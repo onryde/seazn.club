@@ -778,22 +778,65 @@ export const RALLY_LOCKED_TILE_ID = "rallyLocked";
 export const SET_SCORE_TILE_ID = "setScore";
 export const SERVE_ANCHOR_TILE_ID = "serveAnchor";
 
+/** FIVB 7.6.2 — six court positions, rotated one place each time the side
+ *  takes the serve back. */
+const ROTATION_CYCLE = 6;
+
+/**
+ * Does this side field the six positions FIVB 7.6.2 numbers?
+ *
+ * The kernel's own `sideFieldsTheRotation` rule restated for the pad (the two
+ * cannot share: it is not exported): a DECLARED squad is sized, and where none
+ * was declared the preset's `rotationImpliedBy: "substitutions"` stands in —
+ * indoor has a bench and records substitutions, a beach pair has neither.
+ * Pinned against real folds of BOTH variants rather than asserted, because a
+ * hand-copied engine rule is TSC-blind if the engine's own moves.
+ */
+function fieldsTheRotation(view: PadHostView, side: Side): boolean {
+  const players = onFieldPlayers(view.squads, side);
+  if (players.length > 0) return players.length === ROTATION_CYCLE;
+  return recordsFlag(view, "substitutions");
+}
+
 /**
  * Whether the "note the server" declaration is worth offering right now —
- * the reader cannot say who is serving AND a fresh declaration could
- * actually resolve it. The siblings' exact predicate (table tennis's own
- * `needsServeAnchor`, restated here rather than shared, since the two files
- * cannot import from each other): `recorded-disagrees` is excluded because
- * the engine deliberately refuses to re-anchor off a declaration mid-dispute
- * (R4-7's own rule — the NEXT set resolves it, not a same-set
- * redeclaration), and `ledger-mismatch` is excluded because a structural
- * disagreement between the ledger and the folded state is not something a
- * new event fixes. `match-over` is excluded by the outer `live` gate already.
+ * the reader cannot say something a fresh declaration could actually resolve.
+ *
+ * Two exclusions, shared with table tennis's own `needsServeAnchor` (restated
+ * rather than shared, since the two files cannot import from each other):
+ * `recorded-disagrees` is excluded because the engine deliberately refuses to
+ * re-anchor off a declaration mid-dispute (R4-7's own rule — the NEXT set
+ * resolves it, not a same-set redeclaration), and `ledger-mismatch` is
+ * excluded because a structural disagreement between the ledger and the
+ * folded state is not something a new event fixes. `match-over` is excluded
+ * by the outer `live` gate already.
+ *
+ * WHERE VOLLEYBALL PARTS COMPANY WITH ITS SIBLINGS (R5 review, finding 4 —
+ * found by PLAYING the pad, not by any assertion). The siblings stop at
+ * `side === null`, and for them that is the whole question. Here it is not:
+ * `serving` self-heals on every ordinary rally (kernel.ts's own walk), but
+ * `chainBroken` — which gates the ROTATION NUMBER — clears only via a fresh
+ * declaration or a resolved set boundary. Gating on `side` alone therefore
+ * withdrew this tile after the FIRST ordinary tap while the rotation stayed
+ * dark for the rest of the set, with no affordance anywhere to bring it back:
+ * driven live, a scorer who simply started scoring was left with sanction,
+ * time-out and More, and never saw a rotation number again.
+ *
+ * That is the natural flow, not an edge case — nothing asks a scorer to visit
+ * a separate tile before their first point. So the tile stays offered while
+ * anything it can fix is still unresolved, and withdraws the moment the pad
+ * can report both. A side that fields no six (a beach pair) has no rotation to
+ * resolve and so is unaffected — `fieldsTheRotation` is what keeps the tile
+ * from becoming permanent furniture there.
  */
 function needsServeAnchor(view: PadHostView, state: VolleyballStateShape): boolean {
   const ctx = serveContextOf(view, state);
-  if (ctx === null || ctx.side !== null) return false;
-  return ctx.unknownBecause !== "recorded-disagrees" && ctx.unknownBecause !== "ledger-mismatch";
+  if (ctx === null) return false;
+  if (ctx.unknownBecause === "recorded-disagrees" || ctx.unknownBecause === "ledger-mismatch") {
+    return false;
+  }
+  if (ctx.side === null) return true;
+  return ctx.rotation === undefined && fieldsTheRotation(view, ctx.side);
 }
 
 /** This FIXTURE's own record flags, from the fold's cfg. Per-fixture, never
@@ -1335,8 +1378,19 @@ export function volleyballDetail(ctx: ActivityDetailContext): string | undefined
     typeof id === "string" && id.length > 0 ? (personNames?.[id] ?? t("eventCopy.unknownPerson")) : undefined;
 
   switch (eventType) {
-    case RALLY_TYPE:
-      return join([named(payload.scorer), named(payload.server)]);
+    case RALLY_TYPE: {
+      // A person first where one is known, because that is what a scorer
+      // scans for when correcting a misattribution. Where NOBODY was
+      // attributed, name the winning SIDE rather than returning nothing: an
+      // unattributed rally is not an edge case — volleyball's halves are TEAM-level, so it is the ordinary one, and a
+      // ribbon of identical "Rally recorded" rows, each with its own Void
+      // button, is how the wrong point gets voided at a scoring desk. Found
+      // by reading the ribbon on a real 320px screen after five taps (R5).
+      const people = join([named(payload.scorer), named(payload.server)]);
+      if (people !== undefined) return people;
+      const side = sideOfEntrant(state, payload.wonBy);
+      return side ? t(SIDE_LABEL[side]) : undefined;
+    }
     case SUMMARY_TYPE: {
       const home = payload.home;
       const away = payload.away;

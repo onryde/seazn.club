@@ -1146,10 +1146,19 @@ export function badmintonDetail(ctx: ActivityDetailContext): string | undefined 
     typeof id === "string" && id.length > 0 ? (personNames?.[id] ?? t("eventCopy.unknownPerson")) : undefined;
 
   switch (eventType) {
-    case RALLY_TYPE:
-      // The scorer first: it is the fact a scorer scans for when correcting a
-      // misattributed point, and the server is the supporting detail.
-      return join([named(payload.scorer), named(payload.server)]);
+    case RALLY_TYPE: {
+      // A person first where one is known, because that is what a scorer
+      // scans for when correcting a misattribution. Where NOBODY was
+      // attributed, name the winning SIDE rather than returning nothing: an
+      // unattributed rally is not an edge case — a doubles rally sent before the dock's scorer question is answered has no person on it, and a
+      // ribbon of identical "Rally recorded" rows, each with its own Void
+      // button, is how the wrong point gets voided at a scoring desk. Found
+      // by reading the ribbon on a real 320px screen after five taps (R5).
+      const people = join([named(payload.scorer), named(payload.server)]);
+      if (people !== undefined) return people;
+      const side = sideOfEntrant(state, payload.wonBy);
+      return side ? t(SIDE_LABEL[side]) : undefined;
+    }
     case SUMMARY_TYPE: {
       const home = payload.home;
       const away = payload.away;

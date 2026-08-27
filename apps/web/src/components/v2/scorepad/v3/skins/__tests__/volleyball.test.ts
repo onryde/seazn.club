@@ -517,27 +517,60 @@ describe("serving via serveContextOf() — D-17, consumed never re-derived", () 
 // The serve anchor — the tile+sheet this file's header explains at length
 // ---------------------------------------------------------------------------
 
-describe("the serve anchor — narrower than table tennis's, offered only while a declaration could actually resolve `side`", () => {
+describe("the serve anchor — offered while a declaration could still resolve EITHER the side or the rotation", () => {
   it("is offered at 0-0 of a fresh match", () => {
     expect(tileById(buildTiles(view(), t), SERVE_ANCHOR_TILE_ID)).toBeDefined();
   });
 
-  it("withdraws the instant an ORDINARY (undeclared) rally resolves `side` — it does not linger asking for a rotation number `side` alone cannot fix", () => {
-    // Confirms this file's own narrower trigger against table tennis's:
-    // `side` self-heals from any rally, so the tile is gone even though
-    // `rotation` stays unresolved for the rest of this unanchored set.
+  // R5 review, finding 4 — this test and the decider one below USED to assert
+  // the opposite, on the reasoning that the tile "does not linger asking for a
+  // rotation number `side` alone cannot fix". True of `side`; false of the
+  // tile, which posts a DECLARATION, and a declaration is exactly what clears
+  // `chainBroken` and brings the rotation back (proven in this same file by
+  // the anchored fixtures below, and driven live in a browser).
+  //
+  // Withdrawing on `side` alone made the natural flow lossy: a scorer who
+  // simply started tapping — nothing asks them to visit a tile first — lost
+  // the FIVB 7.6.2 rotation number for the whole set, and was left with
+  // sanction, time-out and More. Owner ruling R5-7: keep offering it.
+  it("STAYS OFFERED after an ordinary (undeclared) rally, because the ROTATION is still unresolved and a declaration would fix it", () => {
     const v = view({ events: stream(rally("H")) });
+    expect(ctxOf(v).side, "`side` self-heals from any rally").toBe("home");
+    expect(ctxOf(v).rotation, "but the rotation does not").toBeUndefined();
+    expect(tileById(buildTiles(v, t), SERVE_ANCHOR_TILE_ID)).toBeDefined();
+  });
+
+  it("withdraws once the pad can report the rotation too — the tile answers a question, it is not permanent furniture", () => {
+    const v = view({ events: stream(rally("H", { serving: "H" })) });
     expect(ctxOf(v).side).toBe("home");
-    expect(ctxOf(v).rotation).toBeUndefined();
+    expect(ctxOf(v).rotation, "a declared rally resolves the rotation").not.toBeUndefined();
     expect(tileById(buildTiles(v, t), SERVE_ANCHOR_TILE_ID)).toBeUndefined();
   });
 
-  it("is offered again at 0-0 of the DECIDING set (the toss resets it), and withdraws once that set's own first rally lands", () => {
+  it("never lingers for a BEACH pair, which fields no six to rotate", () => {
+    // The guard that stops R5-7 turning the tile into permanent furniture
+    // wherever a rotation can never resolve: `fieldsTheRotation` restates the
+    // kernel's own `sideFieldsTheRotation`, and this pins the copy against a
+    // real fold of the beach variant rather than asserting it.
+    const v = view({ lineups: PAIR, cfg: BEACH_CFG, events: stream(rally("H")) });
+    expect(ctxOf(v).side, "the side is known").toBe("home");
+    expect(ctxOf(v).rotation, "a pair has no rotation number, ever").toBeUndefined();
+    expect(tileById(buildTiles(v, t), SERVE_ANCHOR_TILE_ID)).toBeUndefined();
+  });
+
+  it("is offered again at 0-0 of the DECIDING set (the toss resets it), and stays until that set's rotation is resolved", () => {
     const toDecider = [summary(3, 0), summary(0, 3), summary(3, 0), summary(0, 3)] as const;
     const before = view({ cfg: SHORT_CFG, events: stream(...toDecider) });
     expect(tileById(buildTiles(before, t), SERVE_ANCHOR_TILE_ID)).toBeDefined();
-    const after = view({ cfg: SHORT_CFG, events: stream(...toDecider, rally("H")) });
-    expect(tileById(buildTiles(after, t), SERVE_ANCHOR_TILE_ID)).toBeUndefined();
+    // An ORDINARY first rally resolves the decider's side but not its
+    // rotation, so the tile is still there to fix it — same rule as set 1.
+    const ordinary = view({ cfg: SHORT_CFG, events: stream(...toDecider, rally("H")) });
+    expect(ctxOf(ordinary).rotation).toBeUndefined();
+    expect(tileById(buildTiles(ordinary, t), SERVE_ANCHOR_TILE_ID)).toBeDefined();
+    // A DECLARED one resolves both, and the tile withdraws.
+    const declared = view({ cfg: SHORT_CFG, events: stream(...toDecider, rally("H", { serving: "H" })) });
+    expect(ctxOf(declared).rotation).not.toBeUndefined();
+    expect(tileById(buildTiles(declared, t), SERVE_ANCHOR_TILE_ID)).toBeUndefined();
   });
 
   it("is never offered once the match is over", () => {
@@ -1015,6 +1048,18 @@ describe("activityDetail()", () => {
     payload,
     personNames: NAMES,
     state,
+  });
+
+  // R5, found by reading the ribbon on a real 320px screen after five taps:
+  // volleyball's halves are TEAM-level, so an unattributed rally is the
+  // ORDINARY case here, not an edge one — and every one of those rows read
+  // "Rally recorded" with its own Void control beside it.
+  it("names the winning SIDE when nobody was attributed — volleyball's ordinary tap", () => {
+    const folded = foldClient(volleyball, VB_CFG, TEAM, stream());
+    expect(volleyballDetail(ctx(RALLY_TYPE, { wonBy: "H" }, folded))).toBe("scorepad.attribution.home");
+    expect(volleyballDetail(ctx(RALLY_TYPE, { wonBy: "A" }, folded))).toBe("scorepad.attribution.away");
+    // A named person still wins: it is the more specific fact.
+    expect(volleyballDetail(ctx(RALLY_TYPE, { wonBy: "H", scorer: "H-p3" }, folded))).toBe("Home MB1");
   });
 
   it("a rally names the scorer first, the server second", () => {

@@ -789,7 +789,20 @@ describe("activityDetail()", () => {
     expect(badmintonDetail(ctx(RALLY_TYPE, { wonBy: "H", scorer: "H-second", server: "A-first" }))).toBe(
       `${NAMES["H-second"]} · ${NAMES["A-first"]}`,
     );
+    // No state to resolve `wonBy` against: nothing can be said, and a raw
+    // entrant id is never printed at the scorer.
     expect(badmintonDetail(ctx(RALLY_TYPE, { wonBy: "H" }))).toBeUndefined();
+  });
+
+  it("names the winning SIDE when nobody was attributed, so two rallies are never the same row", () => {
+    // A doubles rally sent before the dock's scorer question is answered
+    // carries no person. Returning undefined made the ribbon a run of
+    // identical "Rally recorded" rows, each with its own Void control — how
+    // the wrong point gets voided at a scoring desk (found on a 320px screen).
+    expect(badmintonDetail(ctx(RALLY_TYPE, { wonBy: "H" }, FOLDED))).toBe("scorepad.attribution.home");
+    expect(badmintonDetail(ctx(RALLY_TYPE, { wonBy: "A" }, FOLDED))).toBe("scorepad.attribution.away");
+    // A named person still wins: it is the more specific fact.
+    expect(badmintonDetail(ctx(RALLY_TYPE, { wonBy: "H", scorer: "H-first" }, FOLDED))).toBe(NAMES["H-first"]);
   });
 
   it("reads a summary as its score, and flags a partial one", () => {

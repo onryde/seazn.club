@@ -957,7 +957,19 @@ describe("activityDetail()", () => {
     expect(tabletennisDetail(ctx(RALLY_TYPE, { wonBy: "H", scorer: "H1", returns: EXPEDITE_RETURNS_THRESHOLD - 1 }))).toBe(
       NAMES.H1,
     );
+    // No state to resolve `wonBy` against: nothing can be said.
     expect(tabletennisDetail(ctx(RALLY_TYPE, { wonBy: "H" }))).toBeUndefined();
+  });
+
+  it("names the winning SIDE when nobody was attributed, so two rallies are never the same row", () => {
+    expect(tabletennisDetail(ctx(RALLY_TYPE, { wonBy: "H" }, FOLDED))).toBe("scorepad.attribution.home");
+    expect(tabletennisDetail(ctx(RALLY_TYPE, { wonBy: "A" }, FOLDED))).toBe("scorepad.attribution.away");
+    // The expedite flag rides along, since it alone cannot tell two rows apart.
+    expect(
+      tabletennisDetail(ctx(RALLY_TYPE, { wonBy: "H", returns: EXPEDITE_RETURNS_THRESHOLD }, FOLDED)),
+    ).toBe("scorepad.attribution.home · pad.tabletennis.ribbon.expediteReturn");
+    // A named person still wins: it is the more specific fact.
+    expect(tabletennisDetail(ctx(RALLY_TYPE, { wonBy: "H", scorer: "H1" }, FOLDED))).toBe(NAMES.H1);
   });
 
   it("reads a summary as its score, and flags a partial one", () => {

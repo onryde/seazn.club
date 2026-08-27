@@ -2888,7 +2888,11 @@ test("badminton v3 pad: both scoring halves and the Set-score tile hold the 44px
   const fx = await seedRosteredFixture(request, {
     label: `Mobile Badminton V3 ${TAG}-${projectTag()}`,
     sportKey: "badminton",
-    variantKey: "singles",
+    // The variant is `bwf`, not "singles" — and a badminton division refuses
+    // `team` entrants, which is `seedRosteredFixture`'s default, so
+    // `entrantKind` is required rather than optional here.
+    variantKey: "bwf",
+    entrantKind: "individual",
     home: [{ fullName: `Mobile BD Home ${TAG}` }],
     away: [{ fullName: `Mobile BD Away ${TAG}` }],
     emitCoreStart: true,
@@ -2922,7 +2926,8 @@ test("table tennis v3 pad: the serve-anchor tile and its sheet hold the 44px flo
   const fx = await seedRosteredFixture(request, {
     label: `Mobile TT V3 ${TAG}-${projectTag()}`,
     sportKey: "tabletennis",
-    variantKey: "singles",
+    variantKey: "bo5",
+    entrantKind: "individual",
     home: [{ fullName: `Mobile TT Home ${TAG}` }],
     away: [{ fullName: `Mobile TT Away ${TAG}` }],
     emitCoreStart: true,

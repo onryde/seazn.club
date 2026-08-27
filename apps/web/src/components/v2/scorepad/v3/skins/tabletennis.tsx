@@ -1086,7 +1086,18 @@ export function tabletennisDetail(ctx: ActivityDetailContext): string | undefine
     case RALLY_TYPE: {
       const returns = payload.returns;
       const wentToLimit = typeof returns === "number" && returns >= EXPEDITE_RETURNS_THRESHOLD;
-      return join([named(payload.scorer), named(payload.server), wentToLimit ? t("pad.tabletennis.ribbon.expediteReturn") : undefined]);
+      const expedite = wentToLimit ? t("pad.tabletennis.ribbon.expediteReturn") : undefined;
+      // A person first where one is known, because that is what a scorer scans
+      // for when correcting a misattribution. Where NOBODY was attributed —
+      // a doubles rally sent before the dock's scorer question is answered —
+      // name the winning SIDE rather than returning nothing: a ribbon of
+      // identical "Rally recorded" rows, each with its own Void button, is how
+      // the wrong point gets voided at a scoring desk. The expedite flag alone
+      // is not enough to tell two rows apart either, so the side joins it.
+      const people = join([named(payload.scorer), named(payload.server)]);
+      if (people !== undefined) return join([people, expedite]);
+      const side = sideOfEntrant(state, payload.wonBy);
+      return side ? join([t(SIDE_LABEL[side]), expedite]) : expedite;
     }
     case SUMMARY_TYPE: {
       const home = payload.home;
