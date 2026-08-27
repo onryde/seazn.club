@@ -440,45 +440,70 @@ test("RS007 witness — cancelling one of two cart entries: the subtotal keeps t
     await anon.goto(statusUrl, { waitUntil: "load" });
     await anon.waitForTimeout(1000);
 
-    // ---- SETUP FOR THE STRONGER WITNESS: promote B without ever paying ----
-    // Reaching a genuinely-uncharged sibling, as the dispatch prefers. This
-    // is the organiser's own real action (the same POST route the hub's
-    // "Promote" control calls) — setup to REACH the state, not the thing
-    // under test (the cancel + its consequences, next). B is left `pending`
-    // afterward, never paid: promoteWaitlistedRow sets its real amount_cents
-    // but the group's payment_intent_id still only ever names entry A's
-    // charge.
-    const orgEntries = await apiJson<
-      { id: string; display_name: string; status: string; amount_cents: number; refunded_cents: number }[]
-    >(request, `/api/v1/divisions/${div.data!.id}/registrations`, "GET");
-    expect(orgEntries.status, "organiser registrations list").toBeLessThan(300);
-    const entryA = orgEntries.data!.find((e) => e.display_name === TEAM_A);
-    const entryB = orgEntries.data!.find((e) => e.display_name === TEAM_B);
-    if (!entryA || !entryB) {
-      throw new Error(
-        `expected both "${TEAM_A}" and "${TEAM_B}" in the division's registration list, got: ${orgEntries.data!.map((e) => e.display_name).join(", ")}`,
-      );
-    }
-    expect(entryB.status, "entry B should still be waitlisted before promotion").toBe("waitlisted");
-    expect(entryB.amount_cents, "a waitlisted entry is never charged at submit (owner ruling 7)").toBe(0);
+    // ---- SETUP FOR THE STRONGER WITNESS: promote B without ever paying,
+    // TAPPED through the organiser's own hub — the real "Promote from
+    // waitlist" control (registration-hub-registrant-actions.tsx), not the
+    // API directly. It calls the identical POST route, but clicking it is
+    // what a real organiser does, and reaching this state is still setup
+    // (the charter's own allowance) rather than the thing under test — the
+    // cancel + its consequences, next. B is left `pending` afterward, never
+    // paid: promoteWaitlistedRow sets its real amount_cents but the group's
+    // payment_intent_id still only ever names entry A's charge.
+    await page.goto(`/o/${org.slug}/c/${comp.data!.slug}/registration?tab=registrants`, { waitUntil: "load" });
+    await page.waitForTimeout(1000);
+    // Each row IS a native <details data-registration-id="..."> — reading the
+    // id off the rendered row rather than a separate list call. Scoped to
+    // each row's own <summary> text, NOT the whole <details> (a plain
+    // `hasText` on the details element is a trap here: A and B share one
+    // cart, so each row's DETAIL body unconditionally renders the OTHER as
+    // a "cart sibling" — `hasText: TEAM_A` against the whole element would
+    // match both rows, since B's own detail panel mentions A's name too).
+    const rowB = page
+      .locator("details[data-registration-hub-registrant-row]")
+      .filter({ has: page.locator("summary", { hasText: TEAM_B }) });
+    const rowA = page
+      .locator("details[data-registration-hub-registrant-row]")
+      .filter({ has: page.locator("summary", { hasText: TEAM_A }) });
+    await expect(rowB).toBeVisible({ timeout: 15_000 });
+    // The row's summary renders TWO copies of its status pill unconditionally
+    // (a phone card, `sm:hidden`, and a desktop grid, `hidden sm:grid`) — a
+    // bare .first()/getByText resolves to the hidden card block at this
+    // desktop viewport and times out on a pill that is genuinely there.
+    // `:visible` self-selects whichever copy CSS actually shows.
+    await expect(rowB.locator('[data-registration-hub-registrant-status="waitlisted"]:visible')).toBeVisible({
+      timeout: 15_000,
+    });
+    const entryBId = await rowB.getAttribute("data-registration-id");
+    const entryAId = await rowA.getAttribute("data-registration-id");
+    if (!entryBId || !entryAId) throw new Error("registrant row carries no data-registration-id");
+    const entryA = { id: entryAId };
+    const entryB = { id: entryBId };
 
-    const promoted = await apiJson<{ id: string; status: string; amount_cents: number }>(
-      request,
-      `/api/v1/registrations/${entryB.id}/promote`,
-      "POST",
-      {},
-    );
-    expect(promoted.status, "promote B from the waitlist").toBeLessThan(300);
-    expect(promoted.data?.status, "promoted entry should be pending, awaiting its own payment").toBe("pending");
-    expect(promoted.data?.amount_cents, "promotion should set B's real fee").toBe(FEE_CENTS);
+    // Expand B's row (native <details>/<summary> — click opens it) and tap
+    // its real Promote control.
+    await rowB.locator("summary").click();
+    await page.waitForTimeout(500);
+    await page.screenshot({ path: `${SHOTS}/13a-hub-before-promote.png`, fullPage: true });
+    await rowB.getByRole("button", { name: "Promote from waitlist", exact: true }).click();
+    // The success feedback and the button itself live in the DETAIL body
+    // (RegistrationHubRegistrantDetail), which is NOT duplicated the way the
+    // summary scan line is — a plain text match is safe here.
+    await expect(rowB.getByText("Promoted", { exact: true })).toBeVisible({ timeout: 15_000 });
+    await page.waitForTimeout(1500);
+    await expect(rowB.locator('[data-registration-hub-registrant-status="pending"]:visible')).toBeVisible({
+      timeout: 15_000,
+    });
+    await page.screenshot({ path: `${SHOTS}/13b-hub-after-promote.png`, fullPage: true });
 
     // The captain's own snapshot BEFORE cancelling anything — the ledger
     // baseline defect (b)'s "surviving entry unaffected" check compares
-    // against.
+    // against. This read-back (not an action) is the one place the public
+    // API stands in for "the system's own record", per the dispatch.
     const aBefore = await publicRegSnapshot(request, entryA.id, token);
     const bBefore = await publicRegSnapshot(request, entryB.id, token);
     expect(aBefore.status, "A should be paid/confirmed before the cancel").toMatch(/paid|confirmed/);
     expect(bBefore.status, "B should be pending after promotion, still unpaid").toBe("pending");
+    expect(bBefore.amount_cents, "promotion should have set B's real fee").toBe(FEE_CENTS);
     expect(bBefore.refunded_cents, "B has never been charged, so nothing can be refunded from it yet").toBe(0);
 
     await anon.reload({ waitUntil: "load" });
