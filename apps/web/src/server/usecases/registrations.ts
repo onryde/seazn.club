@@ -31,6 +31,7 @@ import {
   sendRefundIssuedEmail,
   sendDisputeAlertEmail,
   sendDisputeLostEmail,
+  sendRegistrationRefundFailedAlertEmail,
 } from "@/lib/email";
 import type { RegistrationEmailArgs } from "@/lib/email-templates";
 import { routes } from "@/lib/routes";
@@ -53,7 +54,7 @@ import {
   tryEarnGrant,
   walletIdFor,
 } from "@/lib/credits";
-import { ageAt, isMinor, requiresDob } from "./registration-eligibility";
+import { ageAt, isMinor, requiresDob, requiresGender } from "./registration-eligibility";
 
 type Tx = postgres.TransactionSql;
 
@@ -301,6 +302,10 @@ export interface RegistrationGroupRow {
   fee_percent: number | null;
   privacy_consent_at: Date | null;
   privacy_consent_version: string | null;
+  /** Optional, versioned the same way as privacy consent (RS006 §A) — never
+   *  blocks submit; null means "not given", not "unknown". */
+  media_consent_at: Date | null;
+  media_consent_version: string | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -390,7 +395,7 @@ export type RegistrationWithGroupRow = RegistrationRow &
     | "payment_intent_id" | "expires_at" | "reminded_at"
     | "refunded_at" | "disputed_at" | "dispute_id" | "offline_marked_paid_at"
     | "offline_marked_paid_by" | "fee_percent" | "privacy_consent_at"
-    | "privacy_consent_version"
+    | "privacy_consent_version" | "media_consent_at" | "media_consent_version"
   > & {
     /** The CART's accumulated refund total (`registration_groups.refunded_cents`,
      *  V363) — aliased so it can never collide with `RegistrationRow`'s own
@@ -416,7 +421,7 @@ function regGroupCols(db: AnySql) {
     g.refunded_cents as group_refunded_cents,
     g.refunded_at, g.disputed_at, g.dispute_id, g.offline_marked_paid_at,
     g.offline_marked_paid_by, g.fee_percent, g.privacy_consent_at,
-    g.privacy_consent_version`;
+    g.privacy_consent_version, g.media_consent_at, g.media_consent_version`;
 }
 
 const SETTINGS_COLS = [
@@ -1318,7 +1323,14 @@ export interface PublicDivisionInfo {
   name: string;
   slug: string;
   sport_key: string;
-  entrant_kind: string;
+  // Needlessly widened to `string` before RS006; the row this is built from
+  // (RegistrationSettingsRow, via the `rs.*` select above) already carries
+  // the narrow union, and the wire contract (PublicRegistrationDivision,
+  // schemas.ts) already declares it as the EntrantKind enum — tightened
+  // here too so a client-side exhaustive switch (RS006's division-card.tsx)
+  // doesn't need a defensive `string` fallback for a value that can only
+  // ever be one of these three.
+  entrant_kind: "team" | "individual" | "pair";
   fee_cents: number;
   currency: string;
   /** How the entry fee is collected (spec §3). */
@@ -1332,7 +1344,17 @@ export interface PublicDivisionInfo {
   open: boolean;
   /** 'window' | 'full' | 'payments_unavailable' | null */
   closed_reason: string | null;
+  /** V364 first-class columns (RS006 W1), alongside the derived booleans
+   *  below — the ENTRIES step badges these directly and runs the SAME
+   *  category/age-band predicates (@/lib/registration-rules) to grey a
+   *  self-ineligible division, rather than forking new rules client-side. */
+  category: string | null;
+  age_min: number | null;
+  age_max: number | null;
+  /** Team-only; drives the ENTRIES step's free-agent option. */
+  allow_free_agents: boolean;
   requires_dob: boolean;
+  requires_gender: boolean;
   /** Youth division (v3/11 gap 8): the form always adds guardian consent. */
   youth: boolean;
   /** Queue length behind a full division (PROMPT-52) — public. */
@@ -1381,6 +1403,11 @@ export async function publicRegistrationInfo(
       eligibility: unknown[];
       // V364 first-class columns: `age_min`/`age_max` also drive
       // `requires_dob` below (a category-only division needs no DOB).
+      // `category` drives `requires_gender` the same way, and both ship on
+      // the wire (RS006 W1: the ENTRIES step badges category/age and greys
+      // a self-ineligible division, so the client needs the raw values, not
+      // just the derived booleans).
+      category: string | null;
       age_min: number | null;
       age_max: number | null;
       youth: boolean;
@@ -1388,7 +1415,7 @@ export async function publicRegistrationInfo(
       waitlisted: number;
     })[]
   >`
-    select rs.*, d.name, d.slug, d.sport_key, d.eligibility, d.age_min, d.age_max, d.youth,
+    select rs.*, d.name, d.slug, d.sport_key, d.eligibility, d.category, d.age_min, d.age_max, d.youth,
            (select count(*)::int from registrations r
              where r.division_id = rs.division_id
                and r.status in ${sql([...SPOT_HOLDERS])}) as active,
@@ -1439,6 +1466,17 @@ export async function publicRegistrationInfo(
       taken: r.active,
       open,
       closed_reason: reason,
+      // V364 first-class columns (RS006 W1): raw values, so the ENTRIES step
+      // can badge category/age and grey a self-ineligible division using the
+      // SAME evaluation the server ships (@/lib/registration-rules), instead
+      // of forking its own rules client-side.
+      category: r.category,
+      age_min: r.age_min,
+      age_max: r.age_max,
+      // Team-only (registration-eligibility's putRegistrationSettings rejects
+      // `true` on a non-team division) — drives the ENTRIES step's free-agent
+      // option (design §4 step 2).
+      allow_free_agents: r.allow_free_agents,
       // V364: a division can require a DOB via the jsonb rules OR via the
       // first-class age_min/age_max columns alone — requiresDob's
       // division-shaped overload checks both.
@@ -1447,6 +1485,9 @@ export async function publicRegistrationInfo(
         age_min: r.age_min,
         age_max: r.age_max,
       }),
+      // Same idea as requires_dob, for gender (RS006 WHO step): a jsonb
+      // GenderRule OR a mens/womens/mixed category.
+      requires_gender: requiresGender({ eligibility: r.eligibility ?? [], category: r.category }),
       youth: r.youth,
       waitlisted: r.waitlisted,
       form_fields: r.form_fields ?? [],
@@ -1491,6 +1532,71 @@ export async function publicRegistrationInfo(
 // `eligibilityIssues` was ALSO in this list originally, but the legacy
 // string[] wrapper it named was deleted at its source (RS002 W5
 // whole-branch review — zero production callers repo-wide, dead since W2).
+
+/**
+ * Payment-integrity fix: `createRegistrationCheckout` overwrites
+ * `registration_groups.checkout_session_id` every time it mints — nothing
+ * expired the session it replaced, so a registrant who clicks "Pay now"
+ * twice (an abandoned tab resumed, a reminder email re-minting the same
+ * still-open session) leaves a SECOND live, payable Stripe session behind
+ * for ~24h. Paying both is already handled (confirmPaidRegistration's
+ * `kind: "duplicate"` auto-refund), but preventing the second charge is
+ * better than reversing it days later.
+ *
+ * Design correction: this used to expire the prior session on ANY
+ * INTERSECTION between its `registration_ids` and the ids being minted now —
+ * wrong, because it also fires on a PARTIAL overlap and strands whatever the
+ * prior session covered that the new mint doesn't. Concretely: session S1
+ * covers {A,B}; entry A is promoted off the waitlist and S2 is minted for
+ * {A} alone; the old intersection check expired S1 outright, so B lost its
+ * only payable link and that money was never collected. The correct
+ * predicate is SUBSUMPTION: expire the prior session only when the new
+ * mint's id set is a superset of (or equal to) the prior session's own ids —
+ * every entry the old session could still pay for is also payable through
+ * the new one, so nothing is stranded.
+ *
+ * Must NOT fire for a DISJOINT (or partially-overlapping) prior session:
+ * `registrationIds` is an explicit subset (a waitlist promotion pays one
+ * entry while its siblings stay separately payable), but
+ * `registration_groups` has only ONE `checkout_session_id` column shared by
+ * the whole cart — so the "prior" session this reads back could belong to a
+ * sibling entry's own, still-legitimate mint. Expired ONLY when BOTH: the
+ * prior session is still `open` (a `complete` session is a paid session —
+ * never touch it), AND its own `registration_ids` metadata is FULLY covered
+ * by the ids being minted now (a prior session with no readable
+ * `registration_ids` at all — foreign or malformed — can never be proven
+ * covered, so it is left alone too).
+ *
+ * Best-effort, like every other Stripe side-call in this file: never blocks
+ * minting the new session, never surfaces to the registrant.
+ */
+async function expireSupersededCheckoutSession(
+  priorSessionId: string,
+  newRegistrationIds: string[],
+): Promise<void> {
+  try {
+    const prior = await getStripe().checkout.sessions.retrieve(priorSessionId);
+    if (prior.status !== "open") return; // paid/expired/foreign — never touch it
+    const priorIds = checkoutRegistrationIds(prior);
+    // Subsumption, not intersection (see doc comment above): expire only
+    // when EVERY id the prior session covered is also covered by the new
+    // mint. `.every` on an empty array is vacuously true, so priorIds.length
+    // is checked explicitly — an unreadable prior coverage set must never
+    // read as "fully covered".
+    if (priorIds.length === 0) return; // unreadable metadata — can't prove subsumption
+    if (!priorIds.every((id) => newRegistrationIds.includes(id))) return; // partial/disjoint — a legitimate sibling session
+    await getStripe().checkout.sessions.expire(priorSessionId);
+    log.info(
+      { priorSessionId, newRegistrationIds },
+      "registration: expired a superseded checkout session on re-mint",
+    );
+  } catch (err) {
+    log.error(
+      { err, priorSessionId },
+      "registration: failed to expire a superseded checkout session — the new session still mints",
+    );
+  }
+}
 
 /**
  * Runs a Checkout Session create and translates Stripe's `amount_too_small`
@@ -1625,12 +1731,22 @@ async function createRegistrationCheckout(
     // joins to ~370, proven in registrations.test.ts) rather than a single
     // registration_id. Wave 3b's webhook rework reads this to flip exactly
     // the listed entries.
+    //
+    // destination_account rides the session the same way fee_percent does
+    // (payment-integrity fix): the Connect account THIS charge's
+    // transfer_data.destination is frozen to, right now, at mint time. If
+    // the org reconnects a DIFFERENT account before this still-open session
+    // is paid, fulfilment compares this stamped value against the org's
+    // CURRENT stripe_account_id to detect the drift — see
+    // checkDestinationAccountDrift below. A short value (an account id),
+    // so it never threatens registration_ids' own near-budget cap above.
     metadata: {
       kind: "registration_group",
       registration_group_id: groupId,
       registration_ids: idsJoined,
       org_id: ctx.org_id,
       fee_percent: String(feePercent),
+      destination_account: destination,
     },
     line_items: entries.map((reg) => ({
       quantity: 1,
@@ -1651,10 +1767,62 @@ async function createRegistrationCheckout(
   if (!session.url) throw new HttpError(502, "Stripe did not return a checkout URL");
   // checkout_session_id/fee_percent live on the cart (V364) — one row to
   // stamp regardless of how many entries this session covers.
-  await sql`
+  //
+  // Ordering fix: stamped BEFORE expiring the prior session below (used to
+  // run the other way round). If this update throws (DB failover, statement
+  // timeout, lock wait) the group must still name the OLD, still-open
+  // session rather than one this call has already told Stripe to expire —
+  // every reader (organiser console, reconcile-by-session, resume) would
+  // otherwise be looking at a dead session with no live successor on
+  // record.
+  //
+  // Concurrency fix: the update is conditional on `checkout_session_id`
+  // still being the exact value THIS call observed before minting
+  // (`firstEntry.checkout_session_id`, read at the top of this function).
+  // Two concurrent calls for the same group (a double-clicked "Pay now", two
+  // open tabs) each mint a real Stripe session before either commits;
+  // without this guard neither would expire the other and the later
+  // `update` would silently overwrite the earlier mint's stamp, leaving TWO
+  // live, payable sessions — a real double-charge risk (the
+  // `kind:"duplicate"` auto-refund path only reverses it after the fact).
+  // `is not distinct from` treats a still-null prior value as a match,
+  // unlike `=`, so this also protects a cart's very first mint. Deliberately
+  // NOT a row lock held across the Stripe call above — serialising every
+  // checkout mint on one row for the length of a network round-trip is worse
+  // than the race it closes.
+  const [stamped] = await sql<{ id: string }[]>`
     update registration_groups
     set checkout_session_id = ${session.id}, fee_percent = ${feePercent}, updated_at = now()
-    where id = ${groupId}`;
+    where id = ${groupId}
+      and checkout_session_id is not distinct from ${firstEntry.checkout_session_id}
+    returning id`;
+  if (!stamped) {
+    // Lost the race: a concurrent mint already stamped a DIFFERENT session
+    // in between this call's read and this update. Nobody has THIS
+    // session's URL yet (it is only ever returned below), so it can't be
+    // paid — best-effort expire it so it doesn't sit open on Stripe for
+    // ~24h, then surface a clean, retryable error. The registrant's own
+    // retry re-reads the now-current checkout_session_id and mints cleanly
+    // against it.
+    try {
+      await getStripe().checkout.sessions.expire(session.id);
+    } catch (err) {
+      log.error(
+        { err, sessionId: session.id, groupId },
+        "registration: failed to expire our own session after losing the checkout re-mint race",
+      );
+    }
+    throw new HttpError(
+      409,
+      "Another checkout was just started for this registration — please refresh and try again",
+      "REGISTRATION_CHECKOUT_CONFLICT",
+    );
+  }
+  // Payment-integrity fix: best-effort; never blocks the mint that already
+  // committed above even if the expire attempt below fails.
+  if (firstEntry.checkout_session_id) {
+    await expireSupersededCheckoutSession(firstEntry.checkout_session_id, registrationIds);
+  }
   return session.url;
 }
 
@@ -1719,6 +1887,106 @@ function checkoutRegistrationIds(session: Stripe.Checkout.Session): string[] {
 }
 
 /**
+ * Payment-integrity fix: `createRegistrationCheckout` freezes
+ * `transfer_data.destination` from the org's `stripe_account_id` AT MINT
+ * TIME (stamped onto `metadata.destination_account`, alongside
+ * `fee_percent`, above). If the org reconnects a DIFFERENT Stripe account
+ * before a still-open session is paid, Stripe has ALREADY routed the charge
+ * to the frozen (now stale) destination by the time this webhook fires —
+ * there is nothing left here to redirect, and `stripeRefund`'s
+ * `reverse_transfer: true` would fail against an account this platform no
+ * longer holds besides. Deliberately does NOT block, refund, or leave the
+ * entry pending — the registrant paid in good faith and must not lose their
+ * place over an organiser-side reconnect; this only records the drift for
+ * the organiser console. Metadata absent (every session minted before this
+ * change) means "cannot tell", and is always treated that way, never as a
+ * mismatch — same fallback shape as `chargedFeePercent` below.
+ *
+ * Resolved off `regIds[0]` (already parsed by the caller via
+ * `checkoutRegistrationIds`, always non-empty by the time this is called)
+ * rather than `session.metadata.registration_group_id` — every entry named
+ * in one session shares one group's org/competition, so any one of them is
+ * enough, and this mirrors `handleRegistrationCheckoutAsyncPaymentFailed`'s
+ * own registrations→divisions resolution below rather than adding a second,
+ * parallel lookup path off a metadata field nothing else in this file reads.
+ *
+ * Review fixup (HIGH): the whole body is wrapped in try/catch, the same
+ * shape as `expireSupersededCheckoutSession` above — a transient failure on
+ * this function's OWN select or its OWN audit insert used to propagate out
+ * of `handleRegistrationCheckoutCompleted` and abort the confirmPaidRegistration
+ * loop that runs after it, contradicting this doc comment's own "does NOT
+ * block, refund, or leave the entry pending". Telemetry must never be able
+ * to break the path it observes.
+ *
+ * Review fixup (LOW): also idempotent against a redelivery. This function
+ * can run more than once for the SAME session — `checkout.session.completed`
+ * and `checkout.session.async_payment_succeeded` both dispatch through
+ * `handleRegistrationCheckoutCompleted` (billing-events.ts), and Stripe's own
+ * retry re-enters it whenever `billing_events.processed_at` stays null (a
+ * later failure elsewhere in the same event, or Stripe's plain at-least-once
+ * delivery). Unlike `confirmPaidRegistration`, this path is audit-only and
+ * has no status column of its own to short-circuit on, so it checks the
+ * ledger it writes to instead — the same "read state, then act" shape as
+ * confirmPaidRegistration's status check and the late-refund path's
+ * `refunded_cents` guard below, applied to the one thing an audit-only path
+ * actually has: a matching row already on record for this exact session.
+ */
+async function checkDestinationAccountDrift(
+  session: Stripe.Checkout.Session,
+  regIds: string[],
+  paymentIntentId: string | null,
+): Promise<void> {
+  try {
+    const mintedDestination = session.metadata?.destination_account;
+    if (!mintedDestination) return;
+    const [row] = await sql<
+      { org_id: string; competition_id: string; stripe_account_id: string | null }[]
+    >`
+      select r.org_id, d.competition_id, o.stripe_account_id
+      from registrations r
+      join divisions d on d.id = r.division_id
+      join organizations o on o.id = r.org_id
+      where r.id = ${regIds[0]!}`;
+    if (!row || row.stripe_account_id === mintedDestination) return;
+    const [already] = await sql<{ n: number }[]>`
+      select 1 as n from competition_events
+      where type = 'registration.destination_account_mismatch'
+        and payload->>'checkout_session_id' = ${session.id}
+      limit 1`;
+    if (already) return; // redelivery of a drift already on record — silent no-op
+    log.error(
+      {
+        registrationId: regIds[0],
+        orgId: row.org_id,
+        mintedDestination,
+        currentDestination: row.stripe_account_id,
+        sessionId: session.id,
+        paymentIntentId,
+      },
+      "registration: destination account changed since checkout was minted — funds routed to the old account",
+    );
+    await audit(
+      sql,
+      row.competition_id,
+      row.org_id,
+      "registration.destination_account_mismatch",
+      {
+        checkout_session_id: session.id,
+        payment_intent_id: paymentIntentId,
+        minted_destination_account: mintedDestination,
+        current_destination_account: row.stripe_account_id,
+      },
+      null,
+    );
+  } catch (err) {
+    log.error(
+      { err, sessionId: session.id, registrationId: regIds[0] },
+      "registration: destination-account drift check failed — fulfilment continues",
+    );
+  }
+}
+
+/**
  * Fulfilment for a `registration_group` checkout session (RS003 W3b —
  * re-keyed from a single `registration_id` to the group's comma-joined
  * `registration_ids`, W3a's `createRegistrationCheckout`): every NAMED entry
@@ -1764,6 +2032,10 @@ export async function handleRegistrationCheckoutCompleted(
   const raw = session.metadata?.fee_percent;
   const chargedFeePercent =
     raw != null && raw !== "" && Number.isFinite(Number(raw)) ? Number(raw) : null;
+  // Payment-integrity fix: detect (never block on) a Connect account that
+  // changed since this session was minted. Session-scoped, so it runs once
+  // per webhook, not once per named entry.
+  await checkDestinationAccountDrift(session, regIds, paymentIntent);
   // Sequential, not Promise.all, and no per-id try/catch: each call is its
   // own locked transaction, so a failure partway through must abort the rest
   // and leave the WHOLE event unprocessed (billing_events.processed_at stays
@@ -2023,11 +2295,20 @@ async function confirmPaidRegistration(
     }, null);
     const ctxLate = await divisionCtx(sql, outcome.reg.division_id);
     notifyRefund(outcome.reg, ctxLate, outcome.reg.amount_cents);
-  } catch {
+  } catch (err) {
     await audit(sql, outcome.competitionId, outcome.reg.org_id, "registration.refund_failed", {
       registration_id: regId,
       mode: outcome.kind,
     }, null);
+    await maybeAlertRegistrationRefundFailed({
+      registrationId: regId,
+      orgId: outcome.reg.org_id,
+      competitionId: outcome.competitionId,
+      amountCents: outcome.reg.amount_cents,
+      currency: outcome.reg.currency,
+      paymentIntentId: outcome.intent,
+      reason: errText(err),
+    });
   }
 }
 
@@ -2218,6 +2499,25 @@ export async function reconcileRegistration(regId: string, token: string): Promi
  * Reconcile-on-return for the token-free /r/[ref] flow (email-minted sessions,
  * spec T6): the session's own metadata must point at the ref's registration —
  * the ref is a lookup, the session is the proof. Best-effort; never throws.
+ *
+ * Security fix: `sessionId` is attacker-controlled (an unauthenticated,
+ * `force-dynamic` GET query param on a public page) — the old code called
+ * `sessions.retrieve(sessionId)` on that raw value before any binding check,
+ * so anyone holding a ref whose oldest entry is `pending` could loop
+ * `GET /r/{ref}?session_id=cs_test_anything` and drive one real Stripe API
+ * call per request, billed to the PLATFORM account and counting against its
+ * rate limits. Fixed by comparing the supplied id against
+ * `registration_groups.checkout_session_id` — the session THIS cart's own
+ * mint actually stamped — BEFORE calling Stripe at all. An id that isn't the
+ * cart's current session now never reaches `sessions.retrieve`; the
+ * `payment_status`/`registration_ids` checks below are unchanged for the one
+ * id that does match.
+ *
+ * Known trade-off, accepted: if a NEWER session has since superseded the
+ * stored id (a later re-mint), an older-but-legitimate `session_id` from
+ * Stripe's own success redirect no longer reconciles here. The webhook
+ * remains the primary fulfilment path and still covers it — do not add a
+ * fallback that re-introduces the arbitrary retrieve to recover this case.
  */
 export async function reconcileRegistrationBySession(
   ref: string,
@@ -2226,6 +2526,7 @@ export async function reconcileRegistrationBySession(
   try {
     const reg = await regByRef(ref);
     if (reg.status !== "pending") return false;
+    if (sessionId !== reg.checkout_session_id) return false;
     const session = await getStripe().checkout.sessions.retrieve(sessionId);
     if (session.payment_status !== "paid") return false;
     // Re-keyed to the GROUP (W3b): the session may cover a whole cart now —
@@ -2376,10 +2677,14 @@ async function regByRef(ref: string): Promise<RegistrationWithGroupRow> {
   const canonical = normalizeRefCode(ref);
   if (!isValidRefCode(canonical)) throw new HttpError(404, "registration not found");
   // ref_code lives on the cart now (V364) — shared by every entry in it. A
-  // cart with more than one entry (not reachable yet: nothing creates one
-  // until RS002/RS003) would have several rows match here; this picks the
-  // oldest deterministically rather than an arbitrary one. RS007 owns
-  // deciding whether /r/[ref] should show the whole cart instead of one entry.
+  // cart can hold more than one entry (RS002/RS003 shipped group submit) —
+  // this picks the oldest deterministically rather than an arbitrary one,
+  // which is exactly right for THIS function's actual callers: the
+  // single-entry ticket.png render, self-withdraw's target row, and
+  // reconcile's status check — none of which need every entry. RS006
+  // decided /r/[ref] itself shows the WHOLE cart: see publicCartByRef below,
+  // which calls this for the checksum/lookup/404 behaviour and then
+  // re-selects every entry in the resolved group.
   const [reg] = await sql<RegistrationWithGroupRow[]>`
     select ${regGroupCols(sql)}
     from registrations r join registration_groups g on g.id = r.group_id
@@ -2422,16 +2727,163 @@ export async function publicRegistrationStatusByRef(
   };
 }
 
-/** Self-withdraw from /r/[ref] — the ref is a lookup, NOT auth: the email
- *  token is still required (v3/05 §4). */
+/** Resolves ONE specific cart entry for a ref, verifying in a SINGLE query
+ *  that (a) `entryId` belongs to the group `ref` itself names and (b) the
+ *  supplied token matches THAT group's access_token_hash — mirrors
+ *  `regByToken` exactly (same SQL-side hash equality, same no-row-means-404
+ *  contract), just scoped by ref_code too. `ref_code` carries a unique index
+ *  (V363), so `g.ref_code = canonical` can join at most one group: an
+ *  entryId from a different cart simply has no row satisfying all three
+ *  predicates at once, regardless of whether the token is otherwise valid
+ *  for THAT other cart. A wrong ref, a wrong token, and a foreign entryId
+ *  all 404 identically (RS006 follow-up: withdraw is per-entry now — see
+ *  `withdrawRegistrationByRef`). */
+async function regByRefAndToken(
+  ref: string,
+  entryId: string,
+  token: string,
+): Promise<RegistrationWithGroupRow> {
+  const canonical = normalizeRefCode(ref);
+  if (!isValidRefCode(canonical)) throw new HttpError(404, "registration not found");
+  const [reg] = await sql<RegistrationWithGroupRow[]>`
+    select ${regGroupCols(sql)}
+    from registrations r join registration_groups g on g.id = r.group_id
+    where g.ref_code = ${canonical} and r.id = ${entryId}
+      and g.access_token_hash = ${hashRegistrationToken(token)}`;
+  if (!reg) throw new HttpError(404, "registration not found");
+  return reg;
+}
+
+/** Self-withdraw from /r/[ref] — the ref is a LOOKUP, NOT auth: the email
+ *  token is still required (v3/05 §4). RS006 follow-up (data-integrity fix):
+ *  a cart can hold more than one entry, and this used to always resolve+act
+ *  on the OLDEST one (`regByRef`'s deterministic pick) regardless of what the
+ *  registrant meant to withdraw — a multi-entry cart rendered one
+ *  undifferentiated Withdraw control that silently withdrew the wrong row.
+ *  The caller now names the target entry explicitly; `regByRefAndToken`
+ *  verifies it belongs to the ref's OWN group before `withdrawCore` ever
+ *  runs, so a valid token can never be paired with a foreign registration id
+ *  to withdraw someone else's entry. Returns the whole cart (the same shape
+ *  the page renders) so every entry's post-withdraw status is visible, not
+ *  just the one just acted on. */
 export async function withdrawRegistrationByRef(
   ref: string,
+  entryId: string,
   token: string,
-): Promise<PublicRefView> {
+): Promise<PublicCartView> {
+  const reg = await regByRefAndToken(ref, entryId, token);
+  await withdrawCore(reg, null);
+  return publicCartByRef(ref, token);
+}
+
+/** One entry as /r/[ref] shows it to the general public — masked per THIS
+ *  entry's own division policy (see `PublicCartView`). */
+export interface PublicCartEntryView {
+  id: string;
+  status: RegistrationRow["status"];
+  display_name: string;
+  division_name: string;
+  /** True when the viewer's token is valid for this cart AND this specific
+   *  entry isn't already withdrawn — RS006 follow-up: withdraw acts on ONE
+   *  named entry now (`withdrawRegistrationByRef` takes an explicit entry
+   *  id), so each entry states its OWN eligibility instead of the whole
+   *  cart inheriting one entry's (that mismatch — one flag, evaluated
+   *  against only the oldest entry, driving a single cart-wide control —
+   *  was the data-integrity bug: nothing told the registrant WHICH entry a
+   *  click would act on). Mirrors the single-entry sibling's predicate
+   *  (`PublicRefView.can_withdraw`) exactly, just evaluated per row. */
+  can_withdraw: boolean;
+}
+
+/**
+ * What /r/[ref] shows the world for the WHOLE cart (RS006 — the owner's
+ * ruling, recorded here: a multi-entry cart shows every entry, not just the
+ * oldest, now that RS002/RS003 make multi-entry carts real). The group-level
+ * sibling of `PublicRefView`, same "never more than the success screen"
+ * contract — NOT `GroupStatusView` (`groupByRef`/`groupById`), which is
+ * token-GATED and deliberately unmasked for that reason. This is reachable
+ * by anyone with a bare ref code, so contact info, amounts/fees/currency,
+ * payment method and the access token are never on this shape, and every
+ * entry's `display_name` is masked through `resolveNameDisplay`/
+ * `maskDisplayName` for ITS OWN division — a cart can span a youth division
+ * and a non-youth one at once, so one mask for the whole cart would be
+ * wrong in either direction.
+ */
+export interface PublicCartView {
+  ref_code: string;
+  competition_name: string;
+  competition_slug: string;
+  org_slug: string;
+  org_name: string;
+  starts_on: string | null;
+  ends_on: string | null;
+  created_at: string;
+  /** True when the viewer's ?token= matches this cart's access token. RS006
+   *  follow-up: no longer tied to any one entry's status — it used to mirror
+   *  the OLDEST entry's (the exact bug: a cart-wide flag standing in for a
+   *  per-entry fact). That check now lives per entry, see
+   *  `PublicCartEntryView.can_withdraw`; this only gates whether the viewer
+   *  has write access to the cart AT ALL. */
+  can_withdraw: boolean;
+  entries: PublicCartEntryView[];
+}
+
+export async function publicCartByRef(ref: string, token?: string | null): Promise<PublicCartView> {
+  // regByRef owns the checksum/normalise/404 contract (shared with the
+  // single-entry read) and hands back the oldest entry joined to the cart's
+  // own columns — enough to resolve competition/org context (divisionCtx,
+  // same source `publicRegistrationStatusByRef` reads) and the access-token
+  // hash, without a second group lookup.
   const reg = await regByRef(ref);
-  const byToken = await regByToken(reg.id, token); // 404s on a bad token
-  await withdrawCore(byToken, null);
-  return publicRegistrationStatusByRef(ref, token);
+  const ctx = await divisionCtx(sql, reg.division_id);
+
+  const entries = await sql<
+    {
+      id: string;
+      status: RegistrationRow["status"];
+      display_name: string;
+      division_name: string;
+      youth: boolean;
+      player_name_display: string | null;
+    }[]
+  >`
+    select r.id, r.status, r.display_name, d.name as division_name,
+           d.youth, d.player_name_display
+    from registrations r join divisions d on d.id = r.division_id
+    where r.group_id = ${reg.group_id}
+    order by r.created_at, r.id`;
+
+  // access_token_hash lives on the GROUP (V364) — shared by every entry, so
+  // any one of them (regByRef's oldest pick) reads it correctly regardless
+  // of which entry is actually being withdrawn. Not constant-time: the
+  // token is OPTIONAL here, so unlike groupByRef's required-token gate there
+  // is no ref-vs-token enumeration distinction to protect (same rule
+  // publicRegistrationStatusByRef's canWithdraw already applies).
+  const tokenValid = !!token && hashRegistrationToken(token) === reg.access_token_hash;
+
+  return {
+    ref_code: reg.ref_code!,
+    competition_name: ctx.comp_name,
+    competition_slug: ctx.comp_slug,
+    org_slug: ctx.org_slug,
+    org_name: ctx.org_name,
+    starts_on: ctx.starts_on,
+    ends_on: ctx.ends_on,
+    created_at: new Date(reg.created_at).toISOString(),
+    can_withdraw: tokenValid,
+    entries: entries.map((e) => ({
+      id: e.id,
+      status: e.status,
+      display_name: maskDisplayName(
+        e.display_name,
+        resolveNameDisplay(e.player_name_display, e.youth),
+      ),
+      division_name: e.division_name,
+      // Per-entry, not inherited from the cart's (oldest-entry-derived) reg
+      // row — see PublicCartEntryView.can_withdraw's doc comment for why.
+      can_withdraw: tokenValid && e.status !== "withdrawn",
+    })),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -2513,6 +2965,45 @@ export async function groupByRef(ref: string, accessToken: string): Promise<Grou
   if (!isValidRefCode(canonical)) throw notFound();
   const [group] = await sql<RegistrationGroupRow[]>`
     select * from registration_groups where ref_code = ${canonical}`;
+  return buildGroupStatusView(group, accessToken, notFound);
+}
+
+const GROUP_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The whole cart by its DB id (RS006 §C) — the shape the post-submit status
+ * page actually navigates to (`?rid=<group_id>&token=...`), matching the
+ * SAME convention `buildCartMail`'s statusUrl and
+ * `createRegistrationCheckout`'s Stripe success/cancel URLs already mint.
+ * Keyed on `id` rather than `ref_code` deliberately: `ref_code` is nullable
+ * on the schema (a submit whose ref-mint retries were exhausted still
+ * commits the cart — see `submitRegistrationGroup`), so a status link built
+ * right after submit needs the ALWAYS-present primary key, not the
+ * sometimes-absent human-quotable one. Same token-gate contract as
+ * `groupByRef` (see that function's own doc comment for the three security
+ * claims): a wrong token and a nonexistent id are indistinguishable, and a
+ * malformed id string 404s cleanly rather than reaching the DB as invalid
+ * `uuid` input syntax.
+ */
+export async function groupById(id: string, accessToken: string): Promise<GroupStatusView> {
+  const notFound = () => new HttpError(404, "registration not found");
+  if (!GROUP_ID_RE.test(id)) throw notFound();
+  const [group] = await sql<RegistrationGroupRow[]>`
+    select * from registration_groups where id = ${id}`;
+  return buildGroupStatusView(group, accessToken, notFound);
+}
+
+/** Shared by `groupByRef`/`groupById` once each has resolved its own
+ *  candidate row (or none) by its own key — token-checks it and, on success,
+ *  assembles the full `GroupStatusView` (competition/org context, entries,
+ *  players). Kept as ONE function so the token-gate's timing/shape
+ *  guarantees (see `groupByRef`'s doc comment) and the entries/players
+ *  assembly can never drift between the two lookup paths. */
+async function buildGroupStatusView(
+  group: RegistrationGroupRow | undefined,
+  accessToken: string,
+  notFound: () => HttpError,
+): Promise<GroupStatusView> {
   const tokenOk = tokenMatchesHash(accessToken, group?.access_token_hash ?? DUMMY_ACCESS_HASH);
   if (!group || !tokenOk) throw notFound();
 
@@ -2621,6 +3112,61 @@ export function notifyRefund(reg: RegistrationWithGroupRow, ctx: DivisionCtx, am
     currency: reg.currency,
     refCode: reg.ref_code,
   }).catch(() => {});
+}
+
+/** Plain string for a caught refund error — never rendered to a customer,
+ *  only into the staff alert body/log below. */
+function errText(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  return String(err);
+}
+
+/**
+ * Best-effort staff alert (this task's gap): a registration refund FAILED,
+ * so the organiser now owes a registrant money that never moved.
+ * `registration.refund_failed` (the audit call every caller keeps making
+ * right alongside this) is written and never read outside tests — without
+ * this, the failure is invisible until the registrant complains.
+ *
+ * NEVER THROWS, and gated on STAFF_ALERT_EMAIL before anything else — the
+ * same discipline as maybeAlertOrgRepriceFailed (billing-events.ts) /
+ * maybeAlertOrgAllowance (extra-orgs.ts), which this deliberately mirrors.
+ * Every call site sits on a refund's OWN failure path, so an alert that
+ * threw would turn "a refund failed" into "the webhook/request fails and
+ * retries forever" — telemetry strictly worse than the fault it reports.
+ * Awaited rather than fire-and-forget: this path is rare, nothing here is
+ * user-facing latency a registrant/organiser is waiting on, and a floating
+ * promise cannot be tested honestly.
+ *
+ * Goes to the PLATFORM OPERATOR only (owner ruling) — never the organiser or
+ * the registrant. The usual causes (a restricted connected account, a
+ * reversed transfer with no headroom, a disconnected destination) are
+ * Connect/platform-level and not something an organiser can act on;
+ * alerting them would produce alarm with no remedy. An organiser-facing
+ * console surface is out of scope here.
+ *
+ * Exported so the never-throws contract can be tested DIRECTLY rather than
+ * through a caller's own catch, which would hide a missing wrapper.
+ */
+export async function maybeAlertRegistrationRefundFailed(opts: {
+  registrationId: string;
+  orgId: string;
+  competitionId: string;
+  amountCents: number;
+  currency: string;
+  paymentIntentId: string | null;
+  reason: string;
+}): Promise<void> {
+  try {
+    const alertTo = process.env.STAFF_ALERT_EMAIL;
+    if (!alertTo) return;
+    await sendRegistrationRefundFailedAlertEmail({ to: alertTo, ...opts });
+  } catch (err) {
+    log.error(
+      { registrationId: opts.registrationId, orgId: opts.orgId, err },
+      "registrations: refund-failed alert failed",
+    );
+  }
 }
 
 async function withdrawCore(reg: RegistrationWithGroupRow, actorId: string | null): Promise<void> {
@@ -2734,13 +3280,22 @@ async function withdrawCore(reg: RegistrationWithGroupRow, actorId: string | nul
         stripe_refund_id: refund.id,
       }, actorId);
       notifyRefund(locked, ctx, remaining);
-    } catch {
+    } catch (err) {
       // Refund failure must not undo the withdrawal — surfaces on the
       // organiser console (withdrawn + refunded_cents < amount_cents).
       await audit(sql, ctx.competition_id, ctx.org_id, "registration.refund_failed", {
         registration_id: reg.id,
         mode: "auto",
       }, actorId);
+      await maybeAlertRegistrationRefundFailed({
+        registrationId: reg.id,
+        orgId: ctx.org_id,
+        competitionId: ctx.competition_id,
+        amountCents: remaining,
+        currency: locked.currency,
+        paymentIntentId: locked.payment_intent_id,
+        reason: errText(err),
+      });
     }
   }
 }

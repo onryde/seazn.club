@@ -2328,7 +2328,16 @@ export const PublicRegistrationDivision = z.object({
   open: z.boolean(),
   /** 'window' | 'full' (waitlist only) | 'payments_unavailable' | null */
   closed_reason: z.string().nullable(),
+  /** V364 first-class columns (RS006 W1): the ENTRIES step badges these and
+   *  greys a self-ineligible division using the same category/age-band
+   *  predicates the server evaluates with (@/lib/registration-rules). */
+  category: z.string().nullable(),
+  age_min: z.number().int().nullable(),
+  age_max: z.number().int().nullable(),
+  /** Team-only; drives the ENTRIES step's free-agent option. */
+  allow_free_agents: z.boolean(),
   requires_dob: z.boolean(),
+  requires_gender: z.boolean(),
   /** Youth division (v3/11 gap 8): the form always adds guardian consent. */
   youth: z.boolean(),
   form_fields: z.array(RegistrationFormField),
@@ -2402,22 +2411,31 @@ export const PublicRegisterGroupEntry = z.object({
  * in this file.
  *
  * #402 lineage: the pre-redesign single-entry `PublicRegisterRequest` had
- * the same self-declaration coherence rule, expressed per-player-row (a
- * top-level `registering_self` PLUS a `players[].self` flag — see this
- * file's history at `850cc6308^` and `public-register-request.test.ts` at
- * that revision). The group shape collapses the two flags into one
- * per-entry pair (`registering_self` + `self_player_index`); the superRefine
- * below is that rule's cart-wide replacement: at most one self row across
- * every entry, a contact dob whenever one is claimed, and the claimed index
- * must land on a real player row (registration-submit.ts:384-390 silently
- * DROPS an unresolvable self declaration rather than erroring, so this is
- * the only place that tells the registrant their link didn't take).
+ * a self-declaration coherence rule, expressed per-player-row (a top-level
+ * `registering_self` PLUS a `players[].self` flag — see this file's history
+ * at `850cc6308^` and `public-register-request.test.ts` at that revision).
+ * The group shape collapses the two flags into one per-entry pair
+ * (`registering_self` + `self_player_index`); the superRefine below is that
+ * rule's per-entry replacement: a contact dob whenever ANY entry claims
+ * `registering_self`, and each claim's index must land on a real player row
+ * (registration-submit.ts:384-390 silently DROPS an unresolvable self
+ * declaration rather than erroring, so this is the only place that tells
+ * the registrant their link didn't take). A registrant MAY claim
+ * `registering_self` on more than one entry cart-wide (RS006: singles +
+ * doubles at the same tournament) — nothing here caps it, and
+ * `self_player_index` being a single int per entry already makes "one self
+ * row per ENTRY" true by construction, so no additional uniqueness check is
+ * needed.
  */
 export const PublicRegisterGroupRequest = z
   .object({
     contact: PublicRegisterGroupContact,
     locale: z.string().max(10).nullish(),
     privacy_consent: z.boolean(),
+    /** Optional — mirrors `privacy_consent` structurally but never blocks
+     *  submit (RS006 §A). Stamped the same way (timestamp + LEGAL_VERSION,
+     *  registration-submit.ts) when true; left null otherwise. */
+    media_consent: z.boolean().optional(),
     entries: z.array(PublicRegisterGroupEntry).min(1).max(10),
     /** Honeypot (v3/05 §4): hidden on the real form; the ROUTE decides what
      *  to do with a filled one, not this schema. */
@@ -2427,13 +2445,13 @@ export const PublicRegisterGroupRequest = z
     const selfEntries = v.entries
       .map((e, i) => ({ e, i }))
       .filter(({ e }) => e.registering_self);
-    if (selfEntries.length > 1) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["entries"],
-        message: "Only one entry cart-wide may be marked as yourself",
-      });
-    }
+    // A registrant may be `registering_self` on more than one entry (singles
+    // + doubles at the same tournament is the common case in racket sports).
+    // Nothing above this comment enforces a cart-wide cap any more — see
+    // `self_player_index`'s own field comment above: a single int per entry
+    // already makes "one self row PER ENTRY" true by construction, which is
+    // all uniqueness this shape ever needed. Do not reintroduce a cart-wide
+    // counter here "for safety" — that was the defect, not a guard.
     if (selfEntries.length > 0 && !v.contact.dob) {
       ctx.addIssue({
         code: "custom",

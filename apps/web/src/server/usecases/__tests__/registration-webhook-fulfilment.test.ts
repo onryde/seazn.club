@@ -18,7 +18,7 @@
 //
 // Real Postgres required; skipped without DATABASE_URL (matches every other
 // DB-backed usecase suite in this directory).
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import type Stripe from "stripe";
 
@@ -55,7 +55,37 @@ const stripeMock = vi.hoisted(() => {
 
 vi.mock("@/lib/stripe", () => ({ getStripe: () => stripeMock.stripe }));
 
+// CHANGE 1 resilience (case 15): forces the drift check's OWN select to
+// reject without touching anything confirmPaidRegistration reads, by
+// intercepting only the ONE tagged-template call whose text contains
+// `dbFaultMock.marker` and rejecting it — every other call (including every
+// fixture write and confirmPaidRegistration's own tx`...` queries, which run
+// through a DIFFERENT client object from sql.begin(), never through this
+// wrapped `sql` at all) passes straight through to the real Postgres client.
+// `marker` defaults to null, which matches nothing, so this is inert for
+// every other test in the file.
+const dbFaultMock = vi.hoisted(() => ({ marker: null as string | null }));
+vi.mock("@/lib/db", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/db")>();
+  const wrapped = new Proxy(actual.sql, {
+    apply(target, thisArg, args) {
+      const marker = dbFaultMock.marker;
+      const strings = args[0];
+      if (
+        marker &&
+        Array.isArray(strings) &&
+        (strings as unknown[]).some((s) => typeof s === "string" && s.includes(marker))
+      ) {
+        return Promise.reject(new Error("simulated DB failure for test: " + marker));
+      }
+      return Reflect.apply(target, thisArg, args);
+    },
+  }) as typeof actual.sql;
+  return { ...actual, sql: wrapped };
+});
+
 import { sql } from "@/lib/db";
+import { log } from "@/server/logger";
 import { balance, walletIdFor } from "@/lib/credits";
 import { processStripeEvent, runEvent } from "../billing-events";
 import { handleRegistrationCheckoutCompleted } from "../registrations";
@@ -99,6 +129,18 @@ beforeEach(() => {
   stripeMock.chargeRetrieve.mockReset();
   stripeMock.reversalCreate.mockReset().mockResolvedValue({ id: "trr_test_1" });
   stripeMock.reversalList.mockReset().mockResolvedValue({ data: [] });
+});
+
+// `log` is a module-level singleton shared by every `it()` in this file —
+// without this, a `vi.spyOn(log, "error")` installed by one test (cases
+// 13-14 below) is REUSED, not re-wrapped, by the next test that spies on
+// the same method (vitest returns the existing mock rather than nesting a
+// second one), so its `.mock.calls` history leaks a PRIOR test's call into
+// a later test's `toHaveBeenCalledWith`/`not.toHaveBeenCalled` assertions —
+// found the hard way: case 14 failed with case 13's own mismatch payload.
+afterEach(() => {
+  vi.restoreAllMocks();
+  dbFaultMock.marker = null;
 });
 
 afterAll(async () => {
@@ -355,5 +397,129 @@ describe.skipIf(!HAS_DB)("registration webhook fulfilment (RS002/RS003 regressio
     const after = await loadWithGroup(res.registration.id);
     expect(after.entrant_id).toBe(entrantId); // no second entrant
     expect(await auditCount("registration.confirmed", res.registration.id)).toBe(1); // no second confirm audit
+  });
+
+  // -------------------------------------------------------------------------
+  // Destination-account drift (CHANGE 1, cases 13-16, payment-integrity).
+  // 15-16 are the review fixup: the check had no try/catch of its own (a
+  // transient failure on its OWN select/audit could abort the whole event,
+  // contradicting its own "detect, never block" call-site comment) and no
+  // guard against re-recording the SAME drift on a redelivery.
+  // -------------------------------------------------------------------------
+
+  it("[13] a destination account that changed since mint still confirms the entry, but records the drift for the organiser", async () => {
+    const { orgId, competition, division, settings } = await stripeRig();
+    const [orgBefore] = await sql<{ stripe_account_id: string }[]>`
+      select stripe_account_id from organizations where id = ${orgId}`;
+    const mintedDestination = orgBefore!.stripe_account_id;
+    const res = await seedRegistration(competition.id, division.id, settings, { amountCents: 500 });
+
+    // The org reconnects a DIFFERENT Stripe account after mint, before this
+    // still-open session gets paid — exactly the hazard CHANGE 1 detects.
+    const reconnectedAccount = "acct_" + randomUUID().slice(0, 8);
+    await sql`update organizations set stripe_account_id = ${reconnectedAccount} where id = ${orgId}`;
+
+    const session = fakeSession(res.registration.id, 500);
+    (session.metadata as Record<string, string>).destination_account = mintedDestination;
+    const errSpy = vi.spyOn(log, "error").mockImplementation(() => undefined as never);
+
+    await handleRegistrationCheckoutCompleted(session);
+
+    const row = await loadWithGroup(res.registration.id);
+    expect(row.status).toBe("confirmed"); // still confirms — the registrant paid in good faith
+    expect(row.entrant_id).not.toBeNull();
+    expect(errSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mintedDestination,
+        currentDestination: reconnectedAccount,
+        sessionId: session.id,
+      }),
+      expect.stringContaining("destination account"),
+    );
+    const [drift] = await sql<{ n: string }[]>`
+      select count(*)::text as n from competition_events
+      where type = 'registration.destination_account_mismatch'
+        and payload->>'checkout_session_id' = ${session.id}`;
+    expect(Number(drift!.n)).toBe(1);
+  });
+
+  it("[14] a destination account that still matches the org's current account writes no drift audit row", async () => {
+    const { orgId, competition, division, settings } = await stripeRig();
+    const [org] = await sql<{ stripe_account_id: string }[]>`
+      select stripe_account_id from organizations where id = ${orgId}`;
+    const res = await seedRegistration(competition.id, division.id, settings, { amountCents: 500 });
+    const session = fakeSession(res.registration.id, 500);
+    (session.metadata as Record<string, string>).destination_account = org!.stripe_account_id;
+    const errSpy = vi.spyOn(log, "error").mockImplementation(() => undefined as never);
+
+    await handleRegistrationCheckoutCompleted(session);
+
+    const row = await loadWithGroup(res.registration.id);
+    expect(row.status).toBe("confirmed");
+    expect(errSpy).not.toHaveBeenCalled();
+    const [drift] = await sql<{ n: string }[]>`
+      select count(*)::text as n from competition_events
+      where type = 'registration.destination_account_mismatch'
+        and payload->>'checkout_session_id' = ${session.id}`;
+    expect(Number(drift!.n)).toBe(0);
+  });
+
+  it("[15] the drift check's own select failing does not block fulfilment — every entry still confirms, and the failure is logged, not swallowed silently", async () => {
+    const { competition, division, settings } = await stripeRig();
+    const a = await seedRegistration(competition.id, division.id, settings, {
+      displayName: "Entry A",
+      amountCents: 500,
+    });
+    const b = await seedSecondEntry(a.registration.group_id, division.id, 500, "Entry B");
+    const session = fakeSession([a.registration.id, b.id], 1000);
+    (session.metadata as Record<string, string>).destination_account = "acct_whatever_mint_time";
+    const errSpy = vi.spyOn(log, "error").mockImplementation(() => undefined as never);
+    // Unique within registrations.ts to checkDestinationAccountDrift's own
+    // select (the join to `organizations`) — confirmPaidRegistration never
+    // reads that table, and runs its own queries through a tx object from
+    // sql.begin(), never through this wrapped `sql`, so it is untouched.
+    dbFaultMock.marker = "o.stripe_account_id";
+
+    await expect(handleRegistrationCheckoutCompleted(session)).resolves.toBeUndefined();
+
+    dbFaultMock.marker = null;
+    const aAfter = await loadWithGroup(a.registration.id);
+    const bAfter = await loadWithGroup(b.id);
+    expect(aAfter.status).toBe("confirmed"); // the drift check's own failure never reached the loop
+    expect(bAfter.status).toBe("confirmed");
+    expect(errSpy).toHaveBeenCalled(); // recorded, not silently eaten
+    const [drift] = await sql<{ n: string }[]>`
+      select count(*)::text as n from competition_events
+      where type = 'registration.destination_account_mismatch'
+        and payload->>'checkout_session_id' = ${session.id}`;
+    expect(Number(drift!.n)).toBe(0); // never got far enough to write one
+  });
+
+  it("[16] a redelivered event re-detecting the SAME drift writes only one audit row and logs only once", async () => {
+    const { orgId, competition, division, settings } = await stripeRig();
+    const [orgBefore] = await sql<{ stripe_account_id: string }[]>`
+      select stripe_account_id from organizations where id = ${orgId}`;
+    const mintedDestination = orgBefore!.stripe_account_id;
+    const res = await seedRegistration(competition.id, division.id, settings, { amountCents: 500 });
+    const reconnectedAccount = "acct_" + randomUUID().slice(0, 8);
+    await sql`update organizations set stripe_account_id = ${reconnectedAccount} where id = ${orgId}`;
+    const session = fakeSession(res.registration.id, 500);
+    (session.metadata as Record<string, string>).destination_account = mintedDestination;
+    const errSpy = vi.spyOn(log, "error").mockImplementation(() => undefined as never);
+
+    await handleRegistrationCheckoutCompleted(session);
+    // Same session object, called directly a second time — the same
+    // "redelivery bypasses billing_events" shape as case 12, but this time
+    // proving CHANGE 1's OWN guard, not confirmPaidRegistration's.
+    await handleRegistrationCheckoutCompleted(session);
+
+    const row = await loadWithGroup(res.registration.id);
+    expect(row.status).toBe("confirmed");
+    expect(errSpy).toHaveBeenCalledTimes(1); // not once per call
+    const [drift] = await sql<{ n: string }[]>`
+      select count(*)::text as n from competition_events
+      where type = 'registration.destination_account_mismatch'
+        and payload->>'checkout_session_id' = ${session.id}`;
+    expect(Number(drift!.n)).toBe(1); // not one per call
   });
 });

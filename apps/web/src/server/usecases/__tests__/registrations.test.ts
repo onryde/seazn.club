@@ -53,6 +53,12 @@ const emailMock = vi.hoisted(() => ({
   registration: vi.fn(),
   forceRegistrationResult: null as boolean | null,
   forceRegistrationError: null as Error | null,
+  // RS006 follow-up: staff alert for a registration refund that FAILS.
+  // Observed the same way as disputeLost above — a bare vi.fn(), asserted
+  // on directly — rather than forwarded to the real implementation, since
+  // these tests only need to prove the call sites TRIGGER it, not exercise
+  // its own template rendering (that lives in registration-refund-alert.test.ts).
+  registrationRefundFailedAlert: vi.fn().mockResolvedValue(true),
 }));
 vi.mock("@/lib/email", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/email")>();
@@ -65,6 +71,7 @@ vi.mock("@/lib/email", async (importOriginal) => {
       if (emailMock.forceRegistrationResult !== null) return emailMock.forceRegistrationResult;
       return actual.sendRegistrationEmail(opts);
     },
+    sendRegistrationRefundFailedAlertEmail: emailMock.registrationRefundFailedAlert,
   };
 });
 
@@ -280,6 +287,7 @@ beforeEach(() => {
   emailMock.registration.mockClear();
   emailMock.forceRegistrationResult = null;
   emailMock.forceRegistrationError = null;
+  emailMock.registrationRefundFailedAlert.mockClear();
 });
 
 afterEach(() => {
@@ -674,6 +682,39 @@ describe.skipIf(!HAS_DB)("registration flows (doc 16 §1.1, PROMPT-20a)", () => 
     expect(promoted.promoted_at).not.toBeNull();
   });
 
+  it("RS006: withdrawCore alerts staff when the pre-lock auto-refund FAILS, but the withdrawal still succeeds", async () => {
+    const { orgId, competition, division, settings } = await stripeRig();
+    const res = await seedRegistration(competition.id, division.id, settings);
+    await handleRegistrationCheckoutCompleted(fakeSession(res.registration.id, 500)); // paid + payment_intent_id set
+    stripeMock.refundCreate.mockClear();
+    stripeMock.refundCreate.mockRejectedValueOnce(new Error("insufficient funds on connected account"));
+    process.env.STAFF_ALERT_EMAIL = "ops@seazn.test";
+    try {
+      const view = await withdrawRegistrationPublic(res.registration.id, res.access_token); // pre-lock auto-refund attempt
+      // Fail-open contract (withdrawCore's own comment above the catch):
+      // the refund failure must not undo the withdrawal.
+      expect(view.status).toBe("withdrawn");
+
+      expect(emailMock.registrationRefundFailedAlert).toHaveBeenCalledTimes(1);
+      const args = emailMock.registrationRefundFailedAlert.mock.calls[0]![0];
+      expect(args.to).toBe("ops@seazn.test");
+      expect(args.registrationId).toBe(res.registration.id);
+      expect(args.orgId).toBe(orgId);
+      expect(args.competitionId).toBe(competition.id);
+      expect(args.amountCents).toBe(500);
+      expect(args.currency).toBe(settings.currency);
+      expect(args.paymentIntentId).toContain("pi_test_");
+      expect(args.reason).toBe("insufficient funds on connected account");
+
+      // The refund really never landed — the alert is reporting a REAL gap,
+      // not a false positive.
+      const row = await loadWithGroup(res.registration.id);
+      expect(row.refunded_cents).toBe(0);
+    } finally {
+      delete process.env.STAFF_ALERT_EMAIL;
+    }
+  });
+
   it("post-lock withdrawal does NOT auto-refund; manual partial refund works and over-refund 422s", async () => {
     const { orgId, ownerId } = await seedOrg("pro");
     const owner = asOwner(orgId, ownerId);
@@ -965,12 +1006,122 @@ describe.skipIf(!HAS_DB)("registration flows (doc 16 §1.1, PROMPT-20a)", () => 
     });
     const ref = registration.ref_code!;
 
-    await expect(withdrawRegistrationByRef(ref, "rg_wrong-token")).rejects.toThrow(/not found/);
+    await expect(
+      withdrawRegistrationByRef(ref, registration.id, "rg_wrong-token"),
+    ).rejects.toThrow(/not found/);
     const still = await loadWithGroup(registration.id);
     expect(still.status).toBe("pending");
 
-    const view = await withdrawRegistrationByRef(ref, access_token);
-    expect(view.status).toBe("withdrawn");
+    const view = await withdrawRegistrationByRef(ref, registration.id, access_token);
+    expect(view.entries.find((e) => e.id === registration.id)?.status).toBe("withdrawn");
+  });
+
+  // RS006 follow-up (data-integrity fix): /r/[ref] shows the WHOLE cart, but
+  // withdraw used to always resolve+act on the OLDEST entry regardless of
+  // which one the caller meant — a multi-entry cart had one undifferentiated
+  // Withdraw control that silently withdrew the wrong row. Withdraw is now
+  // per-entry: the caller names the target id, and it's verified to belong
+  // to the ref's own group before withdrawCore ever runs.
+  it("withdrawing entry 2 of a 3-entry cart withdraws EXACTLY entry 2, leaving 1 and 3 untouched", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    const settings = await putRegistrationSettings(owner, division.id, {
+      enabled: true,
+      entrant_kind: "individual",
+      fee_cents: 0,
+      form_fields: [],
+      opens_at: null,
+      closes_at: null,
+      capacity: null,
+      refund_lock_at: null,
+    });
+    const { registration: entry1, access_token } = await seedRegistration(
+      competition.id,
+      division.id,
+      settings,
+      { refCode: generateRefCode(), displayName: "Singles" },
+    );
+    const entry2 = await seedSecondEntry(entry1.group_id, division.id, 0, "Doubles");
+    const entry3 = await seedSecondEntry(entry1.group_id, division.id, 0, "Mixed");
+    const ref = entry1.ref_code!;
+
+    await withdrawRegistrationByRef(ref, entry2.id, access_token);
+
+    const [after1, after2, after3] = await Promise.all([
+      loadWithGroup(entry1.id),
+      loadWithGroup(entry2.id),
+      loadWithGroup(entry3.id),
+    ]);
+    expect(after2.status).toBe("withdrawn");
+    expect(after1.status).toBe("pending");
+    expect(after3.status).toBe("pending");
+  });
+
+  it("a valid token paired with a registration id from ANOTHER group withdraws nothing (SECURITY)", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    const settings = await putRegistrationSettings(owner, division.id, {
+      enabled: true,
+      entrant_kind: "individual",
+      fee_cents: 0,
+      form_fields: [],
+      opens_at: null,
+      closes_at: null,
+      capacity: null,
+      refund_lock_at: null,
+    });
+    // Two INDEPENDENT carts (own group, own ref, own token) — the realistic
+    // shape of the attack: the caller legitimately holds their OWN ref+token
+    // (myRef/myToken, the page they're actually on) and swaps in an entry id
+    // harvested off a DIFFERENT cart's public /r/[ref] page (entries[].id is
+    // unconditionally public — see publicCartByRef).
+    const { registration: mine, access_token: myToken } = await seedRegistration(
+      competition.id,
+      division.id,
+      settings,
+      { refCode: generateRefCode(), displayName: "Mine" },
+    );
+    const { registration: theirs } = await seedRegistration(
+      competition.id,
+      division.id,
+      settings,
+      { refCode: generateRefCode(), displayName: "Theirs" },
+    );
+    const myRef = mine.ref_code!;
+
+    await expect(withdrawRegistrationByRef(myRef, theirs.id, myToken)).rejects.toThrow(/not found/);
+
+    const stillTheirs = await loadWithGroup(theirs.id);
+    expect(stillTheirs.status).toBe("pending");
+    const stillMine = await loadWithGroup(mine.id);
+    expect(stillMine.status).toBe("pending");
+  });
+
+  it("no token still withdraws nothing", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    const settings = await putRegistrationSettings(owner, division.id, {
+      enabled: true,
+      entrant_kind: "individual",
+      fee_cents: 0,
+      form_fields: [],
+      opens_at: null,
+      closes_at: null,
+      capacity: null,
+      refund_lock_at: null,
+    });
+    const { registration } = await seedRegistration(competition.id, division.id, settings, {
+      refCode: generateRefCode(),
+    });
+    const ref = registration.ref_code!;
+
+    await expect(withdrawRegistrationByRef(ref, registration.id, "")).rejects.toThrow(/not found/);
+
+    const still = await loadWithGroup(registration.id);
+    expect(still.status).toBe("pending");
   });
 
   // ── Youth privacy (v3/11 gap 8, PROMPT-34) ──
@@ -1598,6 +1749,13 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
     });
     const ref = res.registration.ref_code as string;
     const session = fakeSession(res.registration.id, 500);
+    // The cart's OWN stored session — reconcileRegistrationBySession only
+    // ever retrieves the session THIS cart minted (security fix, RS006): a
+    // sessionId that doesn't match this stored value is rejected before any
+    // Stripe call, so the test must stamp it to exercise the retrieve path
+    // at all.
+    await sql`update registration_groups set checkout_session_id = ${session.id}
+              where id = ${res.registration.group_id}`;
 
     // Mismatched session (different registration, none of it this ref's) →
     // no-op.
@@ -2197,6 +2355,35 @@ describe.skipIf(!HAS_DB)("RS002: entry-level refunds (multi-entry cart hazards)"
     expect(row.group_refunded_cents).toBe(500);
   });
 
+  it("RS006: confirmPaidRegistration alerts staff when a late-payment refund FAILS", async () => {
+    const { orgId, competition, division, settings } = await stripeRig();
+    const res = await seedRegistration(competition.id, division.id, settings);
+    await withdrawRegistrationPublic(res.registration.id, res.access_token); // pending -> withdrawn, never paid, no refund fires here
+    stripeMock.refundCreate.mockClear();
+    stripeMock.refundCreate.mockRejectedValueOnce(new Error("card declined"));
+    process.env.STAFF_ALERT_EMAIL = "ops@seazn.test";
+    try {
+      const session = fakeSession(res.registration.id, 500);
+      await handleRegistrationCheckoutCompleted(session); // late payment on an already-withdrawn reg -> refund attempted -> fails
+
+      expect(emailMock.registrationRefundFailedAlert).toHaveBeenCalledTimes(1);
+      const args = emailMock.registrationRefundFailedAlert.mock.calls[0]![0];
+      expect(args.to).toBe("ops@seazn.test");
+      expect(args.registrationId).toBe(res.registration.id);
+      expect(args.orgId).toBe(orgId);
+      expect(args.competitionId).toBe(competition.id);
+      expect(args.amountCents).toBe(500);
+      expect(args.currency).toBe(settings.currency);
+      expect(args.paymentIntentId).toBe(session.payment_intent);
+      expect(args.reason).toBe("card declined");
+
+      const row = await loadWithGroup(res.registration.id);
+      expect(row.refunded_cents).toBe(0); // the refund really never landed
+    } finally {
+      delete process.env.STAFF_ALERT_EMAIL;
+    }
+  });
+
   it("review (major): a lost dispute accumulates via dispute.amount and never regresses the cart total", async () => {
     const { owner, a, b, intent } = await twoEntryCart(1000, 700);
     await refundRegistration(owner, a.id, undefined); // group_refunded_cents -> 1000
@@ -2597,7 +2784,7 @@ describe.skipIf(!HAS_DB)("RS002 W5 review: rejected is terminal from every write
 
     let byRefErr: HttpError | undefined;
     try {
-      await withdrawRegistrationByRef(registration.ref_code!, access_token);
+      await withdrawRegistrationByRef(registration.ref_code!, registration.id, access_token);
     } catch (e) {
       byRefErr = e as HttpError;
     }

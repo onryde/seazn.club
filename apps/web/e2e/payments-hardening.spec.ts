@@ -44,8 +44,9 @@ const GENERIC_CONFIG = {
  *  old "card payments temporarily unavailable" proof is dead.
  *
  *  RS001 deleted the only entry point that could observe this cap (the public
- *  register POST — see `submitPublicRegistration`), so as of RS001 this is
- *  read only by T10's PARKED body. Owed back by RS006/RS007. */
+ *  register POST — see `submitPublicRegistration`); RS006 restored that
+ *  route (cart-shaped) and the register page's live stepper, so T10 reads
+ *  this live again rather than as parked/unexecuted body. */
 const COMMUNITY_ENTRANT_CAP = 64;
 
 // ---------------------------------------------------------------------------
@@ -234,8 +235,9 @@ async function seedStripeDivision(
  *  (V363/V364 split the old single-row shape); org_id is trigger-filled on both
  *  tables, never passed — `orgId` stays a parameter only so T10's frozen call
  *  site needs no edit. event-pass.spec.ts's sibling fillDivision was deleted
- *  outright (its only caller went with it); this one survives because T10's
- *  PARKED body (test.skip, RS006/RS007) still calls it. */
+ *  outright (its only caller went with it); this one survives because T10
+ *  (restored RS006, no longer test.skip'd) still calls it directly rather
+ *  than round-tripping 64 entries through the public endpoint. */
 async function fillDivision(divisionId: string, _orgId: string, taken: number): Promise<void> {
   const tag = randomBytes(5).toString("hex");
   await withDb(async (sql) => {
@@ -254,17 +256,23 @@ async function fillDivision(divisionId: string, _orgId: string, taken: number): 
   });
 }
 
-/** One public registration POST. Returns the HTTP status and the created row's
- *  registration status ('pending' = holds a spot, 'waitlisted' = over the cap).
+/** One public registration POST — a ONE-entry cart (`PublicRegisterGroupRequest`,
+ *  api-v1/schemas.ts:~2430). Returns the HTTP status and the created entry's
+ *  registration status ('pending' = holds a spot, 'waitlisted' = over the
+ *  cap), read off `entries[0]` of the cart-shaped response
+ *  (`PublicRegisterGroupResponse`) — every call here posts exactly one
+ *  entry, so `entries` is always length 1.
  *  The card division's checkout mint fails on the seeded fake Connect account and
- *  is swallowed (createRegistrationCheckout try/catch), so a pending entry still
- *  ACKs 201 without any real Stripe call — this stays CI-runnable.
+ *  is swallowed (route.ts's try/catch around mintGroupCheckout), so a pending
+ *  entry still ACKs 201 without any real Stripe call — this stays CI-runnable.
  *
- *  RS001 DELETED this route (`submitRegistration` — see registrations.ts's
- *  "Public: submit — REMOVED" block); no surviving endpoint can create a
- *  registration. This helper is dead code kept only for T10's PARKED body
- *  (test.skip, RS006/RS007 own restoring it) — every other caller was removed
- *  (T3/T7's cap-drop halves; event-pass.spec.ts's U7 outright). */
+ *  RS001 deleted the old single-entry `submitRegistration` route; RS006
+ *  restored public submit as `submitRegistrationGroup`, a cart. No
+ *  `registering_self`/`self_player_index` here — T10 only cares about the
+ *  capacity outcome, and leaving self-declaration unset keeps every request
+ *  out of the schema's superRefine dob-required branch entirely. The
+ *  honeypot (`website`) is simply never sent — a filled value 400s the
+ *  whole submit (route.ts). */
 async function submitPublicRegistration(
   request: APIRequestContext,
   orgSlug: string,
@@ -272,17 +280,27 @@ async function submitPublicRegistration(
   divisionId: string,
   who: string,
 ): Promise<{ status: number; data?: { status: string } }> {
-  return apiJson<{ status: string }>(
+  const res = await apiJson<{ entries: { status: string }[] }>(
     request,
     `/api/v1/public/orgs/${orgSlug}/competitions/${compSlug}/register`,
     "POST",
     {
-      division_id: divisionId,
-      display_name: who,
-      contact_email: `${who.toLowerCase().replace(/\W+/g, "-")}-${randomBytes(3).toString("hex")}@example.com`,
+      contact: {
+        name: who,
+        email: `${who.toLowerCase().replace(/\W+/g, "-")}-${randomBytes(3).toString("hex")}@example.com`,
+      },
       privacy_consent: true,
+      entries: [
+        {
+          division_id: divisionId,
+          entrant_kind: "individual",
+          players: [{ full_name: who }],
+        },
+      ],
     },
   );
+  const entry = res.data?.entries?.[0];
+  return { status: res.status, data: entry ? { status: entry.status } : undefined };
 }
 
 /** Seed a pass row directly. `passKey` is REQUIRED: `pass_key` is `not null
@@ -522,7 +540,7 @@ test.describe("T3 · Event Pass refund revokes the pass", () => {
     // rather than assert
     // something that no longer proves anything, that half is dropped here
     // (same cause as event-pass.spec.ts's deleted U7); T10 keeps the fuller
-    // mechanism frozen under test.skip for RS006/RS007 to restore.
+    // mechanism and, as of RS006, runs it live again (no longer test.skip'd).
   });
 });
 
@@ -933,32 +951,21 @@ test.describe("T10 · a pass lifts the entrant cap on its own comp only", () => 
   test("Community org: entry 65 waitlists on the no-pass comp, holds a spot on the passed comp", async ({
     page,
   }) => {
-    // PARKED (RS001): this test's whole mechanism is 65 public submissions
-    // through /api/v1/public/orgs/{orgSlug}/competitions/{slug}/register,
-    // which RS001 deleted along with the rest of the old registration UI —
-    // no surviving endpoint can submit a registration (registrations.ts's
-    // "Public: submit — REMOVED" block; same cause as event-pass.spec.ts's
-    // deleted U7). There is no live path — public or organiser — that reads
-    // entrants.per_division.max the way this test needs, so seeding the
-    // waitlisted/pending rows directly would only assert the outcome we'd be
-    // hard-coding, not prove the cap actually moved with the pass. The body
-    // below (including the ~line-951 register-page nav, which now renders the
-    // CLOSED state and would need its own re-decision) is left intact,
-    // unexecuted, for RS006/RS007 to restore.
-    //
-    // RS003 UPDATE: the endpoint EXISTS again — but do NOT simply delete the
-    // skip. Two things changed under it:
-    //   1. `submitPublicRegistration` below still posts the OLD flat body
-    //      ({division_id, display_name, contact_email, privacy_consent}).
-    //      The route now takes `PublicRegisterGroupRequest` — a cart:
-    //      {contact:{name,email,...}, privacy_consent, entries:[{division_id,
-    //      entrant_kind, players:[...]}]}. Un-skipping without rewriting the
-    //      helper yields a 400 that looks like a capacity regression.
-    //   2. the register PAGE still renders its closed state until RS006, so
-    //      the nav below needs the re-decision noted above.
-    // Restoring this is real work, and it belongs with the session that owns
-    // the UI. See _INDEX.md's RS003 entry for the e2e debt it records.
-    test.skip(true, "RS001 deleted the public register POST — owed back by RS006/RS007");
+    // RESTORED (RS006): this test was PARKED (RS001, `test.skip`) because no
+    // surviving endpoint could submit a registration, then held again after
+    // RS003 brought the route back under a NEW cart-shaped wire contract
+    // that `submitPublicRegistration` didn't speak yet. Both gaps are closed
+    // now:
+    //   1. `submitPublicRegistration` posts the cart shape ({contact, entries:
+    //      [{division_id, entrant_kind, players:[...]}], privacy_consent}) and
+    //      reads the created entry's status off `entries[0]` of the response.
+    //   2. the register page's live stepper (register-stepper.tsx) renders
+    //      step 1 (WHO) whenever a division is open — the closed state
+    //      returns before the stepper ever mounts (register/page.tsx) — so
+    //      `#reg-who-name`'s presence below is the same "this comp is open"
+    //      proof the old pre-redesign radio-role probe gave; the new stepper
+    //      has no radio anywhere (division picks are buttons that add cart
+    //      entries), so that old locator could never resolve.
     // Connect stays LIVE; only the paid entitlement lapsed (community plan). V310
     // made registration.paid true on every plan, so card intake no longer closes
     // on plan loss — the entrant cap (community 64, pass 128) is the grant the pass
@@ -979,7 +986,7 @@ test.describe("T10 · a pass lifts the entrant cap on its own comp only", () => 
     // Both card divisions render OPEN now (registration.paid holds on community),
     // so the register page alone proves nothing — the cap is what separates them.
     await page.goto(`/shared/${org.orgSlug}/${passed.compSlug}/register`);
-    await expect(page.getByRole("radio").first()).toBeEnabled();
+    await expect(page.locator("#reg-who-name")).toBeVisible();
 
     const onPlain = await submitPublicRegistration(
       page.request, org.orgSlug, plain.compSlug, plainDiv.divisionId, "Plain 65",

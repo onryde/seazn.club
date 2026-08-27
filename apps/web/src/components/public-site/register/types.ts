@@ -1,0 +1,235 @@
+// RS006 public stepper — client state shapes. Pure types, no runtime code.
+//
+// Designed to map cleanly onto `PublicRegisterGroupRequest`
+// (server/api-v1/schemas.ts:2416) without reshaping later — the chassis +
+// WHO (step 1) + ENTRIES (step 2) were built first; steps 4-5 (CONSENT,
+// REVIEW→PAY) still extend this state, they do not replace it. See
+// `toGroupContact`/`toGroupEntry` in `cart.ts` for the mapping this shape
+// exists to make trivial once submit (step 5) lands.
+//
+// RS006 W3 (step 3 — DETAILS) added `RosterPlayerState`/`CartEntry.players`/
+// `CartEntry.answers` — see their own doc comments below for why they land
+// on `CartEntry` rather than a parallel per-entry map.
+
+export type Gender = "m" | "f" | "x";
+
+/** Step 1 (WHO) contact fields, plus step 4 (CONSENT)'s guardian pair —
+ *  mirrors `PublicRegisterGroupContact` (schemas.ts:2368) field-for-field,
+ *  including `guardian_name`/`guardian_consent`. Earlier RS006 waves (before
+ *  step 4 existed) deliberately left the guardian pair off this shape "this
+ *  session doesn't collect them, so they are intentionally absent here
+ *  rather than reserved-but-unused" — this is that later session: the wire
+ *  shape nests them under `contact` (not a sibling top-level field), so they
+ *  belong HERE, not on a separate consent-only type, to keep the 1:1 mapping
+ *  onto `PublicRegisterGroupContact` this file's header describes. */
+export interface ContactState {
+  name: string;
+  email: string;
+  /** ISO date (`YYYY-MM-DD`), or null until collected/needed. */
+  dob: string | null;
+  gender: Gender | null;
+  guardian_name: string | null;
+  guardian_consent: boolean;
+}
+
+export const EMPTY_CONTACT: ContactState = {
+  name: "",
+  email: "",
+  dob: null,
+  gender: null,
+  guardian_name: null,
+  guardian_consent: false,
+};
+
+/** Step 4 (CONSENT)'s two TOP-LEVEL wire fields (`PublicRegisterGroupRequest.
+ *  privacy_consent`/`.media_consent`, schemas.ts:2434 — siblings of `contact`,
+ *  not nested inside it, unlike the guardian pair above). Cart-wide, one
+ *  choice each for the whole submission. */
+export interface ConsentState {
+  privacy_consent: boolean;
+  media_consent: boolean;
+}
+
+export const EMPTY_CONSENT: ConsentState = { privacy_consent: false, media_consent: false };
+
+/** The subset of `PublicRegistrationDivision` (schemas.ts:2312) the chassis'
+ *  pure logic reads. Narrow on purpose — the same reason
+ *  registration-eligibility.ts's `EligibilityDivision` is narrow: callers
+ *  (including tests) can pass a hand-built object with no cast. */
+export interface DivisionLike {
+  division_id: string;
+  name: string;
+  entrant_kind: "team" | "individual" | "pair";
+  category: string | null;
+  age_min: number | null;
+  age_max: number | null;
+  requires_dob: boolean;
+  requires_gender: boolean;
+  allow_free_agents: boolean;
+  open: boolean;
+  closed_reason: string | null;
+  capacity: number | null;
+  remaining: number | null;
+  taken: number;
+  opens_at: string | null;
+  closes_at: string | null;
+  fee_cents: number;
+  currency: string;
+  payment_method: "offline" | "stripe";
+  /** Step 3's custom-questions renderer (design §4 step 3). A LOCAL shape,
+   *  not an import of `RegistrationFormField` (server/api-v1/schemas.ts) —
+   *  same "narrow on purpose" reasoning as the rest of this interface: a
+   *  hand-built test fixture needs no cast, and this file stays decoupled
+   *  from the wire schema module. Structurally identical to the wire shape
+   *  (schemas.ts:2153-2165), so a real `PublicRegistrationDivision` value
+   *  satisfies this with no mapping step. */
+  form_fields: FormFieldDef[];
+}
+
+/** See `DivisionLike.form_fields` above for why this is a local mirror of
+ *  `RegistrationFormField` rather than an import. */
+export interface FormFieldDef {
+  key: string;
+  label: string;
+  kind: "text" | "select" | "checkbox";
+  /** Present (min 1) only when `kind === "select"` — mirrors the wire
+   *  schema's `.refine`, not re-validated here (this is a read-only view of
+   *  organiser-authored config, never user input). */
+  options?: string[];
+  required: boolean;
+}
+
+/** One roster row, mid-edit (step 3 — DETAILS). Numeric/date-shaped fields
+ *  stay PLAIN STRINGS while being typed — the recovered `parseRoster`'s
+ *  `Player` shape (git history `76ef7987b`), renamed `name` -> `full_name`
+ *  to match the wire field (`PublicRegisterGroupPlayer.full_name`) instead
+ *  of inventing a second name for the same thing. Converted to the wire's
+ *  typed fields only at the submit-mapping boundary (`roster.ts`'s
+ *  `toGroupPlayer`) — this file stays a pure, controlled-`<input>`-friendly
+ *  editing shape, matching `ContactState`'s own convention
+ *  (`dob: string | null`, not `Date`).
+ *
+ *  `email`/`is_captain` are on the shape (matching the wire's full player
+ *  fields) but have NO dedicated input in this session's roster builder —
+ *  same scope line the OLD pre-redesign form drew (its `TeamRoster` never
+ *  collected email or a captain flag either); kept here so the state shape
+ *  — and `roster.ts`'s wire mapping — are complete even though the UI
+ *  doesn't populate them yet. */
+export interface RosterPlayerState {
+  full_name: string;
+  dob: string | null;
+  gender: Gender | null;
+  email: string;
+  /** Digits only, "" = unset — stays a string like `parseRoster`'s
+   *  `squad_number` (parsed to the wire's 0-999 integer only at submit). */
+  squad_number: string;
+  is_captain: boolean;
+}
+
+export const EMPTY_ROSTER_PLAYER: RosterPlayerState = {
+  full_name: "",
+  dob: null,
+  gender: null,
+  email: "",
+  squad_number: "",
+  is_captain: false,
+};
+
+/** One cart line, mid-build. `id` is CLIENT-ONLY — a stable React key and
+ *  the handle every reducer action and the self-link both address an entry
+ *  by — and is never sent to the server (`toGroupEntry` below drops it).
+ *
+ *  `players`/`answers` (step 3 — DETAILS) land HERE rather than a parallel
+ *  `Record<entryId, ...>` map for two reasons: `toGroupEntry`'s own doc
+ *  comment already anticipated "a caller spreads this together with those
+ *  once they exist" (i.e. per-ENTRY, not cart-wide), and `storage.ts`
+ *  persists the whole `CartState` as one blob — putting roster/answers on
+ *  `CartEntry` means mid-flow refresh survival (chassis rule) needs NO
+ *  changes to `storage.ts` at all. A free-agent entry's `players` stays
+ *  whatever it was seeded with (usually `[]`) and is never rendered (design
+ *  §4 step 3: "Free-agent entries need nothing extra"). */
+export interface CartEntry {
+  id: string;
+  division_id: string;
+  entrant_kind: "team" | "individual" | "pair";
+  team_name: string | null;
+  partner_name: string | null;
+  free_agent: boolean;
+  /** Individual: exactly 1 row. Pair: exactly 2 (the second IS the
+   *  "partner field for pairs" the design calls out — labeled distinctly
+   *  in entry-details.tsx, not a separate top-level field). Team:
+   *  unconstrained (0..50, matching `PublicRegisterGroupEntry.players.max(50)`
+   *  and, unlike individual/pair, the server places NO minimum on a team
+   *  roster — `registration-submit.ts` only rejects individual !== 1 and
+   *  pair !== 2, never team's count). Seeded by `cart.ts`'s `blankPlayers`
+   *  at ADD_ENTRY/DUPLICATE_ENTRY time, keyed off `entrant_kind` alone —
+   *  see that function's doc comment for why free-agent status doesn't
+   *  change the seed. */
+  players: RosterPlayerState[];
+  /** Step 3's `form_fields` answers, keyed by `FormFieldDef.key`. text/select
+   *  answers are strings, checkbox answers are booleans — a narrowing of
+   *  `PublicRegisterGroupEntry.answers`'s wire shape
+   *  (`z.record(z.string(), z.unknown())`) to what this renderer actually
+   *  ever produces. */
+  answers: Record<string, string | boolean>;
+  /** True when the CONTACT themselves is one of THIS entry's players —
+   *  mirrors `PublicRegisterGroupEntry.registering_self` (schemas.ts:2399)
+   *  1:1, including its field name. PER-ENTRY on purpose (RS006): a
+   *  registrant may link themselves on more than one cart entry at once
+   *  (singles + doubles at the same tournament is the common racket-sports
+   *  case) — the schema's superRefine no longer caps this cart-wide, so the
+   *  client state must not reintroduce that cap either. Set/cleared by
+   *  `cart.ts`'s `SET_ENTRY_SELF` action. */
+  registering_self: boolean;
+  /** 0-based index into THIS entry's own `players`, identifying which row
+   *  is the contact — mirrors `PublicRegisterGroupEntry.self_player_index`
+   *  1:1. Stays `null` until step 3 resolves it (an individual entry's
+   *  implied index-0 needs no value here at all — see `toGroupEntry`).
+   *  Reset to `null` whenever `registering_self` flips on THIS entry (a
+   *  freshly (re-)linked entry's roster hasn't been picked yet), and
+   *  shifted/cleared by `REMOVE_PLAYER` when a row before/at the linked
+   *  index is removed — see that action's own doc comment. */
+  self_player_index: number | null;
+  /** CLIENT-ONLY (never sent — `toGroupEntry` below does not include it),
+   *  same status as `id`. RS006 fix wave — set `true` the moment the
+   *  registrant EXPLICITLY unticks "This is me" on THIS entry
+   *  (`cart.ts`'s `SET_ENTRY_SELF`, `isSelf: false`); set back to `false`
+   *  the moment they explicitly RE-tick it (`SET_ENTRY_SELF`,
+   *  `isSelf: true`). Exists so `autoLinkObviousSelf`'s reactive
+   *  convenience (register-stepper.tsx's effect, keyed on
+   *  `cart.entries.length`) can tell "nobody has ever said no to this
+   *  entry" apart from "the registrant said no, and an UNRELATED
+   *  cart-shape change (adding then removing a DIFFERENT entry, which
+   *  re-fires that same effect) must not silently undo that." Without
+   *  this, the effect re-observes "exactly one, unlinked, unambiguous"
+   *  after the shape change and re-links it — submitting
+   *  `registering_self:true` (and the guardian-consent gate that comes
+   *  with it) for an entry the registrant explicitly said was not them.
+   *  Deliberately NOT touched by `clearSelfLinkWhenNotPlaying`'s cart-wide
+   *  clear (turning "I'm playing" off entirely) — that is not a per-entry
+   *  "not me" statement, and toggling "I'm playing" back on is expected to
+   *  re-arm auto-link the same way it does on a fresh visit (see that
+   *  function's own doc comment). Optional — not every hand-built
+   *  `CartEntry` fixture in this tree sets it, and `undefined` reads the
+   *  same as `false` everywhere it's checked. */
+  self_link_declined?: boolean;
+}
+
+/** The whole cart. Self-link state lives PER-ENTRY (`CartEntry.
+ *  registering_self`/`self_player_index` above) since RS006 — earlier this
+ *  was a single cart-level `selfEntryId`/`selfPlayerIndex` pair, enforcing
+ *  (via the client alone; the server never required it) that at most one
+ *  entry cart-wide could be the contact. That was a defect inherited from
+ *  the pre-redesign single-entry schema, not a real constraint: a
+ *  registrant may link themselves on more than one entry (singles +
+ *  doubles). Do not reintroduce a cart-level self field "for safety" —
+ *  that would bring the defect back one layer down. */
+export interface CartState {
+  entries: CartEntry[];
+}
+
+export const EMPTY_CART: CartState = { entries: [] };
+
+export const MAX_CART_ENTRIES = 10;
+
+export type StepId = "who" | "entries" | "details" | "consent" | "review";

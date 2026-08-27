@@ -131,21 +131,20 @@ describe("PublicRegisterGroupRequest", () => {
     expect(r.success).toBe(true);
   });
 
-  it("rejects TWO entries both marked registering_self — one contact, one row, cart-wide", () => {
-    expect(
-      issuePaths(
-        cart({
-          contact: contact({ dob: ADULT_DOB }),
-          entries: [
-            entry({ division_id: UUID_A, registering_self: true, self_player_index: 0 }),
-            entry({ division_id: UUID_B, registering_self: true, self_player_index: 0 }),
-          ],
-        }),
-      ),
-    ).toContain("entries");
+  it("accepts TWO entries both marked registering_self — a registrant may link themselves on more than one cart entry (e.g. singles + doubles)", () => {
+    const r = PublicRegisterGroupRequest.safeParse(
+      cart({
+        contact: contact({ dob: ADULT_DOB }),
+        entries: [
+          entry({ division_id: UUID_A, registering_self: true, self_player_index: 0 }),
+          entry({ division_id: UUID_B, registering_self: true, self_player_index: 0 }),
+        ],
+      }),
+    );
+    expect(r.success).toBe(true);
   });
 
-  it("accepts ONE entry marked registering_self (not two) with a contact dob", () => {
+  it("accepts ONE entry marked registering_self with a contact dob", () => {
     const r = PublicRegisterGroupRequest.safeParse(
       cart({
         contact: contact({ dob: ADULT_DOB }),

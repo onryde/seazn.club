@@ -65,7 +65,7 @@ import {
   type ReportSubmittedArgs,
 } from "@/lib/email-templates";
 import { paragraph, panel, renderEmail } from "@/lib/email-templates/compose";
-import { escapeHtml } from "@/lib/email-templates/shared";
+import { escapeHtml, money } from "@/lib/email-templates/shared";
 
 const RESEND_ENDPOINT = "https://api.resend.com/emails";
 
@@ -1151,6 +1151,71 @@ export async function sendExtraOrgRepriceFailedAlertEmail(
     `${bodyText}\n\nbilling group: ${opts.subscriptionId} · stripe sub: ${opts.stripeSubscriptionId} · ` +
     `plan: ${opts.planKey} · item: ${opts.itemId ?? "(none)"} · ` +
     `price ${opts.currentPriceId ?? "(unknown)"} -> ${opts.expectedPriceId ?? "(unresolved)"}`;
+  return send({ to: opts.to, transactional: true, subject, html, text });
+}
+
+export interface RegistrationRefundFailedAlertEmail {
+  to: string;
+  /** The entry that should have been refunded but was not — what a human
+   *  looks up first. */
+  registrationId: string;
+  orgId: string;
+  competitionId: string;
+  /** What is owed and has NOT moved. */
+  amountCents: number;
+  currency: string;
+  /** Null only if the failure happened before any intent was recorded — in
+   *  practice every real call site has one by the time it can fail a refund. */
+  paymentIntentId: string | null;
+  reason: string;
+}
+
+/**
+ * Internal staff alert (this task's gap): a registration refund FAILED, so
+ * the organiser now owes a registrant money that has NOT moved. The audit
+ * trail (`registration.refund_failed`) records the fact but is written and
+ * never read outside tests — without this alert, the failure is invisible
+ * until the registrant complains.
+ *
+ * Goes to the PLATFORM OPERATOR, never the organiser or the registrant
+ * (owner ruling): the usual causes — a restricted connected account, a
+ * reversed transfer with no remaining headroom, a disconnected destination —
+ * are Connect/platform-level and not something an organiser can act on;
+ * alerting them would produce alarm with no remedy.
+ *
+ * Ops-only, no user-facing i18n (mirrors sendExtraOrgRepriceFailedAlertEmail).
+ */
+export async function sendRegistrationRefundFailedAlertEmail(
+  opts: RegistrationRefundFailedAlertEmail,
+): Promise<boolean> {
+  const amount = money(opts.amountCents, opts.currency);
+  const subject = `Registration refund failed — ${amount} still owed (registration ${opts.registrationId})`;
+  const bodyText =
+    `A registration refund could not be completed, so the organiser now owes a registrant ${amount} that ` +
+    `has NOT moved. This is a Connect/platform-level failure — a restricted connected account, a reversed ` +
+    `transfer with no remaining headroom, or a disconnected destination — that the organiser cannot fix ` +
+    `themselves, which is why this alert goes to platform ops rather than the organiser. Reason: ${opts.reason}. ` +
+    `Fix it by opening the payment intent in the Stripe Dashboard, checking the connected account's status ` +
+    `and available balance, clearing the underlying Connect issue, then issuing the refund manually — the ` +
+    `registration's own refunded_cents stays behind what is owed until that manual refund lands.`;
+  const html = renderEmail({
+    subject,
+    preheader: `${amount} owed on registration ${opts.registrationId}`,
+    eyebrow: "Registrations · Payment integrity",
+    title: "Registration refund failed",
+    contentHtml:
+      paragraph(escapeHtml(bodyText)) +
+      panel(
+        "Registration",
+        `registration: ${opts.registrationId}\norg: ${opts.orgId}\ncompetition: ${opts.competitionId}\n` +
+          `amount owed: ${amount} (${opts.amountCents} ${opts.currency})\n` +
+          `payment intent: ${opts.paymentIntentId ?? "(none recorded)"}\nreason: ${opts.reason}`,
+      ),
+    footerNote: "Automated staff alert — registration refund failure.",
+  });
+  const text =
+    `${bodyText}\n\nregistration: ${opts.registrationId} · org: ${opts.orgId} · competition: ${opts.competitionId} · ` +
+    `amount: ${amount} · payment intent: ${opts.paymentIntentId ?? "(none)"} · reason: ${opts.reason}`;
   return send({ to: opts.to, transactional: true, subject, html, text });
 }
 

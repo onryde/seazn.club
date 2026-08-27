@@ -1012,6 +1012,20 @@ async function main() {
   // auto-draft are seams the unit/regression suites can't reach from
   // outside the process. Own fresh Pro org; keyless-safe.
   await eventImportSuite();
+
+  // RS006: a real destination-charge checkout for a registration entry fee —
+  // the paid path scripts/stripe-connect-fixture.ts exists to make testable
+  // at all. Own fresh Pro org; skips cleanly without STRIPE_CONNECT_TEST_ACCOUNT.
+  await registrationPaidLoopSuite();
+
+  // RS006 money-hardening: the two registration paths that move real money
+  // and were previously proven only against a stubbed Stripe — a duplicate
+  // payment's auto-refund (confirmPaidRegistration) and a manual refund's
+  // reverse_transfer/refund_application_fee pairing (stripeRefund). Each
+  // owns a fresh Pro org; both skip cleanly without STRIPE_SECRET_KEY or
+  // STRIPE_CONNECT_TEST_ACCOUNT, same convention as registrationPaidLoopSuite.
+  await registrationDuplicatePaymentSuite();
+  await registrationRefundReversalSuite();
 }
 
 /** F5 remainder — build.ts's per-value i18n fallbacks (the "vs" result
@@ -8135,6 +8149,826 @@ async function postPaidPassWebhook(args: {
       pass_key: args.passKey,
     },
   });
+}
+
+/** A PAID registration checkout session, in the shape createRegistrationCheckout
+ *  stamps (registrations.ts's payment_intent_data / session metadata) and
+ *  handleRegistrationCheckoutCompleted reads: `metadata.registration_ids`
+ *  names which entries to confirm, `metadata.fee_percent` is the rate the
+ *  paid transition stamps onto the competition, and `payment_status: "paid"`
+ *  is what makes the handler run fulfilment at all. Mirrors postPaidPassWebhook
+ *  above, one section up. */
+async function postPaidRegistrationWebhook(args: {
+  groupId: string;
+  registrationIds: string[];
+  orgId: string;
+  currency: string;
+  feePercent: number;
+  paymentIntent: string;
+}): Promise<number> {
+  return postSignedStripeWebhook("checkout.session.completed", {
+    id: `cs_smoke_${tag}_reg_${args.groupId.slice(0, 8)}`,
+    object: "checkout.session",
+    mode: "payment",
+    status: "complete",
+    payment_status: "paid",
+    currency: args.currency,
+    customer: null,
+    payment_intent: args.paymentIntent,
+    metadata: {
+      kind: "registration_group",
+      registration_group_id: args.groupId,
+      registration_ids: args.registrationIds.join(","),
+      org_id: args.orgId,
+      fee_percent: String(args.feePercent),
+    },
+  });
+}
+
+/**
+ * RS006: a real destination-charge checkout for a registration entry fee —
+ * proves the fixture Connect account (STRIPE_CONNECT_TEST_ACCOUNT,
+ * scripts/stripe-connect-fixture.ts) wires all the way through: org
+ * currency, division fee, destination charge, application fee. Same "the
+ * session actually mints" bar the "sp checkout" Connect check above already
+ * holds sponsor orders to (search this file for STRIPE_CONNECT_TEST_ACCOUNT),
+ * extended one step further into the webhook fulfilment path via
+ * postPaidRegistrationWebhook, since Stripe cannot reach localhost and an
+ * embedded Checkout page cannot be completed headlessly here either — the
+ * same reason postPaidPassWebhook exists for the pass-purchase flow, and
+ * exactly the gap seedPaidRegistration's own doc comment names ("the Stripe
+ * checkout can't run headless") for the unrelated delete-guard seed below.
+ *
+ * `organizations.stripe_account_id` carries a partial UNIQUE index — at most
+ * one org may hold the real account at a time. The sponsor-orders Connect
+ * check earlier in main() claims it for its own org and never releases it,
+ * so this suite — which runs later, in main()'s curated tail — releases
+ * whichever org currently holds it before claiming it for its own fresh org.
+ * That release is a real hand-off, not a discard: whoever held it is
+ * remembered and restored when this suite is done, because "whoever holds
+ * it" is not always another suite from the SAME run — pointed at a
+ * persistent/shared dev DB rather than CI's disposable one, it can be a
+ * real, already-onboarded org someone is using right now. Blanking that
+ * org's stripe_account_id to null and leaving it there (an earlier version
+ * of this suite did exactly that) silently disconnects Stripe Connect for
+ * an org this run never touched on purpose — caught by hand, once, against
+ * a local rs006 fixture org that lost its connected account this way.
+ */
+async function registrationPaidLoopSuite(): Promise<void> {
+  if (!process.env.STRIPE_SECRET_KEY) {
+    check("reg checkout: skipped (no STRIPE_SECRET_KEY — cannot mint a real session)", true);
+    return;
+  }
+  if (!CONNECT_TEST_ACCOUNT) {
+    check(
+      "reg checkout: skipped (no STRIPE_CONNECT_TEST_ACCOUNT — destination charge needs a real connected account)",
+      true,
+    );
+    return;
+  }
+
+  // v1Suite's own local shape, one section up — no shared GENERIC_CONFIG
+  // constant exists in this file.
+  const genericConfig = {
+    resultMode: "score",
+    allowDraws: true,
+    points: { w: 3, d: 1, l: 0 },
+    progressScore: false,
+  };
+
+  const owner = newSession();
+  const who = await signIn(owner, `regpay_${tag}@example.com`);
+  const orgId = who.org_id;
+  await setPlan(orgId, "pro", owner);
+  const orgs = (await call(owner, "/api/orgs")) as { id: string; slug: string }[];
+  const orgSlug = orgs.find((o) => o.id === orgId)!.slug;
+
+  const dbUrl = process.env.DATABASE_URL;
+  if (!dbUrl) throw new Error("DATABASE_URL is required for registrationPaidLoopSuite");
+  const isLocal = /@(localhost|127\.0\.0\.1)[:/]/.test(dbUrl);
+  const db = postgres(dbUrl, {
+    connection: { search_path: process.env.DB_SCHEMA ?? "seazn_club" },
+    ssl: process.env.DATABASE_SSL === "disable" ? false : isLocal ? false : "require",
+    prepare: !dbUrl.includes(":6543"),
+    max: 1,
+  });
+  // Whoever holds the fixture account right now (an earlier suite in this
+  // SAME run, or a real org outside this run entirely on a persistent DB) —
+  // captured so the finally block below can hand it back rather than leave
+  // stripe_account_id null. See this function's own doc comment.
+  let previousHolderId: string | null = null;
+  try {
+    // Defensive sports seed (v1Suite's own fallback, one section up): CI runs
+    // sync:sports, but a local run against a DB that hasn't keeps this suite
+    // from failing on a missing sport catalog rather than proving anything
+    // about the Connect path.
+    await db`insert into sports (key, name, module_version, position_catalog)
+             values ('generic', 'Generic', '1.0.0', ${db.json({ groups: [], lineup: { size: 1, benchMax: 0 } })})
+             on conflict (key) do nothing`;
+    await db`insert into sport_variants (sport_key, key, name, config, is_system)
+             values ('generic', 'score', 'Score', ${db.json(genericConfig)}, true)
+             on conflict do nothing`;
+    // Release whichever org currently holds the fixture account, then hand
+    // it to the fresh org this suite just created. A destination charge's
+    // currency must match what the connected account can actually receive —
+    // pin the org to gbp, the currency scripts/stripe-connect-fixture.ts's
+    // onboarded test account actually settles in, rather than trust
+    // whatever a fresh signup defaults to (this repo's default is NOT
+    // necessarily gbp).
+    const [holder] = await db<{ id: string }[]>`
+      select id from organizations where stripe_account_id = ${CONNECT_TEST_ACCOUNT}`;
+    previousHolderId = holder?.id ?? null;
+    await db`update organizations set stripe_account_id = null where stripe_account_id = ${CONNECT_TEST_ACCOUNT}`;
+    await db`update organizations set currency = 'gbp' where id = ${orgId}`;
+  } finally {
+    await db.end();
+  }
+  await setConnect(orgId, true, CONNECT_TEST_ACCOUNT);
+
+  const comp = v1data<{ id: string; slug: string }>(
+    await v1(owner, "/api/v1/competitions", "POST", {
+      ends_on: "2030-12-31",
+      name: `Reg Pay Cup ${tag}`,
+      visibility: "public",
+    }),
+  );
+  const div = v1data<{ id: string }>(
+    await v1(owner, `/api/v1/competitions/${comp.id}/divisions`, "POST", {
+      name: "Open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: genericConfig,
+    }),
+  );
+  const settingsRes = await v1(owner, `/api/v1/divisions/${div.id}/registration-settings`, "PUT", {
+    enabled: true,
+    entrant_kind: "individual",
+    fee_cents: 1500,
+    payment_method: "stripe",
+    approval: "auto",
+  });
+  check("reg checkout: division priced through Stripe", settingsRes.status === 200);
+
+  const submitted = await v1(
+    newSession(),
+    `/api/v1/public/orgs/${orgSlug}/competitions/${comp.slug}/register`,
+    "POST",
+    {
+      contact: { name: `Reg Payer ${tag}`, email: `regpayer_${tag}@example.com` },
+      privacy_consent: true,
+      entries: [
+        {
+          division_id: div.id,
+          entrant_kind: "individual",
+          players: [{ full_name: `Reg Payer ${tag}` }],
+          answers: {},
+        },
+      ],
+    },
+  );
+  type SubmitOut = {
+    group_id: string;
+    currency: string;
+    checkout_url: string | null;
+    entries: { registration_id: string; status: string }[];
+  };
+  const out = v1data<SubmitOut>(submitted);
+  check(
+    "reg checkout starts (submit + real session url)",
+    submitted.status === 201 && !!out?.checkout_url?.startsWith("https://checkout.stripe.com/"),
+  );
+
+  // fee_percent isn't in the submit response (PublicRegisterGroupResponse has
+  // no such field — createRegistrationCheckout stamps it straight onto the
+  // cart) — read back what the mint actually charged, so the synthetic event
+  // below carries the SAME rate a real Stripe webhook would echo, not a guess.
+  const db2 = postgres(dbUrl, {
+    connection: { search_path: process.env.DB_SCHEMA ?? "seazn_club" },
+    ssl: process.env.DATABASE_SSL === "disable" ? false : isLocal ? false : "require",
+    prepare: !dbUrl.includes(":6543"),
+    max: 1,
+  });
+  try {
+    const [group] = await db2<{ fee_percent: number | null }[]>`
+      select fee_percent from registration_groups where id = ${out.group_id}`;
+    const webhookStatus = await postPaidRegistrationWebhook({
+      groupId: out.group_id,
+      registrationIds: out.entries.map((e) => e.registration_id),
+      orgId,
+      currency: out.currency,
+      feePercent: group?.fee_percent ?? 0,
+      paymentIntent: `pi_smoke_${tag}_reg`,
+    });
+    check("reg checkout: webhook fulfilment accepted (200)", webhookStatus === 200);
+
+    const [reg] = await db2<{ status: string; entrant_id: string | null }[]>`
+      select status, entrant_id from registrations where group_id = ${out.group_id}`;
+    check(
+      "reg checkout: entry flips to paid/confirmed and materialises an entrant",
+      (reg?.status === "paid" || reg?.status === "confirmed") && !!reg?.entrant_id,
+    );
+  } finally {
+    // Release this suite's own claim, then restore whoever held the fixture
+    // account BEFORE this suite ran (captured above) — never just leave it
+    // null. A suite added after this one still finds the account free either
+    // way: null if nothing held it going in, or held by its rightful owner
+    // again if something did. See this function's own doc comment.
+    await db2`update organizations set stripe_account_id = null where id = ${orgId}`;
+    if (previousHolderId) {
+      await db2`update organizations set stripe_account_id = ${CONNECT_TEST_ACCOUNT} where id = ${previousHolderId}`;
+    }
+    await db2.end();
+  }
+}
+
+/**
+ * A configured smoke Stripe client for the two real-money legs below
+ * (registrationDuplicatePaymentSuite, registrationRefundReversalSuite) —
+ * unlike every other Connect check in this file, which only ever signs a
+ * SYNTHETIC webhook, these two actually confirm real PaymentIntents and
+ * refund them, so this refuses a live key outright rather than merely
+ * preferring a test one (registration-currency.live.test.ts's own
+ * `expect(key.startsWith("sk_test"))` guard, same idea). Accepts a
+ * *restricted* test key too (`rk_test_…`) — this env's own STRIPE_SECRET_KEY
+ * is one. Dynamic import matches paymentMethodSuite's own convention above —
+ * this plain `node --experimental-strip-types` runner has no `@/lib/stripe`
+ * alias to import from. Caller must already have confirmed STRIPE_SECRET_KEY
+ * is set (the usual skip-shape check).
+ */
+async function smokeStripe() {
+  const key = process.env.STRIPE_SECRET_KEY;
+  if (!key) throw new Error("STRIPE_SECRET_KEY is required to build a smoke Stripe client");
+  if (!key.startsWith("sk_test") && !key.startsWith("rk_test")) {
+    throw new Error("refusing to run a real-money smoke leg against a non-test-mode Stripe key");
+  }
+  const { default: Stripe } = await import("stripe");
+  return new Stripe(key);
+}
+
+/**
+ * Pays a registration entry for REAL against the fixture Connect account —
+ * a destination charge in the same shape createRegistrationCheckout uses
+ * (`transfer_data.destination` + `application_fee_amount`), confirmed
+ * directly with the `pm_card_visa` test token — the same headless-card
+ * mechanism paymentMethodSuite above already relies on to attach a real
+ * card with no client-side step.
+ *
+ * This deliberately does NOT try to complete a real Checkout Session:
+ * probed by hand before writing this (RS006 money-hardening) —
+ * `checkout.sessions.create()`'s own `payment_intent` field comes back
+ * `null` and STAYS null until an actual browser visits the hosted page.
+ * Stripe defers PaymentIntent creation for dynamic/automatic payment
+ * methods, and createRegistrationCheckout never sets
+ * `payment_method_types`, so there is never a PaymentIntent on our real
+ * sessions for this script to confirm — Stripe cannot reach localhost for
+ * the real webhook, and there is no browser here either. Both legs below
+ * still mint real Checkout sessions (via seedRealRegistrationCart / the
+ * resume-checkout endpoint) to prove THAT path against real Stripe, then
+ * pay the cart through this INDEPENDENT PaymentIntent instead — the webhook
+ * that fulfils it (postPaidRegistrationWebhook) already fully synthesizes
+ * its own event body regardless of what a real session would have sent, so
+ * a real, succeeded, correctly-shaped payment_intent id is all fulfilment
+ * ever reads.
+ *
+ * Also probed by hand: the resulting Charge's `application_fee`/`transfer`
+ * fields are still `null` for a moment after the PaymentIntent's `status`
+ * is already "succeeded" — Stripe creates the Transfer/ApplicationFee
+ * objects asynchronously (~2s against this fixture account when probed).
+ * This polls until both exist — up to 15s — before returning, so neither
+ * caller can race a refund (`reverse_transfer`/`refund_application_fee`
+ * against a transfer that does not exist yet is exactly the kind of
+ * Stripe-contract gap a stub can never surface) or an assertion against it.
+ */
+async function payRealDestinationCharge(
+  stripe: Awaited<ReturnType<typeof smokeStripe>>,
+  amountCents: number,
+  currency: string,
+): Promise<{ paymentIntentId: string; chargeId: string; transferId: string; applicationFeeId: string }> {
+  // Narrowed local, not a `!` assertion: CONNECT_TEST_ACCOUNT is a
+  // module-level `const`, so TS cannot see across the caller's own
+  // presence-check into this function — but callers are contractually
+  // required to have already made it (the usual skip-shape check), so a
+  // throw here is a "this should never happen" guard, not a real skip path.
+  const account = CONNECT_TEST_ACCOUNT;
+  if (!account) throw new Error("payRealDestinationCharge requires CONNECT_TEST_ACCOUNT to be set");
+  const pi = await stripe.paymentIntents.create({
+    amount: amountCents,
+    currency,
+    // Any positive fee proves the pairing below; nothing downstream asserts
+    // this matches the app's own live fee_percent (a separate concern —
+    // chargedFeePercent only locks competitions.fee_percent, read from
+    // registration_groups.fee_percent, never from the Stripe side).
+    application_fee_amount: Math.max(1, Math.round(amountCents * 0.02)),
+    transfer_data: { destination: account },
+    payment_method: "pm_card_visa",
+    confirm: true,
+    return_url: "https://smoke.example.com/return",
+  });
+  if (pi.status !== "succeeded") {
+    throw new Error(`payment_intent ${pi.id} did not succeed (status ${pi.status})`);
+  }
+  const chargeId = typeof pi.latest_charge === "string" ? pi.latest_charge : (pi.latest_charge?.id ?? null);
+  if (!chargeId) throw new Error(`payment_intent ${pi.id} succeeded with no latest_charge`);
+
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const charge = await stripe.charges.retrieve(chargeId);
+    const transferId = typeof charge.transfer === "string" ? charge.transfer : (charge.transfer?.id ?? null);
+    const applicationFeeId =
+      typeof charge.application_fee === "string" ? charge.application_fee : (charge.application_fee?.id ?? null);
+    if (transferId && applicationFeeId) {
+      return { paymentIntentId: pi.id, chargeId, transferId, applicationFeeId };
+    }
+    await new Promise((resolve) => setTimeout(resolve, 750));
+  }
+  throw new Error(`charge ${chargeId} never grew a transfer + application_fee within 15s`);
+}
+
+/**
+ * Restores CONNECT_TEST_ACCOUNT to whoever held it before a leg claimed it —
+ * never leaves it null. Mirrors registrationPaidLoopSuite's own finally
+ * block (see that function's doc comment for why "leave it null" is the
+ * wrong move — it silently disconnects a real, unrelated org's Connect
+ * account on a persistent/shared dev DB). Shared by the two legs below,
+ * which both do this identical hand-back.
+ */
+async function releaseConnectAccount(orgId: string, previousHolderId: string | null): Promise<void> {
+  const db = smokeDb();
+  try {
+    await db`update organizations set stripe_account_id = null where id = ${orgId}`;
+    if (previousHolderId) {
+      // Narrowed local, not a `!` assertion — same reasoning as
+      // payRealDestinationCharge's own: a caller reaching this point has
+      // necessarily already passed the module-level presence check, which
+      // TS cannot see across the function boundary.
+      const account = CONNECT_TEST_ACCOUNT;
+      if (!account) throw new Error("releaseConnectAccount requires CONNECT_TEST_ACCOUNT to be set");
+      await db`update organizations set stripe_account_id = ${account} where id = ${previousHolderId}`;
+    }
+  } finally {
+    await db.end();
+  }
+}
+
+/**
+ * Shared scaffold for the two RS006 money-hardening legs below: signs in a
+ * fresh Pro org owner, claims CONNECT_TEST_ACCOUNT for it (the same
+ * capture-and-restore contract as registrationPaidLoopSuite's own doc
+ * comment — the claim sequence itself carries that function's same small,
+ * accepted, not-finally-protected risk window: registrationPaidLoopSuite's
+ * own claim isn't wrapped in a restoring finally either, only the work after
+ * it is), prices one division through Stripe, and submits ONE payable
+ * individual entry — left `pending`, with its first REAL Checkout session
+ * already minted (mintGroupCheckout, called inline by the public submit
+ * route, exactly like registrationPaidLoopSuite's own single-session case).
+ *
+ * Callers own paying the cart (payRealDestinationCharge — NOT this session;
+ * see that function's own doc comment for why), own restoring
+ * `previousHolderId` via releaseConnectAccount when done, and own adding
+ * their owner's email (`${label}_${tag}@example.com`) to cleanup()'s list —
+ * the registrant contact email needs no entry there (see
+ * registrationPaidLoopSuite's own teardown comment: registering_self is
+ * never set on a public submit, so nothing resolves that address to a users
+ * row).
+ */
+async function seedRealRegistrationCart(
+  label: string,
+  competitionName: string,
+  feeCents: number,
+): Promise<{
+  owner: Session;
+  orgId: string;
+  regId: string;
+  groupId: string;
+  currency: string;
+  feePercent: number;
+  sessionId: string;
+  accessToken: string;
+  previousHolderId: string | null;
+}> {
+  // registrationPaidLoopSuite's own local shape, one section up — no shared
+  // GENERIC_CONFIG constant exists in this file.
+  const genericConfig = {
+    resultMode: "score",
+    allowDraws: true,
+    points: { w: 3, d: 1, l: 0 },
+    progressScore: false,
+  };
+
+  const owner = newSession();
+  const who = await signIn(owner, `${label}_${tag}@example.com`);
+  const orgId = who.org_id;
+  await setPlan(orgId, "pro", owner);
+  const orgs = (await call(owner, "/api/orgs")) as { id: string; slug: string }[];
+  const orgSlug = orgs.find((o) => o.id === orgId)!.slug;
+
+  // Narrowed local, not a `!` assertion — same reasoning as
+  // payRealDestinationCharge's own: a caller reaching this point has
+  // necessarily already passed the module-level presence check, which TS
+  // cannot see across the function boundary.
+  const account = CONNECT_TEST_ACCOUNT;
+  if (!account) throw new Error("seedRealRegistrationCart requires CONNECT_TEST_ACCOUNT to be set");
+
+  let previousHolderId: string | null = null;
+  const claimDb = smokeDb();
+  try {
+    await claimDb`insert into sports (key, name, module_version, position_catalog)
+             values ('generic', 'Generic', '1.0.0', ${claimDb.json({ groups: [], lineup: { size: 1, benchMax: 0 } })})
+             on conflict (key) do nothing`;
+    await claimDb`insert into sport_variants (sport_key, key, name, config, is_system)
+             values ('generic', 'score', 'Score', ${claimDb.json(genericConfig)}, true)
+             on conflict do nothing`;
+    const [holder] = await claimDb<{ id: string }[]>`
+      select id from organizations where stripe_account_id = ${account}`;
+    previousHolderId = holder?.id ?? null;
+    await claimDb`update organizations set stripe_account_id = null where stripe_account_id = ${account}`;
+    await claimDb`update organizations set currency = 'gbp' where id = ${orgId}`;
+  } finally {
+    await claimDb.end();
+  }
+  await setConnect(orgId, true, account);
+
+  const comp = v1data<{ id: string; slug: string }>(
+    await v1(owner, "/api/v1/competitions", "POST", {
+      ends_on: "2030-12-31",
+      name: `${competitionName} ${tag}`,
+      visibility: "public",
+    }),
+  );
+  const div = v1data<{ id: string }>(
+    await v1(owner, `/api/v1/competitions/${comp.id}/divisions`, "POST", {
+      name: "Open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: genericConfig,
+    }),
+  );
+  await v1(owner, `/api/v1/divisions/${div.id}/registration-settings`, "PUT", {
+    enabled: true,
+    entrant_kind: "individual",
+    fee_cents: feeCents,
+    payment_method: "stripe",
+    approval: "auto",
+  });
+
+  const submitted = await v1(
+    newSession(),
+    `/api/v1/public/orgs/${orgSlug}/competitions/${comp.slug}/register`,
+    "POST",
+    {
+      contact: { name: `Real Payer ${tag}`, email: `${label}player_${tag}@example.com` },
+      privacy_consent: true,
+      entries: [
+        {
+          division_id: div.id,
+          entrant_kind: "individual",
+          players: [{ full_name: `Real Payer ${tag}` }],
+          answers: {},
+        },
+      ],
+    },
+  );
+  type SubmitOut = {
+    group_id: string;
+    currency: string;
+    checkout_url: string | null;
+    access_token: string;
+    entries: { registration_id: string }[];
+  };
+  const out = v1data<SubmitOut>(submitted);
+  check(
+    `${label}: real checkout session mints for the submitted cart`,
+    submitted.status === 201 && !!out?.checkout_url?.startsWith("https://checkout.stripe.com/"),
+  );
+
+  const readDb = smokeDb();
+  let sessionId: string;
+  let feePercent: number;
+  try {
+    const [group] = await readDb<{ checkout_session_id: string | null; fee_percent: number | null }[]>`
+      select checkout_session_id, fee_percent from registration_groups where id = ${out.group_id}`;
+    if (!group?.checkout_session_id) {
+      throw new Error(`seedRealRegistrationCart(${label}): no checkout_session_id recorded after submit`);
+    }
+    sessionId = group.checkout_session_id;
+    feePercent = group.fee_percent ?? 0;
+  } finally {
+    await readDb.end();
+  }
+
+  return {
+    owner,
+    orgId,
+    regId: out.entries[0]!.registration_id,
+    groupId: out.group_id,
+    currency: out.currency,
+    feePercent,
+    sessionId,
+    accessToken: out.access_token,
+    previousHolderId,
+  };
+}
+
+/**
+ * RS006 money-hardening leg 1/2: `confirmPaidRegistration`'s duplicate-
+ * payment branch (registrations.ts — the `reg.status === "confirmed" ||
+ * reg.status === "paid"` check, just above its own "two open checkout tabs"
+ * comment) — the registrant-reopened-the-pay-link scenario that comment
+ * names, where two distinct real payments land for the same still-pending
+ * cart. The entry must confirm off the FIRST payment only; the second,
+ * different payment_intent must be auto-refunded (its own amount_cents,
+ * never a sibling's or the cart's total) with an audit row carrying
+ * mode:"duplicate" — the exact real-refund-object pairing a stubbed Stripe
+ * can never produce to assert against.
+ *
+ * This does NOT keep two Checkout Sessions open at once, and neither
+ * session is ever completed — see the inline comment on the resume-mint
+ * below for why (this same branch added expireSupersededCheckoutSession),
+ * and payRealDestinationCharge's own doc comment for why a session can't be
+ * paid headlessly at all. The duplicate PAYMENT this leg proves is
+ * synthesized independently: two distinct real PaymentIntents against the
+ * fixture Connect account, each fed through its own
+ * synthetic-but-correctly-signed webhook.
+ *
+ * Own fresh Pro org (seedRealRegistrationCart); claims/restores
+ * CONNECT_TEST_ACCOUNT exactly like registrationPaidLoopSuite. Keyless-safe:
+ * skips (never fails) without STRIPE_SECRET_KEY or
+ * STRIPE_CONNECT_TEST_ACCOUNT, the same convention as every other Connect
+ * check in this file, and refuses outright (smokeStripe) against a
+ * non-test-mode key.
+ */
+async function registrationDuplicatePaymentSuite(): Promise<void> {
+  if (!process.env.STRIPE_SECRET_KEY) {
+    check("reg duplicate: skipped (no STRIPE_SECRET_KEY — cannot mint a real session)", true);
+    return;
+  }
+  if (!CONNECT_TEST_ACCOUNT) {
+    check(
+      "reg duplicate: skipped (no STRIPE_CONNECT_TEST_ACCOUNT — destination charge needs a real connected account)",
+      true,
+    );
+    return;
+  }
+
+  const stripe = await smokeStripe();
+  const feeCents = 1500;
+  const seeded = await seedRealRegistrationCart("regdup", "Reg Dup Cup", feeCents);
+  const openSessions: string[] = [seeded.sessionId];
+  try {
+    // Resume-mints a second real session for the same still-pending cart.
+    // createRegistrationCheckout mints this new session FIRST, then calls
+    // expireSupersededCheckoutSession(seeded.sessionId, registrationIds) —
+    // added this same branch — which finds seeded.sessionId still `open`
+    // with intersecting registration_ids and expires it. So this does NOT
+    // leave two open sessions behind (see this function's own doc comment);
+    // what it proves is that the resume path mints a genuinely distinct
+    // session (asserted via sessionIdB below) rather than replaying the
+    // stale one. Neither session is ever paid through directly either way —
+    // a Checkout Session's own `payment_intent` stays null until a real
+    // browser visits its hosted page, so nothing headless can complete one
+    // (payRealDestinationCharge's doc comment). The duplicate PAYMENT below
+    // is synthesized independently, through two distinct real PaymentIntents.
+    const resumed = await v1(
+      newSession(),
+      `/api/v1/public/registrations/${seeded.regId}/checkout`,
+      "POST",
+      { token: seeded.accessToken },
+    );
+    const resumedOut = v1data<{ checkout_url: string }>(resumed);
+    check(
+      "reg duplicate: a second real session mints for the same still-pending cart",
+      resumed.status === 200 && !!resumedOut?.checkout_url?.startsWith("https://checkout.stripe.com/"),
+    );
+
+    const sessionDb = smokeDb();
+    let sessionIdB: string;
+    try {
+      const [group] = await sessionDb<{ checkout_session_id: string | null }[]>`
+        select checkout_session_id from registration_groups where id = ${seeded.groupId}`;
+      sessionIdB = group?.checkout_session_id ?? "";
+    } finally {
+      await sessionDb.end();
+    }
+    check(
+      "reg duplicate: the second session is a distinct Stripe object from the first",
+      !!sessionIdB && sessionIdB !== seeded.sessionId,
+    );
+    if (sessionIdB) openSessions.push(sessionIdB);
+
+    // Pay BOTH for real against the fixture Connect account — two genuine,
+    // succeeded destination-charge PaymentIntents, in either order. See
+    // payRealDestinationCharge's own doc comment for why this pays through
+    // an independent PaymentIntent rather than either Checkout session
+    // above. Each is fulfilled the same way registrationPaidLoopSuite's own
+    // single session is: a synthetic, correctly-signed
+    // checkout.session.completed, just carrying a REAL payment_intent id
+    // instead of a fake string.
+    const { paymentIntentId: paymentIntentA } = await payRealDestinationCharge(
+      stripe,
+      feeCents,
+      seeded.currency,
+    );
+    const { paymentIntentId: paymentIntentB } = await payRealDestinationCharge(
+      stripe,
+      feeCents,
+      seeded.currency,
+    );
+
+    const webhookA = await postPaidRegistrationWebhook({
+      groupId: seeded.groupId,
+      registrationIds: [seeded.regId],
+      orgId: seeded.orgId,
+      currency: seeded.currency,
+      feePercent: seeded.feePercent,
+      paymentIntent: paymentIntentA,
+    });
+    check("reg duplicate: the FIRST real payment's webhook is accepted (200)", webhookA === 200);
+
+    const readAfter = async () => {
+      const d = smokeDb();
+      try {
+        const [reg] = await d<{ status: string; entrant_id: string | null }[]>`
+          select status, entrant_id from registrations where id = ${seeded.regId}`;
+        const [group] = await d<{ payment_intent_id: string | null }[]>`
+          select payment_intent_id from registration_groups where id = ${seeded.groupId}`;
+        return {
+          status: reg?.status ?? "",
+          entrantId: reg?.entrant_id ?? null,
+          paymentIntentId: group?.payment_intent_id ?? null,
+        };
+      } finally {
+        await d.end();
+      }
+    };
+    const afterA = await readAfter();
+    check(
+      "reg duplicate: the entry confirms off the FIRST payment (paid/confirmed, entrant materialised, cart pinned to intent A)",
+      (afterA.status === "paid" || afterA.status === "confirmed") &&
+        !!afterA.entrantId &&
+        afterA.paymentIntentId === paymentIntentA,
+    );
+
+    const webhookB = await postPaidRegistrationWebhook({
+      groupId: seeded.groupId,
+      registrationIds: [seeded.regId],
+      orgId: seeded.orgId,
+      currency: seeded.currency,
+      feePercent: seeded.feePercent,
+      paymentIntent: paymentIntentB,
+    });
+    check(
+      "reg duplicate: the SECOND real payment's webhook (a different intent) is accepted, not rejected (200)",
+      webhookB === 200,
+    );
+
+    const afterB = await readAfter();
+    check(
+      "reg duplicate: the entry confirms EXACTLY ONCE — status/entrant/pinned intent unchanged by the duplicate payment",
+      afterB.status === afterA.status &&
+        afterB.entrantId === afterA.entrantId &&
+        afterB.paymentIntentId === paymentIntentA,
+    );
+
+    const eventsDb = smokeDb();
+    let events: { type: string; payload: Record<string, unknown> }[];
+    try {
+      events = await eventsDb<{ type: string; payload: Record<string, unknown> }[]>`
+        select type, payload from competition_events
+        where payload ->> 'registration_id' = ${seeded.regId}
+        order by created_at`;
+    } finally {
+      await eventsDb.end();
+    }
+    const confirmedCount = events.filter((e) => e.type === "registration.confirmed").length;
+    const refundEvent = events.find((e) => e.type === "registration.refunded");
+    check(
+      'reg duplicate: exactly one confirmation audit row, and one refund audit row carrying mode:"duplicate"',
+      confirmedCount === 1 && refundEvent?.payload.mode === "duplicate",
+    );
+
+    const stripeRefundId = refundEvent?.payload.stripe_refund_id as string | undefined;
+    const dupRefunds = await stripe.refunds.list({ payment_intent: paymentIntentB, limit: 5 });
+    check(
+      "reg duplicate: a REAL Stripe refund exists for the duplicate (second) intent, for the entry's own amount",
+      dupRefunds.data.length === 1 &&
+        dupRefunds.data[0]?.status === "succeeded" &&
+        dupRefunds.data[0]?.amount === feeCents &&
+        dupRefunds.data[0]?.id === stripeRefundId,
+    );
+
+    const keptRefunds = await stripe.refunds.list({ payment_intent: paymentIntentA, limit: 5 });
+    check(
+      "reg duplicate: the ORIGINAL (kept) payment is untouched — no refund exists for intent A",
+      keptRefunds.data.length === 0,
+    );
+  } finally {
+    for (const id of openSessions) {
+      // Best-effort: an already-completed/expired session is not a failure —
+      // matches registration-currency.live.test.ts's own cleanup.
+      await stripe.checkout.sessions.expire(id).catch(() => undefined);
+    }
+    await releaseConnectAccount(seeded.orgId, seeded.previousHolderId);
+  }
+}
+
+/**
+ * RS006 money-hardening leg 2/2: `stripeRefund` passes `reverse_transfer:
+ * true, refund_application_fee: true` (registrations.ts) — refunding a paid
+ * registration must pull the money back off the CONNECTED account (reverse
+ * the transfer) and hand back the PLATFORM's own cut (refund the
+ * application fee), not just refund the card. A stub can return any canned
+ * refund object it likes; it can never prove Stripe actually paired those
+ * two real side-effects together. This asserts against the real Transfer
+ * and ApplicationFee objects, before and after, that both flipped — plus
+ * the real Refund object's own `transfer_reversal` field, a third,
+ * independent angle on the same pairing.
+ *
+ * Own fresh Pro org (seedRealRegistrationCart); claims/restores
+ * CONNECT_TEST_ACCOUNT exactly like registrationPaidLoopSuite. Keyless-safe:
+ * skips (never fails) without STRIPE_SECRET_KEY or
+ * STRIPE_CONNECT_TEST_ACCOUNT, and refuses outright (smokeStripe) against a
+ * non-test-mode key.
+ */
+async function registrationRefundReversalSuite(): Promise<void> {
+  if (!process.env.STRIPE_SECRET_KEY) {
+    check("reg refund: skipped (no STRIPE_SECRET_KEY — cannot mint a real session)", true);
+    return;
+  }
+  if (!CONNECT_TEST_ACCOUNT) {
+    check(
+      "reg refund: skipped (no STRIPE_CONNECT_TEST_ACCOUNT — destination charge needs a real connected account)",
+      true,
+    );
+    return;
+  }
+
+  const stripe = await smokeStripe();
+  const feeCents = 2000;
+  const seeded = await seedRealRegistrationCart("regrefund", "Reg Refund Cup", feeCents);
+  const openSessions: string[] = [seeded.sessionId];
+  try {
+    // Pays through an independent real PaymentIntent — see
+    // payRealDestinationCharge's own doc comment for why the real Checkout
+    // session minted above is never completed directly.
+    const { paymentIntentId, transferId, applicationFeeId } = await payRealDestinationCharge(
+      stripe,
+      feeCents,
+      seeded.currency,
+    );
+
+    const webhookStatus = await postPaidRegistrationWebhook({
+      groupId: seeded.groupId,
+      registrationIds: [seeded.regId],
+      orgId: seeded.orgId,
+      currency: seeded.currency,
+      feePercent: seeded.feePercent,
+      paymentIntent: paymentIntentId,
+    });
+    check("reg refund: the real payment's webhook confirms the entry (200)", webhookStatus === 200);
+
+    const feeBefore = await stripe.applicationFees.retrieve(applicationFeeId);
+    const transferBefore = await stripe.transfers.retrieve(transferId);
+    check(
+      "reg refund: before refunding, the real destination charge carries an unreversed transfer and an unrefunded application fee",
+      transferBefore.reversed === false && feeBefore.refunded === false,
+    );
+
+    const refundRes = await v1(seeded.owner, `/api/v1/registrations/${seeded.regId}/refund`, "POST", {});
+    check("reg refund: the organiser refund route accepts the paid entry (200)", refundRes.status === 200);
+
+    const eventsDb = smokeDb();
+    let stripeRefundId: string | undefined;
+    try {
+      const [event] = await eventsDb<{ payload: Record<string, unknown> }[]>`
+        select payload from competition_events
+        where payload ->> 'registration_id' = ${seeded.regId} and type = 'registration.refunded'
+        order by created_at desc limit 1`;
+      stripeRefundId = event?.payload.stripe_refund_id as string | undefined;
+    } finally {
+      await eventsDb.end();
+    }
+    if (!stripeRefundId) throw new Error("reg refund: no registration.refunded audit row was written");
+    const refund = await stripe.refunds.retrieve(stripeRefundId);
+    check(
+      "reg refund: the real Refund object reverse_transfer'd — it carries a transfer_reversal",
+      refund.status === "succeeded" && !!refund.transfer_reversal && refund.amount === feeCents,
+    );
+
+    const feeAfter = await stripe.applicationFees.retrieve(applicationFeeId);
+    const transferAfter = await stripe.transfers.retrieve(transferId);
+    check(
+      "reg refund: Stripe actually reversed the FULL transfer off the connected account",
+      transferAfter.reversed === true && transferAfter.amount_reversed === transferBefore.amount,
+    );
+    check(
+      "reg refund: Stripe actually returned the platform's FULL application fee",
+      feeAfter.refunded === true && feeAfter.amount_refunded === feeBefore.amount,
+    );
+  } finally {
+    for (const id of openSessions) {
+      await stripe.checkout.sessions.expire(id).catch(() => undefined);
+    }
+    await releaseConnectAccount(seeded.orgId, seeded.previousHolderId);
+  }
 }
 
 /** payments-hardening P0-1: seed a PAID registration carrying unrefunded card
@@ -15647,6 +16481,18 @@ async function cleanup(tag: string): Promise<void> {
     `orgaddon_${tag}@example.com`,
     `orgaddon_nonpayer_${tag}@example.com`,
     `orgaddon_free_${tag}@example.com`,
+    // registrationPaidLoopSuite — the org owner. `regpayer_${tag}@example.com`
+    // (the registrant's own contact email on the submit) is NOT a users row —
+    // registering_self is never set on that entry, so nothing resolves it to
+    // a person/user — it needs no entry here; the org purge above already
+    // cascades its registration_groups row away with the org.
+    `regpay_${tag}@example.com`,
+    // RS006 money-hardening — registrationDuplicatePaymentSuite and
+    // registrationRefundReversalSuite, each its own Pro org owner. Same
+    // "registrant contact email needs no entry" reasoning as regpay_ above
+    // applies to `regdupplayer_${tag}@example.com`/`regrefundplayer_${tag}@example.com`.
+    `regdup_${tag}@example.com`,
+    `regrefund_${tag}@example.com`,
   ];
   const isLocal = /@(localhost|127\.0\.0\.1)[:/]/.test(url);
   const sql = postgres(url, {

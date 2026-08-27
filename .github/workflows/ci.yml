@@ -1153,6 +1153,19 @@ jobs:
       ANTHROPIC_API_KEY: sk-ant-ci-smoke-fixture
       STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
       STRIPE_WEBHOOK_SECRET: whsec_ci_smoke
+      # Real Stripe Connect test-mode account (`acct_…`), provisioned once via
+      # `npm run stripe:connect-fixture` (scripts/stripe-connect-fixture.ts).
+      # Registration/sponsor checkout mint a destination charge against
+      # org.stripe_account_id, and Stripe rejects a destination that isn't a
+      # real connected account with transfers active — this is what makes
+      # that path testable in CI at all. Read by scripts/smoke.ts's
+      # registrationPaidLoopSuite (RS006) and sponsorsSuite's Connect-gated
+      # checkout leg; both skip their destination-charge assertion when this
+      # is unset — counted as a pass, but never silently: the label reads
+      # "skipped (no STRIPE_CONNECT_TEST_ACCOUNT — …)" so the run stays
+      # honest about what never executed. Same fork-PR secret withholding as
+      # STRIPE_SECRET_KEY above; absent until the owner adds the secret.
+      STRIPE_CONNECT_TEST_ACCOUNT: ${{ secrets.STRIPE_CONNECT_TEST_ACCOUNT }}
 
     steps:
       - uses: actions/checkout@v5

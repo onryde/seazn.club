@@ -2,6 +2,12 @@
 // Sports registration's native artifact is the entry ticket: event masthead
 // up top, a perforated tear line, and the stub carrying the huge mono
 // reference + QR. Server component — the QR arrives as a data URL.
+//
+// RS006: widened from one holder+stamp to an `entries` list — /r/[ref] now
+// shows the WHOLE cart (owner ruling), so the division line moved off the
+// shared masthead (entries can span different divisions in one cart) down
+// into each entry's own row alongside its stamp. The masthead, perforation
+// and ref+QR stub stay cart-level: one ref, one QR, one competition.
 import { msgFor } from "@/lib/messages-i18n";
 import type { Locale } from "@/lib/i18n-constants";
 import type { MessageKey } from "@/lib/messages";
@@ -12,36 +18,48 @@ const STATUS_STAMP: Record<string, { labelKey: MessageKey; tone: string }> = {
   confirmed: { labelKey: "ticket.stamp.confirmed", tone: "text-emerald-700 border-emerald-400" },
   waitlisted: { labelKey: "ticket.stamp.waitlisted", tone: "text-sky-700 border-sky-400" },
   withdrawn: { labelKey: "ticket.stamp.withdrawn", tone: "text-zinc-500 border-zinc-300" },
+  expired: { labelKey: "ticket.stamp.expired", tone: "text-zinc-500 border-zinc-300" },
+  rejected: { labelKey: "ticket.stamp.rejected", tone: "text-red-700 border-red-400" },
 };
+
+export interface TicketEntry {
+  id: string;
+  status: string;
+  displayName: string;
+  divisionName: string;
+}
 
 export function TearOffTicket({
   refCode,
-  status,
-  displayName,
-  divisionName,
+  entries,
   competitionName,
   orgName,
   startsOn,
   endsOn,
   qrDataUrl,
   actions,
+  renderEntryAction,
   locale,
 }: {
   refCode: string | null;
-  status: string;
+  /** One row per cart entry — masked display names come from the caller. */
+  entries: TicketEntry[];
   locale: Locale;
-  displayName: string;
-  divisionName: string;
   competitionName: string;
   orgName: string;
   startsOn: string | null;
   endsOn: string | null;
   /** QR encoding the /r/[ref] status URL; null when the row predates refs. */
   qrDataUrl: string | null;
-  /** Buttons row rendered under the stub (calendar / save / withdraw). */
+  /** Buttons row rendered under the stub (calendar / save / share). */
   actions?: React.ReactNode;
+  /** Per-ROW control, rendered beside that entry's own stamp — e.g. a
+   *  per-entry Withdraw button (RS006 follow-up: withdraw acts on ONE named
+   *  entry, so its control lives on that entry's own row, never as a single
+   *  cart-wide button in `actions`). Return null/undefined for a row with
+   *  nothing to show. */
+  renderEntryAction?: (entry: TicketEntry) => React.ReactNode;
 }) {
-  const stamp = STATUS_STAMP[status] ?? STATUS_STAMP.pending!;
   const dates = startsOn
     ? `${startsOn}${endsOn && endsOn !== startsOn ? ` – ${endsOn}` : ""}`
     : null;
@@ -58,24 +76,38 @@ export function TearOffTicket({
           <h2 className="mt-0.5 font-display text-3xl leading-none font-bold tracking-tight text-ink uppercase">
             {competitionName}
           </h2>
-          <p className="mt-1 text-sm text-ink-muted">
-            {divisionName}
-            {dates ? ` · ${dates}` : ""}
-          </p>
+          {dates && <p className="mt-1 text-sm text-ink-muted">{dates}</p>}
         </header>
 
-        {/* Holder + stamp */}
-        <div className="flex items-center justify-between gap-4 px-6 py-4">
-          <div className="min-w-0">
-            <p className="text-[11px] tracking-widest text-ink-muted uppercase">{msgFor(locale, "register.ticket.entrant")}</p>
-            <p className="truncate text-lg font-semibold text-ink">{displayName}</p>
-          </div>
-          <span
-            className={`shrink-0 -rotate-6 rounded border-2 px-2.5 py-1 font-display text-lg font-bold tracking-widest ${stamp.tone}`}
-            aria-label={`Status: ${status}`}
-          >
-            {msgFor(locale, stamp.labelKey)}
-          </span>
+        {/* One row per cart entry: division + holder, and its own stamp. */}
+        <div className="divide-y divide-zinc-100">
+          {entries.map((entry) => {
+            const stamp = STATUS_STAMP[entry.status] ?? STATUS_STAMP.pending!;
+            return (
+              <div
+                key={entry.id}
+                className="flex flex-col gap-2 px-6 py-4 xs:flex-row xs:items-center xs:justify-between xs:gap-4"
+              >
+                <div className="min-w-0">
+                  <p className="text-[11px] tracking-widest text-ink-muted uppercase">
+                    {entry.divisionName}
+                  </p>
+                  <p className="text-lg font-semibold break-words text-ink xs:truncate">
+                    {entry.displayName}
+                  </p>
+                </div>
+                <div className="flex shrink-0 flex-wrap items-center gap-2">
+                  <span
+                    className={`shrink-0 -rotate-6 rounded border-2 px-2.5 py-1 font-display text-lg font-bold tracking-widest ${stamp.tone}`}
+                    aria-label={`Status: ${entry.status}`}
+                  >
+                    {msgFor(locale, stamp.labelKey)}
+                  </span>
+                  {renderEntryAction?.(entry)}
+                </div>
+              </div>
+            );
+          })}
         </div>
 
         {/* Perforation: the tear line between ticket and stub */}

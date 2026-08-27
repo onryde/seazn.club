@@ -1,30 +1,130 @@
 export const dynamic = "force-dynamic";
-// Public registration status by reference — CLOSED (RS001 registration
-// demolition). `publicRegistrationStatusByRef`/`reconcileRegistrationBySession`
-// read `ref_code`/`access_token_hash` off `registrations`, which V364 moved
-// to `registration_groups`; nothing can submit a registration right now (the
-// old endpoint is deleted, the new one lands in RS003), so no ref can
-// resolve to anything. RS007 re-points this page at group refs. Owner-
-// accepted: prod has zero registration rows, so nothing regresses (design §7
-// phasing).
+// Public registration status by reference (v3/05 §3, PROMPT-34; RS006
+// re-point). The ref is a lookup, not auth — this shows nothing beyond the
+// success screen (see publicCartByRef's own doc comment for exactly what
+// that excludes), and self-withdraw still needs the emailed token (?token=).
+// Doubles as the organiser's day-of check-in lookup.
+//
+// RS001 stubbed this page to an unconditional "registration is closed" on
+// the premise that nothing could submit a registration yet. RS002/RS003
+// invalidated that — registrations submit for real now, including
+// Stripe-paid ones — so this re-points at the real read model.
+//
+// RS006 also settled a question `regByRef`'s own comment used to leave to
+// RS007: a cart can hold more than one entry now, so this shows the WHOLE
+// cart via `publicCartByRef` (masked per entry), not just the oldest one.
+import { notFound } from "next/navigation";
 import type { Metadata } from "next";
+import Link from "next/link";
+import QRCode from "qrcode";
+import {
+  publicCartByRef,
+  reconcileRegistrationBySession,
+} from "@/server/usecases/registrations";
+import { HttpError } from "@/lib/errors";
+import { TearOffTicket } from "@/components/public-site/ticket";
+import { WithdrawByRef } from "@/components/public-site/withdraw-by-ref";
+import { ShareButton } from "@/components/share-button";
+import { baseUrlFromHeaders } from "@/lib/base-url";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t } from "@/lib/i18n";
 import { DictProvider } from "@/components/i18n/dict-provider";
 
 export const metadata: Metadata = { robots: { index: false, follow: false } };
 
-export default async function RefStatusPage() {
+type Props = {
+  params: Promise<{ ref: string }>;
+  searchParams: Promise<{ token?: string; checkout?: string; session_id?: string }>;
+};
+
+export default async function RefStatusPage({ params, searchParams }: Props) {
+  const [{ ref }, { token, checkout, session_id }] = await Promise.all([params, searchParams]);
+  const refCode = decodeURIComponent(ref);
+
+  // Token-free checkout return (email-minted sessions —
+  // registrations.ts's own createRegistrationCheckout mints
+  // `/r/{ref}?src=email` as returnBase, then appends exactly
+  // `&checkout=success&session_id={CHECKOUT_SESSION_ID}` on success):
+  // reconcile BEFORE the read so a paid cart shows confirmed even ahead of
+  // the webhook. Best-effort — reconcileRegistrationBySession never throws.
+  if (checkout === "success" && session_id) {
+    await reconcileRegistrationBySession(refCode, session_id);
+  }
+
+  let view;
+  try {
+    view = await publicCartByRef(refCode, token ?? null);
+  } catch (err) {
+    if (err instanceof HttpError && err.status === 404) notFound();
+    throw err;
+  }
+
+  const origin = await baseUrlFromHeaders();
+  const qrDataUrl = await QRCode.toDataURL(`${origin}/r/${view.ref_code}`, {
+    margin: 1,
+    width: 224,
+  });
+  const competitionHref = `/shared/${view.org_slug}/${view.competition_slug}`;
   const locale = await resolveLocale();
   const ui = await getDictionary(locale, "ui");
 
   return (
     <DictProvider dict={ui} locale={locale}>
       <main className="mx-auto max-w-xl px-4 py-10">
-        <h1 className="font-display text-2xl font-semibold text-ink">
-          {t(ui, "register.closed.title")}
-        </h1>
-        <p className="mt-2 text-sm text-zinc-500">{t(ui, "register.notOpen")}</p>
+        <TearOffTicket
+          refCode={view.ref_code}
+          entries={view.entries.map((e) => ({
+            id: e.id,
+            status: e.status,
+            displayName: e.display_name,
+            divisionName: e.division_name,
+          }))}
+          competitionName={view.competition_name}
+          orgName={view.org_name}
+          startsOn={view.starts_on}
+          endsOn={view.ends_on}
+          qrDataUrl={qrDataUrl}
+          locale={locale}
+          // RS006 follow-up (data-integrity fix): withdraw used to be ONE
+          // button here in `actions`, wired to whichever entry the server
+          // silently picked (the oldest) — a multi-entry cart gave no way to
+          // tell, or choose, which row it would act on. Each entry now
+          // states its OWN can_withdraw, and the control lives on THAT
+          // entry's own row instead — never a single cart-wide button.
+          renderEntryAction={(entry) => {
+            if (!token) return null;
+            const src = view.entries.find((e) => e.id === entry.id);
+            if (!src?.can_withdraw) return null;
+            return (
+              <WithdrawByRef
+                refCode={view.ref_code}
+                token={token}
+                entryId={entry.id}
+                divisionName={entry.divisionName}
+              />
+            );
+          }}
+          actions={
+            <>
+              <Link
+                href={competitionHref}
+                className="rounded-md border border-zinc-300 px-4 py-2 text-sm hover:border-zinc-500"
+              >
+                {t(ui, "ref.viewDashboard")}
+              </Link>
+              {/* v3/10 #2 — "I'm in!" straight to the family group chat. */}
+              <ShareButton
+                title={view.competition_name}
+                text={t(ui, "ref.shareTextCart", {
+                  competition: view.competition_name,
+                  ref: view.ref_code,
+                })}
+                url={competitionHref}
+                className="inline-flex items-center gap-1.5 rounded-md border border-zinc-300 px-4 py-2 text-sm hover:border-zinc-500"
+              />
+            </>
+          }
+        />
       </main>
     </DictProvider>
   );
