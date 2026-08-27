@@ -285,25 +285,56 @@ test("R5 — table tennis: tap a match across the turnLength:2 rotation, into de
   await expect(half(page, "home"), "the boundary must leave the board live and scoreable").toBeVisible();
   await shot(page, "game-two-self-healed");
 
-  // ---- GAME TWO to home, straight — self-heals again into game three -------
-  await tapRally(page, fx, "home");
-  await tapRally(page, fx, "home");
-  await tapRally(page, fx, "home");
+  // ---- GAME TWO to AWAY — the match must go the DISTANCE --------------------
+  // Deliberately not another straight home game. Every sport this programme
+  // has broken, it broke at the DECIDER — cricket's super over, football's
+  // shoot-out, tennis's match tie-break — and a walkthrough that wins 3-0 of
+  // best-of-5 never plays one. Away takes games two and four so the match
+  // reaches game FIVE, which under ITTF Law 2.13.5 is the game where ends
+  // change at 5 points.
+  await tapRally(page, fx, "away");
+  await tapRally(page, fx, "away");
+  await tapRally(page, fx, "away");
   await expect(scorebug(page)).toContainText("Game 3", { timeout: 20_000 });
-  await expect(strip(page, "games")).toContainText("2–0", { timeout: 20_000 });
+  await expect(strip(page, "games")).toContainText("1–1", { timeout: 20_000 });
+  await expect(half(page, "home"), "a game lost must leave the board live and scoreable").toBeVisible();
 
-  // ---- GAME THREE to home, straight — the match decides ---------------------
+  // ---- GAME THREE to home ---------------------------------------------------
+  await tapRally(page, fx, "home");
+  await tapRally(page, fx, "home");
+  await tapRally(page, fx, "home");
+  await expect(scorebug(page)).toContainText("Game 4", { timeout: 20_000 });
+  await expect(strip(page, "games")).toContainText("2–1", { timeout: 20_000 });
+
+  // ---- GAME FOUR to away — into the decider ---------------------------------
+  await tapRally(page, fx, "away");
+  await tapRally(page, fx, "away");
+  await tapRally(page, fx, "away");
+  await expect(scorebug(page), "two games all — the match reaches its DECIDER").toContainText("Game 5", {
+    timeout: 20_000,
+  });
+  await expect(strip(page, "games")).toContainText("2–2", { timeout: 20_000 });
+  // The decider is still an ordinary scoreable board: table tennis has no
+  // `decidingSetTossed`, so unlike volleyball nothing is re-tossed here and
+  // the serve carries through by the same fixed-turns rotation.
+  await expect(half(page, "home"), "the DECIDER must be live and scoreable").toBeVisible();
+  await expect(strip(page, "server"), "the decider names a server like any other game").not.toHaveCount(0);
+  await shot(page, "decider-opens");
+
+  // ---- GAME FIVE to home — the match decides IN THE DECIDER ------------------
   await tapRally(page, fx, "home");
   await tapRally(page, fx, "home");
   await tapRally(page, fx, "home");
 
   const decided = await fixtureState(page.request, fx.fixtureId);
-  expect(decided.status, "three straight games did not decide the match").toBe("decided");
+  expect(decided.status, "a match taken to game five did not decide").toBe("decided");
   expect(decided.outcome, "a decided table tennis match carries no outcome").not.toBeNull();
   expect(decided.outcome!.winner).toBe(fx.homeEntrantId);
 
   const rallies = await ralliesOf(page.request, fx.fixtureId);
-  expect(rallies.length, "the ledger holds a different number of rallies than were tapped").toBe(12);
+  // 6 in game one (the anchor, the turnLength:2 rotation and the deuce dance),
+  // then 3 in each of games two through five — the match now goes the DISTANCE.
+  expect(rallies.length, "the ledger holds a different number of rallies than were tapped").toBe(18);
   expect(rallies[0]!.payload.serving, "the anchor names who served it").toBe(fx.awayEntrantId);
   for (const rally of rallies.slice(1)) {
     expect(rally.payload, "an ordinary tap must never declare serving").not.toHaveProperty("serving");
@@ -328,8 +359,32 @@ test("R5 — table tennis: tap a match across the turnLength:2 rotation, into de
     halfScore(page, "home"),
     "undoing the deciding rally must roll the score back with it",
   ).toHaveText("2", { timeout: 20_000 });
+  await expect(halfScore(page, "away"), "the OTHER side's score must survive the undo untouched").toHaveText("0");
   await expect(half(page, "home"), "the board came back dead after undoing the deciding rally").toBeVisible();
   await shot(page, "undone-pad-back");
+
+  // ---- AND FINISH IT AGAIN, THE OTHER WAY ------------------------------------
+  // The undo alone proves the board comes back; it never proves the board is
+  // still USABLE. A scorer who corrects a mistake has to be able to carry on.
+  // The deciding point goes to AWAY this time — a pad that replayed its old
+  // state rather than re-deriving it would name the winner from before.
+  // FOUR taps, not three: the undo leaves home on 2, so away must reach 4 to
+  // clear `winBy: 2`. Three leaves it 2-3 and still in play — which the first
+  // draft of this asserted, and the board correctly refused to decide.
+  await tapRally(page, fx, "away");
+  await tapRally(page, fx, "away");
+  await tapRally(page, fx, "away");
+  expect(
+    (await fixtureState(page.request, fx.fixtureId)).status,
+    "a one-point lead decided the decider — winBy 2 is not being honoured",
+  ).toBe("in_play");
+  await tapRally(page, fx, "away");
+  const refinished = await fixtureState(page.request, fx.fixtureId);
+  expect(refinished.status, "the match could not be finished again after an undo").toBe("decided");
+  expect(refinished.outcome!.winner, "the re-finished decider named the wrong winner").toBe(fx.awayEntrantId);
+  await page.reload();
+  await expect(pad(page), "a re-decided match unmounts the pad again").toHaveCount(0);
+  await shot(page, "refinished-the-other-way");
 
   if (HOLD > 0) await page.waitForTimeout(HOLD);
 });

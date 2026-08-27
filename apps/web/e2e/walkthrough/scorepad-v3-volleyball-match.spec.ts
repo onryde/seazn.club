@@ -379,8 +379,31 @@ test("R5 — volleyball: tap a match through a cascaded set, an anchored set, an
     halfScore(page, "home"),
     "undoing the deciding rally must roll the score back with it",
   ).toHaveText("2", { timeout: 20_000 });
+  await expect(halfScore(page, "away"), "the OTHER side's score must survive the undo untouched").toHaveText("2");
   await expect(half(page, "home"), "the board came back dead after undoing the deciding rally").toBeVisible();
+  // The decider was ANCHORED before this rally, and undoing a rally must not
+  // un-anchor the set: the serve chain is derived from the ledger, and the
+  // declaration that resolved it is still in there.
+  await expect(
+    v3Tile(page, "serveAnchor"),
+    "undoing a rally re-opened a serve question the ledger had already answered",
+  ).toHaveCount(0, { timeout: 20_000 });
+  await expect(strip(page, "rotation"), "the rotation survives the undo").toHaveCount(1);
   await shot(page, "undone-pad-back");
+
+  // ---- AND FINISH IT AGAIN, THE OTHER WAY ------------------------------------
+  // The undo proves the board comes back; it never proves the board is still
+  // USABLE. A scorer who corrects a mistake has to be able to carry on and
+  // finish. The deciding rally goes to AWAY this time — a pad that replayed
+  // its old state rather than re-deriving it would name the winner from
+  // before, and the rotation would follow the wrong side out.
+  await tapRally(page, fx, "away");
+  const refinished = await fixtureState(page.request, fx.fixtureId);
+  expect(refinished.status, "the match could not be finished again after an undo").toBe("decided");
+  expect(refinished.outcome!.winner, "the re-finished decider named the wrong winner").toBe(fx.awayEntrantId);
+  await page.reload();
+  await expect(pad(page), "a re-decided match unmounts the pad again").toHaveCount(0);
+  await shot(page, "refinished-the-other-way");
 
   if (HOLD > 0) await page.waitForTimeout(HOLD);
 });

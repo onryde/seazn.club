@@ -207,17 +207,63 @@ test("R5 — badminton: tap a match through a game boundary to a decided result,
   await expect(half(page, "home"), "the boundary must leave the board live and scoreable").toBeVisible();
   await shot(page, "game-two-opens-home-serving");
 
-  // ---- GAME TWO to home, straight — the match decides -----------------------
-  await winGame(page, fx, "home");
+  // ---- GAME TWO to AWAY — the match must go the DISTANCE ---------------------
+  // Deliberately not a second straight home game. Every sport this programme
+  // has broken, it broke at the DECIDER — cricket's super over, football's
+  // shoot-out, tennis's match tie-break — and a walkthrough that wins 2-0 of
+  // best-of-3 never plays one.
+  await winGame(page, fx, "away");
+  await expect(scorebug(page), "one game all — the match reaches its DECIDER").toContainText("Game 3", {
+    timeout: 20_000,
+  });
+  await expect(strip(page, "games")).toContainText("1–1", { timeout: 20_000 });
+  // Law 8.1 again, and this time it must name the OTHER side: the rule is
+  // "the winner of the last game serves", not "home serves game three".
+  await expect(
+    strip(page, "server"),
+    "Law 8.1 in the decider — away won game two, so away serves game three",
+  ).toContainText(awayName, { timeout: 20_000 });
+  await expect(half(page, "home"), "the DECIDER must be live and scoreable").toBeVisible();
+  await shot(page, "decider-opens-away-serving");
+
+  // ---- GAME THREE — the EDGE: setTo 3, winBy 2, cap 5 -------------------------
+  // Not another straight game. Level at 2-2 the shortened config is in
+  // DEUCE: three points no longer wins it, a two-point lead is needed, and
+  // `cap: 5` is the ceiling that ends it regardless. This is the branch a
+  // 3-0 game can never reach, and it is where a win-condition off by one
+  // shows up.
+  for (const side of ["home", "away", "home", "away"] as const) await tapRally(page, fx, side);
+  await expect(halfScore(page, "home"), "level at the deuce mark").toHaveText("2", { timeout: 20_000 });
+  await expect(halfScore(page, "away")).toHaveText("2");
+  await expect(half(page, "home"), "deuce must leave the board scoreable, not decided").toBeVisible();
+
+  // 3-2 is a one-point lead at deuce — it must NOT decide the match.
+  await tapRally(page, fx, "home");
+  await expect(halfScore(page, "home")).toHaveText("3", { timeout: 20_000 });
+  expect(
+    (await fixtureState(page.request, fx.fixtureId)).status,
+    "a one-point lead at deuce decided the match — winBy 2 is not being honoured",
+  ).toBe("in_play");
+
+  // Back level, then to the cap. At 4-4 the next point reaches cap 5 and ends
+  // the game with a ONE-point lead — the cap overriding winBy is the whole
+  // reason a cap exists.
+  for (const side of ["away", "home", "away"] as const) await tapRally(page, fx, side);
+  await expect(halfScore(page, "home"), "level again at 4-4, one point from the cap").toHaveText("4", {
+    timeout: 20_000,
+  });
+  await expect(halfScore(page, "away")).toHaveText("4");
+  await shot(page, "decider-at-the-cap");
+  await tapRally(page, fx, "home");
 
   const decided = await fixtureState(page.request, fx.fixtureId);
-  expect(decided.status, "two straight games did not decide the match").toBe("decided");
+  expect(decided.status, "reaching the cap in the decider did not decide the match").toBe("decided");
   expect(decided.outcome, "a decided badminton match carries no outcome").not.toBeNull();
   expect(decided.outcome!.winner).toBe(fx.homeEntrantId);
 
-  // Every rally in the ledger came from a tap: 3 + 3.
+  // Every rally in the ledger came from a tap: 3 + 3 + 9.
   const rallies = await ralliesOf(page.request, fx.fixtureId);
-  expect(rallies.length, "the ledger holds a different number of rallies than were tapped").toBe(6);
+  expect(rallies.length, "the ledger holds a different number of rallies than were tapped").toBe(15);
 
   // The pad unmounts once decided (same chassis behaviour the tennis
   // walkthrough's own F15/F16 note pins) — anchor the capture off that.
@@ -239,9 +285,32 @@ test("R5 — badminton: tap a match through a game boundary to a decided result,
   await expect(
     halfScore(page, "home"),
     "undoing the deciding rally must roll the score back with it",
-  ).toHaveText("2", { timeout: 20_000 });
+  ).toHaveText("4", { timeout: 20_000 });
+  await expect(halfScore(page, "away"), "the OTHER side's score must survive the undo untouched").toHaveText("4");
   await expect(half(page, "home"), "the board came back dead after undoing the deciding rally").toBeVisible();
   await shot(page, "undone-pad-back");
+
+  // ---- AND FINISH IT AGAIN ---------------------------------------------------
+  // The undo is only half the story: a scorer who corrects a mistake has to be
+  // able to carry on and finish the match. Every walkthrough before this one
+  // stopped at the undo, which proves the board comes back but never that it
+  // is still usable. Award the deciding point to the OTHER side this time —
+  // if the pad had merely replayed its old state rather than re-derived it,
+  // the winner would come back wrong.
+  await tapRally(page, fx, "away");
+  const refinished = await fixtureState(page.request, fx.fixtureId);
+  expect(refinished.status, "the match could not be finished again after an undo").toBe("decided");
+  expect(refinished.outcome!.winner, "the re-finished match named the wrong winner").toBe(fx.awayEntrantId);
+  // SIXTEEN, not fifteen: an undo VOIDS the rally, it does not delete it, so
+  // the ledger keeps the original row and the re-tap appends a new one. That
+  // is the audit trail behaving correctly — a scoring ledger that silently
+  // dropped a row would be the defect — and it is worth pinning, because
+  // "undo" reads like a deletion everywhere else in the product.
+  const finalRallies = await ralliesOf(page.request, fx.fixtureId);
+  expect(finalRallies.length, "an undo must VOID the rally, never remove it from the ledger").toBe(16);
+  await page.reload();
+  await expect(pad(page), "a re-decided match unmounts the pad again").toHaveCount(0);
+  await shot(page, "refinished-the-other-way");
 
   if (HOLD > 0) await page.waitForTimeout(HOLD);
 });

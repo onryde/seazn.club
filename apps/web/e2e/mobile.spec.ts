@@ -2913,8 +2913,18 @@ test("badminton v3 pad: both scoring halves and the Set-score tile hold the 44px
   await padHalf(page, "home").click();
   await page.waitForTimeout(750);
   await padHalf(page, "home").click();
-  const strip = page.getByTestId("score-pad").locator('[data-role="v3-scorebug"] [data-strip-item-id]');
-  await expect(strip.first()).toBeVisible({ timeout: 20_000 });
+  // The SERVER item specifically, never `.first()`. `buildStrip` pushes an
+  // unconditional "games" item ahead of everything else, so a `.first()` probe
+  // resolves whether or not a single rally was ever tapped — proven by
+  // commenting out both taps above and watching this test still pass. The
+  // server item is gated on the reader being able to NAME a server, which for
+  // badminton takes the second rally, so it fails if the taps stop landing.
+  const serverItem = page
+    .getByTestId("score-pad")
+    .locator('[data-role="v3-scorebug"] [data-strip-item-id="server"]');
+  await expect(serverItem, "two tapped rallies must bring the server onto the strip").toBeVisible({
+    timeout: 20_000,
+  });
   await expectNoHorizontalScroll(page);
 });
 
