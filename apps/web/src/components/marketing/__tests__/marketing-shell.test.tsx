@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MarketingFooter } from "@/components/marketing-footer";
+import { showBackButton } from "@/components/marketing/show-back-button";
 import { funnelFormClasses } from "@/components/start-funnel-form";
 
 // The footer now mounts the LocaleSwitcher, a client component using navigation
@@ -45,5 +46,22 @@ describe("marketing shell pieces", () => {
     expect(cls).not.toContain("mk-funnel-night");
     expect(cls).toContain("border-purple-200");
     expect(cls).toContain("bg-white/80");
+  });
+
+  // 2026-08-27 feedback: /games reached via chess-quest's own "← Games" link
+  // is a forward navigation, so the shared BackButton's browser-back landed
+  // back in chess-quest instead of anywhere useful. Every OTHER MarketingShell
+  // page keeps the button — this only opts games out.
+  describe("showBackButton — hideBackButton opt-out (games listing)", () => {
+    it("shows by default on light pages, every existing caller unaffected", () => {
+      expect(showBackButton("light", false)).toBe(true);
+    });
+    it("hides when a page explicitly opts out", () => {
+      expect(showBackButton("light", true)).toBe(false);
+    });
+    it("stays hidden on night-scroll pages regardless of the opt-out flag", () => {
+      expect(showBackButton("night-scroll", false)).toBe(false);
+      expect(showBackButton("night-scroll", true)).toBe(false);
+    });
   });
 });

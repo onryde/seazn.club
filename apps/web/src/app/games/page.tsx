@@ -23,7 +23,7 @@ export const metadata: Metadata = {
 
 export default function GamesPage() {
   return (
-    <MarketingShell>
+    <MarketingShell hideBackButton>
       <main className="mx-auto max-w-5xl px-4 py-12">
         <h1 className="mk-display text-4xl font-bold text-[color:var(--cq-ink,oklch(29.1%_0.149_302.717))]">
           Games
@@ -31,6 +31,12 @@ export default function GamesPage() {
         <p className="mt-3 max-w-2xl text-lg text-slate-600">
           Free games in your browser — pick one and play. No install, no sign-up.
         </p>
+        <Link
+          href="/"
+          className="mt-1 inline-block text-xs text-slate-400 hover:text-[color:var(--cq-accent,oklch(55.8%_0.288_302.321))]"
+        >
+          Powered by <span className="font-semibold">Seazn Club</span>
+        </Link>
 
         <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {GAMES.map((g) =>
