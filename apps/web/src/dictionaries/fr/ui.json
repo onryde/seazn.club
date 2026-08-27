@@ -3810,6 +3810,8 @@
   "pad.badminton.ribbon.sanction": "Sanction enregistrée",
   "pad.badminton.scorebug.rally.hint": "Touchez pour attribuer l'échange",
   "pad.badminton.scorebug.serving": "Au service",
+  "pad.badminton.scorebug.strip.court.left": "Carré de service gauche",
+  "pad.badminton.scorebug.strip.court.right": "Carré de service droit",
   "pad.badminton.scorebug.strip.games": "Jeux",
   "pad.badminton.scorebug.strip.interval": "Pause à",
   "pad.badminton.scorebug.strip.intervalNow": "Pause",

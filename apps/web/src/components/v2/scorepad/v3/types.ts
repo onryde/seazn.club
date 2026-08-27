@@ -381,6 +381,26 @@ export interface ContextSlot {
    */
   message?: string;
   /**
+   * R5 — WHAT KIND of message this is, because the chassis had exactly one
+   * answer and it was the wrong one for the second caller.
+   *
+   * `message` shipped hard-coded `text-red-600` (context-strip.tsx), which is
+   * right for its first and only case: cricket's "the resolved bowler is
+   * ineligible" is a fault, it blocks every run tile, and red is the register
+   * a scorer should read it in. Badminton's own message is not a fault at all
+   * — "rally-by-rally scoring needs Pro" is a TIER, the pad is working exactly
+   * as configured, and putting it in the same red as a rejected submission
+   * teaches a scorer that red on this pad means nothing in particular. The
+   * recording chip already words a plan lock a few pixels away, in amber; this
+   * makes the two agree instead of arguing.
+   *
+   * DEFAULTS TO `"alert"`, so every pre-existing slot — cricket's bowler, and
+   * every future one that says nothing — renders byte-identically to before.
+   * A skin opts into `"info"` deliberately, the same additive posture
+   * `readOnly`/`candidates`/`blocked` above already take.
+   */
+  messageTone?: "alert" | "info";
+  /**
    * R2c — SCOPE. When present, SUPERSEDES `pool` entirely: the identical
    * contract, wording and semantics `SheetPersonStep.candidates` (G6) already
    * ships, extended to the strip, and honoured by the same

@@ -629,6 +629,53 @@ function intervalHint(state: BadmintonStateShape, cfg: BadmintonCfgShape, t: TFn
   };
 }
 
+/**
+ * BWF Law 10.2 — WHICH SERVICE COURT. The server serves from the RIGHT court
+ * when their own score in the current game is EVEN, and from the LEFT when it
+ * is odd. Derived, never stored: it is a pure function of the serving side's
+ * score, which is why the kernel has no field for it and why this belongs on
+ * the pad rather than in the fold.
+ *
+ * Worth the strip slot because it is the OTHER half of what a BWF umpire calls
+ * between rallies — "love all, play" is a score, "second server, left court" is
+ * a position — and it is the fact this board's own scorer most often has to
+ * hold in their head. It sits BESIDE the server rather than in the tile grid:
+ * a service court is a STATE, and nothing about it is tappable.
+ *
+ * `null` while the serve is unknown, for the same reason the server item is
+ * omitted then: a court derived from a side we cannot name is a confident
+ * wrong answer wearing a true rule.
+ */
+function serviceCourt(state: BadmintonStateShape, serving: ServingInfo | null, t: TFn): StripItem | null {
+  if (serving === null) return null;
+  const score = pointsOf(state, serving.side);
+  return {
+    id: "court",
+    // No label. "Right service court" is already a complete phrase, and a
+    // "Court: Right" pairing reads as a table cell rather than as something an
+    // umpire would say — the register the rest of this strip is written in.
+    value: t(score % 2 === 0 ? "pad.badminton.scorebug.strip.court.right" : "pad.badminton.scorebug.strip.court.left"),
+  };
+}
+
+/**
+ * THE STRIP IS THE UMPIRE'S CALL, and that is this board's one real design
+ * decision. Everything on it is something a BWF umpire says out loud between
+ * rallies, in the order they say it: the games standing, who is serving, which
+ * court they serve from, and how far the interval is. Nothing here is a number
+ * put on screen because there was room for it — `setsWon` earns its place
+ * because a badminton match is decided in GAMES and the halves only ever show
+ * points, and the two positional facts earn theirs because they are what the
+ * scorer would otherwise be holding in their head.
+ *
+ * NOTHING ON THIS STRIP TAKES `tone: "led"`. The accent is the SERVE and only
+ * the serve (owner ruling R5-3, and R4-4's own discipline for tennis before
+ * it): the chassis already spends `--sport-led` on the serve pip, the score
+ * digits and the board's top hairline, and a fourth LED-panelled strip item
+ * would leave the board with four things shouting and no signature. The
+ * interval is the loudest candidate — a 60-second break IS an event — and it
+ * is deliberately the quietest treatment on the strip.
+ */
 function buildStrip(
   view: PadHostView,
   state: BadmintonStateShape,
@@ -651,12 +698,23 @@ function buildStrip(
     const value = serving.personId
       ? nameOf(view, serving.personId, t)
       : t(SIDE_LABEL[serving.side]);
-    items.push({ id: "server", label: t("pad.badminton.scorebug.strip.server"), value });
+    // `accent`, and it is the ONLY accented item on this strip. `StripItem
+    // .accent` is full-strength ink where the rest of the row is `pad-ink-70`
+    // — a WEIGHT step, not a colour one, which is the whole point: the serve
+    // is this board's thesis and it has to lead the row, but the accent
+    // COLOUR (`tone: "led"`) is reserved for the pip, so lifting it here costs
+    // nothing from the one place the sport's colour is allowed to appear.
+    // Games, court and interval stay at 70% behind it.
+    items.push({ id: "server", label: t("pad.badminton.scorebug.strip.server"), value, accent: true });
   }
-  // Live only. A finished match has no interval to come, and a hint that
-  // outlives the match is furniture.
-  const interval = phase === "live" ? intervalHint(state, cfg, t) : null;
-  if (interval) items.push(interval);
+  // Live only, both of them. A finished match has no court to serve from and
+  // no interval to come, and status that outlives its own match is furniture.
+  if (phase === "live") {
+    const court = serviceCourt(state, serving, t);
+    if (court) items.push(court);
+    const interval = intervalHint(state, cfg, t);
+    if (interval) items.push(interval);
+  }
   return items;
 }
 
@@ -718,6 +776,14 @@ export function buildContextStrip(view: PadHostView, t: TFn): ContextStripSpec |
         message: t("pad.badminton.context.recording.locked", {
           plan: planLabel(featurePlan(RALLY_ENTITLEMENT)),
         }),
+        // A TIER, not a fault. The chassis's default message register is the
+        // red it was built for (cricket's ineligible bowler, which genuinely
+        // blocks every scoring tile); this pad is working exactly as
+        // configured, and reusing rejection red for a plan boundary would
+        // teach a scorer that red here means nothing in particular. `info`
+        // puts it in the same amber the recording chip words its own plan lock
+        // in, two controls away.
+        messageTone: "info",
         candidates: [],
       },
     ],

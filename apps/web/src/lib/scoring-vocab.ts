@@ -690,6 +690,16 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   "pad.badminton.ribbon.game.summary",
   "pad.badminton.ribbon.rally",
   "pad.badminton.ribbon.sanction",
+  // R5 — tap model S's own hint. `ScorebugHalf.hintKey` resolves through the
+  // SAME `padLabel()` gate (scorebug.tsx) as the ribbon copy above, so an
+  // unregistered key prints its own raw dotted name as the visible hint text
+  // on the board — which is exactly what a 320px screenshot of this wave
+  // caught, one line below the score, with every unit test green. Tennis's own
+  // entry a few blocks down carries the identical warning; this wave paid the
+  // price of not reading it, so `skins/__tests__/badminton.test.ts` now asserts
+  // MEMBERSHIP (not merely dictionary presence) for every hintKey the skin
+  // emits, which is the gate that would have caught it.
+  "pad.badminton.scorebug.rally.hint",
 
   "pad.boardgame.action.draw",
   "pad.boardgame.action.pairing",

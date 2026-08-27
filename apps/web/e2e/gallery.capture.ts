@@ -895,10 +895,23 @@ async function captureRacquetBandLimited(
     // scoreboard halves are real buttons instead.
     const rallyGroup = pad(page).locator('[data-tile-id="rallyLocked"]');
     const setScoreGroup = pad(page).locator('[data-tile-id="setScore"]');
-    // The FidelitySwitcher's band-3 chip (fidelity-switcher.tsx's own
-    // `data-band`). Disabled == this org genuinely does not hold
-    // `scoring.rally_by_rally`.
-    const bandThreeChip = pad(page).locator('[data-band="3"]');
+    // THE ENTITLEMENT PRECONDITION, RE-POINTED (R5). The v2 lane proved this
+    // with the FidelitySwitcher's own `[data-band="3"]` chip being disabled —
+    // but `RecordingChip` REPLACES that four-button picker the moment a sport
+    // converts (recording-chip.tsx's own doc), so on a v3 pad `[data-band]`
+    // does not exist at all and the old locator silently found nothing.
+    //
+    // The chip's equivalent, and it is a tighter statement rather than a
+    // looser one: the collapsed pill states the ACTIVE band in words ("Full
+    // timeline" — band 2, which is what a community org actually resolves to
+    // on this kernel, NOT band 0: `resolveFidelityBand` breaks only on a band
+    // that NAMES a missing entitlement and this kernel keys band 3 alone), and
+    // it carries `aria-expanded` ONLY when a next tier exists AND is genuinely
+    // locked. So the attribute's mere presence IS "this org lacks
+    // scoring.rally_by_rally", read off the control the scorer can actually
+    // see. Deliberately not clicked open: `probe()` re-runs once per captured
+    // width, and a toggle would close what the previous width opened.
+    const recordingChip = pad(page).getByRole("button", { name: "Full timeline", exact: true });
     // The skin's own worded reason, on the context strip
     // (`ContextSlot.message`, rendered verbatim by context-strip.tsx with a
     // stable `data-role`). This REPLACES the v2 lane's `scorepad.locked.reason`
@@ -918,9 +931,9 @@ async function captureRacquetBandLimited(
         "gallery(badminton): 12-bandlimited must still be a live pad — the band-0 summary survives",
       ).toBeVisible({ timeout: 20_000 });
       await expect(
-        bandThreeChip,
+        recordingChip,
         "gallery(badminton): 12-bandlimited needs the org to actually LACK scoring.rally_by_rally",
-      ).toBeDisabled({ timeout: 20_000 });
+      ).toHaveAttribute("aria-expanded", "false", { timeout: 20_000 });
       // ===== D-7, INVERTED (R5). The BEFORE run pinned this screen as
       // SILENCE: `toHaveCount(0)` on both — no rally affordance anywhere, and
       // no sentence explaining why, with the only signal a hover-only `title`

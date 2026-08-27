@@ -15,6 +15,8 @@
 // for a shortcut.
 import { describe, expect, it } from "vitest";
 import uiEn from "@/dictionaries/en/ui.json";
+import { PAD_LABEL_KEYS } from "@/lib/scoring-vocab";
+import { ribbonKeyFor } from "../../ribbon";
 import type { EventEnvelope, Lineup, LineupPair, SquadState } from "@seazn/engine/core";
 import { initSquads } from "@seazn/engine/core";
 import type { FidelityBand, ModuleEvent } from "@seazn/engine/sport";
@@ -403,6 +405,48 @@ describe("scorebug", () => {
     // derived: a hardcoded 11 is unreachable in a game to 3.
     const short = view({ cfg: SHORT_CFG, events: stream() });
     expect(stripItem(short, "interval")?.value).toBe("2");
+  });
+
+  it("names the SERVICE COURT beside the server — BWF Law 10.2, and only while the serve is known", () => {
+    // Right on an even score, left on an odd one, read off the SERVING side's
+    // own points. Both parities, and both sides serving, because a rule keyed
+    // on the wrong side's score agrees with this one about half the time.
+    const homeEven = view({ events: stream(rally("A"), rally("H"), rally("H")) }); // home serving, home on 2
+    expect(stripItem(homeEven, "server")?.value).toBe(NAMES.H1);
+    expect(stripItem(homeEven, "court")?.value).toBe("pad.badminton.scorebug.strip.court.right");
+    const homeOdd = view({ events: stream(rally("H")) }); // home serving, home on 1
+    expect(stripItem(homeOdd, "court")?.value).toBe("pad.badminton.scorebug.strip.court.left");
+    const awayOdd = view({ events: stream(rally("H"), rally("A")) }); // away serving, away on 1
+    expect(stripItem(awayOdd, "server")?.value).toBe(NAMES.A1);
+    expect(stripItem(awayOdd, "court")?.value).toBe("pad.badminton.scorebug.strip.court.left");
+    // Unknown serve, no court: a court derived from a side nobody can name is
+    // a confident wrong answer wearing a true rule.
+    expect(stripItem(view(), "court")).toBeUndefined();
+    // ...and no court once the match is over, for the same reason the interval
+    // stops: status that outlives its match is furniture.
+    const done = view({ cfg: SHORT_CFG, events: stream(summary(3, 1), summary(3, 0)) });
+    expect(stripItem(done, "court")).toBeUndefined();
+    expect(stripItem(done, "interval")).toBeUndefined();
+  });
+
+  it("gives the SERVE the only weight step on the strip — accented, while everything beside it stays muted", () => {
+    const spec = buildScorebug(view({ events: stream(rally("H")) }), t);
+    const accented = spec.strip.filter((item) => item.accent === true).map((item) => item.id);
+    expect(accented, "the serve is the board's thesis and must lead its own row").toEqual(["server"]);
+    // Non-vacuous: this strip really does carry other items to be quieter than.
+    expect(spec.strip.length).toBeGreaterThan(2);
+  });
+
+  it("spends the LED accent on the serve and nothing else — no strip item asks for the LED panel", () => {
+    // R5-3 / R4-4's discipline. The chassis already paints the serve pip, the
+    // score digits and the board's top hairline from `--sport-led`; a strip
+    // item taking `tone: "led"` would be a fourth thing shouting. The interval
+    // is the loudest candidate and is deliberately the quietest treatment.
+    for (const events of [stream(), stream(rally("H")), stream(...Array.from({ length: 11 }, () => rally("H")))]) {
+      for (const item of buildScorebug(view({ events }), t).strip) {
+        expect(item.tone, `strip item "${item.id}" reaches for the accent`).toBeUndefined();
+      }
+    }
   });
 
   it("halves are tappable at band 3 and INERT below it, with a hint iff tappable", () => {
@@ -849,6 +893,8 @@ describe("copy truth", () => {
       "pad.badminton.scorebug.strip.server",
       "pad.badminton.scorebug.strip.interval",
       "pad.badminton.scorebug.strip.intervalNow",
+      "pad.badminton.scorebug.strip.court.left",
+      "pad.badminton.scorebug.strip.court.right",
       "pad.badminton.tile.rallyLocked",
       "pad.badminton.tile.rallyLocked.sublabel",
       "pad.badminton.dock.rally.scorer.title",
@@ -899,5 +945,44 @@ describe("copy truth", () => {
 
   it("collects a non-trivial set — a walk that found nothing would pass the check above vacuously", () => {
     expect(collectLabelKeys().size).toBeGreaterThan(20);
+  });
+
+  // FOUND BY A 320px SCREENSHOT, NOT BY THIS FILE — which is the reason this
+  // test exists. `ScorebugHalf.hintKey` and the ribbon's per-event copy do NOT
+  // resolve through a bare `t()`: both go through `padLabel()`, which checks
+  // `PAD_LABEL_KEYS` MEMBERSHIP first and falls back to printing the raw
+  // dotted key when the key is not in that list (scorebug.tsx, ribbon.ts).
+  // Dictionary copy alone is not enough, so the check above — "the key exists
+  // in en/ui.json" — passes happily while the board renders
+  // "pad.badminton.scorebug.rally.hint" under the score in every locale.
+  // Tennis's own entry in that list carries the identical warning; this wave
+  // reproduced the defect anyway, so it is asserted here rather than
+  // remembered.
+  it("every hintKey the scorebug emits is REGISTERED in PAD_LABEL_KEYS, not merely translated", () => {
+    const registered = new Set<string>(PAD_LABEL_KEYS);
+    const hints = new Set<string>();
+    for (const band of [0, 1, 2, 3] as const) {
+      for (const half of buildScorebug(view({ band, events: stream(rally("H")) }), t).halves) {
+        if (half.hintKey !== undefined) hints.add(half.hintKey);
+      }
+    }
+    // Non-vacuous: a band sweep that produced no tappable half at all would
+    // make the loop below assert nothing.
+    expect(hints.size).toBeGreaterThan(0);
+    for (const key of hints) {
+      expect(registered.has(key), `${key} is not in PAD_LABEL_KEYS — padLabel() will print the raw key`).toBe(true);
+    }
+  });
+
+  // The same gate for the RIBBON, which shares `padLabel`'s membership check
+  // and fails the same silent way: an unregistered key leaves every row on the
+  // generic "{event} recorded" fallback forever, with nothing failing.
+  it("every event type this skin dispatches has a REGISTERED ribbon key", () => {
+    const registered = new Set<string>(PAD_LABEL_KEYS);
+    for (const type of [RALLY_TYPE, SUMMARY_TYPE, SANCTION_TYPE]) {
+      const key = ribbonKeyFor(type);
+      expect(registered.has(key), `${key} is not in PAD_LABEL_KEYS — the ribbon stays on the fallback`).toBe(true);
+      expect(key in (uiEn as Record<string, string>), `${key} has no English copy`).toBe(true);
+    }
   });
 });

@@ -3810,6 +3810,8 @@
   "pad.badminton.ribbon.sanction": "Sanction recorded",
   "pad.badminton.scorebug.rally.hint": "Tap to award the rally",
   "pad.badminton.scorebug.serving": "Serving",
+  "pad.badminton.scorebug.strip.court.left": "Left service court",
+  "pad.badminton.scorebug.strip.court.right": "Right service court",
   "pad.badminton.scorebug.strip.games": "Games",
   "pad.badminton.scorebug.strip.interval": "Interval at",
   "pad.badminton.scorebug.strip.intervalNow": "Interval",

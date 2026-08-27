@@ -2716,6 +2716,8 @@ export type DictionaryKey =
   | "pad.badminton.ribbon.sanction"
   | "pad.badminton.scorebug.rally.hint"
   | "pad.badminton.scorebug.serving"
+  | "pad.badminton.scorebug.strip.court.left"
+  | "pad.badminton.scorebug.strip.court.right"
   | "pad.badminton.scorebug.strip.games"
   | "pad.badminton.scorebug.strip.interval"
   | "pad.badminton.scorebug.strip.intervalNow"

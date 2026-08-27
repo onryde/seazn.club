@@ -449,6 +449,68 @@ describe("ContextStrip rendering — slot message (R2b bowler-eligibility block)
     expect(island.text()).toContain("Kannan has bowled his 4 overs.");
   });
 
+  // R5 — `ContextSlot.messageTone` (types.ts). The chassis shipped ONE
+  // register, hard-coded `text-red-600`, which is right for cricket's
+  // ineligible bowler (a fault) and wrong for badminton's "rally-by-rally
+  // needs Pro" (a tier, on a pad that is working exactly as configured).
+  // Reusing rejection red for a plan boundary teaches a scorer that red on
+  // this pad means nothing in particular.
+  //
+  // The DEFAULT is asserted first and separately, because that is the half
+  // that keeps cricket byte-identical: a slot that says nothing about tone
+  // must render exactly what it rendered before this field existed.
+  it("a message with no declared tone stays the ALERT red — cricket's own slot is unchanged", () => {
+    const island = renderIsland(ContextStrip, {
+      spec: {
+        slots: [
+          {
+            id: "bowler",
+            label: "pad.context.bowler",
+            pool: "onfield",
+            required: true,
+            message: "Kannan has bowled his 4 overs.",
+          },
+        ],
+      },
+      view: { squad: baseSquad },
+      personNames: names,
+      t,
+      onSelect: () => {},
+    });
+    const el = messageEl(island.tree(), "bowler")!;
+    expect(propsOf(el)["data-message-tone"]).toBe("alert");
+    expect(String(propsOf(el).className)).toContain("text-red-600");
+    expect(String(propsOf(el).className)).not.toContain("text-amber-700");
+  });
+
+  it('a slot declaring messageTone: "info" renders the tier register instead, not rejection red', () => {
+    const island = renderIsland(ContextStrip, {
+      spec: {
+        slots: [
+          {
+            id: "recording",
+            label: "pad.context.recording",
+            pool: "onfield",
+            required: false,
+            readOnly: true,
+            message: "Rally-by-rally scoring needs Pro.",
+            messageTone: "info",
+          },
+        ],
+      },
+      view: { squad: baseSquad },
+      personNames: names,
+      t,
+      onSelect: () => {},
+    });
+    const el = messageEl(island.tree(), "recording")!;
+    expect(propsOf(el)["data-message-tone"]).toBe("info");
+    expect(String(propsOf(el).className)).toContain("text-amber-700");
+    expect(String(propsOf(el).className)).not.toContain("text-red-600");
+    // Still real visible text, which is the rule the whole block exists for.
+    expect(island.text()).toContain("Rally-by-rally scoring needs Pro.");
+  });
+
   it("a slot with no message renders no message element for that slot", () => {
     const island = renderIsland(ContextStrip, {
       spec: contextSpec(), // neither slot sets `message`

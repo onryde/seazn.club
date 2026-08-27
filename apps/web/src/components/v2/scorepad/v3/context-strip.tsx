@@ -270,7 +270,15 @@ export function ContextStrip({ spec, view, personNames, t, onSelect }: ContextSt
             key={`${slot.id}-message`}
             data-role="context-slot-message"
             data-slot-id={slot.id}
-            className="text-xs font-medium text-red-600"
+            data-message-tone={slot.messageTone ?? "alert"}
+            // R5 — `messageTone` (types.ts) picks the register. ABSENT means
+            // "alert", so cricket's bowler message is byte-identical to what
+            // it has always rendered; a skin whose message is a TIER rather
+            // than a FAULT opts into `info`, which matches the recording
+            // chip's own amber plan wording sitting a few pixels away.
+            className={`text-xs font-medium ${
+              (slot.messageTone ?? "alert") === "info" ? "text-amber-700" : "text-red-600"
+            }`}
           >
             {slot.message}
           </p>
