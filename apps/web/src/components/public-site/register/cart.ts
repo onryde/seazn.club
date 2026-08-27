@@ -189,13 +189,37 @@ export function cartReducer(state: CartState, action: CartAction): CartState {
       // `CartEntry.self_link_declined`'s own doc comment (types.ts) for why
       // this exists: without it, autoLinkObviousSelf cannot tell "never
       // asked" apart from "asked, and said no."
+      // Self-linking is exclusive WITHIN ONE DIVISION, and only there.
+      // Across divisions it must stay free — singles + doubles at the same
+      // tournament is the common racket-sport case, and schemas.ts's own
+      // superRefine calls a cart-wide cap "the defect, not a guard".
+      //
+      // But twice in the SAME division is not a second entry, it is the same
+      // person entered twice: `persons` get-or-create keys on name+dob, so
+      // both rows resolve to one person, who then holds two slots in one
+      // draw and is charged for both. The phantom slot can push a real
+      // entrant onto the waitlist, and the organiser is left to spot the
+      // duplicate and refund it by hand. Nothing downstream catches it —
+      // there is no unique index on (division_id, entrant).
+      //
+      // The displaced sibling is unlinked WITHOUT setting
+      // `self_link_declined`: the registrant never declined it, we moved
+      // their link. Recording a decline would teach autoLinkObviousSelf that
+      // they said "not me" about an entry they said nothing about.
+      const target = state.entries.find((e) => e.id === action.id);
+      const linking = action.isSelf && !!target && !target.free_agent;
       return {
         ...state,
-        entries: state.entries.map((e) =>
-          e.id === action.id && (!action.isSelf || !e.free_agent)
-            ? { ...e, registering_self: action.isSelf, self_player_index: null, self_link_declined: !action.isSelf }
-            : e,
-        ),
+        entries: state.entries.map((e) => {
+          if (e.id === action.id) {
+            return !action.isSelf || !e.free_agent
+              ? { ...e, registering_self: action.isSelf, self_player_index: null, self_link_declined: !action.isSelf }
+              : e;
+          }
+          return linking && e.registering_self && e.division_id === target!.division_id
+            ? { ...e, registering_self: false, self_player_index: null }
+            : e;
+        }),
       };
     }
 

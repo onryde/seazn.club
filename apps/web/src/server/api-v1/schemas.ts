@@ -2459,6 +2459,26 @@ export const PublicRegisterGroupRequest = z
         message: "A date of birth is required when you're registering yourself",
       });
     }
+    // Per-DIVISION, and deliberately not the cart-wide counter the comment
+    // above forbids: linking yourself on entries in two DIFFERENT divisions
+    // is the legitimate singles + doubles case. Twice in ONE division is the
+    // same person entered twice into one draw — `persons` get-or-create keys
+    // on name+dob, so both entries resolve to a single person who then holds
+    // two capacity slots and is charged for both. There is no unique index on
+    // (division_id, entrant) to catch it, so this is the only guard.
+    const selfDivisionFirstSeen = new Map<string, number>();
+    for (const { e, i } of selfEntries) {
+      const firstIndex = selfDivisionFirstSeen.get(e.division_id);
+      if (firstIndex === undefined) {
+        selfDivisionFirstSeen.set(e.division_id, i);
+      } else {
+        ctx.addIssue({
+          code: "custom",
+          path: ["entries", i, "registering_self"],
+          message: `You're already entered as yourself on another entry in this division (entry ${firstIndex + 1}) — a division can only have you once`,
+        });
+      }
+    }
     for (const { e, i } of selfEntries) {
       // This MUST mirror the usecase's own resolution verbatim
       // (registration-submit.ts:383-393): an explicit index, or the implied 0
