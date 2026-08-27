@@ -321,6 +321,25 @@ function gameInProgress(state: TableTennisStateShape): boolean {
   return open !== null && (open.home > 0 || open.away > 0);
 }
 
+/**
+ * ITTF 2.15.1's own floor: 9 points, BOTH sides, in the game being played.
+ *
+ * Not derived from `setTo` — 9 is written into the law as a number, alongside
+ * the ten minutes, and it does not scale with a shortened variant the way an
+ * interval mark does. A hardbat-21 game reaching 9-9 is the same "both sides
+ * are scoring freely, the system is not needed" judgement the law is making.
+ *
+ * Reads the OPEN game only: expedite is declared during play, and a closed
+ * game's final score says nothing about whether the current one is stuck.
+ */
+const EXPEDITE_SCORE_FLOOR = 9;
+
+function bothReachedExpediteFloor(state: TableTennisStateShape): boolean {
+  const open = openGame(state);
+  if (open === null) return false;
+  return open.home >= EXPEDITE_SCORE_FLOOR && open.away >= EXPEDITE_SCORE_FLOOR;
+}
+
 function gameNumber(state: TableTennisStateShape): number {
   const sets = state.sets ?? [];
   const open = openGame(state);
@@ -748,7 +767,27 @@ export function buildTiles(view: PadHostView, t: TFn): TileSpec[] {
   // force, mirroring the kernel's own padSpec gate
   // (`state.expedite` truthy) — 2.15.4 runs it to the end of the match, so a
   // second declaration only errors.
-  if (offerable(EXPEDITE_TYPE) && recordsFlag(view, "expedite") && state.expedite !== true) {
+  //
+  // ALSO hidden at 9-all-or-better, which is the second half of 2.15.1: the
+  // system comes in after ten minutes of play "unless both players or pairs
+  // have scored at least 9 points". The gate used to carry no score term at
+  // all, so one tap put a legal-looking match irreversibly into expedite from
+  // any score — 2.15.4 keeps it there to the end of the MATCH, `applyExpedite`
+  // refuses only a second start, and the only recovery is voiding the event.
+  // Hidden rather than shown-and-disabled, matching the "already in force"
+  // branch immediately above it: there is no action to offer, so offering a
+  // dead one would be furniture.
+  //
+  // The TEN-MINUTE half of 2.15.1 is still unenforced and cannot be enforced
+  // here — this pad folds no game clock (the kernel holds no elapsed time at
+  // all). Recorded as owed in `_INDEX.md` rather than left as an unstated gap;
+  // the score half is enforceable today and is enforced today.
+  if (
+    offerable(EXPEDITE_TYPE) &&
+    recordsFlag(view, "expedite") &&
+    state.expedite !== true &&
+    !bothReachedExpediteFloor(state)
+  ) {
     tiles.push({
       id: EXPEDITE_START_TILE_ID,
       label: "pad.tabletennis.action.expediteStart",
@@ -834,7 +873,18 @@ export function refusedEventTypes(view: PadHostView): string[] {
   if (gameInProgress(state)) refused.push(SUMMARY_TYPE);
   if (!recordsFlag(view, "timeouts")) refused.push(TIMEOUT_TYPE);
   if (!recordsFlag(view, "substitutions")) refused.push(SUB_TYPE);
-  if (!recordsFlag(view, "expedite")) refused.push(EXPEDITE_TYPE);
+  // The expedite tile and this list must agree, or hiding the tile only moves
+  // the illegal action into the More sheet — the same "one predicate, both
+  // places" rule `gameInProgress` above is written to. `state.expedite` is
+  // included here for the same reason: a second declaration is an engine
+  // refusal, and the More sheet was the one surface still offering it.
+  if (
+    !recordsFlag(view, "expedite") ||
+    state.expedite === true ||
+    bothReachedExpediteFloor(state)
+  ) {
+    refused.push(EXPEDITE_TYPE);
+  }
   return refused;
 }
 
@@ -979,9 +1029,19 @@ export function buildSheets(view: PadHostView, t: TFn): Record<string, GuidedShe
 // the recovery: it never touches `serving` (that fact is the serve anchor's
 // job, above, and re-deriving it here at dock-render time — after the
 // optimistic fold has already advanced past this rally — would risk crediting
-// the wrong winner, `EXPEDITE_WRONG_WINNER`), so it is always safe to offer
-// regardless of who won: a sub-13-return rally recorded as 13 would be wrong
-// scorekeeping the umpire chooses not to make, never an engine refusal.
+// the wrong winner, `EXPEDITE_WRONG_WINNER`).
+//
+// The sentence that used to end that paragraph — "so it is always safe to
+// offer regardless of who won: ... never an engine refusal" — was FALSE, and
+// was written rather than executed. Folding the pad's own two payloads proves
+// it: when the serve anchor HAS supplied `serving` and the SERVING side won,
+// stamping `returns: 13` makes `kernel.ts`'s `checkExpedite` throw
+// `EXPEDITE_WRONG_WINNER` (ITTF 2.15.4 — the receiver takes the point on their
+// 13th good return, so a 13-return rally cannot credit the server). The throw
+// rejects the WHOLE rally: the scorer answered two questions correctly, tapped
+// the chip the pad itself offered, and lost the point and the serve fact with
+// no explanation. `expediteOfferable` below is the gate — the pad now declines
+// to ask a question whose only answer it would refuse.
 // ---------------------------------------------------------------------------
 
 function scorerChip(personId: string, labelText: string): DockChip {
@@ -991,6 +1051,40 @@ function scorerChip(personId: string, labelText: string): DockChip {
     labelText,
     mutate: (payload) => ({ ...payload, scorer: personId }),
   };
+}
+
+/**
+ * Whether the 13th-return question may be ASKED of this rally.
+ *
+ * Three states, and they are not the same question:
+ *
+ *  - serve UNKNOWN — offer it. `checkExpedite` cannot compare a receiver it
+ *    does not have, so it counts the rally in `expediteUnchecked` and lets it
+ *    stand; that is the coarse tier working as designed, not a defect. The
+ *    dock says so in its title rather than implying a check that never ran.
+ *  - serve KNOWN, the RECEIVER won — offer it. This is the only shape ITTF
+ *    2.15.4 describes, and the only one the fold accepts.
+ *  - serve KNOWN, the SERVER won — DO NOT offer it. The fold would throw and
+ *    take the whole rally with it.
+ *
+ * `winner === null` falls through to offering: an unresolvable winner is
+ * already a rally this dock cannot reason about, and withholding the question
+ * there would lose a legitimate expedite answer to a resolution failure.
+ */
+function expediteOfferable(
+  state: TableTennisStateShape,
+  payload: Record<string, unknown> | undefined,
+  winner: Side | null,
+): boolean {
+  const serving = typeof payload?.serving === "string" ? payload.serving : undefined;
+  if (serving === undefined || winner === null) return true;
+  return sideOfEntrant(state, serving) !== winner;
+}
+
+/** Whether the fold will actually be able to CHECK the answer — false when the
+ *  serve side is unknown, which is what titles the question honestly. */
+function expediteChecked(payload: Record<string, unknown> | undefined): boolean {
+  return typeof payload?.serving === "string";
 }
 
 function expediteReturnChip(): DockChip {
@@ -1027,9 +1121,17 @@ export function buildDock(
   }
 
   // Step 2 — the expedite return count, offered once the scorer question (if
-  // any) is settled, for as long as this rally has not already flagged it.
-  if (state.expedite === true && returns === undefined) {
-    return { title: t("pad.tabletennis.dock.rally.expedite.title"), chips: [expediteReturnChip()] };
+  // any) is settled, for as long as this rally has not already flagged it AND
+  // the fold would accept the answer (`expediteOfferable`, above).
+  if (state.expedite === true && returns === undefined && expediteOfferable(state, payload, winner)) {
+    return {
+      title: t(
+        expediteChecked(payload)
+          ? "pad.tabletennis.dock.rally.expedite.title"
+          : "pad.tabletennis.dock.rally.expedite.unchecked.title",
+      ),
+      chips: [expediteReturnChip()],
+    };
   }
 
   // Step 3 — EVERY question settled, and the dock STAYS OPEN showing the
@@ -1060,12 +1162,17 @@ export function buildDock(
   }
   if (settled.length > 0) {
     // Titled by the question the scorer answered LAST — expedite is step 2, so
-    // when it is present it is the more recent of the two.
+    // when it is present it is the more recent of the two. The unchecked
+    // variant carries through here too: the confirmation must not claim a
+    // check the fold never performed, which is the whole point of having two
+    // titles rather than one.
     return {
       title: t(
         returns === undefined
           ? "pad.tabletennis.dock.rally.scorer.title"
-          : "pad.tabletennis.dock.rally.expedite.title",
+          : expediteChecked(payload)
+            ? "pad.tabletennis.dock.rally.expedite.title"
+            : "pad.tabletennis.dock.rally.expedite.unchecked.title",
       ),
       chips: settled,
     };

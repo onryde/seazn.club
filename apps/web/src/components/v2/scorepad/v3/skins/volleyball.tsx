@@ -1427,6 +1427,41 @@ export function volleyballDetail(ctx: ActivityDetailContext): string | undefined
       const side = sideOfEntrant(state, payload.by);
       return side ? t(SIDE_LABEL[side]) : undefined;
     }
+    // V-3 (found by reading the Activity panel after recording both, not by a
+    // unit test): a substitution and a libero replacement each rendered as one
+    // bare, name-free line, so a set with six subs and a dozen libero swaps —
+    // an ordinary indoor set — produced a column of identical rows, each with
+    // its own Void button. Volleyball is the WORST sport in the pad for this:
+    // FIVB allows six substitutions a set and unlimited libero replacements,
+    // so this panel has more repeated rows than any other skin's.
+    //
+    // The pair reads the same way football's already does
+    // (`pad.football.ribbon.sub.pair`, "{on} for {off}") — same shape, same
+    // word order decision left to each locale — because a scorer who works
+    // two sports should not have to learn two grammars for one fact.
+    case SUB_TYPE: {
+      const side = sideOfEntrant(state, payload.by);
+      const off = named(payload.off);
+      const on = named(payload.on);
+      const pair = off === undefined || on === undefined ? undefined : t("pad.volleyball.ribbon.sub.pair", { on, off });
+      return join([side ? t(SIDE_LABEL[side]) : undefined, pair]);
+    }
+    case LIBERO_TYPE: {
+      // `core.lineup.replacement` is ASYMMETRIC, and reading it as though it
+      // were not is how this row goes name-free a second time (engine
+      // `core/lineup.ts:204` — `side: EntrantId`, `off: string`, `on:
+      // LineupSlot`). So: `side` is an entrant id like every other event here
+      // and needs the same `sideOfEntrant` resolution; `off` is a BARE person
+      // id; and only `on` is an object whose person is `.personId`.
+      // `buildLiberoEvent` above builds exactly that shape.
+      const side = sideOfEntrant(state, payload.side);
+      const slotPerson = (slot: unknown): unknown =>
+        typeof slot === "object" && slot !== null ? (slot as { personId?: unknown }).personId : undefined;
+      const off = named(payload.off);
+      const on = named(slotPerson(payload.on));
+      const pair = off === undefined || on === undefined ? undefined : t("pad.volleyball.ribbon.sub.pair", { on, off });
+      return join([side ? t(SIDE_LABEL[side]) : undefined, pair]);
+    }
     default:
       return undefined;
   }

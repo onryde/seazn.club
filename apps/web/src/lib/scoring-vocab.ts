@@ -948,14 +948,28 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   // so dictionary copy with no entry in this list stays silently on the
   // generic `pad.ribbon.fallback` ("{event} recorded") forever, with nothing
   // failing. FOUR of the six kernel-union types get a dedicated tile (set
-  // summary, rally, sanction, timeout); `sub` stays on the fallback (its own
-  // scoresheet-tally event is reachable through the generic More sheet, not
-  // a dedicated tile — see volleyball.tsx's own header) and `expedite.start`
-  // never reaches this pad at all (FIVB has no ITTF-style system).
+  // summary, rally, sanction, timeout); `expedite.start` never reaches this
+  // pad at all (FIVB has no ITTF-style system).
+  //
+  // `sub` was left "on the fallback" here on the reasoning that it has no
+  // dedicated tile — and that reasoning was WRONG, because the ribbon is fed
+  // by the EVENT, not by the tile that raised it. Reachable through the
+  // generic More sheet is still reachable: every substitution rendered
+  // `pad.ribbon.fallback` with the raw wire type in it, so a scorer read
+  // "volleyball.sub recorded" — in all four locales — up to six times a set
+  // per side, which is the single most repeated row this panel can show.
+  // Registered now; copy added to all four dictionaries with it.
   "pad.volleyball.ribbon.set.summary",
   "pad.volleyball.ribbon.rally",
   "pad.volleyball.ribbon.sanction",
   "pad.volleyball.ribbon.timeout",
+  "pad.volleyball.ribbon.sub",
+  // The pair line ("{on} for {off}") the Activity row hangs off — NOT a
+  // ribbon base label, so `buildRibbon` never looks it up; `volleyballDetail`
+  // resolves it directly. Registered anyway because `padLabel` membership is
+  // what makes a key legible to the vocab gate, and an unregistered key here
+  // is how the libero row would print its own dotted name.
+  "pad.volleyball.ribbon.sub.pair",
   // R5/C3 — tap model S's own hint. `ScorebugHalf.hintKey` resolves through
   // the SAME `padLabel()` gate (scorebug.tsx) as the ribbon copy above, so an
   // unregistered key prints its own raw dotted name as the visible hint text

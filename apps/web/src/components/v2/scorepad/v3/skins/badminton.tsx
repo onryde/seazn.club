@@ -616,8 +616,33 @@ function buildHalf(
  *
  * Returns null once the mark is passed — the interval has happened, and a hint
  * that lingers for the rest of the game is furniture, not information.
+ *
+ * "PASSED" IS NOT `leader > mark`, which is the off-by-one this used to ship.
+ * `Math.max` has no memory of when the mark was reached, so the strip announced
+ * "Interval" at 11-9 (right), and went on announcing it at 11-10 and again at
+ * 11-11 (wrong: the interval was taken two rallies ago and play has resumed),
+ * clearing only at 12-11. Its own doc claimed otherwise — asserted, never run.
+ * The file's regression case could not see it either: that stream scores one
+ * side every rally, so `leader` never sits still while the game moves under it.
+ *
+ * BWF Law 8.1 supplies the missing memory with no event scan and no history:
+ * the side that wins a rally serves the next one, so "the leader is ON the mark
+ * AND still serving" is exactly "the leader's own rally is the one that just
+ * took them there". Once the trailing side wins a point, serve moves and the
+ * announcement is over — which is the same fact, read the same way, that this
+ * skin's serve chrome already runs on.
+ *
+ * Two states deliberately do NOT go dark: both sides on the mark (11-11 — long
+ * past, returns null), and a serve the reader will not name (coarse tiers, a
+ * broken chain). The second keeps the announcement, because an umpire missing a
+ * 60-second interval is a worse outcome than one seeing it a rally late.
  */
-function intervalHint(state: BadmintonStateShape, cfg: BadmintonCfgShape, t: TFn): StripItem | null {
+function intervalHint(
+  view: PadHostView,
+  state: BadmintonStateShape,
+  cfg: BadmintonCfgShape,
+  t: TFn,
+): StripItem | null {
   const open = openGame(state);
   // A game not yet started is 0-0 of the game ABOUT TO BE PLAYED, not "no
   // game": `SetBasedState.sets` only materialises a set once something lands
@@ -626,9 +651,18 @@ function intervalHint(state: BadmintonStateShape, cfg: BadmintonCfgShape, t: TFn
   // wants to see then. `gameNumber` already reads that boundary the same way.
   const index = open?.index ?? (state.sets ?? []).length;
   const mark = Math.ceil(targetOf(cfg, index) / 2);
-  const leader = Math.max(open?.home ?? 0, open?.away ?? 0);
+  const home = open?.home ?? 0;
+  const away = open?.away ?? 0;
+  const leader = Math.max(home, away);
   if (leader > mark) return null;
-  if (leader === mark) return { id: "interval", value: t("pad.badminton.scorebug.strip.intervalNow") };
+  if (leader === mark) {
+    // Both there: 11-11 is a game that reached its interval long ago.
+    if (home === away) return null;
+    const onMark: Side = home === mark ? "home" : "away";
+    const serving = servingInfo(view, state);
+    if (serving !== null && serving.side !== onMark) return null;
+    return { id: "interval", value: t("pad.badminton.scorebug.strip.intervalNow") };
+  }
   return {
     id: "interval",
     label: t("pad.badminton.scorebug.strip.interval"),
@@ -719,7 +753,7 @@ function buildStrip(
   if (phase === "live") {
     const court = serviceCourt(state, serving, t);
     if (court) items.push(court);
-    const interval = intervalHint(state, cfg, t);
+    const interval = intervalHint(view, state, cfg, t);
     if (interval) items.push(interval);
   }
   return items;
@@ -1104,6 +1138,26 @@ export function buildDock(
   const scorer = typeof payload?.scorer === "string" ? payload.scorer : undefined;
   const title = t("pad.badminton.dock.rally.scorer.title");
 
+  // SINGLES NEVER REACHES A DOCK — checked HERE, before the settled-scorer
+  // branch, because that is where it was being lost.
+  //
+  // The guard used to sit only below, after `if (scorer !== undefined)`
+  // returned. But `buildHalf` stamps `scorer` onto every SINGLES tap at tap
+  // time, so a singles rally always arrives here with `scorer` already set and
+  // returned early — meaning the dock opened on EVERY singles rally, titled
+  // "Which player won it?", offering exactly one answer that was already
+  // chosen. Not an edge case: it was every point of every singles match, the
+  // format most badminton is played in. The harm is idempotent (the chip
+  // re-stamps the same person) which is why nothing broke and nothing caught
+  // it — `badminton.test.ts`'s own case is named "returns nothing" and then
+  // asserts `.not.toBeNull()`, so the suite was pinning the defect in place.
+  //
+  // `winner === null` deliberately falls through rather than suppressing: an
+  // unresolvable side cannot be shown to be singles, and swallowing the dock
+  // on a resolution failure would lose a real doubles question.
+  const winnerPair = winner === null ? null : onFieldPlayers(view.squads, winner);
+  if (winnerPair !== null && winnerPair.length <= 1) return null;
+
   if (scorer !== undefined) {
     // One-way, and the alternatives leave (the chassis's own no-inverse rule):
     // once a scorer lands, the dock shows only that chip. A second tap
@@ -1121,17 +1175,14 @@ export function buildDock(
     return { title, chips: [scorerChip(scorer, nameOf(view, scorer, t))] };
   }
 
-  if (winner === null) return null;
-  const pair = onFieldPlayers(view.squads, winner);
-  // SINGLES NEVER REACHES A DOCK. `buildHalf` already stamped `scorer` onto the
-  // tap itself, so there is nothing to choose and nothing to show — `null`
-  // means the rally commits on the hold, with no second question. The guard is
-  // `pair.length > 1`, NOT merely "`scorer` is undefined", so "nothing to
-  // choose" holds even for a hand-built payload that skipped the tap-time step
-  // (this file's own unit tests do exactly that) rather than leaning on
-  // `buildHalf` having run first.
-  if (pair.length <= 1) return null;
-  return { title, chips: pair.map((member) => scorerChip(member.personId, nameOf(view, member.personId, t))) };
+  // Singles is already gone (the guard above), so anything reaching here with a
+  // resolved winner is a genuine PAIR choice. A hand-built payload with no
+  // resolvable side still lands here and gets no dock, same as before.
+  if (winnerPair === null) return null;
+  return {
+    title,
+    chips: winnerPair.map((member) => scorerChip(member.personId, nameOf(view, member.personId, t))),
+  };
 }
 
 // ---------------------------------------------------------------------------

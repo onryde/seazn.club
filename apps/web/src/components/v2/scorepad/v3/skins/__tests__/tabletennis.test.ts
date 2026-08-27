@@ -553,6 +553,35 @@ describe("tiles()", () => {
     expect(tileById(buildTiles(started, t), EXPEDITE_START_TILE_ID)).toBeUndefined();
   });
 
+  // R5 review finding 3 — ITTF 2.15.1's OWN second clause, which the gate did
+  // not carry: the system comes in after ten minutes "unless both players or
+  // pairs have scored at least 9 points". Before this, one frictionless tap put
+  // a match into expedite from any score at all, 2.15.4 kept it there for the
+  // rest of the MATCH, and the only recovery was voiding the event.
+  it("withdraws Start expedite once BOTH sides have reached 9 — ITTF 2.15.1's own floor", () => {
+    const eight = [...Array<number>(8)].flatMap(() => [rally("H"), rally("A")]);
+    const eightAll = view({ events: stream(...eight) });
+    expect(tileById(buildTiles(eightAll, t), EXPEDITE_START_TILE_ID), "8-8: still introducible").toBeDefined();
+
+    const nine = [...Array<number>(9)].flatMap(() => [rally("H"), rally("A")]);
+    const nineAll = view({ events: stream(...nine) });
+    expect(tileById(buildTiles(nineAll, t), EXPEDITE_START_TILE_ID), "9-9: the law says no").toBeUndefined();
+
+    // ONE SIDE at 9 is not the floor — the law needs BOTH, and a 9-3 game is
+    // exactly the stuck one expedite exists for.
+    const lopsided = view({ events: stream(...[...Array<number>(9)].map(() => rally("H"))) });
+    expect(tileById(buildTiles(lopsided, t), EXPEDITE_START_TILE_ID), "9-0: still introducible").toBeDefined();
+  });
+
+  it("refuses the same action in the More sheet at 9-all — hiding the tile alone would just move it", () => {
+    const nine = [...Array<number>(9)].flatMap(() => [rally("H"), rally("A")]);
+    expect(refusedEventTypes(view({ events: stream(...nine) }))).toContain(EXPEDITE_TYPE);
+    // ...and a second declaration, which the fold refuses outright.
+    expect(refusedEventTypes(view({ events: stream(expedite()) }))).toContain(EXPEDITE_TYPE);
+    // Not refused in the ordinary case, or the tile above would be unreachable.
+    expect(refusedEventTypes(view())).not.toContain(EXPEDITE_TYPE);
+  });
+
   it("offers the serve anchor exactly while the reader cannot say, and never once it can", () => {
     expect(tileById(buildTiles(view(), t), SERVE_ANCHOR_TILE_ID), "undeclared — offer it").toBeDefined();
     const resolved = view({ events: stream(anchor("H", "A")) });
@@ -862,7 +891,12 @@ describe("dock()", () => {
   it("offers the 13th-return chip once expedite is in force, for singles AND doubles alike", () => {
     const singles = view({ events: stream(expedite(), anchor("H", "A")) });
     const singlesDock = buildDock(RALLY_TYPE, singles, t, { wonBy: "H", scorer: "H1" })!;
-    expect(singlesDock.title).toBe("pad.tabletennis.dock.rally.expedite.title");
+    // UNCHECKED, and the title says so: none of these payloads carries `serving`,
+    // so `checkExpedite` cannot compare a receiver and counts the rally in
+    // `expediteUnchecked` instead of validating it. The dock used to claim the
+    // same "13th return?" either way, which is the one thing
+    // DOMAIN.tabletennis.md asks a pad that cannot enforce the rule not to do.
+    expect(singlesDock.title).toBe("pad.tabletennis.dock.rally.expedite.unchecked.title");
     expect(singlesDock.chips.map((chip) => chip.id)).toEqual(["expediteReturn"]);
     expect(singlesDock.chips[0]!.mutate({ wonBy: "H" })).toEqual({ wonBy: "H", returns: EXPEDITE_RETURNS_THRESHOLD });
     // Never touches `serving` — the chip's own doc reason: re-deriving the
@@ -878,7 +912,7 @@ describe("dock()", () => {
     expect(step1.title).toBe("pad.tabletennis.dock.rally.scorer.title");
     // Scorer settled — step 2 becomes reachable.
     const step2 = buildDock(RALLY_TYPE, v, t, { wonBy: "H", scorer: "H-second" })!;
-    expect(step2.title).toBe("pad.tabletennis.dock.rally.expedite.title");
+    expect(step2.title).toBe("pad.tabletennis.dock.rally.expedite.unchecked.title");
   });
 
   // R5 review, finding 2 — this test USED to assert `toBeNull()` here, and in
@@ -895,7 +929,7 @@ describe("dock()", () => {
       returns: EXPEDITE_RETURNS_THRESHOLD,
     })!;
     expect(settled, "a singles scorer answered a real question — the dock must not vanish").not.toBeNull();
-    expect(settled.title).toBe("pad.tabletennis.dock.rally.expedite.title");
+    expect(settled.title).toBe("pad.tabletennis.dock.rally.expedite.unchecked.title");
     expect(settled.chips.map((c) => c.id)).toEqual(["expediteReturn"]);
     // No scorer chip: singles never asked that question (`buildHalf` stamps
     // the sole scorer at tap time), so there is nothing of that kind to show.
@@ -912,7 +946,44 @@ describe("dock()", () => {
     // expedite answer went unconfirmed even in the case the fix was written
     // for.
     expect(settled.chips.map((c) => c.id)).toEqual(["scorer:H-second", "expediteReturn"]);
-    expect(settled.title).toBe("pad.tabletennis.dock.rally.expedite.title");
+    expect(settled.title).toBe("pad.tabletennis.dock.rally.expedite.unchecked.title");
+  });
+
+  // R5 review finding 1 — THE HIGHEST-HARM DEFECT THIS WAVE FOUND, and it was
+  // found by FOLDING the pad's own two outputs together, never by reading
+  // either alone. The suite already proved the engine throws
+  // `EXPEDITE_WRONG_WINNER` on a server-credited 13-return rally (see the
+  // constants block above), and separately proved the dock offers the chip.
+  // Nobody had put the two in the same test — so the pad went on offering a
+  // chip whose only effect, on a rally the serve anchor said the SERVER won,
+  // was to destroy the whole rally: score, serve fact and all, with the sheet
+  // closing and nothing on screen to say why.
+  it("does NOT offer the 13th-return chip on a rally the SERVER won — the chip would make the fold throw the rally away", () => {
+    const events = stream(expedite());
+    const v = view({ events });
+    // The serve anchor's own shape: home served, home won.
+    const served = { wonBy: "H", serving: "H", scorer: "H1" };
+    expect(buildDock(RALLY_TYPE, v, t, served)).toBeNull();
+
+    // And that refusal is not squeamishness — this is what the chip WOULD have
+    // produced, folded against the real engine.
+    const state = foldClient(tabletennis, ITTF_CFG, SINGLES, events);
+    const stamped = { ...served, returns: EXPEDITE_RETURNS_THRESHOLD };
+    expect(() => tabletennis.apply(state, ev(2, RALLY_TYPE, stamped) as never, { strict: true })).toThrow(EngineError);
+  });
+
+  it("DOES offer it when the RECEIVER won, and titles it as CHECKED — the one shape ITTF 2.15.4 describes", () => {
+    const events = stream(expedite());
+    const v = view({ events });
+    const received = { wonBy: "A", serving: "H", scorer: "A1" };
+    const dock = buildDock(RALLY_TYPE, v, t, received)!;
+    expect(dock.title).toBe("pad.tabletennis.dock.rally.expedite.title");
+    expect(dock.chips.map((chip) => chip.id)).toEqual(["expediteReturn"]);
+    // The answer the pad offers is one the fold ACCEPTS. Same pairing as the
+    // test above, opposite verdict — neither can be "fixed" into the other.
+    const state = foldClient(tabletennis, ITTF_CFG, SINGLES, events);
+    const stamped = dock.chips[0]!.mutate(received);
+    expect(() => tabletennis.apply(state, ev(2, RALLY_TYPE, stamped) as never, { strict: true })).not.toThrow();
   });
 
   it("still shows NO dock at all when a singles rally was never asked anything", () => {
@@ -1076,6 +1147,7 @@ describe("copy truth", () => {
       "pad.tabletennis.tile.rallyLocked.sublabel",
       "pad.tabletennis.dock.rally.scorer.title",
       "pad.tabletennis.dock.rally.expedite.title",
+      "pad.tabletennis.dock.rally.expedite.unchecked.title",
       "pad.tabletennis.dock.rally.expedite.chip",
       "pad.tabletennis.dock.person",
       "pad.tabletennis.ribbon.partial",

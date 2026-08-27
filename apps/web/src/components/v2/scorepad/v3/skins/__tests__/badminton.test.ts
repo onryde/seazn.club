@@ -421,6 +421,38 @@ describe("scorebug", () => {
     expect(stripItem(short, "interval")?.value).toBe("2");
   });
 
+  // R5 review finding 4 — THE STREAM ABOVE CANNOT SEE THIS, BY CONSTRUCTION.
+  // It scores one side every rally, so `leader` never sits still while the game
+  // moves under it, and the only way past the mark is `leader > mark`. A real
+  // game does the opposite: the trailing side wins points, the leader stays on
+  // 11, and the strip went on announcing "Interval" at 11-10 and again at
+  // 11-11 — two rallies and then four after the 60 seconds had been taken and
+  // play had resumed. It cleared only at 12-11.
+  it("drops the interval once play has RESUMED, not merely once the score has moved past the mark", () => {
+    const to11 = Array.from({ length: 11 }, () => rally("H"));
+    // 11-9 with home's OWN rally last: home took the mark on that rally and so
+    // serves the next one (BWF 8.1) — the announcement is live. The away points
+    // come FIRST here for exactly that reason; ordering them the other way puts
+    // away on serve at the same 11-9 board, which is the state below.
+    const announced = view({ events: stream(...Array.from({ length: 9 }, () => rally("A")), ...to11) });
+    expect(
+      stripItem(announced, "interval")?.value,
+      "11-9 with home still serving — the interval is happening now",
+    ).toBe("pad.badminton.scorebug.strip.intervalNow");
+
+    // 11-10: AWAY won the last rally, so away serves and the interval is over.
+    // `leader` is still 11 — the old `leader > mark` test could not tell these
+    // two boards apart.
+    const resumed = view({
+      events: stream(...to11, ...Array.from({ length: 10 }, () => rally("A"))),
+    });
+    expect(stripItem(resumed, "interval"), "11-10 — play resumed two rallies ago").toBeUndefined();
+
+    // 11-11: long past, and never ambiguous.
+    const level = view({ events: stream(...to11, ...Array.from({ length: 11 }, () => rally("A"))) });
+    expect(stripItem(level, "interval"), "11-11").toBeUndefined();
+  });
+
   it("names the SERVICE COURT beside the server — BWF Law 10.2, and only while the serve is known", () => {
     // Right on an even score, left on an odd one, read off the SERVING side's
     // own points. Both parities, and both sides serving, because a rule keyed
@@ -748,10 +780,26 @@ describe("sheets()", () => {
 describe("dock()", () => {
   it("returns nothing for a SINGLES rally — the scorer was stamped at tap time", () => {
     const v = view({ events: stream(rally("H")) });
-    expect(buildDock(RALLY_TYPE, v, t, { wonBy: "H", scorer: "H1", server: "H1" })).not.toBeNull();
-    // ...but a payload with no scorer on a singles side still has nothing to
+    // THE PAYLOAD `buildHalf` ITSELF BUILDS, not a hand-made one. This
+    // assertion used to read `.not.toBeNull()` under this very test name — the
+    // suite asserting the opposite of what it claimed, and pinning the defect:
+    // every singles rally opened a dock titled "Which player won it?" with one
+    // pre-answered chip, because the settled-scorer branch returned before the
+    // singles guard could run.
+    expect(buildDock(RALLY_TYPE, v, t, { wonBy: "H", scorer: "H1", server: "H1" })).toBeNull();
+    // ...and a payload with no scorer on a singles side still has nothing to
     // ask: the guard is "the side has one player", never "scorer is undefined".
     expect(buildDock(RALLY_TYPE, v, t, { wonBy: "H" })).toBeNull();
+  });
+
+  it("keeps the dock for a DOUBLES rally that already names its scorer — a real pair still has an answer to show", () => {
+    // The singles guard must not swallow the settled-scorer confirmation the
+    // step above it exists to provide: same shape as the singles case, one
+    // player more on court, opposite outcome.
+    const v = view({ lineups: DOUBLES, events: stream(rally("H")) });
+    const dock = buildDock(RALLY_TYPE, v, t, { wonBy: "H", scorer: "H-first" });
+    expect(dock).not.toBeNull();
+    expect(dock!.chips.map((chip) => chip.id)).toEqual(["scorer:H-first"]);
   });
 
   it("offers one chip per PAIR member, and the chip's mutate stamps the scorer", () => {

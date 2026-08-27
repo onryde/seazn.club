@@ -375,11 +375,25 @@ test("R5 — volleyball: tap a match through a cascaded set, an anchored set, an
   const reopened = await fixtureState(page.request, fx.fixtureId);
   expect(reopened.outcome, "the fixture is in_play but still carries an outcome").toBeNull();
   await expect(pad(page)).toBeVisible({ timeout: 20_000 });
+  // WAIT FOR THE BOARD ITSELF, NOT JUST THE PAD. `pad()` becomes visible while
+  // the scorebug's own grid is still empty — the halves arrive on the refold
+  // that follows the void. Asserting a score straight off `pad()` therefore
+  // races a remount, and under load (a vitest run on the same machine) that
+  // race is lost for longer than the 20s budget: the first version of this
+  // block failed with a stable "0", which reads exactly like a scoring defect
+  // and is not one. The fold's own answer here is home 2, away 0.
+  await expect(
+    scorebug(page).locator(".grid > *").first(),
+    "the scorebug never re-rendered after the undo",
+  ).toBeVisible({ timeout: 30_000 });
   await expect(
     halfScore(page, "home"),
     "undoing the deciding rally must roll the score back with it",
   ).toHaveText("2", { timeout: 20_000 });
-  await expect(halfScore(page, "away"), "the OTHER side's score must survive the undo untouched").toHaveText("2");
+  await expect(
+    halfScore(page, "away"),
+    "the OTHER side's score must survive the undo untouched",
+  ).toHaveText("0");
   await expect(half(page, "home"), "the board came back dead after undoing the deciding rally").toBeVisible();
   // The decider was ANCHORED before this rally, and undoing a rally must not
   // un-anchor the set: the serve chain is derived from the ledger, and the
@@ -397,6 +411,22 @@ test("R5 — volleyball: tap a match through a cascaded set, an anchored set, an
   // finish. The deciding rally goes to AWAY this time — a pad that replayed
   // its old state rather than re-deriving it would name the winner from
   // before, and the rotation would follow the wrong side out.
+  // FOUR taps, not one, and the arithmetic is the decider's own cfg: the board
+  // stands at 2-0 to HOME in a set to 3, winBy 2, cap 5. Away therefore passes
+  // through 2-1, 2-2, 2-3 (three points is the target but a one-point lead is
+  // not enough) and takes the set at 2-4. Asserting each step is what proves
+  // the board is LIVE rather than replaying the state it held before the undo.
+  for (const expected of ["1", "2", "3"]) {
+    await tapRally(page, fx, "away");
+    await expect(
+      halfScore(page, "away"),
+      `the board stopped advancing after the undo at away ${expected}`,
+    ).toHaveText(expected, { timeout: 20_000 });
+  }
+  // The FOURTH tap takes the set (2-4) and with it the match, so the pad
+  // unmounts on the same commit — there is no board left to read a "4" from.
+  // Asserting one here is the same mistake as reading a score off a decided
+  // fixture: the proof of this tap is the fixture's own status, below.
   await tapRally(page, fx, "away");
   const refinished = await fixtureState(page.request, fx.fixtureId);
   expect(refinished.status, "the match could not be finished again after an undo").toBe("decided");
