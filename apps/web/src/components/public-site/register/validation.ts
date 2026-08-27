@@ -137,7 +137,7 @@ export interface EntriesValidation {
    *  This closes a straight CLIENT/SERVER DISAGREEMENT, not a missing
    *  nicety. This file used to say naming was "encouraged in the UI but not
    *  required — the schema itself leaves both nullish", and the schema does;
-   *  but `registration-submit.ts`'s `resolveEntryName` throws
+   *  but `registration-submit.ts`'s `entryDisplayName` throws
    *  422 "A team name is required" for exactly this case. So the registrant
    *  filled in five steps, pressed ENTER, and got a rejection that named
    *  neither the step nor which entry — while the client, believing the
@@ -161,7 +161,7 @@ export interface EntriesValidation {
  *  split, because the SERVER treats the two kinds differently and this file
  *  used to claim otherwise: `partner_name` really is optional (the server
  *  composes a pair's name from its players), but a TEAM entry's `team_name`
- *  is REQUIRED — `registration-submit.ts`'s `resolveEntryName` 422s without
+ *  is REQUIRED — `registration-submit.ts`'s `entryDisplayName` 422s without
  *  one. The zod schema leaves both nullish, so nothing between the two
  *  layers caught the disagreement; see `missingTeamNameEntryId` above.
  *
@@ -197,7 +197,7 @@ export interface EntriesValidation {
 /**
  * Does this entry need a team name it hasn't got?
  *
- * Mirrors `registration-submit.ts`'s `resolveEntryName` condition exactly —
+ * Mirrors `registration-submit.ts`'s `entryDisplayName` condition exactly —
  * `entrant_kind === "team" && !free_agent` — and exists so the rule lives in
  * ONE place. `validateEntries` uses it to block the step; `entry-cart.tsx`
  * uses the same predicate to mark the offending field, rather than re-deriving

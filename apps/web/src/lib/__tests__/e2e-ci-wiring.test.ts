@@ -279,6 +279,26 @@ describe("e2e CI wiring", () => {
       yml,
       "an unconfigured Connect walkthrough skips silently — no ::warning:: telling the reader the money path was not exercised",
     ).toMatch(/::warning::Connect walkthrough NOT run/);
+
+    // ORDER IS LOAD-BEARING, and asserting only on content missed it (review
+    // finding 6): `$GITHUB_ENV` applies to SUBSEQUENT steps, and the server
+    // reads STRIPE_WEBHOOK_SECRET at boot. A forwarder started after the
+    // server would leave the app verifying signatures against the job-level
+    // dummy while Stripe signs with the session secret — every webhook
+    // rejected, the entry stuck `pending`, and the failure surfacing as a
+    // timeout in the spec rather than as anything naming the real cause.
+    // Anchor on the STEP NAMES, not on `stripe listen` — the prose above the
+    // step mentions the command too, and that comment does not move when the
+    // steps do. Written the obvious way first, this assertion survived a
+    // mutation that swapped the two steps: it was matching the comment.
+    const forwarderAt = yml.indexOf("- name: Start Stripe webhook forwarder");
+    const serverAt = yml.indexOf("- name: Start server");
+    expect(forwarderAt, "no Stripe forwarder step at all").toBeGreaterThan(-1);
+    expect(serverAt, "no `Start server` step at all").toBeGreaterThan(-1);
+    expect(
+      forwarderAt,
+      "the Stripe forwarder starts AFTER the server — the server would boot with the wrong webhook secret and reject every event",
+    ).toBeLessThan(serverAt);
   });
 
   // The spec moved out of e2e/ into e2e/walkthrough/ (RS007). The project is

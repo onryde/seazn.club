@@ -147,7 +147,7 @@ describe("validateEntries", () => {
   // to proceed (naming is encouraged in the UI, not gated here — schemas.ts
   // leaves team_name/partner_name nullish)" and passed a NAMELESS TEAM entry.
   // It was asserting one side of a client/server disagreement as though it
-  // were the contract: `registration-submit.ts`'s `resolveEntryName` 422s that
+  // were the contract: `registration-submit.ts`'s `entryDisplayName` 422s that
   // exact entry with "A team name is required". The test froze the bug, which
   // is why five waves of green never surfaced it. Kept and corrected rather
   // than deleted, so the inversion stays visible to the next reader.
@@ -246,7 +246,7 @@ describe("validateEntries", () => {
 
   // RS007. This closed a CLIENT/SERVER DISAGREEMENT, not a missing nicety:
   // validation.ts asserted naming was "encouraged in the UI but not required"
-  // while registration-submit.ts's `resolveEntryName` 422s a nameless TEAM
+  // while registration-submit.ts's `entryDisplayName` 422s a nameless TEAM
   // entry. The zod schema leaves it nullish, so nothing in between caught it,
   // and the registrant met "A team name is required" only after five steps —
   // a message naming neither the step nor which of up to ten entries.
