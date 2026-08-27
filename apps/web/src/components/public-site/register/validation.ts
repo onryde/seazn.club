@@ -16,32 +16,47 @@ export interface WhoFieldRequirements {
 }
 
 /**
- * Design §4 step 1: "dob/gender collected once, only if any division needs
- * them or the registrant plays."
+ * Design §4 step 1: "dob/gender collected once, only if the registrant
+ * plays themselves." Both fields exist ONLY as the self-row "collected
+ * once" fallback (roster.ts's effectiveSelfPlayers/effectiveSelfDob) — a
+ * division's OWN requires_dob/requires_gender is satisfied per-ROSTER-ROW
+ * at step 3 (every roster row gets its own dob/gender input once its
+ * division requires one, roster-table.tsx), never by the WHO-step
+ * contact's fields UNLESS that contact is themselves one of the players.
+ * So neither field is ever read for a division the contact isn't
+ * self-linking, and requiring them anyway collects personal data the
+ * system never uses.
  *
- * dobRequired has TWO independent sources, matched to
- * `PublicRegisterGroupRequest`'s superRefine (schemas.ts):
- *  - `imPlaying`: the contact intends to self-link at least one entry
- *    (cart.ts's per-entry SET_ENTRY_SELF — RS006: possibly more than one),
- *    and the schema requires `contact.dob` whenever ANY entry is
- *    `registering_self` — independent of whether the division they end up
- *    picking itself requires a dob.
- *  - any OPEN division's own `requires_dob` (V364 first-class columns +
- *    jsonb rules, computed server-side — registration-eligibility.ts).
- * A CLOSED division's requires_dob is excluded: nothing can be added for it
- * yet, so forcing the field here would be friction for a division the
- * registrant cannot act on.
+ * Review finding 3 (2026-08-27): the PREVIOUS version also forced
+ * dobRequired/genderRequired from ANY open division's own requires_dob/
+ * requires_gender, independent of `imPlaying` — so a club secretary
+ * registering a team with "I'm playing" OFF was forced to supply their
+ * own dob/gender before "Next", for a value the server never asks for and
+ * this client never reads. Both fields now require `imPlaying` as a
+ * precondition, mirroring `PublicRegisterGroupRequest`'s superRefine
+ * (schemas.ts) exactly:
  *
- * genderRequired has only the division source — the schema has no
- * self-play-implies-gender rule the way it does for dob.
+ *  - dobRequired: UNCONDITIONALLY true once imPlaying — the schema
+ *    requires `contact.dob` whenever ANY entry is `registering_self`,
+ *    independent of whether the division they end up picking itself
+ *    requires a dob.
+ *  - genderRequired: true only when imPlaying AND some OPEN division the
+ *    contact might self-link to requires_gender — the schema itself NEVER
+ *    requires `contact.gender` (no self-play-implies-gender rule the way
+ *    there is for dob), so this is UX-only sugar for the self-row
+ *    fallback, not a hard submit-time requirement. A CLOSED division's
+ *    requires_gender is excluded: nothing can be added for it yet, so
+ *    forcing the field here would be friction for a division the
+ *    registrant cannot act on.
  */
 export function whoFieldRequirements(
   divisions: readonly Pick<DivisionLike, "open" | "requires_dob" | "requires_gender">[],
   imPlaying: boolean,
 ): WhoFieldRequirements {
+  if (!imPlaying) return { dobRequired: false, genderRequired: false };
   const open = divisions.filter((d) => d.open);
   return {
-    dobRequired: imPlaying || open.some((d) => d.requires_dob),
+    dobRequired: true,
     genderRequired: open.some((d) => d.requires_gender),
   };
 }

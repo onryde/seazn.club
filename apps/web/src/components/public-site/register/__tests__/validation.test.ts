@@ -71,20 +71,27 @@ describe("whoFieldRequirements", () => {
     expect(whoFieldRequirements([BASE_DIVISION], true).dobRequired).toBe(true);
   });
 
-  it("dob required when any OPEN division requires it, even if the contact isn't playing", () => {
+  it("review finding 3 (2026-08-27): an open division's requires_dob alone does NOT force the field when the contact isn't playing — the field only ever feeds the self-row fallback, which never fires for a non-playing contact", () => {
     const withDob: DivisionLike = { ...BASE_DIVISION, requires_dob: true };
-    expect(whoFieldRequirements([withDob], false).dobRequired).toBe(true);
+    expect(whoFieldRequirements([withDob], false).dobRequired).toBe(false);
   });
 
-  it("a CLOSED division's requires_dob does not force the field (nothing can be added for it yet)", () => {
+  it("a CLOSED division's requires_dob does not force the field even while playing (nothing can be added for it yet) — imPlaying alone is what forces it open", () => {
     const closedRequiresDob: DivisionLike = { ...BASE_DIVISION, requires_dob: true, open: false };
     expect(whoFieldRequirements([closedRequiresDob], false).dobRequired).toBe(false);
+    expect(whoFieldRequirements([closedRequiresDob], true).dobRequired).toBe(true);
   });
 
-  it("gender required when any open division requires it; imPlaying alone does not force gender", () => {
+  it("review finding 3 (2026-08-27): gender is required only when the contact is BOTH playing AND some open division needs it — never from division alone, and imPlaying alone does not force it either (the schema never requires contact.gender at all)", () => {
     const withGender: DivisionLike = { ...BASE_DIVISION, requires_gender: true };
-    expect(whoFieldRequirements([withGender], false).genderRequired).toBe(true);
+    expect(whoFieldRequirements([withGender], false).genderRequired).toBe(false);
     expect(whoFieldRequirements([BASE_DIVISION], true).genderRequired).toBe(false);
+    expect(whoFieldRequirements([withGender], true).genderRequired).toBe(true);
+  });
+
+  it("review finding 3 (2026-08-27): a non-playing contact needs NEITHER field, even facing a division that requires both", () => {
+    const needsBoth: DivisionLike = { ...BASE_DIVISION, requires_dob: true, requires_gender: true };
+    expect(whoFieldRequirements([needsBoth], false)).toEqual({ dobRequired: false, genderRequired: false });
   });
 });
 

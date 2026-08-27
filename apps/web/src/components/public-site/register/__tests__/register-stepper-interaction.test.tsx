@@ -530,16 +530,21 @@ describe("finding #5 — restoring a pristine saved snapshot never shows stale e
       JSON.stringify({
         version: REGISTER_STATE_VERSION,
         contact: { name: "", email: "", dob: null, gender: null, guardian_name: null, guardian_consent: false },
-        imPlaying: false,
+        imPlaying: true,
         cart: { entries: [] },
         consent: { privacy_consent: false, media_consent: false },
         stepIndex: 0,
       }),
     );
 
-    // An open division that requires both dob AND gender so both fields
-    // render (matching the fix wave's own repro fixture shape), independent
-    // of imPlaying.
+    // imPlaying:true is what makes dobRequired true unconditionally
+    // (whoFieldRequirements — schemas.ts's superRefine requires contact.dob
+    // whenever ANY entry is registering_self, independent of the eventual
+    // division's own requires_dob). DIV_NEEDS_BOTH.requires_gender is what
+    // additionally makes genderRequired true (review finding 3, 2026-08-27:
+    // gender is gated on imPlaying too now — neither field is ever forced
+    // on a contact who never plays, since both exist only as the self-row
+    // "collected once" fallback).
     const DIV_NEEDS_BOTH: DivisionLike = { ...DIV_OPEN, division_id: "div-both", requires_dob: true, requires_gender: true };
     const { pageText } = mount([DIV_OPEN, DIV_NEEDS_BOTH]);
 
@@ -551,6 +556,46 @@ describe("finding #5 — restoring a pristine saved snapshot never shows stale e
     expect(text).toContain("We'll send your confirmation and reference here.");
     expect(text).toContain("Needed because you're playing yourself, or a division you might enter has an age limit.");
     expect(text).toContain("Needed because a division you might enter is gender-restricted.");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Second review round, finding 3 (2026-08-27) — WHO-step dob/gender are
+// collected ONLY when the contact is actually self-linking, never merely
+// because SOME division requires them. Both fields exist purely as the
+// self-row "collected once" fallback (roster.ts); a division's own
+// requires_dob/requires_gender is satisfied per-ROSTER-ROW at step 3
+// instead, for every entry regardless of who's playing.
+// ---------------------------------------------------------------------------
+
+describe("2026-08-27 review finding 3 — a non-playing contact is never forced to give their own dob/gender", () => {
+  it("a team captain with 'I'm playing' OFF sees NO dob/gender fields and is never blocked by them, even for a division that requires both", () => {
+    const DIV_TEAM_NEEDS_BOTH: DivisionLike = {
+      ...DIV_OPEN,
+      division_id: "div-team-needs-both",
+      entrant_kind: "team",
+      requires_dob: true,
+      requires_gender: true,
+    };
+    const { stepWho, clickByText, pageText, island } = mount([DIV_TEAM_NEEDS_BOTH]);
+
+    (propsOf(stepWho()).onChange as (p: object) => void)({ name: "Team Captain", email: "captain@example.com" });
+    // imPlaying is deliberately left false — this contact is not one of
+    // the players, only entering a team on their behalf.
+
+    expect(
+      island.tree().find((e) => propsOf(e).id === "reg-who-dob"),
+      "the dob field must not render at all for a non-playing contact",
+    ).toBeUndefined();
+    expect(
+      island.tree().find((e) => propsOf(e).id === "reg-who-gender"),
+      "the gender field must not render at all for a non-playing contact",
+    ).toBeUndefined();
+
+    clickByText("Next"); // must NOT be blocked by the division's requires_dob/requires_gender
+    expect(pageText(), "must have reached DETAILS (single open division collapses ENTRIES), not stuck on WHO").toContain(
+      "Player details",
+    );
   });
 });
 
@@ -997,9 +1042,10 @@ describe("step 3 — the mixed-composition meter blocks an all-male roster and c
   it("shows the unmet sentence, blocks Next; adding a female player clears both and unblocks", () => {
     const { island, stepWho, divisionCard, clickByText, pageText } = mount([DIV_OPEN, DIV_MIXED_TEAM]);
 
-    // DIV_MIXED_TEAM.requires_gender makes gender a WHO-step requirement
-    // too (whoFieldRequirements: "any open division requires it") — this
-    // contact never self-links, but the field still gates "Next" on WHO.
+    // gender is supplied defensively even though this contact never
+    // self-links (so whoFieldRequirements no longer requires it here —
+    // review finding 3, 2026-08-27) — harmless, and keeps this fixture
+    // realistic without depending on that gate either way.
     (propsOf(stepWho()).onChange as (p: object) => void)({
       name: "Alex Test",
       email: "alex@example.com",
@@ -1041,7 +1087,10 @@ describe("step 3 — an underage player is named BY ROW, not just anywhere on th
   it("the age-ineligibility notice attaches to the underage row only, never the adult row", () => {
     const { island, stepWho, divisionCard, clickByText, pageText } = mount([DIV_OPEN, DIV_AGE_BANDED_TEAM]);
 
-    // DIV_AGE_BANDED_TEAM.requires_dob makes dob a WHO-step requirement too.
+    // dob is supplied defensively even though this contact never
+    // self-links (so whoFieldRequirements no longer requires it here —
+    // review finding 3, 2026-08-27) — harmless, and keeps this fixture
+    // realistic without depending on that gate either way.
     (propsOf(stepWho()).onChange as (p: object) => void)({
       name: "Alex Test",
       email: "alex@example.com",
