@@ -615,23 +615,6 @@ function racquetScoreline(home: number, away: number): string {
   return `${home}\u2013${away}`;
 }
 
-/**
- * One field of racquet-skin.tsx's score header, addressed by its CAPTION
- * ("Sets" / "Points" / "Serving") rather than by index. `buildHeader` keys
- * each field div with `field.id`, but a React `key` is not a DOM attribute —
- * there is nothing else to hold on to — and a positional `.nth(2)` would go
- * on silently photographing the WRONG field the day a fourth field is added
- * or the order changes, which is the class of quiet mis-capture this whole
- * harness exists to make impossible.
- */
-function racquetHeaderValue(page: Page, caption: string): Locator {
-  return pad(page)
-    .locator('[data-role="racquet-header"] > div > div')
-    .filter({ hasText: caption })
-    .locator("p")
-    .first();
-}
-
 interface RacquetServingRecipe {
   slug: string;
   label: string;
@@ -639,27 +622,21 @@ interface RacquetServingRecipe {
   variantKey: string;
   entrantKind?: "individual" | "team" | "pair";
   /**
-   * WHICH PAD LANE this sport renders on today. R5/C1 converted badminton;
-   * R5/C2 converts table tennis. Volleyball still renders `racquet-skin.tsx`
-   * (v2) and its own entry below is byte-identical to the BEFORE run because
-   * this field DEFAULTS to "v2" — a converting wave adds `lane: "v3"` to its
-   * own sport and touches nothing else.
+   * The exact name the serving field must read after the three rallies
+   * below. REQUIRED (asserted at run time, not left optional-and-forgotten),
+   * because "not the placeholder" alone is a far weaker statement than "this
+   * person": a pad that named the WRONG player would satisfy the negative
+   * and is precisely R4's D-21.
    *
-   * The two lanes disagree about every locator in this recipe (v2 has a
-   * `[data-role="racquet-header"]` with three captioned fields; v3 has a
-   * scorebug with two halves and a strip) AND about the D-17 assertion, which
-   * is the whole point: on v2 the serving field is still the em-dash
-   * placeholder, and on v3 it must name the real server.
+   * R5 (2026-08-27): all three racquet sports (badminton C1, table tennis
+   * C2, volleyball C3) have now converted to v3, closing out this family —
+   * this recipe used to also carry a `lane?: "v2" | "v3"` field so an
+   * unconverted sport's entry could stay byte-identical to the pre-R5
+   * BEFORE run; that field, and the v2 locators/assertions it selected, were
+   * retired as dead code in the same wave that deleted racquet-skin.tsx
+   * (v2) itself — nothing can construct a "v2" recipe here any more.
    */
-  lane?: "v2" | "v3";
-  /**
-   * v3 lane only — the exact name the serving field must read after the three
-   * rallies below. REQUIRED for a converted sport (asserted at run time, not
-   * left optional-and-forgotten), because "not the placeholder" alone is a
-   * far weaker statement than "this person": a pad that named the WRONG
-   * player would satisfy the negative and is precisely R4's D-21.
-   */
-  expectedServer?: string;
+  expectedServer: string;
   /**
    * R5/C2 — table tennis's own requirement, badminton never needed this.
    * `serve.within: "fixed-turns"` (ITTF 2.13.3) is a pure function of the
@@ -742,7 +719,6 @@ async function captureRacquetServing(
   // point is what puts the capture on the far side of a rotation boundary
   // instead of on it. The same three taps leave badminton and volleyball
   // (serve follows the rally winner) equally past their own first handover.
-  const lane = recipe.lane ?? "v2";
   for (const [index, side] of (["home", "away", "home"] as const).entries()) {
     const before = await ledgerCount(page.request, fx.fixtureId);
     if (index === 0 && recipe.declareServingAnchor !== undefined) {
@@ -756,29 +732,20 @@ async function captureRacquetServing(
       await expect(sheet, `gallery(${recipe.slug}): the serve anchor sheet must open`).toBeVisible({ timeout: 20_000 });
       await sheet.locator(`[data-choice-option-id="${recipe.declareServingAnchor}"]`).click();
       await sheet.locator(`[data-choice-option-id="${side}"]`).click();
-    } else if (lane === "v3") {
-      // v3: tap model S — the scoreboard HALF is the rally button, and its
+    } else {
+      // tap model S — the scoreboard HALF is the rally button, and its
       // accessible name is the player's own name plus hint text, so it can
       // only be addressed positionally.
       await v3Half(page, side).click();
-    } else {
-      // v2: SideTapAction's own Home/Away buttons (racquet-skin.tsx), which
-      // only exist at band 3.
-      await pad(page)
-        .getByRole("button", { name: side === "home" ? "Home" : "Away", exact: true })
-        .click();
     }
     await waitForLedgerGrowth(page.request, fx.fixtureId, before);
   }
 
-  // The same three facts, addressed per lane. v2 reads three captioned fields
-  // off `[data-role="racquet-header"]`; v3 reads the strip's games item, the
-  // two halves' own score readouts, and the strip's server item.
+  // The same three facts: the strip's games item, the two halves' own score
+  // readouts, and the strip's server item.
   const [expectedHomePoints, expectedAwayPoints] = recipe.expectedPoints.split("\u2013");
-  const sets =
-    lane === "v3" ? pad(page).locator('[data-strip-item-id="games"]') : racquetHeaderValue(page, "Sets");
-  const serving =
-    lane === "v3" ? pad(page).locator('[data-strip-item-id="server"]') : racquetHeaderValue(page, "Serving");
+  const sets = pad(page).locator('[data-strip-item-id="games"]');
+  const serving = pad(page).locator('[data-strip-item-id="server"]');
   const probe: StateProbe = async () => {
     // PRECONDITION, not the defect — this pair does NOT flip at conversion.
     // It is what stops this capture degenerating into R4's D-21: a banked
@@ -788,77 +755,64 @@ async function captureRacquetServing(
       sets,
       `gallery(${recipe.slug}): 11-servingplaceholder needs a BANKED game/set (${recipe.expectedSets})`,
     ).toContainText(recipe.expectedSets, { timeout: 20_000 });
-    if (lane === "v3") {
+    await expect(
+      v3HalfScore(page, "home"),
+      `gallery(${recipe.slug}): 11-servingplaceholder must be MID-game, never turn 0`,
+    ).toHaveText(expectedHomePoints!, { timeout: 20_000 });
+    await expect(v3HalfScore(page, "away")).toHaveText(expectedAwayPoints!, { timeout: 20_000 });
+    // ===== D-11, ASSERTED RATHER THAN ASSUMED. The v2 lane stated the score
+    // THREE times above the fold — the fixture header, the LCD panel, and
+    // the SETS/POINTS board — and the single v3 scorebug retires two of
+    // them. Left unasserted, that retirement would be something a reviewer
+    // has to notice in a screenshot; here it fails the run instead.
+    //
+    // Structural first: the v2 board is gone outright, and exactly one
+    // scorebug replaces it. `[data-role="racquet-header"]` itself has had no
+    // producer anywhere in this codebase since R5 deleted racquet-skin.tsx
+    // (the v2 skin that rendered it) — this assertion stays regardless,
+    // because "gone" is exactly the fact worth pinning, not merely assumed.
+    const scorebug = pad(page).locator('[data-role="v3-scorebug"]');
+    await expect(
+      pad(page).locator('[data-role="racquet-header"]'),
+      `gallery(${recipe.slug}): D-11 — the v2 SETS/POINTS board must be gone, not rendered beside the scorebug`,
+    ).toHaveCount(0, { timeout: 20_000 });
+    await expect(
+      scorebug,
+      `gallery(${recipe.slug}): D-11 — exactly one scorebug states the score`,
+    ).toHaveCount(1, { timeout: 20_000 });
+    // Then textually, which is the half a structural check cannot see: each
+    // side's current points appear ONCE inside it. The strip beside them
+    // carries GAMES (a different fact, `1–0`), never a second copy of
+    // the points — so a skin that put the points back on the strip reds here.
+    for (const value of [expectedHomePoints!, expectedAwayPoints!]) {
       await expect(
-        v3HalfScore(page, "home"),
-        `gallery(${recipe.slug}): 11-servingplaceholder must be MID-game, never turn 0`,
-      ).toHaveText(expectedHomePoints!, { timeout: 20_000 });
-      await expect(v3HalfScore(page, "away")).toHaveText(expectedAwayPoints!, { timeout: 20_000 });
-      // ===== D-11, ASSERTED RATHER THAN ASSUMED. The v2 lane stated the score
-      // THREE times above the fold — the fixture header, the LCD panel, and
-      // the SETS/POINTS board — and the single v3 scorebug retires two of
-      // them. Left unasserted, that retirement would be something a reviewer
-      // has to notice in a screenshot; here it fails the run instead.
-      //
-      // Structural first: the v2 board is gone outright, and exactly one
-      // scorebug replaces it.
-      const scorebug = pad(page).locator('[data-role="v3-scorebug"]');
-      await expect(
-        pad(page).locator('[data-role="racquet-header"]'),
-        `gallery(${recipe.slug}): D-11 — the v2 SETS/POINTS board must be gone, not rendered beside the scorebug`,
-      ).toHaveCount(0, { timeout: 20_000 });
-      await expect(
-        scorebug,
-        `gallery(${recipe.slug}): D-11 — exactly one scorebug states the score`,
+        scorebug.getByText(value, { exact: true }),
+        `gallery(${recipe.slug}): D-11 — "${value}" must be stated once above the fold, not twice`,
       ).toHaveCount(1, { timeout: 20_000 });
-      // Then textually, which is the half a structural check cannot see: each
-      // side's current points appear ONCE inside it. The strip beside them
-      // carries GAMES (a different fact, `1\u20130`), never a second copy of
-      // the points — so a skin that put the points back on the strip reds here.
-      for (const value of [expectedHomePoints!, expectedAwayPoints!]) {
-        await expect(
-          scorebug.getByText(value, { exact: true }),
-          `gallery(${recipe.slug}): D-11 — "${value}" must be stated once above the fold, not twice`,
-        ).toHaveCount(1, { timeout: 20_000 });
-      }
-    } else {
-      await expect(
-        racquetHeaderValue(page, "Points"),
-        `gallery(${recipe.slug}): 11-servingplaceholder must be MID-game (${recipe.expectedPoints}), never turn 0`,
-      ).toHaveText(recipe.expectedPoints, { timeout: 20_000 });
     }
-    // ===== D-17. THIS IS THE ASSERTION A CONVERSION INVERTS — never deletes.
-    //
-    // v2 (table tennis, volleyball — still unconverted): the header prints an
-    // em dash where the server belongs. That is the defect, photographed. When
-    // those two waves land, add `lane: "v3"` + `expectedServer` to their own
-    // recipes and this branch stops applying to them, exactly as it just
-    // stopped applying to badminton. Do not delete the branch: a deleted probe
-    // stops the capture failing and does nothing to stop the placeholder
-    // coming back on the sport that still has it.
-    //
-    // v3 (badminton, R5): INVERTED. The field must not be the placeholder AND
-    // must name the real server. Both halves matter — "not an em dash" alone
-    // is satisfied by a confidently WRONG name, which is R4's D-21 exactly.
-    if (lane === "v3") {
-      const expectedServer = recipe.expectedServer;
-      if (expectedServer === undefined) {
-        throw new Error(`gallery(${recipe.slug}): a v3-lane serving recipe must declare expectedServer`);
-      }
-      await expect(
-        serving,
-        `gallery(${recipe.slug}): D-17 — the serving field must no longer be the placeholder`,
-      ).not.toHaveText(RACQUET_SERVING_PLACEHOLDER, { timeout: 20_000 });
-      await expect(
-        serving,
-        `gallery(${recipe.slug}): D-17 — and it must name the real server, not merely something`,
-      ).toContainText(expectedServer, { timeout: 20_000 });
-    } else {
-      await expect(
-        serving,
-        `gallery(${recipe.slug}): D-17 — the serving field must still be the placeholder here`,
-      ).toHaveText(RACQUET_SERVING_PLACEHOLDER, { timeout: 20_000 });
-    }
+    // ===== D-17. This used to be the assertion a per-sport conversion
+    // inverted rather than deleted (v2: the header prints an em dash where
+    // the server belongs; v3: the field must name the real server) — sound
+    // advice while at least one racquet sport still had a v2 placeholder to
+    // guard. R5 (2026-08-27) closed that out: badminton (C1), table tennis
+    // (C2) and volleyball (C3) have ALL converted, so there is no sport left
+    // for a "still the placeholder" branch to ever be true for. That is the
+    // same runtime-unreachability this wave's own cleanup task was scoped to
+    // remove (racquet-skin.tsx itself went with it, and with it the only
+    // producer `[data-role="racquet-header"]`'s serving field could ever
+    // have had). What survives, unconditionally, is the stronger half the
+    // inversion always built toward: the field must not be the placeholder
+    // AND must name the real server. Both halves matter — "not an em dash"
+    // alone is satisfied by a confidently WRONG name, which is R4's D-21
+    // exactly.
+    await expect(
+      serving,
+      `gallery(${recipe.slug}): D-17 — the serving field must no longer be the placeholder`,
+    ).not.toHaveText(RACQUET_SERVING_PLACEHOLDER, { timeout: 20_000 });
+    await expect(
+      serving,
+      `gallery(${recipe.slug}): D-17 — and it must name the real server, not merely something`,
+    ).toContainText(recipe.expectedServer, { timeout: 20_000 });
   };
 
   await captureState(page, dir, "11-servingplaceholder", recipe.slug, measurements, probe);
@@ -2112,7 +2066,6 @@ const SPORTS: GallerySport[] = [
         label: "Volleyball",
         sportKey: "volleyball",
         variantKey: "indoor",
-        lane: "v3",
         coarseType: "volleyball.set.summary",
         // Indoor set 1 is to 25 (setbased/volleyball.ts).
         summary: { home: 25, away: 20 },
@@ -2133,11 +2086,12 @@ const SPORTS: GallerySport[] = [
       home: [{ fullName: `Gallery Badminton Home ${tag}` }],
       away: [{ fullName: `Gallery Badminton Away ${tag}` }],
     }),
-    // R5 — BADMINTON HAS CONVERTED. It no longer shares racquet-skin.tsx with
-    // volleyball and table tennis (which still do, and whose two entries above
-    // and below are unchanged): tap model S makes the scoreboard HALF the
-    // rally button, and its accessible name is the player's own name plus hint
-    // text, so it can only be addressed positionally. The old
+    // R5 — BADMINTON HAS CONVERTED (the first of the three, C1; table tennis
+    // and volleyball below followed in C2/C3, and racquet-skin.tsx itself is
+    // now deleted — nothing shares it any more): tap model S makes the
+    // scoreboard HALF the rally button, and its accessible name is the
+    // player's own name plus hint text, so it can only be addressed
+    // positionally. The old
     // `getByRole("button", {name: "Home"})` does not merely mis-target here —
     // it throws before a single screenshot is written, which is how R4 nearly
     // asked for a sign-off on a wave with zero pictures.
@@ -2169,7 +2123,6 @@ const SPORTS: GallerySport[] = [
         sportKey: "badminton",
         variantKey: "bwf",
         entrantKind: "individual",
-        lane: "v3",
         coarseType: "badminton.game.summary",
         // BWF game 1 is to 21 (setbased/badminton.ts).
         summary: { home: 21, away: 15 },
@@ -2194,11 +2147,10 @@ const SPORTS: GallerySport[] = [
       home: [{ fullName: `Gallery Tabletennis Home ${tag}` }],
       away: [{ fullName: `Gallery Tabletennis Away ${tag}` }],
     }),
-    // R5/C2 — TABLE TENNIS HAS CONVERTED. It no longer shares
-    // racquet-skin.tsx with volleyball (which still does, and whose own
-    // entry is unchanged): tap model S makes the scoreboard HALF the rally
-    // button, addressed positionally exactly as badminton's own entry above
-    // documents.
+    // R5/C2 — TABLE TENNIS HAS CONVERTED (volleyball below followed in C3,
+    // closing out the family; racquet-skin.tsx itself is now deleted):
+    // tap model S makes the scoreboard HALF the rally button, addressed
+    // positionally exactly as badminton's own entry above documents.
     scoreOne: async (page) => {
       await v3Half(page, "home").click();
     },
@@ -2229,7 +2181,6 @@ const SPORTS: GallerySport[] = [
         sportKey: "tabletennis",
         variantKey: "bo5",
         entrantKind: "individual",
-        lane: "v3",
         coarseType: "tabletennis.game.summary",
         // ITTF game 1 is to 11 (setbased/tabletennis.ts).
         summary: { home: 11, away: 7 },

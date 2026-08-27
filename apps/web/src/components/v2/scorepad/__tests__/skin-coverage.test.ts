@@ -115,8 +115,11 @@ describe("skin coverage", () => {
   it("sweeps every skin's sports across the whole cfg space", () => {
     const { sportsSwept, cfgsSwept, actionsChecked } = sweep();
     // Guards the sweep itself: a walk that silently stops finding sports or
-    // cfgs would make every assertion below vacuously green.
-    expect(sportsSwept).toBe(8);
+    // cfgs would make every assertion below vacuously green. 5, not 8: R5
+    // deleted racquet-skin.tsx (volleyball/badminton/tabletennis fully
+    // converted to v3, registry.ts's `NO_V2_SKIN_SPORTS`) — SKINS now covers
+    // cricket, tennis, football, hockey, icehockey alone.
+    expect(sportsSwept).toBe(5);
     expect(cfgsSwept).toBeGreaterThan(50);
     expect(actionsChecked).toBeGreaterThan(200);
   });
@@ -160,11 +163,11 @@ describe("skin registry", () => {
     const routed = Object.fromEntries(
       SKINS.flatMap((skin) => skin.sports.map((sport) => [sport, skinFor(sport)?.key])),
     );
+    // volleyball/badminton/tabletennis deliberately absent: R5 deleted
+    // racquet-skin.tsx (registry.ts's `NO_V2_SKIN_SPORTS`), so `skinFor` now
+    // returns null for all three rather than routing them here.
     expect(routed).toEqual({
       cricket: "cricket",
-      volleyball: "racquet",
-      badminton: "racquet",
-      tabletennis: "racquet",
       tennis: "tennis",
       football: "football",
       hockey: "period",
@@ -205,11 +208,11 @@ describe("skin dispatch", () => {
 describe("skin headline actions reach the primary surface", () => {
   // Presence is not ergonomics: a cricket skin that reaches `cricket.ball`
   // only from a drawer passes "renders every action" while failing the brief.
+  // volleyball/badminton/tabletennis deliberately absent: R5 deleted
+  // racquet-skin.tsx (registry.ts's `NO_V2_SKIN_SPORTS`) — their headline
+  // placement is now v3-skin coverage, not this sweep's.
   const HEADLINE: Record<string, string> = {
     cricket: "cricket.ball",
-    volleyball: "volleyball.rally",
-    badminton: "badminton.rally",
-    tabletennis: "tabletennis.rally",
     tennis: "tennis.point",
     football: "football.goal",
     hockey: "hockey.goal",
