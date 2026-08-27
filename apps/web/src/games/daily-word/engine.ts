@@ -6,6 +6,7 @@
 // dailySeed() and chess-quest's lib/progress.tsx do -- see their comments
 // for why that's fine for ordinary app code (it's build/workflow scripts
 // that must avoid real-time reads, not this).
+import { siteOrigin } from "../../lib/site-origin";
 import { dailySeed } from "../_shared/daily-seed";
 import { ALLOWED } from "./content/allowed";
 import { ANSWERS } from "./content/answers";
@@ -170,5 +171,10 @@ export function shareText(puzzle: number, guesses: string[], answer: string, max
   const grid = guesses
     .map((g) => evaluate(g, answer).map((r) => RESULT_EMOJI[r]).join(""))
     .join("\n");
-  return `Seazn Word #${puzzle} ${scoreLabel}/${maxGuesses}\n\n${grid}`;
+  // Absolute, not "/games/daily-word" -- on the games.* subdomain the proxy
+  // rewrites relative paths oddly for anything other than "/" and "/games"
+  // (see gamesHostRewrite in proxy.ts, and the identical fix already applied
+  // to the Powered-by links in app/games/**), so a shared link needs to be
+  // unambiguous regardless of which host the sharer is actually on.
+  return `Seazn Word #${puzzle} ${scoreLabel}/${maxGuesses}\n\n${grid}\n\n${siteOrigin()}/games/daily-word`;
 }

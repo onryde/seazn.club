@@ -175,4 +175,12 @@ describe("shareText", () => {
       .filter((l) => /^[\u{1F7E9}\u{1F7E8}\u{2B1B}]+$/u.test(l));
     expect(gridLines).toHaveLength(2);
   });
+
+  it("includes an absolute link back to the game, not a bare relative path", () => {
+    // Absolute so the link works even when shared from the games.* subdomain
+    // (see engine.ts's comment -- same class of fix as the Powered-by links
+    // in app/games/**).
+    const text = shareText(1, ["MOTOR"], "MOTOR");
+    expect(text).toMatch(/https?:\/\/[^\s]+\/games\/daily-word$/);
+  });
 });
