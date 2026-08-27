@@ -40,6 +40,7 @@ import { isValidRefCode, normalizeRefCode } from "@/lib/ref-code";
 import { maskDisplayName, resolveNameDisplay } from "@/lib/name-display";
 import { isoFromZonedParts } from "@/lib/zoned-datetime";
 import { resolveVenueTz } from "@/lib/tz";
+import { rateLimit } from "@/lib/rate-limit";
 import { icsText, foldLine } from "@/lib/public-site";
 import { msgFor } from "@/lib/messages-i18n";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -2685,6 +2686,20 @@ export async function reconcileRegistrationBySession(
  * (V378), so picking one arbitrary sibling to gate on could refuse to even
  * look at Stripe for a session that is genuinely paid. Best-effort; never
  * throws.
+ *
+ * RS007 follow-up: this is the ONLY reconcile path with no self-limit at
+ * all — `reconcileRegistration`/`reconcileRegistrationBySession` both gate
+ * on `status !== "pending"` before ever calling Stripe, but that exact gate
+ * is wrong HERE (see the paragraph above), so this is rate-limited instead,
+ * keyed on the group. The status page calls this on every qualifying GET
+ * (`?checkout=success&session_id=...`), and that URL sits in browser
+ * history and referrers — without a limiter, one repeat visit (or a leaked
+ * link) is unbounded outbound amplification, one `checkout.sessions.retrieve`
+ * per hit, against the platform's own Stripe read limit. A throttled call
+ * folds into the same `false` every other early-return here already means
+ * ("could not reconcile just now") — the caller discards the return value
+ * either way and simply falls through to reading the group's current DB
+ * state, so this never surfaces to the registrant.
  */
 export async function reconcileRegistrationGroupBySession(
   groupId: string,
@@ -2693,6 +2708,7 @@ export async function reconcileRegistrationGroupBySession(
 ): Promise<boolean> {
   try {
     if (!GROUP_ID_RE.test(groupId)) return false;
+    await rateLimit(`reg-reconcile:${groupId}`, { max: 5, windowSeconds: 60 });
     const [group] = await sql<
       Pick<RegistrationGroupRow, "access_token_hash" | "checkout_session_id">[]
     >`

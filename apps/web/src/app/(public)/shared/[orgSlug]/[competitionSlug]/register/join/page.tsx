@@ -14,14 +14,44 @@ export const dynamic = "force-dynamic";
 // surface; the GET route exists for the CLIENT island's post-conflict
 // refresh, see join-form.tsx), then hands the picker to the client island
 // (join-form.tsx) for the interactive part.
+//
+// RS007 follow-up: `join_code` is a `generateRefCode()` value (30^6 ≈ 729M,
+// lib/ref-code.ts) and this preview renders real roster names — bypassing
+// the GET route's own rate limit (above) left this page itself unthrottled,
+// a PII enumeration surface over that whole space. Limited HERE, per-IP,
+// same bucket key as the sibling route (`regjoinpreview:${ip}`, 5/300s —
+// api/v1/.../register/join/route.ts's GET) so this page cannot be used to
+// bypass that route's own budget. Checked BEFORE the lookup, never after: a
+// throttled visit must render the exact same "invalid" markup a wrong code
+// does — a distinguishable throttle response would itself be a new oracle.
 import Link from "next/link";
 import type { Metadata } from "next";
+import { headers } from "next/headers";
 import { previewJoinEntry } from "@/server/usecases/registration-submit";
 import { HttpError } from "@/lib/errors";
+import { rateLimit } from "@/lib/rate-limit";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t } from "@/lib/i18n";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import { JoinForm } from "./join-form";
+
+/** Same extraction the sibling API route's own `clientIp` uses
+ *  (register/join/route.ts) and `publicRateLimit` (server/usecases/public.ts)
+ *  — kept local rather than shared, since a Server Component reads it off
+ *  `headers()` (the Next request-scoped store) instead of a route's own
+ *  `Request`. `headers()` throws SYNCHRONOUSLY outside a real request — the
+ *  shape of this page called directly in tests (no jsdom; see
+ *  resolve-locale.ts's identical guard) — so this falls back to "unknown"
+ *  the same way that module does, rather than breaking every existing test
+ *  here that renders the page with no join_code at all. */
+async function clientIp(): Promise<string> {
+  try {
+    const h = await headers();
+    return h.get("x-forwarded-for")?.split(",")[0]?.trim() ?? h.get("x-real-ip") ?? "unknown";
+  } catch {
+    return "unknown";
+  }
+}
 
 export const metadata: Metadata = { robots: { index: false, follow: false } };
 
@@ -45,10 +75,19 @@ export default async function RegisterJoinPage({ params, searchParams }: Props) 
   // distinguish "no code" from "wrong code" from "code once existed" either.
   let preview: Awaited<ReturnType<typeof previewJoinEntry>> | null = null;
   if (join_code) {
+    let throttled = false;
     try {
-      preview = await previewJoinEntry(join_code);
+      await rateLimit(`regjoinpreview:${await clientIp()}`, { max: 5, windowSeconds: 300 });
     } catch (err) {
-      if (!(err instanceof HttpError && err.status === 404)) throw err;
+      if (!(err instanceof HttpError && err.status === 429)) throw err;
+      throttled = true;
+    }
+    if (!throttled) {
+      try {
+        preview = await previewJoinEntry(join_code);
+      } catch (err) {
+        if (!(err instanceof HttpError && err.status === 404)) throw err;
+      }
     }
   }
 

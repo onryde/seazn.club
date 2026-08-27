@@ -18,8 +18,33 @@ vi.mock("@/server/usecases/registration-submit", () => ({
   previewJoinEntry: (...args: unknown[]) => usecaseMock.previewJoinEntry(...args),
 }));
 
+// RS007 follow-up: the page's own per-IP rate limit over previewJoinEntry.
+// The real limiter is inert without REDIS_URL (unset in this environment),
+// so a throttle is forced deterministically via this mock rather than
+// relying on the real one. This ALSO doubles as proof the page's own
+// `headers()` read is safely guarded: this suite calls RegisterJoinPage
+// directly (renderToStaticMarkup, no real Next.js request — see
+// resolve-locale.ts's identical "outside a request scope" guard), so if
+// that guard were missing every test touching a join_code below would
+// throw synchronously the moment this mock is exercised.
+const rateLimitMock = vi.hoisted(() => ({ throttle: false }));
+vi.mock("@/lib/rate-limit", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/rate-limit")>();
+  return {
+    ...actual,
+    rateLimit: async (...args: Parameters<typeof actual.rateLimit>) => {
+      if (rateLimitMock.throttle) {
+        const { HttpError } = await import("@/lib/errors");
+        throw new HttpError(429, "Too many requests — slow down and try again.");
+      }
+      return actual.rateLimit(...args);
+    },
+  };
+});
+
 beforeEach(() => {
   usecaseMock.previewJoinEntry.mockReset();
+  rateLimitMock.throttle = false;
 });
 
 import RegisterJoinPage from "../page";
@@ -207,6 +232,50 @@ describe("register join page (RS007) — the URL entry-card.tsx already emits", 
       usecaseMock.previewJoinEntry.mockResolvedValueOnce(TEAM_PREVIEW);
       const html = await render({ join_code: "JOIN123", player_id: "not-a-real-slot" });
       expect(html).not.toContain('checked=""');
+    });
+  });
+
+  // RS007 follow-up: join_code is a generateRefCode() value (30^6 ≈ 729M,
+  // lib/ref-code.ts) and this preview renders real roster names — an
+  // unthrottled server-rendered page over that space is a PII enumeration
+  // surface. Hard requirement: a throttled response must be indistinguishable
+  // from the invalid-code 404 in status AND body — a distinguishable throttle
+  // page would itself be a new oracle (confirms an IP has crossed the
+  // threshold, and worse, a DIFFERENT throttle message on an otherwise-live
+  // code would leak that the code would have worked).
+  describe("client-IP rate limit — must not become a new oracle", () => {
+    it("renders byte-identical markup to a wrong code, and never calls previewJoinEntry", async () => {
+      const { HttpError } = await import("@/lib/errors");
+      usecaseMock.previewJoinEntry.mockRejectedValueOnce(new HttpError(404, "This join link is not valid"));
+      const wrongCodeHtml = await render({ join_code: "SZ-DEAD-CODE" });
+
+      rateLimitMock.throttle = true;
+      usecaseMock.previewJoinEntry.mockClear();
+      const throttledHtml = await render({ join_code: "SZ-DEAD-CODE" });
+
+      expect(throttledHtml).toBe(wrongCodeHtml);
+      expect(usecaseMock.previewJoinEntry).not.toHaveBeenCalled();
+    });
+
+    it("hides even a GENUINELY LIVE code — never leaks that the code would have worked", async () => {
+      // Configured to succeed if reached — proves the limiter itself hides
+      // this, not an incidental lookup failure.
+      usecaseMock.previewJoinEntry.mockResolvedValueOnce(TEAM_PREVIEW);
+      rateLimitMock.throttle = true;
+
+      const html = await render({ join_code: "JOIN123" });
+
+      expect(html).toContain("This join link isn&#x27;t valid");
+      expect(html).not.toContain("Team Alpha");
+      expect(html).not.toContain("Which one are you?");
+      expect(usecaseMock.previewJoinEntry).not.toHaveBeenCalled();
+    });
+
+    it("a bare visit with no join_code never consults the limiter at all — matches the existing 'never calls previewJoinEntry' contract", async () => {
+      rateLimitMock.throttle = true; // even so — the limiter must never fire without a code to look up
+      const html = await render({});
+      expect(html).toContain("This join link isn&#x27;t valid");
+      expect(usecaseMock.previewJoinEntry).not.toHaveBeenCalled();
     });
   });
 });

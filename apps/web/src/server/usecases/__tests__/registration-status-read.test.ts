@@ -40,6 +40,26 @@ vi.mock("@/lib/email", async (importOriginal) => {
   };
 });
 
+// RS007 follow-up: reconcileRegistrationGroupBySession's own outbound-Stripe
+// rate limit. The real limiter is inert without REDIS_URL (unset in this
+// environment) — vi.mock so ONE test can force a throttle deterministically,
+// while every other test here forwards to the real (inert) implementation
+// unchanged.
+const rateLimitMock = vi.hoisted(() => ({ throttle: false }));
+vi.mock("@/lib/rate-limit", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/rate-limit")>();
+  return {
+    ...actual,
+    rateLimit: async (...args: Parameters<typeof actual.rateLimit>) => {
+      if (rateLimitMock.throttle) {
+        const { HttpError: RateLimitedError } = await import("@/lib/errors");
+        throw new RateLimitedError(429, "Too many requests — slow down and try again.");
+      }
+      return actual.rateLimit(...args);
+    },
+  };
+});
+
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import {
@@ -89,6 +109,7 @@ async function stripeSettingsRig() {
 beforeEach(() => {
   stripeMock.retrieve.mockReset();
   emailMock.registration.mockReset();
+  rateLimitMock.throttle = false;
 });
 
 afterAll(async () => {
@@ -835,6 +856,43 @@ describe.skipIf(!HAS_DB)("reconcileRegistrationGroupBySession — rid+token retu
     expect(stripeMock.retrieve).not.toHaveBeenCalled();
     const [row] = await sql<{ status: string }[]>`select status from registrations where id = ${registration.id}`;
     expect(row!.status).toBe("pending");
+  });
+
+  // RS007 follow-up: this URL (?checkout=success&session_id=...) sits in
+  // browser history and referrers — every qualifying GET on the status page
+  // called this unconditionally, one outbound checkout.sessions.retrieve
+  // per hit, unbounded. Fulfilment is already idempotent
+  // (confirmPaidRegistration no-ops on an already-paid row), so the fix is a
+  // limiter, not a pending pre-check — this function deliberately has NO
+  // "is some entry still pending" gate (see its own doc comment above: that
+  // would refuse to even look at Stripe for a genuinely-paid multi-entry
+  // cart whose representative entry happens to already be settled).
+  it("a rate-limited reconcile skips Stripe entirely and returns false — even for a token/session pair that WOULD have confirmed it", async () => {
+    const { competition, division } = await stripeSettingsRig();
+    const { registration, access_token } = await seedRegistration(
+      competition.id,
+      division.id,
+      { ...SETTINGS_BASE, fee_cents: 500, currency: "gbp", payment_method: "stripe" },
+      { refCode: freshRef() },
+    );
+    const ownSessionId = "cs_test_owncart_" + randomUUID().slice(0, 8);
+    await sql`update registration_groups set checkout_session_id = ${ownSessionId}
+              where id = ${registration.group_id}`;
+    // Configured to SUCCEED if reached — proves the limiter itself is what
+    // blocks this, not an incidental Stripe failure.
+    stripeMock.retrieve.mockResolvedValueOnce({
+      id: ownSessionId,
+      payment_status: "paid",
+      metadata: { kind: "registration_group", registration_ids: registration.id },
+    });
+    rateLimitMock.throttle = true;
+
+    const result = await reconcileRegistrationGroupBySession(registration.group_id, access_token, ownSessionId);
+
+    expect(result).toBe(false);
+    expect(stripeMock.retrieve).not.toHaveBeenCalled();
+    const [row2] = await sql<{ status: string }[]>`select status from registrations where id = ${registration.id}`;
+    expect(row2!.status).toBe("pending"); // never confirmed — the call never reached Stripe
   });
 
   it("swallows a Stripe outage and returns false rather than throwing", async () => {
