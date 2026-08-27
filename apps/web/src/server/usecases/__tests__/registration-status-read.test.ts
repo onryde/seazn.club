@@ -321,6 +321,34 @@ describe.skipIf(!HAS_DB)("publicCartByRef — token-less, masked cart read", () 
     expect((await publicCartByRef(refCode, "regtok_wrong")).can_withdraw).toBe(false);
     expect((await publicCartByRef(refCode, access_token)).can_withdraw).toBe(true);
   });
+
+  // RS006 follow-up (data-integrity fix): can_withdraw used to be a single
+  // cart-level flag evaluated against ONE entry (the oldest) — its own doc
+  // comment admitted this. A multi-entry cart showed one undifferentiated
+  // Withdraw control with no way to tell which row it would act on. Withdraw
+  // is per-entry now, so each entry states its OWN eligibility.
+  it("each entry's can_withdraw reflects its OWN status, not the oldest entry's — the exact bug this fixes", async () => {
+    const { competition, division } = await stripeSettingsRig();
+    const refCode = freshRef();
+    const { registration, access_token } = await seedRegistration(
+      competition.id,
+      division.id,
+      { fee_cents: 500, currency: "gbp", payment_method: "stripe" },
+      { refCode, displayName: "Singles" },
+    );
+    // Second entry (younger, so NOT the oldest regByRef would pick) already
+    // withdrawn — with a valid cart-level token throughout.
+    const second = await seedSecondEntry(registration.group_id, division.id, 500, "Doubles", "withdrawn");
+
+    const view = await publicCartByRef(refCode, access_token);
+    const first = view.entries.find((e) => e.id === registration.id)!;
+    const withdrawnEntry = view.entries.find((e) => e.id === second.id)!;
+    expect(first.can_withdraw).toBe(true);
+    expect(withdrawnEntry.can_withdraw).toBe(false);
+    // Cart-level can_withdraw is token validity alone now — not tied to any
+    // one entry's status (that would just relocate the same bug).
+    expect(view.can_withdraw).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------

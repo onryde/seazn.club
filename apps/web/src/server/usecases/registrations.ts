@@ -2727,16 +2727,53 @@ export async function publicRegistrationStatusByRef(
   };
 }
 
-/** Self-withdraw from /r/[ref] — the ref is a lookup, NOT auth: the email
- *  token is still required (v3/05 §4). */
+/** Resolves ONE specific cart entry for a ref, verifying in a SINGLE query
+ *  that (a) `entryId` belongs to the group `ref` itself names and (b) the
+ *  supplied token matches THAT group's access_token_hash — mirrors
+ *  `regByToken` exactly (same SQL-side hash equality, same no-row-means-404
+ *  contract), just scoped by ref_code too. `ref_code` carries a unique index
+ *  (V363), so `g.ref_code = canonical` can join at most one group: an
+ *  entryId from a different cart simply has no row satisfying all three
+ *  predicates at once, regardless of whether the token is otherwise valid
+ *  for THAT other cart. A wrong ref, a wrong token, and a foreign entryId
+ *  all 404 identically (RS006 follow-up: withdraw is per-entry now — see
+ *  `withdrawRegistrationByRef`). */
+async function regByRefAndToken(
+  ref: string,
+  entryId: string,
+  token: string,
+): Promise<RegistrationWithGroupRow> {
+  const canonical = normalizeRefCode(ref);
+  if (!isValidRefCode(canonical)) throw new HttpError(404, "registration not found");
+  const [reg] = await sql<RegistrationWithGroupRow[]>`
+    select ${regGroupCols(sql)}
+    from registrations r join registration_groups g on g.id = r.group_id
+    where g.ref_code = ${canonical} and r.id = ${entryId}
+      and g.access_token_hash = ${hashRegistrationToken(token)}`;
+  if (!reg) throw new HttpError(404, "registration not found");
+  return reg;
+}
+
+/** Self-withdraw from /r/[ref] — the ref is a LOOKUP, NOT auth: the email
+ *  token is still required (v3/05 §4). RS006 follow-up (data-integrity fix):
+ *  a cart can hold more than one entry, and this used to always resolve+act
+ *  on the OLDEST one (`regByRef`'s deterministic pick) regardless of what the
+ *  registrant meant to withdraw — a multi-entry cart rendered one
+ *  undifferentiated Withdraw control that silently withdrew the wrong row.
+ *  The caller now names the target entry explicitly; `regByRefAndToken`
+ *  verifies it belongs to the ref's OWN group before `withdrawCore` ever
+ *  runs, so a valid token can never be paired with a foreign registration id
+ *  to withdraw someone else's entry. Returns the whole cart (the same shape
+ *  the page renders) so every entry's post-withdraw status is visible, not
+ *  just the one just acted on. */
 export async function withdrawRegistrationByRef(
   ref: string,
+  entryId: string,
   token: string,
-): Promise<PublicRefView> {
-  const reg = await regByRef(ref);
-  const byToken = await regByToken(reg.id, token); // 404s on a bad token
-  await withdrawCore(byToken, null);
-  return publicRegistrationStatusByRef(ref, token);
+): Promise<PublicCartView> {
+  const reg = await regByRefAndToken(ref, entryId, token);
+  await withdrawCore(reg, null);
+  return publicCartByRef(ref, token);
 }
 
 /** One entry as /r/[ref] shows it to the general public — masked per THIS
@@ -2746,6 +2783,16 @@ export interface PublicCartEntryView {
   status: RegistrationRow["status"];
   display_name: string;
   division_name: string;
+  /** True when the viewer's token is valid for this cart AND this specific
+   *  entry isn't already withdrawn — RS006 follow-up: withdraw acts on ONE
+   *  named entry now (`withdrawRegistrationByRef` takes an explicit entry
+   *  id), so each entry states its OWN eligibility instead of the whole
+   *  cart inheriting one entry's (that mismatch — one flag, evaluated
+   *  against only the oldest entry, driving a single cart-wide control —
+   *  was the data-integrity bug: nothing told the registrant WHICH entry a
+   *  click would act on). Mirrors the single-entry sibling's predicate
+   *  (`PublicRefView.can_withdraw`) exactly, just evaluated per row. */
+  can_withdraw: boolean;
 }
 
 /**
@@ -2771,10 +2818,12 @@ export interface PublicCartView {
   starts_on: string | null;
   ends_on: string | null;
   created_at: string;
-  /** True when the ?token= the viewer presented matches AND the entry that
-   *  `withdrawRegistrationByRef` actually acts on (the oldest) isn't already
-   *  withdrawn — same rule as `PublicRefView.can_withdraw`, evaluated
-   *  against the same target row so this predicts that call's outcome. */
+  /** True when the viewer's ?token= matches this cart's access token. RS006
+   *  follow-up: no longer tied to any one entry's status — it used to mirror
+   *  the OLDEST entry's (the exact bug: a cart-wide flag standing in for a
+   *  per-entry fact). That check now lives per entry, see
+   *  `PublicCartEntryView.can_withdraw`; this only gates whether the viewer
+   *  has write access to the cart AT ALL. */
   can_withdraw: boolean;
   entries: PublicCartEntryView[];
 }
@@ -2804,13 +2853,13 @@ export async function publicCartByRef(ref: string, token?: string | null): Promi
     where r.group_id = ${reg.group_id}
     order by r.created_at, r.id`;
 
-  // Mirrors PublicRefView's own can_withdraw check verbatim (not
-  // constant-time: the token is OPTIONAL here, so unlike groupByRef's
-  // required-token gate there is no ref-vs-token enumeration distinction to
-  // protect), against `reg` — the SAME oldest-entry row
-  // withdrawRegistrationByRef resolves and acts on.
-  const canWithdraw =
-    !!token && reg.status !== "withdrawn" && hashRegistrationToken(token) === reg.access_token_hash;
+  // access_token_hash lives on the GROUP (V364) — shared by every entry, so
+  // any one of them (regByRef's oldest pick) reads it correctly regardless
+  // of which entry is actually being withdrawn. Not constant-time: the
+  // token is OPTIONAL here, so unlike groupByRef's required-token gate there
+  // is no ref-vs-token enumeration distinction to protect (same rule
+  // publicRegistrationStatusByRef's canWithdraw already applies).
+  const tokenValid = !!token && hashRegistrationToken(token) === reg.access_token_hash;
 
   return {
     ref_code: reg.ref_code!,
@@ -2821,7 +2870,7 @@ export async function publicCartByRef(ref: string, token?: string | null): Promi
     starts_on: ctx.starts_on,
     ends_on: ctx.ends_on,
     created_at: new Date(reg.created_at).toISOString(),
-    can_withdraw: canWithdraw,
+    can_withdraw: tokenValid,
     entries: entries.map((e) => ({
       id: e.id,
       status: e.status,
@@ -2830,6 +2879,9 @@ export async function publicCartByRef(ref: string, token?: string | null): Promi
         resolveNameDisplay(e.player_name_display, e.youth),
       ),
       division_name: e.division_name,
+      // Per-entry, not inherited from the cart's (oldest-entry-derived) reg
+      // row — see PublicCartEntryView.can_withdraw's doc comment for why.
+      can_withdraw: tokenValid && e.status !== "withdrawn",
     })),
   };
 }

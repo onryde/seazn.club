@@ -1006,12 +1006,122 @@ describe.skipIf(!HAS_DB)("registration flows (doc 16 §1.1, PROMPT-20a)", () => 
     });
     const ref = registration.ref_code!;
 
-    await expect(withdrawRegistrationByRef(ref, "rg_wrong-token")).rejects.toThrow(/not found/);
+    await expect(
+      withdrawRegistrationByRef(ref, registration.id, "rg_wrong-token"),
+    ).rejects.toThrow(/not found/);
     const still = await loadWithGroup(registration.id);
     expect(still.status).toBe("pending");
 
-    const view = await withdrawRegistrationByRef(ref, access_token);
-    expect(view.status).toBe("withdrawn");
+    const view = await withdrawRegistrationByRef(ref, registration.id, access_token);
+    expect(view.entries.find((e) => e.id === registration.id)?.status).toBe("withdrawn");
+  });
+
+  // RS006 follow-up (data-integrity fix): /r/[ref] shows the WHOLE cart, but
+  // withdraw used to always resolve+act on the OLDEST entry regardless of
+  // which one the caller meant — a multi-entry cart had one undifferentiated
+  // Withdraw control that silently withdrew the wrong row. Withdraw is now
+  // per-entry: the caller names the target id, and it's verified to belong
+  // to the ref's own group before withdrawCore ever runs.
+  it("withdrawing entry 2 of a 3-entry cart withdraws EXACTLY entry 2, leaving 1 and 3 untouched", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    const settings = await putRegistrationSettings(owner, division.id, {
+      enabled: true,
+      entrant_kind: "individual",
+      fee_cents: 0,
+      form_fields: [],
+      opens_at: null,
+      closes_at: null,
+      capacity: null,
+      refund_lock_at: null,
+    });
+    const { registration: entry1, access_token } = await seedRegistration(
+      competition.id,
+      division.id,
+      settings,
+      { refCode: generateRefCode(), displayName: "Singles" },
+    );
+    const entry2 = await seedSecondEntry(entry1.group_id, division.id, 0, "Doubles");
+    const entry3 = await seedSecondEntry(entry1.group_id, division.id, 0, "Mixed");
+    const ref = entry1.ref_code!;
+
+    await withdrawRegistrationByRef(ref, entry2.id, access_token);
+
+    const [after1, after2, after3] = await Promise.all([
+      loadWithGroup(entry1.id),
+      loadWithGroup(entry2.id),
+      loadWithGroup(entry3.id),
+    ]);
+    expect(after2.status).toBe("withdrawn");
+    expect(after1.status).toBe("pending");
+    expect(after3.status).toBe("pending");
+  });
+
+  it("a valid token paired with a registration id from ANOTHER group withdraws nothing (SECURITY)", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    const settings = await putRegistrationSettings(owner, division.id, {
+      enabled: true,
+      entrant_kind: "individual",
+      fee_cents: 0,
+      form_fields: [],
+      opens_at: null,
+      closes_at: null,
+      capacity: null,
+      refund_lock_at: null,
+    });
+    // Two INDEPENDENT carts (own group, own ref, own token) — the realistic
+    // shape of the attack: the caller legitimately holds their OWN ref+token
+    // (myRef/myToken, the page they're actually on) and swaps in an entry id
+    // harvested off a DIFFERENT cart's public /r/[ref] page (entries[].id is
+    // unconditionally public — see publicCartByRef).
+    const { registration: mine, access_token: myToken } = await seedRegistration(
+      competition.id,
+      division.id,
+      settings,
+      { refCode: generateRefCode(), displayName: "Mine" },
+    );
+    const { registration: theirs } = await seedRegistration(
+      competition.id,
+      division.id,
+      settings,
+      { refCode: generateRefCode(), displayName: "Theirs" },
+    );
+    const myRef = mine.ref_code!;
+
+    await expect(withdrawRegistrationByRef(myRef, theirs.id, myToken)).rejects.toThrow(/not found/);
+
+    const stillTheirs = await loadWithGroup(theirs.id);
+    expect(stillTheirs.status).toBe("pending");
+    const stillMine = await loadWithGroup(mine.id);
+    expect(stillMine.status).toBe("pending");
+  });
+
+  it("no token still withdraws nothing", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    const settings = await putRegistrationSettings(owner, division.id, {
+      enabled: true,
+      entrant_kind: "individual",
+      fee_cents: 0,
+      form_fields: [],
+      opens_at: null,
+      closes_at: null,
+      capacity: null,
+      refund_lock_at: null,
+    });
+    const { registration } = await seedRegistration(competition.id, division.id, settings, {
+      refCode: generateRefCode(),
+    });
+    const ref = registration.ref_code!;
+
+    await expect(withdrawRegistrationByRef(ref, registration.id, "")).rejects.toThrow(/not found/);
+
+    const still = await loadWithGroup(registration.id);
+    expect(still.status).toBe("pending");
   });
 
   // ── Youth privacy (v3/11 gap 8, PROMPT-34) ──
@@ -2674,7 +2784,7 @@ describe.skipIf(!HAS_DB)("RS002 W5 review: rejected is terminal from every write
 
     let byRefErr: HttpError | undefined;
     try {
-      await withdrawRegistrationByRef(registration.ref_code!, access_token);
+      await withdrawRegistrationByRef(registration.ref_code!, registration.id, access_token);
     } catch (e) {
       byRefErr = e as HttpError;
     }
