@@ -283,38 +283,67 @@ describe("resolveRefundPolicy (pure, V379/RS007)", () => {
 
   it("an explicit refund_lock_at wins over the starts_on fallback, in either direction", () => {
     // Explicit lock in the past beats a starts_on that is still ahead.
-    expect(resolveRefundPolicy(new Date(PAST), FUTURE, "pi_1", 1000, 0).refundable).toBe(false);
+    expect(resolveRefundPolicy(new Date(PAST), FUTURE, "UTC", "pi_1", 1000, 0).refundable).toBe(false);
     // Explicit lock in the future beats a starts_on that has already passed.
-    expect(resolveRefundPolicy(new Date(FUTURE), PAST, "pi_1", 1000, 0).refundable).toBe(true);
+    expect(resolveRefundPolicy(new Date(FUTURE), PAST, "UTC", "pi_1", 1000, 0).refundable).toBe(true);
   });
 
   it("NULL refund_lock_at falls back to the competition's starts_on — refundable while it is still ahead", () => {
-    const policy = resolveRefundPolicy(null, FUTURE, "pi_1", 1000, 0);
+    const policy = resolveRefundPolicy(null, FUTURE, "UTC", "pi_1", 1000, 0);
     expect(policy.refundable).toBe(true);
-    expect(policy.deadline).toBe(new Date(FUTURE).toISOString());
+    expect(policy.deadline).toBe(new Date(`${FUTURE}T00:00:00.000Z`).toISOString());
+    expect(policy.reason).toBeNull();
   });
 
   it("NULL refund_lock_at falls back to the competition's starts_on — NOT refundable once it has passed", () => {
     // The exact defect this wave fixes: NULL used to mean refundable
     // forever, including the night before (and after) kickoff.
-    const policy = resolveRefundPolicy(null, PAST, "pi_1", 1000, 0);
+    const policy = resolveRefundPolicy(null, PAST, "UTC", "pi_1", 1000, 0);
     expect(policy.refundable).toBe(false);
-    expect(policy.deadline).toBe(new Date(PAST).toISOString());
+    expect(policy.deadline).toBe(new Date(`${PAST}T00:00:00.000Z`).toISOString());
+    expect(policy.reason).toBeNull(); // a known-but-passed deadline, not an unknown one
   });
 
-  it("both null (no lock, no starts_on) has no deadline and stays refundable — never worse than pre-fix behaviour when there is nothing to fall back to", () => {
-    const policy = resolveRefundPolicy(null, null, "pi_1", 1000, 0);
+  it("both null (no lock, no starts_on) has NO derivable deadline and is NOT refundable — owner ruling: an org that never configured either is fail-CLOSED, never auto-refundable forever", () => {
+    // This is the exact defect this wave fixes: null used to read as "no
+    // deadline, so still open" — refundable forever, the precise failure
+    // 445b137c1 claimed it had already removed.
+    const policy = resolveRefundPolicy(null, null, "UTC", "pi_1", 1000, 0);
     expect(policy.deadline).toBeNull();
-    expect(policy.refundable).toBe(true);
+    expect(policy.refundable).toBe(false);
+    expect(policy.reason).toBe("no_deadline");
   });
 
   it("amount_cents is the remaining unrefunded balance, not the original fee", () => {
-    expect(resolveRefundPolicy(null, FUTURE, "pi_1", 1000, 400).amount_cents).toBe(600);
+    expect(resolveRefundPolicy(null, FUTURE, "UTC", "pi_1", 1000, 400).amount_cents).toBe(600);
   });
 
   it("not refundable with no payment_intent_id, or with nothing left to refund, even before the deadline", () => {
-    expect(resolveRefundPolicy(null, FUTURE, null, 1000, 0).refundable).toBe(false);
-    expect(resolveRefundPolicy(null, FUTURE, "pi_1", 1000, 1000).refundable).toBe(false);
+    expect(resolveRefundPolicy(null, FUTURE, "UTC", null, 1000, 0).refundable).toBe(false);
+    expect(resolveRefundPolicy(null, FUTURE, "UTC", "pi_1", 1000, 1000).refundable).toBe(false);
+  });
+
+  // The second bug this wave fixes: `starts_on` is a bare DATE column with no
+  // zone of its own. `new Date("YYYY-MM-DD")` parses it as UTC midnight
+  // regardless of where the org actually runs — an Asia/Kolkata (UTC+5:30)
+  // org's window used to stay open until 05:30 LOCAL on the morning of play,
+  // 5.5h past the local midnight an organiser setting no explicit lock would
+  // reasonably expect.
+  it("the starts_on fallback resolves in the ORG's zone, not as UTC midnight — Asia/Kolkata closes at local midnight, not 05:30 local", () => {
+    vi.useFakeTimers();
+    try {
+      // 2026-01-10 local midnight IST = 2026-01-09T18:30:00Z. Pinned "now"
+      // sits AFTER that real deadline but BEFORE the buggy UTC-midnight
+      // parse (2026-01-10T00:00:00Z) — the two disagree by exactly the
+      // scenario above, so this instant can only read "refundable" under
+      // the pre-fix UTC-midnight bug.
+      vi.setSystemTime(new Date("2026-01-09T20:00:00.000Z"));
+      const policy = resolveRefundPolicy(null, "2026-01-10", "Asia/Kolkata", "pi_1", 1000, 0);
+      expect(policy.deadline).toBe("2026-01-09T18:30:00.000Z");
+      expect(policy.refundable).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -810,6 +839,25 @@ describe.skipIf(!HAS_DB)("registration flows (doc 16 §1.1, PROMPT-20a)", () => 
     await withdrawRegistrationPublic(res.registration.id, res.access_token);
     // Reverting the starts_on fallback makes this fail: NULL would read as
     // "before the lock" forever and auto-refund here regardless.
+    expect(stripeMock.refundCreate).not.toHaveBeenCalled();
+    const row = await loadWithGroup(res.registration.id);
+    expect(row.refunded_cents).toBe(0);
+  });
+
+  // The other bug this wave fixes (bug (a) — `competitions.starts_on` is
+  // nullable, see usecases/competitions.ts:206): a null lock AND a null
+  // starts_on together leave NO derivable deadline at all. Owner ruling:
+  // that is fail-CLOSED, not "refundable forever" — reverting the
+  // resolveRefundPolicy fix above makes this fail exactly the same way the
+  // ALREADY STARTED test above does.
+  it("RS007: NULL refund_lock_at + NULL starts_on — no derivable deadline, withdrawal does NOT auto-refund", async () => {
+    const { competition, division, settings } = await stripeRig(); // refund_lock_at: null (SETTINGS_BASE)
+    await sql`update competitions set starts_on = null where id = ${competition.id}`;
+    const res = await seedRegistration(competition.id, division.id, settings);
+    await handleRegistrationCheckoutCompleted(fakeSession(res.registration.id, 500));
+    stripeMock.refundCreate.mockClear();
+
+    await withdrawRegistrationPublic(res.registration.id, res.access_token);
     expect(stripeMock.refundCreate).not.toHaveBeenCalled();
     const row = await loadWithGroup(res.registration.id);
     expect(row.refunded_cents).toBe(0);

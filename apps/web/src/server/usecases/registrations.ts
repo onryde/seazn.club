@@ -38,6 +38,8 @@ import { routes } from "@/lib/routes";
 import { toLocale } from "@/lib/i18n-constants";
 import { isValidRefCode, normalizeRefCode } from "@/lib/ref-code";
 import { maskDisplayName, resolveNameDisplay } from "@/lib/name-display";
+import { isoFromZonedParts } from "@/lib/zoned-datetime";
+import { resolveVenueTz } from "@/lib/tz";
 import { icsText, foldLine } from "@/lib/public-site";
 import { msgFor } from "@/lib/messages-i18n";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -504,6 +506,14 @@ export interface DivisionCtx {
   default_locale: string | null;
   payment_instructions: string | null;
   charges_enabled: boolean;
+  /** RS007: the org's scheduling timezone (`organizations.timezone`, nullable
+   *  — resolves to UTC via `resolveVenueTz`). Feeds `resolveRefundPolicy`'s
+   *  `starts_on` fallback — deliberately the ORG's zone only, never a
+   *  division's own `schedule_settings.tz` override (see that function's own
+   *  doc comment for why `starts_on`, a competition-level field, cannot
+   *  resolve per-division without risking two entries in one cart
+   *  disagreeing about the same date). */
+  org_timezone: string | null;
   /** The org's CURRENT currency (RS001b/RS003) — read fresh on every call so
    *  `createRegistrationCheckout` can 422 a group whose snapshot has gone
    *  stale (the org's currency moved since submit) BEFORE any Stripe call,
@@ -520,7 +530,7 @@ export async function divisionCtx(db: AnySql, divisionId: string): Promise<Divis
            c.name as comp_name, c.slug as comp_slug, c.visibility as comp_visibility,
            c.starts_on, c.ends_on,
            o.slug as org_slug, o.name as org_name, o.default_locale, o.payment_instructions,
-           o.stripe_charges_enabled as charges_enabled, o.currency
+           o.stripe_charges_enabled as charges_enabled, o.currency, o.timezone as org_timezone
     from divisions d
     join competitions c on c.id = d.competition_id
     join organizations o on o.id = c.org_id
@@ -3204,13 +3214,18 @@ async function buildGroupStatusView(
     {
       comp_name: string; comp_slug: string; org_slug: string; org_name: string;
       starts_on: string | null; charges_enabled: boolean; org_payment_instructions: string | null;
+      org_timezone: string | null;
     }[]
   >`
     select c.name as comp_name, c.slug as comp_slug, o.slug as org_slug, o.name as org_name,
            c.starts_on, o.stripe_charges_enabled as charges_enabled,
-           o.payment_instructions as org_payment_instructions
+           o.payment_instructions as org_payment_instructions, o.timezone as org_timezone
     from competitions c join organizations o on o.id = c.org_id
     where c.id = ${group.competition_id}`;
+  // RS007: same org-only governing clock resolveRefundPolicy's own doc
+  // comment requires — resolved ONCE for the whole group (never per
+  // division), since `starts_on` is this ONE competition's field.
+  const refundTz = resolveVenueTz(null, comp?.org_timezone ?? null);
 
   const entries = await sql<
     (Omit<GroupEntryView, "players" | "refund_policy" | "promotion_expires_at" | "allows_new_joiner"> & {
@@ -3297,6 +3312,7 @@ async function buildGroupStatusView(
       refund_policy: resolveRefundPolicy(
         refundLockByDivision.get(e.division_id) ?? null,
         comp?.starts_on ?? null,
+        refundTz,
         group.payment_intent_id,
         e.amount_cents,
         refunded_cents,
@@ -3424,12 +3440,21 @@ export async function maybeAlertRegistrationRefundFailed(opts: {
 export interface ResolvedRefundPolicy {
   refundable: boolean;
   /** ISO instant, or null only when NEITHER an explicit lock NOR the
-   *  competition's own `starts_on` exists to fall back to. */
+   *  competition's own `starts_on` exists to fall back to — see `reason`. */
   deadline: string | null;
   /** This entry's own remaining unrefunded balance — what would come back if
    *  it were withdrawn right now, regardless of `refundable` (a registrant
    *  past the deadline can still be shown what is at stake). */
   amount_cents: number;
+  /** Set only when `refundable` is false because NO deadline could be
+   *  derived at all — no explicit `refund_lock_at` AND no competition
+   *  `starts_on` (owner ruling, RS007 follow-up to V379): an org that never
+   *  configured either is fail-CLOSED, not auto-refundable forever. Lets a
+   *  surface distinguish "we cannot know when this event begins, ask the
+   *  organiser" from an ordinary past-deadline decline. Null in every other
+   *  case, refundable or not (including a KNOWN deadline that has simply
+   *  passed). */
+  reason: "no_deadline" | null;
 }
 
 /**
@@ -3447,23 +3472,45 @@ export interface ResolvedRefundPolicy {
  * `refund_lock_at` always wins over this fallback — never averaged,
  * never the earlier/later of the two, just a plain `??`.
  *
- * `startsOn` is a DATE column (`competitions.starts_on`, no time-of-day);
- * `new Date("YYYY-MM-DD")` parses it as UTC midnight, same as every other
- * bare-date read in this file (e.g. the .ics `starts_on` handling below).
+ * RS007 follow-up (this wave, closing a gap the V379 comment above did not):
+ * a NULL `refundLockAt` with a NULL `startsOn` used to leave the derived
+ * deadline null too, which the boolean below read as "no deadline, so still
+ * open" — refundable forever, the exact behaviour V379 claims it removed.
+ * Owner ruling: no derivable deadline at all is fail-CLOSED (`refundable:
+ * false`, `reason: "no_deadline"`), never fail-open — an organiser bleeding
+ * refunds through a window that never closes is a worse failure than a
+ * registrant having to ask a human.
+ *
+ * `startsOn` is a DATE column (`competitions.starts_on`, no time-of-day) and
+ * carries no zone of its own — `tz` resolves the fallback in the
+ * COMPETITION's governing clock (`resolveVenueTz(null, organizations.timezone)`,
+ * the same "orgTz, never a division's own schedule_settings.tz" rule
+ * `loadSettings`/`zoned-datetime.ts` document for every other value derived
+ * from a competition- rather than division-scoped field): `starts_on`
+ * belongs to the competition, not any one division, so every division of one
+ * competition must derive the identical instant from it — a per-division
+ * override here would silently disagree with a sibling entry in the same
+ * cart the exact way #397 already fixed for fixture scheduling. Real spread
+ * is UTC-12…UTC+14: parsing as bare UTC midnight (the old behaviour) could
+ * leave an Asia/Kolkata org auto-refunding until 05:30 local on the morning
+ * of play.
  */
 export function resolveRefundPolicy(
   refundLockAt: Date | null,
   startsOn: string | null,
+  tz: string,
   paymentIntentId: string | null,
   amountCents: number,
   refundedCents: number,
 ): ResolvedRefundPolicy {
-  const lockAt = refundLockAt ?? (startsOn ? new Date(startsOn) : null);
+  const startsOnDeadline = startsOn ? isoFromZonedParts(startsOn, "00:00", tz) : null;
+  const lockAt = refundLockAt ?? (startsOnDeadline ? new Date(startsOnDeadline) : null);
   const remaining = amountCents - refundedCents;
   return {
-    refundable: !!paymentIntentId && remaining > 0 && (!lockAt || new Date() < lockAt),
+    refundable: !!paymentIntentId && remaining > 0 && !!lockAt && new Date() < lockAt,
     deadline: lockAt ? lockAt.toISOString() : null,
     amount_cents: remaining,
+    reason: lockAt ? null : "no_deadline",
   };
 }
 
@@ -3548,6 +3595,7 @@ async function withdrawCore(reg: RegistrationWithGroupRow, actorId: string | nul
   const policy = resolveRefundPolicy(
     settings?.refund_lock_at ?? null,
     ctx.starts_on,
+    resolveVenueTz(null, ctx.org_timezone),
     locked.payment_intent_id,
     locked.amount_cents,
     locked.refunded_cents,
