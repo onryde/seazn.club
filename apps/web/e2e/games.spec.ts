@@ -4,11 +4,18 @@ import { test, expect } from "@playwright/test";
 // free-play arcade, 404s, subdomain rewrite. No fixtures — static registry +
 // localStorage.
 
-test("games listing renders the Chess Quest card as playable", async ({ page }) => {
+// Scoped per-card, not a page-wide getByText("Play →") — W4 added Daily Word
+// and 2048 as live games, so the listing now shows three "Play →" labels and
+// a page-wide text locator hits Playwright's strict-mode violation (multiple
+// matches). Each live game's own card link is checked instead.
+test("games listing renders every live game's card as playable", async ({ page }) => {
   await page.goto("/games");
   await expect(page.getByRole("heading", { name: "Games", exact: true })).toBeVisible();
-  await expect(page.getByRole("link", { name: /Chess Quest/ })).toBeVisible();
-  await expect(page.getByText("Play →")).toBeVisible();
+  for (const name of [/Chess Quest/, /Daily Word/, /2048/]) {
+    const card = page.getByRole("link", { name });
+    await expect(card).toBeVisible();
+    await expect(card.getByText("Play →")).toBeVisible();
+  }
 });
 
 test("quest hub shows the map and the Day 1 lesson", async ({ page }) => {
