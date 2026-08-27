@@ -11,8 +11,10 @@ Scout: board toolbar generate/auto-schedule controls (#650,
 `apps/web/src/components/v2/board-*`), competition + division create
 forms (`division-builder.tsx` testids from B03r PR 0), public standings /
 results pages, ScoringPad v3 tile ids for **badminton** and **football**
-and **tennis** (`apps/web/src/scorepad/**` or wherever v3 modules live —
-no badminton walkthrough exists, so its tile ids are discovered here),
+and **tennis** (`apps/web/src/components/v2/scorepad/v3/registry.ts`,
+`tile-grid.tsx`, skins in `../scorepad/skins/` — badminton is the
+`racquet-skin.tsx`; no badminton walkthrough exists, so its tile ids are
+discovered here),
 signup route. Paste re-pins into the PR body.
 
 ## Scope
@@ -61,6 +63,9 @@ signup route. Paste re-pins into the PR body.
    tables, career rollup for the multi-division persons, checker
    conflicts = 0, offenders blocked at submit AND when the organiser
    tries to force them via the hub (RS011 organiser-side gate).
+   Free-agent assignment (Mixed Doubles' 2 free agents) is **performed
+   through the hub but report-only** in v1 (spec D4) — its outcome is
+   logged, never gated.
 5. **Report**: journey step table with wall-times (report-only), funnel
    table, pad taps count + wall (report-only), oracle results.
 6. pino: `journey_step` (step, ms, screenshot), `pad_match_done`
