@@ -96,32 +96,80 @@ update divisions
 set age_cutoff_month = 1
 where age_cutoff_day is not null and age_cutoff_month is null;
 
--- Sex. Only the unambiguous single-gender rules convert:
---   ['m'] -> mens, ['f'] -> womens.
--- Everything else is deliberately LEFT ALONE rather than guessed. ['m','f']
--- is not `mixed` -- `mixed` is a ROSTER rule ("must contain both"), while the
--- jsonb list is a per-person allow-list, and ['x'] alone has no category at
--- all. Guessing here would invent a restriction the organiser never set.
--- NOTE this is also where the accepted behaviour change lands: a jsonb
--- ['m'] rule REJECTED a player whose gender is 'x', whereas category 'mens'
--- admits them (registration-rules.ts, `person.gender !== 'x'`). Converted
--- rows therefore become more permissive for non-binary entrants, which is the
--- owner's explicit call, not an accident of this migration.
-with gender_rule as (
-  select d.id,
-         case
-           when r.value -> 'allowed' = '["m"]'::jsonb then 'mens'
-           when r.value -> 'allowed' = '["f"]'::jsonb then 'womens'
-         end as category
+-- Sex. Two things can happen to a `kind:"gender"` rule: it converts onto
+-- `category` when the conversion is EXACT (the category's admit-set matches
+-- the jsonb allow-list precisely -- no guessing), or it is preserved as a
+-- plain-English sentence in `eligibility_note` below instead, so the drop at
+-- the end of this file never silently destroys it. A division with no
+-- gender rule at all is untouched by either step.
+--
+-- What converts, and why it loses nothing:
+--   ['m']      -> mens     ['f']      -> womens
+--   ['m','x']  -> mens     ['f','x']  -> womens
+-- `categoryEligibilityIssues` (registration-rules.ts) never blocks gender
+-- 'x' against ANY category -- an owner ruling this migration wave already
+-- made, not introduced here -- so `mens` admits EXACTLY {m, x} and `womens`
+-- admits EXACTLY {f, x}. The retired jsonb evaluator's own check was strict
+-- membership with no such case (`r.allowed.includes(person.gender)`,
+-- confirmed by reading it before this branch's app-code half deleted it), so
+-- ['m'] admitted exactly {m} and ['m','x'] admitted exactly {m, x} -- the
+-- same two admit-sets `mens` produces depending only on whether 'x' was
+-- listed. Converting either one to `mens` reproduces its old behaviour
+-- exactly. Only fires where `category` is still null -- an organiser-set
+-- category (hub panel) always wins, same guard as before.
+--
+-- What does not convert, and why guessing would be wrong:
+--   ['m','f'] admits male or female individually and rejects non-binary.
+--   That is NOT `mixed` -- `mixed` is a ROSTER rule (rosterCompositionIssues:
+--   "the TEAM must field at least one male AND one female player"), a
+--   completely different thing from "this ENTRANT may be male or female".
+--   Writing `mixed` here would silently turn a per-entrant admission gate
+--   into a team-composition requirement nobody configured.
+--   ['x'] alone admits only non-binary entrants -- none of `open`/`mens`/
+--   `womens`/`mixed` can express that; there is no column value to put it in.
+-- Both, plus anything this migration does not recognise above (more than one
+-- gender-kind rule on a division, an empty/malformed `allowed`, or a
+-- recognised shape whose division already had a DIFFERENT category set), are
+-- handled the same conservative way: noted below, never guessed.
+with gender_rule_all as (
+  select d.id, r.value, r.ord
   from divisions d
-       cross join lateral jsonb_array_elements(d.eligibility) r(value)
+       cross join lateral jsonb_array_elements(d.eligibility) with ordinality r(value, ord)
   where r.value ->> 'kind' = 'gender'
+),
+gender_rule_count as (
+  select id, count(*) as n from gender_rule_all group by id
+),
+gender_rule_first as (
+  -- First gender-kind rule only, by array order -- same precedent as the
+  -- custom-rule block below. A division with more than one never gets a
+  -- shape match: `n` (from gender_rule_count) stays > 1 for it either way.
+  select distinct on (id) id, value
+  from gender_rule_all
+  order by id, ord
+),
+gender_rule as (
+  select f.id,
+         c.n,
+         case
+           when jsonb_typeof(f.value -> 'allowed') = 'array' then
+             array(select elem
+                   from jsonb_array_elements_text(f.value -> 'allowed') as elem
+                   order by elem)
+           else null
+         end as allowed_sorted
+  from gender_rule_first f
+       join gender_rule_count c using (id)
 )
 update divisions d
-set category = g.category
+set category = case
+                 when g.allowed_sorted in (array['m'], array['m','x']) then 'mens'
+                 when g.allowed_sorted in (array['f'], array['f','x']) then 'womens'
+               end
 from gender_rule g
 where g.id = d.id
-  and g.category is not null
+  and g.n = 1
+  and g.allowed_sorted in (array['m'], array['f'], array['m','x'], array['f','x'])
   and d.category is null;
 
 -- The custom note becomes a column. Multiple custom rules collapse to the
@@ -141,6 +189,95 @@ from custom_rule c
 where c.id = d.id
   and c.note is not null
   and d.eligibility_note is null;
+
+-- Every gender rule the block above could not put into `category` -- an
+-- unrecognised shape, more than one gender-kind rule on a division, or a
+-- recognised shape whose division already carried a DIFFERENT category --
+-- is preserved here as a plain sentence in `eligibility_note` instead of
+-- being silently destroyed by the drop at the end of this file. This column
+-- is organiser-authored free text rendered on the public register/join
+-- pages (`register.organiserNote`) and as a badge in the entrants hub, so an
+-- organiser who has never heard of jsonb still learns their division used
+-- to be restricted. Never overwrites a note already there (most likely one
+-- the custom-rule block above just wrote from this SAME division's
+-- `eligibility`, seconds earlier in this same migration) -- a division can
+-- have lost BOTH a custom note and a gender rule, and clobbering one to
+-- record the other would just move the data loss this migration exists to
+-- close, so the two are appended, clearly separated by a blank line.
+--
+-- Re-derives the same `gender_rule` shape as the block above -- a plain SQL
+-- script cannot share one CTE across two separate statements -- and checks
+-- the now-CURRENT `category` against what THIS rule alone would have
+-- produced: equal means nothing was lost (either the update above just set
+-- it, or the row already agreed before this migration ran), anything else
+-- -- including still null, which cannot happen for a recognised shape since
+-- the update above is unconditional on a match -- means a note is owed.
+with gender_rule_all as (
+  select d.id, r.value, r.ord
+  from divisions d
+       cross join lateral jsonb_array_elements(d.eligibility) with ordinality r(value, ord)
+  where r.value ->> 'kind' = 'gender'
+),
+gender_rule_count as (
+  select id, count(*) as n from gender_rule_all group by id
+),
+gender_rule_first as (
+  select distinct on (id) id, value
+  from gender_rule_all
+  order by id, ord
+),
+gender_rule as (
+  select f.id,
+         c.n,
+         case
+           when jsonb_typeof(f.value -> 'allowed') = 'array' then
+             array(select elem
+                   from jsonb_array_elements_text(f.value -> 'allowed') as elem
+                   order by elem)
+           else null
+         end as allowed_sorted
+  from gender_rule_first f
+       join gender_rule_count c using (id)
+),
+gender_loss as (
+  select g.id,
+         case
+           when g.n = 1 and g.allowed_sorted = array['f','m'] then
+             'Previously restricted to men or women only (non-binary entrants were not eligible).'
+           when g.n = 1 and g.allowed_sorted = array['x'] then
+             'Previously restricted to non-binary entrants only.'
+           when g.n = 1 and g.allowed_sorted = array['m'] then
+             'Previously restricted to men only.'
+           when g.n = 1 and g.allowed_sorted = array['f'] then
+             'Previously restricted to women only.'
+           when g.n = 1 and g.allowed_sorted = array['m','x'] then
+             'Previously restricted to men (non-binary entrants were also allowed).'
+           when g.n = 1 and g.allowed_sorted = array['f','x'] then
+             'Previously restricted to women (non-binary entrants were also allowed).'
+           else
+             'Previously had a gender-based entry restriction that could not be carried forward automatically -- please review this division''s eligibility.'
+         end as note_text
+  from gender_rule g
+       join divisions div on div.id = g.id
+  where g.n <> 1
+     or g.allowed_sorted is null
+     or g.allowed_sorted not in (array['m'], array['f'], array['m','x'], array['f','x'])
+     or div.category is null
+     or div.category <> (
+          case
+            when g.allowed_sorted in (array['m'], array['m','x']) then 'mens'
+            when g.allowed_sorted in (array['f'], array['f','x']) then 'womens'
+          end
+        )
+)
+update divisions d
+set eligibility_note = case
+  when d.eligibility_note is not null and trim(d.eligibility_note) <> '' then
+    trim(d.eligibility_note) || E'\n\n' || gl.note_text
+  else gl.note_text
+end
+from gender_loss gl
+where gl.id = d.id;
 
 -- Re-derive `youth` from the band that now holds the truth. This is defect 2:
 -- rows whose age limit only ever lived in `age_min`/`age_max` never got a
