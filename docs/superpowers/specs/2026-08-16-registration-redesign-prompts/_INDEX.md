@@ -2093,6 +2093,74 @@ change, and doing the standalone fix first means writing it twice.
 files dirty — every file this change needs. Only `_INDEX.md` and the new
 migration were conflict-free, which is why they went first.
 
+#### SESSION STATE at 26 commits (written for compaction, 2026-08-27)
+
+**Branch** `feat/rs007-status-join-payments`, rebased clean on `origin/main`
+(`28dda4bfd`), 26 commits, **no duplicate V-numbers** (checked post-rebase —
+this programme has been bitten by two V367s surviving a clean rebase).
+
+**Environment, all live:**
+- DB `postgresql://postgres@127.0.0.1:54515/seazn_rs007`, **schema v380**,
+  `divisions.eligibility` DROPPED. `sync:sports` HAS been re-run (a stale
+  `benchMax: 20` was reddening 3 roster-cap suites; source says 0).
+- Server `http://localhost:3355`, `seazn-env rebuild --label rs007`.
+- Placement on `localhost:50451`, secret `local-rs007-secret`. **Export
+  `PLACEMENT_SERVICE_HOST=localhost:50451` for any vitest run** or
+  `schedule-build-honours-locks` gives 4 environmental reds.
+- Scratchpad scripts (outside the repo): `sweep-eligibility.mjs` (the 275
+  fixture sweep, self-checking), `tap-join.mjs`, `probe-net.mjs` (logs
+  requests >=400 — this is what found the 500s), `drive.mjs`, `shot.mjs`.
+
+**Gate, run by the main thread (not taken from an agent):** 11984 total /
+11902 passed / 8 failed → all 8 resolved: 1 real regression (fixed), 3 stale
+seed, 4 missing placement env. `tsc` clean, lint `✖ 124 problems (0 errors)`.
+
+**Closed this session:** reviewer finding #1 (join page — VERIFIED BY TAPPING
+a real claim link, 200 at all three widths); the public-surface 500; the
+eligibility consolidation server half; the team-name client/server split; the
+walkthrough charter + Connect CI wiring; seven-width coverage; the journey
+walkthrough.
+
+**OPEN, in the order I would take them:**
+1. **UI-half implementer** was in flight at compaction — wizard rewire
+   (`d99e5176c`), hub panel (`bce2b0726`) committed; items 3-6 (note
+   rendering, `EntrantsPanel` real props, stale comment, cutoff on the public
+   wire) unfinished. `tsc` had 4 errors in `entrants-panel.tsx` /
+   `[divSlug]/page.tsx` — ITS in-flight edits, not defects.
+2. **Rerun the gate**, then a **second reviewer** over the UI-half diff.
+3. **Run the two unrun e2e specs** — `mobile.spec.ts`'s new RS007 routes and
+   `walkthrough/rs007-registration-journey.spec.ts`. Both committed UNRUN and
+   say so in their commit messages.
+4. **Live Connect walkthrough** — `CONNECT_WALKTHROUGH=1` +
+   `STRIPE_CONNECT_TEST_ACCOUNT` + `stripe listen`. Never yet run on this
+   branch.
+5. **First-pass reviewer findings 2-8, ALL STILL OPEN** (list above). #2
+   (refund `starts_on` nullable + UTC midnight) and #3 (reminder passes with
+   no lock/CAS, and that path runs in PROD for the first time because of this
+   PR) are the two that touch money.
+6. Whole-branch review, then the PR.
+
+**Traps this session paid for, beyond the ones already listed in this file:**
+- **A `git add` with a stale pathspec aborts WHOLESALE and stages nothing.**
+  Committed a rename with none of its content; `2>/dev/null` hid the error.
+  `git show --stat` after any commit whose `add` listed a moved file.
+- **Two assertions written this session could not fail.** The sweep script's
+  leftover check greppd the DISK during a dry run (so it reported every
+  pre-existing hit and could never go red), and the CI step-ORDER assertion
+  anchored on `stripe listen`, which also appears in the prose above the step
+  — swapping the steps left it green. Mutation-test every guard; both were
+  caught only that way.
+- **An agent will misattribute your own regression as pre-existing.** The
+  server-half implementer classified `stg-base-url.test.ts` as "GH-workflow
+  drift". It was `registrations-sweep.yml` — added earlier in THIS session,
+  the repo's first production `BASE_URL` — red for hours.
+- **Sequencing a UI half into "a later wave" broke the create path silently.**
+  `CreateDivision` is a NON-strict zod object, so the wizard's now-unknown
+  `eligibility` key was STRIPPED with no error and every wizard-created
+  division shipped with no restriction at all. The ruling above had said the
+  wizard rewire lands in the same session, "not a follow-up"; overriding that
+  for scheduling convenience is what opened it.
+
 ## RS011 — why #412 moved here (2026-08-17)
 
 `L1-412-w1-eligibility.md` in `../2026-08-06-scoringpad-v2-prompts/` was written
