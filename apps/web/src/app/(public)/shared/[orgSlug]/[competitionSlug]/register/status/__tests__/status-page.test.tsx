@@ -177,6 +177,18 @@ describe("register status page (RS007 rebuild)", () => {
       expect(html).not.toContain("{{reference}}");
       // No pay button when the method is offline.
       expect(html).not.toMatch(/Pay now/);
+      // Bug (2026-08-27 review, FIX 1): formatMinor(entry.amount_cents, …)
+      // used to appear ONLY inside the stripe_due "Pay now — {amount}"
+      // label, so an offline-due card showed instructions and a deadline
+      // with no figure to actually transfer. The page's own Subtotal line
+      // ALSO renders "£25" on its own (summed from this same single entry)
+      // — a plain `toContain` would pass on that alone, so this counts
+      // exact, tag-flanked occurrences: 1 is just the Subtotal, 2 proves
+      // the card itself shows its own figure too.
+      expect(
+        (html.match(/>£25</g) || []).length,
+        "the offline-due card itself must show its own fee, not just the page Subtotal",
+      ).toBeGreaterThanOrEqual(2);
     });
 
     // Bug (2026-08-27 browser sweep): payment_instructions is Markdown, and a
@@ -204,9 +216,16 @@ describe("register status page (RS007 rebuild)", () => {
       const html = await render({ rid: "g1", token: "tok" });
       expect(html).not.toMatch(/Pay now/);
       expect(html).toContain("aren&#x27;t available right now");
+      // FIX 1: stripe_unavailable used to render no figure at all either.
+      // Same "Subtotal alone would satisfy a plain toContain" trap as the
+      // offline case above — count exact, tag-flanked occurrences instead.
+      expect(
+        (html.match(/>£25</g) || []).length,
+        "the stripe_unavailable card itself must show its own fee, not just the page Subtotal",
+      ).toBeGreaterThanOrEqual(2);
     });
 
-    it("a confirmed entry shows no money section at all — nothing owed, nothing to name", async () => {
+    it("a confirmed entry still names its own fee — no Pay control, no instructions, but not a blank money section (FIX 1)", async () => {
       usecaseMock.groupById.mockResolvedValueOnce({
         ...BASE_VIEW,
         entries: [{ ...BASE_ENTRY, status: "confirmed" as const }],
@@ -214,6 +233,51 @@ describe("register status page (RS007 rebuild)", () => {
       const html = await render({ rid: "g1", token: "tok" });
       expect(html).not.toMatch(/Pay now/);
       expect(html).not.toContain(">How to pay<");
+      // The page's own Subtotal (summed from this same single entry)
+      // already renders "£25" on its own — see the offline/unavailable
+      // tests above for why a plain toContain can't distinguish "the card
+      // shows it" from "only the Subtotal does".
+      expect(
+        (html.match(/>£25</g) || []).length,
+        "the confirmed card itself must show its own fee, not just the page Subtotal",
+      ).toBeGreaterThanOrEqual(2);
+    });
+
+    it("a genuinely free (amount_cents 0) confirmed entry reads as 'Free', never '£0' (FIX 1)", async () => {
+      usecaseMock.groupById.mockResolvedValueOnce({
+        ...BASE_VIEW,
+        entries: [{ ...BASE_ENTRY, status: "confirmed" as const, amount_cents: 0 }],
+      });
+      const html = await render({ rid: "g1", token: "tok" });
+      expect(html).not.toContain("£0");
+      // The page's own Subtotal (amount_cents 0, single entry) already
+      // reads "Free" on its own — 2 proves the card reads Free too, not
+      // just the Subtotal.
+      expect(
+        (html.match(/>Free</g) || []).length,
+        "the confirmed card itself must read Free, not just the page Subtotal",
+      ).toBeGreaterThanOrEqual(2);
+    });
+  });
+
+  describe("subtotal — never includes a cancelled entry's stale pre-cancellation fee (FIX 1)", () => {
+    it("excludes a withdrawn entry's amount_cents from the page Subtotal — withdrawCore never clears it", async () => {
+      usecaseMock.groupById.mockResolvedValueOnce({
+        ...BASE_VIEW,
+        entries: [
+          { ...BASE_ENTRY, id: "reg-1", status: "pending" as const, amount_cents: 2500 },
+          { ...BASE_ENTRY, id: "reg-2", status: "withdrawn" as const, amount_cents: 1000 },
+        ],
+      });
+      const html = await render({ rid: "g1", token: "tok" });
+      const subtotalMatch = html.match(/<span class="text-lg font-bold text-ink">([^<]*)<\/span>/);
+      expect(subtotalMatch, "subtotal span not found").not.toBeNull();
+      // withdrawCore (registrations.ts), the rejection path
+      // (registration-approval.ts), and the expiry sweep (registrations.ts)
+      // all touch ONLY status/timestamps — none ever clears amount_cents —
+      // so reg-2's stale 1000 must NOT be folded into the live subtotal.
+      expect(subtotalMatch![1]).toContain("25");
+      expect(subtotalMatch![1]).not.toContain("35");
     });
   });
 

@@ -78,6 +78,37 @@ export function canCancelEntry(status: EntryStatus): boolean {
   return status !== "withdrawn" && status !== "rejected" && status !== "expired";
 }
 
+/**
+ * Whether this entry's fee counts as live, current money — folded into the
+ * page's Subtotal line (page.tsx) AND shown as this entry's own figure on
+ * its card (entry-card.tsx). ONE function drives both so the two can never
+ * disagree about which entries count (RS007 status-page review FIX 1: the
+ * Subtotal used to sum every non-waitlisted entry, which silently included
+ * a cancelled entry's stale fee forever — see below).
+ *
+ * True for pending/paid/confirmed. False for:
+ *  - `waitlisted` — its `amount_cents` is always 0 by construction
+ *    (registration-submit.ts sets `feeCents = waitlisted ? 0 :
+ *    live.fee_cents` at insert; a promotion is the only writer that ever
+ *    gives a waitlisted row a real fee, and it flips `status` to `pending`
+ *    in that same write). Excluded here defensively rather than relied
+ *    upon to always be zero.
+ *  - `withdrawn` / `rejected` / `expired` — `withdrawCore`'s update
+ *    (registrations.ts), the rejection path (registration-approval.ts),
+ *    and the expiry sweep (registrations.ts) all touch ONLY `status` and
+ *    timestamp columns — NONE of them ever clears `amount_cents` — so a
+ *    cancelled entry's `amount_cents` keeps naming its PRE-cancellation
+ *    fee forever after. Folding that into a "what's live right now" total
+ *    would overstate it: a registrant who cancels one of several entries
+ *    would see the page's own Subtotal stay inflated by the dead entry's
+ *    fee forever, representing nothing real (not owed, not paid, not
+ *    live) — the exact "debt with no route to settle" shape this page's
+ *    other money rules already guard against, just on the read side.
+ */
+export function entryCountsTowardTotal(status: EntryStatus): boolean {
+  return status === "pending" || status === "paid" || status === "confirmed";
+}
+
 export interface RosterCounts {
   claimed: number;
   total: number;

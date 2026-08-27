@@ -32,6 +32,7 @@ import { renderProse } from "@/lib/prose";
 import { fillPaymentInstructions, preserveLineBreaks } from "@/lib/payment-instructions";
 import { EntryCard } from "./entry-card";
 import { ResendConfirmation } from "./resend-confirmation";
+import { entryCountsTowardTotal } from "./view-model";
 
 export const metadata: Metadata = { robots: { index: false, follow: false } };
 
@@ -90,9 +91,20 @@ export default async function RegistrationStatusPage({ params, searchParams }: P
   // submit-time snapshot — promoteWaitlistedRow updates a promoted entry's
   // own amount_cents but never that mirror, so it goes stale the moment any
   // entry is promoted). Summed fresh from the entries this render actually
-  // has, the same "non-waitlisted" rule buildCartMail's own subtotal uses.
+  // has.
+  //
+  // FIX 1 (RS007 status-page review): this used to exclude only
+  // `waitlisted` (buildCartMail's own "non-waitlisted" rule) — but unlike
+  // that email, which is built once shortly after submit, THIS page is
+  // revisited after a cancellation, and withdrawCore/the rejection
+  // path/the expiry sweep never clear a cancelled entry's `amount_cents`
+  // (see entryCountsTowardTotal's own doc comment, view-model.ts). Summing
+  // that stale figure in kept a cancelled entry's pre-cancellation fee in
+  // the Subtotal forever. `entryCountsTowardTotal` is the SAME predicate
+  // each EntryCard uses to decide whether to show its own fee, so this
+  // total is provably the sum of what the cards actually show.
   const subtotalCents = view.entries
-    .filter((e) => e.status !== "waitlisted")
+    .filter((e) => entryCountsTowardTotal(e.status))
     .reduce((sum, e) => sum + e.amount_cents, 0);
 
   // Rendered ONCE (cart-level, not per entry — every offline-due entry in

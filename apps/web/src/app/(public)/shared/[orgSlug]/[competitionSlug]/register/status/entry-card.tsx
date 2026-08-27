@@ -20,6 +20,7 @@ import { CancelEntry } from "./cancel-entry";
 import {
   canCancelEntry,
   claimHref,
+  entryCountsTowardTotal,
   resolveMoneyState,
   rosterCounts,
   type EntryStatus,
@@ -85,11 +86,27 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
   const roster = rosterCounts(entry.players);
   const unclaimed = entry.players.filter((p) => p.consent_status === "pending");
 
+  // FIX 1 (RS007 status-page review): formatMinor(entry.amount_cents, …)
+  // used to appear ONLY inside the stripe_due "Pay now — {amount}" label,
+  // so an offline_due/stripe_unavailable/paid/confirmed card named no
+  // figure at all — a bank-transfer card showed instructions and a
+  // deadline with nothing to actually transfer. `feeLabel` is this entry's
+  // own figure, phrased the SAME way the review step/cart already phrase a
+  // zero fee (`register.entries.free`, never a bare "£0"). `showsFeeLine`
+  // is gated by the SAME `entryCountsTowardTotal` predicate the page's own
+  // Subtotal filters by (page.tsx), so a card can never show a fee the
+  // Subtotal disagrees about (or vice-versa) — and excludes `stripe_due`
+  // specifically because that state already names the figure inside its
+  // own "Pay now — {amount}" button, right below.
+  const feeLabel =
+    entry.amount_cents === 0
+      ? t(ui, "register.entries.free")
+      : formatMinor(entry.amount_cents, cart.currency as Currency, locale);
+  const showsFeeLine = entryCountsTowardTotal(entry.status) && money.kind !== "stripe_due";
+
   let moneyNode: ReactNode = null;
   if (money.kind === "stripe_due") {
-    const label = t(ui, "register.status.pay.cta", {
-      amount: formatMinor(entry.amount_cents, cart.currency as Currency, locale),
-    });
+    const label = t(ui, "register.status.pay.cta", { amount: feeLabel });
     moneyNode = (
       <div className="space-y-1.5">
         <PayButton entryId={entry.id} token={token} label={label} />
@@ -101,10 +118,16 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
       </div>
     );
   } else if (money.kind === "stripe_unavailable") {
-    moneyNode = <p className="text-sm text-amber-800">{t(ui, "register.status.pay.unavailable")}</p>;
+    moneyNode = (
+      <div className="space-y-1">
+        <p className="text-sm font-semibold text-ink">{feeLabel}</p>
+        <p className="text-sm text-amber-800">{t(ui, "register.status.pay.unavailable")}</p>
+      </div>
+    );
   } else if (money.kind === "offline_due") {
     moneyNode = (
       <div className="space-y-1.5">
+        <p className="text-sm font-semibold text-ink">{feeLabel}</p>
         <p className="text-xs font-semibold tracking-wide text-ink-muted uppercase">
           {t(ui, "register.status.offline.heading")}
         </p>
@@ -118,6 +141,11 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
     );
   } else if (entry.status === "waitlisted") {
     moneyNode = <p className="text-sm text-ink-muted">{t(ui, "register.status.waitlisted.note")}</p>;
+  } else if (showsFeeLine) {
+    // paid/confirmed (the only remaining entryCountsTowardTotal-true
+    // statuses once pending is excluded — pending always lands in one of
+    // the three money.kind branches above via resolveMoneyState).
+    moneyNode = <p className="text-sm font-medium text-ink">{feeLabel}</p>;
   }
 
   return (

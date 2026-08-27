@@ -7,6 +7,7 @@ import {
   claimHref,
   classifyStatusActionFailure,
   effectivePayDeadline,
+  entryCountsTowardTotal,
   publicCheckoutPath,
   publicResendPath,
   publicWithdrawPath,
@@ -97,6 +98,24 @@ describe("canCancelEntry", () => {
   it("refuses cancel once the entry is already terminal — withdrawCore would 422 or no-op on these", () => {
     for (const status of ["withdrawn", "rejected", "expired"] as const) {
       expect(canCancelEntry(status)).toBe(false);
+    }
+  });
+});
+
+describe("entryCountsTowardTotal — live money only (RS007 status-page review FIX 1)", () => {
+  it("counts pending/paid/confirmed — the fee is still live, whatever the payment method", () => {
+    for (const status of ["pending", "paid", "confirmed"] as const) {
+      expect(entryCountsTowardTotal(status)).toBe(true);
+    }
+  });
+
+  it("excludes waitlisted — its amount_cents is always 0 by construction (registration-submit.ts sets feeCents 0 while waitlisted)", () => {
+    expect(entryCountsTowardTotal("waitlisted")).toBe(false);
+  });
+
+  it("excludes the three terminal statuses — none of withdrawCore, the rejection path, or the expiry sweep ever clears amount_cents, so it keeps naming a PRE-cancellation fee forever", () => {
+    for (const status of ["withdrawn", "rejected", "expired"] as const) {
+      expect(entryCountsTowardTotal(status)).toBe(false);
     }
   });
 });
