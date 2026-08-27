@@ -64,26 +64,83 @@ alter table divisions add constraint divisions_age_cutoff_check
 -- Backfill: jsonb rules -> first-class columns.
 -- ---------------------------------------------------------------------------
 
+-- eligibility-backfill:begin
 -- Age. `maxAgeAt`/`minAgeAt` map straight onto the band. Only fills a side the
 -- hub panel left null, so a column value an organiser set explicitly always
 -- wins over the wizard's older jsonb copy of the same intent.
-with age_rule as (
+--
+-- A division can carry MORE THAN ONE `{kind:"age"}` rule object -- this
+-- file's own header documents the old evaluator's rules as "independent and
+-- additive", and in practice the wizard round-trips a min-only object and a
+-- max-only object as two separate array entries for what is really one
+-- band. `cross join lateral jsonb_array_elements` produces one row PER
+-- RULE, so a division with two age rules produced two rows sharing the same
+-- `d.id` -- and an `UPDATE ... FROM` matched against them picks ONE,
+-- unpredictably (Postgres's own documented behaviour for a target row
+-- matched by more than one FROM row), discarding whichever bound the other
+-- row held. Confirmed in psql:
+-- `[{"kind":"age","minAgeAt":8},{"kind":"age","maxAgeAt":15}]` landed
+-- `age_min=8, age_max=NULL` under the original single-CTE version of this
+-- block. That is not cosmetic -- `youth`, recomputed further down from
+-- `age_max` alone, then reads false for a genuine U16 division, and
+-- `resolveNameDisplay` (apps/web/src/server/og/model.ts) stops suppressing
+-- minors' full names on that division's public share images.
+--
+-- Fixed by aggregating per division (`group by d.id`) instead of leaving
+-- one row per rule. `min(min_age)`/`max(max_age)` both skip nulls, so a
+-- min-only object and a max-only object combine into the single band they
+-- were always meant to express -- {8,15} for the example above, regardless
+-- of array order, with no ambiguity as long as at most one object states
+-- each bound (the only shape the wizard itself writes).
+--
+-- A GENUINE conflict -- two rule objects that both state the SAME bound
+-- with DIFFERENT values -- has no "reconstruct the split band" reading to
+-- fall back on, and the wizard never produces one (it writes at most one
+-- age rule per division). `min(min_age)`/`max(max_age)` resolve it the same
+-- direction anyway: the union of every band an organiser configured, wider
+-- rather than narrower. Deliberate, not incidental -- a silently NARROWER
+-- pick is exactly the failure mode this comment exists to fix (it happened
+-- to drop `age_max` to NULL, "no limit", last time), so the direction that
+-- cannot silently exclude someone entitled to register under at least one
+-- of their own configured rules is the safer default for registration
+-- ACCESS. It is a real tradeoff, not a free win: if two conflicting
+-- `maxAgeAt` values straddled 18 (one youth, one not), this pick favours
+-- the LARGER one and the `youth` recompute below follows it. Unrealistic
+-- given the wizard's own shape today (see above), and worth a reader's
+-- attention if that ever changes.
+with age_bounds as (
   select d.id,
-         (r.value ->> 'maxAgeAt')::int              as max_age,
-         (r.value ->> 'minAgeAt')::int              as min_age,
-         (r.value -> 'cutoff' ->> 'month')::int     as cutoff_month,
-         (r.value -> 'cutoff' ->> 'day')::int       as cutoff_day
+         min((r.value ->> 'minAgeAt')::int) as min_age,
+         max((r.value ->> 'maxAgeAt')::int) as max_age
   from divisions d
        cross join lateral jsonb_array_elements(d.eligibility) r(value)
   where r.value ->> 'kind' = 'age'
+  group by d.id
+),
+age_cutoff as (
+  -- The cutoff is a {month,day} PAIR, not a bound -- resolving month and day
+  -- from two DIFFERENT rule rows independently could stitch together a date
+  -- nobody configured. Takes the first rule (by array order) that actually
+  -- carries a cutoff, falling back to the first rule overall if none does --
+  -- same "first by array order, never guessed" precedent as `custom_rule`
+  -- and `gender_rule_first` below.
+  select distinct on (d.id)
+         d.id,
+         (r.value -> 'cutoff' ->> 'month')::int as cutoff_month,
+         (r.value -> 'cutoff' ->> 'day')::int   as cutoff_day
+  from divisions d
+       cross join lateral jsonb_array_elements(d.eligibility) with ordinality r(value, ord)
+  where r.value ->> 'kind' = 'age'
+  order by d.id, (r.value -> 'cutoff') is null, r.ord
 )
 update divisions d
-set age_max          = coalesce(d.age_max, a.max_age),
-    age_min          = coalesce(d.age_min, a.min_age),
-    age_cutoff_month = coalesce(d.age_cutoff_month, a.cutoff_month),
-    age_cutoff_day   = coalesce(d.age_cutoff_day, a.cutoff_day)
-from age_rule a
-where a.id = d.id;
+set age_max          = coalesce(d.age_max, ab.max_age),
+    age_min          = coalesce(d.age_min, ab.min_age),
+    age_cutoff_month = coalesce(d.age_cutoff_month, ac.cutoff_month),
+    age_cutoff_day   = coalesce(d.age_cutoff_day, ac.cutoff_day)
+from age_bounds ab
+left join age_cutoff ac on ac.id = ab.id
+where ab.id = d.id;
 
 -- A cutoff month without its day (or the reverse) would now violate the check
 -- constraint above. The wizard always wrote both, but a hand-authored rule
@@ -286,6 +343,7 @@ where gl.id = d.id;
 update divisions
 set youth = (age_max is not null and age_max < 18)
 where youth is distinct from (age_max is not null and age_max < 18);
+-- eligibility-backfill:end
 
 -- ---------------------------------------------------------------------------
 -- The jsonb column goes. Nothing reads it after this migration: the app's
