@@ -1926,6 +1926,7 @@ export type DictionaryKey =
   | "fixture.decidedBy.extraTime"
   | "fixture.decidedBy.plain"
   | "fixture.decidedBy.shootout"
+  | "fixture.decidedBy.shootoutPlain"
   | "fixture.decidedBy.superOver"
   | "fixture.decidedBy.tie"
   | "fixture.officials.accepted"

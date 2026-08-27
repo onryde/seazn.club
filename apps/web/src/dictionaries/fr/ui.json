@@ -2967,6 +2967,7 @@
   "fixture.officials.pending": "En attente",
   "fixture.officials.declined": "Refusé",
   "fixture.decidedBy.shootout": "{winner} a gagné {score} aux tirs au but",
+  "fixture.decidedBy.shootoutPlain": "{winner} a gagné aux tirs au but",
   "fixture.decidedBy.superOver": "{winner} a gagné au super over",
   "fixture.decidedBy.boundaryCount": "{winner} a gagné au décompte des limites",
   "fixture.decidedBy.extraTime": "{winner} a gagné après prolongation",

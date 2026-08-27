@@ -782,9 +782,9 @@ describe("decidedOutcomeText — a decided fixture names the winner and, where m
     ).toBe("ghost-id won 1–0 on penalties");
   });
 
-  it("shootout with no resolvable score falls back to plain rather than printing 'undefined'", () => {
+  it("F8 (R3.5 review): shootout with no resolvable score still says 'on penalties' — the method must survive a missing tally, never fall to the bare plain sentence", () => {
     expect(decidedOutcomeText({ kind: "win", winner: "W", method: "shootout" }, names, say)).toBe(
-      "Riverside FC won",
+      "Riverside FC won on penalties",
     );
   });
 });
@@ -802,12 +802,15 @@ describe("decidedOutcomeTemplates / renderDecidedOutcome — the server/client s
   const say: MsgFn = (k, vars) => interpolate((uiEn as Record<string, string>)[k] ?? k, vars);
   const templates = decidedOutcomeTemplates(say);
 
-  it("carries a template for every method DECIDED_METHOD_KEY maps, plus the tie and plain fallbacks — never blank", () => {
+  it("carries a template for every method DECIDED_METHOD_KEY maps, plus the tie, plain and shootoutPlain fallbacks — never blank", () => {
     for (const method of ["shootout", "super_over", "boundary_count", "extra_time"]) {
       expect(templates.byMethod[method], `byMethod.${method}`).toBeTruthy();
     }
     expect(templates.tie).toBeTruthy();
     expect(templates.plain).toBeTruthy();
+    // F8 (R3.5 review) — shootout's own score-less fallback, checked
+    // separately from `byMethod`: it is a sibling field, not a method entry.
+    expect(templates.shootoutPlain).toBeTruthy();
   });
 
   it("renderDecidedOutcome reproduces decidedOutcomeText's own sentence for every mapped method — one vocabulary, not two", () => {
@@ -838,10 +841,17 @@ describe("decidedOutcomeTemplates / renderDecidedOutcome — the server/client s
     expect(renderDecidedOutcome(null, names, templates)).toBeNull();
   });
 
-  it("shootout with no resolvable score falls back to plain, matching decidedOutcomeText", () => {
+  it("F8 (R3.5 review): shootout with no resolvable score renders shootoutPlain, matching decidedOutcomeText — not the bare plain sentence", () => {
     expect(renderDecidedOutcome({ kind: "win", winner: "W", method: "shootout" }, names, templates)).toBe(
-      "Riverside FC won",
+      "Riverside FC won on penalties",
     );
+  });
+
+  it("F8 (R3.5 review): a byMethod entry missing for shootout still falls back to plain (defensive — a caller-assembled templates object need not be complete)", () => {
+    const partial = { ...templates, byMethod: {} };
+    expect(
+      renderDecidedOutcome({ kind: "win", winner: "W", method: "shootout" }, names, partial, { home: 3, away: 0 }),
+    ).toBe("Riverside FC won on penalties");
   });
 });
 

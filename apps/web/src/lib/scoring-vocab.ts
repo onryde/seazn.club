@@ -1066,6 +1066,16 @@ export interface DecidedOutcomeLike {
 export interface DecidedOutcomeTemplates {
   tie: string;
   plain: string;
+  /**
+   * F8 (R3.5 review) — shootout is the one method whose template
+   * (`byMethod.shootout`) needs a `{score}`, so it is the one method that
+   * needs a SECOND template for when the tally is unavailable (a trimmed API
+   * projection, a coarse or replayed summary, or `LiveScore` before its
+   * first poll returns `detail`). Every other mapped method's template takes
+   * only `{winner}` and already survives a missing score untouched — a
+   * separate "plain" variant for each of THEM would be dead weight.
+   */
+  shootoutPlain: string;
   byMethod: Record<string, string>;
 }
 
@@ -1082,7 +1092,12 @@ export function decidedOutcomeTemplates(m: MsgFn): DecidedOutcomeTemplates {
   for (const [method, key] of Object.entries(DECIDED_METHOD_KEY)) {
     byMethod[method] = m(key);
   }
-  return { tie: m("fixture.decidedBy.tie"), plain: m("fixture.decidedBy.plain"), byMethod };
+  return {
+    tie: m("fixture.decidedBy.tie"),
+    plain: m("fixture.decidedBy.plain"),
+    shootoutPlain: m("fixture.decidedBy.shootoutPlain"),
+    byMethod,
+  };
 }
 
 /**
@@ -1110,10 +1125,21 @@ export function renderDecidedOutcome(
   const winner = entrantNames[outcome.winner] ?? outcome.winner;
   const key = outcome.method ? DECIDED_METHOD_KEY[outcome.method] : undefined;
   const template = outcome.method ? templates.byMethod[outcome.method] : undefined;
-  if (key === "fixture.decidedBy.shootout" && template && shootoutScore) {
-    return interpolate(template, { winner, score: `${shootoutScore.home}–${shootoutScore.away}` });
+  if (key === "fixture.decidedBy.shootout") {
+    if (template && shootoutScore) {
+      return interpolate(template, { winner, score: `${shootoutScore.home}–${shootoutScore.away}` });
+    }
+    // F8 (R3.5 review) — a missing tally (trimmed API projection, coarse or
+    // replayed summary, `LiveScore` before its first poll) used to fall all
+    // the way to `templates.plain`, silently dropping "on penalties" — the
+    // one thing that distinguishes this method from every other win. Every
+    // OTHER mapped method's template takes only `{winner}` and already
+    // survives a missing score; shootout is the one method whose HOW must
+    // not be thrown away just because the score is unknown.
+    if (templates.shootoutPlain) return interpolate(templates.shootoutPlain, { winner });
+    return interpolate(templates.plain, { winner });
   }
-  if (template && key !== "fixture.decidedBy.shootout") return interpolate(template, { winner });
+  if (template) return interpolate(template, { winner });
   return interpolate(templates.plain, { winner });
 }
 
@@ -1185,5 +1211,6 @@ export const SCORING_VOCAB_KEYS: readonly MessageKey[] = [
   ...Object.values(SQUAD_ROLE_KEY), ...Object.values(SQUAD_PROVENANCE_KEY),
   ...Object.values(CONFIG_KEY), ...PAD_LABEL_KEYS,
   ...Object.values(DECIDED_METHOD_KEY), "fixture.decidedBy.plain", "fixture.decidedBy.tie",
+  "fixture.decidedBy.shootoutPlain",
   ...Object.values(ENUM_VOCAB).flatMap((maps) => maps.flatMap((m) => Object.values(m))),
 ];
