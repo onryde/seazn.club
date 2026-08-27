@@ -363,3 +363,42 @@ describe("division settings — clearing a shoot-out points field deletes BOTH k
     expect(points.shootoutLoss).toBe(1);
   });
 });
+
+describe("division settings — the rules/points panel re-syncs with a refreshed division.config (R3.5 review F6)", () => {
+  it("re-hydrates ruleValues on a MOUNTED instance when router.refresh() hands back a new config", () => {
+    const island = mount({ points: { ...FOOTBALL_POINTS } });
+    expect(ruleValuesOf(island.tree()).shootoutWin, "sanity: starts hydrated from the initial config").toBe("2");
+    // The shape a real router.refresh() delivers after F5's fix actually
+    // deletes a cleared shoot-out pair server-side: same component instance,
+    // a NEW division.config with shootoutWin/shootoutLoss gone.
+    island.rerender(baseProps({ points: { win: 3, draw: 1, loss: 0 } }));
+    const values = ruleValuesOf(island.tree());
+    expect(values.shootoutWin, "must drop the stale value once the server no longer has it").toBeUndefined();
+    expect(values.shootoutLoss).toBeUndefined();
+  });
+
+  it("re-hydrates the standings-points boxes the same way, on the same prop change", () => {
+    const island = mount({ points: { ...FOOTBALL_POINTS } });
+    island.rerender(
+      baseProps({ points: { win: 5, draw: 2, loss: 1, shootoutWin: 2, shootoutLoss: 1 } }),
+    );
+    const [w, d, l] = pointsInputs(island.tree());
+    expect(propsOf(w!).value, "server-clamped/defaulted win must overwrite the stale typed value").toBe("5");
+    expect(propsOf(d!).value).toBe("2");
+    expect(propsOf(l!).value).toBe("1");
+  });
+
+  it("does not discard an in-progress edit when the refreshed config's CONTENT is unchanged", () => {
+    const island = mount({ points: { ...FOOTBALL_POINTS } });
+    typeRuleField(island.tree(), "halfMinutes", "77");
+    // Same content, a fresh object — what an UNRELATED save elsewhere in
+    // this component (name, logo, entrants...) hands back via
+    // router.refresh(), since the server always re-serialises `config` even
+    // when nothing in it changed.
+    island.rerender(baseProps({ points: { ...FOOTBALL_POINTS } }));
+    expect(
+      ruleValuesOf(island.tree()).halfMinutes,
+      "an unrelated refresh must not discard a field the organiser is mid-typing",
+    ).toBe("77");
+  });
+});

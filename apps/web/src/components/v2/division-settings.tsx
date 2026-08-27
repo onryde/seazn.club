@@ -336,6 +336,34 @@ export function DivisionSettings({
   const [ruleValues, setRuleValues] = useState<Record<string, string>>(() =>
     hydrateRuleValues(division.sport_key, division.config),
   );
+  // R3.5 review F6 — hydratePointsValues/hydrateRuleValues above only ever
+  // ran in the useState INITIALIZER, so once this instance is mounted,
+  // saving through `run()` (every action in this component funnels through
+  // it, and it always calls `router.refresh()`) swaps in a freshly-fetched
+  // `division` prop that this already-mounted instance never re-reads:
+  // ruleValues/pointsValues kept showing whatever the organiser last typed,
+  // including a field the server clamped, defaulted, or (F5) deliberately
+  // deleted.
+  //
+  // Render-time "derive from props" adjustment (the same pattern
+  // use-board-actions.ts and cricket-skin.tsx's striker/nonStriker/bowler
+  // resync already use in this codebase) rather than a useEffect: track the
+  // LAST config CONTENT seen in its own state slot, and when the incoming
+  // content differs, overwrite the derived state during render.
+  //
+  // Comparing the config's serialised CONTENT, never the `division.config`
+  // object reference, is load-bearing: the server hands back a brand-new
+  // object on every refresh even when nothing in it changed (an unrelated
+  // save elsewhere in this same component — name, logo, entrants — refreshes
+  // too), and reference comparison would resync on every one of those and
+  // discard an in-progress edit here for no reason.
+  const configSignature = JSON.stringify(division.config);
+  const [syncedConfigSignature, setSyncedConfigSignature] = useState(configSignature);
+  if (configSignature !== syncedConfigSignature) {
+    setSyncedConfigSignature(configSignature);
+    setRuleValues(hydrateRuleValues(division.sport_key, division.config));
+    setPointsValues(hydratePointsValues(division.sport_key, cfg.points));
+  }
   const [advancedText, setAdvancedText] = useState("");
   // Entrants block (spec 2026-07-18): the ticked kinds, the default, and the
   // team extras seed from the resolved effective model.
