@@ -4524,6 +4524,7 @@
   "register.status.cancel.busy": "Bezig met annuleren…",
   "register.status.cancel.error.conflict": "De status van deze inschrijving is net gewijzigd — ververs de pagina en probeer het opnieuw.",
   "register.status.cancel.error.generic": "We konden deze inschrijving niet annuleren — probeer het opnieuw of neem contact op met de organisator.",
+  "register.status.cancel.refund.noDeadline": "De organisator regelt zelf de terugbetalingen voor deze competitie.",
   "register.status.roster.heading": "Team",
   "register.status.roster.meter": "{claimed} van {total} bevestigd",
   "register.status.roster.claimed": "Bevestigd",

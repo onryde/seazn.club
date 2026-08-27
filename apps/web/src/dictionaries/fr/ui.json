@@ -4524,6 +4524,7 @@
   "register.status.cancel.busy": "Annulation…",
   "register.status.cancel.error.conflict": "Le statut de cette inscription vient de changer — actualisez la page et réessayez.",
   "register.status.cancel.error.generic": "Nous n'avons pas pu annuler cette inscription — veuillez réessayer, ou contactez l'organisateur.",
+  "register.status.cancel.refund.noDeadline": "L'organisateur gère directement les remboursements pour cette compétition.",
   "register.status.roster.heading": "Effectif",
   "register.status.roster.meter": "{claimed} sur {total} confirmé(s)",
   "register.status.roster.claimed": "Confirmé",

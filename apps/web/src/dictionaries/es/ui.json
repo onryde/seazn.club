@@ -4524,6 +4524,7 @@
   "register.status.cancel.busy": "Cancelando…",
   "register.status.cancel.error.conflict": "El estado de esta inscripción acaba de cambiar — actualiza la página e inténtalo de nuevo.",
   "register.status.cancel.error.generic": "No hemos podido cancelar esta inscripción — inténtalo de nuevo o contacta con el organizador.",
+  "register.status.cancel.refund.noDeadline": "El organizador gestiona los reembolsos de esta competición directamente.",
   "register.status.roster.heading": "Plantilla",
   "register.status.roster.meter": "{claimed} de {total} confirmados",
   "register.status.roster.claimed": "Confirmado",

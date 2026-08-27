@@ -318,6 +318,46 @@ describe("register status page (RS007 rebuild)", () => {
       const html = await render({ rid: "g1", token: "tok" });
       expect(html).not.toContain("Cancel this entry");
     });
+
+    // Bug (2026-08-27 review, FIX 3): refund_policy now carries a `reason`
+    // ("no_deadline") when a refund is fail-closed-declined because no
+    // deadline is knowable at all (resolveRefundPolicy, registrations.ts),
+    // but nothing rendered it — a registrant saw a refusal with no
+    // explanation. Plain-English copy, not the computed reason code.
+    it("explains a fail-closed 'no_deadline' refund decline in plain English near the Cancel control", async () => {
+      usecaseMock.groupById.mockResolvedValueOnce({
+        ...BASE_VIEW,
+        entries: [
+          {
+            ...BASE_ENTRY,
+            refund_policy: { refundable: false, deadline: null, amount_cents: 2500, reason: "no_deadline" as const },
+          },
+        ],
+      });
+      const html = await render({ rid: "g1", token: "tok" });
+      expect(html).toContain("Cancel this entry");
+      expect(html).toContain("The organiser handles refunds");
+    });
+
+    it("shows no extra explanation for an ORDINARY refund decline (a real deadline that has simply passed — reason null)", async () => {
+      usecaseMock.groupById.mockResolvedValueOnce({
+        ...BASE_VIEW,
+        entries: [
+          {
+            ...BASE_ENTRY,
+            refund_policy: {
+              refundable: false,
+              deadline: "2026-01-01T00:00:00.000Z",
+              amount_cents: 2500,
+              reason: null,
+            },
+          },
+        ],
+      });
+      const html = await render({ rid: "g1", token: "tok" });
+      expect(html).toContain("Cancel this entry");
+      expect(html).not.toContain("The organiser handles refunds");
+    });
   });
 
   describe("roster meter + claim links (acceptance criterion 5)", () => {

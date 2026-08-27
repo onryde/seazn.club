@@ -62,7 +62,18 @@ export interface EntryCardProps {
     allows_new_joiner: boolean;
     promotion_expires_at: string | null;
     players: { id: string; full_name: string; consent_status: "pending" | "granted" | "guardian" }[];
-    refund_policy: { refundable: boolean; deadline: string | null; amount_cents: number };
+    refund_policy: {
+      refundable: boolean;
+      deadline: string | null;
+      amount_cents: number;
+      /** FIX 3 (RS007 status-page review): set only when `refundable` is
+       *  false because NO deadline could be derived at all
+       *  (resolveRefundPolicy, registrations.ts) — optional so every
+       *  existing hand-built fixture that predates this field still
+       *  type-checks; a missing/undefined reason renders nothing extra,
+       *  same as an explicit null. */
+      reason?: "no_deadline" | null;
+    };
   };
   cart: {
     payment_method: "offline" | "stripe" | null;
@@ -245,6 +256,16 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
 
         {canCancelEntry(entry.status) && (
           <div className="border-t border-zinc-100 pt-3">
+            {/* FIX 3 (RS007 status-page review): refund_policy carries a
+                `reason` when a refund is fail-closed-declined because no
+                deadline could be derived at all (resolveRefundPolicy,
+                registrations.ts) — previously rendered nowhere, so a
+                registrant saw a plain refusal with no explanation. Plain-
+                English, says what the organiser will do, not what the
+                system computed. */}
+            {entry.refund_policy.reason === "no_deadline" && (
+              <p className="mb-1.5 text-xs text-ink-muted">{t(ui, "register.status.cancel.refund.noDeadline")}</p>
+            )}
             <CancelEntry
               entryId={entry.id}
               token={token}

@@ -4524,6 +4524,7 @@
   "register.status.cancel.busy": "Cancelling…",
   "register.status.cancel.error.conflict": "This entry's status just changed — refresh the page and try again.",
   "register.status.cancel.error.generic": "We couldn't cancel this entry — please try again, or contact the organiser.",
+  "register.status.cancel.refund.noDeadline": "The organiser handles refunds for this competition directly.",
   "register.status.roster.heading": "Roster",
   "register.status.roster.meter": "{claimed} of {total} confirmed",
   "register.status.roster.claimed": "Confirmed",
