@@ -2796,3 +2796,55 @@ retroactively from the Activity row (correct, its own wave), or label the stat
 as partial wherever it surfaces. Owner-facing recommendation: label it now,
 retro-attribution as its own wave; do NOT widen a chassis constant for one
 sport mid-wave.
+
+### R5 — the C1 adversarial review, and the defect that VERIFYING A CLAIM found
+
+Reviewer run on the un-reviewed half of the wave (the badminton skin, the three
+palettes, `messageTone`, the registry flip, and the two play-through fixes) —
+the ENGINE serve reader had already had its own reviewer, whose six findings
+are closed. Counts: **1220/1220 v3 unit tests passing, 0 failed, 26 files, all
+paths resolved inside the worktree; `turbo typecheck --filter=@seazn/web`
+clean.** Verdict "needs fixes (non-blocking)", two findings.
+
+**Clean in five of the seven categories it was pointed at**, and worth recording
+so a later wave does not re-hunt them: single-parity pins (service court,
+interval, rally-winner, game-change serve all swept both parities AND both
+sides), redundant guards, inert seams (the dock `mutate`→submitted payload is
+proved in e2e, not merely unit-tested), palette tokens (all three new entries
+inside the closed `board/board-2/ink/led/caution/dismissal` vocabulary, cricket
+untouched), i18n (42/42 `pad.badminton.*` keys identical across all four
+dictionaries with matching placeholders; no `gen-keys` regen owed, because only
+a VALUE changed), and vacuous assertions.
+
+**Review finding 1 = P-5 above**, independently reproduced by code reading and
+correctly characterised: `HOLD_MS` is a sport-agnostic chassis race in
+`queue.ts`, not a per-sport knob. Still open, still an owner decision.
+
+**Review finding 2 — "you claimed tennis doubles gains the separator and never
+checked."** Fair, and acting on it found a THIRD defect that neither the review
+nor the play-through had seen. Driving a real tennis-doubles fixture showed:
+
+```
+visible:    "Ada Lovelace/Alan Turing"          ← fixed by P-1
+aria-label: "Ada Lovelace, Serving, Alan Turing" ← still broken
+```
+
+`whoNames()` folds a serving label into its line with a comma AND joined the
+LINES with a comma, so the two levels were indistinguishable: a listener gets
+three flat items and cannot tell that "Serving" belongs to Ada rather than to
+Alan. **The chassis's own unit test had frozen this as its expectation**
+(`scorebug.test.ts`, `.toBe("Alice, Serving, Bob")`) — the "test froze the bug"
+class, and the reason the defect survived R4's sign-off and this wave's review
+alike. Lines now join with `"; "`: `"Ada Lovelace, Serving; Alan Turing"`.
+Blast radius is pinned rather than asserted this time — a new test proves a
+single who-line joins a one-element array and can carry no separator at all, so
+cricket's two halves, football's two and every singles fixture in every sport
+are byte-for-byte unchanged. v3 unit suite 1220 → **1221/1221**; badminton +
+tennis + the doubles probe **11/11 e2e green**; verified visually at 320.
+
+**The transferable lesson, and it is the third time this wave has paid it:**
+P-1 came from playing rather than reading, P-3 came from noticing my OWN
+sampling was single-parity, and this one came from checking a sentence I had
+written in a commit message as though it were a result. A claim about a surface
+you did not open is a hypothesis. This programme's screenshots, unit tests and
+adversarial review all passed over it.

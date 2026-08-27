@@ -337,10 +337,13 @@ test("badminton v3 doubles: the dock's scorer chip reaches the SUBMITTED rally, 
   // by playing the pad, not by any assertion: the chassis rendered one span
   // per name with only a 6px gap, so "Ada Lovelace" and "Alan Turing" ran
   // together into one string, while `whoNames()` — the accessible name for
-  // the very same button — had always joined with ", ". Both halves of that
+  // the very same button — had always separated them. Both halves of that
   // disagreement are pinned here, because a fix to either one alone re-opens
-  // it: the VISIBLE text carries the slash, the SPOKEN name keeps the comma
-  // and must never say "slash".
+  // it: the VISIBLE text carries the slash, and the SPOKEN name carries a
+  // SEMICOLON and must never say "slash". Semicolon, not comma: `whoNames()`
+  // folds a serving label into its own line with a comma, so a comma between
+  // LINES made the two levels indistinguishable — a tennis doubles half
+  // spoke as "Ada Lovelace, Serving, Alan Turing" (see scorebug.tsx).
   const homeHalf = half(page, "home");
   // No spaces around the slash in the assertion: the visible gap is the flex
   // `gap-x-1.5` on either side of the separator span, not whitespace in the
@@ -348,7 +351,7 @@ test("badminton v3 doubles: the dock's scorer chip reaches the SUBMITTED rally, 
   await expect(homeHalf, "a doubles pair must read as two names, not one run-on string").toContainText(
     `${homeFirst}/${homeSecond}`,
   );
-  await expect(homeHalf).toHaveAttribute("aria-label", new RegExp(`${homeFirst}, ${homeSecond}`));
+  await expect(homeHalf).toHaveAttribute("aria-label", new RegExp(`${homeFirst}; ${homeSecond}`));
 
   await homeHalf.click();
   const dock = v3Dock(page);

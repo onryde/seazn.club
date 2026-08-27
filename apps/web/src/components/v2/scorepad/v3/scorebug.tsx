@@ -75,9 +75,25 @@ export interface ScorebugProps {
  * function (`__tests__/scorebug.test.ts`) with no DOM/render involved.
  */
 export function whoNames(who: readonly WhoLine[]): string {
+  // R5 — lines are joined with "; ", NOT ", ". A serving line already folds
+  // its label in with a comma, so a comma between LINES made the two levels
+  // indistinguishable: a tennis doubles half spoke as "Ada Lovelace, Serving,
+  // Alan Turing", three flat items in which "Serving" attaches to nobody in
+  // particular. The semicolon separates the two levels, so the same half now
+  // speaks as "Ada Lovelace, Serving; Alan Turing".
+  //
+  // Found by verifying a claim rather than trusting it: R5's visible "/"
+  // separator was asserted to also improve tennis doubles, and driving a real
+  // tennis-doubles fixture to check showed the VISIBLE half had been fixed
+  // while its accessible name was still ambiguous. This function's own test
+  // had frozen the defect as its expectation (`"Alice, Serving, Bob"`).
+  //
+  // A half with ONE who-line — cricket's two, football's two, and every
+  // singles fixture in every sport — joins a single-element array and is
+  // byte-for-byte unchanged.
   return who
     .map((w) => (w.serving && w.servingLabel ? `${w.name}, ${w.servingLabel}` : w.name))
-    .join(", ");
+    .join("; ");
 }
 
 function HalfContent({ half, hintText }: { half: ScorebugHalf; hintText: string }) {
