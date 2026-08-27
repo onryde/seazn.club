@@ -251,6 +251,21 @@ export interface RegistrationRow {
   refunded_cents: number;
   entrant_id: string | null;
   promoted_at: Date | null;
+  /** V378/RS007: THIS entry's own pay-by deadline, set only when a
+   *  promotion out of the waitlist needs a Stripe window (mirrors
+   *  `promoted_at`'s null-ness — see `promoteWaitlistedRow`). Distinct from
+   *  the cart-level `expires_at` on `RegistrationGroupRow`, which still
+   *  governs a never-paid submit; see the block comment above
+   *  `promoteWaitlistedRow` for why the cart clock cannot serve both. */
+  promotion_expires_at: Date | null;
+  /** V378/RS007: when this row (re)joined the waitlist. Null for a row that
+   *  has never lapsed off a promotion — `promoteOldestWaitlisted` falls back
+   *  to `created_at` for those, so an ordinary first-time waitlist join is
+   *  unaffected. Set to `now()` only by `sweepRegistrations`' lapse branch,
+   *  which sorts a lapsed row BEHIND anyone still waiting on their original
+   *  `created_at` (the waitlist tail), rather than letting it keep its old
+   *  place in line. */
+  waitlisted_at: Date | null;
   withdrawn_at: Date | null;
   /** The cart this entry belongs to — every entry has exactly one (V364). */
   group_id: string;
@@ -414,6 +429,7 @@ function regGroupCols(db: AnySql) {
   return db`
     r.id, r.division_id, r.org_id, r.status, r.display_name, r.answers,
     r.amount_cents, r.refunded_cents, r.entrant_id, r.promoted_at, r.withdrawn_at,
+    r.promotion_expires_at, r.waitlisted_at,
     r.group_id, r.join_code, r.free_agent, r.created_at, r.updated_at,
     g.contact_name, g.contact_email, g.user_id, g.locale, g.ref_code,
     g.access_token_hash, g.currency, g.payment_method, g.checkout_session_id,
@@ -804,6 +820,15 @@ export async function materialise(tx: Tx, reg: RegistrationRow, entrantKind: str
  * Exported for `registration-approval.ts` (RS002 W5) — `promoteFromWaitlist`'s
  * default (no explicit id) mode calls this directly rather than re-deriving
  * the oldest-first pick.
+ *
+ * "Oldest" is `coalesce(waitlisted_at, created_at)`, not bare `created_at`
+ * (V378/RS007). A row that has never lapsed has `waitlisted_at = null`, so
+ * this is byte-for-byte the old ordering for every pre-existing waitlisted
+ * row. A row `sweepRegistrations`' lapse branch just returned to the
+ * waitlist carries a fresh `waitlisted_at = now()`, which sorts it BEHIND
+ * every row still waiting on its original `created_at` — the tail, not a
+ * reclaimed place in line — even though its OWN `created_at` may be far
+ * older than theirs.
  */
 export async function promoteOldestWaitlisted(
   tx: Tx,
@@ -813,7 +838,7 @@ export async function promoteOldestWaitlisted(
   const [picked] = await tx<{ id: string; group_id: string }[]>`
     select id, group_id from registrations
     where division_id = ${divisionId} and status = 'waitlisted'
-    order by created_at, id limit 1
+    order by coalesce(waitlisted_at, created_at), id limit 1
     for update skip locked`;
   if (!picked) return null;
   return promoteWaitlistedRow(tx, picked.id, picked.group_id, settings);
@@ -867,6 +892,19 @@ export async function promoteOldestWaitlisted(
  * later) deadline; same additive pattern the refund paths already use
  * (`greatest(refunded_cents, …)`). When it does not (free/offline
  * promotion), the column is left exactly as it was.
+ *
+ * ── promotion_expires_at (V378/RS007) — ADDITIVE, alongside the group write
+ * above, not instead of it ────────────────────────────────────────────────
+ * The group's `expires_at` is shared by every entry in the cart, so
+ * `sweepRegistrations` cannot use it to decide THIS entry's own pay window
+ * without also catching (or missing) its siblings — see the STRUCTURAL
+ * finding in `_INDEX.md`'s RS007 section. `promotion_expires_at` is this
+ * row's own clock: same window, same `stripeWindow` gate, but scoped to
+ * `regId` alone via a plain overwrite rather than `greatest(...)` — unlike
+ * the group's column, nothing else ever writes this one, so there is no
+ * sibling deadline to protect from shortening. Left null on an
+ * offline/free promotion, exactly like the group's would be if nothing else
+ * in the cart needed it.
  * ───────────────────────────────────────────────────────────────────────── */
 export async function promoteWaitlistedRow(
   tx: Tx,
@@ -880,7 +918,11 @@ export async function promoteWaitlistedRow(
   await tx`
     update registrations
     set status = 'pending', promoted_at = now(), updated_at = now(),
-        amount_cents = ${feeCents}
+        amount_cents = ${feeCents},
+        promotion_expires_at = case
+          when ${stripeWindow} then now() + interval '48 hours'
+          else null
+        end
     where id = ${regId}`;
   await tx`
     update registration_groups
@@ -3305,19 +3347,24 @@ async function withdrawCore(reg: RegistrationWithGroupRow, actorId: string | nul
 // ---------------------------------------------------------------------------
 
 /**
- * Two passes over card pendings: (1) T-24h payment reminders carrying a fresh
- * token-free checkout link, exactly once per registration (reminded_at);
- * (2) expire rows past their deadline and promote the oldest waitlisted with
- * a new window. Each expiry runs in its own row-locked tx, so a racing
- * webhook serialises: webhook first → paid wins; sweep first → the late
- * payment auto-refunds (confirmPaidRegistration).
+ * Three passes over card pendings: (1) T-24h payment reminders carrying a
+ * fresh token-free checkout link, exactly once per registration
+ * (reminded_at); (2) expire never-paid submits past the CART's deadline and
+ * promote the oldest waitlisted with a new window; (3) lapse PROMOTED
+ * entries past their OWN deadline back to the waitlist tail and re-offer the
+ * freed slot (V378/RS007) — `promoted_at is null` vs `is not null` makes (2)
+ * and (3) mutually exclusive, so a row can only ever match one. Each
+ * expiry/lapse runs in its own row-locked tx, so a racing webhook
+ * serialises: webhook first → paid wins; sweep first → the late payment
+ * auto-refunds (confirmPaidRegistration).
  */
 export async function sweepRegistrations(
   origin: string,
-): Promise<{ reminded: number; expired: number; promoted: number }> {
+): Promise<{ reminded: number; expired: number; promoted: number; lapsed: number }> {
   let reminded = 0;
   let expired = 0;
   let promotedCount = 0;
+  let lapsedCount = 0;
 
   // payment_method/expires_at/reminded_at live on the cart now (V364).
   const due = await sql<RegistrationWithGroupRow[]>`
@@ -3367,10 +3414,18 @@ export async function sweepRegistrations(
   // reminder pass uses, PLUS the entry's own fee (a `pending` row can be
   // `amount_cents = 0` even when its cart's method is 'stripe', if a sibling
   // established that method).
+  //
+  // `r.promoted_at is null` (V378/RS007): a PROMOTED entry now has its own
+  // clock (`promotion_expires_at`, checked by the lapse pass below) and must
+  // not also fall off the cart's shared one — the STRUCTURAL finding in
+  // `_INDEX.md`'s RS007 section is exactly this: promoting one entry in a
+  // multi-entry cart used to extend (and later expire) every sibling's
+  // deadline right along with it.
   const overdue = await sql<{ id: string; division_id: string; group_id: string }[]>`
     select r.id, r.division_id, r.group_id
     from registrations r join registration_groups g on g.id = r.group_id
-    where r.status = 'pending' and r.amount_cents > 0 and g.payment_method = 'stripe'
+    where r.status = 'pending' and r.promoted_at is null and r.amount_cents > 0
+      and g.payment_method = 'stripe'
       and g.expires_at is not null and g.expires_at < now()
     order by g.expires_at
     limit 200`;
@@ -3424,7 +3479,79 @@ export async function sweepRegistrations(
     }
   }
 
-  return { reminded, expired, promoted: promotedCount };
+  // Promotion lapse (V378/RS007) — the counterpart pass to the expiry loop
+  // above, over the OTHER half of `pending`: rows `promoted_at is null`
+  // never reaches. Falling off `promotion_expires_at` does not expire the
+  // entry — owner ruling (see `_INDEX.md`'s RS007 section, "FALSE PREMISE —
+  // verify RS002 shipped the lapse") is that it re-joins the waitlist TAIL
+  // (`waitlisted_at = now()`, so `promoteOldestWaitlisted`'s
+  // `coalesce(waitlisted_at, created_at)` sorts it behind anyone who has
+  // been waiting since before this moment) and the freed slot is
+  // immediately re-offered to the next candidate via the SAME
+  // `promoteOldestWaitlisted` the expiry pass above uses — never a forked
+  // copy. No join to `registration_groups` needed: every filter/order
+  // column here is the entry's own.
+  const lapsing = await sql<{ id: string; division_id: string }[]>`
+    select r.id, r.division_id
+    from registrations r
+    where r.status = 'pending' and r.promoted_at is not null
+      and r.promotion_expires_at is not null and r.promotion_expires_at < now()
+    order by r.promotion_expires_at
+    limit 200`;
+  for (const { id, division_id } of lapsing) {
+    const outcome = (await sql.begin(async (tx) => {
+      const [locked] = await tx<RegistrationWithGroupRow[]>`
+        select ${regGroupCols(tx)}
+        from registrations r join registration_groups g on g.id = r.group_id
+        where r.id = ${id} for update`;
+      if (
+        !locked ||
+        locked.status !== "pending" ||
+        !locked.promoted_at ||
+        !locked.promotion_expires_at ||
+        new Date(locked.promotion_expires_at) > new Date()
+      ) {
+        return null; // an organiser action won the race, or the deadline moved
+      }
+      await tx`
+        update registrations
+        set status = 'waitlisted', waitlisted_at = now(),
+            promoted_at = null, promotion_expires_at = null, updated_at = now()
+        where id = ${id}`;
+      // Same stale-deadline gap as the expiry branch: if this was the cart's
+      // LAST pending entry, nothing else needs the group's shared clock.
+      await clearExpiresIfNoLongerNeeded(tx, locked.group_id, locked.id);
+      const settings = await loadSettings(tx, division_id);
+      const [div] = await tx<{ competition_id: string; org_id: string }[]>`
+        select competition_id, org_id from divisions where id = ${division_id}`;
+      const promoted = await promoteOldestWaitlisted(tx, division_id, settings);
+      await audit(tx, div.competition_id, div.org_id, "registration.promotion_lapsed", {
+        registration_id: id,
+        promoted_registration_id: promoted?.id ?? null,
+      }, null);
+      if (promoted) {
+        await audit(tx, div.competition_id, div.org_id, "registration.promoted", {
+          registration_id: promoted.id,
+          from: "waitlist",
+        }, null);
+      }
+      return { promoted, settings, competitionId: div.competition_id };
+    })) as unknown as {
+      promoted: RegistrationWithGroupRow | null;
+      settings: RegistrationSettingsRow | null;
+      competitionId: string;
+    } | null;
+    if (!outcome) continue;
+    lapsedCount++;
+    fireDivisionRevalidate(division_id, outcome.competitionId);
+    if (outcome.promoted) {
+      promotedCount++;
+      const ctx = await divisionCtx(sql, division_id);
+      await notifyPromoted(outcome.promoted, ctx, outcome.settings, origin);
+    }
+  }
+
+  return { reminded, expired, promoted: promotedCount, lapsed: lapsedCount };
 }
 
 // ---------------------------------------------------------------------------

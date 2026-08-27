@@ -177,6 +177,31 @@ describe.skipIf(!HAS_DB)("V363/V364 registration schema", () => {
     await dropOrg(orgId);
   });
 
+  // V378 (RS007): a promoted entry's OWN payment deadline, separate from the
+  // cart-level (registration_groups) expires_at — see the block comment atop
+  // the migration. Both nullable: most rows never promote, and a row that
+  // has never lapsed carries waitlisted_at = null.
+  it("registrations carries its own promotion deadline (V378)", async () => {
+    const cols = await sql<{ column_name: string; is_nullable: string }[]>`
+      select column_name, is_nullable from information_schema.columns
+      where table_name = 'registrations'
+        and column_name in ('promotion_expires_at', 'waitlisted_at')`;
+    const byName = new Map(cols.map((c) => [c.column_name, c.is_nullable]));
+    for (const c of ["promotion_expires_at", "waitlisted_at"]) {
+      expect(byName.has(c), `registrations.${c} missing`).toBe(true);
+      expect(byName.get(c), `${c} should be nullable`).toBe("YES");
+    }
+
+    const { orgId, compId, divId, tag } = await seedOrgCompDiv();
+    const group = await seedGroup(compId, tag);
+    const reg = await seedEntry(group.id, divId);
+    const [row] = await sql<{ promotion_expires_at: Date | null; waitlisted_at: Date | null }[]>`
+      select promotion_expires_at, waitlisted_at from registrations where id = ${reg.id}`;
+    expect(row!.promotion_expires_at).toBeNull();
+    expect(row!.waitlisted_at).toBeNull();
+    await dropOrg(orgId);
+  });
+
   it("every entry belongs to a group — group_id is NOT NULL", async () => {
     const { orgId, divId } = await seedOrgCompDiv();
     await expect(
@@ -415,6 +440,7 @@ describe.skipIf(!HAS_DB)("V363/V364 registration schema", () => {
     for (const idx of [
       "registrations_group_idx",
       "registrations_join_code_key",
+      "registrations_promotion_expiry_idx",
       "registration_groups_ref_code_key",
       "registration_groups_competition_idx",
       "registration_groups_checkout_idx",

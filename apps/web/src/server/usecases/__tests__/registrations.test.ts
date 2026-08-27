@@ -133,6 +133,7 @@ import {
   resumeRegistrationCheckout,
   mintGroupCheckout,
   promoteOldestWaitlisted,
+  promoteWaitlistedRow,
   buildDisputeEvidence,
   resendRegistrationConfirmation,
   notifySubmitted,
@@ -3094,6 +3095,241 @@ describe.skipIf(!HAS_DB)("RS002 W5 whole-branch review: clearing a stale expires
     // Reverting the sweep's clearExpiresIfNoLongerNeeded call makes this
     // fail: same stale-deadline gap as withdrawCore, same fix.
     expect(group!.expires_at).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RS007 (V378) — a promoted entry gets its OWN payment deadline, and a lapse
+// returns it to the waitlist TAIL instead of expiring it. See the STRUCTURAL
+// finding and the "FALSE PREMISE — verify RS002 shipped the lapse" ruling in
+// docs/superpowers/specs/2026-08-16-registration-redesign-prompts/_INDEX.md's
+// RS007 section.
+// ---------------------------------------------------------------------------
+
+describe.skipIf(!HAS_DB)("RS007: promoteWaitlistedRow stamps the entry's own promotion_expires_at", () => {
+  it("a stripe-fee promotion gets a fresh promotion_expires_at in the same window as the group's expires_at", async () => {
+    const { competition, division, settings } = await stripeRig({ feeCents: 500 });
+    const waiting = await seedRegistration(competition.id, division.id, settings, { status: "waitlisted" });
+
+    const promoted = await sql.begin((tx) =>
+      promoteWaitlistedRow(tx, waiting.registration.id, waiting.registration.group_id, settings),
+    );
+    expect(promoted!.status).toBe("pending");
+    expect(promoted!.expires_at, "sanity: the cart's shared clock still extends too").not.toBeNull();
+
+    const [row] = await sql<{ promotion_expires_at: Date | null }[]>`
+      select promotion_expires_at from registrations where id = ${promoted!.id}`;
+    // Reverting the promotion write leaves this null forever — the sweep's
+    // lapse branch (promoted_at is not null and promotion_expires_at < now())
+    // would then never match a promoted row at all.
+    expect(row!.promotion_expires_at).not.toBeNull();
+    // Same 48h window as the group's own expires_at (settings do not carry a
+    // separate pay-window constant to read instead).
+    const deltaMs = Math.abs(
+      new Date(row!.promotion_expires_at!).getTime() - new Date(promoted!.expires_at!).getTime(),
+    );
+    expect(deltaMs).toBeLessThan(5000);
+  });
+
+  it("an offline promotion (no stripe window) leaves promotion_expires_at null", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    const settings = await putRegistrationSettings(owner, division.id, {
+      ...SETTINGS_BASE, fee_cents: 1000, payment_method: "offline",
+    });
+    const waiting = await seedRegistration(competition.id, division.id, settings, { status: "waitlisted" });
+
+    const promoted = await sql.begin((tx) =>
+      promoteWaitlistedRow(tx, waiting.registration.id, waiting.registration.group_id, settings),
+    );
+    expect(promoted!.status).toBe("pending");
+    const [row] = await sql<{ promotion_expires_at: Date | null }[]>`
+      select promotion_expires_at from registrations where id = ${promoted!.id}`;
+    expect(row!.promotion_expires_at).toBeNull();
+  });
+});
+
+describe.skipIf(!HAS_DB)("RS007: promoteOldestWaitlisted orders by coalesce(waitlisted_at, created_at)", () => {
+  it("a recently re-queued row sorts BEHIND one still on its original wait, even with a far older created_at", async () => {
+    const { competition, division, settings } = await stripeRig();
+    const longWaiter = await seedRegistration(competition.id, division.id, settings, {
+      status: "waitlisted", displayName: "Long Waiter", contactEmail: "long@test.local",
+    });
+    const reQueued = await seedRegistration(competition.id, division.id, settings, {
+      status: "waitlisted", displayName: "Re-Queued", contactEmail: "requeued@test.local",
+    });
+    // longWaiter has been on the list for 10 days — an ordinary first-time
+    // join, waitlisted_at stays null, falls back to created_at.
+    await sql`update registrations set created_at = now() - interval '10 days'
+              where id = ${longWaiter.registration.id}`;
+    // reQueued's ORIGINAL submission is far OLDER still (30 days) — if
+    // ordering used created_at alone it would win the queue outright. But it
+    // was promoted and lapsed just an hour ago, so waitlisted_at (the tail
+    // marker) is recent, and THAT must decide.
+    await sql`update registrations
+              set created_at = now() - interval '30 days', waitlisted_at = now() - interval '1 hour'
+              where id = ${reQueued.registration.id}`;
+
+    const promoted = await sql.begin((tx) => promoteOldestWaitlisted(tx, division.id, settings));
+    // Reverting the order-by to plain created_at makes this fail: reQueued's
+    // 30-day-old created_at would win instead of longWaiter's 10-day one.
+    expect(promoted!.id).toBe(longWaiter.registration.id);
+  });
+});
+
+describe.skipIf(!HAS_DB)("RS007: sweep lapses an overdue promotion back to the waitlist tail and re-offers the slot", () => {
+  it("clears promoted_at/promotion_expires_at, sets a fresh waitlisted_at, and promotes the next candidate in the SAME sweep", async () => {
+    const { competition, division, settings } = await stripeRig({ feeCents: 500 });
+    // T was promoted — its own clock is about to lapse.
+    const t = await seedRegistration(competition.id, division.id, settings, {
+      status: "waitlisted", contactEmail: "t@test.local",
+    });
+    const promotedT = await sql.begin((tx) =>
+      promoteWaitlistedRow(tx, t.registration.id, t.registration.group_id, settings),
+    );
+    expect(promotedT!.promotion_expires_at, "sanity").not.toBeNull();
+
+    // W has been waiting since before T ever promoted — the freed slot must
+    // go to W, not back to T.
+    const w = await seedRegistration(competition.id, division.id, settings, {
+      status: "waitlisted", contactEmail: "w@test.local",
+    });
+    await sql`update registrations set created_at = now() - interval '5 days' where id = ${w.registration.id}`;
+
+    // Drive the lapse from the test by writing a short/past
+    // promotion_expires_at directly — never by mocking server time.
+    await sql`update registrations set promotion_expires_at = now() - interval '1 minute'
+              where id = ${t.registration.id}`;
+
+    const res = await sweepRegistrations("https://test.local");
+
+    const tRow = await loadWithGroup(t.registration.id);
+    expect(tRow.status).toBe("waitlisted");
+    expect(tRow.promoted_at).toBeNull();
+    const [tCols] = await sql<{ promotion_expires_at: Date | null; waitlisted_at: Date | null }[]>`
+      select promotion_expires_at, waitlisted_at from registrations where id = ${t.registration.id}`;
+    expect(tCols!.promotion_expires_at).toBeNull();
+    expect(tCols!.waitlisted_at).not.toBeNull();
+
+    // The freed slot went to W (the long-waiter), not back to T — the tail
+    // ordering in practice: T's fresh waitlisted_at sorts behind W's old
+    // created_at.
+    const wRow = await loadWithGroup(w.registration.id);
+    expect(wRow.status).toBe("pending");
+    expect(wRow.promoted_at).not.toBeNull();
+    expect(wRow.amount_cents).toBe(500);
+
+    expect(res.lapsed).toBeGreaterThanOrEqual(1);
+    expect(res.promoted).toBeGreaterThanOrEqual(1);
+
+    // Audited the same way promotion/expiry already are.
+    const auditCount = async (type: string, id: string) => {
+      const [row] = await sql<{ n: string }[]>`
+        select count(*)::text as n from competition_events
+        where type = ${type} and payload->>'registration_id' = ${id}`;
+      return Number(row.n);
+    };
+    expect(await auditCount("registration.promotion_lapsed", t.registration.id)).toBe(1);
+    expect(await auditCount("registration.promoted", w.registration.id)).toBe(1);
+
+    // A further sweep is a no-op for our own rows: T stays on the waitlist
+    // tail, W stays promoted — the two branches must not both fire on the
+    // same row, and a freshly re-offered row must not immediately re-lapse.
+    await sweepRegistrations("https://test.local");
+    expect((await loadWithGroup(t.registration.id)).status).toBe("waitlisted");
+    expect((await loadWithGroup(w.registration.id)).status).toBe("pending");
+  });
+});
+
+describe.skipIf(!HAS_DB)("RS007: sweep sibling isolation on a promotion lapse", () => {
+  it("lapsing ONE promoted entry in a multi-entry cart does not touch its still-pending sibling", async () => {
+    const { competition, division, settings } = await stripeRig({ feeCents: 500 });
+    const first = await seedRegistration(competition.id, division.id, settings, { status: "pending" });
+    // Retroactively mark `first` as a promotion that is about to lapse.
+    await sql`update registrations
+              set promoted_at = now(), promotion_expires_at = now() - interval '1 minute'
+              where id = ${first.registration.id}`;
+    const sibling = await seedSecondEntry(first.registration.group_id, division.id, 500, "Sibling Two", "pending");
+    const siblingBefore = await loadWithGroup(sibling.id);
+    // A bystander waitlisted candidate elsewhere in the division, waiting
+    // far longer than `first`'s about-to-be-fresh waitlisted_at — keeps the
+    // re-offer from landing back on `first` itself, so this test stays
+    // scoped to sibling isolation rather than re-offer ordering (covered
+    // above).
+    const filler = await seedRegistration(competition.id, division.id, settings, {
+      status: "waitlisted", contactEmail: "filler@test.local",
+    });
+    await sql`update registrations set created_at = now() - interval '1 day' where id = ${filler.registration.id}`;
+
+    await sweepRegistrations("https://test.local");
+
+    const firstRow = await loadWithGroup(first.registration.id);
+    expect(firstRow.status).toBe("waitlisted");
+
+    const siblingAfter = await loadWithGroup(sibling.id);
+    // Untouched: same status, same promoted_at (null throughout), same
+    // updated_at — proves the lapse UPDATE is scoped by the entry's OWN id,
+    // not by group_id (which both rows share).
+    expect(siblingAfter.status).toBe("pending");
+    expect(siblingAfter.promoted_at).toBeNull();
+    expect(new Date(siblingAfter.updated_at).getTime()).toBe(new Date(siblingBefore.updated_at).getTime());
+    // The shared cart clock is untouched too — the sibling is still pending,
+    // so clearExpiresIfNoLongerNeeded must not have cleared it.
+    expect(siblingAfter.expires_at).not.toBeNull();
+  });
+});
+
+describe.skipIf(!HAS_DB)("RS007: regression — a never-promoted pending entry still expires", () => {
+  it("a plain overdue pending entry (promoted_at never set) still goes to 'expired', not 'waitlisted'", async () => {
+    const { competition, division, settings } = await stripeRig({ feeCents: 500 });
+    const { registration } = await seedRegistration(competition.id, division.id, settings, { status: "pending" });
+    await sql`update registration_groups set expires_at = now() - interval '1 hour'
+              where id = ${registration.group_id}`;
+
+    const res = await sweepRegistrations("https://test.local");
+
+    const row = await loadWithGroup(registration.id);
+    expect(row.status).toBe("expired");
+    expect(row.promoted_at).toBeNull();
+    expect(res.expired).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe.skipIf(!HAS_DB)("RS007: the entry's own clock governs even when the cart's shared clock has ALSO lapsed", () => {
+  it("still lapses to 'waitlisted' (never 'expired') when both promotion_expires_at and the cart's expires_at are overdue together", async () => {
+    const { competition, division, settings } = await stripeRig({ feeCents: 500 });
+    const t = await seedRegistration(competition.id, division.id, settings, {
+      status: "waitlisted", contactEmail: "both-overdue@test.local",
+    });
+    const promotedT = await sql.begin((tx) =>
+      promoteWaitlistedRow(tx, t.registration.id, t.registration.group_id, settings),
+    );
+    expect(promotedT!.status).toBe("pending");
+    // Both clocks overdue at once: the entry's own AND the shared cart's.
+    await sql`update registrations set promotion_expires_at = now() - interval '1 minute'
+              where id = ${t.registration.id}`;
+    await sql`update registration_groups set expires_at = now() - interval '1 minute'
+              where id = ${t.registration.group_id}`;
+    // A bystander waitlisted candidate, waiting far longer than T's
+    // about-to-be-fresh waitlisted_at — without it, T would be the ONLY
+    // waitlisted row in the division and would legitimately win its own
+    // re-offer, which is not what this test is isolating (that path is
+    // covered by the "re-offers the slot" test above).
+    const filler = await seedRegistration(competition.id, division.id, settings, {
+      status: "waitlisted", contactEmail: "filler-both@test.local",
+    });
+    await sql`update registrations set created_at = now() - interval '1 day' where id = ${filler.registration.id}`;
+
+    await sweepRegistrations("https://test.local");
+
+    const row = await loadWithGroup(t.registration.id);
+    // Reverting the expire branch's "r.promoted_at is null" guard makes this
+    // fail: the expire branch would ALSO match this row (its cart clock is
+    // overdue too) and win the race, terminally expiring an entry the owner
+    // ruling requires to return to the waitlist instead.
+    expect(row.status).toBe("waitlisted");
+    expect(row.promoted_at).toBeNull();
   });
 });
 
