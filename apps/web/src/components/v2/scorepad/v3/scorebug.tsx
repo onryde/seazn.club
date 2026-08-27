@@ -97,6 +97,26 @@ function HalfContent({ half, hintText }: { half: ScorebugHalf; hintText: string 
       >
         {half.who.map((w, i) => (
           <span key={i} className="inline-flex min-w-0 items-center gap-1 wrap-anywhere">
+            {/* R5 — a SEPARATOR between names, found only by playing the pad.
+             *  A doubles half renders one span per WhoLine with nothing but a
+             *  6px `gap-x-1.5` between them, so two real names run together
+             *  into one unreadable string on screen ("PLAY BAD H1 PLAY BAD
+             *  H2") while `whoNames()` — the ACCESSIBLE name for the same
+             *  button — has always joined with ", ". Sighted and screen-reader
+             *  users were reading different content off one control.
+             *
+             *  A slash rather than the aria label's comma because that is how
+             *  a racquet pair is written on a real board (CHEN/WANG), which is
+             *  the register this scorebug is written in; `aria-hidden` so the
+             *  spoken name keeps its comma and never says "slash". Gated on
+             *  `i > 0`, so every half with ONE name — cricket's two halves,
+             *  football's two, and every singles fixture in every sport —
+             *  renders byte-for-byte what it rendered before. */}
+            {i > 0 && (
+              <span aria-hidden="true" className="opacity-60">
+                /
+              </span>
+            )}
             {w.serving && (
               <span
                 aria-hidden="true"

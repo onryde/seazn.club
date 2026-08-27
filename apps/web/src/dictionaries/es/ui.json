@@ -3803,7 +3803,7 @@
   "pad.badminton.context.recording": "Solo resultados de juego",
   "pad.badminton.context.recording.locked": "La anotación jugada a jugada requiere {plan}. Registra el resultado final de cada juego.",
   "pad.badminton.dock.person": "Jugador",
-  "pad.badminton.dock.rally.scorer.title": "¿Quién ganó la jugada?",
+  "pad.badminton.dock.rally.scorer.title": "¿Qué jugador la ganó?",
   "pad.badminton.ribbon.game.summary": "Resultado del juego registrado",
   "pad.badminton.ribbon.partial": "En curso",
   "pad.badminton.ribbon.rally": "Jugada registrada",

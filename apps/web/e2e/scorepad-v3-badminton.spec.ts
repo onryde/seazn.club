@@ -333,10 +333,27 @@ test("badminton v3 doubles: the dock's scorer chip reaches the SUBMITTED rally, 
   // ruling R5-2's whole reason for existing: dedicating `badminton.rally` to
   // the scoreboard half retires the generic form AND its attribution fields,
   // so without this question per-player badminton stats become unrecordable.
-  await half(page, "home").click();
+  // R5 — the two names on a doubles half must be SEPARATED on screen. Found
+  // by playing the pad, not by any assertion: the chassis rendered one span
+  // per name with only a 6px gap, so "Ada Lovelace" and "Alan Turing" ran
+  // together into one string, while `whoNames()` — the accessible name for
+  // the very same button — had always joined with ", ". Both halves of that
+  // disagreement are pinned here, because a fix to either one alone re-opens
+  // it: the VISIBLE text carries the slash, the SPOKEN name keeps the comma
+  // and must never say "slash".
+  const homeHalf = half(page, "home");
+  // No spaces around the slash in the assertion: the visible gap is the flex
+  // `gap-x-1.5` on either side of the separator span, not whitespace in the
+  // text, so `textContent` reads "…HomeA/V3 Bad Pair HomeB".
+  await expect(homeHalf, "a doubles pair must read as two names, not one run-on string").toContainText(
+    `${homeFirst}/${homeSecond}`,
+  );
+  await expect(homeHalf).toHaveAttribute("aria-label", new RegExp(`${homeFirst}, ${homeSecond}`));
+
+  await homeHalf.click();
   const dock = v3Dock(page);
   await expect(dock, "a pair's rally must ask who scored it").toBeVisible({ timeout: 20_000 });
-  await expect(dock).toContainText("Who won the rally?");
+  await expect(dock).toContainText("Which player won it?");
   // Both partners offered, first-named first.
   await expect(dock.getByRole("button", { name: homeFirst, exact: true })).toBeVisible();
   await expect(dock.getByRole("button", { name: homeSecond, exact: true })).toBeVisible();

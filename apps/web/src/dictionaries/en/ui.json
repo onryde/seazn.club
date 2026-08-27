@@ -3803,7 +3803,7 @@
   "pad.badminton.context.recording": "Game scores only",
   "pad.badminton.context.recording.locked": "Rally-by-rally scoring needs {plan}. Record each game's final score instead.",
   "pad.badminton.dock.person": "Player",
-  "pad.badminton.dock.rally.scorer.title": "Who won the rally?",
+  "pad.badminton.dock.rally.scorer.title": "Which player won it?",
   "pad.badminton.ribbon.game.summary": "Game score recorded",
   "pad.badminton.ribbon.partial": "In progress",
   "pad.badminton.ribbon.rally": "Rally recorded",
