@@ -2675,3 +2675,50 @@ chassis had ONE hard-coded error red for every context message, and a plan-tier
 notice is not a fault. Opt-in, defaults to today's red, **cricket byte-identical**,
 pinned in both directions — the R3-6 pattern. Four chassis test files carry that
 gate's registration. Flagged to the owner rather than accepted silently.
+
+### R5 — SESSION STATE, written for compaction (2026-08-27)
+
+Worktree `.claude/worktrees/r5-racquet`, branch `feat/scorepad-v3-r5-racquet-split`.
+Env label `r5`: server **http://localhost:3368** (localhost, NEVER 127.0.0.1),
+Postgres :54573 db `seazn_r5`. `eval "$(~/.claude/skills/seazn-local-env/scripts/seazn-env.sh env --label r5)"`
+is REQUIRED before any apps/web vitest run — a guard now refuses to run when
+`DATABASE_URL` comes from `.env.local` and points at the dev DB.
+
+**DONE**
+- Task A — `setBasedServeContext` (engine). Main-thread gate: 4178/0 failed.
+- Task B — gallery BEFORE states `11-servingplaceholder` (×3 sports) +
+  `12-bandlimited` (badminton). BEFORE sheet:
+  <https://claude.ai/code/artifact/1ad7abe5-01f9-46f6-ae75-00f4cfbaf284>
+- Task C1 — 3 palettes + **badminton converted and flipped**. Main-thread gate:
+  apps/web v3+lib **3302/0 failed**, tsc 0, lint 0 errors, i18n clean, gallery
+  badminton 7 states 0px @320.
+- Adversarial review of Task A: 6 findings, all reproduced.
+
+**IN FLIGHT**
+- Engine fix agent on review findings F1–F6 (`packages/engine/src/sports/setbased`
+  ONLY; instructed to commit with an explicit pathspec because the git index is
+  shared).
+
+**NOT STARTED — the remaining wave**
+1. **C2 tabletennis skin** + flip (+ expedite; `records` is a per-FIXTURE cfg
+   knob, so `refusedEventTypes` reads the fixture cfg, never the preset).
+2. **C3 volleyball skin** + flip (+ libero swap refusal, sport-worded from the
+   machine `.reason` slug — the engine's own prose is English-only and names a
+   personId).
+3. **Three walkthroughs** (`e2e/walkthrough/`, ruling R5-4). A file dropped in
+   that folder joins the `walkthrough` project automatically — no `e2e.yml` or
+   config edit owed, and the wiring guard is generic. Shorten matches through
+   CFG, never the API. The double-submit guard costs 750ms per SAME-SIDE
+   repeat, which side-out sports (badminton, volleyball) hit constantly.
+   `shot(page,caption)` in the existing specs writes numbered captioned
+   screenshots at 1280/768/320 — that IS the owner's visual step record.
+4. **DELETE `skins/racquet-skin.tsx`** + its 3 `RESOLUTION_KIND` rows, with
+   `git grep -a` zero-ref proof. Only after all three sports are flipped.
+5. Gallery AFTER sheet + owner sign-off + live walkthrough offered.
+6. Smoke DEFERRED to R8 by name, stated in the PR body.
+
+**OWNER RULING OWED**: keep or revert `ContextSlot.messageTone` (chassis
+addition from C1 — opt-in, cricket byte-identical, pinned both ways).
+
+**Repair surface is THREE e2e files**, not six: `gallery.capture.ts`,
+`scorepad-skins.spec.ts`, `scoring.spec.ts` (badminton's are done).
