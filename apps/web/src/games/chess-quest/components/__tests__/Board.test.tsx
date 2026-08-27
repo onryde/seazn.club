@@ -6,11 +6,11 @@
 // ProgressProvider (storage-less: window is undefined under node, so the
 // provider falls back to session-only state — the same path progress.test.ts
 // exercises via a bare createProgressState()).
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { sqIdx } from "../../engine";
 import { ProgressProvider } from "../../lib/progress";
-import { Board, cellFor, detectSingleMove } from "../Board";
+import { Board, cellFor, detectSingleMove, dragTransition, runDragAction, type DragState } from "../Board";
 
 const EMPTY_BOARD: string[] = Array(64).fill("");
 
@@ -214,5 +214,114 @@ describe("detectSingleMove — the FLIP-slide detector", () => {
     const next = prev.slice();
     next[0] = "Q"; // same square changed content, didn't empty
     expect(detectSingleMove(prev, next)).toBeNull();
+  });
+});
+
+// W2 — drag reducer. Pure function, no DOM: down/up always resolve against
+// plain state objects, never against real pointer events. down and "up on a
+// different square" report a tap (reusing tap selection, so the game
+// component sees exactly what a tap would produce); "up" back on the SAME
+// square as down reports no further tap — the down's tap already covered a
+// stationary press, so a plain tap performed via pointer events still fires
+// onTap exactly once overall (see the "Rendered" describe block below for
+// that count); "up" outside the board (idx null) is a cancel, also no tap.
+describe("dragTransition — W2 drag reducer (down → move → up)", () => {
+  it("down starts a drag from the pressed square and reports a tap for it", () => {
+    const { state, tap } = dragTransition(null, { type: "down", idx: 12, x: 10, y: 20 });
+    expect(state).toEqual({ fromIdx: 12, x: 10, y: 20 });
+    expect(tap).toBe(12);
+  });
+
+  it("move updates the ghost position and never taps", () => {
+    const afterDown = dragTransition(null, { type: "down", idx: 12, x: 10, y: 20 }).state;
+    const { state, tap } = dragTransition(afterDown, { type: "move", x: 30, y: 40 });
+    expect(state).toEqual({ fromIdx: 12, x: 30, y: 40 });
+    expect(tap).toBeNull();
+  });
+
+  it("move before any down is a no-op (defensive — should not happen in practice)", () => {
+    const { state, tap } = dragTransition(null, { type: "move", x: 30, y: 40 });
+    expect(state).toBeNull();
+    expect(tap).toBeNull();
+  });
+
+  it("up on a legal target: ends the drag and taps the target", () => {
+    const afterDown = dragTransition(null, { type: "down", idx: 12, x: 0, y: 0 }).state;
+    const { state, tap } = dragTransition(afterDown, { type: "up", idx: 29 });
+    expect(state).toBeNull();
+    expect(tap).toBe(29);
+  });
+
+  it("up on an illegal target: still ends the drag and taps it — legality is not this function's job", () => {
+    const afterDown = dragTransition(null, { type: "down", idx: 12, x: 0, y: 0 }).state;
+    const { state, tap } = dragTransition(afterDown, { type: "up", idx: 40 });
+    expect(state).toBeNull();
+    expect(tap).toBe(40);
+  });
+
+  it("up on the SAME square as down: ends the drag, no second tap (down's tap already covered it)", () => {
+    const afterDown = dragTransition(null, { type: "down", idx: 12, x: 0, y: 0 }).state;
+    const { state, tap } = dragTransition(afterDown, { type: "up", idx: 12 });
+    expect(state).toBeNull();
+    expect(tap).toBeNull();
+  });
+
+  it("up outside the board (idx null): cancels, no tap", () => {
+    const afterDown = dragTransition(null, { type: "down", idx: 12, x: 0, y: 0 }).state;
+    const { state, tap } = dragTransition(afterDown, { type: "up", idx: null });
+    expect(state).toBeNull();
+    expect(tap).toBeNull();
+  });
+});
+
+// W2 — "Rendered" per the spec: "pointerdown on a piece then pointerup on a
+// legal target calls onTap with the target index once." This workspace has
+// no jsdom/react-test-renderer (Board.test.tsx's own header above, and
+// attribution-link.test.tsx, document it: "call the component function
+// directly... instead of rendering to a DOM" is the established pattern for
+// anything interactive), so a real mounted pointerdown→pointerup cannot be
+// simulated. `runDragAction` is the exact glue Board's pointer handlers call
+// on every down/move/up (see Board.tsx) — calling it directly with the same
+// actions a real gesture would produce exercises identical logic without a
+// live DOM.
+describe("runDragAction — the onTap-invoking wiring behind Board's pointer handlers", () => {
+  it("pointerdown on a piece then pointerup on a legal target calls onTap with the target index once", () => {
+    const onTap = vi.fn();
+    let state: DragState = null;
+    state = runDragAction(state, { type: "down", idx: 12, x: 0, y: 0 }, onTap);
+    state = runDragAction(state, { type: "up", idx: 29 }, onTap);
+    expect(state).toBeNull();
+    expect(onTap.mock.calls.filter((c) => c[0] === 29)).toHaveLength(1);
+  });
+
+  it("the down call itself taps the source square (so sel/move highlights appear immediately, same as a tap)", () => {
+    const onTap = vi.fn();
+    runDragAction(null, { type: "down", idx: 12, x: 0, y: 0 }, onTap);
+    expect(onTap).toHaveBeenCalledWith(12);
+    expect(onTap).toHaveBeenCalledTimes(1);
+  });
+
+  it("a stationary press-release (down then up on the same square) calls onTap exactly once total — parity with a plain tap", () => {
+    const onTap = vi.fn();
+    let state: DragState = null;
+    state = runDragAction(state, { type: "down", idx: 12, x: 0, y: 0 }, onTap);
+    state = runDragAction(state, { type: "up", idx: 12 }, onTap);
+    expect(state).toBeNull();
+    expect(onTap).toHaveBeenCalledTimes(1);
+    expect(onTap).toHaveBeenCalledWith(12);
+  });
+
+  it("releasing outside the board cancels without ever calling onTap for the release", () => {
+    const onTap = vi.fn();
+    let state: DragState = null;
+    state = runDragAction(state, { type: "down", idx: 12, x: 0, y: 0 }, onTap);
+    onTap.mockClear(); // keep only calls from the release under test
+    state = runDragAction(state, { type: "up", idx: null }, onTap);
+    expect(state).toBeNull();
+    expect(onTap).not.toHaveBeenCalled();
+  });
+
+  it("does nothing if onTap is undefined (board without an onTap prop stays inert)", () => {
+    expect(() => runDragAction(null, { type: "down", idx: 5, x: 0, y: 0 }, undefined)).not.toThrow();
   });
 });

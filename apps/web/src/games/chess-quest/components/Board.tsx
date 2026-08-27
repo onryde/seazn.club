@@ -3,8 +3,9 @@
 // Tap-to-move chess board (React port of the original js/board.js).
 // Controlled: position/highlights/coins come in as props; taps go out.
 // pop/shake are token-driven so a parent can retrigger CSS animations.
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { FILES, fileOf, isWhitePiece, Move, rankRow, sqName } from "../engine";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { FILES, fileOf, isWhitePiece, Move, rankRow, sqIdx, sqName } from "../engine";
+import { useSfx, type SfxKind } from "../lib/useSfx";
 
 export const GLYPH: Record<string, string> = {
   P: "♟",
@@ -65,6 +66,60 @@ export function detectSingleMove(prev: string[], next: string[]): Move | null {
   return null;
 }
 
+// W2 — drag input. A drag is "two taps compressed into one gesture": down
+// reports a tap for the pressed square (reusing the existing tap-selection
+// path so a parent's sel/move/cap highlights appear exactly as they would
+// for a first tap — Board itself has no idea what's legal, only the parent
+// does), and up reports a tap for whatever square the pointer is over when
+// released — again exactly as a second tap would. Board never special-cases
+// legal vs illegal; the parent's own onTap already knows what to do with
+// each. Only two cases suppress the release's tap: releasing back on the
+// SAME square (the down's tap already covered a stationary press, so a
+// plain tap performed via pointer events still fires onTap exactly once
+// overall — see runDragAction's tests), and releasing outside the board
+// (idx null), which cancels instead.
+export type DragState = { fromIdx: number; x: number; y: number } | null;
+
+export type DragAction =
+  | { type: "down"; idx: number; x: number; y: number }
+  | { type: "move"; x: number; y: number }
+  | { type: "up"; idx: number | null };
+
+/** Pure state machine, no DOM — see the W2 unit tests in Board.test.tsx. */
+export function dragTransition(
+  state: DragState,
+  action: DragAction,
+): { state: DragState; tap: number | null } {
+  switch (action.type) {
+    case "down":
+      return { state: { fromIdx: action.idx, x: action.x, y: action.y }, tap: action.idx };
+    case "move":
+      return { state: state ? { ...state, x: action.x, y: action.y } : state, tap: null };
+    case "up": {
+      const settledOrOutside = action.idx === null || action.idx === state?.fromIdx;
+      return { state: null, tap: settledOrOutside ? null : action.idx };
+    }
+  }
+}
+
+/**
+ * The exact glue Board's pointer handlers call on every down/move/up: runs
+ * the action through dragTransition and fires the resulting tap (if any) via
+ * onTap. Exported and called directly by the "Rendered" tests — this
+ * workspace has no jsdom/react-test-renderer (see this file's test header),
+ * so a real mounted pointerdown→pointerup can't be simulated; this is the
+ * same logic a real gesture would run.
+ */
+export function runDragAction(
+  state: DragState,
+  action: DragAction,
+  onTap: ((idx: number) => void) | undefined,
+): DragState {
+  const { state: next, tap } = dragTransition(state, action);
+  if (tap !== null) onTap?.(tap);
+  return next;
+}
+
 function reducedMotion(): boolean {
   return (
     typeof window !== "undefined" &&
@@ -98,11 +153,68 @@ export function Board({
 }) {
   const boardRef = useRef<HTMLDivElement>(null);
   const prevPositionRef = useRef<string[] | null>(null);
+  const { play } = useSfx();
 
   // popToken drives the pop animation directly: the popped piece's `key`
   // includes popToken.n, so bumping it re-mounts that span and replays the
   // CSS keyframes — no extra state needed.
   const popping = popToken ?? null;
+
+  // W2 — drag input. dragRef mirrors `drag` synchronously so dispatch can
+  // read the latest state without depending on the closure from whichever
+  // render attached the window listeners (see the effect below). suppressed
+  // guards against the native `click` a plain tap-via-pointer-events would
+  // ALSO fire on the button (pointerdown already reports that tap itself —
+  // see runDragAction) — set the moment a piece's pointerdown starts, and
+  // consumed (and cleared) by that same square's onClick if the browser
+  // fires one. It's also cleared shortly after pointerup regardless, so a
+  // cross-square drag (no native click ever fires for it) can't leave a
+  // stale `true` around to swallow some LATER, unrelated click.
+  const [drag, setDrag] = useState<DragState>(null);
+  const dragRef = useRef<DragState>(null);
+  const suppressClickRef = useRef(false);
+
+  const dispatch = useCallback(
+    (action: DragAction) => {
+      const next = runDragAction(dragRef.current, action, onTap);
+      dragRef.current = next;
+      setDrag(next);
+    },
+    [onTap],
+  );
+
+  useEffect(() => {
+    if (!drag) return;
+    function move(e: PointerEvent) {
+      dispatch({ type: "move", x: e.clientX, y: e.clientY });
+    }
+    function up(e: PointerEvent) {
+      const square = (e.target as Element | null)?.closest<HTMLElement>("[data-square]");
+      dispatch({ type: "up", idx: square ? sqIdx(square.dataset.square!) : null });
+      setTimeout(() => {
+        suppressClickRef.current = false;
+      }, 0);
+    }
+    function cancel() {
+      dispatch({ type: "up", idx: null });
+      setTimeout(() => {
+        suppressClickRef.current = false;
+      }, 0);
+    }
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", cancel);
+    return () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", cancel);
+    };
+    // Keyed on whether a drag is active, not on `drag` itself — `drag.x/y`
+    // change on every pointermove, and re-subscribing window listeners that
+    // often would be wasteful; the listeners always read the LATEST state
+    // via dragRef/dispatch regardless of which render attached them.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [!!drag, dispatch]);
 
   // Shake replays a CSS animation for ~320ms after each shakeToken change.
   const [shaking, setShaking] = useState(false);
@@ -125,9 +237,17 @@ export function Board({
   useLayoutEffect(() => {
     const prev = prevPositionRef.current;
     prevPositionRef.current = position;
-    if (!prev || !boardRef.current || reducedMotion()) return;
+    if (!prev) return;
     const move = detectSingleMove(prev, position);
-    if (!move) return;
+    // W2 — sound is a hearing concern, not a motion one, so it plays
+    // regardless of prefers-reduced-motion (the slide below still respects
+    // it). check wins over capture wins over a plain move — the rarer,
+    // more important event masks the others, same as most chess UIs.
+    if (move) {
+      const kind: SfxKind = checkSquare != null ? "check" : prev[move.to] !== "" ? "capture" : "move";
+      play(kind);
+    }
+    if (!move || !boardRef.current || reducedMotion()) return;
     const board = boardRef.current;
     const fromEl = board.children[move.from] as HTMLElement | undefined;
     const toEl = board.children[move.to] as HTMLElement | undefined;
@@ -149,7 +269,7 @@ export function Board({
       toImg.style.transform = "";
     };
     toImg.addEventListener("transitionend", clear, { once: true });
-  }, [position]);
+  }, [position, checkSquare, play]);
 
   const squares = [];
   for (let idx = 0; idx < 64; idx++) {
@@ -178,7 +298,23 @@ export function Board({
         data-file={labels && fileEdge ? FILES[fileOf(idx)] : undefined}
         style={{ gridRow: row, gridColumn: col }}
         className={`cq-sq ${light ? "cq-light" : "cq-dark"}${afterClass}`}
-        onClick={onTap ? () => onTap(idx) : undefined}
+        onClick={
+          onTap
+            ? () => {
+                // A plain tap-via-pointer-events already reported itself
+                // through the piece's onPointerDown/window pointerup below —
+                // this native click is the browser's own follow-up for that
+                // same press-release and would double-fire onTap if let
+                // through. Cross-square drags never reach here at all (down
+                // and up land on different elements, so no click fires).
+                if (suppressClickRef.current) {
+                  suppressClickRef.current = false;
+                  return;
+                }
+                onTap(idx);
+              }
+            : undefined
+        }
       >
         {isCheck ? <span className="cq-ov cq-ov-check" /> : null}
         {isLast ? <span className="cq-ov cq-ov-last" /> : null}
@@ -193,6 +329,24 @@ export function Board({
             alt=""
             draggable={false}
             className={`cq-pc${popping?.idx === idx ? " cq-pop" : ""}`}
+            // .cq-pc is `pointer-events: none` in CSS (so a click anywhere on
+            // the square, piece included, has always hit the button, not the
+            // image) — W2 needs the piece itself to receive pointerdown, so
+            // re-enable hit-testing on it, but only when there's an onTap to
+            // drag for; a non-interactive Board render keeps the old
+            // click-passes-through behaviour untouched.
+            style={onTap ? { pointerEvents: "auto" } : undefined}
+            onPointerDown={
+              onTap
+                ? (e) => {
+                    // Only left-button / primary-touch presses start a drag.
+                    if (e.button !== 0) return;
+                    e.preventDefault();
+                    suppressClickRef.current = true;
+                    dispatch({ type: "down", idx, x: e.clientX, y: e.clientY });
+                  }
+                : undefined
+            }
           />
         ) : coins?.has(idx) ? (
           <span className="cq-coin" />
@@ -201,9 +355,29 @@ export function Board({
     );
   }
 
+  // The dragged piece's own image follows the pointer as a ghost — same
+  // sprite, positioned at the last known pointer coordinates. position[] is
+  // read fresh here (not stashed on drag state) so it always reflects the
+  // CURRENT board even if it changes mid-drag.
+  const dragPiece = drag ? position[drag.fromIdx] : "";
+
   return (
-    <div ref={boardRef} className={`cq-board${shaking ? " cq-shake" : ""}`}>
+    <div
+      ref={boardRef}
+      className={`cq-board${shaking ? " cq-shake" : ""}${drag ? " cq-dragging" : ""}`}
+    >
       {squares}
+      {drag && dragPiece ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          aria-hidden
+          alt=""
+          draggable={false}
+          src={`/games/chess-quest/pieces/${dragPiece.toLowerCase()}${isWhitePiece(dragPiece) ? "l" : "d"}.svg`}
+          className="cq-ghost"
+          style={{ left: drag.x, top: drag.y }}
+        />
+      ) : null}
     </div>
   );
 }
