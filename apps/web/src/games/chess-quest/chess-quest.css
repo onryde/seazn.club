@@ -33,6 +33,13 @@
   touch-action: manipulation;
 }
 
+/* W2 — only while a drag is in flight, so the page can still be scrolled by
+   a plain touch tap the rest of the time (see Board.tsx's pointer
+   handlers). */
+.cq-board.cq-dragging {
+  touch-action: none;
+}
+
 .cq-sq {
   position: relative;
   display: flex;
@@ -101,6 +108,23 @@
   width: 84%;
   height: 84%;
   object-fit: contain;
+}
+
+/* W2 — the dragged piece's own sprite, following the pointer. `left`/`top`
+   are set inline per-frame from the pointer's clientX/clientY (Board.tsx);
+   `position: fixed` puts those in viewport coordinates directly, with no
+   board-relative math needed, and escapes .cq-board's `overflow: hidden`
+   (fixed positioning isn't clipped by an ancestor unless that ancestor
+   establishes its own containing block, which .cq-board does not).
+   pointer-events: none so the ghost never intercepts the pointerup that
+   ends the drag. */
+.cq-ghost {
+  position: fixed;
+  z-index: 50;
+  width: 15vmin;
+  max-width: 64px;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
 }
 
 .cq-coin {

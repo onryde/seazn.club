@@ -179,3 +179,30 @@ test("games.* host serves the games tree", async ({ browser }) => {
   await expect(page.getByRole("banner").getByRole("heading", { name: "Chess Quest" })).toBeVisible();
   await ctx.close();
 });
+
+// W2 — drag input. Same flow and same first move (e2-e4) as "an Opening
+// Trainer lesson launches and takes the first move" above, but performed as
+// a real pointer drag instead of two clicks, over the [data-square] rects —
+// proving the board's drag path (Board.tsx's pointer handlers) reaches the
+// same onTap the tap path does, not just that the pure reducer behind it is
+// correct (see Board.test.tsx's unit/"Rendered" tests for that half).
+test("dragging a pawn in the free-play arcade moves it", async ({ page }) => {
+  await page.goto("/games/chess-quest");
+  await page.evaluate(() => localStorage.removeItem("seazn-games:chess-quest:v1"));
+  await page.reload();
+  await page.getByRole("button", { name: "Free play" }).click();
+  await page.getByRole("button", { name: /Opening Trainer/ }).click();
+  await expect(page.getByText(/The Italian Game/)).toBeVisible();
+
+  await expect(page.locator('[data-square="e2"]')).toHaveAttribute("aria-label", /white pawn/);
+  const from = (await page.locator('[data-square="e2"]').boundingBox())!;
+  const to = (await page.locator('[data-square="e4"]').boundingBox())!;
+
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(to.x + to.width / 2, to.y + to.height / 2, { steps: 8 });
+  await page.mouse.up();
+
+  await expect(page.locator('[data-square="e4"]')).toHaveAttribute("aria-label", /white pawn/);
+  await expect(page.locator('[data-square="e2"]')).not.toHaveAttribute("aria-label", /white pawn/);
+});
