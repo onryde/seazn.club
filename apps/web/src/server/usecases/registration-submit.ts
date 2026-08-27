@@ -36,6 +36,8 @@ import {
 } from "./registrations";
 import {
   divisionEligibilityIssues,
+  requiresDob,
+  requiresGender,
   rosterIssues,
   formatEligibilityIssues,
   type EligibilityIssue,
@@ -182,6 +184,20 @@ export interface JoinPreviewResult {
    *  for a `pair` (fixed at two, claim-only) and never once the sport's
    *  roster cap is already met. */
   allow_new_player: boolean;
+  /** Whether the JOIN page's WHO-equivalent fields need to collect a
+   *  dob/gender before joinTeamEntry's own eligibility gate can evaluate
+   *  this joiner — same derivation publicRegistrationInfo's
+   *  PublicDivisionInfo.requires_dob/requires_gender uses
+   *  (@/lib/registration-rules via this module's re-export), so the join
+   *  page asks for exactly what the division needs, never more (RS007). */
+  requires_dob: boolean;
+  requires_gender: boolean;
+  /** This entry's WHOLE roster size (every consent_status, not just the
+   *  unclaimed ones above) — lets the join page render a fill meter after a
+   *  successful join ("2 of 4 confirmed") purely from arithmetic on this
+   *  preview, with no second round-trip: claimed_before = total_players -
+   *  unclaimed_slots.length (RS007). */
+  total_players: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -838,6 +854,15 @@ export async function previewJoinEntry(joinCode: string): Promise<JoinPreviewRes
   // the cap query.
   const allowNewPlayer = reg.entrant_kind !== "pair" && !(await rosterAtCap(reg.division_id, reg.id));
 
+  // Deliberately a SEPARATE count query from rosterAtCap's own (registered_
+  // players where registration_id = ...) rather than threading its result
+  // out — rosterAtCap is called conditionally (short-circuited for a pair)
+  // and returns a boolean, and this preview needs the WHOLE roster's size
+  // unconditionally, including for a pair. Cheap: covered by the same
+  // registration_players_registration_idx either query already uses.
+  const [{ n: totalPlayers }] = await sql<{ n: number }[]>`
+    select count(*)::int as n from registration_players where registration_id = ${reg.id}`;
+
   return {
     registration_id: reg.id,
     display_name: reg.display_name,
@@ -848,6 +873,13 @@ export async function previewJoinEntry(joinCode: string): Promise<JoinPreviewRes
     org_name: divCtx.org_name,
     unclaimed_slots: slots.map((s) => ({ player_id: s.id, full_name: s.full_name })),
     allow_new_player: allowNewPlayer,
+    requires_dob: requiresDob({
+      eligibility: divCtx.eligibility,
+      age_min: divCtx.age_min,
+      age_max: divCtx.age_max,
+    }),
+    requires_gender: requiresGender({ eligibility: divCtx.eligibility, category: divCtx.category }),
+    total_players: totalPlayers,
   };
 }
 

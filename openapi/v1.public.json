@@ -43852,6 +43852,17 @@
                         },
                         "allow_new_player": {
                           "type": "boolean"
+                        },
+                        "requires_dob": {
+                          "type": "boolean"
+                        },
+                        "requires_gender": {
+                          "type": "boolean"
+                        },
+                        "total_players": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
                         }
                       },
                       "required": [
@@ -43863,7 +43874,10 @@
                         "org_slug",
                         "org_name",
                         "unclaimed_slots",
-                        "allow_new_player"
+                        "allow_new_player",
+                        "requires_dob",
+                        "requires_gender",
+                        "total_players"
                       ],
                       "additionalProperties": false
                     },
@@ -43889,7 +43903,10 @@
                         "full_name": "example"
                       }
                     ],
-                    "allow_new_player": true
+                    "allow_new_player": true,
+                    "requires_dob": true,
+                    "requires_gender": true,
+                    "total_players": 0
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }

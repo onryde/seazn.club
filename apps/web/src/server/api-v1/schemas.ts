@@ -2580,6 +2580,14 @@ export const PublicJoinPreviewResponse = z.object({
   org_name: z.string(),
   unclaimed_slots: z.array(PublicJoinPreviewSlot),
   allow_new_player: z.boolean(),
+  /** RS007 join page — whether the WHO-equivalent step must collect a
+   *  dob/gender before this division's eligibility can be evaluated
+   *  (`JoinPreviewResult` mirror, registration-submit.ts). */
+  requires_dob: z.boolean(),
+  requires_gender: z.boolean(),
+  /** This entry's WHOLE roster size — lets the join page compute a fill
+   *  meter after a successful join with no second round-trip. */
+  total_players: z.number().int().nonnegative(),
 });
 export type PublicJoinPreviewResponse = z.infer<typeof PublicJoinPreviewResponse>;
 

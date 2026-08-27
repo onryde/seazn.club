@@ -1563,5 +1563,39 @@ describe.skipIf(!HAS_DB)("joinTeamEntry", () => {
       const team = await rosterRig("team", ["Only Slot"]); // fills the cap of 1
       expect((await previewJoinEntry(team.entry.join_code!)).allow_new_player).toBe(false);
     });
+
+    // RS007 (public join page) — the picker's WHO-equivalent fields must
+    // collect exactly what joinTeamEntry's own eligibility gate below will
+    // need, never more (same reasoning as publicRegistrationInfo's own
+    // requires_dob/requires_gender on PublicDivisionInfo — reused here via
+    // the SAME @/lib/registration-rules predicates, not a second evaluator).
+    it("requires_dob/requires_gender mirror the division's own eligibility columns", async () => {
+      const { division, entry } = await rosterRig("team", []);
+      await sql`update divisions set age_min = 18, category = 'mens' where id = ${division.id}`;
+      const preview = await previewJoinEntry(entry.join_code!);
+      expect(preview.requires_dob).toBe(true);
+      expect(preview.requires_gender).toBe(true);
+    });
+
+    it("requires_dob/requires_gender are both false for a fully open division", async () => {
+      const { entry } = await rosterRig("team", []);
+      const preview = await previewJoinEntry(entry.join_code!);
+      expect(preview.requires_dob).toBe(false);
+      expect(preview.requires_gender).toBe(false);
+    });
+
+    // The join page's success state shows a fill meter ("2 of 4 confirmed")
+    // computed client-side from total_players/unclaimed_slots with no second
+    // round-trip — it needs the WHOLE roster size, not just what's pending.
+    it("total_players counts the WHOLE roster, not just the unclaimed slots", async () => {
+      const { entry, players } = await rosterRig("team", ["Kid One", "Kid Two", "Kid Three"]);
+      await joinTeamEntry(
+        {},
+        { join_code: entry.join_code!, player_id: players[0]!.id, player: { full_name: players[0]!.full_name } },
+      );
+      const preview = await previewJoinEntry(entry.join_code!);
+      expect(preview.total_players).toBe(3);
+      expect(preview.unclaimed_slots).toHaveLength(2);
+    });
   });
 });

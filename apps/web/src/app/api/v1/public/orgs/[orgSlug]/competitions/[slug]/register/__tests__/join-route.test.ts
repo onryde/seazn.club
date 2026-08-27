@@ -96,6 +96,10 @@ function fakePreview(): JoinPreviewResult {
     org_name: "Acme",
     unclaimed_slots: [],
     allow_new_player: true,
+    // RS007 — the public join PAGE's WHO-equivalent fields/fill-meter.
+    requires_dob: false,
+    requires_gender: false,
+    total_players: 0,
   };
 }
 
