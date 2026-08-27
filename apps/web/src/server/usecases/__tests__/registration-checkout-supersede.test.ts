@@ -23,6 +23,19 @@
 // legitimate mint. Expiring unconditionally on that column's old value would
 // strand a legitimate, still-payable sibling session.
 //
+// Design correction (post-review): the ORIGINAL predicate above expired the
+// prior session on any INTERSECTION with the new mint's ids — which ALSO
+// fires on a PARTIAL overlap and strands whatever the prior session covered
+// that the new mint doesn't (the exact waitlist-promotion shape the previous
+// paragraph describes: S1 covers {A,B}, A is promoted and S2 mints for {A}
+// alone — the intersection check expired S1 outright and B lost its only
+// payable link). The two tests below the existing pair prove the corrected
+// SUBSUMPTION predicate: expire only when the new mint's ids are a superset
+// of (or equal to) the prior session's own ids. They drive mintGroupCheckout
+// as well as resumeRegistrationCheckout, since a superset re-mint (a
+// single-entry prior session followed by a whole-cart re-mint) needs the
+// multi-id path.
+//
 // Real Postgres required; skipped without DATABASE_URL (matches every
 // sibling usecase suite in this directory).
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -49,7 +62,7 @@ const stripeMock = vi.hoisted(() => {
 });
 vi.mock("@/lib/stripe", () => ({ getStripe: () => stripeMock.stripe }));
 
-import { resumeRegistrationCheckout } from "../registrations";
+import { resumeRegistrationCheckout, mintGroupCheckout } from "../registrations";
 import { stripeRig, seedRegistration, seedSecondEntry, loadWithGroup } from "./_registration-fixtures";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -127,6 +140,58 @@ describe.skipIf(!HAS_DB)(
       // correctly, that A's own ids don't intersect B's.
       expect(stripeMock.checkoutRetrieve).toHaveBeenCalledWith(sessionA);
       expect(stripeMock.checkoutExpire).not.toHaveBeenCalled();
+    });
+
+    it("re-minting a SUPERSET of a prior session's entries expires the prior session — nothing is stranded", async () => {
+      const { competition, division, settings } = await stripeRig();
+      const a = await seedRegistration(competition.id, division.id, settings, {
+        displayName: "Entry A",
+        amountCents: 500,
+      });
+      await seedSecondEntry(a.registration.group_id, division.id, 500, "Entry B");
+
+      // Prior session covers A ALONE.
+      await resumeRegistrationCheckout(a.registration.id, a.access_token, "http://test.local");
+      const sessionA = (await loadWithGroup(a.registration.id)).checkout_session_id!;
+      stripeMock.checkoutRetrieve.mockResolvedValueOnce(openSession(sessionA, [a.registration.id]));
+
+      // Re-mint for the WHOLE cart (both pending, payable entries): every id
+      // the prior session covered (A) is also covered by the new mint, so
+      // nothing is stranded — the corrected predicate must expire it.
+      await mintGroupCheckout(a.registration.group_id, division.id, "http://test.local", a.access_token);
+
+      expect(stripeMock.checkoutRetrieve).toHaveBeenCalledWith(sessionA);
+      expect(stripeMock.checkoutExpire).toHaveBeenCalledWith(sessionA);
+      const group = await loadWithGroup(a.registration.id);
+      expect(group.checkout_session_id).not.toBe(sessionA); // overwritten with the new (whole-cart) session
+    });
+
+    it("re-minting a PARTIAL subset of a prior session's entries leaves it alone — the uncovered sibling keeps its only payable link", async () => {
+      const { competition, division, settings } = await stripeRig();
+      const a = await seedRegistration(competition.id, division.id, settings, {
+        displayName: "Entry A",
+        amountCents: 500,
+      });
+      const b = await seedSecondEntry(a.registration.group_id, division.id, 500, "Entry B");
+
+      // Prior session covers the WHOLE cart, {A,B}.
+      await mintGroupCheckout(a.registration.group_id, division.id, "http://test.local", a.access_token);
+      const sessionAB = (await loadWithGroup(a.registration.id)).checkout_session_id!;
+      stripeMock.checkoutRetrieve.mockResolvedValueOnce(
+        openSession(sessionAB, [a.registration.id, b.id]),
+      );
+
+      // A alone is re-minted (e.g. re-priced, or promoted and paying on its
+      // own) — B's only payable link is still sessionAB, so expiring it here
+      // would strand B exactly as the file-header bug describes.
+      await resumeRegistrationCheckout(a.registration.id, a.access_token, "http://test.local");
+
+      expect(stripeMock.checkoutRetrieve).toHaveBeenCalledWith(sessionAB);
+      expect(stripeMock.checkoutExpire).not.toHaveBeenCalled();
+      // The cart's checkout_session_id still moves to the new session — only
+      // the EXPIRE decision differs, never the stamp itself.
+      const group = await loadWithGroup(a.registration.id);
+      expect(group.checkout_session_id).not.toBe(sessionAB);
     });
   },
 );

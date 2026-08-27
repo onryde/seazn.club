@@ -1543,14 +1543,29 @@ export async function publicRegistrationInfo(
  * `kind: "duplicate"` auto-refund), but preventing the second charge is
  * better than reversing it days later.
  *
- * Must NOT fire for a DISJOINT prior session: `registrationIds` is an
- * explicit subset (a waitlist promotion pays one entry while its siblings
- * stay separately payable), but `registration_groups` has only ONE
- * `checkout_session_id` column shared by the whole cart — so the "prior"
- * session this reads back could belong to a sibling entry's own, still-
- * legitimate mint. Expired ONLY when BOTH: the prior session is still
- * `open` (a `complete` session is a paid session — never touch it), AND its
- * own `registration_ids` metadata intersects the ids being minted now.
+ * Design correction: this used to expire the prior session on ANY
+ * INTERSECTION between its `registration_ids` and the ids being minted now —
+ * wrong, because it also fires on a PARTIAL overlap and strands whatever the
+ * prior session covered that the new mint doesn't. Concretely: session S1
+ * covers {A,B}; entry A is promoted off the waitlist and S2 is minted for
+ * {A} alone; the old intersection check expired S1 outright, so B lost its
+ * only payable link and that money was never collected. The correct
+ * predicate is SUBSUMPTION: expire the prior session only when the new
+ * mint's id set is a superset of (or equal to) the prior session's own ids —
+ * every entry the old session could still pay for is also payable through
+ * the new one, so nothing is stranded.
+ *
+ * Must NOT fire for a DISJOINT (or partially-overlapping) prior session:
+ * `registrationIds` is an explicit subset (a waitlist promotion pays one
+ * entry while its siblings stay separately payable), but
+ * `registration_groups` has only ONE `checkout_session_id` column shared by
+ * the whole cart — so the "prior" session this reads back could belong to a
+ * sibling entry's own, still-legitimate mint. Expired ONLY when BOTH: the
+ * prior session is still `open` (a `complete` session is a paid session —
+ * never touch it), AND its own `registration_ids` metadata is FULLY covered
+ * by the ids being minted now (a prior session with no readable
+ * `registration_ids` at all — foreign or malformed — can never be proven
+ * covered, so it is left alone too).
  *
  * Best-effort, like every other Stripe side-call in this file: never blocks
  * minting the new session, never surfaces to the registrant.
@@ -1563,7 +1578,13 @@ async function expireSupersededCheckoutSession(
     const prior = await getStripe().checkout.sessions.retrieve(priorSessionId);
     if (prior.status !== "open") return; // paid/expired/foreign — never touch it
     const priorIds = checkoutRegistrationIds(prior);
-    if (!priorIds.some((id) => newRegistrationIds.includes(id))) return; // disjoint — a legitimate sibling session
+    // Subsumption, not intersection (see doc comment above): expire only
+    // when EVERY id the prior session covered is also covered by the new
+    // mint. `.every` on an empty array is vacuously true, so priorIds.length
+    // is checked explicitly — an unreadable prior coverage set must never
+    // read as "fully covered".
+    if (priorIds.length === 0) return; // unreadable metadata — can't prove subsumption
+    if (!priorIds.every((id) => newRegistrationIds.includes(id))) return; // partial/disjoint — a legitimate sibling session
     await getStripe().checkout.sessions.expire(priorSessionId);
     log.info(
       { priorSessionId, newRegistrationIds },
