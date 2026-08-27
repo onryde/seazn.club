@@ -1723,9 +1723,16 @@ async function expireSupersededCheckoutSession(
 
 /**
  * Runs a Checkout Session create and translates Stripe's `amount_too_small`
- * refusal into a clean 422 with a stable code. Everything else rethrows
- * untouched — a blanket catch here would hide real integration failures behind
- * a friendly message, which is worse than the raw error.
+ * refusal into a clean 422 with a stable code. Every OTHER Stripe failure is
+ * now sanitized into a generic 502 (RS007 review finding) instead of
+ * rethrown untouched: v1()'s catch-all (http.ts) forwards a non-HttpError's
+ * `.message` to the client verbatim, and a Stripe-authored message can name
+ * the connected account, a session id, or another identifier that must never
+ * reach a registrant (concrete leak: a disconnected/restricted Connect
+ * account makes transfer_data.destination invalid below, and Stripe's
+ * invalid-request message echoes the account id). Logged server-side at
+ * error level before being replaced, so diagnosis stays possible while
+ * nothing Stripe-authored is ever rendered.
  */
 async function mintOrTranslate(
   create: () => Promise<Stripe.Checkout.Session>,
@@ -1741,7 +1748,8 @@ async function mintOrTranslate(
         "REGISTRATION_AMOUNT_TOO_SMALL",
       );
     }
-    throw err;
+    log.error({ err }, "registration: checkout session create failed (Stripe)");
+    throw new HttpError(502, "Stripe was unable to start this checkout — please try again shortly.");
   }
 }
 

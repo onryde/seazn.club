@@ -1640,6 +1640,10 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
   // writes checkout_session_id/fee_percent to registration_groups AFTER
   // checkout.sessions.create resolves), so nothing is deleted or moved to a
   // terminal status. Assert around the throw instead of a swallowed return.
+  // RS007 review fix: the thrown error is now `mintOrTranslate`'s sanitized
+  // 502, never the raw Stripe message — see the dedicated "sanitizes" test
+  // below for that assertion. This test's own concern (row survives
+  // untouched) is unaffected by that change.
   it("a failed checkout mint leaves the registration and its cart untouched", async () => {
     const { competition, division, settings } = await stripeRig();
     const res = await seedRegistration(competition.id, division.id, settings);
@@ -1647,13 +1651,66 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
 
     await expect(
       resumeRegistrationCheckout(res.registration.id, res.access_token, "http://test.local"),
-    ).rejects.toThrow("stripe down");
+    ).rejects.toMatchObject({ status: 502 });
 
     const after = await loadWithGroup(res.registration.id);
     expect(after).toBeTruthy(); // row not deleted
     expect(after.status).toBe("pending"); // not flipped to a terminal status
     expect(after.checkout_session_id).toBeNull(); // no half-written mint
     expect(after.amount_cents).toBe(res.registration.amount_cents);
+  });
+
+  // RS007 review fix (FIX 2) — mintOrTranslate used to rethrow every
+  // non-amount_too_small Stripe failure untouched, and v1()'s catch-all
+  // (http.ts) forwards a non-HttpError's `.message` to the client verbatim:
+  // a Stripe-authored message can name the connected account, a session id,
+  // or another identifier that must never reach a public pay page. Shaped
+  // exactly like the live leak the review found: a disconnected/restricted
+  // Connect account makes transfer_data.destination invalid, and Stripe's
+  // own invalid-request message echoes the account id.
+  it("sanitizes any OTHER Stripe checkout failure into a generic 502 — never forwards Stripe's own message (account id, etc.)", async () => {
+    const { orgId, competition, division, settings } = await stripeRig();
+    const [org] = await sql<{ stripe_account_id: string }[]>`
+      select stripe_account_id from organizations where id = ${orgId}`;
+    const acctId = org.stripe_account_id;
+    const res = await seedRegistration(competition.id, division.id, settings);
+    stripeMock.checkoutCreate.mockRejectedValueOnce(
+      Object.assign(new Error(`No such destination: '${acctId}'`), {
+        code: "resource_missing",
+        type: "StripeInvalidRequestError",
+      }),
+    );
+
+    let caught: unknown;
+    try {
+      await resumeRegistrationCheckout(res.registration.id, res.access_token, "http://test.local");
+      throw new Error("expected resumeRegistrationCheckout to reject");
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(HttpError);
+    const httpErr = caught as HttpError;
+    expect(httpErr.status).toBe(502);
+    expect(httpErr.message).not.toContain(acctId);
+    expect(httpErr.message).not.toContain("acct_");
+    expect(httpErr.message).not.toContain("No such destination");
+  });
+
+  // RS007 review fix (FIX 2) — the ONE deliberate translation must survive
+  // unchanged: amount_too_small still becomes the stable 422, not the new
+  // generic 502 every OTHER Stripe failure now gets.
+  it("still translates Stripe's amount_too_small into the stable 422 — unaffected by the new sanitization", async () => {
+    const { competition, division, settings } = await stripeRig();
+    const res = await seedRegistration(competition.id, division.id, settings);
+    stripeMock.checkoutCreate.mockRejectedValueOnce(
+      Object.assign(new Error("The Checkout Session's total amount must convert to at least 30 pence."), {
+        code: "amount_too_small",
+      }),
+    );
+
+    await expect(
+      resumeRegistrationCheckout(res.registration.id, res.access_token, "http://test.local"),
+    ).rejects.toMatchObject({ status: 422, code: "REGISTRATION_AMOUNT_TOO_SMALL" });
   });
 
   it("offline submits keep no expiry and no checkout", async () => {

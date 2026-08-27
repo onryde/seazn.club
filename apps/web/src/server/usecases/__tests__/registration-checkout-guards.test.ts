@@ -148,6 +148,11 @@ describe.skipIf(!HAS_DB)("createRegistrationCheckout — guards reachable via or
     ).rejects.toMatchObject({ status: 502, message: "Stripe did not return a checkout URL" });
   });
 
+  // RS007 review fix (registrations.ts's mintOrTranslate): a non-
+  // amount_too_small Stripe failure is now sanitized into a generic 502
+  // instead of rethrown untouched — assert on the sanitized shape, not the
+  // raw Stripe message this test never actually cared about (its own point
+  // is the checkout_session_id stamp ordering below).
   it("checkout_session_id stays null when Stripe throws — the stamp happens ONLY after Stripe returns (:1360)", async () => {
     const { competition, division, settings } = await stripeRig();
     const first = await seedRegistration(competition.id, division.id, settings);
@@ -155,7 +160,7 @@ describe.skipIf(!HAS_DB)("createRegistrationCheckout — guards reachable via or
 
     await expect(
       mintGroupCheckout(first.registration.group_id, division.id, "http://test.local", first.access_token),
-    ).rejects.toThrow("stripe unreachable");
+    ).rejects.toMatchObject({ status: 502 });
 
     const group = await loadWithGroup(first.registration.id);
     expect(group.checkout_session_id).toBeNull();
@@ -218,8 +223,16 @@ describe.skipIf(!HAS_DB)("createRegistrationCheckout — token===null return-URL
       set expires_at = now() + interval '2 hours'
       where id = ${first.registration.group_id}`;
 
-    const result = await sweepRegistrations("http://test.local");
-    expect(result.reminded).toBe(1);
+    // RS007 review fix (registrations.ts sweepRegistrations): `reminded` now
+    // requires a genuinely DELIVERED send, not just an attempted one — this
+    // file's own header comment above says it deliberately never mocks
+    // lib/email, so the real sendPaymentReminderEmail runs here and returns
+    // false with no RESEND_API_KEY configured (lib/email.ts's send()).
+    // Minting is unconditional either way (see createRegistrationCheckout's
+    // own doc comment), so the mint call itself — this test's actual point,
+    // per the file header above — is the right thing to assert on instead.
+    await sweepRegistrations("http://test.local");
+    expect(stripeMock.checkoutCreate).toHaveBeenCalledTimes(1);
 
     const args = stripeMock.checkoutCreate.mock.calls[0]![0] as {
       success_url: string;
@@ -303,21 +316,34 @@ describe.skipIf(!HAS_DB)("createRegistrationCheckout — Stripe error translatio
     ).rejects.toMatchObject({ status: 422, code: "REGISTRATION_AMOUNT_TOO_SMALL" });
   });
 
-  // The translation must stay narrow: a blanket catch would hide real
-  // integration failures behind a friendly message.
-  it("does NOT translate an unrelated Stripe failure", async () => {
+  // The translation must stay narrow: amount_too_small is the only code
+  // that gets a specific 422. RS007 review fix: every OTHER Stripe failure
+  // is now sanitized into a generic 502 (mintOrTranslate) rather than
+  // rethrown untouched — v1()'s catch-all used to forward a raw, Stripe-
+  // authored message straight through to a public pay page. Assert both
+  // halves: not mistranslated as amount_too_small, and the raw Stripe text
+  // never survives into the client-visible message.
+  it("does NOT translate an unrelated Stripe failure into amount_too_small — sanitizes it instead", async () => {
     const { competition, division, settings } = await stripeRig();
     const first = await seedRegistration(competition.id, division.id, settings);
     stripeMock.checkoutCreate.mockRejectedValueOnce(
       Object.assign(new Error("api key expired"), { code: "api_key_expired" }),
     );
-    await expect(
-      mintGroupCheckout(
+    let caught: unknown;
+    try {
+      await mintGroupCheckout(
         first.registration.group_id,
         division.id,
         "https://x.test",
         first.access_token,
-      ),
-    ).rejects.toThrow("api key expired");
+      );
+      throw new Error("expected mintGroupCheckout to reject");
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(HttpError);
+    expect((caught as HttpError).status).toBe(502);
+    expect((caught as HttpError).message).not.toContain("api key expired");
+    expect((caught as HttpError).message).not.toContain("api_key_expired");
   });
 });
