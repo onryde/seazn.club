@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { parseFEN } from "../../engine";
 import { LANDS } from "../lands";
 import { LESSONS } from "../lessons";
-import { TACTICS, TACTICS2 } from "../puzzles";
+import { TACTICS, TACTICS2, TACTICS3, TACTICS4 } from "../puzzles";
 import { OPENING_IDS } from "../openings";
 
 const GAME_IDS = [
@@ -11,6 +11,7 @@ const GAME_IDS = [
   "pawnWars",
   "mateInOne",
   "mateInTwo",
+  "mateInThree",
   "hangingHunt",
   "tacticTrainer",
   "rookMaze",
@@ -18,13 +19,13 @@ const GAME_IDS = [
 ];
 
 describe("curriculum shape", () => {
-  it("53 lessons, numbered 1..53 in order", () => {
-    expect(LESSONS).toHaveLength(53);
+  it("62 lessons, numbered 1..62 in order", () => {
+    expect(LESSONS).toHaveLength(62);
     LESSONS.forEach((l, i) => expect(l.n).toBe(i + 1));
   });
-  it("10 lands tiling lessons 1..53 exactly once", () => {
-    expect(LANDS).toHaveLength(10);
-    const seen = new Array(54).fill(0);
+  it("11 lands tiling lessons 1..62 exactly once", () => {
+    expect(LANDS).toHaveLength(11);
+    const seen = new Array(63).fill(0);
     for (const land of LANDS) {
       for (let i = land.weeks[0]; i <= land.weeks[1]; i++) seen[i]++;
     }
@@ -46,6 +47,12 @@ describe("curriculum shape", () => {
     for (const land of LANDS.filter((l) => l.track === 3)) {
       expect(land.weeks[0]).toBeGreaterThanOrEqual(49);
       expect(land.weeks[1]).toBeLessThanOrEqual(53);
+    }
+  });
+  it("track 4 lands cover lessons 54..62 only", () => {
+    for (const land of LANDS.filter((l) => l.track === 4)) {
+      expect(land.weeks[0]).toBeGreaterThanOrEqual(54);
+      expect(land.weeks[1]).toBeLessThanOrEqual(62);
     }
   });
   it("every land has both check registers", () => {
@@ -78,7 +85,7 @@ describe("curriculum shape", () => {
   it("tactic-trainer lessons point at existing packs", () => {
     for (const l of LESSONS.filter((x) => x.game === "tacticTrainer")) {
       const pack = l.gameOpts?.pack ?? "";
-      const exists = pack in TACTICS || pack in TACTICS2;
+      const exists = pack in TACTICS || pack in TACTICS2 || pack in TACTICS3 || pack in TACTICS4;
       expect(exists, `lesson ${l.n} pack "${pack}"`).toBe(true);
     }
   });

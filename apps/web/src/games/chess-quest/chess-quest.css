@@ -2,13 +2,15 @@
    typography around the board stay Tailwind.
    Every colour in this file (down to the printable-certificate section,
    which is deliberately hardcoded light — see its own comment) comes from a
-   --cq-* custom property, themed per .cq-board[data-theme]. See
-   lib/progress.tsx (getBoardTheme/setBoardTheme) for the stored setting and
+   --cq-* custom property, all defined once on .cq-board. There is exactly
+   one board palette — white/green — by owner ruling 2026-08-27; the brown
+   and purple alternates W1 shipped were removed along with their picker.
+   Do not reintroduce a [data-theme] hook here. See
    docs/superpowers/specs/2026-08-26-games-board-redesign-and-new-games-design.md
    ("W1 — board") for the token table this mirrors. */
 
 .cq-board {
-  /* green — the default theme. */
+  /* white/green — the only board palette. */
   --cq-light: #eeeed2;
   --cq-dark: #769656;
   --cq-sel: rgba(255, 255, 51, 0.5);
@@ -29,23 +31,6 @@
   box-shadow: var(--shadow-sm, 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1));
   overflow: hidden;
   touch-action: manipulation;
-}
-
-.cq-board[data-theme="brown"] {
-  --cq-light: #f0d9b5;
-  --cq-dark: #b58863;
-  --cq-coord-on-light: #b58863;
-  --cq-coord-on-dark: #f0d9b5;
-}
-
-.cq-board[data-theme="purple"] {
-  --cq-light: #faf5ff;
-  --cq-dark: #e9d5ff;
-  --cq-sel: rgba(147, 51, 234, 0.35);
-  --cq-last: rgba(147, 51, 234, 0.25);
-  --cq-move: rgba(88, 28, 135, 0.3);
-  --cq-coord-on-light: #7e22ce;
-  --cq-coord-on-dark: #7e22ce;
 }
 
 .cq-sq {

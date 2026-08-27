@@ -5,7 +5,6 @@
 // pop/shake are token-driven so a parent can retrigger CSS animations.
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { FILES, fileOf, isWhitePiece, Move, rankRow, sqName } from "../engine";
-import { useProgress } from "../lib/progress";
 
 export const GLYPH: Record<string, string> = {
   P: "♟",
@@ -97,8 +96,6 @@ export function Board({
   popToken?: { idx: number; n: number } | null;
   shakeToken?: number;
 }) {
-  const progress = useProgress();
-  const theme = progress.getBoardTheme();
   const boardRef = useRef<HTMLDivElement>(null);
   const prevPositionRef = useRef<string[] | null>(null);
 
@@ -205,7 +202,7 @@ export function Board({
   }
 
   return (
-    <div ref={boardRef} className={`cq-board${shaking ? " cq-shake" : ""}`} data-theme={theme}>
+    <div ref={boardRef} className={`cq-board${shaking ? " cq-shake" : ""}`}>
       {squares}
     </div>
   );

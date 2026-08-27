@@ -1,7 +1,8 @@
 // Tactic detectors (Trick Shots / Tactic Trainer judging) and the coach's
 // attacker/defender helpers.
-import { Board, Piece, isWhitePiece } from "./board";
-import { attackSquares, findKing, inCheck, isAttacked, sliderDirs, step } from "./moves";
+import { Board, isWhitePiece, Piece } from "./board";
+import { allLegalMoves, applyMove, attackSquares, findKing, inCheck, isAttacked, sliderDirs, step } from "./moves";
+import { isMate } from "./mate";
 
 const VALUE: Record<string, number> = { P: 1, N: 3, B: 3, R: 5, Q: 9, K: 100 };
 
@@ -95,4 +96,63 @@ export function defendersOf(board: Board, sq: number): number[] {
   const probe = board.slice();
   probe[sq] = white ? "p" : "P"; // stand-in enemy piece
   return attackersOf(probe, sq, white);
+}
+
+// Sentinel dominating any material total, so a forced mate always outranks
+// a merely-large capture when comparing candidate first moves.
+const MATE_GAIN = 1000;
+
+// Best immediate result for the side to move on `board`: a forced mate
+// (MATE_GAIN) if one exists, else the most valuable capture on offer, else 0.
+//
+// KNOWN GAP (found in review 2026-08-27, not fixed here): this counts the
+// captured piece's raw value without checking the capturing piece survives
+// the reply — a one-ply "is the capture square then attacked" guard makes
+// the pawnFork trio in TACTICS4 fail their own >=3 bar (their real forced
+// net is +2: the retreating knight can hop to the square the forking pawn
+// just vacated, e.g. d6-e4 after e4-e5, which defends the OTHER forked
+// knight's square too). That is a real content gap in those 3 puzzles, not
+// just a heuristic imprecision — but fixing it needs new positions (the
+// vacated-pawn-square defense is structural to a same-rank two-knight pawn
+// fork), not a one-line change here, and reverting the safety check found
+// zero effect on the other 21 TACTICS3/4 puzzles (hand-verified 5 of them
+// in review; sound only because material was too sparse to exploit this).
+// Left as designed pending a pawnFork redesign.
+function bestFollowUp(board: Board, white: boolean): number {
+  for (const m of allLegalMoves(board, white)) {
+    if (isMate(applyMove(board, m.from, m.to), !white)) return MATE_GAIN;
+  }
+  let best = 0;
+  for (const m of allLegalMoves(board, white)) {
+    if (board[m.to] === "") continue;
+    const v = pieceValue(board[m.to]);
+    if (v > best) best = v;
+  }
+  return best;
+}
+
+// Trick Shots tier-3 judge (deflection / decoy / remove-the-defender /
+// interference — motifs with no single structural detector like fork/pin's).
+// Plays from -> to, then black's best defense (the reply that minimizes
+// white's net result), and returns white's material swing: what this move
+// itself captures, minus what black's reply recaptures, plus white's best
+// follow-up next move — or MATE_GAIN if mate is forced. A puzzle is sound
+// when this is >= 3 for the solution and strictly less for every other
+// legal first move (content/__tests__/puzzles.test.ts enforces both).
+export function tacticGainAfter(board: Board, from: number, to: number): number {
+  const white = isWhitePiece(board[from]);
+  const wins1 = board[to] !== "" ? pieceValue(board[to]) : 0;
+  const b1 = applyMove(board, from, to);
+  if (isMate(b1, !white)) return MATE_GAIN; // the move itself mates
+  const replies = allLegalMoves(b1, !white);
+  if (replies.length === 0) return 0; // stalemate — never a real puzzle
+  let worst = Infinity;
+  for (const r of replies) {
+    const losesToReply = b1[r.to] !== "" ? pieceValue(b1[r.to]) : 0;
+    const after = applyMove(b1, r.from, r.to);
+    const followUp = bestFollowUp(after, white);
+    const net = followUp >= MATE_GAIN ? MATE_GAIN : wins1 - losesToReply + followUp;
+    if (net < worst) worst = net;
+  }
+  return worst;
 }

@@ -12,18 +12,6 @@ const KEY = "seazn-games:chess-quest:v1";
 
 export type Mode = "story" | "classic";
 
-// Board colour theme — a device setting (like muted/voiceOff), not per-profile.
-// green is the default; brown and purple (the original look) are alternates.
-export type BoardTheme = "green" | "brown" | "purple";
-
-const BOARD_THEMES: readonly BoardTheme[] = ["green", "brown", "purple"];
-
-export function resolveBoardTheme(value: unknown): BoardTheme {
-  return typeof value === "string" && (BOARD_THEMES as readonly string[]).includes(value)
-    ? (value as BoardTheme)
-    : "green";
-}
-
 type Profile = {
   name: string;
   mode: Mode;
@@ -43,7 +31,6 @@ type Blob = {
   seq: number;
   muted: boolean;
   voiceOff: boolean;
-  boardTheme?: BoardTheme;
   profiles: Record<string, Profile>;
 };
 
@@ -102,8 +89,6 @@ export type Progress = {
   setMuted(m: boolean): void;
   getVoiceOn(): boolean;
   setVoiceOn(on: boolean): void;
-  getBoardTheme(): BoardTheme;
-  setBoardTheme(theme: BoardTheme): void;
 };
 
 function todayISO(): string {
@@ -145,7 +130,6 @@ function freshBlob(): Blob {
     seq: 1,
     muted: false,
     voiceOff: false,
-    boardTheme: "green",
     profiles: { p1: blankProfile() },
   };
 }
@@ -160,6 +144,12 @@ function loadBlob(storage?: Storage): Blob {
     console.warn("[chess-quest] discarding corrupt progress blob");
   }
   if (!data || !data.profiles) return freshBlob();
+  // W1 shipped a boardTheme device setting; the board is white/green only as
+  // of 2026-08-27, so drop the key rather than let loadBlob hand it straight
+  // back to save() and keep a dead field alive in every existing player's
+  // localStorage forever. Targeted on purpose — unknown keys in general are
+  // left alone, since this is the only one we ever wrote and retired.
+  delete (data as Blob & { boardTheme?: unknown }).boardTheme;
   // Backfill any missing fields on older blobs.
   for (const id in data.profiles) {
     data.profiles[id] = { ...blankProfile(), ...data.profiles[id] };
@@ -363,11 +353,6 @@ export function createProgressState(storage?: Storage): Progress {
       data.voiceOff = !on;
       save();
     },
-    getBoardTheme: () => resolveBoardTheme(data.boardTheme),
-    setBoardTheme: (theme) => {
-      data.boardTheme = resolveBoardTheme(theme);
-      save();
-    },
   };
 }
 
@@ -394,7 +379,6 @@ const MUTATORS = [
   "removeProfile",
   "setMuted",
   "setVoiceOn",
-  "setBoardTheme",
 ] as const;
 
 export function ProgressProvider({ children }: { children: React.ReactNode }) {

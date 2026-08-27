@@ -1,7 +1,9 @@
 // Chess Quest lessons — transcribed verbatim from the original app
-// (chess-quest js/curriculum.js WEEKS, renamed LESSONS). 48 lessons:
-// Track 1 = 1–24, Track 2 "Rising Player" = 25–48. Both copy registers
-// (Story for kids, Classic for adult learners) carried over unchanged.
+// (chess-quest js/curriculum.js WEEKS, renamed LESSONS), later extended past
+// the original app's scope. 62 lessons: Track 1 = 1–24, Track 2 "Rising
+// Player" = 25–48, Track 3 "Opening Range" = 49–53, Track 4 "Grandmaster
+// Gorge" = 54–62. Both copy registers (Story for kids, Classic for adult
+// learners) carried over unchanged.
 
 export type GameId =
   | "squareRace"
@@ -9,6 +11,7 @@ export type GameId =
   | "pawnWars"
   | "mateInOne"
   | "mateInTwo"
+  | "mateInThree"
   | "hangingHunt"
   | "tacticTrainer"
   | "rookMaze"
@@ -993,6 +996,164 @@ export const LESSONS: Lesson[] = [
         "1.e4 d5 2.exd5 Qxd5 3.Nc3 Qa5 — the Scandinavian: immediate central challenge as Black, queen tucked on a5.",
       play: "Drill it as Black; learn to develop with tempo after the queen settles.",
       spark: "A dependable, low-theory answer to 1.e4 you can rely on under pressure.",
+    },
+  },
+
+  /* ---- Track 4: Grandmaster Gorge (lessons 54–62, Days 107–123) ---- */
+  {
+    n: 54,
+    land: 11,
+    title: "Mate in Three",
+    game: "mateInThree",
+    learn:
+      "Force checkmate three moves ahead. The first move might not even be check — it just has to leave the enemy king with no good answer.",
+    play: "The Mate in 3 pack: a queen-and-king box, a single rook that needs one quiet move, and the two-rook ladder pushed back a rank.",
+    spark: "Sometimes the best first move looks like nothing at all — a quiet step that closes every door.",
+    classic: {
+      learn:
+        "Forced mate in exactly three moves. The key move is often quiet (no check) — it simply removes the defender's last useful reply.",
+      play: "The Mate in 3 pack: the Q+K technique, the single-rook waiting move, and the two-rook ladder one rank further back.",
+      spark:
+        "Calculating three moves deep — including a non-check first move — is the real jump from “sees tactics” to “calculates variations”.",
+    },
+    diagram: {
+      fen: "7k/8/8/4K3/3p4/8/8/Q7 w - - 0 1",
+      from: "e5",
+      caption: "That pawn on d4 can't help black at all — ignore it and walk your king in first.",
+    },
+  },
+  {
+    n: 55,
+    land: 11,
+    title: "Deflection",
+    game: "tacticTrainer",
+    gameOpts: { pack: "deflection" },
+    learn:
+      "Pull the guard away from its post — attack it, trade it, or force it to answer a bigger threat — then take what it was protecting.",
+    play: "The deflection pack here, then hunt for over-worked defenders in your own games.",
+    spark: "Every defender has a job. Find the move that gives it two jobs at once.",
+    classic: {
+      learn:
+        "Deflection: remove or distract the piece defending a target, then win the target — via capture, check, or a bigger threat.",
+      play: "The deflection pack, then look for overloaded defenders — pieces doing two jobs — in your own games.",
+      spark: "An overloaded piece is a free tactic waiting to be found. Ask: what else is this piece defending?",
+    },
+  },
+  {
+    n: 56,
+    land: 11,
+    title: "The Decoy",
+    game: "tacticTrainer",
+    gameOpts: { pack: "decoy" },
+    learn: "A decoy looks like help arriving — but stepping in is worse than staying away.",
+    play: "The decoy pack: figure out why the “defender” should NOT actually recapture.",
+    spark: "Sometimes the trap isn't the move — it's the piece that walks into it.",
+    classic: {
+      learn:
+        "Decoy: offer material that looks capturable, luring a piece onto a square (or into a role) where it does more harm than good.",
+      play: "The decoy pack — in each one, work out why accepting is actually the losing option.",
+      spark: "Before every capture, ask what changes afterward. A decoy only works if you calculate one move further.",
+    },
+  },
+  {
+    n: 57,
+    land: 11,
+    title: "Remove the Defender",
+    game: "tacticTrainer",
+    gameOpts: { pack: "removeDefender" },
+    learn:
+      "Clear the guard first — trade it, capture it, or prove it can't really recapture — then the prize is undefended.",
+    play: "The remove-the-defender pack, plus a real-board drill: point at any piece and name what's defending it.",
+    spark: "Before you grab the treasure, find out who's guarding the door.",
+    classic: {
+      learn:
+        "Remove the defender: eliminate (or expose as ineffective) the piece guarding a target before capturing the target itself.",
+      play: "The pack here, then a real-board drill naming every defender before every capture.",
+      spark: "Counting attackers and defenders on a square, in order, is the single most useful habit from here on.",
+    },
+  },
+  {
+    n: 58,
+    land: 11,
+    title: "Interference",
+    game: "tacticTrainer",
+    gameOpts: { pack: "interference" },
+    learn:
+      "Drop a piece right into the middle of a defensive line — the guard is still there, but it can't reach the square anymore.",
+    play: "The interference pack: your piece becomes the wall between the defender and its job.",
+    spark: "Sometimes the best move isn't an attack at all — it's standing in the way.",
+    classic: {
+      learn:
+        "Interference: place a piece on the line between a defender and what it defends, cutting the connection without capturing anything.",
+      play: "The interference pack — notice how often the winning move is quiet, not a capture.",
+      spark: "Look for pieces defending along a shared rank, file or diagonal — one well-placed block can end the whole idea.",
+    },
+  },
+  {
+    n: 59,
+    land: 11,
+    title: "Double Check",
+    game: "tacticTrainer",
+    gameOpts: { pack: "doubleCheck" },
+    learn:
+      "Move one piece so that IT checks the king AND uncovers a second checker behind it. Two checks at once has only one answer: the king must move.",
+    play: "The double-check pack: neither a block nor a capture can ever answer two checks together.",
+    spark: "Double check is the strongest check in chess — nothing can stop both attackers at once.",
+    classic: {
+      learn:
+        "Double check: a discovered check where the moving piece also gives check itself. Only a king move ever answers it — blocking or capturing addresses just one attacker.",
+      play: "The double-check pack. Confirm both attackers before you play it — the pattern is unforgiving if only one actually checks.",
+      spark: "Whenever you can discover a check AND check with the mover itself, look hard — it's very often mate.",
+    },
+  },
+  {
+    n: 60,
+    land: 11,
+    title: "The Back-Rank Trap",
+    game: "tacticTrainer",
+    gameOpts: { pack: "backRank" },
+    learn:
+      "A king boxed in by its own pawns can't step up to escape a rook or queen sliding down the back rank.",
+    play: "The back-rank pack: find the slide that the pawn wall can't answer.",
+    spark: "The king built his own cage. Your rook just needs an open road to it.",
+    classic: {
+      learn:
+        "Back-rank mate: an uncastled-looking king trapped behind its own pawn shield falls to a rook or queen on the home rank.",
+      play: "The back-rank pack — check the whole rank is clear before committing.",
+      spark: "Before trading away your last rook, always ask: whose back rank is weaker after this?",
+    },
+  },
+  {
+    n: 61,
+    land: 11,
+    title: "The Trapped Piece",
+    game: "tacticTrainer",
+    gameOpts: { pack: "trappedPiece" },
+    learn:
+      "A piece stuck on the rim or cut off behind enemy lines can look mobile — until you count its actual escape squares.",
+    play: "The trapped-piece pack: work out why running is never really an option.",
+    spark: "A knight on the rim is dim — and a piece with no way home is already halfway captured.",
+    classic: {
+      learn:
+        "A trapped piece has moves on paper but no SAFE one — every escape square is covered. Count escape squares before you count threats.",
+      play: "The trapped-piece pack — name every square the piece could flee to before you attack it.",
+      spark: "Cutting off retreat is often worth more than the attacking move itself. Look for the piece with nowhere to go first.",
+    },
+  },
+  {
+    n: 62,
+    land: 11,
+    title: "The Pawn Fork",
+    game: "tacticTrainer",
+    gameOpts: { pack: "pawnFork" },
+    learn: "The cheapest piece on the board can still attack two pieces at once — one pawn push, two problems.",
+    play: "The pawn-fork pack: find the one square that pokes both pieces diagonally.",
+    spark: "Never forget the little guy — a well-timed pawn push can win a whole piece.",
+    classic: {
+      learn:
+        "Pawn forks: a single pawn push attacks two pieces diagonally at once. Cheapest attacker, often the biggest material swing on the board.",
+      play: "The pawn-fork pack — check both diagonal squares before every pawn advance near enemy pieces.",
+      spark: "Before moving a piece near an enemy pawn's advance square, ask what that pawn attacks once it steps up.",
     },
   },
 ];

@@ -6,7 +6,6 @@ import { LANDS } from "../../content/lands";
 import { LESSONS } from "../../content/lessons";
 import { useCopy } from "../../lib/copy";
 import { useProgress } from "../../lib/progress";
-import { BoardThemePicker } from "../BoardThemePicker";
 
 export function QuestHeader({
   onOpenProfiles,
@@ -45,7 +44,6 @@ export function QuestHeader({
           >
             📊 Progress
           </button>
-          <BoardThemePicker />
           <button
             type="button"
             aria-label={progress.getMuted() ? "Unmute sounds" : "Mute sounds"}
