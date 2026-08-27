@@ -23,8 +23,8 @@ one PR per wave, visual sign-off gate on each).
 | R2c | `R2c-candidate-narrowing.md` + design `R2c-task1-design.md` | R2b (MERGED, so unblocked) | **MERGED #614 `ca3a4357a`** (tip `3eda8a0ff`, 2026-08-18) — approval-on-merge, see the R2c sign-off section below; three screens (`08-bowlerpicker`, `09-retiresheet`, `10-reviewblocked`) carry NO individual verdict and are owed to R8's closing walkthrough. Pre-merge state, kept for the record: worktree `.claude/worktrees/r2c-candidates`, branch `feat/scorepad-v3-r2c-candidate-narrowing` off `main` `7023502a3`. Task 1 (the chassis capability) is DESIGNED and owner-approved before code — see the R2c section below. Closes C1/C2/C3 from `R2b-remaining.md` §C, the three surviving instances of "the pad offers what the engine will refuse" |
 | R3 | `R3-football.md` | R1 | **MERGED #643 `bcc726300`** (2026-08-25). Pre-merge state, kept for the record: **SIGNED OFF + PR RAISED** 2026-08-25 — worktree `.claude/worktrees/r3-football`, branch `feat/scorepad-v3-r3-football`, 51 commits rebased onto `origin/main`. All tasks A-F committed; five review rounds run and closed (round 5 CLEAN). Owner visual sign-off **15/15 APPROVE**, recorded below — that record is the merge gate, not the sheet. Do not treat any count in this row as a gate: the main thread re-runs the boundary gate itself. One thing NOT to re-derive: the two-step goal dock shipped INERT past unit tests and the gallery; see the inert-dock section at the end of this file before touching `DetailDock`/`pad-host` docks. |
 | R4 | `R4-tennis.md` | R1 | **MERGED #649 `5f2951945`** (2026-08-26) — this row read `IN FLIGHT` on merged main until R3.5 corrected it, while the Order table on `main` still read `TODO`: two rows for one wave, both wrong, found by R3.5's planning scout. Pre-merge state kept for the record: worktree `.claude/worktrees/r4-tennis`, branch `feat/scorepad-v3-r4-tennis` off `origin/main` `9080cb959`. Four owner rulings taken before any code (R4-1..R4-4 below); six false premises found in the brief and the register, one of which (D-2) removes the programme's only engine item as written. |
-| R3.5 | `R3.5-deciders.md` | R2, R3, R4 (chassis shape) | **IN FLIGHT** 2026-08-26 — worktree `.claude/worktrees/r35-deciders`, branch `feat/scorepad-v3-r35-deciders` off `main` `5f2951945`. Remedial: the tie-breakers of the two converted sports. Cricket's super over is **unscoreable on the pad** (15/16 tiles disabled, the More escape hatch suppressed by a chassis bug) and football's shoot-out is recordable but illegible. Five rulings taken before any code (R3.5-1..R3.5-5 below), one of which AMENDS R3-4 for the `SHOOTOUT` phase only. Root cause of the whole class: **the gallery harness has no tie-break state**, so neither R2's nor R3's visual sign-off could ever have caught it — task A closes that first. **Task A DONE `72087a19e`**: four states (`11-superover`, `12-superover-decided`, `11-shootout`, `12-shootout-decided`) plus both live decider consoles in the seven-width matrix. BEFORE-captures published: https://claude.ai/code/artifact/ce2fa1b7-14be-4b06-aad5-b8cf0f878239 — gate re-run in the MAIN THREAD, not taken from the implementer: v3 unit 1028/1028, 0 failed suites; `turbo typecheck --force` EXIT=0, 2/2, **0 cached**; `turbo lint --force` 0 errors / 116 warnings (all pre-existing, none in the touched files). Note for R5+: R4 tennis already captures its own tie-break (`14-serveafterbreaker`/`15-breakerdock`/`16-breakermore`) — the gap was cricket's and football's only. **Task B DONE `ee6e4abe0`** (chassis, after a failed round 1 `82607141f`): a disabled tile no longer claims its event type — AND neither does a sheet whose every opening tile is disabled. Round 1 shipped the tile guard alone and **achieved nothing**, because cricket's `wicket` SHEET declares `cricket.superover.ball` and `dedicatedEventTypes` claimed every sheet's event unconditionally. Caught only by probing a REAL folded super over; the five synthetic-tile unit tests were green. Gate after: v3 1036/1036, `GATE_FILTER= gate` 4/4 **0 cached**, 0 errors. **Task C DONE** `9cbd44dc2` (engine) + `a7804cb6d` (skin) + `ab0cea71e` (e2e) + `2d16cbcbe` (gallery probes): the blocker is gone. `activeInnings<T>()` exported from the cricket module and consumed by BOTH `cricketPosition` and the skin, per ruling R3.5-3 — one definition, no second copy. Verified independently in the main thread against real folds, BOTH lanes: fine lane scorebug `6/0`/`0.2` (was `150/7`/`20.0`), RR 18.0 (was 6.0), bowler H-10 (was H-1), 0 disabled tiles (was 15), 0 closure messages (was 3), no stale target; coarse lane now offers all 18 tiles (was: no delivery tiles at all). Gate: v3 1058/1058, engine 4117/4130 with **no golden re-baseline**, `turbo typecheck lint --force` 4/4 **0 cached** 0 errors, cricket+football gallery green at 0px overflow. Before/after sheet: https://claude.ai/code/artifact/ce2fa1b7-14be-4b06-aad5-b8cf0f878239 **FOOTBALL PASS (D+E+F+H+J) DONE** `f00dedcf9`+`b83145622`+`b63581c4b`+`877fa04b3`, batched because all five touch `skins/football.tsx`, the four dictionaries and one `i18n:gen-keys` regen. Verified visually in the main thread: scorebug reads `HOME 1 (2)` / `AWAY 1 (1)` agreeing with its own headline; two LED panels (`PERIOD SHOOT-OUT`, `NEXT KICKER HOME`); kick tiles present with the wrong-turn side dimmed; activity rows read `Shoot-out kick recorded — Away · Scored`. Gate: v3 1088/1088, engine 4122/4135 **no golden re-baseline**, `turbo typecheck lint --force` 4/4 **0 cached** 0 errors, i18n 4250 x 4 locales. R3-4 is now AMENDED per R3.5-5 — `football.shootout.kick` has dedicated tiles in `SHOOTOUT` only; it rides More in every other phase, unchanged. **Tasks G+I+accessibility DONE** `b7a3d3713`+`524646af7`+`1f65b0f19`: a decided fixture now names the winner and the method on the public fixture page, the organiser console and the WhatsApp share text (one shared `decidedOutcomeText()`, `lib/scoring-vocab.ts` — the v3 pad unmounts on decide, so neither surface could be the pad); group-stage `cfg.points.shootoutWin`/`shootoutLoss` (R3.5-4) reach an organiser via two `match-rules.tsx` fields nested inside `points`, proven against a real decided fixture's standings row, not just the config round-trip; the false-premises "vs" WCAG failure noted below is FIXED (`text-slate-400` → `text-slate-600`, 2.63:1 → 7.58:1) and pinned by a computed-ratio test, owner ruling granted this session. Gate: engine 4123/4136 (+1, F21 regression guard, no golden re-baseline), v3 unit UNCHANGED 1088/1088 (neither task touches `scorepad/v3`), `GATE_FILTER= gate` 4/4 **0 cached** 0 errors 116 warnings (all pre-existing), i18n 5131 x 4 locales, football+cricket v3 e2e 37/37 plus both gallery probes (`gallery: Football`/`gallery: Cricket`) green at 0px overflow, organiser console + public page visually verified desktop/320/768. |
-| R5 | `R5-racquet-split.md` | R1 | TODO |
+| R3.5 | `R3.5-deciders.md` | R2, R3, R4 (chassis shape) | **MERGED #667 `177f04976`** (2026-08-26); the tennis match-tie-break walkthrough followed as #670 `74fe088ae` and the walkthrough project + CI leg as #671 `addd126c5`. This row read `IN FLIGHT` until R5 corrected it — the SAME stale-row class R3.5 itself found for R4 two rows up, so the Order table has now gone stale on three consecutive waves; re-read `git log`, never this column. Pre-merge state kept for the record: worktree `.claude/worktrees/r35-deciders`, branch `feat/scorepad-v3-r35-deciders` off `main` `5f2951945`. Remedial: the tie-breakers of the two converted sports. Cricket's super over is **unscoreable on the pad** (15/16 tiles disabled, the More escape hatch suppressed by a chassis bug) and football's shoot-out is recordable but illegible. Five rulings taken before any code (R3.5-1..R3.5-5 below), one of which AMENDS R3-4 for the `SHOOTOUT` phase only. Root cause of the whole class: **the gallery harness has no tie-break state**, so neither R2's nor R3's visual sign-off could ever have caught it — task A closes that first. **Task A DONE `72087a19e`**: four states (`11-superover`, `12-superover-decided`, `11-shootout`, `12-shootout-decided`) plus both live decider consoles in the seven-width matrix. BEFORE-captures published: https://claude.ai/code/artifact/ce2fa1b7-14be-4b06-aad5-b8cf0f878239 — gate re-run in the MAIN THREAD, not taken from the implementer: v3 unit 1028/1028, 0 failed suites; `turbo typecheck --force` EXIT=0, 2/2, **0 cached**; `turbo lint --force` 0 errors / 116 warnings (all pre-existing, none in the touched files). Note for R5+: R4 tennis already captures its own tie-break (`14-serveafterbreaker`/`15-breakerdock`/`16-breakermore`) — the gap was cricket's and football's only. **Task B DONE `ee6e4abe0`** (chassis, after a failed round 1 `82607141f`): a disabled tile no longer claims its event type — AND neither does a sheet whose every opening tile is disabled. Round 1 shipped the tile guard alone and **achieved nothing**, because cricket's `wicket` SHEET declares `cricket.superover.ball` and `dedicatedEventTypes` claimed every sheet's event unconditionally. Caught only by probing a REAL folded super over; the five synthetic-tile unit tests were green. Gate after: v3 1036/1036, `GATE_FILTER= gate` 4/4 **0 cached**, 0 errors. **Task C DONE** `9cbd44dc2` (engine) + `a7804cb6d` (skin) + `ab0cea71e` (e2e) + `2d16cbcbe` (gallery probes): the blocker is gone. `activeInnings<T>()` exported from the cricket module and consumed by BOTH `cricketPosition` and the skin, per ruling R3.5-3 — one definition, no second copy. Verified independently in the main thread against real folds, BOTH lanes: fine lane scorebug `6/0`/`0.2` (was `150/7`/`20.0`), RR 18.0 (was 6.0), bowler H-10 (was H-1), 0 disabled tiles (was 15), 0 closure messages (was 3), no stale target; coarse lane now offers all 18 tiles (was: no delivery tiles at all). Gate: v3 1058/1058, engine 4117/4130 with **no golden re-baseline**, `turbo typecheck lint --force` 4/4 **0 cached** 0 errors, cricket+football gallery green at 0px overflow. Before/after sheet: https://claude.ai/code/artifact/ce2fa1b7-14be-4b06-aad5-b8cf0f878239 **FOOTBALL PASS (D+E+F+H+J) DONE** `f00dedcf9`+`b83145622`+`b63581c4b`+`877fa04b3`, batched because all five touch `skins/football.tsx`, the four dictionaries and one `i18n:gen-keys` regen. Verified visually in the main thread: scorebug reads `HOME 1 (2)` / `AWAY 1 (1)` agreeing with its own headline; two LED panels (`PERIOD SHOOT-OUT`, `NEXT KICKER HOME`); kick tiles present with the wrong-turn side dimmed; activity rows read `Shoot-out kick recorded — Away · Scored`. Gate: v3 1088/1088, engine 4122/4135 **no golden re-baseline**, `turbo typecheck lint --force` 4/4 **0 cached** 0 errors, i18n 4250 x 4 locales. R3-4 is now AMENDED per R3.5-5 — `football.shootout.kick` has dedicated tiles in `SHOOTOUT` only; it rides More in every other phase, unchanged. **Tasks G+I+accessibility DONE** `b7a3d3713`+`524646af7`+`1f65b0f19`: a decided fixture now names the winner and the method on the public fixture page, the organiser console and the WhatsApp share text (one shared `decidedOutcomeText()`, `lib/scoring-vocab.ts` — the v3 pad unmounts on decide, so neither surface could be the pad); group-stage `cfg.points.shootoutWin`/`shootoutLoss` (R3.5-4) reach an organiser via two `match-rules.tsx` fields nested inside `points`, proven against a real decided fixture's standings row, not just the config round-trip; the false-premises "vs" WCAG failure noted below is FIXED (`text-slate-400` → `text-slate-600`, 2.63:1 → 7.58:1) and pinned by a computed-ratio test, owner ruling granted this session. Gate: engine 4123/4136 (+1, F21 regression guard, no golden re-baseline), v3 unit UNCHANGED 1088/1088 (neither task touches `scorepad/v3`), `GATE_FILTER= gate` 4/4 **0 cached** 0 errors 116 warnings (all pre-existing), i18n 5131 x 4 locales, football+cricket v3 e2e 37/37 plus both gallery probes (`gallery: Football`/`gallery: Cricket`) green at 0px overflow, organiser console + public page visually verified desktop/320/768. |
+| R5 | `R5-racquet-split.md` | R1 | **IN FLIGHT** 2026-08-27 — worktree `.claude/worktrees/r5-racquet`, branch `feat/scorepad-v3-r5-racquet-split` off `main` `addd126c5`. Four rulings taken before any code (R5-1..R5-4 below); THREE false premises found in the brief, one of which (FP-1) changes what the wave IS — D-17 is an engine gap, not a render bug. |
 | R6 | `R6-period-pair.md` | R1 | TODO |
 | R7 | `R7-universal-console.md` | R1 (chrome parts benefit from R2–R6 but do not block) | TODO |
 | R8 | `R8-sweep.md` | R2–R7 | TODO |
@@ -2323,3 +2323,219 @@ Owner instruction 2026-08-26: **"No gaps then CI is green then merge"** — the
 than by per-screen verdicts on the sheet. Recorded here because the rule says
 the gate is the verdicts being recorded in this file, and this is what was
 given in their place.
+
+---
+
+## R5 (2026-08-27) — owner rulings, taken before any code
+
+Scoping session against RE-PINNED facts on `main` `addd126c5`, not the brief's
+pre-R1 line numbers. Two scouts re-pinned the engine and the web surface
+independently before a single question was put to the owner.
+
+| # | Decision | Ruling |
+|---|---|---|
+| R5-1 | D-17 ("badminton SERVING shows —"). The brief says to derive it from "the setbased kernel's server field". There is no such field — see FP-1 | **Additive ENGINE reader plus a first-server anchor.** `setBasedServeContext(state, cfg)`, one derivation for three sports and for the public scoreboard. Serving is a PURE FUNCTION of the fold once the match's first server is known (badminton/volleyball side-out; table tennis alternating every 2, every 1 at 10-10 and under expedite), and the per-game first server is itself derivable (BWF: previous game's winner; ITTF/FIVB: alternate). So exactly ONE datum is missing, and it rides the ALREADY-EXISTING optional `serving` field on the first rally — no new event type (§9 holds), no schema change, module stays `1.0.0`. Undeclared ⇒ `serveOrderKnown:false` ⇒ the pad renders NOTHING and asks; it must never render "—" again and must never guess. Rejected: three per-skin derivations (the placer/verifier fork this repo keeps paying for, and R4-3 already ruled against it), and deferring the row to R8 |
+| R5-2 | The attributed rally action carries `server` + `scorer` persons and is INERT from the v2 pad — tennis's D-2 shape, ×3 | **Dock chips on all three sports.** R4-5's exact pattern: one chip per player of the winning pair/team as the dock question, auto-set in singles where there is nothing to choose; the server comes from R5-1's derivation and is never asked. This is the wave's product headline — per-player point and serve stats become recordable for badminton, table tennis and volleyball for the first time. Rejected: badminton+TT only (volleyball's scorer was argued ambiguous; it is not — the payload names a person, not a skill), and plain-rally-only, which would silently retire two of the three declared actions |
+| R5-3 | Three `--sport-*` palettes owed under R3-6 | **badminton A "Sprung Floor"** (maple-hall board `#241a14`/`#33261d`, BWF-mat teal led `#2fe0bd`), **tabletennis A "Two-Colour Bat"** (graphite `#101418`, ITTF-blue band `#0f2d40`, ball-orange led `#ff9440`), **volleyball B "Court Azure"** (arena slate `#161d27`/`#232c39`, court azure led `#4aa8ff`). Owner asked to see it first; comps published and ruled off them, R4-4's precedent. Comps: <https://claude.ai/code/artifact/97a11b49-c1dc-4c4a-b969-2610712ef7c3> |
+| R5-4 | How many whole-match walkthroughs | **All three.** Owner overrode the recommendation of one (volleyball). Cost is real and stated: the walkthrough leg is already the workflow's floor at ~300s on CI with `tennis-mtb` alone. Closes D-13 at full depth — table tennis has never been driven in a browser at all |
+
+### R5-3 — what the palette ruling rejected, and the rule it establishes
+
+The owner's first instinct was "all B". Rejected on the family strip, which is
+the collision test R4-4 flagged and could not run for want of anything to run
+it against. Two of the three B options collide:
+
+- **tabletennis B** board `#062535` against tennis's shipped `#0b2545` — six
+  bytes apart, and in the strip they read as one board. This was the weakest of
+  the six candidates and its own card said so; it was in the sheet to be
+  judged, not picked.
+- **badminton B** collides with football on BOTH axes at once — dark
+  teal-GREEN ground against football's dark green, and cork-amber `#ffc94d`
+  against football's fourth-official amber `#ffb703`.
+- **volleyball B** collides with nothing, and beats its own A on a product
+  argument rather than a taste one: volleyball is the only one of the three
+  where a referee shows a card mid-rally, and A's coral serve signal sits one
+  hue step from A's own red card ON THE SAME BOARD. A serve cue that can be
+  misread as a sanction is a defect, so B wins here and A wins twice above.
+
+**The rule this establishes for R6/R7, stated so it is not re-derived:** no two
+sports may share BOTH a ground family and an accent family. The six lanes now
+spent are violet+lime (cricket), green+amber (football), navy+optic-yellow
+(tennis), warm-brown+teal (badminton), graphite+orange (tabletennis),
+slate+azure (volleyball). R6 (hockey, icehockey) and R7 (boardgame, carrom,
+generic) pick from what is left, and the family strip is how that is judged —
+not a swatch grid, and not one board at a time.
+
+### R5 — false premises found (verified on `main` `addd126c5`, before any code)
+
+Three. The first changes what the wave IS.
+
+- **FP-1 — "serving NEVER renders '—' (D-17) — derive from the setbased
+  kernel's server field" is FALSE, and D-17 is therefore an ENGINE gap, not a
+  render bug.** `setbased/kernel.ts:172-173` states it outright: *the set-based
+  kernel holds no serving state*. `serving: EntrantId.optional()` (`:179`) is a
+  RALLY PAYLOAD field and `server: PersonId.optional()` (`:148`) feeds a
+  `serves` tally only; neither is folded. `racquet-skin.tsx:35`'s header
+  `serving` is a documented PLACEHOLDER. Nothing computes BWF's interval-at-11
+  or ITTF's alternate-every-2 either — `badminton.ts:29-36` is a comment, not
+  code. A wave that followed the brief would have gone looking for a field to
+  render and found nothing to render. Ruling R5-1 is the answer.
+- **FP-2 — `${key}.rally` carries THREE actions, not one.** `rallyAction`
+  (`kernel.ts:1008`), `rallyAttributedAction` (`:1014`) and
+  `rallyExpediteAction` (`:1068`) all share the one wire type. R4's lesson
+  applies three times over: **dedicating a wire type silently retires every
+  OTHER action sharing it**, and R3.5 added that it also drops the generic
+  form's `attribution` person field. So a naive conversion would have removed
+  per-player attribution AND table tennis's expedite system from all three
+  sports at once, with nothing failing. Diff the padSpec actions BY TYPE before
+  flipping a registry entry — never the v2 skin's buttons.
+- **FP-3 — `expectedDoublesServer` is NOT nested/tennis-only.** It exists
+  independently in the set-based kernel too (`kernel.ts:393-398`), delegating
+  to the same shared `expectedPairServerOf` (`squad-state.ts:145`), and
+  `pairOrder` support is already wired through `State.squads`. R4's engine work
+  is therefore already inherited by this family; what is missing is the same
+  thing tennis was missing — a CALLER supplying `serviceTurn`. R5-1's reader is
+  that caller, and must not become a second copy of the rotation.
+
+### R5 — what is already true and must not be re-litigated
+
+- **D-7's evidence line is literally correct.** `fidelityEntitlements` is
+  `{3: preset.rallyEntitlement}` (`kernel.ts:1178`) with the band map at
+  `:1170-1177` — summary 0, timeout/sanction/sub/expedite 1, **rally 3**. So a
+  free/band-0 org's badminton pad really is a lone "Set score" button, exactly
+  as BAD-03 recorded. Band 2 is deliberately unoccupied, as it is for tennis.
+  The recording chip must WORD that state; this family was the worst offender.
+- **Some branches are registered but permanently dead by preset.**
+  `kernel.ts:945-956`: badminton/tabletennis register every branch but build no
+  action for ones their `records` flags disable (e.g. `badminton.timeout`,
+  `tabletennis.sub`). Declared-but-dead BY DESIGN, not a bug — but the More
+  sheet would offer them, so each skin owes `refusedEventTypes`, which R3/E
+  made a REQUIRED argument precisely so a default could not silently restore
+  the defect.
+- **Volleyball's libero handling is generic, and so is its refusal copy.**
+  `volleyball.ts:86-91` declares `{reentry:"once", reentryPositionLock:true,
+  exemptions:{libero:{}}}`; the refusals come from `core/lineup.ts:466/472/482`
+  and are generic strings that name an ID. R2b's binding ruling — never show a
+  generic error where the exact reason is known, and never surface the engine's
+  own English ID-bearing prose — means the skin words these itself from the
+  machine `.reason` slug, in four locales.
+- **No ribbon keys exist for any of the three.**
+  `scorepad.skin.{badminton,tabletennis,volleyball}.*` appear nowhere in the
+  tree. R1's standing item bites here: keys go into `PAD_LABEL_KEYS`
+  (`lib/scoring-vocab.ts`), not only into the four dictionaries, or ribbon copy
+  stays on the generic fallback forever with nothing failing.
+- **Six e2e specs drive these sports today** — `formats`, `funnel`,
+  `me-career`, `scorepad-skins`, `scoring`, `stats` — and every selector they
+  use targets legacy `racquet-skin.tsx` markup (`data-role="racquet-header"`,
+  a generic "Home" button, a "Set score" panel). Flipping the registry breaks
+  all six; repairing them is R5 scope, not R8's. `gallery.capture.ts`'s three
+  `scoreOne` implementations (`:1564-1654`) drive the very controls this
+  conversion deletes — the same break that left R4 unable to run its own
+  sign-off gate.
+
+### R5 — a contrast finding raised and then DISPROVED (2026-08-27)
+
+Recorded in full, including that it was wrong, because "we checked and it was
+fine" is worth as much here as a defect and this file has no other record of it.
+
+Computing R5's candidate palettes meant computing the three SHIPPED ones as a
+baseline, and all three came back under the 4.5:1 text floor for `dismissal` on
+`board-2`: cricket **3.57**, football **2.56**, tennis **3.94**. Football's is
+a card SWATCH and cricket has no cards, but tennis words its violation ladder —
+so tennis looked like a live WCAG failure that R4's own fix had missed by
+checking `board` only. It was raised to the owner as exactly that, pending
+reproduction.
+
+**It does not reproduce, because the PAIRING IS ONE NOTHING RENDERS.**
+`board-2` is the scorebug BAND (`tokens.ts:108` `bandBg`, consumed at
+`scorebug.tsx:150` and `:192`), and the band paints only `ink` and `led`
+(`scorebug.tsx:207` is the sole tone branch and it tests for `led`). The two
+card tones reach the screen through `SPORT_TONE_CLASSES` as guided-sheet
+SWATCHES and as `pad-tone-wash` at 12% alpha behind text (`guided-sheet.tsx:314`,
+`:346`) — never as text on `board-2`. `contrast.test.ts` already pins tennis's
+tones against `board`, where they DO land, mutation-proved against the
+originally-specced `#c1272d`, and pins `board-2`/`ink` separately.
+
+Two things worth keeping:
+
+- **Ruling R4-8 did its job in the cheap direction.** "A review finding is not
+  a defect until the state it describes has been reproduced" is usually quoted
+  about over-claimed severity; here it stopped a one-token edit to a
+  signed-off sport's palette, which would have been a change with no defect
+  under it.
+- **An exhaustive token matrix generates pairings the product never composes.**
+  Every token crossed with every ground is not the same question as "what does
+  this pad render". The wave's own six candidates were held to that stricter
+  bar anyway, which costs nothing — but the FINDING was an artefact of the
+  method, not of the code. The usage-driven licence scan in `contrast.test.ts`
+  is the honest instrument and it was already correct.
+
+
+### R5 Task A DONE — the serve reader, `80386a342` + `26a04f4dd` (2026-08-27)
+
+`setBasedServeContext(module, state, events)` (`setbased/kernel.ts:1285`, exported
+from `index.ts:10`). Gate re-run IN THE MAIN THREAD, not taken from the
+implementer: engine **4178 total / 4165 passed / 0 failed / 0 failed suites**
+(13 pending are pre-existing skips), `success: true`, and **0** result paths
+resolving outside the worktree — the cwd trap that has produced false greens
+here. `tsc --noEmit` EXIT=0; `turbo lint --filter=@seazn/engine` 0 problems.
+**No golden, schema-snapshot or `.schema.json` byte moved**, confirmed by
+`git diff --name-only origin/main..HEAD`; no `UPDATE_GOLDEN`/`REBASELINE_GOLDEN`.
+
+**The rotation rule is DATA, not a sport-key branch** — the thing that makes
+this one derivation rather than three. Each preset declares its own law:
+
+- badminton `{within:"rally-winner", setStart:"set-winner"}` (BWF: rally winner
+  serves; the previous game's winner starts the next)
+- tabletennis `{within:"fixed-turns", turnLength:2, acceleratesAtDeuce:true,
+  setStart:"alternate", serverFromPairOrder:true}` (ITTF)
+- volleyball `{within:"rally-winner", setStart:"alternate",
+  decidingSetTossed:true, serverFromPairOrder:true, nonServingRoles:["libero"],
+  rotationCycle:6}` (FIVB)
+
+R6/R7 add a sport by declaring a preset, never by editing the reader.
+
+**The brief's signature `(state, cfg)` was FALSE and the implementer was right
+to reject it.** `cfg` is already `state.cfg`, and — the part that matters — the
+aggregate state holds set TOTALS, not the rally sequence, so a state-only
+reader could name a server only at 0-0 of a set. It takes the LEDGER and
+replays it through the real `applyRally`/`applySummary`/`bankSet` (the
+`setBasedMatchOutcomesFold` precedent), never a second set predicate.
+**Corollary nobody assumed:** side-out sports need the anchor LESS than R5-1
+stated — once one rally is recorded the ledger answers for itself, so badminton
+needs a declared `serving` only at 0-0 of game 1 and volleyball only at 0-0 of
+the tossed decider. Table tennis needs it once per match.
+
+**Mutation: 27 run, 26 died, 1 survived and the survivor is EQUIVALENT.**
+Red-step first (reader stubbed to always-unknown → 27/30 red), then each guard
+broken in turn against a named test: drift detector, drift widened past the
+set, score-jump guard, score-jump widened to fixed-turns, ledger-mismatch,
+deciding-set toss, match-over, libero, pair-size, rotation squad-size, deuce
+derived from cfg, hardcoded 10-all, both set-start swaps, two turn-index
+off-by-ones, serve-number off-by-one, side-out ignoring the rally winner, and
+expedite not carried into the next game. Survivor: deuce `2*(target-1)` →
+`2*target-1`, checked numerically over targets 2–59 — provably equivalent at
+`turnLength` 1 and 2, diverging only at ≥3, which no preset declares. Left
+unpatched deliberately; an equivalent mutant is not a coverage hole.
+
+**R4's 10-0 lesson recurred, in a new place, and was caught.** A first mutant
+(`expediteFrom = pointsNow()` → `0`) SURVIVED because the covering test pinned
+a single expedite trigger at 5 points — a parity where the wrong turn index
+still names the right side. The TEST was fixed, not the code: the trigger is
+now swept 2..7 asserting side, turn index and serve number, and the mutant dies
+in six tests (`26a04f4dd`). **A single-parity pin is this programme's most
+repeated false green** — R4 tie-break 10-0, R4 D-21 turn 6/8, now this.
+
+### R5 — the implementer's reported blocker is FALSE for this wave
+
+Reported: "`SkinProps`/`SkinLayoutCtx` hand a skin only `state`, never the
+ledger", so the reader is unreachable from a skin without chassis threading.
+True of the **v2** lane, and irrelevant here — R5 builds **v3** skins, and
+`PadHostView.events` already exists (`v3/types.ts:1081`), documented as the
+same list `pipeline.events` exposes, oldest first, ledger plus still-queued
+local events, never a re-derived copy. **No chassis threading is owed.**
+Recorded because a later session reading only the task report would go and
+build a seam that has been there since R2.
+
+Corollary for R6/R7: a v3 skin may call an engine reader that needs history.
+`view.events` is the supported route; do not add a second one.
