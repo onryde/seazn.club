@@ -23,6 +23,15 @@ export const GAMES: GameMeta[] = [
     thumbnail: "♟️",
     status: "live",
   },
+  {
+    slug: "daily-word",
+    title: "Daily Word",
+    tagline: "One 5-letter word, six guesses — a new puzzle every day.",
+    description:
+      "A free daily word-guessing game: five letters, six tries, one puzzle per day. Type or tap a guess and the keyboard fills in green, yellow, and grey to help you close in on the answer — then share your result without spoiling it.",
+    thumbnail: "🔤",
+    status: "live",
+  },
 ];
 
 export function getGame(slug: string): GameMeta | undefined {
