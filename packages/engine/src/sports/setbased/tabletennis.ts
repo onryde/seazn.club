@@ -70,10 +70,11 @@ export const tabletennis = makeSetBasedModule({
   //  * 2.13.3: two points each, whoever wins them — so the serve is a pure
   //    function of the game's score once the game's first server is known,
   //    and a partial score summary costs the rotation nothing.
-  //  * 2.13.5: at deuce (both one short of the target) one point each. Derived
-  //    from `setTo`/`finalSetTo`, so `hardbat-21` accelerates at 20-all with
-  //    nothing extra declared. Expedite (2.15.3) is the same mechanic on an
-  //    earlier trigger and the kernel already folds `state.expedite`.
+  //  * 2.13.3's own deuce clause: once both are one short of the target, one
+  //    point each. Derived from `setTo`/`finalSetTo`, so `hardbat-21`
+  //    accelerates at 20-all with nothing extra declared. Expedite (2.15.3) is
+  //    the same mechanic on an earlier trigger and the kernel already folds
+  //    `state.expedite`.
   //  * 2.13.6: the first server of a game received first in the one before, so
   //    the sides alternate the opening serve.
   //  * 2.13.4: in doubles the pair alternates its own service turns, which IS

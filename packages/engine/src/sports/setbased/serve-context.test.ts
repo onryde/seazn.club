@@ -6,8 +6,8 @@
 // EVERY FIXTURE HERE IS A REAL FOLD. `foldMatch(module, cfg, lineups, events)`
 // is the product's own read path; nothing below hand-builds a `SetBasedState`
 // literal, because a state literal shaped like the implementation proves the
-// literal. The expectations are written from the law (BWF 8.1/10.1, ITTF
-// 2.13.3/2.13.5/2.13.6/2.15.3, FIVB 7.1/7.6.2/12.2.2/19.3.2.4) as explicit
+// literal. The expectations are written from the law (BWF 7.6/10.3/11, ITTF
+// 2.13.3/2.13.6/2.15.3, FIVB 7.6.2/12.1.1/12.1.2/12.2.2/19.3.2.4) as explicit
 // tables, not recomputed with the kernel's own arithmetic.
 import { describe, expect, it } from "vitest";
 import { foldMatch, type EventEnvelope } from "../../core/events.ts";
@@ -142,7 +142,7 @@ const summary = (mod: SetBasedModule, payload: unknown): [string, unknown] => [
 ];
 
 // ---------------------------------------------------------------------------
-// Badminton — BWF Laws 8.1 and 10.1 (side-out, previous game's winner opens)
+// Badminton — BWF Laws 7.6 and 10.3 (side-out, previous game's winner opens)
 // ---------------------------------------------------------------------------
 
 describe("badminton — side-out", () => {
@@ -160,7 +160,7 @@ describe("badminton — side-out", () => {
   });
 
   it("takes the first rally's declared `serving` as the anchor and then follows the rally winners", () => {
-    // BWF 10.1 — the side winning a rally serves the next one. Expectation
+    // BWF 10.3 — the side winning a rally serves the next one. Expectation
     // written as the law reads, not recomputed.
     const winners = ["H", "H", "A", "A", "H", "A", "H", "H"] as const;
     const events = stream(
@@ -190,7 +190,7 @@ describe("badminton — side-out", () => {
     expect(answer.serviceTurn).toBeUndefined();
   });
 
-  it("opens game 2 with the winner of game 1 (Law 8.1) — derivable with no declaration", () => {
+  it("opens game 2 with the winner of game 1 (Law 7.6) — derivable with no declaration", () => {
     const events = stream(["core.start"], summary(badminton, { home: 21, away: 15 }));
     const answer = ctx(badminton, cfg, SINGLES, events);
     expect(answer.servingSide).toBe("H");
@@ -210,7 +210,7 @@ describe("badminton — side-out", () => {
     expect(ctxAfter(badminton, cfg, SINGLES, events, 5).serviceTurn).toBe(1);
   });
 
-  it("never names a PERSON, even off a full doubles sheet (Law 10.5 is a service COURT rule)", () => {
+  it("never names a PERSON, even off a full doubles sheet (Law 11 is a service COURT rule)", () => {
     const events = stream(["core.start"], rally(badminton, { wonBy: "H", serving: "H" }));
     const answer = ctx(badminton, cfg, DOUBLES, events);
     expect(answer.servingSide).toBe("H");
@@ -264,7 +264,7 @@ describe("drift detection stays as narrow as the fact justifies", () => {
     );
     expect(ctxAfter(badminton, short, SINGLES, events, 3).unknownBecause).toBe("recorded-disagrees");
     const next = ctx(badminton, short, SINGLES, events);
-    expect(next.servingSide).toBe("A"); // Law 8.1: the game's winner opens
+    expect(next.servingSide).toBe("A"); // Law 7.6: the game's winner opens
     expect(next.serviceTurn).toBe(0);
   });
 
@@ -366,13 +366,13 @@ describe("drift detection stays as narrow as the fact justifies", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Table tennis — ITTF 2.13.3 (two each), 2.13.5 (deuce), 2.13.6 (alternate)
+// Table tennis — ITTF 2.13.3 (two each, one each at deuce), 2.13.6 (alternate)
 // ---------------------------------------------------------------------------
 
 describe("table tennis — two serves each, one each at deuce", () => {
   const cfg = tabletennis.configSchema.parse({});
 
-  /** ITTF 2.13.3/2.13.5, written out. `H` serves the first point of the game;
+  /** ITTF 2.13.3, written out. `H` serves the first point of the game;
    *  index = points already played. Ten turns of two, then one each. */
   const ITTF_SERVER = [
     "H", "H", "A", "A", "H", "H", "A", "A", "H", "H",
@@ -386,7 +386,7 @@ describe("table tennis — two serves each, one each at deuce", () => {
   ] as const;
 
   // Strictly alternating winners never reach a two-point lead, so the game
-  // runs past 10-all and into the one-serve-each endgame (2.13.5) — the range
+  // runs past 10-all and into the one-serve-each endgame (2.13.3) — the range
   // the boundary actually lives in, rather than one lucky score.
   const alternating = stream(
     ["core.start"],
@@ -518,7 +518,7 @@ describe("table tennis — two serves each, one each at deuce", () => {
   });
 
   it("accelerates at the variant's OWN deuce, not a hardcoded 10-all", () => {
-    // `hardbat-21` plays to 21, so 2.13.5 bites at 20-all. At 11-11 (22 points)
+    // `hardbat-21` plays to 21, so the deuce clause bites at 20-all. At 11-11
     // the standard game is long over and the legacy one is still two-each.
     const hardbat = tabletennis.configSchema.parse(tabletennis.variants["hardbat-21"]);
     const events = stream(
@@ -631,9 +631,9 @@ describe("table tennis — two serves each, one each at deuce", () => {
     expect(answer.unknownBecause).toBe("recorded-disagrees");
   });
 
-  it("accelerates the DECIDING game at ITS target, not the earlier games' (2.13.5)", () => {
+  it("accelerates the DECIDING game at ITS target, not the earlier games' (2.13.3)", () => {
     // No shipped variant sets `finalSetTo` apart from `setTo`, but a
-    // competition config can, and 2.13.5 bites one short of the target THIS
+    // competition config can, and 2.13.3 bites one short of the target THIS
     // game is played to. Games to 3, decider to 5: the decider is still two
     // serves each at 3-2 and only accelerates at 4-all.
     const decider = tabletennis.configSchema.parse({ bestOf: 3, setTo: 3, finalSetTo: 5 });
@@ -689,7 +689,7 @@ describe("table tennis — two serves each, one each at deuce", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Volleyball — FIVB 7.1 (the deciding set is tossed), 7.6.2, 19.3.2.4
+// Volleyball — FIVB 12.1.1/12.1.2 (first service in a set), 7.6.2, 19.3.2.4
 // ---------------------------------------------------------------------------
 
 describe("volleyball", () => {
@@ -751,7 +751,7 @@ describe("volleyball", () => {
     expect(after.serviceTurn).toBeUndefined(); // the set's opener is still untold
   });
 
-  it("stops at the deciding set's door — FIVB 7.1 tosses for it afresh", () => {
+  it("stops at the deciding set's door — FIVB 12.1.1 tosses for it afresh", () => {
     const events = stream(
       ...setOneToHome,
       summary(volleyball, { home: 0, away: 3 }), // set 2 to A

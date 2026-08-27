@@ -844,7 +844,7 @@ function applyAbandon(state: SetBasedState): SetBasedState {
  * Who serves the next rally INSIDE a set.
  *
  *  * `rally-winner` — side-out: the winner of a rally serves the next one
- *    (BWF Law 10.1, FIVB 12.2.2). The consequence worth knowing is that the
+ *    (BWF Law 10.3, FIVB 12.2.2). The consequence worth knowing is that the
  *    ledger answers this by itself from the second rally of a set onwards —
  *    a declaration is only ever needed for the first.
  *  * `fixed-turns` — the serve changes hands after a fixed number of rallies
@@ -856,9 +856,9 @@ export type SetBasedServeWithin = "rally-winner" | "fixed-turns";
 /**
  * Who serves first in a set after the first one.
  *
- *  * `set-winner` — the side that won the previous set (BWF Law 8.1).
+ *  * `set-winner` — the side that won the previous set (BWF Law 7.6).
  *  * `alternate` — the sides take the first serve in turn (ITTF 2.13.6;
- *    FIVB 7.1 for sets 2–4).
+ *    FIVB 12.1.2 for sets 2–4 — 7.1 is the TOSS, a different rule).
  */
 export type SetBasedSetStart = "set-winner" | "alternate";
 
@@ -883,8 +883,8 @@ export type SetBasedServeUnknown =
   | "recorded-disagrees"
   /** The ledger handed in does not fold to the state handed in. */
   | "ledger-mismatch"
-  /** The laws re-toss for the deciding set (FIVB 7.1), so the alternation does
-   *  not carry into it. */
+  /** The deciding set's first service comes from the TOSS (FIVB 12.1.1, the
+   *  toss itself being 7.1), so the alternation does not carry into it. */
   | "deciding-set-toss"
   /** `setStart: "alternate"` only. The next set opens with the OPPONENT of
    *  this set's first server, so the alternation rests on `firstServer` — and
@@ -906,20 +906,22 @@ export interface SetBasedServeRotation {
   readonly within: SetBasedServeWithin;
   /** `fixed-turns` only — rallies per service turn (ITTF 2.13.3: two). */
   readonly turnLength?: number;
-  /** `fixed-turns` only — ITTF 2.13.5: once BOTH sides reach one short of the
+  /** `fixed-turns` only — ITTF 2.13.3's deuce clause: once BOTH sides reach
+   *  one short of the
    *  target ("10-all"), the serve changes after every rally. Derived from
    *  `setTo`/`finalSetTo`, so the hardbat-21 variant accelerates at 20-all
    *  without declaring anything extra. */
   readonly acceleratesAtDeuce?: boolean;
   readonly setStart: SetBasedSetStart;
-  /** FIVB 7.1 — a fresh toss before the deciding set, so the alternation stops
+  /** FIVB 12.1.1 — the deciding set's first service is the toss's (7.1), so
+   *  the alternation stops
    *  there and the reader reports `deciding-set-toss` until the ledger says
    *  who served. */
   readonly decidingSetTossed?: boolean;
   /**
    * The side's service turns run down the team sheet's declared pair order
    * (ITTF 2.13.4 doubles; FIVB Beach 13.2). Absent means the laws pick the
-   * server from facts this kernel does not fold — BWF Law 10.5 reads the
+   * server from facts this kernel does not fold — BWF Law 11 reads the
    * SERVICE COURT the players happen to be standing in, and FIVB 7.6 reads a
    * six-position court rotation — so no person is named at all.
    */
@@ -995,7 +997,7 @@ export interface SetBasedServeContext {
  * The turn a point belongs to, 0-based, under `fixed-turns`.
  *
  * `accelerateFrom` is the point count from which every rally is its own
- * service turn — 10-all (ITTF 2.13.5) or the moment expedite came into force
+ * service turn — 10-all (ITTF 2.13.3) or the moment expedite came into force
  * (2.15.3), whichever comes first. Points before it are grouped `turnLength`
  * at a time; the turn in flight when acceleration begins is CUT SHORT, which
  * is what `Math.ceil` says here and a `Math.floor` would not.
@@ -1084,8 +1086,9 @@ function setBasedServeWalk(
     return open === null ? 0 : open.set.home + open.set.away;
   };
   const closedCount = (): number => replay.sets.filter((set) => set.closed).length;
-  // ITTF 2.13.5 and 2.15.3 are the same mechanic — one rally per turn — with
-  // two different triggers, so the reader takes whichever bites first.
+  // ITTF 2.13.3's deuce clause and 2.15.3 are the same mechanic — one rally
+  // per turn — with two different triggers, so the reader takes whichever
+  // bites first.
   const accelerateFromNow = (): number => {
     const deuce = rotation.acceleratesAtDeuce === true
       ? 2 * (setTarget(cfg, setIndexNow()) - 1)
@@ -1124,14 +1127,15 @@ function setBasedServeWalk(
     const wonBy: Side | null =
       justClosed === undefined ? null : justClosed.home > justClosed.away ? "home" : "away";
     const previousOpener = firstServer;
-    // FIVB 7.1 — the deciding set is tossed for afresh, so the alternation
-    // stops at its door rather than carrying through it.
+    // FIVB 12.1.1 — the deciding set's first service comes from the TOSS
+    // (7.1), so the alternation stops at its door rather than carrying
+    // through it.
     if (rotation.decidingSetTossed === true && closed === cfg.bestOf - 1) {
       startSet(null, "deciding-set-toss");
       return;
     }
     if (rotation.setStart === "set-winner") {
-      // BWF Law 7 — the next game reads the game SCORE, which a contradiction
+      // BWF Law 7.6 — the next game reads the game SCORE, which a contradiction
       // inside the game does not touch. So this branch alternates off nothing
       // and re-anchors cleanly however broken the set it follows was.
       startSet(wonBy, "undeclared");
@@ -1214,7 +1218,7 @@ function setBasedServeWalk(
           // guard that killed the indicator for the rest of the MATCH would be
           // D-24 all over again. How the next set re-anchors depends on which
           // rule it starts under, and the two are not alike:
-          //   * `set-winner` (BWF Law 7) reads the set SCORE — a fact this
+          //   * `set-winner` (BWF Law 7.6) reads the set SCORE — a fact this
           //     contradiction does not touch, so the next set is untouched;
           //   * `alternate` (ITTF 2.13.6, FIVB 12.1.2) reads `firstServer`,
           //     which IS what this disputes, so `openNextSet` refuses to
