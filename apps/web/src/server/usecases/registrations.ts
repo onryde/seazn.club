@@ -2948,6 +2948,12 @@ export interface GroupEntryView {
   free_agent: boolean;
   join_code: string | null;
   players: GroupEntryPlayerView[];
+  /** V379/RS007: this entry's own resolved refund policy — so the status
+   *  page can tell a registrant which side of the line they are on BEFORE
+   *  they confirm a cancel. Same rule `withdrawCore`'s auto-refund uses
+   *  (see `resolveRefundPolicy`); server-only for now, a later wave renders
+   *  it. */
+  refund_policy: ResolvedRefundPolicy;
 }
 
 /** The whole cart, for the status page (design §4 step 6; RS007 builds the
@@ -3050,18 +3056,35 @@ async function buildGroupStatusView(
   if (!group || !tokenOk) throw notFound();
 
   const [comp] = await sql<
-    { comp_name: string; comp_slug: string; org_slug: string; org_name: string }[]
+    { comp_name: string; comp_slug: string; org_slug: string; org_name: string; starts_on: string | null }[]
   >`
-    select c.name as comp_name, c.slug as comp_slug, o.slug as org_slug, o.name as org_name
+    select c.name as comp_name, c.slug as comp_slug, o.slug as org_slug, o.name as org_name,
+           c.starts_on
     from competitions c join organizations o on o.id = c.org_id
     where c.id = ${group.competition_id}`;
 
-  const entries = await sql<Omit<GroupEntryView, "players">[]>`
+  const entries = await sql<
+    (Omit<GroupEntryView, "players" | "refund_policy"> & { refunded_cents: number })[]
+  >`
     select r.id, r.division_id, d.name as division_name, r.display_name, r.status,
-           r.amount_cents, r.free_agent, r.join_code
+           r.amount_cents, r.refunded_cents, r.free_agent, r.join_code
     from registrations r join divisions d on d.id = r.division_id
     where r.group_id = ${group.id}
     order by r.created_at, r.id`;
+
+  // refund_lock_at is a DIVISION setting (registration_settings), so a cart
+  // spanning more than one division can genuinely have one entry refundable
+  // and another not (V379/RS007). Batched by distinct division_id, the same
+  // way `players` batches by entries.map(id) below — one query, not one per
+  // entry.
+  const divisionIds = [...new Set(entries.map((e) => e.division_id))];
+  const settingsRows =
+    divisionIds.length > 0
+      ? await sql<{ division_id: string; refund_lock_at: Date | null }[]>`
+          select division_id, refund_lock_at from registration_settings
+          where division_id in ${sql(divisionIds)}`
+      : [];
+  const refundLockByDivision = new Map(settingsRows.map((s) => [s.division_id, s.refund_lock_at]));
 
   const players =
     entries.length > 0
@@ -3091,7 +3114,17 @@ async function buildGroupStatusView(
     org_slug: comp?.org_slug ?? "",
     org_name: comp?.org_name ?? "",
     created_at: new Date(group.created_at).toISOString(),
-    entries: entries.map((e) => ({ ...e, players: playersByEntry.get(e.id) ?? [] })),
+    entries: entries.map(({ refunded_cents, ...e }) => ({
+      ...e,
+      players: playersByEntry.get(e.id) ?? [],
+      refund_policy: resolveRefundPolicy(
+        refundLockByDivision.get(e.division_id) ?? null,
+        comp?.starts_on ?? null,
+        group.payment_intent_id,
+        e.amount_cents,
+        refunded_cents,
+      ),
+    })),
   };
 }
 
@@ -3211,6 +3244,52 @@ export async function maybeAlertRegistrationRefundFailed(opts: {
   }
 }
 
+export interface ResolvedRefundPolicy {
+  refundable: boolean;
+  /** ISO instant, or null only when NEITHER an explicit lock NOR the
+   *  competition's own `starts_on` exists to fall back to. */
+  deadline: string | null;
+  /** This entry's own remaining unrefunded balance — what would come back if
+   *  it were withdrawn right now, regardless of `refundable` (a registrant
+   *  past the deadline can still be shown what is at stake). */
+  amount_cents: number;
+}
+
+/**
+ * V379/RS007 — the refund policy an entry sits under RIGHT NOW. Shared by
+ * `withdrawCore`'s auto-refund decision and the read path
+ * (`buildGroupStatusView`) so a registrant can never be shown a policy on
+ * the status page that the write path would not actually honour.
+ *
+ * NULL `refundLockAt` no longer means "refundable forever" (owner ruling).
+ * The lock-DATE policy stays — the org still controls refunds by setting one
+ * date, not by actioning each refund individually — but an org that never
+ * configured a lock now falls back to the competition's own `starts_on`,
+ * rather than staying auto-refundable right up until (and past) kickoff,
+ * after the money is already committed to a venue. An EXPLICIT
+ * `refund_lock_at` always wins over this fallback — never averaged,
+ * never the earlier/later of the two, just a plain `??`.
+ *
+ * `startsOn` is a DATE column (`competitions.starts_on`, no time-of-day);
+ * `new Date("YYYY-MM-DD")` parses it as UTC midnight, same as every other
+ * bare-date read in this file (e.g. the .ics `starts_on` handling below).
+ */
+export function resolveRefundPolicy(
+  refundLockAt: Date | null,
+  startsOn: string | null,
+  paymentIntentId: string | null,
+  amountCents: number,
+  refundedCents: number,
+): ResolvedRefundPolicy {
+  const lockAt = refundLockAt ?? (startsOn ? new Date(startsOn) : null);
+  const remaining = amountCents - refundedCents;
+  return {
+    refundable: !!paymentIntentId && remaining > 0 && (!lockAt || new Date() < lockAt),
+    deadline: lockAt ? lockAt.toISOString() : null,
+    amount_cents: remaining,
+  };
+}
+
 async function withdrawCore(reg: RegistrationWithGroupRow, actorId: string | null): Promise<void> {
   if (reg.status === "withdrawn") return; // idempotent
   // RULING A (RS002 W5 review, MAJOR): rejected is terminal from every
@@ -3285,18 +3364,23 @@ async function withdrawCore(reg: RegistrationWithGroupRow, actorId: string | nul
   }
 
   // Auto-refund policy (doc 16 §1.1): full refund when withdrawal lands
-  // before refund_lock_at (or no lock set). After the lock it's organiser
-  // discretion via the manual refund endpoint. Stripe call OUTSIDE the tx.
+  // before refund_lock_at (V379: or its starts_on fallback when unset — see
+  // resolveRefundPolicy). After the lock it's organiser discretion via the
+  // manual refund endpoint. Stripe call OUTSIDE the tx.
   const { locked } = outcome;
-  const refundable = locked.payment_intent_id && locked.refunded_cents < locked.amount_cents;
-  const beforeLock =
-    !settings?.refund_lock_at || new Date() < new Date(settings.refund_lock_at);
-  if (refundable && beforeLock) {
+  const policy = resolveRefundPolicy(
+    settings?.refund_lock_at ?? null,
+    ctx.starts_on,
+    locked.payment_intent_id,
+    locked.amount_cents,
+    locked.refunded_cents,
+  );
+  if (policy.refundable) {
     // RS002 (V368): THIS entry's own remaining balance — never the cart's
     // whole intent (hazard 1) — so a sibling that already carries a partial
     // refund (organiser discretion, then a late withdrawal) is never
     // double-counted here either.
-    const remaining = locked.amount_cents - locked.refunded_cents;
+    const remaining = policy.amount_cents;
     try {
       const refund = await stripeRefund(locked.payment_intent_id as string, remaining);
       // Additive on BOTH tables (hazard 2 fixed), in ONE transaction (review
@@ -3347,13 +3431,19 @@ async function withdrawCore(reg: RegistrationWithGroupRow, actorId: string | nul
 // ---------------------------------------------------------------------------
 
 /**
- * Three passes over card pendings: (1) T-24h payment reminders carrying a
+ * Four passes over card pendings: (1a) T-24h payment reminders for
+ * never-promoted entries, keyed on the CART's shared deadline, carrying a
  * fresh token-free checkout link, exactly once per registration
- * (reminded_at); (2) expire never-paid submits past the CART's deadline and
- * promote the oldest waitlisted with a new window; (3) lapse PROMOTED
- * entries past their OWN deadline back to the waitlist tail and re-offer the
- * freed slot (V378/RS007) — `promoted_at is null` vs `is not null` makes (2)
- * and (3) mutually exclusive, so a row can only ever match one. Each
+ * (registration_groups.reminded_at); (1b) the same T-24h reminder for
+ * PROMOTED entries, keyed on THEIR OWN deadline instead
+ * (registrations.promotion_reminded_at — V379/RS007: a group-level mark
+ * would silence a still-pending sibling's own, unrelated reminder the
+ * moment either one fired); (2) expire never-paid submits past the CART's
+ * deadline and promote the oldest waitlisted with a new window; (3) lapse
+ * PROMOTED entries past their OWN deadline back to the waitlist tail and
+ * re-offer the freed slot (V378/RS007). `r.promoted_at is null` vs
+ * `is not null` scopes (1a) from (1b) and (2) from (3) identically, so a row
+ * can only ever match one reminder pass and one expiry/lapse pass. Each
  * expiry/lapse runs in its own row-locked tx, so a racing webhook
  * serialises: webhook first → paid wins; sweep first → the late payment
  * auto-refunds (confirmPaidRegistration).
@@ -3367,10 +3457,20 @@ export async function sweepRegistrations(
   let lapsedCount = 0;
 
   // payment_method/expires_at/reminded_at live on the cart now (V364).
+  // `r.promoted_at is null` (V379/RS007 — found while wiring the promoted-
+  // reminder pass below): a promotion into a stripe window EXTENDS the
+  // cart's shared expires_at too (promoteWaitlistedRow's `greatest(...)`
+  // write, so a still-pending sibling's own deadline is never shortened),
+  // which means a promoted entry's OWN clock and the cart's shared one can
+  // land in the SAME 24h window at the SAME time — without this filter, a
+  // promoted row would be reminded HERE (against the group's — possibly
+  // sibling-driven, not this entry's own — deadline) AND by the dedicated
+  // promoted pass below (against its real deadline), twice, from two marks.
+  // Promoted rows are this query's business no longer; see (1b) below.
   const due = await sql<RegistrationWithGroupRow[]>`
     select ${regGroupCols(sql)}
     from registrations r join registration_groups g on g.id = r.group_id
-    where r.status = 'pending' and g.payment_method = 'stripe'
+    where r.status = 'pending' and r.promoted_at is null and g.payment_method = 'stripe'
       and g.expires_at is not null
       and g.expires_at < now() + interval '24 hours'
       and g.expires_at > now()
@@ -3399,6 +3499,51 @@ export async function sweepRegistrations(
     }
     await sql`update registration_groups set reminded_at = now(), updated_at = now()
               where id = ${reg.group_id}`;
+    reminded++;
+  }
+
+  // (1b) V379/RS007 — the promoted counterpart to the pass immediately
+  // above: same T-24h window, same mailer, but keyed on THIS entry's own
+  // `promotion_expires_at` and marked on THIS entry's own
+  // `promotion_reminded_at` — never the group's `reminded_at`, which a cart
+  // can share with a still-pending sibling (see (1a)'s comment and the
+  // column's own doc comment on `registrations`, V379). `promotion_expires_at
+  // is not null` alone is enough to scope this to promoted, stripe-fee rows:
+  // `promoteWaitlistedRow` only ever sets it when the promotion itself
+  // needed a stripe window (`amount_cents` > 0 at that moment), and nothing
+  // else in the codebase writes it.
+  const duePromoted = await sql<RegistrationWithGroupRow[]>`
+    select ${regGroupCols(sql)}
+    from registrations r join registration_groups g on g.id = r.group_id
+    where r.status = 'pending' and r.promoted_at is not null
+      and r.promotion_expires_at is not null
+      and r.promotion_expires_at < now() + interval '24 hours'
+      and r.promotion_expires_at > now()
+      and r.promotion_reminded_at is null
+    order by r.promotion_expires_at
+    limit 200`;
+  for (const reg of duePromoted) {
+    try {
+      const ctx = await divisionCtx(sql, reg.division_id);
+      if (!ctx.charges_enabled) continue; // Connect broke — nothing to link to
+      const url = await createRegistrationCheckout(reg.group_id, [reg.id], ctx, origin, null);
+      await sendPaymentReminderEmail({
+        to: reg.contact_email,
+        locale: toLocale(reg.locale),
+        orgName: ctx.org_name,
+        competitionName: ctx.comp_name,
+        displayName: reg.display_name,
+        feeCents: reg.amount_cents,
+        currency: reg.currency,
+        paymentInstructions: null,
+        checkoutUrl: url,
+        payDeadline: reg.promotion_expires_at,
+      });
+    } catch {
+      continue; // promotion_reminded_at stays null — the next sweep retries
+    }
+    await sql`update registrations set promotion_reminded_at = now(), updated_at = now()
+              where id = ${reg.id}`;
     reminded++;
   }
 

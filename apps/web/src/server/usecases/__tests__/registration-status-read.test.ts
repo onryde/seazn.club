@@ -164,6 +164,89 @@ describe.skipIf(!HAS_DB)("groupByRef — token gate", () => {
   });
 });
 
+// V379/RS007 — the resolved refund policy groupByRef exposes per entry, so
+// the status page can tell a registrant which side of the line they are on
+// BEFORE they confirm a cancel. Same rule withdrawCore's auto-refund uses
+// (resolveRefundPolicy) — its own pure-logic coverage lives in
+// registrations.test.ts ("resolveRefundPolicy (pure, V379/RS007)"); these
+// prove it is actually WIRED into this read path, with a real payment
+// intent and a real competition row, not just callable in isolation.
+describe.skipIf(!HAS_DB)("groupByRef — resolved refund policy (V379/RS007)", () => {
+  it("a paid entry with no refund_lock_at falls back to the competition's own starts_on, and reads refundable while that is still ahead", async () => {
+    const { competition, division } = await stripeSettingsRig(); // rig()'s default starts_on: 2026-09-15 (future)
+    const refCode = freshRef();
+    const { registration, access_token } = await seedRegistration(
+      competition.id,
+      division.id,
+      { fee_cents: 500, currency: "gbp", payment_method: "stripe" },
+      { refCode },
+    );
+    await sql`update registration_groups set payment_intent_id = ${"pi_test_" + randomUUID().slice(0, 8)}
+              where id = ${registration.group_id}`;
+
+    const view = await groupByRef(refCode, access_token);
+    const entry = view.entries[0]!;
+    expect(entry.refund_policy.refundable).toBe(true);
+    expect(entry.refund_policy.amount_cents).toBe(500);
+    expect(entry.refund_policy.deadline).toBe(new Date("2026-09-15").toISOString());
+  });
+
+  it("falls back to NOT refundable once the competition itself has already started", async () => {
+    const { competition, division } = await stripeSettingsRig();
+    await sql`update competitions set starts_on = (now() - interval '1 day')::date where id = ${competition.id}`;
+    const refCode = freshRef();
+    const { registration, access_token } = await seedRegistration(
+      competition.id,
+      division.id,
+      { fee_cents: 500, currency: "gbp", payment_method: "stripe" },
+      { refCode },
+    );
+    await sql`update registration_groups set payment_intent_id = ${"pi_test_" + randomUUID().slice(0, 8)}
+              where id = ${registration.group_id}`;
+
+    const view = await groupByRef(refCode, access_token);
+    expect(view.entries[0]!.refund_policy.refundable).toBe(false);
+  });
+
+  it("an explicit refund_lock_at wins over the starts_on fallback", async () => {
+    const { competition, division } = await stripeSettingsRig();
+    await sql`update registration_settings set refund_lock_at = '2020-01-01T00:00:00Z'
+              where division_id = ${division.id}`;
+    const refCode = freshRef();
+    const { registration, access_token } = await seedRegistration(
+      competition.id,
+      division.id,
+      { fee_cents: 500, currency: "gbp", payment_method: "stripe" },
+      { refCode },
+    );
+    await sql`update registration_groups set payment_intent_id = ${"pi_test_" + randomUUID().slice(0, 8)}
+              where id = ${registration.group_id}`;
+
+    const view = await groupByRef(refCode, access_token);
+    const entry = view.entries[0]!;
+    // Not the competition's (future) starts_on — the explicit lock, long past.
+    expect(entry.refund_policy.refundable).toBe(false);
+    expect(entry.refund_policy.deadline).toBe(new Date("2020-01-01T00:00:00Z").toISOString());
+  });
+
+  it("amount_cents is the entry's own remaining unrefunded balance, not the original fee", async () => {
+    const { competition, division } = await stripeSettingsRig();
+    const refCode = freshRef();
+    const { registration, access_token } = await seedRegistration(
+      competition.id,
+      division.id,
+      { fee_cents: 1000, currency: "gbp", payment_method: "stripe" },
+      { refCode },
+    );
+    await sql`update registration_groups set payment_intent_id = ${"pi_test_" + randomUUID().slice(0, 8)}
+              where id = ${registration.group_id}`;
+    await sql`update registrations set refunded_cents = 300 where id = ${registration.id}`;
+
+    const view = await groupByRef(refCode, access_token);
+    expect(view.entries[0]!.refund_policy.amount_cents).toBe(700);
+  });
+});
+
 // RS006 §C — the post-submit status page resolves the group by its DB id
 // (`?rid=<group_id>&token=...`, the SAME convention `buildCartMail`'s
 // statusUrl and `createRegistrationCheckout`'s Stripe success/cancel URLs

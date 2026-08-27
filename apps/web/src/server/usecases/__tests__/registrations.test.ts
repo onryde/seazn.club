@@ -137,6 +137,7 @@ import {
   buildDisputeEvidence,
   resendRegistrationConfirmation,
   notifySubmitted,
+  resolveRefundPolicy,
 } from "../registrations";
 // RS005 F1: rendering the REAL production template off captured
 // `RegistrationEmail` args (see emailMock.registration above) — this file's
@@ -267,6 +268,47 @@ describe("validateAnswers (pure)", () => {
   it("rejects a missing required field and an off-list select value", () => {
     expect(() => validateAnswers(fields, {})).toThrow(HttpError);
     expect(() => validateAnswers(fields, { size: "XXL" })).toThrow(HttpError);
+  });
+});
+
+describe("resolveRefundPolicy (pure, V379/RS007)", () => {
+  const FUTURE = "2099-01-01";
+  const PAST = "2000-01-01";
+
+  it("an explicit refund_lock_at wins over the starts_on fallback, in either direction", () => {
+    // Explicit lock in the past beats a starts_on that is still ahead.
+    expect(resolveRefundPolicy(new Date(PAST), FUTURE, "pi_1", 1000, 0).refundable).toBe(false);
+    // Explicit lock in the future beats a starts_on that has already passed.
+    expect(resolveRefundPolicy(new Date(FUTURE), PAST, "pi_1", 1000, 0).refundable).toBe(true);
+  });
+
+  it("NULL refund_lock_at falls back to the competition's starts_on — refundable while it is still ahead", () => {
+    const policy = resolveRefundPolicy(null, FUTURE, "pi_1", 1000, 0);
+    expect(policy.refundable).toBe(true);
+    expect(policy.deadline).toBe(new Date(FUTURE).toISOString());
+  });
+
+  it("NULL refund_lock_at falls back to the competition's starts_on — NOT refundable once it has passed", () => {
+    // The exact defect this wave fixes: NULL used to mean refundable
+    // forever, including the night before (and after) kickoff.
+    const policy = resolveRefundPolicy(null, PAST, "pi_1", 1000, 0);
+    expect(policy.refundable).toBe(false);
+    expect(policy.deadline).toBe(new Date(PAST).toISOString());
+  });
+
+  it("both null (no lock, no starts_on) has no deadline and stays refundable — never worse than pre-fix behaviour when there is nothing to fall back to", () => {
+    const policy = resolveRefundPolicy(null, null, "pi_1", 1000, 0);
+    expect(policy.deadline).toBeNull();
+    expect(policy.refundable).toBe(true);
+  });
+
+  it("amount_cents is the remaining unrefunded balance, not the original fee", () => {
+    expect(resolveRefundPolicy(null, FUTURE, "pi_1", 1000, 400).amount_cents).toBe(600);
+  });
+
+  it("not refundable with no payment_intent_id, or with nothing left to refund, even before the deadline", () => {
+    expect(resolveRefundPolicy(null, FUTURE, null, 1000, 0).refundable).toBe(false);
+    expect(resolveRefundPolicy(null, FUTURE, "pi_1", 1000, 1000).refundable).toBe(false);
   });
 });
 
@@ -746,6 +788,67 @@ describe.skipIf(!HAS_DB)("registration flows (doc 16 §1.1, PROMPT-20a)", () => 
     await expect(refundRegistration(owner, res.registration.id, 700)).rejects.toThrow(HttpError);
     const fullRest = await refundRegistration(owner, res.registration.id, undefined);
     expect(fullRest.refunded_cents).toBe(1000);
+  });
+
+  // V379/RS007 — NULL refund_lock_at no longer means refundable forever; it
+  // falls back to the competition's own starts_on (resolveRefundPolicy).
+  // Wired end-to-end through withdrawCore here — the pure rule itself has
+  // its own fast coverage above ("resolveRefundPolicy (pure, V379/RS007)").
+  it("RS007: NULL refund_lock_at + competition ALREADY STARTED — withdrawal does NOT auto-refund", async () => {
+    const { competition, division, settings } = await stripeRig(); // refund_lock_at: null (SETTINGS_BASE)
+    await sql`update competitions set starts_on = (now() - interval '1 day')::date where id = ${competition.id}`;
+    const res = await seedRegistration(competition.id, division.id, settings);
+    await handleRegistrationCheckoutCompleted(fakeSession(res.registration.id, 500));
+    stripeMock.refundCreate.mockClear();
+
+    await withdrawRegistrationPublic(res.registration.id, res.access_token);
+    // Reverting the starts_on fallback makes this fail: NULL would read as
+    // "before the lock" forever and auto-refund here regardless.
+    expect(stripeMock.refundCreate).not.toHaveBeenCalled();
+    const row = await loadWithGroup(res.registration.id);
+    expect(row.refunded_cents).toBe(0);
+  });
+
+  it("RS007: NULL refund_lock_at + competition still UPCOMING — withdrawal still auto-refunds", async () => {
+    const { competition, division, settings } = await stripeRig();
+    await sql`update competitions set starts_on = (now() + interval '30 days')::date where id = ${competition.id}`;
+    const res = await seedRegistration(competition.id, division.id, settings);
+    await handleRegistrationCheckoutCompleted(fakeSession(res.registration.id, 500));
+    stripeMock.refundCreate.mockClear();
+
+    await withdrawRegistrationPublic(res.registration.id, res.access_token);
+    expect(stripeMock.refundCreate).toHaveBeenCalledTimes(1);
+    const row = await loadWithGroup(res.registration.id);
+    expect(row.refunded_cents).toBe(row.amount_cents);
+  });
+
+  it("RS007: an explicit refund_lock_at wins over the starts_on fallback even when the competition is still upcoming", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    await sql`update organizations
+              set stripe_account_id = ${"acct_" + randomUUID().slice(0, 8)}, stripe_charges_enabled = true
+              where id = ${orgId}`;
+    const { competition, division } = await rig(owner, { startsOn: "2026-12-25" }); // far future
+    const settings = await putRegistrationSettings(owner, division.id, {
+      enabled: true,
+      entrant_kind: "individual",
+      fee_cents: 1000,
+      form_fields: [],
+      opens_at: null,
+      closes_at: null,
+      capacity: null,
+      refund_lock_at: "2020-01-01T00:00:00Z", // explicit lock, long past
+    });
+    const res = await seedRegistration(competition.id, division.id, settings);
+    await handleRegistrationCheckoutCompleted(fakeSession(res.registration.id, 1000));
+    stripeMock.refundCreate.mockClear();
+
+    await withdrawRegistrationPublic(res.registration.id, res.access_token);
+    // Reverting resolveRefundPolicy's `refundLockAt ?? fallback` order (or
+    // falling back even when an explicit lock exists) would refund here,
+    // since the competition itself has not started — the explicit lock must
+    // still win.
+    expect(stripeMock.refundCreate).not.toHaveBeenCalled();
   });
 
   // "eligibility gate: U16 rejects an adult; a minor needs guardian consent"
@@ -3330,6 +3433,109 @@ describe.skipIf(!HAS_DB)("RS007: the entry's own clock governs even when the car
     // ruling requires to return to the waitlist instead.
     expect(row.status).toBe("waitlisted");
     expect(row.promoted_at).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// V379/RS007 — a promoted entry's own T-24h payment reminder. Its deadline
+// is `promotion_expires_at`, not the cart's shared `expires_at` (same split
+// V378 already made for expiry vs lapse). See the "remind promoted entrants
+// before they lapse" task and its "Decide where the remind-once mark lives"
+// instruction: it lives on the ENTRY (registrations.promotion_reminded_at),
+// never the GROUP, because a group can hold a still-pending sibling whose
+// own reminder must not be silenced by this one firing.
+// ---------------------------------------------------------------------------
+
+describe.skipIf(!HAS_DB)("RS007: sweep reminds a promoted entry off its OWN clock, once", () => {
+  it("inside the last 24h of its own promotion_expires_at: reminded exactly once, via its OWN mark — not the group's", async () => {
+    const { competition, division, settings } = await stripeRig({ feeCents: 500 });
+    const waiting = await seedRegistration(competition.id, division.id, settings, { status: "waitlisted" });
+    const promoted = await sql.begin((tx) =>
+      promoteWaitlistedRow(tx, waiting.registration.id, waiting.registration.group_id, settings),
+    );
+    // Single-entry cart: promoteWaitlistedRow's own `greatest(...)` write
+    // (see its doc comment) lands the group's shared expires_at on the SAME
+    // instant as this entry's own promotion_expires_at here, which is
+    // exactly what makes this scenario able to catch a missing
+    // `r.promoted_at is null` guard on the group-level reminder pass — pull
+    // BOTH into the last-24h window together and confirm only ONE reminder
+    // goes out, off the entry's OWN mark.
+    await sql`update registrations set promotion_expires_at = now() + interval '10 hours'
+              where id = ${promoted!.id}`;
+    await sql`update registration_groups set expires_at = now() + interval '10 hours'
+              where id = ${promoted!.group_id}`;
+
+    const checkoutsFor = (id: string) =>
+      stripeMock.checkoutCreate.mock.calls.filter(([args]) =>
+        (args as { metadata?: { registration_ids?: string } })
+          ?.metadata?.registration_ids
+          ?.split(",")
+          .includes(id),
+      ).length;
+    stripeMock.checkoutCreate.mockClear();
+
+    const first = await sweepRegistrations("https://test.local");
+    expect(first.reminded).toBeGreaterThanOrEqual(1);
+
+    const [cols] = await sql<{ promotion_reminded_at: Date | null }[]>`
+      select promotion_reminded_at from registrations where id = ${promoted!.id}`;
+    expect(cols!.promotion_reminded_at, "the entry's OWN mark is set").not.toBeNull();
+    const groupRow = await loadWithGroup(promoted!.id);
+    // Reverting the `r.promoted_at is null` guard on the group-level "due"
+    // pass makes this fail: the group pass would ALSO catch this row (its
+    // shared expires_at is in-window and reminded_at is null) and stamp
+    // this too, on top of the entry's own pass below.
+    expect(groupRow.reminded_at, "the group-level mark stays untouched").toBeNull();
+    // Exactly one checkout link minted — two would mean two reminder emails
+    // for the same entry from two passes.
+    expect(checkoutsFor(promoted!.id)).toBe(1);
+
+    // A second sweep must not re-remind.
+    const remindedAt = cols!.promotion_reminded_at;
+    await sweepRegistrations("https://test.local");
+    const [cols2] = await sql<{ promotion_reminded_at: Date | null }[]>`
+      select promotion_reminded_at from registrations where id = ${promoted!.id}`;
+    expect(cols2!.promotion_reminded_at).toEqual(remindedAt);
+    expect(checkoutsFor(promoted!.id)).toBe(1); // still exactly one — no re-send
+  });
+});
+
+describe.skipIf(!HAS_DB)("RS007: a promoted entry's reminder does not block a still-pending sibling's own reminder", () => {
+  it("sibling's LATER group-level reminder still fires once its own deadline is due", async () => {
+    const { competition, division, settings } = await stripeRig({ feeCents: 500 });
+    const waiting = await seedRegistration(competition.id, division.id, settings, { status: "waitlisted" });
+    const promoted = await sql.begin((tx) =>
+      promoteWaitlistedRow(tx, waiting.registration.id, waiting.registration.group_id, settings),
+    );
+    // X (promoted) is due now.
+    await sql`update registrations set promotion_expires_at = now() + interval '10 hours'
+              where id = ${promoted!.id}`;
+    // Y — a second, never-promoted pending entry in the SAME cart — is not
+    // due yet: its own (shared) deadline is safely out of the 24h window.
+    const sibling = await seedSecondEntry(promoted!.group_id, division.id, 500, "Sibling Pending", "pending");
+    await sql`update registration_groups set expires_at = now() + interval '40 hours'
+              where id = ${promoted!.group_id}`;
+
+    await sweepRegistrations("https://test.local"); // sweep #1 — only X is due
+
+    const [xCols] = await sql<{ promotion_reminded_at: Date | null }[]>`
+      select promotion_reminded_at from registrations where id = ${promoted!.id}`;
+    expect(xCols!.promotion_reminded_at, "X's own reminder fired").not.toBeNull();
+    let groupRow = await loadWithGroup(sibling.id);
+    expect(groupRow.reminded_at, "Y is not due yet").toBeNull();
+
+    // Now Y's own (shared) deadline enters the window too.
+    await sql`update registration_groups set expires_at = now() + interval '10 hours'
+              where id = ${promoted!.group_id}`;
+    await sweepRegistrations("https://test.local"); // sweep #2
+
+    groupRow = await loadWithGroup(sibling.id);
+    // Reverting the per-entry mark to reuse registration_groups.reminded_at
+    // for X's own reminder makes this fail: X's sweep-1 write would already
+    // have set g.reminded_at, and Y's own reminder would silently never
+    // fire — the exact "a group-level mark would silence a sibling's
+    // reminder" hazard this column exists to avoid.
+    expect(groupRow.reminded_at, "Y's own reminder fires, unblocked by X's").not.toBeNull();
   });
 });
 
