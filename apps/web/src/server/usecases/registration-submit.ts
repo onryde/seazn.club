@@ -158,11 +158,18 @@ export interface JoinTeamEntryInput {
    *  player's own registration_players row (privacy_consent_at/.version,
    *  V384), never on registration_groups: that column pair belongs to the
    *  CAPTAIN's cart-wide submit, and reusing it here would silently apply
-   *  the captain's own choice to every later joiner. Optional (see
-   *  PublicJoinRequest's own doc comment, schemas.ts) — stamped only when
-   *  truthy, exactly like media_consent below; an omitted/false value
-   *  simply leaves the stamp null rather than fabricating a consent that
-   *  was never given. */
+   *  the captain's own choice to every later joiner. Contractually REQUIRED
+   *  — `joinTeamEntry` throws 422 on a falsy value unconditionally (mirrors
+   *  `submitRegistrationGroup`'s own gate, `:547`) before either the claim
+   *  or insert branch ever writes. Typed optional anyway (like
+   *  `guardian_consent` below, whose own enforcement is conditional on
+   *  minority rather than unconditional): `PublicJoinRequest.privacy_consent`
+   *  IS required at the wire (schemas.ts) and is this field's only
+   *  real-traffic source, so the type gap here can never be reached through
+   *  the route — it exists only so hand-built call sites (this module's own
+   *  test suites) keep compiling while each is updated to pass the field
+   *  explicitly, rather than a required-field edit here forcing every one
+   *  of them into the same commit, including ones this task does not own. */
   privacy_consent?: boolean;
   /** Per-player media consent — optional, never blocks (mirrors
    *  SubmitGroupInput.media_consent's own "optional, never blocks"
@@ -960,8 +967,12 @@ export async function previewJoinEntry(joinCode: string): Promise<JoinPreviewRes
  * is reused verbatim with `registering_self: true` hardcoded, so the SAME
  * adult+no-guardian-fields rule that protects submit's self row protects a
  * join too (a guardian filling the form for a minor must not accidentally
- * link the CHILD's row to the guardian's own account). Eligibility and the
- * minor/guardian gate apply identically on both paths.
+ * link the CHILD's row to the guardian's own account). Eligibility, the
+ * minor/guardian gate, AND the privacy-consent gate below all apply
+ * identically on both paths — a CLAIMED row was typed in by the CAPTAIN,
+ * who never consented on this player's behalf, so the claim moment is
+ * exactly as much this player's OWN first consent as a fresh insert's is
+ * (design §2 ruling 4 above; consent-asymmetry follow-up, 2026-08-28).
  */
 export async function joinTeamEntry(
   ctx: JoinTeamEntryCtx,
@@ -1031,6 +1042,19 @@ export async function joinTeamEntry(
   if (minor && !(input.guardian_consent && input.guardian_name?.trim())) {
     throw new HttpError(422, "A guardian's name and consent are required for players under 18");
   }
+
+  // GDPR privacy consent (mirrors submitRegistrationGroup:547) — required on
+  // BOTH branches below, not just the insert path (consent-asymmetry
+  // follow-up, 2026-08-28: this was previously enforced only by the join
+  // form's own client-side gate, so a direct API call could join with no
+  // consent recorded at all). registration_groups.privacy_consent_at is the
+  // CAPTAIN's own choice, stamped at THEIR submit, and is never read here
+  // (PublicJoinRequest.privacy_consent's own doc comment) — a claimed row
+  // was typed in by the captain, who never consented on this player's
+  // behalf, so the claim moment is where THIS player's own consent is
+  // captured for the first time, exactly like a freshly-inserted joiner's.
+  if (!input.privacy_consent) throw new HttpError(422, "Please agree to the privacy policy to join");
+
   const consentStatus: "granted" | "guardian" = minor ? "guardian" : "granted";
   const linkUserId = deriveLinkUserId(
     ctx.sessionUserId ?? null,

@@ -78,7 +78,15 @@ const ctx = (orgSlug: string, slug: string) => ({ params: Promise.resolve({ orgS
 const URL_ = (orgSlug: string, slug: string) => `/public/orgs/${orgSlug}/competitions/${slug}/register/join`;
 
 function joinBody(over: Record<string, unknown> = {}): Record<string, unknown> {
-  return { join_code: "SZ-JOIN-0001", player: { full_name: "New Joiner" }, ...over };
+  return {
+    join_code: "SZ-JOIN-0001",
+    player: { full_name: "New Joiner" },
+    // Required (consent-asymmetry follow-up, 2026-08-28) — every case below
+    // that isn't specifically exercising the gate needs a schema-valid body
+    // to ever reach joinTeamEntry at all.
+    privacy_consent: true,
+    ...over,
+  };
 }
 
 function fakeResult(): JoinTeamEntryResult {
@@ -212,6 +220,21 @@ describe("POST .../register/join — routing", () => {
       ctx("acme", "cup"),
     );
     expect(joinSpy.mock.calls[0]![1]).toMatchObject({ player_id: claimId });
+  });
+
+  // Consent-asymmetry follow-up (2026-08-28): privacy_consent is now
+  // REQUIRED on PublicJoinRequest (schemas.ts), so a body omitting it fails
+  // schema validation before ever reaching the usecase — the schema-level
+  // half of the fix; joinTeamEntry's own 422 gate (registration-submit.
+  // test.ts / join-consent.test.ts) is the other half, for a body that
+  // passes the schema with an explicit `false`.
+  it("400s when privacy_consent is missing from the body, without calling the usecase", async () => {
+    const res = await joinRoute(
+      req(URL_("acme", "cup"), joinBody({ privacy_consent: undefined }), { "x-forwarded-for": "8.8.8.8" }),
+      ctx("acme", "cup"),
+    );
+    expect((await read(res)).status).toBe(400);
+    expect(joinSpy).not.toHaveBeenCalled();
   });
 });
 
@@ -373,7 +396,11 @@ describe.skipIf(!HAS_DB)("POST .../register/join — DB-backed", () => {
     const res = await joinRoute(
       req(
         URL_(orgSlug, competition.slug),
-        { join_code: joinCode, player: { full_name: "New Joiner", dob: "1995-05-01" } },
+        {
+          join_code: joinCode,
+          player: { full_name: "New Joiner", dob: "1995-05-01" },
+          privacy_consent: true,
+        },
         { "x-forwarded-for": "8.8.8.20" },
       ),
       ctx(orgSlug, competition.slug),
@@ -403,7 +430,12 @@ describe.skipIf(!HAS_DB)("POST .../register/join — DB-backed", () => {
     const res = await joinRoute(
       req(
         URL_(orgSlug, competition.slug),
-        { join_code: joinCode, player_id: slot!.id, player: { full_name: "Pending Kid", dob: "1996-02-02" } },
+        {
+          join_code: joinCode,
+          player_id: slot!.id,
+          player: { full_name: "Pending Kid", dob: "1996-02-02" },
+          privacy_consent: true,
+        },
         { "x-forwarded-for": "8.8.8.21" },
       ),
       ctx(orgSlug, competition.slug),

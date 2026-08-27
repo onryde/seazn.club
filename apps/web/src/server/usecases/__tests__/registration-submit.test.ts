@@ -1310,7 +1310,7 @@ describe.skipIf(!HAS_DB)("joinTeamEntry", () => {
     const sessionUserId = await makeUser("joiner");
     const res = await joinTeamEntry(
       { sessionUserId },
-      { join_code: entry.join_code!, player: { full_name: "New Joiner", dob: "1995-05-01" } },
+      { join_code: entry.join_code!, player: { full_name: "New Joiner", dob: "1995-05-01" }, privacy_consent: true },
     );
     expect(res.consent_status).toBe("granted");
     const [row] = await sql<{ user_id: string | null; source: string; consent_status: string }[]>`
@@ -1333,6 +1333,7 @@ describe.skipIf(!HAS_DB)("joinTeamEntry", () => {
         player: { full_name: "Young Joiner", dob: "2015-01-01" },
         guardian_name: "A Guardian",
         guardian_consent: true,
+        privacy_consent: true,
       },
     );
     expect(res.consent_status).toBe("guardian");
@@ -1347,7 +1348,10 @@ describe.skipIf(!HAS_DB)("joinTeamEntry", () => {
   it("full-roster rejection: joining is refused once the sport's squad cap is reached", async () => {
     const { entry } = await teamRig();
     // Fills the cap (1) — must succeed before the cap can be proven.
-    await joinTeamEntry({}, { join_code: entry.join_code!, player: { full_name: "First In" } });
+    await joinTeamEntry(
+      {},
+      { join_code: entry.join_code!, player: { full_name: "First In" }, privacy_consent: true },
+    );
     await expect(
       joinTeamEntry({}, { join_code: entry.join_code!, player: { full_name: "One Too Many" } }),
     ).rejects.toMatchObject({ status: 422 });
@@ -1384,6 +1388,47 @@ describe.skipIf(!HAS_DB)("joinTeamEntry", () => {
   });
 
   // ---------------------------------------------------------------------------
+  // Privacy consent (GDPR) — consent-asymmetry follow-up, 2026-08-28. Mirrors
+  // submitRegistrationGroup's own "privacy consent (GDPR) is required" test
+  // above (registration-submit.ts:547) — this suite owns the structural/
+  // status-code coverage for the gate (join-consent.test.ts, this file's
+  // sibling, owns the per-player DB-persistence angle: no stamp, no row
+  // mutated). Both the insert AND claim branches are covered: a captain-
+  // entered row's own consent was never collected either, so the claim
+  // moment is exactly as much this player's first consent as a fresh
+  // insert's is (joinTeamEntry's own doc comment).
+  // ---------------------------------------------------------------------------
+
+  it("privacy consent is required on the INSERT path — a refusal is rejected, not silently joined", async () => {
+    const { entry } = await teamRig();
+    await expect(
+      joinTeamEntry(
+        {},
+        { join_code: entry.join_code!, player: { full_name: "No Consent" }, privacy_consent: false },
+      ),
+    ).rejects.toMatchObject({ status: 422 });
+    expect(await countPlayers(entry.registration_id)).toBe(0);
+  });
+
+  it("privacy consent is required on the CLAIM path — a refusal is rejected, row stays pending", async () => {
+    const { entry, players } = await rosterRig("team", ["Kid One"]);
+    await expect(
+      joinTeamEntry(
+        {},
+        {
+          join_code: entry.join_code!,
+          player_id: players[0]!.id,
+          player: { full_name: "Kid One" },
+          privacy_consent: false,
+        },
+      ),
+    ).rejects.toMatchObject({ status: 422 });
+    const [row] = await sql<{ consent_status: string }[]>`
+      select consent_status from registration_players where id = ${players[0]!.id}`;
+    expect(row!.consent_status).toBe("pending"); // never flipped, never claimed
+  });
+
+  // ---------------------------------------------------------------------------
   // Claim path — a captain-entered row is UPDATED in place, never duplicated
   // (RS007 "found while using the shipped RS006 flow", 2026-08-27: this was
   // previously always an INSERT, which double-counted the roster and left
@@ -1400,6 +1445,7 @@ describe.skipIf(!HAS_DB)("joinTeamEntry", () => {
         join_code: entry.join_code!,
         player_id: players[0]!.id,
         player: { full_name: "Kid One", dob: "1995-05-01" },
+        privacy_consent: true,
       },
     );
     expect(res.player_id).toBe(players[0]!.id);
@@ -1418,12 +1464,22 @@ describe.skipIf(!HAS_DB)("joinTeamEntry", () => {
     const { entry, players } = await rosterRig("team", ["Kid One"]);
     await joinTeamEntry(
       {},
-      { join_code: entry.join_code!, player_id: players[0]!.id, player: { full_name: "Kid One" } },
+      {
+        join_code: entry.join_code!,
+        player_id: players[0]!.id,
+        player: { full_name: "Kid One" },
+        privacy_consent: true,
+      },
     );
     await expect(
       joinTeamEntry(
         {},
-        { join_code: entry.join_code!, player_id: players[0]!.id, player: { full_name: "Kid One" } },
+        {
+          join_code: entry.join_code!,
+          player_id: players[0]!.id,
+          player: { full_name: "Kid One" },
+          privacy_consent: true,
+        },
       ),
     ).rejects.toMatchObject({ status: 409 });
     expect(await countPlayers(entry.registration_id)).toBe(1);
@@ -1435,7 +1491,12 @@ describe.skipIf(!HAS_DB)("joinTeamEntry", () => {
     await expect(
       joinTeamEntry(
         {},
-        { join_code: b.entry.join_code!, player_id: a.players[0]!.id, player: { full_name: "A Kid" } },
+        {
+          join_code: b.entry.join_code!,
+          player_id: a.players[0]!.id,
+          player: { full_name: "A Kid" },
+          privacy_consent: true,
+        },
       ),
     ).rejects.toMatchObject({ status: 404 });
     const [row] = await sql<{ consent_status: string }[]>`
@@ -1464,6 +1525,7 @@ describe.skipIf(!HAS_DB)("joinTeamEntry", () => {
         player: { full_name: "Young Kid", dob: "2015-01-01" },
         guardian_name: "A Guardian",
         guardian_consent: true,
+        privacy_consent: true,
       },
     );
     expect(res.consent_status).toBe("guardian");
@@ -1496,6 +1558,7 @@ describe.skipIf(!HAS_DB)("joinTeamEntry", () => {
         join_code: entry.join_code!,
         player_id: partner.id,
         player: { full_name: "Partner P", dob: "1994-01-01" },
+        privacy_consent: true,
       },
     );
     expect(res.consent_status).toBe("granted");
@@ -1516,7 +1579,12 @@ describe.skipIf(!HAS_DB)("joinTeamEntry", () => {
       const first = players[0]!;
       await joinTeamEntry(
         {},
-        { join_code: entry.join_code!, player_id: first.id, player: { full_name: first.full_name } },
+        {
+          join_code: entry.join_code!,
+          player_id: first.id,
+          player: { full_name: first.full_name },
+          privacy_consent: true,
+        },
       );
       const preview = await previewJoinEntry(entry.join_code!);
       expect(preview.unclaimed_slots.map((s) => s.player_id)).toEqual(
@@ -1610,7 +1678,12 @@ describe.skipIf(!HAS_DB)("joinTeamEntry", () => {
       const { entry, players } = await rosterRig("team", ["Kid One", "Kid Two", "Kid Three"]);
       await joinTeamEntry(
         {},
-        { join_code: entry.join_code!, player_id: players[0]!.id, player: { full_name: players[0]!.full_name } },
+        {
+          join_code: entry.join_code!,
+          player_id: players[0]!.id,
+          player: { full_name: players[0]!.full_name },
+          privacy_consent: true,
+        },
       );
       const preview = await previewJoinEntry(entry.join_code!);
       expect(preview.total_players).toBe(3);

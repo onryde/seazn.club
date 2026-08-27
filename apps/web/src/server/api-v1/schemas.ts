@@ -2600,14 +2600,18 @@ export const PublicJoinRequest = z.object({
    *  step (StepConsent, reused verbatim) and persisted PER-PLAYER by
    *  joinTeamEntry (registration_players.privacy_consent_at/.version,
    *  V384), never on registration_groups — that would silently apply the
-   *  CAPTAIN's own choice to every later joiner, which is the bug this
-   *  fixes. Optional here, unlike PublicRegisterGroupRequest.privacy_consent
-   *  (required there, enforced server-side): the join form already hard-
-   *  blocks submit without it client-side (validateConsent), and there is
-   *  no equivalent server-side gate for this path — an omitted value simply
-   *  never gets a privacy_consent_at stamp, mirroring guardian_consent's own
-   *  "optional at the wire, enforced by the caller" convention above. */
-  privacy_consent: z.boolean().optional(),
+   *  CAPTAIN's own choice to every later joiner, which is the bug that fix
+   *  closed. REQUIRED here, same as PublicRegisterGroupRequest.privacy_consent
+   *  (consent-asymmetry follow-up, 2026-08-28): this field was previously
+   *  optional, enforced only by the join form's own client-side gate
+   *  (validateConsent) — a direct API call could join with no consent
+   *  recorded at all, and an omitted value was indistinguishable from a
+   *  refusal. joinTeamEntry now throws 422 on a falsy value, mirroring
+   *  submitRegistrationGroup's own gate (registration-submit.ts:547),
+   *  identically on BOTH the claim and insert branches — a captain-typed
+   *  row's own consent was never collected either, so the claim moment is
+   *  exactly as much this player's first consent as a fresh insert's is. */
+  privacy_consent: z.boolean(),
   /** Optional, never blocks — mirrors PublicRegisterGroupRequest.media_consent
    *  structurally (RS006 §A: "media consent is OPTIONAL and never blocks
    *  submit"). Stamped when true, left null otherwise (a deliberate `false`

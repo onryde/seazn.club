@@ -383,6 +383,7 @@ describe("PublicJoinRequest", () => {
     const r = PublicJoinRequest.safeParse({
       join_code: "SZ-JOIN-0001",
       player: { full_name: "New Joiner" },
+      privacy_consent: true,
     });
     expect(r.success).toBe(true);
   });
@@ -393,17 +394,21 @@ describe("PublicJoinRequest", () => {
       player: { full_name: "Young Joiner", dob: "2015-01-01" },
       guardian_name: "Parent Name",
       guardian_consent: true,
+      privacy_consent: true,
     });
     expect(r.success).toBe(true);
   });
 
   it("rejects a body with no join_code", () => {
-    const r = PublicJoinRequest.safeParse({ player: { full_name: "New Joiner" } });
+    const r = PublicJoinRequest.safeParse({
+      player: { full_name: "New Joiner" },
+      privacy_consent: true,
+    });
     expect(r.success).toBe(false);
   });
 
   it("rejects a body with no player", () => {
-    const r = PublicJoinRequest.safeParse({ join_code: "SZ-JOIN-0001" });
+    const r = PublicJoinRequest.safeParse({ join_code: "SZ-JOIN-0001", privacy_consent: true });
     expect(r.success).toBe(false);
   });
 
@@ -427,14 +432,29 @@ describe("PublicJoinRequest", () => {
     }
   });
 
-  it("still accepts a body that omits both — optional at the wire, same convention as guardian_consent", () => {
+  // Consent-asymmetry follow-up (2026-08-28): privacy_consent used to be
+  // optional at the wire, enforced only by the join form's own client-side
+  // gate — a direct API call could join with no consent recorded at all,
+  // indistinguishable from a refusal. Now REQUIRED, matching
+  // PublicRegisterGroupRequest.privacy_consent exactly; joinTeamEntry's own
+  // usecase-level gate (registration-submit.test.ts) is the 422 half of
+  // this fix, this schema is the 400 half.
+  it("rejects a body that omits privacy_consent — no longer optional at the wire", () => {
     const r = PublicJoinRequest.safeParse({
       join_code: "SZ-JOIN-0001",
       player: { full_name: "New Joiner" },
     });
+    expect(r.success).toBe(false);
+  });
+
+  it("still accepts a body that omits media_consent — optional at the wire, same convention as guardian_consent", () => {
+    const r = PublicJoinRequest.safeParse({
+      join_code: "SZ-JOIN-0001",
+      player: { full_name: "New Joiner" },
+      privacy_consent: true,
+    });
     expect(r.success).toBe(true);
     if (r.success) {
-      expect(r.data.privacy_consent).toBeUndefined();
       expect(r.data.media_consent).toBeUndefined();
     }
   });

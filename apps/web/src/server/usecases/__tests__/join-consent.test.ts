@@ -12,6 +12,14 @@
 // convention as registration-submit.test.ts (this suite's sibling, whose
 // own `joinTeamEntry` describe block owns the structural/status-code
 // coverage this file deliberately does not repeat).
+//
+// Consent-asymmetry follow-up (2026-08-28): `privacy_consent` was optional
+// at the wire and enforced ONLY by the join form's own client-side gate — a
+// direct API call could join with no consent recorded, indistinguishable
+// from a refusal. Now REQUIRED (schemas.ts) and gated server-side in
+// joinTeamEntry (mirrors submitRegistrationGroup:547), identically on both
+// branches. The "omitting privacy_consent" cases below now assert the
+// refusal (422, nothing written) rather than a silent null stamp.
 import { describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
@@ -148,16 +156,22 @@ describe.skipIf(!HAS_DB)("joinTeamEntry — per-player consent (RS007 defect #4)
       expect(row.media_consent_version).toBeNull();
     });
 
-    it("omitting privacy_consent leaves the stamp null rather than fabricating a consent that was never given", async () => {
+    it("an explicit privacy_consent: false is refused with 422 — the claimed row is untouched, never a silent null stamp", async () => {
       const { joinCode, players } = await teamWithRoster(["Kid One"]);
-      const res = await joinTeamEntry(
-        {},
-        { join_code: joinCode, player_id: players[0]!.id, player: { full_name: "Kid One" } },
-      );
-      const row = await playerConsentRow(res.player_id);
-      expect(row.privacy_consent_at).toBeNull();
-      expect(row.privacy_consent_version).toBeNull();
-      expect(row.media_consent_at).toBeNull();
+      await expect(
+        joinTeamEntry(
+          {},
+          {
+            join_code: joinCode,
+            player_id: players[0]!.id,
+            player: { full_name: "Kid One" },
+            privacy_consent: false,
+          },
+        ),
+      ).rejects.toMatchObject({ status: 422 });
+      const [row] = await sql<{ consent_status: string }[]>`
+        select consent_status from registration_players where id = ${players[0]!.id}`;
+      expect(row!.consent_status).toBe("pending"); // never flipped, never claimed
     });
   });
 
@@ -184,6 +198,19 @@ describe.skipIf(!HAS_DB)("joinTeamEntry — per-player consent (RS007 defect #4)
       const row = await playerConsentRow(res.player_id);
       expect(row.media_consent_at).toBeNull();
       expect(row.media_consent_version).toBeNull();
+    });
+
+    it("an explicit privacy_consent: false is refused with 422 — no row is inserted", async () => {
+      const { joinCode, registrationId } = await teamWithRoster([]);
+      await expect(
+        joinTeamEntry(
+          {},
+          { join_code: joinCode, player: { full_name: "No Consent" }, privacy_consent: false },
+        ),
+      ).rejects.toMatchObject({ status: 422 });
+      const [{ n }] = await sql<{ n: number }[]>`
+        select count(*)::int as n from registration_players where registration_id = ${registrationId}`;
+      expect(n).toBe(0);
     });
   });
 

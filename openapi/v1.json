@@ -59050,7 +59050,8 @@
                 },
                 "required": [
                   "join_code",
-                  "player"
+                  "player",
+                  "privacy_consent"
                 ],
                 "additionalProperties": false
               },
@@ -59063,7 +59064,8 @@
                   "email": "example"
                 },
                 "player_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
-                "guardian_name": "example"
+                "guardian_name": "example",
+                "privacy_consent": true
               }
             }
           }
