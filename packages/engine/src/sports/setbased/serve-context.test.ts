@@ -280,6 +280,40 @@ describe("drift detection stays as narrow as the fact justifies", () => {
     });
   });
 
+  it("a partial summary that RESTATES the score costs the chain nothing", () => {
+    // `score-jumped` exists because the rallies a snapshot swallowed ARE the
+    // side-out rotation. A snapshot that swallowed none has taken nothing
+    // away, so the refusal is conditioned on the score actually MOVING —
+    // untested until now, and a guard nothing tests is a guard nothing keeps.
+    const events = stream(
+      ["core.start"],
+      rally(badminton, { wonBy: "H", serving: "H" }),
+      summary(badminton, { by: "H", forBy: 1, forOpp: 0, partial: true }), // 1-0, again
+    );
+    const answer = ctx(badminton, cfg, SINGLES, events);
+    expect(answer.servingSide).toBe("H");
+    expect(answer.serviceTurn).toBe(0); // the chain is whole, not merely the side
+  });
+
+  it("names nobody once the ledger is FINALISED, or the match was abandoned", () => {
+    // `match-over` has three phases and only `done` was covered. A finalised
+    // ledger and an abandoned fixture would both otherwise answer with the
+    // side the last event left serving.
+    const finalised = stream(
+      ["core.start"],
+      summary(badminton, { home: 21, away: 15 }),
+      summary(badminton, { home: 21, away: 17 }),
+      ["core.finalize", {}],
+    );
+    expect(ctx(badminton, cfg, SINGLES, finalised).unknownBecause).toBe("match-over");
+    const abandoned = stream(
+      ["core.start"],
+      rally(badminton, { wonBy: "H", serving: "H" }),
+      ["core.abandon", { reason: "hall flooded" }],
+    );
+    expect(ctx(badminton, cfg, SINGLES, abandoned).unknownBecause).toBe("match-over");
+  });
+
   it("names nobody once the match is over", () => {
     const events = stream(
       ["core.start"],
@@ -553,6 +587,62 @@ describe("table tennis — two serves each, one each at deuce", () => {
     expect(second.serveNumber).toBe(1);
   });
 
+  it("a later declaration does NOT patch a contradicted game (R4-7)", () => {
+    // Under `fixed-turns` a declaration plus the score name the game's opener
+    // on their own, so a contradiction would be silently REPAIRED by the next
+    // rally carrying `serving` — one derivation patched to match the other,
+    // which is the thing R4-7 exists to forbid. The guard that refuses it had
+    // no test: deleting it left the suite green.
+    const events = stream(
+      ["core.start"],
+      rally(tabletennis, { wonBy: "H", serving: "H" }), // H opened
+      rally(tabletennis, { wonBy: "H", serving: "A" }), // …but the pad says A served point 2
+      rally(tabletennis, { wonBy: "H", serving: "H" }), // a later, agreeable declaration
+    );
+    const answer = ctx(tabletennis, cfg, SINGLES, events);
+    expect(answer.serveOrderKnown).toBe(false);
+    expect(answer.unknownBecause).toBe("recorded-disagrees");
+  });
+
+  it("accelerates the DECIDING game at ITS target, not the earlier games' (2.13.5)", () => {
+    // No shipped variant sets `finalSetTo` apart from `setTo`, but a
+    // competition config can, and 2.13.5 bites one short of the target THIS
+    // game is played to. Games to 3, decider to 5: the decider is still two
+    // serves each at 3-2 and only accelerates at 4-all.
+    const decider = tabletennis.configSchema.parse({ bestOf: 3, setTo: 3, finalSetTo: 5 });
+    const events = stream(
+      ["core.start"],
+      rally(tabletennis, { wonBy: "H", serving: "H" }), // game 1: H opens…
+      rally(tabletennis, { wonBy: "H" }),
+      rally(tabletennis, { wonBy: "H" }), // …3-0
+      rally(tabletennis, { wonBy: "A" }), // game 2: A opens…
+      rally(tabletennis, { wonBy: "A" }),
+      rally(tabletennis, { wonBy: "A" }), // …0-3, one game each
+      // Game 3, H opening: alternating winners never reach a two-point lead,
+      // so it runs past 4-all with nobody winning it.
+      ...Array.from({ length: 10 }, (_unused, i) =>
+        rally(tabletennis, { wonBy: i % 2 === 0 ? "H" : "A" }),
+      ),
+    );
+    // Written from the law: two serves each until 4-all (eight points), one
+    // each after. Points 5 and 6 are the ones an earlier trigger gets wrong.
+    const table = [
+      { points: 5, side: "H", serve: 2 }, // still H's second serve of turn 2
+      { points: 6, side: "A", serve: 1 }, // an earlier trigger says H here
+      { points: 8, side: "H", serve: 1 },
+      { points: 9, side: "A", serve: 1 },
+    ] as const;
+    for (const row of table) {
+      // 1 core.start + 3 + 3 game rallies before game 3 begins.
+      const answer = ctxAfter(tabletennis, decider, SINGLES, events, 7 + row.points);
+      expect({ points: row.points, side: answer.servingSide, serve: answer.serveNumber }).toEqual({
+        points: row.points,
+        side: row.side,
+        serve: row.serve,
+      });
+    }
+  });
+
   it("names the doubles server down the sheet's declared pair order (2.13.4)", () => {
     // ITTF 2.13.4's A-X-B-Y cycle, by points already played (index 0 is the
     // anchor rally itself). Each side's own turns walk down its declared order.
@@ -671,6 +761,24 @@ describe("volleyball", () => {
     expect(ctxAfter(volleyball, cfg, SIX, events, 2).rotation).toBe(1);
     expect(ctxAfter(volleyball, cfg, SIX, events, 3).rotation).toBe(2);
     expect(ctxAfter(volleyball, cfg, SIX, events, 4).rotation).toBe(2);
+  });
+
+  it("a declaration after a score jump names the side WITHOUT restarting the set", () => {
+    // The re-anchor is `before === 0` only. At love-all a declared serve IS
+    // the set's opener; midway through a set it names only who serves NEXT.
+    // Re-anchoring off it would restart the turn count at zero and the
+    // rotation at one — two facts the swallowed rallies actually decided —
+    // and both would be fabrications with a confident face on.
+    const events = stream(
+      ["core.start"],
+      rally(volleyball, { wonBy: "H", serving: "H" }),
+      summary(volleyball, { by: "H", forBy: 6, forOpp: 3, partial: true }),
+      rally(volleyball, { wonBy: "A", serving: "A" }),
+    );
+    const answer = ctx(volleyball, cfg, SIX, events);
+    expect(answer.servingSide).toBe("A");
+    expect(answer.serviceTurn).toBeUndefined();
+    expect(answer.rotation).toBeUndefined();
   });
 
   it("gives a beach PAIR no six-position rotation number, but does name its server", () => {
