@@ -115,6 +115,60 @@ export function claimHref(
   return `/shared/${orgSlug}/${competitionSlug}/register/join?${qs.toString()}`;
 }
 
+/**
+ * Classifies a write-action failure (cancel/pay/resend) by HTTP status alone
+ * — never the raw server string — the same "map from HTTP status" contract
+ * join-form.tsx's own `classifyJoinFailure` established. This is a SEPARATE
+ * classifier from both `classifyJoinFailure` (join/view-model.ts) and
+ * `classifySubmitFailure` (register-stepper's submit.ts): neither has a
+ * rate-limited bucket (all three of THIS page's write routes now call
+ * `publicRateLimit` — `checkout`/`withdraw`/`groups/{id}/resend` route.ts
+ * files, verified directly), and 409 does not mean the same thing on every
+ * surface either — see `resumeRegistrationCheckout`'s own
+ * `REGISTRATION_CHECKOUT_CONFLICT` (a losing compare-and-swap on a
+ * concurrent checkout mint — registrations.ts) vs. withdraw/resend, which
+ * never emit a 409 at all today (only 404/422/503). One shared function
+ * rather than three copies since all three write actions need the exact
+ * same four-way split; each caller supplies its own action-specific copy
+ * for the reachable buckets via its own `Record<StatusActionFailureKind,
+ * string>` (mirrors `FAILURE_KEY` in join-form.tsx).
+ *
+ * Audit finding this fixes (RS007 follow-up): `err.message` — the server's
+ * OWN un-localized English text (`apiV1`, client-v1.ts, reads
+ * `payload.error.message` verbatim) — used to be the ONLY thing a public
+ * visitor saw on any of these three buttons' failure paths. There is no
+ * server-side i18n in this repo (deliberate), so that string can never be
+ * the PRIMARY user-facing message on an otherwise fully localized page.
+ *
+ *  - notFound (404): the token/entryId/groupId no longer resolves — same
+ *    "regByToken"/"group not found" shape `register.status.notFound`
+ *    already covers for the page's own initial load, so failures here
+ *    reuse that exact key rather than mint a near-duplicate.
+ *  - conflict (409): a genuine concurrency race — "refresh and try again"
+ *    is the honest advice (matches the checkout-mint race's own server
+ *    message), never "click the exact same thing again blindly".
+ *  - rateLimited (429): `publicRateLimit` tripped — transient, caused by
+ *    request VOLUME rather than anything about this request's content.
+ *  - generic: everything else (422 content-refused — e.g. "already
+ *    rejected, cannot withdraw", "nothing to pay", "cart already
+ *    terminal"; 503 Connect-not-live; 5xx; no response at all). These read
+ *    fine under one honest "try again, or contact the organiser" fallback
+ *    — the raw detail (kept as SECONDARY text, register-stepper's FIX 3
+ *    convention — none of these three usecases' thrown messages interpolate
+ *    the access token or any other secret, verified by reading
+ *    withdrawCore/resumeRegistrationCheckout/resendRegistrationConfirmationPublic
+ *    directly) still supplies whatever extra color the classification
+ *    can't.
+ */
+export type StatusActionFailureKind = "notFound" | "conflict" | "rateLimited" | "generic";
+
+export function classifyStatusActionFailure(status: number | undefined): StatusActionFailureKind {
+  if (status === 404) return "notFound";
+  if (status === 409) return "conflict";
+  if (status === 429) return "rateLimited";
+  return "generic";
+}
+
 // ---------------------------------------------------------------------------
 // Public write-path URLs. Named constants, not inlined into the client
 // components that call them, so the regression test proving "cancel calls

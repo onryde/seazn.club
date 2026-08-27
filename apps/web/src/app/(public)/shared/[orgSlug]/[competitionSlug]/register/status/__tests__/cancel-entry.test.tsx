@@ -45,6 +45,7 @@ vi.mock("@/components/ui/confirm-provider", () => ({
 }));
 
 import { textOf } from "@/components/__tests__/_hook-harness";
+import { ApiV1Error } from "@/lib/client-v1";
 import { CancelEntry } from "../cancel-entry";
 
 beforeEach(() => {
@@ -127,19 +128,81 @@ describe("CancelEntry", () => {
     expect(body).not.toContain("£25.00");
   });
 
-  it("shows the server's error message on failure, without refreshing", async () => {
-    net.rejection = new Error("This registration was rejected and cannot be withdrawn");
-    const island = renderIsland(CancelEntry, {
-      entryId: "reg-1",
-      token: "rg_tok",
-      divisionName: "Mixed Doubles",
-      refundable: true,
-      refundAmountFormatted: "£25.00",
+  // RS007 i18n follow-up — AUDIT FINDING: this used to render `err.message`
+  // (un-localized English straight off the server) as the ONLY thing a
+  // public visitor saw. Every failure now shows a LOCALIZED, HTTP-status-
+  // classified primary message (classifyStatusActionFailure, view-model.ts),
+  // matching join-form.tsx's own contract — never the raw server string as
+  // the primary content. The raw detail is kept as SECONDARY, de-emphasized
+  // text (register-stepper.tsx's FIX 3 convention — the chosen convention
+  // for this surface, since none of withdrawCore's own messages embed the
+  // access token or any other secret).
+  describe("failure — localized primary message, classified from HTTP status", () => {
+    it("422 (e.g. already rejected) shows the localized cancel-failed message as primary, with the raw detail as secondary — NOT the raw message alone", async () => {
+      net.rejection = new ApiV1Error("This registration was rejected and cannot be withdrawn", 422, "ERROR");
+      const island = renderIsland(CancelEntry, {
+        entryId: "reg-1",
+        token: "rg_tok",
+        divisionName: "Mixed Doubles",
+        refundable: true,
+        refundAmountFormatted: "£25.00",
+      });
+
+      await (propsOf(findButton(island.tree())).onClick as () => Promise<void>)();
+
+      expect(island.text()).toContain("We couldn't cancel this entry");
+      // Secondary — the raw server detail is still shown, just not primary.
+      expect(island.text()).toContain("This registration was rejected and cannot be withdrawn");
+      expect(router.refreshCount).toBe(0);
     });
 
-    await (propsOf(findButton(island.tree())).onClick as () => Promise<void>)();
+    it("404 (stale token/entryId) shows the SAME shared 'couldn't find that registration' copy the page's own initial load uses", async () => {
+      net.rejection = new ApiV1Error("registration not found", 404, "NOT_FOUND");
+      const island = renderIsland(CancelEntry, {
+        entryId: "reg-1",
+        token: "rg_tok",
+        divisionName: "Mixed Doubles",
+        refundable: true,
+        refundAmountFormatted: "£25.00",
+      });
 
-    expect(island.text()).toContain("This registration was rejected and cannot be withdrawn");
-    expect(router.refreshCount).toBe(0);
+      await (propsOf(findButton(island.tree())).onClick as () => Promise<void>)();
+
+      expect(island.text()).toContain("We couldn't find that registration");
+      expect(router.refreshCount).toBe(0);
+    });
+
+    it("409 (conflict) shows the localized 'status just changed, refresh' message, not the raw server string as primary", async () => {
+      net.rejection = new ApiV1Error("some conflicting server detail", 409, "CONFLICT");
+      const island = renderIsland(CancelEntry, {
+        entryId: "reg-1",
+        token: "rg_tok",
+        divisionName: "Mixed Doubles",
+        refundable: true,
+        refundAmountFormatted: "£25.00",
+      });
+
+      await (propsOf(findButton(island.tree())).onClick as () => Promise<void>)();
+
+      expect(island.text()).toContain("status just changed");
+      expect(router.refreshCount).toBe(0);
+    });
+
+    it("429 (rate limited) shows a 'try again in a moment' style message, not the generic failure copy", async () => {
+      net.rejection = new ApiV1Error("rate limited", 429, "RATE_LIMITED");
+      const island = renderIsland(CancelEntry, {
+        entryId: "reg-1",
+        token: "rg_tok",
+        divisionName: "Mixed Doubles",
+        refundable: true,
+        refundAmountFormatted: "£25.00",
+      });
+
+      await (propsOf(findButton(island.tree())).onClick as () => Promise<void>)();
+
+      expect(island.text()).toContain("Too many attempts");
+      expect(island.text()).not.toContain("We couldn't cancel this entry");
+      expect(router.refreshCount).toBe(0);
+    });
   });
 });
