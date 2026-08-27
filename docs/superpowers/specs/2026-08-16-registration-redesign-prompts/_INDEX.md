@@ -2607,3 +2607,45 @@ file pathspecs on every `git add`, never `-A`. Two lanes already ran
 concurrently in this worktree for ~29 minutes without cross-contamination on
 exactly that discipline. The shared git index makes "disjoint file sets" a
 necessary condition, not a sufficient one.
+
+### Walkthrough lane closed 2026-08-27 — the invite→pay→claim→promote→cancel witness
+
+Commits `de7c115db` (spec) + `35450d248` (promotion tapped through the hub, not
+the API). Foreground run, real exit code: **1 failed, 2 passed (47.8s)**.
+
+**The failure is the point.** It reproduces CRITICAL **#1** through real UI,
+three runs identically: a promoted-but-never-charged entry's cancel dialog reads
+*"This frees your spot. £25 will be refunded automatically"* — sourced from a
+SIBLING entry's real PaymentIntent, not its own (£0). Until now #1 was a code
+reading plus a constructed repro; this is the product saying it out loud on the
+page a registrant actually uses. **The spec should turn green when the money
+lane lands #1, and that is the acceptance gate for it** — not the unit counts.
+
+**Every step of the seam is a real UI action, including the promotion.** That
+started as an API call and was reworked to click the hub's own "Promote from
+waitlist" button. API is used only to CREATE the competition/division/settings
+(matching `registration-connect.spec.ts`'s own precedent), to claim/release the
+Connect fixture, for public-API read-backs, and for cleanup — none of which is
+the seam under test. That is the folder charter applied correctly.
+
+**Two spec bugs found by tapping, both fixed inside `e2e/` only** (verified: both
+commits touch nothing outside that folder): row scoping — each row's detail
+panel lists the sibling entry, so an unscoped locator reads the wrong row — and
+a status pill rendered twice (phone + desktop), needing `:visible`. Asked back
+whether the row-scoping one is a product defect or correct cart behaviour;
+answer pending.
+
+**What it does NOT catch, stated by the lane rather than discovered later:**
+#4, #10 and #13. No media-consent interaction in the join form, a single
+division and payment method throughout so no cart/division divergence, and no
+email inspection or deadline-format comparison. Those three still have no
+witness. Recording that plainly is worth more than a spec that implies coverage
+it does not have.
+
+**A stale claim from this lane, corrected.** It reported assertion (a) — the
+subtotal keeping a withdrawn entry's fee — as still live, from a direct source
+read. It is fixed, in `54b88fb9f`, by the sibling lane while this one was
+running; the read predates it. The assertion itself is fine: it asserts the
+CORRECT subtotal, so it is now a regression guard, not a reproduction. Only its
+prose was stale, and that is corrected in the file. Two lanes racing on one
+worktree means a source read is a point-in-time claim, not a standing fact.

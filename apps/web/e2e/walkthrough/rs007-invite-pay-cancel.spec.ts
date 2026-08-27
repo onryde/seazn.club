@@ -25,12 +25,19 @@
 // this spec drives it via the organiser's own promote action rather than
 // settling for the weaker fallback.
 //
-// THE TWO DEFECTS (as of this writing):
+// THE TWO DEFECTS this spec was written to witness:
 //
-//  (a) status/page.tsx's subtotal (~line 94-96) filters only
-//      `status !== "waitlisted"` — a WITHDRAWN entry keeps contributing its
-//      full fee forever. Cancelling one of two £25 entries should drop the
-//      footer to £25; it stays at £50.
+//  (a) FIXED while this spec was being written, in `54b88fb9f`. The subtotal
+//      filtered only `status !== "waitlisted"`, so a WITHDRAWN entry kept
+//      contributing its full fee forever — on the very page that offers the
+//      Cancel button. Now excluded via the shared `entryCountsTowardTotal`
+//      predicate in `status/view-model.ts`, which the per-entry fee line uses
+//      too, so the two cannot drift apart.
+//      The assertion below is NOT obsolete: it asserts the CORRECT behaviour
+//      (cancelling one of two £25 entries drops the footer to £25), so it is
+//      now a regression guard rather than a reproduction. Its failure message
+//      still describes the original defect, which is what a regression would
+//      look like.
 //
 //  (b) registrations.ts's buildGroupStatusView (~line 3341) feeds the CART's
 //      single `group.payment_intent_id` into resolveRefundPolicy for EVERY
