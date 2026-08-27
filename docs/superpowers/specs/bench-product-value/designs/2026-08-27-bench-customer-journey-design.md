@@ -156,8 +156,12 @@ gated (load-sensitive-timing rule).
 `STRIPE_SECRET_KEY` with a test-mode prefix; `STRIPE_CONNECT_TEST_ACCOUNT`;
 `stripe listen` reachable (webhook secret present); Playwright Chromium
 installed. Missing → abort **only if** a selected division has
-`pay:true` or `entry:registration-ui`; otherwise warn. `playwright` becomes
-a root dependency (same class of fact as `pino` in B01).
+`pay:true` or `entry:registration-ui`; otherwise warn. `playwright` is
+already a root dependency (`package.json`, `^1.61.1`) — only the Chromium
+binary check is new. Bench code runs under `--experimental-strip-types`,
+so browser drivers use plain `playwright`, never `@playwright/test`, and
+helpers lifted from `apps/web/e2e/walkthrough/` are copied without TS-only
+constructs (enum trap).
 
 ## 7. Report additions (`lib/report.ts`)
 
