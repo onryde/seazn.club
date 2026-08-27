@@ -420,7 +420,10 @@ test.describe("RS003 public registration API", () => {
       request,
       `${registerPath(rig)}/join`,
       "POST",
-      { join_code: joinCode, player: { full_name: "Late Joiner" } },
+      // `privacy_consent` is required by PublicJoinRequest — the join page
+      // gates on it client-side and joinTeamEntry now gates on it server-side,
+      // so a body without it is a 400 before the join code is even looked up.
+      { join_code: joinCode, player: { full_name: "Late Joiner" }, privacy_consent: true },
     );
     expect(joined.status).toBe(201);
     expect(joined.data?.player_id).toBeTruthy();
@@ -440,6 +443,11 @@ test.describe("RS003 public registration API", () => {
     const { status } = await apiJson(request, `${registerPath(rig)}/join`, "POST", {
       join_code: `SZJOIN${randomBytes(4).toString("hex").toUpperCase()}`,
       player: { full_name: "Nobody" },
+      // Required by the schema, and it must be present here for the test to
+      // mean what it says: without it the request 400s on validation and never
+      // reaches the join-code lookup, so a passing test would prove nothing
+      // about unknown codes.
+      privacy_consent: true,
     });
     expect(status).toBe(404);
   });

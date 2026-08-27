@@ -602,7 +602,16 @@ describe.skipIf(!HAS_DB)("joinTeamEntry — closing two unguarded windows (genui
     // same row.
     const joinPromise = joinTeamEntry(
       {},
-      { join_code: joinCode, player_id: playerId, player: { full_name: "Kid One", dob: "1995-05-01" } },
+      {
+        join_code: joinCode,
+        player_id: playerId,
+        player: { full_name: "Kid One", dob: "1995-05-01" },
+        // Consent is now gated server-side in joinTeamEntry (RS007 finding #4
+        // follow-up). Without it this call 422s on the consent check BEFORE
+        // reaching `for update`, so the lock race this test exists to observe
+        // would never happen and `waitForBlockedLocks(1)` would hang.
+        privacy_consent: true,
+      },
     );
     await waitForBlockedLocks(1);
     release();
@@ -658,8 +667,11 @@ describe.skipIf(!HAS_DB)("joinTeamEntry — closing two unguarded windows (genui
     await isStaged;
 
     const racing = Promise.allSettled([
-      joinTeamEntry({}, { join_code: joinCode, player: { full_name: "Racer A" } }),
-      joinTeamEntry({}, { join_code: joinCode, player: { full_name: "Racer B" } }),
+      // `privacy_consent` is required by joinTeamEntry's consent gate; without
+      // it both racers reject on consent instead of on the roster cap, and the
+      // cap race this test exists to observe never runs.
+      joinTeamEntry({}, { join_code: joinCode, player: { full_name: "Racer A" }, privacy_consent: true }),
+      joinTeamEntry({}, { join_code: joinCode, player: { full_name: "Racer B" }, privacy_consent: true }),
     ]);
     await waitForBlockedLocks(2);
     release();
