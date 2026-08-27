@@ -1673,6 +1673,208 @@ it, each mutation-proven):
 - RS004 ruling 4's deferred item lands here: the division page re-points into
   the hub with its division pre-filtered.
 
+### RS007 (2026-08-27) — branch `feat/rs007-status-join-payments`
+
+Rulings taken at session open, from scout verification against `d165908e7`.
+Both open calls went to the owner and both took the recommendation.
+
+- **RULING — join becomes CLAIM-first, and the mint widens to pairs.**
+  The pair/`join_code` question in this file (lines 57-59) turned out to be
+  the smaller half of a bigger defect. `joinTeamEntry`
+  (`registration-submit.ts:738`) **INSERTs** a new `registration_players` row
+  (`:794-807`, `source='self_joined'`) — while submit already inserts every
+  non-self roster player as a real row (`:610-639`,
+  `source='captain_entered'`, `consent_status='pending'`). A captain-entered
+  player who follows the join link therefore gets a SECOND row: the roster
+  double-counts and the original pending consent stays pending forever.
+  `git grep` finds **zero** non-test write sites that flip a
+  `captain_entered` row from `pending` to `granted`, so **owner ruling 4**
+  ("join/claim is the consent moment for players entered by someone else")
+  is currently unimplementable. This is a defect in the DESIGN, not only the
+  code — design §4 specifies join as "inserts a `registration_players` row
+  (`source='self_joined'`)". §4 gets a correction line.
+  Shape: the join page lists the entry's unclaimed slots and asks "which one
+  are you?" — picking a name UPDATEs that row to `granted`/`guardian`;
+  "I'm someone else" keeps today's INSERT path, cap-checked. A **pair** has
+  exactly one unclaimed slot and no "someone else" option, so the
+  fixed-at-two rule falls out of the UI with no special case, and widening
+  the mint is deleting `entrant_kind === "team"` at `:565`. V364's partial
+  unique index and the collision-retry loop are untouched.
+  Consequence: `register.consent.rosterNotice` becomes true as written in
+  all 4 locales — **no copy retreat is owed**, which reverses the
+  contingency in RS007's acceptance criteria.
+- **`joinTeamEntry` has no dedupe of any kind** (`:738-817`) — not by name,
+  dob, `person_id` or `user_id`. The only guards are free_agent, status,
+  roster cap and eligibility. The same person can join repeatedly, one fresh
+  row each time. Worse, the cap comes from the sport's
+  `position_catalog.lineup.size + benchMax` (`:768-775`) and **null =
+  unlimited**, so on a sport with no declared lineup a leaked join code grows
+  a roster without bound. Claim-first plus "a granted row 409s on re-claim"
+  closes both.
+- **FALSE PREMISE — "verify RS002 shipped the lapse".** It did not, and what
+  exists does the opposite. `sweepRegistrations`
+  (`registrations.ts:3373-3391`) matches `r.status='pending' and
+  g.expires_at < now()` and sets `status='expired'`. A promoted entrant who
+  misses the window is dropped permanently. **Owner call: lapse returns them
+  to the waitlist TAIL and re-offers the slot** (RS007's AC as written).
+- **STRUCTURAL — the promotion deadline has nowhere to live.** RS001 moved
+  `expires_at` to `registration_groups`, so it is **cart-level**.
+  `promoteWaitlistedRow` (`:871`) sets `status='pending'` + `promoted_at =
+  now()` on the ENTRY but extends the deadline on the GROUP, so promoting one
+  entry in a 3-entry cart extends every sibling's deadline and one sweep pass
+  expires them together. Pay-on-promotion mints a checkout for a single
+  entry, so it needs a single entry's clock. **V378** adds
+  `registrations.promotion_expires_at` + a partial sweep index (Flyway
+  high-water was **V377**). The sweep splits in two: the group deadline still
+  expires never-paid submits, the entry deadline lapses promotions.
+  `promoted_at is not null` already distinguishes the two — no new flag.
+- **STALE GOTCHA — refunds are NOT cart-level.** RS007's brief warns against
+  an entry-level cancel calling a cart-level refund. `refundRegistration`
+  (`registrations.ts:3923`) is `(auth, regId, amountCents?)` — entry-keyed,
+  writing `registrations.refunded_cents` (V368) additively and aggregating to
+  the group. Entry-level cancel is safe to ship; the warning is out of date.
+- **Both surfaces have ZERO width coverage.** `mobile.spec.ts` references
+  neither `register/status` nor the join flow. A surface has no width
+  coverage until it is inside that file.
+- **RULING (FINAL, after correction) — keep the `refund_lock_at` policy;
+  fix its defaults and make it VISIBLE.** Owner call 2026-08-27, retaken
+  once the shipped behaviour was read correctly. The org controls refunds by
+  setting a date, not by actioning each cancellation — which is the better
+  deal for a volunteer club secretary than manual admin on every withdrawal.
+  No shipped code is reversed. What RS007 owes instead:
+  - **`refund_lock_at` NULL currently means auto-refund FOREVER** — including
+    the night before the tournament, after the club has committed the money
+    to a venue. That is the actual defect. Fix the default so "never set" is
+    not "always refundable".
+  - **The registrant must see which side of the line they are on BEFORE they
+    confirm a cancel**: "cancel now and £25 is refunded" vs "refunds are at
+    the organiser's discretion after 20 Aug". The behaviour is defensible;
+    being unable to see it is what generates the support email.
+  - Organisers likely do not know the setting exists — surface it in org
+    settings with a sensible suggested default.
+  An earlier version of this ruling said a paid self-cancel must NOT
+  auto-refund and that the org actions every refund. That was taken on the
+  false premise recorded below and is SUPERSEDED — do not reinstate it.
+  **CORRECTION 2026-08-27 — the premise this ruling was taken on was wrong,
+  and the ruling is therefore REOPENED (see below).** An earlier scout
+  reported the auto-refund lived in the caller
+  `withdrawRegistrationOrganiser`, not in `withdrawCore`. Reading the code:
+  the auto-refund is **inside `withdrawCore`** at `registrations.ts:3287-3301`
+  (direct `stripeRefund` call), and `withdrawRegistrationOrganiser` (`:4040`)
+  is a thin wrapper around it. Consequences:
+  - **A public token-authorised self-cancel ALREADY EXISTS and ALREADY
+    auto-refunds.** `api/v1/public/registrations/by-ref/[ref]/withdraw/route.ts:25`
+    → `withdrawRegistrationByRef` (`:2811`) → `withdrawCore` → refund. No
+    session auth. So "the org refunds" is not a new policy to add — it is a
+    REVERSAL of shipped behaviour, on a route that is already public.
+  - **A refund policy already exists and is org-controlled**: the refund is
+    gated on `refund_lock_at` — full auto-refund while the withdrawal lands
+    before the org's lock date, organiser discretion after it, via the manual
+    refund endpoint. The org already controls refunds, by setting a date
+    rather than by actioning each one. The gating comment cites "doc 16 §1.1";
+    **that document is NOT verified to exist** — this repo has form for
+    comments citing documents that do not (cf. the engine's "doc 14").
+  Corollary the ruling REQUIRES, or the money just sits: a paid self-cancel
+  must reach the organiser — the entry shows in the hub as withdrawn + paid
+  with a refund outstanding, and an email goes to the organiser. Free upside:
+  `withdrawCore` already auto-promotes the next waitlisted entry
+  (`:3216-3217`), so the slot recycles immediately while the club still holds
+  the money. Briefly two payments against one slot — correct, and the reason
+  the outstanding refund must be visible rather than implicit.
+- **CRITICAL — `sweepRegistrations` HAS NO SCHEDULER. Everything on the money
+  path is dead code in production.** Verified 2026-08-27 in the main checkout:
+  `/api/cron/registrations/route.ts:18` is the ONLY caller of
+  `sweepRegistrations`, it is `CRON_SECRET`-gated, and **nothing invokes that
+  route** — six cron workflows exist (`ai-preview-sweep-stg`,
+  `billing-events-stg`, `billing-grant-stg`, `billing-quantity-stg`,
+  `funnel-reminders-stg`, `news-digest-stg`, all STAGING-only and all hourly),
+  none for registrations; there is no `vercel.json` and no `"crons"` config
+  anywhere in the repo. Consequences in production TODAY:
+  - `sendPaymentReminderEmail` (`registrations.ts:3385-3396`) never fires —
+    the payment-reminder feature is built, wired, idempotent, and has never
+    sent a single mail.
+  - Unpaid pending entries never expire, so their slots are never freed.
+  - **W1a's new lapse branch is INERT** — green under test, dead in prod.
+    A promotion that "lapses back to the waitlist tail" never lapses at all.
+  **Owner call: add the scheduler this session** (asked first, since a new
+  `.github/workflows/` file widens the stated file set). Copy the
+  `funnel-reminders-stg.yml` pattern: hourly, `x-cron-secret` matching the
+  app's `CRON_SECRET`, skip-with-warning when the GitHub secret is absent so
+  a missing secret does not fill the Actions tab with red, fail loud on any
+  non-200. Note the secret must be set in BOTH places (`gh secret set` and
+  `flyctl secrets set`) or the leg is a no-op that looks scheduled.
+- **Scope additions taken as product calls (2026-08-27), each beyond the
+  literal brief**: (a) **per-slot claim links** — the captain copies a link
+  per unclaimed player rather than one code for the team, so claims land on
+  the right row and the captain stops playing switchboard; the picker stays
+  as the fallback for a generic link. (b) **pre-lapse reminder** before a
+  promotion expires — a silent expiry converts badly, and the whole point of
+  a waitlist is that promoted entrants actually pay. RESOLVED: the mailer and
+  the `reminded_at` bookkeeping already exist inside `sweepRegistrations`
+  (`registrations.ts:3385-3400`), so this is pure wiring — it starts working
+  the moment the scheduler above exists, and needs a promoted-entry branch
+  reading `promotion_expires_at` rather than the group's `expires_at`.
+  (c) **the deadline is shown** on the status page and in the promotion mail,
+  which removes the "I didn't know there was a deadline" refund argument the
+  organiser otherwise settles by hand.
+- **RULING — RS007 ships a WALKTHROUGH, and the wave is verified VISUALLY.**
+  Owner call 2026-08-27. `e2e/walkthrough/` is its own Playwright project and
+  its own CI leg. The folder's rule applies verbatim here: *setup may use the
+  API to REACH a state; every event that IS the thing under test must be
+  TAPPED*. RS007's value is a JOURNEY — captain registers, partner claims,
+  entry is promoted, money is paid, a promotion lapses — and no unit test can
+  see whether that journey holds together. It is the same risk shape that put
+  the folder there: two signed-off waves shipped broken deciders that no
+  code-asserting surface caught.
+  - Spec: `e2e/walkthrough/rs007-registration-journey.spec.ts`. Every step
+    TAPPED through the real stepper, the real claim link and the real
+    status page — never posted. An API-driven registration test is blind to
+    a payload the stepper never builds and a control the page disabled.
+  - **OWNER RULING — the walkthrough charter is GENERIC, not sport-scoped.**
+    The folder landed on `main` at `addd126c5` (2026-08-27) stating its
+    charter as sport-and-decider specific: "a walkthrough plays a whole match
+    by hand", "a sport belongs here once it has a decider". That scoping is
+    the bug. The folder's actual principle — *every other surface asserts on
+    CODE; none of them had ever tapped the thing* — is domain-independent,
+    and sport-scoping it leaves every non-sport journey (registration,
+    payments, onboarding, venues) with no home and no CI leg. That is the
+    same blindness that shipped two broken deciders, relocated to another
+    domain rather than fixed.
+    RS007 generalises the README: a walkthrough is ANY end-to-end journey a
+    customer completes; the deciders are one instance, not the definition.
+  - **Screenshots are a first-class output of EVERY walkthrough, not an
+    RS007 extra.** Ships as a SHARED helper emitting step shots at
+    1280 / 768 / 320 to a known directory, reusable by the existing sport
+    specs and every future one. The helper must FAIL LOUDLY if it writes
+    nothing — a screenshot step that silently no-ops is the same vacuous
+    green as an e2e that never ran.
+  - **ORDERING**: the worktree branched from `d165908e7` and does NOT contain
+    `e2e/walkthrough/` at all. Rebase onto `origin/main` BEFORE any
+    walkthrough work, or the spec is written against a folder that is not
+    there and the wiring guard cannot see it.
+  - `apps/web/src/lib/__tests__/e2e-ci-wiring.test.ts` proves the project is
+    dispatched and selects the files — a project nothing dispatches is
+    indistinguishable from a passing one. The `WALKTHROUGH` regex is
+    `/[\\/]e2e[\\/]walkthrough[\\/]/` (`playwright.config.ts:119`), deliberately
+    anchored: a bare `/walkthrough\//` once matched an entire worktree at
+    `.claude/worktrees/walkthrough/`. New spec MUST live in that folder.
+  - Screenshots at every step, at 1280 / 768 / 320, are the review artifact —
+    the owner verifies the journey by looking at it, and so does the session.
+    Visual verification is not optional here and is not satisfied by green
+    counts.
+- **Owed to RS009, deliberately NOT built here**: the organiser needs to see
+  which entries still have unclaimed players ("2 teams have incomplete
+  rosters") before the draw. It belongs to RS005's Registrants tab and
+  reaching into it from RS007 widens the file set past this session.
+- Status page as inherited is **140 lines** (`groupById(rid, token)`,
+  `:64`): ref code, contact/org name, per-entry division/status/fee, cart
+  subtotal. No join link, no cancel, no pay-now, and no reference to
+  `session_id`, `checkout` or `reconcile`. `groupById` does not select
+  `payment_instructions`, which is why the offline case states a debt and
+  offers nothing — `paymentInstructionsText()`
+  (`lib/payment-instructions.ts:18`) is reachable from `/r/[ref]`'s data path
+  and the email builders only.
+
 ## RS011 — why #412 moved here (2026-08-17)
 
 `L1-412-w1-eligibility.md` in `../2026-08-06-scoringpad-v2-prompts/` was written
