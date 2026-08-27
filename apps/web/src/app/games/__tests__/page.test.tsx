@@ -16,7 +16,7 @@ vi.mock("@/components/marketing/marketing-shell", () => ({
   }) => <div data-hide-back-button={String(!!hideBackButton)}>{children}</div>,
 }));
 
-import GamesPage from "../page";
+import GamesPage, { metadata } from "../page";
 
 // 2026-08-27 feedback: the shared BackButton (browser-history-back) landed
 // back in chess-quest when reached via its own "← Games" link — /games is a
@@ -42,5 +42,22 @@ describe("GamesPage — back-button opt-out + Powered by attribution", () => {
   it("the Powered by link is absolute, never a bare relative \"/\" (games.* subdomain dead-loop)", () => {
     const html = renderToStaticMarkup(<GamesPage />);
     expect(html).not.toMatch(/href="\/"[^>]*>\s*Powered by/);
+  });
+});
+
+// Review 2026-08-27: Metadata objects merge per-segment, and a SHALLOW merge
+// at that -- since this page defines its own openGraph key, the root
+// layout's openGraph (type/siteName only, no title/description) is REPLACED
+// here, not merged with it. Without its own openGraph.title/description,
+// sharing this page (e.g. a link back from Daily Word's share text) showed
+// no page-specific preview card at all.
+describe("GamesPage metadata — Open Graph", () => {
+  it("sets openGraph title/description matching the page's own title/description", () => {
+    expect(metadata.openGraph?.title).toBe(metadata.title);
+    expect(metadata.openGraph?.description).toBe(metadata.description);
+  });
+
+  it("sets an openGraph url", () => {
+    expect(metadata.openGraph?.url).toBe("/games");
   });
 });

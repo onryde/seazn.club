@@ -26,11 +26,21 @@ export async function generateMetadata({
   const { slug } = await params;
   const game = getGame(slug);
   if (!game) return {};
+  const title = `${game.title} — play free | Seazn Club`;
   return {
-    title: `${game.title} — play free | Seazn Club`,
+    title,
     description: game.description,
     // Canonical always on the apex domain so games.seazn.club doesn't split SEO.
     alternates: { canonical: `https://seazn.club/games/${slug}` },
+    // This page defines its own openGraph key, which REPLACES (not merges
+    // with) the root layout's openGraph — see games/page.tsx's comment for
+    // the full reasoning. Without this, sharing a game (e.g. the WhatsApp
+    // share button Daily Word now has) showed no page-specific preview.
+    openGraph: {
+      title,
+      description: game.description,
+      url: `https://seazn.club/games/${slug}`,
+    },
   };
 }
 

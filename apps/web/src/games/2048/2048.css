@@ -1,0 +1,79 @@
+/* 2048 -- board/tile structure and the spawn/merge-pop animations. Tile
+   colours themselves are plain Tailwind classes applied in
+   components/Board.tsx (the classic 2048 palette, by value) -- this file is
+   only the game-board furniture Tailwind utilities can't express cleanly:
+   fixed track sizing and the reduced-motion-guarded keyframes.
+
+   Sizing is FIXED, not responsive -- same posture as Daily Word's 48px
+   tiles (components/Grid.tsx) and chess-quest's board squares: one layout
+   at every viewport, centered by GameFrame's own `flex justify-center`
+   wrapper (a file this game must not modify -- see _shared/game-frame.tsx).
+   The four 64px column/row tracks plus three 8px gaps plus 4px padding on
+   each side sum to exactly 288px (4*64 + 3*8 + 2*4 = 288) -- the design
+   doc's 320px acceptance number ("2048 board at 320 = 288px, tiles 64px"),
+   which is also exactly the content width GameFrame's own 16px `px-4`
+   leaves inside a 320px viewport (320 - 2*16 = 288): the board fits with
+   zero slack at the narrowest supported width. */
+.board-2048 {
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: repeat(4, 64px);
+  grid-template-rows: repeat(4, 64px);
+  gap: 8px;
+  padding: 4px;
+  border-radius: 8px;
+  background: #bbada0;
+}
+
+.tile-2048 {
+  box-sizing: border-box;
+  width: 64px;
+  height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  font-weight: 700;
+  /* A same-cell value change (e.g. a merge target while reduced motion is
+     on) still gets a smooth colour swap even with the keyframes below
+     disabled -- transitions are a separate mechanism from the
+     `animation` property and are NOT covered by the
+     prefers-reduced-motion guard, same as chess-quest's own stance on its
+     FLIP transform (checked separately, in JS). */
+  transition: background-color 100ms ease-out, color 100ms ease-out;
+}
+
+/* Spawn (a brand new tile appearing) and merge (two tiles combining) each
+   get their own guarded keyframe -- see chess-quest.css's cq-pop/cq-shake/
+   cq-hint-pulse block for the identical guard shape this copies. Under
+   prefers-reduced-motion: reduce, neither `animation` rule below applies at
+   all, so a new/merged tile just appears with its final value instantly. */
+@media (prefers-reduced-motion: no-preference) {
+  .tile-2048-spawn {
+    animation: tile-2048-spawn 150ms ease-out;
+  }
+  .tile-2048-merge {
+    animation: tile-2048-merge 150ms ease-out;
+  }
+}
+
+@keyframes tile-2048-spawn {
+  0% {
+    transform: scale(0);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes tile-2048-merge {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.15);
+  }
+  100% {
+    transform: scale(1);
+  }
+}

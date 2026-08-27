@@ -14,12 +14,28 @@ import { MarketingShell } from "@/components/marketing/marketing-shell";
 import { GAMES } from "@/games/registry";
 import { siteOrigin } from "@/lib/site-origin";
 
+const TITLE = "Games — free browser games | Seazn Club";
+const DESCRIPTION =
+  "Play free browser games by Seazn Club. Learn-to-play quests and quick challenges — no install, no sign-up.";
+
 export const metadata: Metadata = {
-  title: "Games — free browser games | Seazn Club",
-  description:
-    "Play free browser games by Seazn Club. Learn-to-play quests and quick challenges — no install, no sign-up.",
+  title: TITLE,
+  description: DESCRIPTION,
   // Relative — resolved against the root layout's metadataBase.
   alternates: { canonical: "/games" },
+  // Metadata objects are shallowly merged per segment: since this page
+  // defines its OWN openGraph key, the root layout's openGraph (type,
+  // siteName only — no title/description) is REPLACED here, not merged, so
+  // og:title/og:description must be set explicitly or a shared link (e.g.
+  // WhatsApp) shows no page-specific preview at all (found in review
+  // 2026-08-27, confirmed against node_modules/next/dist/docs's own
+  // metadata-merging rules — "duplicate keys are replaced", "the absence of
+  // openGraph.description" is their own example of exactly this gap).
+  openGraph: {
+    title: TITLE,
+    description: DESCRIPTION,
+    url: "/games",
+  },
 };
 
 export default function GamesPage() {

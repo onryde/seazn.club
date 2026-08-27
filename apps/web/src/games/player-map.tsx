@@ -14,4 +14,6 @@ const loading = () => (
 
 export const PLAYER_MAP: Record<string, ComponentType> = {
   "chess-quest": dynamic(() => import("./chess-quest"), { ssr: false, loading }),
+  "daily-word": dynamic(() => import("./daily-word"), { ssr: false, loading }),
+  "2048": dynamic(() => import("./2048"), { ssr: false, loading }),
 };
