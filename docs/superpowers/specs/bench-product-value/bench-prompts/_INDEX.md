@@ -18,9 +18,9 @@ citation is stale by design; that is what B00 exists for.
 ## Order
 
 ```
-B00 → B01 → B02 → B03 → B04 → B05 → B06(pilot) → B07..B16 → B17 → B18
-                                        └ B07–B16 parallel-safe (worktrees,
-                                          disjoint pack files, schema frozen)
+B00 → B01 → B02 → B03 → B03r → B04 → B05 → B06(pilot) → B07..B16 → B17 → B18
+                          ▲                    └ B07–B16 parallel-safe (worktrees,
+                   RS010 merged                  disjoint pack files, schema frozen)
 ```
 
 B03/B04/B05 are sequential (shared `scripts/bench/lib/`). B17 needs B15
@@ -32,6 +32,7 @@ B03/B04/B05 are sequential (shared `scripts/bench/lib/`). B17 needs B15
 | B01 | `B01-runner-core.md` | CLI, pre-flight, HTTP client, report writer | B00 | **in review (#658)** |
 | B02 | `B02-pack-lib.md` | PackSchema, stage-0 validator, reconstruction | B01 | TODO |
 | B03 | `B03-seeding-layer.md` | org/comp/divisions/persons/officials/plans/claims | B02 | TODO |
+| B03r | `B03r-registration-layer.md` (to author) | registration entry path: `--entry` flag, http+browser drivers, PackSchema `registration` block, Stripe test-mode payer, funnel oracle | B03 + **RS007–RS011, RS010 merged** | TODO (gated) |
 | B04 | `B04-scheduling-layer.md` | config apply, auto/validate, checker, certificate, metrics | B03 | TODO |
 | B05 | `B05-simulation-layer.md` | event loop, advancement, oracles, people-layer steps | B04 | TODO |
 | B06 | `B06-pack-darts-pilot.md` | suite 11 (PDC) — pilot proves the playbook | B05 | TODO |
@@ -44,12 +45,13 @@ B03/B04/B05 are sequential (shared `scripts/bench/lib/`). B17 needs B15
 | B13 | `B13-pack-tabletennis.md` | suite 6 (WTTC 25) | B06 | TODO |
 | B14 | `B14-pack-volleyball.md` | suite 7 (Paris 24 M+W) | B06 | TODO |
 | B15 | `B15-pack-hockey-icehockey.md` | suites 8 (Paris 24) + 9 (IIHF 25) | B06 | TODO |
+| B16 | `B16-pack-club-open.md` (to author) | suite 13 "Club Open" — customer journey, UI-first: signup → comp → restricted divisions → register/pay/join/consent → approve/promote → fixtures → **pad-tapped play** → results | B03r, B05, B06 | TODO (gated) |
 | B17 | `B17-disruption-suite.md` | suite 12: blackout→reflow, walkover, correction | B15 | TODO |
-| B18 | `B18-full-run-closeout.md` | all suites, perf baseline, report, docs, memory | all | TODO |
+| B18 | `B18-full-run-closeout.md` (amend) | all suites, perf baseline, report, docs, memory; + one `--entry registration` pass ("Registration at volume" baseline, report-only) | all | TODO |
 
-(No B16 — hockey+icehockey share the period-family playbook sheet and one
-session; renumber only if that session splits in practice. Pack sessions
-may pair further if research proves thin — record the pairing here.)
+(B16 was vacant — hockey+icehockey share one session, B15 — and is now
+the customer-journey suite. Pack sessions may pair further if research
+proves thin — record the pairing here.)
 
 ## Decisions already made (do not re-open)
 
@@ -73,6 +75,15 @@ may pair further if research proves thin — record the pairing here.)
   exist; prompts name the fallback when absent.
 - Suite roster + per-suite constraints/specials: bench spec §3/§5/§8
   tables are the contract; deviations go through §7A adaptations.
+- **Registration + customer journey (owner, 2026-08-27)** — spec
+  `../designs/2026-08-27-bench-customer-journey-design.md`, decisions D1–D10
+  closed there. Headlines: suite 13 is **UI-first** (Playwright taps every
+  customer surface incl. Stripe test-mode Checkout and the scoring pad);
+  suites 1–12 stay API-first; `--entry registration` runs suites 1–12
+  through the API registration path free/open/auto, report-only; "no
+  Stripe" now scoped to entitlements only; bench never *builds* UI, suite
+  13 *drives* it; free-agent assignment report-only in v1; whole leg
+  waits for RS010.
 
 ## Portfolio inventory (B00, 2026-08-26)
 
@@ -95,6 +106,11 @@ fall back from, is live — no B-prompt needs its fallback path.
 ## Status log
 
 (append as sessions run)
+
+- 2026-08-27 — **Registration + customer-journey amendment approved in
+  brainstorm** (owner). New sessions B03r + B16, B18 amended, gate
+  RS010 → B03r added to `_MASTER.md`. Prompts for B03r/B16 not yet
+  authored — write them from the spec once RS007–RS011 status is known.
 
 - 2026-08-13 — prompts authored, gated. S9+C0 merged; C1+S10 in flight.
   B-numbering: B16 intentionally absent (B15 covers suites 8+9).
