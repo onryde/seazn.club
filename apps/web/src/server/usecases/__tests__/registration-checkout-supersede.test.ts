@@ -29,18 +29,29 @@
 // that the new mint doesn't (the exact waitlist-promotion shape the previous
 // paragraph describes: S1 covers {A,B}, A is promoted and S2 mints for {A}
 // alone — the intersection check expired S1 outright and B lost its only
-// payable link). The two tests below the existing pair prove the corrected
-// SUBSUMPTION predicate: expire only when the new mint's ids are a superset
-// of (or equal to) the prior session's own ids. They drive mintGroupCheckout
-// as well as resumeRegistrationCheckout, since a superset re-mint (a
-// single-entry prior session followed by a whole-cart re-mint) needs the
-// multi-id path.
+// payable link). Two of the tests below the existing pair prove the
+// corrected SUBSUMPTION predicate: expire only when the new mint's ids are a
+// superset of (or equal to) the prior session's own ids. They drive
+// mintGroupCheckout as well as resumeRegistrationCheckout, since a superset
+// re-mint (a single-entry prior session followed by a whole-cart re-mint)
+// needs the multi-id path.
+//
+// A further ordering fix, proven by the LAST test below: the group used to
+// be stamped with the new session AFTER the prior one was expired. If the
+// stamp then failed (DB failover, statement timeout, lock wait), the group
+// was left naming a session this call had already told Stripe to expire —
+// every reader would see a dead session with no live successor on record.
+// The stamp now runs first; that test reads the DB back from INSIDE the
+// mocked expire() call to prove the new session is already durably on
+// record at that exact point, not just in the eventual end state.
 //
 // Real Postgres required; skipped without DATABASE_URL (matches every
 // sibling usecase suite in this directory).
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import type Stripe from "stripe";
+
+import { sql } from "@/lib/db";
 
 // vi.mock is hoisted per-module and does not travel through an import (same
 // note as every sibling registration suite's own header) — declared here,
@@ -192,6 +203,36 @@ describe.skipIf(!HAS_DB)(
       // the EXPIRE decision differs, never the stamp itself.
       const group = await loadWithGroup(a.registration.id);
       expect(group.checkout_session_id).not.toBe(sessionAB);
+    });
+
+    it("stamps the new session BEFORE expiring the prior one — a failed stamp must never leave a dead session on record", async () => {
+      const { competition, division, settings } = await stripeRig();
+      const first = await seedRegistration(competition.id, division.id, settings, { amountCents: 500 });
+      await resumeRegistrationCheckout(first.registration.id, first.access_token, "http://test.local");
+      const firstSessionId = (await loadWithGroup(first.registration.id)).checkout_session_id!;
+
+      stripeMock.checkoutRetrieve.mockResolvedValueOnce(
+        openSession(firstSessionId, [first.registration.id]),
+      );
+      // Reads the group's row from INSIDE the mocked expire() call — proves
+      // the ORDERING at the exact instant expire() runs, not just the
+      // eventual end state (which would look identical either way).
+      let stampedWhenExpireRan: string | null | undefined;
+      stripeMock.checkoutExpire.mockImplementationOnce(async (id: string) => {
+        const [row] = await sql<{ checkout_session_id: string | null }[]>`
+          select checkout_session_id from registration_groups where id = ${first.registration.group_id}`;
+        stampedWhenExpireRan = row!.checkout_session_id;
+        return { id };
+      });
+
+      await resumeRegistrationCheckout(first.registration.id, first.access_token, "http://test.local");
+
+      expect(stripeMock.checkoutExpire).toHaveBeenCalledWith(firstSessionId);
+      // The NEW session was already durably on record when expire() ran —
+      // never the old one being expired, which would mean a reader could
+      // observe a dead session with no live successor.
+      expect(stampedWhenExpireRan).not.toBeNull();
+      expect(stampedWhenExpireRan).not.toBe(firstSessionId);
     });
   },
 );

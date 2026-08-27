@@ -1765,18 +1765,25 @@ async function createRegistrationCheckout(
     cancel_url: `${returnBase}&checkout=cancelled`,
   }));
   if (!session.url) throw new HttpError(502, "Stripe did not return a checkout URL");
-  // Payment-integrity fix: `firstEntry.checkout_session_id` is still the
-  // PRIOR value here — the update below hasn't run yet. Best-effort; never
-  // blocks stamping the new session even if the expire attempt fails.
-  if (firstEntry.checkout_session_id) {
-    await expireSupersededCheckoutSession(firstEntry.checkout_session_id, registrationIds);
-  }
   // checkout_session_id/fee_percent live on the cart (V364) — one row to
   // stamp regardless of how many entries this session covers.
+  //
+  // Ordering fix: stamped BEFORE expiring the prior session below (used to
+  // run the other way round). If this update throws (DB failover, statement
+  // timeout, lock wait) the group must still name the OLD, still-open
+  // session rather than one this call has already told Stripe to expire —
+  // every reader (organiser console, reconcile-by-session, resume) would
+  // otherwise be looking at a dead session with no live successor on
+  // record.
   await sql`
     update registration_groups
     set checkout_session_id = ${session.id}, fee_percent = ${feePercent}, updated_at = now()
     where id = ${groupId}`;
+  // Payment-integrity fix: best-effort; never blocks the mint that already
+  // committed above even if the expire attempt below fails.
+  if (firstEntry.checkout_session_id) {
+    await expireSupersededCheckoutSession(firstEntry.checkout_session_id, registrationIds);
+  }
   return session.url;
 }
 
