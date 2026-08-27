@@ -63,6 +63,20 @@ export const badminton = makeSetBasedModule({
   // removing a player from the match, which a badminton umpire's sheet does
   // record, so all four stay reachable here.
   sanctionLevels: ["warning", "penalty", "expulsion", "disqualification"],
+  // R5-1 — BWF service, declared rather than keyed on the sport name.
+  //  * Law 10.1: the side winning a rally serves the next one. So the LEDGER
+  //    answers "who serves next" by itself from the second rally of a game
+  //    onwards; a declaration is needed only for the very first rally of the
+  //    match, and `game.summary`-only scoring.
+  //  * Law 8.1: the side that won a game serves first in the next one — no
+  //    alternation, and no toss after the first game.
+  //  * No `serverFromPairOrder`: BWF Law 10.5 picks the doubles server by the
+  //    SERVICE COURT the players are standing in, which changes only when the
+  //    serving side wins a rally and which this kernel does not fold. The
+  //    declared pair order cannot answer it, so badminton names no person —
+  //    an omitted fact over a confident wrong one (DOMAIN.badminton.md's own
+  //    "service court" row is still deferred).
+  serve: { within: "rally-winner", setStart: "set-winner" },
   entrantModel: { kinds: ["individual", "pair"], defaultKind: "individual" },
   playerStats: {
     metrics: [

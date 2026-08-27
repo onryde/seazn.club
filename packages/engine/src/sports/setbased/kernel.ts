@@ -47,7 +47,8 @@ import type {
   SportModule,
   TiebreakerKey,
 } from "../../sport/module.ts";
-import { expectedPairServerOf, makeSquadAdopter } from "../squad-state.ts";
+import { expectedPairServerOf, makeSquadAdopter, pairOrderOf } from "../squad-state.ts";
+import { memberOf, onFieldPersons } from "../../core/lineup.ts";
 import type { LineupPolicy, SquadState } from "../../core/lineup.ts";
 
 // ---------------------------------------------------------------------------
@@ -816,6 +817,553 @@ function applyAbandon(state: SetBasedState): SetBasedState {
 }
 
 // ---------------------------------------------------------------------------
+// R5-1 (owner ruling, R5 dispatch) — THE SERVE-CONTEXT READER (v3/09 defect
+// D-17: the pad rendered "—" for who is serving, on all three sports).
+//
+// WHY IT LIVES HERE AND NOT IN THE PAD. Three skins each deriving the BWF /
+// ITTF / FIVB service rules is the placer-vs-verifier fork this engine keeps
+// paying for, and the public scoreboard needs the same answer as the pad. One
+// reader, over the fold the whole product already reads.
+//
+// WHY IT ADDS NO STATE AND NO EVENT. Serving is a pure function of the ledger
+// once ONE datum is known — who served the first rally — and that datum
+// already has a home: `SetBasedRally.serving`, the optional field expedite
+// enforcement was given (see its own doc comment). So there is no new event
+// type (§9), no payload change, no new State key (a State key would red the
+// frozen tabletennis corpus, whose expedite rallies already carry `serving`)
+// and no new cfg key (a cfg key reds golden.ts's config-COVERAGE gate, which
+// can only be closed from `src/testkit/golden.ts`). The rules ride on the
+// PRESET, which is compile-time and in no corpus at all.
+//
+// THE RULES ARE DECLARED, NEVER KEYED ON THE SPORT. `if (key === "badminton")`
+// anywhere below would be the same defect in a new place; every branch here
+// reads `SetBasedServeRotation`, which each preset states for itself.
+// ---------------------------------------------------------------------------
+
+/**
+ * Who serves the next rally INSIDE a set.
+ *
+ *  * `rally-winner` — side-out: the winner of a rally serves the next one
+ *    (BWF Law 10.1, FIVB 12.2.2). The consequence worth knowing is that the
+ *    ledger answers this by itself from the second rally of a set onwards —
+ *    a declaration is only ever needed for the first.
+ *  * `fixed-turns` — the serve changes hands after a fixed number of rallies
+ *    whoever wins them (ITTF 2.13.3), so it is a function of the SCORE and
+ *    the set's first server, and nothing else.
+ */
+export type SetBasedServeWithin = "rally-winner" | "fixed-turns";
+
+/**
+ * Who serves first in a set after the first one.
+ *
+ *  * `set-winner` — the side that won the previous set (BWF Law 8.1).
+ *  * `alternate` — the sides take the first serve in turn (ITTF 2.13.6;
+ *    FIVB 7.1 for sets 2–4).
+ */
+export type SetBasedSetStart = "set-winner" | "alternate";
+
+/**
+ * Why the reader will not name a server. Present exactly when
+ * `serveOrderKnown` is false, and never otherwise — a pad renders nothing and
+ * ASKS, so it needs to know which question to ask.
+ */
+export type SetBasedServeUnknown =
+  /** Nothing in the ledger has ever said who served, and the laws do not make
+   *  it derivable here (the first rally of the match; a `fixed-turns` set
+   *  whose opener was never established). */
+  | "undeclared"
+  /** The match is over. Nobody serves next. */
+  | "match-over"
+  /** A partial set summary moved the score without naming the rallies that
+   *  moved it, and under side-out the rally winners ARE the rotation. */
+  | "score-jumped"
+  /** R4-7 drift detector: a rally declared a serving side that the fold's own
+   *  rotation contradicts. Two derivations of one fact disagree, so the answer
+   *  is unknown — neither is patched to match the other. */
+  | "recorded-disagrees"
+  /** The ledger handed in does not fold to the state handed in. */
+  | "ledger-mismatch"
+  /** The laws re-toss for the deciding set (FIVB 7.1), so the alternation does
+   *  not carry into it. */
+  | "deciding-set-toss";
+
+/**
+ * The service rules of ONE federation, declared by the preset that plays them.
+ *
+ * REQUIRED on `SetBasedPreset`, and required for the same reason
+ * `sanctionLevels` is: a sport added to this kernel must state its own answer
+ * rather than silently inherit the FIVB's. The three shipped answers disagree
+ * on every field that has one.
+ */
+export interface SetBasedServeRotation {
+  readonly within: SetBasedServeWithin;
+  /** `fixed-turns` only — rallies per service turn (ITTF 2.13.3: two). */
+  readonly turnLength?: number;
+  /** `fixed-turns` only — ITTF 2.13.5: once BOTH sides reach one short of the
+   *  target ("10-all"), the serve changes after every rally. Derived from
+   *  `setTo`/`finalSetTo`, so the hardbat-21 variant accelerates at 20-all
+   *  without declaring anything extra. */
+  readonly acceleratesAtDeuce?: boolean;
+  readonly setStart: SetBasedSetStart;
+  /** FIVB 7.1 — a fresh toss before the deciding set, so the alternation stops
+   *  there and the reader reports `deciding-set-toss` until the ledger says
+   *  who served. */
+  readonly decidingSetTossed?: boolean;
+  /**
+   * The side's service turns run down the team sheet's declared pair order
+   * (ITTF 2.13.4 doubles; FIVB Beach 13.2). Absent means the laws pick the
+   * server from facts this kernel does not fold — BWF Law 10.5 reads the
+   * SERVICE COURT the players happen to be standing in, and FIVB 7.6 reads a
+   * six-position court rotation — so no person is named at all.
+   */
+  readonly serverFromPairOrder?: boolean;
+  /** Squad roles this federation forbids from serving (FIVB 19.3.2.4 — a
+   *  libero may not serve). Matched against `SquadMember.roles`. */
+  readonly nonServingRoles?: readonly string[];
+  /** Positions in the court rotation (FIVB 7.6.2: six). Reported only where
+   *  the side actually has that many players on court, so a pair never gets a
+   *  six-position rotation number. */
+  readonly rotationCycle?: number;
+}
+
+/** What the reader needs off a module: its key (for the event type strings it
+ *  already builds the same way) and the rules it plays. */
+export interface SetBasedServeSource {
+  readonly key: string;
+  readonly coarseEventType: "set.summary" | "game.summary";
+  readonly serveRotation: SetBasedServeRotation;
+}
+
+/**
+ * Who is serving, as far as the ledger can say.
+ *
+ * INVARIANT: `serveOrderKnown === (servingSide !== null)`, and
+ * `unknownBecause` is present exactly when it is false. A caller draws the
+ * indicator when it is true and draws NOTHING (and asks) when it is false —
+ * never a placeholder glyph standing in for a fact.
+ *
+ * The optional fields are narrower still: they need the set's whole service
+ * chain, from its first rally, and are simply ABSENT when it has a hole in it.
+ * An omitted fact beats an authoritative-looking wrong one.
+ */
+export interface SetBasedServeContext {
+  /** The entrant id due to serve the NEXT rally. */
+  servingSide: string | null;
+  /** The same answer as a side label, for a caller that renders home/away. */
+  side: Side | null;
+  /** The person due to serve, where the laws make one derivable and the team
+   *  sheet declared the order. `null` is the normal answer for singles, for an
+   *  undeclared order, and for every badminton and indoor-volleyball fixture. */
+  serverPersonId: string | null;
+  serveOrderKnown: boolean;
+  /** This side's own 0-based service-turn index within the current set. */
+  serviceTurn?: number;
+  /** `fixed-turns` only: which serve of the current turn comes next, 1-based. */
+  serveNumber?: number;
+  /** The serving side's rotation number, 1-based against the lineup it started
+   *  the set with (FIVB 7.6.2). */
+  rotation?: number;
+  unknownBecause?: SetBasedServeUnknown;
+}
+
+/**
+ * The turn a point belongs to, 0-based, under `fixed-turns`.
+ *
+ * `accelerateFrom` is the point count from which every rally is its own
+ * service turn — 10-all (ITTF 2.13.5) or the moment expedite came into force
+ * (2.15.3), whichever comes first. Points before it are grouped `turnLength`
+ * at a time; the turn in flight when acceleration begins is CUT SHORT, which
+ * is what `Math.ceil` says here and a `Math.floor` would not.
+ */
+function serveTurnIndexOf(points: number, turnLength: number, accelerateFrom: number): number {
+  if (points < accelerateFrom) return Math.floor(points / turnLength);
+  return Math.ceil(accelerateFrom / turnLength) + (points - accelerateFrom);
+}
+
+/** The point count at which service turn `turn` began — the inverse of
+ *  `serveTurnIndexOf`, and the only thing `serveNumber` needs. */
+function servePointsAtTurnStart(turn: number, turnLength: number, accelerateFrom: number): number {
+  const pivot = Math.ceil(accelerateFrom / turnLength);
+  return turn < pivot ? turn * turnLength : accelerateFrom + (turn - pivot);
+}
+
+/** A pair is two people. `expectedPairServerOf` cycles `turn % order.length`,
+ *  so handing it a six-long "order" off an indoor volleyball sheet would
+ *  produce a six-cycle that is not the FIVB rotation and name the wrong
+ *  player with complete confidence — the exact failure R4's own code review
+ *  found in `pairOrderOf` (defect 2). Size is checked, not assumed. */
+const SERVE_PAIR_SIZE = 2;
+
+interface ServeWalk {
+  /** Who serves the next rally, or null when the ledger cannot say. */
+  serving: Side | null;
+  /** Who opened the set in progress — kept even across a drift, because the
+   *  set-transition rules read it and a within-set contradiction is not
+   *  evidence against it. */
+  firstServer: Side | null;
+  /** Set-scoped. `turns[side]` counts the service turns that side has STARTED,
+   *  so its current 0-based index is one less. */
+  turns: { home: number; away: number };
+  /** Set-scoped: times this side has taken the serve FROM the opponent, which
+   *  is what FIVB 7.6.2 rotates on. */
+  gains: { home: number; away: number };
+  /** Non-null when this set's chain has a hole in it: the side may still be
+   *  known, but turn counts, the server person and the rotation are not. */
+  chainBroken: SetBasedServeUnknown | null;
+  /** Points played in the set in progress. */
+  points: number;
+  /** `serveTurnIndexOf`'s third argument for the set in progress. */
+  accelerateFrom: number;
+  /** Does the ledger handed in actually fold to the state handed in? */
+  ledgerAgrees: boolean;
+}
+
+/**
+ * Replays the ledger through THE REAL `applyRally`/`applySummary`/`bankSet`
+ * and tracks the serve alongside it.
+ *
+ * Never a parallel reimplementation of the set predicate — the same rule
+ * `setBasedMatchOutcomesFold` above follows, and for the same reason: a second
+ * derivation of "did that close a set?" drifts from the fold silently, and the
+ * whole point of this reader is not to be a second source of truth.
+ *
+ * Total and never throws: every refusal is a returned value.
+ */
+function setBasedServeWalk(
+  source: SetBasedServeSource,
+  state: SetBasedState,
+  events: readonly EventEnvelope[],
+): ServeWalk {
+  const rotation = source.serveRotation;
+  const cfg = state.cfg;
+  const turnLength = Math.max(1, Math.trunc(rotation.turnLength ?? 1));
+  const rallyType = `${source.key}.rally`;
+  const summaryType = `${source.key}.${source.coarseEventType}`;
+  const expediteType = `${source.key}.expedite.start`;
+
+  const sideFor = (id: unknown): Side | null =>
+    id === state.entrants.home ? "home" : id === state.entrants.away ? "away" : null;
+
+  let replay = setBasedReplayState(cfg, state.entrants.home, state.entrants.away);
+  let ledgerAgrees = true;
+  let firstServer: Side | null = null;
+  let serving: Side | null = null;
+  let turns = { home: 0, away: 0 };
+  let gains = { home: 0, away: 0 };
+  let expediteFrom: number | null = null;
+  let chainBroken: SetBasedServeUnknown | null = "undeclared";
+
+  const setIndexNow = (): number => openSet(replay)?.index ?? replay.sets.length;
+  const pointsNow = (): number => {
+    const open = openSet(replay);
+    return open === null ? 0 : open.set.home + open.set.away;
+  };
+  const closedCount = (): number => replay.sets.filter((set) => set.closed).length;
+  // ITTF 2.13.5 and 2.15.3 are the same mechanic — one rally per turn — with
+  // two different triggers, so the reader takes whichever bites first.
+  const accelerateFromNow = (): number => {
+    const deuce = rotation.acceleratesAtDeuce === true
+      ? 2 * (setTarget(cfg, setIndexNow()) - 1)
+      : Number.POSITIVE_INFINITY;
+    return Math.min(deuce, expediteFrom ?? Number.POSITIVE_INFINITY);
+  };
+
+  // Who we believe is about to serve, given `points` already played this set.
+  // `fixed-turns` derives it from the score every time (so a summary that
+  // jumps the score costs it nothing); side-out carries it forward from the
+  // last rally winner.
+  const believedServer = (points: number): Side | null => {
+    if (chainBroken === "recorded-disagrees") return null;
+    if (rotation.within !== "fixed-turns") return serving;
+    if (firstServer === null) return null;
+    const turn = serveTurnIndexOf(points, turnLength, accelerateFromNow());
+    return turn % 2 === 0 ? firstServer : opponent(firstServer);
+  };
+
+  const startSet = (opener: Side | null, why: SetBasedServeUnknown): void => {
+    firstServer = opener;
+    serving = opener;
+    turns = { home: 0, away: 0 };
+    gains = { home: 0, away: 0 };
+    if (opener !== null) turns[opener] = 1;
+    // Expedite runs to the end of the MATCH (ITTF 2.15.4), so a set that opens
+    // with it already in force is one-rally-per-turn from its very first point.
+    expediteFrom = replay.expedite === true ? 0 : null;
+    chainBroken = opener === null ? why : null;
+  };
+
+  /** A set just closed: who opens the next one, per the declared rule. */
+  const openNextSet = (): void => {
+    const closed = closedCount();
+    const justClosed = replay.sets[closed - 1];
+    const wonBy: Side | null =
+      justClosed === undefined ? null : justClosed.home > justClosed.away ? "home" : "away";
+    const previousOpener = firstServer;
+    // FIVB 7.1 — the deciding set is tossed for afresh, so the alternation
+    // stops at its door rather than carrying through it.
+    if (rotation.decidingSetTossed === true && closed === cfg.bestOf - 1) {
+      startSet(null, "deciding-set-toss");
+      return;
+    }
+    if (rotation.setStart === "set-winner") {
+      startSet(wonBy, "undeclared");
+      return;
+    }
+    startSet(previousOpener === null ? null : opponent(previousOpener), "undeclared");
+  };
+
+  for (const event of resolveVoids(events)) {
+    if (!ledgerAgrees) break;
+
+    if (event.type === expediteType) {
+      try {
+        replay = applyExpedite(replay);
+      } catch {
+        ledgerAgrees = false;
+        break;
+      }
+      expediteFrom = pointsNow();
+      continue;
+    }
+
+    if (event.type === rallyType) {
+      const parsed = SetBasedRally.safeParse(event.payload);
+      if (!parsed.success) {
+        ledgerAgrees = false;
+        break;
+      }
+      const payload = parsed.data;
+      const winner = sideFor(payload.wonBy);
+      if (winner === null) {
+        ledgerAgrees = false;
+        break;
+      }
+      const before = pointsNow();
+      const believed = believedServer(before);
+      if (payload.serving !== undefined) {
+        const declared = sideFor(payload.serving);
+        if (declared === null) {
+          ledgerAgrees = false;
+          break;
+        }
+        if (believed === null) {
+          // THE ANCHOR. A gap may be filled by a declaration; a CONTRADICTION
+          // may not, which is why a set already flagged `recorded-disagrees`
+          // is not re-anchored here — that would be patching one derivation to
+          // match the other, the thing R4-7 exists to forbid.
+          if (chainBroken !== "recorded-disagrees") {
+            if (rotation.within === "fixed-turns") {
+              // The score says which turn this rally is; the declaration says
+              // who is serving it; together they name the set's opener — and
+              // with the opener known, every other turn in the set is a pure
+              // function of the score, so the chain is whole again even when
+              // the declaration arrives in the middle of one.
+              const turn = serveTurnIndexOf(before, turnLength, accelerateFromNow());
+              firstServer = turn % 2 === 0 ? declared : opponent(declared);
+              chainBroken = null;
+            } else {
+              serving = declared;
+              if (before === 0) {
+                firstServer = declared;
+                turns = { home: 0, away: 0 };
+                gains = { home: 0, away: 0 };
+                turns[declared] = 1;
+                chainBroken = null;
+              }
+            }
+          }
+        } else if (declared !== believed) {
+          // R4-7. Narrow on purpose: the rest of THIS set is unknown, and the
+          // next set re-anchors off a fact this contradiction does not touch
+          // (the set winner, or the alternation off `firstServer`). A guard
+          // that killed the indicator for the rest of the match would be D-24
+          // all over again.
+          chainBroken = "recorded-disagrees";
+          serving = null;
+        }
+      }
+
+      const closedBefore = closedCount();
+      try {
+        replay = applyRally(replay, payload, {
+          key: source.key,
+          recordsExpedite: cfg.records.expedite,
+          strict: false,
+        });
+      } catch {
+        ledgerAgrees = false;
+        break;
+      }
+      if (rotation.within === "rally-winner" && chainBroken !== "recorded-disagrees") {
+        if (serving !== null && winner !== serving) {
+          gains[winner] += 1;
+          turns[winner] += 1;
+        }
+        // Side-out: the winner of the rally serves the next one, which holds
+        // whether or not we knew who served THIS one.
+        serving = winner;
+      }
+      if (closedCount() > closedBefore) openNextSet();
+      continue;
+    }
+
+    if (event.type === summaryType) {
+      const parsed = SetBasedSummary.safeParse(event.payload);
+      if (!parsed.success) {
+        ledgerAgrees = false;
+        break;
+      }
+      const before = pointsNow();
+      const closedBefore = closedCount();
+      try {
+        replay = applySummary(replay, parsed.data, false);
+      } catch {
+        ledgerAgrees = false;
+        break;
+      }
+      if (closedCount() > closedBefore) {
+        openNextSet();
+        continue;
+      }
+      // A partial snapshot moved the score without naming the rallies that
+      // moved it. Under side-out the rally winners ARE the rotation, so the
+      // chain has a hole; under `fixed-turns` the score is the whole input and
+      // nothing is lost. Narrow both ways, and both directions are tested.
+      if (rotation.within === "rally-winner" && pointsNow() !== before) {
+        if (chainBroken === null) chainBroken = "score-jumped";
+        serving = null;
+      }
+      continue;
+    }
+  }
+
+  const points = pointsNow();
+  const accelerateFrom = accelerateFromNow();
+  const serverNow = believedServer(points);
+  const agrees =
+    ledgerAgrees &&
+    replay.sets.length === state.sets.length &&
+    replay.setsWon.home === state.setsWon.home &&
+    replay.setsWon.away === state.setsWon.away &&
+    replay.sets.every((set, i) => {
+      const mirror = state.sets[i];
+      return (
+        mirror !== undefined &&
+        set.home === mirror.home &&
+        set.away === mirror.away &&
+        set.closed === mirror.closed
+      );
+    });
+
+  return {
+    serving: serverNow,
+    firstServer,
+    turns,
+    gains,
+    chainBroken,
+    points,
+    accelerateFrom,
+    ledgerAgrees: agrees,
+  };
+}
+
+/**
+ * WHO IS SERVING — the reader D-17 was open for.
+ *
+ * A pure reader over the ledger and the folded state, with no fold effect: it
+ * mutates nothing, `init`/`apply` never call it, and it adds not one byte to
+ * any serialised state.
+ *
+ * TWO DRIFT DETECTORS, both R4-7 shaped — compare two derivations and report
+ * unknown when they disagree, rather than patching either:
+ *
+ *  1. a rally's own recorded `serving` against the rotation the fold implies;
+ *  2. the set ledger this walk replays against the `state` handed in, so a
+ *     truncated or foreign ledger reports `ledger-mismatch` instead of naming
+ *     a confidently wrong side.
+ */
+export function setBasedServeContext(
+  source: SetBasedServeSource,
+  state: SetBasedState,
+  events: readonly EventEnvelope[],
+): SetBasedServeContext {
+  const unknown = (why: SetBasedServeUnknown): SetBasedServeContext => ({
+    servingSide: null,
+    side: null,
+    serverPersonId: null,
+    serveOrderKnown: false,
+    unknownBecause: why,
+  });
+
+  // "pre" is deliberately NOT here: a fixture that has not started still has a
+  // first server to declare, and the pad wants to ask for it.
+  if (state.phase === "done" || state.phase === "final" || state.phase === "abandoned") {
+    return unknown("match-over");
+  }
+
+  const walk = setBasedServeWalk(source, state, events);
+  if (!walk.ledgerAgrees) return unknown("ledger-mismatch");
+  const side = walk.serving;
+  if (side === null) return unknown(walk.chainBroken ?? "undeclared");
+
+  const rotation = source.serveRotation;
+  const turnLength = Math.max(1, Math.trunc(rotation.turnLength ?? 1));
+  const chainComplete = walk.chainBroken === null;
+
+  let serviceTurn: number | undefined;
+  let serveNumber: number | undefined;
+  if (chainComplete) {
+    if (rotation.within === "fixed-turns") {
+      const turn = serveTurnIndexOf(walk.points, turnLength, walk.accelerateFrom);
+      serviceTurn = Math.floor(turn / 2);
+      serveNumber =
+        walk.points - servePointsAtTurnStart(turn, turnLength, walk.accelerateFrom) + 1;
+    } else {
+      serviceTurn = walk.turns[side] - 1;
+    }
+  }
+
+  let rotationNumber: number | undefined;
+  const cycle = rotation.rotationCycle;
+  if (cycle !== undefined && chainComplete && state.squads !== undefined) {
+    // Reported only for a side that really has that many players on court —
+    // a beach pair plays the same side-out rules under the same preset and
+    // has no six-position rotation to number.
+    if (onFieldPersons(state.squads[side]).length === cycle) {
+      rotationNumber = (walk.gains[side] % cycle) + 1;
+    }
+  }
+
+  let serverPersonId: string | null = null;
+  if (rotation.serverFromPairOrder === true && serviceTurn !== undefined) {
+    const order = state.squads === undefined ? [] : pairOrderOf(state.squads[side]);
+    if (order.length === SERVE_PAIR_SIZE) {
+      const candidate = expectedDoublesServer(state, side, serviceTurn);
+      const forbidden = rotation.nonServingRoles ?? [];
+      const member =
+        candidate === null || state.squads === undefined
+          ? undefined
+          : memberOf(state.squads[side], candidate);
+      // FIVB 19.3.2.4 — a libero may not serve. Refuse to NAME them; the side
+      // is still serving and still reported, because the side is not in doubt.
+      const barred =
+        forbidden.length > 0 && (member?.roles ?? []).some((role) => forbidden.includes(role));
+      serverPersonId = barred ? null : candidate;
+    }
+  }
+
+  return {
+    servingSide: state.entrants[side],
+    side,
+    serverPersonId,
+    serveOrderKnown: true,
+    ...(serviceTurn === undefined ? {} : { serviceTurn }),
+    ...(serveNumber === undefined ? {} : { serveNumber }),
+    ...(rotationNumber === undefined ? {} : { rotation: rotationNumber }),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Generator helper — a reachable completed-set score for the given target.
 // ---------------------------------------------------------------------------
 
@@ -877,6 +1425,17 @@ export interface SetBasedPreset {
    * and `discipline.colors` keeps projecting all four.
    */
   sanctionLevels: readonly SetBasedSanctionLevel[];
+  /**
+   * R5-1 — the service rules THIS federation plays (`SetBasedServeRotation`).
+   *
+   * REQUIRED, for the same reason `sanctionLevels` above is: the three sports
+   * on this kernel disagree on every field of it, so a kernel default would be
+   * right for at most one of them and silently wrong for the others. It is a
+   * PRESET field rather than a cfg one deliberately — cfg is serialised into
+   * every frozen state and a new cfg key reds golden.ts's config-coverage gate,
+   * which cannot be closed from inside `src/sports/**`.
+   */
+  serve: SetBasedServeRotation;
   entrantModel?: EntrantModel;
   // W4 (#407) — which interruptions THIS sport's scoresheet carries. A sport
   // that does not declare one refuses the event outright rather than silently
@@ -1490,9 +2049,16 @@ function mergePlayerStats(
   };
 }
 
-export function makeSetBasedModule(
-  preset: SetBasedPreset,
-): SportModule<SetBasedCfg, SetBasedEv, SetBasedState> {
+/**
+ * A set-based module, plus the two declarations `setBasedServeContext` reads
+ * off it. An intersection rather than a change to `SportModule` (which this
+ * kernel does not own), and structurally still a `SportModule`, so every
+ * existing consumer is untouched.
+ */
+export type SetBasedModule = SportModule<SetBasedCfg, SetBasedEv, SetBasedState> &
+  SetBasedServeSource;
+
+export function makeSetBasedModule(preset: SetBasedPreset): SetBasedModule {
   const configSchema = makeConfigSchema(preset.defaults);
   const rallyType = `${preset.key}.rally`;
   const summaryType = `${preset.key}.${preset.coarseEventType}`;
@@ -1624,6 +2190,10 @@ export function makeSetBasedModule(
   return {
     key: preset.key,
     version: preset.version,
+    // R5-1 — read by `setBasedServeContext`, which builds this module's own
+    // event type strings the same way the factory does, from `key`.
+    coarseEventType: preset.coarseEventType,
+    serveRotation: preset.serve,
     configSchema,
     eventSchema: SetBasedEv,
     eventSchemas,
