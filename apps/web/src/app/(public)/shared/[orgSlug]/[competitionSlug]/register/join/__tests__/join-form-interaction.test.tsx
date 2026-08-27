@@ -410,6 +410,19 @@ describe("submit — designed failure states, never a raw server string", () => 
     expect(m.pageText()).not.toContain("This join link is not valid");
   });
 
+  // RS007 review defect #15 (MEDIUM): 429 used to fall through to
+  // classifyJoinFailure's catch-all "rejected", whose copy is scoped to
+  // roster cap/eligibility — a throttled teammate was told their DETAILS
+  // were refused, not that they'd tried too many times.
+  it("429 (throttled) shows a distinct 'too many attempts' state, never the 'couldn't complete this' copy", async () => {
+    apiV1Mock.queue.push({ ok: false, error: new ApiV1Error("Too many requests — slow down and try again.", 429, "RATE_LIMITED") });
+    const m = mount({ initialPlayerId: "p1" });
+    fillMinimalValidForm(m);
+    await submit(m);
+    expect(m.pageText()).toContain("You've tried this a few times in a row");
+    expect(m.pageText()).not.toContain("We couldn't complete this");
+  });
+
   it("422 (e.g. roster cap, pair-can't-add, ineligible) shows a designed 'couldn't complete this' state", async () => {
     apiV1Mock.queue.push({ ok: false, error: new ApiV1Error("This roster is already full", 422, "ERROR") });
     const m = mount({ initialPlayerId: "p1" });
@@ -428,7 +441,7 @@ describe("submit — designed failure states, never a raw server string", () => 
   });
 
   it("CRITICAL: the join_code capability token never appears in ANY rendered failure banner", async () => {
-    for (const status of [404, 409, 422, 503]) {
+    for (const status of [404, 409, 422, 429, 503]) {
       apiV1Mock.queue = [{ ok: false, error: new ApiV1Error("server detail", status, "X") }];
       const m = mount({ initialPlayerId: "p1" });
       fillMinimalValidForm(m);

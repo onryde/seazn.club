@@ -239,42 +239,60 @@ describe("register join page (RS007) — the URL entry-card.tsx already emits", 
   // lib/ref-code.ts) and this preview renders real roster names — an
   // unthrottled server-rendered page over that space is a PII enumeration
   // surface. Hard requirement: a throttled response must be indistinguishable
-  // from the invalid-code 404 in status AND body — a distinguishable throttle
-  // page would itself be a new oracle (confirms an IP has crossed the
-  // threshold, and worse, a DIFFERENT throttle message on an otherwise-live
-  // code would leak that the code would have worked).
-  describe("client-IP rate limit — must not become a new oracle", () => {
-    it("renders byte-identical markup to a wrong code, and never calls previewJoinEntry", async () => {
+  // from any OTHER throttled response in status AND body, regardless of
+  // whether the code behind it is dead, wrong, missing, or genuinely live —
+  // a throttle response that varied with code validity would itself be a
+  // new oracle (confirms an IP has crossed the threshold, and worse, a
+  // DIFFERENT throttle message on an otherwise-live code would leak that
+  // the code would have worked).
+  //
+  // RS007 review defect #15 (MEDIUM, fixed here): the throttled state used
+  // to reuse the invalid-link copy VERBATIM, so a throttled teammate was
+  // told their link was dead. The oracle-proof property above still holds —
+  // it just no longer requires lying that the link doesn't exist.
+  describe("client-IP rate limit — must not become a new oracle, and must not lie that the link is dead either (defect #15)", () => {
+    it("renders the DISTINCT throttled state, never the invalid-link copy, and never calls previewJoinEntry", async () => {
+      rateLimitMock.throttle = true;
+      const html = await render({ join_code: "SZ-DEAD-CODE" });
+
+      expect(html).toContain("Too many attempts");
+      expect(html).not.toContain("This join link isn&#x27;t valid");
+      expect(usecaseMock.previewJoinEntry).not.toHaveBeenCalled();
+    });
+
+    it("the throttled state is byte-identical for a dead code and a genuinely LIVE one — still never a new oracle", async () => {
       const { HttpError } = await import("@/lib/errors");
       usecaseMock.previewJoinEntry.mockRejectedValueOnce(new HttpError(404, "This join link is not valid"));
-      const wrongCodeHtml = await render({ join_code: "SZ-DEAD-CODE" });
-
       rateLimitMock.throttle = true;
-      usecaseMock.previewJoinEntry.mockClear();
-      const throttledHtml = await render({ join_code: "SZ-DEAD-CODE" });
+      const deadCodeHtml = await render({ join_code: "SZ-DEAD-CODE" });
 
-      expect(throttledHtml).toBe(wrongCodeHtml);
+      // Configured to succeed if reached — proves the limiter itself hides
+      // this, not an incidental lookup failure.
+      usecaseMock.previewJoinEntry.mockResolvedValueOnce(TEAM_PREVIEW);
+      rateLimitMock.throttle = true;
+      const liveCodeHtml = await render({ join_code: "JOIN123" });
+
+      expect(deadCodeHtml).toBe(liveCodeHtml);
       expect(usecaseMock.previewJoinEntry).not.toHaveBeenCalled();
     });
 
     it("hides even a GENUINELY LIVE code — never leaks that the code would have worked", async () => {
-      // Configured to succeed if reached — proves the limiter itself hides
-      // this, not an incidental lookup failure.
       usecaseMock.previewJoinEntry.mockResolvedValueOnce(TEAM_PREVIEW);
       rateLimitMock.throttle = true;
 
       const html = await render({ join_code: "JOIN123" });
 
-      expect(html).toContain("This join link isn&#x27;t valid");
+      expect(html).toContain("Too many attempts");
       expect(html).not.toContain("Team Alpha");
       expect(html).not.toContain("Which one are you?");
       expect(usecaseMock.previewJoinEntry).not.toHaveBeenCalled();
     });
 
-    it("a bare visit with no join_code never consults the limiter at all — matches the existing 'never calls previewJoinEntry' contract", async () => {
+    it("a bare visit with no join_code never consults the limiter at all — matches the existing 'never calls previewJoinEntry' contract, and falls back to the invalid-link state (never throttled — there was never a code to throttle)", async () => {
       rateLimitMock.throttle = true; // even so — the limiter must never fire without a code to look up
       const html = await render({});
       expect(html).toContain("This join link isn&#x27;t valid");
+      expect(html).not.toContain("Too many attempts");
       expect(usecaseMock.previewJoinEntry).not.toHaveBeenCalled();
     });
   });

@@ -20,10 +20,31 @@ export const dynamic = "force-dynamic";
 // the GET route's own rate limit (above) left this page itself unthrottled,
 // a PII enumeration surface over that whole space. Limited HERE, per-IP,
 // same bucket key as the sibling route (`regjoinpreview:${ip}`, 5/300s —
-// api/v1/.../register/join/route.ts's GET) so this page cannot be used to
-// bypass that route's own budget. Checked BEFORE the lookup, never after: a
-// throttled visit must render the exact same "invalid" markup a wrong code
-// does — a distinguishable throttle response would itself be a new oracle.
+// api/v1/.../register/join/route.ts's GET, also spent by join-form.tsx's
+// own refreshSlots()) so this page cannot be used to bypass that route's
+// own budget. Checked BEFORE the lookup, never after: a throttled visit
+// never even runs previewJoinEntry, so its response cannot depend on
+// whether join_code is missing, wrong, or genuinely live — a
+// distinguishable throttle response would itself be a new oracle.
+//
+// RS007 review defect #15 (MEDIUM): that byte-identical-to-what requirement
+// used to be satisfied by reusing the invalid-link markup verbatim, which
+// conflated two different facts — "this link is dead" and "you're going too
+// fast" — into one message, so a throttled teammate was told their link had
+// expired. Fixed: throttled now renders its OWN designed state (below),
+// still computed from `throttled` alone before any lookup, so it keeps the
+// oracle-proof property above while finally saying the true, actionable
+// thing.
+//
+// Judgment call on the shared bucket itself (left unchanged): the preview
+// GET and refreshSlots() spending the SAME budget is what makes "3 of 5
+// gone before a throttled visit even happens" possible on one shared IP
+// (venue wifi, CGNAT) — but splitting them would let this page's own
+// reloads bypass the sibling route's budget entirely, recreating the exact
+// PII-enumeration bypass the per-IP limit above exists to close. Loosening
+// the limit to compensate would weaken the same protection from the other
+// side. Neither trade is worth taking to fix a wording bug — the throttled
+// state above fixes the LIE, not the limit.
 import Link from "next/link";
 import type { Metadata } from "next";
 import { headers } from "next/headers";
@@ -74,8 +95,8 @@ export default async function RegisterJoinPage({ params, searchParams }: Props) 
   // the identical 404-shape (its own doc comment), so this branch cannot
   // distinguish "no code" from "wrong code" from "code once existed" either.
   let preview: Awaited<ReturnType<typeof previewJoinEntry>> | null = null;
+  let throttled = false;
   if (join_code) {
-    let throttled = false;
     try {
       await rateLimit(`regjoinpreview:${await clientIp()}`, { max: 5, windowSeconds: 300 });
     } catch (err) {
@@ -89,6 +110,35 @@ export default async function RegisterJoinPage({ params, searchParams }: Props) 
         if (!(err instanceof HttpError && err.status === 404)) throw err;
       }
     }
+  }
+
+  // RS007 review defect #15 (MEDIUM): a throttled visit used to fall
+  // straight into the `!preview` branch below and render the exact same
+  // "This join link isn't valid" copy as a dead code — a teammate who hit
+  // the shared per-IP budget (CGNAT/venue wifi, or the picker's own
+  // refreshSlots() spending the same bucket) was told their link was dead
+  // rather than that they'd tried too many times. This is its OWN designed
+  // state now, checked BEFORE `!preview` — but still computed from
+  // `throttled` ALONE, decided above before any lookup ever ran, so it
+  // stays exactly as oracle-proof as the invalid-link branch: identical
+  // output whether join_code is missing, wrong, or a genuinely live code
+  // (see "must not become a new oracle" in this page's own test suite).
+  if (throttled) {
+    return (
+      <DictProvider dict={ui} locale={locale}>
+        <div className="flex min-h-[60vh] flex-col items-center justify-center bg-canvas px-4 py-16 text-center">
+          <div aria-hidden className="mb-6 h-0.5 w-10 bg-accent" />
+          <h1 className="font-display text-2xl font-semibold text-ink">{t(ui, "register.join.throttled.heading")}</h1>
+          <p className="mt-2 max-w-sm text-sm text-ink-muted">{t(ui, "register.join.throttled.body")}</p>
+          <Link
+            href={`/shared/${orgSlug}/${competitionSlug}`}
+            className="mt-6 text-sm font-medium text-accent-strong underline underline-offset-2"
+          >
+            {t(ui, "register.join.back.cta")}
+          </Link>
+        </div>
+      </DictProvider>
+    );
   }
 
   if (!preview) {

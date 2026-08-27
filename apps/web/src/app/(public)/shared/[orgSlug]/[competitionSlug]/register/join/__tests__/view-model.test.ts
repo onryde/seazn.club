@@ -175,6 +175,15 @@ describe("classifyJoinFailure — 409 here means a real conflict, unlike submit.
     expect(classifyJoinFailure(422)).toBe("rejected");
     expect(classifyJoinFailure(400)).toBe("rejected");
   });
+  // RS007 review defect #15 (MEDIUM): 429 fell through to "rejected", whose
+  // copy (register.join.error.rejected) is doc-comment-scoped to roster cap/
+  // eligibility — a throttled teammate was told their DETAILS were refused,
+  // not that they were rate-limited. Must stay distinct from "rejected" so
+  // the banner can say the honest, actionable thing (wait, then retry).
+  it("429 -> rateLimited (throttled — a distinct, honest state, never 'rejected')", () => {
+    expect(classifyJoinFailure(429)).toBe("rateLimited");
+    expect(classifyJoinFailure(429)).not.toBe("rejected");
+  });
   it("5xx and no-response -> retry", () => {
     expect(classifyJoinFailure(500)).toBe("retry");
     expect(classifyJoinFailure(503)).toBe("retry");

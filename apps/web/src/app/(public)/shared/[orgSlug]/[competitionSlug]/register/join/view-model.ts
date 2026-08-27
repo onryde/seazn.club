@@ -168,15 +168,23 @@ export function buildJoinBody(
  *  - conflict (409): a real race, the slot is gone — offer a refresh.
  *  - retry (no response / 5xx): transient, the exact same click is
  *    expected to work.
+ *  - rateLimited (429): the per-IP join-submit budget (route.ts's own
+ *    `regjoin:${ip}` bucket) is spent — RS007 review defect #15: 429 used
+ *    to fall through to "rejected" below, whose copy is doc-comment-scoped
+ *    to roster cap/eligibility, so a throttled teammate was told their
+ *    DETAILS were refused rather than that they'd tried too many times.
+ *    Distinct, honest copy: wait, then the exact same click works (unlike
+ *    "rejected", where resubmitting unchanged never will).
  *  - rejected (everything else — 400/422/…): the server refused what was
  *    submitted (roster cap, pair-can't-add, guardian missing, eligibility).
  */
-export type JoinFailureKind = "notFound" | "conflict" | "retry" | "rejected";
+export type JoinFailureKind = "notFound" | "conflict" | "retry" | "rateLimited" | "rejected";
 
 export function classifyJoinFailure(status: number | undefined): JoinFailureKind {
   if (status === undefined) return "retry";
   if (status === 404) return "notFound";
   if (status === 409) return "conflict";
+  if (status === 429) return "rateLimited";
   if (status >= 500) return "retry";
   return "rejected";
 }

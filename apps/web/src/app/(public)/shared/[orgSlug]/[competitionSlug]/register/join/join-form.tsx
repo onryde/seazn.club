@@ -8,7 +8,7 @@
 // CRITICAL — join_code is a CAPABILITY TOKEN (like the status page's own
 // access token). This file NEVER renders a raw server error string: every
 // failure is classified by HTTP STATUS ALONE (classifyJoinFailure,
-// view-model.ts) into one of four fixed, fully-localized banners. Unlike
+// view-model.ts) into one of five fixed, fully-localized banners. Unlike
 // pay-button.tsx/cancel-entry.tsx/resend-confirmation.tsx (which render
 // `err.message` verbatim, hardcoded-English, on their catch branches — a
 // known, separately-tracked gap, not this file's pattern to repeat), no
@@ -249,10 +249,16 @@ export function JoinForm({
 /** register.submit.error is the SAME generic "please try again" copy the
  *  main register flow's own retry bucket uses (submit.ts's
  *  classifySubmitFailure) — genuinely domain-neutral, reused rather than
- *  duplicated. The other three are join-specific designed states. */
+ *  duplicated. The other four are join-specific designed states.
+ *  `rateLimited` (RS007 review defect #15) is its OWN copy, deliberately
+ *  never reusing `rejected`'s — that copy is doc-comment-scoped to roster
+ *  cap/eligibility (view-model.ts), so reusing it here would tell a
+ *  throttled teammate their DETAILS were refused instead of that they
+ *  tried too many times. */
 const FAILURE_KEY: Record<JoinFailureKind, string> = {
   retry: "register.submit.error",
   notFound: "register.join.invalid.body",
   conflict: "register.join.error.claimed",
+  rateLimited: "register.join.error.rateLimited",
   rejected: "register.join.error.rejected",
 };
