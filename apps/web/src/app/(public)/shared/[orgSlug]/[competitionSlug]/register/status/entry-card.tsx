@@ -124,8 +124,12 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
     <li className="flex overflow-hidden rounded-xl border border-zinc-200 bg-surface shadow-sm">
       <span aria-hidden className={`w-1.5 shrink-0 ${tone.rail}`} />
       <div className="min-w-0 flex-1 space-y-3 p-4">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
+        {/* Wraps for the same reason the roster rows below do: the status
+            badge is shrink-0, so at 320px it took the row and truncated the
+            entry's own name to "Width Team ri...". The name IS the card's
+            identity — the badge drops to its own line instead. */}
+        <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
+          <div className="min-w-0 flex-1 basis-48">
             <p className="truncate text-xs font-semibold tracking-wide text-ink-muted uppercase">
               {entry.division_name}
             </p>
@@ -150,10 +154,18 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
                 {t(ui, "register.status.roster.meter", { claimed: roster.claimed, total: roster.total })}
               </p>
             </div>
+            {/* Each row wraps rather than letting the badge win. The badge is
+                shrink-0 and the name truncates, so at 320px a long status
+                label ("Awaiting confirmation") took the whole row and crushed
+                the name to a few characters — a roster that tells you a spot
+                is unclaimed but not WHOSE it is. Wrapping drops the badge to
+                its own line there and gives the name full width. Verified by
+                screenshot at 320/768/1280; the no-horizontal-scroll e2e gate
+                passed both before and after, so it could not see this. */}
             <ul className="mt-2 space-y-1.5">
               {entry.players.map((p) => (
-                <li key={p.id} className="flex items-center justify-between gap-2 text-sm">
-                  <span className="truncate text-ink">{p.full_name}</span>
+                <li key={p.id} className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-sm">
+                  <span className="min-w-0 flex-1 basis-40 truncate text-ink">{p.full_name}</span>
                   <span
                     className={
                       p.consent_status === "pending"
