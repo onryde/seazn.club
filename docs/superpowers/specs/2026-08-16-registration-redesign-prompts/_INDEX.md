@@ -2332,21 +2332,21 @@ fix. Statuses below are as of the moment of writing; update them in place.
 
 | # | Severity | Location | Status |
 | --- | --- | --- | --- |
-| 1 | CRITICAL | `registrations.ts:3332` | OPEN — money lane |
-| 2 | CRITICAL | `registrations.ts:2247` | OPEN — money lane |
-| 3 | HIGH | `V380__…consolidation.sql:70` | OPEN — safeguarding |
-| 4 | HIGH | `register/join/view-model.ts:119` | OPEN |
-| 5 | HIGH | `registrations.ts:3983` | OPEN — money lane |
+| 1 | CRITICAL | `registrations.ts:3332` | **FIXED** `af9c9021f` |
+| 2 | CRITICAL | `registrations.ts:2247` | **FIXED** `908196cb5` |
+| 3 | HIGH | `V380__…consolidation.sql:70` | **FIXED** `5cdb0dc99` + `ccecf09c5` |
+| 4 | HIGH | `register/join/view-model.ts:119` | **FIXED** `4009ae586` (+ gate in flight) |
+| 5 | HIGH | `registrations.ts:3983` | **FIXED** `4965c0093` |
 | 6 | HIGH | `registrations.ts:3768` | **FIXED** `097c1949b` |
-| 7 | HIGH | `registrations.ts:3762` | OPEN — money lane |
+| 7 | HIGH | `registrations.ts:3762` | **FIXED** `57fa7fca3` (V383) |
 | 8 | HIGH | `register/status/view-model.ts:59` | OPEN |
-| 9 | HIGH | `registrations.ts:3740` | OPEN — money lane |
+| 9 | HIGH | `registrations.ts:3740` | **FIXED** `57fa7fca3` |
 | 10 | HIGH | `register/status/view-model.ts:62` | OPEN |
 | 11 | HIGH | `register/status/page.tsx:95` | **FIXED** `54b88fb9f` |
-| 12 | MEDIUM | `registrations.ts:929` | OPEN — money lane |
+| 12 | MEDIUM | `registrations.ts:929` | **FIXED** `4fc6cd1cb` |
 | 13 | MEDIUM | `register/status/entry-card.tsx:98` | OPEN |
 | 14 | MEDIUM | `register-stepper.tsx:209` | **FIXED** `d33ecea48` |
-| 15 | MEDIUM | `register/join/page.tsx:80` | OPEN |
+| 15 | MEDIUM | `register/join/page.tsx:80` | **FIXED** `0f799edb7` |
 
 ### The two CRITICALs
 
@@ -2658,3 +2658,42 @@ running; the read predates it. The assertion itself is fine: it asserts the
 CORRECT subtotal, so it is now a regression guard, not a reproduction. Only its
 prose was stale, and that is corrected in the file. Two lanes racing on one
 worktree means a source read is a point-in-time claim, not a standing fact.
+
+### Money lane closed 2026-08-28 — both CRITICALs plus #5/#7/#9/#12
+
+Counts re-run by the main thread: **178/178**, and that run deliberately
+INCLUDED `registration-checkout-guards.test.ts`, the suite the lane flagged as
+failing. It passes. The lane's diagnosis (accumulated `reminded_at` rows in
+this long-lived shared test DB — 90 of 98 "due" rows already carried the old
+group-level mark) is consistent with that, but the claim was checked rather
+than accepted: this repo has a recorded case of an agent classifying its own
+regression as pre-existing.
+
+Per-defect red→green, each stated separately: #1 155→155/155, #2 156→156/156,
+#5 157→165/165 (+ the concurrency file), #12 158→158/158, #7+#9 160/153/7 red
+→ 327/327.
+
+**Three deviations the lane declared rather than buried, all accepted:**
+- **#7 and #9 committed together** (`57fa7fca3`) because their edits interleave
+  in the same `sweepRegistrations` block. Splitting after the fact risks
+  introducing an error to satisfy a bookkeeping preference.
+- **#9's mint-after-claim reorder was extended to pass (1b)**, not just the
+  cited pass (1a). Same bug shape, one pass along. The finding named one line;
+  the defect was a pattern. Flagged in the commit body rather than silently
+  widened.
+- **#12 also nulls `promotion_reminder_claimed_at`**, not only
+  `promotion_reminded_at`, so the lease state is consistently fresh on
+  re-promotion. Fixing the mark but not the lease would have left the same
+  class of stale-bookkeeping bug one field over.
+
+**V383 was applied locally with `-outOfOrder=true`** because a sibling lane had
+already applied V384 to this shared DB. The FILE is correctly numbered and
+applies in order anywhere else — but anyone rebuilding this local DB should
+know why its history looks out of order.
+
+**The acceptance gate for #1 is NOT these counts.** The invite-pay-cancel
+walkthrough reproduces #1 through real UI and currently REDS on it. That spec
+going green against a rebuilt server is the evidence; a unit count cannot see
+the cancel dialog offering to refund a sibling's card. Pending — deliberately
+sequenced after the consent-gate lane stops editing, so the build is made from
+a still tree rather than a moving one.
