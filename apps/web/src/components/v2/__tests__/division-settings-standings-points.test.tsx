@@ -146,11 +146,21 @@ function ruleValuesOf(tree: ReactElement[]): Record<string, string> {
   return propsOf(matchRuleFieldsEl(tree)).values as Record<string, string>;
 }
 
-/** The three standings-points <input>s (Win/Draw/Loss, in that order) are the
- *  only min=0/max=99 number inputs anywhere in division-settings.tsx — every
- *  other numeric field there uses a different min/max pair. */
+/** Every standings-points <input> currently rendered — min=0/max=99 is the
+ *  only pair used for this editor anywhere in division-settings.tsx, every
+ *  other numeric field there uses a different min/max. The COUNT varies by
+ *  sport post-R3.5-review-F7 (shape-derived: 2 for a win/loss-only sport
+ *  like tennis, 3 for win/draw/loss), so this does not assert a length —
+ *  `pointsInputs` below is the fixed-at-3 convenience the football/generic
+ *  tests already assume. */
+function allPointsInputs(tree: ReactElement[]): ReactElement[] {
+  return tree.filter((e) => e.type === "input" && propsOf(e).min === 0 && propsOf(e).max === 99);
+}
+
+/** The three standings-points <input>s (Win/Draw/Loss, in that order) for a
+ *  sport whose schema has all three concepts — football/generic here. */
 function pointsInputs(tree: ReactElement[]): ReactElement[] {
-  const inputs = tree.filter((e) => e.type === "input" && propsOf(e).min === 0 && propsOf(e).max === 99);
+  const inputs = allPointsInputs(tree);
   if (inputs.length !== 3) {
     throw new Error(`expected 3 standings-points inputs, found ${inputs.length}`);
   }
@@ -159,6 +169,11 @@ function pointsInputs(tree: ReactElement[]): ReactElement[] {
 
 function typePointsField(tree: ReactElement[], index: 0 | 1 | 2, value: string): void {
   const input = pointsInputs(tree)[index]!;
+  (propsOf(input).onChange as (e: { target: { value: string } }) => void)({ target: { value } });
+}
+
+function typeAnyPointsField(tree: ReactElement[], index: number, value: string): void {
+  const input = allPointsInputs(tree)[index]!;
   (propsOf(input).onChange as (e: { target: { value: string } }) => void)({ target: { value } });
 }
 
@@ -241,5 +256,60 @@ describe("division settings save path — the standings-points editor must not s
     clickButton(island.tree(), "Save match rules");
     await flush();
     expect(lastPatchConfig().halfMinutes).toBe(50);
+  });
+});
+
+describe("division settings — the points editor renders exactly the boxes a sport's schema declares (R3.5 review F7)", () => {
+  it("renders Win/Loss only for a sport whose points schema has no draw (tennis)", () => {
+    const island = mount({ points: { win: 3, loss: 0 } }, "tennis", "standard");
+    expect(allPointsInputs(island.tree())).toHaveLength(2);
+  });
+
+  it("never writes a spurious draw key for a division whose schema has none (tennis)", async () => {
+    const island = mount({ points: { win: 3, loss: 0 } }, "tennis", "standard");
+    clickButton(island.tree(), "Save match rules");
+    await flush();
+    const points = lastPatchConfig().points as Record<string, unknown>;
+    expect(points.win).toBe(3);
+    expect(points.loss).toBe(0);
+    expect(points.draw, "tennis has no draw in its points schema — must not gain one").toBeUndefined();
+  });
+
+  it("retyping win/loss for a tennis division writes only those two keys", async () => {
+    const island = mount({ points: { win: 3, loss: 0 } }, "tennis", "standard");
+    typeAnyPointsField(island.tree(), 0, "4");
+    typeAnyPointsField(island.tree(), 1, "1");
+    clickButton(island.tree(), "Save match rules");
+    await flush();
+    const points = lastPatchConfig().points as Record<string, unknown>;
+    expect(points.win).toBe(4);
+    expect(points.loss).toBe(1);
+    expect(Object.keys(points).sort()).toEqual(["loss", "win"]);
+  });
+
+  it("renders Win/Loss only for a T20-shaped cricket division (no draw) — tie/noResult stay unexposed", () => {
+    const island = mount({ points: { win: 2, tie: 1, noResult: 1, loss: 0 } }, "cricket", "standard");
+    expect(allPointsInputs(island.tree())).toHaveLength(2);
+  });
+
+  it("saving a T20-shaped cricket division leaves tie/noResult untouched and writes no draw", async () => {
+    const island = mount({ points: { win: 2, tie: 1, noResult: 1, loss: 0 } }, "cricket", "standard");
+    clickButton(island.tree(), "Save match rules");
+    await flush();
+    const points = lastPatchConfig().points as Record<string, unknown>;
+    expect(points.win).toBe(2);
+    expect(points.loss).toBe(0);
+    expect(points.tie, "not yet exposed as editable — must pass through unchanged").toBe(1);
+    expect(points.noResult, "not yet exposed as editable — must pass through unchanged").toBe(1);
+    expect(points.draw, "T20 has no draw in its points schema — must not gain one").toBeUndefined();
+  });
+
+  it("renders Win/Draw/Loss for a 2-innings-shaped cricket division (draw present) — tie/noResult still unexposed", () => {
+    const island = mount(
+      { points: { win: 2, tie: 1, noResult: 1, loss: 0, draw: 1 } },
+      "cricket",
+      "standard",
+    );
+    expect(allPointsInputs(island.tree())).toHaveLength(3);
   });
 });
