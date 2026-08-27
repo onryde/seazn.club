@@ -90,13 +90,19 @@ export function playSfx(kind: SfxKind): void {
   if (sfx.isMuted()) return;
   const a = ac();
   if (!a) return;
-  void loadBuffer(kind, a).then((buf) => {
-    if (!buf || sfx.isMuted()) return;
-    const src = a.createBufferSource();
-    src.buffer = buf;
-    src.connect(a.destination);
-    src.start();
-  });
+  void loadBuffer(kind, a)
+    .then((buf) => {
+      if (!buf || sfx.isMuted()) return;
+      const src = a.createBufferSource();
+      src.buffer = buf;
+      src.connect(a.destination);
+      src.start();
+    })
+    // loadBuffer itself never rejects (see its own try/catch), but if
+    // playback ever threw synchronously this keeps the whole thing the
+    // silent no-op the spec wants, not an unhandled rejection (review
+    // 2026-08-27).
+    .catch(() => {});
 }
 
 /**

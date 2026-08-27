@@ -10,7 +10,15 @@ import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { sqIdx } from "../../engine";
 import { ProgressProvider } from "../../lib/progress";
-import { Board, cellFor, detectSingleMove, dragTransition, runDragAction, type DragState } from "../Board";
+import {
+  Board,
+  cellFor,
+  detectSingleMove,
+  dragTransition,
+  resolveDropSquare,
+  runDragAction,
+  type DragState,
+} from "../Board";
 
 const EMPTY_BOARD: string[] = Array(64).fill("");
 
@@ -227,50 +235,122 @@ describe("detectSingleMove — the FLIP-slide detector", () => {
 // that count); "up" outside the board (idx null) is a cancel, also no tap.
 describe("dragTransition — W2 drag reducer (down → move → up)", () => {
   it("down starts a drag from the pressed square and reports a tap for it", () => {
-    const { state, tap } = dragTransition(null, { type: "down", idx: 12, x: 10, y: 20 });
-    expect(state).toEqual({ fromIdx: 12, x: 10, y: 20 });
+    const { state, tap } = dragTransition(null, { type: "down", idx: 12, x: 10, y: 20, pointerId: 1 });
+    expect(state).toEqual({ fromIdx: 12, x: 10, y: 20, pointerId: 1 });
     expect(tap).toBe(12);
   });
 
   it("move updates the ghost position and never taps", () => {
-    const afterDown = dragTransition(null, { type: "down", idx: 12, x: 10, y: 20 }).state;
-    const { state, tap } = dragTransition(afterDown, { type: "move", x: 30, y: 40 });
-    expect(state).toEqual({ fromIdx: 12, x: 30, y: 40 });
+    const afterDown = dragTransition(null, {
+      type: "down",
+      idx: 12,
+      x: 10,
+      y: 20,
+      pointerId: 1,
+    }).state;
+    const { state, tap } = dragTransition(afterDown, { type: "move", x: 30, y: 40, pointerId: 1 });
+    expect(state).toEqual({ fromIdx: 12, x: 30, y: 40, pointerId: 1 });
     expect(tap).toBeNull();
   });
 
   it("move before any down is a no-op (defensive — should not happen in practice)", () => {
-    const { state, tap } = dragTransition(null, { type: "move", x: 30, y: 40 });
+    const { state, tap } = dragTransition(null, { type: "move", x: 30, y: 40, pointerId: 1 });
     expect(state).toBeNull();
     expect(tap).toBeNull();
   });
 
   it("up on a legal target: ends the drag and taps the target", () => {
-    const afterDown = dragTransition(null, { type: "down", idx: 12, x: 0, y: 0 }).state;
-    const { state, tap } = dragTransition(afterDown, { type: "up", idx: 29 });
+    const afterDown = dragTransition(null, { type: "down", idx: 12, x: 0, y: 0, pointerId: 1 }).state;
+    const { state, tap } = dragTransition(afterDown, { type: "up", idx: 29, pointerId: 1 });
     expect(state).toBeNull();
     expect(tap).toBe(29);
   });
 
   it("up on an illegal target: still ends the drag and taps it — legality is not this function's job", () => {
-    const afterDown = dragTransition(null, { type: "down", idx: 12, x: 0, y: 0 }).state;
-    const { state, tap } = dragTransition(afterDown, { type: "up", idx: 40 });
+    const afterDown = dragTransition(null, { type: "down", idx: 12, x: 0, y: 0, pointerId: 1 }).state;
+    const { state, tap } = dragTransition(afterDown, { type: "up", idx: 40, pointerId: 1 });
     expect(state).toBeNull();
     expect(tap).toBe(40);
   });
 
   it("up on the SAME square as down: ends the drag, no second tap (down's tap already covered it)", () => {
-    const afterDown = dragTransition(null, { type: "down", idx: 12, x: 0, y: 0 }).state;
-    const { state, tap } = dragTransition(afterDown, { type: "up", idx: 12 });
+    const afterDown = dragTransition(null, { type: "down", idx: 12, x: 0, y: 0, pointerId: 1 }).state;
+    const { state, tap } = dragTransition(afterDown, { type: "up", idx: 12, pointerId: 1 });
     expect(state).toBeNull();
     expect(tap).toBeNull();
   });
 
   it("up outside the board (idx null): cancels, no tap", () => {
-    const afterDown = dragTransition(null, { type: "down", idx: 12, x: 0, y: 0 }).state;
-    const { state, tap } = dragTransition(afterDown, { type: "up", idx: null });
+    const afterDown = dragTransition(null, { type: "down", idx: 12, x: 0, y: 0, pointerId: 1 }).state;
+    const { state, tap } = dragTransition(afterDown, { type: "up", idx: null, pointerId: 1 });
     expect(state).toBeNull();
     expect(tap).toBeNull();
+  });
+
+  // Found in review 2026-08-27: a second finger going down mid-drag used to
+  // silently steal `fromIdx`, so the FIRST finger's eventual release fired
+  // onTap with the SECOND finger's (now stale) square — a real misfire, not
+  // just a missed tap. These three lock in the fix: single-pointer-only.
+  it("a second pointer's down mid-drag is dropped, not stolen — the first drag keeps its fromIdx", () => {
+    const afterFirstDown = dragTransition(null, {
+      type: "down",
+      idx: 12,
+      x: 0,
+      y: 0,
+      pointerId: 1,
+    }).state;
+    const { state, tap } = dragTransition(afterFirstDown, {
+      type: "down",
+      idx: 40,
+      x: 0,
+      y: 0,
+      pointerId: 2,
+    });
+    expect(state).toEqual({ fromIdx: 12, x: 0, y: 0, pointerId: 1 });
+    expect(tap).toBeNull();
+  });
+
+  it("move from a pointer that isn't the active drag's is ignored", () => {
+    const afterDown = dragTransition(null, { type: "down", idx: 12, x: 0, y: 0, pointerId: 1 }).state;
+    const { state, tap } = dragTransition(afterDown, { type: "move", x: 99, y: 99, pointerId: 2 });
+    expect(state).toEqual({ fromIdx: 12, x: 0, y: 0, pointerId: 1 });
+    expect(tap).toBeNull();
+  });
+
+  it("up from a pointer that isn't the active drag's is ignored — the real drag stays open", () => {
+    const afterDown = dragTransition(null, { type: "down", idx: 12, x: 0, y: 0, pointerId: 1 }).state;
+    const { state, tap } = dragTransition(afterDown, { type: "up", idx: 40, pointerId: 2 });
+    expect(state).toEqual({ fromIdx: 12, x: 0, y: 0, pointerId: 1 });
+    expect(tap).toBeNull();
+  });
+});
+
+// Found in review 2026-08-27: touch pointers get implicit capture on
+// pointerdown, so a touch drag's pointerup.target is always the ORIGIN
+// square, never wherever the finger actually released — resolveDropSquare
+// reads the live coordinate via elementFromPoint instead, sidestepping
+// capture. Faked here without a real DOM by injecting a stub
+// elementFromPoint (this workspace has no jsdom).
+describe("resolveDropSquare — reads the point under the pointer, not e.target", () => {
+  function fakeSquareEl(square: string): Element {
+    return { closest: () => ({ dataset: { square } }) } as unknown as Element;
+  }
+
+  it("resolves the square at the given coordinates via the injected elementFromPoint", () => {
+    const elementFromPoint = vi.fn().mockReturnValue(fakeSquareEl("e4"));
+    const idx = resolveDropSquare(123, 456, elementFromPoint);
+    expect(elementFromPoint).toHaveBeenCalledWith(123, 456);
+    expect(idx).toBe(sqIdx("e4"));
+  });
+
+  it("returns null when the point isn't over a square (outside the board)", () => {
+    const elementFromPoint = vi.fn().mockReturnValue({ closest: () => null });
+    expect(resolveDropSquare(0, 0, elementFromPoint)).toBeNull();
+  });
+
+  it("returns null when the point resolves to nothing at all", () => {
+    const elementFromPoint = vi.fn().mockReturnValue(null);
+    expect(resolveDropSquare(0, 0, elementFromPoint)).toBeNull();
   });
 });
 
@@ -288,15 +368,15 @@ describe("runDragAction — the onTap-invoking wiring behind Board's pointer han
   it("pointerdown on a piece then pointerup on a legal target calls onTap with the target index once", () => {
     const onTap = vi.fn();
     let state: DragState = null;
-    state = runDragAction(state, { type: "down", idx: 12, x: 0, y: 0 }, onTap);
-    state = runDragAction(state, { type: "up", idx: 29 }, onTap);
+    state = runDragAction(state, { type: "down", idx: 12, x: 0, y: 0, pointerId: 1 }, onTap);
+    state = runDragAction(state, { type: "up", idx: 29, pointerId: 1 }, onTap);
     expect(state).toBeNull();
     expect(onTap.mock.calls.filter((c) => c[0] === 29)).toHaveLength(1);
   });
 
   it("the down call itself taps the source square (so sel/move highlights appear immediately, same as a tap)", () => {
     const onTap = vi.fn();
-    runDragAction(null, { type: "down", idx: 12, x: 0, y: 0 }, onTap);
+    runDragAction(null, { type: "down", idx: 12, x: 0, y: 0, pointerId: 1 }, onTap);
     expect(onTap).toHaveBeenCalledWith(12);
     expect(onTap).toHaveBeenCalledTimes(1);
   });
@@ -304,8 +384,8 @@ describe("runDragAction — the onTap-invoking wiring behind Board's pointer han
   it("a stationary press-release (down then up on the same square) calls onTap exactly once total — parity with a plain tap", () => {
     const onTap = vi.fn();
     let state: DragState = null;
-    state = runDragAction(state, { type: "down", idx: 12, x: 0, y: 0 }, onTap);
-    state = runDragAction(state, { type: "up", idx: 12 }, onTap);
+    state = runDragAction(state, { type: "down", idx: 12, x: 0, y: 0, pointerId: 1 }, onTap);
+    state = runDragAction(state, { type: "up", idx: 12, pointerId: 1 }, onTap);
     expect(state).toBeNull();
     expect(onTap).toHaveBeenCalledTimes(1);
     expect(onTap).toHaveBeenCalledWith(12);
@@ -314,14 +394,30 @@ describe("runDragAction — the onTap-invoking wiring behind Board's pointer han
   it("releasing outside the board cancels without ever calling onTap for the release", () => {
     const onTap = vi.fn();
     let state: DragState = null;
-    state = runDragAction(state, { type: "down", idx: 12, x: 0, y: 0 }, onTap);
+    state = runDragAction(state, { type: "down", idx: 12, x: 0, y: 0, pointerId: 1 }, onTap);
     onTap.mockClear(); // keep only calls from the release under test
-    state = runDragAction(state, { type: "up", idx: null }, onTap);
+    state = runDragAction(state, { type: "up", idx: null, pointerId: 1 }, onTap);
     expect(state).toBeNull();
     expect(onTap).not.toHaveBeenCalled();
   });
 
+  it("a second pointer's down/up mid-drag never calls onTap — the first drag's release still does", () => {
+    const onTap = vi.fn();
+    let state: DragState = null;
+    state = runDragAction(state, { type: "down", idx: 12, x: 0, y: 0, pointerId: 1 }, onTap);
+    onTap.mockClear();
+    state = runDragAction(state, { type: "down", idx: 40, x: 0, y: 0, pointerId: 2 }, onTap);
+    state = runDragAction(state, { type: "up", idx: 40, pointerId: 2 }, onTap);
+    expect(onTap).not.toHaveBeenCalled();
+    state = runDragAction(state, { type: "up", idx: 29, pointerId: 1 }, onTap);
+    expect(state).toBeNull();
+    expect(onTap).toHaveBeenCalledTimes(1);
+    expect(onTap).toHaveBeenCalledWith(29);
+  });
+
   it("does nothing if onTap is undefined (board without an onTap prop stays inert)", () => {
-    expect(() => runDragAction(null, { type: "down", idx: 5, x: 0, y: 0 }, undefined)).not.toThrow();
+    expect(() =>
+      runDragAction(null, { type: "down", idx: 5, x: 0, y: 0, pointerId: 1 }, undefined),
+    ).not.toThrow();
   });
 });

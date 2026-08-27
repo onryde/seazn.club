@@ -78,28 +78,65 @@ export function detectSingleMove(prev: string[], next: string[]): Move | null {
 // plain tap performed via pointer events still fires onTap exactly once
 // overall — see runDragAction's tests), and releasing outside the board
 // (idx null), which cancels instead.
-export type DragState = { fromIdx: number; x: number; y: number } | null;
+export type DragState = { fromIdx: number; x: number; y: number; pointerId: number } | null;
 
 export type DragAction =
-  | { type: "down"; idx: number; x: number; y: number }
-  | { type: "move"; x: number; y: number }
-  | { type: "up"; idx: number | null };
+  | { type: "down"; idx: number; x: number; y: number; pointerId: number }
+  | { type: "move"; x: number; y: number; pointerId: number }
+  | { type: "up"; idx: number | null; pointerId: number };
 
-/** Pure state machine, no DOM — see the W2 unit tests in Board.test.tsx. */
+/**
+ * Pure state machine, no DOM — see the W2 unit tests in Board.test.tsx.
+ *
+ * Single-pointer only, by design: a second pointer going down while one is
+ * already dragging is dropped rather than stealing the slot (found in review
+ * 2026-08-27 — a kid poking the board with a second finger mid-drag used to
+ * overwrite `fromIdx`, so the FIRST finger's eventual release fired onTap
+ * with the SECOND finger's stale square). `move`/`up` for any pointerId
+ * other than the one that started the drag are ignored the same way.
+ */
 export function dragTransition(
   state: DragState,
   action: DragAction,
 ): { state: DragState; tap: number | null } {
   switch (action.type) {
     case "down":
-      return { state: { fromIdx: action.idx, x: action.x, y: action.y }, tap: action.idx };
+      if (state) return { state, tap: null };
+      return {
+        state: { fromIdx: action.idx, x: action.x, y: action.y, pointerId: action.pointerId },
+        tap: action.idx,
+      };
     case "move":
-      return { state: state ? { ...state, x: action.x, y: action.y } : state, tap: null };
+      if (!state || action.pointerId !== state.pointerId) return { state, tap: null };
+      return { state: { ...state, x: action.x, y: action.y }, tap: null };
     case "up": {
-      const settledOrOutside = action.idx === null || action.idx === state?.fromIdx;
+      if (!state || action.pointerId !== state.pointerId) return { state, tap: null };
+      const settledOrOutside = action.idx === null || action.idx === state.fromIdx;
       return { state: null, tap: settledOrOutside ? null : action.idx };
     }
   }
+}
+
+/**
+ * Which square is under a pointer's actual screen position — NOT `e.target`.
+ * Found in review 2026-08-27: touch pointers get implicit capture on
+ * `pointerdown` (spec'd browser behaviour), which pins `e.target` on every
+ * later event for that pointer back to the ORIGIN element regardless of
+ * where the finger actually moved to — so a touch drag's `pointerup.target`
+ * is always the square it started on, never the square it ended on, and the
+ * piece silently snaps back on every real device. `elementFromPoint` reads
+ * the live coordinate instead, sidestepping capture entirely.
+ * `elementFromPoint` is injectable so this is testable without a real DOM
+ * (this workspace has no jsdom — see this file's test header).
+ */
+export function resolveDropSquare(
+  clientX: number,
+  clientY: number,
+  elementFromPoint: (x: number, y: number) => Element | null = (x, y) =>
+    document.elementFromPoint(x, y),
+): number | null {
+  const square = elementFromPoint(clientX, clientY)?.closest<HTMLElement>("[data-square]");
+  return square ? sqIdx(square.dataset.square!) : null;
 }
 
 /**
@@ -186,28 +223,49 @@ export function Board({
   useEffect(() => {
     if (!drag) return;
     function move(e: PointerEvent) {
-      dispatch({ type: "move", x: e.clientX, y: e.clientY });
+      dispatch({ type: "move", x: e.clientX, y: e.clientY, pointerId: e.pointerId });
     }
     function up(e: PointerEvent) {
-      const square = (e.target as Element | null)?.closest<HTMLElement>("[data-square]");
-      dispatch({ type: "up", idx: square ? sqIdx(square.dataset.square!) : null });
+      dispatch({
+        type: "up",
+        idx: resolveDropSquare(e.clientX, e.clientY),
+        pointerId: e.pointerId,
+      });
       setTimeout(() => {
         suppressClickRef.current = false;
       }, 0);
     }
-    function cancel() {
-      dispatch({ type: "up", idx: null });
+    function cancel(e: PointerEvent) {
+      dispatch({ type: "up", idx: null, pointerId: e.pointerId });
       setTimeout(() => {
         suppressClickRef.current = false;
       }, 0);
+    }
+    // Safety net, not part of the tap/drag contract above: if the tab is
+    // hidden or the window loses focus mid-drag, no pointerup/pointercancel
+    // may ever arrive for this pointer (OS-level interruption, alt-tab).
+    // Found in review 2026-08-27 — without this, `drag` stays non-null
+    // forever: the ghost image never clears and .cq-dragging's
+    // touch-action: none stays stuck on the whole board. This bypasses
+    // dragTransition entirely (it's a forced reset, not a real tap) and
+    // clears suppressClickRef immediately, not on the usual setTimeout,
+    // since no further click for this press is coming either.
+    function forceCancel() {
+      dragRef.current = null;
+      setDrag(null);
+      suppressClickRef.current = false;
     }
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
     window.addEventListener("pointercancel", cancel);
+    window.addEventListener("blur", forceCancel);
+    document.addEventListener("visibilitychange", forceCancel);
     return () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
       window.removeEventListener("pointercancel", cancel);
+      window.removeEventListener("blur", forceCancel);
+      document.removeEventListener("visibilitychange", forceCancel);
     };
     // Keyed on whether a drag is active, not on `drag` itself — `drag.x/y`
     // change on every pointermove, and re-subscribing window listeners that
@@ -343,7 +401,7 @@ export function Board({
                     if (e.button !== 0) return;
                     e.preventDefault();
                     suppressClickRef.current = true;
-                    dispatch({ type: "down", idx, x: e.clientX, y: e.clientY });
+                    dispatch({ type: "down", idx, x: e.clientX, y: e.clientY, pointerId: e.pointerId });
                   }
                 : undefined
             }
