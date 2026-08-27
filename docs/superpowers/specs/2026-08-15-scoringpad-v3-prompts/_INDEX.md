@@ -2399,12 +2399,23 @@ Three. The first changes what the wave IS.
 
 ### R5 — what is already true and must not be re-litigated
 
-- **D-7's evidence line is literally correct.** `fidelityEntitlements` is
-  `{3: preset.rallyEntitlement}` (`kernel.ts:1178`) with the band map at
-  `:1170-1177` — summary 0, timeout/sanction/sub/expedite 1, **rally 3**. So a
-  free/band-0 org's badminton pad really is a lone "Set score" button, exactly
-  as BAD-03 recorded. Band 2 is deliberately unoccupied, as it is for tennis.
-  The recording chip must WORD that state; this family was the worst offender.
+- **D-7's evidence line OVERSTATES, and the main thread asserted it wrongly
+  before the harness task checked — corrected here.** The band map
+  (`setbased/kernel.ts:1714-1736`) is summary 0, timeout/sanction/sub/expedite
+  1, **rally 3**, and `fidelityEntitlements: {3: preset.rallyEntitlement}`
+  (`:1737`) keys **band 3 ONLY**. Bands 0-2 are therefore UNGATED, and a
+  community org resolves to **band 2, never band 0**. So the free badminton pad
+  is not "a lone Set score button" as BAD-03 records and as this file first
+  repeated: it is Set score **plus a Sanctions drawer**, because every admin
+  event sits at the ungated band 1. Verified in a real browser against a real
+  plan flip, not read off the map.
+  The SUBSTANCE of D-7 survives intact — the rally group is simply absent with
+  **no visible reason given** — and that is what the recording chip must word.
+  Band 2 is genuinely unoccupied for this kernel (no player-line analogue), as
+  it is for tennis.
+  Two smaller pins corrected with it: the earlier `kernel.ts:1178` /
+  `:1170-1177` refs in this file were stale, and the coarse event type must be
+  posted FULLY QUALIFIED — a bare `game.summary` returns `422 INVALID_EVENT`.
 - **Some branches are registered but permanently dead by preset.**
   `kernel.ts:945-956`: badminton/tabletennis register every branch but build no
   action for ones their `records` flags disable (e.g. `badminton.timeout`,
@@ -2539,3 +2550,63 @@ build a seam that has been there since R2.
 
 Corollary for R6/R7: a v3 skin may call an engine reader that needs history.
 `view.events` is the supported route; do not add a second one.
+
+### R5 Task B DONE — the harness photographs the defects FIRST, `c60b920bf` + `015f7ec5b`
+
+Two `EXTRA_STATES`, added BEFORE the conversion on purpose. `V3_SKINS` still
+holds only cricket/football/tennis; all three sports still render v2
+`racquet-skin.tsx`, and an untouched control sport (carrom, 5 states) still
+captures green.
+
+- **`11-servingplaceholder`** — all three sports (D-17). Game/set 1 banked by
+  summary, then **three rallies TAPPED in the browser**; the board reads
+  SETS 1–0, POINTS 2–1, SERVING `—`. Deliberately **not turn 0**, and table
+  tennis's is past a 2-serve rotation boundary — the first browser-driven
+  rotation crossing that sport has ever had (D-13).
+- **`12-bandlimited`** — badminton (D-7). A community org's live pad: no Rally
+  group, and a greyed `Detail 🔒` with no words anywhere explaining it. Plan
+  flipped and restored in a `finally`.
+
+**320px overflow: 0px on all 19 states across the three sports**;
+`padRowsByWidth` agrees at 320/768/1280, so each published trio is provably
+three views of ONE state rather than three states.
+
+**The probes were mutation-checked in the direction that matters.** Both
+POST-fix expectations were run against today's build and FAIL — serving reports
+`Received: "—"` after 44 polls, the rally group `resolved to 0 elements`. A
+probe that cannot fail proves nothing, and this is the wave's own version of
+R3.5's "inverted, never deleted": each flipping assertion is commented inline
+with what it becomes.
+
+| today | at conversion |
+|---|---|
+| `expect(serving).toHaveText("—")` | `.not.toHaveText("—")` + the server's name |
+| `expect(rallyGroup).toHaveCount(0)` | `toHaveCount(1)` |
+| `expect(lockedReason).toHaveCount(0)` | `toBeVisible()` |
+
+BEFORE sheet published for the owner:
+<https://claude.ai/code/artifact/1ad7abe5-01f9-46f6-ae75-00f4cfbaf284>
+
+**Seen only by looking at the rendered page** — three further register rows are
+visibly present on this surface and no test asserts any of them. Recorded, not
+taken:
+
+- **D-11 (score rendered 3× above the fold) is LIVE on the v2 racquet lane** —
+  the fixture header, the LCD "SCORE" panel, and the SETS/POINTS board all
+  state it. Spec §8 assigns D-11 to R1, which shipped the single scorebug but
+  could not retire the v2 lane. **R5's conversion closes it for these three
+  sports as a side effect** — worth asserting in the AFTER captures rather than
+  leaving it to be noticed.
+- **D-7/GF-3's raw picker is exactly as described** — `Result only | Card |
+  Timeline | Detail 🔒`, a bare padlock with no words. This is the screen the
+  recording chip replaces.
+- **D-4 (Activity ledger rendered twice per console page) is present here too.**
+  Assigned to R7 and NOT taken; recorded so R7 knows the racquet family shows
+  it as well, not just cricket.
+
+**A capture artefact that must not be read as a defect:** a full-page
+screenshot paints the sticky nav a second time mid-image on a tall page. Known
+Chromium behaviour with `position: sticky`, documented at
+`gallery.capture.ts:404-406` and disclosed in the generated sheet's own text at
+`:2277`. Called out in the published BEFORE sheet too, since that sheet's whole
+job is showing the owner defects.
