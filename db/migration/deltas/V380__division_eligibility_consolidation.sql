@@ -343,6 +343,40 @@ where gl.id = d.id;
 update divisions
 set youth = (age_max is not null and age_max < 18)
 where youth is distinct from (age_max is not null and age_max < 18);
+
+-- ...then re-assert it conservatively from the RULES, not only the band.
+--
+-- The band above resolves a genuine same-bound conflict by UNION (see the
+-- age_bounds comment): two `maxAgeAt` objects saying 15 and 20 land
+-- `age_max = 20`, so nobody entitled to register under one of their own
+-- organiser's rules is silently excluded. That is the right direction for
+-- registration ACCESS.
+--
+-- It is the wrong direction for SAFEGUARDING, and the two are separable.
+-- `youth` does not decide who may enter -- it is what makes
+-- `resolveNameDisplay` (apps/web/src/server/og/model.ts) suppress minors'
+-- full names on public share images. If ANY age rule the organiser
+-- configured caps this division under 18, a minor can be in it, and the flag
+-- must hold whichever bound won the band. Without this pass the widening
+-- above would clear `youth` on exactly the divisions that most need it --
+-- reinstating defect 2 through the fix for defect 2, one conflict shape
+-- removed from where it was found the first time.
+--
+-- Deliberately asymmetric: a wrongly-true `youth` shortens an adult's
+-- displayed name, a wrongly-false one publishes a child's. Only one of those
+-- is recoverable after the fact. This runs while `eligibility` still exists
+-- (the column is dropped below), so it is the last point at which the
+-- original rules can be consulted at all.
+update divisions d
+set youth = true
+where d.youth is not true
+  and exists (
+    select 1
+    from jsonb_array_elements(d.eligibility) r(value)
+    where r.value ->> 'kind' = 'age'
+      and (r.value ->> 'maxAgeAt') ~ '^[0-9]+$'
+      and (r.value ->> 'maxAgeAt')::int < 18
+  );
 -- eligibility-backfill:end
 
 -- ---------------------------------------------------------------------------

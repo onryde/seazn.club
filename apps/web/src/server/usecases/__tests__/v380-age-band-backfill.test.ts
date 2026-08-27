@@ -151,6 +151,33 @@ describe.skipIf(!HAS_DB)("V380 age-band backfill (safeguarding: youth derivation
     expect(row.youth).toBe(true);
   });
 
+  it("two conflicting maxAgeAt rules straddling 18 widen the BAND but must NOT clear the safeguarding flag", async () => {
+    // The backfill resolves a genuine same-bound conflict by union —
+    // `max(max_age)` — so nobody entitled to register under one of their
+    // organiser's own rules is silently excluded. That is the right call for
+    // registration ACCESS, and the migration documents it.
+    //
+    // It is the wrong call for SAFEGUARDING, and the two decisions are
+    // separable. `youth` is not a statement about who may enter; it is what
+    // makes `resolveNameDisplay` suppress minors' full names on public share
+    // images. If ANY age rule an organiser configured caps this division
+    // under 18, a minor can be in it, and the flag must hold regardless of
+    // which bound won the band.
+    //
+    // So: widest band (20) AND youth true. The asymmetry is deliberate — a
+    // wrongly-true youth flag shortens an adult's displayed name, a wrongly-
+    // false one publishes a child's.
+    const row = await runBackfill({
+      eligibility: [
+        { kind: "age", maxAgeAt: 15 },
+        { kind: "age", maxAgeAt: 20 },
+      ],
+    });
+
+    expect(row.age_max).toBe(20);
+    expect(row.youth).toBe(true);
+  });
+
   it("an organiser-set age_max column still wins over the jsonb copy (coalesce precedence preserved)", async () => {
     // The hub panel already set age_max=99 directly; the wizard's older
     // jsonb copy separately says maxAgeAt=12. The column must win — this
