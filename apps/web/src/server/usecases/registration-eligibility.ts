@@ -122,15 +122,56 @@ export interface EligibilityRosterPlayer extends EligibilityPerson {
  * `categoryEligibilityIssues`) — nothing client-side calls this directly,
  * the client only ever reads the boolean this produces off the wire.
  *
- * Must agree with `divisionEligibilityIssues`'s gender source exactly: the
- * first-class `category` being `mens`/`womens` (individual-level: needs the
- * specific gender) or `mixed` (roster-level: needs every player's gender to
- * prove the roster balances). `open`/`null` need nothing.
+ * Two INDEPENDENT triggers (review fix, 2026-08-27):
+ *
+ *  1. `category` is `mens`/`womens` (individual-level: needs the specific
+ *     gender) or `mixed` (roster-level: needs every player's gender to
+ *     prove the roster balances) — agrees EXACTLY with
+ *     `divisionEligibilityIssues`'s gender source
+ *     (`categoryEligibilityIssues`/`rosterCompositionIssues`,
+ *     `@/lib/registration-rules`), same as before this fix.
+ *
+ *  2. `eligibility_note` is non-empty. V380 dropped the jsonb `eligibility`
+ *     rules — and this function's own jsonb branch, which used to catch
+ *     `division.eligibility.some((r) => r.kind === "gender")` regardless of
+ *     shape — without a first-class replacement for every gender-rule shape
+ *     a division could carry: its own backfill converts ONLY an exact
+ *     `["m"]`/`["f"]` singleton allow-list onto a null `category`
+ *     (V380 header, "Sex" section); an allow-list like `["m","f"]`
+ *     (excludes non-binary) or `["x"]` alone (admits only non-binary), or
+ *     ANY shape on a division that already had a `category` set, falls
+ *     through unconverted. Once the jsonb column drops in that same
+ *     migration those rules are gone for good — see V382's header for why
+ *     no later migration, this one included, can ever recover them. A
+ *     division like that now reads as plain "open" through `category`
+ *     alone, but it may still carry an organiser-authored restriction, and
+ *     `eligibility_note` (the one other column V380 left — "the custom rule
+ *     was shown nowhere", V380 header, defect 3) is the only place left
+ *     such a restriction can still be recorded as free text.
+ *
+ *     This branch is COLLECTION-only, unlike branch 1 — it does NOT gate
+ *     `divisionEligibilityIssues`, because nothing programmatically
+ *     evaluates note text (categoryEligibilityIssues/ageBandEligibilityIssues/
+ *     rosterCompositionIssues never read it; only a human, reading the note
+ *     against the submitted roster, can). Collecting gender is the least
+ *     this function can do to make that manual check possible — silently
+ *     gathering nothing is the exact failure this fix exists to close. The
+ *     cost: a division whose note is unrelated to gender (a height limit,
+ *     "club members only") also collects a field it never uses. That is a
+ *     smaller, safer failure mode than repeating V380's silent loss.
  */
-export function requiresGender(division: { category: string | null }): boolean {
-  return (
-    division.category === "mens" || division.category === "womens" || division.category === "mixed"
-  );
+export function requiresGender(division: {
+  category: string | null;
+  eligibility_note?: string | null;
+}): boolean {
+  if (
+    division.category === "mens" ||
+    division.category === "womens" ||
+    division.category === "mixed"
+  ) {
+    return true;
+  }
+  return Boolean(division.eligibility_note && division.eligibility_note.trim().length > 0);
 }
 
 /**

@@ -84,22 +84,75 @@ describe("requiresDob (division-aware, V364/V380) — unaffected by the code rew
 
 // RS006 chassis: the WHO step (design §4 step 1) shows a gender field only
 // when at least one open division needs one — mirrors requiresDob's own
-// "does the form need to collect this at all" role, but for gender. Must
-// agree EXACTLY with divisionEligibilityIssues's gender source (the
-// mens/womens/mixed category block) or the public read model would tell the
-// client to hide a field the server's own evaluator is about to require.
-describe("requiresGender (RS006) — mirrors divisionEligibilityIssues's gender source", () => {
+// "does the form need to collect this at all" role, but for gender.
+//
+// Two independent triggers (review fix, 2026-08-27 — see requiresGender's
+// own doc comment and V382's header for the full account):
+//
+//  1. `category` mens/womens/mixed — agrees EXACTLY with
+//     divisionEligibilityIssues's gender source (categoryEligibilityIssues/
+//     rosterCompositionIssues), same as before this fix.
+//  2. A non-empty `eligibility_note` — added because V380 dropped the jsonb
+//     `eligibility` rules without a first-class replacement for every
+//     gender-rule shape (e.g. an allow-list excluding non-binary, or any
+//     rule on a division that already had a category): those divisions now
+//     have NOTHING in `category` proving them unrestricted, and
+//     `eligibility_note` is the one other place an organiser's restriction
+//     can still be recorded. This branch is COLLECTION-only — it does not
+//     gate divisionEligibilityIssues the way branch 1 does, since nothing
+//     programmatically evaluates note text (see the "collects but does not
+//     individually constrain" tests below, same shape as `mixed`'s own
+//     roster-wide-only behaviour).
+describe("requiresGender (RS006 + RS007 review fix) — category OR a non-empty eligibility_note", () => {
   it("is true for mens/womens category (first-class column alone)", () => {
     expect(requiresGender({ category: "mens" })).toBe(true);
     expect(requiresGender({ category: "womens" })).toBe(true);
   });
 
-  it("is true for a mixed category (roster composition needs every player's gender)", () => {
+  it("is true for a mixed category (roster composition needs every player's gender), independent of eligibility_note", () => {
     expect(requiresGender({ category: "mixed" })).toBe(true);
+    expect(requiresGender({ category: "mixed", eligibility_note: null })).toBe(true);
+    // Roster-wide, per the schema comment on `category` — it does NOT
+    // constrain an individual (categoryEligibilityIssues never fires for
+    // `mixed`), so requiresGender=true here is a collection signal only,
+    // same shape as the null-category+note case below.
+    expect(divisionEligibilityIssues({ ...NO_RULES, category: "mixed" }, { gender: "x" }, 2026)).toEqual(
+      [],
+    );
   });
 
-  it("is false for open/null category", () => {
+  it("is false for open/null category with no eligibility_note", () => {
     expect(requiresGender({ category: "open" })).toBe(false);
+    expect(requiresGender({ category: null })).toBe(false);
+  });
+
+  // The genuinely new case: V380 could not convert every jsonb gender-rule
+  // shape onto `category` (its own header, "Sex" section — only exact
+  // `["m"]`/`["f"]` singletons onto a null category convert; an allow-list
+  // like `["m","f"]`, `["x"]` alone, or ANY shape on a division that already
+  // had a category, fall through unconverted and are gone once the jsonb
+  // column drops). Such a division reads as plain "open" through `category`
+  // alone — but it may still carry an organiser-authored restriction,
+  // recorded now only as free text in `eligibility_note`. Collect gender
+  // defensively rather than silently gather nothing an organiser reviewing
+  // entries against that note would need.
+  it("is true for a null-category division carrying a non-empty eligibility_note", () => {
+    expect(requiresGender({ category: null, eligibility_note: "Girls only (club rule)" })).toBe(true);
+    // Same for the explicit 'open' category, not just null.
+    expect(requiresGender({ category: "open", eligibility_note: "Girls only (club rule)" })).toBe(true);
+    // Collection-only, same shape as `mixed` above: `EligibilityDivision`
+    // (divisionEligibilityIssues' own parameter type) has no
+    // `eligibility_note` field at all — nothing in that evaluator reads
+    // note text, by construction, so a null-category division's
+    // individual-level check still reports nothing regardless of what its
+    // note says.
+    expect(divisionEligibilityIssues(NO_RULES, { gender: "x" }, 2026)).toEqual([]);
+  });
+
+  it("a blank/whitespace-only eligibility_note does NOT force collection", () => {
+    expect(requiresGender({ category: null, eligibility_note: "" })).toBe(false);
+    expect(requiresGender({ category: null, eligibility_note: "   " })).toBe(false);
+    expect(requiresGender({ category: null, eligibility_note: null })).toBe(false);
     expect(requiresGender({ category: null })).toBe(false);
   });
 });
