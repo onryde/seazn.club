@@ -678,6 +678,18 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   "pad.badminton.panel.setScore",
   "pad.badminton.panel.subs",
   "pad.badminton.panel.timeouts",
+  // R5 — the v3 badminton skin's own ribbon copy. Registered HERE, not only in
+  // the four dictionaries: `ribbon.ts`'s `buildRibbon` gates its per-sport
+  // lookup on PAD_LABEL_KEYS MEMBERSHIP before calling `padLabel`, so
+  // dictionary copy with no entry in this list stays silently on the generic
+  // `pad.ribbon.fallback` ("{event} recorded") forever, with nothing failing.
+  // One key per event type this skin's own halves/tiles/sheets dispatch
+  // directly — the three unrecordable types (timeout, sub, expedite.start) are
+  // refused by the fold and reach no surface, so they stay on the fallback,
+  // the same graceful degradation ribbon.ts's header documents.
+  "pad.badminton.ribbon.game.summary",
+  "pad.badminton.ribbon.rally",
+  "pad.badminton.ribbon.sanction",
 
   "pad.boardgame.action.draw",
   "pad.boardgame.action.pairing",
