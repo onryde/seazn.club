@@ -30,7 +30,7 @@ import { propsOf, walk } from "@/components/__tests__/_hook-harness";
 import { cartReducer, type CartAction } from "../cart";
 import { EntryDetails } from "../entry-details";
 import { FormFields } from "../form-fields";
-import { EMPTY_CONTACT, type CartEntry, type CartState, type DivisionLike } from "../types";
+import { EMPTY_CONTACT, EMPTY_ROSTER_PLAYER, type CartEntry, type CartState, type DivisionLike } from "../types";
 
 vi.mock("@/components/i18n/dict-provider", () => ({
   useT: () => (key: string) => key,
@@ -145,8 +145,8 @@ describe("EntryDetails — the self-row picker says when it is the thing blockin
           registering_self: true,
           self_player_index: selfPlayerIndex,
           players: [
-            { full_name: "Priya Raman", squad_number: "", dob: null, gender: null },
-            { full_name: "Arun Menon", squad_number: "", dob: null, gender: null },
+            { ...EMPTY_ROSTER_PLAYER, full_name: "Priya Raman" },
+            { ...EMPTY_ROSTER_PLAYER, full_name: "Arun Menon" },
           ],
         }),
         division: DIVISION,
