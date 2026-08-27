@@ -3353,7 +3353,17 @@ async function buildGroupStatusView(
         refundLockByDivision.get(e.division_id) ?? null,
         comp?.starts_on ?? null,
         refundTz,
-        group.payment_intent_id,
+        // REVIEW FIX (money-path defect #1): group.payment_intent_id is the
+        // CART's charge — every entry in a multi-entry cart shares one, but
+        // only the entries actually named in the checkout session that
+        // produced it were ever charged. A promoted-but-unpaid sibling
+        // ('pending', never itself billed) must never inherit a PAID
+        // sibling's payment_intent_id here — that reads as "refundable" and
+        // withdrawCore below would run a REAL Stripe refund against money
+        // this entry's registrant never paid. 'paid'/'confirmed' are the
+        // only statuses a Stripe checkout webhook (confirmPaidRegistration)
+        // ever leaves an entry in — see the block comment there.
+        e.status === "paid" || e.status === "confirmed" ? group.payment_intent_id : null,
         e.amount_cents,
         refunded_cents,
       ),
@@ -3636,7 +3646,15 @@ async function withdrawCore(reg: RegistrationWithGroupRow, actorId: string | nul
     settings?.refund_lock_at ?? null,
     ctx.starts_on,
     resolveVenueTz(null, ctx.org_timezone),
-    locked.payment_intent_id,
+    // REVIEW FIX (money-path defect #1, write-side twin of buildGroupStatusView's
+    // fix above): `locked` is the pre-update row (read before the `status =
+    // 'withdrawn'` write above), so `locked.status` is this entry's OWN status
+    // right up to this withdrawal — 'pending'/'waitlisted' means it was never
+    // itself charged, even when the CART's payment_intent_id is live from a
+    // sibling's real payment. Passing the group PI unconditionally here used to
+    // let cancelling a never-charged promoted sibling run a REAL stripeRefund
+    // against the sibling's own money.
+    locked.status === "paid" || locked.status === "confirmed" ? locked.payment_intent_id : null,
     locked.amount_cents,
     locked.refunded_cents,
   );

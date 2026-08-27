@@ -921,6 +921,52 @@ describe.skipIf(!HAS_DB)("registration flows (doc 16 §1.1, PROMPT-20a)", () => 
     expect(stripeMock.refundCreate).not.toHaveBeenCalled();
   });
 
+  // REVIEW FIX (money-path defect #1) — buildGroupStatusView fed the CART's
+  // shared payment_intent_id into a PER-ENTRY resolveRefundPolicy, so a
+  // sibling that was never itself charged (a fresh waitlist promotion, still
+  // 'pending') rode a PAID sibling's payment_intent_id and read as
+  // refundable. withdrawCore had the identical confusion on the WRITE side —
+  // cancelling the never-charged entry would call a REAL stripeRefund against
+  // the paid sibling's own intent. Repro matches the dispatch's own: cart
+  // holds paid entry A (confirmed via a real Stripe session, stamping the
+  // group's payment_intent_id) and a promoted-but-never-charged entry B
+  // sharing that same cart.
+  it("REVIEW FIX: a promoted, never-charged cart sibling is not shown or refunded off the PAID sibling's payment_intent_id", async () => {
+    const { competition, division, settings } = await stripeRig({ feeCents: 2500 });
+    const a = await seedRegistration(competition.id, division.id, settings);
+    await handleRegistrationCheckoutCompleted(fakeSession(a.registration.id, 2500));
+    const aRow = await loadWithGroup(a.registration.id);
+    expect(aRow.status).toBe("confirmed"); // sanity: A really did pay
+    expect(aRow.payment_intent_id).toContain("pi_test_"); // sanity: the group's PI is live
+
+    // B: a waitlist promotion into the SAME cart — its own fee is owed, but
+    // no Stripe session has ever been minted or paid for it. seedSecondEntry
+    // reproduces exactly the row shape promoteWaitlistedRow leaves behind.
+    const b = await seedSecondEntry(a.registration.group_id, division.id, 2500, "Promoted B", "pending");
+
+    // READ SIDE: the status page must never tell B's registrant "you'll get
+    // a refund" for money that was never taken from them.
+    const view = await groupById(a.registration.group_id, a.access_token);
+    const bEntry = view.entries.find((e) => e.id === b.id);
+    expect(bEntry, "sanity: B is in the cart view").toBeDefined();
+    expect(bEntry!.refund_policy.refundable, "B was never charged — must not read refundable").toBe(false);
+    // A (genuinely paid, lock still open) is correctly still refundable —
+    // proves the fix narrows the READ, it does not blanket-disable it.
+    const aEntry = view.entries.find((e) => e.id === a.registration.id);
+    expect(aEntry!.refund_policy.refundable, "A really did pay — still refundable").toBe(true);
+
+    // WRITE SIDE: cancelling B must never move A's money.
+    stripeMock.refundCreate.mockClear();
+    await withdrawRegistrationPublic(b.id, a.access_token);
+    expect(stripeMock.refundCreate, "no Stripe call for an entry that was never charged").not.toHaveBeenCalled();
+    const bRow = await loadWithGroup(b.id);
+    expect(bRow.status).toBe("withdrawn");
+    expect(bRow.refunded_cents).toBe(0);
+    const [groupRow] = await sql<{ refunded_cents: number }[]>`
+      select refunded_cents from registration_groups where id = ${a.registration.group_id}`;
+    expect(groupRow!.refunded_cents, "A's real payment must be untouched").toBe(0);
+  });
+
   // "eligibility gate: U16 rejects an adult; a minor needs guardian consent"
   // DELETED (RS001 demolition): the whole test drove
   // `submitRegistration`'s own eligibility-gate enforcement at submit time —
