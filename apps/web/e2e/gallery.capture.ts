@@ -2070,40 +2070,56 @@ const SPORTS: GallerySport[] = [
       home: [{ fullName: `Gallery Volleyball Home ${tag}` }],
       away: [{ fullName: `Gallery Volleyball Away ${tag}` }],
     }),
-    // Verified live: scorepad-skins.spec.ts "racquet skin (volleyball): a
-    // set summary then a rally" — this harness only needs ONE representative
-    // event, so it drives the plain rally tap. (That test's "close set 1 by
-    // summary FIRST" ordering is about driving BOTH mechanisms for the same
-    // set in one test, not a precondition for either alone.)
+    // R5/C3 — VOLLEYBALL HAS CONVERTED. It no longer shares racquet-skin.tsx
+    // with anything (badminton R5/C1, table tennis R5/C2 converted first):
+    // tap model S makes the scoreboard HALF the rally button, addressed
+    // positionally exactly as badminton's and table tennis's own entries
+    // document. The old `getByRole("button", {name: "Home"})` does not merely
+    // mis-target here — it throws before a single screenshot is written.
     scoreOne: async (page) => {
-      await pad(page).getByRole("button", { name: "Home", exact: true }).click();
+      await v3Half(page, "home").click();
     },
-    // "Set score" is a genuine multi-field panel (Home/Away number fields),
-    // opened after the rally above and left unconfirmed.
+    // The v3 lane's genuine multi-field entry surface, opened and left
+    // unconfirmed — the siblings' own choice of tile and the same reason:
+    // `scoreOne` above has just put a rally into set 1, and D-16's fix
+    // withholds the Set score tile for a set already being scored
+    // rally-by-rally, so reaching for it here would find nothing.
     openDock: async (page) => {
-      const setScore = pad(page).getByRole("button", { name: "Set score", exact: true });
-      if (!(await setScore.isVisible({ timeout: 3_000 }).catch(() => false))) return false;
-      await setScore.click();
-      const homeField = pad(page).getByLabel("Home", { exact: true });
-      if (!(await homeField.isVisible({ timeout: 3_000 }).catch(() => false))) return false;
-      await homeField.fill("25");
-      await pad(page).getByLabel("Away", { exact: true }).fill("20");
+      const sanction = pad(page).locator('[data-tile-id="sanction-home"]');
+      if (!(await sanction.isVisible({ timeout: 3_000 }).catch(() => false))) return false;
+      await sanction.click();
+      const sheet = pad(page).locator('[data-role="v3-sheet"]');
+      if (!(await sheet.isVisible({ timeout: 3_000 }).catch(() => false))) return false;
       return true;
     },
-    // R5 — D-17. Indoor volleyball's serve follows the rally winner (FIVB
-    // 12.2.2), so the ledger alone answers "who serves next" from the second
-    // rally onward; the pad prints "—" anyway. See `captureRacquetServing`.
+    // R5/C3 — D-17. Indoor volleyball's serve follows the rally winner (FIVB
+    // 12.2.2, side-out — the identical rule badminton plays), so `side`
+    // itself would answer "who serves next" from the second rally onward
+    // even unanchored. `declareServingAnchor` is used anyway (away served,
+    // home won the anchor) — NOT for `side` (which self-heals regardless)
+    // but so the ROTATION NUMBER (FIVB 7.6.2) is genuinely resolved in this
+    // photograph too, matching volleyball.tsx's own header: without one
+    // declared rally somewhere, `chainComplete` never clears for an
+    // "alternate" sport and the rotation stays permanently dark. This
+    // recipe's own one-person-per-side roster carries no `pairOrder`, so the
+    // server field still names the SIDE ("Home"), never a person — the
+    // honest indoor answer (badminton's own singles convenience does not
+    // exist for this sport; see volleyball.tsx's header, "THE DOCK ALWAYS
+    // ASKS").
     captureExtra: async (page, dir, tag, measurements) => [
       await captureRacquetServing(page, dir, tag, measurements, {
         slug: "volleyball",
         label: "Volleyball",
         sportKey: "volleyball",
         variantKey: "indoor",
+        lane: "v3",
         coarseType: "volleyball.set.summary",
         // Indoor set 1 is to 25 (setbased/volleyball.ts).
         summary: { home: 25, away: 20 },
         expectedSets: racquetScoreline(1, 0),
         expectedPoints: racquetScoreline(2, 1),
+        declareServingAnchor: "away",
+        expectedServer: "Home",
       }),
     ],
   },
