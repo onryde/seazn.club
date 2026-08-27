@@ -29,16 +29,39 @@ prompts dir) also writes — those two are **sequential, never parallel**.
 | RS003 | `RS003-public-endpoints.md` | RS002 | **DONE** — PR #615 merged `29690ec8c` (2026-08-18) |
 | RS004 | `RS004-hub-settings-tab.md` | RS003 | **DONE** — merged `171df1376` (PR #641, 2026-08-25). Smoke still owed by RS010, as the PR states |
 | RS005 | `RS005-hub-registrants-tab.md` | RS004 | **DONE** — merged `9d2ad39bc` (PR #651, 2026-08-26), 16/16 checks green. Known-open and stated in the PR: no pagination in the read path; `resend-confirmation` has no throttle (mirrors the pre-existing `/remind`). Smoke still owed by RS010 |
-| RS006 | `RS006-public-stepper.md` | RS003 | TODO |
+| RS006 | `RS006-public-stepper.md` | RS003 | **DONE** — merged `ec5cc6e3a` (PR #666, 2026-08-27), 9/9 checks + seven-width e2e green. Follow-ups merged `81f2198a1` (PR #668) fixed three defects found by USING the flow, none of which three review passes caught: RS005's "public sign-up page isn't live yet" notices were still telling organisers the link and QR do not work; "This is me" was not exclusive within a division (one person, two slots, charged twice); step 3 blocked with a step-wide message and no field marked. Smoke still owed by RS010 |
 | RS007 | `RS007-status-page-join-payments.md` | RS006 | TODO |
 | RS008 | `RS008-consent-claim-optout.md` | RS007 | TODO |
 | RS009 | `RS009-free-agents.md` | RS005, RS003 | TODO |
 | RS011 | `RS011-organiser-eligibility-gates.md` | RS002 | TODO — issue #412, re-homed from `L1` |
 | RS010 | `RS010-closeout-e2e-smoke-help.md` | all | TODO |
 
-Public registration is **intentionally down** between the RS001 and RS006
-merges (owner-accepted; prod has zero registration usage). The register page
-serves its closed/unavailable state during that window.
+Public registration was **intentionally down** between the RS001 and RS006
+merges (owner-accepted; prod has zero registration usage). That window
+**CLOSED on 2026-08-27** with `ec5cc6e3a`: the register page serves the real
+five-step stepper, `/r/[ref]` renders the cart, and both share links and
+printed QR codes work. Anything still asserting or announcing "not open" is
+stale — two such notices survived the merge for an hour and had to be removed
+in `81f2198a1`; check for more before trusting any copy in this area.
+
+**Read before starting RS007** — the stepper's contract as SHIPPED, plus two
+things RS007 inherits:
+
+- Checkout returns to `/shared/<org>/<comp>/register/status?rid=…&token=…`,
+  **not** `/r/<ref>`: `createRegistrationCheckout`'s `returnBase` takes the
+  token branch whenever a token exists, which a cart submit always has.
+  `/r/<ref>` is the token-less from-an-email route. The missed-webhook
+  self-heal (`reconcileRegistrationBySession`, `registrations.ts:2522`) is
+  wired into `/r/[ref]` **only** — the status page ignores it and the
+  `session_id` Stripe appends for it.
+- `join_code` is minted **only** for `entrant_kind === "team"`, so a `pair`
+  entry has no join path at all. RS007 must decide this explicitly before
+  being estimated — see its spec's "Found while using the shipped RS006 flow".
+
+The paid path is proven end to end by
+`apps/web/e2e/registration-connect-walkthrough.spec.ts` (opt-in
+`RS006_CONNECT_WALKTHROUGH=1`; `WALKTHROUGH_WATCH=1` to watch it). It is the
+only place `checkout.session.completed` is genuinely produced.
 
 ## Owner rulings (from the 2026-08-16 brainstorm — trust these)
 
