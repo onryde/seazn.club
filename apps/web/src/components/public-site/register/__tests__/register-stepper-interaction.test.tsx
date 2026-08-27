@@ -603,6 +603,62 @@ describe("finding #3 — a self-linked ineligible entry blocks progression and s
 // (temporarily seeding a bad initial value with the reset removed, see the
 // fix wave report) rather than by a test that can go red against this
 // codebase's current, reachable behavior.
+// A restored snapshot carrying an EMPTY cart, on a competition whose entries
+// step is collapsed, had no surface anywhere to add an entry.
+//
+// The hydration effect reads `if (saved) { restore } else if (collapseEntries)
+// { seed }`, so a restored snapshot skips the auto-seed — and when entries is
+// collapsed there is no step on which to add one by hand. The visitor walks
+// WHO -> DETAILS -> CONSENT -> REVIEW with an empty cart, sees the "free"
+// submit label, and gets a `.min(1)` 422 with nothing to fix. That is the same
+// unrecoverable dead end the entrant-kind collapse fix (2d4d7b623) closed from
+// the other direction, reached by a different route: reaching REVIEW with a
+// cart the flow gives you no way to fill.
+//
+// It is genuinely reachable: advance past WHO on a two-division competition
+// without adding an entry (the snapshot persists at stepIndex 1 with an empty
+// cart), then return after one division closes. It is also reachable simply by
+// restoring any snapshot saved before an entry was added.
+//
+// A whole-branch review probed this exact area and reported "no dead path
+// found" — it checked that a division whose entrant kind CHANGED between
+// visits regains the entries step, which it does, and stopped there.
+describe("a restored EMPTY cart on a collapsed competition still gets its entry", () => {
+  it("seeds the single open division even when a snapshot was restored, so DETAILS has a roster to fill", () => {
+    const key = `seazn_register_${ORG_SLUG}_${COMPETITION_SLUG}`;
+    fakeSessionStorage.setItem(
+      key,
+      JSON.stringify({
+        version: REGISTER_STATE_VERSION,
+        contact: {
+          name: "Returning Visitor",
+          email: "returning@example.com",
+          dob: "1990-01-01",
+          gender: null,
+          guardian_name: null,
+          guardian_consent: false,
+        },
+        imPlaying: true,
+        // The whole point: a saved cart with nothing in it.
+        cart: { entries: [] },
+        consent: { privacy_consent: false, media_consent: false },
+        stepIndex: 0,
+      }),
+    );
+
+    const { clickByText, island } = mount([DIV_OPEN]);
+    clickByText("Next"); // single open INDIVIDUAL division collapses ENTRIES -> DETAILS
+
+    // The seeded entry is what puts a roster row on DETAILS. With the cart
+    // left empty there is no row, no entry, and REVIEW would 422.
+    const nameBox = island.tree().find((e) => propsOf(e)["aria-label"] === "Player 1 — Your name");
+    expect(
+      nameBox,
+      "a restored empty cart must still be seeded — otherwise DETAILS renders no entry and REVIEW 422s with no surface to fix it",
+    ).toBeDefined();
+  });
+});
+
 describe("finding #5 — restoring a pristine saved snapshot never shows stale errors", () => {
   it("an empty-but-saved contact renders grey helper text on every field, not red errors", () => {
     const key = `seazn_register_${ORG_SLUG}_${COMPETITION_SLUG}`;

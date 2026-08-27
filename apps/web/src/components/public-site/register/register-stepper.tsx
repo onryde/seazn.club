@@ -200,7 +200,19 @@ export function RegisterStepper({
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setContact(saved.contact);
       setImPlaying(saved.imPlaying);
-      setCart(saved.cart);
+      // A restored snapshot can carry an EMPTY cart — the visitor advanced
+      // past WHO without adding an entry, or a division closed since they
+      // saved. When entries is collapsed there is no step on which to add
+      // one, so restoring that emptiness verbatim walks them to REVIEW with
+      // nothing to submit and a `.min(1)` 422 they cannot act on. The seed
+      // is therefore keyed on "the cart is empty and entries is collapsed",
+      // NOT on "this is a fresh visit" — the `else if` below only covers
+      // the fresh case, which is what left this route open.
+      setCart(
+        collapseEntries && saved.cart.entries.length === 0
+          ? { ...EMPTY_CART, entries: autoSeedSingleDivision(openDivisions[0]!, crypto.randomUUID()) }
+          : saved.cart,
+      );
       setConsent(saved.consent);
       // Clamped to the LAST real step, never stepOrder.length itself —
       // "review" (step 5) has its own Submit action, not a "coming soon"
