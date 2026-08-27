@@ -340,6 +340,35 @@ describe("submit — designed failure states, never a raw server string", () => 
     expect(apiV1Mock.calls[1]!.method ?? undefined).not.toBe("POST");
   });
 
+  // Bug (2026-08-27 review, FIX 4): NEW_PLAYER_CHOICE ("new") is never a
+  // real player_id, so refreshSlots's old "does the selection still exist
+  // in the fresh unclaimed list" check silently reset a valid "I'm someone
+  // else" pick to null on every refresh — even though the fresh preview
+  // still allowed a new player, forcing the joiner to re-pick and risk the
+  // exact same conflict again.
+  it("a conflict refresh preserves a valid 'I'm someone else' selection instead of silently dropping it", async () => {
+    apiV1Mock.queue.push({ ok: false, error: new ApiV1Error("already joined", 409, "CONFLICT") });
+    apiV1Mock.queue.push({
+      ok: true,
+      data: { unclaimed_slots: [{ player_id: "p2", full_name: "Jordan Player" }], allow_new_player: true },
+    });
+    const m = mount({
+      unclaimedSlots: [{ player_id: "p1", full_name: "Sam Player" }],
+      allowNewPlayer: true,
+      initialPlayerId: null,
+    });
+    const newRadioBefore = m.radios()[m.radios().length - 1]!;
+    (propsOf(newRadioBefore).onChange as () => void)();
+    fillMinimalValidForm(m);
+    await submit(m);
+    m.clickByText("Refresh available spots");
+    await Promise.resolve();
+    await Promise.resolve();
+    const after = m.radios();
+    const newRadioAfter = after[after.length - 1]!;
+    expect(propsOf(newRadioAfter).checked, "the 'I'm someone else' selection must survive the refresh").toBe(true);
+  });
+
   it("404 (a stale/dead code or player_id) shows the SAME 'not valid' copy as the page-level invalid-link state", async () => {
     apiV1Mock.queue.push({ ok: false, error: new ApiV1Error("This join link is not valid", 404, "NOT_FOUND") });
     const m = mount({ initialPlayerId: "p1" });

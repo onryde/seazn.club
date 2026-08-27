@@ -161,6 +161,29 @@ export function classifyJoinFailure(status: number | undefined): JoinFailureKind
   return "rejected";
 }
 
+/**
+ * What the picker's selection should become after a post-conflict refresh
+ * (join-form.tsx's refreshSlots). Bug (2026-08-27 review, FIX 4): a bare
+ * "does `prev` still exist in the fresh slot list" check silently dropped
+ * a valid NEW_PLAYER_CHOICE selection on EVERY refresh — NEW_PLAYER_CHOICE
+ * is a sentinel, never a real player_id, so it can never appear in
+ * `freshSlots`, and the refresh treated its absence there as "gone" even
+ * when `freshAllowNew` was still true, forcing the joiner to re-pick and
+ * risking the exact same conflict again.
+ *
+ * A real per-slot choice keeps the existing "still present in the fresh
+ * list" rule (the slot may have just been claimed by someone else, which
+ * is the genuine "gone" case that rule exists to catch).
+ */
+export function selectionAfterRefresh(
+  prev: SlotChoice | null,
+  freshSlots: readonly Pick<JoinSlot, "player_id">[],
+  freshAllowNew: boolean,
+): SlotChoice | null {
+  if (prev === NEW_PLAYER_CHOICE) return freshAllowNew ? prev : null;
+  return prev && freshSlots.some((s) => s.player_id === prev) ? prev : null;
+}
+
 export interface RosterMeter {
   claimed: number;
   total: number;

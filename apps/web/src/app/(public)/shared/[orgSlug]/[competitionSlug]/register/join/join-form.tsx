@@ -32,6 +32,7 @@ import {
   joinWhoRequirements,
   NEW_PLAYER_CHOICE,
   rosterMeterAfterJoin,
+  selectionAfterRefresh,
   type JoinFailureKind,
   type JoinSlot,
   type SlotChoice,
@@ -104,7 +105,11 @@ export function JoinForm({
       );
       setSlots(fresh.unclaimed_slots);
       setAllowNew(fresh.allow_new_player);
-      setSelected((prev) => (prev && fresh.unclaimed_slots.some((s) => s.player_id === prev) ? prev : null));
+      // FIX 4 (RS007 review): NEW_PLAYER_CHOICE is never a real player_id,
+      // so a bare "still in the fresh list" check always read it as gone —
+      // selectionAfterRefresh (view-model.ts) special-cases it against
+      // `fresh.allow_new_player` instead.
+      setSelected((prev) => selectionAfterRefresh(prev, fresh.unclaimed_slots, fresh.allow_new_player));
       setFailure(null);
     } catch {
       // Best-effort — a failed refresh leaves the stale list up rather than

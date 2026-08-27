@@ -13,6 +13,7 @@ import {
   joinWhoRequirements,
   NEW_PLAYER_CHOICE,
   rosterMeterAfterJoin,
+  selectionAfterRefresh,
 } from "../view-model";
 
 const CONTACT = {
@@ -149,6 +150,35 @@ describe("classifyJoinFailure — 409 here means a real conflict, unlike submit.
     expect(classifyJoinFailure(500)).toBe("retry");
     expect(classifyJoinFailure(503)).toBe("retry");
     expect(classifyJoinFailure(undefined)).toBe("retry");
+  });
+});
+
+describe("selectionAfterRefresh — a post-conflict refresh must not silently drop a valid selection (FIX 4)", () => {
+  const SLOTS = [{ player_id: "p1" }, { player_id: "p2" }];
+
+  it("keeps a real player_id selection when it is still among the fresh unclaimed slots", () => {
+    expect(selectionAfterRefresh("p2", SLOTS, true)).toBe("p2");
+  });
+
+  it("drops a real player_id selection once it is claimed by someone else (no longer in the fresh list)", () => {
+    expect(selectionAfterRefresh("p2", [{ player_id: "p1" }], true)).toBeNull();
+  });
+
+  // Bug (2026-08-27 review): NEW_PLAYER_CHOICE ("new") is a sentinel, never
+  // a real player_id — `fresh.unclaimed_slots.some(s => s.player_id ===
+  // prev)` is always false for it, so a bare "does prev still exist in the
+  // fresh list" check reset a valid "I'm someone else" pick to null on
+  // EVERY refresh, even when the fresh preview still allows a new player.
+  it("keeps NEW_PLAYER_CHOICE across a refresh when the fresh preview still allows a new player", () => {
+    expect(selectionAfterRefresh(NEW_PLAYER_CHOICE, SLOTS, true)).toBe(NEW_PLAYER_CHOICE);
+  });
+
+  it("drops NEW_PLAYER_CHOICE when the fresh preview no longer allows one (e.g. the roster hit cap)", () => {
+    expect(selectionAfterRefresh(NEW_PLAYER_CHOICE, SLOTS, false)).toBeNull();
+  });
+
+  it("stays null when nothing was selected", () => {
+    expect(selectionAfterRefresh(null, SLOTS, true)).toBeNull();
   });
 });
 
