@@ -2423,10 +2423,6 @@
                           "module_version": {
                             "type": "string"
                           },
-                          "eligibility": {
-                            "type": "array",
-                            "items": {}
-                          },
                           "tiebreakers": {
                             "anyOf": [
                               {
@@ -2501,6 +2497,41 @@
                               }
                             ]
                           },
+                          "age_cutoff_month": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 12
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "age_cutoff_day": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 31
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "eligibility_note": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "maxLength": 2000
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "status": {
                             "type": "string",
                             "enum": [
@@ -2556,11 +2587,13 @@
                           "variant_key",
                           "config",
                           "module_version",
-                          "eligibility",
                           "tiebreakers",
                           "category",
                           "age_min",
                           "age_max",
+                          "age_cutoff_month",
+                          "age_cutoff_day",
+                          "eligibility_note",
                           "status",
                           "officials_hide_names",
                           "scheduling_mode",
@@ -2592,15 +2625,15 @@
                       "variant_key": "example",
                       "config": null,
                       "module_version": "example",
-                      "eligibility": [
-                        null
-                      ],
                       "tiebreakers": [
                         "points"
                       ],
                       "category": "open",
                       "age_min": 0,
                       "age_max": 0,
+                      "age_cutoff_month": 1,
+                      "age_cutoff_day": 1,
+                      "eligibility_note": "example",
                       "status": "setup",
                       "officials_hide_names": true,
                       "scheduling_mode": "timed",
@@ -2811,17 +2844,6 @@
                     },
                     "additionalProperties": {}
                   },
-                  "eligibility": {
-                    "default": [],
-                    "type": "array",
-                    "items": {
-                      "type": "object",
-                      "propertyNames": {
-                        "type": "string"
-                      },
-                      "additionalProperties": {}
-                    }
-                  },
                   "tiebreakers": {
                     "anyOf": [
                       {
@@ -2861,8 +2883,7 @@
                   "name",
                   "sport_key",
                   "variant_key",
-                  "config",
-                  "eligibility"
+                  "config"
                 ],
                 "additionalProperties": false
               },
@@ -2871,10 +2892,7 @@
                 "slug": "example",
                 "sport_key": "example",
                 "variant_key": "example",
-                "config": {},
-                "eligibility": [
-                  {}
-                ]
+                "config": {}
               }
             }
           }
@@ -2933,10 +2951,6 @@
                         "config": {},
                         "module_version": {
                           "type": "string"
-                        },
-                        "eligibility": {
-                          "type": "array",
-                          "items": {}
                         },
                         "tiebreakers": {
                           "anyOf": [
@@ -3012,6 +3026,41 @@
                             }
                           ]
                         },
+                        "age_cutoff_month": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 12
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "age_cutoff_day": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 31
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "eligibility_note": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "maxLength": 2000
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "status": {
                           "type": "string",
                           "enum": [
@@ -3067,11 +3116,13 @@
                         "variant_key",
                         "config",
                         "module_version",
-                        "eligibility",
                         "tiebreakers",
                         "category",
                         "age_min",
                         "age_max",
+                        "age_cutoff_month",
+                        "age_cutoff_day",
+                        "eligibility_note",
                         "status",
                         "officials_hide_names",
                         "scheduling_mode",
@@ -3101,15 +3152,15 @@
                     "variant_key": "example",
                     "config": null,
                     "module_version": "example",
-                    "eligibility": [
-                      null
-                    ],
                     "tiebreakers": [
                       "points"
                     ],
                     "category": "open",
                     "age_min": 0,
                     "age_max": 0,
+                    "age_cutoff_month": 1,
+                    "age_cutoff_day": 1,
+                    "eligibility_note": "example",
                     "status": "setup",
                     "officials_hide_names": true,
                     "scheduling_mode": "timed",
@@ -3430,10 +3481,6 @@
                         "module_version": {
                           "type": "string"
                         },
-                        "eligibility": {
-                          "type": "array",
-                          "items": {}
-                        },
                         "tiebreakers": {
                           "anyOf": [
                             {
@@ -3508,6 +3555,41 @@
                             }
                           ]
                         },
+                        "age_cutoff_month": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 12
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "age_cutoff_day": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 31
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "eligibility_note": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "maxLength": 2000
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "status": {
                           "type": "string",
                           "enum": [
@@ -3563,11 +3645,13 @@
                         "variant_key",
                         "config",
                         "module_version",
-                        "eligibility",
                         "tiebreakers",
                         "category",
                         "age_min",
                         "age_max",
+                        "age_cutoff_month",
+                        "age_cutoff_day",
+                        "eligibility_note",
                         "status",
                         "officials_hide_names",
                         "scheduling_mode",
@@ -3597,15 +3681,15 @@
                     "variant_key": "example",
                     "config": null,
                     "module_version": "example",
-                    "eligibility": [
-                      null
-                    ],
                     "tiebreakers": [
                       "points"
                     ],
                     "category": "open",
                     "age_min": 0,
                     "age_max": 0,
+                    "age_cutoff_month": 1,
+                    "age_cutoff_day": 1,
+                    "eligibility_note": "example",
                     "status": "setup",
                     "officials_hide_names": true,
                     "scheduling_mode": "timed",
@@ -3804,16 +3888,6 @@
                       }
                     ]
                   },
-                  "eligibility": {
-                    "type": "array",
-                    "items": {
-                      "type": "object",
-                      "propertyNames": {
-                        "type": "string"
-                      },
-                      "additionalProperties": {}
-                    }
-                  },
                   "tiebreakers": {
                     "anyOf": [
                       {
@@ -3882,6 +3956,41 @@
                         "type": "integer",
                         "minimum": 0,
                         "maximum": 120
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "age_cutoff_month": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 12
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "age_cutoff_day": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 31
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "eligibility_note": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 2000
                       },
                       {
                         "type": "null"
@@ -3961,12 +4070,10 @@
               "example": {
                 "name": "example",
                 "description": "example",
-                "eligibility": [
-                  {}
-                ],
                 "tiebreakers": [
                   "points"
-                ]
+                ],
+                "category": "open"
               }
             }
           }
@@ -4025,10 +4132,6 @@
                         "config": {},
                         "module_version": {
                           "type": "string"
-                        },
-                        "eligibility": {
-                          "type": "array",
-                          "items": {}
                         },
                         "tiebreakers": {
                           "anyOf": [
@@ -4104,6 +4207,41 @@
                             }
                           ]
                         },
+                        "age_cutoff_month": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 12
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "age_cutoff_day": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 31
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "eligibility_note": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "maxLength": 2000
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "status": {
                           "type": "string",
                           "enum": [
@@ -4159,11 +4297,13 @@
                         "variant_key",
                         "config",
                         "module_version",
-                        "eligibility",
                         "tiebreakers",
                         "category",
                         "age_min",
                         "age_max",
+                        "age_cutoff_month",
+                        "age_cutoff_day",
+                        "eligibility_note",
                         "status",
                         "officials_hide_names",
                         "scheduling_mode",
@@ -4193,15 +4333,15 @@
                     "variant_key": "example",
                     "config": null,
                     "module_version": "example",
-                    "eligibility": [
-                      null
-                    ],
                     "tiebreakers": [
                       "points"
                     ],
                     "category": "open",
                     "age_min": 0,
                     "age_max": 0,
+                    "age_cutoff_month": 1,
+                    "age_cutoff_day": 1,
+                    "eligibility_note": "example",
                     "status": "setup",
                     "officials_hide_names": true,
                     "scheduling_mode": "timed",
@@ -4800,10 +4940,6 @@
                         "module_version": {
                           "type": "string"
                         },
-                        "eligibility": {
-                          "type": "array",
-                          "items": {}
-                        },
                         "tiebreakers": {
                           "anyOf": [
                             {
@@ -4878,6 +5014,41 @@
                             }
                           ]
                         },
+                        "age_cutoff_month": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 12
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "age_cutoff_day": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 31
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "eligibility_note": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "maxLength": 2000
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "status": {
                           "type": "string",
                           "enum": [
@@ -4933,11 +5104,13 @@
                         "variant_key",
                         "config",
                         "module_version",
-                        "eligibility",
                         "tiebreakers",
                         "category",
                         "age_min",
                         "age_max",
+                        "age_cutoff_month",
+                        "age_cutoff_day",
+                        "eligibility_note",
                         "status",
                         "officials_hide_names",
                         "scheduling_mode",
@@ -4967,15 +5140,15 @@
                     "variant_key": "example",
                     "config": null,
                     "module_version": "example",
-                    "eligibility": [
-                      null
-                    ],
                     "tiebreakers": [
                       "points"
                     ],
                     "category": "open",
                     "age_min": 0,
                     "age_max": 0,
+                    "age_cutoff_month": 1,
+                    "age_cutoff_day": 1,
+                    "eligibility_note": "example",
                     "status": "setup",
                     "officials_hide_names": true,
                     "scheduling_mode": "timed",
@@ -5250,10 +5423,6 @@
                         "module_version": {
                           "type": "string"
                         },
-                        "eligibility": {
-                          "type": "array",
-                          "items": {}
-                        },
                         "tiebreakers": {
                           "anyOf": [
                             {
@@ -5328,6 +5497,41 @@
                             }
                           ]
                         },
+                        "age_cutoff_month": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 12
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "age_cutoff_day": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 31
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "eligibility_note": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "maxLength": 2000
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "status": {
                           "type": "string",
                           "enum": [
@@ -5383,11 +5587,13 @@
                         "variant_key",
                         "config",
                         "module_version",
-                        "eligibility",
                         "tiebreakers",
                         "category",
                         "age_min",
                         "age_max",
+                        "age_cutoff_month",
+                        "age_cutoff_day",
+                        "eligibility_note",
                         "status",
                         "officials_hide_names",
                         "scheduling_mode",
@@ -5417,15 +5623,15 @@
                     "variant_key": "example",
                     "config": null,
                     "module_version": "example",
-                    "eligibility": [
-                      null
-                    ],
                     "tiebreakers": [
                       "points"
                     ],
                     "category": "open",
                     "age_min": 0,
                     "age_max": 0,
+                    "age_cutoff_month": 1,
+                    "age_cutoff_day": 1,
+                    "eligibility_note": "example",
                     "status": "setup",
                     "officials_hide_names": true,
                     "scheduling_mode": "timed",
