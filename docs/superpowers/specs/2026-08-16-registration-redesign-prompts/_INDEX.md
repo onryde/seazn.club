@@ -2573,3 +2573,37 @@ rs007 worktree.
   cross-contaminated: every stage used explicit file pathspecs, verified clean
   after each commit. That is the mitigation that makes two lanes in one
   worktree survivable; ownership lists alone would not have.
+
+### Lanes in flight 2026-08-27 (written for compaction)
+
+Three implementer lanes dispatched at once, file sets provably disjoint. A
+fourth (invite-pay-cancel walkthrough) was already running and owns
+`apps/web/e2e/**`, which none of the three touch.
+
+| Lane | Findings | Owns |
+| --- | --- | --- |
+| money | #1, #2, #5, #7, #9, #12 | `registrations.ts` + its tests, `register/status/**` if a per-entry field must reach the UI |
+| migration | #3 | `V380__…consolidation.sql`, new `__tests__/v380-age-band-backfill.test.ts` |
+| join | #4, #15 | `register/join/**`, `registration-submit.ts`, `schemas.ts`, `openapi/*`, dicts |
+
+**Flyway V-numbers pre-allocated, because this programme has already shipped
+two V367s through a clean rebase:** high-water is **V382**; money lane takes
+**V383** (per-entry reminder claim, replacing the group-scoped one V381 left),
+join lane takes **V384** (per-player consent, only if
+`registration_players` has nowhere to put it). Check for duplicates before the
+next rebase regardless — a clean rebase does not detect them.
+
+**NOT yet assigned — #8, #10, #13.** All three land on the status page's money
+state and would collide with the money lane: #8 wants a deadline re-check
+inside `resumeRegistrationCheckout`, #10 wants the money state resolved from
+the DIVISION's payment method rather than the cart's, and #13 wants the org
+timezone (already resolved as `refundTz`) threaded onto `GroupStatusView` plus
+the entry's own clock sent in the promotion mail. All three reach into
+`registrations.ts`. They go in a fourth lane AFTER the money lane commits, not
+in parallel with it.
+
+**Instruction given to every lane, and the reason it matters here:** explicit
+file pathspecs on every `git add`, never `-A`. Two lanes already ran
+concurrently in this worktree for ~29 minutes without cross-contamination on
+exactly that discipline. The shared git index makes "disjoint file sets" a
+necessary condition, not a sufficient one.
