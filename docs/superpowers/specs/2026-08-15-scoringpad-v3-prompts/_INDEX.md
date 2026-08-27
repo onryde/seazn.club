@@ -2617,3 +2617,61 @@ Chromium behaviour with `position: sticky`, documented at
 `gallery.capture.ts:404-406` and disclosed in the generated sheet's own text at
 `:2277`. Called out in the published BEFORE sheet too, since that sheet's whole
 job is showing the owner defects.
+
+### R5 Task C1 DONE — palettes ×3 + badminton converted (`83c527da0` `20e2042ce` `ad3fa577c` `c8ca84b10`)
+
+Gate re-run in the MAIN THREAD: apps/web `v3`+`lib` **3302 total / 3277 passed /
+0 failed / 0 failed suites** (25 skipped), `success: true`, **0** result paths
+outside the worktree, and `badminton.test.ts` confirmed COLLECTED by name — a
+suite that fails to collect contributes no failures and reads as green. tsc
+EXIT=0. Lint 0 errors / 124 warnings (125 before; one removed). `i18n:gen-keys`
++ `i18n:check` clean with `git status --porcelain` EMPTY. e2e 16 passed;
+gallery badminton 7 states, **every state 0px overflow at 320**.
+
+**Verified visually by the main thread at 768 and 320**, not on counts: the
+board reads `Serving <name>` (D-17 closed), `Right service court` (BWF Law
+10.2, derived from score parity — a genuine addition, not in the brief),
+`Interval at 11` as STATUS not a tile, a worded `Every detail` chip in place of
+the `Result only | Card | Timeline | Detail 🔒` picker (D-7 closed), and all
+tiles dashed-minor with NO primary weight competing with the tappable halves.
+At 320 the strip wraps to three rows rather than overflowing.
+
+**A SCREENSHOT CAUGHT WHAT NO TEST DID — new trap, general to every skin.**
+The half's hint shipped as the RAW KEY `pad.badminton.scorebug.rally.hint`.
+Cause: `hintKey` resolves through `padLabel`, which gates on `PAD_LABEL_KEYS`
+**MEMBERSHIP**, not on dictionary copy — so a key present in all four
+dictionaries but absent from `PAD_LABEL_KEYS` renders its own name, and every
+unit test passes because they assert the KEY. Fixed, plus a membership guard
+for hint and ribbon keys. This is the third distinct way this repo can ship a
+raw i18n key (after cricket's defaulted `t` and R1's ribbon-fallback item), and
+the only one no assertion caught.
+
+**A surviving mutant became a real fix, again.** The serve was guarded TWICE
+(`serveOrderKnown` AND `side === null`) and NEITHER mutant could be killed —
+each half covered for the other, so both looked tested and neither was.
+Collapsed to one guard asserting the engine invariant directly; the
+fabrication mutant now dies twice. **Two guards that cover for each other are
+indistinguishable from one tested guard** — worth adding to the mutation
+checklist for R6/R7.
+
+**Found false in this task's brief:**
+- `kernel.ts:945-956` was already stale (R5-1 moved it).
+- `badminton.timeout` is dead for every SHIPPED config, but `records` is a
+  per-fixture cfg knob — so `refusedEventTypes` must read the FIXTURE's own
+  cfg, never the preset. A preset-driven refusal would be wrong for a custom
+  config.
+- **`[data-band="3"]` no longer exists on a converted sport** — `RecordingChip`
+  REPLACES `FidelitySwitcher`, so a third D-7 probe had to move as well; the
+  brief flagged only two. `renderLockedTile` and `scorepad.locked.reason` do
+  not exist in v3 either, and v3 has no panel headings. **Every locator in a
+  pre-conversion probe moves at the flip** — inverting the assertion is not
+  enough on its own.
+- `globals.css` needed no edit, as predicted — confirmed by measuring the
+  rendered focus ring at `#2fe0bd`.
+
+**CHASSIS ADDITION, declared rather than smuggled** (outside the task's owned
+files): `ContextSlot.messageTone` in `v3/types.ts` + `context-strip.tsx`. The
+chassis had ONE hard-coded error red for every context message, and a plan-tier
+notice is not a fault. Opt-in, defaults to today's red, **cricket byte-identical**,
+pinned in both directions — the R3-6 pattern. Four chassis test files carry that
+gate's registration. Flagged to the owner rather than accepted silently.
