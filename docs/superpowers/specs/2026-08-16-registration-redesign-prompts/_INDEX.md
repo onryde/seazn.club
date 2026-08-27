@@ -1995,6 +1995,104 @@ Both open calls went to the owner and both took the recommendation.
   (`lib/payment-instructions.ts:18`) is reachable from `/r/[ref]`'s data path
   and the email builders only.
 
+#### Eligibility consolidation — owner ruling 2026-08-27, "go"
+
+Raised by the owner mid-RS007 ("do we have similar eligibility setting in
+division creation, do we need that? or deprecate it?"), then decided once
+greenfield was confirmed ("we are greenfield and no data in production").
+
+**Two eligibility representations were live at once, both enforced,
+additively** — `registration-eligibility.ts:163-174` says so in its own words
+("independent and additive"):
+
+| Axis | Wizard → jsonb | Hub panel → column |
+| --- | --- | --- |
+| Age | `{kind:"age",maxAgeAt,cutoff:{month,day}}` — `division-builder.tsx:286-293` | `age_min`/`age_max`, cutoff hardcoded **1 Jan** (`registration-rules.ts:182`) |
+| Sex | `{kind:"gender",allowed:[m,f,x]}` multi-select — `division-builder.tsx:619-647` | `category` enum — `registration-hub-config-panel.tsx:569-583` |
+
+Three defects fell out of that, none of which any test could see:
+
+1. **Two age rules with two different cutoff dates both fire.** Set U16/1-Sept
+   in the wizard and 15 in the hub and a player born Sept–Dec is eligible under
+   one and rejected by the other. Stricter silently wins; no screen shows both.
+2. **`youth` is derived from the jsonb ONLY** (`divisions.ts:97-103`,
+   re-derived only on `patch.eligibility` at `:681-684`; no UI writes it
+   directly). Set the age band in the registration hub instead of the wizard
+   and `youth` stays false — so OG share images publish full player names
+   (`og/model.ts:84-87,143`), the slideshow stops shortening them
+   (`slideshow-data.ts:150`), and the public-visibility dialog skips its youth
+   warning (`visibility-picker.tsx:53-55`). The replacement column was never
+   wired to the derivation the original fed. **Safeguarding, live in code —
+   but greenfield, so never live in production.**
+3. **"Custom rule (manual, shown as a warning)" is shown nowhere.** Written at
+   `division-builder.tsx:298`, and that write is the ONLY `kind:"custom"` match
+   in the repo. The validator handles `age` and `gender` only — no `custom`
+   branch, no fallthrough. The label makes two promises ("manual", "shown as a
+   warning") and keeps neither, so an organiser types "School-registered
+   students only" into a void while believing entrants get warned. The note IS
+   carried in `openapi/v1.public.json:2426`, so it leaves the building by API
+   while no UI renders it.
+
+**Also confirmed dead, unrelated to the above**: the `eligibility.enforced`
+plan entitlement. Seeded `V112:69-71`, bundled `V290:23`, then DELETEd by
+`V319__v17_phase1_reorg.sql:47`. No `requireFeature`/`has` call site survives
+anywhere in `apps/web/src` — it lives on only as paywall copy
+(`feature-copy.ts:52`), i.e. we advertise unlocking a gate that no longer
+exists. Safe to remove.
+
+**RULING: remove the jsonb, do not keep both.** `RULES.md:32-34` is explicit —
+"Prefer a correct schema over a backwards-compatible one; don't contort a
+design to dodge a migration." Keeping both was only ever backfill avoidance,
+and there is nothing to backfill. End state:
+
+```
+category                          open|mens|womens|mixed   exists
+age_min / age_max                                          exists
+age_cutoff_month / age_cutoff_day                NEW       recovers the wizard's cutoff
+eligibility_note                  text           NEW       the custom rule, actually rendered
+youth                             derived from age_max     repointed
+DROP divisions.eligibility jsonb
+```
+
+The wizard's Eligibility tab keeps its UI and writes columns instead. Both
+screens then edit ONE truth, so the two-surfaces problem dissolves without
+deleting a surface. The dual evaluator, the additive double-firing and the
+gender precedence rule below all delete with it — this is LESS code than
+keeping it.
+
+**Two behaviour changes, accepted deliberately by the owner, not refactors:**
+
+- **Non-binary players gain access.** jsonb `allowed:["m"]` rejects a player
+  whose gender is `x`; `category='mens'` deliberately allows them
+  (`registration-rules.ts:147` — `person.gender !== "x" && person.gender !==
+  needed`). Under today's precedence the jsonb wins, so the HARSHER rule is
+  what ships. Collapsing onto `category` makes the product more inclusive.
+- **The chip labelled "Mixed / other" is NOT `category='mixed'`.** The chip is
+  a person's own gender; `mixed` is a ROSTER rule (the roster must contain
+  both — `MIXED_NEEDS_BOTH_GENDERS`, which fires independently of any
+  per-person rule). Same word, different subject. Mapping is none→`open`,
+  m→`mens`, f→`womens`, and `mixed` becomes its own explicit choice rather
+  than a gender chip.
+
+**SUPERSEDES the gender precedence ruling of 2026-08-17** (recorded in this
+file's RS002 rulings, implemented at `registration-eligibility.ts:163-174`:
+"if the jsonb loop already emitted a gender-family code,
+`categoryEligibilityIssues` is skipped entirely"). With one representation
+there is no precedence left to arbitrate; delete the rule with the loop.
+
+**Sequencing, and why it is not a follow-up.** Delta `V380`, wizard rewire,
+one evaluator, the note rendered on the public entry + join pages, 4 dicts,
+OpenAPI regen (dropping the column trips the pre-commit drift gate), tests,
+visual pass at 1280/768/320. Lands as its own commit on the RS007 branch so
+the review stays together. **It absorbs the `youth` fix rather than preceding
+it** — repointing `eligibilityIsYouth` at `age_max` is one line of this
+change, and doing the standalone fix first means writing it twice.
+
+**Blocked on W5 while it was in flight**: W5 held `dictionaries/*/ui.json`,
+`i18n-keys.ts`, `schemas.ts`, `registration-submit.ts` and both `openapi/*`
+files dirty — every file this change needs. Only `_INDEX.md` and the new
+migration were conflict-free, which is why they went first.
+
 ## RS011 — why #412 moved here (2026-08-17)
 
 `L1-412-w1-eligibility.md` in `../2026-08-06-scoringpad-v2-prompts/` was written
