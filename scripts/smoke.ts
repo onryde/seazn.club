@@ -8672,13 +8672,22 @@ async function seedRealRegistrationCart(
  * RS006 money-hardening leg 1/2: `confirmPaidRegistration`'s duplicate-
  * payment branch (registrations.ts — the `reg.status === "confirmed" ||
  * reg.status === "paid"` check, just above its own "two open checkout tabs"
- * comment) — two REAL open Checkout sessions for the SAME still-pending
- * cart, both paid for real, the registrant-reopened-the-pay-link scenario
- * that comment names. The entry must confirm off the FIRST payment only;
- * the second, different payment_intent must be auto-refunded (its own
- * amount_cents, never a sibling's or the cart's total) with an audit row
- * carrying mode:"duplicate" — the exact real-refund-object pairing a
- * stubbed Stripe can never produce to assert against.
+ * comment) — the registrant-reopened-the-pay-link scenario that comment
+ * names, where two distinct real payments land for the same still-pending
+ * cart. The entry must confirm off the FIRST payment only; the second,
+ * different payment_intent must be auto-refunded (its own amount_cents,
+ * never a sibling's or the cart's total) with an audit row carrying
+ * mode:"duplicate" — the exact real-refund-object pairing a stubbed Stripe
+ * can never produce to assert against.
+ *
+ * This does NOT keep two Checkout Sessions open at once, and neither
+ * session is ever completed — see the inline comment on the resume-mint
+ * below for why (this same branch added expireSupersededCheckoutSession),
+ * and payRealDestinationCharge's own doc comment for why a session can't be
+ * paid headlessly at all. The duplicate PAYMENT this leg proves is
+ * synthesized independently: two distinct real PaymentIntents against the
+ * fixture Connect account, each fed through its own
+ * synthetic-but-correctly-signed webhook.
  *
  * Own fresh Pro org (seedRealRegistrationCart); claims/restores
  * CONNECT_TEST_ACCOUNT exactly like registrationPaidLoopSuite. Keyless-safe:
@@ -8705,11 +8714,19 @@ async function registrationDuplicatePaymentSuite(): Promise<void> {
   const seeded = await seedRealRegistrationCart("regdup", "Reg Dup Cup", feeCents);
   const openSessions: string[] = [seeded.sessionId];
   try {
-    // A second open session for the SAME still-pending cart, minted BEFORE
-    // either is paid — createRegistrationCheckout's "payable" query has no
-    // notion of "already has an open session", so this mints cleanly even
-    // though seeded.sessionId is still open on Stripe's side: exactly the
-    // two-open-tabs scenario the duplicate branch exists for.
+    // Resume-mints a second real session for the same still-pending cart.
+    // createRegistrationCheckout mints this new session FIRST, then calls
+    // expireSupersededCheckoutSession(seeded.sessionId, registrationIds) —
+    // added this same branch — which finds seeded.sessionId still `open`
+    // with intersecting registration_ids and expires it. So this does NOT
+    // leave two open sessions behind (see this function's own doc comment);
+    // what it proves is that the resume path mints a genuinely distinct
+    // session (asserted via sessionIdB below) rather than replaying the
+    // stale one. Neither session is ever paid through directly either way —
+    // a Checkout Session's own `payment_intent` stays null until a real
+    // browser visits its hosted page, so nothing headless can complete one
+    // (payRealDestinationCharge's doc comment). The duplicate PAYMENT below
+    // is synthesized independently, through two distinct real PaymentIntents.
     const resumed = await v1(
       newSession(),
       `/api/v1/public/registrations/${seeded.regId}/checkout`,
