@@ -493,10 +493,23 @@ export function DivisionSettings({
       const { points: rulePoints, ...ruleOverrideRest } = buildRuleOverride(division.sport_key, ruleValues);
       Object.assign(override, ruleOverrideRest);
       if (rulePoints && typeof rulePoints === "object") {
-        override.points = {
+        const mergedPoints: Record<string, unknown> = {
           ...((override.points as Record<string, unknown>) ?? {}),
           ...(rulePoints as Record<string, unknown>),
         };
+        // R3.5 review F5 — a rule field's build()/buildOnBlank() (currently
+        // only match-rules.tsx's shootoutPointsPatch) can ask to DELETE a key
+        // from the nested object by setting it to `undefined` rather than
+        // omitting it — omitting it would leave whatever `override.points`
+        // already carried forward from the `{...division.config}` base at
+        // the top of this function untouched. Resolve those markers into a
+        // real deletion here, so the PATCH body (and any `toEqual`/
+        // `toHaveProperty` assertion on it) is a clean object rather than
+        // one holding `undefined`-valued keys.
+        for (const key of Object.keys(mergedPoints)) {
+          if (mergedPoints[key] === undefined) delete mergedPoints[key];
+        }
+        override.points = mergedPoints;
       }
       if (pointsFieldKeys.some((k) => pointsValues[k] !== undefined && pointsValues[k] !== "")) {
         // Spread whatever survived above (shootout points included) rather

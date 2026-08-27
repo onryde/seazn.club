@@ -28,6 +28,20 @@ export interface RuleField {
    */
   build: (value: string, values: Record<string, string>) => Record<string, unknown>;
   /**
+   * What to emit when THIS field's own raw value is BLANK. Most fields have
+   * no opinion when blank — a blank `halfMinutes` leaves whatever's already
+   * saved untouched (no `buildOnBlank`, nothing merged, exactly the
+   * pre-R3.5-review behaviour). A field whose blank state must ACTIVELY
+   * delete a previously-saved key (R3.5 review F5: shootoutWin/shootoutLoss)
+   * implements this instead. Return `undefined` for a key here — never just
+   * omit it — to signal "delete": division-settings.tsx's applyFormat
+   * merges this return value on top of the division's existing saved
+   * `points`, so omitting a key would leave that stale value in place, not
+   * remove it. applyFormat resolves the `undefined` markers into a real
+   * deletion before the PATCH goes out.
+   */
+  buildOnBlank?: (values: Record<string, string>) => Record<string, unknown>;
+  /**
    * Inverse of `build`: given the division's saved config, return this
    * field's current raw value (what the input should show on reopen), or
    * `undefined` if there is nothing to show. Optional — a field with no
@@ -153,6 +167,42 @@ const TABLETENNIS_RULES: RuleField[] = [
   WIN_BY,
 ];
 
+/** R3.5 review F5 — the shoot-out points pair's shared "what should be
+ *  persisted" computation (see the shootoutWin/shootoutLoss fields below for
+ *  why this has to be one function called from both `build` and
+ *  `buildOnBlank`, not two independent ones). `undefined` is the explicit
+ *  delete signal `RuleField.buildOnBlank` documents — the engine's split
+ *  gate needs both `points.shootoutWin`/`shootoutLoss` defined
+ *  (football.ts:2602-2603), so "one set, one blank" has no meaning: either
+ *  both are set, or neither key is persisted.
+ *
+ *  The early `{}` return when BOTH raw values are absent (not merely blank)
+ *  matters: `buildOnBlank` now fires for this field on every save where the
+ *  organiser never touched shoot-out points at all (a fresh division, or an
+ *  unrelated field like maxSubs), and `values` simply has no
+ *  shootoutWin/shootoutLoss keys in that case. Without this guard the pair
+ *  would emit a delete-marker on EVERY football save regardless of subject —
+ *  harmless once division-settings.tsx's applyFormat strips it against a
+ *  `points` object that never had the keys either, but it turns
+ *  `buildRuleOverride`'s own return value into a poor pin of "what did this
+ *  save actually touch" (see match-rules.test.ts's "football's two
+ *  independent substitution caps" — that suite has nothing to do with
+ *  shoot-out points and must see a clean, minimal object). A key present as
+ *  `""` (hydrated then explicitly cleared, or the sibling never saved but
+ *  THIS field just got typed into) still means "the organiser touched this
+ *  pair" and must still resolve to real values or a delete. */
+function shootoutPointsPatch(values: Record<string, string>): Record<string, unknown> {
+  const win = values.shootoutWin;
+  const loss = values.shootoutLoss;
+  if (win === undefined && loss === undefined) return {};
+  const bothSet = win !== undefined && win !== "" && loss !== undefined && loss !== "";
+  return {
+    points: bothSet
+      ? { shootoutWin: Number(win), shootoutLoss: Number(loss) }
+      : { shootoutWin: undefined, shootoutLoss: undefined },
+  };
+}
+
 export const SPORT_RULES: Record<string, RuleField[]> = {
   football: [
     {
@@ -184,27 +234,26 @@ export const SPORT_RULES: Record<string, RuleField[]> = {
     // NESTED inside `points`, not bare cfg keys — a UI writing a top-level
     // `shootoutWin` would parse, persist, and silently never fire.
     //
-    // Both fields' build() reads BOTH raw values out of `values` (not just
-    // its own) and re-emits whichever are actually set. buildRuleOverride's
-    // outer loop does a bare `Object.assign` per field's return value, so if
-    // each field only emitted its own key, the field processed LAST would
-    // silently overwrite the other's contribution to `points` — there is no
-    // other football field sharing a nested object today, so nothing else in
-    // this array needs the same treatment yet.
+    // R3.5 review finding F5 (BLOCKER, fixed): the pairing requirement is
+    // documented in both fields' help text ("leave either blank to award a
+    // normal win/loss instead") but that promise wasn't true — a blank field
+    // emitted NO key at all, and division-settings.tsx's `applyFormat` seeds
+    // its override from `{...division.config}`, so a stale saved value just
+    // rode along unchanged. Clearing a box did nothing; the old pair kept
+    // paying out forever.
     //
-    // A blank field must emit NO key, not 0 — undefined is what turns the
-    // split off (the engine gate reads `!== undefined`), and 0 is a legal
-    // points value ("a shoot-out win is worth nothing"). The outer loop
-    // already only calls build() when THIS field's own value is non-blank,
-    // so leaving one field blank naturally emits just the other's key.
-    //
-    // Ruling (R3.5-6, recorded in _INDEX.md): the pairing requirement is
-    // documented in both fields' help text rather than enforced by an
-    // interactive validator — match-rules.tsx/MatchRuleFields has no
-    // validation-error channel today, and the asymmetric case is already
-    // safe (F21: the unset side just falls back to a normal win/loss, it
-    // does not corrupt anything), so blocking the UI on it is not worth
-    // being the first field in this file to need one.
+    // Owner ruling: blank in EITHER box deletes BOTH keys — that is what the
+    // help text already promises (and content/help/scoring/
+    // knockout-deciders.md), and it makes "turn this off" one action rather
+    // than an error the organiser has to decode. `shootoutPointsPatch` below
+    // is the ONE place that decides the pair's fate, called from BOTH
+    // fields' `build` (own value non-blank) and `buildOnBlank` (own value
+    // blank) so the result is identical no matter which field is filled,
+    // which is blank, or which one buildRuleOverride's loop processes last —
+    // the same "reconstruct the full nested object from every raw value,
+    // every time" discipline the pre-fix version used, just extended to the
+    // blank case too. Returning `undefined` (not omitting the key) is what
+    // tells applyFormat's merge to actually delete it — see RuleField.
     {
       key: "shootoutWin",
       label: "Points for a shoot-out win",
@@ -212,14 +261,8 @@ export const SPORT_RULES: Record<string, RuleField[]> = {
       kind: "number",
       min: 0,
       max: 10,
-      build: (v, values) => ({
-        points: {
-          shootoutWin: Number(v),
-          ...(values.shootoutLoss !== undefined && values.shootoutLoss !== ""
-            ? { shootoutLoss: Number(values.shootoutLoss) }
-            : {}),
-        },
-      }),
+      build: (_v, values) => shootoutPointsPatch(values),
+      buildOnBlank: (values) => shootoutPointsPatch(values),
       read: (config) => {
         const points = config.points as { shootoutWin?: number } | undefined;
         return points?.shootoutWin !== undefined ? String(points.shootoutWin) : undefined;
@@ -232,14 +275,8 @@ export const SPORT_RULES: Record<string, RuleField[]> = {
       kind: "number",
       min: 0,
       max: 10,
-      build: (v, values) => ({
-        points: {
-          shootoutLoss: Number(v),
-          ...(values.shootoutWin !== undefined && values.shootoutWin !== ""
-            ? { shootoutWin: Number(values.shootoutWin) }
-            : {}),
-        },
-      }),
+      build: (_v, values) => shootoutPointsPatch(values),
+      buildOnBlank: (values) => shootoutPointsPatch(values),
       read: (config) => {
         const points = config.points as { shootoutLoss?: number } | undefined;
         return points?.shootoutLoss !== undefined ? String(points.shootoutLoss) : undefined;
@@ -639,7 +676,11 @@ export function buildRuleOverride(
   const override: Record<string, unknown> = {};
   for (const field of SPORT_RULES[sportKey] ?? []) {
     const value = values[field.key];
-    if (value !== undefined && value !== "") Object.assign(override, field.build(value, values));
+    if (value !== undefined && value !== "") {
+      Object.assign(override, field.build(value, values));
+    } else if (field.buildOnBlank) {
+      Object.assign(override, field.buildOnBlank(values));
+    }
   }
   return override;
 }

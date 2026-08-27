@@ -137,10 +137,22 @@ describe("buildRuleOverride — football's two independent substitution caps", (
 // defined). Unlike every other football field above, these two are NOT
 // independent top-level keys: `buildRuleOverride`'s outer loop does a
 // SHALLOW `Object.assign` per field (match-rules.tsx's own doc), so if each
-// field's build() only emitted ITS OWN key inside `points`, whichever field
-// ran last would silently overwrite the other's contribution — the exact
-// trap the brief called out. Each field's build() therefore reads BOTH raw
-// values out of `values` and re-emits whichever are actually set.
+// field's build()/buildOnBlank() only emitted ITS OWN key inside `points`,
+// whichever field ran last would silently overwrite the other's
+// contribution — the exact trap the brief called out. Each field calls the
+// SAME shared `shootoutPointsPatch`, which reads BOTH raw values out of
+// `values` and reconstructs the full pair state every time, so the result
+// is identical regardless of field order.
+//
+// R3.5 review finding F5 (BLOCKER, superseded the original F19-F21 shape
+// below): the engine's split needs BOTH keys defined, so "one set, one
+// blank" was never a real state to persist — the original fix (this
+// describe block, pre-review) let a lone value ride through as-is, which is
+// what let a cleared box leave the OTHER box's stale value in the saved
+// config forever. Owner ruling: blank in EITHER box now resolves to an
+// explicit delete of BOTH keys (`undefined` — division-settings.tsx's
+// applyFormat turns that into a real deletion; see F20/F21 below for the
+// updated shape).
 describe("buildRuleOverride — football's shoot-out points split, merged into ONE points object", () => {
   it("F19: both set — one points object carrying both keys, regardless of field order", () => {
     expect(buildRuleOverride("football", { shootoutWin: "2", shootoutLoss: "1" })).toEqual({
@@ -148,20 +160,30 @@ describe("buildRuleOverride — football's shoot-out points split, merged into O
     });
   });
 
-  it("F21: only shootoutWin set — emits shootoutWin alone, never a fabricated 0 for the unset side", () => {
+  it("F5 (was F21): only shootoutWin set — deletes BOTH, not a lone shootoutWin", () => {
     expect(buildRuleOverride("football", { shootoutWin: "2" })).toEqual({
-      points: { shootoutWin: 2 },
+      points: { shootoutWin: undefined, shootoutLoss: undefined },
     });
   });
 
-  it("F21: only shootoutLoss set — emits shootoutLoss alone", () => {
+  it("F5 (was F21): only shootoutLoss set — deletes BOTH, not a lone shootoutLoss", () => {
     expect(buildRuleOverride("football", { shootoutLoss: "1" })).toEqual({
-      points: { shootoutLoss: 1 },
+      points: { shootoutWin: undefined, shootoutLoss: undefined },
     });
   });
 
-  it("F20: neither set — no points key at all, today's flat win/loss is untouched", () => {
-    expect(buildRuleOverride("football", { shootoutWin: "", shootoutLoss: "" })).toEqual({});
+  it("F5 (was F20): both explicitly cleared — deletes BOTH (the 'turn it off' path)", () => {
+    expect(buildRuleOverride("football", { shootoutWin: "", shootoutLoss: "" })).toEqual({
+      points: { shootoutWin: undefined, shootoutLoss: undefined },
+    });
+  });
+
+  it("F20: neither field is part of this save at all — no points key, today's flat win/loss is untouched", () => {
+    // Distinct from the "explicitly cleared" case above: these keys are
+    // ABSENT from `values` (a fresh division, or a save that never touched
+    // shoot-out points), not present-and-blank. Emitting a delete-marker
+    // here regardless would pollute every unrelated football save's return
+    // value with shoot-out noise — see the "does not disturb..." test below.
     expect(buildRuleOverride("football", {})).toEqual({});
   });
 
@@ -175,5 +197,9 @@ describe("buildRuleOverride — football's shoot-out points split, merged into O
     expect(
       buildRuleOverride("football", { shootoutWin: "2", shootoutLoss: "1", maxSubs: "3" }),
     ).toEqual({ points: { shootoutWin: 2, shootoutLoss: 1 }, maxSubs: 3 });
+  });
+
+  it("leaves maxSubs/subWindows untouched by shoot-out points when neither is part of the save", () => {
+    expect(buildRuleOverride("football", { maxSubs: "3" })).toEqual({ maxSubs: 3 });
   });
 });

@@ -313,3 +313,53 @@ describe("division settings — the points editor renders exactly the boxes a sp
     expect(allPointsInputs(island.tree())).toHaveLength(3);
   });
 });
+
+describe("division settings — clearing a shoot-out points field deletes BOTH keys (R3.5 review F5, BLOCKER)", () => {
+  it("clearing only shootoutWin removes both shootoutWin and shootoutLoss from the saved points", async () => {
+    const island = mount({ points: { ...FOOTBALL_POINTS } });
+    typeRuleField(island.tree(), "shootoutWin", "");
+    clickButton(island.tree(), "Save match rules");
+    await flush();
+    const points = lastPatchConfig().points as Record<string, unknown>;
+    expect(points, "clearing win must also drop the now-orphaned loss side").not.toHaveProperty("shootoutWin");
+    expect(points).not.toHaveProperty("shootoutLoss");
+    expect(points.win).toBe(3);
+    expect(points.draw).toBe(1);
+    expect(points.loss).toBe(0);
+  });
+
+  it("clearing only shootoutLoss removes both shootoutWin and shootoutLoss from the saved points", async () => {
+    const island = mount({ points: { ...FOOTBALL_POINTS } });
+    typeRuleField(island.tree(), "shootoutLoss", "");
+    clickButton(island.tree(), "Save match rules");
+    await flush();
+    const points = lastPatchConfig().points as Record<string, unknown>;
+    expect(points).not.toHaveProperty("shootoutWin");
+    expect(points).not.toHaveProperty("shootoutLoss");
+  });
+
+  it("clearing both shoot-out fields removes both keys — the deliberate 'turn it off' path", async () => {
+    const island = mount({ points: { ...FOOTBALL_POINTS } });
+    typeRuleField(island.tree(), "shootoutWin", "");
+    typeRuleField(island.tree(), "shootoutLoss", "");
+    clickButton(island.tree(), "Save match rules");
+    await flush();
+    const points = lastPatchConfig().points as Record<string, unknown>;
+    expect(points).not.toHaveProperty("shootoutWin");
+    expect(points).not.toHaveProperty("shootoutLoss");
+    expect(points.win).toBe(3);
+    expect(points.draw).toBe(1);
+    expect(points.loss).toBe(0);
+  });
+
+  it("setting both shoot-out fields from scratch still writes both — the pair stays intact when fully set", async () => {
+    const island = mount({ points: { win: 3, draw: 1, loss: 0 } });
+    typeRuleField(island.tree(), "shootoutWin", "2");
+    typeRuleField(island.tree(), "shootoutLoss", "1");
+    clickButton(island.tree(), "Save match rules");
+    await flush();
+    const points = lastPatchConfig().points as Record<string, unknown>;
+    expect(points.shootoutWin).toBe(2);
+    expect(points.shootoutLoss).toBe(1);
+  });
+});
