@@ -3765,7 +3765,18 @@ export async function sweepRegistrations(
         returning id`;
       if (!row) continue; // lease held by a concurrent sweep, or already sent
       claimed = true;
-      await sendPaymentReminderEmail({
+      // RS007 review fix — sendPaymentReminderEmail (lib/email.ts) NEVER
+      // throws on a provider-level failure: its own send() catches every
+      // failure mode (missing key, suppressed, non-2xx, fetch throw) and
+      // RETURNS false instead. This call used to discard that return value,
+      // so an ordinary Resend 4xx/5xx — far commoner than the process death
+      // the lease above exists for — fell through to the unconditional
+      // "sent" write below and permanently marked an email that never left
+      // this process. Branch on the result: only a genuinely delivered send
+      // may promote the lease; a `false` return is handled exactly like a
+      // thrown failure (see the `catch` below) — release the lease, leave
+      // the permanent mark null, and let the next sweep retry.
+      const delivered = await sendPaymentReminderEmail({
         to: reg.contact_email,
         locale: toLocale(reg.locale),
         orgName: ctx.org_name,
@@ -3777,6 +3788,11 @@ export async function sweepRegistrations(
         checkoutUrl: url,
         payDeadline: reg.expires_at,
       });
+      if (!delivered) {
+        await sql`update registration_groups set reminder_claimed_at = null, updated_at = now()
+                  where id = ${reg.group_id}`;
+        continue; // reminded_at (sent) stays null — a later sweep retries
+      }
       // Send succeeded — promote the lease to the permanent SENT record.
       await sql`update registration_groups set reminded_at = now(), updated_at = now()
                 where id = ${reg.group_id}`;
@@ -3831,7 +3847,10 @@ export async function sweepRegistrations(
         returning id`;
       if (!row) continue; // lease held by a concurrent sweep, or already sent
       claimed = true;
-      await sendPaymentReminderEmail({
+      // RS007 review fix — same false-vs-throw gap as pass (1a) above, on
+      // this pass's own lease/mark columns (never the group's — see this
+      // pass's own doc comment on why).
+      const delivered = await sendPaymentReminderEmail({
         to: reg.contact_email,
         locale: toLocale(reg.locale),
         orgName: ctx.org_name,
@@ -3843,6 +3862,11 @@ export async function sweepRegistrations(
         checkoutUrl: url,
         payDeadline: reg.promotion_expires_at,
       });
+      if (!delivered) {
+        await sql`update registrations set promotion_reminder_claimed_at = null, updated_at = now()
+                  where id = ${reg.id}`;
+        continue; // promotion_reminded_at (sent) stays null — a later sweep retries
+      }
       // Send succeeded — promote the lease to the permanent SENT record.
       await sql`update registrations set promotion_reminded_at = now(), updated_at = now()
                 where id = ${reg.id}`;

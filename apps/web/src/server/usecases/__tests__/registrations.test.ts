@@ -2024,6 +2024,57 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
     expect(sentCallsForOurs(), "exactly one send once the lease actually goes through").toHaveLength(1);
   });
 
+  // RS007 review fix (FIX 1, found after V381 landed) — sendPaymentReminderEmail
+  // NEVER throws on a provider-level failure: lib/email.ts's send() catches
+  // every failure mode itself (missing key, suppressed, non-2xx, fetch throw)
+  // and RETURNS false. V381's fix above only reverted the LEASE inside a
+  // `catch`, so a `false` return fell through to the unconditional "sent"
+  // write and permanently marked reminded_at for an email that was never
+  // delivered — worse than the crash V381 targeted, since an ordinary Resend
+  // 4xx/5xx is far commoner than a process death. The mock only misbehaves
+  // for THIS test's own contact email (same trick the racing-sweeps test
+  // above uses), so a platform row from another test/org can never be the
+  // one that "consumes" the forced failure.
+  it("a delivered-but-failed send (false return, not a throw) clears the lease instead of marking sent, and the next sweep retries", async () => {
+    const { competition, division, settings } = await stripeRig();
+    const contactEmail = `remind-false-${randomUUID().slice(0, 8)}@test.local`;
+    const a = await seedRegistration(competition.id, division.id, settings, { contactEmail });
+    await sql`update registration_groups set expires_at = now() + interval '10 hours'
+              where id = ${a.registration.group_id}`;
+
+    const sentCallsForOurs = () =>
+      emailMock.paymentReminder.mock.calls.filter(
+        ([opts]) => (opts as { to?: string })?.to === contactEmail,
+      );
+    const cols = async () => {
+      const [row] = await sql<{ reminded_at: Date | null; reminder_claimed_at: Date | null }[]>`
+        select reminded_at, reminder_claimed_at from registration_groups
+        where id = ${a.registration.group_id}`;
+      return row!;
+    };
+
+    emailMock.paymentReminder.mockImplementation(async (opts: unknown) => {
+      if ((opts as { to?: string } | undefined)?.to === contactEmail) return false;
+      return true;
+    });
+    await sweepRegistrations("http://test.local");
+    const afterFailure = await cols();
+    expect(afterFailure.reminded_at, "never delivered — the permanent mark must stay null").toBeNull();
+    expect(afterFailure.reminder_claimed_at, "the lease is released, not left stuck").toBeNull();
+    expect(sentCallsForOurs()).toHaveLength(1);
+
+    // Next sweep: let the send succeed and confirm the row is picked back up.
+    // `.mockImplementation` only (never `.mockReset` here) — reset also
+    // wipes `.mock.calls`, which would erase the failed attempt recorded
+    // above and make the length-2 assertion below vacuous.
+    emailMock.paymentReminder.mockImplementation(async () => true);
+    const res2 = await sweepRegistrations("http://test.local");
+    expect(res2.reminded).toBeGreaterThanOrEqual(1);
+    const afterRetry = await cols();
+    expect(afterRetry.reminded_at, "the retried send is now marked sent").not.toBeNull();
+    expect(sentCallsForOurs()).toHaveLength(2); // the failed attempt + the retry
+  });
+
   it("reconciles by session from /r/[ref] (token-free return)", async () => {
     const { competition, division, settings } = await stripeRig();
     const res = await seedRegistration(competition.id, division.id, settings, {
@@ -3718,6 +3769,56 @@ describe.skipIf(!HAS_DB)("RS007: sweep reminds a promoted entry off its OWN cloc
     expect(res.reminded).toBeGreaterThanOrEqual(1);
     expect(await sentMark(), "the stale lease was retried and the reminder sent").not.toBeNull();
     expect(sentCallsForOurs(), "exactly one send once the lease actually goes through").toHaveLength(1);
+  });
+
+  // RS007 review fix (FIX 1) — same false-vs-throw gap as the group-level
+  // pass above, on this pass's OWN lease/mark columns
+  // (promotion_reminder_claimed_at / promotion_reminded_at).
+  it("a delivered-but-failed send (false return) on the promoted pass clears its OWN lease instead of marking sent, and the next sweep retries", async () => {
+    const { competition, division, settings } = await stripeRig({ feeCents: 500 });
+    const contactEmail = `remind-promoted-false-${randomUUID().slice(0, 8)}@test.local`;
+    const waiting = await seedRegistration(competition.id, division.id, settings, {
+      status: "waitlisted",
+      contactEmail,
+    });
+    const promoted = await sql.begin((tx) =>
+      promoteWaitlistedRow(tx, waiting.registration.id, waiting.registration.group_id, settings),
+    );
+    await sql`update registrations set promotion_expires_at = now() + interval '10 hours'
+              where id = ${promoted!.id}`;
+
+    const sentCallsForOurs = () =>
+      emailMock.paymentReminder.mock.calls.filter(
+        ([opts]) => (opts as { to?: string })?.to === contactEmail,
+      );
+    const cols = async () => {
+      const [row] = await sql<{
+        promotion_reminded_at: Date | null;
+        promotion_reminder_claimed_at: Date | null;
+      }[]>`
+        select promotion_reminded_at, promotion_reminder_claimed_at from registrations
+        where id = ${promoted!.id}`;
+      return row!;
+    };
+
+    emailMock.paymentReminder.mockImplementation(async (opts: unknown) => {
+      if ((opts as { to?: string } | undefined)?.to === contactEmail) return false;
+      return true;
+    });
+    await sweepRegistrations("https://test.local");
+    const afterFailure = await cols();
+    expect(afterFailure.promotion_reminded_at, "never delivered — must stay null").toBeNull();
+    expect(afterFailure.promotion_reminder_claimed_at, "the lease is released").toBeNull();
+    expect(sentCallsForOurs()).toHaveLength(1);
+
+    // `.mockImplementation` only — see the group-level pass's own test above
+    // for why `.mockReset` here would silently erase the length-2 proof.
+    emailMock.paymentReminder.mockImplementation(async () => true);
+    const res2 = await sweepRegistrations("https://test.local");
+    expect(res2.reminded).toBeGreaterThanOrEqual(1);
+    const afterRetry = await cols();
+    expect(afterRetry.promotion_reminded_at, "the retried send is now marked sent").not.toBeNull();
+    expect(sentCallsForOurs()).toHaveLength(2);
   });
 });
 
