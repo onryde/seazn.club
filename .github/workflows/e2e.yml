@@ -223,8 +223,15 @@ jobs:
       # webhook secret) and the known webhook secret to sign against. CI-only
       # dummies; no real Stripe call is made (checkout still 503s on unsynced
       # prices, so the Stripe-gated billing specs stay skipped as before).
-      STRIPE_SECRET_KEY: sk_test_ci_e2e_dummy
+      # The walkthrough leg needs a REAL test key: it drives an actual hosted
+      # checkout on checkout.stripe.com, which a dummy cannot reach. Every
+      # other leg keeps the dummy, so nothing else gains a Stripe dependency.
+      # Mapped through `env` rather than read as `secrets.*` inside a step
+      # `if:` — the same shape registrations-sweep.yml uses, because the
+      # secrets context is not dependable in step-level conditions.
+      STRIPE_SECRET_KEY: ${{ (matrix.project == 'walkthrough' && secrets.STRIPE_SECRET_KEY) || 'sk_test_ci_e2e_dummy' }}
       STRIPE_WEBHOOK_SECRET: whsec_e2e_payments
+      STRIPE_CONNECT_TEST_ACCOUNT: ${{ matrix.project == 'walkthrough' && secrets.STRIPE_CONNECT_TEST_ACCOUNT || '' }}
       # v4 AI architect e2e (ai-architect.spec.ts): the spec starts a model
       # fixture server on 4319; the app server must point anthropicClient()
       # at it and carry a non-empty key so the ai-plan routes never 503.
@@ -398,6 +405,53 @@ jobs:
             docker logs placement-e2e || true
             exit 1
           fi
+
+      # RS007: the registration money path through a REAL Stripe Connect hosted
+      # checkout (`e2e/walkthrough/registration-connect.spec.ts`). Walkthrough
+      # leg only, and only when the secrets exist — absent either one the spec
+      # skips and says on stdout that fulfilment was never exercised.
+      #
+      # WHY A FORWARDER IS NOT OPTIONAL. The webhook is registrations' ONLY
+      # fulfilment path (billing has `reconcileCheckout` as a missed-webhook
+      # fallback; registrations have no equivalent), so without one the entry
+      # stays `pending` after a successful charge and the spec fails at the
+      # wait rather than passing vacuously. A runner has no inbound route from
+      # Stripe, but it does not need one: `stripe listen` dials OUT over a
+      # websocket and forwards inward to localhost.
+      #
+      # It must run BEFORE the server starts, because the session mints its own
+      # `whsec` and the server reads that secret at boot. `$GITHUB_ENV` applies
+      # to subsequent steps, so the override lands on the server step below.
+      # Overriding it is safe HERE and only here: `payments-hardening.spec.ts`
+      # signs synthetic webhooks against the job-level `whsec_e2e_payments`, and
+      # it runs in a different matrix leg, in a different job.
+      #
+      # COST/RISK, stated rather than buried: on the walkthrough leg this makes
+      # genuine Stripe test-mode API calls on every push to `main` — $0, but a
+      # real external dependency, so a Stripe outage reds this leg.
+      - name: Connect walkthrough not configured — skip loudly
+        if: matrix.project == 'walkthrough' && (env.STRIPE_CONNECT_TEST_ACCOUNT == '' || env.STRIPE_SECRET_KEY == 'sk_test_ci_e2e_dummy')
+        run: |
+          echo "::warning::Connect walkthrough NOT run — the registration money path was not exercised. Needs both STRIPE_SECRET_KEY and STRIPE_CONNECT_TEST_ACCOUNT repo secrets."
+
+      - name: Start Stripe webhook forwarder (walkthrough leg, secrets permitting)
+        if: matrix.project == 'walkthrough' && env.STRIPE_CONNECT_TEST_ACCOUNT != '' && env.STRIPE_SECRET_KEY != 'sk_test_ci_e2e_dummy'
+        env:
+          STRIPE_API_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+        run: |
+          curl -fsSL https://github.com/stripe/stripe-cli/releases/download/v1.21.8/stripe_1.21.8_linux_x86_64.tar.gz \
+            | tar -xz -C /usr/local/bin stripe
+          stripe listen --api-key "$STRIPE_API_KEY" \
+            --forward-to http://localhost:3000/api/webhooks/stripe \
+            --print-secret > whsec.txt 2>listen.log || { cat listen.log; exit 1; }
+          secret=$(tr -d '[:space:]' < whsec.txt)
+          if [ -z "$secret" ]; then echo "::error::stripe listen produced no webhook secret"; cat listen.log; exit 1; fi
+          echo "STRIPE_WEBHOOK_SECRET=$secret" >> "$GITHUB_ENV"
+          echo "CONNECT_WALKTHROUGH=1" >> "$GITHUB_ENV"
+          # Now hold the forwarder open for the rest of the job.
+          stripe listen --api-key "$STRIPE_API_KEY" \
+            --forward-to http://localhost:3000/api/webhooks/stripe > forward.log 2>&1 &
+          echo "forwarder started (pid $!)"
 
       - name: Start server
         # On the SERVER, not the Playwright step: `build.ts` runs server-side,

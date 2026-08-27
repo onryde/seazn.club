@@ -236,4 +236,61 @@ describe("e2e CI wiring", () => {
     expect(yml).toContain("--shard=1/2");
     expect(yml).toContain("--shard=2/2");
   });
+
+  // RS007. The Connect walkthrough is the ONLY place in the suite that
+  // genuinely produces `checkout.session.completed`, and it can only do so
+  // with a real key AND a webhook forwarder — the webhook is registrations'
+  // sole fulfilment path, so without a forwarder a paid entry stays `pending`.
+  // Both halves are asserted here because either one missing degrades the leg
+  // to a silent skip, which reads in the summary exactly like a leg that ran.
+  it("wires the Connect walkthrough's real key and its webhook forwarder", () => {
+    const yml = readFileSync(join(REPO_ROOT, ".github/workflows/e2e.yml"), "utf8");
+
+    // Comments are NOT stripped here, unlike the slice test above: this
+    // assertion is about wiring that only the walkthrough leg may receive, and
+    // the surrounding prose is what stops the next reader handing the real key
+    // to every leg.
+    expect(
+      yml,
+      "the walkthrough leg no longer receives a real STRIPE_SECRET_KEY — the Connect walkthrough cannot reach checkout.stripe.com with the dummy",
+    ).toContain("matrix.project == 'walkthrough' && secrets.STRIPE_SECRET_KEY");
+    expect(
+      yml,
+      "STRIPE_CONNECT_TEST_ACCOUNT is not wired — a fabricated account id is rejected by Stripe as a transfer destination",
+    ).toContain("STRIPE_CONNECT_TEST_ACCOUNT");
+    expect(
+      yml,
+      "no `stripe listen` forwarder — without it a paid entry stays `pending` and the spec fails at the webhook wait",
+    ).toContain("stripe listen");
+    // The forwarder must publish the session's own secret to LATER steps: the
+    // server reads STRIPE_WEBHOOK_SECRET at boot, so a forwarder started after
+    // it, or one that never exports, silently verifies against the wrong key.
+    expect(
+      yml,
+      "the forwarder does not export STRIPE_WEBHOOK_SECRET to subsequent steps",
+    ).toContain('echo "STRIPE_WEBHOOK_SECRET=$secret" >> "$GITHUB_ENV"');
+    expect(
+      yml,
+      "nothing enables CONNECT_WALKTHROUGH, so the spec skips even when the secrets are present",
+    ).toContain("CONNECT_WALKTHROUGH=1");
+    // A missing secret must ANNOUNCE that the money path went unexercised,
+    // rather than leaving a green leg that proves nothing about fulfilment.
+    expect(
+      yml,
+      "an unconfigured Connect walkthrough skips silently — no ::warning:: telling the reader the money path was not exercised",
+    ).toMatch(/::warning::Connect walkthrough NOT run/);
+  });
+
+  // The spec moved out of e2e/ into e2e/walkthrough/ (RS007). The project is
+  // directory-anchored, so the move is what enrols it — but a rename or a
+  // revert would leave the wiring above pointing at nothing.
+  it("keeps the Connect walkthrough inside the walkthrough project", async () => {
+    const { default: unset } = await import("../../../playwright.config");
+    const walkthrough = projectNamed(unset, "walkthrough");
+    const selected = specFiles().filter((f) => selects(walkthrough, f));
+    expect(
+      selected,
+      "registration-connect.spec.ts is not selected by the walkthrough project",
+    ).toContain("walkthrough/registration-connect.spec.ts");
+  });
 });

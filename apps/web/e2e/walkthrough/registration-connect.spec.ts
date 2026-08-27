@@ -13,8 +13,8 @@
 // Run it:
 //   seazn-env up --label <l> --server && eval "$(seazn-env env --label <l>)"
 //   stripe listen --forward-to $SMOKE_BASE/api/webhooks/stripe   # in another shell
-//   RS006_CONNECT_WALKTHROUGH=1 STRIPE_CONNECT_TEST_ACCOUNT=acct_... \
-//     npx playwright test e2e/registration-connect-walkthrough.spec.ts --project=parallel
+//   CONNECT_WALKTHROUGH=1 STRIPE_CONNECT_TEST_ACCOUNT=acct_... \
+//     npx playwright test e2e/walkthrough/registration-connect.spec.ts --project=walkthrough
 //
 // Add WALKTHROUGH_WATCH=1 to run it headed and slowed down, with video — it
 // doubles as the demo of the flow. `stripe listen` is required, not optional:
@@ -23,15 +23,32 @@
 // equivalent), so without a forwarder the entry stays `pending` after a
 // successful charge.
 import { expect, test } from "@playwright/test";
-import { apiJson } from "./helpers";
+import { apiJson } from "../helpers";
 
 /** Never on by accident: absent the flag this skips visibly rather than
  *  silently passing, so a CI run that cannot reach Stripe reports a skip
  *  rather than a green that proves nothing. */
-const ENABLED = process.env.RS006_CONNECT_WALKTHROUGH === "1";
+const ENABLED = process.env.CONNECT_WALKTHROUGH === "1";
 const WATCH = process.env.WALKTHROUGH_WATCH === "1";
 
 const CONNECT_ACCOUNT = process.env.STRIPE_CONNECT_TEST_ACCOUNT ?? "";
+
+// A skip is only honest if someone SEES it. Playwright's own summary prints
+// "1 skipped" with no reason attached, and a CI leg that silently skips its
+// only real-Stripe proof is indistinguishable from one that ran it — the
+// failure mode this repo has already paid for ("unrun e2e ships vacuous
+// waits"). Say so on stdout, at collection time, where the job log keeps it.
+if (!ENABLED || !CONNECT_ACCOUNT) {
+  const missing = [
+    ENABLED ? null : "CONNECT_WALKTHROUGH=1",
+    CONNECT_ACCOUNT ? null : "STRIPE_CONNECT_TEST_ACCOUNT",
+  ].filter(Boolean);
+  console.warn(
+    `\n  ⚠ registration-connect walkthrough SKIPPED — the real Stripe Connect money path was NOT exercised.` +
+      `\n    missing: ${missing.join(", ")}` +
+      `\n    Nothing else in the suite produces checkout.session.completed, so this run proves nothing about it.\n`,
+  );
+}
 
 /** `organizations.stripe_account_id` is UNIQUE, so exactly one org can hold
  *  the fixture account at a time. Take it for the duration and give it back —
@@ -99,7 +116,7 @@ test.use({
 });
 
 test("RS006 — organiser settings, team entry, Stripe Connect payment", async ({ page, browser, request }, testInfo) => {
-  test.skip(!ENABLED, "opt-in: set RS006_CONNECT_WALKTHROUGH=1 (needs a real sk_test and `stripe listen`)");
+  test.skip(!ENABLED, "opt-in: set CONNECT_WALKTHROUGH=1 (needs a real sk_test and `stripe listen`)");
   test.skip(!CONNECT_ACCOUNT, "STRIPE_CONNECT_TEST_ACCOUNT is unset — a fabricated account id is rejected by Stripe");
   test.setTimeout(600_000);
 
