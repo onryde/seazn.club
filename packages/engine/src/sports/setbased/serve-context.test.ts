@@ -369,6 +369,26 @@ describe("table tennis — two serves each, one each at deuce", () => {
     expect(ctx(tabletennis, short, SINGLES, events).servingSide).toBe("A");
   });
 
+  it("alternates off the game's first SERVER, not its winner (2.13.6)", () => {
+    // In every other alternate fixture the opener also WINS the game, which
+    // makes "opponent of the opener" and "opponent of the winner" the same
+    // side and pins nothing. Here H opens game 1 and LOSES it 0-3, so the two
+    // readings disagree: 2.13.6 keys on the first SERVER, and the opener of
+    // game 2 is A. (FIVB 12.1.2 says the same thing for volleyball, and has
+    // its own fixture below.)
+    const short = tabletennis.configSchema.parse({ setTo: 3, finalSetTo: 3 });
+    const events = stream(
+      ["core.start"],
+      rally(tabletennis, { wonBy: "A", serving: "H" }), // H served it, A won it
+      rally(tabletennis, { wonBy: "A" }),
+      rally(tabletennis, { wonBy: "A" }), // game 1 to A, 0-3 — the opener lost
+    );
+    const game2 = ctx(tabletennis, short, SINGLES, events);
+    expect(game2.servingSide).toBe("A");
+    expect(game2.serviceTurn).toBe(0);
+    expect(game2.serveNumber).toBe(1);
+  });
+
   it("refuses to alternate off a DISPUTED opener — a contradiction leaves game 2 unopened", () => {
     // 2.13.6 makes the next game's opener the OPPONENT OF THIS GAME'S FIRST
     // SERVER, so the alternation turns on `firstServer` — the very derivation
@@ -574,6 +594,23 @@ describe("volleyball", () => {
   it("alternates the opening serve for sets 2-4", () => {
     const events = stream(...setOneToHome);
     expect(ctx(volleyball, short, SIX, events).servingSide).toBe("A");
+  });
+
+  it("alternates off the set's first SERVER, not its winner (12.1.2)", () => {
+    // `setOneToHome` above has the opener winning the set, so it cannot tell
+    // 12.1.2 ("the team that did not serve first in the previous set") from
+    // "the team that lost it". Here H opens and loses 0-3, and the answer is
+    // A either way ONLY if you read the law right.
+    const events = stream(
+      ["core.start"],
+      rally(volleyball, { wonBy: "A", serving: "H" }), // H served, A sided out
+      rally(volleyball, { wonBy: "A" }),
+      rally(volleyball, { wonBy: "A" }), // set 1 to A, 0-3 — the opener lost
+    );
+    const set2 = ctx(volleyball, short, SIX, events);
+    expect(set2.servingSide).toBe("A");
+    expect(set2.serviceTurn).toBe(0);
+    expect(set2.rotation).toBe(1);
   });
 
   it("refuses to alternate off a DISPUTED opener (12.1.2), and set 2 recovers on its first rally", () => {
