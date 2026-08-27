@@ -2849,3 +2849,83 @@ sampling was single-parity, and this one came from checking a sentence I had
 written in a commit message as though it were a result. A claim about a surface
 you did not open is a hypothesis. This programme's screenshots, unit tests and
 adversarial review all passed over it.
+
+### R5 — SESSION STATE #2, written for compaction (2026-08-27, later)
+
+Supersedes the earlier "SESSION STATE" block above wherever they disagree.
+
+**Where.** Worktree `.claude/worktrees/r5-racquet`, branch
+`feat/scorepad-v3-r5-racquet-split` off `main` `addd126c5`. Env label `r5`:
+server `http://localhost:3368`, Postgres `:54573`, db `seazn_r5`. Bring the
+env vars into a shell with
+`eval "$(~/.claude/skills/seazn-local-env/scripts/seazn-env.sh env --label r5)"`,
+and note vitest here REFUSES to start without a `DATABASE_URL=` prefix.
+
+**DONE — all three sports are converted and the registry is flipped.**
+
+| Task | Commits | Reviewed? |
+| --- | --- | --- |
+| A — engine serve reader | `80386a342` `26a04f4dd` + fixes `8becbca50` `add70056a` `85cc79166` `4f2e7e9b3` `1191627a4` | yes — 6 findings, all closed, 11/11 mutants die |
+| B — e2e harness photographs the defects first | `c60b920bf` `015f7ec5b` | n/a |
+| C1 — badminton + 3 palettes | `83c527da0` `20e2042ce` `ad3fa577c` `c8ca84b10` | yes — 2 findings; acting on one found a third defect |
+| C2 — table tennis | `2a6344f67` `a55c371b2` `efc5c2fb6` + fixes `acd53ac27` | yes — 2 defects + 3 coverage holes, all fixed |
+| C3 — volleyball | `c05506c9d` `5d3a342f7` | **reviewer IN FLIGHT at compaction** |
+| chassis fixes from playing | `14b3a4650` `721d975c9` | yes |
+| rulings/docs | `538333433` `1915cff0a` | n/a |
+
+**Counts I ran myself (not agent-reported), at `5d3a342f7`:** v3 unit
+**1397/1397**, 0 failed, 0 failed suites, 28 files, zero paths outside the
+worktree. `turbo typecheck --filter=@seazn/web` 0 errors uncached. i18n parity
+OK. e2e: table tennis 5/5, badminton + tennis 11/11.
+
+**STILL OWED, in order.** (1) C3's reviewer findings → fix + re-verify.
+(2) PLAY volleyball in a browser — a rebuild was in flight at compaction; this
+is the step that found real defects in both earlier sports and must not be
+skipped. (3) Three walkthroughs in `e2e/walkthrough/` (ruling R5-4) — the
+directory, the Playwright project (absolute-path-anchored regex,
+`playwright.config.ts:119`) and the CI leg (`e2e.yml:181-183`) all already
+exist. (4) Delete `skins/racquet-skin.tsx` + its 3 `RESOLUTION_KIND` rows with
+`git grep -a` zero-ref proof — only now that all three sports have flipped.
+(5) Gallery AFTER sheet + owner sign-off. Smoke DEFERRED to R8 by name; say so
+in the PR body.
+
+**Owner instructions taken this session, both standing.**
+- **Reviewer loop per TASK** (ruling R5-6), not per wave.
+- **NEVER file a GitHub issue — or any outward-facing artifact — unless the
+  owner asks for that specific one.** One approval is not a pattern: `#675`
+  was asked for, `#676` was not, and filing it was corrected. Record findings
+  in this file and in chat by default; if an issue seems warranted, ask in one
+  line and carry on. Saved to memory as `feedback_never_file_issues_unprompted`.
+
+**Two CHASSIS defects, both OPEN, both deliberately NOT fixed in R5** (each
+would touch all eleven skins mid-wave):
+- **#675** — the ~6s `HOLD_MS` window drops the wave's headline per-player
+  attribution with no recovery (`activity.tsx:347` offers void only; v3 has no
+  edit path). Entrant credit SURVIVES via `points_won`'s `fromEntrant` fallback
+  — only the per-player split is lost. Proposed fix is a commutative
+  `<sport>.rally.credit { targetSeq, scorer }`, because a point is ordered and
+  a tally is not. Rejected: env var (client-side, `NEXT_PUBLIC_*` bakes at
+  build), 6s→10s (worsens spectator lag), per-division cfg (`configSchema`
+  STRIPS unknown keys, so it would silently vanish; a first-class column beside
+  `scorer_can_finalize` would work but hands the org a dial for a race).
+- **#676** — `PadHostView.state` is the OPTIMISTIC fold while
+  `PadHostView.events` is the CONFIRMED ledger (`pad-host.tsx:785`), so they
+  disagree by one event for the whole hold. The serve reader correctly refuses,
+  and **the serve strip blanks for ~6s on EVERY rally, in badminton AND table
+  tennis** (reproduced twice each in a browser). Predates R5. Fix is to make
+  `view.events` optimistic too — its own wave.
+
+**The pattern this wave keeps paying for, worth carrying forward.** Every
+defect found here came from something ASSERTED rather than EXECUTED, and all of
+it sat behind a green gate of ~1300 unit tests plus passing e2e and
+screenshots:
+- a commit message claiming tennis doubles was fixed → checking it found the
+  `whoNames` accessible-name defect, which the chassis's own test had FROZEN as
+  its expectation;
+- a test COMMENT arguing carefully for a property its fixture did not have →
+  the `setStart:"alternate"` fixture defeated "winner serves next" but not
+  "loser serves next" (proved by mutating the kernel: the old test SURVIVED);
+- an e2e spec written but never RUN → two real table tennis defects;
+- my own single-parity SAMPLING while playing → nearly reported a correct
+  service-court rule as broken.
+So: run the spec, play the pad, mutate the guard. A green suite is the floor.
