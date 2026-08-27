@@ -3257,3 +3257,138 @@ it pass at 320px; fixed in `f0e7b2cbe` by anchoring on the `server` strip item.
 fixed in `555c1aff0`. The three walkthroughs sailed over (c) silently, because
 their last on-screen check happens BEFORE the decider closes and afterwards
 they read only `fixtureState` then reload the pad away.
+
+### R5 — the racquet-claim sweep: five findings, all CONFIRMED, all fixed (2026-08-28)
+
+Independent verification of five claims against table tennis and badminton.
+Every one was reproduced by a live fold or a live board, and **every one was
+already covered by a green unit suite** — the wave's own meta-pattern, now at
+thirteen instances: the defect was ASSERTED away in a comment, never EXECUTED.
+Fixed in `b152353ef`; ranked here by harm to a scorer.
+
+1. **The pad offered an answer the fold would refuse, and destroyed the rally
+   for taking it.** With the serve anchor's `serving` present and the SERVING
+   side credited, the expedite dock's 13th-return chip made `checkExpedite`
+   (`kernel.ts:576`) throw `EXPEDITE_WRONG_WINNER` — ITTF 2.15.4 gives the
+   point to the RECEIVER on their 13th good return, so a 13-return rally cannot
+   credit the server. The throw rejects the WHOLE rally: the scorer answered two
+   questions correctly, tapped the chip the pad itself offered, and lost the
+   point and the serve fact with nothing on screen. The chip's own doc comment
+   said it was "always safe to offer regardless of who won ... never an engine
+   refusal" — false, and written rather than run. The suite already proved the
+   engine throws on that payload, and separately proved the dock offers the
+   chip; **nobody had put the two in one test.** Both new tests now fold the
+   dock's own `mutate()` output through the real engine.
+2. **ITTF 2.15.1's score clause was unenforced.** The expedite gate carried no
+   score term at all, so one frictionless tap put a match irreversibly into
+   expedite from ANY score; 2.15.4 keeps it there to the end of the MATCH,
+   `applyExpedite` refuses only a SECOND start, and the only recovery is voiding
+   the event. Withheld now at 9-all-or-better — in the tile AND in
+   `refusedEventTypes`, since hiding a tile only moves the action into the More
+   sheet. **The ten-minute half stays unenforceable and is now owed out loud:**
+   this pad folds no game clock and the kernel holds no elapsed time.
+3. **Silent non-enforcement, contrary to the dossier.** With `serving` absent
+   the fold cannot compare a receiver, so it counts the rally in
+   `expediteUnchecked` and lets it stand — correct coarse-tier behaviour, but
+   `expediteUnchecked` has ZERO readers in `apps/web` and the dock said the
+   identical thing either way. `DOMAIN.tabletennis.md:97-101` asks precisely
+   that a pad which cannot enforce the rule "say so rather than let a scorer
+   believe the rule is being enforced". It now has its own title.
+4. **Badminton's interval announcement lingered for three rallies.**
+   `Math.max` has no memory of when the mark was reached: "Interval" showed at
+   11-9 (right), 11-10 and 11-11 (wrong — the 60 seconds had been taken and play
+   had resumed), clearing only at 12-11. Its own doc claimed "returns null once
+   the mark is passed". **The regression test could not see it by
+   construction** — its stream scores one side every rally, so the leader never
+   sits still while the game moves underneath it. BWF Law 8.1 supplies the
+   missing memory free: the rally winner serves next, so "on the mark AND still
+   serving" is exactly "the rally that just took them there".
+5. **A dock on every singles rally, asking a question with one pre-chosen
+   answer.** The settled-scorer branch returned before the singles guard, and
+   `buildHalf` stamps the sole scorer at tap time — so every point of every
+   singles match opened "Which player won it?" with one chip. Harmless
+   (re-stamping the same person) which is why nothing broke. **Its own test was
+   named "returns nothing for a SINGLES rally" and asserted `.not.toBeNull()`**
+   — the suite pinning the defect in place under a name that denied it.
+
+### R5 — the libero swap, fixed at BOTH ends (2026-08-28, `b152353ef`)
+
+The headline C3 feature could not submit at all. Two independent faults:
+
+- **The type gate.** `LIBERO_TYPE` is `core.lineup.replacement`, and the
+  declared set `createSkinDispatch` checks is built from the sport MODULE's
+  PadSpec. No module declares a `core.*` type and none ever can — `padLabel`'s
+  registry is keyed by per-sport `PadLabel.key`, and `ribbon.ts`'s
+  `CORE_RIBBON_KEY` exists precisely because these types cannot earn one. So the
+  gate was never "a skin may not invent an event type"; it was a categorical ban
+  on a skin emitting ANY core event, including the five the kernel validates
+  itself. It now admits `LINEUP_EVENT_SCHEMAS` — sourced from the engine so a
+  sixth lineup type is admitted with it rather than going inert the same way —
+  and still refuses `core.void`/`core.finalize`, which are host business.
+- **The swallow, which is the deeper one.** All six dispatch sites in
+  `pad-host.tsx` were bare `void dispatch(...)`, discarding the rejected
+  promise: no event, no banner, no console line, sheet closed. Any future
+  dispatch fault would have been equally invisible. One `send` now surfaces the
+  refusal on the same banner the server's 422s already use, and logs the detail.
+
+The engine was proven innocent first, by folding the exact payload
+`buildLiberoEvent` builds: it succeeds and puts the player back on court.
+
+### R5 — a REAL chassis defect the walkthrough found: undo-after-decided crashes the pad (2026-08-28)
+
+**Not an R5 defect, not a flake, and NOT fixed here — a subagent is on it.**
+
+Undoing a match-DECIDING event from the fixture console's "Undo last"
+(`fixture-console.tsx:559`) crashes the v3 pad into `ScoringErrorBoundary`:
+
+```
+EngineError: core.void targets unknown or non-prior event "<uuid>"
+```
+
+Reproduced 4 times in 6 runs of `scorepad-v3-volleyball-match.spec.ts`.
+**The fault is client-side, and that is proven rather than assumed:** the
+server accepted the void (the fixture goes `in_play`, `outcome: null`) and the
+server folds BEFORE inserting, so the server's ledger is valid by construction.
+The list that throws is the pad's own.
+
+Prime hypothesis, handed to the subagent to verify or refute: the pad's pipeline
+stamps a CLIENT-fabricated id (the idempotency key) on every event it knows
+about and never learns the server's row id — `fixture-console.tsx`'s own doc
+comment says exactly this, and warns against the same hazard one layer out. The
+console's void targets the SERVER id, which the pad's list does not contain.
+That also explains why a reload recovers: a cold mount folds the server's list
+verbatim.
+
+**Three traps this cost, worth more than the bug:**
+- The first red read as a SCORING defect — a stable "0" where the fold said 2.
+  It was the error boundary having replaced the scorebug; the locator was
+  resolving against the crash screen. **The screenshot settled in one look what
+  four log readings had not.**
+- The same assertion passed under no load and failed under a concurrent vitest
+  run. Load-sensitivity made a real crash look like a race, and a race look
+  like a real crash — in opposite runs.
+- Three of my own arithmetic errors hid inside it: `away` is 0 after the undo
+  (not 2 — the fold says so), four away taps are needed to take a set from
+  2-0 at `setTo 3 / winBy 2 / cap 5` (not one), and the fourth tap decides the
+  match, so the pad unmounts and there is no board left to read a "4" from.
+
+### R5 — SESSION STATE #4 (2026-08-28)
+
+Branch at `b152353ef`. **Walkthroughs: 10 of 11 green in one full run**
+(13.0m, `--workers=1`) — badminton 2.1m, table tennis 2.9m, tennis MTB 3.0m,
+football, cricket ×3 all green. The eleventh is volleyball, red ONLY on the
+chassis crash above.
+
+Owed, in order:
+1. The subagent's undo fix — then re-run the volleyball walkthrough 3× (it is
+   intermittent; one green run is not evidence).
+2. `scorepad-skins.spec.ts:307` — CONFIRMED red, still unfixed. Use
+   `scorepad-v3-volleyball.spec.ts:269-274`'s per-step `getByRole("spinbutton")`
+   + `Confirm` idiom.
+3. **Owner call, engine core, unchanged from #3:** V-1, the libero re-entry cap
+   (`core/lineup.ts:469` `bringOn`) refuses legitimate play partway through set
+   one and never resets — FIVB 19.3.2.1 makes libero replacements unlimited.
+   Second item: `setBasedServeWalk` throws though documented "Total and never
+   throws".
+4. Merge gates still open: owner visual sign-off (gallery sheet unpublished),
+   and smoke (deferred to R8 by name).
