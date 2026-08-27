@@ -3200,3 +3200,60 @@ A committed e2e spec that had never been run was 3/6 red. My own new width
 test seeded two sports wrongly and would have 422'd at all seven widths. My
 own "confirmation" of a reviewer's finding used a grep that could not see
 prose test titles. Run the spec, play the pad, mutate the guard.
+
+### R5 — volleyball review verdicts, reproduced against the real fold (2026-08-27)
+
+Landed just at the compaction boundary. All four reproduced with live probes,
+not read.
+
+**V-1 — CONFIRMED, REAL, and WORSE than reported. The libero cap blocks
+legitimate play partway through SET ONE, permanently.** `core/lineup.ts:469`
+(`bringOn`) takes no exemption argument, so `reentry: "once"` applies to a
+libero exactly as to an ordinary player — and `kernel.ts:525-534` (`bankSet`)
+resets only `subs.thisSet`, never `squads`, so there is no per-set reset
+either. A direct `reduceLineupEvent` probe under the real policy refuses the
+libero's THIRD on-court entrance: `{ok:false, reason:"reentry-limit"}`. FIVB
+19.3.2.1 makes libero replacements UNLIMITED, separated only by a completed
+rally; a side using its libero normally is refused mid-set-one for the rest of
+the match, with no workaround. **ENGINE CORE — owner call.** Fix: make
+`bringOn`'s reentry check exemption-aware.
+
+**V-2 — CONFIRMED, REAL, highest frequency. Every ordinary substitution
+renders the raw wire type: "volleyball.sub recorded", in all four locales.**
+`scoring-vocab.ts:936` registers `pad.volleyball.action.sub` and all four
+dictionaries translate it, so the More sheet genuinely offers Substitution —
+but `:955-958` register four sibling RIBBON keys and never
+`pad.volleyball.ribbon.sub`. `ribbon.ts:137-146` gates on PAD_LABEL_KEYS
+MEMBERSHIP, so it falls to `pad.ribbon.fallback` = `"{event} recorded"`.
+Indoor defaults `records.substitutions: true`, and a match runs up to ~60
+substitutions. Fix: add the key and translate ×4.
+
+**V-3 — CONFIRMED, REAL.** `volleyballDetail` handles RALLY/SUMMARY/SANCTION/
+TIMEOUT and defaults to undefined, so every libero exchange and every
+substitution renders an identical, name-free, individually-voidable row —
+byte-for-byte the defect this wave already fixed for the RALLY case, left open
+for the two event types this skin uniquely introduces. Fix: the same shape,
+`join([named(payload.off), named(on)])` falling back to `sideOfEntrant`.
+
+**V-4 — REFUTED, THEORETICAL.** The "Libero tile offered to both sides with a
+`timesOff` filter admitting ordinary players" claim conflates the engine's
+generic capability with what this skin can reach: `applySub` writes only
+`state.subs`, never `state.squads`, and no volleyball UI path emits
+`core.lineup.substitution`/`retirement` at all. Probed: the libero-less side's
+candidate list is genuinely `[]`. The dev comment was right.
+
+Ranked by harm to a scorer: **V-1 > V-2 > V-3 > V-4 (none)**.
+
+### R5 — decided-board and vacuity verdicts (2026-08-27)
+
+**CONFIRMED, all three.** (a) `scorepad-skins.spec.ts:307` is RED by live run —
+times out at 120s on `getByLabel("Points — Away")`, and `[data-role="confirm"]`
+has ZERO producers in v3; fix with `scorepad-v3-volleyball.spec.ts:269-274`'s
+per-step `getByRole("spinbutton")` + `Confirm`. (b) This branch's own T17
+badminton probe was VACUOUS — proven by commenting out both taps and watching
+it pass at 320px; fixed in `f0e7b2cbe` by anchoring on the `server` strip item.
+(c) The decided board named a game nobody played — real-fold probes returned
+`{"bestOf":3,"game":4}`, `{"bestOf":5,"game":6}`, `{"bestOf":5,"set":6}`;
+fixed in `555c1aff0`. The three walkthroughs sailed over (c) silently, because
+their last on-screen check happens BEFORE the decider closes and afterwards
+they read only `fixtureState` then reload the pad away.
