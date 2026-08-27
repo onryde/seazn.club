@@ -550,6 +550,13 @@ export async function archiveCourtBySql(courtId: string): Promise<void> {
  * fragile. Fails loudly on zero rows — a no-op fixture would leave the spec
  * asserting that nothing changed when nothing was changed.
  */
+/** Writes a division config STRAIGHT TO THE DB, bypassing `patchDivision`'s
+ *  `sportModule.configSchema.safeParse` (usecases/divisions.ts:640) — which is
+ *  the only thing that would have rejected it. A config that cannot parse
+ *  renders NO PAD AT ALL rather than an error, so the symptom of a bad object
+ *  here is a missing scoring surface, not a config complaint. Cricket bites
+ *  hardest: `ballsPerInnings` is refined against BOTH `maxOversPerBowler` and
+ *  `minOversForResult`, so shortening a match means lowering all three. */
 export async function setDivisionConfigSql(divisionId: string, config: unknown): Promise<void> {
   await withDb(async (sql) => {
     const res = await sql`
