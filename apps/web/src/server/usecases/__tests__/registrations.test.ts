@@ -2044,6 +2044,16 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
           .includes(id),
       ).length;
     const regRow = (id: string) => loadWithGroup(id);
+    // REVIEW FIX (money-path defect #7): pass (1a)'s sent mark moved off the
+    // GROUP (registration_groups.reminded_at) onto the ENTRY
+    // (registrations.submit_reminded_at, V383) — see that migration's own
+    // doc comment. loadWithGroup's `.reminded_at` now reads the group's
+    // column, which this pass no longer writes at all.
+    const submitRemindedAt = async (id: string) => {
+      const [row] = await sql<{ submit_reminded_at: Date | null }[]>`
+        select submit_reminded_at from registrations where id = ${id}`;
+      return row!.submit_reminded_at;
+    };
     const auditCount = async (type: string, id: string) => {
       const [row] = await sql<{ n: string }[]>`
         select count(*)::text as n from competition_events
@@ -2055,17 +2065,17 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
     // lives on the cart now (V364).
     await sql`update registration_groups set expires_at = now() + interval '10 hours'
               where id = ${a.registration.group_id}`;
-    expect((await regRow(a.registration.id)).reminded_at).toBeNull();
+    expect(await submitRemindedAt(a.registration.id)).toBeNull();
     stripeMock.checkoutCreate.mockClear();
     const first = await sweepRegistrations("http://test.local");
     expect(first.reminded).toBeGreaterThanOrEqual(1); // A is among the reminded
-    const remindedAt = (await regRow(a.registration.id)).reminded_at;
+    const remindedAt = await submitRemindedAt(a.registration.id);
     expect(remindedAt).not.toBeNull();
     expect(checkoutsFor(a.registration.id)).toBe(1); // fresh session for the email
 
-    // reminded_at guard: a second sweep must not re-remind A.
+    // submit_reminded_at guard: a second sweep must not re-remind A.
     await sweepRegistrations("http://test.local");
-    expect((await regRow(a.registration.id)).reminded_at).toEqual(remindedAt);
+    expect(await submitRemindedAt(a.registration.id)).toEqual(remindedAt);
     expect(checkoutsFor(a.registration.id)).toBe(1); // still exactly one, no re-send
 
     // Past the deadline → A expired + B promoted with a fresh window.
@@ -2157,8 +2167,110 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
       ([opts]) => (opts as { to?: string })?.to === contactEmail,
     );
     expect(oursCalls).toHaveLength(1);
-    const row = await loadWithGroup(a.registration.id);
-    expect(row.reminded_at, "the winner's claim stuck").not.toBeNull();
+    // REVIEW FIX (money-path defect #7): the winner's claim/mark now lives on
+    // the ENTRY (registrations.submit_reminded_at, V383), not the group.
+    const [row] = await sql<{ submit_reminded_at: Date | null }[]>`
+      select submit_reminded_at from registrations where id = ${a.registration.id}`;
+    expect(row!.submit_reminded_at, "the winner's claim stuck").not.toBeNull();
+  });
+
+  // REVIEW FIX (money-path defect #7) — pass (1a) iterates PER ENTRY but used
+  // to claim and mark a GROUP column (registration_groups.reminded_at /
+  // reminder_claimed_at). A cart with two still-pending, never-promoted
+  // entries produces TWO rows in the "due" select sharing one group_id:
+  // whichever wins the group's claim silences the OTHER's own attempt (same
+  // filter, now non-null) for every future sweep — its fee is never
+  // presented to anyone, since each reminder mints a checkout for `[reg.id]`
+  // alone, not the whole cart. V383 moves the claim/mark onto the entry
+  // (mirroring pass (1b)'s promotion_reminded_at) so cart siblings can never
+  // silence each other.
+  it("REVIEW FIX: both never-promoted entries in the SAME cart are reminded independently, never silenced by a sibling's claim", async () => {
+    const { competition, division, settings } = await stripeRig({ feeCents: 500 });
+    const a = await seedRegistration(competition.id, division.id, settings, {
+      contactEmail: "cart-sibling-a@test.local",
+    });
+    const b = await seedSecondEntry(a.registration.group_id, division.id, 500, "Cart Sibling B", "pending");
+    await sql`update registration_groups set expires_at = now() + interval '10 hours'
+              where id = ${a.registration.group_id}`;
+
+    const checkoutsFor = (id: string) =>
+      stripeMock.checkoutCreate.mock.calls.filter(([args]) =>
+        (args as { metadata?: { registration_ids?: string } })
+          ?.metadata?.registration_ids
+          ?.split(",")
+          .includes(id),
+      ).length;
+    stripeMock.checkoutCreate.mockClear();
+
+    const res = await sweepRegistrations("https://test.local");
+    expect(res.reminded).toBeGreaterThanOrEqual(2);
+
+    // Reverting to a group-level claim/mark makes this fail: A wins the
+    // shared claim and B's own attempt finds it already non-null — B is
+    // silently excluded from every future sweep.
+    expect(checkoutsFor(a.registration.id), "A reminded").toBe(1);
+    expect(checkoutsFor(b.id), "B reminded independently, not silenced by A's claim").toBe(1);
+
+    const submitRemindedAt = async (id: string) => {
+      const [row] = await sql<{ submit_reminded_at: Date | null }[]>`
+        select submit_reminded_at from registrations where id = ${id}`;
+      return row!.submit_reminded_at;
+    };
+    expect(await submitRemindedAt(a.registration.id)).not.toBeNull();
+    expect(await submitRemindedAt(b.id)).not.toBeNull();
+
+    // A second sweep must not re-remind either.
+    await sweepRegistrations("https://test.local");
+    expect(checkoutsFor(a.registration.id)).toBe(1);
+    expect(checkoutsFor(b.id)).toBe(1);
+  });
+
+  // REVIEW FIX (money-path defect #9) — a losing claim used to mint a real
+  // Stripe checkout session BEFORE checking whether it actually won the
+  // claim, unconditionally stamping registration_groups.checkout_session_id
+  // with a session nobody would ever hold (the loser never sends, so nobody
+  // is ever given that URL). Repro mirrors the racing-sweeps test above:
+  // trigger a genuinely concurrent second sweepRegistrations() call from
+  // inside the FIRST invocation's own send call, at which point the first
+  // invocation's claim has ALREADY committed but its send has not — so the
+  // racing invocation's own "due" select still finds the row (submit_reminded_at
+  // is still null) and, pre-fix, still minted before its own claim attempt
+  // failed. Fixed by moving the mint to AFTER a successful claim, so a
+  // losing invocation never reaches createRegistrationCheckout at all.
+  it("REVIEW FIX: a losing claim never mints a checkout — the group's session pointer is never clobbered by a session nobody holds", async () => {
+    const { competition, division, settings } = await stripeRig();
+    const contactEmail = `mint-race-${randomUUID().slice(0, 8)}@test.local`;
+    const a = await seedRegistration(competition.id, division.id, settings, { contactEmail });
+    await sql`update registration_groups set expires_at = now() + interval '1 hour'
+              where id = ${a.registration.group_id}`;
+
+    let bPromise: Promise<unknown> | null = null;
+    emailMock.paymentReminder.mockImplementation(async (opts: unknown) => {
+      if ((opts as { to?: string } | undefined)?.to === contactEmail && !bPromise) {
+        bPromise = sweepRegistrations("http://test.local");
+        await bPromise;
+      }
+      return true;
+    });
+    stripeMock.checkoutCreate.mockClear();
+
+    await sweepRegistrations("http://test.local");
+    expect(bPromise, "the racing sweep must have been triggered").not.toBeNull();
+
+    const mintsForOurs = stripeMock.checkoutCreate.mock.calls.filter(([args]) =>
+      (args as { metadata?: { registration_ids?: string } })
+        ?.metadata?.registration_ids
+        ?.split(",")
+        .includes(a.registration.id),
+    ).length;
+    // Reverting the fix (mint before claim) makes this fail: the racing
+    // invocation still mints a real session before its own claim attempt
+    // loses — TWO mints for one reminder that was only ever sent once.
+    expect(mintsForOurs, "exactly one mint — the loser's claim failed before it ever minted").toBe(1);
+
+    const [groupRow] = await sql<{ checkout_session_id: string | null }[]>`
+      select checkout_session_id from registration_groups where id = ${a.registration.group_id}`;
+    expect(groupRow!.checkout_session_id, "the winner's own session is what got stamped").not.toBeNull();
   });
 
   // V381/RS007: the claim above is now a LEASE, not a permanent mark — see
@@ -2167,11 +2279,10 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
   // the claim committing and the send completing. Simulated here by writing
   // the lease column directly via SQL — exactly what a crashed sweep would
   // leave behind — rather than trying to kill a real process mid-test.
-  // Asserted via the email mock, not stripeMock.checkoutCreate: minting
-  // stays unconditional even when a claim is blocked (see the pass's own
-  // comment), so a blocked sweep still wastes a mint — checkoutCreate count
-  // is not a reliable send proxy here, same reason the racing-sweeps test
-  // above uses the email mock instead of it.
+  // Asserted via the email mock, not stripeMock.checkoutCreate: this pass's
+  // own claim/mark now lives on registrations.submit_reminded_at /
+  // submit_reminder_claimed_at (V383, money-path defect #7's fix), which
+  // this test also drives directly below.
   it("V381: a fresh lease blocks a concurrent claim; a stale one is retried and the reminder still goes out", async () => {
     const { competition, division, settings } = await stripeRig();
     const contactEmail = `lease-fresh-${randomUUID().slice(0, 8)}@test.local`;
@@ -2184,16 +2295,17 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
         ([opts]) => (opts as { to?: string })?.to === contactEmail,
       );
     const sentMark = async () => {
-      const [row] = await sql<{ reminded_at: Date | null }[]>`
-        select reminded_at from registration_groups where id = ${a.registration.group_id}`;
-      return row!.reminded_at;
+      const [row] = await sql<{ submit_reminded_at: Date | null }[]>`
+        select submit_reminded_at from registrations where id = ${a.registration.id}`;
+      return row!.submit_reminded_at;
     };
 
     // Simulate a crash: an earlier invocation claimed the lease and died
-    // before the send completed — reminded_at (sent) is still null. This is
-    // exactly the state 648c56503's permanent claim would have left forever.
-    await sql`update registration_groups set reminder_claimed_at = now()
-              where id = ${a.registration.group_id}`;
+    // before the send completed — submit_reminded_at (sent) is still null.
+    // This is exactly the state 648c56503's permanent claim would have left
+    // forever.
+    await sql`update registrations set submit_reminder_claimed_at = now()
+              where id = ${a.registration.id}`;
 
     // The lease is still fresh — this sweep must not double-claim or send.
     await sweepRegistrations("http://test.local");
@@ -2203,8 +2315,8 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
     // Age the lease out of its window (well beyond any reasonable lease
     // duration, so this does not depend on the exact minutes chosen) — a
     // later sweep must treat this row as claimable again and actually send.
-    await sql`update registration_groups set reminder_claimed_at = now() - interval '1 day'
-              where id = ${a.registration.group_id}`;
+    await sql`update registrations set submit_reminder_claimed_at = now() - interval '1 day'
+              where id = ${a.registration.id}`;
     const res = await sweepRegistrations("http://test.local");
     expect(res.reminded).toBeGreaterThanOrEqual(1);
     expect(await sentMark(), "the stale lease was retried and the reminder sent").not.toBeNull();
@@ -2233,10 +2345,13 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
       emailMock.paymentReminder.mock.calls.filter(
         ([opts]) => (opts as { to?: string })?.to === contactEmail,
       );
+    // REVIEW FIX (money-path defect #7): this pass's claim/mark columns now
+    // live on the entry (registrations.submit_reminded_at /
+    // submit_reminder_claimed_at, V383), not the group.
     const cols = async () => {
-      const [row] = await sql<{ reminded_at: Date | null; reminder_claimed_at: Date | null }[]>`
-        select reminded_at, reminder_claimed_at from registration_groups
-        where id = ${a.registration.group_id}`;
+      const [row] = await sql<{ submit_reminded_at: Date | null; submit_reminder_claimed_at: Date | null }[]>`
+        select submit_reminded_at, submit_reminder_claimed_at from registrations
+        where id = ${a.registration.id}`;
       return row!;
     };
 
@@ -2246,8 +2361,8 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
     });
     await sweepRegistrations("http://test.local");
     const afterFailure = await cols();
-    expect(afterFailure.reminded_at, "never delivered — the permanent mark must stay null").toBeNull();
-    expect(afterFailure.reminder_claimed_at, "the lease is released, not left stuck").toBeNull();
+    expect(afterFailure.submit_reminded_at, "never delivered — the permanent mark must stay null").toBeNull();
+    expect(afterFailure.submit_reminder_claimed_at, "the lease is released, not left stuck").toBeNull();
     expect(sentCallsForOurs()).toHaveLength(1);
 
     // Next sweep: let the send succeed and confirm the row is picked back up.
@@ -2258,7 +2373,7 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
     const res2 = await sweepRegistrations("http://test.local");
     expect(res2.reminded).toBeGreaterThanOrEqual(1);
     const afterRetry = await cols();
-    expect(afterRetry.reminded_at, "the retried send is now marked sent").not.toBeNull();
+    expect(afterRetry.submit_reminded_at, "the retried send is now marked sent").not.toBeNull();
     expect(sentCallsForOurs()).toHaveLength(2); // the failed attempt + the retry
   });
 
@@ -3928,15 +4043,14 @@ describe.skipIf(!HAS_DB)("RS007: sweep reminds a promoted entry off its OWN cloc
     const first = await sweepRegistrations("https://test.local");
     expect(first.reminded).toBeGreaterThanOrEqual(1);
 
-    const [cols] = await sql<{ promotion_reminded_at: Date | null }[]>`
-      select promotion_reminded_at from registrations where id = ${promoted!.id}`;
+    const [cols] = await sql<{ promotion_reminded_at: Date | null; submit_reminded_at: Date | null }[]>`
+      select promotion_reminded_at, submit_reminded_at from registrations where id = ${promoted!.id}`;
     expect(cols!.promotion_reminded_at, "the entry's OWN mark is set").not.toBeNull();
-    const groupRow = await loadWithGroup(promoted!.id);
-    // Reverting the `r.promoted_at is null` guard on the group-level "due"
-    // pass makes this fail: the group pass would ALSO catch this row (its
-    // shared expires_at is in-window and reminded_at is null) and stamp
-    // this too, on top of the entry's own pass below.
-    expect(groupRow.reminded_at, "the group-level mark stays untouched").toBeNull();
+    // Reverting the `r.promoted_at is null` guard on pass (1a)'s "due" query
+    // makes this fail: pass (1a) would ALSO catch this row (its shared
+    // expires_at is in-window and submit_reminded_at is null) and stamp this
+    // too, on top of pass (1b)'s own mark checked above.
+    expect(cols!.submit_reminded_at, "pass (1a)'s mark stays untouched").toBeNull();
     // Exactly one checkout link minted — two would mean two reminder emails
     // for the same entry from two passes.
     expect(checkoutsFor(promoted!.id)).toBe(1);
@@ -4101,7 +4215,7 @@ describe.skipIf(!HAS_DB)("RS007: sweep reminds a promoted entry off its OWN cloc
 });
 
 describe.skipIf(!HAS_DB)("RS007: a promoted entry's reminder does not block a still-pending sibling's own reminder", () => {
-  it("sibling's LATER group-level reminder still fires once its own deadline is due", async () => {
+  it("sibling's LATER reminder still fires once its own deadline is due — X's OWN mark never touches Y's", async () => {
     const { competition, division, settings } = await stripeRig({ feeCents: 500 });
     const waiting = await seedRegistration(competition.id, division.id, settings, { status: "waitlisted" });
     const promoted = await sql.begin((tx) =>
@@ -4115,27 +4229,33 @@ describe.skipIf(!HAS_DB)("RS007: a promoted entry's reminder does not block a st
     const sibling = await seedSecondEntry(promoted!.group_id, division.id, 500, "Sibling Pending", "pending");
     await sql`update registration_groups set expires_at = now() + interval '40 hours'
               where id = ${promoted!.group_id}`;
+    // REVIEW FIX (money-path defect #7): Y's own mark now lives on
+    // registrations.submit_reminded_at (V383), not the group.
+    const submitRemindedAt = async (id: string) => {
+      const [row] = await sql<{ submit_reminded_at: Date | null }[]>`
+        select submit_reminded_at from registrations where id = ${id}`;
+      return row!.submit_reminded_at;
+    };
 
     await sweepRegistrations("https://test.local"); // sweep #1 — only X is due
 
     const [xCols] = await sql<{ promotion_reminded_at: Date | null }[]>`
       select promotion_reminded_at from registrations where id = ${promoted!.id}`;
     expect(xCols!.promotion_reminded_at, "X's own reminder fired").not.toBeNull();
-    let groupRow = await loadWithGroup(sibling.id);
-    expect(groupRow.reminded_at, "Y is not due yet").toBeNull();
+    expect(await submitRemindedAt(sibling.id), "Y is not due yet").toBeNull();
 
     // Now Y's own (shared) deadline enters the window too.
     await sql`update registration_groups set expires_at = now() + interval '10 hours'
               where id = ${promoted!.group_id}`;
     await sweepRegistrations("https://test.local"); // sweep #2
 
-    groupRow = await loadWithGroup(sibling.id);
-    // Reverting the per-entry mark to reuse registration_groups.reminded_at
-    // for X's own reminder makes this fail: X's sweep-1 write would already
-    // have set g.reminded_at, and Y's own reminder would silently never
-    // fire — the exact "a group-level mark would silence a sibling's
-    // reminder" hazard this column exists to avoid.
-    expect(groupRow.reminded_at, "Y's own reminder fires, unblocked by X's").not.toBeNull();
+    // Reverting the per-entry mark to reuse a shared column for X's own
+    // reminder makes this fail: X's sweep-1 write would already have set
+    // that shared mark, and Y's own reminder would silently never fire —
+    // the exact "a shared mark would silence a sibling's reminder" hazard
+    // both this pass's own entry-scoping (V383) and pass (1b)'s
+    // (promotion_reminded_at, V379) exist to avoid.
+    expect(await submitRemindedAt(sibling.id), "Y's own reminder fires, unblocked by X's").not.toBeNull();
   });
 });
 
