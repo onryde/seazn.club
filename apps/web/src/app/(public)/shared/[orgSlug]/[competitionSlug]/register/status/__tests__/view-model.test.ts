@@ -4,6 +4,7 @@
 import { describe, expect, it } from "vitest";
 import {
   canCancelEntry,
+  canJoinEntry,
   claimHref,
   classifyStatusActionFailure,
   effectivePayDeadline,
@@ -116,6 +117,20 @@ describe("entryCountsTowardTotal — live money only (RS007 status-page review F
   it("excludes the three terminal statuses — none of withdrawCore, the rejection path, or the expiry sweep ever clears amount_cents, so it keeps naming a PRE-cancellation fee forever", () => {
     for (const status of ["withdrawn", "rejected", "expired"] as const) {
       expect(entryCountsTowardTotal(status)).toBe(false);
+    }
+  });
+});
+
+describe("canJoinEntry — gates the roster claim/invite links (RS007 status-page review FIX 2)", () => {
+  it("allows a join/claim for every live status — joinTeamEntry/previewJoinEntry only refuse the three terminal ones", () => {
+    for (const status of ["pending", "paid", "confirmed", "waitlisted"] as const) {
+      expect(canJoinEntry(status)).toBe(true);
+    }
+  });
+
+  it("refuses withdrawn/rejected/expired — joinTeamEntry and previewJoinEntry both 404/422 on these (registration-submit.ts)", () => {
+    for (const status of ["withdrawn", "rejected", "expired"] as const) {
+      expect(canJoinEntry(status)).toBe(false);
     }
   });
 });

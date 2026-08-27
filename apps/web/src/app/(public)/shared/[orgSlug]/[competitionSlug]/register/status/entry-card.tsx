@@ -19,6 +19,7 @@ import { PayButton } from "./pay-button";
 import { CancelEntry } from "./cancel-entry";
 import {
   canCancelEntry,
+  canJoinEntry,
   claimHref,
   entryCountsTowardTotal,
   resolveMoneyState,
@@ -206,7 +207,13 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
                 </li>
               ))}
             </ul>
-            {entry.join_code && (unclaimed.length > 0 || entry.allows_new_joiner) && (
+            {/* FIX 2 (RS007 status-page review): this used to gate on
+                join_code + roster shape alone, with NO status check —
+                withdrawCore never clears join_code, so a cancelled entry
+                kept offering claim/invite links that
+                joinTeamEntry/previewJoinEntry's own dead-entry gate 404s
+                every time (canJoinEntry, view-model.ts). */}
+            {canJoinEntry(entry.status) && entry.join_code && (unclaimed.length > 0 || entry.allows_new_joiner) && (
               <ul className="mt-2 space-y-1 border-t border-zinc-200 pt-2">
                 {unclaimed.map((p) => (
                   <li key={p.id}>

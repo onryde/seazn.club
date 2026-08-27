@@ -109,6 +109,31 @@ export function entryCountsTowardTotal(status: EntryStatus): boolean {
   return status === "pending" || status === "paid" || status === "confirmed";
 }
 
+/**
+ * Gates the roster claim/invite affordances (the per-slot "Send {name}
+ * their claim link" and the generic "Invite someone new to this entry").
+ * Mirrors joinTeamEntry's and previewJoinEntry's own dead-entry gate
+ * (registration-submit.ts: both refuse with
+ * `["withdrawn", "rejected", "expired"].includes(reg.status)` — a 404 from
+ * previewJoinEntry's read, a 422 from joinTeamEntry's write) — an entry in
+ * any of those three states makes every claim/invite link this page could
+ * construct for it a guaranteed dead link (RS007 status-page review FIX
+ * 2). `entry.join_code` being non-null already rules out a free_agent
+ * entry on its own (submitRegistrationGroup never mints one for a free
+ * agent — registration-submit.ts) — that half of the backend gate is
+ * covered by the existing `entry.join_code` check at the call site, not
+ * repeated here.
+ *
+ * Coincides with `canCancelEntry`'s own three-status gate today, but is
+ * its OWN rule sourced from a different backend contract
+ * (registration-submit.ts, not withdrawCore/registrations.ts) — kept as a
+ * separate function rather than a call-through so the two can diverge
+ * safely if either backend gate ever does.
+ */
+export function canJoinEntry(status: EntryStatus): boolean {
+  return status !== "withdrawn" && status !== "rejected" && status !== "expired";
+}
+
 export interface RosterCounts {
   claimed: number;
   total: number;

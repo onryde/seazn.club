@@ -370,5 +370,35 @@ describe("register status page (RS007 rebuild)", () => {
       expect(html).toContain("join_code=PAIR456&amp;player_id=p2");
       expect(html).not.toMatch(/href="\/shared\/riverside\/summer-smash\/register\/join\?join_code=PAIR456"/);
     });
+
+    // Bug (2026-08-27 review, FIX 2): the claim block gated on
+    // `entry.join_code && (unclaimed.length > 0 || entry.allows_new_joiner)`
+    // with NO status check, while withdrawCore never clears join_code — so
+    // a cancelled entry kept offering claim/invite links that
+    // joinTeamEntry/previewJoinEntry's own dead-entry gate 404s every time.
+    it.each(["withdrawn", "rejected", "expired"] as const)(
+      "hides both the per-slot claim link and the generic invite link on a %s entry, even though join_code + unclaimed players + allows_new_joiner are all still present",
+      async (status) => {
+        usecaseMock.groupById.mockResolvedValueOnce({
+          ...BASE_VIEW,
+          entries: [
+            {
+              ...BASE_ENTRY,
+              status,
+              join_code: "DEAD789",
+              allows_new_joiner: true,
+              players: [
+                { id: "p1", full_name: "Sam Player", consent_status: "granted" as const },
+                { id: "p2", full_name: "Jordan Player", consent_status: "pending" as const },
+              ],
+            },
+          ],
+        });
+        const html = await render({ rid: "g1", token: "tok" });
+        expect(html).not.toContain("join_code=DEAD789");
+        expect(html).not.toContain("Send Jordan Player their claim link");
+        expect(html).not.toContain("Invite someone new to this entry");
+      },
+    );
   });
 });
