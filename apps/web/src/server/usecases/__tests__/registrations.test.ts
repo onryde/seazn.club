@@ -148,6 +148,8 @@ import {
   resendRegistrationConfirmation,
   notifySubmitted,
   resolveRefundPolicy,
+  groupById,
+  type GroupStatusView,
 } from "../registrations";
 // RS005 F1: rendering the REAL production template off captured
 // `RegistrationEmail` args (see emailMock.registration above) — this file's
@@ -4627,5 +4629,61 @@ describe.skipIf(!HAS_DB)("RS005 F1: swallowed registration-mail failures are now
     expect(spy.mock.calls[0]?.[0]).toMatchObject({ err: boom, groupId: seeded.registration.group_id });
     expect(spy.mock.calls[0]?.[1]).toContain("submit confirmation");
     spy.mockRestore();
+  });
+});
+
+// Review fix (RS007): buildGroupStatusView (shared by groupByRef/groupById)
+// used to non-null-assert `ref_code: group.ref_code!` and GroupStatusView
+// declared it `string`. The column genuinely IS nullable at this point — a
+// submit whose ref-mint retries were exhausted still commits the cart with
+// ref_code: null (submitRegistrationGroup), and `groupById` exists
+// specifically to keep serving that exact cart by its always-present id (see
+// groupById's own doc comment, and the RS007 status page's, which say so in
+// those words). Every OTHER ref_code-shaped field in this file
+// (PublicStatusView.ref_code, the refCode/refStatusUrl pairs elsewhere in
+// registrations.ts) is already correctly typed/guarded nullable — this one
+// call site was the odd one out.
+//
+// The trap: TypeScript's `!` is erased at compile time and never throws, so
+// it changes NOTHING about runtime behaviour — `group.ref_code!` and
+// `group.ref_code` evaluate identically whether the column is null or not.
+// A test that asserts groupById "does not throw" or "returns null" on a
+// ref-mint-exhausted cart would pass identically before and after this fix,
+// which is exactly the accidentally-passing idiom to avoid here: it proves
+// the runtime value flows through (worth pinning as a regression guard, see
+// the first `it` below), but it can't be the FALSIFIABLE check, because
+// nothing here was ever going to throw. The actual defect is a TYPE lie —
+// GroupStatusView promised `string` for a value that can be `null` — so the
+// falsifiable check is a type-level pin (second `it` below), whose failure
+// surfaces as a `tsc --noEmit` error, not a vitest assertion. Confirmed
+// pre-fix: `const pin: GroupStatusView["ref_code"] = null;` fails to
+// compile with "Type 'null' is not assignable to type 'string'" until
+// GroupStatusView.ref_code widens to `string | null`.
+describe.skipIf(!HAS_DB)("groupById — ref_code is genuinely nullable (FIX 2 review)", () => {
+  it("a cart whose ref-mint was exhausted still resolves by id, and ref_code reads back null end to end", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    const settings = await putRegistrationSettings(owner, division.id, { ...SETTINGS_BASE, fee_cents: 0 });
+    const { registration, access_token } = await seedRegistration(competition.id, division.id, settings, {
+      refCode: null,
+      players: [{ name: "No Ref Player" }],
+    });
+    // The seed actually landed the case under test.
+    expect(registration.ref_code).toBeNull();
+
+    const view = await groupById(registration.group_id, access_token);
+    expect(view.ref_code).toBeNull();
+    expect(view.entries).toHaveLength(1);
+  });
+
+  it("GroupStatusView types ref_code as nullable — a type-level pin, not a runtime one (see describe comment)", () => {
+    // Only compiles if GroupStatusView['ref_code'] includes null. This is
+    // the real red for this fix: pre-fix it fails `tsc --noEmit` with
+    // "Type 'null' is not assignable to type 'string'"; vitest's own
+    // pass/fail count cannot see it either way, because `!` has no runtime
+    // effect to assert against (see the describe block's own comment).
+    const pin: GroupStatusView["ref_code"] = null;
+    expect(pin).toBeNull();
   });
 });

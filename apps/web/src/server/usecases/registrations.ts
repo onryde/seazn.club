@@ -3132,7 +3132,15 @@ export interface GroupEntryView {
  *  the registrant (or someone they chose to share the link with), not the
  *  general public `/r/[ref]` serves. */
 export interface GroupStatusView {
-  ref_code: string;
+  /** Review fix (RS007): genuinely nullable — unlike `PublicRefView`/
+   *  `PublicCartView` above (both resolved BY `ref_code`, so a match
+   *  guarantees non-null), this view is also reachable via `groupById`,
+   *  which is keyed on the group's always-present DB id specifically
+   *  BECAUSE a submit whose ref-mint retries were exhausted still commits
+   *  the cart with `ref_code: null` (see that function's own doc comment).
+   *  The two current consumers (`fillPaymentInstructions`'s `reference`
+   *  param, and a bare JSX `{view.ref_code}`) already tolerate null. */
+  ref_code: string | null;
   contact_name: string;
   currency: string;
   amount_cents: number;
@@ -3319,7 +3327,10 @@ async function buildGroupStatusView(
   }
 
   return {
-    ref_code: group.ref_code!,
+    // Review fix (RS007): was `group.ref_code!` — see GroupStatusView's own
+    // doc comment for why that was a lie (groupById reaches rows where this
+    // is genuinely null).
+    ref_code: group.ref_code,
     contact_name: group.contact_name,
     currency: group.currency,
     amount_cents: group.amount_cents,
