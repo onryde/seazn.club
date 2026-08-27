@@ -2475,17 +2475,27 @@ test("register stepper: ENTRIES/DETAILS/CONSENT/REVIEW hold at this width, no ho
       await anon.waitForTimeout(300);
 
       // Step 1 — WHO. Two open divisions, one `requires_dob`, means
-      // `whoFieldRequirements` demands a contact dob regardless of whether
-      // this contact plays ("I'm playing" is left off deliberately — see
-      // this test's header comment).
+      // "I'm playing" is left off deliberately (see this test's header
+      // comment), and `whoFieldRequirements` now gates the contact's OWN dob
+      // on that toggle: a secretary entering a team is never a player, so the
+      // server never asks for their dob (`PublicRegisterGroupRequest`'s
+      // superRefine requires `contact.dob` only when some entry is
+      // `registering_self`). Collecting it anyway was compulsory collection of
+      // personal data the system never uses, on the step immediately before the
+      // privacy-consent checkbox.
+      //
+      // This assertion is INVERTED rather than deleted: it used to demand the
+      // field be visible, and it is the probe that catches the requirement
+      // silently coming back. A `requires_dob` division still asks for every
+      // PLAYER's dob at step 3 — that is what this test exercises below, and it
+      // is unaffected.
       await expect(anon.locator("#reg-who-name")).toBeVisible({ timeout: 20_000 });
       await anon.locator("#reg-who-name").fill(`Mobile Stepper Contact ${TAG}`);
       await anon.locator("#reg-who-email").fill(`stepper-${TAG}-${projectTag()}@example.com`);
       await expect(
         anon.locator("#reg-who-dob"),
-        "an open requires_dob division must force the WHO step's own dob field",
-      ).toBeVisible();
-      await anon.locator("#reg-who-dob").fill("1990-05-15");
+        "a contact who is not playing must NOT be asked for their own date of birth",
+      ).toHaveCount(0);
       await anon.getByRole("button", { name: "Next", exact: true }).click();
 
       // Step 2 — ENTRIES.
