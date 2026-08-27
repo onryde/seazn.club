@@ -70,4 +70,18 @@ describe("ALLOWED", () => {
       expect(allowedSet.has(w), `expected ALLOWED to contain ${w}`).toBe(true);
     }
   });
+
+  it("does not mis-pluralize 4-letter roots whose real plural is '+es', not '+s' (code review, 2026-08-27)", () => {
+    // The 4-letter+s pluralization step blindly appended "s" to every
+    // 4-letter dictionary root, which is wrong for roots ending in
+    // s/x/z/ch/sh (their real plural adds "es", six letters, out of scope
+    // for this game) -- shipping nonsense guesses like "fishs" (should be
+    // "fishes"), "axess", "basss", "buzzs", "cashs", "dishs". Caught in
+    // code review before merge, fixed by excluding that subset from
+    // pluralization entirely rather than mis-pluralizing it.
+    const allowedSet = new Set(ALLOWED);
+    for (const bad of ["FISHS", "AXESS", "BASSS", "BUZZS", "CASHS", "DISHS", "WISHS", "MASSS"]) {
+      expect(allowedSet.has(bad), `expected ALLOWED NOT to contain nonsense word ${bad}`).toBe(false);
+    }
+  });
 });
