@@ -274,19 +274,30 @@ test("badminton pad shows the current game number, not always game 1", async ({
   }
 
   await page.goto(await fixturePath(page.request, fixtureId));
-  // S13/#422 W11 cutover — v1's literal "Game 2"/"1 game won" copy is gone;
-  // the v2 racquet skin (racquet-skin.tsx's buildHeader) carries the same
-  // fact as two numeric header fields instead. "Sets" already reading 1–0
-  // is the "not always game 1" proof (a game is won and counted), and
-  // "Points" having reset to 0–0 — rather than staying stuck on game 1's
-  // final 21–0 — is the proof the pad has actually moved on to game 2 and
-  // is not just re-displaying stale state.
-  const header = page.locator('[data-role="racquet-header"]');
-  await expect(header).toBeVisible({ timeout: 20_000 });
-  const setsField = header.getByText("Sets", { exact: true }).locator("..");
-  const pointsField = header.getByText("Points", { exact: true }).locator("..");
-  await expect(setsField).toContainText("1–0", { timeout: 20_000 });
-  await expect(pointsField).toContainText("0–0");
+  // R5 cutover — badminton renders `v3/skins/badminton.tsx` now, so the v2
+  // racquet header (`[data-role="racquet-header"]`, two numeric fields) is
+  // gone. The v3 scorebug carries the SAME two facts in two places instead:
+  // the strip's games tally, and the two halves' own point readouts. The
+  // test's claim is unchanged — "Games" already reading 1–0 is the "not
+  // always game 1" proof (a game is won and counted), and the halves having
+  // reset to 0 rather than staying on game 1's final 21–0 is the proof the
+  // pad has actually moved on and is not re-displaying stale state.
+  //
+  // The v3 scorebug states the CURRENT GAME NUMBER outright, which the v2
+  // header never did — so this test can finally assert its own headline
+  // directly instead of inferring it from two tallies. Both are kept: the
+  // context line is the direct statement, the tallies are what would catch it
+  // being cosmetic.
+  const scorebug = pad(page).locator('[data-role="v3-scorebug"]');
+  await expect(scorebug).toBeVisible({ timeout: 20_000 });
+  await expect(scorebug, "the pad must name the game it is actually on").toContainText("Game 2", {
+    timeout: 20_000,
+  });
+  await expect(scorebug.locator('[data-strip-item-id="games"]')).toContainText("1–0", { timeout: 20_000 });
+  const halfScore = (side: "home" | "away") =>
+    scorebug.locator(".grid > *").nth(side === "home" ? 0 : 1).locator(".app-display.font-bold");
+  await expect(halfScore("home")).toHaveText("0", { timeout: 20_000 });
+  await expect(halfScore("away")).toHaveText("0");
 });
 
 test("badminton: an entered game score lands in the header summary live (v3/09 §1a)", async ({
@@ -318,33 +329,38 @@ test("badminton: an entered game score lands in the header summary live (v3/09 �
   });
 
   await page.goto(await fixturePath(page.request, fixtureId));
-  // S13/#422 W11 cutover — v1's "Game totals"/"Record game" form (entrant-
-  // named field labels, a joined "1 — 0 · 21–15" summary string) is gone.
-  // The v2 racquet skin's equivalent is the unconditional "Set score" action
-  // (kernel.ts's `summaryAction`, `pad.badminton.action.setScore`), whose
-  // two number fields derive plain "Home"/"Away" captions from their own
-  // path (view-model.ts's `deriveFieldPathLabel` — the action ships no
-  // labelKey for either). Same idiom scorepad-skins.spec.ts's racquet-skin
-  // test already proved for volleyball's identical `summaryAction`. Under
-  // load the fill can land before React hydrates — re-fill until it sticks.
-  await page.getByRole("button", { name: "Set score", exact: true }).click({ timeout: 20_000 });
-  const confirm = page.locator('[data-role="confirm"]');
-  await expect(async () => {
-    await page.getByLabel("Home", { exact: true }).fill("21");
-    await page.getByLabel("Away", { exact: true }).fill("15");
-    await expect(confirm).toBeEnabled({ timeout: 1_000 });
-  }).toPass({ timeout: 20_000 });
-  await confirm.click();
+  // R5 cutover — the v2 racquet skin's generic "Set score" action form is
+  // gone; badminton's v3 skin gives the same event a dedicated TILE opening a
+  // GUIDED SHEET (two number steps, one per side, prefilled from the live
+  // score), which is one wizard with a single `[data-role="confirm"]` rather
+  // than a two-field form. The test's claim is unchanged: an entered game
+  // score lands in the header summary live AND reaches the real ledger.
+  const setScoreTile = pad(page).locator('[data-tile-id="setScore"]');
+  await expect(setScoreTile, "a fresh game offers the Set score tile").toBeVisible({ timeout: 20_000 });
+  await setScoreTile.click();
+  const sheet = pad(page).locator('[data-role="v3-sheet"]');
+  await expect(sheet).toBeVisible({ timeout: 20_000 });
+  // Each step is its own screen: answer, confirm, answer, confirm. Under load
+  // a same-tick fill can land before React hydrates, so each is retried until
+  // the value sticks — the same reason the pre-cutover version wrapped its own
+  // fills.
+  for (const value of ["21", "15"]) {
+    const field = sheet.getByRole("spinbutton");
+    await expect(async () => {
+      await field.fill(value);
+      await expect(field).toHaveValue(value, { timeout: 1_000 });
+    }).toPass({ timeout: 20_000 });
+    await sheet.getByRole("button", { name: "Confirm", exact: true }).click();
+  }
 
-  // "1 game won" lands in the header summary live (intake #28a) — the exact
-  // 21–15 score is never re-rendered by this skin once the game closes (only
-  // the running games-won tally persists on screen), so the entered score
-  // reaching the server is proven directly off the real ledger instead. The
-  // header can read "1–0" off an optimistic local update before the POST
-  // this action fires has actually been committed server-side, so the
-  // ledger read is polled too, not fetched once.
-  const header = page.locator('[data-role="racquet-header"]');
-  await expect(header.getByText("Sets", { exact: true }).locator("..")).toContainText("1–0", {
+  // "1 game won" lands in the scorebug's own strip live (intake #28a) — the
+  // exact 21–15 score is never re-rendered once the game closes (only the
+  // running games-won tally persists on screen), so the entered score reaching
+  // the server is proven directly off the real ledger instead. The strip can
+  // read "1–0" off an optimistic local update before the POST this action
+  // fires has actually been committed server-side, so the ledger read is
+  // polled too, not fetched once.
+  await expect(pad(page).locator('[data-strip-item-id="games"]')).toContainText("1–0", {
     timeout: 20_000,
   });
   const fetchEvents = () =>

@@ -282,12 +282,24 @@ describe("serving (D-17) — from the engine's ledger reader, never a placeholde
     // turn 0 (R4's D-21: turn 0 names the right player under every derivation
     // anyone has shipped, correct or not). Game 1 is banked by SUMMARY, which
     // is also the shape the gallery capture uses.
-    const homeWon = view({ events: stream(summary(21, 15), rally("H")) });
-    const awayWon = view({ events: stream(summary(15, 21), rally("A")) });
+    //
+    // ISOLATED ON PURPOSE — no rally after the summary. A rally would hand
+    // the serve to its own winner under Law 10.1, so `summary + rally(H)`
+    // names home whether or not Law 8.1 is implemented at all: the
+    // set-transition rule and the rally-winner rule would agree by
+    // construction and the test would prove only the second one. Asserting
+    // BEFORE any rally in the new game is the only shape that isolates it.
+    const homeWon = view({ events: stream(summary(21, 15)) });
+    const awayWon = view({ events: stream(summary(15, 21)) });
     expect(stripItem(homeWon, "server")?.value).toBe(NAMES.H1);
     expect(stripItem(awayWon, "server")?.value).toBe(NAMES.A1);
-    // ...and the game really did change, so this is not game 1 in disguise.
+    // Both directions, and a SECOND transition — a rule that simply answered
+    // "whoever won the first game" would pass the pair above.
+    const twoGames = view({ events: stream(summary(21, 15), summary(10, 21)) });
+    expect(stripItem(twoGames, "server")?.value).toBe(NAMES.A1);
+    // ...and the games really did change, so this is not game 1 in disguise.
     expect(buildScorebug(homeWon, t).context).toContain('"game":2');
+    expect(buildScorebug(twoGames, t).context).toContain('"game":3');
   });
 
   it("names a SIDE, never a person, for a doubles pair — BWF Law 10.5 reads the service COURT", () => {

@@ -235,8 +235,41 @@ async function mergeDivisionConfig(
   await setDivisionConfigSql(divisionId, { ...div.data.config, ...patch });
 }
 
-function tennisHalf(page: Page, side: "home" | "away") {
+/**
+ * One TAPPABLE v3 scoreboard half. Scoped to `button` deliberately: a half
+ * renders EITHER a `<button>` (tappable — live, at the action's band) OR a
+ * plain `<div>` at the same grid position, so a wildcard locator happily
+ * resolves the still-present pre-fold `<div>`, clicks it, and dispatches
+ * nothing. Narrowing to `button` restores Playwright's own auto-wait as the
+ * race fix (scorepad-v3-tennis.spec.ts's own `tennisHalf` carries the full
+ * reasoning).
+ *
+ * R5 — generalised out of `tennisHalf` below, unchanged in behaviour: tap
+ * model S is no longer tennis-only now that badminton has converted, and
+ * two copies of this locator would be two things to keep in step.
+ */
+function v3Half(page: Page, side: "home" | "away") {
   return pad(page).locator('[data-role="v3-scorebug"] .grid > button').nth(side === "home" ? 0 : 1);
+}
+
+/**
+ * One v3 half's SCORE readout specifically, as opposed to the half's whole
+ * text. `ScorebugHalf.big` carries no data attribute of its own, so it is
+ * addressed by the two classes only it wears — `app-display` plus `font-bold`
+ * (the optional `sub` figure beside it is `font-semibold`, scorebug.tsx).
+ * Needed rather than a `toContainText` on the half, because these scores are
+ * bare small integers and every fixture label in this harness ends in a
+ * numeric TAG: `toContainText("2")` would match the player's own name.
+ */
+function v3HalfScore(page: Page, side: "home" | "away") {
+  return pad(page)
+    .locator('[data-role="v3-scorebug"] .grid > *')
+    .nth(side === "home" ? 0 : 1)
+    .locator(".app-display.font-bold");
+}
+
+function tennisHalf(page: Page, side: "home" | "away") {
+  return v3Half(page, side);
 }
 
 /**
@@ -605,6 +638,28 @@ interface RacquetServingRecipe {
   sportKey: string;
   variantKey: string;
   entrantKind?: "individual" | "team" | "pair";
+  /**
+   * WHICH PAD LANE this sport renders on today. R5 converted BADMINTON ONLY;
+   * table tennis and volleyball still render `racquet-skin.tsx` (v2) and their
+   * own two entries below are byte-identical to the BEFORE run because this
+   * field DEFAULTS to "v2" — a converting wave adds `lane: "v3"` to its own
+   * sport and touches nothing else.
+   *
+   * The two lanes disagree about every locator in this recipe (v2 has a
+   * `[data-role="racquet-header"]` with three captioned fields; v3 has a
+   * scorebug with two halves and a strip) AND about the D-17 assertion, which
+   * is the whole point: on v2 the serving field is still the em-dash
+   * placeholder, and on v3 it must name the real server.
+   */
+  lane?: "v2" | "v3";
+  /**
+   * v3 lane only — the exact name the serving field must read after the three
+   * rallies below. REQUIRED for a converted sport (asserted at run time, not
+   * left optional-and-forgotten), because "not the placeholder" alone is a
+   * far weaker statement than "this person": a pad that named the WRONG
+   * player would satisfy the negative and is precisely R4's D-21.
+   */
+  expectedServer?: string;
   /** The kernel's FULLY QUALIFIED coarse event type, `${sportKey}.${preset.
    *  coarseEventType}` (setbased/kernel.ts:1560) — "badminton.game.summary",
    *  "tabletennis.game.summary", "volleyball.set.summary". The bare
@@ -671,19 +726,31 @@ async function captureRacquetServing(
   // point is what puts the capture on the far side of a rotation boundary
   // instead of on it. The same three taps leave badminton and volleyball
   // (serve follows the rally winner) equally past their own first handover.
+  const lane = recipe.lane ?? "v2";
   for (const side of ["home", "away", "home"] as const) {
     const before = await ledgerCount(page.request, fx.fixtureId);
-    // The same locator `scoreOne` uses for these three sports — SideTapAction's
-    // own Home/Away buttons (racquet-skin.tsx), which only exist at band 3.
-    await pad(page)
-      .getByRole("button", { name: side === "home" ? "Home" : "Away", exact: true })
-      .click();
+    // v2: SideTapAction's own Home/Away buttons (racquet-skin.tsx), which only
+    // exist at band 3. v3: tap model S — the scoreboard HALF is the rally
+    // button, and its accessible name is the player's own name plus hint text,
+    // so it can only be addressed positionally.
+    if (lane === "v3") {
+      await v3Half(page, side).click();
+    } else {
+      await pad(page)
+        .getByRole("button", { name: side === "home" ? "Home" : "Away", exact: true })
+        .click();
+    }
     await waitForLedgerGrowth(page.request, fx.fixtureId, before);
   }
 
-  const sets = racquetHeaderValue(page, "Sets");
-  const points = racquetHeaderValue(page, "Points");
-  const serving = racquetHeaderValue(page, "Serving");
+  // The same three facts, addressed per lane. v2 reads three captioned fields
+  // off `[data-role="racquet-header"]`; v3 reads the strip's games item, the
+  // two halves' own score readouts, and the strip's server item.
+  const [expectedHomePoints, expectedAwayPoints] = recipe.expectedPoints.split("\u2013");
+  const sets =
+    lane === "v3" ? pad(page).locator('[data-strip-item-id="games"]') : racquetHeaderValue(page, "Sets");
+  const serving =
+    lane === "v3" ? pad(page).locator('[data-strip-item-id="server"]') : racquetHeaderValue(page, "Serving");
   const probe: StateProbe = async () => {
     // PRECONDITION, not the defect — this pair does NOT flip at conversion.
     // It is what stops this capture degenerating into R4's D-21: a banked
@@ -692,22 +759,78 @@ async function captureRacquetServing(
     await expect(
       sets,
       `gallery(${recipe.slug}): 11-servingplaceholder needs a BANKED game/set (${recipe.expectedSets})`,
-    ).toHaveText(recipe.expectedSets, { timeout: 20_000 });
-    await expect(
-      points,
-      `gallery(${recipe.slug}): 11-servingplaceholder must be MID-game (${recipe.expectedPoints}), never turn 0`,
-    ).toHaveText(recipe.expectedPoints, { timeout: 20_000 });
-    // ===== THE DEFECT (D-17). THIS IS THE ASSERTION THE CONVERSION FLIPS. =====
-    // Today the header prints an em dash where the server belongs. When R5
-    // wires `setBasedServeContext` into the pad, invert THIS line — assert the
-    // field is NOT the placeholder and names the serving side/player — and
-    // leave everything else in this probe exactly as it is. Do not delete it:
-    // a deleted probe stops the capture failing and does nothing to stop the
-    // placeholder coming back.
-    await expect(
-      serving,
-      `gallery(${recipe.slug}): D-17 — the serving field must still be the placeholder here`,
-    ).toHaveText(RACQUET_SERVING_PLACEHOLDER, { timeout: 20_000 });
+    ).toContainText(recipe.expectedSets, { timeout: 20_000 });
+    if (lane === "v3") {
+      await expect(
+        v3HalfScore(page, "home"),
+        `gallery(${recipe.slug}): 11-servingplaceholder must be MID-game, never turn 0`,
+      ).toHaveText(expectedHomePoints!, { timeout: 20_000 });
+      await expect(v3HalfScore(page, "away")).toHaveText(expectedAwayPoints!, { timeout: 20_000 });
+      // ===== D-11, ASSERTED RATHER THAN ASSUMED. The v2 lane stated the score
+      // THREE times above the fold — the fixture header, the LCD panel, and
+      // the SETS/POINTS board — and the single v3 scorebug retires two of
+      // them. Left unasserted, that retirement would be something a reviewer
+      // has to notice in a screenshot; here it fails the run instead.
+      //
+      // Structural first: the v2 board is gone outright, and exactly one
+      // scorebug replaces it.
+      const scorebug = pad(page).locator('[data-role="v3-scorebug"]');
+      await expect(
+        pad(page).locator('[data-role="racquet-header"]'),
+        `gallery(${recipe.slug}): D-11 — the v2 SETS/POINTS board must be gone, not rendered beside the scorebug`,
+      ).toHaveCount(0, { timeout: 20_000 });
+      await expect(
+        scorebug,
+        `gallery(${recipe.slug}): D-11 — exactly one scorebug states the score`,
+      ).toHaveCount(1, { timeout: 20_000 });
+      // Then textually, which is the half a structural check cannot see: each
+      // side's current points appear ONCE inside it. The strip beside them
+      // carries GAMES (a different fact, `1\u20130`), never a second copy of
+      // the points — so a skin that put the points back on the strip reds here.
+      for (const value of [expectedHomePoints!, expectedAwayPoints!]) {
+        await expect(
+          scorebug.getByText(value, { exact: true }),
+          `gallery(${recipe.slug}): D-11 — "${value}" must be stated once above the fold, not twice`,
+        ).toHaveCount(1, { timeout: 20_000 });
+      }
+    } else {
+      await expect(
+        racquetHeaderValue(page, "Points"),
+        `gallery(${recipe.slug}): 11-servingplaceholder must be MID-game (${recipe.expectedPoints}), never turn 0`,
+      ).toHaveText(recipe.expectedPoints, { timeout: 20_000 });
+    }
+    // ===== D-17. THIS IS THE ASSERTION A CONVERSION INVERTS — never deletes.
+    //
+    // v2 (table tennis, volleyball — still unconverted): the header prints an
+    // em dash where the server belongs. That is the defect, photographed. When
+    // those two waves land, add `lane: "v3"` + `expectedServer` to their own
+    // recipes and this branch stops applying to them, exactly as it just
+    // stopped applying to badminton. Do not delete the branch: a deleted probe
+    // stops the capture failing and does nothing to stop the placeholder
+    // coming back on the sport that still has it.
+    //
+    // v3 (badminton, R5): INVERTED. The field must not be the placeholder AND
+    // must name the real server. Both halves matter — "not an em dash" alone
+    // is satisfied by a confidently WRONG name, which is R4's D-21 exactly.
+    if (lane === "v3") {
+      const expectedServer = recipe.expectedServer;
+      if (expectedServer === undefined) {
+        throw new Error(`gallery(${recipe.slug}): a v3-lane serving recipe must declare expectedServer`);
+      }
+      await expect(
+        serving,
+        `gallery(${recipe.slug}): D-17 — the serving field must no longer be the placeholder`,
+      ).not.toHaveText(RACQUET_SERVING_PLACEHOLDER, { timeout: 20_000 });
+      await expect(
+        serving,
+        `gallery(${recipe.slug}): D-17 — and it must name the real server, not merely something`,
+      ).toContainText(expectedServer, { timeout: 20_000 });
+    } else {
+      await expect(
+        serving,
+        `gallery(${recipe.slug}): D-17 — the serving field must still be the placeholder here`,
+      ).toHaveText(RACQUET_SERVING_PLACEHOLDER, { timeout: 20_000 });
+    }
   };
 
   await captureState(page, dir, "11-servingplaceholder", recipe.slug, measurements, probe);
@@ -759,24 +882,37 @@ async function captureRacquetBandLimited(
       timeout: 20_000,
     });
 
-    const rallyGroup = pad(page).getByRole("heading", { name: "Rally", exact: true });
-    const setScoreGroup = pad(page).getByRole("heading", { name: "Set score", exact: true });
+    // R5 — RE-POINTED AT THE v3 DOM, and INVERTED. Badminton renders
+    // `v3/skins/badminton.tsx` now, so every locator below moved: the v2 lane's
+    // panel HEADINGS became tiles carrying `data-tile-id`, and the amber
+    // `renderLockedTile` path (skins/shared.tsx) does not exist in v3 at all —
+    // `filterTilesByBand` DROPS an above-band tile rather than locking it, so
+    // the skin itself has to author the notice. What each assertion means is
+    // unchanged; only where it looks, and which way round it reads.
+    //
+    // The rally affordance, band-limited: the skin's own disabled tile
+    // (`RALLY_LOCKED_TILE_ID`). At band 3 this tile does not exist and the two
+    // scoreboard halves are real buttons instead.
+    const rallyGroup = pad(page).locator('[data-tile-id="rallyLocked"]');
+    const setScoreGroup = pad(page).locator('[data-tile-id="setScore"]');
     // The FidelitySwitcher's band-3 chip (fidelity-switcher.tsx's own
     // `data-band`). Disabled == this org genuinely does not hold
     // `scoring.rally_by_rally`.
     const bandThreeChip = pad(page).locator('[data-band="3"]');
-    // `scorepad.locked.reason` — the one string the pad shows when an action
-    // is present but paid-gated (`renderLockedTile`, skins/shared.tsx).
-    const lockedReason = pad(page).getByText("Upgrade your plan to unlock this action.");
+    // The skin's own worded reason, on the context strip
+    // (`ContextSlot.message`, rendered verbatim by context-strip.tsx with a
+    // stable `data-role`). This REPLACES the v2 lane's `scorepad.locked.reason`
+    // string, which was never reachable for a band gap in the first place.
+    const lockedReason = pad(page).locator('[data-role="context-slot-message"][data-slot-id="recording"]');
     const probe: StateProbe = async () => {
       // PRECONDITIONS, not the defect. Neither flips.
       //  (a) The band-0 summary action survives, so this is a real, rendered,
       //      LIVE pad and not a blank or failed page.
-      //  (b) The band-3 chip is locked — which is what makes the missing rally
-      //      group below attributable to the ENTITLEMENT. Without it this
-      //      probe would pass just as happily against a pad that failed to
-      //      render its rally group for some entirely unrelated reason, and
-      //      would photograph that instead while claiming D-7.
+      //  (b) The band-3 chip is locked — which is what makes the rally
+      //      affordance below attributable to the ENTITLEMENT. Without it this
+      //      probe would pass just as happily against a pad that rendered its
+      //      rally control for some entirely unrelated reason, and would
+      //      photograph that instead while claiming D-7.
       await expect(
         setScoreGroup,
         "gallery(badminton): 12-bandlimited must still be a live pad — the band-0 summary survives",
@@ -785,27 +921,36 @@ async function captureRacquetBandLimited(
         bandThreeChip,
         "gallery(badminton): 12-bandlimited needs the org to actually LACK scoring.rally_by_rally",
       ).toBeDisabled({ timeout: 20_000 });
-      // ===== THE DEFECT (D-7). THESE TWO ARE THE ASSERTIONS THAT FLIP. =====
-      // Rally is band 3 and the org holds no `scoring.rally_by_rally`, so
-      // `resolveAction` returns null and the whole group vanishes — and with
-      // nothing rendered there is nothing to carry `scorepad.locked.reason`
-      // either. That silence is the defect. What the scorer DOES get, and it
-      // is not enough: a padlock glyph on the fidelity switcher's own band-3
-      // chip, whose explanation ("Requires a plan upgrade.",
-      // `scorepad.fidelity.locked`) is a `title` attribute — hover-only, so
-      // unreachable on the phone this pad is designed for — sitting on a
-      // DIFFERENT control from the one that vanished. When R5 fixes it,
-      // invert BOTH lines below — the Rally group visible, the locked reason
-      // on screen — and keep them; do not delete either, or a regression back
-      // to silence sails straight through this gate.
+      // ===== D-7, INVERTED (R5). The BEFORE run pinned this screen as
+      // SILENCE: `toHaveCount(0)` on both — no rally affordance anywhere, and
+      // no sentence explaining why, with the only signal a hover-only `title`
+      // on a DIFFERENT control (the fidelity chip's
+      // `scorepad.fidelity.locked`, unreachable on the phone this pad is built
+      // for). Both lines are inverted here rather than deleted: a deleted
+      // probe stops the capture failing and does nothing to stop the silence
+      // coming back.
+      //
+      // The rally tile is present AND still genuinely untappable — asserting
+      // presence alone would pass against a pad that had simply been handed
+      // the entitlement, which is not the fix.
       await expect(
         rallyGroup,
-        "gallery(badminton): D-7 — below band 3 the rally group must still be ABSENT, not locked",
-      ).toHaveCount(0, { timeout: 20_000 });
+        "gallery(badminton): D-7 — below band 3 the rally affordance must be VISIBLE, not silently absent",
+      ).toHaveCount(1, { timeout: 20_000 });
+      await expect(
+        rallyGroup,
+        "gallery(badminton): D-7 — visible, but never tappable: the org still lacks the entitlement",
+      ).toBeDisabled({ timeout: 20_000 });
       await expect(
         lockedReason,
-        "gallery(badminton): D-7 — and no VISIBLE sentence must still explain why",
-      ).toHaveCount(0, { timeout: 20_000 });
+        "gallery(badminton): D-7 — and a VISIBLE sentence must now explain why",
+      ).toBeVisible({ timeout: 20_000 });
+      // Worded in badminton's own vocabulary and naming a real plan — not a
+      // padlock glyph, and not a band number a scorer has no use for.
+      await expect(
+        lockedReason,
+        "gallery(badminton): D-7 — the sentence must name the plan that unlocks it",
+      ).toContainText("Pro", { timeout: 20_000 });
     };
 
     await captureState(page, dir, "12-bandlimited", "badminton", measurements, probe);
@@ -1931,26 +2076,29 @@ const SPORTS: GallerySport[] = [
       home: [{ fullName: `Gallery Badminton Home ${tag}` }],
       away: [{ fullName: `Gallery Badminton Away ${tag}` }],
     }),
-    // badminton/tabletennis/volleyball share ONE component, racquet-skin.tsx
-    // — the plain rally tap verified for volleyball above is the same
-    // control here.
+    // R5 — BADMINTON HAS CONVERTED. It no longer shares racquet-skin.tsx with
+    // volleyball and table tennis (which still do, and whose two entries above
+    // and below are unchanged): tap model S makes the scoreboard HALF the
+    // rally button, and its accessible name is the player's own name plus hint
+    // text, so it can only be addressed positionally. The old
+    // `getByRole("button", {name: "Home"})` does not merely mis-target here —
+    // it throws before a single screenshot is written, which is how R4 nearly
+    // asked for a sign-off on a wave with zero pictures.
     scoreOne: async (page) => {
-      await pad(page).getByRole("button", { name: "Home", exact: true }).click();
+      await v3Half(page, "home").click();
     },
-    // Verified live: scoring.spec.ts's badminton flow uses this same
-    // "Set score" summary panel (shared racquet-skin.tsx), wrapped in a
-    // retry because a same-tick fill can land before React hydrates —
-    // mirrored here even though this harness does not confirm the panel.
+    // The v3 lane's genuine multi-field entry surface, opened and left
+    // unconfirmed. NOT the Set score sheet: `scoreOne` above has just put a
+    // rally into game 1, and D-16's fix withholds the Set score tile for a
+    // game already being scored rally-by-rally — so reaching for it here would
+    // find nothing. The sanction sheet is the honest picture of what a badminton
+    // scorer can still open at this moment.
     openDock: async (page) => {
-      const setScore = pad(page).getByRole("button", { name: "Set score", exact: true });
-      if (!(await setScore.isVisible({ timeout: 3_000 }).catch(() => false))) return false;
-      await setScore.click();
-      const homeField = pad(page).getByLabel("Home", { exact: true });
-      if (!(await homeField.isVisible({ timeout: 3_000 }).catch(() => false))) return false;
-      await expect(async () => {
-        await homeField.fill("21");
-        await expect(homeField).toHaveValue("21");
-      }).toPass({ timeout: 10_000 });
+      const sanction = pad(page).locator('[data-tile-id="sanction-home"]');
+      if (!(await sanction.isVisible({ timeout: 3_000 }).catch(() => false))) return false;
+      await sanction.click();
+      const sheet = pad(page).locator('[data-role="v3-sheet"]');
+      if (!(await sheet.isVisible({ timeout: 3_000 }).catch(() => false))) return false;
       return true;
     },
     // R5 — D-17 and D-7. Badminton is the sport BAD-03 names, so it carries
@@ -1964,11 +2112,17 @@ const SPORTS: GallerySport[] = [
         sportKey: "badminton",
         variantKey: "bwf",
         entrantKind: "individual",
+        lane: "v3",
         coarseType: "badminton.game.summary",
         // BWF game 1 is to 21 (setbased/badminton.ts).
         summary: { home: 21, away: 15 },
         expectedSets: racquetScoreline(1, 0),
         expectedPoints: racquetScoreline(2, 1),
+        // Three rallies, home/away/home, and BWF Law 10.1 gives the serve to
+        // the rally winner — so the third rally's winner is due to serve next,
+        // and that is HOME. Named in full, not merely "not the placeholder":
+        // see `expectedServer`'s own doc.
+        expectedServer: `Gallery badminton SV Home ${tag}sv`,
       }),
       await captureRacquetBandLimited(page, dir, tag, measurements),
     ],
