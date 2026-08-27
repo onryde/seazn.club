@@ -13,6 +13,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getGame } from "@/games/registry";
+import { siteOrigin } from "@/lib/site-origin";
 import { GamePlayer } from "./game-player";
 
 type Params = { slug: string };
@@ -52,8 +53,12 @@ export default async function GamePage({ params }: { params: Promise<Params> }) 
           {game.title}
         </h1>
         <span className="text-sm text-slate-300">|</span>
+        {/* Absolute, not "/" — on the games.* subdomain the proxy rewrites "/"
+            straight back to "/games" (see gamesHostRewrite in proxy.ts), so a
+            relative href here would be a dead loop back into this game
+            instead of reaching the marketing home (found in review 2026-08-27). */}
         <Link
-          href="/"
+          href={`${siteOrigin()}/`}
           className="text-xs text-slate-400 hover:text-[color:var(--cq-accent,oklch(55.8%_0.288_302.321))]"
         >
           Powered by <span className="font-semibold">Seazn Club</span>

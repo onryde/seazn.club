@@ -12,6 +12,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { MarketingShell } from "@/components/marketing/marketing-shell";
 import { GAMES } from "@/games/registry";
+import { siteOrigin } from "@/lib/site-origin";
 
 export const metadata: Metadata = {
   title: "Games — free browser games | Seazn Club",
@@ -31,8 +32,12 @@ export default function GamesPage() {
         <p className="mt-3 max-w-2xl text-lg text-slate-600">
           Free games in your browser — pick one and play. No install, no sign-up.
         </p>
+        {/* Absolute, not "/" — on the games.* subdomain the proxy rewrites "/"
+            straight back to "/games" (see gamesHostRewrite in proxy.ts), so a
+            relative href here would be a dead loop back to this same page
+            instead of reaching the marketing home (found in review 2026-08-27). */}
         <Link
-          href="/"
+          href={`${siteOrigin()}/`}
           className="mt-1 inline-block text-xs text-slate-400 hover:text-[color:var(--cq-accent,oklch(55.8%_0.288_302.321))]"
         >
           Powered by <span className="font-semibold">Seazn Club</span>

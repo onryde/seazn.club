@@ -31,7 +31,16 @@ describe("GamesPage — back-button opt-out + Powered by attribution", () => {
 
   it("shows a Powered by Seazn Club link back to home", () => {
     const html = renderToStaticMarkup(<GamesPage />);
-    expect(html).toMatch(/href="\/"[^>]*>\s*Powered by/);
+    expect(html).toMatch(/href="https?:\/\/[^"]+\/"[^>]*>\s*Powered by/);
     expect(html).toContain("Seazn Club");
+  });
+
+  // Review 2026-08-27: on the games.* subdomain, proxy.ts's gamesHostRewrite
+  // sends a relative href="/" straight back to /games — a dead loop, never
+  // reaching the marketing home. The link must be absolute (siteOrigin()),
+  // never a bare "/", so it actually escapes the subdomain.
+  it("the Powered by link is absolute, never a bare relative \"/\" (games.* subdomain dead-loop)", () => {
+    const html = renderToStaticMarkup(<GamesPage />);
+    expect(html).not.toMatch(/href="\/"[^>]*>\s*Powered by/);
   });
 });
