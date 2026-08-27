@@ -2342,7 +2342,7 @@ fix. Statuses below are as of the moment of writing; update them in place.
 | 8 | HIGH | `register/status/view-model.ts:59` | OPEN |
 | 9 | HIGH | `registrations.ts:3740` | OPEN — money lane |
 | 10 | HIGH | `register/status/view-model.ts:62` | OPEN |
-| 11 | HIGH | `register/status/page.tsx:95` | IN FLIGHT — status lane |
+| 11 | HIGH | `register/status/page.tsx:95` | **FIXED** `54b88fb9f` |
 | 12 | MEDIUM | `registrations.ts:929` | OPEN — money lane |
 | 13 | MEDIUM | `register/status/entry-card.tsx:98` | OPEN |
 | 14 | MEDIUM | `register-stepper.tsx:209` | **FIXED** `d33ecea48` |
@@ -2545,3 +2545,31 @@ contaminated one `tsc` run with an error on a file this lane was told not to
 touch. It cleared when they committed. Two lanes in one worktree share the
 index and the type graph — this is the shared-worktree contamination trap, and
 it presented here as someone else's compile error inside this lane's gate.
+
+### Lane closed 2026-08-27 — status-page money and claim links (closes #11)
+
+Counts re-run by the main thread: **152/152, 57 suites**, every path inside the
+rs007 worktree.
+
+- **#11 subtotal — CONFIRMED, not refuted.** The agent traced all three write
+  paths that end an entry — `withdrawCore` (`registrations.ts~3546`), the
+  rejection path (`registration-approval.ts:210`) and the expiry sweep
+  (`registrations.ts:3939`) — and **none of them clears `amount_cents`**. So a
+  cancelled entry's pre-cancellation fee stayed in the total permanently. Fixed
+  with `entryCountsTowardTotal` (pending/paid/confirmed only), shared by the
+  Subtotal filter and each card's new per-entry fee line, so the two cannot
+  drift the way the collapse rule did.
+- Dead claim links, the fail-closed refund reason (new key
+  `register.status.cancel.refund.noDeadline`, all 4 dicts + `i18n:gen-keys`),
+  the join form losing a valid "someone else" pick across a refresh, and the
+  `flex-1` → `grow` cascade fix.
+- Per-fix red→green, each stated separately rather than as one final green:
+  13→69/69, 5→74/74, 1→76/76, 5+1→67/67, 1→77/77.
+- **The layout fix was mutation-checked by hand** — removing `flex-wrap` still
+  reds the guard — and the mutation was restored from a `cp` backup, never
+  `git checkout`, which in a shared worktree would have taken a sibling lane's
+  uncommitted work with it.
+- Both lanes ran concurrently in one worktree for ~29 minutes and neither
+  cross-contaminated: every stage used explicit file pathspecs, verified clean
+  after each commit. That is the mitigation that makes two lanes in one
+  worktree survivable; ownership lists alone would not have.
