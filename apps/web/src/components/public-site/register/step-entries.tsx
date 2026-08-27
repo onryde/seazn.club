@@ -34,7 +34,7 @@ export function StepEntries({
   return (
     <div className="grid gap-4 lg:grid-cols-[1fr_320px] lg:items-start">
       <div className="rounded-xl border border-zinc-200/80 bg-surface p-4 shadow-sm sm:p-6">
-        <h2 className="font-display text-xl font-semibold uppercase tracking-wide text-ink">
+        <h2 tabIndex={-1} className="font-display text-xl font-semibold uppercase tracking-wide text-ink">
           {t("register.entries.heading")}
         </h2>
         <p className="mt-1 text-sm text-ink-muted">{t("register.entries.subtitle")}</p>

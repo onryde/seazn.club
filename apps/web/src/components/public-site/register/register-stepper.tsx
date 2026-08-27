@@ -14,7 +14,7 @@
 //
 // `?join=` deep-link (RS007): accepted as a prop and deliberately unused —
 // the seam is "render nothing, don't crash on the param" (RS006 prompt).
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useT } from "@/components/i18n/dict-provider";
 import { apiV1 } from "@/lib/client-v1";
 import { formatMinor, type Currency } from "@/lib/currency";
@@ -36,7 +36,7 @@ import { StepEntries } from "./step-entries";
 import { StepNav } from "./step-nav";
 import { StepReview } from "./step-review";
 import { StepWho } from "./step-who";
-import { buildStepOrder, nextStepIndex, prevStepIndex } from "./steps";
+import { buildStepOrder, nextStepIndex, prevStepIndex, stepFocusTransition } from "./steps";
 import { BTN_GHOST, BTN_PRIMARY } from "./styles";
 import {
   EMPTY_CART,
@@ -138,6 +138,14 @@ export function RegisterStepper({
   // silently resume a stale "submitting" state).
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  // Review finding #2 (MEDIUM) — focus management across step transitions.
+  // `containerRef` scopes the DOM query the focus effect below runs
+  // (mirrors modal.tsx's own `dialogRef`/`querySelectorAll` pattern);
+  // `stepFocusArmed` is that effect's OWN memory of whether it has already
+  // seen its first post-hydration commit — see stepFocusTransition's own
+  // doc comment (steps.ts) for exactly what it decides and why.
+  const containerRef = useRef<HTMLDivElement>(null);
+  const stepFocusArmed = useRef(false);
 
   // Hydrate from sessionStorage once, client-only. The initial useState
   // values above are deterministic (same on server and first client
@@ -224,6 +232,25 @@ export function RegisterStepper({
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setCart((prev) => clearSelfLinkWhenNotPlaying(autoLinkObviousSelf(prev, imPlaying), imPlaying));
   }, [hydrated, imPlaying, cart.entries.length]);
+
+  // Review finding #2 (MEDIUM) — move focus to the new step's own heading
+  // on a REAL step transition (goNext/goBack), never on the initial mount
+  // (including a restored snapshot that lands straight on a later step —
+  // stepFocusTransition's own doc comment, steps.ts, has the full
+  // reasoning). Each Step* component's own `<h2>` already carries the
+  // right copy for its step; `tabIndex={-1}` there is what makes it a
+  // valid programmatic focus target without joining the natural Tab order.
+  // DOM-only side effect, no jsdom in this workspace — pinned at the
+  // source level only (register-stepper-interaction.test.tsx), same split
+  // modal.tsx/modal.test.ts already established for the modal's own focus
+  // trap.
+  useEffect(() => {
+    const decision = stepFocusTransition(hydrated, stepFocusArmed.current);
+    stepFocusArmed.current = decision.armed;
+    if (decision.focus) {
+      containerRef.current?.querySelector<HTMLHeadingElement>("h2")?.focus();
+    }
+  }, [hydrated, stepIndex]);
 
   function dispatchCart(action: CartAction) {
     setCart((prev) => cartReducer(prev, action));
@@ -318,7 +345,7 @@ export function RegisterStepper({
   }
 
   return (
-    <div className="space-y-4" data-join-code={joinCode ?? undefined}>
+    <div ref={containerRef} className="space-y-4" data-join-code={joinCode ?? undefined}>
       <StepNav order={stepOrder} currentIndex={clampedIndex} />
 
       {currentStep === "who" && (

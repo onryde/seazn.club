@@ -33,7 +33,7 @@ export function StepDetails({
   return (
     <div className="space-y-4">
       <div className="rounded-xl border border-zinc-200/80 bg-surface p-4 shadow-sm sm:p-6">
-        <h2 className="font-display text-xl font-semibold uppercase tracking-wide text-ink">
+        <h2 tabIndex={-1} className="font-display text-xl font-semibold uppercase tracking-wide text-ink">
           {t("register.details.heading")}
         </h2>
         <p className="mt-1 text-sm text-ink-muted">{t("register.details.subtitle")}</p>

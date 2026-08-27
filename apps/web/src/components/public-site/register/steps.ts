@@ -50,3 +50,34 @@ export function nextStepIndex(current: number, order: readonly unknown[]): numbe
 export function prevStepIndex(current: number): number {
   return Math.max(current - 1, 0);
 }
+
+/**
+ * Review finding #2 (MEDIUM) — pure decision for the step-change
+ * focus-management effect in register-stepper.tsx. goNext/goBack used to
+ * only update stepIndex; nothing moved focus, so a screen-reader/keyboard
+ * user got no announcement when Back/Next replaced the whole step's
+ * content. The fix moves focus to the new step's own heading — but never
+ * on the initial mount (RS006 dispatch: "do NOT steal focus on the initial
+ * mount — only on an actual transition"), which includes a restored
+ * sessionStorage snapshot that lands straight on a later step.
+ *
+ * No DOM reads or writes here — the effect that owns the ref/`.focus()`
+ * call is pinned at the SOURCE level only in
+ * register-stepper-interaction.test.tsx (this workspace has no jsdom; same
+ * split modal.tsx/modal.test.ts already established for its own focus
+ * trap: `nextTrapFocus` there, this function here).
+ *
+ * `armed` is the effect's OWN ref value from its previous run (starts
+ * `false`). The FIRST run where `hydrated` is true — whether that's a
+ * fresh visit (stepIndex stays 0) or a restored snapshot that jumps
+ * straight to a later step — must not steal focus; it only arms. Every run
+ * after that reflects a REAL stepIndex change: once `hydrated` is true it
+ * never flips again, so stepIndex is the only remaining thing that can
+ * rerun the effect, and nothing but goNext/goBack ever calls setStepIndex
+ * post-hydration.
+ */
+export function stepFocusTransition(hydrated: boolean, armed: boolean): { focus: boolean; armed: boolean } {
+  if (!hydrated) return { focus: false, armed };
+  if (!armed) return { focus: false, armed: true };
+  return { focus: true, armed: true };
+}

@@ -591,6 +591,55 @@ describe("the nav row never sits below the cookie banner", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Review finding #2 (MEDIUM) — focus management across step transitions.
+// stepFocusTransition (steps.ts) carries the actual DECISION logic and gets
+// real behavioural unit tests in steps.test.ts, no DOM required. This
+// workspace has no jsdom, so the DOM-wiring half here (the ref, the effect,
+// the `.focus()` call) is pinned at the SOURCE level only — same split
+// modal.tsx/modal.test.ts already established for the modal focus trap.
+// These are source-level pins, not proof of runtime focus behaviour.
+// ---------------------------------------------------------------------------
+
+describe("review finding #2 — step transitions move focus to the new step's heading (source-level pins — no jsdom, see modal.test.ts's own header for the same split)", () => {
+  const stepperSrc = readFileSync(join(__dirname, "..", "register-stepper.tsx"), "utf8");
+
+  it("the root element carries the ref the focus effect queries", () => {
+    expect(stepperSrc).toMatch(/ref=\{containerRef\}/);
+  });
+
+  it("the focus effect is keyed on stepIndex (and hydrated) and calls stepFocusTransition — the pure, unit-tested decision — rather than separate inline logic", () => {
+    expect(stepperSrc).toMatch(/stepFocusTransition\(hydrated,\s*stepFocusArmed\.current\)/);
+    expect(stepperSrc).toMatch(/\},\s*\[hydrated,\s*stepIndex\]\);/);
+  });
+
+  it("only calls .focus() when the decision says to — gated behind decision.focus, never unconditional", () => {
+    const effectStart = stepperSrc.indexOf("stepFocusTransition(hydrated");
+    expect(effectStart, "stepFocusTransition call not found").toBeGreaterThan(-1);
+    const effectBody = stepperSrc.slice(effectStart, effectStart + 400);
+    expect(effectBody).toMatch(/if \(decision\.focus\)/);
+    expect(effectBody).toMatch(/containerRef\.current\?\.querySelector[\s\S]*\?\.focus\(\)/);
+  });
+
+  it.each([
+    ["step-who.tsx", "register.section.identity"],
+    ["step-entries.tsx", "register.entries.heading"],
+    ["step-details.tsx", "register.details.heading"],
+    ["step-consent.tsx", "register.section.consent"],
+    ["step-review.tsx", "register.review.heading"],
+  ])("%s's own step heading is tabIndex={-1} — the actual focus TARGET, not a synthetic wrapper", (file, key) => {
+    const src = readFileSync(join(__dirname, "..", file), "utf8");
+    const h2Index = src.indexOf("<h2");
+    expect(h2Index, `${file} has no <h2>`).toBeGreaterThan(-1);
+    const h2TagEnd = src.indexOf(">", h2Index);
+    const h2Tag = src.slice(h2Index, h2TagEnd + 1);
+    expect(h2Tag, `${file}'s <h2> must carry tabIndex={-1}`).toContain("tabIndex={-1}");
+    // Sanity: this IS the step's own heading (the right copy key follows
+    // immediately), not some unrelated <h2> earlier in the file.
+    expect(src.slice(h2Index, h2Index + 300)).toContain(key);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Finding #4 — a stale-closed division in a restored cart doesn't count
 // toward the subtotal
 // ---------------------------------------------------------------------------
