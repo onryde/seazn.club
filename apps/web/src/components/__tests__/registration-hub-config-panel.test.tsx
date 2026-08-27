@@ -481,19 +481,25 @@ describe("RegistrationHubConfigPanel — every routable field has a render site 
   });
 });
 
-// RS005 R5 task 1 — the same "leads nowhere" problem the row's Copy/Open/QR
-// controls have (registration-hub-division-row.test.tsx's own coverage),
-// but reached from the SETTING an organiser flips to turn registration on:
-// the public sign-up page is hardcoded closed until RS006 ships the cart
-// stepper, so entrants still cannot register even once this toggle is on.
+// RS005 R5 task 1 put a "this toggle does not open registration to anyone
+// yet" notice beside the open-for-public toggle, because the public sign-up
+// page was hardcoded closed. RS006 (`ec5cc6e3a`) shipped that page, and the
+// notice's own comment said to remove it — and its dictionary key — at
+// exactly that point. Flipping this toggle now does open registration.
+//
+// INVERTED rather than deleted: as written these asserted the presence of
+// copy that tells an organiser the toggle they just flipped does nothing.
+// Probed by the `data-registration-hub-link-not-live` marker, which outlives
+// the wording — the dictionary key it rendered no longer exists.
+//
 // Open & close defaults OPEN (this file's own header comment), so this needs
 // no deepExpand — a direct OpenCloseSection call, matching the "every
 // routable field" test above, is enough.
-describe("RegistrationHubConfigPanel — the open-for-public toggle does not promise more than it delivers (RS005 R5 task 1)", () => {
-  it("renders a not-live notice beside the toggle, unconditionally", () => {
-    const tree = walk(
+describe("RegistrationHubConfigPanel — the open-for-public toggle's not-live notice is gone (RS006 follow-up)", () => {
+  const openCloseTree = (enabled: boolean) =>
+    walk(
       OpenCloseSection({
-        state: FULL_STATE,
+        state: { ...FULL_STATE, enabled },
         errors: {},
         patch: vi.fn(),
         msg: testMsg,
@@ -502,22 +508,20 @@ describe("RegistrationHubConfigPanel — the open-for-public toggle does not pro
         onDateTimeHalfChange: vi.fn(),
       }),
     );
-    expect(textOf(tree)).toContain(t(uiEn, "reg.settings.openForPublic.notLive"));
+
+  it("renders no not-live notice beside the toggle when registration is ON", () => {
+    const tree = openCloseTree(true);
+    expect(tree.filter((e) => propsOf(e)["data-registration-hub-link-not-live"] !== undefined)).toHaveLength(0);
   });
 
-  it("still renders the notice when the toggle is OFF — an organiser reads it before ever turning registration on", () => {
-    const tree = walk(
-      OpenCloseSection({
-        state: { ...FULL_STATE, enabled: false },
-        errors: {},
-        patch: vi.fn(),
-        msg: testMsg,
-        orgTz: "UTC",
-        dtDrafts: {},
-        onDateTimeHalfChange: vi.fn(),
-      }),
-    );
-    expect(textOf(tree)).toContain(t(uiEn, "reg.settings.openForPublic.notLive"));
+  it("renders no not-live notice when the toggle is OFF either", () => {
+    const tree = openCloseTree(false);
+    expect(tree.filter((e) => propsOf(e)["data-registration-hub-link-not-live"] !== undefined)).toHaveLength(0);
+  });
+
+  it("still renders the open-for-public toggle itself — the notice went, the control stayed", () => {
+    const tree = openCloseTree(true);
+    expect(tree.some((e) => propsOf(e)["data-field"] === "enabled")).toBe(true);
   });
 });
 

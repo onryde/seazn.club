@@ -231,59 +231,65 @@ describe("RegistrationHubDivisionRow — the copy control is never dropped", () 
   });
 });
 
-// RS005 R5 task 1 — the public register page is hardcoded closed until
-// RS006 ships the cart stepper (see the register page's own header
-// comment), so Copy/Open/QR here currently lead an organiser to "Registration
-// is not open for this competition" — worse for the QR, which gets printed
-// and pinned to a noticeboard. The controls stay (settings must remain
-// configurable ahead of launch); this only adds a notice an organiser reads
-// BEFORE reaching for Copy or QR.
-describe("RegistrationHubDivisionRow — public sign-up page not-live notice (RS005 R5 task 1)", () => {
-  it("renders the not-live notice whenever the copy/QR controls render", () => {
+// RS005 R5 task 1 shipped an amber "the public sign-up page isn't live yet —
+// nothing you copy, share, or print from here will work today" notice above
+// Copy/Open/QR, because the public register page was hardcoded closed. RS006
+// (`ec5cc6e3a`) made that page real, and both the notice and its two
+// dictionary keys carried an explicit instruction to be removed at exactly
+// that point.
+//
+// These probes are INVERTED rather than deleted: left as they were, they
+// asserted the presence of copy that now tells an organiser the link they
+// just shared and the QR they just printed do not work — which is how a
+// shipped feature goes dark. The `data-registration-hub-link-not-live`
+// marker outlives any wording, so it is the probe rather than the string
+// (whose dictionary keys no longer exist to look up).
+const notLiveNotices = (tree: ReturnType<typeof walk>) =>
+  tree.filter((e) => propsOf(e)["data-registration-hub-link-not-live"] !== undefined);
+
+describe("RegistrationHubDivisionRow — the not-live notice is gone now the public page is real (RS006 follow-up)", () => {
+  it("renders NO not-live notice when the copy/QR controls render", () => {
     const tree = walk(
       RegistrationHubDivisionRow({ row: BASE_ROW, context: { ...BASE_CONTEXT, showRegisterLink: true } }),
     );
-    expect(textOf(tree)).toContain(t(uiEn, "div.registrations.publicLink.notLive"));
+    expect(notLiveNotices(tree)).toHaveLength(0);
   });
 
-  it("places the notice BEFORE CopyLink in reading order — read before Copy/QR is ever reachable", () => {
+  it("still renders CopyLink itself — removing the notice must not take the control with it", () => {
     const tree = walk(
       RegistrationHubDivisionRow({ row: BASE_ROW, context: { ...BASE_CONTEXT, showRegisterLink: true } }),
     );
-    const notice = tree.find(
-      (e) => e.type === "p" && String(propsOf(e).children ?? "").includes(t(uiEn, "div.registrations.publicLink.notLive")),
-    );
-    const link = tree.find((e) => e.type === CopyLink);
-    expect(notice).toBeTruthy();
-    expect(link).toBeTruthy();
-    expect(tree.indexOf(notice!)).toBeLessThan(tree.indexOf(link!));
+    expect(tree.some((e) => e.type === CopyLink)).toBe(true);
   });
 
-  it("does NOT render the not-live notice when the competition is private (no link controls at all)", () => {
+  it("renders no notice — and no link controls — when the competition is private", () => {
     const tree = walk(
       RegistrationHubDivisionRow({ row: BASE_ROW, context: { ...BASE_CONTEXT, showRegisterLink: false } }),
     );
-    expect(textOf(tree)).not.toContain(t(uiEn, "div.registrations.publicLink.notLive"));
+    expect(notLiveNotices(tree)).toHaveLength(0);
+    expect(tree.some((e) => e.type === CopyLink)).toBe(false);
   });
 
-  it("does NOT render the not-live notice on a closed division (no link controls there either)", () => {
+  it("renders no notice on a closed division (no link controls there either)", () => {
     const tree = walk(
       RegistrationHubDivisionRow({
         row: { ...BASE_ROW, enabled: false },
         context: { ...BASE_CONTEXT, showRegisterLink: true },
       }),
     );
-    expect(textOf(tree)).not.toContain(t(uiEn, "div.registrations.publicLink.notLive"));
+    expect(notLiveNotices(tree)).toHaveLength(0);
+    expect(tree.some((e) => e.type === CopyLink)).toBe(false);
   });
 
-  it("still renders for a SCHEDULED division — an organiser can reach Copy/QR before the window opens, so the warning must too", () => {
+  it("a SCHEDULED division keeps Copy/QR and gains no notice — its link works the moment the window opens", () => {
     const tree = walk(
       RegistrationHubDivisionRow({
         row: { ...BASE_ROW, enabled: true, opens_at: "2026-07-01T00:00:00Z", closes_at: null },
         context: { ...BASE_CONTEXT, showRegisterLink: true },
       }),
     );
-    expect(textOf(tree)).toContain(t(uiEn, "div.registrations.publicLink.notLive"));
+    expect(notLiveNotices(tree)).toHaveLength(0);
+    expect(tree.some((e) => e.type === CopyLink)).toBe(true);
   });
 });
 
