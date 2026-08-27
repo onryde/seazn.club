@@ -49,6 +49,25 @@ describe("entry card — a status badge never crushes the name beside it", () =>
     expect(block).toMatch(/basis-\d+/);
   });
 
+  // FIX 5 (RS007 review, hardening — not a live bug; the 320/768/1280
+  // screenshots already pin the correct rendering). `flex-1` expands to
+  // `flex: 1 1 0%`, which sets its OWN flex-basis — whether the `basis-*`
+  // utility wins is Tailwind utility-ORDER dependent. `grow` (`flex-grow:
+  // 1`) never touches flex-basis, so `basis-*` can never be silently
+  // outranked by a future ordering change. Cascade-proofs the wrap without
+  // changing anything else about the class list.
+  it("uses `grow`, never `flex-1`, so a Tailwind ordering change can never let flex-1's own basis outrank basis-*", () => {
+    const at = SOURCE.indexOf("{entry.division_name}");
+    const headingBlock = SOURCE.slice(Math.max(0, at - 400), at);
+    expect(headingBlock).toContain("grow");
+    expect(headingBlock).not.toMatch(/\bflex-1\b/);
+
+    const rosterAt = SOURCE.indexOf("{p.full_name}");
+    const rosterBlock = SOURCE.slice(Math.max(0, rosterAt - 200), rosterAt);
+    expect(rosterBlock).toContain("grow");
+    expect(rosterBlock).not.toMatch(/\bflex-1\b/);
+  });
+
   it("each roster row wraps rather than truncating the player's name", () => {
     const row = rowOpening("entry.players.map");
     expect(row, "the roster row must wrap so its badge can drop to its own line").toContain("flex-wrap");

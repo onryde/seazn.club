@@ -169,7 +169,7 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
             entry's own name to "Width Team ri...". The name IS the card's
             identity — the badge drops to its own line instead. */}
         <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
-          <div className="min-w-0 flex-1 basis-48">
+          <div className="min-w-0 grow basis-48">
             <p className="truncate text-xs font-semibold tracking-wide text-ink-muted uppercase">
               {entry.division_name}
             </p>
@@ -205,7 +205,7 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
             <ul className="mt-2 space-y-1.5">
               {entry.players.map((p) => (
                 <li key={p.id} className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-sm">
-                  <span className="min-w-0 flex-1 basis-40 truncate text-ink">{p.full_name}</span>
+                  <span className="min-w-0 grow basis-40 truncate text-ink">{p.full_name}</span>
                   <span
                     className={
                       p.consent_status === "pending"
