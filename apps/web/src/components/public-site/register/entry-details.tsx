@@ -78,7 +78,7 @@ export function EntryDetails({
   // falls back to the WHO-step contact for EVALUATION only — the table
   // itself still edits/shows the raw (unmerged) rows, see roster.ts's
   // effectiveSelfPlayers doc comment.
-  const effective = isSelfEntry ? effectiveSelfPlayers(entry.players, selfPlayerIndex, contact) : entry.players;
+  const effective = isSelfEntry ? effectiveSelfPlayers(entry, contact) : entry.players;
   const verdict = rosterEligibilityForDivision(division, effective, seasonStartYear);
   const rowIssues = issuesByPlayerIndex(verdict.issues);
   const mixedUnmet = verdict.issues.some((i) => i.code === "MIXED_NEEDS_BOTH_GENDERS");

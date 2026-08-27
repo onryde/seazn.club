@@ -1126,6 +1126,44 @@ describe("step 3 — pasting a roster via the textarea parses into named rows (p
 });
 
 // ---------------------------------------------------------------------------
+// Second review round, finding 1 (2026-08-27) — effectiveSelfPlayers must
+// resolve an INDIVIDUAL entry's implied self row: self_player_index stays
+// null FOREVER for that kind (entry-details.tsx's self-row picker never
+// renders for it — showSelfPicker), so the "collected once" dob/gender
+// merge must happen without an explicit index, mirroring effectiveSelfDob's
+// own individual-implies-0 fallback (roster.ts).
+// ---------------------------------------------------------------------------
+
+describe("2026-08-27 review finding 1 — a self-linked INDIVIDUAL entry's already-collected contact dob must satisfy a requires_dob division", () => {
+  // age_min (not just requires_dob) is what actually makes
+  // ageBandEligibilityIssues (registration-rules.ts) evaluate a dob at
+  // all — same reasoning DIV_AGE_BANDED_TEAM below documents. 18 is
+  // comfortably under the "1990-01-01" contact dob this test fills in, so
+  // the only way this could fail is the MISSING_DOB false positive itself,
+  // never a genuine age rejection.
+  const DIV_SOLO_REQUIRES_DOB: DivisionLike = { ...DIV_OPEN, division_id: "div-solo-req-dob", requires_dob: true, age_min: 18 };
+
+  it("ticking 'I'm playing', filling contact dob, then adding an individual entry: no false MISSING_DOB, Next reaches CONSENT", () => {
+    const { stepWho, clickByText, pageText, island } = mount([DIV_SOLO_REQUIRES_DOB]);
+    (propsOf(stepWho()).onChange as (p: object) => void)({ name: "Self Row", email: "self@example.com", dob: "1990-01-01" });
+    (propsOf(stepWho()).onImPlayingChange as (v: boolean) => void)(true); // auto-links the sole entry
+    clickByText("Next"); // single open division collapses ENTRIES -> DETAILS
+    setByAriaLabel(island, "Player 1 — Your name", "Self Row");
+    // Deliberately NOT typing a dob into the roster row itself — the whole
+    // point is that the WHO-step contact.dob already collected above must
+    // satisfy this individual division's requires_dob via
+    // effectiveSelfPlayers' implied-index-0 resolution (roster.ts).
+    expect(
+      pageText(),
+      "no false MISSING_DOB for the self-linked individual row — contact.dob was already collected",
+    ).not.toContain("Enter this player's date of birth to check eligibility");
+
+    clickByText("Next"); // must actually ADVANCE to CONSENT, not silently no-op on DETAILS
+    expect(pageText(), "Next must not be blocked").toContain("Consent");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Review finding #1 (MEDIUM) — form_fields DOM ids must be scoped per cart
 // entry. Two cart entries on the SAME division is normal and unrestricted
 // (e.g. two teams in one "Open" division); form-fields.tsx used to build

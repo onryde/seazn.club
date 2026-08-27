@@ -166,28 +166,53 @@ describe("toGroupPlayers — drops blank-named TEAM rows, keeps individual/pair 
 describe("effectiveSelfPlayers — presentation-only fallback of the self row's dob/gender to the WHO-step contact", () => {
   const contact = { dob: "1990-01-01" as string | null, gender: "f" as "m" | "f" | "x" | null };
 
+  type SelfPlayersEntry = Pick<CartEntry, "players" | "self_player_index" | "entrant_kind">;
+  // Defaults to "team" (a multi-row kind) so these cases exercise ONLY the
+  // explicit-index path — the individual-implied-0 fallback is covered on
+  // its own below (review finding 1, 2026-08-27).
+  function entryFor(
+    players: RosterPlayerState[],
+    selfIndex: number | null,
+    kind: CartEntry["entrant_kind"] = "team",
+  ): SelfPlayersEntry {
+    return { players, self_player_index: selfIndex, entrant_kind: kind };
+  }
+
   it("fills the self row's blank dob/gender from contact, leaves a filled row alone", () => {
     const players = [player({ full_name: "Self" }), player({ full_name: "Other" })];
-    const effective = effectiveSelfPlayers(players, 0, contact);
+    const effective = effectiveSelfPlayers(entryFor(players, 0), contact);
     expect(effective[0]).toEqual(player({ full_name: "Self", dob: "1990-01-01", gender: "f" }));
     expect(effective[1]).toEqual(player({ full_name: "Other" })); // non-self row untouched
   });
 
   it("does not override a self row that already repeated its OWN dob/gender", () => {
     const players = [player({ full_name: "Self", dob: "2000-06-15", gender: "m" })];
-    const effective = effectiveSelfPlayers(players, 0, contact);
+    const effective = effectiveSelfPlayers(entryFor(players, 0), contact);
     expect(effective[0]!.dob).toBe("2000-06-15");
     expect(effective[0]!.gender).toBe("m");
   });
 
-  it("selfIndex null returns the SAME players (no merge, no self row to fall back)", () => {
-    const players = [player({ full_name: "Solo" })];
-    expect(effectiveSelfPlayers(players, null, contact)).toBe(players);
+  it("self_player_index null on a multi-row entry returns the SAME players (no merge, no row resolved)", () => {
+    const players = [player({ full_name: "Solo" }), player({ full_name: "Other" })];
+    expect(effectiveSelfPlayers(entryFor(players, null), contact)).toBe(players);
   });
 
-  it("an out-of-range selfIndex degrades to the players unchanged rather than throwing", () => {
+  it("an out-of-range self_player_index degrades to the players unchanged rather than throwing", () => {
     const players = [player({ full_name: "Solo" })];
-    expect(effectiveSelfPlayers(players, 5, contact)).toBe(players);
+    expect(effectiveSelfPlayers(entryFor(players, 5), contact)).toBe(players);
+  });
+
+  describe("review finding 1 (2026-08-27) — an INDIVIDUAL entry's self_player_index stays null forever client-side (entry-details.tsx never renders a picker for it); must still resolve to row 0, matching effectiveSelfDob and the server", () => {
+    it("merges the contact's dob/gender into the individual entry's single row even though self_player_index is null", () => {
+      const players = [player({ full_name: "Self" })];
+      const effective = effectiveSelfPlayers(entryFor(players, null, "individual"), contact);
+      expect(effective[0]).toEqual(player({ full_name: "Self", dob: "1990-01-01", gender: "f" }));
+    });
+
+    it("does NOT apply the implied-0 fallback to a team/pair entry with no explicit pick — that stays a real 'nothing resolved' state", () => {
+      const players = [player({ full_name: "Self" }), player({ full_name: "Other" })];
+      expect(effectiveSelfPlayers(entryFor(players, null, "team"), contact)).toBe(players);
+    });
   });
 });
 

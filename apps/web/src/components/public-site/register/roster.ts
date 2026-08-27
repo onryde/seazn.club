@@ -103,6 +103,32 @@ export function toGroupPlayers(
 }
 
 /**
+ * Resolves WHICH roster row is "self": the entry's own explicit
+ * `self_player_index` when one has been set, else the schema's
+ * individual-implies-index-0 fallback (`registration-submit.ts` ~line
+ * 398-406, the server's own mirror of this rule) — entry-details.tsx's
+ * self-row `<select>` never renders for entrant_kind "individual"
+ * (`showSelfPicker`), so `self_player_index` stays `null` in client state
+ * for that kind FOREVER; the schema still treats row 0 as the contact
+ * whenever there's exactly one row. Returns `null` for a multi-row kind
+ * (team/pair) with no explicit pick yet — there is no safe default there.
+ *
+ * Shared by `effectiveSelfPlayers` and `effectiveSelfDob` below so the two
+ * can never resolve "which row is self" differently again. Before review
+ * finding 1 (2026-08-27) only `effectiveSelfDob` did this resolution;
+ * `effectiveSelfPlayers` trusted a raw, pre-resolved index and silently did
+ * nothing for an individual entry — so a self-linked individual's
+ * already-collected WHO-step dob never merged into their one roster row,
+ * and a `requires_dob` division falsely blocked "Next" with a MISSING_DOB
+ * the registrant had already answered.
+ */
+export function resolveSelfPlayerIndex(
+  entry: Pick<CartEntry, "self_player_index" | "entrant_kind" | "players">,
+): number | null {
+  return entry.self_player_index ?? (entry.entrant_kind === "individual" && entry.players.length === 1 ? 0 : null);
+}
+
+/**
  * Mirrors `registration-submit.ts`'s own self-row fallback (~line 405-411)
  * for PRESENTATION: "The self row's dob/gender fall back to the contact's
  * cart-level values ... when the row itself didn't repeat them" (design §4
@@ -115,16 +141,21 @@ export function toGroupPlayers(
  * TABLE itself still renders/edits the raw (unmerged) rows, so an input
  * never shows a value the registrant didn't type.
  *
+ * Resolves which row is "self" via `resolveSelfPlayerIndex` above
+ * (individual-implies-index-0 included as of review finding 1, 2026-08-27
+ * — see that function's own doc comment for the bug this closes).
+ *
  * Returns the SAME array reference when there is nothing to merge (no self
  * row, or an index that doesn't resolve to a real row) — matching every
  * other pure helper in this tree's "same reference when it's a no-op"
  * convention.
  */
 export function effectiveSelfPlayers(
-  players: readonly RosterPlayerState[],
-  selfIndex: number | null,
+  entry: Pick<CartEntry, "players" | "self_player_index" | "entrant_kind">,
   contact: Pick<ContactState, "dob" | "gender">,
 ): readonly RosterPlayerState[] {
+  const { players } = entry;
+  const selfIndex = resolveSelfPlayerIndex(entry);
   if (selfIndex === null || !players[selfIndex]) return players;
   return players.map((p, i) => (i === selfIndex ? { ...p, dob: p.dob ?? contact.dob, gender: p.gender ?? contact.gender } : p));
 }
@@ -144,12 +175,9 @@ export function effectiveSelfPlayers(
  * registration-submit.ts's own gate had the identical `contact.dob`-only
  * blind spot server-side (fixed in the same change).
  *
- * Resolves WHICH row is "self" the same way `registration-submit.ts` does
- * (~line 398-406), including its individual-implies-index-0 fallback:
- * entry-details.tsx's self-row picker never renders for an "individual"
- * entry (`showSelfPicker`), so `self_player_index` stays `null` in client
- * state for that kind forever — the schema still implies row 0 is the
- * contact.
+ * Resolves WHICH row is "self" via `resolveSelfPlayerIndex` above (shared
+ * with `effectiveSelfPlayers` — see that function's own doc comment for why
+ * this now lives in one place instead of two that could silently drift).
  *
  * Falls back to `contact.dob` (the OLD, pre-fix signal) whenever no row can
  * be resolved at all — e.g. mid-flow before step 3 has built out a roster,
@@ -163,8 +191,7 @@ export function effectiveSelfDob(
   contact: Pick<ContactState, "dob">,
 ): string | null {
   if (!entry.registering_self) return null;
-  const idx =
-    entry.self_player_index ?? (entry.entrant_kind === "individual" && entry.players.length === 1 ? 0 : null);
+  const idx = resolveSelfPlayerIndex(entry);
   const row = idx !== null ? entry.players[idx] : undefined;
   return (row ? row.dob : null) ?? contact.dob;
 }

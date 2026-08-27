@@ -253,9 +253,7 @@ export function validateDetails(
 
     if (!entryDetailsComplete(entry, division)) return { valid: false, error: "incomplete" };
 
-    const effective = entry.registering_self
-      ? effectiveSelfPlayers(entry.players, entry.self_player_index, contact)
-      : entry.players;
+    const effective = entry.registering_self ? effectiveSelfPlayers(entry, contact) : entry.players;
     const verdict = rosterEligibilityForDivision(division, effective, seasonStartYear);
     if (!verdict.eligible) return { valid: false, error: "incomplete" };
 
