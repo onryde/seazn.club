@@ -13,6 +13,22 @@ export function fillPaymentInstructions(
   return instructions.replaceAll("{{reference}}", reference ?? "your registration reference");
 }
 
+/** Hard-code every single line break as a CommonMark hard break (trailing
+ *  double-space) so lib/prose renders it as `<br>` instead of collapsing it
+ *  to a space — Markdown treats one `\n` as insignificant whitespace and
+ *  only a BLANK line starts a new paragraph, so an organiser's bank details
+ *  ("Bank: X\nAccount name: Y") otherwise run together into one paragraph.
+ *  A real paragraph break (a blank line) is left alone. HTML-render path
+ *  only: paymentInstructionsText's plain-text panels already show `\n` as a
+ *  real line break, so they never call this (and must not — the trailing
+ *  spaces this adds would leak as literal characters into plain text). */
+export function preserveLineBreaks(markdown: string): string {
+  return markdown
+    .split(/\n{2,}/)
+    .map((block) => block.replace(/\n/g, "  \n"))
+    .join("\n\n");
+}
+
 /** Markdown → readable plain text for the email panels: links become
  *  "label: url", emphasis/heading/quote markers drop, structure survives. */
 export function paymentInstructionsText(instructions: string): string {

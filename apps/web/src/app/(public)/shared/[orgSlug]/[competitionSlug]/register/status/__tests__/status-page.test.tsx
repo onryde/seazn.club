@@ -179,6 +179,26 @@ describe("register status page (RS007 rebuild)", () => {
       expect(html).not.toMatch(/Pay now/);
     });
 
+    // Bug (2026-08-27 browser sweep): payment_instructions is Markdown, and a
+    // single \n is insignificant whitespace to Markdown — only a blank line
+    // starts a new paragraph — so multi-line bank details rendered as ONE
+    // run-on paragraph ("Account name: X Sort code: Y"), which at 320px
+    // wraps into false groupings. The blank-line break must still work.
+    it("an unpaid OFFLINE entry keeps each line of multi-line payment instructions on its own line", async () => {
+      usecaseMock.groupById.mockResolvedValueOnce({
+        ...BASE_VIEW,
+        payment_method: "offline" as const,
+        payment_instructions:
+          "Please pay using these details:\n\nBank: Example Bank\nAccount name: RS007 Seed Org\nSort code: 12-34-56\nAccount number: 12345678\nReference: {{reference}}",
+      });
+      const html = await render({ rid: "g1", token: "tok" });
+      expect(html).toContain("Bank: Example Bank<br>");
+      expect(html).toContain("Account name: RS007 Seed Org<br>");
+      expect(html).toContain("Sort code: 12-34-56<br>");
+      // The tell for the bug: never space-joined into one run-on paragraph.
+      expect(html).not.toContain("Account name: RS007 Seed Org Sort code:");
+    });
+
     it("a card entry with the org's Connect account not live shows 'unavailable', never a button that would 503", async () => {
       usecaseMock.groupById.mockResolvedValueOnce({ ...BASE_VIEW, charges_enabled: false });
       const html = await render({ rid: "g1", token: "tok" });
@@ -195,6 +215,28 @@ describe("register status page (RS007 rebuild)", () => {
       expect(html).not.toMatch(/Pay now/);
       expect(html).not.toContain(">How to pay<");
     });
+  });
+
+  // Bug (2026-08-27 browser sweep): the global cookie-consent banner is
+  // fixed bottom-left (components/cookie-consent.tsx) and, on a first visit
+  // — which a registration email always is — sat over this page's own
+  // primary actions (Cancel this entry at 1280px; the whole roster block
+  // and per-slot claim links at 320px). The banner itself is out of scope
+  // (blast radius — see its own z-index test suite); this page reserves
+  // its own bottom clearance instead, the same "fixed bar → spacer" shape
+  // globals.css already uses for `.bottom-bar`/`.bottom-bar-spacer`.
+  it("reserves bottom clearance so the fixed cookie banner never sits over the roster/cancel actions", async () => {
+    usecaseMock.groupById.mockResolvedValueOnce(BASE_VIEW);
+    const html = await render({ rid: "g1", token: "tok" });
+    const wrapperMatch = html.match(/<div class="([^"]*mx-auto max-w-2xl[^"]*)"/);
+    expect(wrapperMatch, "status page content wrapper not found").not.toBeNull();
+    const wrapperClass = wrapperMatch![1];
+    // Safe-area aware, matching the codebase's own `pb-[calc(<n>+env(safe-
+    // area-inset-bottom))]` convention (confirm-provider.tsx, modal.tsx) —
+    // generous enough to clear the banner's real measured footprint
+    // (240px on mobile, 160px on desktop, both starting from bottom-4).
+    expect(wrapperClass).toMatch(/pb-\[calc\(\d+px\+env\(safe-area-inset-bottom\)\)\]/);
+    expect(wrapperClass).toMatch(/sm:pb-\[calc\(\d+px\+env\(safe-area-inset-bottom\)\)\]/);
   });
 
   describe("cancel + refund clarity (acceptance criteria 3 & 4)", () => {

@@ -1862,6 +1862,54 @@ Both open calls went to the owner and both took the recommendation.
     the owner verifies the journey by looking at it, and so does the session.
     Visual verification is not optional here and is not satisfied by green
     counts.
+- **DEFECT found by LOOKING at it — a stale status link renders Next's bare
+  framework 404.** Verified 2026-08-27 in a browser against the prod
+  standalone build at three widths: visible text is exactly "404 This page
+  could not be found", with no branding, no explanation and no route forward.
+  The only designed element on screen is the cookie banner. This is the page
+  **every registration email links to**, and links in this flow go stale
+  routinely — an entry is cancelled, an old mail is forwarded, a token
+  rotates. A registrant landing here cannot tell whether they are registered
+  and is given no prompt to ask the organiser to resend.
+  The 404 SHAPE is correct and must survive the fix: a wrong token and a
+  never-existed group have to stay indistinguishable, or the page leaks which
+  groups exist. Confirmed no data leak — a bogus rid+token body has ZERO
+  visible occurrences of roster/paid/registration; all 87 hits are inside
+  bundled script chunks. So the fix is a DESIGNED not-valid-link page that
+  reveals nothing, not a loosening of the check.
+  No horizontal scroll at 1280/768/320, so the layout bar itself passes.
+- **THREE MORE DEFECTS FOUND BY DRIVING THE REAL STEPPER** (2026-08-27,
+  prod standalone build, registered a team by hand and read the result).
+  Every one of these passes the unit suites.
+  1. **Payment instructions lose their line breaks — bank details run
+     together.** The status page renders the organiser's instructions as
+     markdown, where a SINGLE newline collapses to a space (the blank-line
+     paragraph break survives, which is the tell). A seeded instruction of
+     "Bank: … / Account name: … / Sort code: … / Account number: …" rendered
+     as one run-on paragraph. At **320px it is worse than cosmetic**: wrapping
+     then invents false groupings — "Account name: RS007 Seed / Org Sort code:
+     12-34-56" reads as a label called "Org Sort code". These are BANK
+     DETAILS on the width most people read registration email at; a transposed
+     digit means a failed payment the organiser then has to chase. Render with
+     line breaks preserved.
+  2. **The cookie banner covers the page's primary actions.** Fixed-position,
+     bottom-left. At 1280 it sits over "Cancel this entry"; at **320 it covers
+     the entire roster block** — every player's status AND the claim links,
+     which are the exact actions this page exists to prompt. First visit only,
+     but a registration email lands on a first visit by definition.
+  3. **Stepper validation timing is INVERTED across steps.** Step 2's team
+     name is required, yet NEXT stays enabled with it empty and no inline
+     error appears — you pass steps 3 and 4 INCLUDING GIVING CONSENT, and only
+     the step-5 submit says "A team name is required", naming neither the step
+     nor the entry, with the "Unnamed team" review row not clickable to fix
+     it. Meanwhile step 3 shows "Choose which player on this entry is you" in
+     red ON FIRST PAINT, when the roster is empty and the only option is "None
+     of these" — an error you cannot satisfy, contradicting the copy directly
+     above it ("or leave it blank — the organiser can fill it in later").
+     So the step that CANNOT yet be satisfied complains immediately, and the
+     step with a real missing value stays silent until the last click. This is
+     the top of the funnel: a paying captain hits a dead end after consenting.
+     NOTE: fixing this touches the RS006 stepper, widening RS007's file set.
 - **Owed to RS009, deliberately NOT built here**: the organiser needs to see
   which entries still have unclaimed players ("2 teams have incomplete
   rosters") before the draw. It belongs to RS005's Registrants tab and

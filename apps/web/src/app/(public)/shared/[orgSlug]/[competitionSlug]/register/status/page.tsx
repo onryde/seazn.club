@@ -29,7 +29,7 @@ import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t } from "@/lib/i18n";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import { renderProse } from "@/lib/prose";
-import { fillPaymentInstructions } from "@/lib/payment-instructions";
+import { fillPaymentInstructions, preserveLineBreaks } from "@/lib/payment-instructions";
 import { EntryCard } from "./entry-card";
 import { ResendConfirmation } from "./resend-confirmation";
 
@@ -100,7 +100,7 @@ export default async function RegistrationStatusPage({ params, searchParams }: P
   // non-async component (see its own doc comment for why that matters for
   // this page's own render-to-static-markup tests).
   const instructionsHtml = view.payment_instructions
-    ? await renderProse(fillPaymentInstructions(view.payment_instructions, view.ref_code))
+    ? await renderProse(preserveLineBreaks(fillPaymentInstructions(view.payment_instructions, view.ref_code)))
     : null;
   const cart = {
     payment_method: view.payment_method,
@@ -112,7 +112,22 @@ export default async function RegistrationStatusPage({ params, searchParams }: P
 
   return (
     <DictProvider dict={ui} locale={locale}>
-      <div className="mx-auto max-w-2xl px-4 py-8 sm:px-6">
+      <div
+        // Bottom clearance for the global cookie-consent banner
+        // (components/cookie-consent.tsx: fixed, bottom-4, z-40). On a
+        // first visit — which a registration email always is — the banner
+        // sat directly over this page's own primary actions: "Cancel this
+        // entry" at 1280px, the whole roster block + per-slot claim links
+        // at 320px (measured live: the banner renders ~240px tall on
+        // mobile, ~160px on desktop, both anchored bottom-4). The banner
+        // itself is out of scope here (blast radius — it's shared by every
+        // page); this page reserves its own trailing clearance instead,
+        // same "fixed bar → spacer" shape as globals.css's own
+        // `.bottom-bar`/`.bottom-bar-spacer` pair, safe-area aware to match
+        // `pb-[calc(<n>+env(safe-area-inset-bottom))]` elsewhere
+        // (confirm-provider.tsx, modal.tsx).
+        className="mx-auto max-w-2xl px-4 pt-8 pb-[calc(280px+env(safe-area-inset-bottom))] sm:px-6 sm:pb-[calc(200px+env(safe-area-inset-bottom))]"
+      >
         <p className="text-xs text-ink-muted">
           {/* The RESOLVED view's own org/competition — token-authenticated,
               so trusted over the URL's own path segments (which could be a
