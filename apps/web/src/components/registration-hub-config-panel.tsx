@@ -610,7 +610,21 @@ export function EligibilitySection({
             data-field="age_min"
             className="input mt-1"
             value={state.age_min ?? ""}
-            onChange={(e) => patch({ age_min: e.target.value === "" ? null : Number(e.target.value) })}
+            onChange={(e) => {
+              const value = e.target.value === "" ? null : Number(e.target.value);
+              // Review fix: clearing the LAST side still holding the age
+              // band must also clear the cutoff — otherwise it strands
+              // behind `disabled` (below) with no way left for the
+              // organiser to remove it, and the PATCH body still carries
+              // it (toDivisionPatchBody sends all six eligibility keys
+              // together on every save).
+              const bandCleared = value == null && state.age_max == null;
+              patch(
+                bandCleared
+                  ? { age_min: value, age_cutoff_month: null, age_cutoff_day: null }
+                  : { age_min: value },
+              );
+            }}
           />
           {errors.age_min && (<p data-field-error="age_min" role="alert" className="mt-1 text-xs text-red-600">{errors.age_min}</p>)}
         </label>
@@ -623,7 +637,16 @@ export function EligibilitySection({
             data-field="age_max"
             className="input mt-1"
             value={state.age_max ?? ""}
-            onChange={(e) => patch({ age_max: e.target.value === "" ? null : Number(e.target.value) })}
+            onChange={(e) => {
+              const value = e.target.value === "" ? null : Number(e.target.value);
+              // Same rule, other side — see age_min's onChange above.
+              const bandCleared = value == null && state.age_min == null;
+              patch(
+                bandCleared
+                  ? { age_max: value, age_cutoff_month: null, age_cutoff_day: null }
+                  : { age_max: value },
+              );
+            }}
           />
           {errors.age_max && (<p data-field-error="age_max" role="alert" className="mt-1 text-xs text-red-600">{errors.age_max}</p>)}
         </label>

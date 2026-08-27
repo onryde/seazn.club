@@ -1380,3 +1380,67 @@ describe("RegistrationHubConfigPanel — every field round-trips through save", 
     expect((put.json as Record<string, unknown>).form_fields).toEqual(next);
   });
 });
+
+// Review fix (RS007): the age-band cutoff (age_cutoff_month/age_cutoff_day)
+// used to survive clearing the age band untouched. `hasAgeBand` only
+// DISABLES the cutoff controls once the band is gone — it never cleared
+// their STORED state — and toDivisionPatchBody sends all six eligibility
+// keys together on every save (see that function's own doc comment), so the
+// stale cutoff rode along in the PATCH body even though the band meant to
+// anchor it had just been removed. Not a DB rejection:
+// divisions_age_cutoff_check (V380) only enforces cutoff month/day
+// BOTH-OR-NEITHER and says nothing about the age band, so the pair 9/1 with
+// no band passes that constraint fine — this was a silently confusing,
+// stranded value, not a save-time 500/422. And once the band is gone the
+// cutoff controls are `disabled`, so the organiser had no way left in the
+// UI to clear the stray value either — hence "uncleanable".
+describe("RegistrationHubConfigPanel — clearing the age band clears a stranded cutoff (FIX 3)", () => {
+  it("clearing age_min then age_max also clears the cutoff in STATE, not just on save", async () => {
+    const island = await openPanel(); // DIVISION: age_min 10, age_max 18, cutoff month 9 / day 1
+    (propsOf(findField(island.tree(), "age_min")!).onChange as (e: { target: { value: string } }) => void)({
+      target: { value: "" },
+    });
+    (propsOf(findField(island.tree(), "age_max")!).onChange as (e: { target: { value: string } }) => void)({
+      target: { value: "" },
+    });
+    // Fails pre-fix: the cutoff select/input still show the stale 9 / 1,
+    // now behind `disabled` with no UI path left to clear them.
+    expect(propsOf(findField(island.tree(), "age_cutoff_month")!).value).toBe("");
+    expect(propsOf(findField(island.tree(), "age_cutoff_day")!).value).toBe("");
+
+    net.calls = [];
+    await clickSave(island);
+    const patch = net.calls.find((c) => c.method === "PATCH")!;
+    expect(patch.json).toEqual({
+      category: "mixed",
+      age_min: null,
+      age_max: null,
+      age_cutoff_month: null,
+      age_cutoff_day: null,
+      eligibility_note: "School-registered students only",
+    });
+  });
+
+  it("clearing age_max first, then age_min, clears the cutoff too — order-independent", async () => {
+    const island = await openPanel();
+    (propsOf(findField(island.tree(), "age_max")!).onChange as (e: { target: { value: string } }) => void)({
+      target: { value: "" },
+    });
+    (propsOf(findField(island.tree(), "age_min")!).onChange as (e: { target: { value: string } }) => void)({
+      target: { value: "" },
+    });
+    expect(propsOf(findField(island.tree(), "age_cutoff_month")!).value).toBe("");
+    expect(propsOf(findField(island.tree(), "age_cutoff_day")!).value).toBe("");
+  });
+
+  it("clearing only age_min while age_max stays set leaves the cutoff untouched — band still anchored", async () => {
+    const island = await openPanel();
+    (propsOf(findField(island.tree(), "age_min")!).onChange as (e: { target: { value: string } }) => void)({
+      target: { value: "" },
+    });
+    expect(propsOf(findField(island.tree(), "age_cutoff_month")!).value).toBe(9);
+    expect(propsOf(findField(island.tree(), "age_cutoff_day")!).value).toBe(1);
+    // Still enabled: hasAgeBand is true (age_max is still 18).
+    expect(propsOf(findField(island.tree(), "age_cutoff_month")!).disabled).toBe(false);
+  });
+});
