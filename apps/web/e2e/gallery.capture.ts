@@ -163,6 +163,12 @@ const EXTRA_STATES = [
   "12-superover-decided",
   "11-shootout",
   "12-shootout-decided",
+  // R5 (2026-08-27) — the racquet family (badminton / table tennis /
+  // volleyball, one shared component: racquet-skin.tsx), captured BEFORE the
+  // conversion on purpose. See the block comment above `SPORTS` for the three
+  // defects each one photographs and which assertion the conversion FLIPS.
+  "11-servingplaceholder",
+  "12-bandlimited",
 ] as const;
 type ExtraGalleryState = (typeof EXTRA_STATES)[number];
 
@@ -501,6 +507,314 @@ interface GallerySport {
     tag: string,
     measurements: Measurement320[],
   ) => Promise<ExtraGalleryState[]>;
+}
+
+// ---------------------------------------------------------------------------
+// R5 (2026-08-27) — the racquet family's BEFORE captures.
+//
+// Badminton, table tennis and volleyball share ONE component today
+// (`racquetSkin.sports = ["volleyball","badminton","tabletennis"]`,
+// v2/scorepad/skins/racquet-skin.tsx). These states are captured BEFORE R5
+// converts them, deliberately: R3.5's reusable lesson is that the gallery is
+// blind by omission of a STATE, not of a sport — R2 and R3 both signed off
+// legitimately against a harness that could not render the screen carrying
+// the defect — and R2c's standing instruction for R3-R7 is to ask, before
+// publishing a sign-off sheet, which of the wave's changes is visible in the
+// five shared states. None of these three is.
+//
+// Three defects, and each probe below is written so the conversion INVERTS
+// its expectation rather than deleting it (R3.5: "deleting it stops the
+// capture failing and does nothing to stop the defect returning"). Each one
+// names its own flipping assertion inline.
+//
+//  * D-17 — WHO IS SERVING IS A PLACEHOLDER. racquet-skin.tsx's header
+//    declares its `serving` field a deliberate placeholder ("—") because the
+//    set-based kernel folded no serving fact (`SetBasedRally`'s own doc,
+//    setbased/kernel.ts: "the set-based kernel holds no serving state ... so
+//    the engine cannot name the receiver from what it stores"). Photographed
+//    by `11-servingplaceholder`, on all three sports.
+//
+//  * D-7 — BELOW BAND 3 THE PAD SAYS NOTHING. The kernel keys only band 3
+//    (`fidelityEntitlements: { 3: preset.rallyEntitlement }`, i.e.
+//    "scoring.rally_by_rally"), and `view-model.ts` DROPS an action above the
+//    org's band rather than locking it (`if (band === undefined || band >
+//    ctx.band) return null`) — so an org without that entitlement gets a live
+//    scoring pad with no rally control and no reason on screen. The
+//    register's own BAD-03 evidence line, never photographed. `12-bandlimited`,
+//    badminton only (BAD-03's own sport; the kernel is shared, so the same
+//    screen is reachable on the other two).
+//
+//    NAMED `bandlimited`, NOT `bandzero`, and the difference is a real
+//    finding: the defect register calls this "a free / band-0 org", but a
+//    community org actually resolves to band TWO here. `resolveFidelityBand`
+//    walks 0..3 and only breaks on a band that NAMES an entitlement the org
+//    lacks; this kernel keys band 3 alone, so bands 0, 1 and 2 are all free.
+//    What the free org therefore loses is the rally action only — the band-1
+//    interruptions (sanctions, and on the other two sports timeouts/subs)
+//    survive, so the screen is a Set score panel AND a Sanctions drawer, not
+//    the "lone Set score button" the register describes.
+//
+//  * D-13 — TABLE TENNIS HAS NEVER BEEN DRIVEN IN A BROWSER beyond this
+//    harness's single `scoreOne` tap (see this file's own tabletennis note:
+//    "No e2e precedent exists anywhere in this repo for table tennis
+//    specifically"). Its `11-servingplaceholder` taps real rallies in a real
+//    browser past a 2-serve rotation boundary (`turnLength: 2`,
+//    setbased/tabletennis.ts) — new coverage in itself.
+//
+// NOT TURN 0, EVER. R4's D-21 shipped a wrong human name live because
+// `11-doublesserve` photographed service turn 0, and turn 0 names the right
+// player under every derivation anyone has shipped, correct or not. Every
+// serving capture below banks a whole game/set FIRST and then plays into the
+// next one, so both the set-transition rule and (for table tennis) the
+// within-game rotation have already had to fire.
+// ---------------------------------------------------------------------------
+
+/** racquet-skin.tsx's own placeholder glyph for the serving field — an EM
+ *  dash (U+2014), deliberately NOT the EN dash (U+2013) `scoreline()` joins a
+ *  score with. The two are one code point apart and look almost identical in
+ *  a diff, so they are named here once rather than typed inline three times. */
+const RACQUET_SERVING_PLACEHOLDER = "—";
+
+/** The EN dash `scoreline()` (racquet-skin.tsx) joins a header score with —
+ *  spelled as an escape so a reviewer can tell it apart from the EM dash
+ *  placeholder above without reaching for a hex editor. */
+function racquetScoreline(home: number, away: number): string {
+  return `${home}\u2013${away}`;
+}
+
+/**
+ * One field of racquet-skin.tsx's score header, addressed by its CAPTION
+ * ("Sets" / "Points" / "Serving") rather than by index. `buildHeader` keys
+ * each field div with `field.id`, but a React `key` is not a DOM attribute —
+ * there is nothing else to hold on to — and a positional `.nth(2)` would go
+ * on silently photographing the WRONG field the day a fourth field is added
+ * or the order changes, which is the class of quiet mis-capture this whole
+ * harness exists to make impossible.
+ */
+function racquetHeaderValue(page: Page, caption: string): Locator {
+  return pad(page)
+    .locator('[data-role="racquet-header"] > div > div')
+    .filter({ hasText: caption })
+    .locator("p")
+    .first();
+}
+
+interface RacquetServingRecipe {
+  slug: string;
+  label: string;
+  sportKey: string;
+  variantKey: string;
+  entrantKind?: "individual" | "team" | "pair";
+  /** The kernel's FULLY QUALIFIED coarse event type, `${sportKey}.${preset.
+   *  coarseEventType}` (setbased/kernel.ts:1560) — "badminton.game.summary",
+   *  "tabletennis.game.summary", "volleyball.set.summary". The bare
+   *  `coarseEventType` half is NOT an event type: the API answers a bare
+   *  "game.summary" with 422 INVALID_EVENT, which is how this was found. */
+  coarseType: string;
+  /** A COMPLETED first game/set, posted as ONE summary before any rally
+   *  touches it. It must be the set's first event: `applySummary`'s strict
+   *  branch refuses a summary for a set that already has points ("this set is
+   *  being scored rally-by-rally"). Between sets the two fidelities mix
+   *  freely — which is exactly what this recipe needs and why the PRIMARY
+   *  fixture cannot be reused (by the time `captureExtra` runs, `scoreOne`
+   *  has already put a rally into set 1). */
+  summary: { home: number; away: number };
+  /** The scoreline the header must read afterwards. Asserted exactly, not
+   *  merely "not 0-0": an exact expectation cannot pass vacuously against a
+   *  locator that resolved to nothing, and it fails LOUDLY with the real
+   *  value when a fold surprises us. */
+  expectedSets: string;
+  expectedPoints: string;
+}
+
+/**
+ * `11-servingplaceholder` — the board mid-game with the serving field empty.
+ *
+ * Its own fixture, seeded live (`emitCoreStart: true`), because the primary
+ * one is the wrong vehicle: `scoreOne` has already scored a rally into set 1
+ * (so no summary can close it) and `openDock` has left the Set score panel
+ * open on top of the board. Same reasoning, and the same fix, as R2b's
+ * cricket over-tile hook.
+ *
+ * Three rallies are TAPPED in the browser rather than posted: for table
+ * tennis those taps are D-13's whole point, and for all three they prove the
+ * rally control is genuinely live at band 3 — which is what makes
+ * `12-bandlimited` below a comparison and not just a different picture.
+ */
+async function captureRacquetServing(
+  page: Page,
+  dir: string,
+  tag: string,
+  measurements: Measurement320[],
+  recipe: RacquetServingRecipe,
+): Promise<ExtraGalleryState> {
+  const svTag = `${tag}sv`;
+  const fx = await seedRosteredFixture(page.request, {
+    label: `Gallery ${recipe.label} Serving ${svTag}`,
+    sportKey: recipe.sportKey,
+    variantKey: recipe.variantKey,
+    entrantKind: recipe.entrantKind,
+    home: [{ fullName: `Gallery ${recipe.slug} SV Home ${svTag}` }],
+    away: [{ fullName: `Gallery ${recipe.slug} SV Away ${svTag}` }],
+    emitCoreStart: true,
+  });
+  // Bank game/set 1 by summary — one event, and the set-transition rule the
+  // serving derivation has to get right has now fired at least once.
+  await postEvent(page.request, fx.fixtureId, recipe.coarseType, recipe.summary);
+
+  await page.goto(await fixturePath(page.request, fx.fixtureId));
+  await expect(pad(page), `gallery(${recipe.slug}): the serving fixture must render a pad`).toBeVisible({
+    timeout: 20_000,
+  });
+  // Home, away, home — 3 points into the SECOND game. Three, not one: table
+  // tennis rotates the serve every 2 points (`turnLength: 2`), so a third
+  // point is what puts the capture on the far side of a rotation boundary
+  // instead of on it. The same three taps leave badminton and volleyball
+  // (serve follows the rally winner) equally past their own first handover.
+  for (const side of ["home", "away", "home"] as const) {
+    const before = await ledgerCount(page.request, fx.fixtureId);
+    // The same locator `scoreOne` uses for these three sports — SideTapAction's
+    // own Home/Away buttons (racquet-skin.tsx), which only exist at band 3.
+    await pad(page)
+      .getByRole("button", { name: side === "home" ? "Home" : "Away", exact: true })
+      .click();
+    await waitForLedgerGrowth(page.request, fx.fixtureId, before);
+  }
+
+  const sets = racquetHeaderValue(page, "Sets");
+  const points = racquetHeaderValue(page, "Points");
+  const serving = racquetHeaderValue(page, "Serving");
+  const probe: StateProbe = async () => {
+    // PRECONDITION, not the defect — this pair does NOT flip at conversion.
+    // It is what stops this capture degenerating into R4's D-21: a banked
+    // game/set AND a current game away from 0-0, so no derivation can be
+    // right here by accident of being asked at turn 0.
+    await expect(
+      sets,
+      `gallery(${recipe.slug}): 11-servingplaceholder needs a BANKED game/set (${recipe.expectedSets})`,
+    ).toHaveText(recipe.expectedSets, { timeout: 20_000 });
+    await expect(
+      points,
+      `gallery(${recipe.slug}): 11-servingplaceholder must be MID-game (${recipe.expectedPoints}), never turn 0`,
+    ).toHaveText(recipe.expectedPoints, { timeout: 20_000 });
+    // ===== THE DEFECT (D-17). THIS IS THE ASSERTION THE CONVERSION FLIPS. =====
+    // Today the header prints an em dash where the server belongs. When R5
+    // wires `setBasedServeContext` into the pad, invert THIS line — assert the
+    // field is NOT the placeholder and names the serving side/player — and
+    // leave everything else in this probe exactly as it is. Do not delete it:
+    // a deleted probe stops the capture failing and does nothing to stop the
+    // placeholder coming back.
+    await expect(
+      serving,
+      `gallery(${recipe.slug}): D-17 — the serving field must still be the placeholder here`,
+    ).toHaveText(RACQUET_SERVING_PLACEHOLDER, { timeout: 20_000 });
+  };
+
+  await captureState(page, dir, "11-servingplaceholder", recipe.slug, measurements, probe);
+  return "11-servingplaceholder";
+}
+
+/**
+ * `12-bandlimited` (D-7) — the same live badminton pad, for an org that does not
+ * hold `scoring.rally_by_rally`.
+ *
+ * The lever is the org's PLAN, flipped to community and restored in a
+ * `finally`: that is literally the org the defect is about, and it exercises
+ * the real plan matrix rather than a staff-deny override. It is restored
+ * before this hook returns because the shared body mints a device link
+ * afterwards and device links are Pro-only.
+ *
+ * NO cache invalidation on purpose. `invalidateOrgEntitlements` exists for
+ * Redis-backed targets, and it works by flipping the org OWNER to superadmin
+ * and back — a side effect on the very account the next four captures are
+ * taken as. Local and CI have no Redis (`cache.ts`'s `client()` returns null,
+ * so `cacheGet` is inert), which is where the runbook already says to run
+ * this harness; against a Redis-backed target this state's probe FAILS,
+ * loudly and by name, rather than photographing a band-3 board and calling it
+ * band-limited. A loud wrong-environment failure is the honest outcome here.
+ */
+async function captureRacquetBandLimited(
+  page: Page,
+  dir: string,
+  tag: string,
+  measurements: Measurement320[],
+): Promise<ExtraGalleryState> {
+  const bzTag = `${tag}bz`;
+  // Seeded (and started) while the org is still Pro: a community org has
+  // lower creation caps, and none of that is what this state is about.
+  const fx = await seedRosteredFixture(page.request, {
+    label: `Gallery Badminton BandLimited ${bzTag}`,
+    sportKey: "badminton",
+    variantKey: "bwf",
+    entrantKind: "individual",
+    home: [{ fullName: `Gallery Badminton BZ Home ${bzTag}` }],
+    away: [{ fullName: `Gallery Badminton BZ Away ${bzTag}` }],
+    emitCoreStart: true,
+  });
+  const org = await activeOrg(page);
+  try {
+    await setOrgPlanBySql({ orgId: org.id }, "community");
+    await page.goto(await fixturePath(page.request, fx.fixtureId));
+    await expect(pad(page), "gallery(badminton): 12-bandlimited must render a pad").toBeVisible({
+      timeout: 20_000,
+    });
+
+    const rallyGroup = pad(page).getByRole("heading", { name: "Rally", exact: true });
+    const setScoreGroup = pad(page).getByRole("heading", { name: "Set score", exact: true });
+    // The FidelitySwitcher's band-3 chip (fidelity-switcher.tsx's own
+    // `data-band`). Disabled == this org genuinely does not hold
+    // `scoring.rally_by_rally`.
+    const bandThreeChip = pad(page).locator('[data-band="3"]');
+    // `scorepad.locked.reason` — the one string the pad shows when an action
+    // is present but paid-gated (`renderLockedTile`, skins/shared.tsx).
+    const lockedReason = pad(page).getByText("Upgrade your plan to unlock this action.");
+    const probe: StateProbe = async () => {
+      // PRECONDITIONS, not the defect. Neither flips.
+      //  (a) The band-0 summary action survives, so this is a real, rendered,
+      //      LIVE pad and not a blank or failed page.
+      //  (b) The band-3 chip is locked — which is what makes the missing rally
+      //      group below attributable to the ENTITLEMENT. Without it this
+      //      probe would pass just as happily against a pad that failed to
+      //      render its rally group for some entirely unrelated reason, and
+      //      would photograph that instead while claiming D-7.
+      await expect(
+        setScoreGroup,
+        "gallery(badminton): 12-bandlimited must still be a live pad — the band-0 summary survives",
+      ).toBeVisible({ timeout: 20_000 });
+      await expect(
+        bandThreeChip,
+        "gallery(badminton): 12-bandlimited needs the org to actually LACK scoring.rally_by_rally",
+      ).toBeDisabled({ timeout: 20_000 });
+      // ===== THE DEFECT (D-7). THESE TWO ARE THE ASSERTIONS THAT FLIP. =====
+      // Rally is band 3 and the org holds no `scoring.rally_by_rally`, so
+      // `resolveAction` returns null and the whole group vanishes — and with
+      // nothing rendered there is nothing to carry `scorepad.locked.reason`
+      // either. That silence is the defect. What the scorer DOES get, and it
+      // is not enough: a padlock glyph on the fidelity switcher's own band-3
+      // chip, whose explanation ("Requires a plan upgrade.",
+      // `scorepad.fidelity.locked`) is a `title` attribute — hover-only, so
+      // unreachable on the phone this pad is designed for — sitting on a
+      // DIFFERENT control from the one that vanished. When R5 fixes it,
+      // invert BOTH lines below — the Rally group visible, the locked reason
+      // on screen — and keep them; do not delete either, or a regression back
+      // to silence sails straight through this gate.
+      await expect(
+        rallyGroup,
+        "gallery(badminton): D-7 — below band 3 the rally group must still be ABSENT, not locked",
+      ).toHaveCount(0, { timeout: 20_000 });
+      await expect(
+        lockedReason,
+        "gallery(badminton): D-7 — and no VISIBLE sentence must still explain why",
+      ).toHaveCount(0, { timeout: 20_000 });
+    };
+
+    await captureState(page, dir, "12-bandlimited", "badminton", measurements, probe);
+    return "12-bandlimited";
+  } finally {
+    // Device links (05-devicelink, minted by the shared body right after this
+    // hook returns) are Pro-only.
+    await setOrgPlanBySql({ orgId: org.id }, "pro");
+  }
 }
 
 const SPORTS: GallerySport[] = [
@@ -1590,6 +1904,22 @@ const SPORTS: GallerySport[] = [
       await pad(page).getByLabel("Away", { exact: true }).fill("20");
       return true;
     },
+    // R5 — D-17. Indoor volleyball's serve follows the rally winner (FIVB
+    // 12.2.2), so the ledger alone answers "who serves next" from the second
+    // rally onward; the pad prints "—" anyway. See `captureRacquetServing`.
+    captureExtra: async (page, dir, tag, measurements) => [
+      await captureRacquetServing(page, dir, tag, measurements, {
+        slug: "volleyball",
+        label: "Volleyball",
+        sportKey: "volleyball",
+        variantKey: "indoor",
+        coarseType: "volleyball.set.summary",
+        // Indoor set 1 is to 25 (setbased/volleyball.ts).
+        summary: { home: 25, away: 20 },
+        expectedSets: racquetScoreline(1, 0),
+        expectedPoints: racquetScoreline(2, 1),
+      }),
+    ],
   },
   {
     slug: "badminton",
@@ -1623,6 +1953,25 @@ const SPORTS: GallerySport[] = [
       }).toPass({ timeout: 10_000 });
       return true;
     },
+    // R5 — D-17 and D-7. Badminton is the sport BAD-03 names, so it carries
+    // the band-limited capture as well as the serving one. Order matters:
+    // 11 runs at Pro (its three rally taps only exist at band 3), 12 flips
+    // the plan and restores it before this hook returns.
+    captureExtra: async (page, dir, tag, measurements) => [
+      await captureRacquetServing(page, dir, tag, measurements, {
+        slug: "badminton",
+        label: "Badminton",
+        sportKey: "badminton",
+        variantKey: "bwf",
+        entrantKind: "individual",
+        coarseType: "badminton.game.summary",
+        // BWF game 1 is to 21 (setbased/badminton.ts).
+        summary: { home: 21, away: 15 },
+        expectedSets: racquetScoreline(1, 0),
+        expectedPoints: racquetScoreline(2, 1),
+      }),
+      await captureRacquetBandLimited(page, dir, tag, measurements),
+    ],
   },
   {
     slug: "tabletennis",
@@ -1651,6 +2000,23 @@ const SPORTS: GallerySport[] = [
       await homeField.fill("11");
       return true;
     },
+    // R5 — D-17 and D-13. The three rally taps here are the first time table
+    // tennis has been driven past a serve-rotation boundary in a browser at
+    // all (`turnLength: 2`, setbased/tabletennis.ts).
+    captureExtra: async (page, dir, tag, measurements) => [
+      await captureRacquetServing(page, dir, tag, measurements, {
+        slug: "tabletennis",
+        label: "Table Tennis",
+        sportKey: "tabletennis",
+        variantKey: "bo5",
+        entrantKind: "individual",
+        coarseType: "tabletennis.game.summary",
+        // ITTF game 1 is to 11 (setbased/tabletennis.ts).
+        summary: { home: 11, away: 7 },
+        expectedSets: racquetScoreline(1, 0),
+        expectedPoints: racquetScoreline(2, 1),
+      }),
+    ],
   },
   {
     slug: "icehockey",
