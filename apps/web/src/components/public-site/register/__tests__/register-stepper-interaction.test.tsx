@@ -432,6 +432,79 @@ describe("RS006 — a registrant may self-link more than one cart entry", () => 
 });
 
 // ---------------------------------------------------------------------------
+// FIX 1 (RS006 fix wave, 2026-08-27) — an EXPLICIT unlink must never be
+// silently undone by an UNRELATED cart-shape change. The auto-link effect
+// (register-stepper.tsx) is keyed on cart.entries.length: adding a second
+// entry then removing it takes the length 1 -> 2 -> 1, re-firing the effect
+// a SECOND time with the ORIGINAL entry once again the cart's only one.
+// Before this fix, autoLinkObviousSelf could not tell that entry apart from
+// one that was simply never linked, and silently re-linked it — resurrecting
+// registering_self:true (and the guardian-consent gate that comes with it)
+// for an entry the registrant explicitly said was not them. This is a
+// SEQUENCE-of-dispatches bug, not any single action's output — a reducer
+// test alone is structurally blind to it (cart.test.ts covers the new
+// per-action behaviour separately); only a real click sequence through the
+// mounted stepper can see it, which is why it shipped in the first place.
+// ---------------------------------------------------------------------------
+
+describe('FIX 1 — an explicit "not me" survives an unrelated add-then-remove', () => {
+  it('unticking "This is me", then adding and removing a DIFFERENT entry, leaves the original entry unlinked', () => {
+    const { stepWho, divisionCard, selfCheckboxes, entryCartCart, clickByText, island } = mount([
+      DIV_OPEN,
+      DIV_OPEN_2,
+    ]);
+
+    (propsOf(stepWho()).onChange as (p: object) => void)({
+      name: "Alex Test",
+      email: "alex@example.com",
+      dob: "1990-01-01",
+    });
+    (propsOf(stepWho()).onImPlayingChange as (v: boolean) => void)(true);
+    clickByText("Next"); // -> ENTRIES
+
+    (propsOf(divisionCard("div-open")).onAddIndividual as () => void)();
+    // Exactly one entry, imPlaying true, nothing ambiguous — auto-linked.
+    expect(entryCartCart().entries.map((e) => e.registering_self), "auto-linked, the obvious case").toEqual([
+      true,
+    ]);
+
+    // Explicitly untick "This is me" on that one entry.
+    const box = selfCheckboxes()[0]!;
+    expect(propsOf(box).checked, "starts checked (auto-linked)").toBe(true);
+    (propsOf(box).onChange as (e: { target: { checked: boolean } }) => void)({ target: { checked: false } });
+    expect(entryCartCart().entries.map((e) => e.registering_self), "explicit uncheck sticks").toEqual([false]);
+
+    // Add a SECOND, unrelated entry — two entries now, so autoLinkObviousSelf
+    // is a no-op (ambiguous), same as every other "2 entries" case in this
+    // file. The point of this step is purely to re-fire the
+    // cart.entries.length-keyed effect via 1 -> 2.
+    (propsOf(divisionCard("div-open-2")).onAddIndividual as () => void)();
+    expect(
+      entryCartCart().entries.map((e) => e.registering_self),
+      "still unlinked — the second entry was never linked either",
+    ).toEqual([false, false]);
+
+    // Remove that second entry — back to exactly ONE entry: the SAME entry
+    // that was explicitly declined above. This re-fires the effect a SECOND
+    // time via 2 -> 1, the exact trigger the bug report names.
+    const removeButtons = () => island.tree().filter((e) => e.type === "button" && textOf(e) === "Remove");
+    expect(removeButtons(), "one Remove control per cart line").toHaveLength(2);
+    (propsOf(removeButtons()[1]!).onClick as () => void)();
+
+    // The bug: autoLinkObviousSelf re-observes "exactly one, unlinked,
+    // unambiguous" and silently re-links it. The fix: it must not — the
+    // registrant's explicit "no" must be remembered, not just the CURRENT
+    // registering_self value.
+    expect(
+      entryCartCart().entries.map((e) => e.registering_self),
+      "the explicitly-declined entry must STAY unlinked — an unrelated add-then-remove must not resurrect it",
+    ).toEqual([false]);
+    expect(selfCheckboxes(), "checkbox reflects the same unlinked state").toHaveLength(1);
+    expect(propsOf(selfCheckboxes()[0]!).checked, "checkbox must not silently re-check itself").toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Finding #3 — a self-linked ineligible entry shows a verdict in the cart
 // AND blocks progression
 // ---------------------------------------------------------------------------

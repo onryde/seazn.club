@@ -69,6 +69,7 @@ function entry(overrides: Partial<CartEntry> & Pick<CartEntry, "id" | "division_
     answers: {},
     registering_self: false,
     self_player_index: null,
+    self_link_declined: false,
     ...overrides,
   };
 }
@@ -294,6 +295,21 @@ describe("cartReducer — SET_ENTRY_SELF (per-entry, independently settable — 
   it("never touches an unrelated entry's own fields", () => {
     const next = cartReducer(two, { type: "SET_ENTRY_SELF", id: "e1", isSelf: false });
     expect(next.entries.find((e) => e.id === "e2")).toEqual(two.entries[1]);
+  });
+
+  // RS006 fix wave — self_link_declined is the memory autoLinkObviousSelf
+  // reads to tell "never asked" apart from "asked, and said no" (see that
+  // function's own describe block below, and CartEntry.self_link_declined's
+  // doc comment in types.ts).
+  it("an explicit isSelf:false sets self_link_declined:true", () => {
+    const next = cartReducer(two, { type: "SET_ENTRY_SELF", id: "e1", isSelf: false });
+    expect(next.entries.find((e) => e.id === "e1")!.self_link_declined).toBe(true);
+  });
+
+  it("an explicit isSelf:true clears self_link_declined — a registrant changing their mind back has nothing left to remember", () => {
+    const declined = cartReducer(two, { type: "SET_ENTRY_SELF", id: "e1", isSelf: false });
+    const next = cartReducer(declined, { type: "SET_ENTRY_SELF", id: "e1", isSelf: true });
+    expect(next.entries.find((e) => e.id === "e1")!.self_link_declined).toBe(false);
   });
 
   // RS006 §D (known gap): a free-agent entry has NO roster UI (design:
@@ -569,6 +585,21 @@ describe("autoLinkObviousSelf — links the ONE cart entry to 'I'm playing' when
     const unlinked: CartState = { entries: [{ ...oneEntry.entries[0]!, registering_self: false }] };
     const next = autoLinkObviousSelf(unlinked, true);
     expect(next.entries[0]!.registering_self).toBe(true);
+  });
+
+  // RS006 fix wave — the contrasting case to the one above: THIS unlinked
+  // state came from an EXPLICIT "This is me" uncheck (SET_ENTRY_SELF,
+  // self_link_declined:true), not an imPlaying round-trip, and must NOT
+  // re-link. This is the pure-function half of the fix; the mounted
+  // add-then-remove SEQUENCE that actually shipped the bug is regression-
+  // pinned in register-stepper-interaction.test.tsx (a reducer-level test
+  // alone cannot see a bug that only exists across multiple dispatches).
+  it("does NOT re-link when the sole entry was EXPLICITLY declined (self_link_declined:true), even though it is otherwise the obvious, unambiguous case", () => {
+    const declined: CartState = {
+      entries: [{ ...oneEntry.entries[0]!, registering_self: false, self_link_declined: true }],
+    };
+    const next = autoLinkObviousSelf(declined, true);
+    expect(next).toBe(declined);
   });
 
   // RS006 §D (known gap) — see the matching SET_ENTRY_SELF test above for

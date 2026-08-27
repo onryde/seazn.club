@@ -107,6 +107,7 @@ export function cartReducer(state: CartState, action: CartAction): CartState {
         answers: {},
         registering_self: false,
         self_player_index: null,
+        self_link_declined: false,
       };
       return { ...state, entries: [...state.entries, entry] };
     }
@@ -140,6 +141,7 @@ export function cartReducer(state: CartState, action: CartAction): CartState {
         answers: {},
         registering_self: false,
         self_player_index: null,
+        self_link_declined: false,
       };
       return { ...state, entries: [...state.entries, clone] };
     }
@@ -178,11 +180,20 @@ export function cartReducer(state: CartState, action: CartAction): CartState {
       // renders the checkbox for a free-agent entry; autoLinkObviousSelf
       // below skips one too). `isSelf: false` (unlinking) is always allowed
       // — refusing THAT would leave a stale link with no way to clear it.
+      //
+      // `self_link_declined` (RS006 fix wave) mirrors the action's OWN
+      // isSelf, inverted: an explicit `isSelf: false` is what "declining"
+      // means, so it flips to `true`; an explicit `isSelf: true` is the
+      // registrant changing their mind back, so it flips to `false` — a
+      // freshly re-linked entry has nothing left to remember. See
+      // `CartEntry.self_link_declined`'s own doc comment (types.ts) for why
+      // this exists: without it, autoLinkObviousSelf cannot tell "never
+      // asked" apart from "asked, and said no."
       return {
         ...state,
         entries: state.entries.map((e) =>
           e.id === action.id && (!action.isSelf || !e.free_agent)
-            ? { ...e, registering_self: action.isSelf, self_player_index: null }
+            ? { ...e, registering_self: action.isSelf, self_player_index: null, self_link_declined: !action.isSelf }
             : e,
         ),
       };
@@ -300,6 +311,7 @@ export function autoSeedSingleDivision(division: DivisionLike, id: string): Cart
       answers: {},
       registering_self: false,
       self_player_index: null,
+      self_link_declined: false,
     },
   ];
 }
@@ -311,12 +323,23 @@ export function autoSeedSingleDivision(division: DivisionLike, id: string): Cart
  *  and never guesses across 2+ entries — that ambiguity is the rep's call
  *  (cart.ts's SET_ENTRY_SELF, driven by the ENTRIES step's per-entry "This is
  *  me" control). Returns the SAME reference when there is nothing to do,
- *  matching every other function here. */
+ *  matching every other function here.
+ *
+ *  RS006 fix wave — this is called from an EFFECT keyed on
+ *  `cart.entries.length` (register-stepper.tsx), which re-fires on ANY
+ *  cart-shape change, not just the one that made it relevant. Before the
+ *  `self_link_declined` check below, "not currently linked" was the ONLY
+ *  signal available, which is indistinguishable from "explicitly declined,
+ *  then an unrelated entry was added and removed" — a length round-trip
+ *  (1 -> 2 -> 1) silently re-linked an entry the registrant had just said
+ *  was not them. `self_link_declined` (set by SET_ENTRY_SELF) is what
+ *  "never overrides an EXPLICIT choice" above actually means now. */
 export function autoLinkObviousSelf(cart: CartState, imPlaying: boolean): CartState {
   if (!imPlaying) return cart;
   if (cart.entries.length !== 1) return cart;
   const only = cart.entries[0]!;
   if (only.registering_self) return cart;
+  if (only.self_link_declined) return cart;
   // RS006 §D (known gap) — a free-agent entry has no roster UI to ever
   // resolve self_player_index (see SET_ENTRY_SELF's own doc comment above,
   // which the reducer call below would hit anyway — this early return just

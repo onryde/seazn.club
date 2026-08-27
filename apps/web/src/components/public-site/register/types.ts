@@ -190,6 +190,29 @@ export interface CartEntry {
    *  shifted/cleared by `REMOVE_PLAYER` when a row before/at the linked
    *  index is removed — see that action's own doc comment. */
   self_player_index: number | null;
+  /** CLIENT-ONLY (never sent — `toGroupEntry` below does not include it),
+   *  same status as `id`. RS006 fix wave — set `true` the moment the
+   *  registrant EXPLICITLY unticks "This is me" on THIS entry
+   *  (`cart.ts`'s `SET_ENTRY_SELF`, `isSelf: false`); set back to `false`
+   *  the moment they explicitly RE-tick it (`SET_ENTRY_SELF`,
+   *  `isSelf: true`). Exists so `autoLinkObviousSelf`'s reactive
+   *  convenience (register-stepper.tsx's effect, keyed on
+   *  `cart.entries.length`) can tell "nobody has ever said no to this
+   *  entry" apart from "the registrant said no, and an UNRELATED
+   *  cart-shape change (adding then removing a DIFFERENT entry, which
+   *  re-fires that same effect) must not silently undo that." Without
+   *  this, the effect re-observes "exactly one, unlinked, unambiguous"
+   *  after the shape change and re-links it — submitting
+   *  `registering_self:true` (and the guardian-consent gate that comes
+   *  with it) for an entry the registrant explicitly said was not them.
+   *  Deliberately NOT touched by `clearSelfLinkWhenNotPlaying`'s cart-wide
+   *  clear (turning "I'm playing" off entirely) — that is not a per-entry
+   *  "not me" statement, and toggling "I'm playing" back on is expected to
+   *  re-arm auto-link the same way it does on a fresh visit (see that
+   *  function's own doc comment). Optional — not every hand-built
+   *  `CartEntry` fixture in this tree sets it, and `undefined` reads the
+   *  same as `false` everywhere it's checked. */
+  self_link_declined?: boolean;
 }
 
 /** The whole cart. Self-link state lives PER-ENTRY (`CartEntry.
