@@ -3703,10 +3703,30 @@ export async function sweepRegistrations(
     order by g.expires_at
     limit 200`;
   for (const reg of due) {
+    let claimed = false;
     try {
       const ctx = await divisionCtx(sql, reg.division_id);
       if (!ctx.charges_enabled) continue; // Connect broke — nothing to link to
       const url = await createRegistrationCheckout(reg.group_id, [reg.id], ctx, origin, null);
+      // RS007 follow-up: the mark is now a CLAIM taken right before the
+      // send it gates, not a receipt written after it — nothing re-checked
+      // it at write time before, so a client-side retry racing the same
+      // sweep (registrations-sweep.yml's own curl --retry, landing while
+      // the first invocation is still running server-side) could mint+email
+      // this row twice: the second mint silently supersedes/expires the
+      // first's session, so the FIRST email goes out carrying a dead pay
+      // link. Minting stays unconditional either way — harmless if wasted,
+      // and createRegistrationCheckout's own checkout_session_id CAS
+      // already settles which session survives a genuine re-mint — but only
+      // the invocation that wins THIS claim may send. Reverted in the catch
+      // below on a genuine send failure, so a real failure still retries
+      // next sweep — never a silent, permanent loss.
+      const [row] = await sql<{ id: string }[]>`
+        update registration_groups set reminded_at = now(), updated_at = now()
+        where id = ${reg.group_id} and reminded_at is null
+        returning id`;
+      if (!row) continue; // a concurrent sweep already claimed this row
+      claimed = true;
       await sendPaymentReminderEmail({
         to: reg.contact_email,
         locale: toLocale(reg.locale),
@@ -3720,10 +3740,12 @@ export async function sweepRegistrations(
         payDeadline: reg.expires_at,
       });
     } catch {
-      continue; // reminded_at stays null — the next sweep retries
+      if (claimed) {
+        await sql`update registration_groups set reminded_at = null, updated_at = now()
+                  where id = ${reg.group_id}`;
+      }
+      continue; // reminded_at stays/reverts to null — the next sweep retries
     }
-    await sql`update registration_groups set reminded_at = now(), updated_at = now()
-              where id = ${reg.group_id}`;
     reminded++;
   }
 
@@ -3748,10 +3770,20 @@ export async function sweepRegistrations(
     order by r.promotion_expires_at
     limit 200`;
   for (const reg of duePromoted) {
+    let claimed = false;
     try {
       const ctx = await divisionCtx(sql, reg.division_id);
       if (!ctx.charges_enabled) continue; // Connect broke — nothing to link to
       const url = await createRegistrationCheckout(reg.group_id, [reg.id], ctx, origin, null);
+      // RS007 follow-up — same CAS-claim fix as pass (1a) above, on this
+      // entry's OWN mark (never the group's, per this pass's own doc
+      // comment on why).
+      const [row] = await sql<{ id: string }[]>`
+        update registrations set promotion_reminded_at = now(), updated_at = now()
+        where id = ${reg.id} and promotion_reminded_at is null
+        returning id`;
+      if (!row) continue; // a concurrent sweep already claimed this row
+      claimed = true;
       await sendPaymentReminderEmail({
         to: reg.contact_email,
         locale: toLocale(reg.locale),
@@ -3765,10 +3797,12 @@ export async function sweepRegistrations(
         payDeadline: reg.promotion_expires_at,
       });
     } catch {
-      continue; // promotion_reminded_at stays null — the next sweep retries
+      if (claimed) {
+        await sql`update registrations set promotion_reminded_at = null, updated_at = now()
+                  where id = ${reg.id}`;
+      }
+      continue; // promotion_reminded_at stays/reverts to null — the next sweep retries
     }
-    await sql`update registrations set promotion_reminded_at = now(), updated_at = now()
-              where id = ${reg.id}`;
     reminded++;
   }
 

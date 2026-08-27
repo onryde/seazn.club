@@ -59,6 +59,15 @@ const emailMock = vi.hoisted(() => ({
   // these tests only need to prove the call sites TRIGGER it, not exercise
   // its own template rendering (that lives in registration-refund-alert.test.ts).
   registrationRefundFailedAlert: vi.fn().mockResolvedValue(true),
+  // RS007 sweep-reminder CAS race test: observed directly (bare vi.fn, not
+  // forwarded to the real implementation — this is a no-op without
+  // RESEND_API_KEY anyway, same as every other email in this file's own
+  // convention), so a race test can count sends without depending on the
+  // provider being configured. Every OTHER sweep test in this file only
+  // ever asserted via stripeMock.checkoutCreate as a proxy for "one send" —
+  // that proxy breaks once a race can mint twice but send once (or vice
+  // versa), which is exactly what this fix separates.
+  paymentReminder: vi.fn().mockResolvedValue(true),
 }));
 vi.mock("@/lib/email", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/email")>();
@@ -72,6 +81,7 @@ vi.mock("@/lib/email", async (importOriginal) => {
       return actual.sendRegistrationEmail(opts);
     },
     sendRegistrationRefundFailedAlertEmail: emailMock.registrationRefundFailedAlert,
+    sendPaymentReminderEmail: emailMock.paymentReminder,
   };
 });
 
@@ -366,6 +376,10 @@ beforeEach(() => {
   emailMock.forceRegistrationResult = null;
   emailMock.forceRegistrationError = null;
   emailMock.registrationRefundFailedAlert.mockClear();
+  // .mockReset() (not .mockClear()): a race test installs its own
+  // mockImplementation on this one — reset the implementation back to its
+  // default too, or it leaks into every later test in this file.
+  emailMock.paymentReminder.mockReset().mockResolvedValue(true);
 });
 
 afterEach(() => {
@@ -1900,6 +1914,64 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
     expect(await auditCount("registration.promoted", b.registration.id)).toBe(1);
     expect(checkoutsFor(a.registration.id)).toBe(1); // A stays reminded exactly once
     expect(checkoutsFor(b.registration.id)).toBe(1); // B not re-linked
+  });
+
+  // RS007 follow-up (this wave): the reminder mark was a RECEIPT (written
+  // after send), never a CLAIM — nothing re-checked it at write time. The
+  // live vector is registrations-sweep.yml's own curl --retry: up to 200
+  // rows x (checkout mint + email) serially makes a >60s sweep ordinary, so
+  // the client times out and re-POSTs while the FIRST invocation is still
+  // running server-side — two genuinely concurrent sweepRegistrations()
+  // calls, not two workflow runs (the workflow itself has a concurrency:
+  // gate).
+  //
+  // Staged as a genuine STAGGER, deliberately not a tight simultaneous
+  // mint collision: the racing sweep is kicked off from inside the FIRST
+  // invocation's OWN email-send call (never any other due row's — filtered
+  // by contact email) and fully AWAITED there before the first invocation
+  // takes its own next step. This is not a guessed delay: by the time any
+  // invocation reaches its send, its own mint+stamp has ALREADY committed
+  // unconditionally (send is strictly sequenced after them in both the pre-
+  // and post-fix code), so the racing sweep's own checkout read always
+  // observes an ALREADY-STAMPED session — never a collision on
+  // createRegistrationCheckout's OWN, unrelated checkout_session_id CAS
+  // (confirmed live: an earlier version of this test that raced the mint
+  // itself tripped exactly that unrelated CAS and passed for the wrong
+  // reason, 409-ing the loser before it could ever send). And because the
+  // racing sweep's own due-select runs while still inside the first
+  // invocation's send call, it reads whatever the reminder mark ACTUALLY is
+  // at that exact point — still null pre-fix (mark comes after send, so the
+  // race sweep sees the row as due and sends again), already claimed
+  // post-fix (mark/claim comes before send, so the race sweep's own
+  // due-select excludes the row outright) — which is exactly the fix this
+  // test exists to prove.
+  it("RS007: two sweeps racing the SAME due reminder — exactly one email goes out, never two", async () => {
+    const { competition, division, settings } = await stripeRig();
+    const contactEmail = `remind-race-${randomUUID().slice(0, 8)}@test.local`;
+    const a = await seedRegistration(competition.id, division.id, settings, { contactEmail });
+    await sql`update registration_groups set expires_at = now() + interval '1 hour'
+              where id = ${a.registration.group_id}`;
+
+    let bPromise: Promise<unknown> | null = null;
+    emailMock.paymentReminder.mockImplementation(async (opts: unknown) => {
+      if ((opts as { to?: string } | undefined)?.to === contactEmail && !bPromise) {
+        bPromise = sweepRegistrations("http://test.local");
+        await bPromise;
+      }
+      return true;
+    });
+
+    await sweepRegistrations("http://test.local");
+    // Sanity: the race actually happened — otherwise this test would pass
+    // vacuously regardless of the fix.
+    expect(bPromise, "the racing sweep must have been triggered").not.toBeNull();
+
+    const oursCalls = emailMock.paymentReminder.mock.calls.filter(
+      ([opts]) => (opts as { to?: string })?.to === contactEmail,
+    );
+    expect(oursCalls).toHaveLength(1);
+    const row = await loadWithGroup(a.registration.id);
+    expect(row.reminded_at, "the winner's claim stuck").not.toBeNull();
   });
 
   it("reconciles by session from /r/[ref] (token-free return)", async () => {
