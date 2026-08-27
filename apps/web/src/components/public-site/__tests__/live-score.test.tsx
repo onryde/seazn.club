@@ -66,6 +66,10 @@ const templates: DecidedOutcomeTemplates = {
   tie: "TIE",
   plain: "{winner} WON",
   byMethod: { shootout: "{winner} WON {score} ON PENALTIES" },
+  // F8 (R3.5 review) — the score-less shootout fallback. Distinct wording
+  // from the scored one above so this file's own live-update assertions
+  // cannot pass by accidentally matching the wrong template.
+  shootoutPlain: "{winner} WON ON PENALTIES",
 };
 
 const entrantNames = { W: "Riverside FC", L: "Oakdale United" };
