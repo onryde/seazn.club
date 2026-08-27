@@ -506,6 +506,44 @@ describe("validateDetails — step 3's Next gate", () => {
     expect(validateDetails(cart, [BASE_DIVISION], EMPTY_CONTACT, SEASON_START_YEAR).valid).toBe(false);
   });
 
+  // RS006 follow-up. Every OTHER step-3 blocker has inline state of its own —
+  // roster rows, the mixed meter, required-field markers. This one had none,
+  // so a complete-looking roster with the self picker left on "None of these"
+  // produced a dead Next under a step-wide "fill in the missing details
+  // above" that marked no field at all. Reported distinctly so the banner can
+  // name it and entry-details.tsx can flag the picker itself.
+  it("reports an unresolved self_player_index as selfRowUnnamed, not the generic incomplete", () => {
+    const cart: CartState = {
+      entries: [
+        entry({
+          id: "e1",
+          division_id: "d1",
+          entrant_kind: "team",
+          players: [{ ...EMPTY_ROSTER_PLAYER, full_name: "Alex" }],
+          registering_self: true,
+          self_player_index: null,
+        }),
+      ],
+    };
+    expect(validateDetails(cart, [BASE_DIVISION], EMPTY_CONTACT, SEASON_START_YEAR).error).toBe("selfRowUnnamed");
+  });
+
+  it("still reports a genuinely incomplete roster as incomplete — the two blockers stay distinguishable", () => {
+    const cart: CartState = {
+      entries: [
+        entry({
+          id: "e1",
+          division_id: "d1",
+          entrant_kind: "team",
+          players: [{ ...EMPTY_ROSTER_PLAYER, full_name: "   " }],
+          registering_self: true,
+          self_player_index: 0,
+        }),
+      ],
+    };
+    expect(validateDetails(cart, [BASE_DIVISION], EMPTY_CONTACT, SEASON_START_YEAR).error).toBe("incomplete");
+  });
+
   it("does NOT block a self-linked INDIVIDUAL entry lacking self_player_index (schema implies index 0)", () => {
     const cart: CartState = {
       entries: [

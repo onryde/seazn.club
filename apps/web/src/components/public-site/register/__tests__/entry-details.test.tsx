@@ -129,3 +129,59 @@ describe("EntryDetails' form_fields onChange -> cartReducer — no intervening r
     });
   });
 });
+
+// RS006 follow-up — the self picker is REQUIRED whenever it renders (an
+// unresolved `self_player_index` blocks step 3's Next, validation.ts), but
+// it had no error state of its own. "None of these" is its default and
+// reads like a valid answer, so a registrant with a complete roster met a
+// dead Next button, no field marked, and only a step-wide "fill in the
+// missing details above" to go on. Silent abandonment the organiser never
+// hears about.
+describe("EntryDetails — the self-row picker says when it is the thing blocking Next", () => {
+  function renderSelfEntry(selfPlayerIndex: number | null) {
+    return walk(
+      EntryDetails({
+        entry: makeEntry({
+          registering_self: true,
+          self_player_index: selfPlayerIndex,
+          players: [
+            { full_name: "Priya Raman", squad_number: "", dob: null, gender: null },
+            { full_name: "Arun Menon", squad_number: "", dob: null, gender: null },
+          ],
+        }),
+        division: DIVISION,
+        contact: EMPTY_CONTACT,
+        isSelfEntry: true,
+        selfPlayerIndex,
+        seasonStartYear: 2026,
+        dispatch: () => {},
+        importText: "",
+        onImportTextChange: () => {},
+      }),
+    );
+  }
+
+  const picker = (tree: ReturnType<typeof walk>) => tree.find((el) => propsOf(el).id === "reg-self-index-e1");
+  const error = (tree: ReturnType<typeof walk>) => tree.find((el) => propsOf(el).id === "reg-self-index-e1-error");
+
+  it("marks the picker invalid and renders an error beside it while no row is chosen", () => {
+    const tree = renderSelfEntry(null);
+    expect(picker(tree), "self picker not rendered").toBeTruthy();
+    expect(propsOf(picker(tree)!)["aria-invalid"]).toBe(true);
+    expect(error(tree), "no error rendered beside the picker").toBeTruthy();
+    expect(propsOf(error(tree)!).role).toBe("alert");
+  });
+
+  it("points the picker at that error via aria-describedby, so it is announced with the control", () => {
+    const tree = renderSelfEntry(null);
+    expect(propsOf(picker(tree)!)["aria-describedby"]).toBe("reg-self-index-e1-error");
+  });
+
+  it("clears both the error and the invalid state once a row IS chosen", () => {
+    const tree = renderSelfEntry(0);
+    expect(picker(tree), "self picker not rendered").toBeTruthy();
+    expect(propsOf(picker(tree)!)["aria-invalid"]).toBeUndefined();
+    expect(propsOf(picker(tree)!)["aria-describedby"]).toBeUndefined();
+    expect(error(tree)).toBeUndefined();
+  });
+});

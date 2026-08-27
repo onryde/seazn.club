@@ -3808,6 +3808,7 @@ export type DictionaryKey =
   | "register.errors.nameTooLong"
   | "register.errors.privacyConsent"
   | "register.errors.selfIneligible"
+  | "register.errors.selfPlayerRequired"
   | "register.guardian.consent.label"
   | "register.guardian.intro"
   | "register.guardian.name.label"

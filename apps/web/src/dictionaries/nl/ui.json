@@ -4470,6 +4470,7 @@
   "register.details.issue.missingDob": "Voeg de geboortedatum van deze speler toe om de geschiktheid te controleren",
   "register.details.issue.missingGender": "Voeg het geslacht van deze speler toe om de geschiktheid te controleren",
   "register.errors.detailsIncomplete": "Vul de ontbrekende gegevens hierboven in voordat je verdergaat",
+  "register.errors.selfPlayerRequired": "Kies welke speler in deze inschrijving jij bent",
   "register.consent.namesPublic": "Standaard is je naam publiek zichtbaar op de pagina's van dit evenement. Je kunt op elk moment overschakelen naar initialen via je profiel.",
   "register.consent.media.label": "Ik vind het goed dat {org} foto's of video's van mij van dit evenement gebruikt.",
   "register.consent.media.hint": "Optioneel — dit heeft nooit invloed op je inschrijving.",

@@ -4470,6 +4470,7 @@
   "register.details.issue.missingDob": "Ajoutez la date de naissance de ce joueur pour vérifier son éligibilité",
   "register.details.issue.missingGender": "Ajoutez le genre de ce joueur pour vérifier son éligibilité",
   "register.errors.detailsIncomplete": "Complétez les informations manquantes ci-dessus avant de continuer",
+  "register.errors.selfPlayerRequired": "Indiquez quel joueur de cette inscription est vous",
   "register.consent.namesPublic": "Par défaut, votre nom apparaît publiquement sur les pages de cet événement. Vous pouvez passer à l'affichage des initiales à tout moment depuis votre profil.",
   "register.consent.media.label": "J'accepte que {org} utilise des photos ou vidéos de moi prises lors de cet événement.",
   "register.consent.media.hint": "Facultatif — cela n'affecte jamais votre inscription.",

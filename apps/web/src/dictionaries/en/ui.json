@@ -4470,6 +4470,7 @@
   "register.details.issue.missingDob": "Enter this player's date of birth to check eligibility",
   "register.details.issue.missingGender": "Enter this player's gender to check eligibility",
   "register.errors.detailsIncomplete": "Fill in the missing details above before continuing",
+  "register.errors.selfPlayerRequired": "Choose which player on this entry is you",
   "register.consent.namesPublic": "By default, your name appears publicly on this event's pages. You can switch to showing initials any time from your profile.",
   "register.consent.media.label": "I'm happy for {org} to use photos or video of me from this event.",
   "register.consent.media.hint": "Optional — this never affects whether you can register.",
