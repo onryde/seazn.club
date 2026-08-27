@@ -406,6 +406,38 @@ describe("PublicJoinRequest", () => {
     const r = PublicJoinRequest.safeParse({ join_code: "SZ-JOIN-0001" });
     expect(r.success).toBe(false);
   });
+
+  // RS007 review defect #4 (HIGH): the join page's own CONSENT step
+  // collects both flags, but this schema had nowhere to receive them —
+  // joinTeamEntry could never record a joiner's privacy consent, and a
+  // deliberate media-consent REFUSAL was silently overridden by the
+  // captain's own group-level choice (registration-submit.ts persists both
+  // PER-PLAYER now, never on the group).
+  it("accepts and preserves privacy_consent/media_consent, including an explicit false", () => {
+    const r = PublicJoinRequest.safeParse({
+      join_code: "SZ-JOIN-0001",
+      player: { full_name: "New Joiner" },
+      privacy_consent: true,
+      media_consent: false,
+    });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data.privacy_consent).toBe(true);
+      expect(r.data.media_consent).toBe(false);
+    }
+  });
+
+  it("still accepts a body that omits both — optional at the wire, same convention as guardian_consent", () => {
+    const r = PublicJoinRequest.safeParse({
+      join_code: "SZ-JOIN-0001",
+      player: { full_name: "New Joiner" },
+    });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data.privacy_consent).toBeUndefined();
+      expect(r.data.media_consent).toBeUndefined();
+    }
+  });
 });
 
 describe("PublicJoinResponse", () => {

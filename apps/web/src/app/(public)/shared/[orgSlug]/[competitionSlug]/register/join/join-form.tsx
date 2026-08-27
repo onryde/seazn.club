@@ -128,7 +128,7 @@ export function JoinForm({
     try {
       await apiV1(joinSubmitUrl(orgSlug, competitionSlug), {
         method: "POST",
-        json: buildJoinBody(joinCode, selected!, contact),
+        json: buildJoinBody(joinCode, selected!, contact, consent),
       });
       setMeter(rosterMeterAfterJoin(totalPlayers, slots.length, selected === NEW_PLAYER_CHOICE));
     } catch (err) {

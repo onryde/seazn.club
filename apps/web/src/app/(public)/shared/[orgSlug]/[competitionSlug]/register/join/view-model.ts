@@ -5,7 +5,7 @@
 // sends, how a status code maps to a DESIGNED state rather than a raw
 // error) are provable without a render. Mirrors register/status/
 // view-model.ts's own "pure logic, own file" convention for this route.
-import type { CartState, ContactState } from "@/components/public-site/register/types";
+import type { CartState, ConsentState, ContactState } from "@/components/public-site/register/types";
 import type { WhoFieldRequirements } from "@/components/public-site/register/validation";
 
 /** Sentinel for "add me as a new player" — never a real player_id (those
@@ -107,6 +107,16 @@ export interface JoinRequestBody {
   player: { full_name: string; dob: string | null; gender: string | null; email: string };
   guardian_name: string | null;
   guardian_consent: boolean;
+  /** RS007 review defect #4 fix — the join page's own CONSENT step
+   *  (StepConsent) collects both, but the body sent neither: a joiner's
+   *  privacy consent was never recorded, and a deliberate media-consent
+   *  REFUSAL was silently overridden by the captain's own group-level
+   *  choice (joinTeamEntry persists these PER-PLAYER, never on the group —
+   *  registration-submit.ts). Always sent explicitly as a boolean, never
+   *  omitted — same convention submit.ts's own SubmitRequestBody uses for
+   *  these two fields: a `false` IS the answer (a refusal), not "unset". */
+  privacy_consent: boolean;
+  media_consent: boolean;
 }
 
 /** Mirrors PublicJoinRequest's wire shape field-for-field (schemas.ts).
@@ -115,8 +125,16 @@ export interface JoinRequestBody {
  *  absent -> insert", and omitting the key is the more honest wire shape
  *  for "this field does not apply" (matches submit.ts's own
  *  SubmitRequestBody convention of never sending a field that means
- *  nothing for the current case). */
-export function buildJoinBody(joinCode: string, selected: SlotChoice, contact: ContactState): JoinRequestBody {
+ *  nothing for the current case). `consent` is a separate parameter from
+ *  `contact` (rather than folded into it) because that is how the two
+ *  live client-side too — ConsentState (privacy_consent/media_consent) is
+ *  its own step-4 state, never merged into ContactState (types.ts). */
+export function buildJoinBody(
+  joinCode: string,
+  selected: SlotChoice,
+  contact: ContactState,
+  consent: ConsentState,
+): JoinRequestBody {
   return {
     join_code: joinCode,
     ...(selected === NEW_PLAYER_CHOICE ? {} : { player_id: selected }),
@@ -128,6 +146,8 @@ export function buildJoinBody(joinCode: string, selected: SlotChoice, contact: C
     },
     guardian_name: contact.guardian_name,
     guardian_consent: contact.guardian_consent,
+    privacy_consent: consent.privacy_consent,
+    media_consent: consent.media_consent,
   };
 }
 

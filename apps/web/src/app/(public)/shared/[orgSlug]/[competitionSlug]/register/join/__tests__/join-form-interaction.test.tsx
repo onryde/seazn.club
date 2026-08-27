@@ -250,6 +250,38 @@ describe("minor joiner — guardian path", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Consent wiring — RS007 review defect #4 (HIGH): the join page hard-blocks
+// submit on privacy consent, but the POST body sent neither privacy_consent
+// nor media_consent — a joiner's privacy consent was never recorded, and a
+// deliberate media-consent REFUSAL was silently overridden by the captain's
+// own group-level choice (joinTeamEntry now persists both PER-PLAYER, never
+// on the group — registration-submit.ts).
+// ---------------------------------------------------------------------------
+
+describe("consent wiring — RS007 defect #4", () => {
+  it("sends privacy_consent/media_consent once both are ticked", async () => {
+    apiV1Mock.queue.push({ ok: true, data: { registration_id: "reg-1", player_id: "p1", consent_status: "granted" } });
+    const m = mount({ initialPlayerId: "p1" });
+    fillMinimalValidForm(m); // ticks privacy only
+    const mediaBox = m.island.tree().find((e) => propsOf(e).id === "reg-consent-media")!;
+    (propsOf(mediaBox).onChange as (e: { target: { checked: boolean } }) => void)({ target: { checked: true } });
+    await submit(m);
+    expect(apiV1Mock.calls[0]!.json).toMatchObject({ privacy_consent: true, media_consent: true });
+  });
+
+  it("a deliberate media-consent REFUSAL is sent as `false`, not omitted — must never be silently overridden server-side", async () => {
+    apiV1Mock.queue.push({ ok: true, data: { registration_id: "reg-1", player_id: "p1", consent_status: "granted" } });
+    const m = mount({ initialPlayerId: "p1" });
+    fillMinimalValidForm(m); // ticks privacy only — media stays unchecked
+    await submit(m);
+    const body = apiV1Mock.calls[0]!.json as Record<string, unknown>;
+    expect(body.privacy_consent).toBe(true);
+    expect("media_consent" in body).toBe(true);
+    expect(body.media_consent).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Submit outcomes — designed states, never a raw server string
 // ---------------------------------------------------------------------------
 

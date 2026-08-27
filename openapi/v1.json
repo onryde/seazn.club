@@ -59040,6 +59040,12 @@
                   },
                   "guardian_consent": {
                     "type": "boolean"
+                  },
+                  "privacy_consent": {
+                    "type": "boolean"
+                  },
+                  "media_consent": {
+                    "type": "boolean"
                   }
                 },
                 "required": [

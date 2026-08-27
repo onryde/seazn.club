@@ -25,6 +25,8 @@ const CONTACT = {
   guardian_consent: false,
 };
 
+const CONSENT = { privacy_consent: true, media_consent: false };
+
 describe("defaultSlotChoice", () => {
   const SLOTS = [
     { player_id: "p1" },
@@ -98,29 +100,36 @@ describe("joinWhoRequirements", () => {
 
 describe("buildJoinBody", () => {
   it("claim path — sends the chosen player_id", () => {
-    const body = buildJoinBody("JOIN123", "p2", { ...CONTACT, dob: "1990-01-01", gender: "f" });
+    const body = buildJoinBody("JOIN123", "p2", { ...CONTACT, dob: "1990-01-01", gender: "f" }, CONSENT);
     expect(body).toEqual({
       join_code: "JOIN123",
       player_id: "p2",
       player: { full_name: "Alex Test", dob: "1990-01-01", gender: "f", email: "alex@example.com" },
       guardian_name: null,
       guardian_consent: false,
+      privacy_consent: true,
+      media_consent: false,
     });
   });
 
   it("insert path (NEW_PLAYER_CHOICE) — player_id is OMITTED, not sent as null/undefined", () => {
-    const body = buildJoinBody("JOIN123", NEW_PLAYER_CHOICE, CONTACT);
+    const body = buildJoinBody("JOIN123", NEW_PLAYER_CHOICE, CONTACT, CONSENT);
     expect("player_id" in body).toBe(false);
   });
 
   it("trims name/email, carries the guardian pair through untouched", () => {
-    const body = buildJoinBody("JOIN123", "p1", {
-      ...CONTACT,
-      name: "  Kid Joiner  ",
-      email: "  kid@example.com  ",
-      guardian_name: "A Guardian",
-      guardian_consent: true,
-    });
+    const body = buildJoinBody(
+      "JOIN123",
+      "p1",
+      {
+        ...CONTACT,
+        name: "  Kid Joiner  ",
+        email: "  kid@example.com  ",
+        guardian_name: "A Guardian",
+        guardian_consent: true,
+      },
+      CONSENT,
+    );
     expect(body.player.full_name).toBe("Kid Joiner");
     expect(body.player.email).toBe("kid@example.com");
     expect(body.guardian_name).toBe("A Guardian");
@@ -128,10 +137,30 @@ describe("buildJoinBody", () => {
   });
 
   it("CRITICAL: the join_code capability token is never echoed anywhere except its own field", () => {
-    const body = buildJoinBody("SECRET-CODE-999", "p1", CONTACT);
+    const body = buildJoinBody("SECRET-CODE-999", "p1", CONTACT, CONSENT);
     const { join_code, ...rest } = body;
     expect(join_code).toBe("SECRET-CODE-999");
     expect(JSON.stringify(rest)).not.toContain("SECRET-CODE-999");
+  });
+
+  // RS007 review defect #4 (HIGH): the join page hard-blocks submit on
+  // privacy consent, but the body sent neither field — a joiner's privacy
+  // consent was never recorded, and a deliberate media-consent REFUSAL was
+  // silently overridden by the captain's own group-level choice
+  // (joinTeamEntry now persists both PER-PLAYER, never on the group —
+  // registration-submit.ts).
+  describe("privacy_consent/media_consent — RS007 defect #4", () => {
+    it("sends both consent flags, granted", () => {
+      const body = buildJoinBody("JOIN123", "p1", CONTACT, { privacy_consent: true, media_consent: true });
+      expect(body.privacy_consent).toBe(true);
+      expect(body.media_consent).toBe(true);
+    });
+
+    it("a deliberate media-consent REFUSAL is sent as `false`, never dropped/omitted", () => {
+      const body = buildJoinBody("JOIN123", "p1", CONTACT, { privacy_consent: true, media_consent: false });
+      expect("media_consent" in body).toBe(true);
+      expect(body.media_consent).toBe(false);
+    });
   });
 });
 

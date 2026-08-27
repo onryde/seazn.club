@@ -2596,6 +2596,23 @@ export const PublicJoinRequest = z.object({
   player_id: Uuid.nullish(),
   guardian_name: z.string().max(120).nullish(),
   guardian_consent: z.boolean().optional(),
+  /** RS007 review defect #4 fix — collected by the join page's own CONSENT
+   *  step (StepConsent, reused verbatim) and persisted PER-PLAYER by
+   *  joinTeamEntry (registration_players.privacy_consent_at/.version,
+   *  V384), never on registration_groups — that would silently apply the
+   *  CAPTAIN's own choice to every later joiner, which is the bug this
+   *  fixes. Optional here, unlike PublicRegisterGroupRequest.privacy_consent
+   *  (required there, enforced server-side): the join form already hard-
+   *  blocks submit without it client-side (validateConsent), and there is
+   *  no equivalent server-side gate for this path — an omitted value simply
+   *  never gets a privacy_consent_at stamp, mirroring guardian_consent's own
+   *  "optional at the wire, enforced by the caller" convention above. */
+  privacy_consent: z.boolean().optional(),
+  /** Optional, never blocks — mirrors PublicRegisterGroupRequest.media_consent
+   *  structurally (RS006 §A: "media consent is OPTIONAL and never blocks
+   *  submit"). Stamped when true, left null otherwise (a deliberate `false`
+   *  persists as a refusal, same as that field). */
+  media_consent: z.boolean().optional(),
 });
 export type PublicJoinRequest = z.infer<typeof PublicJoinRequest>;
 

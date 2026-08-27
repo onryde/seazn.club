@@ -154,6 +154,23 @@ export interface JoinTeamEntryInput {
   player: SubmitGroupPlayerInput;
   guardian_name?: string | null;
   guardian_consent?: boolean;
+  /** RS007 review defect #4 — per-player GDPR consent, persisted on THIS
+   *  player's own registration_players row (privacy_consent_at/.version,
+   *  V384), never on registration_groups: that column pair belongs to the
+   *  CAPTAIN's cart-wide submit, and reusing it here would silently apply
+   *  the captain's own choice to every later joiner. Optional (see
+   *  PublicJoinRequest's own doc comment, schemas.ts) — stamped only when
+   *  truthy, exactly like media_consent below; an omitted/false value
+   *  simply leaves the stamp null rather than fabricating a consent that
+   *  was never given. */
+  privacy_consent?: boolean;
+  /** Per-player media consent — optional, never blocks (mirrors
+   *  SubmitGroupInput.media_consent's own "optional, never blocks"
+   *  contract). THE point of this field: a deliberate `false` must persist
+   *  as a recorded refusal (media_consent_at stays null) and must never
+   *  silently inherit the group's own media_consent_at from the captain's
+   *  earlier submit. */
+  media_consent?: boolean;
 }
 
 export interface JoinTeamEntryResult {
@@ -1058,6 +1075,10 @@ export async function joinTeamEntry(
             consent_at = now(),
             guardian_name = ${minor ? (input.guardian_name ?? null) : null},
             user_id = ${linkUserId},
+            privacy_consent_at = ${input.privacy_consent ? tx`now()` : null},
+            privacy_consent_version = ${input.privacy_consent ? LEGAL_VERSION : null},
+            media_consent_at = ${input.media_consent ? tx`now()` : null},
+            media_consent_version = ${input.media_consent ? LEGAL_VERSION : null},
             updated_at = now()
         where id = ${input.player_id}
           and registration_id = ${reg.id}
@@ -1088,10 +1109,14 @@ export async function joinTeamEntry(
     const [player] = await tx<{ id: string }[]>`
       insert into registration_players
         (registration_id, full_name, dob, gender, source, consent_status,
-         consent_at, guardian_name, user_id)
+         consent_at, guardian_name, user_id,
+         privacy_consent_at, privacy_consent_version,
+         media_consent_at, media_consent_version)
       values (
         ${reg.id}, ${input.player.full_name}, ${input.player.dob ?? null}, ${input.player.gender ?? null},
-        'self_joined', ${consentStatus}, now(), ${minor ? (input.guardian_name ?? null) : null}, ${linkUserId}
+        'self_joined', ${consentStatus}, now(), ${minor ? (input.guardian_name ?? null) : null}, ${linkUserId},
+        ${input.privacy_consent ? tx`now()` : null}, ${input.privacy_consent ? LEGAL_VERSION : null},
+        ${input.media_consent ? tx`now()` : null}, ${input.media_consent ? LEGAL_VERSION : null}
       )
       returning id`;
     return player!.id;
