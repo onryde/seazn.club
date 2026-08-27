@@ -2284,3 +2284,37 @@ collapsed step 2 and a seeded entry cannot disagree again. (Same shape as the
 "TWO vocab paths drift" trap already recorded for this repo.)
 
 Commit `2d4d7b623`. Register component suite 304/304, from 4 red.
+
+## CORRECTION (2026-08-27) — the "non-strict zod stripped the wizard payload" claim is FALSE
+
+Recorded earlier this session as a CRITICAL defect, repeated in the PR body, and
+used as the reasoning that made V380's lossy gender backfill look harmless. It
+is wrong, and the correction matters more than the original claim.
+
+`origin/main:apps/web/src/server/api-v1/schemas.ts:183` declares, on
+`CreateDivision`:
+
+    eligibility: z.array(z.record(z.string(), z.unknown())).default([])
+
+The field is DECLARED, so zod never stripped it — wizard payloads were accepted
+and stored in the jsonb column all along. The ~150 test files this branch edits
+to delete `eligibility: []` from `createDivision` calls are themselves evidence
+it was accepted. There was no "every wizard-created division ships with no
+restriction" defect.
+
+**Why the correction is load-bearing.** If wizard divisions really had shipped
+empty, V380's backfill could lose nothing. They did not, so real jsonb rules
+exist on dev and staging (the rolled-back dry run counted 25 divisions carrying
+them) and possibly in production. V380 converts only exact `["m"]`/`["f"]` and
+only when `category is null`; `["m","f"]`, `["x"]`, and any list on a division
+that already had a category fall through unconverted, and the column is then
+dropped with no `eligibility_note` fallback and no notice to the organiser.
+Compounding it, `requiresGender` narrowed to `category in (mens, womens, mixed)`,
+so those divisions stopped COLLECTING gender on the public form as well.
+
+Being wrong about the premise is what let the backfill's losses read as
+acceptable for most of this session. Recorded here rather than quietly dropped:
+the greenfield stance covers registration ROWS (owner, 2026-08-16), it was never
+a statement about divisions, and this session conflated the two.
+
+Follow-up: V382 + the `requiresGender` predicate, dispatched 2026-08-27.
