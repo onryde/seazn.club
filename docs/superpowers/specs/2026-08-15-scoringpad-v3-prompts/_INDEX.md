@@ -3030,3 +3030,82 @@ exits 1 with `No package found`), and the background command's own completion
 notification reported "exit code 0" while the log's `EXIT=$?` said 1. Assert
 the ARTIFACT, never the exit code. Written to memory as
 `reference_turbo_build_cache_hit_from_another_worktree`.
+
+### R5-7 — owner ruling, 2026-08-27: the serve anchor stays while it can still fix something
+
+Taken after the gap was demonstrated live rather than argued. Volleyball's
+anchor tile gated on `ctx.side !== null`, and `side` self-heals on the first
+ordinary rally — so a scorer who simply started scoring lost the FIVB 7.6.2
+rotation number for the whole set, with sanction, time-out and More the only
+tiles left. Driven in a browser at 390px:
+
+| | anchor tile | rotation |
+|---|---|---|
+| on open | present | — |
+| after ONE ordinary tap | **gone** | never appears |
+| after five rallies | gone | still nothing |
+
+The same fixture anchored first showed Rotation 2, then 3.
+
+Two C3 tests asserted the withdrawal deliberately, reasoning the tile "does
+not linger asking for a rotation number `side` alone cannot fix". True of
+`side` — but the tile posts a DECLARATION, and a declaration is exactly what
+clears `chainBroken`. The premise named the wrong thing.
+
+**Ruling: keep offering it while anything it can fix is unresolved; withdraw
+once the pad can report both.** The owner chose this over retitling the tile
+(rejected: a new key in four locales for a wording problem the strip's own
+copy does not actually create) and over merely elevating its `kind` (rejected:
+the window still closes, and a scorer who misses it still loses the set's
+rotation). `fieldsTheRotation` — the kernel's unexported `sideFieldsTheRotation`
+restated, pinned against a real fold of the beach variant — stops the tile
+becoming permanent furniture for a pair, which has no six to rotate.
+
+Shipped in `aca58a959`, re-driven live afterwards: the tile survives five
+ordinary rallies and the rotation is recoverable.
+
+### R5 — the defect a SCREENSHOT found that no assertion could
+
+Reading the 320px capture of a played volleyball match: the Activity list held
+five rows, every one of them "Rally recorded", each with its own Void button.
+`activityDetail`'s rally case returns `join([named(scorer), named(server)])`,
+which is `undefined` when nobody was attributed — and for volleyball that is
+the ORDINARY case, its halves being team-level, not an edge one. Badminton and
+table tennis reach it too, on any pair rally sent before the dock's scorer
+question is answered.
+
+At a scoring desk this is how the wrong point gets voided. All three sports
+now fall back to naming the winning side; a named person still wins, being the
+more specific fact. Fixed in `aca58a959`, mutation-killed one test per sport,
+and confirmed by re-reading the same 320px screen: rows now read "Rally
+recorded — Home" / "— Away".
+
+Worth keeping for the next wave: this is the second finding in two days that
+came off a screenshot rather than a suite, and both were in the ribbon/activity
+surface, which no unit test renders and no e2e spec reads for MEANING.
+
+### R5 — two verification traps that produced false signals this session
+
+**A vitest JSON run reported `numFailedTests: 0` while 25 suites failed to
+COLLECT.** Green by the usual reading, and by `_RULES.md` §2's own instruction
+to judge from the JSON reporter. The tell was `numTotalTests` falling from
+1402 to 42 — the failed count alone says nothing when nothing ran. Cause: the
+run was launched from the WORKTREE ROOT, so `@/` aliases did not resolve and
+paths came back as `/r5-racquet/src/...` instead of `/r5-racquet/apps/web/
+src/...`. **Run vitest from `apps/web`, and judge `numTotalTests` first.**
+
+**`seazn-env.sh`'s appDir guard could never match.** Next writes
+`required-server-files.json` with `"appDir": "/abs/path"` — a space after the
+colon — and the guard grepped for `"appDir":"..."` without one. It therefore
+fired on every invocation: force-rebuild, "wrong" appDir again, rebuild again,
+never starting a server, ~4 minutes a lap. Patched in the machine-local script
+to match against a space-normalised copy with `grep -F` (a worktree path
+contains `.claude`, so an unescaped regex would be wrong too). The underlying
+hazard it guards is real and worth knowing: **turbo's build cache is shared
+across ALL worktrees by content hash, so a cache HIT replays another
+worktree's build and bakes that tree's absolute appDir in.** Two further masks
+compounded it — `--filter=web` is wrong (the package is `@seazn/web`, and
+turbo exits 1 with `No package found`), and a backgrounded command's own
+completion notification said "exit code 0" while the log's `EXIT=$?` said 1.
+Assert the ARTIFACT (`ls .next/standalone/apps/web/server.js`), never the exit
+code.
