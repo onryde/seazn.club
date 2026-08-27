@@ -47,24 +47,30 @@ test("free-play arcade lists the eight games and one solves", async ({ page }) =
   await expect(page.getByText(/Checkmate/)).toBeVisible();
 });
 
-test("board theme picker switches data-theme and survives reload", async ({ page }) => {
+// Inverted, not deleted: this test used to switch the board theme picker to
+// "brown" and confirm it survived a reload. Owner ruling 2026-08-27 removed
+// the picker entirely (games(chess-quest) PR #660-series, one white/green
+// board only) — this stale e2e spec was missed by that wave's unit-test
+// inversions and kept failing CI on main until now. It now guards the
+// removal end-to-end: no theme control anywhere, no data-theme attribute
+// ever, and that holds across a reload.
+test("board has no theme control and no data-theme attribute, before or after reload", async ({
+  page,
+}) => {
   await page.goto("/games/chess-quest");
   await page.evaluate(() => localStorage.removeItem("seazn-games:chess-quest:v1"));
   await page.reload();
 
-  // Default is green until changed.
+  await expect(page.getByLabel("Board theme")).toHaveCount(0);
   await page.getByRole("button", { name: /Play Square Race/ }).click();
-  await expect(page.locator(".cq-board")).toHaveAttribute("data-theme", "green");
+  await expect(page.locator(".cq-board")).not.toHaveAttribute("data-theme");
   await page.getByRole("button", { name: "← Back to quest" }).click();
+  await expect(page.getByLabel("Board theme")).toHaveCount(0);
 
-  await page.getByLabel("Board theme").selectOption("brown");
-  await page.getByRole("button", { name: /Play Square Race/ }).click();
-  await expect(page.locator(".cq-board")).toHaveAttribute("data-theme", "brown");
-
-  // Survives a reload — a fresh mount reads the same persisted device setting.
+  // Survives a reload — still nothing to switch, still no attribute.
   await page.reload();
   await page.getByRole("button", { name: /Play Square Race/ }).click();
-  await expect(page.locator(".cq-board")).toHaveAttribute("data-theme", "brown");
+  await expect(page.locator(".cq-board")).not.toHaveAttribute("data-theme");
 });
 
 test("an Opening Trainer lesson launches and takes the first move", async ({ page }) => {
