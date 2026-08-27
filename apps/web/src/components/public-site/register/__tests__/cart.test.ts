@@ -258,6 +258,57 @@ describe("cartReducer — UPDATE_ENTRY", () => {
   });
 });
 
+// RS006 follow-up. Self-linking across divisions is free (the describe below
+// pins that); within ONE division it is exclusive. Two self-linked entries in
+// the same division are not two entries, they are one person entered twice:
+// `persons` get-or-create keys on name+dob, both rows resolve to the same
+// person, and that person then holds two slots in one draw and pays for both.
+// No unique index on (division_id, entrant) catches it downstream.
+describe("cartReducer — SET_ENTRY_SELF is exclusive WITHIN a division (RS006 follow-up)", () => {
+  const sameDivision: CartState = {
+    entries: [
+      entry({ id: "p1", division_id: "div-pair", entrant_kind: "pair", registering_self: true, self_player_index: 1 }),
+      entry({ id: "p2", division_id: "div-pair", entrant_kind: "pair" }),
+      entry({ id: "p3", division_id: "div-pair", entrant_kind: "pair" }),
+    ],
+  };
+
+  it("linking a second entry in the SAME division unlinks the first", () => {
+    const next = cartReducer(sameDivision, { type: "SET_ENTRY_SELF", id: "p2", isSelf: true });
+    expect(next.entries.find((e) => e.id === "p1")!.registering_self).toBe(false);
+    expect(next.entries.find((e) => e.id === "p2")!.registering_self).toBe(true);
+    expect(next.entries.filter((e) => e.registering_self)).toHaveLength(1);
+  });
+
+  it("clears the displaced entry's stale self_player_index along with its link", () => {
+    const next = cartReducer(sameDivision, { type: "SET_ENTRY_SELF", id: "p2", isSelf: true });
+    expect(next.entries.find((e) => e.id === "p1")!.self_player_index).toBeNull();
+  });
+
+  it("does NOT mark the displaced entry as declined — the registrant never said 'not me' about it", () => {
+    const next = cartReducer(sameDivision, { type: "SET_ENTRY_SELF", id: "p2", isSelf: true });
+    // self_link_declined is what autoLinkObviousSelf reads to tell "never
+    // asked" from "asked, and said no". Setting it here would answer a
+    // question the registrant was never put.
+    expect(next.entries.find((e) => e.id === "p1")!.self_link_declined).toBe(false);
+  });
+
+  it("three entries in one doubles division stay in the cart — only the SELF-LINK is exclusive, not the entries", () => {
+    const next = cartReducer(sameDivision, { type: "SET_ENTRY_SELF", id: "p3", isSelf: true });
+    // A club entering three pairs is the real use case and must keep working;
+    // what cannot happen is one person appearing on more than one of them.
+    expect(next.entries).toHaveLength(3);
+    expect(next.entries.every((e) => e.division_id === "div-pair")).toBe(true);
+    expect(next.entries.filter((e) => e.registering_self)).toHaveLength(1);
+  });
+
+  it("unlinking still touches only its own entry — no sibling is dragged along", () => {
+    const next = cartReducer(sameDivision, { type: "SET_ENTRY_SELF", id: "p1", isSelf: false });
+    expect(next.entries.find((e) => e.id === "p2")).toEqual(sameDivision.entries[1]);
+    expect(next.entries.find((e) => e.id === "p3")).toEqual(sameDivision.entries[2]);
+  });
+});
+
 describe("cartReducer — SET_ENTRY_SELF (per-entry, independently settable — RS006)", () => {
   const two: CartState = {
     entries: [

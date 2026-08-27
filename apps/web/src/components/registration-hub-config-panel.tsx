@@ -682,20 +682,6 @@ export function OpenCloseSection({
         {msg("reg.settings.openForPublic")}
       </label>
       {errors.enabled && (<p data-field-error="enabled" role="alert" className="mt-1 text-xs text-red-600">{errors.enabled}</p>)}
-      {/* TEMP(RS005 R5): the public register page is hardcoded closed until
-          RS006 ships the cart stepper (register/page.tsx's own header
-          comment) — this toggle does not open registration to anyone yet,
-          on or off. Unconditional (not just while `state.enabled`) so an
-          organiser reads it before ever turning this on, not after.
-          Companion notice: registration-hub-division-row.tsx, beside the
-          row's Copy/Open/QR controls. Remove both (and their two
-          dictionary keys) once RS006 makes the public page real. */}
-      <p
-        data-registration-hub-link-not-live
-        className="rounded-lg border border-amber-100 bg-amber-50 p-2 text-xs text-amber-800"
-      >
-        {msg("reg.settings.openForPublic.notLive")}
-      </p>
       <label className="label">
         {msg("reg.settings.entrantType")}
         <select

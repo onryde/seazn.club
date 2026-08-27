@@ -79,6 +79,10 @@ const ENTRIES_ERROR_KEY: Record<NonNullable<EntriesValidation["error"]>, string>
  *  blocking, it doesn't re-enumerate every reason. */
 const DETAILS_ERROR_KEY: Record<NonNullable<DetailsValidation["error"]>, string> = {
   incomplete: "register.errors.detailsIncomplete",
+  // The one blocker with no inline state of its own to point at, so this
+  // banner has to name it rather than defer upward — see DetailsValidation's
+  // own comment (validation.ts).
+  selfRowUnnamed: "register.errors.selfPlayerRequired",
 };
 
 export interface RegisterInfo {

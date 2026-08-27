@@ -131,6 +131,8 @@ export function EntryDetails({
             id={`reg-self-index-${entry.id}`}
             className={`${FIELD} min-w-0`}
             value={selfPlayerIndex ?? ""}
+            aria-invalid={selfPlayerIndex === null ? true : undefined}
+            aria-describedby={selfPlayerIndex === null ? `reg-self-index-${entry.id}-error` : undefined}
             onChange={(e) =>
               dispatch({
                 type: "SET_SELF_PLAYER_INDEX",
@@ -148,6 +150,17 @@ export function EntryDetails({
               ) : null,
             )}
           </select>
+          {/* Leaving this on "None of these" blocks step 3's Next
+              (validateDetails), and until this marker existed nothing said
+              so: every visible field was filled, none was flagged, and the
+              only feedback was a step-wide "fill in the missing details
+              above". "None of these" reads like a valid answer, which is
+              exactly why the dead end was silent. */}
+          {selfPlayerIndex === null && (
+            <p id={`reg-self-index-${entry.id}-error`} role="alert" className="mt-1 text-xs text-red-600">
+              {t("register.errors.selfPlayerRequired")}
+            </p>
+          )}
         </div>
       )}
 

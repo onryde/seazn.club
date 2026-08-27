@@ -144,6 +144,45 @@ describe("PublicRegisterGroupRequest", () => {
     expect(r.success).toBe(true);
   });
 
+  // RS006 follow-up. The case above is legitimate BECAUSE the two entries sit
+  // in different divisions. Twice in ONE division is the same person entered
+  // twice into one draw: `persons` get-or-create keys on name+dob, so both
+  // rows resolve to a single person holding two capacity slots and paying for
+  // both — and the phantom slot can push a real entrant onto the waitlist.
+  // No unique index on (division_id, entrant) catches it downstream, so this
+  // schema is the guard. Per-division, NOT the cart-wide counter the
+  // superRefine's own comment calls "the defect, not a guard".
+  it("rejects TWO entries marked registering_self in the SAME division — one person, two slots, charged twice", () => {
+    const r = PublicRegisterGroupRequest.safeParse(
+      cart({
+        contact: contact({ dob: ADULT_DOB }),
+        entries: [
+          entry({ division_id: UUID_A, registering_self: true, self_player_index: 0 }),
+          entry({ division_id: UUID_A, registering_self: true, self_player_index: 0 }),
+        ],
+      }),
+    );
+    expect(r.success).toBe(false);
+    const paths = r.error!.issues.map((i) => i.path.join("."));
+    // Attributed to the SECOND entry — the first is the one they keep.
+    expect(paths).toContain("entries.1.registering_self");
+    expect(paths).not.toContain("entries.0.registering_self");
+  });
+
+  it("still accepts three entries in ONE division when only one is registering_self — a club entering three pairs", () => {
+    const r = PublicRegisterGroupRequest.safeParse(
+      cart({
+        contact: contact({ dob: ADULT_DOB }),
+        entries: [
+          entry({ division_id: UUID_A, registering_self: true, self_player_index: 0 }),
+          entry({ division_id: UUID_A }),
+          entry({ division_id: UUID_A }),
+        ],
+      }),
+    );
+    expect(r.success).toBe(true);
+  });
+
   it("accepts ONE entry marked registering_self with a contact dob", () => {
     const r = PublicRegisterGroupRequest.safeParse(
       cart({

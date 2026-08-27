@@ -53,6 +53,15 @@ closes the consent gap for captain-entered rosters, and the money edge cases
       back to waitlist, slot re-offered
 - [ ] Status page authz: wrong token → 404-shape, no data leak; ref alone
       insufficient
+- [ ] The pair/`join_code` decision above is recorded in `_INDEX.md` with its
+      reasoning — including, if pairs stay out, the copy change that stops
+      `register.consent.rosterNotice` promising a join that cannot happen
+- [ ] An entry with money owed renders how to pay it: "pay now" for card,
+      the resolved `paymentInstructions` for offline — no state that states
+      a debt and offers nothing
+- [ ] Reconcile-on-load closes the missed-webhook window on the page the
+      paid flow actually returns to: with the webhook suppressed, a visit to
+      `…/register/status?…&session_id=…` reads as paid on first view
 - [ ] ×4 locales; screenshots 1280/768/320; both surfaces in seven-width
       matrix
 - [ ] Counts from JSON reporter; `tsc EXIT=0`; lint clean; drift gates clean
@@ -63,6 +72,59 @@ closes the consent gap for captain-entered rosters, and the money edge cases
 - **E2E** — the three loops above. **Smoke** — deferred RS010.
 - **Regression** — join respects roster cap; token authz; lapse returns
   the slot.
+
+## Found while using the shipped RS006 flow (2026-08-27)
+
+Three things surfaced by driving the merged stepper through a real Stripe
+Connect payment (`apps/web/e2e/registration-connect-walkthrough.spec.ts`).
+The first CHANGES THIS WAVE'S SCOPE; read it before estimating.
+
+- **A `pair` entry never gets a `join_code`, so doubles has no join path.**
+  Minting is gated on `entrant_kind === "team"`
+  (`registration-submit.ts`, the non-free-agent team branch), and
+  `joinTeamEntry` resolves solely by `join_code`. Scope item 2 as written
+  ("player-side join flow that closes the consent gap for captain-entered
+  rosters") therefore closes it for TEAMS and leaves DOUBLES open — the
+  partner stays a name on someone else's roster who never confirms their
+  own details or consent. That is the same gap this wave exists to close,
+  and RS006 already promises otherwise in copy
+  (`register.consent.rosterNotice`: "We'll ask each of them to confirm
+  their own details and consent when they join or claim their spot").
+  Decide explicitly: widen minting to pairs, or state in the spec that
+  doubles partners are out of scope and stop the copy promising it.
+  Widening is not free — `join_code` is a capability token with a partial
+  unique index (V364) and a collision-retry loop; a pair's roster is fixed
+  at exactly two (`registration-submit.ts` 422s otherwise), so "join" there
+  means CLAIMING a named row, not growing a roster.
+
+- **The missed-webhook fallback is on the wrong page — it exists, and the
+  paid flow never reaches it.** `reconcileRegistrationBySession`
+  (`registrations.ts:2522`) is wired into `/r/[ref]` and covered by that
+  page's tests. But `createRegistrationCheckout`'s `returnBase` takes the
+  TOKEN branch whenever a token exists — which a cart submit always has —
+  so a paying registrant returns to
+  `/shared/<org>/<comp>/register/status?rid=…&token=…&checkout=success&session_id=…`,
+  and `status/page.tsx` contains no reference to `reconcile`, `session_id`
+  or `checkout` at all. Stripe appends that `session_id` specifically for
+  this page to consume and the page drops it on the floor. Verified by
+  paying a real destination charge: the redirect lands on the status page,
+  not `/r/<ref>`.
+
+  So the fix is a wiring job, not new plumbing: call the existing usecase
+  from the status page as `/r/[ref]` already does. It pays off three
+  times — production self-heals inside the webhook retry window, the local
+  walkthrough stops needing `stripe listen`, and a genuinely end-to-end
+  paid test becomes possible in CI. Keep the webhook primary regardless:
+  async payment methods settle days later and a registrant may never
+  revisit the page.
+
+- **An unpaid entry shows its debt and no way to settle it.** Verified on
+  a real submit: the page renders "pending £25" with no payment
+  instructions and no pay control. For the offline/`payment_method` case
+  the data is already resolved server-side — `registrations.ts` builds
+  `paymentInstructions` (per-division override falling back to
+  `org.payment_instructions`) for the emails — so this is a rendering gap
+  on the page this wave rebuilds, not new plumbing.
 
 ## Gotchas
 

@@ -248,8 +248,18 @@ export interface DetailsValidation {
   valid: boolean;
   /** Per-entry detail lives in the entry's OWN card (roster rows, the
    *  mixed meter, required-field markers all render their own inline
-   *  state) — this is just the gate. */
-  error: "incomplete" | null;
+   *  state) — this is just the gate.
+   *
+   *  `selfRowUnnamed` is separate because that assumption does NOT hold for
+   *  it: an unresolved `self_player_index` had no inline state anywhere, so
+   *  a complete-looking roster with the self picker left on "None of these"
+   *  produced a dead Next button under a step-wide "fill in the missing
+   *  details above" that marked no field at all. The registrant has no way
+   *  to discover what is wrong, and the honest outcome is an abandoned
+   *  registration the organiser never hears about. entry-details.tsx now
+   *  marks the picker itself; this value is what lets the step-level message
+   *  name the same problem instead of the generic one. */
+  error: "incomplete" | "selfRowUnnamed" | null;
 }
 
 /**
@@ -306,7 +316,7 @@ export function validateDetails(
     if (!verdict.eligible) return { valid: false, error: "incomplete" };
 
     if (entry.registering_self && entry.entrant_kind !== "individual" && entry.self_player_index === null) {
-      return { valid: false, error: "incomplete" };
+      return { valid: false, error: "selfRowUnnamed" };
     }
   }
 
