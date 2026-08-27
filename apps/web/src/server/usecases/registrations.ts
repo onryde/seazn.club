@@ -1208,6 +1208,56 @@ export async function resendRegistrationConfirmation(
   return { sent };
 }
 
+/**
+ * Registrant self-service resend (RS007) — the token-gated sibling of
+ * `resendRegistrationConfirmation` above. Keyed on the GROUP (`rid`), not one
+ * entry: the confirmation mail is cart-shaped (`buildCartMail`), so gating on
+ * one arbitrarily-picked entry's own status — the way the organiser path's
+ * `regId` does — would refuse a resend for a cart that still has other
+ * active entries. This refuses only once EVERY entry in the cart is
+ * terminal.
+ *
+ * Unlike the organiser path — which never holds the plaintext token past
+ * submit, only its hash survives — this path is called from the very page
+ * that already has the real token in its URL, so it threads it through to
+ * `buildCartMail`: the resent mail's `statusUrl` is the full rid+token
+ * status page, not the masked `/r/[ref]` fallback `token: null` produces.
+ */
+export async function resendRegistrationConfirmationPublic(
+  groupId: string,
+  token: string,
+  origin: string,
+): Promise<{ sent: boolean }> {
+  const [group] = await sql<
+    Pick<RegistrationGroupRow, "org_id" | "competition_id" | "access_token_hash">[]
+  >`
+    select org_id, competition_id, access_token_hash
+    from registration_groups where id = ${groupId}`;
+  if (!group || !tokenMatchesHash(token, group.access_token_hash)) {
+    throw new HttpError(404, "registration not found");
+  }
+  const entries = await sql<{ status: RegistrationRow["status"] }[]>`
+    select status from registrations where group_id = ${groupId}`;
+  if (entries.length === 0 || entries.every((e) => isTerminalRegistrationStatus(e.status))) {
+    throw new HttpError(
+      422,
+      "This registration is no longer active — a confirmation would tell the registrant they are entered",
+    );
+  }
+  const mail = await buildCartMail(groupId, origin, token, null);
+  if (!mail) return { sent: false }; // buildCartMail already logged why
+  const sent = await sendRegistrationEmail({ to: mail.to, locale: toLocale(mail.locale), ...mail.args });
+  await audit(
+    sql,
+    group.competition_id,
+    group.org_id,
+    "registration.confirmation_resent",
+    { group_id: groupId },
+    null,
+  );
+  return { sent };
+}
+
 // ---------------------------------------------------------------------------
 // Organiser: settings
 // ---------------------------------------------------------------------------
@@ -2581,6 +2631,54 @@ export async function reconcileRegistrationBySession(
   }
 }
 
+/**
+ * Reconcile-on-return for the rid+token status page (RS007) — the group-id
+ * sibling of `reconcileRegistrationBySession` above. That function resolves
+ * its group via `ref_code`, which is nullable (a submit whose ref-mint
+ * retries were exhausted still commits the cart) — exactly the case
+ * `groupById`'s own doc comment says THIS page exists to still serve, so
+ * reconciling here cannot depend on a ref existing either. Keyed on the
+ * group's DB id + the emailed access token instead, matching `groupById`'s
+ * own lookup exactly.
+ *
+ * Same security posture as the ref-based sibling: the caller-supplied
+ * `sessionId` is compared against the group's OWN stored
+ * `checkout_session_id` BEFORE any Stripe call, closing the identical
+ * arbitrary-retrieve hole that function's doc comment describes.
+ *
+ * Deliberately has NO "is some representative entry still pending" pre-check
+ * — `handleRegistrationCheckoutCompleted` already re-derives everything from
+ * the session's own `registration_ids` metadata and confirms each named
+ * entry independently (`confirmPaidRegistration`'s own row-locked status
+ * check), so such a gate would only be an optimisation, and the wrong one
+ * for a multi-entry cart: a promotion mints a checkout for a SINGLE entry
+ * (V378), so picking one arbitrary sibling to gate on could refuse to even
+ * look at Stripe for a session that is genuinely paid. Best-effort; never
+ * throws.
+ */
+export async function reconcileRegistrationGroupBySession(
+  groupId: string,
+  token: string,
+  sessionId: string,
+): Promise<boolean> {
+  try {
+    if (!GROUP_ID_RE.test(groupId)) return false;
+    const [group] = await sql<
+      Pick<RegistrationGroupRow, "access_token_hash" | "checkout_session_id">[]
+    >`
+      select access_token_hash, checkout_session_id
+      from registration_groups where id = ${groupId}`;
+    if (!group || !tokenMatchesHash(token, group.access_token_hash)) return false;
+    if (sessionId !== group.checkout_session_id) return false;
+    const session = await getStripe().checkout.sessions.retrieve(sessionId);
+    if (session.payment_status !== "paid") return false;
+    await handleRegistrationCheckoutCompleted(session);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Public: status / withdraw / resume payment (token-gated)
 // ---------------------------------------------------------------------------
@@ -2947,12 +3045,24 @@ export interface GroupEntryView {
   amount_cents: number;
   free_agent: boolean;
   join_code: string | null;
+  /** RS007: whether the GENERIC (no player_id) claim link is valid for this
+   *  entry — false for a `pair` (its fixed two-person roster leaves no room
+   *  for a new joiner; only its per-slot partner link is real), true
+   *  otherwise. Irrelevant when `join_code` itself is null. */
+  allows_new_joiner: boolean;
+  /** V378/RS007: this entry's OWN pay-by deadline when it was promoted out
+   *  of the waitlist — null for a never-promoted entry, whose deadline is
+   *  the CART's own `GroupStatusView.expires_at` instead (see
+   *  `promoteWaitlistedRow`'s doc comment for why one shared column cannot
+   *  serve both). The status page resolves `promotion_expires_at ??` the
+   *  cart's `expires_at`, mirroring the sweep's identical fallback. */
+  promotion_expires_at: string | null;
   players: GroupEntryPlayerView[];
   /** V379/RS007: this entry's own resolved refund policy — so the status
    *  page can tell a registrant which side of the line they are on BEFORE
    *  they confirm a cancel. Same rule `withdrawCore`'s auto-refund uses
-   *  (see `resolveRefundPolicy`); server-only for now, a later wave renders
-   *  it. */
+   *  (see `resolveRefundPolicy`) — the status page's cancel-confirm copy
+   *  reads this directly rather than re-deriving it. */
   refund_policy: ResolvedRefundPolicy;
 }
 
@@ -2975,6 +3085,21 @@ export interface GroupStatusView {
   org_slug: string;
   org_name: string;
   created_at: string;
+  /** RS007: whether the org's Connect account can currently take a payment —
+   *  gates the status page's "pay now" CTA so it never renders a button that
+   *  `resumeRegistrationCheckout` would just 503. Resolved off the first
+   *  entry that still carries a fee (else the first entry), mirroring
+   *  `buildCartMail`'s identical "one division is representative of the
+   *  whole cart" simplification (a cart's paid divisions already agree on
+   *  payment_method at submit — `assertUniformPaymentMethod`). */
+  charges_enabled: boolean;
+  /** RS007: the resolved offline instructions ({{reference}} left
+   *  un-substituted — the page fills it in with THIS cart's own ref_code),
+   *  division override falling back to the org's, or null for a
+   *  stripe-method cart. Same resolution order `buildCartMail`'s email
+   *  uses, so the page and the confirmation email never disagree about what
+   *  a registrant is told to do. */
+  payment_instructions: string | null;
   entries: GroupEntryView[];
 }
 
@@ -3056,35 +3181,63 @@ async function buildGroupStatusView(
   if (!group || !tokenOk) throw notFound();
 
   const [comp] = await sql<
-    { comp_name: string; comp_slug: string; org_slug: string; org_name: string; starts_on: string | null }[]
+    {
+      comp_name: string; comp_slug: string; org_slug: string; org_name: string;
+      starts_on: string | null; charges_enabled: boolean; org_payment_instructions: string | null;
+    }[]
   >`
     select c.name as comp_name, c.slug as comp_slug, o.slug as org_slug, o.name as org_name,
-           c.starts_on
+           c.starts_on, o.stripe_charges_enabled as charges_enabled,
+           o.payment_instructions as org_payment_instructions
     from competitions c join organizations o on o.id = c.org_id
     where c.id = ${group.competition_id}`;
 
   const entries = await sql<
-    (Omit<GroupEntryView, "players" | "refund_policy"> & { refunded_cents: number })[]
+    (Omit<GroupEntryView, "players" | "refund_policy" | "promotion_expires_at" | "allows_new_joiner"> & {
+      refunded_cents: number;
+      promotion_expires_at: Date | null;
+    })[]
   >`
     select r.id, r.division_id, d.name as division_name, r.display_name, r.status,
-           r.amount_cents, r.refunded_cents, r.free_agent, r.join_code
+           r.amount_cents, r.refunded_cents, r.free_agent, r.join_code, r.promotion_expires_at
     from registrations r join divisions d on d.id = r.division_id
     where r.group_id = ${group.id}
     order by r.created_at, r.id`;
 
-  // refund_lock_at is a DIVISION setting (registration_settings), so a cart
-  // spanning more than one division can genuinely have one entry refundable
-  // and another not (V379/RS007). Batched by distinct division_id, the same
-  // way `players` batches by entries.map(id) below — one query, not one per
-  // entry.
+  // RS007: the resolved offline payment instructions — mirrors
+  // buildCartMail's own "first entry that still carries a fee is
+  // representative of the whole cart" rule exactly, so the status page and
+  // the confirmation email never disagree. Division override, else the
+  // org's own (already fetched above, no extra query for that half).
+  let paymentInstructions: string | null = null;
+  if (group.payment_method === "offline" && entries.length > 0) {
+    const firstPaid = entries.find((e) => e.amount_cents > 0) ?? entries[0]!;
+    const repSettings = await loadSettings(sql, firstPaid.division_id);
+    paymentInstructions = repSettings?.payment_instructions ?? comp?.org_payment_instructions ?? null;
+  }
+
+  // refund_lock_at and entrant_kind are DIVISION settings
+  // (registration_settings), so a cart spanning more than one division can
+  // genuinely have one entry refundable and another not (V379/RS007), or one
+  // entry a team and another a pair. Batched by distinct division_id, the
+  // same way `players` batches by entries.map(id) below — one query, not one
+  // per entry.
   const divisionIds = [...new Set(entries.map((e) => e.division_id))];
   const settingsRows =
     divisionIds.length > 0
-      ? await sql<{ division_id: string; refund_lock_at: Date | null }[]>`
-          select division_id, refund_lock_at from registration_settings
+      ? await sql<{ division_id: string; refund_lock_at: Date | null; entrant_kind: RegistrationSettingsRow["entrant_kind"] }[]>`
+          select division_id, refund_lock_at, entrant_kind from registration_settings
           where division_id in ${sql(divisionIds)}`
       : [];
   const refundLockByDivision = new Map(settingsRows.map((s) => [s.division_id, s.refund_lock_at]));
+  // A pair's roster is fixed at exactly two (registration-submit.ts's own
+  // structural check + rosterIssues at submit) — its join_code only ever
+  // lets the PARTNER claim their already-typed-in slot; `joinTeamEntry`
+  // 422s a pair's insert-a-new-person path outright. Unknown (a division
+  // whose settings row is somehow missing) fails toward showing the link
+  // rather than hiding a legitimate one — a UX dead end the join route's own
+  // "defense in depth" 422 already catches safely, never a money/auth risk.
+  const entrantKindByDivision = new Map(settingsRows.map((s) => [s.division_id, s.entrant_kind]));
 
   const players =
     entries.length > 0
@@ -3114,8 +3267,12 @@ async function buildGroupStatusView(
     org_slug: comp?.org_slug ?? "",
     org_name: comp?.org_name ?? "",
     created_at: new Date(group.created_at).toISOString(),
-    entries: entries.map(({ refunded_cents, ...e }) => ({
+    charges_enabled: comp?.charges_enabled ?? false,
+    payment_instructions: paymentInstructions,
+    entries: entries.map(({ refunded_cents, promotion_expires_at, ...e }) => ({
       ...e,
+      promotion_expires_at: promotion_expires_at ? new Date(promotion_expires_at).toISOString() : null,
+      allows_new_joiner: entrantKindByDivision.get(e.division_id) !== "pair",
       players: playersByEntry.get(e.id) ?? [],
       refund_policy: resolveRefundPolicy(
         refundLockByDivision.get(e.division_id) ?? null,

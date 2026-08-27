@@ -256,6 +256,7 @@ export const ROUTES: RouteSpec[] = [
   { path: "/public/registrations/{id}/checkout", method: "post", summary: "(Re)open Stripe Checkout for a pending paid registration", tag: "public", public: true, request: S.PublicRegistrationToken, errors: [422, 503] },
   { path: "/public/registrations/{id}/ics", method: "get", summary: "Confirmation .ics for the competition dates (?token=)", tag: "public", public: true, errors: [401] },
   { path: "/public/registrations/by-ref/{ref}/withdraw", method: "post", summary: "Self-withdraw via reference number — the ref locates, the email token authorises (v3/05 §3)", tag: "public", public: true, request: S.PublicRegistrationToken, errors: [404] },
+  { path: "/public/registrations/groups/{id}/resend", method: "post", summary: "Registrant self-service resend of the cart-shaped confirmation email (token) — refused only once every entry in the cart is terminal", tag: "public", public: true, request: S.PublicRegistrationToken, response: z.object({ sent: z.boolean() }), errors: [404, 422] },
   // Clubs & bulk import (Jul3/01, PROMPT-21)
   { path: "/clubs", method: "get", summary: "List clubs", tag: "clubs", response: z.array(S.Club) },
   { path: "/clubs", method: "post", summary: "Create a club (Pro `clubs.hierarchy`)", tag: "clubs", request: S.CreateClub, response: S.Club, status: 201, errors: [402, 409] },

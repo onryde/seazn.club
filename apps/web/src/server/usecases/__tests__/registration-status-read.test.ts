@@ -23,6 +23,23 @@ vi.mock("@/lib/stripe", () => ({
   getStripe: () => ({ checkout: { sessions: { retrieve: stripeMock.retrieve } } }),
 }));
 
+// RS007 rebuild: resendRegistrationConfirmationPublic sends through
+// sendRegistrationEmail — captured the same way registrations.test.ts
+// already does (forwards to the REAL implementation so `{sent}` stays
+// realistic; send() is a no-op without RESEND_API_KEY either way), so the
+// resolved `args.statusUrl` this function builds is actually observable.
+const emailMock = vi.hoisted(() => ({ registration: vi.fn() }));
+vi.mock("@/lib/email", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/email")>();
+  return {
+    ...actual,
+    sendRegistrationEmail: async (opts: Parameters<typeof actual.sendRegistrationEmail>[0]) => {
+      emailMock.registration(opts);
+      return actual.sendRegistrationEmail(opts);
+    },
+  };
+});
+
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import {
@@ -31,6 +48,8 @@ import {
   publicCartByRef,
   reconcileRegistration,
   reconcileRegistrationBySession,
+  reconcileRegistrationGroupBySession,
+  resendRegistrationConfirmationPublic,
 } from "@/server/usecases/registrations";
 import { generateRefCode } from "@/lib/ref-code";
 import { createDivision } from "../divisions";
@@ -41,6 +60,7 @@ import {
   seedRegistration,
   seedSecondEntry,
   SETTINGS_BASE,
+  stripeRig,
 } from "./_registration-fixtures";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -68,6 +88,7 @@ async function stripeSettingsRig() {
 
 beforeEach(() => {
   stripeMock.retrieve.mockReset();
+  emailMock.registration.mockReset();
 });
 
 afterAll(async () => {
@@ -301,6 +322,153 @@ describe.skipIf(!HAS_DB)("groupById — token gate", () => {
     await expect(groupById("not-a-uuid", "regtok_" + randomUUID())).rejects.toMatchObject({
       status: 404,
     });
+  });
+});
+
+// RS007 rebuild — fields the status page needs that the RS006 minimal render
+// never selected: this entry's own promotion deadline, whether the org can
+// currently take a card payment, and the resolved offline instructions.
+describe.skipIf(!HAS_DB)("groupById — widened fields for the status page rebuild (RS007)", () => {
+  it("promotion_expires_at is null for a never-promoted entry", async () => {
+    const { competition, division } = await stripeSettingsRig();
+    const { registration, access_token } = await seedRegistration(
+      competition.id,
+      division.id,
+      { ...SETTINGS_BASE, fee_cents: 500, currency: "gbp", payment_method: "stripe" },
+      { refCode: freshRef() },
+    );
+    const view = await groupById(registration.group_id, access_token);
+    expect(view.entries[0]!.promotion_expires_at).toBeNull();
+  });
+
+  it("promotion_expires_at surfaces THIS entry's own clock, distinct from the cart's shared expires_at", async () => {
+    const { competition, division } = await stripeSettingsRig();
+    const { registration, access_token } = await seedRegistration(
+      competition.id,
+      division.id,
+      { ...SETTINGS_BASE, fee_cents: 500, currency: "gbp", payment_method: "stripe" },
+      { refCode: freshRef() },
+    );
+    await sql`update registrations set promotion_expires_at = '2026-09-05T12:00:00Z', promoted_at = now()
+              where id = ${registration.id}`;
+    const view = await groupById(registration.group_id, access_token);
+    expect(view.entries[0]!.promotion_expires_at).toBe(new Date("2026-09-05T12:00:00Z").toISOString());
+    // The cart's own column is untouched by this raw update — proves the two
+    // are genuinely separate columns, not one value read twice.
+    expect(view.expires_at).not.toBe(view.entries[0]!.promotion_expires_at);
+  });
+
+  it("charges_enabled is true when the org's Connect account is live", async () => {
+    const { competition, division } = await stripeRig();
+    const { registration, access_token } = await seedRegistration(
+      competition.id,
+      division.id,
+      { ...SETTINGS_BASE, fee_cents: 500, currency: "gbp", payment_method: "stripe" },
+      { refCode: freshRef() },
+    );
+    const view = await groupById(registration.group_id, access_token);
+    expect(view.charges_enabled).toBe(true);
+  });
+
+  it("charges_enabled is false when the org has no live Connect account — gates the pay CTA before resumeRegistrationCheckout would 503", async () => {
+    const { competition, division } = await stripeSettingsRig();
+    const { registration, access_token } = await seedRegistration(
+      competition.id,
+      division.id,
+      { ...SETTINGS_BASE, fee_cents: 500, currency: "gbp", payment_method: "stripe" },
+      { refCode: freshRef() },
+    );
+    const view = await groupById(registration.group_id, access_token);
+    expect(view.charges_enabled).toBe(false);
+  });
+
+  it("payment_instructions is null for a stripe-method cart", async () => {
+    const { competition, division } = await stripeRig();
+    const { registration, access_token } = await seedRegistration(
+      competition.id,
+      division.id,
+      { ...SETTINGS_BASE, fee_cents: 500, currency: "gbp", payment_method: "stripe" },
+      { refCode: freshRef() },
+    );
+    const view = await groupById(registration.group_id, access_token);
+    expect(view.payment_instructions).toBeNull();
+  });
+
+  it("payment_instructions resolves the DIVISION's own override for an offline cart", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    await sql`update organizations set payment_instructions = 'org-level fallback text' where id = ${orgId}`;
+    await sql`
+      insert into registration_settings
+        (division_id, enabled, entrant_kind, fee_cents, payment_method, payment_instructions, approval, allow_free_agents)
+      values (${division.id}, true, 'individual', 500, 'offline', 'division-level override text', 'auto', false)`;
+    const { registration, access_token } = await seedRegistration(
+      competition.id,
+      division.id,
+      { ...SETTINGS_BASE, fee_cents: 500, currency: "gbp", payment_method: "offline" },
+      { refCode: freshRef() },
+    );
+    const view = await groupById(registration.group_id, access_token);
+    expect(view.payment_instructions).toBe("division-level override text");
+  });
+
+  it("falls back to the ORG's payment_instructions when the division has none", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    await sql`update organizations set payment_instructions = 'org-level fallback text' where id = ${orgId}`;
+    await sql`
+      insert into registration_settings
+        (division_id, enabled, entrant_kind, fee_cents, payment_method, approval, allow_free_agents)
+      values (${division.id}, true, 'individual', 500, 'offline', 'auto', false)`;
+    const { registration, access_token } = await seedRegistration(
+      competition.id,
+      division.id,
+      { ...SETTINGS_BASE, fee_cents: 500, currency: "gbp", payment_method: "offline" },
+      { refCode: freshRef() },
+    );
+    const view = await groupById(registration.group_id, access_token);
+    expect(view.payment_instructions).toBe("org-level fallback text");
+  });
+
+  // A pair's roster is fixed at exactly two (registration-submit.ts's own
+  // structural check) — its join_code only ever lets the partner claim
+  // their already-typed-in slot; joinTeamEntry 422s a pair's
+  // insert-a-new-person path. The status page's generic (no player_id)
+  // claim link must not be offered for one.
+  it("allows_new_joiner is false for a pair division, true for a team division", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division: pairDivision } = await rig(owner);
+    const { division: teamDivision } = await rig(owner);
+    await sql`
+      insert into registration_settings
+        (division_id, enabled, entrant_kind, fee_cents, payment_method, approval, allow_free_agents)
+      values (${pairDivision.id}, true, 'pair', 500, 'stripe', 'auto', false)`;
+    await sql`
+      insert into registration_settings
+        (division_id, enabled, entrant_kind, fee_cents, payment_method, approval, allow_free_agents)
+      values (${teamDivision.id}, true, 'team', 500, 'stripe', 'auto', false)`;
+
+    const pairSeed = await seedRegistration(
+      competition.id,
+      pairDivision.id,
+      { ...SETTINGS_BASE, fee_cents: 500, currency: "gbp", payment_method: "stripe" },
+      { refCode: freshRef() },
+    );
+    const teamSeed = await seedRegistration(
+      competition.id,
+      teamDivision.id,
+      { ...SETTINGS_BASE, fee_cents: 500, currency: "gbp", payment_method: "stripe" },
+      { refCode: freshRef() },
+    );
+
+    const pairView = await groupById(pairSeed.registration.group_id, pairSeed.access_token);
+    const teamView = await groupById(teamSeed.registration.group_id, teamSeed.access_token);
+
+    expect(pairView.entries[0]!.allows_new_joiner).toBe(false);
+    expect(teamView.entries[0]!.allows_new_joiner).toBe(true);
   });
 });
 
@@ -593,5 +761,228 @@ describe.skipIf(!HAS_DB)("reconcileRegistrationBySession — token-free /r/[ref]
     expect(stripeMock.retrieve).toHaveBeenCalledWith(ownSessionId);
     const [row] = await sql<{ status: string }[]>`select status from registrations where id = ${registration.id}`;
     expect(row!.status).toBe("confirmed");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RS007 rebuild — the status page's own group-keyed reconcile. Same security
+// posture as reconcileRegistrationBySession above (the supplied session_id is
+// checked against the group's OWN stored checkout_session_id before Stripe is
+// ever called), but keyed on the group's DB id + the emailed access token —
+// never ref_code, which is nullable — matching groupById's own lookup.
+// ---------------------------------------------------------------------------
+describe.skipIf(!HAS_DB)("reconcileRegistrationGroupBySession — rid+token return (RS007)", () => {
+  it("returns false for a wrong token, without ever calling Stripe", async () => {
+    const { competition, division } = await stripeSettingsRig();
+    const { registration } = await seedRegistration(
+      competition.id,
+      division.id,
+      { ...SETTINGS_BASE, fee_cents: 500, currency: "gbp", payment_method: "stripe" },
+      { refCode: freshRef() },
+    );
+    await sql`update registration_groups set checkout_session_id = ${"cs_test_" + randomUUID().slice(0, 8)}
+              where id = ${registration.group_id}`;
+    expect(
+      await reconcileRegistrationGroupBySession(registration.group_id, "rg_" + randomUUID(), "cs_test_x"),
+    ).toBe(false);
+    expect(stripeMock.retrieve).not.toHaveBeenCalled();
+  });
+
+  it("returns false when the cart has no checkout session yet, without calling Stripe", async () => {
+    const { competition, division } = await stripeSettingsRig();
+    const { registration, access_token } = await seedRegistration(
+      competition.id,
+      division.id,
+      { ...SETTINGS_BASE, fee_cents: 500, currency: "gbp", payment_method: "stripe" },
+      { refCode: freshRef() },
+    );
+    expect(
+      await reconcileRegistrationGroupBySession(registration.group_id, access_token, "cs_test_x"),
+    ).toBe(false);
+    expect(stripeMock.retrieve).not.toHaveBeenCalled();
+  });
+
+  it("a malformed group id returns false rather than throwing a raw DB syntax error", async () => {
+    await expect(
+      reconcileRegistrationGroupBySession("not-a-uuid", "rg_" + randomUUID(), "cs_test_x"),
+    ).resolves.toBe(false);
+  });
+
+  // The same security fix reconcileRegistrationBySession carries: sessionId is
+  // an attacker-controlled query param on a public, force-dynamic page.
+  it("an attacker-supplied session_id that isn't this cart's own stored session must NOT reach Stripe", async () => {
+    const { competition, division } = await stripeSettingsRig();
+    const { registration, access_token } = await seedRegistration(
+      competition.id,
+      division.id,
+      { ...SETTINGS_BASE, fee_cents: 500, currency: "gbp", payment_method: "stripe" },
+      { refCode: freshRef() },
+    );
+    await sql`update registration_groups set checkout_session_id = ${"cs_test_owncart_" + randomUUID().slice(0, 8)}
+              where id = ${registration.group_id}`;
+
+    const result = await reconcileRegistrationGroupBySession(
+      registration.group_id,
+      access_token,
+      "cs_test_attacker_supplied",
+    );
+
+    expect(result).toBe(false);
+    expect(stripeMock.retrieve).not.toHaveBeenCalled();
+    const [row] = await sql<{ status: string }[]>`select status from registrations where id = ${registration.id}`;
+    expect(row!.status).toBe("pending");
+  });
+
+  it("swallows a Stripe outage and returns false rather than throwing", async () => {
+    const { competition, division } = await stripeSettingsRig();
+    const { registration, access_token } = await seedRegistration(
+      competition.id,
+      division.id,
+      { ...SETTINGS_BASE, fee_cents: 500, currency: "gbp", payment_method: "stripe" },
+      { refCode: freshRef() },
+    );
+    const ownSessionId = "cs_test_owncart_" + randomUUID().slice(0, 8);
+    await sql`update registration_groups set checkout_session_id = ${ownSessionId}
+              where id = ${registration.group_id}`;
+    stripeMock.retrieve.mockRejectedValueOnce(new Error("stripe unreachable"));
+    await expect(
+      reconcileRegistrationGroupBySession(registration.group_id, access_token, ownSessionId),
+    ).resolves.toBe(false);
+  });
+
+  it("the cart's OWN stored session id, with the correct token, confirms the entry", async () => {
+    const { competition, division } = await stripeSettingsRig();
+    const { registration, access_token } = await seedRegistration(
+      competition.id,
+      division.id,
+      { ...SETTINGS_BASE, fee_cents: 500, currency: "gbp", payment_method: "stripe" },
+      { refCode: freshRef() },
+    );
+    const ownSessionId = "cs_test_owncart_" + randomUUID().slice(0, 8);
+    await sql`update registration_groups set checkout_session_id = ${ownSessionId}
+              where id = ${registration.group_id}`;
+    stripeMock.retrieve.mockResolvedValueOnce({
+      id: ownSessionId,
+      payment_status: "paid",
+      metadata: { kind: "registration_group", registration_ids: registration.id },
+    });
+
+    const result = await reconcileRegistrationGroupBySession(registration.group_id, access_token, ownSessionId);
+
+    expect(result).toBe(true);
+    const [row] = await sql<{ status: string }[]>`select status from registrations where id = ${registration.id}`;
+    expect(row!.status).toBe("confirmed");
+  });
+
+  // The reason this function exists as its OWN thing rather than reusing
+  // reconcileRegistrationBySession: that function's ref-based lookup reads
+  // ONE representative (oldest) entry's status as a pre-check gate. A
+  // promotion mints a checkout for a single entry (V378) — in a multi-entry
+  // cart where an EARLIER entry already settled (confirmed) but a LATER one
+  // was just promoted and paid, gating on the oldest entry's status would
+  // refuse to even look at Stripe. This function has no such gate — it
+  // trusts handleRegistrationCheckoutCompleted's own per-id idempotent
+  // confirm loop to do the right thing regardless of sibling state.
+  it("still confirms the paid entry even when an EARLIER sibling in the same cart already settled", async () => {
+    const { competition, division } = await stripeSettingsRig();
+    const { registration, access_token } = await seedRegistration(
+      competition.id,
+      division.id,
+      { ...SETTINGS_BASE, fee_cents: 500, currency: "gbp", payment_method: "stripe" },
+      { refCode: freshRef(), status: "confirmed" },
+    );
+    const promoted = await seedSecondEntry(registration.group_id, division.id, 500, "Second Entry", "pending");
+    const ownSessionId = "cs_test_owncart_" + randomUUID().slice(0, 8);
+    await sql`update registration_groups set checkout_session_id = ${ownSessionId}
+              where id = ${registration.group_id}`;
+    stripeMock.retrieve.mockResolvedValueOnce({
+      id: ownSessionId,
+      payment_status: "paid",
+      metadata: { kind: "registration_group", registration_ids: promoted.id },
+    });
+
+    const result = await reconcileRegistrationGroupBySession(registration.group_id, access_token, ownSessionId);
+
+    expect(result).toBe(true);
+    const [row] = await sql<{ status: string }[]>`select status from registrations where id = ${promoted.id}`;
+    expect(row!.status).toBe("confirmed");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RS007 rebuild — the registrant self-service resend of the cart's
+// confirmation email, the token-gated sibling of the organiser-only
+// resendRegistrationConfirmation. Cart-scoped (the mail is cart-shaped): it
+// refuses only when EVERY entry in the cart is terminal, never when one
+// arbitrarily-picked entry happens to be.
+// ---------------------------------------------------------------------------
+describe.skipIf(!HAS_DB)("resendRegistrationConfirmationPublic (RS007)", () => {
+  it("a wrong token 404s, matching every other public token-gated action", async () => {
+    const { competition, division } = await stripeSettingsRig();
+    const { registration } = await seedRegistration(
+      competition.id,
+      division.id,
+      { ...SETTINGS_BASE, fee_cents: 500, currency: "gbp", payment_method: "stripe" },
+      { refCode: freshRef() },
+    );
+    await expect(
+      resendRegistrationConfirmationPublic(registration.group_id, "rg_" + randomUUID(), "https://test.local"),
+    ).rejects.toMatchObject({ status: 404 });
+    expect(emailMock.registration).not.toHaveBeenCalled();
+  });
+
+  it("refuses once EVERY entry in the cart is terminal", async () => {
+    const { competition, division } = await stripeSettingsRig();
+    const { registration, access_token } = await seedRegistration(
+      competition.id,
+      division.id,
+      { ...SETTINGS_BASE, fee_cents: 500, currency: "gbp", payment_method: "stripe" },
+      { refCode: freshRef(), status: "withdrawn" },
+    );
+    await expect(
+      resendRegistrationConfirmationPublic(registration.group_id, access_token, "https://test.local"),
+    ).rejects.toMatchObject({ status: 422 });
+    expect(emailMock.registration).not.toHaveBeenCalled();
+  });
+
+  it("attempts the send when the cart has at least one still-active entry, even if an ARBITRARY other one is terminal", async () => {
+    const { competition, division } = await stripeSettingsRig();
+    const { registration, access_token } = await seedRegistration(
+      competition.id,
+      division.id,
+      { ...SETTINGS_BASE, fee_cents: 500, currency: "gbp", payment_method: "stripe" },
+      { refCode: freshRef(), status: "withdrawn" },
+    );
+    await seedSecondEntry(registration.group_id, division.id, 500, "Still Active", "pending");
+
+    // Whether the provider itself reports success depends on RESEND_API_KEY
+    // being configured in the environment (lib/email.ts) — not this
+    // function's own logic, which is what "reached the real send" proves.
+    await resendRegistrationConfirmationPublic(registration.group_id, access_token, "https://test.local");
+
+    expect(emailMock.registration).toHaveBeenCalledTimes(1);
+  });
+
+  // Unlike the organiser path (which never holds the plaintext token past
+  // submit — only its hash survives), THIS path is called from the very page
+  // that already has it in the URL. It should thread the real token through
+  // so the resent mail's statusUrl is the full rid+token page, not the
+  // masked /r/[ref] fallback buildCartMail uses when token is null.
+  it("threads the REAL token through so the resent mail links back to the full rid+token status page", async () => {
+    const { orgSlug, competition, division } = await stripeSettingsRig();
+    const { registration, access_token } = await seedRegistration(
+      competition.id,
+      division.id,
+      { ...SETTINGS_BASE, fee_cents: 500, currency: "gbp", payment_method: "stripe" },
+      { refCode: freshRef() },
+    );
+
+    await resendRegistrationConfirmationPublic(registration.group_id, access_token, "https://test.local");
+
+    expect(emailMock.registration).toHaveBeenCalledTimes(1);
+    const args = emailMock.registration.mock.calls[0]![0] as { statusUrl: string };
+    expect(args.statusUrl).toBe(
+      `https://test.local/shared/${orgSlug}/${competition.slug}/register/status?rid=${registration.group_id}&token=${access_token}`,
+    );
   });
 });
