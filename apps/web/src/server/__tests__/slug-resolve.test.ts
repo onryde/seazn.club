@@ -62,7 +62,6 @@ describe.skipIf(!HAS_DB)("slug-resolve (PROMPT-30)", () => {
       sport_key: "generic",
       variant_key: "score",
       config: GENERIC_CONFIG,
-      eligibility: [],
     });
 
     const org = await orgBySlug(orgSlug);
@@ -104,7 +103,6 @@ describe.skipIf(!HAS_DB)("slug-resolve (PROMPT-30)", () => {
       sport_key: "generic",
       variant_key: "score",
       config: GENERIC_CONFIG,
-      eligibility: [],
     });
     const [{ id: stageId }] = await sql<{ id: string }[]>`
       insert into stages (division_id, org_id, seq, kind, name, config)
@@ -140,7 +138,6 @@ describe.skipIf(!HAS_DB)("slug-resolve (PROMPT-30)", () => {
       sport_key: "generic",
       variant_key: "score",
       config: GENERIC_CONFIG,
-      eligibility: [],
     });
     const names = await breadcrumbNames(auth.orgId);
     expect(names.comps[comp.slug]).toBe("Crumb Cup");

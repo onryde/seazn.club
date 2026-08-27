@@ -71,7 +71,6 @@ async function seedDivisionWithCourt(): Promise<{
     sport_key: "generic",
     variant_key: "score",
     config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
-    eligibility: [],
   });
   return { auth, divisionId: division.id, courtId: court.id };
 }

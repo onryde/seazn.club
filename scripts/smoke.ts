@@ -3010,7 +3010,6 @@ async function clubsSuite(): Promise<void> {
         points: { w: 3, d: 1, l: 0 },
         progressScore: false,
       },
-      eligibility: [],
     },
   );
   const syncDivId = v1data<{ id: string }>(syncDiv).id;
@@ -5928,7 +5927,6 @@ async function regQueueSuite(admin: Session): Promise<void> {
       sport_key: "generic",
       variant_key: "score",
       config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
-      eligibility: [],
     }),
   );
   // RS001b: currency is ORG-level. The request schema has no `currency`, so a

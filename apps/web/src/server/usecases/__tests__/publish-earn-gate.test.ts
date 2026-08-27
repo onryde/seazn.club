@@ -132,7 +132,6 @@ describe.skipIf(!HAS_DB)("publish-with-division earn gate — wiring (v17 gap #2
       sport_key: "generic",
       variant_key: "score",
       config: GENERIC_CONFIG,
-      eligibility: [],
     });
 
     const walletId = await walletIdFor(org.id);
@@ -151,7 +150,6 @@ describe.skipIf(!HAS_DB)("publish-with-division earn gate — wiring (v17 gap #2
       sport_key: "generic",
       variant_key: "score",
       config: GENERIC_CONFIG,
-      eligibility: [],
     });
     await patchCompetition(auth, comp2.id, { status: "published" });
     expect(await packBalance(walletId)).toBe(10);
@@ -183,7 +181,6 @@ describe.skipIf(!HAS_DB)("publish-with-division earn gate — wiring (v17 gap #2
       sport_key: "generic",
       variant_key: "score",
       config: GENERIC_CONFIG,
-      eligibility: [],
     });
 
     await patchCompetition(auth, comp.id, { status: "published" });
@@ -217,7 +214,6 @@ describe.skipIf(!HAS_DB)("publish-with-division earn gate — wiring (v17 gap #2
       sport_key: "generic",
       variant_key: "score",
       config: GENERIC_CONFIG,
-      eligibility: [],
     });
 
     const rejections: unknown[] = [];
@@ -257,7 +253,6 @@ describe.skipIf(!HAS_DB)("publish-with-division earn gate — wiring (v17 gap #2
       sport_key: "generic",
       variant_key: "score",
       config: GENERIC_CONFIG,
-      eligibility: [],
     });
     await sql`update divisions set archived_at = now() where id = ${division.id}`;
 

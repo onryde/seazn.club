@@ -99,7 +99,6 @@ async function seedStagedDivision(auth: AuthCtx) {
     sport_key: "generic",
     variant_key: "score",
     config: GENERIC_CONFIG,
-    eligibility: [],
   });
 }
 

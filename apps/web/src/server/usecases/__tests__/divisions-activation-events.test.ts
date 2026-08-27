@@ -73,7 +73,6 @@ describe.skipIf(!HAS_DB)("createDivision — activation funnel call count", () =
       sport_key: "generic",
       variant_key: "score",
       config: {},
-      eligibility: [],
     });
     const calls = vi.mocked(captureServer).mock.calls.map(([args]) => args);
     const divisionCalls = calls.filter((c) => c.event === EVENTS.DIVISION_CREATED);
@@ -92,14 +91,12 @@ describe.skipIf(!HAS_DB)("createDivision — activation funnel call count", () =
       sport_key: "generic",
       variant_key: "score",
       config: {},
-      eligibility: [],
     });
     await createDivision(auth, competitionId, {
       name: "Open B",
       sport_key: "generic",
       variant_key: "score",
       config: {},
-      eligibility: [],
     });
     const calls = vi.mocked(captureServer).mock.calls.map(([args]) => args);
     expect(calls.filter((c) => c.event === EVENTS.DIVISION_CREATED)).toHaveLength(2);

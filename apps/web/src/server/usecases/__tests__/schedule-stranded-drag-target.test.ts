@@ -71,7 +71,6 @@ async function seedArchivedCourtBoard(): Promise<{
     sport_key: "generic",
     variant_key: "score",
     config: GENERIC_CONFIG,
-    eligibility: [],
   });
   await sql`
     insert into schedule_settings (division_id, config, tz, updated_at)

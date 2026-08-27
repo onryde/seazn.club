@@ -124,7 +124,6 @@ describe.skipIf(!HAS_DB)("GET /competitions/:id/registrations", () => {
       sport_key: "generic",
       variant_key: "score",
       config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
-      eligibility: [],
     });
     await seedRegistration(competition.id, divA.id, SETTINGS, { status: "pending", displayName: "In A" });
     await seedRegistration(competition.id, divB.id, SETTINGS, { status: "pending", displayName: "In B" });
@@ -149,7 +148,6 @@ describe.skipIf(!HAS_DB)("GET /competitions/:id/registrations", () => {
       sport_key: "generic",
       variant_key: "score",
       config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
-      eligibility: [],
     });
     await putRegistrationSettings(owner, teamDiv.id, {
       enabled: true,

@@ -491,7 +491,6 @@ export interface DivisionCtx {
   id: string;
   competition_id: string;
   org_id: string;
-  eligibility: unknown[];
   comp_name: string;
   comp_slug: string;
   comp_visibility: string;
@@ -517,7 +516,7 @@ export interface DivisionCtx {
 
 export async function divisionCtx(db: AnySql, divisionId: string): Promise<DivisionCtx> {
   const [row] = await db<DivisionCtx[]>`
-    select d.id, d.competition_id, d.org_id, d.eligibility, d.slug as div_slug,
+    select d.id, d.competition_id, d.org_id, d.slug as div_slug,
            c.name as comp_name, c.slug as comp_slug, c.visibility as comp_visibility,
            c.starts_on, c.ends_on,
            o.slug as org_slug, o.name as org_name, o.default_locale, o.payment_instructions,
@@ -1492,7 +1491,6 @@ export async function publicRegistrationInfo(
       name: string;
       slug: string;
       sport_key: string;
-      eligibility: unknown[];
       // V364 first-class columns: `age_min`/`age_max` also drive
       // `requires_dob` below (a category-only division needs no DOB).
       // `category` drives `requires_gender` the same way, and both ship on
@@ -1507,7 +1505,7 @@ export async function publicRegistrationInfo(
       waitlisted: number;
     })[]
   >`
-    select rs.*, d.name, d.slug, d.sport_key, d.eligibility, d.category, d.age_min, d.age_max, d.youth,
+    select rs.*, d.name, d.slug, d.sport_key, d.category, d.age_min, d.age_max, d.youth,
            (select count(*)::int from registrations r
              where r.division_id = rs.division_id
                and r.status in ${sql([...SPOT_HOLDERS])}) as active,
@@ -1569,17 +1567,15 @@ export async function publicRegistrationInfo(
       // `true` on a non-team division) — drives the ENTRIES step's free-agent
       // option (design §4 step 2).
       allow_free_agents: r.allow_free_agents,
-      // V364: a division can require a DOB via the jsonb rules OR via the
-      // first-class age_min/age_max columns alone — requiresDob's
-      // division-shaped overload checks both.
+      // V364/V380: a division requires a DOB when either first-class age
+      // column is set.
       requires_dob: requiresDob({
-        eligibility: r.eligibility ?? [],
         age_min: r.age_min,
         age_max: r.age_max,
       }),
-      // Same idea as requires_dob, for gender (RS006 WHO step): a jsonb
-      // GenderRule OR a mens/womens/mixed category.
-      requires_gender: requiresGender({ eligibility: r.eligibility ?? [], category: r.category }),
+      // Same idea as requires_dob, for gender (RS006 WHO step): a
+      // mens/womens/mixed category.
+      requires_gender: requiresGender({ category: r.category }),
       youth: r.youth,
       waitlisted: r.waitlisted,
       form_fields: r.form_fields ?? [],

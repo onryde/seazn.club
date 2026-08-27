@@ -154,7 +154,6 @@ async function seedDivision(): Promise<{
     sport_key: "generic",
     variant_key: "score",
     config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
-    eligibility: [],
   });
   const [stage] = await createStages(auth, division.id, {
     seq: 1,
@@ -261,7 +260,6 @@ describe.skipIf(!HAS_DB)("connection-pool nesting tripwire", () => {
         sport_key: "generic",
         variant_key: "score",
         config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
-        eligibility: [],
       }),
     );
 
@@ -400,7 +398,6 @@ describe.skipIf(!HAS_DB)("connection-pool nesting tripwire", () => {
           sport_key: "generic",
           variant_key: "score",
           config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
-          eligibility: [],
         }),
       ),
     ).rejects.toMatchObject({ status: 402, featureKey: "competitions.max_active" });

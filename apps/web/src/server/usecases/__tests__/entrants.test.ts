@@ -53,7 +53,6 @@ async function seedBoardgameDivision(auth: AuthCtx) {
     sport_key: "boardgame",
     variant_key: "classical",
     config: {},
-    eligibility: [],
   } as never);
 }
 

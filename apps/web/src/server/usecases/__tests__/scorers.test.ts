@@ -95,7 +95,7 @@ async function rig(owner: AuthCtx) {
   });
   const division = await createDivision(owner, competition.id, {
     name: "Open", sport_key: "generic", variant_key: "score",
-    config: { points: { w: 3, d: 1, l: 0 }, progressScore: false }, eligibility: [],
+    config: { points: { w: 3, d: 1, l: 0 }, progressScore: false }, 
   });
   await createEntrants(owner, division.id, ["A", "B", "C", "D"].map((n, i) => ({
     kind: "individual" as const, display_name: n, seed: i + 1, members: [],

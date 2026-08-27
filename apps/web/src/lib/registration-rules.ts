@@ -16,13 +16,17 @@
 // server-only half and a client-safe half); the stepper
 // (components/public-site/register/**) imports straight from here.
 //
-// What stays OUT of this file, on purpose: `divisionEligibilityIssues`'s
-// jsonb-rules loop. It reads `divisions.eligibility` (jsonb), which the
-// public read model never ships to the client (`PublicRegistrationDivision`
-// carries only the booleans `requires_dob`/`requires_gender` derived FROM
-// it) — so the client structurally cannot evaluate those rules, correctly.
-// Only the first-class `category`/`age_min`/`age_max` columns (V364) are
-// public (badges need the raw values), so only their predicates belong here.
+// RS007/V380 dropped the `divisions.eligibility` jsonb column entirely (owner
+// ruling, `_INDEX.md` "Eligibility consolidation") — `category`/`age_min`/
+// `age_max`/`age_cutoff_month`/`age_cutoff_day` are now the ONLY eligibility
+// representation, server and client alike, so this file's predicates are no
+// longer a deliberately-narrower subset of a wider server-side evaluator —
+// `divisionEligibilityIssues` (registration-eligibility.ts) is now a thin
+// wrapper over exactly these two functions plus nothing else. The public read
+// model (`PublicRegistrationDivision`) still ships only the derived booleans
+// `requires_dob`/`requires_gender`, not the cutoff fields — a client-side
+// caller of `ageBandEligibilityIssues` gets the 1-January default until a
+// later wave threads the real cutoff onto the wire.
 //
 // `rosterIssues`'s roster-composition check (`mixedCompositionTally`/
 // `rosterCompositionIssues` below) moved IN at RS006 W3 (step 3 — DETAILS):
@@ -94,28 +98,19 @@ export interface EligibilityIssue {
 }
 
 /**
- * Division has an age rule ⇒ the form must collect DOB.
+ * Division has an age band ⇒ the form must collect DOB.
  *
- * Overloaded: the legacy jsonb-only shape (a bare rules array), and a
- * division-shaped object so a division using ONLY `age_min`/`age_max` (no
- * jsonb age rule at all) still collects a DOB. Before V364 this inspected
- * only the jsonb rules, so a first-class-only age band silently collected no
- * DOB and then failed every player at eligibility time. Untouched by the
- * structured-issue rework — this returns a boolean, not an issue.
+ * RS007/V380: the jsonb `eligibility` rules (and this function's old
+ * bare-array overload, which read them) are gone — `age_min`/`age_max` are
+ * the only source left, so this is now a plain boolean-in boolean-out
+ * predicate. Untouched by the structured-issue rework — this returns a
+ * boolean, not an issue.
  */
-export function requiresDob(rules: unknown[]): boolean;
 export function requiresDob(division: {
-  eligibility: unknown[];
   age_min: number | null;
   age_max: number | null;
-}): boolean;
-export function requiresDob(
-  input: unknown[] | { eligibility: unknown[]; age_min: number | null; age_max: number | null },
-): boolean {
-  if (Array.isArray(input)) {
-    return input.some((r) => (r as { kind?: string })?.kind === "age");
-  }
-  return input.age_min != null || input.age_max != null || requiresDob(input.eligibility);
+}): boolean {
+  return division.age_min != null || division.age_max != null;
 }
 
 /**
@@ -128,12 +123,10 @@ export function requiresDob(
  *
  * Extracted from `divisionEligibilityIssues`'s first-class block
  * (server/usecases/registration-eligibility.ts) so the stepper's ENTRIES
- * step can grey a self-ineligible division with the literal same rule.
- * Deliberately does NOT know about the jsonb-vs-category gender precedence
- * rule (a jsonb GenderRule suppresses this block server-side) — the public
- * read model never ships jsonb rules to the client, so from the client's
- * vantage point this predicate IS the whole gender-eligibility story for a
- * division whose `requires_gender` is category-driven.
+ * step can grey a self-ineligible division with the literal same rule. RS007/
+ * V380 retired the jsonb `eligibility` rules (and the gender-precedence rule
+ * that used to arbitrate between them and this block) — `category` is now
+ * the whole gender-eligibility story, server and client alike.
  */
 export function categoryEligibilityIssues(
   division: { category: string | null },
@@ -157,16 +150,29 @@ export function categoryEligibilityIssues(
 
 /**
  * First-class AGE BAND check only (`age_min`/`age_max`, V364). Evaluated at
- * 1 January of `seasonStartYear` — never "today" — matching the jsonb
- * rules' `cutoff.yearOf: "season_start"` branch exactly, deliberately: a
- * season-long division must not change who is eligible partway through the
- * season.
+ * `age_cutoff_month`/`age_cutoff_day` of `seasonStartYear` when the division
+ * sets them, else 1 January — never "today": a season-long division must not
+ * change who is eligible partway through the season. RS007/V380 moved the
+ * cutoff here from the retired jsonb rules' `cutoff.yearOf: "season_start"`
+ * branch, which this replaces exactly (same anchor, same reason).
+ *
+ * The two cutoff fields are OPTIONAL on this narrow parameter type (unlike
+ * `EligibilityDivision`, server-side, which always carries them) — a caller
+ * that only has `category`/`age_min`/`age_max` in hand, e.g. the public
+ * stepper's client-safe division shape (the wire contract does not ship the
+ * cutoff to the client yet), keeps compiling unchanged and gets the same
+ * 1-January default it always has.
  *
  * Extracted from `divisionEligibilityIssues`'s first-class block for the
  * same reason as `categoryEligibilityIssues` above.
  */
 export function ageBandEligibilityIssues(
-  division: { age_min: number | null; age_max: number | null },
+  division: {
+    age_min: number | null;
+    age_max: number | null;
+    age_cutoff_month?: number | null;
+    age_cutoff_day?: number | null;
+  },
   person: EligibilityPerson,
   seasonStartYear: number,
 ): EligibilityIssue[] {
@@ -179,7 +185,9 @@ export function ageBandEligibilityIssues(
     });
     return issues;
   }
-  const cutoffDate = new Date(Date.UTC(seasonStartYear, 0, 1));
+  const cutoffMonth = division.age_cutoff_month ?? 1;
+  const cutoffDay = division.age_cutoff_day ?? 1;
+  const cutoffDate = new Date(Date.UTC(seasonStartYear, cutoffMonth - 1, cutoffDay));
   const age = ageAt(person.dob, cutoffDate);
   if (division.age_max != null && age > division.age_max) {
     issues.push({

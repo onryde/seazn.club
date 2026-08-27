@@ -174,7 +174,6 @@ async function seedCompetition(
       sport_key: "generic",
       variant_key: "score",
       config: GENERIC_CONFIG,
-      eligibility: [],
     });
     await createEntrants(
       auth,
@@ -244,7 +243,6 @@ async function seedBigDivision(
     sport_key: "generic",
     variant_key: "score",
     config: GENERIC_CONFIG,
-    eligibility: [],
   });
   const resolvedCourts = await courtIds(auth, ["Court 1", "Court 2"]);
   await sql`
@@ -322,7 +320,7 @@ async function seedJointObstacleCourtOrderBoard(): Promise<{
 
   const divA = await createDivision(auth, comp.id, {
     name: "Alpha", slug: `alpha-${randomUUID().slice(0, 6)}`, sport_key: "generic",
-    variant_key: "score", config: GENERIC_CONFIG, eligibility: [],
+    variant_key: "score", config: GENERIC_CONFIG, 
   });
   await createEntrants(
     auth,
@@ -339,7 +337,7 @@ async function seedJointObstacleCourtOrderBoard(): Promise<{
 
   const divB = await createDivision(auth, comp.id, {
     name: "Bravo", slug: `bravo-${randomUUID().slice(0, 6)}`, sport_key: "generic",
-    variant_key: "score", config: GENERIC_CONFIG, eligibility: [],
+    variant_key: "score", config: GENERIC_CONFIG, 
   });
   await createEntrants(
     auth,

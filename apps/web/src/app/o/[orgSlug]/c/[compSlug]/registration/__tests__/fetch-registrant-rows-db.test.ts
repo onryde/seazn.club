@@ -96,7 +96,6 @@ describe.skipIf(!HAS_DB)("fetchRegistrantRows — real Postgres", () => {
       sport_key: "generic",
       variant_key: "score",
       config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
-      eligibility: [],
     });
     await seedRegistration(competition.id, otherDivision.id, SETTINGS, { status: "pending" });
 
@@ -117,7 +116,6 @@ describe.skipIf(!HAS_DB)("fetchDivisionOptions — real Postgres", () => {
       sport_key: "generic",
       variant_key: "score",
       config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
-      eligibility: [],
     });
 
     const options = await fetchDivisionOptions(owner, competition.id);

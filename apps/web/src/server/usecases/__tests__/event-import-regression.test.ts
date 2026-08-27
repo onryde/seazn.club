@@ -63,7 +63,6 @@ async function startedDivisionWithPersons(auth: AuthCtx): Promise<{
     sport_key: "generic",
     variant_key: "score",
     config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
-    eligibility: [],
   });
   // Called directly as a usecase (bypassing the route's Zod `.parse()`), so
   // NewPersonMemberInput's `.default(false)`/`.default([])` never apply —

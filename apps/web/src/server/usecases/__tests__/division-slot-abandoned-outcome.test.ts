@@ -49,7 +49,6 @@ function divisionInput(name: string): CreateDivision {
     sport_key: "generic",
     variant_key: "score",
     config: GENERIC_CONFIG,
-    eligibility: [],
   } as CreateDivision;
 }
 

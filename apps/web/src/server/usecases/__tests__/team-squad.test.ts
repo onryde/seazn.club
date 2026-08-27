@@ -51,7 +51,6 @@ async function makeDivision(auth: AuthCtx, competitionId: string, sport: string)
     sport_key: sport,
     variant_key: sport === "football" ? "default" : sport === "cricket" ? "t20" : "score",
     config: sport === "generic" ? GENERIC : {},
-    eligibility: [],
   } as never);
 }
 

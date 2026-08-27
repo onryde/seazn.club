@@ -69,7 +69,7 @@ async function seedCompetition(auth: AuthCtx, name: string): Promise<string> {
   const competition = await createCompetition(auth, { ends_on: "2030-12-31", name, visibility: "private", branding: {} });
   await createDivision(auth, competition.id, {
     name: "Open", sport_key: "generic", variant_key: "score",
-    config: GENERIC_CONFIG, eligibility: [],
+    config: GENERIC_CONFIG, 
   });
   return competition.id;
 }

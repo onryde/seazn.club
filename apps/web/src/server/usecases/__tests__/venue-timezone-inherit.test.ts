@@ -68,7 +68,6 @@ async function seedDivision(auth: AuthCtx): Promise<{ divisionId: string; courts
     sport_key: "generic",
     variant_key: "score",
     config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
-    eligibility: [],
   });
   const courts = await seedCourts(auth.orgId, 1);
   return { divisionId: division.id, courts };

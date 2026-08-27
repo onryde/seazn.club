@@ -40,7 +40,6 @@ describe.skipIf(!HAS_DB)("card-stats: TBD fixtures never surface as 'next' (D4a/
       sport_key: "generic",
       variant_key: "score",
       config: GENERIC_CONFIG,
-      eligibility: [],
     });
     const entrants = await createEntrants(auth, division.id, [
       { kind: "individual", display_name: "Real A", seed: 1, members: [] },
@@ -108,7 +107,6 @@ describe.skipIf(!HAS_DB)("card-stats: TBD fixtures never surface as 'next' (D4a/
       sport_key: "generic",
       variant_key: "score",
       config: GENERIC_CONFIG,
-      eligibility: [],
     });
     const [stage] = await createStages(auth, division.id, {
       seq: 1,
@@ -145,7 +143,6 @@ describe.skipIf(!HAS_DB)("card-stats: TBD fixtures never surface as 'next' (D4a/
       sport_key: "generic",
       variant_key: "score",
       config: GENERIC_CONFIG,
-      eligibility: [],
     });
     await createEntrants(auth, division.id, [
       { kind: "individual", display_name: "Real A", seed: 1, members: [] },

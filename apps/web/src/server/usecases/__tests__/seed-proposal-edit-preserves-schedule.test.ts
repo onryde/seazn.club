@@ -42,7 +42,6 @@ describe.skipIf(!HAS_DB)("confirmSeedProposal + edits[] preserves scheduling (P6
       sport_key: "generic",
       variant_key: "score",
       config: GENERIC_CONFIG,
-      eligibility: [],
     });
     const entrants = await createEntrants(
       auth,

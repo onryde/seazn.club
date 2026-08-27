@@ -80,7 +80,6 @@ describe.skipIf(!HAS_DB)("/api/v1 service layer", () => {
       sport_key: "generic",
       variant_key: "score",
       config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
-      eligibility: [],
     });
     expect(division.module_version).toBe("1.0.0");
 
@@ -160,7 +159,7 @@ describe.skipIf(!HAS_DB)("/api/v1 service layer", () => {
     const { auth } = await seedOrg();
     const competition = await createCompetition(auth, { ends_on: "2030-12-31", name: "Winter", visibility: "private", branding: {} });
     const division = await createDivision(auth, competition.id, {
-      name: "Open", sport_key: "generic", variant_key: "score", config: { points: { w: 3, d: 1, l: 0 }, progressScore: false }, eligibility: [],
+      name: "Open", sport_key: "generic", variant_key: "score", config: { points: { w: 3, d: 1, l: 0 }, progressScore: false }, 
     });
     await createEntrants(auth, division.id, [
       { kind: "individual", display_name: "A", seed: 1, members: [] },
@@ -217,7 +216,7 @@ describe.skipIf(!HAS_DB)("/api/v1 service layer", () => {
     const { auth } = await seedOrg();
     const competition = await createCompetition(auth, { ends_on: "2030-12-31", name: "KO Cup", visibility: "private", branding: {} });
     const division = await createDivision(auth, competition.id, {
-      name: "Open", sport_key: "generic", variant_key: "score", config: { points: { w: 3, d: 1, l: 0 }, progressScore: false }, eligibility: [],
+      name: "Open", sport_key: "generic", variant_key: "score", config: { points: { w: 3, d: 1, l: 0 }, progressScore: false }, 
     });
     // 3 entrants → bracket of 4 → one bye: seed 1 auto-advances to the final.
     await createEntrants(auth, division.id, [
@@ -253,7 +252,7 @@ describe.skipIf(!HAS_DB)("/api/v1 service layer", () => {
     const { auth } = await seedOrg();
     const competition = await createCompetition(auth, { ends_on: "2030-12-31", name: "Worlds", visibility: "private", branding: {} });
     const division = await createDivision(auth, competition.id, {
-      name: "Open", sport_key: "generic", variant_key: "score", config: { points: { w: 3, d: 1, l: 0 }, progressScore: false }, eligibility: [],
+      name: "Open", sport_key: "generic", variant_key: "score", config: { points: { w: 3, d: 1, l: 0 }, progressScore: false }, 
     });
     const entrants = await createEntrants(
       auth,
@@ -378,7 +377,7 @@ describe.skipIf(!HAS_DB)("/api/v1 service layer", () => {
     const { auth } = await seedOrg();
     const competition = await createCompetition(auth, { ends_on: "2030-12-31", name: "Keep", visibility: "private", branding: {} });
     const division = await createDivision(auth, competition.id, {
-      name: "Open", sport_key: "generic", variant_key: "score", config: { points: { w: 3, d: 1, l: 0 }, progressScore: false }, eligibility: [],
+      name: "Open", sport_key: "generic", variant_key: "score", config: { points: { w: 3, d: 1, l: 0 }, progressScore: false }, 
     });
     await createEntrants(auth, division.id, [
       { kind: "individual", display_name: "A", seed: 1, members: [] },
@@ -395,7 +394,7 @@ describe.skipIf(!HAS_DB)("/api/v1 service layer", () => {
     const { auth } = await seedOrg();
     const competition = await createCompetition(auth, { ends_on: "2030-12-31", name: "Prune", visibility: "private", branding: {} });
     const division = await createDivision(auth, competition.id, {
-      name: "Open", sport_key: "generic", variant_key: "score", config: { points: { w: 3, d: 1, l: 0 }, progressScore: false }, eligibility: [],
+      name: "Open", sport_key: "generic", variant_key: "score", config: { points: { w: 3, d: 1, l: 0 }, progressScore: false }, 
     });
     await createEntrants(auth, division.id, [
       { kind: "individual", display_name: "A", seed: 1, members: [] },

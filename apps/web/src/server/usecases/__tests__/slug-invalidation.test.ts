@@ -64,7 +64,6 @@ const divInput = (name: string) => ({
   sport_key: "generic",
   variant_key: "score",
   config: GENERIC_CONFIG,
-  eligibility: [],
 });
 
 beforeEach(() => {

@@ -173,6 +173,23 @@ function checkAgeBand(
   }
 }
 
+// RS007/V380: the age-band cutoff override — both-or-neither, mirroring the
+// DB CHECK (`divisions_age_cutoff_check`). This catches the common
+// single-request case; usecases/divisions.ts's isAgeCutoffCheckViolation
+// backstops the READ COMMITTED race a merge-and-validate guard can't see,
+// same pattern as AGE_MAX_BEFORE_MIN/checkAgeBand above.
+export const AGE_CUTOFF_BOTH_OR_NEITHER =
+  "age_cutoff_month and age_cutoff_day must be set together, or both left null.";
+
+function checkAgeCutoff(
+  v: { age_cutoff_month?: number | null; age_cutoff_day?: number | null },
+  ctx: z.RefinementCtx,
+): void {
+  if ((v.age_cutoff_month != null) !== (v.age_cutoff_day != null)) {
+    ctx.addIssue({ code: "custom", path: ["age_cutoff_day"], message: AGE_CUTOFF_BOTH_OR_NEITHER });
+  }
+}
+
 export const CreateDivision = z.object({
   name: z.string().min(1).max(200),
   slug: Slug.optional(),
@@ -180,7 +197,6 @@ export const CreateDivision = z.object({
   variant_key: z.string().min(1),
   /** Merged over the variant preset, then validated by the sport module. */
   config: z.record(z.string(), z.unknown()).default({}),
-  eligibility: z.array(z.record(z.string(), z.unknown())).default([]),
   tiebreakers: z.array(TiebreakerKeyS).nullish(),
 });
 export type CreateDivision = z.infer<typeof CreateDivision>;
@@ -190,17 +206,26 @@ export const PatchDivision = z
     name: z.string().min(1).max(200),
     /** Markdown (v3/06 §2), shown on the public division page. */
     description: z.string().max(20_000).nullable(),
-    eligibility: z.array(z.record(z.string(), z.unknown())),
     tiebreakers: z.array(TiebreakerKeyS).nullable(),
-    /** V364 first-class eligibility columns (RS004): read alongside the
-     *  jsonb `eligibility` rules above, never instead of them. */
+    /** V364/V380 first-class eligibility columns — the ONE eligibility
+     *  representation (RS007/V380 dropped the jsonb `eligibility` rules this
+     *  comment used to say "read alongside"). */
     category: DivisionCategory.nullable(),
-    /** Years, evaluated at 1 Jan of the season-start year. Nullable
-     *  independently of age_max; combined they must satisfy age_max >=
-     *  age_min (checkAgeBand below) — the DB CHECK backstops any caller
-     *  that bypasses this schema (e.g. a direct usecase call in a test). */
+    /** Years, evaluated at the age_cutoff_month/day below (1 Jan when
+     *  null) of the season-start year. Nullable independently of age_max;
+     *  combined they must satisfy age_max >= age_min (checkAgeBand below) —
+     *  the DB CHECK backstops any caller that bypasses this schema (e.g. a
+     *  direct usecase call in a test). */
     age_min: z.number().int().min(0).max(120).nullable(),
     age_max: z.number().int().min(0).max(120).nullable(),
+    /** RS007/V380: overrides the age band's cutoff date (default 1
+     *  January) — school-year age groups commonly run 1 September.
+     *  Both-or-neither (checkAgeCutoff below; DB CHECK backstops it). */
+    age_cutoff_month: z.number().int().min(1).max(12).nullable(),
+    age_cutoff_day: z.number().int().min(1).max(31).nullable(),
+    /** RS007/V380: the retired jsonb "custom rule" note, now a first-class
+     *  column the public entry/join pages render as a warning. */
+    eligibility_note: z.string().max(2000).nullable(),
     status: DivisionStatus,
     /** Hide official names on all public reads (Jul3/02, 25 Jun). */
     officials_hide_names: z.boolean(),
@@ -231,7 +256,8 @@ export const PatchDivision = z
   })
   .partial()
   .refine((p) => Object.keys(p).length > 0, "empty patch")
-  .superRefine(checkAgeBand);
+  .superRefine(checkAgeBand)
+  .superRefine(checkAgeCutoff);
 export type PatchDivision = z.infer<typeof PatchDivision>;
 
 export const Division = z.object({
@@ -244,15 +270,17 @@ export const Division = z.object({
   variant_key: z.string(),
   config: z.unknown(),
   module_version: z.string(),
-  eligibility: z.array(z.unknown()),
   tiebreakers: z.array(TiebreakerKeyS).nullable(),
-  // V364 first-class eligibility columns (RS004); see PatchDivision above.
+  // V364/V380 first-class eligibility columns; see PatchDivision above.
   category: DivisionCategory.nullable(),
   // Bounded 0-120, matching PatchDivision's request-side bounds above
   // (RS004 review finding 4) — the generated OpenAPI spec described this
   // field two different ways otherwise.
   age_min: z.number().int().min(0).max(120).nullable(),
   age_max: z.number().int().min(0).max(120).nullable(),
+  age_cutoff_month: z.number().int().min(1).max(12).nullable(),
+  age_cutoff_day: z.number().int().min(1).max(31).nullable(),
+  eligibility_note: z.string().max(2000).nullable(),
   status: DivisionStatus,
   officials_hide_names: z.boolean(),
   scheduling_mode: z.enum(["timed", "flexible"]),

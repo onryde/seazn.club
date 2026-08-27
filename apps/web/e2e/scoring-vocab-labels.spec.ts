@@ -45,7 +45,7 @@ test("cricket: the tenth dismissal is offered as words, not snake_case", async (
     request,
     `/api/v1/competitions/${comp.data!.id}/divisions`,
     "POST",
-    { name: "T20", sport_key: "cricket", variant_key: "t20", config: {}, eligibility: [] },
+    { name: "T20", sport_key: "cricket", variant_key: "t20", config: {} },
   );
   const divId = div.data!.id;
 
@@ -202,7 +202,7 @@ test("tennis: a sanction's level renders as words in the activity feed", async (
     request,
     `/api/v1/competitions/${comp.data!.id}/divisions`,
     "POST",
-    { name: "Tour", sport_key: "tennis", variant_key: "tour", config: {}, eligibility: [] },
+    { name: "Tour", sport_key: "tennis", variant_key: "tour", config: {} },
   );
   const divId = div.data!.id;
   const ent = await apiJson<{ id: string }[]>(request, `/api/v1/divisions/${divId}/entrants`, "POST", [

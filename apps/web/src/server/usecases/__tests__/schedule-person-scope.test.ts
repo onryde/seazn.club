@@ -124,7 +124,6 @@ async function makeDivision(
     sport_key: "generic",
     variant_key: "score",
     config: GENERIC_CONFIG,
-    eligibility: [],
   });
   const courts = await courtIds(auth, ["Court 1", "Court 2", "Court 3"]);
   await sql`

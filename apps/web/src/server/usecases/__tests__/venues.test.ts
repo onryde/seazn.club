@@ -161,7 +161,6 @@ async function seedFixtureOnCourt(
     sport_key: "generic",
     variant_key: "score",
     config: GENERIC_CONFIG,
-    eligibility: [],
   });
   const [{ id: stageId }] = await sql<{ id: string }[]>`
     insert into stages (division_id, seq, kind, name)
@@ -895,7 +894,6 @@ describe.skipIf(!HAS_DB)("venues usecase — DB", () => {
       sport_key: "generic",
       variant_key: "score",
       config: GENERIC_CONFIG,
-      eligibility: [],
     });
     const [{ id: stageId }] = await sql<{ id: string }[]>`
       insert into stages (division_id, seq, kind, name)

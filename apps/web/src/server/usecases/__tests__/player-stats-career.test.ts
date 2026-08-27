@@ -93,7 +93,6 @@ async function seedDivisionWithStage(
     sport_key: sportKey,
     variant_key: variantKey,
     config: {},
-    eligibility: [],
   });
   const [{ id: stageId }] = await sql<{ id: string }[]>`
     insert into stages (division_id, seq, kind, name) values (${division.id}, 1, 'league', 'League')

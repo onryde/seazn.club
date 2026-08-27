@@ -32,7 +32,6 @@ describe.skipIf(!HAS_DB)("fetchDivisionRows — real Postgres", () => {
       sport_key: "generic",
       variant_key: "score",
       config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
-      eligibility: [],
     });
     await putRegistrationSettings(owner, configured.id, {
       enabled: true,
@@ -135,7 +134,6 @@ describe.skipIf(!HAS_DB)("fetchDivisionRows — real Postgres", () => {
         sport_key: "generic",
         variant_key: "score",
         config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
-        eligibility: [],
       });
       dupeIds.push(division.id);
     }

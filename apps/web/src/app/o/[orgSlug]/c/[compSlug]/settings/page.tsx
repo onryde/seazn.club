@@ -64,17 +64,20 @@ export default async function CompetitionSettingsPage({
   const archivedDivisions = allDivisions.filter((d) => d.archived_at !== null);
   const trialAvailable = checkoutTrialDays(subRow) > 0;
 
-  // Youth flag (v3/11 gap 8): any live division with a U-age eligibility rule
+  // Youth flag (v3/11 gap 8): any live division with a U-age eligibility
   // raises the guardian-consent interstitial before the competition leaves
-  // Private. Org slug feeds the picker's share URL.
+  // Private. Org slug feeds the picker's share URL. RS007/V380: reads the
+  // `youth` column directly (same convention as every other reader —
+  // slideshow-data.ts, og/model.ts, exports.ts) instead of recomputing from
+  // the now-dropped jsonb rules; `youth` is kept correctly derived from
+  // `age_max` at write time (usecases/divisions.ts's deriveYouth) and stays
+  // overridable, so trusting the column also honours an explicit organiser
+  // override the old recompute could not see.
   const [youthRow] = await withTenant(auth.orgId, (tx) =>
     tx<{ youth: boolean }[]>`
       select exists(
-        select 1 from divisions d,
-               jsonb_array_elements(d.eligibility) r
-        where d.competition_id = ${id} and d.archived_at is null
-          and r->>'kind' = 'age'
-          and coalesce((r->>'maxAgeAt')::int, 99) < 18
+        select 1 from divisions d
+        where d.competition_id = ${id} and d.archived_at is null and d.youth
       ) as youth`,
   );
 

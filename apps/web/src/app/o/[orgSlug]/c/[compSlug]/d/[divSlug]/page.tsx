@@ -431,7 +431,11 @@ export default async function DivisionPage({
             canEdit={editable}
             positionGroups={sportModule.positions.groups}
             roles={sportModule.positions.roles ?? []}
-            eligibility={division.eligibility as Record<string, unknown>[]}
+            // RS007/V380 dropped `divisions.eligibility` (jsonb) — there are
+            // no more rules to show. `EntrantsPanel` itself is UI-half, a
+            // separate wave (do not touch here), so this stays an always-
+            // empty array rather than removing the prop.
+            eligibility={[]}
             entrantModel={entrantModel}
             suspensions={entrantSuspensions}
           />

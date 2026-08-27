@@ -240,10 +240,11 @@ interface EntryDivisionCtx {
   id: string;
   competition_id: string;
   org_id: string;
-  eligibility: unknown[];
   category: string | null;
   age_min: number | null;
   age_max: number | null;
+  age_cutoff_month: number | null;
+  age_cutoff_day: number | null;
   /** division_name/comp_name/org_name added for `previewJoinEntry`'s
    *  "division and competition/org context" read — the same bundle
    *  `publicRegistrationStatus`/`publicRegistrationStatusByRef`
@@ -263,7 +264,8 @@ interface EntryDivisionCtx {
 
 async function loadEntryDivisionCtx(divisionId: string): Promise<EntryDivisionCtx> {
   const [row] = await sql<EntryDivisionCtx[]>`
-    select d.id, d.competition_id, d.org_id, d.eligibility, d.category, d.age_min, d.age_max,
+    select d.id, d.competition_id, d.org_id, d.category, d.age_min, d.age_max,
+           d.age_cutoff_month, d.age_cutoff_day,
            d.name as division_name,
            c.slug as comp_slug, c.name as comp_name, c.visibility as comp_visibility, c.starts_on,
            o.slug as org_slug, o.name as org_name, o.currency as org_currency,
@@ -276,9 +278,10 @@ async function loadEntryDivisionCtx(divisionId: string): Promise<EntryDivisionCt
   return row;
 }
 
-/** Season anchor for eligibility's `cutoff.yearOf: "season_start"` branch —
- *  same derivation old `submitRegistration`'s (deleted) `seasonStartYear`
- *  used: the competition's start date, or this year if unset. */
+/** Season anchor for the age band's cutoff (`ageBandEligibilityIssues`,
+ *  `@/lib/registration-rules`) — same derivation old `submitRegistration`'s
+ *  (deleted) `seasonStartYear` used: the competition's start date, or this
+ *  year if unset. */
 function seasonStartYear(ctx: { starts_on: string | null }): number {
   return ctx.starts_on ? new Date(`${ctx.starts_on}T00:00:00Z`).getUTCFullYear() : new Date().getUTCFullYear();
 }
@@ -475,7 +478,13 @@ export async function submitRegistrationGroup(
     );
 
     const issues = rosterIssues(
-      { eligibility: divCtx.eligibility, category: divCtx.category, age_min: divCtx.age_min, age_max: divCtx.age_max },
+      {
+        category: divCtx.category,
+        age_min: divCtx.age_min,
+        age_max: divCtx.age_max,
+        age_cutoff_month: divCtx.age_cutoff_month,
+        age_cutoff_day: divCtx.age_cutoff_day,
+      },
       players.map((p) => ({ full_name: p.full_name, dob: p.dob, gender: p.gender })),
       seasonYear,
     );
@@ -874,11 +883,10 @@ export async function previewJoinEntry(joinCode: string): Promise<JoinPreviewRes
     unclaimed_slots: slots.map((s) => ({ player_id: s.id, full_name: s.full_name })),
     allow_new_player: allowNewPlayer,
     requires_dob: requiresDob({
-      eligibility: divCtx.eligibility,
       age_min: divCtx.age_min,
       age_max: divCtx.age_max,
     }),
-    requires_gender: requiresGender({ eligibility: divCtx.eligibility, category: divCtx.category }),
+    requires_gender: requiresGender({ category: divCtx.category }),
     total_players: totalPlayers,
   };
 }
@@ -970,7 +978,13 @@ export async function joinTeamEntry(
   const divCtx = await loadEntryDivisionCtx(reg.division_id);
 
   const issues = divisionEligibilityIssues(
-    { eligibility: divCtx.eligibility, category: divCtx.category, age_min: divCtx.age_min, age_max: divCtx.age_max },
+    {
+      category: divCtx.category,
+      age_min: divCtx.age_min,
+      age_max: divCtx.age_max,
+      age_cutoff_month: divCtx.age_cutoff_month,
+      age_cutoff_day: divCtx.age_cutoff_day,
+    },
     { dob: input.player.dob, gender: input.player.gender },
     seasonStartYear(divCtx),
   );

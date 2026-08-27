@@ -66,7 +66,6 @@ async function setupGroupsToKnockout(
     sport_key: "generic",
     variant_key: "score",
     config: GENERIC_CONFIG,
-    eligibility: [],
   });
   const entrants = await createEntrants(
     auth,
@@ -296,7 +295,6 @@ describe.skipIf(!HAS_DB)("D4a/P5 — bestNth position-key collision (F3 round-3 
       sport_key: "generic",
       variant_key: "score",
       config: GENERIC_CONFIG,
-      eligibility: [],
     });
     const entrants = await createEntrants(
       auth,
@@ -481,7 +479,6 @@ describe.skipIf(!HAS_DB)("D4a/P5 — confirm validation (double-assignment, fore
       sport_key: "generic",
       variant_key: "score",
       config: GENERIC_CONFIG,
-      eligibility: [],
     });
     // One pool (2 groups), no ties possible from a single-match pool with a
     // decisive result — so instead force the tie directly on the STANDINGS
@@ -571,7 +568,6 @@ async function setupGroupsToKnockoutWithBye(): Promise<Setup> {
     sport_key: "generic",
     variant_key: "score",
     config: GENERIC_CONFIG,
-    eligibility: [],
   });
   const entrants = await createEntrants(
     auth,
@@ -707,7 +703,6 @@ describe.skipIf(!HAS_DB)("D4a/P5 — bye-award bulk UPDATE guards against strand
       sport_key: "generic",
       variant_key: "score",
       config: GENERIC_CONFIG,
-      eligibility: [],
     });
     // 3 entrants -> bracket of 4, ONE bye (same shape as integration.test.ts's
     // "byes auto-advance" test) — the bye's award propagates straight into
@@ -781,7 +776,6 @@ describe.skipIf(!HAS_DB)("D4a/P5 — standings override marks a draft stale", ()
       sport_key: "generic",
       variant_key: "score",
       config: GENERIC_CONFIG,
-      eligibility: [],
     });
     const entrants = await createEntrants(
       auth,

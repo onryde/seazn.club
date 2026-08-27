@@ -61,7 +61,6 @@ async function rig(auth: AuthCtx, entrantNames: string[]) {
     sport_key: "generic",
     variant_key: "score",
     config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
-    eligibility: [],
   });
   const entrants = await createEntrants(
     auth,
@@ -179,7 +178,6 @@ describe.skipIf(!HAS_DB)("withdrawal cascade (spec 05 §5)", () => {
       sport_key: "generic",
       variant_key: "score",
       config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
-      eligibility: [],
     });
     const entrants = await createEntrants(auth, division.id, [
       { kind: "individual", display_name: "A", seed: 1, members: [] },

@@ -76,7 +76,6 @@ async function seedBoard(
     sport_key: "generic",
     variant_key: "score",
     config: GENERIC_CONFIG,
-    eligibility: [],
   });
   await createEntrants(
     auth,
@@ -239,7 +238,6 @@ describe.skipIf(!HAS_DB)("#404 re-verify published boards after a merge", () => 
       sport_key: "generic",
       variant_key: "score",
       config: GENERIC_CONFIG,
-      eligibility: [],
     });
     await createEntrants(
       auth,
@@ -374,7 +372,6 @@ describe.skipIf(!HAS_DB)("#404 re-verify published boards after a merge", () => 
       sport_key: "generic",
       variant_key: "score",
       config: GENERIC_CONFIG,
-      eligibility: [],
     });
     await createEntrants(
       auth,

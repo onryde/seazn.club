@@ -68,7 +68,6 @@ async function seedDivision(auth: AuthCtx, visibility: "private" | "public" = "p
     sport_key: "football",
     variant_key: "default",
     config: {},
-    eligibility: [],
   });
   const mkPeople = async (names: string[]) =>
     Promise.all(
@@ -319,7 +318,6 @@ describe.skipIf(!HAS_DB)("player statistics (Jul3/07)", () => {
       sport_key: "generic",
       variant_key: "score",
       config: {},
-      eligibility: [],
     });
     await createEntrants(
       auth,
@@ -442,7 +440,6 @@ async function seedSetBasedDivision(
     sport_key: mod.key,
     variant_key: "default",
     config,
-    eligibility: [],
   });
   const entrants = await createEntrants(
     auth,

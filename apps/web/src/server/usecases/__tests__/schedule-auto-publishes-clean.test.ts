@@ -96,7 +96,6 @@ async function seedDivision(): Promise<Seeded> {
     sport_key: "generic",
     variant_key: "score",
     config: GENERIC_CONFIG,
-    eligibility: [],
   });
   const venue = await createVenue(auth, { name: "Main", sort: 0 });
   const court1 = await createCourt(auth, venue.id, { name: "Court 1", sort: 0, tags: [] });

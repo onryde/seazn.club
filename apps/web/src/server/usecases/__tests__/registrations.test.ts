@@ -3834,7 +3834,6 @@ describe.skipIf(!HAS_DB)("mintGroupCheckout — per-currency matrix (RS003 W4)",
       sport_key: "generic",
       variant_key: "score",
       config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
-      eligibility: [],
     });
 
     // Create registration with display name containing special characters
@@ -3933,7 +3932,6 @@ describe.skipIf(!HAS_DB)("mintGroupCheckout — per-currency matrix (RS003 W4)",
         sport_key: "generic",
         variant_key: "score",
         config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
-        eligibility: [],
       });
       const settings = await putRegistrationSettings(owner, division.id, {
         enabled: true, entrant_kind: "individual", fee_cents: 0, form_fields: [],

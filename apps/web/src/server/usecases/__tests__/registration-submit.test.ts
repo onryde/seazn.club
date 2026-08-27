@@ -139,7 +139,6 @@ async function rig(
     sport_key: "generic",
     variant_key: "score",
     config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
-    eligibility: [],
   });
   return { competition, division };
 }
@@ -503,7 +502,6 @@ describe.skipIf(!HAS_DB)("submitRegistrationGroup", () => {
       sport_key: "generic",
       variant_key: "score",
       config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
-      eligibility: [],
     });
     await seedSettings(offlineDivision.id, { entrant_kind: "individual", fee_cents: 500, payment_method: "offline" });
 
@@ -768,7 +766,6 @@ describe.skipIf(!HAS_DB)("submitRegistrationGroup", () => {
       sport_key: "generic",
       variant_key: "score",
       config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
-      eligibility: [],
     });
     await seedSettings(division2.id, { entrant_kind: "individual", fee_cents: 0 });
     const notSelf = await submitRegistrationGroup(
@@ -810,7 +807,6 @@ describe.skipIf(!HAS_DB)("submitRegistrationGroup", () => {
       sport_key: "generic",
       variant_key: "score",
       config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
-      eligibility: [],
     });
     await seedSettings(division2.id, { entrant_kind: "individual", fee_cents: 0 });
     const sessionUserId = await makeUser("multiself");
@@ -1053,7 +1049,6 @@ describe.skipIf(!HAS_DB)("submitRegistrationGroup", () => {
       sport_key: "generic",
       variant_key: "score",
       config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
-      eligibility: [],
     });
     await seedSettings(soloDivision.id, { entrant_kind: "individual", fee_cents: 0 });
 

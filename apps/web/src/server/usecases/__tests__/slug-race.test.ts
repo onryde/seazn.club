@@ -64,7 +64,6 @@ const divInput = (name: string) => ({
   sport_key: "generic",
   variant_key: "score",
   config: GENERIC_CONFIG,
-  eligibility: [],
 });
 
 /** Block until some backend is waiting on a lock we have not granted — i.e.

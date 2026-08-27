@@ -424,7 +424,7 @@ test.describe("T1 · competition delete is blocked while money is on file", () =
       page.request,
       `/api/v1/competitions/${cardComp.data!.id}/divisions`,
       "POST",
-      { name: "Open", sport_key: "generic", variant_key: "score", config: GENERIC_CONFIG, eligibility: [] },
+      { name: "Open", sport_key: "generic", variant_key: "score", config: GENERIC_CONFIG },
     );
     await withDb(async (sql) => {
       // V363/V364: the payment envelope (payment_intent_id/refunded_cents/

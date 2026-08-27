@@ -108,7 +108,7 @@ async function seedFullDivision(
   });
   const division = await createDivision(auth, competition.id, {
     name: "Open", sport_key: "generic", variant_key: "score",
-    config: GENERIC_CONFIG, eligibility: [],
+    config: GENERIC_CONFIG, 
   });
   await sql`
     insert into entrants (division_id, kind, display_name, status)

@@ -59,7 +59,7 @@ async function seedLiveFixture(
     request,
     `/api/v1/competitions/${comp.data!.id}/divisions`,
     "POST",
-    { name: "MS", sport_key: "badminton", variant_key: "bwf", config: {}, eligibility: [] },
+    { name: "MS", sport_key: "badminton", variant_key: "bwf", config: {} },
   );
   const divisionId = div.data!.id;
   const home = `Asha ${label} ${TAG}`;
@@ -217,7 +217,7 @@ test("forfeit dropdown closes when clicking outside", async ({ page, request }) 
     request,
     `/api/v1/competitions/${comp.data!.id}/divisions`,
     "POST",
-    { name: "MS", sport_key: "badminton", variant_key: "bwf", config: {}, eligibility: [] },
+    { name: "MS", sport_key: "badminton", variant_key: "bwf", config: {} },
   );
   const divisionId = div.data!.id;
   await addEntrantsViaApi(request, divisionId, ["Asha", "Bala"]);
@@ -248,7 +248,7 @@ test("badminton pad shows the current game number, not always game 1", async ({
     request,
     `/api/v1/competitions/${comp.data!.id}/divisions`,
     "POST",
-    { name: "WS", sport_key: "badminton", variant_key: "bwf", config: {}, eligibility: [] },
+    { name: "WS", sport_key: "badminton", variant_key: "bwf", config: {} },
   );
   const divisionId = div.data!.id;
   const { ids } = await addEntrantsViaApi(request, divisionId, ["Mina", "Rita"]);
@@ -301,7 +301,7 @@ test("badminton: an entered game score lands in the header summary live (v3/09 ย
     request,
     `/api/v1/competitions/${comp.data!.id}/divisions`,
     "POST",
-    { name: "MS", sport_key: "badminton", variant_key: "bwf", config: {}, eligibility: [] },
+    { name: "MS", sport_key: "badminton", variant_key: "bwf", config: {} },
   );
   const divisionId = div.data!.id;
   await addEntrantsViaApi(request, divisionId, ["Priya", "Sana"]);
@@ -377,7 +377,7 @@ test("cricket: undo mid-over keeps the scoring panel usable (v3/09 ยง2)", async 
     request,
     `/api/v1/competitions/${comp.data!.id}/divisions`,
     "POST",
-    { name: "T20", sport_key: "cricket", variant_key: "t20", config: {}, eligibility: [] },
+    { name: "T20", sport_key: "cricket", variant_key: "t20", config: {} },
   );
   const divisionId = div.data!.id;
   const entrants = await apiJson<{ id: string }[]>(
@@ -537,7 +537,7 @@ test("cricket scores over-by-over: add an over grows the total, then close innin
     request,
     `/api/v1/competitions/${comp.data!.id}/divisions`,
     "POST",
-    { name: "T20", sport_key: "cricket", variant_key: "t20", config: {}, eligibility: [] },
+    { name: "T20", sport_key: "cricket", variant_key: "t20", config: {} },
   );
   const divisionId = div.data!.id;
   const entrants = await apiJson<{ id: string }[]>(
@@ -699,7 +699,6 @@ test("cricket DLS scales a five-ball-over format onto the published table", asyn
       // The only override the rail needs: scoring.ts reads dls.enabled straight
       // off divisions.config to decide a revise is a DLS one.
       config: { dls: { enabled: true, edition: "standard" } },
-      eligibility: [],
     },
   );
   const divisionId = div.data!.id;

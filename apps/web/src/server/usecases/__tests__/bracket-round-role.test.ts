@@ -46,7 +46,6 @@ async function seedDoubleElimStage(entrantCount: number) {
     sport_key: "generic",
     variant_key: "score",
     config: GENERIC_CONFIG,
-    eligibility: [],
   });
   await createEntrants(
     auth,
@@ -91,7 +90,6 @@ async function seedKnockoutStage(entrantCount: number, config: Record<string, un
     sport_key: "generic",
     variant_key: "score",
     config: GENERIC_CONFIG,
-    eligibility: [],
   });
   await createEntrants(
     auth,
@@ -133,7 +131,6 @@ async function seedSeededDoubleElimStage(entrantCount: number) {
     sport_key: "generic",
     variant_key: "score",
     config: GENERIC_CONFIG,
-    eligibility: [],
   });
   await createEntrants(
     auth,

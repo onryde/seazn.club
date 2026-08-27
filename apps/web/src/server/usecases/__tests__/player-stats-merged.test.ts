@@ -58,7 +58,6 @@ async function seedFootball(auth: AuthCtx, reds: string[]) {
     sport_key: "football",
     variant_key: "default",
     config: {},
-    eligibility: [],
   });
   const keeper = await person(auth.orgId, "Cy Keeper");
   const roster = (people: string[]) =>

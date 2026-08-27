@@ -79,7 +79,6 @@ async function seedDivisionWithTwoLeagues(auth: AuthCtx) {
     sport_key: "generic",
     variant_key: "score",
     config: GENERIC_CONFIG,
-    eligibility: [],
   });
   // Every "league" stage below draws from the WHOLE division entrant list
   // (generateStageFixtures' plain path) — 4 entrants play a full
@@ -416,7 +415,6 @@ describe.skipIf(!HAS_DB)("multi-source progression (F2 Decision 4 / Finding 1)",
       sport_key: "generic",
       variant_key: "score",
       config: GENERIC_CONFIG,
-      eligibility: [],
     });
     const entrants = await createEntrants(
       auth,
@@ -584,7 +582,6 @@ describe.skipIf(!HAS_DB)("multi-source progression (F2 Decision 4 / Finding 1)",
       sport_key: "generic",
       variant_key: "score",
       config: GENERIC_CONFIG,
-      eligibility: [],
     });
     const entrants = await createEntrants(
       auth,

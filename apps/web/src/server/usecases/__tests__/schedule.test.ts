@@ -179,7 +179,6 @@ describe.skipIf(!HAS_DB)("scheduling console (doc 12, PROMPT-17)", () => {
       sport_key: "generic",
       variant_key: "score",
       config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
-      eligibility: [],
     });
     await createEntrants(
       auth,
@@ -527,7 +526,7 @@ describe.skipIf(!HAS_DB)("scheduling console (doc 12, PROMPT-17)", () => {
     const competition = await createCompetition(auth, { ends_on: "2030-12-31", name: "Club Night", visibility: "private", branding: {} });
     const division = await createDivision(auth, competition.id, {
       name: "Open", sport_key: "generic", variant_key: "score",
-      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false }, eligibility: [],
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false }, 
     });
     await createEntrants(auth, division.id, [
       { kind: "individual", display_name: "A", seed: 1, members: [] },
@@ -634,7 +633,7 @@ describe.skipIf(!HAS_DB)("scheduling console (doc 12, PROMPT-17)", () => {
     const competition = await createCompetition(auth, { ends_on: "2030-12-31", name: "Rolling", visibility: "private", branding: {} });
     const division = await createDivision(auth, competition.id, {
       name: "Open", sport_key: "generic", variant_key: "score",
-      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false }, eligibility: [],
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false }, 
     });
     await createEntrants(auth, division.id, [
       { kind: "individual", display_name: "A", seed: 1, members: [] },
@@ -673,7 +672,7 @@ describe.skipIf(!HAS_DB)("scheduling console (doc 12, PROMPT-17)", () => {
     const competition = await createCompetition(auth, { ends_on: "2030-12-31", name: "TwoAdmins", visibility: "private", branding: {} });
     const division = await createDivision(auth, competition.id, {
       name: "Open", sport_key: "generic", variant_key: "score",
-      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false }, eligibility: [],
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false }, 
     });
     await createEntrants(auth, division.id, [
       { kind: "individual", display_name: "A", seed: 1, members: [] },
@@ -736,7 +735,7 @@ describe.skipIf(!HAS_DB)("scheduling console (doc 12, PROMPT-17)", () => {
     const competition = await createCompetition(auth, { ends_on: "2030-12-31", name: "AI Cup", visibility: "private", branding: {} });
     const division = await createDivision(auth, competition.id, {
       name: "Open", sport_key: "generic", variant_key: "score",
-      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false }, eligibility: [],
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false }, 
     });
     await createEntrants(auth, division.id, [
       { kind: "individual", display_name: "A", seed: 1, members: [] },
@@ -789,7 +788,6 @@ describe.skipIf(!HAS_DB)("roundRobinStageIds (C1, 2026-08-12 round-order design)
       sport_key: "generic",
       variant_key: "score",
       config: DIVISION_CONFIG,
-      eligibility: [],
     });
     const [league, group, knockout] = await createStages(auth, division.id, [
       { seq: 1, kind: "league", name: "League", config: {} },
@@ -817,7 +815,6 @@ describe.skipIf(!HAS_DB)("roundRobinStageIds (C1, 2026-08-12 round-order design)
       sport_key: "generic",
       variant_key: "score",
       config: DIVISION_CONFIG,
-      eligibility: [],
     });
     await createStages(auth, division.id, [{ seq: 1, kind: "knockout", name: "KO", config: {} }]);
 
@@ -916,7 +913,6 @@ describe.skipIf(!HAS_DB)("loadSettings resolves the organisation zone separately
       sport_key: "generic",
       variant_key: "score",
       config: DIVISION_CONFIG,
-      eligibility: [],
     });
     return { auth, divisionId: division.id };
   }
@@ -1069,7 +1065,6 @@ describe.skipIf(!HAS_DB)("blackout windows round-trip into the placer (date/time
       sport_key: "generic",
       variant_key: "score",
       config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
-      eligibility: [],
     });
     const [c1, c2] = await seedCourts(auth, ["Court 1", "Court 2"]);
     return { auth, divisionId: division.id, courts: [c1!, c2!] };
@@ -1230,7 +1225,6 @@ describe.skipIf(!HAS_DB)("blackout windows round-trip into the placer (date/time
         sport_key: "generic",
         variant_key: "score",
         config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
-        eligibility: [],
       });
       await createEntrants(
         auth,
@@ -1397,7 +1391,6 @@ describe.skipIf(!HAS_DB)("court removal is refused while a pin sits on it (date/
       sport_key: "generic",
       variant_key: "score",
       config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
-      eligibility: [],
     });
     await createEntrants(
       auth,

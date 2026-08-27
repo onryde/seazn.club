@@ -17,29 +17,28 @@ import "server-only";
 // verbatim (see the `@/lib/registration-rules` import below) so it stays
 // the ONE evaluator — "two eligibility evaluators is the exact failure the
 // RS011 re-homing exists to prevent" (this file's own prior header) applies
-// just as much to a server/client fork as to two server-side copies. What
-// stayed here: everything that reads the jsonb `eligibility` rules (never
-// shipped to the client).
+// just as much to a server/client fork as to two server-side copies.
 //
 // RS006 W3 (step 3 — DETAILS) moved the roster-composition check
 // (`rosterIssues`'s hasM/hasF tally) out to `@/lib/registration-rules` too
 // (`rosterCompositionIssues`), for the same reason: the public stepper's
-// mixed-composition METER needs the identical rule, and unlike the jsonb
-// loop, the composition check only reads `category` (public) and each
-// player's `gender` — nothing server-only. `rosterIssues` below now calls
-// it instead of tallying inline.
+// mixed-composition METER needs the identical rule, and it reads only
+// `category` (public) and each player's `gender` — nothing server-only.
+// `rosterIssues` below now calls it instead of tallying inline.
 //
-// Two eligibility sources exist side by side, and are read TOGETHER, never
-// one replacing the other:
-//  - `divisions.eligibility` (jsonb): free-form age/gender rules authored in
-//    the division builder. `AgeRule`/`GenderRule` below are the only kinds
-//    this file understands; roster/grade/custom rules stay organiser-side
-//    (doc 06 §2).
-//  - `divisions.category`/`age_min`/`age_max` (V364, first-class columns):
-//    added so the public page can show a category/age badge and close a
-//    division at READ time, not only at validation time. The jsonb rules
-//    stay live for custom extra restrictions a plain category/age band
-//    can't express.
+// RS007/V380 (owner ruling, `_INDEX.md` "Eligibility consolidation") DROPPED
+// `divisions.eligibility` (jsonb) — until then, a division carried its age/
+// gender rules TWICE (the jsonb rules here, AND `category`/`age_min`/
+// `age_max`, V364), enforced ADDITIVELY, with a precedence rule arbitrating
+// when both fired for gender. That was the source of three live defects (two
+// cutoff dates disagreeing, `youth` only ever derived from the jsonb half,
+// and the jsonb "custom" rule rendered nowhere) — see the migration's own
+// header (`db/migration/deltas/V380__division_eligibility_consolidation.sql`)
+// for the full account. This file now has exactly ONE eligibility
+// representation: `category`/`age_min`/`age_max`/`age_cutoff_month`/
+// `age_cutoff_day` — nothing left to arbitrate, so the precedence rule (and
+// the dual-source "additive" framing) is gone with the jsonb loop it existed
+// to reconcile.
 //
 // RETURN SHAPE (RS002 entry-condition item 5, `_INDEX.md`, 2026-08-17):
 // structured `EligibilityIssue[]` with a machine `code`, not `string[]`.
@@ -85,27 +84,22 @@ export {
 };
 export type { EligibilityCode, EligibilityIssue, EligibilityPerson };
 
-interface AgeRule {
-  kind: "age";
-  maxAgeAt?: number;
-  minAgeAt?: number;
-  cutoff?: { month: number; day: number; yearOf?: "season_start" | "calendar" };
-}
-interface GenderRule {
-  kind: "gender";
-  allowed: string[];
-}
-
 /**
  * A division carrying only the fields eligibility checks need — narrow on
  * purpose so a caller can pass a full division row (or a hand-built object
- * in a test) without a cast.
+ * in a test) without a cast. RS007/V380: `age_cutoff_month`/`age_cutoff_day`
+ * are required-but-nullable here (unlike `ageBandEligibilityIssues`'s own,
+ * looser parameter type in `@/lib/registration-rules`, where they are
+ * optional) — every server-side caller has a real division row in hand, so
+ * this stays as explicit as `age_min`/`age_max` rather than silently
+ * defaulting to 1 January when a caller forgets to pass them.
  */
 export interface EligibilityDivision {
-  eligibility: unknown[];
   category: string | null;
   age_min: number | null;
   age_max: number | null;
+  age_cutoff_month: number | null;
+  age_cutoff_day: number | null;
 }
 
 /**
@@ -124,119 +118,46 @@ export interface EligibilityRosterPlayer extends EligibilityPerson {
  * design §4 step 1: "dob/gender collected once, only if any division needs
  * them"). Sibling of `requiresDob` above, same shape: a boolean the PUBLIC
  * read model can hand a client so the client never has to re-derive WHICH
- * divisions care about gender from raw jsonb rules it cannot even see (the
- * public info response never carries the jsonb `eligibility` array itself,
- * only booleans this module computes from it). Stays server-side (unlike
+ * divisions care about gender itself. Stays server-side (unlike
  * `categoryEligibilityIssues`) — nothing client-side calls this directly,
  * the client only ever reads the boolean this produces off the wire.
  *
- * Must agree with `divisionEligibilityIssues`'s two gender sources exactly:
- * a jsonb `GenderRule` (`kind: "gender"`), OR the first-class `category`
- * being `mens`/`womens` (individual-level: needs the specific gender) or
- * `mixed` (roster-level: needs every player's gender to prove the roster
- * balances). `open`/`null` need nothing on their own.
+ * Must agree with `divisionEligibilityIssues`'s gender source exactly: the
+ * first-class `category` being `mens`/`womens` (individual-level: needs the
+ * specific gender) or `mixed` (roster-level: needs every player's gender to
+ * prove the roster balances). `open`/`null` need nothing.
  */
-export function requiresGender(division: {
-  eligibility: unknown[];
-  category: string | null;
-}): boolean {
-  if (
-    division.category === "mens" ||
-    division.category === "womens" ||
-    division.category === "mixed"
-  ) {
-    return true;
-  }
-  return division.eligibility.some((r) => (r as { kind?: string })?.kind === "gender");
+export function requiresGender(division: { category: string | null }): boolean {
+  return (
+    division.category === "mens" || division.category === "womens" || division.category === "mixed"
+  );
 }
 
 /**
- * Full structured eligibility check for one player against one division:
- * the jsonb `eligibility` rules (doc 06 §2 — only 'age' and 'gender' are
- * checkable here; roster/grade/custom rules are organiser-side) PLUS the
- * first-class `category`/`age_min`/`age_max` columns (V364, evaluated by
+ * Full structured eligibility check for one player against one division: the
+ * first-class `category`/`age_min`/`age_max`/`age_cutoff_month`/
+ * `age_cutoff_day` columns (V364/V380, evaluated by
  * `categoryEligibilityIssues`/`ageBandEligibilityIssues`,
- * `@/lib/registration-rules`). The two sources are independent and
- * additive — a division configured with both yields issues from both.
- * `seasonStartYear` anchors both the jsonb rules' `cutoff.yearOf:
- * "season_start"` branch and the first-class age band.
- *
- * Precedence when a division carries BOTH a jsonb `GenderRule` and a
- * `mens`/`womens` category (owner ruling, 2026-08-17 review, recorded in
- * `_INDEX.md`'s RS002 session rulings): within one person's evaluation the
- * same code never fires twice, and if the jsonb loop above already emitted a
- * gender-family code (`MISSING_GENDER` or `GENDER_NOT_ALLOWED`) for this
- * person, `categoryEligibilityIssues` is skipped entirely — the
- * organiser-authored jsonb rule is the more specific statement and wins.
- * Roster-level `MIXED_NEEDS_BOTH_GENDERS` is unaffected by this: it is a
- * property of the roster, not of a person, and always fires independently.
+ * `@/lib/registration-rules`) — the ONE eligibility representation since
+ * RS007/V380 dropped the jsonb `eligibility` rules this function used to
+ * evaluate first (and the precedence rule that arbitrated between the two
+ * when both fired for gender; see this file's header). `seasonStartYear`
+ * anchors the age band's cutoff.
  */
 export function divisionEligibilityIssues(
   division: EligibilityDivision,
   person: EligibilityPerson,
   seasonStartYear: number,
 ): EligibilityIssue[] {
-  const issues: EligibilityIssue[] = [];
-
-  for (const raw of division.eligibility) {
-    const rule = raw as { kind?: string };
-    if (rule.kind === "age") {
-      const r = raw as AgeRule;
-      if (!person.dob) {
-        issues.push({
-          code: "MISSING_DOB",
-          message: "Date of birth is required for this age-restricted division.",
-        });
-        continue;
-      }
-      const cutoff = r.cutoff ?? { month: 1, day: 1, yearOf: "calendar" as const };
-      const year =
-        cutoff.yearOf === "season_start" ? seasonStartYear : new Date().getUTCFullYear();
-      const cutoffDate = new Date(Date.UTC(year, (cutoff.month ?? 1) - 1, cutoff.day ?? 1));
-      const age = ageAt(person.dob, cutoffDate);
-      if (r.maxAgeAt !== undefined && age > r.maxAgeAt) {
-        issues.push({
-          code: "AGE_TOO_OLD",
-          message: `Too old for this division (must be ${r.maxAgeAt} or younger on the cutoff date).`,
-          meta: { limit: r.maxAgeAt },
-        });
-      }
-      if (r.minAgeAt !== undefined && age < r.minAgeAt) {
-        issues.push({
-          code: "AGE_TOO_YOUNG",
-          message: `Too young for this division (must be ${r.minAgeAt} or older on the cutoff date).`,
-          meta: { limit: r.minAgeAt },
-        });
-      }
-    } else if (rule.kind === "gender") {
-      const r = raw as GenderRule;
-      if (!person.gender) {
-        issues.push({ code: "MISSING_GENDER", message: "Gender is required for this division." });
-      } else if (!r.allowed.includes(person.gender)) {
-        issues.push({
-          code: "GENDER_NOT_ALLOWED",
-          message: "This division is not open to your gender category.",
-          meta: { allowed: r.allowed },
-        });
-      }
-    }
-  }
-
-  const jsonbAlreadyFlaggedGender = issues.some(
-    (i) => i.code === "MISSING_GENDER" || i.code === "GENDER_NOT_ALLOWED",
-  );
-  if (!jsonbAlreadyFlaggedGender) {
-    issues.push(...categoryEligibilityIssues(division, person));
-  }
-
-  issues.push(...ageBandEligibilityIssues(division, person, seasonStartYear));
-
-  return issues;
+  return [
+    ...categoryEligibilityIssues(division, person),
+    ...ageBandEligibilityIssues(division, person, seasonStartYear),
+  ];
 }
 
 /**
- * Roster-level eligibility (V364 first-class columns + jsonb rules,
- * together): every player's own issues from `divisionEligibilityIssues`,
+ * Roster-level eligibility (V364/V380 first-class columns): every player's
+ * own issues from `divisionEligibilityIssues`,
  * each carrying `playerIndex` (1-based) and `playerName` so the offending
  * row is identifiable on a multi-player entry — PLUS the mixed-composition
  * issue (`MIXED_NEEDS_BOTH_GENDERS`) when the division's category is

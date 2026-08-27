@@ -36,7 +36,6 @@ import {
 } from "../registrations";
 
 const NO_RULES: EligibilityDivision = {
-  eligibility: [],
   category: null,
   age_min: null,
   age_max: null,
@@ -68,12 +67,12 @@ describe("registrations.ts re-exports the moved eligibility helpers", () => {
 
 describe("requiresDob (division-aware overload, V364) — unaffected by the code rework, still boolean", () => {
   it("is true for a division with only age_min/age_max set and no jsonb age rule", () => {
-    expect(requiresDob({ eligibility: [], age_min: 10, age_max: null })).toBe(true);
-    expect(requiresDob({ eligibility: [], age_min: null, age_max: 18 })).toBe(true);
+    expect(requiresDob({ age_min: 10, age_max: null })).toBe(true);
+    expect(requiresDob({ age_min: null, age_max: 18 })).toBe(true);
   });
 
   it("is false when neither the jsonb rules nor the age columns require one", () => {
-    expect(requiresDob({ eligibility: [], age_min: null, age_max: null })).toBe(false);
+    expect(requiresDob({ age_min: null, age_max: null })).toBe(false);
   });
 
   it("still honours the jsonb rules when passed as a division", () => {
@@ -98,17 +97,17 @@ describe("requiresDob (division-aware overload, V364) — unaffected by the code
 // evaluator is about to require.
 describe("requiresGender (RS006) — mirrors divisionEligibilityIssues's gender sources", () => {
   it("is true for mens/womens category (first-class column alone)", () => {
-    expect(requiresGender({ eligibility: [], category: "mens" })).toBe(true);
-    expect(requiresGender({ eligibility: [], category: "womens" })).toBe(true);
+    expect(requiresGender({ category: "mens" })).toBe(true);
+    expect(requiresGender({ category: "womens" })).toBe(true);
   });
 
   it("is true for a mixed category (roster composition needs every player's gender)", () => {
-    expect(requiresGender({ eligibility: [], category: "mixed" })).toBe(true);
+    expect(requiresGender({ category: "mixed" })).toBe(true);
   });
 
   it("is false for open/null category with no jsonb gender rule", () => {
-    expect(requiresGender({ eligibility: [], category: "open" })).toBe(false);
-    expect(requiresGender({ eligibility: [], category: null })).toBe(false);
+    expect(requiresGender({ category: "open" })).toBe(false);
+    expect(requiresGender({ category: null })).toBe(false);
   });
 
   it("is true when a jsonb GenderRule is present, regardless of category", () => {

@@ -62,7 +62,6 @@ async function seedCompWithDivision(): Promise<{
     sport_key: "generic",
     variant_key: "score",
     config: GENERIC_CONFIG,
-    eligibility: [],
   });
   return { auth, orgId, compId: comp.id, divId: division.id };
 }

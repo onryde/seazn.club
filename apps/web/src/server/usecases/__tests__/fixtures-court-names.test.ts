@@ -33,7 +33,6 @@ async function seedTwoFixtureDivision(auth: AuthCtx) {
     sport_key: "generic",
     variant_key: "score",
     config: GENERIC_CONFIG,
-    eligibility: [],
   });
   await createEntrants(auth, division.id, [
     { kind: "individual", display_name: "A", seed: 1, members: [] },

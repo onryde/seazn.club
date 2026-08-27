@@ -66,7 +66,6 @@ describe.skipIf(!HAS_DB)("combined qualification round-trip (PROMPT-59)", () => 
       sport_key: "generic",
       variant_key: "score",
       config: GENERIC_CONFIG,
-      eligibility: [],
     });
     // 12 entrants → 4 pools of 3 (seeded-snake).
     const entrants = await createEntrants(

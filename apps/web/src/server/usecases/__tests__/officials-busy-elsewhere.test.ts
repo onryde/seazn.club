@@ -68,7 +68,7 @@ async function seedFutureDivision(auth: AuthCtx) {
   });
   const division = await createDivision(auth, comp.id, {
     name: "Open", slug: "open", sport_key: "generic", variant_key: "score",
-    config: GENERIC_CONFIG, eligibility: [],
+    config: GENERIC_CONFIG, 
   });
   await createEntrants(
     auth,
