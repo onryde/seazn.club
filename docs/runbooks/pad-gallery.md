@@ -123,6 +123,71 @@ innings' FIRST event. Score a ball first and the innings locks to ball-by-ball
 fidelity, the over tile correctly does not exist, and the capture silently
 records the wrong state.
 
+R5 declares it for the racquet family — badminton, table tennis and
+volleyball, which share one component today (`racquet-skin.tsx`). These were
+captured **before** the conversion, deliberately, so the wave has a BEFORE
+picture of each defect it is about to fix:
+
+| ID | Sport(s) | What it shows | Defect |
+|---|---|---|---|
+| `11-servingplaceholder` | volleyball, badminton, tabletennis | Mid-game board — a game/set already banked, the current game away from 0–0 — with an em dash under SERVING | D-17 |
+| `12-bandlimited` | badminton | The same live pad for an org without `scoring.rally_by_rally`: no rally control at all, and no visible sentence saying why | D-7 |
+
+Table tennis's three rally taps are also **D-13**: the first time it has been
+driven past a serve-rotation boundary (`turnLength: 2`) in a browser at all.
+
+Four things about these that a later wave should not re-derive:
+
+- **Each of them owns a second fixture.** By the time `captureExtra` runs, the
+  primary fixture has a rally in set 1 (so `applySummary`'s strict branch
+  refuses to close it: *"this set is being scored rally-by-rally"*) and an
+  open Set score panel on top of the board. Same reasoning, same fix, as
+  R2b's cricket over-tile hook.
+- **The coarse event type is fully qualified.** `${sportKey}.${preset.
+  coarseEventType}` — `badminton.game.summary`, not `game.summary`. The bare
+  half is not an event type; the API answers it `422 INVALID_EVENT`.
+- **Never turn 0.** Each serving capture banks a whole game/set first and then
+  plays into the next one. R4's D-21 shipped a wrong human name live because
+  `11-doublesserve` photographed service turn 0, and turn 0 names the right
+  player under every derivation anyone has shipped, correct or not.
+- **`12-bandlimited` flips the org's PLAN to community and restores it in a
+  `finally`** — device links (`05-devicelink`, minted right after the hook
+  returns) are Pro-only. It does NOT call `invalidateOrgEntitlements`: that
+  helper works by flipping the org owner to superadmin and back, a side
+  effect on the very account the next captures are taken as, and local/CI
+  have no Redis so the entitlement cache is inert there anyway. Against a
+  Redis-backed target this state's probe FAILS by name instead of quietly
+  photographing a band-3 board.
+
+**`bandlimited`, not `bandzero`** — and the difference is a finding, not
+pedantry. The defect register calls D-7 "a free / band-0 org", but a community
+org resolves to band **2** here: `resolveFidelityBand` only breaks on a band
+that names an entitlement the org lacks, and this kernel keys band 3 alone, so
+bands 0–2 are all free. What the free org loses is the rally action only. The
+band-1 interruptions survive, so the screen is a Set score panel **and** a
+Sanctions drawer — not the "lone Set score button" the register describes.
+
+### Inverting a defect probe, never deleting it
+
+Every state above carries a `StateProbe` that asserts THE DEFECT IS ON SCREEN.
+When R5 fixes one, **invert that probe's expectation and keep it** — deleting
+it stops the capture failing and does nothing to stop the defect returning
+(R3.5). Each probe names its own flipping assertion in a comment. The three
+flips, in full:
+
+| State | Today | After the fix |
+|---|---|---|
+| `11-servingplaceholder` | `expect(serving).toHaveText("—")` | `expect(serving).not.toHaveText("—")`, plus the serving side/player by name |
+| `12-bandlimited` | `expect(rallyGroup).toHaveCount(0)` | `toHaveCount(1)` — the group renders as a locked tile |
+| `12-bandlimited` | `expect(lockedReason).toHaveCount(0)` | `toBeVisible()` — `scorepad.locked.reason` on screen |
+
+Everything else in those probes is a PRECONDITION and does not move: the
+banked scoreline, the mid-game points, the surviving band-0 Set score panel,
+and the disabled `[data-band="3"]` chip that proves the org really lacks the
+entitlement. Both defect probes were mutation-checked when they were written —
+each post-fix expectation was run against today's build and FAILED, with the
+real on-screen value in the message.
+
 Judge the result the same way as every other suite in this repo — never a
 wrapper summary:
 
