@@ -674,8 +674,14 @@ describe("2026-08-27 review finding 3 — a non-playing contact is never forced 
     ).toBeUndefined();
 
     clickByText("Next"); // must NOT be blocked by the division's requires_dob/requires_gender
-    expect(pageText(), "must have reached DETAILS (single open division collapses ENTRIES), not stuck on WHO").toContain(
-      "Player details",
+    // Lands on ENTRIES, not DETAILS: a one-division TEAM competition no
+    // longer collapses step 2 (RS007 — that step is the only place the team
+    // name is typed and the only place "sign up solo" is offered; collapsing
+    // it dead-ended the captain at a 422 with no field to answer). What this
+    // test actually asserts is unchanged: WHO did not block on the
+    // division's requires_dob/requires_gender.
+    expect(pageText(), "must have advanced past WHO, not been blocked by requires_dob/requires_gender").toContain(
+      "Choose your divisions",
     );
   });
 });

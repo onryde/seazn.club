@@ -7,27 +7,51 @@ import { describe, expect, it } from "vitest";
 import { buildStepOrder, nextStepIndex, prevStepIndex, shouldCollapseEntries, stepFocusTransition } from "../steps";
 
 describe("shouldCollapseEntries", () => {
-  it("collapses only when exactly one OPEN division exists", () => {
-    expect(shouldCollapseEntries(0)).toBe(false); // nothing open — closed page handles this upstream
-    expect(shouldCollapseEntries(1)).toBe(true);
-    expect(shouldCollapseEntries(2)).toBe(false);
+  it("collapses only when exactly one OPEN division exists AND it needs nothing typed", () => {
+    expect(shouldCollapseEntries(0, "individual")).toBe(false); // nothing open — closed page handles this upstream
+    expect(shouldCollapseEntries(1, "individual")).toBe(true);
+    expect(shouldCollapseEntries(2, "individual")).toBe(false);
+  });
+
+  // These two used to read `shouldCollapseEntries(1) === true` for EVERY
+  // entrant kind, which froze a defect rather than describing a rule: step 2
+  // is the only place a team name can be typed and the only place "sign up
+  // solo" can be chosen, so collapsing it on a one-division TEAM competition
+  // left the captain at Review with an entry the UI itself labels "Unnamed
+  // team", a live Enter button, and a 422 "A team name is required" on submit
+  // — with no field anywhere in the flow to answer it. Inverted, not deleted.
+  it("never collapses a team division — step 2 owns the team name and the solo choice", () => {
+    expect(shouldCollapseEntries(1, "team")).toBe(false);
+  });
+
+  it("never collapses a pair division — step 2 owns the partner name", () => {
+    expect(shouldCollapseEntries(1, "pair")).toBe(false);
+  });
+
+  it("does not collapse when the entrant kind is unknown", () => {
+    expect(shouldCollapseEntries(1, undefined)).toBe(false);
   });
 });
 
 describe("buildStepOrder", () => {
   it("includes entries when 0 or 2+ open divisions exist, followed by consent and review", () => {
-    expect(buildStepOrder(0)).toEqual(["who", "entries", "details", "consent", "review"]);
-    expect(buildStepOrder(3)).toEqual(["who", "entries", "details", "consent", "review"]);
+    expect(buildStepOrder(0, "individual")).toEqual(["who", "entries", "details", "consent", "review"]);
+    expect(buildStepOrder(3, "individual")).toEqual(["who", "entries", "details", "consent", "review"]);
   });
 
-  it("drops entries (but NOT details/consent/review) when exactly one open division exists", () => {
-    expect(buildStepOrder(1)).toEqual(["who", "details", "consent", "review"]);
+  it("drops entries (but NOT details/consent/review) for one open INDIVIDUAL division", () => {
+    expect(buildStepOrder(1, "individual")).toEqual(["who", "details", "consent", "review"]);
+  });
+
+  it("keeps entries for one open team or pair division", () => {
+    expect(buildStepOrder(1, "team")).toEqual(["who", "entries", "details", "consent", "review"]);
+    expect(buildStepOrder(1, "pair")).toEqual(["who", "entries", "details", "consent", "review"]);
   });
 });
 
 describe("nextStepIndex / prevStepIndex — generic over ANY step list length", () => {
   it("advances within bounds and returns list.length (one past the end) on the last step", () => {
-    const order = buildStepOrder(2); // ["who", "entries", "details"]
+    const order = buildStepOrder(2, "individual"); // ["who", "entries", "details"]
     expect(nextStepIndex(0, order)).toBe(1);
     expect(nextStepIndex(1, order)).toBe(2);
     expect(nextStepIndex(2, order)).toBe(3); // past the end — chassis renders the "more soon" end-cap
@@ -45,7 +69,7 @@ describe("nextStepIndex / prevStepIndex — generic over ANY step list length", 
   });
 
   it("the collapsed step order still round-trips through next/prev without an out-of-range index", () => {
-    const order = buildStepOrder(1); // ["who", "details"]
+    const order = buildStepOrder(1, "individual"); // ["who", "details"]
     expect(nextStepIndex(0, order)).toBe(1);
     expect(nextStepIndex(1, order)).toBe(2); // one past the end, same seam as the multi-step case
     expect(prevStepIndex(0)).toBe(0);
