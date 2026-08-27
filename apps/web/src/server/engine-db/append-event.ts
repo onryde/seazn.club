@@ -272,6 +272,20 @@ export async function appendEventInTx(
           { fixtureId, eventType: input.type, code: error.code },
           "scoring event refused",
         );
+      } else {
+        // F10 (R3.5 review) — this catch only instrumented the EngineError
+        // (422) case above. A TypeError/RangeError thrown from inside a
+        // sport module, or a Zod issue surfacing as a plain Error, used to
+        // re-throw with NOTHING written to the log: production saw a bare
+        // 500 with no fixtureId, no event type, no seq to chase — strictly
+        // worse than the refusal case, which at least names the fixture and
+        // the code. Same ID-only-fields posture as the branch above (no
+        // `code` — a non-engine error has none); the error itself is
+        // untouched, re-thrown exactly as before, just below.
+        log.error(
+          { fixtureId, eventType: input.type, seq: candidate.seq },
+          "scoring event fold crashed",
+        );
       }
       throw error;
     }

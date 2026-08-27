@@ -13,10 +13,28 @@ import { randomUUID } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { football } from "@seazn/engine/sports/football";
+import { foldMatch } from "@seazn/engine/core";
 import { sql } from "@/lib/db";
 import { appendEvent } from "../index";
+
+// F10 (R3.5 review) — the fold's catch only instrumented the EngineError
+// (422) case; a TypeError/RangeError from inside a sport module, or a Zod
+// issue surfacing as a plain Error, re-threw with NOTHING logged. Proving
+// that deterministically needs a non-EngineError thrown FROM `foldMatch`
+// itself. Real sport-module internals that happen to crash today are out of
+// this task's lane (packages/engine/**) and would make the test depend on
+// incidental engine behaviour rather than on append-event.ts's own catch, so
+// this wraps the imported `foldMatch` instead. `importActual` keeps every
+// OTHER export (EngineError, resolveVoids, …) real, and `foldMatch` itself
+// defaults to the real implementation — every test in this file still folds
+// for real — except the one call in K8 below that overrides it with
+// `mockImplementationOnce`.
+vi.mock("@seazn/engine/core", async () => {
+  const actual = await vi.importActual<typeof import("@seazn/engine/core")>("@seazn/engine/core");
+  return { ...actual, foldMatch: vi.fn(actual.foldMatch) };
+});
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -147,6 +165,12 @@ beforeEach(() => {
   lines.length = 0;
 });
 
+afterEach(() => {
+  // K8's mockImplementationOnce is self-clearing after one call, but guard
+  // against a failed assertion leaving it queued for the NEXT test anyway.
+  vi.mocked(foldMatch).mockClear();
+});
+
 describe.skipIf(!HAS_DB)("appendEvent logging (R3.5 Task K)", () => {
   it("K1: logs an accepted event with its type, fixture and resulting seq", async () => {
     const s = await seed();
@@ -185,6 +209,31 @@ describe.skipIf(!HAS_DB)("appendEvent logging (R3.5 Task K)", () => {
     });
     // Re-thrown unchanged means the tx aborted before any insert — no
     // accepted-event line for the refused attempt.
+    expect(linesNamed("scoring event appended")).toHaveLength(0);
+  });
+
+  it("K8 (F10, R3.5 review): a non-EngineError from the fold is logged with ID-only fields, and re-thrown UNCHANGED", async () => {
+    const s = await seed();
+    const boom = new TypeError("cannot read properties of undefined (reading 'x')");
+    vi.mocked(foldMatch).mockImplementationOnce(() => {
+      throw boom;
+    });
+
+    // Reference equality, not just a matching shape: the catch must not
+    // wrap, reshape, or replace the error it re-throws.
+    await expect(
+      appendEvent(s.orgId, s.fixtureId, 0, { type: "core.start", payload: {} }),
+    ).rejects.toBe(boom);
+
+    const crashed = linesNamed("scoring event fold crashed");
+    expect(crashed).toHaveLength(1);
+    expect(crashed[0]).toMatchObject({
+      fixtureId: s.fixtureId,
+      eventType: "core.start",
+      seq: 1,
+    });
+    // Neither sibling branch fired for this error, and nothing was written.
+    expect(linesNamed("scoring event refused")).toHaveLength(0);
     expect(linesNamed("scoring event appended")).toHaveLength(0);
   });
 
