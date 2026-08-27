@@ -2435,10 +2435,17 @@ Three. The first changes what the wave IS.
   tree. R1's standing item bites here: keys go into `PAD_LABEL_KEYS`
   (`lib/scoring-vocab.ts`), not only into the four dictionaries, or ribbon copy
   stays on the generic fallback forever with nothing failing.
-- **Six e2e specs drive these sports today** — `formats`, `funnel`,
-  `me-career`, `scorepad-skins`, `scoring`, `stats` — and every selector they
-  use targets legacy `racquet-skin.tsx` markup (`data-role="racquet-header"`,
-  a generic "Home" button, a "Set score" panel). Flipping the registry breaks
+- **THREE e2e files drive the racquet pad DOM, not six** — corrected against
+  `git grep -aln "racquet-header" -- apps/web/e2e/`, which returns exactly
+  `gallery.capture.ts`, `scorepad-skins.spec.ts` and `scoring.spec.ts`. The
+  scoping scout listed six; `formats` and `funnel` do not reference these
+  sports at all, and `me-career`/`stats` touch them ONLY by posting
+  `badminton.rally` through the API (`me-career.spec.ts:222`,
+  `stats.spec.ts:221`). Those two survive the flip untouched — **and that is
+  the point worth keeping**: an API-driven spec is blind to the pad by
+  construction, so neither of them would have noticed if the pad stopped
+  building a correct payload entirely. They prove the engine's stats path, not
+  the surface. The repair surface is three files. Flipping the registry breaks
   all six; repairing them is R5 scope, not R8's. `gallery.capture.ts`'s three
   `scoreOne` implementations (`:1564-1654`) drive the very controls this
   conversion deletes — the same break that left R4 unable to run its own
