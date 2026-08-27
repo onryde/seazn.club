@@ -3109,3 +3109,94 @@ turbo exits 1 with `No package found`), and a backgrounded command's own
 completion notification said "exit code 0" while the log's `EXIT=$?` said 1.
 Assert the ARTIFACT (`ls .next/standalone/apps/web/server.js`), never the exit
 code.
+
+### R5 — SESSION STATE #3, written for compaction (2026-08-27, late)
+
+**PR #678 is OPEN** — `feat/scorepad-v3-r5-racquet-split`, worktree
+`.claude/worktrees/r5-racquet`, label `r5`, server `http://localhost:3368`,
+Postgres `:54573`, db `seazn_r5`. Everything below is PUSHED except where said.
+
+`eval "$(~/.claude/skills/seazn-local-env/scripts/seazn-env.sh env --label r5)"`
+
+**THE ONE DEFECT THAT MATTERS MOST, root-caused and NOT yet fixed.**
+The libero swap — C3's headline feature — CANNOT SUBMIT AT ALL.
+`LIBERO_TYPE` is `core.lineup.replacement` (`volleyball.tsx:255`), but the
+setbased `padSpec` declares only rally / summary / timeout / sanction / sub /
+expedite (`kernel.ts` ~1549-1700). `createSkinDispatch`
+(`scorepad/skins/types.ts:154`) THROWS on any type the spec does not declare,
+and `pad-host.tsx:1146` calls it as `void dispatch(...)` — so the promise
+rejects into nothing: the sheet closes, no event is written, no banner, no
+log. The engine is innocent, proven by folding the exact payload the UI
+builds: it succeeds cleanly and puts MB back on court with `timesOn: 1`.
+Football avoids this by posting `football.sub`, a DECLARED MODULE type
+(`football.tsx:1304`); volleyball is the only skin posting a core type.
+Unit-green throughout — the builder is tested, the dispatch gate never is.
+Fix candidates, in order: (a) post the declared `SUB_TYPE` carrying the libero
+exemption — check `SetBasedSub`'s strict schema first, it is
+`{by, off?, on?}` and does NOT carry `exemption` or `on.roles`, so this
+likely needs an engine change; (b) let `core.lineup.*` past the declared-set
+gate, since that gate exists for MODULE actions and the swap surface has its
+own eligibility gating. `scorepad-v3-volleyball.spec.ts`'s libero test is
+RED and left red on purpose so this cannot be lost.
+
+**Shipped this session (11 commits).** `c1ef8133e` T17 seven-width bar +
+volleyball anchor exclusions · `a1e3265fe` TT dock for every answered question
++ badminton time-out side · `2d9cd02ec` racquet-skin deleted ·
+`aca58a959` R5-7 anchor stays + activity side fallback ×3 sports ·
+`4db264be3` FR/NL truncation swept · `098be05a7` docs · `db4c5de2a`
+`fieldsTheRotation` reads the kernel's own input · `ad793b52a` three
+walkthroughs + volleyball spec fixed (was 3/6 RED, committed unrun) ·
+`555c1aff0` decided board no longer names a game nobody played ·
+`f0e7b2cbe` walkthroughs to the decider + undo + re-finish, T17 vacuity —
+**NOT YET GREEN, see below**.
+
+**Owed, in order.**
+1. `f0e7b2cbe` is UNVERIFIED. Last run: badminton and TT failed on my own
+   arithmetic (fixed there, unrun); volleyball failed its PRE-EXISTING
+   post-undo `halfScore(home) === "2"` with `"0"`, and it passed before those
+   edits — settle whether that is a real undo defect at a set boundary or
+   contention from three specs on one loaded machine. Run:
+   `cd apps/web && PLAYWRIGHT_BASE=http://localhost:3368 E2E_PROD_TARGET=1 npx playwright test --project=walkthrough --workers=1`
+2. The libero dispatch defect above.
+3. `scorepad-skins.spec.ts:307` is RED — CONFIRMED by live run, times out at
+   120s on `getByLabel("Points — Away")`, and `[data-role="confirm"]` has ZERO
+   producers in v3. Fix with `scorepad-v3-volleyball.spec.ts:269-274`'s idiom:
+   per step, `getByRole("spinbutton")` then `Confirm`, twice. Merges red
+   otherwise — e2e triggers on push to `main`, so the PR never shows it.
+4. Two review agents still unreported at compaction: volleyball libero/ribbon
+   claims (both-sides tile, `timesOff` candidate filter, FIVB 19.3.2.1 unlimited
+   libero replacements vs the pad's `reentry-limit`, missing `LIBERO_TYPE`/
+   `SUB_TYPE` activity rows, `pad.volleyball.ribbon.sub` in NEITHER
+   `PAD_LABEL_KEYS` nor any dictionary) and the TT/badminton claims (expedite
+   chip possibly folding `EXPEDITE_WRONG_WINNER` and DROPPING A POINT; ITTF
+   2.15.1/2.15.2 unenforced; `intervalHint` off-by-one re-announcing "Interval
+   now"; badminton singles dock self-answering, frozen by a test whose name
+   contradicts its assertion).
+5. MERGE GATES STILL OPEN: owner visual sign-off (gallery sheet not published)
+   and smoke, deferred to R8 by name.
+
+**Two engine-core items needing an owner call, deliberately NOT fixed:**
+FIVB 19.3.2.1 makes libero replacements UNLIMITED while `core/lineup.ts`'s
+`reentry: "once"` caps them at two stints; and `setBasedServeWalk` is
+documented "Total and never throws" but calls `resolveVoids` unguarded, which
+can throw inside render where the pipeline's own catch cannot degrade it.
+
+**Verification traps confirmed THIS session, all of which produced a false
+signal before being caught:** vitest run from the WORKTREE ROOT reports
+`numFailedTests: 0` while 25 suites fail to COLLECT — read `numTotalTests`
+first, and run from `apps/web`; a blanked `DATABASE_URL=` silently skips ~490
+DB tests into `pending`; turbo's build cache is shared across worktrees by
+content hash, so a hit replays another tree's build and `seazn-env.sh`'s
+appDir guard could never match it (patched locally); a backgrounded command's
+completion notification says "exit code 0" while the log's own `EXIT=$?` says
+1; and `rtk`'s grep elided PRODUCTION hits for `data-candidate-id`, which
+nearly cost a wrong conclusion about the swap sheet.
+
+**The pattern, now at eight instances.** Every defect this wave came from
+something ASSERTED rather than EXECUTED, and the last two came off a
+SCREENSHOT and a BROWSER, not a suite: five identical "Rally recorded" rows
+each with its own Void button, and a serve anchor that vanished after one tap.
+A committed e2e spec that had never been run was 3/6 red. My own new width
+test seeded two sports wrongly and would have 422'd at all seven widths. My
+own "confirmation" of a reviewer's finding used a grep that could not see
+prose test titles. Run the spec, play the pad, mutate the guard.
