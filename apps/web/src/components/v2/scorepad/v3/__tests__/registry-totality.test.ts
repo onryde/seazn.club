@@ -108,21 +108,23 @@ describe("registry totality", () => {
     expect(resolvePad("tabletennis", T).lane).toBe("v3");
   });
 
-  // Volleyball is table tennis's own kernel sibling (`sports/setbased`) and
-  // stays LEGACY — named explicitly rather than left to the arithmetic below,
-  // because "the other sport of three that share the kernel" is the exact
-  // thing a later wave could get wrong by flipping the kernel instead of the
-  // sport, and `racquet-skin.tsx` still has to serve it alone now.
-  it("volleyball stays LEGACY — its kernel sibling table tennis converted, volleyball has not", () => {
-    expect(resolvePad("volleyball", T).lane).toBe("legacy");
+  // R5/C3 — volleyball, this wave's own deliverable, pinned independently of
+  // the structural sweep above for the same reason every flip before it is:
+  // that sweep only proves resolvePad AGREES with V3_SKINS/LEGACY_SPORTS'
+  // membership, whatever it happens to say, so a task that shipped without
+  // actually flipping volleyball would keep it green. This closes out the
+  // racquet family: volleyball is the third and last `sports/setbased`
+  // sibling, and `racquet-skin.tsx` (v2) is now unreferenced by any sport.
+  it("volleyball specifically resolves to the v3 lane, not legacy — this wave's own flip", () => {
+    expect(resolvePad("volleyball", T).lane).toBe("v3");
   });
 
-  it("every other builtinModules sport still resolves to legacy — the flips touch cricket, football, tennis, badminton and table tennis alone", () => {
-    const converted = new Set(["cricket", "football", "tennis", "badminton", "tabletennis"]);
+  it("every other builtinModules sport still resolves to legacy — the flips touch cricket, football, tennis, badminton, table tennis and volleyball alone", () => {
+    const converted = new Set(["cricket", "football", "tennis", "badminton", "tabletennis", "volleyball"]);
     const others = builtinModules.map((m) => m.key).filter((key) => !converted.has(key));
     // Pins today's known-good shape, same convention registry.test.tsx's own
     // "the table names exactly the 11 shipped sports" assertion uses.
-    expect(others.length).toBe(6);
+    expect(others.length).toBe(5);
     for (const key of others) {
       expect(resolvePad(key, T).lane, key).toBe("legacy");
     }

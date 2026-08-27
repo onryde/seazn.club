@@ -53,6 +53,7 @@ import { footballSkinV3 } from "./skins/football";
 import { tennisSkinV3 } from "./skins/tennis";
 import { badmintonSkinV3 } from "./skins/badminton";
 import { tabletennisSkinV3 } from "./skins/tabletennis";
+import { volleyballSkinV3 } from "./skins/volleyball";
 
 /**
  * Sport key -> v3 skin FACTORY. Empty through R1; populated sport-by-sport
@@ -89,11 +90,15 @@ V3_SKINS.tennis = tennisSkinV3;
 // and tennis's own entries above.
 V3_SKINS.badminton = badmintonSkinV3;
 // R5/C2 — table tennis, the fifth conversion and the SECOND of the three
-// `sports/setbased` sports (badminton, R5/C1, above). Volleyball stays on the
-// legacy lane (and on `skins/racquet-skin.tsx`, which still serves it alone
-// now) until its own wave. The FACTORY, never `tabletennisSkinV3(t)`, same
-// reason as every other entry above.
+// `sports/setbased` sports (badminton, R5/C1, above). The FACTORY, never
+// `tabletennisSkinV3(t)`, same reason as every other entry above.
 V3_SKINS.tabletennis = tabletennisSkinV3;
+// R5/C3 — volleyball, the sixth conversion and the THIRD and LAST of the
+// three `sports/setbased` sports. `skins/racquet-skin.tsx` (v2) is now
+// unreferenced by any sport and is deleted in this wave's own follow-up
+// task, not here. The FACTORY, never `volleyballSkinV3(t)`, same reason as
+// every other entry above.
+V3_SKINS.volleyball = volleyballSkinV3;
 
 /**
  * Every engine sport key NOT already owned by `V3_SKINS`, computed from
@@ -108,8 +113,9 @@ V3_SKINS.tabletennis = tabletennisSkinV3;
  * structurally impossible instead of merely caught. One sport moves per
  * wave: add it to `V3_SKINS` above AND exclude it here, in the SAME
  * change — R2/task E did exactly that for cricket, R3/task B2 for football,
- * R4 for tennis, R5/C1 for badminton and R5/C2 for table tennis (volleyball,
- * the third `sports/setbased` sibling, stays legacy until its own wave).
+ * R4 for tennis, R5/C1 for badminton, R5/C2 for table tennis and R5/C3 for
+ * volleyball — the third and last `sports/setbased` sibling, closing out the
+ * racquet family.
  *
  * `CONVERTED_SPORTS` below is a LITERAL list, deliberately not
  * `Object.keys(V3_SKINS)`: deriving one from the other would make the totality
@@ -122,6 +128,7 @@ const CONVERTED_SPORTS: ReadonlySet<string> = new Set([
   "tennis",
   "badminton",
   "tabletennis",
+  "volleyball",
 ]);
 
 export const LEGACY_SPORTS: ReadonlySet<string> = new Set(
