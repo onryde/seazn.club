@@ -99,22 +99,30 @@ describe("registry totality", () => {
     expect(resolvePad("badminton", T).lane).toBe("v3");
   });
 
-  // R5 converts BADMINTON ONLY. Its two kernel siblings are named explicitly
-  // here rather than left to the arithmetic below, because "one sport of three
-  // that share `sports/setbased`" is the exact thing a later wave could get
-  // wrong by flipping the kernel instead of the sport — and `racquet-skin.tsx`
-  // still has to serve both of them.
-  it("table tennis and volleyball stay LEGACY — the kernel is shared, the conversion is not", () => {
-    expect(resolvePad("tabletennis", T).lane).toBe("legacy");
+  // R5/C2 — table tennis, this wave's own deliverable, pinned independently
+  // of the structural sweep above for the same reason every flip before it
+  // is: that sweep only proves resolvePad AGREES with V3_SKINS/
+  // LEGACY_SPORTS' membership, whatever it happens to say, so a task that
+  // shipped without actually flipping table tennis would keep it green.
+  it("table tennis specifically resolves to the v3 lane, not legacy — this wave's own flip", () => {
+    expect(resolvePad("tabletennis", T).lane).toBe("v3");
+  });
+
+  // Volleyball is table tennis's own kernel sibling (`sports/setbased`) and
+  // stays LEGACY — named explicitly rather than left to the arithmetic below,
+  // because "the other sport of three that share the kernel" is the exact
+  // thing a later wave could get wrong by flipping the kernel instead of the
+  // sport, and `racquet-skin.tsx` still has to serve it alone now.
+  it("volleyball stays LEGACY — its kernel sibling table tennis converted, volleyball has not", () => {
     expect(resolvePad("volleyball", T).lane).toBe("legacy");
   });
 
-  it("every other builtinModules sport still resolves to legacy — the flips touch cricket, football, tennis and badminton alone", () => {
-    const converted = new Set(["cricket", "football", "tennis", "badminton"]);
+  it("every other builtinModules sport still resolves to legacy — the flips touch cricket, football, tennis, badminton and table tennis alone", () => {
+    const converted = new Set(["cricket", "football", "tennis", "badminton", "tabletennis"]);
     const others = builtinModules.map((m) => m.key).filter((key) => !converted.has(key));
     // Pins today's known-good shape, same convention registry.test.tsx's own
     // "the table names exactly the 11 shipped sports" assertion uses.
-    expect(others.length).toBe(7);
+    expect(others.length).toBe(6);
     for (const key of others) {
       expect(resolvePad(key, T).lane, key).toBe("legacy");
     }

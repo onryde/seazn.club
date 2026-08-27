@@ -872,6 +872,29 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   "pad.tabletennis.panel.setScore",
   "pad.tabletennis.panel.subs",
   "pad.tabletennis.panel.timeouts",
+  // R5/C2 — the v3 table tennis skin's own ribbon copy. Registered HERE, not
+  // only in the four dictionaries: `ribbon.ts`'s `buildRibbon` gates its
+  // per-sport lookup on PAD_LABEL_KEYS MEMBERSHIP before calling `padLabel`,
+  // so dictionary copy with no entry in this list stays silently on the
+  // generic `pad.ribbon.fallback` ("{event} recorded") forever, with nothing
+  // failing. FIVE of the six kernel-union types — unlike badminton (which
+  // records only three of its own six), this skin dedicates a real tile to
+  // timeout and expedite.start too, so their own ribbon copy is reachable;
+  // `sub` alone stays on the fallback (`records.substitutions` is false for
+  // every shipped table tennis config, and no tile for it exists at all).
+  "pad.tabletennis.ribbon.game.summary",
+  "pad.tabletennis.ribbon.rally",
+  "pad.tabletennis.ribbon.sanction",
+  "pad.tabletennis.ribbon.timeout",
+  "pad.tabletennis.ribbon.expedite.start",
+  // R5/C2 — tap model S's own hint, the identical
+  // `padLabel()`/PAD_LABEL_KEYS gate `ScorebugHalf.hintKey` resolves through
+  // (scorebug.tsx). Badminton's own entry a few blocks up carries the
+  // incident this guards: a hint key present in all four dictionaries but
+  // absent from this list still prints its own raw dotted name on the board,
+  // caught only by a 320px screenshot, not by any unit test that asserts the
+  // KEY rather than membership.
+  "pad.tabletennis.scorebug.rally.hint",
 
   "pad.tennis.action.gameAward",
   "pad.tennis.action.interruption",

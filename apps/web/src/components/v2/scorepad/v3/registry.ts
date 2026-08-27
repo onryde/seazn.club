@@ -52,6 +52,7 @@ import { cricketSkinV3 } from "./skins/cricket";
 import { footballSkinV3 } from "./skins/football";
 import { tennisSkinV3 } from "./skins/tennis";
 import { badmintonSkinV3 } from "./skins/badminton";
+import { tabletennisSkinV3 } from "./skins/tabletennis";
 
 /**
  * Sport key -> v3 skin FACTORY. Empty through R1; populated sport-by-sport
@@ -81,13 +82,18 @@ V3_SKINS.football = footballSkinV3;
 // R4 — tennis, the third conversion. The FACTORY, never `tennisSkinV3(t)`,
 // same reason as football's own entry above.
 V3_SKINS.tennis = tennisSkinV3;
-// R5 — badminton, the fourth conversion and the FIRST of the three sports that
-// share `sports/setbased`'s kernel. Table tennis and volleyball stay on the
-// legacy lane (and on `skins/racquet-skin.tsx`, which still serves both) until
-// their own waves; only badminton moves here, and only badminton comes out of
-// `CONVERTED_SPORTS` below. The FACTORY, never `badmintonSkinV3(t)`, same
-// reason as football's and tennis's own entries above.
+// R5/C1 — badminton, the fourth conversion and the FIRST of the three sports
+// that share `sports/setbased`'s kernel. Volleyball stays on the legacy lane
+// (and on `skins/racquet-skin.tsx`, which still serves it) until its own
+// wave. The FACTORY, never `badmintonSkinV3(t)`, same reason as football's
+// and tennis's own entries above.
 V3_SKINS.badminton = badmintonSkinV3;
+// R5/C2 — table tennis, the fifth conversion and the SECOND of the three
+// `sports/setbased` sports (badminton, R5/C1, above). Volleyball stays on the
+// legacy lane (and on `skins/racquet-skin.tsx`, which still serves it alone
+// now) until its own wave. The FACTORY, never `tabletennisSkinV3(t)`, same
+// reason as every other entry above.
+V3_SKINS.tabletennis = tabletennisSkinV3;
 
 /**
  * Every engine sport key NOT already owned by `V3_SKINS`, computed from
@@ -102,15 +108,21 @@ V3_SKINS.badminton = badmintonSkinV3;
  * structurally impossible instead of merely caught. One sport moves per
  * wave: add it to `V3_SKINS` above AND exclude it here, in the SAME
  * change — R2/task E did exactly that for cricket, R3/task B2 for football,
- * R4 for tennis and R5 for badminton (badminton ONLY: its two kernel siblings,
- * table tennis and volleyball, stay legacy until their own waves).
+ * R4 for tennis, R5/C1 for badminton and R5/C2 for table tennis (volleyball,
+ * the third `sports/setbased` sibling, stays legacy until its own wave).
  *
  * `CONVERTED_SPORTS` below is a LITERAL list, deliberately not
  * `Object.keys(V3_SKINS)`: deriving one from the other would make the totality
  * gate's "double-owned" check structurally impossible to fail rather than
  * merely caught, which is the whole reason the two sets are maintained apart.
  */
-const CONVERTED_SPORTS: ReadonlySet<string> = new Set(["cricket", "football", "tennis", "badminton"]);
+const CONVERTED_SPORTS: ReadonlySet<string> = new Set([
+  "cricket",
+  "football",
+  "tennis",
+  "badminton",
+  "tabletennis",
+]);
 
 export const LEGACY_SPORTS: ReadonlySet<string> = new Set(
   builtinModules.map((m) => m.key).filter((key) => !CONVERTED_SPORTS.has(key)),
