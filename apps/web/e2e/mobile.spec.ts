@@ -2372,10 +2372,18 @@ test("registrants tab: no-scroll, grid/card switch, expanded-row and filter-bar 
 // from each API response, never by re-querying on name or TAG — TAG is
 // per-PROCESS, not per-project (this file's own header comment), so a name
 // collision across two width workers is possible and this test must not
-// care. Nothing here mutates the shared org the seven width projects race
-// over (documented flakiness, top of file); it only READS the org's slug
-// via `activeOrg`, exactly like every other self-contained test in this
-// file (T15/T16/T17 above).
+// care. It reads the org's slug via `activeOrg`, the same way every other
+// self-contained test in this file does (T15/T16/T17 above) — but it is NOT
+// read-only: it DOES mutate the shared org, minting one competition and two
+// divisions under it. Left alone that accumulates forever (all seven width
+// projects run this test, every CI run), so the whole flow below runs
+// inside a `try` whose `finally` deletes the competition by the exact id
+// captured right after creation — never a name/prefix search, so cleanup
+// can never catch a concurrent width project's own row. The delete cascades
+// both divisions and their registration_settings rows (competition_id /
+// division_id are ON DELETE CASCADE), fires even when an assertion above
+// throws, and is best-effort/unasserted so a cleanup hiccup can never mask
+// a real test failure.
 //
 // "Stepper Solo" is `entrant_kind: "individual"`, PATCHED with `age_min: 0`
 // right after creation — the cheapest way to flip `requires_dob` true with
@@ -2408,129 +2416,143 @@ test("register stepper: ENTRIES/DETAILS/CONSENT/REVIEW hold at this width, no ho
   });
   expect(comp.status).toBeLessThan(300);
 
-  const soloDiv = await apiJson<{ id: string }>(
-    request,
-    `/api/v1/competitions/${comp.data!.id}/divisions`,
-    "POST",
-    {
-      name: "Stepper Solo",
-      sport_key: "generic",
-      variant_key: "score",
-      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
-    },
-  );
-  expect(soloDiv.status).toBeLessThan(300);
-  const soloDivisionId = soloDiv.data!.id;
-  // Flips requires_dob true (requiresDob, @/lib/registration-rules) with no
-  // real age restriction — see this test's header comment.
-  const agePatch = await apiJson(request, `/api/v1/divisions/${soloDivisionId}`, "PATCH", { age_min: 0 });
-  expect(agePatch.status).toBeLessThan(300);
-  const soloSettings = await apiJson(
-    request,
-    `/api/v1/divisions/${soloDivisionId}/registration-settings`,
-    "PUT",
-    { enabled: true, entrant_kind: "individual", capacity: 10, fee_cents: 0, form_fields: [] },
-  );
-  expect(soloSettings.status).toBeLessThan(300);
-
-  const teamDiv = await apiJson<{ id: string }>(
-    request,
-    `/api/v1/competitions/${comp.data!.id}/divisions`,
-    "POST",
-    {
-      name: "Stepper Team",
-      sport_key: "generic",
-      variant_key: "score",
-      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
-    },
-  );
-  expect(teamDiv.status).toBeLessThan(300);
-  const teamSettings = await apiJson(
-    request,
-    `/api/v1/divisions/${teamDiv.data!.id}/registration-settings`,
-    "PUT",
-    { enabled: true, entrant_kind: "team", capacity: 10, fee_cents: 0, form_fields: [] },
-  );
-  expect(teamSettings.status).toBeLessThan(300);
-
-  const org = await activeOrg(page);
-
-  const anonCtx = await browser.newContext({ viewport: projectViewport() ?? undefined });
+  // Everything below mutates the shared org (this competition + its two
+  // divisions — see this test's header comment) and must be torn down even
+  // when an assertion throws, so it all runs inside this `try`; the
+  // `finally` deletes by `comp.data!.id`, captured above, never by name.
   try {
-    const anon = await anonCtx.newPage();
-    await anon.goto(`/shared/${org.slug}/${comp.data!.slug}/register`, { waitUntil: "load" });
-    await anon.waitForTimeout(300);
+    const soloDiv = await apiJson<{ id: string }>(
+      request,
+      `/api/v1/competitions/${comp.data!.id}/divisions`,
+      "POST",
+      {
+        name: "Stepper Solo",
+        sport_key: "generic",
+        variant_key: "score",
+        config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+      },
+    );
+    expect(soloDiv.status).toBeLessThan(300);
+    const soloDivisionId = soloDiv.data!.id;
+    // Flips requires_dob true (requiresDob, @/lib/registration-rules) with no
+    // real age restriction — see this test's header comment.
+    const agePatch = await apiJson(request, `/api/v1/divisions/${soloDivisionId}`, "PATCH", { age_min: 0 });
+    expect(agePatch.status).toBeLessThan(300);
+    const soloSettings = await apiJson(
+      request,
+      `/api/v1/divisions/${soloDivisionId}/registration-settings`,
+      "PUT",
+      { enabled: true, entrant_kind: "individual", capacity: 10, fee_cents: 0, form_fields: [] },
+    );
+    expect(soloSettings.status).toBeLessThan(300);
 
-    // Step 1 — WHO. Two open divisions, one `requires_dob`, means
-    // `whoFieldRequirements` demands a contact dob regardless of whether
-    // this contact plays ("I'm playing" is left off deliberately — see
-    // this test's header comment).
-    await expect(anon.locator("#reg-who-name")).toBeVisible({ timeout: 20_000 });
-    await anon.locator("#reg-who-name").fill(`Mobile Stepper Contact ${TAG}`);
-    await anon.locator("#reg-who-email").fill(`stepper-${TAG}-${projectTag()}@example.com`);
-    await expect(
-      anon.locator("#reg-who-dob"),
-      "an open requires_dob division must force the WHO step's own dob field",
-    ).toBeVisible();
-    await anon.locator("#reg-who-dob").fill("1990-05-15");
-    await anon.getByRole("button", { name: "Next", exact: true }).click();
+    const teamDiv = await apiJson<{ id: string }>(
+      request,
+      `/api/v1/competitions/${comp.data!.id}/divisions`,
+      "POST",
+      {
+        name: "Stepper Team",
+        sport_key: "generic",
+        variant_key: "score",
+        config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+      },
+    );
+    expect(teamDiv.status).toBeLessThan(300);
+    const teamSettings = await apiJson(
+      request,
+      `/api/v1/divisions/${teamDiv.data!.id}/registration-settings`,
+      "PUT",
+      { enabled: true, entrant_kind: "team", capacity: 10, fee_cents: 0, form_fields: [] },
+    );
+    expect(teamSettings.status).toBeLessThan(300);
 
-    // Step 2 — ENTRIES.
-    await expect(anon.getByRole("heading", { name: "Choose your divisions", exact: true })).toBeVisible({
-      timeout: 20_000,
-    });
-    await anon.getByRole("button", { name: "Add an entry", exact: true }).click();
-    await expect(
-      anon.getByRole("button", { name: "Remove", exact: true }),
-      "adding the individual division must land one line in the cart",
-    ).toBeVisible();
-    await expectNoHorizontalScroll(anon);
-    await anon.getByRole("button", { name: "Next", exact: true }).click();
+    const org = await activeOrg(page);
 
-    // Step 3 — DETAILS. The point of this test: a requires_dob division's
-    // roster row renders `input[type="date"]`, the widest control in the
-    // whole flow, and it must fit at every width.
-    await expect(anon.getByRole("heading", { name: "Player details", exact: true })).toBeVisible({
-      timeout: 20_000,
-    });
-    const rosterName = anon.getByPlaceholder("Full name");
-    await expect(rosterName).toBeVisible();
-    await rosterName.fill("Alex Roster");
-    const rosterDob = anon.locator('input[type="date"]');
-    await expect(
-      rosterDob,
-      "roster table must render a date input for a requires_dob division",
-    ).toBeVisible();
-    await rosterDob.fill("1990-05-15");
-    const dobBox = await rosterDob.boundingBox();
-    expect(dobBox, "roster date-of-birth input has no layout box").not.toBeNull();
-    const vw = anon.viewportSize()?.width ?? 0;
-    expect(
-      dobBox!.x + dobBox!.width,
-      "roster date-of-birth input right edge must stay within the viewport",
-    ).toBeLessThanOrEqual(vw);
-    await expectNoHorizontalScroll(anon);
-    await anon.getByRole("button", { name: "Next", exact: true }).click();
+    const anonCtx = await browser.newContext({ viewport: projectViewport() ?? undefined });
+    try {
+      const anon = await anonCtx.newPage();
+      await anon.goto(`/shared/${org.slug}/${comp.data!.slug}/register`, { waitUntil: "load" });
+      await anon.waitForTimeout(300);
 
-    // Step 4 — CONSENT. No self-link anywhere in the cart, so the guardian
-    // block must be absent (guardianRequired keys off the cart's self-link,
-    // not the WHO step's "I'm playing" toggle) — only privacy consent gates
-    // "Next" here.
-    await expect(anon.getByRole("heading", { name: "Consent", exact: true })).toBeVisible({ timeout: 20_000 });
-    await expect(anon.locator("#reg-guardian-name")).toHaveCount(0);
-    await anon.locator("#reg-consent-privacy").check();
-    await expectNoHorizontalScroll(anon);
-    await anon.getByRole("button", { name: "Next", exact: true }).click();
+      // Step 1 — WHO. Two open divisions, one `requires_dob`, means
+      // `whoFieldRequirements` demands a contact dob regardless of whether
+      // this contact plays ("I'm playing" is left off deliberately — see
+      // this test's header comment).
+      await expect(anon.locator("#reg-who-name")).toBeVisible({ timeout: 20_000 });
+      await anon.locator("#reg-who-name").fill(`Mobile Stepper Contact ${TAG}`);
+      await anon.locator("#reg-who-email").fill(`stepper-${TAG}-${projectTag()}@example.com`);
+      await expect(
+        anon.locator("#reg-who-dob"),
+        "an open requires_dob division must force the WHO step's own dob field",
+      ).toBeVisible();
+      await anon.locator("#reg-who-dob").fill("1990-05-15");
+      await anon.getByRole("button", { name: "Next", exact: true }).click();
 
-    // Step 5 — REVIEW. Final frame; deliberately never taps Submit (that
-    // would POST the real registration and navigate away — out of scope for
-    // a width-coverage test).
-    await expect(anon.getByRole("heading", { name: "Review & pay", exact: true })).toBeVisible({
-      timeout: 20_000,
-    });
-    await expect(anon.getByText("Stepper Solo")).toBeVisible();
-    await expectNoHorizontalScroll(anon);
+      // Step 2 — ENTRIES.
+      await expect(anon.getByRole("heading", { name: "Choose your divisions", exact: true })).toBeVisible({
+        timeout: 20_000,
+      });
+      await anon.getByRole("button", { name: "Add an entry", exact: true }).click();
+      await expect(
+        anon.getByRole("button", { name: "Remove", exact: true }),
+        "adding the individual division must land one line in the cart",
+      ).toBeVisible();
+      await expectNoHorizontalScroll(anon);
+      await anon.getByRole("button", { name: "Next", exact: true }).click();
+
+      // Step 3 — DETAILS. The point of this test: a requires_dob division's
+      // roster row renders `input[type="date"]`, the widest control in the
+      // whole flow, and it must fit at every width.
+      await expect(anon.getByRole("heading", { name: "Player details", exact: true })).toBeVisible({
+        timeout: 20_000,
+      });
+      const rosterName = anon.getByPlaceholder("Full name");
+      await expect(rosterName).toBeVisible();
+      await rosterName.fill("Alex Roster");
+      const rosterDob = anon.locator('input[type="date"]');
+      await expect(
+        rosterDob,
+        "roster table must render a date input for a requires_dob division",
+      ).toBeVisible();
+      await rosterDob.fill("1990-05-15");
+      const dobBox = await rosterDob.boundingBox();
+      expect(dobBox, "roster date-of-birth input has no layout box").not.toBeNull();
+      const vw = anon.viewportSize()?.width ?? 0;
+      expect(
+        dobBox!.x + dobBox!.width,
+        "roster date-of-birth input right edge must stay within the viewport",
+      ).toBeLessThanOrEqual(vw);
+      await expectNoHorizontalScroll(anon);
+      await anon.getByRole("button", { name: "Next", exact: true }).click();
+
+      // Step 4 — CONSENT. No self-link anywhere in the cart, so the guardian
+      // block must be absent (guardianRequired keys off the cart's self-link,
+      // not the WHO step's "I'm playing" toggle) — only privacy consent gates
+      // "Next" here.
+      await expect(anon.getByRole("heading", { name: "Consent", exact: true })).toBeVisible({ timeout: 20_000 });
+      await expect(anon.locator("#reg-guardian-name")).toHaveCount(0);
+      await anon.locator("#reg-consent-privacy").check();
+      await expectNoHorizontalScroll(anon);
+      await anon.getByRole("button", { name: "Next", exact: true }).click();
+
+      // Step 5 — REVIEW. Final frame; deliberately never taps Submit (that
+      // would POST the real registration and navigate away — out of scope for
+      // a width-coverage test).
+      await expect(anon.getByRole("heading", { name: "Review & pay", exact: true })).toBeVisible({
+        timeout: 20_000,
+      });
+      await expect(anon.getByText("Stepper Solo")).toBeVisible();
+      await expectNoHorizontalScroll(anon);
+    } finally {
+      await anonCtx.close();
+    }
   } finally {
-    await anonCtx.close();
+    // Best-effort, unasserted cleanup: deletes by the exact id captured
+    // above, never a name/prefix search, so this can never race or catch a
+    // concurrent width project's own competition. Cascades both divisions
+    // and their registration_settings rows (competition_id/division_id are
+    // ON DELETE CASCADE), and is swallowed rather than asserted so a cleanup
+    // hiccup can never mask a real failure from the try block above it.
+    await apiJson(request, `/api/v1/competitions/${comp.data!.id}`, "DELETE").catch(() => undefined);
   }
 });
