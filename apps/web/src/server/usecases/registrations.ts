@@ -2257,7 +2257,22 @@ async function confirmPaidRegistration(
     // replayed webhook. Rejected reuses this exact path unchanged: refund,
     // never confirm, is precisely what "the organiser said no" requires.
     // payment_intent_id lives on the cart now (V364).
-    if (reg.status === "withdrawn" || reg.status === "expired" || reg.status === "rejected") {
+    //
+    // REVIEW FIX (money-path defect #2): 'waitlisted' added to this list.
+    // A promoted entry that misses its OWN promotion_expires_at window
+    // lapses back to 'waitlisted' (V378/RS007's sweep lapse pass) — it is
+    // exactly as dead as withdrawn/expired/rejected here: its slot has
+    // already been re-offered to the next waitlist candidate by the time a
+    // late/in-flight checkout completes. Without this, the payment silently
+    // fell through to the branch below (status='paid', then materialised on
+    // auto-approval) — an entrant seated in a slot the sweep had already
+    // handed to someone else, and the late payer never refunded.
+    if (
+      reg.status === "withdrawn" ||
+      reg.status === "expired" ||
+      reg.status === "rejected" ||
+      reg.status === "waitlisted"
+    ) {
       await tx`update registration_groups
                set payment_intent_id = coalesce(payment_intent_id, ${paymentIntentId}),
                    updated_at = now()

@@ -1895,6 +1895,59 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
     );
   });
 
+  // REVIEW FIX (money-path defect #2) — confirmPaidRegistration's late-
+  // payment branch matched only withdrawn/expired/rejected, but a PROMOTED
+  // entry that misses its own 48h window lapses to 'waitlisted' instead
+  // (V378/RS007 — see the sweep's lapse pass). A webhook landing after that
+  // lapse fell through to the ordinary confirm branch: 'paid', then
+  // materialised — an entrant seated in a slot the sweep had already handed
+  // to the next waitlist candidate, with no refund for the late payer.
+  it("REVIEW FIX: a late payment against a promotion that already LAPSED to waitlisted is refunded, never silently confirmed", async () => {
+    const { competition, division, settings } = await stripeRig({ feeCents: 500 });
+    const waiting = await seedRegistration(competition.id, division.id, settings, { status: "waitlisted" });
+    const promotedX = await sql.begin((tx) =>
+      promoteWaitlistedRow(tx, waiting.registration.id, waiting.registration.group_id, settings),
+    );
+    expect(promotedX!.status).toBe("pending");
+
+    // A bystander elsewhere in the division, waiting far longer — outranks
+    // X's fresh waitlisted_at on the sweep's re-offer (see
+    // reference_waitlist_reoffer_self_selects_if_only_candidate in this
+    // task's own agent memory), so this test isolates the late-payment
+    // guard from the re-offer/self-selection behaviour covered elsewhere.
+    const filler = await seedRegistration(competition.id, division.id, settings, {
+      status: "waitlisted", contactEmail: "filler-late-pay@test.local",
+    });
+    await sql`update registrations set created_at = now() - interval '1 day' where id = ${filler.registration.id}`;
+
+    // X's checkout is in flight when its OWN clock lapses — driven directly,
+    // never by mocking server time (same convention as the sibling lapse
+    // tests above).
+    await sql`update registrations set promotion_expires_at = now() - interval '1 minute'
+              where id = ${promotedX!.id}`;
+    await sweepRegistrations("https://test.local");
+    const lapsedRow = await loadWithGroup(promotedX!.id);
+    expect(lapsedRow.status, "sanity: X really did lapse to waitlisted").toBe("waitlisted");
+
+    // The abandoned checkout completes AFTER the lapse.
+    await handleRegistrationCheckoutCompleted(fakeSession(promotedX!.id, 500));
+
+    const row = await loadWithGroup(promotedX!.id);
+    // Reverting the terminal-status list to omit 'waitlisted' makes this
+    // fail: the entry silently flips to 'paid' then 'confirmed' (auto-
+    // approval materialises it) even though its slot was already re-offered.
+    expect(row.status).toBe("waitlisted");
+    expect(row.entrant_id).toBeNull();
+    expect(row.refunded_cents).toBe(500);
+    expect(stripeMock.refundCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payment_intent: "pi_test_" + promotedX!.id.slice(0, 8),
+        reverse_transfer: true,
+        refund_application_fee: true,
+      }),
+    );
+  });
+
   it("a second completed session refunds the duplicate intent, state untouched", async () => {
     const { competition, division, settings } = await stripeRig();
     const res = await seedRegistration(competition.id, division.id, settings);
