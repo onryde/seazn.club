@@ -27,7 +27,7 @@ import {
   setDivisionConfigSql,
   TAG,
   type RosteredFixture,
-} from "./helpers";
+} from "../helpers";
 
 // Each test seeds its own fixture — no shared state, so no reason to serialise.
 test.describe.configure({ mode: "parallel" });

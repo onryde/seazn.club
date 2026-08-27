@@ -158,15 +158,30 @@ jobs:
         include:
           - group: parallel 1/2
             slug: parallel-1
+            project: parallel
             slice: rest
             args: --shard=1/2
           - group: parallel 2/2
             slug: parallel-2
+            project: parallel
             slice: rest
             args: --shard=2/2
           - group: parallel heavy
             slug: parallel-heavy
+            project: parallel
             slice: heavy
+            args: ""
+          # Whole matches played by hand, through the decider — the suite's
+          # product-level proofs (#667, #670). Its own leg so a failure reads
+          # as "a scorer cannot finish a match" rather than "a shard broke",
+          # and so its ~174s does not sit on top of the sharded remainder.
+          # `slice` is irrelevant to this project and left empty deliberately:
+          # E2E_PARALLEL_SLICE only selects between the parallel project's own
+          # halves, and setting it here would imply otherwise.
+          - group: walkthrough
+            slug: walkthrough
+            project: walkthrough
+            slice: ""
             args: ""
 
     services:
@@ -420,7 +435,7 @@ jobs:
           echo "static assets serve ($asset)"
 
       - name: Run Playwright e2e (${{ matrix.group }})
-        run: npx playwright test --project=parallel ${{ matrix.args }}
+        run: npx playwright test --project=${{ matrix.project }} ${{ matrix.args }}
         working-directory: apps/web
         env:
           PLAYWRIGHT_BASE: http://localhost:3000

@@ -82,6 +82,42 @@ const SERIAL_SPECS =
 const PARALLEL_HEAVY = /(scorepad-v3-cricket|marketing-ai-demo|board-v3)\.spec\.ts/;
 const PARALLEL_SLICE = process.env.E2E_PARALLEL_SLICE;
 
+// --- the walkthrough leg ---------------------------------------------------
+//
+// e2e/walkthrough/ holds the specs that play a WHOLE match by hand — from the
+// pre-match screen through the decider — rather than asserting on a slice of
+// behaviour. They exist because cricket and football each shipped a broken
+// decider through two signed-off waves: every surface asserted on code, and
+// nothing ever tapped the thing (#667, #670).
+//
+// Carved into their own leg for two reasons, in this order:
+//
+//  1. ATTRIBUTION. These are the suite's product-level proofs. A red leg named
+//     "walkthrough" says "a scorer cannot finish a match", which is a
+//     different alarm from "a shard failed" and wants reading differently.
+//  2. BALANCE. Measured locally, warm server, one worker per file:
+//     deciders-byhand 7s, deciders-fullmatch 64s, tennis-mtb 174s of test time
+//     (~245s total, but ~174s wall clock at 2 workers — tennis-mtb is ONE test
+//     and cannot be split). Left in the sharded remainder that lands as ~122s
+//     on each "rest" leg; carved out, the rest legs return to their designed
+//     ~128s and this leg costs ~174s + setup.
+//
+// Read the trade honestly before moving it: a separate job re-pays the whole
+// ~106s setup (Flyway, sport sync, prod build, placement image, server), so
+// this leg lands around ~280s and becomes the workflow's wall-clock floor,
+// which e2e-mobile's phones-small leg (~244s) held before it. That is ~30s of
+// wall clock bought for isolation and a legible failure. If it ever needs
+// winning back, tennis-mtb is the whole lever — one test, ~174s, most of it
+// deliberate waits clearing the pad's double-submit guard.
+// ANCHORED ON `e2e/` deliberately. Playwright matches `testMatch`/`testIgnore`
+// against the file's ABSOLUTE path, not a path relative to `testDir`, so a
+// bare /walkthrough\// also matches every checkout that happens to live under
+// a directory of that name — which is not hypothetical: developing this in a
+// worktree at .claude/worktrees/walkthrough/ made the pattern select the whole
+// suite, `helpers.ts` included, and Playwright then rejected every spec with
+// `test file "ai-architect.spec.ts" should not import test file "helpers.ts"`.
+const WALKTHROUGH = /[\\/]e2e[\\/]walkthrough[\\/]/;
+
 export default defineConfig({
   testDir: "./e2e",
   // Runs before EVERY project, `setup` included: proves the server on BASE is a
@@ -115,8 +151,18 @@ export default defineConfig({
       testIgnore: [
         SERIAL_SPECS,
         /mobile\.spec\.ts/,
+        // The walkthrough leg runs these; without this they would run TWICE.
+        WALKTHROUGH,
         ...(PARALLEL_SLICE === "rest" ? [PARALLEL_HEAVY] : []),
       ],
+      use: { ...devices["Desktop Chrome"], storageState: AUTH_STATE },
+      dependencies: ["setup"],
+    },
+    // Whole matches, played by hand, through the decider. Its own leg — see
+    // WALKTHROUGH above for why, and for what it costs.
+    {
+      name: "walkthrough",
+      testMatch: WALKTHROUGH,
       use: { ...devices["Desktop Chrome"], storageState: AUTH_STATE },
       dependencies: ["setup"],
     },

@@ -25,7 +25,7 @@ import {
   setDivisionConfigSql,
   TAG,
   type RosteredFixture,
-} from "./helpers";
+} from "../helpers";
 
 test.describe.configure({ mode: "parallel" });
 
