@@ -140,6 +140,15 @@ export interface JoinTeamEntryCtx {
 
 export interface JoinTeamEntryInput {
   join_code: string;
+  /** Identifies ONE existing `captain_entered`/`pending` `registration_players`
+   *  row to CLAIM — a captain's per-slot share link naming one specific
+   *  roster spot (design §2 ruling 4: "join/claim link is the consent
+   *  moment for players someone else entered"). Omitted (or the id doesn't
+   *  resolve to a claimable row on THIS entry) falls back to the legacy
+   *  insert-a-new-player path below, which now refuses a `pair` outright
+   *  (its roster is fixed at two — see `joinTeamEntry`'s own doc comment)
+   *  and is otherwise unchanged. */
+  player_id?: string | null;
   player: SubmitGroupPlayerInput;
   guardian_name?: string | null;
   guardian_consent?: boolean;
@@ -149,6 +158,30 @@ export interface JoinTeamEntryResult {
   registration_id: string;
   player_id: string;
   consent_status: "granted" | "guardian";
+}
+
+export interface JoinPreviewSlot {
+  player_id: string;
+  full_name: string;
+}
+
+/** The join page's first read (design §4 "Join flow"), before it asks
+ *  anyone to type anything: who/where the link joins, which captain-entered
+ *  slots are still unclaimed, and whether the page may offer an "add
+ *  someone new" option at all. */
+export interface JoinPreviewResult {
+  registration_id: string;
+  display_name: string;
+  division_name: string;
+  competition_name: string;
+  competition_slug: string;
+  org_slug: string;
+  org_name: string;
+  unclaimed_slots: JoinPreviewSlot[];
+  /** True only when this entry can still grow by adding someone NEW — never
+   *  for a `pair` (fixed at two, claim-only) and never once the sport's
+   *  roster cap is already met. */
+  allow_new_player: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -195,10 +228,19 @@ interface EntryDivisionCtx {
   category: string | null;
   age_min: number | null;
   age_max: number | null;
+  /** division_name/comp_name/org_name added for `previewJoinEntry`'s
+   *  "division and competition/org context" read — the same bundle
+   *  `publicRegistrationStatus`/`publicRegistrationStatusByRef`
+   *  (registrations.ts) already return for every other public context
+   *  view, reused here for consistency rather than inventing a second
+   *  shape. Purely additive; every existing caller ignores them. */
+  division_name: string;
   comp_slug: string;
+  comp_name: string;
   comp_visibility: string;
   starts_on: string | null;
   org_slug: string;
+  org_name: string;
   org_currency: string;
   charges_enabled: boolean;
 }
@@ -206,8 +248,9 @@ interface EntryDivisionCtx {
 async function loadEntryDivisionCtx(divisionId: string): Promise<EntryDivisionCtx> {
   const [row] = await sql<EntryDivisionCtx[]>`
     select d.id, d.competition_id, d.org_id, d.eligibility, d.category, d.age_min, d.age_max,
-           c.slug as comp_slug, c.visibility as comp_visibility, c.starts_on,
-           o.slug as org_slug, o.currency as org_currency,
+           d.name as division_name,
+           c.slug as comp_slug, c.name as comp_name, c.visibility as comp_visibility, c.starts_on,
+           o.slug as org_slug, o.name as org_name, o.currency as org_currency,
            o.stripe_charges_enabled as charges_enabled
     from divisions d
     join competitions c on c.id = d.competition_id
@@ -561,11 +604,21 @@ export async function submitRegistrationGroup(
       const status: RegistrationRow["status"] = waitlisted ? "waitlisted" : "pending";
 
       let regRow: RegistrationRow;
-      if (p.input.entrant_kind === "team" && !p.input.free_agent) {
-        // join_code is minted for every NON-free-agent team entry regardless
-        // of waitlist outcome — a waitlisted team can still grow its roster
-        // while it waits (only money/status are gated by waitlisting, not
-        // the link). A free agent is `entrant_kind: "team"` at the division
+      if ((p.input.entrant_kind === "team" || p.input.entrant_kind === "pair") && !p.input.free_agent) {
+        // join_code is minted for every NON-free-agent team OR pair entry
+        // regardless of waitlist outcome — a waitlisted team can still grow
+        // its roster (or a pair's partner still claim their spot) while it
+        // waits (only money/status are gated by waitlisting, not the link).
+        // Widened to `pair` (RS007 "found while using the shipped RS006
+        // flow", 2026-08-27): a pair's roster is fixed at exactly two
+        // (structural check above, and rosterIssues at submit), so its
+        // join_code only ever lets the partner CLAIM their already-typed-in
+        // row — `joinTeamEntry` 422s a pair's insert-a-new-person path (see
+        // its own `entrant_kind === "pair"` guard). `free_agent` cannot be
+        // true for a `pair` (the structural check above only allows it for
+        // `team`), so the `!p.input.free_agent` guard is a no-op for pairs
+        // today — kept for symmetry with the team branch rather than special-
+        // cased away. A free agent is `entrant_kind: "team"` at the division
         // level but represents ONE unassigned person (design §5) — minting a
         // join_code for it would let other players "join" and grow it into
         // an ad hoc roster, bypassing RS009's assignment flow entirely
@@ -723,17 +776,115 @@ export async function submitRegistrationGroup(
 // joinTeamEntry
 // ---------------------------------------------------------------------------
 
+/** Roster headcount vs the sport's configured cap (design "squad-size config
+ *  where defined, else unlimited") — `sports.position_catalog.lineup.size +
+ *  .benchMax` via the shared `rosterCapExpr` (registrations.ts; RS005 W1b
+ *  re-pointed the squad-cap check at it — one source instead of two hand-
+ *  copies). `null` cap reads as unlimited. Shared by `previewJoinEntry`'s
+ *  `allow_new_player` and `joinTeamEntry`'s insert path so the two can never
+ *  drift apart (this repo's parallel-vocab-lookup trap). */
+async function rosterAtCap(divisionId: string, registrationId: string): Promise<boolean> {
+  const [cap] = await sql<{ max: number | null }[]>`
+    select ${rosterCapExpr(sql)} as max
+    from divisions d join sports sp on sp.key = d.sport_key
+    where d.id = ${divisionId}`;
+  if (cap?.max == null) return false;
+  const [{ n }] = await sql<{ n: number }[]>`
+    select count(*)::int as n from registration_players where registration_id = ${registrationId}`;
+  return n >= cap.max;
+}
+
+// ---------------------------------------------------------------------------
+// previewJoinEntry
+// ---------------------------------------------------------------------------
+
 /**
- * Player joining an existing team entry via its link (design §4 "Join
- * flow"). `join_code` is GLOBALLY unique (V364 partial unique index), so a
- * `?join=<CODE>` link carries nothing else — no org/competition scoping
- * needed for the lookup, matching how `ref_code` lookups already work.
+ * Join-link preview — the join page's first read, before it asks anyone to
+ * type anything (design §4 "Join flow"). Resolves the SAME way
+ * `joinTeamEntry` does (global `join_code` lookup, no org/competition
+ * scoping needed) and applies the SAME dead-entry gates (free agent,
+ * withdrawn/rejected/expired) so a link `joinTeamEntry` would refuse never
+ * previews as live either — and, like that lookup, an unknown OR dead code
+ * returns the identical 404-shape: never leak whether a code once existed.
+ */
+export async function previewJoinEntry(joinCode: string): Promise<JoinPreviewResult> {
+  const [reg] = await sql<
+    {
+      id: string;
+      division_id: string;
+      display_name: string;
+      status: string;
+      free_agent: boolean;
+      entrant_kind: "team" | "individual" | "pair";
+    }[]
+  >`
+    select r.id, r.division_id, r.display_name, r.status, r.free_agent, rs.entrant_kind
+    from registrations r
+    join registration_settings rs on rs.division_id = r.division_id
+    where r.join_code = ${joinCode}`;
+  if (!reg || reg.free_agent || ["withdrawn", "rejected", "expired"].includes(reg.status)) {
+    throw new HttpError(404, "This join link is not valid");
+  }
+
+  const divCtx = await loadEntryDivisionCtx(reg.division_id);
+
+  const slots = await sql<{ id: string; full_name: string }[]>`
+    select id, full_name from registration_players
+    where registration_id = ${reg.id} and source = 'captain_entered' and consent_status = 'pending'
+    order by squad_number nulls last, created_at`;
+
+  // Never for a `pair` (fixed at two — claim only), and never once the
+  // sport's cap is already met. Short-circuited so a pair never even issues
+  // the cap query.
+  const allowNewPlayer = reg.entrant_kind !== "pair" && !(await rosterAtCap(reg.division_id, reg.id));
+
+  return {
+    registration_id: reg.id,
+    display_name: reg.display_name,
+    division_name: divCtx.division_name,
+    competition_name: divCtx.comp_name,
+    competition_slug: divCtx.comp_slug,
+    org_slug: divCtx.org_slug,
+    org_name: divCtx.org_name,
+    unclaimed_slots: slots.map((s) => ({ player_id: s.id, full_name: s.full_name })),
+    allow_new_player: allowNewPlayer,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// joinTeamEntry
+// ---------------------------------------------------------------------------
+
+/**
+ * Player joining an existing team OR pair entry via its link (design §4
+ * "Join flow"). `join_code` is GLOBALLY unique (V364 partial unique index),
+ * so a `?join=<CODE>` link carries nothing else — no org/competition
+ * scoping needed for the lookup, matching how `ref_code` lookups already
+ * work.
+ *
+ * Two paths, chosen by whether `input.player_id` names an existing row:
+ *  - CLAIM (player_id given): the captain already typed this person in at
+ *    submit — `source='captain_entered'`, `consent_status='pending'`. This
+ *    is the consent moment design §2 ruling 4 promises ("join/claim link is
+ *    the consent moment for players someone else entered") — the row is
+ *    UPDATED in place (dob/gender/guardian_name/consent_status/user_id),
+ *    NEVER duplicated. A row that is not `pending` (already claimed) 409s —
+ *    the dedupe a captain-entered row had no guard against before this
+ *    existed. A `player_id` that does not resolve to a pending, captain-
+ *    entered row on THIS entry reads exactly like an invalid link (404) —
+ *    which case it was is never leaked back to the caller.
+ *  - INSERT (player_id omitted): a genuinely new person adds themselves,
+ *    same as before — cap-checked against the sport's roster cap, and now
+ *    refused outright (422) for a `pair`, whose roster is fixed at exactly
+ *    two by the structural check at submit: the second seat can only ever
+ *    be CLAIMED, never grown.
  *
  * A joiner is, by construction, registering themselves — `deriveLinkUserId`
  * is reused verbatim with `registering_self: true` hardcoded, so the SAME
  * adult+no-guardian-fields rule that protects submit's self row protects a
  * join too (a guardian filling the form for a minor must not accidentally
- * link the CHILD's row to the guardian's own account).
+ * link the CHILD's row to the guardian's own account). Eligibility and the
+ * minor/guardian gate apply identically on both paths.
  */
 export async function joinTeamEntry(
   ctx: JoinTeamEntryCtx,
@@ -741,9 +892,19 @@ export async function joinTeamEntry(
 ): Promise<JoinTeamEntryResult> {
   const now = new Date();
   const [reg] = await sql<
-    { id: string; division_id: string; status: string; org_id: string; free_agent: boolean }[]
+    {
+      id: string;
+      division_id: string;
+      status: string;
+      org_id: string;
+      free_agent: boolean;
+      entrant_kind: "team" | "individual" | "pair";
+    }[]
   >`
-    select id, division_id, status, org_id, free_agent from registrations where join_code = ${input.join_code}`;
+    select r.id, r.division_id, r.status, r.org_id, r.free_agent, rs.entrant_kind
+    from registrations r
+    join registration_settings rs on rs.division_id = r.division_id
+    where r.join_code = ${input.join_code}`;
   if (!reg) throw new HttpError(404, "This join link is not valid");
   // Defense in depth (review MAJOR 4): submitRegistrationGroup never mints a
   // join_code for a free agent (design §5 — it is one unassigned person, not
@@ -756,24 +917,25 @@ export async function joinTeamEntry(
     throw new HttpError(422, "This entry is no longer accepting players");
   }
 
-  const divCtx = await loadEntryDivisionCtx(reg.division_id);
-
-  // Squad cap: the sport's own lineup config (design "squad-size config
-  // where defined, else unlimited") — `sports.position_catalog.lineup.size +
-  // .benchMax`. A sport with no lineup config declared leaves `max` null,
-  // read as unlimited.
-  // RS005 W1b: re-pointed at the shared rosterCapExpr (registrations.ts) —
-  // same expression, one source now instead of two hand-copies (that file's
-  // own doc comment on rosterCapExpr named this call site as the copy owed).
-  const [cap] = await sql<{ max: number | null }[]>`
-    select ${rosterCapExpr(sql)} as max
-    from divisions d join sports sp on sp.key = d.sport_key
-    where d.id = ${reg.division_id}`;
-  if (cap?.max != null) {
-    const [{ n }] = await sql<{ n: number }[]>`
-      select count(*)::int as n from registration_players where registration_id = ${reg.id}`;
-    if (n >= cap.max) throw new HttpError(422, "This roster is already full");
+  if (!input.player_id) {
+    // A pair's roster is fixed at exactly two (structural check, submit) —
+    // its join_code exists only so the partner can CLAIM their already-
+    // typed-in row (widened mint, review "found while using the shipped
+    // RS006 flow" 2026-08-27). Growing it past two has no claim to enforce
+    // against, so it is refused outright rather than falling through to a
+    // cap check that would (mis)report "roster is already full".
+    if (reg.entrant_kind === "pair") {
+      throw new HttpError(
+        422,
+        "This pair's roster is fixed — the second player claims their spot, it can't be added as new",
+      );
+    }
+    if (await rosterAtCap(reg.division_id, reg.id)) {
+      throw new HttpError(422, "This roster is already full");
+    }
   }
+
+  const divCtx = await loadEntryDivisionCtx(reg.division_id);
 
   const issues = divisionEligibilityIssues(
     { eligibility: divCtx.eligibility, category: divCtx.category, age_min: divCtx.age_min, age_max: divCtx.age_max },
@@ -798,20 +960,62 @@ export async function joinTeamEntry(
     now,
   );
 
-  const [player] = await sql<{ id: string }[]>`
-    insert into registration_players
-      (registration_id, full_name, dob, gender, source, consent_status,
-       consent_at, guardian_name, user_id)
-    values (
-      ${reg.id}, ${input.player.full_name}, ${input.player.dob ?? null}, ${input.player.gender ?? null},
-      'self_joined', ${consentStatus}, now(), ${minor ? (input.guardian_name ?? null) : null}, ${linkUserId}
-    )
-    returning id`;
+  let playerId: string;
+  if (input.player_id) {
+    // Atomic compare-and-swap: the WHERE clause IS the verification (belongs
+    // to this entry, still a pending captain-entered row) — a concurrent
+    // double-claim of the same slot can make at most one caller win, no
+    // separate SELECT-then-UPDATE race window. full_name is deliberately
+    // NOT overwritten — only the fields the insert path itself fills.
+    const [claimed] = await sql<{ id: string }[]>`
+      update registration_players
+      set dob = ${input.player.dob ?? null},
+          gender = ${input.player.gender ?? null},
+          consent_status = ${consentStatus},
+          consent_at = now(),
+          guardian_name = ${minor ? (input.guardian_name ?? null) : null},
+          user_id = ${linkUserId},
+          updated_at = now()
+      where id = ${input.player_id}
+        and registration_id = ${reg.id}
+        and source = 'captain_entered'
+        and consent_status = 'pending'
+      returning id`;
+    if (!claimed) {
+      // Distinguish "already claimed" (409, a real conflict) from every
+      // other reason the compare-and-swap could miss — wrong code, wrong
+      // entry, a self_joined row, or an id that doesn't exist — which all
+      // read as the same invalid-link 404 a dead join_code gives, so a
+      // caller can never learn WHICH case it was.
+      const [existing] = await sql<{ id: string }[]>`
+        select id from registration_players
+        where id = ${input.player_id} and registration_id = ${reg.id} and source = 'captain_entered'`;
+      if (existing) throw new HttpError(409, "This player has already joined");
+      throw new HttpError(404, "This join link is not valid");
+    }
+    playerId = claimed.id;
+  } else {
+    const [player] = await sql<{ id: string }[]>`
+      insert into registration_players
+        (registration_id, full_name, dob, gender, source, consent_status,
+         consent_at, guardian_name, user_id)
+      values (
+        ${reg.id}, ${input.player.full_name}, ${input.player.dob ?? null}, ${input.player.gender ?? null},
+        'self_joined', ${consentStatus}, now(), ${minor ? (input.guardian_name ?? null) : null}, ${linkUserId}
+      )
+      returning id`;
+    playerId = player!.id;
+  }
 
   log.info(
-    { event: "registration.player_joined", registration_id: reg.id, org_id: reg.org_id },
+    {
+      event: "registration.player_joined",
+      registration_id: reg.id,
+      org_id: reg.org_id,
+      via: input.player_id ? "claim" : "insert",
+    },
     "player joined team entry via link",
   );
 
-  return { registration_id: reg.id, player_id: player!.id, consent_status: consentStatus };
+  return { registration_id: reg.id, player_id: playerId, consent_status: consentStatus };
 }

@@ -2530,27 +2530,58 @@ export const PublicRegisterGroupResponse = z.object({
   entries: z.array(PublicRegisterGroupEntryResult),
 });
 
-/** Join an existing team entry via its `join_code` link (`JoinTeamEntryInput`
- *  mirror, registration-submit.ts:136-141). A joiner is one player row, so
- *  this reuses the same player shape submit uses. */
+/** Join an existing team OR pair entry via its `join_code` link
+ *  (`JoinTeamEntryInput` mirror, registration-submit.ts). A joiner is one
+ *  player row, so this reuses the same player shape submit uses.
+ *  `player_id` (optional) is a per-slot claim link naming ONE existing
+ *  captain-entered row to CLAIM in place — omitted, it falls back to
+ *  inserting a genuinely new player (refused for a `pair`, whose roster is
+ *  fixed at two). */
 export const PublicJoinRequest = z.object({
   join_code: z.string().min(1).max(80),
   player: PublicRegisterGroupPlayer,
+  player_id: Uuid.nullish(),
   guardian_name: z.string().max(120).nullish(),
   guardian_consent: z.boolean().optional(),
 });
 export type PublicJoinRequest = z.infer<typeof PublicJoinRequest>;
 
-/** (`JoinTeamEntryResult` mirror, registration-submit.ts:143-147).
- *  `consent_status` is deliberately the 2-value subset this path actually
- *  returns — 'pending' is `registration_players`' 3rd DB-level value, and a
- *  join never produces it (registration-submit.ts:761 only ever picks
- *  granted or guardian). */
+/** (`JoinTeamEntryResult` mirror, registration-submit.ts). `consent_status`
+ *  is deliberately the 2-value subset this path actually returns —
+ *  'pending' is `registration_players`' 3rd DB-level value, and neither the
+ *  claim nor the insert branch of `joinTeamEntry` ever produces it (both
+ *  only ever pick granted or guardian). */
 export const PublicJoinResponse = z.object({
   registration_id: Uuid,
   player_id: Uuid,
   consent_status: z.enum(["granted", "guardian"]),
 });
+
+/** One CAPTAIN-ENTERED, still-`pending` slot on an entry — claimable by
+ *  sending its `player_id` back as `PublicJoinRequest.player_id`
+ *  (`JoinPreviewSlot` mirror, registration-submit.ts). */
+export const PublicJoinPreviewSlot = z.object({
+  player_id: Uuid,
+  full_name: z.string(),
+});
+
+/** Join-link preview (`JoinPreviewResult` mirror, registration-submit.ts) —
+ *  the join page's first read, before it asks anyone to type anything: who/
+ *  where the link joins, which slots are still unclaimed, and whether the
+ *  page may offer an "add someone new" option (never for a `pair`; never
+ *  once the sport's roster cap is met). */
+export const PublicJoinPreviewResponse = z.object({
+  registration_id: Uuid,
+  display_name: z.string(),
+  division_name: z.string(),
+  competition_name: z.string(),
+  competition_slug: z.string(),
+  org_slug: z.string(),
+  org_name: z.string(),
+  unclaimed_slots: z.array(PublicJoinPreviewSlot),
+  allow_new_player: z.boolean(),
+});
+export type PublicJoinPreviewResponse = z.infer<typeof PublicJoinPreviewResponse>;
 
 /** Registrant-facing status view (token-gated; no dob, no payment ids). */
 export const PublicRegistrationStatus = z.object({
