@@ -43,20 +43,20 @@ export function LessonCard({
 
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-5">
-      <span className="text-xs font-semibold uppercase tracking-wide text-purple-400">
+      <span className="text-xs font-semibold uppercase tracking-wide text-(color:--cq-accent-muted)">
         {land.glyph} {land.name} · Day {dayOf(wk.n)}
       </span>
-      <h2 className="mk-display mt-1 text-2xl font-bold text-purple-950">{wk.title}</h2>
+      <h2 className="mk-display mt-1 text-2xl font-bold text-(color:--cq-ink)">{wk.title}</h2>
 
       <dl className="mt-3 flex flex-col gap-2 text-sm">
         <div className="flex gap-3">
-          <dt className="w-12 shrink-0 font-bold text-purple-700">Learn</dt>
+          <dt className="w-12 shrink-0 font-bold text-(color:--cq-label)">Learn</dt>
           <dd className="text-slate-600">
             <Rich html={c.learn} />
           </dd>
         </div>
         <div className="flex gap-3">
-          <dt className="w-12 shrink-0 font-bold text-purple-700">Play</dt>
+          <dt className="w-12 shrink-0 font-bold text-(color:--cq-label)">Play</dt>
           <dd className="text-slate-600">
             <Rich html={c.play} />
           </dd>
@@ -105,7 +105,7 @@ export function LessonCard({
       </div>
 
       {isLast ? (
-        <p className="mt-4 rounded-lg bg-purple-50 p-3 text-sm text-purple-900">
+        <p className="mt-4 rounded-lg bg-(color:--cq-accent-wash) p-3 text-sm text-(color:--cq-ink-muted)">
           <b>
             {land.glyph} Level-up check:
           </b>{" "}

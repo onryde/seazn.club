@@ -34,7 +34,7 @@ export function Modal({
         className="my-8 w-full max-w-lg rounded-2xl bg-white p-5 shadow-xl"
       >
         <div className="flex items-center justify-between">
-          <h2 className="mk-display text-xl font-bold text-purple-950">{title}</h2>
+          <h2 className="mk-display text-xl font-bold text-(color:--cq-ink)">{title}</h2>
           <button
             type="button"
             aria-label="Close"

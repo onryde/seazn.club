@@ -28,20 +28,20 @@ export function ProfilePanel({ onClose }: { onClose(): void }) {
             <li
               key={prof.id}
               className={`flex items-center gap-2 rounded-xl border p-2 ${
-                active ? "border-purple-400 bg-purple-50" : "border-slate-200"
+                active ? "border-(color:--cq-accent-muted) bg-(color:--cq-accent-wash)" : "border-slate-200"
               }`}
             >
-              <span className="flex-1 text-sm font-medium text-purple-950">
+              <span className="flex-1 text-sm font-medium text-(color:--cq-ink)">
                 {prof.name || `Player ${i + 1}`}
                 <span className="ml-2 rounded-full bg-slate-100 px-1.5 py-0.5 text-xs text-slate-500">
                   {prof.mode === "story" ? "Story" : "Classic"}
                 </span>
-                {active ? <span className="ml-2 text-xs text-purple-600">· active</span> : null}
+                {active ? <span className="ml-2 text-xs text-(color:--cq-accent)">· active</span> : null}
               </span>
               {!active ? (
                 <button
                   type="button"
-                  className="rounded-lg border border-purple-300 px-2 py-1 text-xs font-medium text-purple-700 hover:bg-purple-50"
+                  className="rounded-lg border border-(color:--cq-accent-line) px-2 py-1 text-xs font-medium text-(color:--cq-label) hover:bg-(color:--cq-accent-wash)"
                   onClick={() => progress.switchProfile(prof.id)}
                 >
                   Switch
@@ -91,8 +91,8 @@ export function ProfilePanel({ onClose }: { onClose(): void }) {
               onClick={() => progress.setMode(m)}
               className={`rounded-full border px-3 py-1 text-sm font-medium ${
                 progress.getMode() === m
-                  ? "border-purple-600 bg-purple-600 text-white"
-                  : "border-purple-300 bg-white text-purple-800 hover:bg-purple-50"
+                  ? "border-(color:--cq-accent) bg-(color:--cq-accent) text-white"
+                  : "border-(color:--cq-accent-line) bg-white text-(color:--cq-accent-strong) hover:bg-(color:--cq-accent-wash)"
               }`}
             >
               {m === "story" ? "Story (kids)" : "Classic (adult)"}
