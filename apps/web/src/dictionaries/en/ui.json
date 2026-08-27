@@ -4442,6 +4442,7 @@
   "register.entries.cart.freeAgentBadge": "Solo sign-up",
   "register.entries.cart.waitlistNote": "Not charged now — pay only if you're promoted from the waitlist.",
   "register.entries.cart.closedNote": "This division has closed since you added this entry — it won't be charged and may need to be removed.",
+  "register.entries.cart.closedBlocking": "This division is no longer open and can't be charged — remove this entry to continue.",
   "register.entries.cart.subtotal": "Subtotal",
   "register.entries.free": "Free",
   "register.entries.cart.max": "Cart is full — up to {max} entries per registration.",

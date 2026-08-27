@@ -4442,6 +4442,7 @@
   "register.entries.cart.freeAgentBadge": "Inscription solo",
   "register.entries.cart.waitlistNote": "Non facturé pour l'instant — vous ne payez que si vous êtes promu depuis la liste d'attente.",
   "register.entries.cart.closedNote": "Cette catégorie s'est fermée depuis l'ajout de cette inscription — elle ne sera pas facturée et devra peut-être être supprimée.",
+  "register.entries.cart.closedBlocking": "Cette catégorie n'est plus ouverte et ne peut plus être facturée — retirez cette inscription pour continuer.",
   "register.entries.cart.subtotal": "Sous-total",
   "register.entries.free": "Gratuit",
   "register.entries.cart.max": "Le panier est plein — jusqu'à {max} inscriptions par enregistrement.",

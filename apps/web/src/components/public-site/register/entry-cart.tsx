@@ -127,7 +127,21 @@ export function EntryCart({
                 )}
 
                 {willWaitlist && <p className="mt-1.5 text-xs text-amber-700">{t("register.entries.cart.waitlistNote")}</p>}
-                {isStaleClosed && <p className="mt-1.5 text-xs text-red-700">{t("register.entries.cart.closedNote")}</p>}
+                {/* Review finding 2 (2026-08-27): this note now BLOCKS
+                    "Next" (validateEntries's staleClosedEntryId) rather than
+                    being purely informational, so its copy is the stronger,
+                    action-directed closedBlocking string (not the softer
+                    closedNote step-review.tsx still uses for its read-only,
+                    nothing-to-remove-from-there summary) — role="alert" to
+                    match register-stepper.tsx's own error-banner convention
+                    for a state that blocks progress. The Remove button right
+                    above in this same row is "a way to remove it and
+                    continue" — no separate control needed. */}
+                {isStaleClosed && (
+                  <p role="alert" className="mt-1.5 text-xs font-medium text-red-700">
+                    {t("register.entries.cart.closedBlocking")}
+                  </p>
+                )}
 
                 {selfVerdict && !selfVerdict.eligible && (
                   <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">

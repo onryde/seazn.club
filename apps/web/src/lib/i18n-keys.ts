@@ -3765,6 +3765,7 @@ export type DictionaryKey =
   | "register.entries.age.range"
   | "register.entries.badge.closed"
   | "register.entries.badge.waitlist"
+  | "register.entries.cart.closedBlocking"
   | "register.entries.cart.closedNote"
   | "register.entries.cart.duplicate"
   | "register.entries.cart.empty"

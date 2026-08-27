@@ -227,6 +227,65 @@ describe("validateEntries", () => {
       expect(r.valid).toBe(true);
     });
   });
+
+  describe("review finding 2 (2026-08-27): a stale-closed division blocks progress, attributed to the entry, unless it's a waitlist ('full')", () => {
+    const STALE_WINDOW_DIVISION: DivisionLike = { ...BASE_DIVISION, division_id: "d-stale", closed_reason: "window" };
+    const STALE_PAYMENTS_DIVISION: DivisionLike = {
+      ...BASE_DIVISION,
+      division_id: "d-stale-pay",
+      closed_reason: "payments_unavailable",
+    };
+    const FULL_DIVISION: DivisionLike = { ...BASE_DIVISION, division_id: "d-full", closed_reason: "full" };
+
+    it("blocks with staleClosedEntryId set to the offending entry's id — error stays null, this is a per-entry cause, not a cart-wide banner code", () => {
+      const cart: CartState = { entries: [entry({ id: "e1", division_id: "d-stale", entrant_kind: "individual" })] };
+      const r = validateEntries(cart, [STALE_WINDOW_DIVISION], EMPTY_CONTACT, SEASON_START_YEAR);
+      expect(r.valid).toBe(false);
+      expect(r.error).toBeNull();
+      expect(r.staleClosedEntryId).toBe("e1");
+    });
+
+    it("blocks for 'payments_unavailable' too — every non-'full' closed_reason blocks", () => {
+      const cart: CartState = { entries: [entry({ id: "e1", division_id: "d-stale-pay", entrant_kind: "individual" })] };
+      const r = validateEntries(cart, [STALE_PAYMENTS_DIVISION], EMPTY_CONTACT, SEASON_START_YEAR);
+      expect(r.valid).toBe(false);
+      expect(r.staleClosedEntryId).toBe("e1");
+    });
+
+    it("does NOT block on closed_reason 'full' — that path legitimately waitlists (summarizeCart's own waitlisted/staleClosed split)", () => {
+      const cart: CartState = { entries: [entry({ id: "e1", division_id: "d-full", entrant_kind: "individual" })] };
+      const r = validateEntries(cart, [FULL_DIVISION], EMPTY_CONTACT, SEASON_START_YEAR);
+      expect(r.valid).toBe(true);
+      expect(r.staleClosedEntryId).toBeNull();
+    });
+
+    it("blocks regardless of self-link — an entry nobody is playing themselves still blocks the whole cart at submit", () => {
+      const cart: CartState = { entries: [entry({ id: "e1", division_id: "d-stale", entrant_kind: "team" })] };
+      const r = validateEntries(cart, [STALE_WINDOW_DIVISION], EMPTY_CONTACT, SEASON_START_YEAR);
+      expect(r.valid).toBe(false);
+      expect(r.staleClosedEntryId).toBe("e1");
+    });
+
+    it("names the stale-closed entry even when a valid sibling entry is also in the cart", () => {
+      const cart: CartState = {
+        entries: [
+          entry({ id: "e1", division_id: "d1", entrant_kind: "individual" }), // BASE_DIVISION — open, unaffected
+          entry({ id: "e2", division_id: "d-stale", entrant_kind: "individual" }),
+        ],
+      };
+      const r = validateEntries(cart, [BASE_DIVISION, STALE_WINDOW_DIVISION], EMPTY_CONTACT, SEASON_START_YEAR);
+      expect(r.valid).toBe(false);
+      expect(r.staleClosedEntryId).toBe("e2");
+    });
+
+    it("an entry whose division is missing from the list (data gap) does not crash and does not block — same degrade-don't-throw precedent as the self-eligibility gate above", () => {
+      const cart: CartState = { entries: [entry({ id: "e1", division_id: "d-unknown", entrant_kind: "individual" })] };
+      expect(() => validateEntries(cart, [], EMPTY_CONTACT, SEASON_START_YEAR)).not.toThrow();
+      const r = validateEntries(cart, [], EMPTY_CONTACT, SEASON_START_YEAR);
+      expect(r.valid).toBe(true);
+      expect(r.staleClosedEntryId).toBeNull();
+    });
+  });
 });
 
 describe("entryDetailsComplete", () => {

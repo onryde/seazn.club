@@ -120,6 +120,15 @@ export function validateContact(
 export interface EntriesValidation {
   valid: boolean;
   error: "cartEmpty" | "selfIneligible" | null;
+  /** The id of a cart entry whose division has gone stale-closed
+   *  (`closed_reason` set to anything OTHER than "full") since the entry
+   *  was added — review finding 2 (2026-08-27). Non-null exactly when
+   *  THAT is the reason `valid` is false (`error` stays null for this
+   *  case: it's a per-ENTRY cause, not a cart-wide banner code — see this
+   *  field's own check in `validateEntries` below for why). entry-cart.tsx
+   *  reads this to say WHICH entry and offer its existing Remove control,
+   *  rather than a single generic banner naming nothing. */
+  staleClosedEntryId: string | null;
 }
 
 /** `PublicRegisterGroupRequest.entries` is `.min(1).max(10)`
@@ -129,7 +138,24 @@ export interface EntriesValidation {
  *  (team_name/partner_name) is encouraged in the UI but not required — the
  *  schema itself leaves both nullish.
  *
- *  Second gate (fix wave finding #3): a self-linked entry whose division the
+ *  Second gate (review finding 2, 2026-08-27): ANY entry — self-linked or
+ *  not — whose division has gone STALE-CLOSED since it was added
+ *  (`closed_reason` set to something other than "full") is certain to
+ *  422 the WHOLE cart at submit (registration-submit.ts's own open/
+ *  charges_enabled gate rejects the entire request, not just that one
+ *  entry), losing every valid sibling entry too, with no attribution
+ *  telling the registrant which division did it. `summarizeCart` (cart.ts)
+ *  already computes this exact distinction per line (`staleClosed` vs
+ *  `waitlisted`) for entry-cart.tsx's own note — re-read here rather than
+ *  forked, same "one place, not two that could drift" precedent as
+ *  `summarizeCart`'s own doc comment states. `closed_reason: "full"` is
+ *  deliberately EXCLUDED: that path legitimately waitlists (the one
+ *  server-tolerated closed reason) and must not block progress. Checked
+ *  BEFORE self-eligibility below — a stale-closed division is a more
+ *  fundamental problem (nothing about this entry can ever be submitted
+ *  until it's removed) than whether the contact personally qualifies.
+ *
+ *  Third gate (fix wave finding #3): a self-linked entry whose division the
  *  CONTACT personally does not qualify for (category/age-band) is a cart the
  *  server will certainly reject at submit — the same
  *  `selfEligibilityForDivision` predicate DivisionCard already greys the
@@ -143,21 +169,28 @@ export interface EntriesValidation {
  *  elsewhere already degrades the same way. */
 export function validateEntries(
   cart: CartState,
-  divisions: readonly Pick<DivisionLike, "division_id" | "category" | "age_min" | "age_max">[],
+  divisions: readonly Pick<DivisionLike, "division_id" | "category" | "age_min" | "age_max" | "closed_reason">[],
   contact: Pick<ContactState, "dob" | "gender">,
   seasonStartYear: number,
 ): EntriesValidation {
-  if (cart.entries.length === 0) return { valid: false, error: "cartEmpty" };
+  if (cart.entries.length === 0) return { valid: false, error: "cartEmpty", staleClosedEntryId: null };
+
+  for (const entry of cart.entries) {
+    const division = divisions.find((d) => d.division_id === entry.division_id);
+    if (division && division.closed_reason != null && division.closed_reason !== "full") {
+      return { valid: false, error: null, staleClosedEntryId: entry.id };
+    }
+  }
 
   for (const entry of cart.entries) {
     if (!entry.registering_self) continue;
     const division = divisions.find((d) => d.division_id === entry.division_id);
     if (!division) continue;
     const verdict = selfEligibilityForDivision(division, contact, seasonStartYear);
-    if (!verdict.eligible) return { valid: false, error: "selfIneligible" };
+    if (!verdict.eligible) return { valid: false, error: "selfIneligible", staleClosedEntryId: null };
   }
 
-  return { valid: true, error: null };
+  return { valid: true, error: null, staleClosedEntryId: null };
 }
 
 // ---------------------------------------------------------------------------

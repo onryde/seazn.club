@@ -4442,6 +4442,7 @@
   "register.entries.cart.freeAgentBadge": "Solo-inschrijving",
   "register.entries.cart.waitlistNote": "Nu niet in rekening gebracht — je betaalt alleen als je van de wachtlijst wordt gepromoveerd.",
   "register.entries.cart.closedNote": "Deze categorie is gesloten sinds je deze inschrijving toevoegde — er wordt niet voor in rekening gebracht en je moet hem mogelijk verwijderen.",
+  "register.entries.cart.closedBlocking": "Deze categorie is niet meer open en kan niet in rekening worden gebracht — verwijder deze inschrijving om door te gaan.",
   "register.entries.cart.subtotal": "Subtotaal",
   "register.entries.free": "Gratis",
   "register.entries.cart.max": "Winkelwagen is vol — maximaal {max} inschrijvingen per registratie.",

@@ -779,7 +779,11 @@ describe("finding #4 — a non-\"full\" closed division in the cart is excluded 
       }),
     );
     const text = textOf(tree);
-    expect(text).toContain("This division has closed since you added this entry");
+    // Review finding 2 (2026-08-27): this note now BLOCKS "Next"
+    // (validateEntries's staleClosedEntryId), so entry-cart.tsx renders the
+    // stronger, action-directed closedBlocking copy here instead of the
+    // softer closedNote step-review.tsx's read-only summary still uses.
+    expect(text).toContain("This division is no longer open and can't be charged — remove this entry to continue.");
     expect(text).not.toContain("Not charged now — pay only if you're promoted from the waitlist."); // the WAITLIST note — a different case
     expect(text).toContain("Free"); // subtotal excludes the stale fee entirely
     expect(text).not.toMatch(/£15(\.00)?/);
@@ -1253,6 +1257,57 @@ describe("review finding #1 — form_fields ids are scoped per cart entry", () =
       new Set(ids).size,
       "field ids must be DISTINCT across entries — a shared id makes label[for] resolve to the WRONG entry's input",
     ).toBe(ids.length);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Second review round, finding 2 (2026-08-27) — a STALE-closed division
+// (closed_reason set to anything other than "full", since the entry was
+// added) must block "Next" at ENTRIES, attributed to the entry that's
+// blocking it, with a way to remove it and continue. Mirrors the existing
+// "full" (waitlist) DIV_WAITLIST fixture below (step 5) in staying
+// `open: true` with only `closed_reason` set — DivisionCard's "Add"
+// control is gated on `open`, not on `closed_reason`, so a stale-closed
+// division is still addable through the ordinary flow, same as a
+// waitlisted one; the difference this finding fixes is entirely in
+// whether "Next" then lets you past it.
+// ---------------------------------------------------------------------------
+
+describe("2026-08-27 review finding 2 — a stale-closed division blocks Next at ENTRIES, attributed to the entry, with Remove as the way out", () => {
+  it("adding an entry to a division that has gone stale-closed blocks Next with a live per-entry note; removing that entry unblocks it", () => {
+    const DIV_STALE_CLOSED: DivisionLike = {
+      ...DIV_OPEN,
+      division_id: "div-stale",
+      name: "Recently Closed",
+      closed_reason: "window",
+    };
+    const { stepWho, divisionCard, clickByText, pageText, entryCartText, entryCartCart } = mount([
+      DIV_OPEN,
+      DIV_STALE_CLOSED,
+    ]);
+    (propsOf(stepWho()).onChange as (p: object) => void)({ name: "Rep", email: "rep@example.com" });
+    clickByText("Next"); // -> ENTRIES (2 open divisions — not collapsed)
+
+    (propsOf(divisionCard("div-stale")).onAddIndividual as () => void)();
+
+    // The note is LIVE (not gated behind "attempted") — same precedent as
+    // step 2's self-ineligibility notices — and names the actual blocking
+    // reason, distinct from the softer (non-blocking) waitlist note.
+    expect(entryCartText()).toContain(
+      "This division is no longer open and can't be charged — remove this entry to continue.",
+    );
+
+    clickByText("Next"); // must NOT advance — the stale-closed entry blocks the WHOLE cart
+    // Still on ENTRIES: entryCartCart() itself asserts EntryCart is in the
+    // tree, so a silent advance to DETAILS would fail HERE, not just below.
+    const staleEntryId = entryCartCart().entries[0]!.id;
+
+    clickByText("Remove"); // the SAME per-entry control every cart line already has
+    expect(entryCartCart().entries.map((e) => e.id), "the stale-closed entry is gone").not.toContain(staleEntryId);
+
+    (propsOf(divisionCard("div-open")).onAddIndividual as () => void)();
+    clickByText("Next"); // now unblocked — nothing stale-closed left in the cart
+    expect(pageText(), "must have reached DETAILS (single-division-shaped roster UI)").toContain("Player details");
   });
 });
 
