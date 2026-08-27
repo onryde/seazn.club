@@ -1,12 +1,15 @@
-// RS003 W5d — real two-actor concurrency coverage for the four registration
-// paths that take a row lock (or a savepoint+retry) and had no interleaved
-// test before this file:
+// RS003 W5d — real two-actor concurrency coverage for registration paths
+// that take a row lock (or a savepoint+retry, or a compare-and-swap) and had
+// no interleaved test before this file:
 //   1. promoteOldestWaitlisted's `for update skip locked` (registrations.ts:793)
 //   2. confirmPaidRegistration's `for update`             (registrations.ts:1536)
 //   3. sweepRegistrations' overdue `for update`            (registrations.ts:2525),
 //      whose comment at :2454-2456 claims a specific ordering-dependent
 //      outcome — verified below in BOTH orders, not just read.
 //   4. submitRegistrationGroup's ref_code savepoint+retry (registration-submit.ts:485-508)
+//   5. createRegistrationCheckout's checkout_session_id compare-and-swap
+//      (registrations.ts, the stamp inside createRegistrationCheckout) — see
+//      its own section below for why this one is staged differently from 1-4.
 //
 // Real Postgres required; every describe below is skipped without
 // DATABASE_URL, matching every other suite in this directory.
@@ -49,13 +52,17 @@ import { randomUUID } from "node:crypto";
 const stripeMock = vi.hoisted(() => {
   const checkoutCreate = vi.fn();
   const checkoutRetrieve = vi.fn();
+  const checkoutExpire = vi.fn().mockResolvedValue({ id: "expired" });
   const refundCreate = vi.fn().mockResolvedValue({ id: "re_test_fixed" });
   return {
     checkoutCreate,
     checkoutRetrieve,
+    checkoutExpire,
     refundCreate,
     stripe: {
-      checkout: { sessions: { create: checkoutCreate, retrieve: checkoutRetrieve } },
+      checkout: {
+        sessions: { create: checkoutCreate, retrieve: checkoutRetrieve, expire: checkoutExpire },
+      },
       refunds: { create: refundCreate },
     },
   };
@@ -87,6 +94,7 @@ import {
   handleRegistrationCheckoutCompleted,
   sweepRegistrations,
   putRegistrationSettings,
+  resumeRegistrationCheckout,
 } from "../registrations";
 import { submitRegistrationGroup, type SubmitGroupContact } from "../registration-submit";
 import {
@@ -136,7 +144,8 @@ function baseContact(over: Partial<SubmitGroupContact> = {}): SubmitGroupContact
 beforeEach(() => {
   refCodeMock.fixedNextCalls = [];
   stripeMock.refundCreate.mockClear();
-  stripeMock.checkoutCreate.mockClear();
+  stripeMock.checkoutCreate.mockReset();
+  stripeMock.checkoutExpire.mockClear();
 });
 
 // ---------------------------------------------------------------------------
@@ -425,3 +434,83 @@ describe.skipIf(!HAS_DB)("submitRegistrationGroup — ref_code collision retry (
     expect(totalCount).toBe(2);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 5. createRegistrationCheckout — checkout_session_id compare-and-swap
+//    (registrations.ts, the conditional `update registration_groups set
+//    checkout_session_id = ...` inside createRegistrationCheckout)
+//
+// Staged differently from races 1-4 above, for a specific reason: the fix
+// here is explicitly NOT a row lock held across the Stripe network call
+// (rejected in review as worse than the race it would close — see the doc
+// comment at the call site). So there is no lock for a second actor to
+// visibly block on the way waitForBlockedLocks proves for races 1-3. Instead
+// two REAL concurrent createRegistrationCheckout calls (via the exported
+// resumeRegistrationCheckout) are raced with Promise.all, and the mocked
+// Stripe `checkout.sessions.create` is gated so NEITHER call's mint resolves
+// until BOTH have started — deterministic overlap with no sleep-guessed
+// timing — so both calls reach their own conditional UPDATE with the SAME
+// stale (null) `checkout_session_id` they each read before minting. Real
+// Postgres row-level write serialisation on that single UPDATE is what
+// actually proves the guard: whichever statement lands first at the DB wins
+// the CAS for real; the loser's `where checkout_session_id is not distinct
+// from ...` clause re-evaluates against the winner's already-committed value
+// and matches zero rows.
+// ---------------------------------------------------------------------------
+
+describe.skipIf(!HAS_DB)(
+  "createRegistrationCheckout — concurrent re-mint compare-and-swap (genuine concurrency)",
+  () => {
+    it("two concurrent mints for the same registration: exactly one wins; the loser's own session is expired, never returned", async () => {
+      const { competition, division, settings } = await stripeRig();
+      const seeded = await seedRegistration(competition.id, division.id, settings, { amountCents: 500 });
+      const regId = seeded.registration.id;
+
+      let started = 0;
+      let releaseBoth!: () => void;
+      const bothStarted = new Promise<void>((resolve) => (releaseBoth = resolve));
+      stripeMock.checkoutCreate.mockImplementation(async () => {
+        started++;
+        const n = started;
+        if (n === 2) releaseBoth();
+        await bothStarted; // neither call's mint resolves until BOTH have started minting
+        const id = `cs_test_race_${n}_${randomUUID().slice(0, 6)}`;
+        return { id, url: `https://checkout.stripe.test/${id}` };
+      });
+
+      const results = await Promise.allSettled([
+        resumeRegistrationCheckout(regId, seeded.access_token, "http://test.local"),
+        resumeRegistrationCheckout(regId, seeded.access_token, "http://test.local"),
+      ]);
+
+      const fulfilled = results.filter(
+        (r): r is PromiseFulfilledResult<{ checkout_url: string }> => r.status === "fulfilled",
+      );
+      const rejected = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+      // Genuine overlap happened at all (not one call finishing before the
+      // other even started) — both proceeded far enough to mint a real
+      // Stripe session, and exactly one of the two lost the CAS.
+      expect(started).toBe(2);
+      expect(fulfilled).toHaveLength(1);
+      expect(rejected).toHaveLength(1);
+      expect(rejected[0]!.reason).toMatchObject({
+        status: 409,
+        code: "REGISTRATION_CHECKOUT_CONFLICT",
+      });
+
+      const row = await loadWithGroup(regId);
+      const winnerSessionId = row.checkout_session_id!;
+      expect(winnerSessionId).toMatch(/^cs_test_race_/);
+      // The winner's OWN returned URL corresponds to the session actually
+      // stamped on the group — not to some other in-flight session.
+      expect(fulfilled[0]!.value.checkout_url).toBe(`https://checkout.stripe.test/${winnerSessionId}`);
+
+      // The LOSER's session — never handed back to any caller — was expired
+      // rather than left open on Stripe for ~24h.
+      expect(stripeMock.checkoutExpire).toHaveBeenCalledTimes(1);
+      const loserExpiredId = stripeMock.checkoutExpire.mock.calls[0]![0];
+      expect(loserExpiredId).toMatch(/^cs_test_race_/);
+      expect(loserExpiredId).not.toBe(winnerSessionId);
+    });
+  },
+);

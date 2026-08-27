@@ -1775,10 +1775,49 @@ async function createRegistrationCheckout(
   // every reader (organiser console, reconcile-by-session, resume) would
   // otherwise be looking at a dead session with no live successor on
   // record.
-  await sql`
+  //
+  // Concurrency fix: the update is conditional on `checkout_session_id`
+  // still being the exact value THIS call observed before minting
+  // (`firstEntry.checkout_session_id`, read at the top of this function).
+  // Two concurrent calls for the same group (a double-clicked "Pay now", two
+  // open tabs) each mint a real Stripe session before either commits;
+  // without this guard neither would expire the other and the later
+  // `update` would silently overwrite the earlier mint's stamp, leaving TWO
+  // live, payable sessions — a real double-charge risk (the
+  // `kind:"duplicate"` auto-refund path only reverses it after the fact).
+  // `is not distinct from` treats a still-null prior value as a match,
+  // unlike `=`, so this also protects a cart's very first mint. Deliberately
+  // NOT a row lock held across the Stripe call above — serialising every
+  // checkout mint on one row for the length of a network round-trip is worse
+  // than the race it closes.
+  const [stamped] = await sql<{ id: string }[]>`
     update registration_groups
     set checkout_session_id = ${session.id}, fee_percent = ${feePercent}, updated_at = now()
-    where id = ${groupId}`;
+    where id = ${groupId}
+      and checkout_session_id is not distinct from ${firstEntry.checkout_session_id}
+    returning id`;
+  if (!stamped) {
+    // Lost the race: a concurrent mint already stamped a DIFFERENT session
+    // in between this call's read and this update. Nobody has THIS
+    // session's URL yet (it is only ever returned below), so it can't be
+    // paid — best-effort expire it so it doesn't sit open on Stripe for
+    // ~24h, then surface a clean, retryable error. The registrant's own
+    // retry re-reads the now-current checkout_session_id and mints cleanly
+    // against it.
+    try {
+      await getStripe().checkout.sessions.expire(session.id);
+    } catch (err) {
+      log.error(
+        { err, sessionId: session.id, groupId },
+        "registration: failed to expire our own session after losing the checkout re-mint race",
+      );
+    }
+    throw new HttpError(
+      409,
+      "Another checkout was just started for this registration — please refresh and try again",
+      "REGISTRATION_CHECKOUT_CONFLICT",
+    );
+  }
   // Payment-integrity fix: best-effort; never blocks the mint that already
   // committed above even if the expire attempt below fails.
   if (firstEntry.checkout_session_id) {
