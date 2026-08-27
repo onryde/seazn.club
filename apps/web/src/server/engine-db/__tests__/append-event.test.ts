@@ -16,8 +16,9 @@ import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { football } from "@seazn/engine/sports/football";
 import { foldMatch } from "@seazn/engine/core";
-import { sql } from "@/lib/db";
+import { sql, withTenant } from "@/lib/db";
 import { appendEvent } from "../index";
+import { appendEventInTx } from "../append-event";
 
 // F10 (R3.5 review) — the fold's catch only instrumented the EngineError
 // (422) case; a TypeError/RangeError from inside a sport module, or a Zod
@@ -237,6 +238,41 @@ describe.skipIf(!HAS_DB)("appendEvent logging (R3.5 Task K)", () => {
     expect(linesNamed("scoring event appended")).toHaveLength(0);
   });
 
+  it("K9 (F9, R3.5 review): a rollback AFTER the fold succeeds must NOT have logged an accepted-event line", async () => {
+    const s = await seed();
+
+    // Call appendEventInTx directly, inside OUR OWN transaction — the same
+    // shape the P11 batch importer uses (event-import.ts), and the pattern
+    // append-event-in-tx.test.ts's own "rolls back every event" test uses —
+    // so we control what happens to the surrounding transaction AFTER the
+    // fold succeeds and BEFORE it commits. `withTenant` (postgres.js
+    // `sql.begin`) only issues COMMIT once this callback resolves; throwing
+    // here forces a ROLLBACK of everything appendEventInTx already did,
+    // exactly the window F9 closes.
+    await expect(
+      withTenant(s.orgId, async (tx) => {
+        await appendEventInTx(tx, s.orgId, s.fixtureId, 0, { type: "core.start", payload: {} });
+        throw new Error("deliberate rollback — simulates a throw between the fold and commit");
+      }),
+    ).rejects.toThrow("deliberate rollback");
+
+    // Guard against a vacuous pass: the fold really did succeed and really
+    // did roll back, not just "nothing happened". If the write had landed,
+    // this fixture would show in_play.
+    const [row] = await sql<{ status: string }[]>`
+      select status from fixtures where id = ${s.fixtureId}
+    `;
+    expect(row.status).toBe("scheduled");
+
+    // The whole point of F9: a line claiming the append happened is only
+    // honest once the write actually committed. Before the fix this fired
+    // unconditionally the moment the fold succeeded, regardless of what the
+    // surrounding transaction went on to do — so this assertion is RED
+    // against the old code (see the task report for the captured run) even
+    // though it never calls `appendEvent` at all.
+    expect(linesNamed("scoring event appended")).toHaveLength(0);
+  });
+
   it("K3: the accepted-event line shows the decider phase once the fold enters SHOOTOUT", async () => {
     const cfg = football.configSchema.parse({
       extraTime: { enabled: false, halfMinutes: 15 },
@@ -314,6 +350,59 @@ describe.skipIf(!HAS_DB)("appendEvent logging (R3.5 Task K)", () => {
     const accepted = linesNamed("scoring event appended");
     expect(accepted).toHaveLength(1);
     expect(accepted[0]).toMatchObject({ phase: "done", status: "decided" });
+  });
+
+  it("K10 (F9, R3.5 review): a rollback AFTER the DECIDING fold succeeds must NOT have logged 'fixture decided' either", async () => {
+    const cfg = football.configSchema.parse({
+      extraTime: { enabled: false, halfMinutes: 15 },
+      shootout: true,
+    });
+    const s = await seedFootball(cfg);
+    let seq = 0;
+    const post = async (type: string, payload: unknown) => {
+      await appendEvent(s.orgId, s.fixtureId, seq, { type, payload });
+      seq += 1;
+    };
+    const kick = (by: "home" | "away", scored: boolean) =>
+      post("football.shootout.kick", { by: by === "home" ? s.home : s.away, scored });
+
+    await post("core.start", {});
+    await post("football.period", { phase: "HT" });
+    await post("football.period", { phase: "FT" }); // 0-0, extraTime off -> SHOOTOUT
+    await kick("home", true);
+    await kick("away", true);
+    await kick("home", true);
+    await kick("away", true);
+    await kick("home", true);
+    await kick("away", true);
+    await kick("home", false);
+    await kick("away", false);
+    await kick("home", true);
+    lines.length = 0;
+
+    // The 10th kick (4-3 after 5 each) is the one that decides — append it
+    // directly, inside OUR transaction, so it can be rolled back after the
+    // fold succeeds. Same window as K9, for the OTHER log line.
+    await expect(
+      withTenant(s.orgId, async (tx) => {
+        await appendEventInTx(tx, s.orgId, s.fixtureId, seq, {
+          type: "football.shootout.kick",
+          payload: { by: s.away, scored: false },
+        });
+        throw new Error("deliberate rollback — simulates a throw between the fold and commit");
+      }),
+    ).rejects.toThrow("deliberate rollback");
+
+    // Guard against a vacuous pass: still mid-shootout, not decided — the
+    // fixtures row update the fold's outcome would have driven never landed.
+    const [row] = await sql<{ status: string; outcome: unknown }[]>`
+      select status, outcome from fixtures where id = ${s.fixtureId}
+    `;
+    expect(row.status).toBe("in_play");
+    expect(row.outcome).toBeNull();
+
+    expect(linesNamed("fixture decided")).toHaveLength(0);
+    expect(linesNamed("scoring event appended")).toHaveLength(0);
   });
 
   it("K5: never logs an event payload, a person name, or an email", async () => {
