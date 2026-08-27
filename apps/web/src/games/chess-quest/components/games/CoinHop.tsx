@@ -124,8 +124,8 @@ export function CoinHop({ pieces = ["N"] }: { pieces?: string[] }) {
                 onClick={() => setPiece(p)}
                 className={`rounded-full border px-3 py-1 text-sm font-medium ${
                   p === piece
-                    ? "border-purple-600 bg-purple-600 text-white"
-                    : "border-purple-300 bg-white text-purple-800 hover:bg-purple-50"
+                    ? "border-(color:--cq-accent) bg-(color:--cq-accent) text-white"
+                    : "border-(color:--cq-accent-line) bg-white text-(color:--cq-accent-strong) hover:bg-(color:--cq-accent-wash)"
                 }`}
               >
                 {GLYPH[p]} {NAMES[p]}

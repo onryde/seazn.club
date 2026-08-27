@@ -205,15 +205,48 @@ CC0, < 10 KB each; no external fetch, CSP untouched).
 - e2e: one test drags a pawn in the free-play arcade and asserts the position
   changed (`page.mouse` down/move/up over `[data-square]` rects).
 
-## W3 — chrome: dark mode and tokens
+## Amendment 2 (2026-08-27) — W3 ships tokens only, no `dark:`
+
+This wave's original brief (below, kept for the record) assumed the app
+already had dark-mode infrastructure — Seazn dark token *values* in
+`globals.css` and some toggle mechanism — for chess-quest's tokens to
+follow. Neither exists: `globals.css` defines light-value custom
+properties only (no dark counterparts), there is no `.dark` class,
+`[data-theme]` attribute, `ThemeProvider`, or `prefers-color-scheme`
+override anywhere in `apps/web/src`. The only 3 existing `dark:` usages
+in the whole app (`apps/web/src/components/v2/board/*.tsx`) rely on
+Tailwind's default, unconfigured `dark:` variant — i.e. driven purely by
+the *visitor's OS* setting, with nothing in the app coordinating it.
+
+That matters because `apps/web/src/components/v2/__tests__/history-panel-contrast.test.tsx`
+documents a real, shipped regression from exactly this pattern: `dark:`
+classes fired from OS dark mode while the surrounding card stayed
+light-only, producing illegible contrast — the fix was to strip `dark:`
+entirely and add a test asserting its absence. Adding `dark:` to
+chess-quest's `purple-*` classes today would reproduce that same bug
+for the entire games surface, for any visitor whose OS is set to dark,
+with no way to opt out.
+
+Owner decision (2026-08-27, asked mid-implementation): ship the token
+extraction only — hardcoded `purple-*` utility classes become named CSS
+custom properties (matching the app's existing `--mk-*`/`--ps-*`
+naming), still purple, still light-only, no `dark:` anywhere. Real dark
+mode for chess-quest is deferred until the app has real dark-mode
+infrastructure (a toggle + actual dark token *values*) to build on —
+not re-proposed piecemeal per surface. The e2e-matrix-coverage line
+below is unaffected by this and still ships.
+
+## W3 — chrome: token extraction (no dark mode — see Amendment 2)
 
 Files: every `*.tsx` under `src/games/chess-quest/components/` with `purple-*`
-classes (54 occurrences), `app/games/page.tsx`, `app/games/[slug]/page.tsx`.
-`chess-quest.css` print palette untouched.
+classes (57 occurrences per the actual count, not 54), `src/app/games/page.tsx`,
+`src/app/games/[slug]/page.tsx`. `chess-quest.css` print palette untouched.
 
-- Replace hardcoded `purple-*` with Seazn tokens from `app/globals.css` plus
+- ~~Replace hardcoded `purple-*` with Seazn tokens from `app/globals.css` plus
   `dark:` variants; the game's identity stays purple-accented (brand), but
-  surfaces/text follow the app's light and dark palettes.
+  surfaces/text follow the app's light and dark palettes.~~ Superseded by
+  Amendment 2 — tokens only, no `dark:` variants; no app-wide dark palette
+  exists to follow.
 - The listing card and player header get the same treatment.
 - Certificate print sheet is deliberately hardcoded light and stays so.
 
@@ -221,7 +254,8 @@ classes (54 occurrences), `app/games/page.tsx`, `app/games/[slug]/page.tsx`.
 
 - `grep -c "purple-" src/games/chess-quest/components/**/*.tsx` drops to
   accent-only usages, listed in the PR.
-- Screenshots light + dark at 1280 / 768 / 320.
+- ~~Screenshots light + dark at 1280 / 768 / 320.~~ Retired by Amendment 2 —
+  light-only screenshots at 1280 / 768 / 320 (no dark mode to shoot).
 - `/games` and `/games/chess-quest` added to `e2e/mobile.spec.ts` so the seven
   widths cover the games tree from here on.
 

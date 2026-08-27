@@ -23,24 +23,24 @@ export function QuestHeader({
   return (
     <header className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="mk-display text-2xl font-bold text-purple-950">
+        <h2 className="mk-display text-2xl font-bold text-(color:--cq-ink)">
           {name ? `${name}'s ` : ""}Chess Quest <span aria-hidden>♞</span>
         </h2>
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
             onClick={onOpenProfiles}
-            className="rounded-full border border-purple-300 bg-white px-3 py-1 text-sm font-medium text-purple-800 hover:bg-purple-50"
+            className="rounded-full border border-(color:--cq-accent-line) bg-white px-3 py-1 text-sm font-medium text-(color:--cq-accent-strong) hover:bg-(color:--cq-accent-wash)"
           >
             👥 {name || "Players"}{" "}
-            <span className="ml-1 rounded-full bg-purple-100 px-1.5 py-0.5 text-xs text-purple-700">
+            <span className="ml-1 rounded-full bg-(color:--cq-accent-soft) px-1.5 py-0.5 text-xs text-(color:--cq-label)">
               {isStory() ? "Story" : "Classic"}
             </span>
           </button>
           <button
             type="button"
             onClick={onOpenProgress}
-            className="rounded-full border border-purple-300 bg-white px-3 py-1 text-sm font-medium text-purple-800 hover:bg-purple-50"
+            className="rounded-full border border-(color:--cq-accent-line) bg-white px-3 py-1 text-sm font-medium text-(color:--cq-accent-strong) hover:bg-(color:--cq-accent-wash)"
           >
             📊 Progress
           </button>
@@ -49,7 +49,7 @@ export function QuestHeader({
             aria-label={progress.getMuted() ? "Unmute sounds" : "Mute sounds"}
             aria-pressed={progress.getMuted()}
             onClick={() => progress.setMuted(!progress.getMuted())}
-            className="rounded-full border border-purple-300 bg-white px-2 py-1 text-sm hover:bg-purple-50"
+            className="rounded-full border border-(color:--cq-accent-line) bg-white px-2 py-1 text-sm hover:bg-(color:--cq-accent-wash)"
           >
             {progress.getMuted() ? "🔇" : "🔊"}
           </button>
@@ -60,7 +60,7 @@ export function QuestHeader({
             onClick={() => progress.setVoiceOn(!progress.getVoiceOn())}
             className={`rounded-full border px-2 py-1 text-sm ${
               progress.getVoiceOn()
-                ? "border-purple-300 bg-white hover:bg-purple-50"
+                ? "border-(color:--cq-accent-line) bg-white hover:bg-(color:--cq-accent-wash)"
                 : "border-slate-200 bg-slate-100 opacity-50"
             }`}
           >
@@ -85,8 +85,8 @@ export function QuestHeader({
               {done} / {LESSONS.length} days
             </span>
           </div>
-          <div className="mt-1 h-2 overflow-hidden rounded-full bg-purple-100">
-            <div className="h-full rounded-full bg-purple-500" style={{ width: `${pct}%` }} />
+          <div className="mt-1 h-2 overflow-hidden rounded-full bg-(color:--cq-accent-soft)">
+            <div className="h-full rounded-full bg-(color:--cq-ring)" style={{ width: `${pct}%` }} />
           </div>
         </div>
       </div>

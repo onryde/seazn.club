@@ -25,7 +25,7 @@ export function GameShell({
   return (
     <div className="mx-auto flex w-full max-w-xl flex-col gap-3 px-4 py-4">
       <header className="flex items-baseline justify-between gap-3">
-        <h2 className="mk-display text-2xl font-bold text-purple-950">{title}</h2>
+        <h2 className="mk-display text-2xl font-bold text-(color:--cq-ink)">{title}</h2>
         {score ? <div className="text-sm font-medium text-slate-600">{score}</div> : null}
       </header>
 
@@ -33,8 +33,8 @@ export function GameShell({
         <span aria-hidden className="mt-1 text-2xl">
           ♞
         </span>
-        <div className="min-h-14 flex-1 rounded-2xl rounded-tl-sm border border-purple-200 bg-purple-50 px-3 py-2">
-          <Rich html={status} className="text-sm text-purple-950 [&_strong]:font-bold" />
+        <div className="min-h-14 flex-1 rounded-2xl rounded-tl-sm border border-(color:--cq-line-soft) bg-(color:--cq-accent-wash) px-3 py-2">
+          <Rich html={status} className="text-sm text-(color:--cq-ink) [&_strong]:font-bold" />
           {chips && chips.length > 0 ? (
             <div className="mt-2 flex flex-wrap gap-2">
               {chips.map((c) => (
@@ -42,7 +42,7 @@ export function GameShell({
                   key={c.label}
                   type="button"
                   onClick={c.onPick}
-                  className="rounded-full border border-purple-300 bg-white px-3 py-1 text-xs font-medium text-purple-800 hover:bg-purple-100"
+                  className="rounded-full border border-(color:--cq-accent-line) bg-white px-3 py-1 text-xs font-medium text-(color:--cq-accent-strong) hover:bg-(color:--cq-accent-soft)"
                 >
                   {c.label}
                 </button>

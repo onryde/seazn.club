@@ -220,6 +220,48 @@
   }
 }
 
+/* ---------- chrome tokens (W3 — token extraction, no dark mode) ---------- */
+/* Amendment 2 (2026-08-27) to
+   docs/superpowers/specs/2026-08-26-games-board-redesign-and-new-games-design.md:
+   this wave extracts the hardcoded Tailwind `purple-*` utility classes used
+   by chess-quest's CHROME (everything except the board itself, which keeps
+   its own --cq-* set on .cq-board above) into named custom properties. Pure
+   refactor, same visual result: every value below is copied verbatim from
+   Tailwind v4's stock `purple` scale (node_modules/tailwindcss/theme.css),
+   not hand-rounded, so the rendered pixels stay byte-identical to the
+   classes they replace — see globals.css's own --mk-lime/text-lime-400
+   comment for why a hex approximation of a v4 oklch stop is NOT safe here.
+   One token per distinct shade actually in use, not a lossy 4-token
+   collapse — the acceptance bar is "identical chrome", not "fewer colours".
+   No dark: variants anywhere: the app has no dark-mode infrastructure at
+   all (no .dark class, [data-theme], ThemeProvider, or prefers-color-scheme
+   override) and a real regression from bare OS-driven dark: classes is
+   already on record (history-panel-contrast.test.tsx). Real dark mode is a
+   later wave, once that infrastructure exists.
+   Scoped to :root, not .cq-board: these are consumed by chrome components
+   (GameShell, the quest panels, Modal, the mini-games' own picker chips)
+   that render throughout the chess-quest tree and by src/app/games/page.tsx
+   + src/app/games/[slug]/page.tsx, which sit outside chess-quest's own
+   component tree entirely. Those two page files also carry an inline
+   var(--cq-x, <same oklch>) fallback for every token they use — see the W3
+   chrome-tokens test for why: they can render before (or without) this
+   file ever having loaded, since chess-quest is a client-only,
+   `next/dynamic({ ssr:false })` chunk loaded from a completely different
+   module graph. */
+:root {
+  --cq-ink: oklch(29.1% 0.149 302.717); /* purple-950 — headings, primary text */
+  --cq-ink-muted: oklch(38.1% 0.176 304.987); /* purple-900 — secondary dark text */
+  --cq-accent-strong: oklch(43.8% 0.218 303.724); /* purple-800 — label/button text, hover-darken target */
+  --cq-label: oklch(49.6% 0.265 301.924); /* purple-700 — label text, lighter variant */
+  --cq-accent: oklch(55.8% 0.288 302.321); /* purple-600 — solid accent fill, active state, link text */
+  --cq-ring: oklch(62.7% 0.265 303.9); /* purple-500 — selection ring, progress-bar fill */
+  --cq-accent-muted: oklch(71.4% 0.203 305.504); /* purple-400 — eyebrow caption, subtle active border */
+  --cq-accent-line: oklch(82.7% 0.119 306.383); /* purple-300 — default border/line */
+  --cq-line-soft: oklch(90.2% 0.063 306.703); /* purple-200 — lighter border */
+  --cq-accent-soft: oklch(94.6% 0.033 307.174); /* purple-100 — light tinted background */
+  --cq-accent-wash: oklch(97.7% 0.014 308.299); /* purple-50 — lightest tinted background */
+}
+
 /* ---------- printable certificate ---------- */
 /* Hidden on screen; @media print hides the whole app and shows only the cert.
    Print palette is hardcoded so a dark viewer never prints a dark sheet. */

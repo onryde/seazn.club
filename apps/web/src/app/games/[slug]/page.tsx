@@ -1,9 +1,19 @@
 // /games/<slug> — game player page. Slim chrome (no marketing footer):
 // header bar + full-height game area. Coming-soon games get a teaser panel.
+//
+// W3 (chrome tokens, Amendment 2): this header's purple-* classes now read
+// from chess-quest's --cq-* custom properties (chess-quest.css), each with
+// an inline var(--cq-x, <same oklch>) fallback. Load-bearing here: chess-quest
+// mounts through player-map.tsx's next/dynamic({ ssr:false }) — a separate,
+// client-only chunk — so this server-rendered header can paint before (or
+// for a non-chess-quest slug, without ever) that chunk's CSS loads. Fallback
+// values are copied verbatim from chess-quest.css's token table — see
+// chess-quest-chrome-tokens.test.ts.
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getGame } from "@/games/registry";
+import { siteOrigin } from "@/lib/site-origin";
 import { GamePlayer } from "./game-player";
 
 type Params = { slug: string };
@@ -32,13 +42,25 @@ export default async function GamePage({ params }: { params: Promise<Params> }) 
   return (
     <div className="flex min-h-dvh flex-col bg-white">
       <header className="flex flex-wrap items-center justify-center gap-3 border-b border-slate-200 px-4 py-2">
-        <Link href="/games" className="text-sm font-medium text-purple-600 hover:text-purple-800">
+        <Link
+          href="/games"
+          className="text-sm font-medium text-[color:var(--cq-accent,oklch(55.8%_0.288_302.321))] hover:text-[color:var(--cq-accent-strong,oklch(43.8%_0.218_303.724))]"
+        >
           ← Games
         </Link>
         <span className="text-sm text-slate-300">|</span>
-        <h1 className="mk-display text-base font-bold text-purple-950">{game.title}</h1>
+        <h1 className="mk-display text-base font-bold text-[color:var(--cq-ink,oklch(29.1%_0.149_302.717))]">
+          {game.title}
+        </h1>
         <span className="text-sm text-slate-300">|</span>
-        <Link href="/" className="text-xs text-slate-400 hover:text-purple-600">
+        {/* Absolute, not "/" — on the games.* subdomain the proxy rewrites "/"
+            straight back to "/games" (see gamesHostRewrite in proxy.ts), so a
+            relative href here would be a dead loop back into this game
+            instead of reaching the marketing home (found in review 2026-08-27). */}
+        <Link
+          href={`${siteOrigin()}/`}
+          className="text-xs text-slate-400 hover:text-[color:var(--cq-accent,oklch(55.8%_0.288_302.321))]"
+        >
           Powered by <span className="font-semibold">Seazn Club</span>
         </Link>
       </header>
@@ -48,7 +70,7 @@ export default async function GamePage({ params }: { params: Promise<Params> }) 
         ) : (
           <div className="flex h-full flex-col items-center justify-center gap-3 px-4 py-16 text-center">
             <div className="text-6xl">{game.thumbnail}</div>
-            <h2 className="mk-display text-2xl font-bold text-purple-950">
+            <h2 className="mk-display text-2xl font-bold text-[color:var(--cq-ink,oklch(29.1%_0.149_302.717))]">
               {game.title} is coming soon
             </h2>
             <p className="max-w-md text-sm text-slate-500">{game.description}</p>

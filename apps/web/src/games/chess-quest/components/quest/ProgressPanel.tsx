@@ -37,8 +37,8 @@ function TrackBar({ label, done, total }: { label: string; done: number; total: 
           {done} / {total}
         </span>
       </div>
-      <div className="mt-1 h-2 overflow-hidden rounded-full bg-purple-100">
-        <div className="h-full rounded-full bg-purple-500" style={{ width: `${(done / total) * 100}%` }} />
+      <div className="mt-1 h-2 overflow-hidden rounded-full bg-(color:--cq-accent-soft)">
+        <div className="h-full rounded-full bg-(color:--cq-ring)" style={{ width: `${(done / total) * 100}%` }} />
       </div>
     </div>
   );
@@ -73,7 +73,7 @@ export function ProgressPanel({ onClose, onPrint }: { onClose(): void; onPrint()
 
   const tile = (num: React.ReactNode, label: string) => (
     <div className="flex flex-col items-center rounded-xl border border-slate-200 bg-slate-50 p-3">
-      <span className="text-xl font-bold text-purple-950">{num}</span>
+      <span className="text-xl font-bold text-(color:--cq-ink)">{num}</span>
       <span className="text-xs text-slate-500">{label}</span>
     </div>
   );
@@ -91,14 +91,14 @@ export function ProgressPanel({ onClose, onPrint }: { onClose(): void; onPrint()
         {tile(progress.activityDates().length, "days played")}
       </div>
 
-      <h3 className="mk-display mt-5 font-bold text-purple-950">Quest tracks</h3>
+      <h3 className="mk-display mt-5 font-bold text-(color:--cq-ink)">Quest tracks</h3>
       <div className="mt-2 flex flex-col gap-2">
         <TrackBar label="Track 1 · First Steps" done={progress.trackDone(1)} total={24} />
         <TrackBar label="Track 2 · Rising Player" done={progress.trackDone(2)} total={24} />
         <TrackBar label="Track 3 · Opening Range" done={progress.trackDone(3)} total={5} />
       </div>
 
-      <h3 className="mk-display mt-5 font-bold text-purple-950">Last 14 days</h3>
+      <h3 className="mk-display mt-5 font-bold text-(color:--cq-ink)">Last 14 days</h3>
       <div
         role="img"
         aria-label={`Played on ${days.filter((d) => d.on).length} of the last 14 days`}
@@ -114,7 +114,7 @@ export function ProgressPanel({ onClose, onPrint }: { onClose(): void; onPrint()
         ))}
       </div>
 
-      <h3 className="mk-display mt-5 font-bold text-purple-950">Games</h3>
+      <h3 className="mk-display mt-5 font-bold text-(color:--cq-ink)">Games</h3>
       <table className="mt-2 w-full text-sm">
         <tbody>
           {rows.map(([label, id, detail]) => (

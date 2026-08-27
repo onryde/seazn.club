@@ -28,10 +28,10 @@ export function QuestMap({
           <div key={land.id} className="flex flex-col gap-2">
             {showTrackHead ? (
               <div className="mt-1 flex items-baseline gap-2">
-                <span className="text-xs font-semibold uppercase tracking-wide text-purple-400">
+                <span className="text-xs font-semibold uppercase tracking-wide text-(color:--cq-accent-muted)">
                   Track {track}
                 </span>
-                <span className="mk-display text-sm font-bold text-purple-900">
+                <span className="mk-display text-sm font-bold text-(color:--cq-ink-muted)">
                   {track === 1
                     ? "First Steps"
                     : track === 2
@@ -50,7 +50,7 @@ export function QuestMap({
                   <span className="text-xs text-slate-400">
                     Days {dayOf(land.weeks[0])}–{dayOf(land.weeks[1])}
                   </span>
-                  <span className="mk-display text-sm font-bold text-purple-950">{land.name}</span>
+                  <span className="mk-display text-sm font-bold text-(color:--cq-ink)">{land.name}</span>
                 </div>
                 <span
                   title={won ? "Badge earned!" : "Finish every day here to earn the badge"}
@@ -78,9 +78,9 @@ export function QuestMap({
                         isDone
                           ? "border-emerald-500 bg-emerald-500 text-white"
                           : isCur
-                            ? "border-purple-500 bg-purple-100 text-purple-800"
+                            ? "border-(color:--cq-ring) bg-(color:--cq-accent-soft) text-(color:--cq-accent-strong)"
                             : "border-slate-200 bg-white text-slate-600"
-                      } ${isSel ? "ring-2 ring-purple-500 ring-offset-1" : ""}`}
+                      } ${isSel ? "ring-2 ring-(color:--cq-ring) ring-offset-1" : ""}`}
                     >
                       {isDone ? "✓" : isCur ? "♞" : dayOf(n)}
                     </button>

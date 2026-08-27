@@ -510,6 +510,12 @@ test("public surfaces: no horizontal scroll (v3/11 gap 12)", async ({ browser })
       `/shared/${orgSlug}`,
       `/shared/${orgSlug}/${compSlug}`,
       `/shared/${orgSlug}/${compSlug}/register`,
+      // Seazn Games (design doc 2026-08-26, W3) — public, no login, no org.
+      // Added here rather than the "console routes" test above because
+      // these are genuinely anonymous marketing/play surfaces, same as "/"
+      // and "/pricing" already on this list, not authed console pages.
+      "/games",
+      "/games/chess-quest",
     ];
     for (const path of routes) {
       await anon.goto(path, { waitUntil: "load" });

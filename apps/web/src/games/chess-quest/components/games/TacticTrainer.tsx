@@ -318,8 +318,8 @@ export function TacticTrainer({ pack: initialPack = "fork" }: { pack?: string })
                 onClick={() => load(pk, 0)}
                 className={`rounded-full border px-2.5 py-1 text-xs font-medium ${
                   pk === pack
-                    ? "border-purple-600 bg-purple-600 text-white"
-                    : "border-purple-300 bg-white text-purple-800 hover:bg-purple-50"
+                    ? "border-(color:--cq-accent) bg-(color:--cq-accent) text-white"
+                    : "border-(color:--cq-accent-line) bg-white text-(color:--cq-accent-strong) hover:bg-(color:--cq-accent-wash)"
                 }`}
               >
                 {PACK_GLYPH[pk]} {PACK_INFO[pk].name}

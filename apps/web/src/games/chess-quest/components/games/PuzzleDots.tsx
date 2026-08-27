@@ -29,8 +29,8 @@ export function PuzzleDots({
             className={`h-6 w-6 rounded-full border text-xs font-semibold ${
               solved
                 ? "border-emerald-500 bg-emerald-500 text-white"
-                : "border-purple-300 bg-white text-purple-700"
-            } ${cur ? "ring-2 ring-purple-500 ring-offset-1" : ""}`}
+                : "border-(color:--cq-accent-line) bg-white text-(color:--cq-label)"
+            } ${cur ? "ring-2 ring-(color:--cq-ring) ring-offset-1" : ""}`}
           >
             {i + 1}
           </button>
