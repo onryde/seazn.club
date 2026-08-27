@@ -18,6 +18,7 @@ vi.mock("@/server/usecases/registration-submit", async (importOriginal) => {
   return {
     ...actual,
     joinTeamEntry: vi.fn(actual.joinTeamEntry),
+    previewJoinEntry: vi.fn(actual.previewJoinEntry),
     // submitRegistrationGroup stays REAL and unwrapped — DB-backed tests use
     // it directly (unmocked) to mint a joinable team entry as test setup.
   };
@@ -36,15 +37,18 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import {
   submitRegistrationGroup,
   joinTeamEntry,
+  previewJoinEntry,
   type JoinTeamEntryResult,
+  type JoinPreviewResult,
 } from "@/server/usecases/registration-submit";
 import { createCompetition } from "@/server/usecases/competitions";
 import { createDivision } from "@/server/usecases/divisions";
-import { POST as joinRoute } from "../join/route";
+import { GET as joinPreviewRoute, POST as joinRoute } from "../join/route";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const rl = vi.mocked(rateLimit);
 const joinSpy = vi.mocked(joinTeamEntry);
+const previewSpy = vi.mocked(previewJoinEntry);
 
 interface Envelope {
   ok: boolean;
@@ -58,6 +62,12 @@ function req(path: string, body: unknown, headers: Record<string, string> = {}):
     headers: { "content-type": "application/json", ...headers },
     body: JSON.stringify(body),
   });
+}
+
+function getReq(path: string, joinCode: string | null, headers: Record<string, string> = {}): Request {
+  const url = new URL(`https://test.local/api/v1${path}`);
+  if (joinCode !== null) url.searchParams.set("join_code", joinCode);
+  return new Request(url, { headers });
 }
 
 async function read(res: Response): Promise<{ status: number; body: Envelope }> {
@@ -75,9 +85,24 @@ function fakeResult(): JoinTeamEntryResult {
   return { registration_id: randomUUID(), player_id: randomUUID(), consent_status: "granted" };
 }
 
+function fakePreview(): JoinPreviewResult {
+  return {
+    registration_id: randomUUID(),
+    display_name: "Joinable Team",
+    division_name: "Open",
+    competition_name: "Join Cup",
+    competition_slug: "join-cup",
+    org_slug: "acme",
+    org_name: "Acme",
+    unclaimed_slots: [],
+    allow_new_player: true,
+  };
+}
+
 beforeEach(() => {
   rl.mockClear();
   joinSpy.mockClear();
+  previewSpy.mockClear();
   authState.userId = null;
 });
 
@@ -169,6 +194,68 @@ describe("POST .../register/join — routing", () => {
       guardian_name: "A Guardian",
       guardian_consent: true,
     });
+  });
+
+  it("forwards player_id — the per-slot claim link — to the usecase", async () => {
+    joinSpy.mockResolvedValueOnce(fakeResult());
+    const claimId = randomUUID();
+    await joinRoute(
+      req(URL_("acme", "cup"), joinBody({ player_id: claimId }), { "x-forwarded-for": "8.8.8.7" }),
+      ctx("acme", "cup"),
+    );
+    expect(joinSpy.mock.calls[0]![1]).toMatchObject({ player_id: claimId });
+  });
+});
+
+describe("GET .../register/join — routing", () => {
+  it("rate-limits on regjoinpreview:<ip> {max:5, windowSeconds:300}", async () => {
+    previewSpy.mockResolvedValueOnce(fakePreview());
+    await joinPreviewRoute(
+      getReq(URL_("acme", "cup"), "SZ-JOIN-0001", { "x-forwarded-for": "8.8.9.1" }),
+      ctx("acme", "cup"),
+    );
+    expect(rl.mock.calls).toEqual([["regjoinpreview:8.8.9.1", { max: 5, windowSeconds: 300 }]]);
+  });
+
+  it("returns previewJoinEntry's result verbatim at 200", async () => {
+    const fake = fakePreview();
+    previewSpy.mockResolvedValueOnce(fake);
+    const res = await joinPreviewRoute(
+      getReq(URL_("acme", "cup"), "SZ-JOIN-0001", { "x-forwarded-for": "8.8.9.2" }),
+      ctx("acme", "cup"),
+    );
+    const { status, body } = await read(res);
+    expect(status).toBe(200);
+    expect(body.data).toEqual(fake);
+  });
+
+  it("forwards join_code from the query string to the usecase", async () => {
+    previewSpy.mockResolvedValueOnce(fakePreview());
+    await joinPreviewRoute(
+      getReq(URL_("acme", "cup"), "SZ-JOIN-7777", { "x-forwarded-for": "8.8.9.3" }),
+      ctx("acme", "cup"),
+    );
+    expect(previewSpy).toHaveBeenCalledWith("SZ-JOIN-7777");
+  });
+
+  it("surfaces a 404 from an unknown code without leaking anything extra", async () => {
+    previewSpy.mockImplementationOnce(async () => {
+      throw new HttpError(404, "This join link is not valid");
+    });
+    const res = await joinPreviewRoute(
+      getReq(URL_("acme", "cup"), "SZ-DEAD-CODE", { "x-forwarded-for": "8.8.9.4" }),
+      ctx("acme", "cup"),
+    );
+    expect((await read(res)).status).toBe(404);
+  });
+
+  it("400s when join_code is missing from the query string, without calling the usecase", async () => {
+    const res = await joinPreviewRoute(
+      getReq(URL_("acme", "cup"), null, { "x-forwarded-for": "8.8.9.5" }),
+      ctx("acme", "cup"),
+    );
+    expect((await read(res)).status).toBe(400);
+    expect(previewSpy).not.toHaveBeenCalled();
   });
 });
 
@@ -297,5 +384,59 @@ describe.skipIf(!HAS_DB)("POST .../register/join — DB-backed", () => {
       select user_id, source from registration_players where id = ${playerId}`;
     expect(row!.source).toBe("self_joined");
     expect(row!.user_id).toBe(sessionUserId);
+  });
+
+  it("claims a captain-entered row in place instead of duplicating it", async () => {
+    const { orgSlug, competition, joinCode } = await teamRig();
+    const [reg] = await sql<{ id: string }[]>`select id from registrations where join_code = ${joinCode}`;
+    const [slot] = await sql<{ id: string }[]>`
+      insert into registration_players (registration_id, full_name, source, consent_status)
+      values (${reg!.id}, 'Pending Kid', 'captain_entered', 'pending') returning id`;
+
+    const res = await joinRoute(
+      req(
+        URL_(orgSlug, competition.slug),
+        { join_code: joinCode, player_id: slot!.id, player: { full_name: "Pending Kid", dob: "1996-02-02" } },
+        { "x-forwarded-for": "8.8.8.21" },
+      ),
+      ctx(orgSlug, competition.slug),
+    );
+    const { status, body } = await read(res);
+    expect(status).toBe(201);
+    expect(body.data?.consent_status).toBe("granted");
+    expect(body.data?.player_id).toBe(slot!.id);
+
+    const [{ n }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from registration_players where registration_id = ${reg!.id}`;
+    expect(n).toBe(1); // claimed, not duplicated
+  });
+});
+
+describe.skipIf(!HAS_DB)("GET .../register/join — DB-backed", () => {
+  it("previews a real team's unclaimed slot by join_code and hides granted ones", async () => {
+    const { orgSlug, competition, joinCode } = await teamRig();
+    const [reg] = await sql<{ id: string }[]>`select id from registrations where join_code = ${joinCode}`;
+    const [pending] = await sql<{ id: string }[]>`
+      insert into registration_players (registration_id, full_name, source, consent_status)
+      values (${reg!.id}, 'Pending Kid', 'captain_entered', 'pending') returning id`;
+    await sql`
+      insert into registration_players (registration_id, full_name, source, consent_status, consent_at)
+      values (${reg!.id}, 'Already In', 'captain_entered', 'granted', now())`;
+
+    const res = await joinPreviewRoute(
+      getReq(URL_(orgSlug, competition.slug), joinCode, { "x-forwarded-for": "8.8.9.20" }),
+      ctx(orgSlug, competition.slug),
+    );
+    const { status, body } = await read(res);
+    expect(status).toBe(200);
+    expect(body.data?.unclaimed_slots).toEqual([{ player_id: pending!.id, full_name: "Pending Kid" }]);
+  });
+
+  it("404-shapes an unknown code", async () => {
+    const res = await joinPreviewRoute(
+      getReq(URL_("acme", "cup"), "SZ-NEVER-EXISTED", { "x-forwarded-for": "8.8.9.21" }),
+      ctx("acme", "cup"),
+    );
+    expect((await read(res)).status).toBe(404);
   });
 });

@@ -44,8 +44,10 @@ import { createDivision } from "../divisions";
 import {
   submitRegistrationGroup,
   joinTeamEntry,
+  previewJoinEntry,
   type SubmitGroupContact,
   type SubmitGroupEntryInput,
+  type SubmitGroupEntryResult,
   type SubmitGroupInput,
 } from "../registration-submit";
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -1041,7 +1043,7 @@ describe.skipIf(!HAS_DB)("submitRegistrationGroup", () => {
     expect(entrants).toBe(0);
   });
 
-  it("join_code is generated for team entries only, and retries past a real collision to stay globally unique", async () => {
+  it("join_code is generated for team (and pair) entries only, and retries past a real collision to stay globally unique", async () => {
     const { orgId, orgSlug, ownerId } = await seedOrg("pro");
     const owner = asOwner(orgId, ownerId);
     const { competition, division } = await rig(owner);
@@ -1254,6 +1256,61 @@ describe.skipIf(!HAS_DB)("joinTeamEntry", () => {
     return { orgId, orgSlug, competition, division, entry: submitted.entries[0]! };
   }
 
+  /** Seeds an entry (`team` or `pair`) WITH named captain-entered players —
+   *  `teamRig` above deliberately seeds zero so each existing test controls
+   *  its own cap math; the claim-path and pair tests below need real rows
+   *  to claim, so this is a second, parallel fixture rather than a change
+   *  to `teamRig` (every existing test above depends on its zero-roster
+   *  starting point). Returns the player rows so a test can pick one by id
+   *  without hand-deriving it. */
+  async function rosterRig(
+    entrantKind: "team" | "pair",
+    playerNames: string[],
+  ): Promise<{
+    orgId: string;
+    orgSlug: string;
+    competition: { id: string; slug: string };
+    division: { id: string; slug: string };
+    entry: SubmitGroupEntryResult;
+    players: { id: string; full_name: string }[];
+  }> {
+    const { orgId, orgSlug, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    await seedSettings(division.id, { entrant_kind: entrantKind, fee_cents: 0 });
+    const entryInput: SubmitGroupEntryInput =
+      entrantKind === "pair"
+        ? {
+            division_id: division.id,
+            entrant_kind: "pair",
+            partner_name: "Partner",
+            players: playerNames.map((full_name) => ({ full_name })),
+            answers: {},
+          }
+        : {
+            division_id: division.id,
+            entrant_kind: "team",
+            team_name: "Rosterful Team",
+            players: playerNames.map((full_name) => ({ full_name })),
+            answers: {},
+          };
+    const submitted = await submitRegistrationGroup(
+      { orgSlug, compSlug: competition.slug },
+      { contact: baseContact(), privacy_consent: true, entries: [entryInput] },
+    );
+    const entry = submitted.entries[0]!;
+    const players = await sql<{ id: string; full_name: string }[]>`
+      select id, full_name from registration_players
+      where registration_id = ${entry.registration_id} order by full_name`;
+    return { orgId, orgSlug, competition, division, entry, players };
+  }
+
+  async function countPlayers(registrationId: string): Promise<number> {
+    const [{ n }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from registration_players where registration_id = ${registrationId}`;
+    return n;
+  }
+
   it("happy path: an adult player joins via the code and is linked when signed in", async () => {
     const { entry } = await teamRig();
     const sessionUserId = await makeUser("joiner");
@@ -1330,5 +1387,181 @@ describe.skipIf(!HAS_DB)("joinTeamEntry", () => {
     await expect(
       joinTeamEntry({}, { join_code: entry.join_code!, player: { full_name: "Too Late" } }),
     ).rejects.toMatchObject({ status: 422 });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Claim path — a captain-entered row is UPDATED in place, never duplicated
+  // (RS007 "found while using the shipped RS006 flow", 2026-08-27: this was
+  // previously always an INSERT, which double-counted the roster and left
+  // the original row's consent pending forever).
+  // ---------------------------------------------------------------------------
+
+  it("a captain-entered player CLAIMS their existing row — flips to granted, roster count unchanged", async () => {
+    const { entry, players } = await rosterRig("team", ["Kid One"]);
+    expect(await countPlayers(entry.registration_id)).toBe(1);
+
+    const res = await joinTeamEntry(
+      {},
+      {
+        join_code: entry.join_code!,
+        player_id: players[0]!.id,
+        player: { full_name: "Kid One", dob: "1995-05-01" },
+      },
+    );
+    expect(res.player_id).toBe(players[0]!.id);
+    expect(res.consent_status).toBe("granted");
+    // THE regression this task exists to fix: claiming must never insert.
+    expect(await countPlayers(entry.registration_id)).toBe(1);
+
+    const [row] = await sql<{ consent_status: string; source: string; dob: string | null }[]>`
+      select consent_status, source, dob from registration_players where id = ${players[0]!.id}`;
+    expect(row!.consent_status).toBe("granted");
+    expect(row!.source).toBe("captain_entered"); // provenance unchanged by a claim
+    expect(row!.dob).toBe("1995-05-01");
+  });
+
+  it("claiming an already-granted slot is a 409 conflict, not a duplicate", async () => {
+    const { entry, players } = await rosterRig("team", ["Kid One"]);
+    await joinTeamEntry(
+      {},
+      { join_code: entry.join_code!, player_id: players[0]!.id, player: { full_name: "Kid One" } },
+    );
+    await expect(
+      joinTeamEntry(
+        {},
+        { join_code: entry.join_code!, player_id: players[0]!.id, player: { full_name: "Kid One" } },
+      ),
+    ).rejects.toMatchObject({ status: 409 });
+    expect(await countPlayers(entry.registration_id)).toBe(1);
+  });
+
+  it("claiming a slot that belongs to a DIFFERENT entry is rejected and writes nothing", async () => {
+    const a = await rosterRig("team", ["A Kid"]);
+    const b = await rosterRig("team", ["B Kid"]);
+    await expect(
+      joinTeamEntry(
+        {},
+        { join_code: b.entry.join_code!, player_id: a.players[0]!.id, player: { full_name: "A Kid" } },
+      ),
+    ).rejects.toMatchObject({ status: 404 });
+    const [row] = await sql<{ consent_status: string }[]>`
+      select consent_status from registration_players where id = ${a.players[0]!.id}`;
+    expect(row!.consent_status).toBe("pending");
+  });
+
+  it("guardian consent works on the CLAIM branch for a minor and records guardian_name", async () => {
+    const { entry, players } = await rosterRig("team", ["Young Kid"]);
+    await expect(
+      joinTeamEntry(
+        {},
+        {
+          join_code: entry.join_code!,
+          player_id: players[0]!.id,
+          player: { full_name: "Young Kid", dob: "2015-01-01" },
+        },
+      ),
+    ).rejects.toMatchObject({ status: 422 });
+
+    const res = await joinTeamEntry(
+      {},
+      {
+        join_code: entry.join_code!,
+        player_id: players[0]!.id,
+        player: { full_name: "Young Kid", dob: "2015-01-01" },
+        guardian_name: "A Guardian",
+        guardian_consent: true,
+      },
+    );
+    expect(res.consent_status).toBe("guardian");
+    const [row] = await sql<{ guardian_name: string | null; consent_status: string }[]>`
+      select guardian_name, consent_status from registration_players where id = ${players[0]!.id}`;
+    expect(row!.guardian_name).toBe("A Guardian");
+    expect(row!.consent_status).toBe("guardian");
+    expect(await countPlayers(entry.registration_id)).toBe(1);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Pair widening — `pair` entries now mint a join_code too (previously only
+  // `team` did), but a pair's roster is fixed at exactly two: the code exists
+  // only so the partner can CLAIM their already-typed-in row, never to grow it.
+  // ---------------------------------------------------------------------------
+
+  it("a pair entry now mints a join_code at submit (previously null)", async () => {
+    const { entry } = await rosterRig("pair", ["Captain P", "Partner P"]);
+    expect(entry.join_code).toEqual(expect.any(String));
+  });
+
+  it("a pair partner claims their slot — granted, still exactly two rows", async () => {
+    const { entry, players } = await rosterRig("pair", ["Captain P", "Partner P"]);
+    expect(players).toHaveLength(2);
+    const partner = players.find((p) => p.full_name === "Partner P")!;
+
+    const res = await joinTeamEntry(
+      {},
+      {
+        join_code: entry.join_code!,
+        player_id: partner.id,
+        player: { full_name: "Partner P", dob: "1994-01-01" },
+      },
+    );
+    expect(res.consent_status).toBe("granted");
+    expect(await countPlayers(entry.registration_id)).toBe(2);
+  });
+
+  it("a pair refuses the add-a-new-person path — roster is fixed at two, claim only", async () => {
+    const { entry } = await rosterRig("pair", ["Captain P", "Partner P"]);
+    await expect(
+      joinTeamEntry({}, { join_code: entry.join_code!, player: { full_name: "Third Wheel" } }),
+    ).rejects.toMatchObject({ status: 422 });
+    expect(await countPlayers(entry.registration_id)).toBe(2);
+  });
+
+  describe("previewJoinEntry", () => {
+    it("lists only unclaimed slots and hides claimed ones", async () => {
+      const { entry, players } = await rosterRig("team", ["Kid One", "Kid Two"]);
+      const first = players[0]!;
+      await joinTeamEntry(
+        {},
+        { join_code: entry.join_code!, player_id: first.id, player: { full_name: first.full_name } },
+      );
+      const preview = await previewJoinEntry(entry.join_code!);
+      expect(preview.unclaimed_slots.map((s) => s.player_id)).toEqual(
+        players.filter((p) => p.id !== first.id).map((p) => p.id),
+      );
+    });
+
+    it("returns entry/division/competition/org context and the entry's display name", async () => {
+      const { entry, competition, orgSlug } = await rosterRig("team", []);
+      const preview = await previewJoinEntry(entry.join_code!);
+      expect(preview.registration_id).toBe(entry.registration_id);
+      expect(preview.display_name).toBe("Rosterful Team");
+      expect(preview.division_name).toBe("Open");
+      expect(preview.competition_slug).toBe(competition.slug);
+      expect(preview.org_slug).toBe(orgSlug);
+    });
+
+    it("unknown code returns a 404-shape", async () => {
+      await expect(previewJoinEntry("SZ-DEAD-CODE")).rejects.toMatchObject({ status: 404 });
+    });
+
+    it("a withdrawn entry's join link previews as a 404-shape too", async () => {
+      const { entry } = await rosterRig("team", []);
+      await sql`update registrations set status = 'withdrawn' where id = ${entry.registration_id}`;
+      await expect(previewJoinEntry(entry.join_code!)).rejects.toMatchObject({ status: 404 });
+    });
+
+    it("allow_new_player is false for a pair and true for a team under cap", async () => {
+      const pair = await rosterRig("pair", ["A", "B"]);
+      expect((await previewJoinEntry(pair.entry.join_code!)).allow_new_player).toBe(false);
+
+      const team = await rosterRig("team", []);
+      // generic sport's lineup cap is 1 (seedOrg) and this team has 0 rows.
+      expect((await previewJoinEntry(team.entry.join_code!)).allow_new_player).toBe(true);
+    });
+
+    it("allow_new_player is false once the roster is at the sport's cap", async () => {
+      const team = await rosterRig("team", ["Only Slot"]); // fills the cap of 1
+      expect((await previewJoinEntry(team.entry.join_code!)).allow_new_player).toBe(false);
+    });
   });
 });
