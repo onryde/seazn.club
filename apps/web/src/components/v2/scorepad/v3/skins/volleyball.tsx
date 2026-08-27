@@ -792,9 +792,22 @@ const ROTATION_CYCLE = 6;
  * Pinned against real folds of BOTH variants rather than asserted, because a
  * hand-copied engine rule is TSC-blind if the engine's own moves.
  */
-function fieldsTheRotation(view: PadHostView, side: Side): boolean {
-  const players = onFieldPlayers(view.squads, side);
-  if (players.length > 0) return players.length === ROTATION_CYCLE;
+function fieldsTheRotation(view: PadHostView, state: VolleyballStateShape, side: Side): boolean {
+  // Read `state.squads`, NOT `view.squads`. The kernel asks "was a squad
+  // DECLARED?" and, once one was, sizes it and never consults the cfg flag.
+  // `state.squads` is absent exactly where a squad adds no information, which
+  // is what makes that fallback reachable — whereas the pad's `view.squads` is
+  // always materialised from the team sheet, so keying off it would make the
+  // fallback dead and the sizing check answer for a squad the engine never
+  // saw. A first cut of this gated on "are there on-field players?" instead:
+  // for a declared squad yielding none, the kernel answers false while that
+  // test fell through to the flag and answered true, leaving the anchor tile
+  // permanently offered for a rotation the engine can never resolve — the
+  // exact failure this helper exists to prevent (review of PR #678).
+  const squad = state.squads?.[side];
+  if (squad !== undefined) {
+    return squad.members.filter((m) => m.onField && m.role === "player").length === ROTATION_CYCLE;
+  }
   return recordsFlag(view, "substitutions");
 }
 
@@ -836,7 +849,7 @@ function needsServeAnchor(view: PadHostView, state: VolleyballStateShape): boole
     return false;
   }
   if (ctx.side === null) return true;
-  return ctx.rotation === undefined && fieldsTheRotation(view, ctx.side);
+  return ctx.rotation === undefined && fieldsTheRotation(view, state, ctx.side);
 }
 
 /** This FIXTURE's own record flags, from the fold's cfg. Per-fixture, never

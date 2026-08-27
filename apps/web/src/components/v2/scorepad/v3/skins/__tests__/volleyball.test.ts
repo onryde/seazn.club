@@ -547,6 +547,36 @@ describe("the serve anchor — offered while a declaration could still resolve E
     expect(tileById(buildTiles(v, t), SERVE_ANCHOR_TILE_ID)).toBeUndefined();
   });
 
+  // Review of PR #678. The kernel's `sideFieldsTheRotation` asks "was a squad
+  // DECLARED?" and, once one was, SIZES it and never consults the cfg flag.
+  // The first cut of `fieldsTheRotation` asked "are there on-field PLAYERS?"
+  // against `view.squads` instead — a different input: `state.squads` is
+  // ABSENT wherever a squad adds no information (probed: an ordinary indoor
+  // fixture has none, which is why the `substitutions` fallback is the branch
+  // that actually fires there), while the pad always materialises
+  // `view.squads` from the team sheet.
+  //
+  // Where the two part company is a squad that IS declared and fields nobody:
+  // the kernel answers false — nothing can ever number that rotation — while
+  // the old pad code fell through to the flag, answered true, and offered the
+  // anchor tile FOREVER for a question no declaration could settle. Exactly
+  // the permanence this helper exists to prevent.
+  //
+  // `state.squads` is overridden directly because that IS the input under
+  // test; nothing else in this file needs to fake it.
+  it("does not offer the tile forever for a DECLARED squad that fields nobody — the rotation can never resolve there", () => {
+    const v = view({ events: stream(rally("H")) });
+    const state = v.state as { squads?: Record<string, { members: readonly unknown[] }> };
+    expect(state.squads, "an ordinary indoor fold persists no squad").toBeUndefined();
+    state.squads = { home: { members: [] }, away: { members: [] } };
+
+    expect(ctxOf(v).rotation, "the engine cannot number a rotation nobody fields").toBeUndefined();
+    expect(
+      tileById(buildTiles(v, t), SERVE_ANCHOR_TILE_ID),
+      "a declaration cannot fix this, so the tile must not be offered",
+    ).toBeUndefined();
+  });
+
   it("never lingers for a BEACH pair, which fields no six to rotate", () => {
     // The guard that stops R5-7 turning the tile into permanent furniture
     // wherever a rotation can never resolve: `fieldsTheRotation` restates the
