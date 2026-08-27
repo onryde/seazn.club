@@ -417,31 +417,84 @@ describe("table tennis — two serves each, one each at deuce", () => {
     expect(answer.serveNumber).toBe(1);
   });
 
-  it("gives each serve its own turn from the moment expedite is introduced (2.15.3)", () => {
+  /**
+   * ITTF 2.15.3 stated as a rule, not as this kernel's arithmetic: two serves
+   * each until expedite is introduced, and from that moment the service
+   * changes after EVERY point — including the point immediately after the
+   * introduction, whether or not the server had used both of theirs.
+   *
+   * `trigger` is the number of points already played when the umpire calls it.
+   */
+  function expediteServers(trigger: number, through: number): string[] {
+    const servers: string[] = [];
+    for (let p = 0; p < through; p += 1) {
+      if (p < trigger) servers.push(Math.floor(p / 2) % 2 === 0 ? "H" : "A");
+      else servers.push(servers[p - 1] === "H" ? "A" : "H");
+    }
+    return servers;
+  }
+
+  /** A side's own 0-based service-turn index at point `p`, read off the server
+   *  sequence as the number of separate spells it has had, minus one. */
+  function turnIndexFrom(servers: readonly string[], p: number): number {
+    let spells = 0;
+    for (let i = 0; i <= p; i += 1) {
+      if (servers[i] === servers[p] && (i === 0 || servers[i - 1] !== servers[i])) spells += 1;
+    }
+    return spells - 1;
+  }
+
+  // R4's lesson, applied: 10-0 was a parity where the bug was accidentally
+  // right, so the trigger is swept rather than picked. A single trigger of
+  // five points passes even when the kernel forgets WHERE expedite began.
+  for (const trigger of [2, 3, 4, 5, 6, 7]) {
+    it(`gives each serve its own turn from the moment expedite is introduced, called at ${trigger} points (2.15.3)`, () => {
+      const through = trigger + 3;
+      const events = stream(
+        ["core.start"],
+        rally(tabletennis, { wonBy: "H", serving: "H" }),
+        ...Array.from({ length: trigger - 1 }, (_unused, i) =>
+          rally(tabletennis, { wonBy: i % 2 === 0 ? "A" : "H" }),
+        ),
+        [`${tabletennis.key}.expedite.start`, {}],
+        ...Array.from({ length: through - trigger }, (_unused, i) =>
+          rally(tabletennis, { wonBy: (trigger + i) % 2 === 0 ? "A" : "H" }),
+        ),
+      );
+      const servers = expediteServers(trigger, through);
+      // +1 for core.start, +1 for the expedite event once we are past it.
+      const at = (played: number) => played + 1 + (played >= trigger ? 1 : 0);
+      for (let played = 1; played < through; played += 1) {
+        const answer = ctxAfter(tabletennis, cfg, SINGLES, events, at(played));
+        expect({ trigger, played, side: answer.servingSide, turn: answer.serviceTurn }).toEqual({
+          trigger,
+          played,
+          side: servers[played],
+          turn: turnIndexFrom(servers, played),
+        });
+        if (played >= trigger) expect(answer.serveNumber).toBe(1);
+      }
+    });
+  }
+
+  it("carries expedite into the next game — every point its own turn from love-all (2.15.4)", () => {
+    const short = tabletennis.configSchema.parse({ setTo: 3, finalSetTo: 3 });
     const events = stream(
       ["core.start"],
-      rally(tabletennis, { wonBy: "H", serving: "H" }), // p0 H
-      rally(tabletennis, { wonBy: "A" }), // p1 H
-      rally(tabletennis, { wonBy: "H" }), // p2 A
-      rally(tabletennis, { wonBy: "A" }), // p3 A
-      rally(tabletennis, { wonBy: "H" }), // p4 H  → 5 points played
+      rally(tabletennis, { wonBy: "H", serving: "H" }),
       [`${tabletennis.key}.expedite.start`, {}],
-      rally(tabletennis, { wonBy: "A" }), // p5 — the cut-short turn ends here
-      rally(tabletennis, { wonBy: "H" }), // p6
-      rally(tabletennis, { wonBy: "A" }), // p7
+      rally(tabletennis, { wonBy: "H" }),
+      rally(tabletennis, { wonBy: "H" }), // game 1 to H, 3-0
+      rally(tabletennis, { wonBy: "A" }), // game 2, point 0
     );
-    // Before expedite the fifth point is still in H's turn; after it every
-    // point is its own turn, so the sides alternate one for one.
-    expect(ctxAfter(tabletennis, cfg, SINGLES, events, 6).servingSide).toBe("H");
-    const after = ["A", "H", "A"];
-    for (let i = 0; i < after.length; i += 1) {
-      const answer = ctxAfter(tabletennis, cfg, SINGLES, events, 7 + i);
-      expect({ i, side: answer.servingSide, serve: answer.serveNumber }).toEqual({
-        i,
-        side: after[i],
-        serve: 1,
-      });
-    }
+    // Game 2 opens with A (2.13.6 alternation) and, because expedite runs to
+    // the end of the MATCH, its very first point is a turn of its own.
+    const opener = ctxAfter(tabletennis, short, SINGLES, events, 5);
+    expect(opener.servingSide).toBe("A");
+    expect(opener.serviceTurn).toBe(0);
+    const second = ctx(tabletennis, short, SINGLES, events);
+    expect(second.servingSide).toBe("H");
+    expect(second.serveNumber).toBe(1);
   });
 
   it("names the doubles server down the sheet's declared pair order (2.13.4)", () => {
@@ -475,8 +528,8 @@ describe("volleyball", () => {
   const short = volleyball.configSchema.parse({ setTo: 3, finalSetTo: 3 });
 
   /** Set one, opened by a declared serve and played out three-nil. */
-  const setOneToHome = [
-    ["core.start"] as [string, unknown],
+  const setOneToHome: Array<[type: string, payload?: unknown]> = [
+    ["core.start"],
     rally(volleyball, { wonBy: "H", serving: "H" }),
     rally(volleyball, { wonBy: "H" }),
     rally(volleyball, { wonBy: "H" }),
