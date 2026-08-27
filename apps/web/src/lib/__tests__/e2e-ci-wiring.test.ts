@@ -64,9 +64,15 @@ function asRegExps(pattern: Pattern): RegExp[] {
 const DEFAULT_TEST_MATCH = /\.(spec|test)\.[cm]?[jt]sx?$/;
 
 function selects(project: ProjectLike, file: string): boolean {
-  if (asRegExps(project.testIgnore).some((re) => re.test(file))) return false;
+  // Playwright matches against the file's ABSOLUTE path, so a pattern may be
+  // anchored on a directory (`/e2e/walkthrough/`) and not merely a basename.
+  // `file` arrives relative to e2e/, so put the segment back before testing —
+  // otherwise a directory-anchored pattern silently matches nothing here and
+  // this guard reports selection that the real runner does not perform.
+  const path = `/e2e/${file}`;
+  if (asRegExps(project.testIgnore).some((re) => re.test(path))) return false;
   const match = asRegExps(project.testMatch);
-  return match.length === 0 ? DEFAULT_TEST_MATCH.test(file) : match.some((re) => re.test(file));
+  return match.length === 0 ? DEFAULT_TEST_MATCH.test(path) : match.some((re) => re.test(path));
 }
 
 /** The config is built at MODULE EVALUATION from `process.env
@@ -94,9 +100,25 @@ function projectNamed(config: { projects: ProjectLike[] }, name: string): Projec
  *  `spec`/`test` in its name, which is how the default `testMatch` keeps the
  *  gallery harness from ever being selected by accident. */
 function specFiles(): string[] {
-  return readdirSync(E2E_DIR)
-    .filter((f) => f.endsWith(".spec.ts"))
-    .sort();
+  // RECURSIVE, and returns paths RELATIVE TO e2e/ — both load-bearing since
+  // the walkthrough specs moved into e2e/walkthrough/.
+  //
+  // A bare `readdirSync` does not descend, so every spec in a subdirectory
+  // becomes invisible to `orphans` below and this guard goes green while
+  // those specs run nowhere — which is the exact failure it exists to catch,
+  // reintroduced by a directory move rather than a config edit. And the paths
+  // must stay relative rather than bare basenames, because a project that
+  // selects or ignores a DIRECTORY (`/walkthrough\//`) can only be tested
+  // against a path that still contains it.
+  const walk = (dir: string, prefix: string): string[] =>
+    readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
+      entry.isDirectory()
+        ? walk(join(dir, entry.name), `${prefix}${entry.name}/`)
+        : entry.name.endsWith(".spec.ts")
+          ? [`${prefix}${entry.name}`]
+          : [],
+    );
+  return walk(E2E_DIR, "").sort();
 }
 
 afterEach(() => {
@@ -118,6 +140,7 @@ describe("e2e CI wiring", () => {
     const rest = projectNamed(await configFor("rest"), "parallel");
     const unset = await configFor(undefined);
     const serial = projectNamed(unset, "serial");
+    const walkthrough = projectNamed(unset, "walkthrough");
     const mobile = unset.projects.filter((p) => p.name?.startsWith("mobile-") || p.name?.startsWith("tablet-"));
 
     const orphans = specFiles().filter(
@@ -125,6 +148,7 @@ describe("e2e CI wiring", () => {
         !selects(heavy, file) &&
         !selects(rest, file) &&
         !selects(serial, file) &&
+        !selects(walkthrough, file) &&
         !mobile.some((p) => selects(p, file)),
     );
     expect(orphans, "a spec no CI leg selects runs nowhere and can never fail").toEqual([]);
@@ -146,6 +170,26 @@ describe("e2e CI wiring", () => {
     expect([...inHeavy, ...inRest].sort()).toEqual(inWhole);
     expect(inHeavy.filter((f) => inRest.includes(f))).toEqual([]);
     expect(inHeavy.length).toBeGreaterThan(0);
+
+    // The partition covers the parallel project only. The walkthrough specs
+    // are ignored by all three slices and belong to their own project — if
+    // they ever leak back in they would run twice, once here and once there.
+    expect(files.filter((f) => f.startsWith("walkthrough/")).filter((f) => selects(whole, f))).toEqual([]);
+  });
+
+  it("gives the walkthrough specs a project of their own, and it is not empty", async () => {
+    // These are the suite's product-level proofs — a whole match played by
+    // hand through the decider. They are also the specs most likely to be
+    // moved or renamed, and a walkthrough project that selects nothing is
+    // indistinguishable from a green one.
+    const unset = await configFor(undefined);
+    const walkthrough = projectNamed(unset, "walkthrough");
+    const selected = specFiles().filter((f) => selects(walkthrough, f));
+    expect(selected.length, "the walkthrough project selects no specs at all").toBeGreaterThan(0);
+    expect(
+      selected.every((f) => f.startsWith("walkthrough/")),
+      "the walkthrough project selected something outside e2e/walkthrough/",
+    ).toBe(true);
   });
 
   it("names only REAL files in the heavy carve-out", async () => {
@@ -183,6 +227,11 @@ describe("e2e CI wiring", () => {
     for (const slice of ["heavy", "rest"]) {
       expect(yml, `e2e.yml dispatches no "${slice}" leg`).toContain(`slice: ${slice}`);
     }
+    // A project declared in the config but never dispatched runs nowhere —
+    // the same orphan defect one level up, at the workflow rather than the
+    // spec. The matrix carries the project name per leg for this reason.
+    expect(yml, "e2e.yml dispatches no walkthrough leg").toContain("project: walkthrough");
+    expect(yml, "the matrix must pass its project through to Playwright").toContain("--project=${{ matrix.project }}");
     // The two "rest" legs shard between themselves; the heavy leg does not.
     expect(yml).toContain("--shard=1/2");
     expect(yml).toContain("--shard=2/2");
