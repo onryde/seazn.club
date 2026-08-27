@@ -12,7 +12,7 @@ Tap **Goal** for the side that scored and pick who from the roster — plus an a
 
 ## Cards and substitutions
 
-**Card** records a yellow, a straight red, or a second yellow (which the pad turns into a red on its own), with the offence if you want it logged. **Substitution** swaps a bench player on for one coming off; a batch of subs made at the same stoppage are grouped as one window, so the activity feed doesn't read them as five separate interruptions.
+**Card** records a yellow, a red, or a second yellow — its own option on the sheet for a player who's already been cautioned this match, counting as both a caution and a sending-off, the same as the referee's version — with the offence if you want it logged. **Substitution** swaps a bench player on for one coming off; a batch of subs made at the same stoppage are grouped as one window, so the activity feed doesn't read them as five separate interruptions.
 
 ## Penalties
 
@@ -22,14 +22,14 @@ Tap **Goal** for the side that scored and pick who from the roster — plus an a
 
 **End of period** closes the half (or quarter) you're in and asks which break it is — the pad only offers the ones that make sense from where you are. If both sides are level at full time and the stage plays extra time, two more periods follow before anything is decided; if it doesn't, or they're still level after extra time, the match goes straight to a shoot-out.
 
-Once the shoot-out starts, **Shoot-out kick** tiles replace the goal/card/sub tiles — kicks aren't goals, and don't add to the regulation score. The board shows the shoot-out tally next to it instead, as `1 (2)`, and names whose kick is next. Kicks have to alternate side to side; the pad won't record one out of turn. It ends the moment the outcome is no longer in doubt, not necessarily after a full round each.
+Once the shoot-out starts, **Shoot-out kick** tiles replace the goal and substitution tiles — kicks aren't goals, and don't add to the regulation score. **Card** stays available: a card during the shoot-out is still a real disciplinary moment the pad has to record. The board shows the shoot-out tally next to it instead, as `1 (2)`, and names whose kick is next. Kicks have to alternate side to side; only the side whose turn it is has a tappable kick tile, so there's nothing to record out of turn. It ends the moment the outcome is no longer in doubt, not necessarily after a full round each.
 
 ## Standings
 
-Football pays your division's usual win/draw/loss points, and by default a shoot-out win is worth exactly the same as a win in regulation — the shoot-out is only how the match was decided, not a different result. Some knockout formats instead pay a smaller points split for a shoot-out win and loss (a youth-cup convention); that's a setting in your stage's **Match rules**, not something you choose while scoring — see [knockout deciders](/help/scoring/knockout-deciders).
+Football pays your division's usual win/draw/loss points, and by default a shoot-out win is worth exactly the same as a win in regulation — the shoot-out is only how the match was decided, not a different result. A group stage that also plays a shoot-out can instead pay less for a win on kicks than a win in regulation (a youth-cup convention); that's a setting in your stage's **Match rules**, not something you choose while scoring — see [knockout deciders](/help/scoring/knockout-deciders).
 
 ## Common questions
 
 **Why can't I record a kick?** Shoot-out kicks only exist once the match is actually in the shoot-out phase — level at full time (or after extra time) with the decider turned on. Before that, score the goal as usual.
 
-**Someone kicked out of turn?** The pad refuses it and says why — kicks strictly alternate side to side, with no way to skip your opponent's turn.
+**Someone kicked out of turn?** It can't happen from the pad itself — kicks strictly alternate side to side, and the board names whose turn it is; the other side's kick tile is simply greyed out until its turn comes round.
