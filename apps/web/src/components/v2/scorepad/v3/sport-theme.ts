@@ -191,6 +191,106 @@ export const SPORT_PALETTES: Readonly<Record<string, Partial<SportPalette>>> = O
     caution: "#f2a900",
     dismissal: "#fa5252",
   },
+  /*
+   * ------------------------------------------------------------------------
+   * THE RACQUET FAMILY (R5-3, owner-ruled 2026-08-27 off the published comps
+   * sheet). All THREE land together, one wave before two of the three skins
+   * do — R5 converts badminton only, and table tennis and volleyball follow
+   * in later waves. That is deliberate, not premature: these three sports
+   * share ONE engine (`sports/setbased/kernel.ts`) and will be judged on one
+   * sign-off sheet, so their identities are a set to be picked together or a
+   * set that drifts. `contrast.test.ts` pins all three EXPLICITLY, today,
+   * because its own tone licence is usage-driven and can say nothing about a
+   * palette whose skin does not exist yet (see tennis's note above, and the
+   * `R5/racquet family` block in that file).
+   *
+   * ONE RULE ACROSS ALL THREE: `led` is spent on the SERVE and nothing else.
+   * Who is serving is the one fact this family's boards could never state
+   * (D-17) and the one this wave's engine reader finally answers, so the
+   * accent goes to it exclusively rather than being sprayed across the score.
+   * ------------------------------------------------------------------------
+   */
+
+  /*
+   * BADMINTON — the maple sports-hall floor, with the BWF mat's teal.
+   *
+   *   board       varnished maple, seen from the umpire's chair
+   *   board-2     the band under the names, one shade up the same timber
+   *   led         the BWF competition mat's teal — the service mark, only
+   *   caution     the umpire's YELLOW card (BWF Law 16.7.2.1, `warning`)
+   *   dismissal   the RED and BLACK end of the same ladder, worded
+   *   ink         warm off-white, the shuttle against the wood
+   *
+   * Chosen over "shuttlecock white on court green", which is both the
+   * generic sports-app answer and a straight collision with football's
+   * floodlit turf on the same sheet. Wood is what a badminton hall actually
+   * looks like, and no other sport in this programme has it.
+   *
+   * WHY THE TONES ARE TEXT, NOT SWATCHES. The BWF umpire has three cards, so
+   * a card-shaped reading is tempting — but the kernel does not model a card:
+   * `sanctionAction` is `{kind: "enum", path: "level"}` over four WORDS
+   * (`warning`/`penalty`/`expulsion`/`disqualification`, setbased/badminton.ts
+   * declares all four), rendered as choice-row labels. Words owe 4.5:1, and
+   * both of these clear it on both grounds — computed, not judged.
+   */
+  badminton: {
+    board: "#241a14",
+    "board-2": "#33261d",
+    ink: "#f7f1e8",
+    led: "#2fe0bd",
+    caution: "#ffc233",
+    dismissal: "#ff6b6b",
+  },
+
+  /*
+   * TABLE TENNIS — the two-colour bat: graphite ground, ITTF-blue band, the
+   * orange ball as the signal. NOT converted by R5; the palette lands now so
+   * the family is picked as a set (see the block comment above).
+   *
+   *   board       the blade's graphite face
+   *   board-2     the ITTF match table's blue, as the band
+   *   led         the 40mm orange ball — the service mark, only
+   *   caution     the umpire's yellow card (ITTF 3.5.2)
+   *   dismissal   the red card, worded, one step warmer than badminton's so
+   *               the two racquet boards never read as one palette
+   *   ink         cool near-white
+   */
+  tabletennis: {
+    board: "#101418",
+    "board-2": "#0f2d40",
+    ink: "#f2f6f8",
+    led: "#ff9440",
+    caution: "#ffd60a",
+    dismissal: "#ff7a80",
+  },
+
+  /*
+   * VOLLEYBALL — arena slate with the playing court's azure. NOT converted by
+   * R5; same reasoning as table tennis above.
+   *
+   *   board       the arena floor's slate surround
+   *   board-2     the playing court inside it
+   *   led         FIVB court azure — the serving side's mark, only
+   *   caution     the yellow card (FIVB 21.3)
+   *   dismissal   the red card / expulsion end, worded
+   *   ink         cool near-white
+   *
+   * CHOSEN OVER THE TRUER CORAL, and the reason is a rule rather than a
+   * preference: volleyball is the one sport of these three where a referee
+   * shows a card MID-RALLY, so `caution`/`dismissal` and the accent can be on
+   * screen at the same instant. Coral sits one hue step from its own red
+   * card, so the accent and the sanction would have read as the same signal
+   * at exactly the moment they mean opposite things. Azure is a full hue away
+   * from both card colours.
+   */
+  volleyball: {
+    board: "#161d27",
+    "board-2": "#232c39",
+    ink: "#f4f7fa",
+    led: "#4aa8ff",
+    caution: "#ffd60a",
+    dismissal: "#ff6b6b",
+  },
 });
 
 /** The custom-property name a token is emitted under. One place, so the
