@@ -301,6 +301,36 @@ describe("e2e CI wiring", () => {
     ).toBeLessThan(serverAt);
   });
 
+  // RS007 follow-up. Two reviewers independently claimed the job-level `env:
+  // STRIPE_WEBHOOK_SECRET: whsec_e2e_payments` above is re-applied to every
+  // step and therefore clobbers the forwarder's `$GITHUB_ENV` write, so
+  // `Start server` would always boot with the placeholder. Checked against
+  // the actions/runner source (StepsRunner.cs / JobExtension.cs /
+  // FileCommandManager.cs, actions/runner@1d8e0dd6): the job-level `env:`
+  // block is folded into the job's one shared env dictionary EXACTLY ONCE,
+  // at job init, before any step runs. Every step then rebuilds its own env
+  // context fresh FROM that same shared, mutable dictionary, and a
+  // `$GITHUB_ENV` write mutates it in place — nothing ever re-applies the
+  // static job-level value afterward. So the claim is FALSE: the forwarder's
+  // write wins for every step that follows it, exactly as the comment above
+  // the forwarder step already says. The one thing that WOULD still shadow
+  // it is a STEP-LEVEL `env:` key on the step that actually reads the secret
+  // at boot — the real precedence rules give a step's own `env:` priority
+  // over the job's shared dictionary for that step alone. That is the one
+  // shape of "shadowing" that can really happen, so it is what this guards.
+  it("does not let a step-level env on `Start server` shadow the forwarder's dynamic secret", () => {
+    const yml = readFileSync(join(REPO_ROOT, ".github/workflows/e2e.yml"), "utf8");
+    const serverAt = yml.indexOf("- name: Start server");
+    const nextStepAt = yml.indexOf("- name: Run Playwright e2e");
+    expect(serverAt, "no `Start server` step at all").toBeGreaterThan(-1);
+    expect(nextStepAt, "no step follows `Start server`").toBeGreaterThan(serverAt);
+    const serverStep = yml.slice(serverAt, nextStepAt);
+    expect(
+      serverStep,
+      "`Start server` declares its own STRIPE_WEBHOOK_SECRET — a step-level env key wins over whatever the forwarder wrote to $GITHUB_ENV for THIS step, so the server would boot verifying against the wrong secret",
+    ).not.toContain("STRIPE_WEBHOOK_SECRET");
+  });
+
   // The spec moved out of e2e/ into e2e/walkthrough/ (RS007). The project is
   // directory-anchored, so the move is what enrols it — but a rename or a
   // revert would leave the wiring above pointing at nothing.
