@@ -515,7 +515,14 @@ function nameOf(view: PadHostView, personId: string, t: TFn): string {
  *  because it is the stronger statement. */
 function buildContext(state: BadmintonStateShape, cfg: BadmintonCfgShape, t: TFn): string {
   const bestOf = cfg.bestOf ?? 3;
-  const game = gameNumber(state);
+  // CLAMPED to `bestOf`. `gameNumber` is "closed games plus one", which is what makes
+  // "Game 2" appear the instant game 1 banks — correct while a match is
+  // live, and wrong the moment it ends: every game is then closed, so a
+  // decided best-of-3 board announced "Game 4", a game nobody played.
+  // The scorebug renders its context line in EVERY phase (`scorebug.tsx`) and
+  // `pad-host.tsx` renders the scorebug in "post", so the decided board is a
+  // real screen a scorer reads, not a transient. Found in review of PR #678.
+  const game = Math.min(gameNumber(state), bestOf);
   const base = t("pad.badminton.context.line", { bestOf, game });
   const open = openGame(state);
   if (open === null || open.home !== open.away) return base;

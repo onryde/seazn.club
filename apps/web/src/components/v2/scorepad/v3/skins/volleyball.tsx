@@ -599,7 +599,14 @@ function nameOf(view: PadHostView, personId: string, t: TFn): string {
  *  absent. */
 function buildContext(state: VolleyballStateShape, cfg: VolleyballCfgShape, t: TFn): string {
   const bestOf = cfg.bestOf ?? 5;
-  const set = setNumber(state);
+  // CLAMPED to `bestOf`. `setNumber` is "closed sets plus one", which is what makes
+  // "Set 2" appear the instant set 1 banks — correct while a match is
+  // live, and wrong the moment it ends: every set is then closed, so a
+  // decided best-of-5 board announced "Set 6", a set nobody played.
+  // The scorebug renders its context line in EVERY phase (`scorebug.tsx`) and
+  // `pad-host.tsx` renders the scorebug in "post", so the decided board is a
+  // real screen a scorer reads, not a transient. Found in review of PR #678.
+  const set = Math.min(setNumber(state), bestOf);
   const base = t("pad.volleyball.context.line", { bestOf, set });
   const open = openSet(state);
   if (open === null || open.home !== open.away) return base;

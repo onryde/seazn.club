@@ -304,6 +304,20 @@ describe("serving (D-17) — from the engine's ledger reader, never a placeholde
     expect(buildScorebug(twoGames, t).context).toContain('"game":3');
   });
 
+  // Review of PR #678 — the DECIDED board. `gameNumber` is "closed games plus one",
+  // right while a match is live and wrong the moment it ends: every game is
+  // then closed, so a decided best-of-3 board announced "Game 4" — a
+  // game nobody played. Not a transient: the scorebug renders its context in
+  // EVERY phase and pad-host renders the scorebug in "post", so this is a real
+  // screen. Now clamped to `bestOf`.
+  it("never names a game past `bestOf` on a DECIDED board", () => {
+    const done = view({ cfg: SHORT_CFG, events: stream(summary(3, 1), summary(1, 3), summary(3, 1)) });
+    expect(buildScorebug(done, t).context, "a decided board announced a game nobody played").toContain(
+      '"game":3',
+    );
+    expect(buildScorebug(done, t).context).not.toContain('"game":4');
+  });
+
   it("names a SIDE, never a person, for a doubles pair — BWF Law 10.5 reads the service COURT", () => {
     // The engine declares no `serverFromPairOrder` for badminton precisely
     // because the laws pick the server from a fact this kernel does not fold.

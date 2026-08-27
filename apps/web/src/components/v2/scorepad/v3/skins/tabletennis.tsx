@@ -448,7 +448,14 @@ function nameOf(view: PadHostView, personId: string, t: TFn): string {
  *  genuinely allows one, and this reads it rather than assuming it absent. */
 function buildContext(state: TableTennisStateShape, cfg: TableTennisCfgShape, t: TFn): string {
   const bestOf = cfg.bestOf ?? 5;
-  const game = gameNumber(state);
+  // CLAMPED to `bestOf`. `gameNumber` is "closed games plus one", which is what makes
+  // "Game 2" appear the instant game 1 banks — correct while a match is
+  // live, and wrong the moment it ends: every game is then closed, so a
+  // decided best-of-5 board announced "Game 6", a game nobody played.
+  // The scorebug renders its context line in EVERY phase (`scorebug.tsx`) and
+  // `pad-host.tsx` renders the scorebug in "post", so the decided board is a
+  // real screen a scorer reads, not a transient. Found in review of PR #678.
+  const game = Math.min(gameNumber(state), bestOf);
   const base = t("pad.tabletennis.context.line", { bestOf, game });
   const open = openGame(state);
   if (open === null || open.home !== open.away) return base;
