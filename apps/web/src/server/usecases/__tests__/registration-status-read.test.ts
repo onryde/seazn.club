@@ -427,4 +427,60 @@ describe.skipIf(!HAS_DB)("reconcileRegistrationBySession — token-free /r/[ref]
     stripeMock.retrieve.mockRejectedValueOnce(new Error("stripe unreachable"));
     await expect(reconcileRegistrationBySession(refCode, "cs_test_boom")).resolves.toBe(false);
   });
+
+  // Security fix (RS006): /r/[ref] is public, unauthenticated, and
+  // force-dynamic — `sessionId` here is a raw, attacker-controlled query
+  // param. Before this fix it reached `sessions.retrieve(sessionId)`
+  // unconditionally, so anyone holding a ref whose oldest entry is `pending`
+  // could loop `GET /r/{ref}?session_id=cs_test_anything` and drive one real
+  // Stripe API call per request, billed to the PLATFORM account. The fix
+  // compares the supplied id against the cart's OWN stored
+  // `checkout_session_id` before ever calling Stripe.
+  it("an attacker-supplied session_id that isn't this cart's own stored session must NOT reach Stripe", async () => {
+    const { competition, division } = await stripeSettingsRig();
+    const refCode = freshRef();
+    const { registration } = await seedRegistration(
+      competition.id,
+      division.id,
+      { ...SETTINGS_BASE, fee_cents: 500, currency: "gbp", payment_method: "stripe" },
+      { refCode },
+    );
+    // This cart's REAL, current session — deliberately different from what
+    // gets supplied below.
+    await sql`update registration_groups set checkout_session_id = ${"cs_test_owncart_" + randomUUID().slice(0, 8)}
+              where id = ${registration.group_id}`;
+
+    const result = await reconcileRegistrationBySession(refCode, "cs_test_attacker_supplied");
+
+    expect(result).toBe(false);
+    expect(stripeMock.retrieve).not.toHaveBeenCalled();
+    const [row] = await sql<{ status: string }[]>`select status from registrations where id = ${registration.id}`;
+    expect(row!.status).toBe("pending");
+  });
+
+  it("the cart's OWN stored session id still reconciles", async () => {
+    const { competition, division } = await stripeSettingsRig();
+    const refCode = freshRef();
+    const { registration } = await seedRegistration(
+      competition.id,
+      division.id,
+      { ...SETTINGS_BASE, fee_cents: 500, currency: "gbp", payment_method: "stripe" },
+      { refCode },
+    );
+    const ownSessionId = "cs_test_owncart_" + randomUUID().slice(0, 8);
+    await sql`update registration_groups set checkout_session_id = ${ownSessionId}
+              where id = ${registration.group_id}`;
+    stripeMock.retrieve.mockResolvedValueOnce({
+      id: ownSessionId,
+      payment_status: "paid",
+      metadata: { kind: "registration_group", registration_ids: registration.id },
+    });
+
+    const result = await reconcileRegistrationBySession(refCode, ownSessionId);
+
+    expect(result).toBe(true);
+    expect(stripeMock.retrieve).toHaveBeenCalledWith(ownSessionId);
+    const [row] = await sql<{ status: string }[]>`select status from registrations where id = ${registration.id}`;
+    expect(row!.status).toBe("confirmed");
+  });
 });

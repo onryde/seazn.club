@@ -1639,6 +1639,13 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
     });
     const ref = res.registration.ref_code as string;
     const session = fakeSession(res.registration.id, 500);
+    // The cart's OWN stored session — reconcileRegistrationBySession only
+    // ever retrieves the session THIS cart minted (security fix, RS006): a
+    // sessionId that doesn't match this stored value is rejected before any
+    // Stripe call, so the test must stamp it to exercise the retrieve path
+    // at all.
+    await sql`update registration_groups set checkout_session_id = ${session.id}
+              where id = ${res.registration.group_id}`;
 
     // Mismatched session (different registration, none of it this ref's) →
     // no-op.

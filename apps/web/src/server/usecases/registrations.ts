@@ -2432,6 +2432,25 @@ export async function reconcileRegistration(regId: string, token: string): Promi
  * Reconcile-on-return for the token-free /r/[ref] flow (email-minted sessions,
  * spec T6): the session's own metadata must point at the ref's registration —
  * the ref is a lookup, the session is the proof. Best-effort; never throws.
+ *
+ * Security fix: `sessionId` is attacker-controlled (an unauthenticated,
+ * `force-dynamic` GET query param on a public page) — the old code called
+ * `sessions.retrieve(sessionId)` on that raw value before any binding check,
+ * so anyone holding a ref whose oldest entry is `pending` could loop
+ * `GET /r/{ref}?session_id=cs_test_anything` and drive one real Stripe API
+ * call per request, billed to the PLATFORM account and counting against its
+ * rate limits. Fixed by comparing the supplied id against
+ * `registration_groups.checkout_session_id` — the session THIS cart's own
+ * mint actually stamped — BEFORE calling Stripe at all. An id that isn't the
+ * cart's current session now never reaches `sessions.retrieve`; the
+ * `payment_status`/`registration_ids` checks below are unchanged for the one
+ * id that does match.
+ *
+ * Known trade-off, accepted: if a NEWER session has since superseded the
+ * stored id (a later re-mint), an older-but-legitimate `session_id` from
+ * Stripe's own success redirect no longer reconciles here. The webhook
+ * remains the primary fulfilment path and still covers it — do not add a
+ * fallback that re-introduces the arbitrary retrieve to recover this case.
  */
 export async function reconcileRegistrationBySession(
   ref: string,
@@ -2440,6 +2459,7 @@ export async function reconcileRegistrationBySession(
   try {
     const reg = await regByRef(ref);
     if (reg.status !== "pending") return false;
+    if (sessionId !== reg.checkout_session_id) return false;
     const session = await getStripe().checkout.sessions.retrieve(sessionId);
     if (session.payment_status !== "paid") return false;
     // Re-keyed to the GROUP (W3b): the session may cover a whole cart now —
