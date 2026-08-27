@@ -53,6 +53,14 @@ closes the consent gap for captain-entered rosters, and the money edge cases
       back to waitlist, slot re-offered
 - [ ] Status page authz: wrong token → 404-shape, no data leak; ref alone
       insufficient
+- [ ] The pair/`join_code` decision above is recorded in `_INDEX.md` with its
+      reasoning — including, if pairs stay out, the copy change that stops
+      `register.consent.rosterNotice` promising a join that cannot happen
+- [ ] An entry with money owed renders how to pay it: "pay now" for card,
+      the resolved `paymentInstructions` for offline — no state that states
+      a debt and offers nothing
+- [ ] Reconcile-on-load closes the missed-webhook window: a paid session
+      whose webhook never arrived reads as paid on first view of `/r/<ref>`
 - [ ] ×4 locales; screenshots 1280/768/320; both surfaces in seven-width
       matrix
 - [ ] Counts from JSON reporter; `tsc EXIT=0`; lint clean; drift gates clean
@@ -63,6 +71,50 @@ closes the consent gap for captain-entered rosters, and the money edge cases
 - **E2E** — the three loops above. **Smoke** — deferred RS010.
 - **Regression** — join respects roster cap; token authz; lapse returns
   the slot.
+
+## Found while using the shipped RS006 flow (2026-08-27)
+
+Three things surfaced by driving the merged stepper through a real Stripe
+Connect payment (`apps/web/e2e/registration-connect-walkthrough.spec.ts`).
+The first CHANGES THIS WAVE'S SCOPE; read it before estimating.
+
+- **A `pair` entry never gets a `join_code`, so doubles has no join path.**
+  Minting is gated on `entrant_kind === "team"`
+  (`registration-submit.ts`, the non-free-agent team branch), and
+  `joinTeamEntry` resolves solely by `join_code`. Scope item 2 as written
+  ("player-side join flow that closes the consent gap for captain-entered
+  rosters") therefore closes it for TEAMS and leaves DOUBLES open — the
+  partner stays a name on someone else's roster who never confirms their
+  own details or consent. That is the same gap this wave exists to close,
+  and RS006 already promises otherwise in copy
+  (`register.consent.rosterNotice`: "We'll ask each of them to confirm
+  their own details and consent when they join or claim their spot").
+  Decide explicitly: widen minting to pairs, or state in the spec that
+  doubles partners are out of scope and stop the copy promising it.
+  Widening is not free — `join_code` is a capability token with a partial
+  unique index (V364) and a collision-retry loop; a pair's roster is fixed
+  at exactly two (`registration-submit.ts` 422s otherwise), so "join" there
+  means CLAIMING a named row, not growing a roster.
+
+- **Registrations have no missed-webhook fallback, and the status page is
+  where it belongs.** The webhook is the ONLY path that flips an entry to
+  paid; billing has `reconcileCheckout` for exactly this and registrations
+  have no equivalent. A registrant who pays and lands on `/r/<ref>` inside
+  the retry window is told they have not paid, and either pays twice or
+  emails the organiser about a payment that succeeded. Porting reconcile
+  onto this page pays off three times: production self-heals, the local
+  walkthrough stops needing `stripe listen`, and a genuinely end-to-end
+  paid test becomes possible in CI. Keep the webhook primary regardless —
+  async payment methods settle days later and a registrant may never
+  revisit the page.
+
+- **An unpaid entry shows its debt and no way to settle it.** Verified on
+  a real submit: the page renders "pending £25" with no payment
+  instructions and no pay control. For the offline/`payment_method` case
+  the data is already resolved server-side — `registrations.ts` builds
+  `paymentInstructions` (per-division override falling back to
+  `org.payment_instructions`) for the emails — so this is a rendering gap
+  on the page this wave rebuilds, not new plumbing.
 
 ## Gotchas
 
