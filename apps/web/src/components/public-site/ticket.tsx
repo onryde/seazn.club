@@ -38,6 +38,7 @@ export function TearOffTicket({
   endsOn,
   qrDataUrl,
   actions,
+  renderEntryAction,
   locale,
 }: {
   refCode: string | null;
@@ -50,8 +51,14 @@ export function TearOffTicket({
   endsOn: string | null;
   /** QR encoding the /r/[ref] status URL; null when the row predates refs. */
   qrDataUrl: string | null;
-  /** Buttons row rendered under the stub (calendar / save / withdraw). */
+  /** Buttons row rendered under the stub (calendar / save / share). */
   actions?: React.ReactNode;
+  /** Per-ROW control, rendered beside that entry's own stamp — e.g. a
+   *  per-entry Withdraw button (RS006 follow-up: withdraw acts on ONE named
+   *  entry, so its control lives on that entry's own row, never as a single
+   *  cart-wide button in `actions`). Return null/undefined for a row with
+   *  nothing to show. */
+  renderEntryAction?: (entry: TicketEntry) => React.ReactNode;
 }) {
   const dates = startsOn
     ? `${startsOn}${endsOn && endsOn !== startsOn ? ` – ${endsOn}` : ""}`
@@ -89,12 +96,15 @@ export function TearOffTicket({
                     {entry.displayName}
                   </p>
                 </div>
-                <span
-                  className={`shrink-0 -rotate-6 rounded border-2 px-2.5 py-1 font-display text-lg font-bold tracking-widest ${stamp.tone}`}
-                  aria-label={`Status: ${entry.status}`}
-                >
-                  {msgFor(locale, stamp.labelKey)}
-                </span>
+                <div className="flex shrink-0 flex-wrap items-center gap-2">
+                  <span
+                    className={`shrink-0 -rotate-6 rounded border-2 px-2.5 py-1 font-display text-lg font-bold tracking-widest ${stamp.tone}`}
+                    aria-label={`Status: ${entry.status}`}
+                  >
+                    {msgFor(locale, stamp.labelKey)}
+                  </span>
+                  {renderEntryAction?.(entry)}
+                </div>
               </div>
             );
           })}

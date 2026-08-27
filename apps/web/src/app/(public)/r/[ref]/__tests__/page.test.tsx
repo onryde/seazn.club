@@ -26,8 +26,24 @@ vi.mock("next/navigation", () => ({
 // through correctly without exercising withdraw-by-ref.tsx's own (untouched,
 // already-covered) internals.
 vi.mock("@/components/public-site/withdraw-by-ref", () => ({
-  WithdrawByRef: ({ refCode, token }: { refCode: string; token: string }) => (
-    <button data-testid="withdraw-stub" data-ref={refCode} data-token={token} />
+  WithdrawByRef: ({
+    refCode,
+    token,
+    entryId,
+    divisionName,
+  }: {
+    refCode: string;
+    token: string;
+    entryId: string;
+    divisionName: string;
+  }) => (
+    <button
+      data-testid="withdraw-stub"
+      data-ref={refCode}
+      data-token={token}
+      data-entry={entryId}
+      data-division={divisionName}
+    />
   ),
 }));
 
@@ -70,8 +86,20 @@ const BASE_VIEW = {
   created_at: "2026-08-20T10:00:00.000Z",
   can_withdraw: false,
   entries: [
-    { id: "reg-1", status: "confirmed" as const, display_name: "Alex Roberts", division_name: "Open" },
-    { id: "reg-2", status: "pending" as const, display_name: "Jamie Y.", division_name: "Under 15" },
+    {
+      id: "reg-1",
+      status: "confirmed" as const,
+      display_name: "Alex Roberts",
+      division_name: "Open",
+      can_withdraw: false,
+    },
+    {
+      id: "reg-2",
+      status: "pending" as const,
+      display_name: "Jamie Y.",
+      division_name: "Under 15",
+      can_withdraw: false,
+    },
   ],
 };
 
@@ -116,18 +144,52 @@ describe("/r/[ref] cart status page", () => {
     expect(usecases.reconcileRegistrationBySession).not.toHaveBeenCalled();
   });
 
-  it("renders the withdraw control only when can_withdraw is true AND a token is present", async () => {
-    usecases.publicCartByRef.mockResolvedValueOnce({ ...BASE_VIEW, can_withdraw: true });
+  // RS006 follow-up (data-integrity fix): withdraw used to be ONE control for
+  // the whole cart, wired to whichever entry withdrawRegistrationByRef
+  // silently picked (the oldest) — a multi-entry cart gave no way to tell,
+  // or choose, which row it would act on. Each entry now carries its OWN
+  // can_withdraw, and the page must render a control PER entry, scoped to
+  // that entry's id — never a single cart-wide button.
+  it("renders a withdraw control per entry, scoped to that entry's id — only where can_withdraw is true AND a token is present", async () => {
+    usecases.publicCartByRef.mockResolvedValueOnce({
+      ...BASE_VIEW,
+      can_withdraw: true,
+      entries: [
+        { ...BASE_VIEW.entries[0]!, can_withdraw: true },
+        { ...BASE_VIEW.entries[1]!, can_withdraw: false },
+      ],
+    });
     const withToken = await render("SZ-TEST-01", { token: "regtok_abc" });
-    expect(withToken).toContain('data-testid="withdraw-stub"');
+    // Exactly the withdrawable entry (reg-1) gets a control — reg-2 (its own
+    // can_withdraw false) does not, even though the cart-level flag is true
+    // and a token is present: this is the exact bug (one flag driving every
+    // row) the per-entry field replaces.
+    expect(withToken).toContain('data-entry="reg-1"');
+    expect(withToken).not.toContain('data-entry="reg-2"');
     expect(withToken).toContain('data-token="regtok_abc"');
+    expect(withToken).toContain('data-division="Open"');
 
-    usecases.publicCartByRef.mockResolvedValueOnce({ ...BASE_VIEW, can_withdraw: true });
+    usecases.publicCartByRef.mockResolvedValueOnce({
+      ...BASE_VIEW,
+      can_withdraw: true,
+      entries: [
+        { ...BASE_VIEW.entries[0]!, can_withdraw: true },
+        { ...BASE_VIEW.entries[1]!, can_withdraw: true },
+      ],
+    });
     const withoutToken = await render("SZ-TEST-01", {});
+    // No ?token= at all — zero controls, regardless of what any entry claims.
     expect(withoutToken).not.toContain("withdraw-stub");
 
-    usecases.publicCartByRef.mockResolvedValueOnce({ ...BASE_VIEW, can_withdraw: false });
-    const cannotWithdraw = await render("SZ-TEST-01", { token: "regtok_abc" });
-    expect(cannotWithdraw).not.toContain("withdraw-stub");
+    usecases.publicCartByRef.mockResolvedValueOnce({
+      ...BASE_VIEW,
+      can_withdraw: false,
+      entries: [
+        { ...BASE_VIEW.entries[0]!, can_withdraw: false },
+        { ...BASE_VIEW.entries[1]!, can_withdraw: false },
+      ],
+    });
+    const noneWithdrawable = await render("SZ-TEST-01", { token: "regtok_abc" });
+    expect(noneWithdrawable).not.toContain("withdraw-stub");
   });
 });

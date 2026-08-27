@@ -85,6 +85,25 @@ export default async function RefStatusPage({ params, searchParams }: Props) {
           endsOn={view.ends_on}
           qrDataUrl={qrDataUrl}
           locale={locale}
+          // RS006 follow-up (data-integrity fix): withdraw used to be ONE
+          // button here in `actions`, wired to whichever entry the server
+          // silently picked (the oldest) — a multi-entry cart gave no way to
+          // tell, or choose, which row it would act on. Each entry now
+          // states its OWN can_withdraw, and the control lives on THAT
+          // entry's own row instead — never a single cart-wide button.
+          renderEntryAction={(entry) => {
+            if (!token) return null;
+            const src = view.entries.find((e) => e.id === entry.id);
+            if (!src?.can_withdraw) return null;
+            return (
+              <WithdrawByRef
+                refCode={view.ref_code}
+                token={token}
+                entryId={entry.id}
+                divisionName={entry.divisionName}
+              />
+            );
+          }}
           actions={
             <>
               <Link
@@ -103,9 +122,6 @@ export default async function RefStatusPage({ params, searchParams }: Props) {
                 url={competitionHref}
                 className="inline-flex items-center gap-1.5 rounded-md border border-zinc-300 px-4 py-2 text-sm hover:border-zinc-500"
               />
-              {view.can_withdraw && token && (
-                <WithdrawByRef refCode={view.ref_code} token={token} />
-              )}
             </>
           }
         />
