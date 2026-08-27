@@ -156,6 +156,7 @@ export function EntryDetails({
           <FormFields
             fields={division.form_fields}
             answers={entry.answers}
+            entryId={entry.id}
             onChange={(key, value) =>
               dispatch({ type: "SET_ANSWERS", id: entry.id, answers: { ...entry.answers, [key]: value } })
             }

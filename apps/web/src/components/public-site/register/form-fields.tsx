@@ -15,10 +15,20 @@ export function FormFields({
   fields,
   answers,
   onChange,
+  entryId,
 }: {
   fields: readonly FormFieldDef[];
   answers: Record<string, string | boolean>;
   onChange: (key: string, value: string | boolean) => void;
+  /** Scopes each field's DOM id to the cart entry rendering it (review
+   *  finding #1, MEDIUM). Two cart entries on the SAME division is a
+   *  normal, unrestricted case (e.g. two teams in one "Open" division) —
+   *  each renders that division's form_fields, and an unscoped
+   *  `reg-field-${f.key}` collided across them: `label[for]` resolves to
+   *  the FIRST matching id, so clicking the second entry's label focused
+   *  the first entry's input. Same entry-scoping precedent as
+   *  entry-details.tsx's `reg-self-index-${entry.id}`. */
+  entryId: string;
 }) {
   const t = useT();
   if (fields.length === 0) return null;
@@ -29,7 +39,7 @@ export function FormFields({
         {t("register.section.questions")}
       </h4>
       {fields.map((f) => {
-        const fieldId = `reg-field-${f.key}`;
+        const fieldId = `reg-field-${entryId}-${f.key}`;
         if (f.kind === "checkbox") {
           return (
             <label key={f.key} className="flex items-start gap-2 text-sm text-ink">

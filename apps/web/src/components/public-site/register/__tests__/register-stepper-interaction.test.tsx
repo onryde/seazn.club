@@ -49,7 +49,7 @@ import { StepEntries } from "../step-entries";
 import { StepReview } from "../step-review";
 import { StepWho } from "../step-who";
 import { REGISTER_STATE_VERSION } from "../storage";
-import { EMPTY_CONTACT, type CartState, type DivisionLike } from "../types";
+import { EMPTY_CONTACT, type CartState, type DivisionLike, type FormFieldDef } from "../types";
 
 const EN_UI: Dict = JSON.parse(
   readFileSync(join(__dirname, "..", "..", "..", "..", "dictionaries", "en", "ui.json"), "utf8"),
@@ -1038,6 +1038,50 @@ describe("step 3 — pasting a roster via the textarea parses into named rows (p
     // The draft clears after a successful import.
     const clearedTextarea = island.tree().find((e) => e.type === "textarea");
     expect(propsOf(clearedTextarea!).value).toBe("");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Review finding #1 (MEDIUM) — form_fields DOM ids must be scoped per cart
+// entry. Two cart entries on the SAME division is normal and unrestricted
+// (e.g. two teams in one "Open" division); form-fields.tsx used to build
+// `reg-field-${f.key}` with no per-entry scope, so BOTH entries' identical
+// question rendered the SAME id twice. `label[for]` then resolves to
+// whichever one is FIRST in the DOM, so clicking the second entry's label
+// focuses the FIRST entry's input.
+// ---------------------------------------------------------------------------
+
+describe("review finding #1 — form_fields ids are scoped per cart entry", () => {
+  it("two entries on the SAME division render DISTINCT field ids for the same question", () => {
+    const FIELDS: FormFieldDef[] = [{ key: "shirt_size", label: "Shirt size", kind: "text", required: false }];
+    const DIV_FIELDS: DivisionLike = { ...DIV_OPEN, division_id: "div-fields", name: "Fielded Division", form_fields: FIELDS };
+    const { stepWho, divisionCard, clickByText, island } = mount([DIV_FIELDS, DIV_OPEN_2]);
+
+    (propsOf(stepWho()).onChange as (p: object) => void)({ name: "Alex Test", email: "alex@example.com" });
+    clickByText("Next"); // -> ENTRIES
+
+    // Two SEPARATE entries, same division — the normal, unrestricted case
+    // the finding calls out (no per-division cap in cart.ts's canAddEntry).
+    (propsOf(divisionCard("div-fields")).onAddIndividual as () => void)();
+    (propsOf(divisionCard("div-fields")).onAddIndividual as () => void)();
+
+    clickByText("Next"); // -> DETAILS
+
+    const fieldInputs = island
+      .tree()
+      .filter(
+        (e) =>
+          (e.type === "input" || e.type === "select") &&
+          typeof propsOf(e).id === "string" &&
+          (propsOf(e).id as string).startsWith("reg-field-"),
+      );
+    expect(fieldInputs, "one text field per entry, two entries").toHaveLength(2);
+
+    const ids = fieldInputs.map((e) => propsOf(e).id as string);
+    expect(
+      new Set(ids).size,
+      "field ids must be DISTINCT across entries — a shared id makes label[for] resolve to the WRONG entry's input",
+    ).toBe(ids.length);
   });
 });
 
