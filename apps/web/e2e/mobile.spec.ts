@@ -2822,3 +2822,210 @@ test("register stepper: ENTRIES/DETAILS/CONSENT/REVIEW hold at this width, no ho
     await apiJson(request, `/api/v1/competitions/${comp.data!.id}`, "DELETE").catch(() => undefined);
   }
 });
+
+// ---------------------------------------------------------------------------
+// T17 — the ScoringPad v3 RACQUET pads (R5/tasks C1-C3: badminton, table
+// tennis, volleyball) at all SEVEN width projects.
+//
+// Same reasoning T16 gives for cricket, and it applies three more times over:
+// R5 split these sports off a SHARED v2 skin (`racquet-skin.tsx`) onto three
+// separate v3 skins, each a new render tree, and this file's own seven
+// projects are the ONLY place any new surface gets width coverage narrower
+// than 375/768 at all (reference_new_ui_surface_uncovered_until_in_mobile_
+// spec). Before this block, `git grep -a` for badminton/tabletennis/
+// volleyball across mobile.spec.ts returned ZERO matches — three brand-new
+// pads with no width bar whatsoever.
+//
+// One test per sport rather than one walking all three: a 320px failure that
+// reads "badminton pad" is a different alarm from one that reads "the R5
+// pads", and the extra fixture seeding is cheap next to losing that.
+//
+// Every fixture here seeds with `emitCoreStart: true`, so none of these pay
+// T16's Start-match hydration dance — the pad is live on first paint.
+// ---------------------------------------------------------------------------
+
+/** Both scoreboard halves, scoped to `button` deliberately: a half renders
+ *  EITHER a `<button>` (tappable — live, band 3) or a plain `<div>` at the
+ *  same grid position, and a wildcard locator happily resolves the untappable
+ *  div. Tap model S — the halves ARE the scoring control on all three of
+ *  these sports, so they are the touch target that matters most here. */
+function padHalf(page: Page, side: "home" | "away"): Locator {
+  return page
+    .getByTestId("score-pad")
+    .locator('[data-role="v3-scorebug"]')
+    .locator(".grid > button")
+    .nth(side === "home" ? 0 : 1);
+}
+
+function padTile(page: Page, id: string): Locator {
+  return page.getByTestId("score-pad").locator(`[data-tile-id="${id}"]`);
+}
+
+async function assertTouchFloor(locator: Locator, label: string): Promise<void> {
+  await expect(locator, `${label} not visible`).toBeVisible({ timeout: 20_000 });
+  const box = await locator.boundingBox();
+  expect(box, `${label} has no box`).not.toBeNull();
+  expect(box!.height, `${label} touch target is ${box!.height}px`).toBeGreaterThanOrEqual(44);
+}
+
+/** The three checks every racquet pad owes at every width, before any
+ *  sport-specific surface: the pad rendered at all (not just a 2xx shell),
+ *  both scoring halves clear the 44px floor, and the page does not scroll
+ *  sideways. */
+async function assertRacquetPadFloor(page: Page): Promise<void> {
+  const pad = page.getByTestId("score-pad");
+  await expect(pad).toBeVisible({ timeout: 20_000 });
+  await assertTouchFloor(padHalf(page, "home"), "home scoreboard half");
+  await assertTouchFloor(padHalf(page, "away"), "away scoreboard half");
+  await expectNoHorizontalScroll(page);
+}
+
+test("badminton v3 pad: both scoring halves and the Set-score tile hold the 44px floor, no horizontal scroll", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(90_000);
+  const fx = await seedRosteredFixture(request, {
+    label: `Mobile Badminton V3 ${TAG}-${projectTag()}`,
+    sportKey: "badminton",
+    variantKey: "singles",
+    home: [{ fullName: `Mobile BD Home ${TAG}` }],
+    away: [{ fullName: `Mobile BD Away ${TAG}` }],
+    emitCoreStart: true,
+  });
+
+  await page.goto(await fixturePath(page.request, fx.fixtureId), { waitUntil: "load" });
+  await assertRacquetPadFloor(page);
+
+  // The Set-score tile is the band-0 action that survives at every fidelity
+  // band, so it is the one tile guaranteed present on a fresh live pad.
+  await assertTouchFloor(padTile(page, "setScore"), "Set-score tile");
+
+  // A real rally tap, then the context strip it brings on screen — the strip
+  // is a new v3 surface and only renders once the reader can name a server,
+  // which for badminton takes the SECOND rally (the first has no prior rally
+  // to derive the serve from). Two taps, spaced past the pipeline's 600ms
+  // double-submit guard, which compares the whole payload.
+  await padHalf(page, "home").click();
+  await page.waitForTimeout(750);
+  await padHalf(page, "home").click();
+  const strip = page.getByTestId("score-pad").locator('[data-role="v3-scorebug"] [data-strip-item-id]');
+  await expect(strip.first()).toBeVisible({ timeout: 20_000 });
+  await expectNoHorizontalScroll(page);
+});
+
+test("table tennis v3 pad: the serve-anchor tile and its sheet hold the 44px floor, no horizontal scroll", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(90_000);
+  const fx = await seedRosteredFixture(request, {
+    label: `Mobile TT V3 ${TAG}-${projectTag()}`,
+    sportKey: "tabletennis",
+    variantKey: "singles",
+    home: [{ fullName: `Mobile TT Home ${TAG}` }],
+    away: [{ fullName: `Mobile TT Away ${TAG}` }],
+    emitCoreStart: true,
+  });
+
+  await page.goto(await fixturePath(page.request, fx.fixtureId), { waitUntil: "load" });
+  await assertRacquetPadFloor(page);
+  await assertTouchFloor(padTile(page, "setScore"), "Set-score tile");
+
+  // D-17's serve anchor: table tennis's `within: "fixed-turns"` NEVER
+  // self-heals, so the tile is on screen from the first paint of a fresh
+  // fixture and its two-step sheet is a brand-new surface at every width.
+  await assertTouchFloor(padTile(page, "serveAnchor"), "serve-anchor tile");
+  await padTile(page, "serveAnchor").click();
+  const sheet = page.getByTestId("score-pad").locator('[data-role="v3-sheet"]');
+  await expect(sheet, "the anchor sheet must open").toBeVisible({ timeout: 20_000 });
+  await assertTouchFloor(sheet.locator('[data-choice-option-id="home"]'), "anchor sheet: home option");
+  await assertTouchFloor(sheet.locator('[data-choice-option-id="away"]'), "anchor sheet: away option");
+  await expectNoHorizontalScroll(page);
+});
+
+test("volleyball v3 pad: the anchor sheet and the libero Swap-sheet hold the 44px floor, no horizontal scroll", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(120_000);
+  // A full indoor starting six, S/OH/MB/OPP/OH/MB — FIVB's own catalog shape.
+  // Six a side is what makes volleyball the widest of the three scorebugs, so
+  // it is the one most likely to overflow a 320px viewport.
+  const court = ["S", "OH", "MB", "OPP", "OH", "MB"] as const;
+  const roster = (label: string) =>
+    court.map((positionKey, i) => ({ fullName: `${label} P${i + 1} ${TAG}`, positionKey }));
+  const fx = await seedRosteredFixture(request, {
+    label: `Mobile VB V3 ${TAG}-${projectTag()}`,
+    sportKey: "volleyball",
+    variantKey: "indoor",
+    home: roster(`Mobile VB Home ${TAG}-${projectTag()}`),
+    away: roster(`Mobile VB Away ${TAG}-${projectTag()}`),
+    emitCoreStart: true,
+  });
+
+  await page.goto(await fixturePath(page.request, fx.fixtureId), { waitUntil: "load" });
+  await assertRacquetPadFloor(page);
+
+  await assertTouchFloor(padTile(page, "serveAnchor"), "serve-anchor tile");
+  await padTile(page, "serveAnchor").click();
+  const sheet = page.getByTestId("score-pad").locator('[data-role="v3-sheet"]');
+  await expect(sheet, "the anchor sheet must open").toBeVisible({ timeout: 20_000 });
+  await assertTouchFloor(sheet.locator('[data-choice-option-id="away"]'), "anchor sheet: away option");
+  await expectNoHorizontalScroll(page);
+  await sheet.locator('[data-choice-option-id="away"]').click();
+  await page.waitForTimeout(400);
+  await sheet.locator('[data-choice-option-id="home"]').click();
+  await expect(sheet, "the anchor sheet closes once both steps are answered").toHaveCount(0, {
+    timeout: 20_000,
+  });
+  await expectNoHorizontalScroll(page);
+
+  // The libero Swap-sheet (`[data-role="v3-swap"]`) is the one surface
+  // NEITHER sibling has at all, and its candidate rows are the densest thing
+  // any of these three pads renders — twelve names in one scrolling list, at
+  // 320px. The tile only appears once a side has ACTUALLY used a libero, so
+  // the first exchange is established directly; the SHEET is what this test
+  // is measuring, not the act of bringing the libero on.
+  const middleBlocker = `Mobile VB Home ${TAG}-${projectTag()} P3 ${TAG}`;
+  const libero = `Mobile VB Home ${TAG}-${projectTag()} P6 ${TAG}`;
+  const state = await apiJson<{ last_seq: number }>(
+    page.request,
+    `/api/v1/fixtures/${fx.fixtureId}/state`,
+  );
+  expect(state.status, "state read before the libero exchange").toBe(200);
+  const posted = await apiJson(
+    page.request,
+    `/api/v1/fixtures/${fx.fixtureId}/events`,
+    "POST",
+    {
+      expected_seq: state.data!.last_seq,
+      type: "core.lineup.replacement",
+      payload: {
+        side: fx.homeEntrantId,
+        off: fx.personIds[middleBlocker]!,
+        on: {
+          personId: fx.personIds[libero]!,
+          positionKey: "MB",
+          slot: "starting",
+          orderNo: 7,
+          roles: ["libero"],
+        },
+        exemption: "libero",
+      },
+    },
+  );
+  expect(posted.status, `libero exchange POST: ${JSON.stringify(posted.error)}`).toBeLessThan(300);
+
+  await page.reload({ waitUntil: "load" });
+  await expect(page.getByTestId("score-pad")).toBeVisible({ timeout: 20_000 });
+  await assertTouchFloor(padTile(page, "libero-home"), "libero tile");
+  await padTile(page, "libero-home").click();
+  const swap = page.getByTestId("score-pad").locator('[data-role="v3-swap"]');
+  await expect(swap, "the libero Swap-sheet must open").toBeVisible({ timeout: 20_000 });
+  await assertTouchFloor(
+    swap.locator(`[data-candidate-id="${fx.personIds[libero]!}"]`),
+    "swap sheet: the libero's own candidate row",
+  );
+  await expectNoHorizontalScroll(page);
+});

@@ -545,6 +545,42 @@ describe("the serve anchor — narrower than table tennis's, offered only while 
     expect(tileById(buildTiles(done, t), SERVE_ANCHOR_TILE_ID)).toBeUndefined();
   });
 
+  // Mutation audit — `needsServeAnchor`'s two `unknownBecause` exclusions
+  // (`recorded-disagrees`, `ledger-mismatch`) had no coverage of their own:
+  // every test above reaches the tile only through `undeclared`,
+  // `deciding-set-toss` or `match-over`, so neutering the whole predicate to
+  // `return true` left every test above green (97/97). Both exclusions are
+  // pinned here, for a different reason each, so they are separate tests
+  // rather than one loop — table tennis's own `tiles()` describe pins the
+  // byte-identical predicate the same way.
+  it("withholds the anchor during a RECORDED DISAGREEMENT — a re-declaration is not what fixes that", () => {
+    // Home declares AND wins the anchor rally, so side-out says home keeps
+    // serving. The very next rally's own `serving` field wrongly says away —
+    // a genuine contradiction between what was recorded and what the fold
+    // implies. The engine refuses to re-anchor mid-dispute (R4-7: the NEXT
+    // set resolves it, per `setStart:"alternate"`, not a same-set
+    // redeclaration), so offering the tile here would invite an answer to a
+    // question the engine has already refused to accept.
+    const disputed = view({ events: stream(rally("H", { serving: "H" }), rally("A", { serving: "A" })) });
+    expect(ctxOf(disputed).unknownBecause).toBe("recorded-disagrees");
+    expect(ctxOf(disputed).side, "the reader must not name a server mid-dispute").toBeNull();
+    expect(
+      tileById(buildTiles(disputed, t), SERVE_ANCHOR_TILE_ID),
+      "a disputed chain is not an undeclared one — the anchor must stay withheld",
+    ).toBeUndefined();
+  });
+
+  it("withholds the anchor on a LEDGER MISMATCH — no event of any kind repairs that", () => {
+    // `view()`'s `state` is folded from the FULL three-rally stream, but the
+    // `events` handed to the reader are truncated to the first two — state
+    // and ledger now describe different matches. That is structural: a fresh
+    // declaration cannot reconcile it, so the tile must not be offered.
+    const events = stream(rally("H", { serving: "H" }), rally("A"), rally("H"));
+    const mismatched = { ...view({ events }), events: events.slice(0, 2) };
+    expect(ctxOf(mismatched).unknownBecause).toBe("ledger-mismatch");
+    expect(tileById(buildTiles(mismatched, t), SERVE_ANCHOR_TILE_ID)).toBeUndefined();
+  });
+
   it("the sheet posts a real RALLY_TYPE event with `serving` — TWO independent choice steps, both sides offered", () => {
     const sheet = buildSheets(view(), t)[SERVE_ANCHOR_TILE_ID]!;
     expect(sheet.event).toBe(RALLY_TYPE);

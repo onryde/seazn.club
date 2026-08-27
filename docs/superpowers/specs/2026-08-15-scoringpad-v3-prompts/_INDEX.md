@@ -2929,3 +2929,104 @@ screenshots:
 - my own single-parity SAMPLING while playing → nearly reported a correct
   service-court rule as broken.
 So: run the spec, play the pad, mutate the guard. A green suite is the floor.
+
+### R5 — the parallel finding sweep, and what four independent reviewers found
+
+Run after C3 landed, with the owner's explicit "start in parallel if possible
+for finding". Four agents on provably disjoint read-only ground: a zero-ref
+scout for the `racquet-skin.tsx` deletion, an adversarial reviewer on the C3
+volleyball diff, a cross-sport capability-regression reviewer (what did a
+sport LOSE in the split?), and a preset-law-vs-skin truth auditor.
+
+Every finding below was re-verified by the main thread before it was believed.
+Three of the four survived; the numbers matter more than the prose.
+
+**F1 — `needsServeAnchor`'s two exclusions are held by NOTHING, in BOTH
+volleyball and table tennis.** `volleyball.tsx:793-796` and the byte-identical
+`tabletennis.tsx:671`. The reviewer neutered the predicate body to
+`return true`; the full 97-test volleyball skin suite stayed GREEN. Verified
+independently: `grep -a "recorded-disagrees\|ledger-mismatch"` across
+`__tests__/volleyball.test.ts` and `__tests__/tabletennis.test.ts` returns
+ZERO matches. The shipped logic reads correct against `kernel.ts`'s own
+`setBasedServeContext` (~:1355-1400) — this is a missing gate, not a live bug,
+and C3 inherited it from C2 rather than closing it.
+
+**F2 — table tennis's dock vanishes the moment the LAST question is answered,
+and the wave's own fix caused half of it.** C2 fixed the DOUBLES case by
+adding a `pair.length > 1` gate at `tabletennis.tsx:1039-1049`; that gate then
+excludes SINGLES, where step 2 (the ITTF expedite return count,
+`state.expedite === true`) genuinely does ask a question. A singles scorer
+under expedite taps the return chip and the whole dock disappears, taking the
+"Send now" control — the only way to commit before `HOLD_MS` expires — with
+it. Worse, and NOT in the reviewer's report: in DOUBLES the settled dock shows
+only the scorer chip, so the expedite answer is never confirmed either. Every
+sibling's equivalent branch is unconditional — `badminton.tsx:1100`,
+`volleyball.tsx:1310`, `tennis.tsx:1224`.
+`tabletennis.test.ts:884-887` FROZE the closed-dock behaviour as intended, two
+tests below the very fix it was modelled on. Invert that probe, never delete
+it (`reference_task_verify_green_while_breaking_another_harness`).
+
+**F3 — badminton drops the side label on a Time-out.** `badmintonDetail`
+(`badminton.tsx:1142-1167`) has no `TIMEOUT_TYPE` case and falls to
+`default: return undefined`, so the activity ribbon shows a bare "Time-out
+recorded". Both siblings resolve `payload.by` through `ctx.state`
+(`tabletennis.tsx:1081-1089`, `volleyball.tsx:1348-1355`). Reachable on a
+legal cfg: `badminton.tsx:942` reads `records.timeouts` PER FIXTURE rather
+than hardcoding the type off, so this is an oversight, not a dead path.
+
+**F4 — volleyball's serve anchor is a ONE-SHOT window (product gap, not a code
+defect).** Engine-verified at `kernel.ts:1244-1252`: `serving` self-heals on
+every ordinary rally unconditionally, but `chainBroken` — which gates
+`rotation` and `serverPersonId` — clears only via a fresh declaration or a
+resolved set boundary. `needsServeAnchor` gates on `ctx.side !== null`, which
+resolves after rally 1. So in the NATURAL flow (open the pad, start scoring,
+never touch the separate "note the server" tile) the anchor withdraws after
+one tap and the rotation number stays dark for the rest of the set. Documented
+in three independent places, so deliberate — but the tile is `kind: "minor"`
+(`volleyball.tsx:917-926`), the same tier as three neighbours, with no
+elevated urgency on a window that closes after a single tap.
+
+**F5 — FR and NL reintroduce the 320px truncation this wave already fixed
+once.** `pad.volleyball.dock.rally.scorer.title`: FR 31 chars, NL 26, against
+the sibling wording's 21/17 (EN and ES match the siblings). Only FR and NL
+translated "won it" as "won THE RALLY". The EN original was shortened earlier
+this wave for exactly this reason, and the shortening did not travel.
+
+**Not a finding, but the deletion is bigger than the brief said.**
+`racquet-skin.tsx` is runtime-UNREACHABLE (`registry.tsx:292-312` short-
+circuits to the v3 lane for all three sports before `skinFor` can run) but it
+is NOT zero-reference: three live static imports (`skins/registry.ts:38,43`,
+`__tests__/skin-locked.test.tsx:66`, plus its own dedicated unit test), 9
+`scorepad.skin.racquet.*` keys × 4 dictionaries, and a now-dead v2 branch of
+the `lane === "v3" ? … : racquetHeaderValue(...)` ternaries in
+`gallery.capture.ts`. A one-line delete would red the build.
+
+### R5 — the width bar the wave was about to merge without
+
+`git grep -a` for badminton, tabletennis or volleyball across
+`apps/web/e2e/mobile.spec.ts` returned ZERO matches. R5 ships three brand-new
+v3 render trees, and this file's seven projects (320/360/375/390/430/768/834)
+are the only place any new surface gets width coverage narrower than 375/768
+at all — the exact reasoning T16 gives for cricket, unapplied three more
+times. Closed by **T17**: one test per sport, each asserting the pad rendered
+(not just a 2xx shell), both tap-model-S scoreboard halves at the 44px floor,
+and no horizontal scroll; table tennis and volleyball additionally open the
+serve-anchor SHEET, and volleyball opens the libero **Swap-sheet** — twelve
+candidate rows in one list, the densest thing any of these three pads renders,
+and a surface neither sibling has at all.
+
+### R5 — environment trap that cost three build attempts
+
+`seazn-env rebuild --label r5` exited 0, printed its own success line, and
+emitted NO `.next/standalone` at all; the server then died with
+`Cannot find module .../standalone/apps/web/server.js`, which reads as a
+broken build. Cause: turbo's local cache is shared across ALL worktrees of
+this repo by content hash, not by path, so a same-hash HIT replays another
+worktree's build verbatim and bakes that tree's absolute `appDir` into
+`required-server-files.json`. `up --server` carries the guard and re-runs with
+`--force`; `rebuild` did not catch it. Two more masks compounded it in the
+same ten minutes: `--filter=web` is wrong (the package is `@seazn/web`; turbo
+exits 1 with `No package found`), and the background command's own completion
+notification reported "exit code 0" while the log's `EXIT=$?` said 1. Assert
+the ARTIFACT, never the exit code. Written to memory as
+`reference_turbo_build_cache_hit_from_another_worktree`.
