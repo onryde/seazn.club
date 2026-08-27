@@ -885,7 +885,14 @@ export type SetBasedServeUnknown =
   | "ledger-mismatch"
   /** The laws re-toss for the deciding set (FIVB 7.1), so the alternation does
    *  not carry into it. */
-  | "deciding-set-toss";
+  | "deciding-set-toss"
+  /** `setStart: "alternate"` only. The next set opens with the OPPONENT of
+   *  this set's first server, so the alternation rests on `firstServer` — and
+   *  a `recorded-disagrees` inside the set disputes that very derivation.
+   *  Distinct from `recorded-disagrees` because the new set is not itself in
+   *  contradiction: its first declared serve re-anchors it, and under side-out
+   *  its first rally names the side again. */
+  | "alternation-disputed";
 
 /**
  * The service rules of ONE federation, declared by the preset that plays them.
@@ -1106,7 +1113,19 @@ function setBasedServeWalk(
       return;
     }
     if (rotation.setStart === "set-winner") {
+      // BWF Law 7 — the next game reads the game SCORE, which a contradiction
+      // inside the game does not touch. So this branch alternates off nothing
+      // and re-anchors cleanly however broken the set it follows was.
       startSet(wonBy, "undeclared");
+      return;
+    }
+    // ITTF 2.13.6 / FIVB 12.1.2 — the next set opens with the OPPONENT OF THIS
+    // SET'S FIRST SERVER. That is `firstServer`, the derivation an R4-7
+    // contradiction disputes, so alternating off it would answer the next set
+    // with full confidence from a fact the ledger has already contradicted.
+    // Refuse instead, and let the new set re-anchor from its own evidence.
+    if (chainBroken === "recorded-disagrees") {
+      startSet(null, "alternation-disputed");
       return;
     }
     startSet(previousOpener === null ? null : opponent(previousOpener), "undeclared");
@@ -1173,11 +1192,17 @@ function setBasedServeWalk(
             }
           }
         } else if (declared !== believed) {
-          // R4-7. Narrow on purpose: the rest of THIS set is unknown, and the
-          // next set re-anchors off a fact this contradiction does not touch
-          // (the set winner, or the alternation off `firstServer`). A guard
-          // that killed the indicator for the rest of the match would be D-24
-          // all over again.
+          // R4-7. Narrow on purpose: the rest of THIS set is unknown, and a
+          // guard that killed the indicator for the rest of the MATCH would be
+          // D-24 all over again. How the next set re-anchors depends on which
+          // rule it starts under, and the two are not alike:
+          //   * `set-winner` (BWF Law 7) reads the set SCORE — a fact this
+          //     contradiction does not touch, so the next set is untouched;
+          //   * `alternate` (ITTF 2.13.6, FIVB 12.1.2) reads `firstServer`,
+          //     which IS what this disputes, so `openNextSet` refuses to
+          //     alternate off it and opens `alternation-disputed` instead.
+          // Nothing type-checks a comment, so that split is a test
+          // ("refuses to alternate off a DISPUTED opener"), on both sports.
           chainBroken = "recorded-disagrees";
           serving = null;
         }

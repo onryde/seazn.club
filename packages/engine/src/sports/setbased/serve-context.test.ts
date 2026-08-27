@@ -369,6 +369,42 @@ describe("table tennis — two serves each, one each at deuce", () => {
     expect(ctx(tabletennis, short, SINGLES, events).servingSide).toBe("A");
   });
 
+  it("refuses to alternate off a DISPUTED opener — a contradiction leaves game 2 unopened", () => {
+    // 2.13.6 makes the next game's opener the OPPONENT OF THIS GAME'S FIRST
+    // SERVER, so the alternation turns on `firstServer` — the very derivation
+    // a `recorded-disagrees` disputes. Badminton's Law 7 re-anchor reads the
+    // game score, which a contradiction does not touch; this one has nothing
+    // sound left to turn on, so it refuses rather than answering off it.
+    const short = tabletennis.configSchema.parse({ setTo: 3, finalSetTo: 3 });
+    const events = stream(
+      ["core.start"],
+      rally(tabletennis, { wonBy: "H", serving: "H" }), // H opened the game
+      rally(tabletennis, { wonBy: "H", serving: "A" }), // …but the pad says A served point 2
+      rally(tabletennis, { wonBy: "H" }), // game 1 to H, 3-0
+    );
+    expect(ctxAfter(tabletennis, short, SINGLES, events, 3).unknownBecause).toBe(
+      "recorded-disagrees",
+    );
+    const game2 = ctx(tabletennis, short, SINGLES, events);
+    expect(game2.serveOrderKnown).toBe(false);
+    expect(game2.unknownBecause).toBe("alternation-disputed");
+  });
+
+  it("and ONE declared serve re-opens game 2 — the refusal is one game wide (D-24)", () => {
+    const short = tabletennis.configSchema.parse({ setTo: 3, finalSetTo: 3 });
+    const events = stream(
+      ["core.start"],
+      rally(tabletennis, { wonBy: "H", serving: "H" }),
+      rally(tabletennis, { wonBy: "H", serving: "A" }), // contradiction, game 1
+      rally(tabletennis, { wonBy: "H" }), // game 1 to H, 3-0
+      rally(tabletennis, { wonBy: "H", serving: "A" }), // game 2 opens, declared
+    );
+    const answer = ctx(tabletennis, short, SINGLES, events);
+    expect(answer.servingSide).toBe("A"); // A opened game 2; point 1 is still A's turn
+    expect(answer.serviceTurn).toBe(0);
+    expect(answer.serveNumber).toBe(2);
+  });
+
   it("a partial summary costs the rotation NOTHING — the score is the whole input", () => {
     // The mirror image of badminton's `score-jumped`: the same event, the same
     // kernel, opposite answers, because the two federations rotate on
@@ -538,6 +574,27 @@ describe("volleyball", () => {
   it("alternates the opening serve for sets 2-4", () => {
     const events = stream(...setOneToHome);
     expect(ctx(volleyball, short, SIX, events).servingSide).toBe("A");
+  });
+
+  it("refuses to alternate off a DISPUTED opener (12.1.2), and set 2 recovers on its first rally", () => {
+    // The same shape as table tennis's: 12.1.2 starts the next set with the
+    // side that did NOT serve first in this one, so the alternation rests on
+    // this set's first server — which is what the contradiction disputes.
+    const events = stream(
+      ["core.start"],
+      rally(volleyball, { wonBy: "H", serving: "H" }), // H opened set 1
+      rally(volleyball, { wonBy: "H", serving: "A" }), // H won point 1, so H serves point 2
+      rally(volleyball, { wonBy: "H" }), // set 1 to H, 3-0
+      rally(volleyball, { wonBy: "A" }), // set 2, point 0
+    );
+    const set2 = ctxAfter(volleyball, short, SIX, events, 4);
+    expect(set2.serveOrderKnown).toBe(false);
+    expect(set2.unknownBecause).toBe("alternation-disputed");
+    // D-24: one rally of set 2 and side-out answers for itself again — the
+    // refusal is one set wide, never the rest of the match.
+    const after = ctx(volleyball, short, SIX, events);
+    expect(after.servingSide).toBe("A");
+    expect(after.serviceTurn).toBeUndefined(); // the set's opener is still untold
   });
 
   it("stops at the deciding set's door — FIVB 7.1 tosses for it afresh", () => {
