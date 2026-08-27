@@ -32,6 +32,15 @@ describe.skipIf(!HAS_DB)("fetchDivisionRows — real Postgres", () => {
       sport_key: "generic",
       variant_key: "score",
       config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+      // RS007/V380 — createDivision can set these at create time now (see
+      // divisions.ts); real values here (not the vacuous null default) so
+      // this test can actually prove fetchDivisionRows' SELECT reads them
+      // back, not just that the interface declares them.
+      category: "mixed",
+      age_max: 15,
+      age_cutoff_month: 9,
+      age_cutoff_day: 1,
+      eligibility_note: "School-registered students only",
     });
     await putRegistrationSettings(owner, configured.id, {
       enabled: true,
@@ -66,6 +75,9 @@ describe.skipIf(!HAS_DB)("fetchDivisionRows — real Postgres", () => {
       category: null,
       age_min: null,
       age_max: null,
+      age_cutoff_month: null,
+      age_cutoff_day: null,
+      eligibility_note: null,
       enabled: false,
       entrant_kind: null,
       opens_at: null,
@@ -92,6 +104,14 @@ describe.skipIf(!HAS_DB)("fetchDivisionRows — real Postgres", () => {
       // RS005 F4 — the Money section's re-price warning reads this. Counted
       // by its OWN subquery (status = 'waitlisted'), never SPOT_HOLDERS.
       waitlisted: 2,
+      // RS007/V380 — set at createDivision time above; proves the SELECT
+      // actually reads category/age_cutoff_month/age_cutoff_day/
+      // eligibility_note off `divisions`, not just age_min/age_max.
+      category: "mixed",
+      age_max: 15,
+      age_cutoff_month: 9,
+      age_cutoff_day: 1,
+      eligibility_note: "School-registered students only",
     });
     expect(configuredRow.org_currency).toBeTruthy();
     // A fresh org's Stripe account is not connected at all — never

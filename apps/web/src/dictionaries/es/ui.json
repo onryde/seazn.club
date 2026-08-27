@@ -4343,6 +4343,7 @@
   "reg.hub.config.category": "Categoría",
   "reg.hub.config.ageMin": "Edad mínima",
   "reg.hub.config.ageMax": "Edad máxima",
+  "reg.hub.config.eligibilityNote": "Nota para los participantes",
   "reg.hub.config.approval": "¿Quién aprueba las inscripciones?",
   "reg.hub.config.allowSolo": "Permitir inscripción individual",
   "reg.hub.config.freeAgentsHint": "Solo disponible para categorías de equipos.",

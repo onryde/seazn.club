@@ -3524,6 +3524,7 @@ export type DictionaryKey =
   | "reg.hub.config.currencyNote"
   | "reg.hub.config.duplicateFormFieldKeysError"
   | "reg.hub.config.eligibility"
+  | "reg.hub.config.eligibilityNote"
   | "reg.hub.config.feeCentsRangeError"
   | "reg.hub.config.feeCut"
   | "reg.hub.config.freeAgentsHint"

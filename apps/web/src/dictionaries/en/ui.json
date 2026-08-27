@@ -4343,6 +4343,7 @@
   "reg.hub.config.category": "Category",
   "reg.hub.config.ageMin": "Minimum age",
   "reg.hub.config.ageMax": "Maximum age",
+  "reg.hub.config.eligibilityNote": "Note for entrants",
   "reg.hub.config.approval": "Who approves entries?",
   "reg.hub.config.allowSolo": "Allow solo sign-ups",
   "reg.hub.config.freeAgentsHint": "Only available for team divisions.",

@@ -40,6 +40,12 @@ const ROW: RegistrationHubRowData = {
   category: null,
   age_min: null,
   age_max: null,
+  // RS007/V380 — non-null on purpose (see the config-panel `division` prop
+  // assertion below): a null default would round-trip "correctly" even if
+  // this panel's own division={{...}} construction dropped the fields.
+  age_cutoff_month: 9,
+  age_cutoff_day: 1,
+  eligibility_note: "School-registered students only",
   enabled: true,
   entrant_kind: "individual",
   opens_at: null,
@@ -128,6 +134,16 @@ describe("RegistrationHubSettingsPanel — opening/closing/saving the config pan
     const panel = island.tree().find((e) => e.type === RegistrationHubConfigPanel);
     expect(panel).toBeTruthy();
     expect(propsOf(panel!).division).toMatchObject({ division_id: "div-2", name: "Open Doubles" });
+    // RS007/V380 — this panel builds the config panel's `division` prop
+    // field-by-field (registration-hub-settings-panel.tsx); a `toMatchObject`
+    // check above would stay green even if the cutoff/note fields were
+    // silently left out of that object literal, so they get their own
+    // assertion here.
+    expect(propsOf(panel!).division).toMatchObject({
+      age_cutoff_month: 9,
+      age_cutoff_day: 1,
+      eligibility_note: "School-registered students only",
+    });
   });
 
   it("passes orgTz/currency/orgSlug/feePercentPct/cardUnsupportedCurrency through to the config panel", () => {

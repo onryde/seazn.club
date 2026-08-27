@@ -20,6 +20,14 @@ export interface RegistrationConfigState {
   category: DivisionCategoryValue | null;
   age_min: number | null;
   age_max: number | null;
+  /** RS007/V380: the age-band cutoff override (default 1 January when
+   *  null) and the retired jsonb "custom rule" note, now first-class
+   *  `divisions` columns alongside category/age_min/age_max above — same
+   *  PATCH endpoint, same "logically one eligibility edit" convention
+   *  `toDivisionPatchBody` below documents. */
+  age_cutoff_month: number | null;
+  age_cutoff_day: number | null;
+  eligibility_note: string | null;
   // registration_settings (PUT /api/v1/divisions/{id}/registration-settings)
   enabled: boolean;
   entrant_kind: EntrantKindValue;
@@ -38,10 +46,14 @@ export interface RegistrationConfigState {
 /** The GET response shape (RegistrationSettingsRow & OrgPaymentDefaults on
  *  the server, `RegistrationSettings` in server/api-v1/schemas.ts — declared
  *  locally rather than imported from that DO-NOT-TOUCH, value-heavy file,
- *  same precedent as FormField). No category/age_min/age_max: those live on
- *  `divisions`, not `registration_settings`. */
+ *  same precedent as FormField). No category/age_min/age_max, no cutoff
+ *  fields, no eligibility_note: those all live on `divisions`, not
+ *  `registration_settings`. */
 export interface RegistrationSettingsResponse
-  extends Omit<RegistrationConfigState, "category" | "age_min" | "age_max"> {
+  extends Omit<
+    RegistrationConfigState,
+    "category" | "age_min" | "age_max" | "age_cutoff_month" | "age_cutoff_day" | "eligibility_note"
+  > {
   division_id: string;
   /** Org's registration currency (RS001b) — read-only echo, never sent back. */
   currency: string;
@@ -60,6 +72,9 @@ export interface DivisionEligibility {
   category: DivisionCategoryValue | null;
   age_min: number | null;
   age_max: number | null;
+  age_cutoff_month: number | null;
+  age_cutoff_day: number | null;
+  eligibility_note: string | null;
 }
 
 /** Seed the panel's local edit state: registration_settings fields from the
@@ -72,6 +87,9 @@ export function initialConfigState(
     category: eligibility.category,
     age_min: eligibility.age_min,
     age_max: eligibility.age_max,
+    age_cutoff_month: eligibility.age_cutoff_month,
+    age_cutoff_day: eligibility.age_cutoff_day,
+    eligibility_note: eligibility.eligibility_note,
     enabled: settings.enabled,
     entrant_kind: settings.entrant_kind,
     opens_at: settings.opens_at,
@@ -87,13 +105,23 @@ export function initialConfigState(
   };
 }
 
-/** PATCH /api/v1/divisions/{id} body — always all three keys together (a
+/** PATCH /api/v1/divisions/{id} body — always all six keys together (a
  *  patch missing every key is rejected by PatchDivision's own "empty
- *  patch" refine, and these three are logically one "eligibility" edit). */
+ *  patch" refine, and these six are logically one "eligibility" edit). */
 export function toDivisionPatchBody(
   state: RegistrationConfigState,
-): Pick<RegistrationConfigState, "category" | "age_min" | "age_max"> {
-  return { category: state.category, age_min: state.age_min, age_max: state.age_max };
+): Pick<
+  RegistrationConfigState,
+  "category" | "age_min" | "age_max" | "age_cutoff_month" | "age_cutoff_day" | "eligibility_note"
+> {
+  return {
+    category: state.category,
+    age_min: state.age_min,
+    age_max: state.age_max,
+    age_cutoff_month: state.age_cutoff_month,
+    age_cutoff_day: state.age_cutoff_day,
+    eligibility_note: state.eligibility_note,
+  };
 }
 
 /** PUT /api/v1/divisions/{id}/registration-settings body — FULL REPLACE.
@@ -101,7 +129,10 @@ export function toDivisionPatchBody(
  *  the organiser actually touched. */
 export function toRegistrationSettingsPutBody(
   state: RegistrationConfigState,
-): Omit<RegistrationConfigState, "category" | "age_min" | "age_max"> {
+): Omit<
+  RegistrationConfigState,
+  "category" | "age_min" | "age_max" | "age_cutoff_month" | "age_cutoff_day" | "eligibility_note"
+> {
   const {
     enabled,
     entrant_kind,

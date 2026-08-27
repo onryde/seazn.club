@@ -4343,6 +4343,7 @@
   "reg.hub.config.category": "Categorie",
   "reg.hub.config.ageMin": "Minimumleeftijd",
   "reg.hub.config.ageMax": "Maximumleeftijd",
+  "reg.hub.config.eligibilityNote": "Notitie voor deelnemers",
   "reg.hub.config.approval": "Wie keurt inschrijvingen goed?",
   "reg.hub.config.allowSolo": "Solo-inschrijving toestaan",
   "reg.hub.config.freeAgentsHint": "Alleen beschikbaar voor teamdivisies.",

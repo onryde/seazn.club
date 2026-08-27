@@ -40,6 +40,13 @@ export interface RawDivisionRow {
   category: RegistrationHubRowData["category"];
   age_min: number | null;
   age_max: number | null;
+  /** RS007/V380 — the age-band cutoff override (default 1 January) and the
+   *  retired jsonb "custom rule" note, now first-class `divisions` columns
+   *  alongside category/age_min/age_max above; the config panel's
+   *  Eligibility section edits all six as one PATCH. */
+  age_cutoff_month: number | null;
+  age_cutoff_day: number | null;
+  eligibility_note: string | null;
   enabled: boolean;
   entrant_kind: RegistrationHubRowData["entrant_kind"];
   opens_at: Date | string | null;
@@ -87,6 +94,9 @@ export async function fetchDivisionRows(
         d.category,
         d.age_min,
         d.age_max,
+        d.age_cutoff_month,
+        d.age_cutoff_day,
+        d.eligibility_note,
         coalesce(rs.enabled, false) as enabled,
         rs.entrant_kind,
         rs.opens_at,

@@ -37,7 +37,7 @@ import { ChevronDown } from "lucide-react";
 import type { ReactEventHandler, ReactNode } from "react";
 import { Modal } from "@/components/modal";
 import Link from "@/components/ui/console-link";
-import { useMsg } from "@/components/i18n/dict-provider";
+import { useMsg, useLocaleOrDefault } from "@/components/i18n/dict-provider";
 import { routes } from "@/lib/routes";
 import type { Currency } from "@/lib/currency";
 import type { MessageKey } from "@/lib/messages";
@@ -315,6 +315,17 @@ export function RegistrationHubConfigPanel({
   onSaved: () => void;
 }) {
   const msg = useMsg();
+  // RS007/V380 — the cutoff fields' month <select> needs localised month
+  // names (matching the division-creation wizard's own cutoff fields,
+  // division-builder.tsx). Read here and passed down as a prop, same as
+  // `msg` above: EligibilitySection is called directly, outside React, by
+  // this panel's own test harness (see its "hookless" comment below), so it
+  // cannot call a hook itself. useLocaleOrDefault, not useLocale: this
+  // island is rendered bare (no <DictProvider>) in that harness and in a
+  // static-render pass, and the locale here is FORMATTING-only (month
+  // names) — a silent English fallback there is correct, not a bug (see
+  // useLocaleOrDefault's own doc comment, dict-provider.tsx).
+  const locale = useLocaleOrDefault();
   const { state, readOnly, loadError, busy, errors, formError, saveOutcome, patch, save } =
     useRegistrationConfigPanelState(division, onSaved);
   const [openSections, setOpenSections] = useState<Record<SectionId, boolean>>(DEFAULT_OPEN);
@@ -473,7 +484,7 @@ export function RegistrationHubConfigPanel({
               const hasError = SECTION_FIELDS[id].some((f) => fieldErrors[f]);
               const content =
                 id === "eligibility" ? (
-                  <EligibilitySection state={state} errors={fieldErrors} patch={patch} msg={msg} />
+                  <EligibilitySection state={state} errors={fieldErrors} patch={patch} msg={msg} locale={locale} />
                 ) : id === "schedule" ? (
                   <OpenCloseSection
                     state={state}
@@ -556,13 +567,20 @@ export function EligibilitySection({
   errors,
   patch,
   msg,
+  locale,
 }: {
   state: RegistrationConfigState;
   errors: Partial<Record<ConfigFieldKey, string>>;
   patch: (p: Partial<RegistrationConfigState>) => void;
   msg: Msg;
+  /** RS007/V380 — month names for the cutoff <select> below. */
+  locale: string;
 }) {
   const isTeam = state.entrant_kind === "team";
+  // A cutoff means nothing without an age band to anchor it — disabled
+  // rather than hidden, mirroring the division-creation wizard's own
+  // `disabled={!maxAge}` on its cutoff fields (division-builder.tsx).
+  const hasAgeBand = state.age_min != null || state.age_max != null;
   return (
     <section className="card space-y-3 p-4">
       <label className="label">
@@ -610,6 +628,73 @@ export function EligibilitySection({
           {errors.age_max && (<p data-field-error="age_max" role="alert" className="mt-1 text-xs text-red-600">{errors.age_max}</p>)}
         </label>
       </div>
+      {/* RS007/V380 — the age-band cutoff override (default 1 January when
+          neither side is set) and the retired jsonb "custom rule" note, now
+          first-class columns alongside category/age_min/age_max above. Month
+          + day always move TOGETHER (both-or-neither, the DB CHECK's own
+          rule — divisions_age_cutoff_check): clearing one clears both, and
+          setting one defaults the other to its first value, so this control
+          can never leave the pair half-set the way two independently
+          nullable inputs could. */}
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <label className="label">
+          {msg("wizard.cutoffMonth")}
+          <select
+            data-field="age_cutoff_month"
+            className="input min-h-11 mt-1"
+            disabled={!hasAgeBand}
+            value={state.age_cutoff_month ?? ""}
+            onChange={(e) => {
+              const month = e.target.value === "" ? null : Number(e.target.value);
+              patch({
+                age_cutoff_month: month,
+                age_cutoff_day: month === null ? null : (state.age_cutoff_day ?? 1),
+              });
+            }}
+          >
+            <option value="">—</option>
+            {Array.from({ length: 12 }, (_, i) => i + 1).map((n) => (
+              <option key={n} value={n}>
+                {new Date(2000, n - 1, 1).toLocaleString(locale, { month: "long" })}
+              </option>
+            ))}
+          </select>
+          {errors.age_cutoff_month && (<p data-field-error="age_cutoff_month" role="alert" className="mt-1 text-xs text-red-600">{errors.age_cutoff_month}</p>)}
+        </label>
+        <label className="label">
+          {msg("wizard.cutoffDay")}
+          <input
+            type="number"
+            min={1}
+            max={31}
+            data-field="age_cutoff_day"
+            className="input mt-1"
+            disabled={!hasAgeBand}
+            value={state.age_cutoff_day ?? ""}
+            onChange={(e) => {
+              const day = e.target.value === "" ? null : Number(e.target.value);
+              patch({
+                age_cutoff_day: day,
+                age_cutoff_month: day === null ? null : (state.age_cutoff_month ?? 1),
+              });
+            }}
+          />
+          {errors.age_cutoff_day && (<p data-field-error="age_cutoff_day" role="alert" className="mt-1 text-xs text-red-600">{errors.age_cutoff_day}</p>)}
+        </label>
+      </div>
+      <label className="label">
+        {msg("reg.hub.config.eligibilityNote")}
+        <textarea
+          data-field="eligibility_note"
+          rows={2}
+          maxLength={2000}
+          className="input mt-1"
+          value={state.eligibility_note ?? ""}
+          onChange={(e) => patch({ eligibility_note: e.target.value || null })}
+          placeholder={msg("wizard.customRulePlaceholder")}
+        />
+        {errors.eligibility_note && (<p data-field-error="eligibility_note" role="alert" className="mt-1 text-xs text-red-600">{errors.eligibility_note}</p>)}
+      </label>
       <label className="label">
         {msg("reg.hub.config.approval")}
         <select
