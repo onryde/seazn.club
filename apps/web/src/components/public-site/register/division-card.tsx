@@ -20,8 +20,41 @@ const CATEGORY_KEY = {
 
 const BADGE = "inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium";
 
-function windowDate(iso: string, locale: string): string {
-  return new Intl.DateTimeFormat(locale, { day: "numeric", month: "short" }).format(new Date(iso));
+/** Viewer-LOCAL date, not the organiser's (RS006 fix wave finding #2,
+ *  MEDIUM) — the ORGANISER's timezone is not plumbed to this client at all
+ *  today: `PublicRegistrationDivision`/`PublicRegistrationInfo`
+ *  (schemas.ts:2312, :2346) carry no tz field, and `publicRegistrationInfo`'s
+ *  own SQL query (registrations.ts:~1382) never selects
+ *  `organizations.timezone` even though that column exists and already
+ *  governs scheduling elsewhere (`settings.orgTz`, #397/#448). Inventing
+ *  that plumbing is out of scope here (a server-schema change touching
+ *  files this task doesn't own) — the proper fix would select `o.timezone`
+ *  alongside the org fields `publicRegistrationInfo` already reads, ship it
+ *  the same way `currency` already is (`currency: comp.currency`, resolved
+ *  ORG-WIDE and flattened onto every division — registrations.ts:1460's own
+ *  comment), and pass it down here as an explicit `timeZone` instead of
+ *  leaving this function to infer one.
+ *
+ *  Until then: label what IS shown rather than leave it silently ambiguous.
+ *  `timeZoneName: "short"` turns two viewers' bare dates that quietly
+ *  DISAGREE for the same instant (Sydney's "6 Mar" vs LA's "5 Mar" for
+ *  closes_at=2026-03-05T23:00:00Z) into two dates that visibly, honestly
+ *  disagree ("6 Mar, GMT+11" vs "5 Mar, PST").
+ *
+ *  `timeZone` is a TEST-ONLY escape hatch — every production call site below
+ *  omits it, so this still resolves the BROWSER's own ambient zone exactly
+ *  as before this fix. It exists because this workspace's `process.env.TZ`
+ *  does not move `Date`/`Intl` inside a vitest worker thread
+ *  (zoned-datetime.test.ts's own header) — an explicit param is the only way
+ *  a test can pin a zone deterministically instead of silently asserting
+ *  whatever zone the CI box happens to run in. */
+export function windowDate(iso: string, locale: string, timeZone?: string): string {
+  return new Intl.DateTimeFormat(locale, {
+    day: "numeric",
+    month: "short",
+    timeZoneName: "short",
+    timeZone,
+  }).format(new Date(iso));
 }
 
 export function DivisionCard({
@@ -60,6 +93,23 @@ export function DivisionCard({
   const feeLabel = division.fee_cents === 0 ? t("register.entries.free") : formatMinor(division.fee_cents, division.currency as Currency, locale);
 
   const now = new Date();
+  // Absolute-INSTANT comparison: `new Date(iso)` parses the server's
+  // `Z`-suffixed ISO string to a fixed point on the timeline, same as `now`
+  // — so, unlike `windowDate`'s DISPLAY above, this boolean does NOT vary by
+  // viewer timezone (verified: two `Date` objects compare by their
+  // underlying epoch millisecond, with no zone attached to either side).
+  // Investigated per fix wave finding #2: the residual risk here is
+  // ordinary staleness/clock-skew (division.open/closed_reason were decided
+  // once, server-side, at fetch time; this re-derives freshness from the
+  // VIEWER's own clock at render time) — not a timezone bug, and no
+  // different from `division.open` itself already being unrevalidated
+  // between fetch and render. Reconciling that needs either polling/
+  // revalidation or the server splitting `closed_reason: "window"` into a
+  // distinct "not yet open" vs "closed" reason (it currently sends one
+  // value for both, which is WHY this client-side re-derivation exists at
+  // all — the server never told us which side of `opens_at` we're on).
+  // Both are out of scope here: a large change, and the second also touches
+  // server files this task doesn't own.
   const notYetOpen = division.closed_reason === "window" && division.opens_at && new Date(division.opens_at) > now;
   const windowClosed = division.closed_reason === "window" && !notYetOpen;
   // De-emphasis for a division the CONTACT personally doesn't qualify for
