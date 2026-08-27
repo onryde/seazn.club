@@ -441,7 +441,22 @@ export function dueBattingSide(state: CricketStateShape, cfg: CricketCfgShape): 
     // algebraically against that function for every completed pair
     // boundary, not just this one: `so[so.length-1].battingSide` and
     // `soBattingSideAt(state, so.length)` always agree.
-    return (so[so.length - 1] as CricketInningsShape).battingSide ?? null;
+    //
+    // R3.5 F4 (review finding, MAJOR) — `?? "home"`, not `?? null`: this used
+    // to disagree with the mid-pair branch just above, which already
+    // defaults an absent `battingSide` to `"home"` (a real `foldMatch`
+    // always populates it — `InningsState.battingSide` is required on the
+    // engine's own type — so this is a defensive-shape-only fork, never
+    // reachable through a real fold). The two branches are not made to
+    // return the SAME final value (they never did even when the field is
+    // present — this branch returns the side directly, the one above
+    // returns its opponent) — they now agree on what the MISSING raw fact
+    // itself is assumed to be. `null` here specifically re-arms
+    // `blockedByClosure` (`buildTiles`) and disables the whole delivery row
+    // while the fold happily accepts the next ball — exactly the defect
+    // class Tasks C and R exist to remove, reproduced by malformed data
+    // instead of a real state transition.
+    return (so[so.length - 1] as CricketInningsShape).battingSide ?? "home";
   }
   const innings = currentInnings(state);
   if (innings === null || innings.closed !== true) return null;

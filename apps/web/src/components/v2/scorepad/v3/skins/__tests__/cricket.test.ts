@@ -1933,6 +1933,44 @@ describe("dueBattingSide", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// R3.5 F4 (review finding, MAJOR) — dueBattingSide's two super-over branches
+// disagreed about what an ABSENT `battingSide` means: the pair-complete
+// branch (`so.length % 2 === 0`) defaulted to `null`; the mid-pair branch
+// one line up already defaulted to `"home"`. A real `foldMatch` always
+// populates `InningsState.battingSide` (required on the engine's own type),
+// so this exact fork is UNREACHABLE through a real fold — a hand-built
+// shape is the only way to exercise it, same posture as this file's own
+// pre-existing hand-built `dueBattingSide` cases in the block just above.
+//
+// Fixed by making the pair-complete branch default to the SAME "home" token
+// the mid-pair branch already assumes for the identical missing raw fact —
+// not by making the two branches return the SAME final answer, which they
+// never did even when the field IS present: the mid-pair branch returns the
+// OPPONENT of the last entry's side (an innings just opened for X; the
+// OTHER end is due), while the pair-complete branch returns that side
+// DIRECTLY (ICC: the side that batted SECOND in the pair just finished
+// bats FIRST in the next one — `dueBattingSide`'s own doc). A `null` return
+// here specifically re-arms `blockedByClosure` (`buildTiles`) and disables
+// the whole delivery row while the fold happily accepts the next ball — the
+// exact defect class Tasks C and R exist to remove, reproduced by malformed
+// data instead of a real state transition.
+// ---------------------------------------------------------------------------
+describe("dueBattingSide — the two super-over branches agree on an absent battingSide (F4)", () => {
+  it("mid-pair (so.length===1, odd — the pair's first innings closed, second not yet started), battingSide absent: opponent of the assumed 'home' default — away (UNCHANGED; pins the pre-existing behaviour this fix must not disturb)", () => {
+    const s = state({ phase: "super_over", superOver: { innings: [{ closed: true }] } });
+    expect(dueBattingSide(s, cfg())).toBe("away");
+  });
+
+  it("pair complete (so.length===2, even>0), battingSide absent on the last entry: the assumed 'home' default itself, never null — agrees with the mid-pair branch's own assumption instead of silently re-disabling the delivery row", () => {
+    const s = state({
+      phase: "super_over",
+      superOver: { innings: [{ closed: true, battingSide: "away" }, { closed: true }] },
+    });
+    expect(dueBattingSide(s, cfg())).toBe("home");
+  });
+});
+
 describe("buildContext — innings closed names the real cause (R2b defect 2)", () => {
   // R2b-next (2026-08-17): both fixtures below now carry TWO closed innings
   // — same reason as `buildTiles`'s own defect-2 block above: under the
