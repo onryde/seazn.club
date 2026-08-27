@@ -2338,6 +2338,7 @@ independently before a single question was put to the owner.
 | R5-2 | The attributed rally action carries `server` + `scorer` persons and is INERT from the v2 pad — tennis's D-2 shape, ×3 | **Dock chips on all three sports.** R4-5's exact pattern: one chip per player of the winning pair/team as the dock question, auto-set in singles where there is nothing to choose; the server comes from R5-1's derivation and is never asked. This is the wave's product headline — per-player point and serve stats become recordable for badminton, table tennis and volleyball for the first time. Rejected: badminton+TT only (volleyball's scorer was argued ambiguous; it is not — the payload names a person, not a skill), and plain-rally-only, which would silently retire two of the three declared actions |
 | R5-3 | Three `--sport-*` palettes owed under R3-6 | **badminton A "Sprung Floor"** (maple-hall board `#241a14`/`#33261d`, BWF-mat teal led `#2fe0bd`), **tabletennis A "Two-Colour Bat"** (graphite `#101418`, ITTF-blue band `#0f2d40`, ball-orange led `#ff9440`), **volleyball B "Court Azure"** (arena slate `#161d27`/`#232c39`, court azure led `#4aa8ff`). Owner asked to see it first; comps published and ruled off them, R4-4's precedent. Comps: <https://claude.ai/code/artifact/97a11b49-c1dc-4c4a-b969-2610712ef7c3> |
 | R5-4 | How many whole-match walkthroughs | **All three.** Owner overrode the recommendation of one (volleyball). Cost is real and stated: the walkthrough leg is already the workflow's floor at ~300s on CI with `tennis-mtb` alone. Closes D-13 at full depth — table tennis has never been driven in a browser at all |
+| R5-5 | `ContextSlot.messageTone` — badminton's band-3 lock needed a context-strip message, and that strip hard-codes `text-red-600`. Chassis change, so raised rather than taken | **KEEP the additive `messageTone?: "alert" \| "info"`** (`types.ts:402`, consumed `context-strip.tsx:273-280` as `slot.messageTone ?? "alert"`). Red on this pad already MEANS "your tap was rejected" (cricket's ineligible bowler); a plan boundary is not a rejection, and the recording chip two controls away already words the same lock in amber — the two surfaces were arguing. `text-amber-700` clears the 4.5 floor (~5.0:1 on white, computed off the Tailwind **v3** hex `#b45309`; this repo is on v4 oklch, where the value shifts — see `sport-theme.ts`'s own lime-400 warning — so indicative, not exact) and already carries plan/upgrade meaning in `settings/billing`, `settings`, `o/[orgSlug]`, `my-matches`. Blast radius is nil by construction: opt-in, defaults to `"alert"`, cricket byte-identical, pinned in both directions — same shape as `readOnly`/`candidates`/`blocked` already on that type |
 
 ### R5-3 — what the palette ruling rejected, and the rule it establishes
 
@@ -2722,3 +2723,76 @@ addition from C1 — opt-in, cricket byte-identical, pinned both ways).
 
 **Repair surface is THREE e2e files**, not six: `gallery.capture.ts`,
 `scorepad-skins.spec.ts`, `scoring.spec.ts` (badminton's are done).
+
+### R5 — what PLAYING the pad found that the green gate could not (2026-08-27)
+
+Task C1 was fully green — 5/5 e2e, unit suite passing, gallery screenshots
+captured and read — before anyone had *driven* the badminton pad through a
+doubles rally. Doing that (a throwaway `e2e/__play-badminton.spec.ts`, deleted
+after) found two real defects, disproved one suspicion, and confirmed one
+designed refusal. The pattern is worth naming: **all four are doubles-only, and
+every earlier check in this wave used a SINGLES fixture.** A sport's own most
+common club format was the untested one.
+
+**P-1 (FIXED) — two names on a half rendered as one run-on string.**
+`scorebug.tsx`'s `HalfContent` maps one `<span>` per `WhoLine` with nothing but
+a 6px `gap-x-1.5` between them, so a real doubles half read
+`ADA LOVELACEALAN TURING`. Meanwhile `whoNames()` — the ACCESSIBLE name of that
+same button — has always joined with `", "`. So sighted and screen-reader users
+were reading materially different content off ONE control, and only the
+screen-reader one was right. Fixed with an `aria-hidden` `/` separator gated on
+`i > 0` (a racquet pair is written CHEN/WANG; the spoken name keeps its comma
+and must never say "slash"). Blast radius verified rather than asserted:
+cricket and football build exactly ONE `WhoLine` per half, so the branch never
+fires there and both render byte-for-byte as before; tennis doubles gains the
+same fix. RED proved by disabling the branch and re-running — the failure
+message is the defect itself (`HomeA mtbnwea5V3 Bad Pair HomeB`).
+Pinned in `scorepad-v3-badminton.spec.ts`, **both halves** of the disagreement:
+the visible text carries the slash AND the `aria-label` keeps the comma, since
+fixing either one alone re-opens the gap.
+
+**P-2 (FIXED) — the dock asked a question the scorer had already answered.**
+`pad.badminton.dock.rally.scorer.title` was "Who won the rally?" while offering
+only the WINNING pair's two players. The rally winner is settled by which half
+you tapped; the dock is asking which PARTNER scored. Now "Which player won it?"
+in all four locales. Note the first rewrite — "Which player won the rally?" —
+**truncated at 320** (`Which player won the ra…`), caught on the 320 screenshot
+and not by any assertion: the dock title ellipsises at roughly 22 characters, a
+pre-existing chassis limit that no test guards. Tennis's own
+`pad.tennis.dock.point.scorer.title` ("Who won the point?") has the identical
+ambiguity and is left alone deliberately — it is a merged wave's copy, so it is
+raised rather than taken.
+
+**P-3 (NOT a defect — my own single-parity sampling.)** The strip read "Left
+service court" at every score I happened to observe, which looked wrong. It was
+not: BWF 10.2 is right court on an EVEN score, and my three samples were 1, 1
+and 3 — all odd. Both parities are already unit-covered
+(`badminton.test.ts:416/418`). Recording it because the near-miss is the same
+single-parity trap this programme has now paid for four times, and this time it
+was the OBSERVER who sampled one parity, not the test.
+
+**P-4 (by design, already pinned) — badminton doubles names no server, ever.**
+`serverFromPairOrder` is absent from badminton's preset, so
+`setBasedServeContext` answers `serverPersonId: null` for a pair and the pad
+prints the serving SIDE only. That is correct: BWF picks the doubles server by
+the service COURT the players stand in, which needs the pair's starting
+positions — a datum this kernel does not fold. Honest refusal, ruling R5-1's
+stance, and `scorepad-v3-badminton.spec.ts` already pins both the absent
+`server` payload and the side-only strip. **Consequence to state in the PR:**
+the wave's per-player SERVE stats are singles-only for badminton. Per-player
+POINT stats (the scorer chip) work in both.
+
+**P-5 (OPEN, chassis, raised not taken) — the 6-second window silently drops
+the wave's headline stat.** A doubles rally opens the dock; if nobody answers
+within `HOLD_MS` (~6s) the hold drains and the rally submits with `wonBy` only.
+Observed directly: of five tapped rallies, the one where a chip was clicked
+carries `keys=wonBy,scorer` and the other four carry `keys=wonBy`. There is no
+recovery — `activity.tsx:347` offers `v3-activity-void` and v3 has NO edit or
+amend path anywhere — so the only way back is to void the rally and re-tap it.
+Per-player badminton stats are therefore collected only when the scorer beats a
+6s clock, which biases the data toward SLOW points. Options weighed: widen
+`HOLD_MS` per skin (cheapest, still loses the late look), attribute
+retroactively from the Activity row (correct, its own wave), or label the stat
+as partial wherever it surfaces. Owner-facing recommendation: label it now,
+retro-attribution as its own wave; do NOT widen a chassis constant for one
+sport mid-wave.
