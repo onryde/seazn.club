@@ -340,6 +340,27 @@ describe("serving (D-17) — from the engine's ledger reader, never a placeholde
     expect(stripItem(v, "serve")?.value).toBe("pad.tabletennis.scorebug.strip.serve.first");
   });
 
+  // R5/C2 review finding 3 — the test above defeats "the WINNER serves next",
+  // and the reviewer showed it cannot defeat "the LOSER serves next": with the
+  // opener also winning game 1, `opponent(firstServer)` and `opponent(winner)`
+  // name the same side, so both rules agree and the fixture cannot tell them
+  // apart. This is the alternate-vs-winner mutant already on record for this
+  // shared kernel. The pair of fixtures together is what closes it — do not
+  // delete either one.
+  //
+  // Here the opener LOSES: home serves the anchor, away wins it and the game.
+  //   alternate (correct) -> opponent(firstServer = home) = AWAY
+  //   "loser serves next" -> loser = home                 = HOME   (disagrees)
+  it("follows the serve across a game the opener LOST — so 'loser serves next' cannot masquerade as alternate either", () => {
+    const v = view({ cfg: SHORT_CFG, events: stream(anchor("H", "A"), rally("A"), rally("A")) });
+    expect((v.state as { sets: unknown[] }).sets.filter((s) => (s as { closed?: boolean }).closed).length).toBe(1);
+    expect(
+      stripItem(v, "server")?.value,
+      "ITTF 2.13.6 reads the SET'S FIRST SERVER, not the game's winner and not its loser",
+    ).toBe(NAMES.A1);
+    expect(stripItem(v, "server")?.value).not.toBe(NAMES.H1);
+  });
+
   it("refuses to answer when the ledger and the folded state describe different matches", () => {
     const events = stream(anchor("H", "H"), rally("A"), rally("H"));
     const v = { ...view({ events }), events: events.slice(0, 2) };
@@ -538,6 +559,36 @@ describe("tiles()", () => {
     expect(tileById(buildTiles(resolved, t), SERVE_ANCHOR_TILE_ID), "resolved — gone").toBeUndefined();
     // Below band 3 the rally family is unreachable at all, anchor included.
     expect(tileById(buildTiles(view({ band: 2 }), t), SERVE_ANCHOR_TILE_ID)).toBeUndefined();
+  });
+
+  // R5/C2 review finding 2 — `needsServeAnchor`'s TWO `unknownBecause`
+  // exclusions had zero coverage: the reviewer neutered the whole predicate to
+  // `return true` and all 73 tests still passed. The behaviour was already
+  // correct; nothing was holding it. Both exclusions are pinned here, and the
+  // reason each one exists is different, so they are separate tests rather
+  // than one loop.
+  it("withholds the anchor during a RECORDED DISAGREEMENT — a re-declaration is not what fixes that", () => {
+    // Home served and won the anchor, so `turnLength: 2` says home serves
+    // rally 2 as well. The umpire's own `serving` on that rally says AWAY, and
+    // the engine refuses to re-anchor mid-dispute (R4-7) — the NEXT game
+    // resolves it, not another declaration. Offering the tile here would
+    // invite the scorer to answer a question that cannot be answered.
+    const disputed = view({ events: stream(anchor("H", "H"), rally("H", { serving: "A" })) });
+    expect(stripItem(disputed, "server"), "the reader must not name a server mid-dispute").toBeUndefined();
+    expect(
+      tileById(buildTiles(disputed, t), SERVE_ANCHOR_TILE_ID),
+      "a disputed chain is not an undeclared one — the anchor must stay withheld",
+    ).toBeUndefined();
+  });
+
+  it("withholds the anchor on a LEDGER MISMATCH — no event of any kind repairs that", () => {
+    // The folded state and the ledger describe different matches (state folded
+    // from the full stream, `events` truncated). That is structural: a fresh
+    // declaration cannot reconcile it, so the tile must not be offered.
+    const events = stream(anchor("H", "H"), rally("A"), rally("H"));
+    const mismatched = { ...view({ events }), events: events.slice(0, 2) };
+    expect(stripItem(mismatched, "server")).toBeUndefined();
+    expect(tileById(buildTiles(mismatched, t), SERVE_ANCHOR_TILE_ID)).toBeUndefined();
   });
 
   it("declares no tiles outside `live` — every tile names the live phase only", () => {
@@ -786,6 +837,28 @@ describe("dock()", () => {
     expect(dock.chips.map((chip) => chip.id)).toEqual(["scorer:A-first", "scorer:A-second"]);
   });
 
+  // R5/C2 fix — this used to fall through to `null`, so the moment a doubles
+  // scorer answered, the whole dock vanished: the confirmation of what they
+  // had just chosen AND the "Send now" control that commits before the hold
+  // expires. Badminton's dock stays open showing the answer, and a scorer
+  // moving between the two pads met two behaviours for one gesture. Found by
+  // driving a doubles fixture in a browser, not by any assertion here.
+  it("STAYS OPEN once the pair's scorer is settled, showing that answer as the only chip", () => {
+    const v = view({ lineups: DOUBLES, events: stream(anchor("H", "A")) });
+    const settled = buildDock(RALLY_TYPE, v, t, { wonBy: "H", scorer: "H-second" });
+    expect(settled, "an answered dock must not disappear — the flush control lives on it").not.toBeNull();
+    expect(settled!.chips).toHaveLength(1);
+    expect(settled!.title).toBe("pad.tabletennis.dock.rally.scorer.title");
+  });
+
+  // The other side of that branch: SINGLES had nothing to ask, so it has no
+  // dock to leave open. Pinned beside its opposite so neither can be "fixed"
+  // into the other.
+  it("still returns nothing for a settled SINGLES rally — there was never a question", () => {
+    const v = view({ events: stream(anchor("H", "A")) });
+    expect(buildDock(RALLY_TYPE, v, t, { wonBy: "H", scorer: "H1" })).toBeNull();
+  });
+
   it("offers the 13th-return chip once expedite is in force, for singles AND doubles alike", () => {
     const singles = view({ events: stream(expedite(), anchor("H", "A")) });
     const singlesDock = buildDock(RALLY_TYPE, singles, t, { wonBy: "H", scorer: "H1" })!;
@@ -947,7 +1020,6 @@ describe("copy truth", () => {
       "pad.tabletennis.scorebug.serving",
       "pad.tabletennis.scorebug.strip.games",
       "pad.tabletennis.scorebug.strip.server",
-      "pad.tabletennis.scorebug.strip.serve",
       "pad.tabletennis.scorebug.strip.serve.first",
       "pad.tabletennis.scorebug.strip.serve.second",
       "pad.tabletennis.scorebug.strip.expedite",

@@ -565,9 +565,16 @@ function buildStrip(
     // `chainComplete` gate on `serveNumber`), so a mid-set drift omits this
     // exactly as it omits the server name.
     if (serveCtx?.serveNumber !== undefined) {
+      // No label, and the value is a COMPLETE PHRASE — badminton's own
+      // `serviceCourt` established this in the same family and for the same
+      // reason: a "Serve: 2nd" pairing reads as a table cell, not as something
+      // an umpire would say, and the chassis renders `label` and `value`
+      // concatenated in that order. In English that produced "Serve 2nd",
+      // which is not English. Carrying the whole phrase in the value also lets
+      // each locale order the noun and the ordinal its own way — es/fr/nl put
+      // the noun first, English does not.
       items.push({
         id: "serve",
-        label: t("pad.tabletennis.scorebug.strip.serve"),
         value: t(serveCtx.serveNumber === 1 ? "pad.tabletennis.scorebug.strip.serve.first" : "pad.tabletennis.scorebug.strip.serve.second"),
       });
     }
@@ -1016,6 +1023,27 @@ export function buildDock(
   // any) is settled, for as long as this rally has not already flagged it.
   if (state.expedite === true && returns === undefined) {
     return { title: t("pad.tabletennis.dock.rally.expedite.title"), chips: [expediteReturnChip()] };
+  }
+
+  // Step 3 — EVERY question settled, and the dock STAYS OPEN showing the
+  // answer, exactly as badminton's does. Falling through to `null` here was a
+  // real defect, found by driving a doubles fixture rather than by any
+  // assertion: the moment the scorer tapped a chip the whole dock vanished,
+  // taking with it both the confirmation of what they had just chosen and the
+  // "Send now" control — the only way to commit before the hold expires. A
+  // scorer moving between this pad and badminton's would have met two
+  // different behaviours for the same gesture.
+  //
+  // Only for a genuine PAIR: a singles side had nothing to ask (`buildHalf`
+  // stamps its sole scorer at tap time), so it had no dock to leave open.
+  if (scorer !== undefined && winner !== null) {
+    const pair = onFieldPlayers(view.squads, winner);
+    if (pair.length > 1) {
+      return {
+        title: t("pad.tabletennis.dock.rally.scorer.title"),
+        chips: [scorerChip(scorer, nameOf(view, scorer, t))],
+      };
+    }
   }
 
   return null;

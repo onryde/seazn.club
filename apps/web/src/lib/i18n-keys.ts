@@ -3030,7 +3030,6 @@ export type DictionaryKey =
   | "pad.tabletennis.scorebug.serving"
   | "pad.tabletennis.scorebug.strip.expedite"
   | "pad.tabletennis.scorebug.strip.games"
-  | "pad.tabletennis.scorebug.strip.serve"
   | "pad.tabletennis.scorebug.strip.serve.first"
   | "pad.tabletennis.scorebug.strip.serve.second"
   | "pad.tabletennis.scorebug.strip.server"

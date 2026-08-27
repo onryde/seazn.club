@@ -192,7 +192,7 @@ test("table tennis v3 singles: the serve anchor resolves D-17, then the turnLeng
   await expect(strip(page, "server"), "away served the anchor and turnLength is 2").toContainText(awayName, {
     timeout: 20_000,
   });
-  await expect(strip(page, "serve")).toHaveText("2nd", { timeout: 20_000 });
+  await expect(strip(page, "serve")).toHaveText("2nd serve", { timeout: 20_000 });
   await expect(v3Tile(page, "serveAnchor"), "resolved — the anchor tile withdraws").toHaveCount(0, { timeout: 20_000 });
 
   // Away wins the second rally too — a PLAIN tap, no declaration. The turn
@@ -200,13 +200,13 @@ test("table tennis v3 singles: the serve anchor resolves D-17, then the turnLeng
   await tapRally(page, "away");
   await expect(halfScore(page, "away")).toHaveText("1", { timeout: 20_000 });
   await expect(strip(page, "server"), "turn flips at the 2-point boundary").toContainText(homeName, { timeout: 20_000 });
-  await expect(strip(page, "serve")).toHaveText("1st", { timeout: 20_000 });
+  await expect(strip(page, "serve")).toHaveText("1st serve", { timeout: 20_000 });
 
   // Home wins the third rally — still home's turn, their second serve.
   await tapRally(page, "home");
   await expect(halfScore(page, "home")).toHaveText("2", { timeout: 20_000 });
   await expect(strip(page, "server")).toContainText(homeName, { timeout: 20_000 });
-  await expect(strip(page, "serve")).toHaveText("2nd", { timeout: 20_000 });
+  await expect(strip(page, "serve")).toHaveText("2nd serve", { timeout: 20_000 });
 
   // The ledger, once every hold has drained — the SUBMITTED shape, not an
   // optimistic local one. The anchor rally alone carries `serving`; the two
