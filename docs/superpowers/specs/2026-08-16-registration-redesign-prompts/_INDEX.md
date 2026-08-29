@@ -2853,3 +2853,63 @@ and invisible to the organiser (who has no reason to check).
 **Status:** OPEN, mechanism under diagnosis. The S4 walkthrough scenario
 is the reproduction and is currently RED on this assertion, deliberately.
 Reproduce with `KEEP_FIXTURES=1` to keep the ledger.
+
+### #18 — FIXED 2026-08-30 (`dfdcfae95`), with one residual gap (#18b)
+
+**Mechanism, pinned.** Not a webhook redelivery, and not a Connect
+duplicate — both were ruled out. `reconcileRegistrationGroupBySession`
+(`registrations.ts:2772-2794`), the status page's reconcile-on-return,
+deliberately carries no status pre-check and calls
+`handleRegistrationCheckoutCompleted` DIRECTLY, bypassing
+`billing_events`/`runEvent`'s dedupe entirely. `cancel-entry.tsx:75`
+fires `router.refresh()` after a successful withdrawal, which re-renders
+the SAME status URL with the same `?checkout=success&session_id=…` — so
+reconcile runs again against the same Checkout Session, which Stripe
+still reports as `payment_status: "paid"` forever (a refund never changes
+a session's own payment_status). That is why the ledger showed ONE
+`checkout.session.completed` and yet two refund-receipt sends: the second
+pass never went through the event table at all.
+
+**Fix.** The `'withdrawn'` arm is now gated on `reg.entrant_id`, written
+in the same UPDATE as `status = 'confirmed'` (`materialise`) and never
+cleared by `withdrawCore`. A confirmed-then-withdrawn replay no-ops; a
+never-confirmed withdrawn row still refunds in full, unchanged. No
+migration — the column already existed.
+
+**Verified end to end**, not just by unit test. S4 of the money matrix
+now passes against real Stripe, and its ledger reads:
+
+```
+registration.confirmed  {"paid": true, "entrant_id": "172b0bf8…"}
+registration.withdrawn  {"by": "registrant"}          ← no refund
+registration.refunded   {"mode": "manual", "amount_cents": 4000}
+```
+
+— the refund arriving ONLY after the organiser used #16's new control.
+That single run proves both fixes at once.
+
+#### #18b — the same hole remains on a MANUAL-approval division. OPEN.
+
+`entrant_id` is written by `materialise()`, which runs on CONFIRMATION.
+On a `manual`-approval division `confirmPaidRegistration` leaves a paid
+entry at `status = 'paid'` awaiting the organiser's decision and does NOT
+materialise it — so `entrant_id` is still null.
+
+So: manual-approval division, `refund_lock_at` in the past, entrant pays,
+entrant withdraws. `withdrawCore` correctly refuses to auto-refund (its
+own `locked.status === 'paid'` path passes the real PI and the policy
+says no). Then the same reconcile replay fires, reads `status =
+'withdrawn'` with `entrant_id` null, takes the "never confirmed" arm, and
+refunds in full — bypassing `refund_lock_at` exactly as before.
+
+Narrower population than #18 (it needs manual approval), but the same
+money consequence for exactly the clubs that vet their entries. The
+guard needs a signal that separates "never had a live charge" from
+"charged, then withdrawn" — `entrant_id` only answers "was ever seated",
+which is not the same question. `payment_intent_id` + `withdrawn_at`
+ordering, or a status snapshot taken before the withdrawal write, would
+answer it for both approval modes.
+
+**Owed:** a test on the manual-approval path (the #18 reproduction
+harness in `registrations.test.ts` already builds everything but the
+approval mode), then a guard that covers it.
