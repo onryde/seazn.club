@@ -229,6 +229,64 @@
 // never a fabricated placeholder — this file has no concept of injecting a
 // synthetic event into `ledgerEvents`, since anything merged there is folded
 // as if it really happened.
+//
+// SCOPE BOUNDARY, R5 UPDATE (a FOREIGN core.void crashes the pad — passes
+// G-J above only ever fixed THIS hook's OWN void submissions). Repro: the
+// fixture console (a sibling component, its OWN independent write path)
+// undoes a match-deciding event a live pad JUST scored. Passes F/G above
+// already establish that a pad-submitted event keeps its CLIENT-fabricated
+// idempotency key as `ledgerEvents`' id for it FOREVER within a mount —
+// `AppendSuccess` carries no row id at all. When the console's undo lands, a
+// LATER `initialEvents` refresh (its own `router.refresh()`) or poll tick
+// hands this hook the SAME event's REAL server id at the SAME seq — but
+// `mergeEnvelopesIntoLedger`'s own "existing wins" default (below) discarded
+// it outright, exactly the protection pass F's own ack-append comment
+// documents for a DIFFERENT reason (never regress a richer local void with a
+// bare polled copy). So `ledgerEvents` kept the target under the CLIENT id
+// forever, while the console's void — built server-side, the only id the
+// server ever knew — named the REAL id: unresolvable, forever, the moment it
+// merged in. The engine's own `resolveVoids`
+// (packages/engine/src/core/events.ts) threw INVALID_EVENT on every fold
+// from that point on. Unlike passes G-J's own failure mode (a caught
+// rejection banner — `foldedState`'s try/catch), this one can reach a
+// genuinely UNGUARDED caller: a v3 skin computing a serve/rotation label
+// (e.g. `setBasedServeContext`, `packages/engine/src/sports/setbased/
+// kernel.ts`) reads `pipeline.events` — this hook's raw, unfolded list,
+// `UsePadPipelineResult.events` below — directly, synchronously, during
+// render, with no try/catch of its own; a render-phase throw there crashes
+// straight into `ScoringErrorBoundary` rather than degrading.
+//
+// A SECOND, INDEPENDENT half of the same defect, found by running the fix
+// above against a real pad (walkthrough/scorepad-v3-volleyball-match.spec.ts,
+// 1 red in 3): the id merge only helps when the console's void reaches this
+// hook through a fresh `initialEvents` batch, which carries a full envelope.
+// Reached through a POLL instead, the void arrived with NO TARGET AT ALL —
+// `LedgerSlotEvent` did not carry `voids_event_id` and the transport
+// boundary parsed-then-DROPPED it, though the server has always sent it
+// (`EventOut`, server/usecases/fixtures.ts; `ScoreEvent`,
+// server/api-v1/schemas.ts). `resolveVoids` rejects a `core.void` naming
+// nothing exactly as it rejects one naming an unknown id, so the pad froze
+// behind a rejection banner on whichever of the two paths won the race —
+// which is why the same walkthrough passed twice and failed once. This is
+// NOT specific to the console: ANY void this device did not itself submit —
+// a second referee's undo on a shared fixture — took the same path.
+//
+// Fixed in three places, one per hop of the same fact:
+//  - transport.ts keeps `voids_event_id` instead of dropping it, and
+//    types.ts's `LedgerSlotEvent` carries it (both nullable — only a
+//    core.void ever has one).
+//  - `ledgerSlotToEnvelope` below widens it into the envelope's `voids`.
+//  - `mergeEnvelopesIntoLedger` below adopts the wire-sourced copy on a seq
+//    collision whenever the two genuinely disagree on `.id` or `.voids`,
+//    unless doing so would DROP a void target this hook already holds — the
+//    one case the old blanket "existing wins" default really existed for.
+//    See that function's own doc for why both halves are needed: correcting
+//    an id under a seq without also allowing a void to be re-targeted just
+//    moves the dangling reference to the other side.
+// Scoped to the DEFAULT merge direction only: `runDrain`'s own
+// `incomingWins: true` ack append (pass F) is untouched by this branch, so
+// its own "the just-acked copy always wins outright" guarantee still holds
+// byte-for-byte — see that call site's own comment.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { EngineError, type EventEnvelope, type LineupPair } from "@seazn/engine/core";
 import type { AnySportModule } from "@seazn/engine/sport";
@@ -483,9 +541,17 @@ export function pendingToEnvelope(
  * either: types.ts's own JSDoc explains why they are optional on that
  * TYPE despite the real transport always populating them, so an absent
  * value here can only be a hand-rolled test double that predates this
- * widening, never a real server response. Still drops `voids_event_id`
- * (LedgerSlotEvent does not carry it) — see the SCOPE BOUNDARY comment at
- * the top of this file for what that means for a foreign `core.void`.
+ * widening, never a real server response.
+ *
+ * R5 — `voids` is now carried through, from `voids_event_id` (types.ts,
+ * populated at the transport boundary since this same pass). It used to be
+ * dropped here, which made every FOREIGN void — one this device did not
+ * submit, so `pendingToEnvelope` never built it — arrive as a `core.void`
+ * naming nothing: the engine's `resolveVoids` (packages/engine/src/core/
+ * events.ts) then rejected every fold from that seq on, freezing the pad
+ * behind a rejection banner. Set only when non-null, so a normal (non-void)
+ * row still widens to an envelope with no `voids` key at all rather than an
+ * explicit `undefined`.
  */
 function ledgerSlotToEnvelope(fixtureId: string, row: LedgerSlotEvent): EventEnvelope | null {
   if (row.id === undefined || row.recorded_at === undefined) return null;
@@ -497,6 +563,7 @@ function ledgerSlotToEnvelope(fixtureId: string, row: LedgerSlotEvent): EventEnv
     payload: row.payload,
     recordedAt: row.recorded_at,
     recordedBy: row.recorded_by,
+    ...(row.voids_event_id ? { voids: row.voids_event_id } : {}),
   };
 }
 
@@ -521,18 +588,60 @@ function ledgerSlotToEnvelope(fixtureId: string, row: LedgerSlotEvent): EventEnv
  * ledger row can never reconstruct. `runDrain`'s ack append (pass F) needs
  * the OPPOSITE precedence — see that call site's own comment for the
  * `id`/`voids` argument for why.
+ *
+ * R5 — see the file header's own R5 UPDATE for the full trace. "Existing
+ * wins" was never really about provenance; it was about not LOSING
+ * information, and the only information a wire-sourced row could ever lack
+ * was a void's target (`voids_event_id`, dropped at the transport boundary
+ * until this same pass). So the rule is now stated as what it always meant:
+ * on a seq collision where the two copies genuinely disagree — a different
+ * `.id`, or a different `.voids` — the WIRE-sourced copy wins, unless
+ * adopting it would drop a void target this hook already holds
+ * (`existing.voids` set, `event.voids` absent). That single exception is
+ * exactly the case the old default existed to protect: `runDrain`'s
+ * `pendingToEnvelope` sets `voids` for a core.void THIS device recorded,
+ * and a pre-R5 (or hand-rolled) row can still arrive without one.
+ *
+ * Both halves of the disagreement matter, and each fixes its own crash:
+ *  - `.id` — a locally-scored event keeps its CLIENT-fabricated idempotency
+ *    key as its ledger id for the life of the mount (`AppendSuccess` carries
+ *    no row id), so a void naming the SERVER's real id could never resolve
+ *    against it. Adopting the wire id can never lose anything: this hook's
+ *    fabricated ids never appear in wire-sourced data.
+ *  - `.voids` — the corollary. Once an id can be corrected under a seq, a
+ *    void baked earlier against the OLD id has to be correctable too, or the
+ *    id fix simply moves the dangling reference from one side to the other.
+ *
+ * Scoped to the default direction only: `runDrain`'s own `incomingWins: true`
+ * ack append is untouched (the branch below is gated on
+ * `!opts?.incomingWins`), so its own "the just-acked copy always wins
+ * outright" guarantee still holds byte-for-byte.
  */
 function mergeEnvelopesIntoLedger(
   current: readonly EventEnvelope[],
   incoming: readonly EventEnvelope[],
-  opts?: { incomingWins?: boolean },
+  opts?: { incomingWins?: boolean; incomingIsLocal?: boolean },
 ): EventEnvelope[] {
   const first = opts?.incomingWins ? incoming : current;
   const second = opts?.incomingWins ? current : incoming;
   const bySeq = new Map<number, EventEnvelope>();
   for (const event of first) bySeq.set(event.seq, event);
   for (const event of second) {
-    if (!bySeq.has(event.seq)) bySeq.set(event.seq, event);
+    const existing = bySeq.get(event.seq);
+    if (existing === undefined) {
+      bySeq.set(event.seq, event);
+      continue;
+    }
+    // R5 — the wire-sourced copy wins on a real disagreement UNLESS it is
+    // strictly less informative (see this function's own R5 doc above).
+    // `incomingIsLocal` marks the ONE caller whose `incoming` is this
+    // device's own build rather than a server read (`runDrain`'s ack
+    // append): there the existing wire copy is the authoritative one, so
+    // this branch must not fire.
+    if (!opts?.incomingWins && !opts?.incomingIsLocal && (existing.id !== event.id || existing.voids !== event.voids)) {
+      const wouldLoseVoidTarget = existing.voids !== undefined && event.voids === undefined;
+      if (!wouldLoseVoidTarget) bySeq.set(event.seq, event);
+    }
   }
   return [...bySeq.values()].sort((a, b) => a.seq - b.seq);
 }
@@ -1203,7 +1312,36 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
           // `acked` (built fresh, this call, from this hook's own identity)
           // is always the richer, correctly-attributed copy, so it must win
           // outright, not merely survive alongside the other one.
-          const withAck = mergeEnvelopesIntoLedger(ledgerEventsRef.current, [acked], { incomingWins: true });
+          //
+          // R5 — `incomingWins` is now `false` for ALREADY-APPLIED, and the
+          // reasoning above survives intact for a genuine ack only. An
+          // already-applied outcome means `sendOne`'s own 409 inspection
+          // just PROVED the server's row for this event exists (that is the
+          // only way `resolveConflict` returns it), so the ledger's copy —
+          // if a poll or an `initialEvents` re-seed has already merged it —
+          // is the SERVER's, under the real row id, and this locally-rebuilt
+          // copy adds nothing but a client-fabricated id. Letting the local
+          // copy win there is what broke the volleyball walkthrough: a tap
+          // whose POST the page reload aborted MID-FLIGHT (committed
+          // server-side, never acked to the client) resumed from the durable
+          // queue after the reload, resolved as already-applied, and
+          // overwrote the server row's id — so the console's void, naming
+          // that real id, targeted nothing and every fold from there on
+          // threw INVALID_EVENT. The second leg of the argument above is
+          // also gone as of R5: a wire-sourced copy of a core.void now DOES
+          // carry `voids` (transport.ts / `ledgerSlotToEnvelope`), so it can
+          // no longer fold as a silent no-op. The FIRST leg — `ownEventIds`
+          // attribution — is preserved explicitly below instead of by
+          // forcing the local copy to win.
+          const withAck = mergeEnvelopesIntoLedger(ledgerEventsRef.current, [acked], {
+            incomingWins: outcome.kind === "acked",
+            incomingIsLocal: true,
+          });
+          // Whichever copy survived at this seq is the one every later
+          // reader sees, so "is this mine" must follow it. Cheap and
+          // idempotent — `markOwn` is a set insert.
+          const survivor = withAck.find((e) => e.seq === acked.seq);
+          if (survivor !== undefined) markOwn(survivor.id);
           commitLedgerEvents(withAck);
           void reconcileAfterAck(withAck);
         } else if (outcome.kind === "rejected") {

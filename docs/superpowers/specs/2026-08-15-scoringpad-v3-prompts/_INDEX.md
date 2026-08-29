@@ -3392,3 +3392,52 @@ Owed, in order:
    throws".
 4. Merge gates still open: owner visual sign-off (gallery sheet unpublished),
    and smoke (deferred to R8 by name).
+
+### R5 — the undo crash, root-caused: TWO defects, one symptom (2026-08-29)
+
+The "undo after a decided match crashes the pad" red was **two independent
+information losses in the same seam**, either of which alone reproduces the
+symptom. That is why it was intermittent: which one fired depended on whether
+the console's undo reached the pad through a `router.refresh()` (a full
+`initialEvents` batch) or through a **poll tick** — a race, decided differently
+run to run.
+
+**Defect 1 — the pad's ledger keeps a client-fabricated id forever.**
+An event this pad scored keeps the idempotency key it minted as its ledger id
+for the life of the mount: `AppendSuccess` carries no row id, so nothing ever
+teaches the pad what the server called that row. A foreign void — built
+server-side — names the REAL id. Unresolvable. `mergeEnvelopesIntoLedger`'s
+blanket "existing wins" then discarded the correctly-id'd copy that the very
+same batch carried for it. Note this also made **S12/#421 pass J inert**: pass
+J merges a freshly-read, correctly-id'd row into the ledger through this same
+primitive, and "existing wins" was silently dropping it.
+
+**Defect 2 — a polled void names nothing at all.**
+`voids_event_id` is on the wire (`EventOut`, `ScoreEvent`) and was
+**parsed-then-DROPPED** at the transport boundary; `LedgerSlotEvent` never
+carried it. So every void this device did not itself submit, arriving via the
+poll path, widened into a `core.void` with no target. `resolveVoids` rejects
+that exactly as it rejects an unknown id. **This was never console-specific:
+a second referee's undo on a shared fixture took the same path.** Found only
+by running the walkthrough three times against the Defect-1 fix — 2 green,
+1 red — and reading the screenshot, which showed a live pad behind a rejection
+banner rather than the error boundary.
+
+**Why it crashed rather than degraded.** `foldedState` catches. But a v3 skin
+computing a serve/rotation label reads `pipeline.events` — the raw, unfolded
+list — synchronously during render with no try/catch, so the throw reached
+`ScoringErrorBoundary`.
+
+**Fixed** in `transport.ts` (keep the field), `types.ts` (`LedgerSlotEvent`
+carries it), `ledgerSlotToEnvelope` (widen it into `voids`), and
+`mergeEnvelopesIntoLedger`, whose rule is now stated as what it always meant:
+on a seq collision the WIRE copy wins where the two genuinely disagree on
+`.id` or `.voids`, unless adopting it would DROP a void target already held.
+Both halves are needed — correcting an id under a seq without allowing a void
+to be re-targeted just moves the dangling reference to the other side.
+
+Each half has its own MUTATION TARGET test, verified to red independently.
+
+**The trap worth keeping:** one green run proved nothing. The first fix passed
+the walkthrough twice before the third run exposed a second, unrelated defect
+underneath it.

@@ -105,12 +105,11 @@ describe("appendEvent — outcome mapping", () => {
 });
 
 describe("listEventsSince / getLastSeq / fetchState", () => {
-  it("listEventsSince returns the ledger rows, KEEPING id/recorded_at (S12/#421) but still dropping voids_event_id, and hits the right URL", async () => {
+  it("listEventsSince returns the ledger rows, KEEPING id/recorded_at (S12/#421) and voids_event_id (R5), and hits the right URL", async () => {
     // The server's real EventOut carries more columns than LedgerSlotEvent
-    // declares (types.ts) — voids_event_id is validated but DROPPED by the
-    // zod boundary (review finding 1), not silently forwarded. id/
-    // recorded_at used to be dropped the same way; S12/#421 widened the
-    // schema to keep them (use-pad-pipeline.ts needs both to fold a row).
+    // once declared (types.ts). id/recorded_at were dropped until S12/#421
+    // widened the schema to keep them; voids_event_id was dropped until R5 —
+    // see the MUTATION TARGET below for the defect that dropping it caused.
     const rawRow = {
       id: "e1",
       seq: 5,
@@ -124,9 +123,47 @@ describe("listEventsSince / getLastSeq / fetchState", () => {
     const { fn, calls } = fakeFetch(() => fakeResponse(200, { ok: true, data: [rawRow] }));
     const result = await sessionTransport({ fetchFn: fn }).listEventsSince("fx-1", 4);
     expect(result).toEqual([
-      { id: "e1", seq: 5, type: "core.start", payload: {}, recorded_at: "t", recorded_by: "u1", device_link_id: null },
+      {
+        id: "e1",
+        seq: 5,
+        type: "core.start",
+        payload: {},
+        recorded_at: "t",
+        recorded_by: "u1",
+        device_link_id: null,
+        voids_event_id: null,
+      },
     ]);
     expect(calls[0]!.url).toBe("/api/v1/fixtures/fx-1/events?since_seq=4");
+  });
+
+  it("MUTATION TARGET (R5): a POLLED core.void keeps the id of the row it undoes — dropping it left every foreign undo targeting nothing", async () => {
+    // The pad only ever builds a void's `voids` itself for a void IT
+    // submitted (use-pad-pipeline.ts `pendingToEnvelope`). Every OTHER void —
+    // the fixture console's "Undo last", a second referee's undo on the same
+    // fixture — reaches this device through exactly this read, and the engine
+    // rejects a core.void naming nothing precisely as it rejects one naming
+    // an unknown id, freezing the pad behind a rejection banner.
+    const voidRow = {
+      id: "v1",
+      seq: 9,
+      type: "core.void",
+      payload: {},
+      recorded_at: "t",
+      recorded_by: "u2",
+      voids_event_id: "e-target-1",
+      device_link_id: null,
+    };
+    const { fn } = fakeFetch(() => fakeResponse(200, { ok: true, data: [voidRow] }));
+    const result = await sessionTransport({ fetchFn: fn }).listEventsSince("fx-1", 8);
+    expect(result[0]!.voids_event_id).toBe("e-target-1");
+  });
+
+  it("normalises an OMITTED voids_event_id key to a real null — the common case, since only a core.void ever carries one", async () => {
+    const rawRow = { id: "e1", seq: 5, type: "core.score", payload: {}, recorded_at: "t", recorded_by: "u1", device_link_id: null };
+    const { fn } = fakeFetch(() => fakeResponse(200, { ok: true, data: [rawRow] }));
+    const result = await sessionTransport({ fetchFn: fn }).listEventsSince("fx-1", 4);
+    expect(result[0]!.voids_event_id).toBeNull();
   });
 
   it("MUTATION TARGET (S12/#421): a row missing id or recorded_at rejects with a parse error — both are NOT NULL server columns, never guessed", async () => {
@@ -190,7 +227,16 @@ describe("listEventsSince — ledger row validation at the wire boundary (review
     const { fn } = fakeFetch(() => fakeResponse(200, { ok: true, data: [rawRow] }));
     const result = await sessionTransport({ fetchFn: fn }).listEventsSince("fx-1", 4);
     expect(result).toEqual([
-      { id: "e1", seq: 5, type: "core.note", payload: { text: "x" }, recorded_at: "t", recorded_by: null, device_link_id: null },
+      {
+        id: "e1",
+        seq: 5,
+        type: "core.note",
+        payload: { text: "x" },
+        recorded_at: "t",
+        recorded_by: null,
+        device_link_id: null,
+        voids_event_id: null,
+      },
     ]);
     // A GENUINE own key holding `null`, not merely absent from the object —
     // pipeline.ts's resolveConflict compares this against OwnIdentity's own
@@ -205,7 +251,16 @@ describe("listEventsSince — ledger row validation at the wire boundary (review
     const { fn } = fakeFetch(() => fakeResponse(200, { ok: true, data: [rawRow] }));
     const result = await sessionTransport({ fetchFn: fn }).listEventsSince("fx-1", 4);
     expect(result).toEqual([
-      { id: "e1", seq: 5, type: "core.note", payload: {}, recorded_at: "t", recorded_by: null, device_link_id: null },
+      {
+        id: "e1",
+        seq: 5,
+        type: "core.note",
+        payload: {},
+        recorded_at: "t",
+        recorded_by: null,
+        device_link_id: null,
+        voids_event_id: null,
+      },
     ]);
   });
 

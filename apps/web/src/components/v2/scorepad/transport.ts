@@ -45,9 +45,19 @@ import type { AppendSuccess, LedgerSlotEvent } from "./types";
 // `z.string()`): a row missing one is a genuine wire-contract violation and
 // should hard-fail here, not silently degrade. (LedgerSlotEvent's own TYPE
 // still marks both optional, for a DIFFERENT, TS-compile-time reason — see
-// its JSDoc in types.ts.) Still narrower than the server's real EventOut:
-// `voids_event_id` is validated-then-dropped, matching LedgerSlotEvent's
-// own documented scope (types.ts) — out of this pass's stated fix.
+// its JSDoc in types.ts.)
+//
+// R5 — `voids_event_id` is now KEPT, not validated-then-dropped. Dropping it
+// here was the wire half of a real defect: the server has always sent the
+// field (`EventOut`, server/usecases/fixtures.ts; `ScoreEvent`,
+// server/api-v1/schemas.ts), but every void this pad learned about through a
+// POLL rather than through its own submission arrived with no target at all,
+// so use-pad-pipeline.ts's `ledgerSlotToEnvelope` widened it into a
+// `core.void` naming nothing and the engine's `resolveVoids` rejected the
+// fold from that point on — a second referee's undo, or the fixture
+// console's, froze this device's pad behind a rejection banner. Nullable on
+// the wire (only a core.void ever carries one), and `.nullish()` for the same
+// absent-key-vs-explicit-null reason as the two identity fields below.
 const ledgerSlotEventSchema = z.object({
   id: z.string(),
   seq: z.number(),
@@ -59,6 +69,10 @@ const ledgerSlotEventSchema = z.object({
     .nullish()
     .transform((v) => v ?? null),
   device_link_id: z
+    .string()
+    .nullish()
+    .transform((v) => v ?? null),
+  voids_event_id: z
     .string()
     .nullish()
     .transform((v) => v ?? null),
