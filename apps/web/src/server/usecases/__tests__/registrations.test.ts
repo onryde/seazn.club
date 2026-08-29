@@ -149,6 +149,7 @@ import {
   notifySubmitted,
   resolveRefundPolicy,
   groupById,
+  reconcileRegistrationGroupBySession,
   type GroupStatusView,
 } from "../registrations";
 // RS005 F1: rendering the REAL production template off captured
@@ -839,6 +840,89 @@ describe.skipIf(!HAS_DB)("registration flows (doc 16 §1.1, PROMPT-20a)", () => 
     await expect(refundRegistration(owner, res.registration.id, 700)).rejects.toThrow(HttpError);
     const fullRest = await refundRegistration(owner, res.registration.id, undefined);
     expect(fullRest.refunded_cents).toBe(1000);
+  });
+
+  // Finding #18 (CRITICAL, money-matrix S4): a paid, CONFIRMED entry that is
+  // later withdrawn past refund_lock_at must stay unrefunded — same policy
+  // as "post-lock withdrawal does NOT auto-refund" directly above — even
+  // when the status page's own reconcile-on-return path re-runs against the
+  // SAME Stripe session after the withdrawal.
+  //
+  // Mechanism: the status page (register/status/page.tsx) calls
+  // reconcileRegistrationGroupBySession unconditionally whenever
+  // ?checkout=success&session_id=... is present, with NO gate on the
+  // registration's current status (deliberate — see that function's own doc
+  // comment; a multi-entry cart can have a representative sibling already
+  // settled). cancel-entry.tsx calls router.refresh() right after a
+  // successful withdrawal, which re-renders that SAME URL — query string
+  // intact — so the reconcile call fires again with the identical
+  // session_id. Stripe still reports that session as paid forever (a refund
+  // does not change payment_status), so confirmPaidRegistration re-enters
+  // with the row now 'withdrawn' and takes its withdrawn/expired/
+  // rejected/waitlisted branch — built for a payment landing on a spot the
+  // entrant no longer holds, not for the ordinary post-lock cancellation
+  // this scenario actually is — and refunds in full, audited as
+  // "late_payment", bypassing refund_lock_at entirely.
+  it("F18 CRITICAL: a reconcile replay of the SAME session after a post-lock withdrawal must not refund as 'late'", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    await sql`update organizations
+              set stripe_account_id = ${"acct_" + randomUUID().slice(0, 8)}, stripe_charges_enabled = true
+              where id = ${orgId}`;
+    const { competition, division } = await rig(owner);
+    const settings = await putRegistrationSettings(owner, division.id, {
+      enabled: true,
+      entrant_kind: "individual",
+      payment_method: "stripe",
+      fee_cents: 4000,
+      form_fields: [],
+      opens_at: null,
+      closes_at: null,
+      capacity: null,
+      refund_lock_at: "2020-01-01T00:00:00Z", // lock long past — organiser discretion only
+    });
+
+    const res = await seedRegistration(competition.id, division.id, settings);
+    const session = fakeSession(res.registration.id, 4000);
+    // The binding reconcileRegistrationGroupBySession checks BEFORE ever
+    // calling Stripe — the same stamp createRegistrationCheckout leaves.
+    await sql`update registration_groups set checkout_session_id = ${session.id}
+              where id = ${res.registration.group_id}`;
+    stripeMock.checkoutRetrieve.mockResolvedValue(session);
+
+    // Reconcile-on-return, first visit: the status page's own render right
+    // after Stripe's redirect back. Confirms the entry.
+    expect(
+      await reconcileRegistrationGroupBySession(res.registration.group_id, res.access_token, session.id),
+    ).toBe(true);
+    expect((await loadWithGroup(res.registration.id)).status).toBe("confirmed");
+
+    // Registrant cancels from the status page. refund_lock_at is long past,
+    // so this is organiser-discretion only — withdrawCore must issue no
+    // refund (asserted the same way the sibling test above does).
+    await withdrawRegistrationPublic(res.registration.id, res.access_token);
+    expect(stripeMock.refundCreate).not.toHaveBeenCalled();
+
+    // cancel-entry.tsx's router.refresh() re-renders the SAME URL — the
+    // query string (rid/token/checkout=success/session_id) is untouched —
+    // so the page calls reconcileRegistrationGroupBySession again with the
+    // identical session id. Stripe has no idea the entrant withdrew; the
+    // session it hands back is unchanged.
+    const reconciledAgain = await reconcileRegistrationGroupBySession(
+      res.registration.group_id,
+      res.access_token,
+      session.id,
+    );
+
+    // The replay still reaches fulfilment (proving the assertions below are
+    // not vacuous from an early return elsewhere, e.g. a token/binding miss).
+    expect(reconciledAgain).toBe(true);
+    // The lock said organiser discretion, and a page refresh must not move
+    // money the first read of that same policy correctly withheld.
+    expect(stripeMock.refundCreate, "the replay must not touch Stripe's refund API at all").not.toHaveBeenCalled();
+    const row = await loadWithGroup(res.registration.id);
+    expect(row.status).toBe("withdrawn");
+    expect(row.refunded_cents).toBe(0);
   });
 
   // V379/RS007 — NULL refund_lock_at no longer means refundable forever; it

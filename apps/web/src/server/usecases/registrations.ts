@@ -2307,6 +2307,46 @@ async function confirmPaidRegistration(
     // fell through to the branch below (status='paid', then materialised on
     // auto-approval) — an entrant seated in a slot the sweep had already
     // handed to someone else, and the late payer never refunded.
+    //
+    // Finding #18 (money-matrix S4, CRITICAL): 'withdrawn' is reachable two
+    // structurally different ways, and reg.status alone cannot tell them
+    // apart. (a) The row was NEVER paid/confirmed — it was cancelled before
+    // any money moved, and a stale checkout now completes for a spot the
+    // entrant never held; that is exactly what the branch below exists for
+    // (refund in full, ignore refund_lock_at — the organiser never had a
+    // seated entrant to keep the money for). (b) The row WAS confirmed —
+    // materialise() already ran, an entrant was seated — and was withdrawn
+    // AFTERWARDS: the ordinary post-lock cancellation refund_lock_at exists
+    // to govern. Reaching this function again for case (b) is not a late
+    // payment; it is a REPLAY of an already-fulfilled payment.
+    // reconcileRegistrationGroupBySession (the status page's
+    // reconcile-on-return, register/status/page.tsx) deliberately has no
+    // status pre-check — a multi-entry cart can have a settled
+    // representative sibling — so cancel-entry.tsx's router.refresh() right
+    // after a successful withdrawal re-renders the SAME URL (same
+    // ?checkout=success&session_id=... query string) and re-enters here
+    // with the SAME session, which Stripe still happily reports as paid —
+    // a refund never changes a Checkout Session's own payment_status.
+    // Refunding again here would silently overrule withdrawCore's own
+    // already-correct policy decision for this entry.
+    //
+    // `entrant_id` is the durable, already-on-the-row signal for "was this
+    // ever case (b)": it is written in the SAME update as `status =
+    // 'confirmed'` (materialise, above) and nothing ever clears it —
+    // withdrawCore only flips the linked ENTRANT row's own status to
+    // 'withdrawn', never registrations.entrant_id. Scoped to 'withdrawn'
+    // alone, not the other three statuses below: only withdrawCore can act
+    // on an already-confirmed row. 'expired'/'waitlisted' only ever fire
+    // from a still-'pending' row (sweepRegistrations' own
+    // `locked.status !== "pending"` guards on both its expiry and lapse
+    // passes), and 'rejected' only from 'pending'/'paid'
+    // (rejectRegistration's own guard) — never from 'confirmed' — so
+    // entrant_id is always null on those three already, and a genuinely
+    // rejected (or expired/lapsed) entry must keep refunding in full here
+    // regardless of any lock, unchanged.
+    if (reg.status === "withdrawn" && reg.entrant_id) {
+      return null;
+    }
     if (
       reg.status === "withdrawn" ||
       reg.status === "expired" ||
