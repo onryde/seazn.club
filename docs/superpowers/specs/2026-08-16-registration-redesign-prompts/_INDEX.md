@@ -2738,3 +2738,118 @@ designed and then dropped, rather than deliberately deferred.
 **Status:** OPEN. Owed: the control in the registrant detail panel,
 gated on the same conditions the endpoint enforces, plus a walkthrough
 scenario that taps it after the lock (scenario S4 of the matrix below).
+
+### #17 (NEW, found 2026-08-30) — a pair's typed partner name never reaches its roster
+
+Found by walking the doubles journey by hand for the money matrix, in a
+screenshot — no test asserts either half of this, and both halves are
+individually correct.
+
+**What happens.** On the entries step a pair captain types the partner
+into `register.entries.partnerName.placeholder` ("Partner's name
+(optional for now)"). That value feeds `pairDisplayName`
+(`registration-submit.ts:344-360`), so the entry is named
+"Alice & Bob". The DETAILS step then renders the pair's TWO roster rows
+**empty** — the typed partner name does not seed row 2 — and refuses to
+advance until both are filled. So the captain types the partner's name a
+second time, into a different box, on a different screen.
+
+**Why that is worse than redundant.** The two values are never compared.
+The display name comes from the entries step; the roster comes from the
+details step; nothing validates that the second name matches the first.
+Type anything different the second time — a nickname, a typo, or the
+captain's own name — and the entry keeps the ORIGINAL display name
+forever while its roster says something else.
+
+**Where it surfaces, and to whom.** The join page. Its heading is the
+display name and its "Which one are you?" radio list is the roster, so a
+partner following their own invite link sees:
+
+> Joining **Pair Captain … & Pair Partner …** · Mixed Doubles
+> Which one are you?  ( ) Pair Captain …   ( ) Pair Captain …
+
+Two identical options, neither matching the name in the heading. There is
+no way for that partner to tell which row is theirs, and picking wrong
+claims the captain's own slot. (Screenshot:
+`apps/web/test-results/walkthrough-rs007-money-ma-6ee80--the-price-it-actually-paid-walkthrough/test-failed-2.png`
+from the S2 run of 2026-08-30.)
+
+The identical-names case above was produced by the walkthrough filling
+both rows the same way; the DISAGREEMENT between heading and roster needs
+nothing unusual at all, only a captain who types the partner's name
+slightly differently the second time — which is the ordinary case, since
+nothing on screen tells them the two are meant to match.
+
+**Status:** OPEN. Owed: seed the pair's second roster row from the
+entries-step partner name (and keep them in step if it is edited), so the
+name is typed once. `entrant_kind === "pair"` is fixed at exactly two
+players (`registration-submit.ts:487`), so there is no ambiguity about
+which row it seeds.
+
+### #18 (NEW, found 2026-08-30) — CRITICAL: money leaves the organiser's account past `refund_lock_at`, audited as `late_payment`
+
+Found by the S4 scenario of the money matrix, against REAL Stripe. No
+unit test could have found it: it needs a live PaymentIntent and a live
+webhook stream.
+
+**Reproduction (S4, `rs007-money-matrix.spec.ts`).** A paid singles
+division whose `refund_lock_at` is one hour in the PAST. An entrant pays
+£40 by card, then cancels from the status page.
+
+**What the product tells them, correctly.** The cancel dialog renders
+`confirm.cancelEntry.bodyDiscretion` — "The refund window has passed —
+any refund is at the organiser's discretion." Both assertions on that
+copy PASS. `resolveRefundPolicy` returned `refundable: false`, and
+`withdrawCore` therefore issued no refund. The read side is right.
+
+**What actually happens to the money.** Three seconds later £40 is
+refunded anyway. From the ledger on the run of 2026-08-30:
+
+```
+00:21:54.431  registration.confirmed   {"paid": true, "amount_cents": 4000}
+00:22:02.620  registration.withdrawn   {"by": "registrant"}
+00:22:05.541  registration.refunded    {"mode": "late_payment",
+                                        "amount_cents": 4000,
+                                        "stripe_refund_id": "re_3U9vZM…"}
+```
+
+`refund_lock_at` was `2026-08-29 23:21:33+01`; `starts_on` was
+`2030-11-01`, so the `starts_on` fallback was not in play. Verified in
+the database afterwards: `status=withdrawn, amount_cents=4000,
+refunded_cents=4000`.
+
+**Why `late_payment` is the wrong verdict here.** That mode comes from
+`confirmPaidRegistration` (`registrations.ts:2481-2484`), whose
+withdrawn/expired/rejected/waitlisted branch (`:2311-2327`) exists for a
+payment that lands for a spot the entrant no longer holds — legitimately
+NOT bound by the refund lock, because the organiser never had a seated
+entrant to keep the money for. That is not this case. This payment
+arrived first, confirmed the entry, and the entrant withdrew afterwards
+— the ordinary post-lock cancellation the whole `refund_lock_at` feature
+exists to govern. The branch reads the row's status at the moment it
+runs, and cannot tell "paid late" from "paid, then withdrawn".
+
+The existing redelivery guard (`:2457`, `refunded_cents >=
+amount_cents`) only stops a SECOND late refund. It does not stop the
+first one from firing against an entry that was already confirmed.
+
+**Mechanism NOT yet pinned — do not assume one.** `billing_events` shows
+exactly ONE `checkout.session.completed` for this registration
+(`evt_1U9vZOAy22H0xqqxvQGtJVCi`, `replay_attempts 0`, processed
+00:21:54.473), and `handleRegistrationCheckoutCompleted` — the only
+caller of `confirmPaidRegistration` — is reached from that event type
+alone. So something re-entered that path ~11s later with no new recorded
+event, or another path writes this audit row. One suggestive detail: the
+server log shows the refund-receipt email attempted TWICE for the S4
+contact address on each of two separate runs, against a single
+`registration.refunded` audit row.
+
+**Why it is CRITICAL.** The organiser silently loses money their own
+published policy said they keep, on the ordinary late-cancellation path,
+with an audit trail that calls it a late payment so nothing looks wrong.
+It is invisible to the registrant (who was told they would get nothing)
+and invisible to the organiser (who has no reason to check).
+
+**Status:** OPEN, mechanism under diagnosis. The S4 walkthrough scenario
+is the reproduction and is currently RED on this assertion, deliberately.
+Reproduce with `KEEP_FIXTURES=1` to keep the ledger.

@@ -1,5 +1,10 @@
-// A witness spec for TWO CONFIRMED RS007 defects, both on the status page's
-// money surface. It is meant to FAIL — see "THE TWO DEFECTS" below.
+// A witness spec for two RS007 money defects on the status page. Both are now
+// FIXED, so this file is a regression guard rather than a reproduction — see
+// "THE TWO DEFECTS" below for what each one was and how it failed.
+//
+// The wider matrix that grew out of this one — singles, doubles + an invited
+// partner, a mid-competition price rise, an organiser-side cancellation and
+// the refund lock — lives in `rs007-money-matrix.spec.ts` beside it.
 //
 // The journey: an organiser opens a PAID team division at capacity ONE, a
 // public captain enters TWO team entries in one cart (so the second is
@@ -65,10 +70,16 @@
 //     npx playwright test e2e/walkthrough/rs007-invite-pay-cancel.spec.ts --project=walkthrough
 import { expect, test } from "@playwright/test";
 import { apiJson, activeOrg, TAG } from "../helpers";
-
-const ENABLED = process.env.CONNECT_WALKTHROUGH === "1";
-const WATCH = process.env.WALKTHROUGH_WATCH === "1";
-const CONNECT_ACCOUNT = process.env.STRIPE_CONNECT_TEST_ACCOUNT ?? "";
+import {
+  CONNECT_ACCOUNT,
+  ENABLED,
+  WATCH,
+  centsFromRenderedAmount,
+  claimConnectAccount,
+  publicRegSnapshot,
+  releaseConnectAccount,
+  type ConnectClaim,
+} from "../rs007-money-kit";
 
 // Loud skip at collection time — Playwright's own summary prints "1 skipped"
 // with no reason, and a CI leg that silently skips its only real-money
@@ -86,112 +97,13 @@ if (!ENABLED || !CONNECT_ACCOUNT) {
   );
 }
 
-/** `organizations.stripe_account_id` is UNIQUE — take the fixture account for
- *  the duration and give it back. Copied verbatim from registration-connect.spec.ts:
- *  deliberately NOT helpers' `setOrgConnectSql`, which writes a fabricated
- *  `acct_e2e_<id>` that Stripe rejects as a transfer destination. */
-async function withDb<T>(fn: (sql: import("postgres").Sql) => Promise<T>): Promise<T> {
-  const url = process.env.DATABASE_URL;
-  if (!url) throw new Error("DATABASE_URL required");
-  const { default: postgres } = await import("postgres");
-  const sql = postgres(url, { connection: { search_path: "seazn_club" }, ssl: false });
-  try {
-    return await fn(sql);
-  } finally {
-    await sql.end({ timeout: 5 });
-  }
-}
-
-async function claimConnectAccount(orgId: string): Promise<string | null> {
-  return withDb(async (sql) => {
-    const prior = await sql`
-      select id from organizations where stripe_account_id = ${CONNECT_ACCOUNT}`;
-    const priorId = (prior[0]?.id as string | undefined) ?? null;
-    if (priorId) {
-      await sql`
-        update organizations
-        set stripe_account_id = null, stripe_charges_enabled = false
-        where id = ${priorId}`;
-    }
-    await sql`
-      update organizations
-      set stripe_account_id = ${CONNECT_ACCOUNT}, stripe_charges_enabled = true
-      where id = ${orgId}`;
-    return priorId;
-  });
-}
-
-async function releaseConnectAccount(orgId: string, priorId: string | null): Promise<void> {
-  await withDb(async (sql) => {
-    await sql`
-      update organizations
-      set stripe_account_id = null, stripe_charges_enabled = false
-      where id = ${orgId}`;
-    if (priorId) {
-      await sql`
-        update organizations
-        set stripe_account_id = ${CONNECT_ACCOUNT}, stripe_charges_enabled = true
-        where id = ${priorId}`;
-    }
-    const back = await sql`
-      select id from organizations where stripe_account_id = ${CONNECT_ACCOUNT}`;
-    console.log(`RESTORE>>> fixture now held by ${(back[0]?.id as string) ?? "NOBODY"} (expected ${priorId})`);
-  });
-}
-
-/** A rendered "£25.00" / "£25" / "€1.234,50" -> cents.
- *
- *  The original version of this helper stripped every non-digit and returned
- *  that, on the stated premise that "GBP/USD/EUR all render exactly two
- *  minor-unit digits". That premise is FALSE for this app: a whole amount
- *  renders as "£25", which stripped to `25` — so the helper reported 25 cents
- *  where the page said twenty-five pounds, and the assertion failed with a
- *  message blaming a product defect that had already been fixed. A parser that
- *  is wrong in the safe direction still accuses the wrong party.
- *
- *  So: read the trailing separator group. Exactly two digits after the last
- *  `.`/`,` is a minor-unit fraction; anything else (three digits, or no
- *  separator at all) is grouping. Handles "£25", "£25.00", "£1,234.50" and
- *  "€1.234,50" alike, without needing to know the org's currency or locale. */
-function centsFromRenderedAmount(text: string): number {
-  const match = text.match(/\d[\d.,\s  ]*\d|\d/);
-  if (!match) throw new Error(`no monetary amount found in "${text}"`);
-  const raw = match[0].replace(/[\s  ]/g, "");
-  const trailing = raw.match(/[.,](\d+)$/);
-  const normalised =
-    trailing && trailing[1]!.length === 2
-      ? `${raw.slice(0, -trailing[0]!.length).replace(/[.,]/g, "")}.${trailing[1]}`
-      : raw.replace(/[.,]/g, "");
-  const value = Number(normalised);
-  if (!Number.isFinite(value)) throw new Error(`unparseable monetary amount "${text}"`);
-  return Math.round(value * 100);
-}
-
-interface PublicRegSnapshot {
-  id: string;
-  status: string;
-  amount_cents: number;
-  refunded_cents: number;
-}
-
-/** GET /api/v1/public/registrations/{id}?token= — publicRegistrationStatus's
- *  wire shape (registrations.ts). The read-back the dispatch requires: "the
- *  system's own record", not the rendered pixels. */
-async function publicRegSnapshot(
-  request: import("@playwright/test").APIRequestContext,
-  regId: string,
-  token: string,
-): Promise<PublicRegSnapshot> {
-  const res = await apiJson<PublicRegSnapshot>(
-    request,
-    `/api/v1/public/registrations/${regId}?token=${encodeURIComponent(token)}`,
-    "GET",
-  );
-  if (res.status !== 200 || !res.data) {
-    throw new Error(`publicRegSnapshot(${regId}): GET -> ${res.status}`);
-  }
-  return res.data;
-}
+// The Connect-fixture claim/release, the money parser and the public status
+// read-back all moved to `../rs007-money-kit` when the money matrix
+// (rs007-money-matrix.spec.ts) needed the same four. The claim there also
+// takes a Postgres advisory lock, which is what stops these two files — both
+// in the `walkthrough` project, which inherits `fullyParallel: true` — from
+// landing on two workers and stealing the one UNIQUE
+// `organizations.stripe_account_id` out from under each other mid-checkout.
 
 test.use({
   headless: !WATCH,
@@ -214,8 +126,7 @@ test("RS007 witness — cancelling one of two cart entries drops the subtotal to
   test.setTimeout(600_000);
 
   const SHOTS = testInfo.outputPath();
-  let priorHolder: string | null = null;
-  let claimedFor: string | null = null;
+  let connect: ConnectClaim | null = null;
 
   const CAPTAIN_NAME = `Test Captain ${TAG}`;
   const CAPTAIN_EMAIL = `captain-${TAG}@example.com`;
@@ -247,9 +158,8 @@ test("RS007 witness — cancelling one of two cart entries drops the subtotal to
 
   try {
     const org = await activeOrg(page);
-    priorHolder = await claimConnectAccount(org.id);
-    claimedFor = org.id;
-    console.log(`CONNECT>>> ${CONNECT_ACCOUNT} taken from ${priorHolder ?? "nobody"} for ${org.slug}`);
+    connect = await claimConnectAccount(org.id);
+    console.log(`CONNECT>>> ${CONNECT_ACCOUNT} taken from ${connect.priorId ?? "nobody"} for ${org.slug}`);
 
     // ---- SETUP: one PAID team division at capacity ONE --------------------
     // "Through the hub UI where practical" — practical here means the same
@@ -613,6 +523,6 @@ test("RS007 witness — cancelling one of two cart entries drops the subtotal to
     await ctx.close();
   } finally {
     await apiJson(request, `/api/v1/competitions/${comp.data!.id}`, "DELETE");
-    if (claimedFor) await releaseConnectAccount(claimedFor, priorHolder);
+    await releaseConnectAccount(connect);
   }
 });
