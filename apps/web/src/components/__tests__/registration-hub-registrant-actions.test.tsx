@@ -301,7 +301,7 @@ describe("RegistrationHubRegistrantActions — confirm gating", () => {
   // trip rather than being optimistically cleared: it is `refunded_cents`,
   // arriving via router.refresh(), that turns canRefund false.
   it("surfaces the server's own error text when a refund is refused, and leaves the row alone", async () => {
-    net.next.set("refund", Promise.reject(new ApiV1Error(422, "Already fully refunded")));
+    net.next.set("refund", Promise.reject(new ApiV1Error("Already fully refunded", 422, "ERROR")));
     const island = mount({
       status: "withdrawn",
       approval: "auto",

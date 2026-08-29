@@ -225,6 +225,19 @@ describe.skipIf(!HAS_DB)("groupByRef — resolved refund policy (V379/RS007)", (
     );
     await sql`update registration_groups set payment_intent_id = ${"pi_test_" + randomUUID().slice(0, 8)}
               where id = ${registration.group_id}`;
+    // The entry's OWN status, not just the cart's payment intent. This test
+    // is named "a paid entry" and never made one: `seedRegistration` leaves
+    // it `pending`, and it passed only because buildGroupStatusView used to
+    // hand the CART's shared payment_intent_id to resolveRefundPolicy for
+    // every entry regardless of whether that entry was the one charged —
+    // which is money-path defect #1 itself (a promoted-but-unpaid sibling
+    // reading `refundable: true` off another entry's real charge, and
+    // withdrawCore then refunding against it). So this assertion had frozen
+    // the defect as the specification, the same shape as `steps.test.ts`
+    // asserting `shouldCollapseEntries(1) === true` before RS007's own
+    // entrant-kind ruling. Making the entry genuinely paid restores what
+    // the title always claimed to be testing: the starts_on FALLBACK.
+    await sql`update registrations set status = 'paid' where id = ${registration.id}`;
 
     const view = await groupByRef(refCode, access_token);
     const entry = view.entries[0]!;
