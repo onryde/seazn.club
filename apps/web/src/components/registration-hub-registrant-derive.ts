@@ -203,6 +203,8 @@ export interface RegistrantActionFlags {
   canMarkPaid: boolean;
   /** RS005 R1 second wave finding — see the block comment below. */
   canResend: boolean;
+  /** RS007 finding #16 — see the block comment below. */
+  canRefund: boolean;
 }
 
 /**
@@ -295,11 +297,33 @@ export interface RegistrantActionFlags {
  *
  * promote: legal ONLY for a `waitlisted` entry — every other status has
  * nothing to promote FROM.
+ *
+ * canRefund (RS007 finding #16): mirrors `refundRegistration`'s own two
+ * refusals (registrations.ts) exactly — "No payment to refund" when there is
+ * no `payment_intent_id`, and "Already fully refunded" when
+ * `amount_cents - refunded_cents <= 0`. Deliberately NOT gated on status:
+ * the usecase is not either, and the case that matters most is a WITHDRAWN
+ * entry — past `refund_lock_at`, `withdrawCore` refuses to auto-refund and
+ * the registrant is told at that moment that "any refund is at the
+ * organiser's discretion" (`confirm.cancelEntry.bodyDiscretion`). Hiding the
+ * control on terminal statuses would leave exactly that promise unkeepable,
+ * which is the gap this flag exists to close.
+ *
+ * Also deliberately NOT gated on the refund LOCK. Before the lock a
+ * withdrawal refunds automatically and `refunded_cents` catches up, so the
+ * flag falls false on its own; the lock is the boundary for what happens
+ * AUTOMATICALLY, never a ceiling on what an organiser may choose to do. This
+ * row does not carry the division's `refund_lock_at` in any case.
  */
 export function deriveRegistrantActionFlags(
   row: Pick<
     RegistrationListRow,
-    "status" | "approval" | "amount_cents" | "payment_intent_id" | "division_fee_cents"
+    | "status"
+    | "approval"
+    | "amount_cents"
+    | "refunded_cents"
+    | "payment_intent_id"
+    | "division_fee_cents"
   >,
 ): RegistrantActionFlags {
   const awaitingManualDecision =
@@ -327,5 +351,6 @@ export function deriveRegistrantActionFlags(
     canPromote: row.status === "waitlisted",
     canMarkPaid: awaitingOfflineFee,
     canResend: nonTerminal,
+    canRefund: row.payment_intent_id !== null && row.amount_cents - row.refunded_cents > 0,
   };
 }

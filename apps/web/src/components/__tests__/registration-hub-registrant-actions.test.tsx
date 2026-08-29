@@ -93,6 +93,7 @@ const PROPS: ActionProps = {
   amountCents: 0,
   divisionFeeCents: 0,
   paymentIntentId: null,
+  refundedCents: 0,
 };
 
 function mount(overrides: Partial<ActionProps> = {}) {
@@ -146,6 +147,58 @@ describe("RegistrationHubRegistrantActions — legality (which buttons render)",
     for (const status of ["withdrawn", "rejected", "expired"] as const) {
       expect(findAction(mount({ status, approval: "auto" }), "withdraw")).toBeUndefined();
     }
+  });
+
+  // RS007 finding #16 — the refund control. Until this wave the endpoint
+  // (POST /api/v1/registrations/{id}/refund) and its confirm copy
+  // (confirm.refundRegistration.*, written in all four locales since RS002)
+  // had NO caller anywhere in apps/web/src.
+  it("hides refund when there is no payment on file", () => {
+    expect(
+      findAction(mount({ status: "confirmed", approval: "auto", amountCents: 2500 }), "refund"),
+    ).toBeUndefined();
+  });
+
+  it("shows refund on a paid entry with a balance left", () => {
+    expect(
+      findAction(
+        mount({ status: "confirmed", approval: "auto", amountCents: 2500, paymentIntentId: "pi_1" }),
+        "refund",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("hides refund once the entry is fully refunded — the server answers 'Already fully refunded'", () => {
+    expect(
+      findAction(
+        mount({
+          status: "confirmed",
+          approval: "auto",
+          amountCents: 2500,
+          refundedCents: 2500,
+          paymentIntentId: "pi_1",
+        }),
+        "refund",
+      ),
+    ).toBeUndefined();
+  });
+
+  // The case the control exists for, and the one every OTHER action here is
+  // hidden on. Past `refund_lock_at` withdrawCore refuses to auto-refund and
+  // the registrant is told at that moment that any refund is "at the
+  // organiser's discretion" — so the organiser must still be able to act on a
+  // TERMINAL row, unlike withdraw/resend/approve/reject.
+  it("shows refund on a WITHDRAWN entry that was paid, where every other action is hidden", () => {
+    const island = mount({
+      status: "withdrawn",
+      approval: "manual",
+      amountCents: 4000,
+      paymentIntentId: "pi_1",
+    });
+    expect(findAction(island, "refund")).toBeTruthy();
+    expect(findAction(island, "withdraw")).toBeUndefined();
+    expect(findAction(island, "resend")).toBeUndefined();
+    expect(findAction(island, "approve")).toBeUndefined();
   });
 
   it("shows promote ONLY for a waitlisted entry", () => {
@@ -205,6 +258,62 @@ describe("RegistrationHubRegistrantActions — confirm gating", () => {
     const island = mount({ status: "confirmed", approval: "auto" });
     await (propsOf(findAction(island, "withdraw")!).onClick as () => Promise<void>)();
     expect(confirmMock.fn).toHaveBeenCalledTimes(1);
+  });
+
+  // RS007 finding #16. The assertion that matters is the URL: the whole
+  // defect was that `POST /api/v1/registrations/{id}/refund` had no caller,
+  // so a test that only checked a button rendered would have passed against
+  // a button wired to nothing.
+  it("confirms with the pre-existing refund copy, then POSTs to the refund endpoint", async () => {
+    const island = mount({
+      status: "withdrawn",
+      approval: "auto",
+      amountCents: 4000,
+      paymentIntentId: "pi_1",
+    });
+    await (propsOf(findAction(island, "refund")!).onClick as () => Promise<void>)();
+    expect(confirmMock.fn).toHaveBeenCalledTimes(1);
+    expect(confirmMock.fn.mock.calls[0]![0]).toMatchObject({
+      title: t(uiEn, "confirm.refundRegistration.title"),
+      confirmLabel: t(uiEn, "confirm.refundRegistration.label"),
+      tone: "danger",
+    });
+    expect(
+      net.calls.some((c) => c.url === "/api/v1/registrations/reg-1/refund" && c.method === "POST"),
+      `no POST reached the refund endpoint — calls were ${JSON.stringify(net.calls)}`,
+    ).toBe(true);
+    expect(nav.refresh).toHaveBeenCalled();
+  });
+
+  it("sends no refund request when the confirm is cancelled — money must never move on a mis-click", async () => {
+    confirmMock.fn.mockImplementationOnce(async () => false);
+    const island = mount({
+      status: "withdrawn",
+      approval: "auto",
+      amountCents: 4000,
+      paymentIntentId: "pi_1",
+    });
+    await (propsOf(findAction(island, "refund")!).onClick as () => Promise<void>)();
+    expect(net.calls.some((c) => c.url.endsWith("/refund"))).toBe(false);
+  });
+
+  // A refund does not change `status`, so the button must survive the round
+  // trip rather than being optimistically cleared: it is `refunded_cents`,
+  // arriving via router.refresh(), that turns canRefund false.
+  it("surfaces the server's own error text when a refund is refused, and leaves the row alone", async () => {
+    net.next.set("refund", Promise.reject(new ApiV1Error(422, "Already fully refunded")));
+    const island = mount({
+      status: "withdrawn",
+      approval: "auto",
+      amountCents: 4000,
+      paymentIntentId: "pi_1",
+    });
+    await (propsOf(findAction(island, "refund")!).onClick as () => Promise<void>)();
+    const feedback = island
+      .tree()
+      .find((e) => propsOf(e)["data-registration-hub-registrant-actions-feedback"] !== undefined);
+    expect(propsOf(feedback!)["data-tone"]).toBe("error");
+    expect(findAction(island, "refund")).toBeTruthy();
   });
 
   it("does not confirm before promoting or resending", async () => {
@@ -464,6 +573,7 @@ describe("RegistrationHubRegistrantActions — finding 2: a failure never resurr
       amountCents: 0,
       divisionFeeCents: 0,
       paymentIntentId: null,
+  refundedCents: 0,
     });
     // The existing render-time prop-sync already reconciles to it —
     // withdraw (legal on "confirmed") reappears.
@@ -562,6 +672,7 @@ describe("RegistrationHubRegistrantActions — a fee edited after the entry exis
       amountCents: 0, // quoted while the division was free
       divisionFeeCents: 2000, // charged now
       paymentIntentId: null,
+  refundedCents: 0,
     });
     expect(findAction(island, "mark-paid"), "the control the server accepts").toBeTruthy();
     expect(findAction(island, "approve"), "approve would 422 'mark it paid first'").toBeUndefined();
@@ -574,6 +685,7 @@ describe("RegistrationHubRegistrantActions — a fee edited after the entry exis
       amountCents: 2000,
       divisionFeeCents: 0,
       paymentIntentId: null,
+  refundedCents: 0,
     });
     expect(findAction(island, "approve"), "nothing is owed, so approve is live").toBeTruthy();
     expect(findAction(island, "mark-paid"), "mark paid would 422 'no entry fee'").toBeUndefined();

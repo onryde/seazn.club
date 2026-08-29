@@ -271,6 +271,7 @@ export function RegistrationHubRegistrantDetail({
             amountCents={row.amount_cents}
             divisionFeeCents={row.division_fee_cents}
             paymentIntentId={row.payment_intent_id}
+            refundedCents={row.refunded_cents}
           />
         </section>
       )}

@@ -2697,3 +2697,44 @@ going green against a rebuilt server is the evidence; a unit count cannot see
 the cancel dialog offering to refund a sibling's card. Pending — deliberately
 sequenced after the consent-gate lane stops editing, so the build is made from
 a still tree rather than a moving one.
+
+### #16 (NEW, found 2026-08-29) — the organiser's discretionary refund has no UI at all
+
+Found while scoping the money-matrix walkthrough the owner asked for
+("price change and refund for old price, withdraw, auto refund lock").
+Not from the review; not in the register of 15.
+
+**What is there.** `POST /api/v1/registrations/{id}/refund` (route,
+`refundRegistration` usecase, `RefundRegistration` schema, audit entry,
+partial amounts supported). And the copy is written, in all four
+locales: `confirm.refundRegistration.title` / `.body` / `.label`
+("Refund this registration?" / "Refund"). It is even declared in the
+generated `apps/web/src/lib/i18n-keys.ts:1286-1288`.
+
+**What is not there.** Nothing renders those keys. Grepping the whole of
+`apps/web/src` for `confirm.refundRegistration` outside the dictionaries
+and the generated key union returns NOTHING, and the only component that
+posts to a `/refund` path in the entire app is `sponsor-packages.tsx`,
+for sponsor orders. `registration-hub-registrant-actions.tsx` mentions
+refunds twice — both in comments about what `withdraw` does — and has no
+`canRefund` flag, no button, no confirm dialog.
+
+**Why this matters, in the organiser's terms.** `resolveRefundPolicy`
+(`registrations.ts:3585-3601`) auto-refunds a withdrawal only while
+`now() < refund_lock_at ?? starts_on`. Past that line the code comment
+says refunds are "organiser discretion via the manual refund endpoint" —
+and that endpoint is unreachable from the product. So an organiser who
+calls a rained-off competition off after the lock, or who agrees to
+refund one injured entrant as a goodwill gesture, cannot do it. Their
+two real options are to email us, or to refund from the Stripe dashboard
+directly — and a dashboard refund never writes `registrations.refunded_cents`
+or `registration_groups.refunded_cents`, so from that moment the hub's
+money column, the registrant's status page and Stripe permanently
+disagree, with no way to reconcile them from inside the app.
+
+The three-line copy sitting unused in four dictionaries says this was
+designed and then dropped, rather than deliberately deferred.
+
+**Status:** OPEN. Owed: the control in the registrant detail panel,
+gated on the same conditions the endpoint enforces, plus a walkthrough
+scenario that taps it after the lock (scenario S4 of the matrix below).
