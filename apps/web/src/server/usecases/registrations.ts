@@ -989,8 +989,18 @@ export async function notifyPromoted(
   origin: string,
 ): Promise<void> {
   try {
+    // REVIEW FIX (#10): the DIVISION's own payment method — never
+    // `promoted.payment_method` (registration_groups.payment_method, the
+    // cart's shared envelope column). promoteWaitlistedRow only writes that
+    // shared column when no OTHER entry in the cart is still 'pending' (see
+    // its own doc comment), so it can stay null/stale forever past exactly
+    // the promotion this function emails — reading it here silently dropped
+    // BOTH the pay link (stripe divisions) and the instructions (offline
+    // divisions). Same fallback convention promoteWaitlistedRow's own
+    // `method` already uses.
+    const method = settings?.payment_method ?? "offline";
     let payUrl: string | null = null;
-    if (promoted.payment_method === "stripe" && promoted.amount_cents > 0 && ctx.charges_enabled) {
+    if (method === "stripe" && promoted.amount_cents > 0 && ctx.charges_enabled) {
       try {
         payUrl = await createRegistrationCheckout(promoted.group_id, [promoted.id], ctx, origin, null);
       } catch {
@@ -1006,9 +1016,17 @@ export async function notifyPromoted(
       feeCents: promoted.amount_cents,
       currency: promoted.currency,
       payUrl,
-      payDeadline: promoted.expires_at,
+      // REVIEW FIX (#13b): this entry's OWN promotion_expires_at, never
+      // `promoted.expires_at` (the GROUP's shared column, which a sibling's
+      // own earlier/later promotion can leave disagreeing with this row) —
+      // the lapse sweep enforces THIS entry's own clock (sweepRegistrations
+      // pass 1b, keyed on `r.promotion_expires_at`), so emailing the
+      // group's could tell a registrant they have longer than they
+      // actually do. Same column pass (1b)'s own reminder mail already
+      // uses. Null on an offline/free promotion, exactly as before.
+      payDeadline: promoted.promotion_expires_at,
       paymentInstructions:
-        promoted.payment_method === "offline" && promoted.amount_cents > 0
+        method === "offline" && promoted.amount_cents > 0
           ? (settings?.payment_instructions ?? ctx.payment_instructions)
           : null,
       refCode: promoted.ref_code,
@@ -3146,6 +3164,16 @@ export interface GroupEntryView {
    *  for a new joiner; only its per-slot partner link is real), true
    *  otherwise. Irrelevant when `join_code` itself is null. */
   allows_new_joiner: boolean;
+  /** REVIEW FIX (#10, "a lapse timer with no way to pay"): this entry's OWN
+   *  division's payment method (registration_settings.payment_method) —
+   *  never `GroupStatusView.payment_method` (the cart's shared envelope
+   *  column). `promoteWaitlistedRow` only overwrites that shared column
+   *  when no OTHER entry in the cart is still 'pending' (see its own doc
+   *  comment), so it can stay null/stale forever past a promotion whose own
+   *  division genuinely charges — resolveMoneyState (register/status/
+   *  view-model.ts) reads THIS field now, per entry, so it can never be
+   *  fooled by a sibling's stale write. */
+  payment_method: "offline" | "stripe";
   /** V378/RS007: this entry's OWN pay-by deadline when it was promoted out
    *  of the waitlist — null for a never-promoted entry, whose deadline is
    *  the CART's own `GroupStatusView.expires_at` instead (see
@@ -3204,6 +3232,13 @@ export interface GroupStatusView {
    *  uses, so the page and the confirmation email never disagree about what
    *  a registrant is told to do. */
   payment_instructions: string | null;
+  /** REVIEW FIX (#13a): the org's own scheduling timezone, resolved exactly
+   *  once (`resolveVenueTz`, same call already used for `refund_policy`
+   *  below — no second resolution to drift from it) and always a valid IANA
+   *  zone (falls back to "UTC", never null) — entry-card.tsx renders every
+   *  pay-by deadline in THIS zone, with a zone label, instead of the
+   *  hardcoded UTC it used to. */
+  org_timezone: string;
   entries: GroupEntryView[];
 }
 
@@ -3302,7 +3337,10 @@ async function buildGroupStatusView(
   const refundTz = resolveVenueTz(null, comp?.org_timezone ?? null);
 
   const entries = await sql<
-    (Omit<GroupEntryView, "players" | "refund_policy" | "promotion_expires_at" | "allows_new_joiner"> & {
+    (Omit<
+      GroupEntryView,
+      "players" | "refund_policy" | "promotion_expires_at" | "allows_new_joiner" | "payment_method"
+    > & {
       refunded_cents: number;
       promotion_expires_at: Date | null;
     })[]
@@ -3313,29 +3351,28 @@ async function buildGroupStatusView(
     where r.group_id = ${group.id}
     order by r.created_at, r.id`;
 
-  // RS007: the resolved offline payment instructions — mirrors
-  // buildCartMail's own "first entry that still carries a fee is
-  // representative of the whole cart" rule exactly, so the status page and
-  // the confirmation email never disagree. Division override, else the
-  // org's own (already fetched above, no extra query for that half).
-  let paymentInstructions: string | null = null;
-  if (group.payment_method === "offline" && entries.length > 0) {
-    const firstPaid = entries.find((e) => e.amount_cents > 0) ?? entries[0]!;
-    const repSettings = await loadSettings(sql, firstPaid.division_id);
-    paymentInstructions = repSettings?.payment_instructions ?? comp?.org_payment_instructions ?? null;
-  }
-
-  // refund_lock_at and entrant_kind are DIVISION settings
-  // (registration_settings), so a cart spanning more than one division can
-  // genuinely have one entry refundable and another not (V379/RS007), or one
-  // entry a team and another a pair. Batched by distinct division_id, the
-  // same way `players` batches by entries.map(id) below — one query, not one
-  // per entry.
+  // refund_lock_at, entrant_kind and payment_method are all DIVISION
+  // settings (registration_settings), so a cart spanning more than one
+  // division can genuinely have one entry refundable and another not
+  // (V379/RS007), one entry a team and another a pair, or (REVIEW FIX #10)
+  // one entry billed via Stripe and another offline. Batched by distinct
+  // division_id, the same way `players` batches by entries.map(id) below —
+  // one query, not one per entry. Moved ABOVE the payment-instructions block
+  // below (it used to run after) so that block can resolve off the SAME
+  // division-sourced map instead of the cart's own (sometimes stale/null)
+  // `payment_method` column — see paymentMethodByDivision's own comment.
   const divisionIds = [...new Set(entries.map((e) => e.division_id))];
   const settingsRows =
     divisionIds.length > 0
-      ? await sql<{ division_id: string; refund_lock_at: Date | null; entrant_kind: RegistrationSettingsRow["entrant_kind"] }[]>`
-          select division_id, refund_lock_at, entrant_kind from registration_settings
+      ? await sql<
+          {
+            division_id: string;
+            refund_lock_at: Date | null;
+            entrant_kind: RegistrationSettingsRow["entrant_kind"];
+            payment_method: RegistrationSettingsRow["payment_method"];
+          }[]
+        >`
+          select division_id, refund_lock_at, entrant_kind, payment_method from registration_settings
           where division_id in ${sql(divisionIds)}`
       : [];
   const refundLockByDivision = new Map(settingsRows.map((s) => [s.division_id, s.refund_lock_at]));
@@ -3347,6 +3384,36 @@ async function buildGroupStatusView(
   // rather than hiding a legitimate one — a UX dead end the join route's own
   // "defense in depth" 422 already catches safely, never a money/auth risk.
   const entrantKindByDivision = new Map(settingsRows.map((s) => [s.division_id, s.entrant_kind]));
+  // REVIEW FIX (#10): the DIVISION's own payment method — never
+  // GroupStatusView.payment_method (group.payment_method, the cart's shared
+  // envelope column). promoteWaitlistedRow only writes that shared column
+  // when no OTHER entry in the cart is still 'pending' (see its own doc
+  // comment), so it can stay null/stale forever past a promotion whose own
+  // division genuinely charges. resolveMoneyState (view-model.ts) reads
+  // this per entry now. Falls back to 'offline' only when the settings row
+  // itself is missing — same convention promoteWaitlistedRow's own `method`
+  // already uses.
+  const paymentMethodByDivision = new Map(settingsRows.map((s) => [s.division_id, s.payment_method]));
+
+  // RS007: the resolved offline payment instructions — mirrors
+  // buildCartMail's own "first entry that still carries a fee is
+  // representative of the whole cart" rule exactly, so the status page and
+  // the confirmation email never disagree. Division override, else the
+  // org's own (already fetched above, no extra query for that half).
+  //
+  // REVIEW FIX (#10): gated on the representative entry's own DIVISION
+  // method (paymentMethodByDivision) rather than group.payment_method —
+  // same fix, same reason, as resolveMoneyState's own: the cart's shared
+  // column can be null/stale past exactly the promotion this resolves
+  // instructions for.
+  let paymentInstructions: string | null = null;
+  if (entries.length > 0) {
+    const firstPaid = entries.find((e) => e.amount_cents > 0) ?? entries[0]!;
+    if ((paymentMethodByDivision.get(firstPaid.division_id) ?? "offline") === "offline") {
+      const repSettings = await loadSettings(sql, firstPaid.division_id);
+      paymentInstructions = repSettings?.payment_instructions ?? comp?.org_payment_instructions ?? null;
+    }
+  }
 
   const players =
     entries.length > 0
@@ -3381,10 +3448,12 @@ async function buildGroupStatusView(
     created_at: new Date(group.created_at).toISOString(),
     charges_enabled: comp?.charges_enabled ?? false,
     payment_instructions: paymentInstructions,
+    org_timezone: refundTz,
     entries: entries.map(({ refunded_cents, promotion_expires_at, ...e }) => ({
       ...e,
       promotion_expires_at: promotion_expires_at ? new Date(promotion_expires_at).toISOString() : null,
       allows_new_joiner: entrantKindByDivision.get(e.division_id) !== "pair",
+      payment_method: paymentMethodByDivision.get(e.division_id) ?? "offline",
       players: playersByEntry.get(e.id) ?? [],
       refund_policy: resolveRefundPolicy(
         refundLockByDivision.get(e.division_id) ?? null,
@@ -3424,6 +3493,21 @@ export async function resumeRegistrationCheckout(
   }
   if (reg.amount_cents <= 0) {
     throw new HttpError(422, "This registration has no entry fee");
+  }
+  // REVIEW FIX (#8, "pay-then-refund on a stale deadline"): the sweep that
+  // expires an overdue pending entry (and auto-refunds a paid Stripe one) is
+  // hourly (cron "37 * * * *"), so a cart whose deadline passed at 14:00 is
+  // still 'pending' at 14:36 — without this check a stale tab or a direct
+  // POST in that window would mint a REAL Stripe session, the registrant
+  // would pay, and the next sweep expires the row and auto-refunds it
+  // straight back out. Same precedence as the client's own
+  // effectivePayDeadline (register/status/view-model.ts): this entry's own
+  // promotion window if it was promoted out of the waitlist, else the
+  // cart's shared window — this is the LOAD-BEARING half; the client-side
+  // window_closed state is cosmetic without this.
+  const deadline = reg.promotion_expires_at ?? reg.expires_at;
+  if (deadline && deadline.getTime() <= Date.now()) {
+    throw new HttpError(422, "This payment window has closed");
   }
   const ctx = await divisionCtx(sql, reg.division_id);
   if (!ctx.charges_enabled) {

@@ -4519,6 +4519,7 @@
   "register.status.pay.unavailable": "Kaartbetalingen zijn nu niet beschikbaar — neem contact op met de organisator.",
   "register.status.pay.error.conflict": "Er is zojuist een andere betaalpoging gestart voor deze inschrijving — ververs de pagina en probeer het opnieuw.",
   "register.status.pay.error.generic": "We konden de betaling niet starten — probeer het opnieuw of neem contact op met de organisator.",
+  "register.status.pay.windowClosed": "Het betaalvenster voor deze inschrijving is gesloten — neem contact op met de organisator als je nog wilt betalen.",
   "register.status.offline.heading": "Zo betaal je",
   "register.status.cancel.cta": "Deze inschrijving annuleren",
   "register.status.cancel.busy": "Bezig met annuleren…",

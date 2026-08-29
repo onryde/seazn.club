@@ -33,32 +33,45 @@ describe("effectivePayDeadline", () => {
 });
 
 describe("resolveMoneyState — never a debt with no route to settle", () => {
+  // Deliberately far past/future — see FIX #8 below, which reads `deadline`
+  // against the REAL wall clock (Date.now()), so a date merely "later than
+  // when this test was written" (e.g. a fixed 2026 date) goes stale and
+  // silently starts reading as window_closed the moment real time catches up
+  // to it. Mirrors resolveRefundPolicy's own test file's FUTURE/PAST
+  // convention (registrations.test.ts) for the identical reason.
+  const FUTURE = "2099-01-01T00:00:00.000Z";
+  const PAST = "2000-01-01T00:00:00.000Z";
+
   const cart = (over: Partial<Parameters<typeof resolveMoneyState>[1]> = {}) => ({
-    payment_method: "stripe" as const,
-    expires_at: "2026-08-20T00:00:00.000Z",
+    expires_at: FUTURE,
     charges_enabled: true,
     ...over,
   });
+  // RS007 review fix #10: payment_method now lives on the ENTRY (sourced
+  // from its own DIVISION's registration_settings.payment_method), never on
+  // the cart — see this describe block's own "division wins" tests below for
+  // why: registration_groups.payment_method (the cart's shared envelope
+  // column) can stay null/stale past a promotion that genuinely needs it
+  // (promoteWaitlistedRow's `not exists (other pending)` guard).
   const entry = (over: Partial<Parameters<typeof resolveMoneyState>[0]> = {}) => ({
     status: "pending" as const,
     amount_cents: 2500,
     promotion_expires_at: null,
+    payment_method: "stripe" as const,
     ...over,
   });
 
   it("a pending card entry with Stripe live is stripe_due, deadline attached", () => {
     expect(resolveMoneyState(entry(), cart())).toEqual({
       kind: "stripe_due",
-      deadline: "2026-08-20T00:00:00.000Z",
+      deadline: FUTURE,
     });
   });
 
   it("a promoted entry's OWN deadline wins over the cart's", () => {
-    const state = resolveMoneyState(
-      entry({ promotion_expires_at: "2026-09-05T00:00:00.000Z" }),
-      cart(),
-    );
-    expect(state).toEqual({ kind: "stripe_due", deadline: "2026-09-05T00:00:00.000Z" });
+    const ownDeadline = "2099-02-01T00:00:00.000Z"; // distinct from cart's FUTURE — proves it, doesn't just match it
+    const state = resolveMoneyState(entry({ promotion_expires_at: ownDeadline }), cart());
+    expect(state).toEqual({ kind: "stripe_due", deadline: ownDeadline });
   });
 
   it("a pending card entry with Stripe NOT live is stripe_unavailable — never a bare 'pay now' that 503s", () => {
@@ -68,9 +81,9 @@ describe("resolveMoneyState — never a debt with no route to settle", () => {
   });
 
   it("a pending offline entry is offline_due, deadline attached", () => {
-    expect(resolveMoneyState(entry(), cart({ payment_method: "offline" }))).toEqual({
+    expect(resolveMoneyState(entry({ payment_method: "offline" }), cart())).toEqual({
       kind: "offline_due",
-      deadline: "2026-08-20T00:00:00.000Z",
+      deadline: FUTURE,
     });
   });
 
@@ -86,6 +99,71 @@ describe("resolveMoneyState — never a debt with no route to settle", () => {
 
   it("a free (amount_cents 0) pending entry owes nothing even though it is pending", () => {
     expect(resolveMoneyState(entry({ amount_cents: 0 }), cart())).toEqual({ kind: "none" });
+  });
+
+  // RS007 review fix #10 ("a lapse timer with no way to pay"): a promoted
+  // entry whose own division genuinely charges via Stripe must read
+  // stripe_due even when the CART's shared payment_method write was
+  // suppressed (promoteWaitlistedRow only overwrites it when no OTHER entry
+  // in the cart is still 'pending') — the entry's own division is now the
+  // only input, so there is no cart-level field left to go stale.
+  it("a promoted entry's own division method is 'stripe' — resolves stripe_due regardless of what the (now-irrelevant) cart column would have said", () => {
+    expect(
+      resolveMoneyState(entry({ payment_method: "stripe", promotion_expires_at: FUTURE }), cart()),
+    ).toEqual({ kind: "stripe_due", deadline: FUTURE });
+  });
+
+  it("a promoted entry's own division method is 'offline' — resolves offline_due, never stripe_due", () => {
+    expect(
+      resolveMoneyState(entry({ payment_method: "offline", promotion_expires_at: FUTURE }), cart()),
+    ).toEqual({ kind: "offline_due", deadline: FUTURE });
+  });
+
+  // RS007 review fix #8 ("pay-then-refund on a stale deadline"): the hourly
+  // sweep (cron "37 * * * *") means a cart whose deadline passed at 14:00 is
+  // still 'pending' at 14:36 — resolveMoneyState must not print a live pay
+  // control (or offline instructions) above a deadline that has already
+  // gone by, however the entry would otherwise be paid.
+  describe("window_closed — the deadline has passed but the sweep has not caught up yet", () => {
+    it("a stripe entry past its OWN promotion deadline is window_closed, never stripe_due", () => {
+      expect(
+        resolveMoneyState(
+          entry({ promotion_expires_at: PAST }),
+          cart({ expires_at: FUTURE }), // cart's own clock still ahead — must not win
+        ),
+      ).toEqual({ kind: "window_closed" });
+    });
+
+    it("a stripe entry past the CART's shared deadline (never promoted) is window_closed, never stripe_due", () => {
+      expect(resolveMoneyState(entry(), cart({ expires_at: PAST }))).toEqual({
+        kind: "window_closed",
+      });
+    });
+
+    it("an offline entry past its deadline is ALSO window_closed — the stale 'Pay by' copy is the bug, not just the button", () => {
+      expect(
+        resolveMoneyState(entry({ payment_method: "offline" }), cart({ expires_at: PAST })),
+      ).toEqual({ kind: "window_closed" });
+    });
+
+    it("takes priority over stripe_unavailable — the window being closed is the more actionable fact", () => {
+      expect(
+        resolveMoneyState(entry(), cart({ expires_at: PAST, charges_enabled: false })),
+      ).toEqual({ kind: "window_closed" });
+    });
+
+    it("a deadline in the future is unaffected (sanity: not simply always-closed)", () => {
+      const state = resolveMoneyState(entry(), cart({ expires_at: FUTURE }));
+      expect(state.kind).toBe("stripe_due");
+    });
+
+    it("no deadline at all (null) never reads as closed — nothing to have closed", () => {
+      const state = resolveMoneyState(
+        entry({ payment_method: "offline" }),
+        cart({ expires_at: null }),
+      );
+      expect(state).toEqual({ kind: "offline_due", deadline: null });
+    });
   });
 });
 

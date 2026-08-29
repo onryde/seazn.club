@@ -4519,6 +4519,7 @@
   "register.status.pay.unavailable": "Card payments aren't available right now — contact the organiser.",
   "register.status.pay.error.conflict": "Another payment attempt just started for this entry — refresh the page and try again.",
   "register.status.pay.error.generic": "We couldn't start the payment — please try again, or contact the organiser.",
+  "register.status.pay.windowClosed": "The payment window for this entry has closed — contact the organiser if you still want to pay.",
   "register.status.offline.heading": "How to pay",
   "register.status.cancel.cta": "Cancel this entry",
   "register.status.cancel.busy": "Cancelling…",

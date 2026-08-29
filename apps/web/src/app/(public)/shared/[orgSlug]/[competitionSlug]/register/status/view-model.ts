@@ -37,7 +37,19 @@ export type MoneyState =
    *  than folding into stripe_due so the page never renders a "Pay now"
    *  button that is guaranteed to fail on click. */
   | { kind: "stripe_unavailable" }
-  | { kind: "offline_due"; deadline: string | null };
+  | { kind: "offline_due"; deadline: string | null }
+  /** RS007 review fix #8 ("pay-then-refund on a stale deadline"): the sweep
+   *  that expires an overdue pending entry (and auto-refunds a Stripe one)
+   *  runs hourly (cron "37 * * * *"), so a cart whose deadline passed at
+   *  14:00 is still 'pending' at 14:36 — this entry's effectivePayDeadline
+   *  has passed but the DB row has not caught up yet. Its own state (never
+   *  folded into stripe_due/offline_due) so the page can never render a
+   *  live "Pay now" button, or offline instructions under a "Pay by" date,
+   *  that names a window already closed — resumeRegistrationCheckout
+   *  carries the matching server-side re-check (registrations.ts), since a
+   *  stale tab or a direct POST could otherwise still mint a real session
+   *  in the exact window this state exists to close off. */
+  | { kind: "window_closed" };
 
 /**
  * What, if anything, this entry currently owes and how to settle it — the
@@ -49,9 +61,17 @@ export function resolveMoneyState(
     status: EntryStatus;
     amount_cents: number;
     promotion_expires_at: string | null;
+    /** RS007 review fix #10 ("a lapse timer with no way to pay"): this
+     *  entry's OWN division's payment method (registration_settings.
+     *  payment_method), never registration_groups.payment_method (the
+     *  cart's shared envelope column) — promoteWaitlistedRow only writes
+     *  that column when no OTHER entry in the cart is still 'pending' (see
+     *  its own doc comment), so it can stay null/stale forever past a
+     *  promotion whose own division genuinely charges. buildGroupStatusView
+     *  (registrations.ts) resolves this per entry now. */
+    payment_method: "offline" | "stripe";
   },
   cart: {
-    payment_method: "offline" | "stripe" | null;
     expires_at: string | null;
     charges_enabled: boolean;
   },
@@ -59,7 +79,13 @@ export function resolveMoneyState(
   const owes = entry.status === "pending" && entry.amount_cents > 0;
   if (!owes) return { kind: "none" };
   const deadline = effectivePayDeadline(entry.promotion_expires_at, cart.expires_at);
-  if (cart.payment_method === "stripe") {
+  // FIX #8: checked before either branch below, and takes priority over
+  // stripe_unavailable too — "the window closed" is the more actionable,
+  // more honest fact than "Connect isn't live" when both happen to be true.
+  if (deadline && new Date(deadline).getTime() <= Date.now()) {
+    return { kind: "window_closed" };
+  }
+  if (entry.payment_method === "stripe") {
     return cart.charges_enabled ? { kind: "stripe_due", deadline } : { kind: "stripe_unavailable" };
   }
   return { kind: "offline_due", deadline };

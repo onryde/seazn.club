@@ -115,11 +115,14 @@ export default async function RegistrationStatusPage({ params, searchParams }: P
     ? await renderProse(preserveLineBreaks(fillPaymentInstructions(view.payment_instructions, view.ref_code)))
     : null;
   const cart = {
-    payment_method: view.payment_method,
     expires_at: view.expires_at,
     charges_enabled: view.charges_enabled,
     instructionsHtml,
     currency: view.currency,
+    // FIX #13(a): org's own zone (already resolved server-side as refundTz —
+    // registrations.ts) — entry-card.tsx renders every deadline in this,
+    // never a hardcoded UTC.
+    timezone: view.org_timezone,
   };
 
   return (

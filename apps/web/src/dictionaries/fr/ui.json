@@ -4519,6 +4519,7 @@
   "register.status.pay.unavailable": "Les paiements par carte ne sont pas disponibles pour le moment — contactez l'organisateur.",
   "register.status.pay.error.conflict": "Une autre tentative de paiement vient de démarrer pour cette inscription — actualisez la page et réessayez.",
   "register.status.pay.error.generic": "Nous n'avons pas pu démarrer le paiement — veuillez réessayer, ou contactez l'organisateur.",
+  "register.status.pay.windowClosed": "Le délai de paiement pour cette inscription est dépassé — contactez l'organisateur si vous souhaitez tout de même payer.",
   "register.status.offline.heading": "Comment payer",
   "register.status.cancel.cta": "Annuler cette inscription",
   "register.status.cancel.busy": "Annulation…",

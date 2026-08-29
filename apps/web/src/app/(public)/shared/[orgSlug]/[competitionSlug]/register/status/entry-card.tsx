@@ -11,7 +11,7 @@
 // as a plain string.
 import type { ReactNode } from "react";
 import { formatMinor, type Currency } from "@/lib/currency";
-import { fmtDateTime, UTC } from "@/lib/format";
+import { fmtDateTime, fmtZoneAbbrev } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import type { Dict, Locale } from "@/lib/i18n-constants";
 import { CompetitionProse } from "@/components/public-site/competition-prose";
@@ -61,6 +61,10 @@ export interface EntryCardProps {
      *  a new joiner, so only its per-slot partner link is real. */
     allows_new_joiner: boolean;
     promotion_expires_at: string | null;
+    /** RS007 review fix #10: this entry's OWN division's payment method —
+     *  see resolveMoneyState's own doc comment (view-model.ts) for why this
+     *  moved off the cart. */
+    payment_method: "offline" | "stripe";
     players: { id: string; full_name: string; consent_status: "pending" | "granted" | "guardian" }[];
     refund_policy: {
       refundable: boolean;
@@ -76,7 +80,6 @@ export interface EntryCardProps {
     };
   };
   cart: {
-    payment_method: "offline" | "stripe" | null;
     expires_at: string | null;
     charges_enabled: boolean;
     /** Pre-rendered offline instructions (renderProse + fillPaymentInstructions
@@ -84,6 +87,12 @@ export interface EntryCardProps {
      *  a cart with no instructions configured. */
     instructionsHtml: string | null;
     currency: string;
+    /** RS007 review fix #13(a): the org's own timezone (already resolved as
+     *  `refundTz` in buildGroupStatusView, registrations.ts) — every deadline
+     *  rendered below uses THIS, never the hardcoded UTC the page used to
+     *  render every pay-by date in regardless of where the org actually
+     *  runs. */
+    timezone: string;
   };
   orgSlug: string;
   competitionSlug: string;
@@ -116,6 +125,15 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
       : formatMinor(entry.amount_cents, cart.currency as Currency, locale);
   const showsFeeLine = entryCountsTowardTotal(entry.status) && money.kind !== "stripe_due";
 
+  // FIX #13(a): org-zone-aware, zone-labelled ("01/09/2026, 00:30 IST", not
+  // hardcoded-UTC "01/09/2026, 19:00" with no label at all). dateStyle/
+  // timeStyle cannot be combined with timeZoneName in one Intl.DateTimeFormat
+  // call (throws), so the two are composed by hand — same convention
+  // officials-panel.tsx/timezone-preference.tsx already use elsewhere in
+  // this codebase.
+  const deadlineLabel = (deadline: string) =>
+    `${fmtDateTime(cart.timezone, deadline)} ${fmtZoneAbbrev(cart.timezone, deadline)}`;
+
   let moneyNode: ReactNode = null;
   if (money.kind === "stripe_due") {
     const label = t(ui, "register.status.pay.cta", { amount: feeLabel });
@@ -124,7 +142,7 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
         <PayButton entryId={entry.id} token={token} label={label} />
         {money.deadline && (
           <p className="text-xs text-ink-muted">
-            {t(ui, "register.status.money.deadline", { date: fmtDateTime(UTC, money.deadline) })}
+            {t(ui, "register.status.money.deadline", { date: deadlineLabel(money.deadline) })}
           </p>
         )}
       </div>
@@ -146,9 +164,20 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
         {cart.instructionsHtml ? <CompetitionProse html={cart.instructionsHtml} /> : null}
         {money.deadline && (
           <p className="text-xs text-ink-muted">
-            {t(ui, "register.status.money.deadline", { date: fmtDateTime(UTC, money.deadline) })}
+            {t(ui, "register.status.money.deadline", { date: deadlineLabel(money.deadline) })}
           </p>
         )}
+      </div>
+    );
+  } else if (money.kind === "window_closed") {
+    // FIX #8: the pay-by deadline has passed but the hourly sweep has not
+    // caught up yet (status is still 'pending') — no Pay button (it would
+    // mint a real Stripe session the very next sweep expires and
+    // auto-refunds) and no "Pay by" date (it has already gone by).
+    moneyNode = (
+      <div className="space-y-1">
+        <p className="text-sm font-semibold text-ink">{feeLabel}</p>
+        <p className="text-sm text-amber-800">{t(ui, "register.status.pay.windowClosed")}</p>
       </div>
     );
   } else if (entry.status === "waitlisted") {

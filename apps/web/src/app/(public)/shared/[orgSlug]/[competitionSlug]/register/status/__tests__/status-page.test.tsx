@@ -9,6 +9,7 @@
 // that the resolved view's data actually reaches the right sections.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
+import { fmtDateTime, fmtZoneAbbrev } from "@/lib/format";
 
 vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: async () => "en" }));
 
@@ -45,6 +46,14 @@ const render = async (searchParams: Record<string, string>): Promise<string> =>
     }),
   );
 
+// Deliberately far past/future — resolveMoneyState's FIX #8 reads
+// money.deadline (and, through it, this fixture's `expires_at`) against the
+// REAL wall clock (Date.now()), so a date merely "later than when this
+// fixture was written" goes stale the moment real time catches up to it and
+// every card in this file would silently start rendering window_closed.
+// Mirrors view-model.test.ts's own FUTURE/PAST convention.
+const FUTURE = "2099-01-01T00:00:00.000Z";
+
 const BASE_ENTRY = {
   id: "reg-1",
   division_id: "div-1",
@@ -56,6 +65,10 @@ const BASE_ENTRY = {
   join_code: null as string | null,
   allows_new_joiner: true,
   promotion_expires_at: null as string | null,
+  // RS007 review fix #10: payment_method now lives on the ENTRY (its own
+  // division's registration_settings.payment_method), never the cart —
+  // see resolveMoneyState's own doc comment (view-model.ts).
+  payment_method: "stripe" as const,
   players: [] as { id: string; full_name: string; consent_status: "pending" | "granted" | "guardian" }[],
   refund_policy: { refundable: true, deadline: "2026-09-15T00:00:00.000Z", amount_cents: 2500 },
 };
@@ -66,7 +79,7 @@ const BASE_VIEW = {
   currency: "gbp",
   amount_cents: 2500,
   payment_method: "stripe" as const,
-  expires_at: "2026-08-20T00:00:00.000Z",
+  expires_at: FUTURE,
   refunded_cents: 0,
   competition_name: "Summer Smash",
   competition_slug: "summer-smash",
@@ -75,6 +88,9 @@ const BASE_VIEW = {
   created_at: "2026-08-20T10:00:00.000Z",
   charges_enabled: true,
   payment_instructions: null as string | null,
+  // RS007 review fix #13(a): the org's own timezone, threaded onto
+  // GroupStatusView (buildGroupStatusView, registrations.ts).
+  org_timezone: "UTC",
   entries: [
     BASE_ENTRY,
     {
@@ -170,6 +186,10 @@ describe("register status page (RS007 rebuild)", () => {
         ...BASE_VIEW,
         payment_method: "offline" as const,
         payment_instructions: "Send to club@example.com, quoting {{reference}}.",
+        // RS007 review fix #10: money state now reads the ENTRY's own
+        // payment_method, not the cart's (above) — both must agree here for
+        // this to still exercise the offline_due branch under test.
+        entries: BASE_VIEW.entries.map((e) => ({ ...e, payment_method: "offline" as const })),
       });
       const html = await render({ rid: "g1", token: "tok" });
       expect(html).toContain("club@example.com");
@@ -202,6 +222,7 @@ describe("register status page (RS007 rebuild)", () => {
         payment_method: "offline" as const,
         payment_instructions:
           "Please pay using these details:\n\nBank: Example Bank\nAccount name: RS007 Seed Org\nSort code: 12-34-56\nAccount number: 12345678\nReference: {{reference}}",
+        entries: BASE_VIEW.entries.map((e) => ({ ...e, payment_method: "offline" as const })),
       });
       const html = await render({ rid: "g1", token: "tok" });
       expect(html).toContain("Bank: Example Bank<br>");
@@ -257,6 +278,66 @@ describe("register status page (RS007 rebuild)", () => {
         (html.match(/>Free</g) || []).length,
         "the confirmed card itself must read Free, not just the page Subtotal",
       ).toBeGreaterThanOrEqual(2);
+    });
+  });
+
+  describe("money — code-review follow-up #8 and #13(a)", () => {
+    // FIX #8 ("pay-then-refund on a stale deadline"): the hourly sweep has
+    // not caught up yet, so the row is still 'pending', but its own deadline
+    // has already passed — no live Pay button (it would mint a real Stripe
+    // session the very next sweep expires and auto-refunds) and no stale
+    // "Pay by" date printed above it.
+    it("an entry past its own deadline shows neither a Pay button nor a 'Pay by' date — the payment-window-closed message instead", async () => {
+      usecaseMock.groupById.mockResolvedValueOnce({
+        ...BASE_VIEW,
+        expires_at: "2000-01-01T00:00:00.000Z", // robustly in the past
+      });
+      const html = await render({ rid: "g1", token: "tok" });
+      expect(html).not.toMatch(/Pay now/);
+      expect(html).not.toMatch(/Pay by/);
+      expect(html).toContain("The payment window for this entry has closed");
+      // The fee is still named (transparency about what's owed) — same
+      // "never a blank money section" rule FIX 1 already established for
+      // stripe_unavailable/confirmed/free.
+      expect(
+        (html.match(/>£25</g) || []).length,
+        "the window_closed card itself must still show its own fee",
+      ).toBeGreaterThanOrEqual(2);
+    });
+
+    it("an entry whose deadline is still ahead is unaffected (sanity — not simply hiding every Pay button)", async () => {
+      usecaseMock.groupById.mockResolvedValueOnce(BASE_VIEW); // FUTURE expires_at
+      const html = await render({ rid: "g1", token: "tok" });
+      expect(html).toMatch(/Pay now/);
+      expect(html).not.toContain("The payment window for this entry has closed");
+    });
+
+    // FIX #13(a): entry-card.tsx used to hardcode UTC (and no zone label) for
+    // every deadline it rendered, whatever timezone the org actually runs
+    // in. Asserts against the SAME formatting functions the component calls
+    // (fmtDateTime/fmtZoneAbbrev) rather than a hand-typed string, so this
+    // can't drift from a real ICU/ Intl formatting change — see this
+    // repo's own "pin an actual computed value, don't guess the format
+    // string" convention (formatMinor's whole-number rounding trap).
+    it("renders the deadline in the ORG's own timezone, with a zone label — never hardcoded UTC", async () => {
+      const deadline = "2026-09-01T19:00:00.000Z"; // 00:30 on 2 Sept LOCAL in Asia/Kolkata (UTC+5:30)
+      usecaseMock.groupById.mockResolvedValueOnce({
+        ...BASE_VIEW,
+        org_timezone: "Asia/Kolkata",
+        expires_at: deadline,
+      });
+      const html = await render({ rid: "g1", token: "tok" });
+
+      const expectedDate = fmtDateTime("Asia/Kolkata", deadline);
+      const expectedZone = fmtZoneAbbrev("Asia/Kolkata", deadline);
+      const utcDate = fmtDateTime("UTC", deadline);
+      expect(utcDate, "sanity: the two zones must genuinely disagree on this instant").not.toBe(expectedDate);
+
+      expect(html).toContain(expectedDate);
+      expect(html).toContain(expectedZone);
+      // The bug this fixes: the OLD hardcoded-UTC render of this exact
+      // instant must not appear anywhere on the page.
+      expect(html).not.toContain(utcDate);
     });
   });
 

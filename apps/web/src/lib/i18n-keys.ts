@@ -3894,6 +3894,7 @@ export type DictionaryKey =
   | "register.status.pay.error.conflict"
   | "register.status.pay.error.generic"
   | "register.status.pay.unavailable"
+  | "register.status.pay.windowClosed"
   | "register.status.resend.busy"
   | "register.status.resend.cta"
   | "register.status.resend.error.conflict"
