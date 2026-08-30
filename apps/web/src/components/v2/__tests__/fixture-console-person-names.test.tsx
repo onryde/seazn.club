@@ -17,12 +17,14 @@
 // The TEAM case is asserted too, and it is not a formality: a resolution
 // that turned every entrant into a list of its players would pass all three
 // individual/pair claims below while making football unreadable.
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ReactElement, ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { builtinModules } from "@seazn/engine/sports";
 import { entrantDisplayName } from "@/lib/entrant-name";
 import { FixtureConsole } from "@/components/v2/fixture-console";
 import type { EventIn, LiveState, MemberIn, SideInfo, SportInfo } from "@/components/v2/fixture-console";
+import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
@@ -186,19 +188,105 @@ describe("the console renders people, not entry labels (D-6)", () => {
     expect(html).not.toContain("Entry 3");
   });
 
-  it("uses them in the forfeit picker, which names the side that gives up", () => {
-    const html = consoleHtml(SINGLES, PAIR);
-    // The dropdown is closed on first render; its labels are built from the
-    // same resolution, so the assertion is on the ForfeitButton's props path
-    // being fed resolved sides — proven by the header + ledger above plus
-    // this: no raw entrant label reaches ANY of the three.
-    expect(html).not.toContain("Entry");
-  });
-
   it("still shows a football team by its team name", () => {
     const html = consoleHtml(TEAM, { ...TEAM, id: "e-team2", name: "Summit Athletic" });
     expect(html).toContain("Riverside FC");
     expect(html).toContain("Summit Athletic");
     expect(html, "a team must not become a list of its players").not.toContain("Dee Rahman");
+  });
+});
+
+// R7 / Task C review fix #3 — THE FORFEIT PICKER, ACTUALLY OPENED.
+//
+// The case this replaces was named "uses them in the forfeit picker" and
+// asserted `not.toContain("Entry")` over `renderToStaticMarkup`. The dropdown
+// is behind `useState(false)` and never renders there, so the assertion only
+// restated the scoreline claim above it: reverting `entrantDisplayName(s)` to
+// `s.name` inside `ForfeitButton` left it GREEN. A test that survives the
+// mutation it exists to catch reports a safety it does not provide.
+//
+// So: drive the real control. `_hook-harness` supplies React's dispatcher, so
+// the picker can be OPENED and the sentence a user reads can be asserted —
+// including the confirmation dialog behind it, which turned out to still be
+// naming the entry label.
+describe("the forfeit picker, opened (D-6)", () => {
+  beforeEach(() => {
+    // `ForfeitButton`'s outside-click effect runs the moment the menu opens
+    // and there is no DOM in this workspace (`environment: "node"`). Two
+    // no-ops are the whole contract it needs; anything more would be a
+    // second, silent implementation of the behaviour under test.
+    vi.stubGlobal("document", {
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  /** The real `<ForfeitButton/>` element the console builds, re-mounted in the
+   *  harness so its own `useState` can be driven. Found by function identity
+   *  rather than exported for the test: the console is its only caller, and
+   *  widening the module's surface to reach it would be the test changing the
+   *  product. */
+  function forfeitIsland() {
+    const console_ = renderIsland(FixtureConsole, {
+      fixture: { id: "f1", status: "in_play", scheduled_at: null, venue_name: null, court_name: null, round_no: 1 },
+      sport,
+      home: SINGLES,
+      away: PAIR,
+      initialState: {
+        status: "in_play",
+        last_seq: 1,
+        summary: { headline: "1 — 0" },
+        state: {},
+        outcome: null,
+      } satisfies LiveState,
+      initialEvents: [GOAL],
+      canEdit: true,
+    });
+    const el = console_
+      .tree()
+      .find((e) => typeof e.type === "function" && (e.type as { name?: string }).name === "ForfeitButton");
+    if (!el) throw new Error("<ForfeitButton/> not found in the console's tree");
+    return renderIsland(el.type as (props: unknown) => ReactNode, propsOf(el));
+  }
+
+  function buttons(island: ReturnType<typeof forfeitIsland>): ReactElement[] {
+    return island.tree().filter((e) => e.type === "button");
+  }
+
+  it("names the people once the menu is open, never the entry label", () => {
+    const island = forfeitIsland();
+
+    // Closed: one control, the trigger — proves the click below is what
+    // reveals the labels, so the assertions cannot be reading the header.
+    expect(buttons(island)).toHaveLength(1);
+    (propsOf(buttons(island)[0]!).onClick as () => void)();
+
+    const open = buttons(island);
+    expect(open, "the trigger plus one row per side").toHaveLength(3);
+    const text = island.text();
+    expect(text).toContain("Ada Okonkwo forfeits");
+    expect(text).toContain("Cy Mensah / Bo Lindqvist forfeits");
+    expect(text, "the entry label must not reach the picker").not.toContain("Entry 3");
+    expect(text).not.toContain("Entry 4");
+  });
+
+  it("names the person in the confirmation the organiser has to read and accept", () => {
+    // The step AFTER the picker, and the one that carries the consequence:
+    // "Reason {name} forfeits:". It was still reading `forfeitPrompt.name`,
+    // so a console that had named Ada Okonkwo everywhere else asked the
+    // organiser to confirm a forfeit for "Entry 3".
+    const island = forfeitIsland();
+    (propsOf(buttons(island)[0]!).onClick as () => void)();
+    (propsOf(buttons(island)[1]!).onClick as () => void)();
+
+    const dialog = island
+      .tree()
+      .find((e) => typeof e.type === "function" && (e.type as { name?: string }).name === "TextPromptDialog");
+    if (!dialog) throw new Error("<TextPromptDialog/> not found after picking a side");
+    expect(propsOf(dialog).title).toBe("Reason Ada Okonkwo forfeits:");
   });
 });

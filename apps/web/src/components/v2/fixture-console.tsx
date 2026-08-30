@@ -923,7 +923,11 @@ function ForfeitButton({
       )}
       {forfeitPrompt && (
         <TextPromptDialog
-          title={msg("score.forfeitPrompt", { name: forfeitPrompt.name })}
+          // R7/C review fix #3 — the picker resolved the person and the
+          // confirmation behind it did not, so a console that named Ada
+          // Okonkwo everywhere else asked the organiser to confirm a forfeit
+          // for "Entry 3". Same resolution, same `SideInfo`.
+          title={msg("score.forfeitPrompt", { name: entrantDisplayName(forfeitPrompt) })}
           initialValue="walkover"
           msg={msg}
           onClose={() => setForfeitPrompt(null)}
