@@ -1364,6 +1364,72 @@ describe.skipIf(!HAS_DB)("registration flows (doc 16 §1.1, PROMPT-20a)", () => 
     ).rejects.toThrow(/not found/);
   });
 
+  // RS008: publicRegistrationStatusByRef's own consent-masking sibling to
+  // publicCartByRef's (registration-status-read.test.ts owns the youth
+  // baseline + the pair/team cases) — pinned here since this file already
+  // owns the ref-resolution tests for this specific function.
+  it("publicRegistrationStatusByRef masks display_name when the linked person opted out — even on a non-youth division", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    const settings = await putRegistrationSettings(owner, division.id, {
+      enabled: true,
+      entrant_kind: "individual",
+      fee_cents: 0,
+      form_fields: [],
+      opens_at: null,
+      closes_at: null,
+      capacity: null,
+      refund_lock_at: null,
+    });
+    const { registration } = await seedRegistration(competition.id, division.id, settings, {
+      refCode: generateRefCode(),
+      displayName: "Priya Singh",
+      players: [{ name: "Priya Singh" }],
+    });
+    const [{ id: personId }] = await sql<{ id: string }[]>`
+      insert into persons (org_id, full_name, consent)
+      values (${orgId}, 'Priya Singh', ${sql.json({ public_name: false } as never)})
+      returning id`;
+    await sql`
+      update registration_players set person_id = ${personId}
+      where registration_id = ${registration.id}`;
+
+    const view = await publicRegistrationStatusByRef(registration.ref_code!);
+    expect(view.display_name).toBe("Priya S.");
+  });
+
+  it("publicRegistrationStatusByRef never masks a TEAM's display_name by a roster member's opt-out", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    const settings = await putRegistrationSettings(owner, division.id, {
+      enabled: true,
+      entrant_kind: "team",
+      fee_cents: 0,
+      form_fields: [],
+      opens_at: null,
+      closes_at: null,
+      capacity: null,
+      refund_lock_at: null,
+    });
+    const { registration } = await seedRegistration(competition.id, division.id, settings, {
+      refCode: generateRefCode(),
+      displayName: "Thunder Strikers",
+      players: [{ name: "Cap Tain" }],
+    });
+    const [{ id: personId }] = await sql<{ id: string }[]>`
+      insert into persons (org_id, full_name, consent)
+      values (${orgId}, 'Cap Tain', ${sql.json({ public_name: false } as never)})
+      returning id`;
+    await sql`
+      update registration_players set person_id = ${personId}
+      where registration_id = ${registration.id}`;
+
+    const view = await publicRegistrationStatusByRef(registration.ref_code!);
+    expect(view.display_name).toBe("Thunder Strikers");
+  });
+
   it("self-withdraw by ref requires the email token — the ref alone is a lookup, not auth", async () => {
     const { orgId, ownerId } = await seedOrg();
     const owner = asOwner(orgId, ownerId);

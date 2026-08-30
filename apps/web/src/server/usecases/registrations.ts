@@ -37,7 +37,7 @@ import type { RegistrationEmailArgs } from "@/lib/email-templates";
 import { routes } from "@/lib/routes";
 import { toLocale } from "@/lib/i18n-constants";
 import { isValidRefCode, normalizeRefCode } from "@/lib/ref-code";
-import { maskDisplayName, resolveNameDisplay } from "@/lib/name-display";
+import { anyOptedOut, resolvePersonDisplayName } from "@/lib/name-display";
 import { isoFromZonedParts } from "@/lib/zoned-datetime";
 import { resolveVenueTz } from "@/lib/tz";
 import { rateLimit } from "@/lib/rate-limit";
@@ -3232,6 +3232,38 @@ async function regByRef(ref: string): Promise<RegistrationWithGroupRow> {
   return reg;
 }
 
+/**
+ * RS008 — batched "does ANY roster player on this registration have an
+ * explicit consent opt-out" check, keyed by registration id, for the two
+ * PERSON-shaped public reads below (`publicRegistrationStatusByRef`,
+ * `publicCartByRef`) — a multi-entry cart costs ONE query here, not one per
+ * entry. INNER JOINs persons on purpose: a row with no `person_id` yet
+ * (unclaimed, never materialised) has no consent object to check and can
+ * never contribute an opt-out, so it is correctly invisible to this query
+ * rather than needing an explicit null-check. Delegates the actual
+ * "stricter wins across several people sharing one display_name" rule to
+ * `anyOptedOut` (lib/name-display.ts) — never re-implements it.
+ */
+async function anyOptedOutByRegistration(regIds: string[]): Promise<Set<string>> {
+  if (regIds.length === 0) return new Set();
+  const rows = await sql<{ registration_id: string; consent: { public_name?: boolean } | null }[]>`
+    select rp.registration_id, p.consent
+    from registration_players rp
+    join persons p on p.id = rp.person_id
+    where rp.registration_id in ${sql(regIds)}`;
+  const consentsByReg = new Map<string, ({ public_name?: boolean } | null)[]>();
+  for (const r of rows) {
+    const list = consentsByReg.get(r.registration_id) ?? [];
+    list.push(r.consent);
+    consentsByReg.set(r.registration_id, list);
+  }
+  const optedOut = new Set<string>();
+  for (const [regId, consents] of consentsByReg) {
+    if (anyOptedOut(consents)) optedOut.add(regId);
+  }
+  return optedOut;
+}
+
 export async function publicRegistrationStatusByRef(
   ref: string,
   token?: string | null,
@@ -3243,7 +3275,21 @@ export async function publicRegistrationStatusByRef(
   >`
     select name, slug, youth, player_name_display from divisions
     where id = ${reg.division_id}`;
-  const mode = resolveNameDisplay(div?.player_name_display ?? null, div?.youth ?? false);
+  // RS008: display_name is a PERSON's name for individual/pair, but a TEAM's
+  // own declared name for team — no personal consent applies there, same
+  // `kind === "team"` bypass public.ts's publicEntrants already established.
+  const settings = await loadSettings(sql, reg.division_id);
+  const isTeam = (settings?.entrant_kind ?? "individual") === "team";
+  // A team entry's roster can still carry an opted-out member — never
+  // queried for one, so `optedOut` is always empty and the mask stays
+  // youth-only, exactly like the pre-RS008 behaviour.
+  const optedOut = isTeam ? new Set<string>() : await anyOptedOutByRegistration([reg.id]);
+  const displayName = resolvePersonDisplayName(
+    reg.display_name,
+    optedOut.has(reg.id) ? { public_name: false } : null,
+    div?.player_name_display ?? null,
+    div?.youth ?? false,
+  );
   // access_token_hash already rode the join in regByRef — no separate fetch
   // needed (it lives on the cart now, V364).
   const canWithdraw =
@@ -3251,7 +3297,7 @@ export async function publicRegistrationStatusByRef(
   return {
     ref_code: reg.ref_code!,
     status: reg.status,
-    display_name: maskDisplayName(reg.display_name, mode),
+    display_name: displayName,
     division_name: div?.name ?? "",
     division_slug: div?.slug ?? "",
     competition_name: ctx.comp_name,
@@ -3342,10 +3388,12 @@ export interface PublicCartEntryView {
  * token-GATED and deliberately unmasked for that reason. This is reachable
  * by anyone with a bare ref code, so contact info, amounts/fees/currency,
  * payment method and the access token are never on this shape, and every
- * entry's `display_name` is masked through `resolveNameDisplay`/
- * `maskDisplayName` for ITS OWN division — a cart can span a youth division
- * and a non-youth one at once, so one mask for the whole cart would be
- * wrong in either direction.
+ * entry's `display_name` is masked through `resolvePersonDisplayName` for
+ * ITS OWN division AND its own roster's consent (RS008) — a cart can span a
+ * youth division and a non-youth one at once, so one mask for the whole cart
+ * would be wrong in either direction. A `team` entry's own name is never
+ * personal, so it skips the consent axis entirely (`entrantKindByDivision`
+ * below) — same bypass `public.ts`'s `publicEntrants` already established.
  */
 export interface PublicCartView {
   ref_code: string;
@@ -3380,12 +3428,13 @@ export async function publicCartByRef(ref: string, token?: string | null): Promi
       id: string;
       status: RegistrationRow["status"];
       display_name: string;
+      division_id: string;
       division_name: string;
       youth: boolean;
       player_name_display: string | null;
     }[]
   >`
-    select r.id, r.status, r.display_name, d.name as division_name,
+    select r.id, r.status, r.display_name, r.division_id, d.name as division_name,
            d.youth, d.player_name_display
     from registrations r join divisions d on d.id = r.division_id
     where r.group_id = ${reg.group_id}
@@ -3398,6 +3447,24 @@ export async function publicCartByRef(ref: string, token?: string | null): Promi
   // is no ref-vs-token enumeration distinction to protect (same rule
   // publicRegistrationStatusByRef's canWithdraw already applies).
   const tokenValid = !!token && hashRegistrationToken(token) === reg.access_token_hash;
+
+  // RS008: entrant_kind per DIVISION (a cart can span more than one, same
+  // reason buildGroupStatusView's own entrantKindByDivision map exists) —
+  // a TEAM entry's display_name is the team's own name, never a person's,
+  // so it never takes the consent axis. Batched: one query for the whole
+  // cart's distinct divisions, not one per entry.
+  const divisionIds = [...new Set(entries.map((e) => e.division_id))];
+  const settingsRows =
+    divisionIds.length > 0
+      ? await sql<{ division_id: string; entrant_kind: RegistrationSettingsRow["entrant_kind"] }[]>`
+          select division_id, entrant_kind from registration_settings
+          where division_id in ${sql(divisionIds)}`
+      : [];
+  const entrantKindByDivision = new Map(settingsRows.map((s) => [s.division_id, s.entrant_kind]));
+  const nonTeamEntryIds = entries
+    .filter((e) => (entrantKindByDivision.get(e.division_id) ?? "individual") !== "team")
+    .map((e) => e.id);
+  const optedOut = await anyOptedOutByRegistration(nonTeamEntryIds);
 
   return {
     ref_code: reg.ref_code!,
@@ -3412,9 +3479,11 @@ export async function publicCartByRef(ref: string, token?: string | null): Promi
     entries: entries.map((e) => ({
       id: e.id,
       status: e.status,
-      display_name: maskDisplayName(
+      display_name: resolvePersonDisplayName(
         e.display_name,
-        resolveNameDisplay(e.player_name_display, e.youth),
+        optedOut.has(e.id) ? { public_name: false } : null,
+        e.player_name_display,
+        e.youth,
       ),
       division_name: e.division_name,
       // Per-entry, not inherited from the cart's (oldest-entry-derived) reg
