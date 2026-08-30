@@ -194,7 +194,7 @@ async function tapAnchor(
     .toBe(before + 1);
 }
 
-test("R5 — volleyball: tap a match through a cascaded set, an anchored set, and the deciding set's own fresh toss, to a decided result", async ({
+test("R5 — volleyball: tap a match through a set the pad asks the opener of, a set that inherits it by alternation, and the deciding set's own fresh toss, to a decided result", async ({
   page,
 }) => {
   test.setTimeout(180_000);
@@ -328,7 +328,7 @@ test("R5 — volleyball: tap a match through a cascaded set, an anchored set, an
   await expect(half(page, "home"), "the boundary must leave the board live and scoreable").toBeVisible();
   await shot(page, "set-two-opens-unresolved");
 
-  // ---- SET TWO — inherited, and scored on ONE tap ---------------------------
+  // ---- SET TWO — inherited, scored on ONE tap, and rotating ----------------
   // This block used to open set two with `tapAnchor`, because set two's own
   // opener was unknown. It no longer is: set one now names a first server, so
   // alternation hands set two its opener and there is no anchor tile to press.
@@ -341,18 +341,49 @@ test("R5 — volleyball: tap a match through a cascaded set, an anchored set, an
   await expect(strip(page, "server"), "away won it, so away serves next").toContainText("Away", {
     timeout: 20_000,
   });
-  // The strip item renders its LABEL and value together ("Rotation 2"), so
-  // this anchors on both: a `toHaveText("2")` would fail even when correct,
-  // and a bare `toContainText("2")` would pass on a label that happened to
+  // FIVB 7.6.2's NEGATIVE case, and the reason this reads "1" and not "2": a
+  // side that wins a rally it was ALREADY serving keeps the serve and does not
+  // rotate. The engine's number is `(gains[side] % rotationCycle) + 1` and
+  // `gains` moves only on a side-out (setbased/kernel.ts), so away — which
+  // opened this set and has not yet lost the serve — is still on its first
+  // court position.
+  //
+  // The strip item renders its LABEL and value together ("Rotation 1"), so
+  // this anchors on both: a `toHaveText("1")` would fail even when correct,
+  // and a bare `toContainText("1")` would pass on a label that happened to
   // carry the digit.
-  await expect(strip(page, "rotation"), "FIVB 7.6.2 — away's own court-position number").toHaveText("Rotation 2", {
-    timeout: 20_000,
-  });
+  await expect(strip(page, "rotation"), "FIVB 7.6.2 — serve kept, so nothing rotates").toHaveText(
+    "Rotation 1",
+    { timeout: 20_000 },
+  );
   await expect(v3Tile(page, "serveAnchor"), "nothing unresolved — no tile").toHaveCount(0);
   await shot(page, "set-two-inherited");
 
+  // ---- THE SIDE-OUT: the only event that rotates ---------------------------
+  // The negative case above would also pass against a board that never
+  // rotated at all, so the positive case follows it immediately. Home has been
+  // receiving since this set opened; it now takes the serve. That is the
+  // side-out — `winner !== serving` — and it is the single transition FIVB
+  // 7.6.2 turns a court position on.
+  await tapRally(page, fx, "home");
+  await expect(halfScore(page, "home")).toHaveText("1", { timeout: 20_000 });
+  await expect(strip(page, "server"), "home took the serve off away").toContainText("Home", {
+    timeout: 20_000,
+  });
+  await expect(
+    strip(page, "rotation"),
+    "FIVB 7.6.2 — home rotated one position on winning the serve",
+  ).toHaveText("Rotation 2", { timeout: 20_000 });
+  await shot(page, "set-two-side-out-rotates");
+
+  // Away takes it straight back — a second side-out, so away moves to its own
+  // second position — then serves the set out at 3-1.
   await tapRally(page, fx, "away");
   await expect(halfScore(page, "away")).toHaveText("2", { timeout: 20_000 });
+  await expect(
+    strip(page, "rotation"),
+    "FIVB 7.6.2 — away's own second position, counted against away's lineup",
+  ).toHaveText("Rotation 2", { timeout: 20_000 });
   await tapRally(page, fx, "away");
 
   // ---- THE DECIDER: TOSSED AFRESH, regardless of set two's own resolution --
@@ -394,15 +425,26 @@ test("R5 — volleyball: tap a match through a cascaded set, an anchored set, an
   expect(decided.outcome!.winner).toBe(fx.homeEntrantId);
 
   const rallies = await ralliesOf(page.request, fx.fixtureId);
-  expect(rallies.length, "the ledger holds a different number of rallies than were tapped").toBe(9);
-  expect(
-    rallies[0]!.payload,
-    "set one's own first rally was an ORDINARY tap, not a declaration",
-  ).not.toHaveProperty("serving");
-  expect(rallies[3]!.payload.serving, "set two's own anchor declared home as its server").toBe(
+  // 3 + 4 + 3: set one to 3-0, set two to 3-1 (two side-outs in it), the
+  // decider to 3-0. The count is asserted because a sheet that dispatched
+  // twice — one event for the answer and another for the rally — would leave
+  // every score assertion above still green.
+  expect(rallies.length, "the ledger holds a different number of rallies than were tapped").toBe(10);
+  // Set one's opener was ASKED, and the answer rides the same rally rather
+  // than arriving as an event of its own: one tap, one row, `serving` folded
+  // into it. This is the assertion that the opener question costs the ledger
+  // nothing extra.
+  expect(rallies[0]!.payload.serving, "set one's opener was answered in-band").toBe(
     fx.homeEntrantId,
   );
-  expect(rallies[6]!.payload.serving, "the decider's own anchor declared away as its server").toBe(
+  // Set two's first rally is the whole point of the alternation: it names NO
+  // server, because it did not have to ask for one. If the pad ever regressed
+  // to asking again, this row would carry `serving` and this line would fail.
+  expect(
+    rallies[3]!.payload,
+    "set two inherited its opener by alternation, so it declared nothing",
+  ).not.toHaveProperty("serving");
+  expect(rallies[7]!.payload.serving, "the decider's own anchor declared away as its server").toBe(
     fx.awayEntrantId,
   );
 
