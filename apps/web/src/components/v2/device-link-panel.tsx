@@ -19,10 +19,19 @@ interface ActiveLink {
 export function DeviceLinkPanel({
   fixtureId,
   scorerLabel,
+  embedded = false,
 }: {
   fixtureId: string;
   /** Sport-aware copy (doc 13 §1): 'Umpire' / 'Referee' / 'Arbiter' / 'Scorer'. */
   scorerLabel: string;
+  /**
+   * R7/C3 (D-19) — rendered INSIDE the scoring card, opened from its heading
+   * row, instead of as the last card on the page. Drops this component's own
+   * card chrome and heading: a card inside a card reads as a nesting bug, and
+   * the disclosure button the organiser just pressed already said what this
+   * is. Everything below the heading is unchanged.
+   */
+  embedded?: boolean;
 }) {
   const msg = useMsg();
   const [active, setActive] = useState<ActiveLink | null>(null);
@@ -81,9 +90,14 @@ export function DeviceLinkPanel({
   const padUrl = minted ? `${window.location.origin}/score/${minted.secret}` : null;
 
   return (
-    <section className="card p-5">
-      <h2 className="text-sm font-semibold text-slate-700">{msg("dlink.title")}</h2>
-      <p className="mt-1 text-xs text-slate-500">{msg("dlink.desc", { scorer: scorerLabel.toLowerCase() })}</p>
+    <section
+      className={embedded ? "rounded-xl border border-purple-100 bg-purple-50/40 p-4" : "card p-5"}
+      data-role="device-link-panel"
+    >
+      {!embedded && <h2 className="text-sm font-semibold text-slate-700">{msg("dlink.title")}</h2>}
+      <p className={`text-xs text-slate-600 ${embedded ? "" : "mt-1"}`}>
+        {msg("dlink.desc", { scorer: scorerLabel.toLowerCase() })}
+      </p>
 
       {paywall && <div className="mt-3"><UpgradeGate feature="scoring.device_links" /></div>}
       {error && <p className="mt-3 rounded-md bg-red-50 px-3 py-2 text-xs text-red-600">{error}</p>}

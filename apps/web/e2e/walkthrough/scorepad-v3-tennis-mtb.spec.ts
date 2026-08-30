@@ -224,7 +224,7 @@ test("R4 — tennis: tap a match through the deciding-set MATCH TIE-BREAK to a d
   // A match decided by a tie-break must stay reversible until Finalize, and
   // the pad must come BACK scoreable — otherwise a mis-tap on match point
   // ends the match with no way out.
-  const undoLast = page.getByRole("button", { name: /Undo last/ });
+  const undoLast = page.getByRole("button", { name: /Void last entry/ });
   await expect(undoLast, "a match decided on a tie-break left no way to undo it").toBeVisible();
   await undoLast.click();
   await expect

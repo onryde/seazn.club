@@ -174,10 +174,10 @@ test("abandon records core.abandon with its reason and ends the fixture", async 
     "an abandoned fixture must not still offer the scoring pad",
   ).toHaveCount(0);
   // ...but the abandon stays REVERSIBLE. `decidedLock` is deliberately not
-  // widened, so Undo last is still reachable — over, but not sealed. This is
+  // widened, so Void last entry is still reachable — over, but not sealed. This is
   // the half the fix's own commit message claimed and did not prove.
   await expect(
-    page.getByRole("button", { name: /Undo last/ }),
+    page.getByRole("button", { name: /Void last entry/ }),
     "an abandon recorded by mistake must still be undoable",
   ).toBeVisible({ timeout: 20_000 });
 });
@@ -455,7 +455,7 @@ test("cricket: undo mid-over keeps the scoring panel usable (v3/09 §2)", async 
 
   // The intake #29 repro action: Undo last (voids the over) — chassis-level
   // fixture-console.tsx control, untouched by the v2→v3 pad swap.
-  await page.getByRole("button", { name: /Undo last/ }).click();
+  await page.getByRole("button", { name: /Void last entry/ }).click();
   await expect(scorebug).toContainText("0/0", { timeout: 20_000 });
 
   // The panel stays usable — no blank screen, no dead-end: score again.
@@ -529,9 +529,9 @@ test("cricket: undo mid-over keeps the scoring panel usable (v3/09 §2)", async 
 
   // Undo storms past the start: the console never dead-ends. Two more undos
   // (the corrected over, then core.start) must land back on "Start match".
-  await page.getByRole("button", { name: /Undo last/ }).click();
+  await page.getByRole("button", { name: /Void last entry/ }).click();
   await expect(scorebug).toContainText("0/0", { timeout: 20_000 });
-  await page.getByRole("button", { name: /Undo last/ }).click();
+  await page.getByRole("button", { name: /Void last entry/ }).click();
   await expect(page.getByRole("button", { name: "Start match" })).toBeVisible({
     timeout: 20_000,
   });

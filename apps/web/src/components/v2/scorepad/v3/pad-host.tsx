@@ -520,6 +520,37 @@ export function tileEventType(
 }
 
 /**
+ * R7/C2 — THE OTHER HALF OF D-12. "Forfeit/Abandon are not representable in
+ * the tile grid" has been a CONVENTION stated in prose since R1, with no
+ * type and no runtime block (`_INDEX.md`: "Skin-level validation owes the
+ * enforcement"). Nothing enforced it; the eleven shipped skins simply never
+ * declared such a tile, which is not the same thing as the chassis refusing
+ * one.
+ *
+ * Console chrome is where the enforcement belongs because console chrome is
+ * where these two events LIVE: the labelled "Match actions" band
+ * (fixture-console.tsx), below the pad and below the ledger, with a sentence
+ * saying they end the match record and a confirmation on Abandon. A tile
+ * reaching the same event from inside the scoring grid would put the most
+ * destructive action in the product one thumb-width from a rally tap — the
+ * hierarchy failure D-12 names — and bypass both the sentence and the
+ * confirmation.
+ *
+ * Enforced INSIDE `filterTilesByBand` rather than as a separate pass with
+ * its own call site: every tile the host renders already goes through that
+ * one filter, so there is no second wiring step a later wave can forget, and
+ * a guard nothing is wired to is not a guard.
+ *
+ * A CLOSED PAIR, not a ban on `core.*`. `core.note` and `core.award` stay
+ * tile-able — the activity panel's own void allowlist already treats those
+ * two as the safe ones for the same reason (no state effect).
+ */
+export const AUTHORITY_ONLY_EVENT_TYPES: ReadonlySet<string> = new Set([
+  "core.forfeit",
+  "core.abandon",
+]);
+
+/**
  * Sign-off review 2026-08-17: tiles were rendered regardless of the org's
  * fidelity band, so an org without `scoring.ball_by_ball` saw every ball tile
  * and each tap earned a server refusal — `assertEntitledToScore` gates at the
@@ -535,6 +566,11 @@ export function tileEventType(
  * type carries no `fidelity` entry, is KEPT. Hiding a control we failed to
  * classify is a worse failure than showing one that refuses: the scorer can
  * see and report a refusal, but cannot report a button that was never drawn.
+ *
+ * ONE clause fails CLOSED — `AUTHORITY_ONLY_EVENT_TYPES`, see its own doc.
+ * The fail-open reasoning above does not transfer to it and the two are not
+ * in tension: a tile we could not classify is a nuisance, and a Forfeit tile
+ * a scorer taps by mistake ends someone's match.
  */
 export function filterTilesByBand(
   tiles: readonly TileSpec[],
@@ -546,6 +582,7 @@ export function filterTilesByBand(
   return tiles.filter((tile) => {
     const type = tileEventType(tile, sheets, swaps);
     if (type === null) return true;
+    if (AUTHORITY_ONLY_EVENT_TYPES.has(type)) return false;
     const band = fidelity[type];
     if (band === undefined) return true;
     return entitledBands.has(band);

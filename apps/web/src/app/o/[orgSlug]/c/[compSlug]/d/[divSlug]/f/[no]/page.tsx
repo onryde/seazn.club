@@ -21,7 +21,6 @@ import {
   type SideInfo,
   type LineupSlotIn,
 } from "@/components/v2/fixture-console";
-import { DeviceLinkPanel } from "@/components/v2/device-link-panel";
 import { listFixtureAvailability } from "@/server/usecases/me";
 import { CheckinQr } from "@/components/v2/checkin-qr";
 import { FixtureOfficialsStrip } from "@/components/v2/fixture-officials-strip";
@@ -208,20 +207,16 @@ export default async function FixturePage({
           // own footer, beside the rows it is a verdict ABOUT. It used to be
           // a loose strip below the whole console, two cards away from them.
           audit={audit}
+          // R7/C3 (D-19) — the gate stays here (only this server component
+          // knows about the freeze); the PANEL moved into the console, beside
+          // the pad's heading. It used to render as the last card below.
+          deviceHandover={
+            canEdit &&
+            !(competition.frozen ?? false) &&
+            fixture.status !== "finalized" &&
+            fixture.status !== "cancelled"
+          }
         />
-
-        {/* Day-of device link (doc 13 §7): editors only — scorers never mint. */}
-        {canEdit &&
-          !(competition.frozen ?? false) &&
-          fixture.status !== "finalized" &&
-          fixture.status !== "cancelled" && (
-            <div className="mt-6">
-              <DeviceLinkPanel
-                fixtureId={fixture.id}
-                scorerLabel={sportModule.officialLabel.scorer}
-              />
-            </div>
-          )}
       </main>
     </>
   );

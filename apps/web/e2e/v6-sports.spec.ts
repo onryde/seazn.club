@@ -239,7 +239,7 @@ test("tennis: device-width pad speaks the score, banks a tie-break set, undo res
   await expect(pad(page).locator('[data-role="v3-headline"]')).toContainText("7–6(0)", { timeout: 20_000 });
 
   // Undo restores the live point: score one, undo, the tally is unchanged.
-  // fixture-console.tsx's "Undo last" reads its OWN `events` state, which
+  // fixture-console.tsx's "Void last entry" reads its OWN `events` state, which
   // only refreshes via that component's own writes/resync — never via the
   // pad's separate `usePadPipeline` — so (the same "API-side events don't
   // stream into the console — reload to pick them up" rule this file's own
@@ -260,7 +260,7 @@ test("tennis: device-width pad speaks the score, banks a tie-break set, undo res
   // whatever event comes next once the first one actually took.
   await expect(async () => {
     const alreadyVoided = (await ledger(request, fixtureId)).some((e) => e.type === "core.void");
-    if (!alreadyVoided) await page.getByRole("button", { name: /Undo last/ }).click();
+    if (!alreadyVoided) await page.getByRole("button", { name: /Void last entry/ }).click();
     await expect
       .poll(async () => (await ledger(request, fixtureId)).some((e) => e.type === "core.void"), { timeout: 3_000 })
       .toBe(true);

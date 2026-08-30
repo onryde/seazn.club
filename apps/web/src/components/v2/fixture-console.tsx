@@ -17,6 +17,7 @@ import {
   type PositionGroupIn,
 } from "@/components/v2/lineup-editor";
 import { ScoringErrorBoundary } from "@/components/v2/scoring-error-boundary";
+import { DeviceLinkPanel } from "@/components/v2/device-link-panel";
 import { PadSuspensionBanner } from "@/components/discipline/pad-suspension-banner";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { scoringErrorText, decidedOutcomeText, shootoutScoreFromDetail } from "@/lib/scoring-vocab";
@@ -254,6 +255,19 @@ interface Props {
    * audit (no events yet), which renders no strip at all.
    */
   audit?: { verified: boolean; tamperedSeq: number | null; entitled: boolean } | null;
+  /**
+   * Whether this fixture may still be handed to a courtside device — the
+   * page's own gate (editor, competition not frozen, fixture not finalized
+   * or cancelled), passed down rather than re-derived here because only the
+   * server component knows about the freeze.
+   *
+   * R7/C3 (D-19): `DeviceLinkPanel` used to render as the LAST card on the
+   * page, below the audit strip — at 375 the console is ~2400px tall, so the
+   * one control an organiser reaches for at the START of a fixture sat below
+   * everything they would only read at the end. It now opens from the pad's
+   * own heading row.
+   */
+  deviceHandover?: boolean;
 }
 
 /** Payload keys that carry a person id across the sport modules (card, goal,
@@ -314,6 +328,7 @@ export function FixtureConsole({
   activeSuspensions = [],
   scorePadV2 = null,
   audit = null,
+  deviceHandover = false,
 }: Props) {
   const msg = useMsg();
   const router = useRouter();
@@ -335,6 +350,7 @@ export function FixtureConsole({
   const [abandonPrompt, setAbandonPrompt] = useState(false);
   /** The row whose Void is in flight — the panel dims exactly that button. */
   const [voidingId, setVoidingId] = useState<string | null>(null);
+  const [handoverOpen, setHandoverOpen] = useState(false);
 
   const resync = useCallback(async () => {
     const [state, all] = await Promise.all([
@@ -580,130 +596,80 @@ export function FixtureConsole({
         </div>
       )}
 
-      {/* Match controls */}
+      {/* SCORING (R7/C2 + C3). The pad, and beside its heading the two
+          controls that belong to scoring rather than to authority: `Start
+          match`, the one thing to press before kick-off and the only filled
+          button on this page, and `Hand over device` — which used to be the
+          LAST card on the page, below the audit strip, ~1900px past the pad
+          at 375. It takes the slot the bare authority row vacates.
+
+          `data-testid="score-pad"` stays on the pad's OWN wrapper, never on
+          this section: e2e reads it as "a decided fixture offers no way to
+          record more", and a section that outlived the pad would answer
+          that question wrong. */}
       {scoring && home && away && (
-        <div className="flex flex-wrap items-center gap-2">
-          {!started && (
-            <button
-              type="button"
-              disabled={busy || padSyncing}
-              onClick={() => send("core.start", {})}
-              className="btn btn-primary"
-            >
-              {msg("score.startMatch")}
-            </button>
-          )}
-          {decided && (
-            <>
-              <button
-                type="button"
-                disabled={busy || padSyncing}
-                onClick={() => send("core.finalize", {})}
-                className="btn btn-primary"
-              >
-                {msg("score.finalize")}
-              </button>
-              {publicPath && home && away && (
-                // v3/10 #2: result decided → one tap to the club group chat.
-                <ShareButton
-                  title={`${home.name} ${msg("schedule.vs")} ${away.name}`}
-                  text={msg("score.shareText", { home: home.name, away: away.name, headline: summary?.headline ?? msg("score.resultIn") })}
-                  url={publicPath}
+        <section className="card p-5" data-role="console-scoring">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-sm font-semibold text-slate-700">{msg("score.scoring")}</h2>
+            <div className="flex flex-wrap items-center gap-2">
+              {deviceHandover && (
+                <button
+                  type="button"
+                  data-role="device-handover"
+                  aria-expanded={handoverOpen}
+                  onClick={() => setHandoverOpen((v) => !v)}
                   className="btn btn-ghost"
-                />
+                >
+                  {msg("score.handOverDevice")}
+                </button>
               )}
-            </>
-          )}
-          {!decided && (
-            <>
-              <ForfeitButton busy={busy} padSyncing={padSyncing} home={home} away={away} send={send} />
-              <button
-                type="button"
-                disabled={busy || padSyncing}
-                onClick={() => setAbandonPrompt(true)}
-                className="btn btn-danger"
-              >
-                {msg("score.abandon")}
-              </button>
-            </>
-          )}
-          {abandonPrompt && (
-            <TextPromptDialog
-              title={msg("score.abandonPrompt")}
-              initialValue=""
-              msg={msg}
-              onClose={() => setAbandonPrompt(false)}
-              onSubmit={(reason) => {
-                setAbandonPrompt(false);
-                void send("core.abandon", { reason });
-              }}
-            />
-          )}
-          {lastVoidable && (
-            <button
-              type="button"
-              disabled={busy || padSyncing}
-              onClick={() => send("core.void", { event_id: lastVoidable.id })}
-              className="btn btn-ghost"
-              title={msg("score.undoTitle", { type: lastVoidable.type, seq: lastVoidable.seq })}
-            >
-              {msg("score.undoLast")}
-            </button>
-          )}
-        </div>
-      )}
+              {!started && (
+                <button
+                  type="button"
+                  disabled={busy || padSyncing}
+                  onClick={() => send("core.start", {})}
+                  className="btn btn-primary"
+                >
+                  {msg("score.startMatch")}
+                </button>
+              )}
+            </div>
+          </div>
 
-      {/* Sport pad — S13/#422: the v2 registry, unconditionally (the flag and
-          the eight v1 pads it used to choose between are gone). `scorePadV2`
-          stays a null-guard, not a flag check: it is null only when
-          server-side bootstrap resolution failed, in which case there is no
-          v1 chain left to fall back to and the section renders nothing. */}
-      {scorePadV2 && scoring && !decided && home && away && (
-        <section className="card p-5" data-testid="score-pad">
-          <h2 className="mb-3 text-sm font-semibold text-slate-700">{msg("score.scoring")}</h2>
-          <ScoringErrorBoundary fixtureId={fixture.id}>
-            <ScorePad
-              fixtureId={fixture.id}
-              sportKey={sport.key}
-              moduleVersion={scorePadV2.moduleVersion}
-              resolvedConfig={scorePadV2.resolvedConfig}
-              home={home}
-              away={away}
-              initialEvents={scorePadV2.initialEvents}
-              auth={{ kind: "session" }}
-              identity={scorePadV2.identity}
-              entitlements={scorePadV2.entitlements}
-              band={scorePadV2.band}
-              onEvents={handlePadEvents}
-              // R7/C1 — this console mounts the one ledger itself, below.
-              hideActivity
-            />
-          </ScoringErrorBoundary>
+          {deviceHandover && handoverOpen && (
+            <div className="mb-4">
+              <DeviceLinkPanel fixtureId={fixture.id} scorerLabel={sport.scorerLabel} embedded />
+            </div>
+          )}
+
+          {/* Sport pad — S13/#422: the v2 registry, unconditionally (the flag
+              and the eight v1 pads it used to choose between are gone).
+              `scorePadV2` stays a null-guard, not a flag check: it is null
+              only when server-side bootstrap resolution failed, in which case
+              there is no v1 chain left to fall back to. */}
+          {scorePadV2 && !decided && (
+            <div data-testid="score-pad">
+              <ScoringErrorBoundary fixtureId={fixture.id}>
+                <ScorePad
+                  fixtureId={fixture.id}
+                  sportKey={sport.key}
+                  moduleVersion={scorePadV2.moduleVersion}
+                  resolvedConfig={scorePadV2.resolvedConfig}
+                  home={home}
+                  away={away}
+                  initialEvents={scorePadV2.initialEvents}
+                  auth={{ kind: "session" }}
+                  identity={scorePadV2.identity}
+                  entitlements={scorePadV2.entitlements}
+                  band={scorePadV2.band}
+                  onEvents={handlePadEvents}
+                  // R7/C1 — this console mounts the one ledger itself, below.
+                  hideActivity
+                />
+              </ScoringErrorBoundary>
+            </div>
+          )}
         </section>
-      )}
-
-      {/* Lineups (locked once the fixture starts). Gated on the module's own
-          declaration as well as on the two sides: a sport that nominates one
-          unit and admits no bench has no lineup to pick (R7 D-1). */}
-      {home && away && lineupEditorApplies(sport) && (
-        <div className="grid gap-4 lg:grid-cols-2">
-          {(["home", "away"] as const).map((sideKey) => {
-            const s = sides[sideKey]!;
-            return (
-              <LineupEditor
-                key={s.id}
-                fixtureId={fixture.id}
-                side={s}
-                positionGroups={sport.positionGroups}
-                roles={sport.roles}
-                lineupSize={sport.lineupSize}
-                canEdit={canEdit && live.status === "scheduled"}
-                onSaved={() => router.refresh()}
-                availability={availability}
-              />
-            );
-          })}
-        </div>
       )}
 
       {/* THE ledger (R7/C1, D-4). One panel, one component — the same
@@ -741,16 +707,134 @@ export function FixtureConsole({
         }
         voidingId={voidingId}
         footer={
-          audit && (
-            <AuditStrip
-              fixtureId={fixture.id}
-              verified={audit.verified}
-              tamperedSeq={audit.tamperedSeq}
-              entitled={audit.entitled}
-            />
+          (audit || lastVoidable) && (
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              {/* Ruling R7-5 keeps this control and renames it for what it
+                  actually does: unlike the pad's take-back it can NEVER
+                  cancel before send — it always writes a permanent
+                  `core.void` row. It also reaches rows the per-row Void
+                  cannot: `lastVoidable` skips voided rows and voids, which is
+                  how a mistaken `core.abandon` stays reversible
+                  (scoring.spec.ts pins that). It lives in the LEDGER's own
+                  footer, not the authority band: it edits an entry, which is
+                  scoring, not something that ends the match. */}
+              {lastVoidable && scoring && !decidedLock(live.status) ? (
+                <button
+                  type="button"
+                  disabled={busy || padSyncing}
+                  onClick={() => send("core.void", { event_id: lastVoidable.id })}
+                  className="btn btn-ghost px-2.5 py-1 text-xs"
+                  title={msg("score.voidLastTitle", { type: lastVoidable.type, seq: lastVoidable.seq })}
+                >
+                  {msg("score.voidLast")}
+                </button>
+              ) : (
+                <span />
+              )}
+              {audit && (
+                <AuditStrip
+                  fixtureId={fixture.id}
+                  verified={audit.verified}
+                  tamperedSeq={audit.tamperedSeq}
+                  entitled={audit.entitled}
+                />
+              )}
+            </div>
           )
         }
       />
+      {/* Lineups (locked once the fixture starts). Gated on the module's own
+          declaration as well as on the two sides: a sport that nominates one
+          unit and admits no bench has no lineup to pick (R7 D-1). */}
+      {home && away && lineupEditorApplies(sport) && (
+        <div className="grid gap-4 lg:grid-cols-2">
+          {(["home", "away"] as const).map((sideKey) => {
+            const s = sides[sideKey]!;
+            return (
+              <LineupEditor
+                key={s.id}
+                fixtureId={fixture.id}
+                side={s}
+                positionGroups={sport.positionGroups}
+                roles={sport.roles}
+                lineupSize={sport.lineupSize}
+                canEdit={canEdit && live.status === "scheduled"}
+                onSaved={() => router.refresh()}
+                availability={availability}
+              />
+            );
+          })}
+        </div>
+      )}
+
+      {/* THE AUTHORITY BAND (R7/C2, D-12; Finalize in it per R7-3a).
+          These three used to be a bare row of buttons ABOVE the scoring
+          card — no container, no heading, nothing saying they end the match,
+          with Abandon as the second control on the page. Now: a named
+          container with a sentence saying what it costs, below the pad and
+          below the ledger, and OUTLINED throughout — a filled button here
+          would compete with a scoring tile for the eye, which is exactly the
+          hierarchy failure D-12 is. */}
+      {scoring && home && away && (
+        <section
+          data-role="match-actions"
+          className="rounded-2xl border border-purple-100 bg-purple-50/40 p-4"
+        >
+          <h2 className="text-[11px] font-semibold uppercase tracking-[0.09em] text-purple-800">
+            {msg("score.matchActions")}
+          </h2>
+          <p className="mt-0.5 text-xs text-slate-600">{msg("score.matchActionsNote")}</p>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            {decided && (
+              <>
+                <button
+                  type="button"
+                  disabled={busy || padSyncing}
+                  onClick={() => send("core.finalize", {})}
+                  className="btn btn-ghost"
+                >
+                  {msg("score.finalize")}
+                </button>
+                {publicPath && (
+                  // v3/10 #2: result decided → one tap to the club group chat.
+                  <ShareButton
+                    title={`${home.name} ${msg("schedule.vs")} ${away.name}`}
+                    text={msg("score.shareText", { home: home.name, away: away.name, headline: summary?.headline ?? msg("score.resultIn") })}
+                    url={publicPath}
+                    className="btn btn-ghost"
+                  />
+                )}
+              </>
+            )}
+            {!decided && (
+              <>
+                <ForfeitButton busy={busy} padSyncing={padSyncing} home={home} away={away} send={send} />
+                <button
+                  type="button"
+                  disabled={busy || padSyncing}
+                  onClick={() => setAbandonPrompt(true)}
+                  className="btn btn-danger"
+                >
+                  {msg("score.abandon")}
+                </button>
+              </>
+            )}
+          </div>
+          {abandonPrompt && (
+            <TextPromptDialog
+              title={msg("score.abandonPrompt")}
+              initialValue=""
+              msg={msg}
+              onClose={() => setAbandonPrompt(false)}
+              onSubmit={(reason) => {
+                setAbandonPrompt(false);
+                void send("core.abandon", { reason });
+              }}
+            />
+          )}
+        </section>
+      )}
+
     </div>
   );
 }
@@ -797,7 +881,7 @@ function ForfeitButton({
         type="button"
         disabled={busy || padSyncing}
         onClick={() => setOpen(!open)}
-        className="btn btn-ghost"
+        className="btn btn-danger"
       >
         {msg("score.forfeit")}
       </button>

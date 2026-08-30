@@ -293,7 +293,7 @@ export function DeviceScorePad({
               disabled={busy || padSyncing}
               onClick={() => send("core.void", { event_id: lastOwnVoidable.id })}
               className="flex h-12 items-center justify-center gap-2 rounded-full border border-amber-500/30 bg-amber-500/10 px-6 text-sm font-semibold text-amber-300 transition hover:border-amber-400/60 hover:bg-amber-500/20 active:scale-[0.98] disabled:opacity-50"
-              title={msg("score.undoTitle", { type: lastOwnVoidable.type, seq: lastOwnVoidable.seq })}
+              title={msg("score.voidLastTitle", { type: lastOwnVoidable.type, seq: lastOwnVoidable.seq })}
             >
               <span aria-hidden className="text-base leading-none">⟲</span>
               {msg("device.undoMine")}

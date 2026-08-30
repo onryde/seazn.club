@@ -357,7 +357,7 @@ test("R5 — table tennis: tap a match across the turnLength:2 rotation, into de
   await shot(page, "decided");
 
   // ---- UNDO THE DECIDING RALLY ----------------------------------------------
-  const undoLast = page.getByRole("button", { name: /Undo last/ });
+  const undoLast = page.getByRole("button", { name: /Void last entry/ });
   await expect(undoLast, "a match decided by a tapped rally left no way to undo it").toBeVisible();
   await undoLast.click();
   await expect

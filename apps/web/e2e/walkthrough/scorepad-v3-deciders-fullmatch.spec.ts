@@ -374,7 +374,7 @@ test("R3.5 — cricket: undo a super-over ball, then undo the result the super o
   // The pad is GONE by design once decided (F15/F16) — the console is the only
   // surface left, and it is the one that must still offer the way back.
   await expect(pad(page)).toHaveCount(0);
-  const undoLast = page.getByRole("button", { name: /Undo last/ });
+  const undoLast = page.getByRole("button", { name: /Void last entry/ });
   await expect(undoLast, "a decided super over left no way to undo the result").toBeVisible();
   await shot(page, "undo", "decided-by-super-over-pad-gone");
 

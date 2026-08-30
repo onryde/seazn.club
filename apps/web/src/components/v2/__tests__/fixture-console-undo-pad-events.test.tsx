@@ -19,6 +19,7 @@ import type { EventEnvelope } from "@seazn/engine/core";
 import { FixtureConsole } from "@/components/v2/fixture-console";
 import type { EventIn, SideInfo, SportInfo } from "@/components/v2/fixture-console";
 import { ScorePad } from "@/components/v2/scorepad/registry";
+import { ActivityPanel } from "@/components/v2/scorepad/v3/activity";
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 
 vi.mock("next/navigation", () => ({
@@ -117,13 +118,38 @@ function baseProps() {
   };
 }
 
-/** The chassis "Undo last" control is the only <button> this file renders
- *  with a `title` prop (`score.undoTitle`) — per-row void buttons and every
- *  other toolbar button omit `title` entirely (fixture-console.tsx). */
+/** Depth-first search through a React element and its CHILDREN. The harness's
+ *  own `tree()` expands what a component RENDERS; it cannot see an element
+ *  handed to another component as a prop, which is where R7/C1 put this
+ *  control (`<ActivityPanel footer={…}>`). */
+function deepFind(node: unknown, pred: (el: ReactElement) => boolean): ReactElement | null {
+  if (Array.isArray(node)) {
+    for (const n of node) {
+      const hit = deepFind(n, pred);
+      if (hit) return hit;
+    }
+    return null;
+  }
+  if (node === null || typeof node !== "object" || !("type" in node)) return null;
+  const el = node as ReactElement;
+  if (pred(el)) return el;
+  return deepFind((propsOf(el) as { children?: unknown }).children, pred);
+}
+
+/** The chassis "Void last entry" control (R7/C1 renamed it from "Undo last"
+ *  and moved it into the LEDGER's own footer, where it belongs — it edits an
+ *  entry, which is scoring, not an action that ends the match). Still the only
+ *  <button> this file renders with a `title` prop (`score.voidLastTitle`):
+ *  per-row void buttons and every other control omit `title` entirely. */
 function findUndoLast(tree: ReactElement[]): ReactElement {
-  const el = tree.find((e) => e.type === "button" && propsOf(e).title !== undefined);
-  if (!el) throw new Error("Undo last button not found");
-  return el;
+  const flat = tree.find((e) => e.type === "button" && propsOf(e).title !== undefined);
+  if (flat) return flat;
+  const panel = tree.find((e) => e.type === ActivityPanel);
+  const inFooter = panel
+    ? deepFind(propsOf(panel).footer, (e) => e.type === "button" && propsOf(e).title !== undefined)
+    : null;
+  if (!inFooter) throw new Error("Void last entry button not found");
+  return inFooter;
 }
 
 function findScorePad(tree: ReactElement[]): ReactElement {
@@ -149,7 +175,7 @@ describe("FixtureConsole — Undo last after a pad-driven submit", () => {
     // Sanity: before the pad ever fires, undo targets the seeded event —
     // proves the assertion below is discriminating, not vacuously true.
     const initialVoid = findUndoLast(island.tree());
-    expect(propsOf(initialVoid).title).toContain("1"); // score.undoTitle's seq
+    expect(propsOf(initialVoid).title).toContain("1"); // score.voidLastTitle's seq
 
     const onEvents = propsOf(findScorePad(island.tree())).onEvents as (
       events: readonly EventEnvelope[],
