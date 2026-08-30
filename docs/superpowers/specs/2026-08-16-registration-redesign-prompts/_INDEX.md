@@ -31,7 +31,7 @@ prompts dir) also writes — those two are **sequential, never parallel**.
 | RS005 | `RS005-hub-registrants-tab.md` | RS004 | **DONE** — merged `9d2ad39bc` (PR #651, 2026-08-26), 16/16 checks green. Known-open and stated in the PR: no pagination in the read path; `resend-confirmation` has no throttle (mirrors the pre-existing `/remind`). Smoke still owed by RS010 |
 | RS006 | `RS006-public-stepper.md` | RS003 | **DONE** — merged `ec5cc6e3a` (PR #666, 2026-08-27), 9/9 checks + seven-width e2e green. Follow-ups merged `81f2198a1` (PR #668) fixed three defects found by USING the flow, none of which three review passes caught: RS005's "public sign-up page isn't live yet" notices were still telling organisers the link and QR do not work; "This is me" was not exclusive within a division (one person, two slots, charged twice); step 3 blocked with a step-wide message and no field marked. Smoke still owed by RS010 |
 | RS007 | `RS007-status-page-join-payments.md` | RS006 | **DONE** — merged (PR #677 `a6fca57f2` + PR #680 `2b743185e`, 2026-08-30). Table was stale here; see git log. |
-| RS008 | `RS008-consent-claim-optout.md` (superseded by an inline brief, 2026-08-30 — that file's premises were checked against shipped code and found stale) | RS007 | **PR #682 opened** — branch `feat/rs008-consent-claim-optout`, 11 commits on `origin/main` (`e23dcf241`, #24 fixed in commits 9-11). See closing note below. |
+| RS008 | `RS008-consent-claim-optout.md` (superseded by an inline brief, 2026-08-30 — that file's premises were checked against shipped code and found stale) | RS007 | **PR #682 updated** — branch `feat/rs008-consent-claim-optout`, 24 commits on `origin/main` (`e23dcf241`): the original 11 (A/B1-4/C1-3/#24), then a review-fixes wave closing findings #1–#10 (10 commits). See closing notes below. |
 | RS009 | `RS009-free-agents.md` | RS005, RS003 | TODO |
 | RS011 | `RS011-organiser-eligibility-gates.md` | RS002 | TODO — issue #412, re-homed from `L1` |
 | RS010 | `RS010-closeout-e2e-smoke-help.md` | all | TODO |
@@ -3747,3 +3747,141 @@ wiring verified by reading the diff (byte-identical to
 `confirmRegistration`'s, which IS end-to-end tested) rather than each
 getting its own real webhook-style test, given time budget on an
 already-large session.
+
+### RS008 review-fixes wave (2026-08-30) — PR #682, findings #1–#9 closed
+
+A reviewer audit of PR #682 returned "Needs fixes": 9 numbered findings, all
+closed, one commit each (9 commits, `9330c14bd`..`4db5f7850` on top of the
+11 already on the branch). Full pattern repeated at every site: route the
+raw `display_name` through `resolvePersonDisplayName`
+(`lib/name-display.ts`), with a `kind === "team"` bypass (team names never
+take the consent axis) and a local per-site "any current roster member
+opted out" query (never widening a general-purpose view/usecase that other,
+already-correct consumers read unmodified).
+
+**#1 (Critical)** `entry-card.tsx`'s own card HEADING (`entry.display_name`)
+had zero masking — only the roster rows below it (B1) did. New
+`entryDisplayName` (view-model.ts) + `GroupEntryView.entrant_kind`
+(registrations.ts, sourced from the SAME `entrantKindByDivision` map
+`allows_new_joiner` already reads).
+
+**#2 (Important)** `buildPublicDivisionSlides` (slideshow-data.ts) — the
+anonymous `/present` kiosk's "pure, DB-free" twin of `buildDivisionSlides`
+had NO masking at all. `PublicSlideInput` widened with optional
+`division.youth`/`.player_name_display` and `entrants[].kind`/`.opted_out`
+(every field defaults to "never mask" — back-compat with every existing
+test). Real callers get live values via fix #5's `PublicEntrant.opted_out`.
+
+**#3 (Important)** `publicRegistrationStatus` (registrations.ts, the
+`?rid=&token=` status read) had NO masking, not even youth — brought to
+parity with its `...ByRef` sibling.
+
+**#4 (Important)** `publicEntrants` (public.ts, `GET /api/v1/public/.../entrants`)
+masked `display_name` by youth only — added the consent axis via a local
+`entrant_members`/`persons` query. Zero prior test coverage for this
+function at all; new file `public-entrants-consent.test.ts`.
+
+**#5 (Important, largest)** `public-site/data.ts` — `getPublicDivision`
+(feeding the division page, `calendar.ics`, `poster.pdf`, and via the
+`{...data}` spread the `/present` kiosk) and `getPublicFixture` both read
+`public_entrants_v.display_name` raw. New exported `maskPublicEntrantNames`;
+`PublicDivision` gains optional `youth`/`player_name_display` (joined from
+the base `divisions` table — `public_divisions_v` itself was NOT widened).
+**Widened file set** (pre-authorized by the dispatch): also fixed
+`embed-data.ts`'s `embedDivisionData` (the Pro embeds door, a paying org's
+widget on a THIRD-PARTY site), which ran its own separate but structurally
+identical entrants query with the same gap — not named in the original
+brief, found while tracing every `public_entrants_v.display_name` read site
+as instructed.
+
+**#6 (Minor)** `previewJoinEntry` (registration-submit.ts, the join page's
+own heading) — masked the same way `/r/[ref]` does; `anyOptedOutByRegistration`
+(registrations.ts) exported for reuse rather than a parallel query.
+
+**#7 (Important)** `maybeInviteClaim`'s open-claim guard checked only
+`claimed_at`/`revoked_at`, never `expires_at`. Since `person-claims.ts`'s
+natural-expiry path never sets `revoked_at`, a lapsed (14-day) invite read
+as "open" FOREVER, permanently blocking that person from ever being
+auto-invited again — defeating C's whole purpose. One-line fix
+(`and expires_at > now()`); no second revoke needed, since
+`createSystemClaimInvite` already revokes any `claimed_at is null and
+revoked_at is null` row (regardless of ITS expiry) before inserting.
+
+**#8 (Minor)** `findPlayerPersonByEmail`'s "zero or ambiguous both return
+null" rule is correct for identity (duplicate persons exist per the merge
+feature) but was reused for a masking decision, where it fails OPEN exactly
+when uncertain. New `playerPersonConsentsByEmail` (registrations.ts) returns
+every match's consent; `anyOptedOut` decides — ANY match opted out now
+masks.
+
+**#9** RS009 handoff key `register.status.entry.awaitingTeam` (all 4
+locales) + `awaitingTeamAssignment` (view-model.ts), gated ONLY on
+`free_agent === true` — its own doc comment states plainly that this is
+incomplete (entry MODE, not outcome) and names RS009/V388 as the owner of
+narrowing it; deliberately does NOT add `assignedToTeam`.
+
+Every fix mutation-checked (revert/weaken the production line, confirm
+exactly the new test(s) redden, restore via `cp` backup — never
+`git checkout`). `seazn-env gate --label rs008`: 0 errors, 125 pre-existing
+warnings (same count before and after this wave).
+
+### Review-fixes wave — verification record
+
+376/376 across every touched test file plus every immediate regression
+neighbor (status-page.test.tsx, view-model.test.ts,
+entry-card-layout.test.ts, embed-data.test.ts,
+embed-court-venue-names.test.ts, public-slides.test.ts,
+slideshow-data-locale.test.ts, consent.test.ts,
+data-court-venue-names.test.ts, public-entrants-consent.test.ts [new file],
+public-slot-labels.test.ts, registration-submit.test.ts,
+registrations.test.ts — 91 suites); a second sweep of the wider blast
+radius (registration-status-read.test.ts, person-claims.test.ts,
+exports.test.ts, registration-approval.test.ts, name-display.test.ts) adds
+161/161 — 537/537 total, 0 failures, 0 failed suites, both runs via
+`--reporter=json --outputFile`. `tsc`/`eslint` via `seazn-env gate
+--label rs008`: 0 errors (125 pre-existing warnings, unchanged count).
+
+**The e2e walkthrough (#10) ran for real**, against a real rebuilt server
+(`seazn-env rebuild --label rs008`, `PLAYWRIGHT_BASE` pointed at it,
+`--project=walkthrough`): `rs007-registration-journey.spec.ts` — **3 passed
+(15.9s), exit 0**. All 9 new screenshots (the 3 named moments × 1280/768/320)
+confirmed present on disk AND read back: the claim-accept page shows the
+real signed-in claimer ("Signed in as journey mate2 &lt;TAG&gt; ... This is
+me — claim Mate Two &lt;TAG&gt;"); `/me` shows "Show my name publicly"
+unchecked right after the toggle; the revisited status page shows "Journey
+Captain &lt;TAG&gt;" and "Mate One &lt;TAG&gt;" in full alongside "Mate
+&lt;initial&gt;." (Mate Two, masked) on the same roster — the masked/
+unmasked text differs exactly as the fix predicts, confirmed visually, not
+just by a passing assertion. Building the environment cost two failed
+rebuild attempts first: firing a second `seazn-env rebuild` while the first
+was still mid-build raced its own `rm -rf .next` against the first build's
+in-flight read of a Turbopack manifest file (`ENOENT
+..._clientMiddlewareManifest.js`) — self-inflicted, not a product defect;
+resolved by running exactly one rebuild at a time and waiting it out
+(~8 minutes under the heavy concurrent load from sibling agents' own
+worktrees on this machine).
+
+**Widened scope beyond the dispatch, both pre-authorized and net-new:**
+`embed-data.ts` (fix #5, see above) and `e2e/helpers.ts` gained two new
+exported helpers (`mintClaimPathForPlayerRow`, `screenshotAtWidths` — no
+shared screenshot helper existed in `e2e/` before fix #10).
+
+**New finding, NOT fixed this wave (record, don't drop):** `ConsentCard`'s
+own SQL-side sibling masking convention — `public_person_name()` (used by
+`public_entrants_v.members[].name`, discipline.ts, player-stats.ts) treats
+an ABSENT/`{}` consent as opted-OUT (fails closed, initials-only by
+default), the exact OPPOSITE of `resolvePersonDisplayName`'s "absence never
+masks" contract that this entire session's fixes (and RS007's own
+`consent.test.ts` matrix) are built on. Confirmed by re-reading
+`consent.test.ts`'s own `seedPerson(orgId, "Bob Builder", {})` case: Bob's
+member-card name renders as "B.B." with NO explicit opt-out at all. The two
+conventions have coexisted since before RS008 (this session touched
+neither `public_person_name()` nor `members[].name`, per every prior
+session's own "already-correct, do not touch" ruling) — flagging it now
+because the DIVERGENCE itself is a real product inconsistency (a person who
+has never touched `/me` sees their OWN declared name on one public surface
+and initials on another, for the same event) that no session has yet
+scoped a ruling for. Owed: a decision on whether `public_person_name()`'s
+default should flip to match RS007/RS008's "registering is consent" ruling
+5, or whether the two surfaces are intentionally different and that should
+be documented at both definitions.
