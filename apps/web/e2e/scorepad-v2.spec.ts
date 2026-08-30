@@ -350,7 +350,14 @@ test.describe("v2 console — cricket, the headline flow S11 could not drive", (
     // the console still renders outside the pad for the nine unconverted
     // sports. Same subject, same guarantee: a per-row void addressed by the
     // row's OWN event id.
-    const activity = pad(page).locator('[data-role="v3-activity-slot"]');
+    //
+    // PAGE-WIDE, not pad-scoped (R7/C1, gallery.capture.ts's own
+    // `padEventRows` fix): C1 moved the ledger OUT of the pad root on the
+    // console (`ScorePad`'s `hideActivity`), so the pad-host-internal
+    // `v3-activity-slot` wrapper never renders here; `[data-role="v3-activity"]`
+    // is the panel's own root (activity.tsx), rendered exactly once regardless
+    // of which lane mounts it.
+    const activity = page.locator('[data-role="v3-activity"]');
     await expect(activity).toBeVisible();
     // Scope to the GOAL's own row. The oldest row is `core.start` — a
     // lifecycle event the server will not void — so a positional click would
@@ -431,7 +438,13 @@ test.describe("v2 console — cricket, the headline flow S11 could not drive", (
     // and deliberately did not match the ledger's — that mismatch was the
     // whole defect this test was written for, and locating by text is what
     // keeps the test honest whichever id the row now carries.
-    const goalRow = pad(page)
+    //
+    // PAGE-WIDE, not pad-scoped — same R7/C1 reasoning as this file's other
+    // activity-panel lookup above: the console's ledger mounts OUTSIDE
+    // `data-testid="score-pad"` since C1, so a `pad(page)`-scoped
+    // `v3-activity-row` locator resolves to zero here.
+    const goalRow = page
+      .locator('[data-role="v3-activity"]')
       .locator('[data-role="v3-activity-row"]')
       .filter({ hasText: /Goal/i })
       .first();
@@ -730,8 +743,13 @@ test("device link: score offline on the universal renderer, reconnect, drain, co
     // swallow the ones landing inside its 600ms window. Polling the durable
     // queue after each press is what actually separates them; the old fixed
     // 200ms wait was already measured queueing 2 of 3 on the v2 form.
+    //
+    // `[data-role="v3-scorebug-half"]` (scorebug.tsx, added in review)
+    // replaces a `.grid > * >> .app-display.font-bold` structural chain that
+    // reached through the score figure's own layout classes rather than the
+    // half itself. `.nth(0)` is home, by the chassis's own render order.
     async function scoreOnce(points: number): Promise<void> {
-      await scorebug.locator(".grid > *").nth(0).locator(".app-display.font-bold").click();
+      await scorebug.locator('[data-role="v3-scorebug-half"]').nth(0).click();
       const dock = page.locator('[data-role="v3-dock"]');
       await expect(dock, "a tally tap must open the amend dock").toBeVisible({ timeout: 20_000 });
       if (points !== 1) {

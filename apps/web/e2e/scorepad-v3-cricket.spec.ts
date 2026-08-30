@@ -466,7 +466,15 @@ test("cricket v3: the activity panel lists every recorded ball, NOT just the lat
       .toBe(expected);
   }
 
-  const panel = pad(page).locator('[data-role="v3-activity-slot"]');
+  // PAGE-WIDE, not pad-scoped (R7/C1, gallery.capture.ts's `padEventRows` own
+  // fix, same reasoning): C1 moved the ledger OUT of the pad root on the
+  // console (`ScorePad`'s `hideActivity`, honoured by `v3-activity-slot`
+  // never rendering there at all — the console's own `<ActivityPanel>` mounts
+  // outside `data-testid="score-pad"` in fixture-console.tsx), so a
+  // `pad(page)`-scoped locator resolves to zero here. `[data-role="v3-activity"]`
+  // is the panel's own root (activity.tsx), rendered exactly once regardless
+  // of which lane mounts it.
+  const panel = page.locator('[data-role="v3-activity"]');
   await expect(panel).toBeVisible({ timeout: 20_000 });
   // Every ball has a row — three, not one. A ribbon-only pad shows one.
   await expect
@@ -506,7 +514,9 @@ test("cricket v3: voiding an OLDER event from the activity panel writes core.voi
   const balls = ledgerRows.filter((e) => e.type === "cricket.ball");
   const oldest = balls[0]!;
 
-  const panel = pad(page).locator('[data-role="v3-activity-slot"]');
+  // PAGE-WIDE — see the R7/C1 note on this file's first `v3-activity` panel
+  // lookup above.
+  const panel = page.locator('[data-role="v3-activity"]');
   // Target the oldest BALL by its own event id, never by position. The ledger
   // also carries structural events (core.start), so "the last row" is the
   // match start, not the oldest ball — and voiding the start is refused, which
@@ -907,7 +917,9 @@ test(
       )
       .toBe(7);
 
-    const panel = pad(page).locator('[data-role="v3-activity-slot"]');
+    // PAGE-WIDE — see the R7/C1 note on this file's first `v3-activity` panel
+    // lookup above.
+    const panel = page.locator('[data-role="v3-activity"]');
     await expect(panel).toBeVisible({ timeout: 20_000 });
     const rows = panel.locator('[data-role="v3-activity-row"]');
     await expect.poll(async () => rows.count(), { timeout: 20_000 }).toBeGreaterThanOrEqual(7);
