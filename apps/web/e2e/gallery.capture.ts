@@ -1854,10 +1854,10 @@ const SPORTS: GallerySport[] = [
       // on `!decided` (fixture-console.tsx: `scorePadV2 && scoring &&
       // !decided && home && away`) and unmounts entirely once a match is
       // done. The SAME headline text moves to the console's own header
-      // paragraph instead; the "Finalize (lock ledger)" button is gated
+      // paragraph instead; the "Finalize result" button is gated
       // directly on `decided`, which is what this state is actually
       // proving, so it is the more precise anchor of the two.
-      const soFinalize = page.getByRole("button", { name: "Finalize (lock ledger)", exact: true });
+      const soFinalize = page.getByRole("button", { name: "Finalize result", exact: true });
       await captureState(
         page,
         dir,
@@ -2019,9 +2019,9 @@ const SPORTS: GallerySport[] = [
       // `data-testid="score-pad"` section is gated on `!decided`
       // (fixture-console.tsx) and unmounts entirely once a match is done;
       // the headline text moves to the console's own header paragraph
-      // instead. "Finalize (lock ledger)" is gated directly on `decided`,
+      // instead. "Finalize result" is gated directly on `decided`,
       // which is what this state is actually proving.
-      const decidedFinalize = page.getByRole("button", { name: "Finalize (lock ledger)", exact: true });
+      const decidedFinalize = page.getByRole("button", { name: "Finalize result", exact: true });
       await captureState(
         page,
         dir,

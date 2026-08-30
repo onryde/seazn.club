@@ -135,6 +135,19 @@ describe("the authority band (D-12)", () => {
     expect(band).toContain("Finalize");
   });
 
+  // R7/C review — the design of record's own wording, which C shipped without
+  // because `gallery.capture.ts` matched the old Finalize literal with
+  // `exact: true` (that file's two recipes moved in the same commit).
+  // Pinned as the exact sentences a user reads, not as `toContain`: "Finalize"
+  // and "Abandon" both still matched the strings this replaces.
+  it("reads Finalize result and Abandon…, the approved wording", () => {
+    expect(bandHtml(consoleHtml())).toContain(">Abandon…<");
+    expect(
+      bandHtml(consoleHtml({ outcome: { kind: "win", winner: "e-home" } })),
+      "the button no longer explains its own mechanism in its label",
+    ).toContain(">Finalize result<");
+  });
+
   it("uses outlined buttons only — nothing here competes with a scoring tile", () => {
     expect(
       bandHtml(consoleHtml()),

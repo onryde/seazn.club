@@ -138,7 +138,7 @@ test("forfeit records core.forfeit with the side and the reason, and ends the fi
   // `!decided` gates both controls (fixture-console.tsx), so a decided fixture
   // offers neither. This is the user-visible half of the same claim.
   await expect(page.getByRole("button", { name: /Forfeit/ })).toHaveCount(0, { timeout: 20_000 });
-  await expect(page.getByRole("button", { name: "Abandon", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Abandon…", exact: true })).toHaveCount(0);
 });
 
 test("abandon records core.abandon with its reason and ends the fixture", async ({
@@ -148,7 +148,7 @@ test("abandon records core.abandon with its reason and ends the fixture", async 
   const { fixtureId } = await seedLiveFixture(request, "Abandon");
   await page.goto(await fixturePath(page.request, fixtureId));
 
-  await page.getByRole("button", { name: "Abandon", exact: true }).click({ timeout: 20_000 });
+  await page.getByRole("button", { name: "Abandon…", exact: true }).click({ timeout: 20_000 });
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible({ timeout: 10_000 });
   await dialog.locator('input[name="reason"]').fill("rain");
@@ -160,7 +160,7 @@ test("abandon records core.abandon with its reason and ends the fixture", async 
   const abandon = (await ledger(request, fixtureId)).find((e) => e.type === "core.abandon")!;
   expect(abandon.payload.reason).toBe("rain");
 
-  await expect(page.getByRole("button", { name: "Abandon", exact: true })).toHaveCount(0, {
+  await expect(page.getByRole("button", { name: "Abandon…", exact: true })).toHaveCount(0, {
     timeout: 20_000,
   });
   await expect(page.getByRole("button", { name: /Forfeit/ })).toHaveCount(0);
@@ -194,14 +194,14 @@ test("abandon with an empty reason writes nothing — the fixture stays live", a
   const { fixtureId } = await seedLiveFixture(request, "AbandonEmpty");
   await page.goto(await fixturePath(page.request, fixtureId));
 
-  await page.getByRole("button", { name: "Abandon", exact: true }).click({ timeout: 20_000 });
+  await page.getByRole("button", { name: "Abandon…", exact: true }).click({ timeout: 20_000 });
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible({ timeout: 10_000 });
   await dialog.getByRole("button", { name: "Apply", exact: true }).click();
 
   await expect(dialog).toHaveCount(0, { timeout: 10_000 });
   // Still offered, because nothing was decided.
-  await expect(page.getByRole("button", { name: "Abandon", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Abandon…", exact: true })).toBeVisible();
   expect(
     (await ledger(request, fixtureId)).map((e) => e.type),
     "an empty reason must never reach the ledger",

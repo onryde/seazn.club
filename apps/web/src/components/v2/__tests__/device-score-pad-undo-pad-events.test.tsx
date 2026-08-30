@@ -8,12 +8,12 @@
 // (handlePadEvents) is duplicated deliberately, not refactored into a
 // shared hook, per the dispatch's own scope.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ReactElement } from "react";
+import type { ReactElement, ReactNode } from "react";
 import type { EventEnvelope } from "@seazn/engine/core";
 import { DeviceScorePad, type PadEventIn } from "@/components/v2/device-score-pad";
 import type { SideInfo, SportInfo } from "@/components/v2/fixture-console";
 import { ScorePad } from "@/components/v2/scorepad/registry";
-import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
+import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
 
 const api = vi.hoisted(() => ({
   calls: [] as { url: string; options?: { method?: string; json?: unknown } }[],
@@ -203,5 +203,31 @@ describe("DeviceScorePad — Undo mine after a pad-driven submit", () => {
 
     const settledUndo = findUndoMine(island.tree());
     expect(propsOf(settledUndo).disabled).toBe(false);
+  });
+});
+
+// R7 / Task C review fix #6b — A THIRD UNDO CONTROL THAT CONTRADICTED ITS OWN
+// TOOLTIP.
+//
+// C4's point was that two controls must not share one word while behaving
+// differently, and it renamed both: the ribbon's to "Take back" (it can
+// cancel before send), the console's to "Void last entry" (it always writes a
+// permanent `core.void` row). This one — the device link's — was left reading
+// "Undo my last entry" while its tooltip, shared with the console's control,
+// already said Void. Same button, two vocabularies.
+describe("the device link's own last-entry control says what it does", () => {
+  it("agrees with the tooltip it shares with the console", () => {
+    const island = renderIsland(DeviceScorePad, baseProps());
+    const button = findUndoMine(island.tree());
+
+    const label = textOf(propsOf(button).children as ReactNode);
+    const title = String(propsOf(button).title);
+
+    expect(title, "the tooltip is score.voidLastTitle — the console's own").toContain("Void");
+    expect(
+      label,
+      "and the label must name the same act: this control can never cancel before send",
+    ).toContain("Void");
+    expect(label, "the word C4 took away from every other control").not.toContain("Undo");
   });
 });
