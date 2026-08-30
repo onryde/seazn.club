@@ -31,7 +31,14 @@
 //     HTML, so they're excluded — nothing serves a <script> tag for them.
 // Verified against the #19 repro this file cites: this union reproduces
 // the reported "18 referenced chunks" for the register page exactly,
-// including the one that went missing (1e0nyjjz3x5pr.js).
+// including the one that went missing. Its id is deliberately NOT quoted
+// here — it is a per-build hash that any rebuild invalidates, so it would
+// be stale documentation within a day, and the solver-retirement drift
+// gate under scripts/__tests__ greps this tree case-insensitively for a
+// two-character solver name that a base36 chunk id can contain by pure
+// coincidence. It did, and quoting the chunk failed that gate on a
+// filename with nothing to do with the solver. #19 in the RS007 index
+// carries the real id.
 //
 // Checked against the STANDALONE tree, not the pre-copy one: `next build`
 // (output: standalone) writes .next/static but does not copy it into
