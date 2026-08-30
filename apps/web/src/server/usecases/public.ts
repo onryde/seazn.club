@@ -8,10 +8,11 @@ import { sql } from "@/lib/db";
 import { cacheGet, cacheSet } from "@/lib/cache";
 import { HttpError } from "@/lib/errors";
 import { rateLimit } from "@/lib/rate-limit";
-import { anyOptedOut, maskDisplayName, resolveNameDisplay, resolvePersonDisplayName } from "@/lib/name-display";
 import {
+  maskPublicEntrantNames,
   withCourtVenueName,
   withCourtVenueNames,
+  type PublicEntrantMember,
   type PublicFixture,
 } from "@/server/public-site/data";
 
@@ -155,67 +156,31 @@ export async function publicEntrants(
   const division = await findDivision(orgSlug, compSlug, divSlug);
   return cached(`pub:v1:div:${division.id}:entrants`, async () => {
     const entrants = await sql<
-      { id: string; kind: string; display_name: string; members: { name?: string | null }[] | null }[]
+      {
+        id: string;
+        kind: string;
+        display_name: string;
+        seed: number | null;
+        status: string;
+        members: PublicEntrantMember[];
+      }[]
     >`
       select id, kind, display_name, seed, status, members
       from public_entrants_v where division_id = ${division.id}
       order by seed nulls last, display_name`;
-    // Youth privacy (v3/11 gap 8): person-shaped names mask to "Arun K."
-    // when the division resolves first_initial. Team names are not personal
-    // and pass through; member names (already consent-gated) mask too. The
-    // standings/schedule pages join names from this payload, so masking here
-    // covers every public dashboard surface.
     const [priv] = await sql<{ youth: boolean; player_name_display: string | null }[]>`
       select youth, player_name_display from divisions where id = ${division.id}`;
-    const mode = resolveNameDisplay(priv?.player_name_display ?? null, priv?.youth ?? false);
-
-    // RS008 review fix #4 (Important) — display_name (a non-team entrant's
-    // own name) was masked by YOUTH ONLY; a person's explicit /me opt-out
-    // never reached this endpoint, unlike every other public display_name
-    // site this session has already swept. Small local, parallel query for
-    // the same "any current roster member opted out" signal
-    // buildGroupStatusView/buildDivisionSlides/etc already compute for their
-    // own entrants — never derived from public_entrants_v.members[].name,
-    // which is a DIFFERENT, already-masked string with no raw consent
-    // alongside it (that field's own masking, below, is untouched).
-    const nonTeamIds = entrants.filter((e) => e.kind !== "team").map((e) => e.id);
-    const consentRows =
-      nonTeamIds.length > 0
-        ? await sql<{ entrant_id: string; consent: { public_name?: boolean } | null }[]>`
-            select em.entrant_id, p.consent
-            from entrant_members em
-            join persons p on p.id = em.person_id
-            where em.entrant_id in ${sql(nonTeamIds)}`
-        : [];
-    const consentsByEntrant = new Map<string, ({ public_name?: boolean } | null)[]>();
-    for (const r of consentRows) {
-      const list = consentsByEntrant.get(r.entrant_id) ?? [];
-      list.push(r.consent);
-      consentsByEntrant.set(r.entrant_id, list);
-    }
-
-    const masked = entrants.map((e) => ({
-      ...e,
-      display_name:
-        e.kind === "team"
-          ? e.display_name
-          : resolvePersonDisplayName(
-              e.display_name,
-              anyOptedOut(consentsByEntrant.get(e.id) ?? []) ? { public_name: false } : null,
-              priv?.player_name_display ?? null,
-              priv?.youth ?? false,
-            ),
-      // Unchanged by this fix: member names mask by division youth policy
-      // ALONE (mode) when not "full" — already consent-gated once, SQL-side
-      // (public_person_name inside public_entrants_v); never re-derived here.
-      members:
-        mode === "full"
-          ? e.members
-          : (e.members ?? [])?.map((m) => ({
-              ...m,
-              name: m.name ? maskDisplayName(m.name, mode) : m.name,
-            })),
-    }));
+    // Code-review fix (2026-08-30, item 5): this used to reimplement
+    // maskPublicEntrantNames's own query+masking inline for display_name
+    // (youth+consent), while members[].name kept coming from the SQL-side
+    // public_person_name() — a masking convention with the OPPOSITE default
+    // polarity (absent consent masks there, never masks here) and no youth
+    // awareness. One shared helper now, covering both fields the same way
+    // embed-data.ts's embedDivisionData already does.
+    const masked = await maskPublicEntrantNames(entrants, {
+      youth: priv?.youth ?? false,
+      player_name_display: priv?.player_name_display ?? null,
+    });
     return { division_id: division.id, entrants: masked };
   });
 }

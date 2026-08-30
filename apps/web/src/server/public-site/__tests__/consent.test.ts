@@ -338,6 +338,56 @@ describe.skipIf(!HAS_DB)("getPublicDivision / getPublicFixture — entrant displ
     expect(data!.entrants.map((e) => e.display_name)).toContain("Thunder Strikers");
   });
 
+  // Code-review fix (2026-08-30, item 5) — members[].name used to come off
+  // the view's own public_person_name() SQL function, which fails CLOSED:
+  // absent/{} consent reads as opted-out (masked), the opposite of
+  // resolvePersonDisplayName's "absence never masks" contract every other
+  // site swept by this session already honours. Re-derived here through the
+  // SAME resolver as display_name, via maskPublicEntrantNames.
+  it("getPublicDivision's entrants[].members[].name follows resolvePersonDisplayName's polarity — absence never masks, an explicit opt-out still does", async () => {
+    const { auth, orgId } = await seedOrg();
+    const [{ slug: orgSlug }] = await sql<{ slug: string }[]>`
+      select slug from organizations where id = ${orgId}`;
+    const comp = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "Fix5 Members Cup",
+      visibility: "public",
+      branding: {},
+    });
+    const division = await createDivision(auth, comp.id, {
+      name: "Open",
+      slug: "open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: DIVISION_CONFIG,
+    });
+    const [{ id: quietId }] = await sql<{ id: string }[]>`
+      insert into persons (org_id, full_name, consent)
+      values (${orgId}, 'Quiet Consent', ${sql.json({})})
+      returning id`;
+    const [{ id: optedOutId }] = await sql<{ id: string }[]>`
+      insert into persons (org_id, full_name, consent)
+      values (${orgId}, 'Opted Out', ${sql.json({ public_name: false })})
+      returning id`;
+    await createEntrants(auth, division.id, [
+      {
+        kind: "team",
+        display_name: "Roster Team",
+        seed: 1,
+        members: [
+          { person_id: quietId, squad_number: 1, default_position_key: null, is_captain: false, roles: [] },
+          { person_id: optedOutId, squad_number: 2, default_position_key: null, is_captain: false, roles: [] },
+        ],
+      },
+    ]);
+
+    const data = await getPublicDivision(orgSlug, comp.slug, division.slug);
+    const team = data!.entrants.find((e) => e.display_name === "Roster Team")!;
+    const names = team.members.map((m) => m.name);
+    expect(names).toContain("Quiet Consent"); // {} consent never masks
+    expect(names).toContain("Opted O."); // explicit opt-out still does
+  });
+
   it("getPublicFixture's entrantNames mask a non-team entrant the same way, on the individual fixture page", async () => {
     const { auth, orgId } = await seedOrg();
     const [{ slug: orgSlug }] = await sql<{ slug: string }[]>`

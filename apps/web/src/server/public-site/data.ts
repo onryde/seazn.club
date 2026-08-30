@@ -508,7 +508,18 @@ export async function getPublicCompetition(
  * (fix #2) to also see a real signal via the `{...data}` spread.
  */
 export async function maskPublicEntrantNames<
-  T extends { id: string; kind: string; display_name: string },
+  T extends {
+    id: string;
+    kind: string;
+    display_name: string;
+    members?: {
+      name: string | null;
+      person_id?: string | null;
+      photo?: string | null;
+      squad_number?: number | null;
+      position?: string | null;
+    }[];
+  },
 >(entrants: T[], division: { youth?: boolean; player_name_display?: string | null }): Promise<(T & { opted_out: boolean })[]> {
   const nonTeamIds = entrants.filter((e) => e.kind !== "team").map((e) => e.id);
   const consentRows =
@@ -525,10 +536,58 @@ export async function maskPublicEntrantNames<
     list.push(r.consent);
     consentsByEntrant.set(r.entrant_id, list);
   }
+
+  // Code-review fix (2026-08-30, item 5) — members[].name used to come
+  // straight off public_entrants_v's own public_person_name(full_name,
+  // consent) column: a SQL-side masking convention with the OPPOSITE default
+  // polarity from resolvePersonDisplayName ("absent consent masks" there,
+  // vs "absent consent never masks" here) and no youth awareness at all.
+  // Re-derived per member instead, off a fresh entrant_members/persons join
+  // — the view's own members[].person_id is null for anyone without
+  // public-name consent (PublicEntrantMember's own doc comment), so it
+  // cannot be used to look a member's consent back up here. Positionally
+  // zipped against the view's own members array: this query and the view's
+  // internal jsonb_agg both join entrant_members/persons on the same
+  // entrant_id, filter the same `merged_into is null`, and order by the same
+  // `squad_number nulls last, full_name` — one Postgres instance ordering
+  // the same underlying rows the same way twice, so index i always names
+  // the same person in both (guarded by a length check below regardless).
+  const entrantIdsWithMembers = entrants.filter((e) => (e.members?.length ?? 0) > 0).map((e) => e.id);
+  const memberRowsByEntrant = new Map<string, { full_name: string; consent: { public_name?: boolean } | null }[]>();
+  if (entrantIdsWithMembers.length > 0) {
+    const rows = await sql<
+      { entrant_id: string; full_name: string; consent: { public_name?: boolean } | null }[]
+    >`
+      select em.entrant_id, p.full_name, p.consent
+      from entrant_members em
+      join persons p on p.id = em.person_id
+      where em.entrant_id in ${sql(entrantIdsWithMembers)} and p.merged_into is null
+      order by em.entrant_id, em.squad_number nulls last, p.full_name`;
+    for (const r of rows) {
+      const list = memberRowsByEntrant.get(r.entrant_id) ?? [];
+      list.push({ full_name: r.full_name, consent: r.consent });
+      memberRowsByEntrant.set(r.entrant_id, list);
+    }
+  }
+
   return entrants.map((e) => {
     const optedOut = e.kind !== "team" && anyOptedOut(consentsByEntrant.get(e.id) ?? []);
+    const fresh = e.members ? memberRowsByEntrant.get(e.id) : undefined;
+    const remaskedMembers =
+      e.members && fresh && fresh.length === e.members.length
+        ? e.members.map((m, i) => ({
+            ...m,
+            name: resolvePersonDisplayName(
+              fresh[i]!.full_name,
+              fresh[i]!.consent,
+              division.player_name_display ?? null,
+              division.youth ?? false,
+            ),
+          }))
+        : undefined;
     return {
       ...e,
+      ...(remaskedMembers ? { members: remaskedMembers } : {}),
       opted_out: optedOut,
       display_name:
         e.kind === "team"
