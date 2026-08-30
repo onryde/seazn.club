@@ -5300,3 +5300,63 @@ time):**
 
 Running total of premises found false this wave: **twelve**. Six in the
 brief/register/index, **six authored by R7 itself**.
+
+### R7-15 — owner rulings on the two review MAJORs (2026-08-30)
+
+**The unguarded lineup write path: COMMENT ONLY in R7; the wiring is OWED.**
+Correct `lineup-editor.tsx:227-229,366-368` so they stop asserting an engine 422
+that does not exist. Do NOT wire `validateLineup` into the PUT route this wave.
+
+Stated accurately for whoever picks it up, because "fix the comment" understates
+what is left behind: this is **two inert seams and an unguarded write path**, not
+a stale comment. `validateLineup` and `assertLineup` (`sport/catalog.ts:73,143`)
+both have ZERO production callers, and `lineups/[entrantId]/route.ts:17-24`
+performs no catalog validation, so **a lineup violating a declared group minimum
+saves fine today**. That is a data-integrity question with real blast radius —
+turning an always-succeeding save into one that can 422 on a route every sport
+uses, with existing violating lineups failing on their next edit — and it needs
+its own e2e. OWED BY R8 or its own change; recorded here so it is not rediscovered
+as a defect.
+
+The amber notice therefore stays ADVISORY: it tells an organiser what is missing
+without blocking Save. For a club product that is arguably correct on its own
+merits, not merely the cheap option.
+
+**Keep the new notice, and ADD THE LEVER.** `goalkeeper` is settable nowhere in
+the UI, so R7's correctly-wired conditional serves a state no organiser can
+produce. A `goalkeeper` field goes into `match-rules.tsx` this wave. Without it
+the whole B2 chain is correct and unusable.
+
+**Dead code vs DEAD REACH** — the distinction this wave produced, worth carrying
+forward. Dead code is unreachable and shows up in coverage. Dead reach is
+wired, typed, tested, covered, and serves a state the product gives no user a
+way to enter. **It passes every test a working seam passes.** The only thing
+that catches it is asking "can a real organiser produce this state, and through
+which control?" — a question no test suite asks.
+
+**R6's position on the nag, taken independently:** keep it. Both period modules
+declare `GK`/`G` at `min 1, max 1` (`hockey.ts:33`, `icehockey.ts:43`), so
+"Starting line-up still needs: Goalkeeper × 1" is TRUE and useful to an organiser
+building a side. R6 is adding it to their `captureExtra` states deliberately and
+naming it at their walkthrough as new behaviour arriving from R7 — rather than
+having it appear unexplained in a capture. Suppressing a true, useful notice to
+keep a review artifact tidy optimises the artifact over the product.
+
+### R7-16 — "a read is not a run", now in AGENTS.md (joint finding with R6)
+
+The generalisation behind R7's sixth false premise, promoted by R6 into
+`AGENTS.md` so it reaches every session rather than living in two indexes:
+
+> "`resolvePositions` has no production callers" is TRUE and grep-checkable.
+> "…so a user sees the editor demanding a keeper" is NEITHER, and neither
+> session looked.
+
+R7 stated it; R6 called it better than their own framing, adopted it verbatim,
+sharpened it into "the single point of failure for the empty-net case", and
+wrote it into their index — none of which either session reproduced. R6 had
+written "a grep is not a read" into `AGENTS.md` earlier the same session and
+then made the next version of the same mistake within the hour.
+
+Sequence worth keeping: **grep → read → RUN.** Each step answers a question the
+one before it cannot. A grep answers what exists; a read answers how it is
+ordered and what it does; only running it answers what a user sees.
