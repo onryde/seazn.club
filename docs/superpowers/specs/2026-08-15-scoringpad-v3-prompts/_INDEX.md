@@ -5177,3 +5177,62 @@ briefed, and was then FORCED by tsc into `v3/tokens.ts` as well —
 size it as a two-file change: the tone set fans out to types.ts,
 sport-theme.ts, tokens.ts, a `.pad-*` rule in globals.css, and both
 `contrast.test.ts` and `sport-theme.test.ts`.
+
+### R7 Tasks B + B2 — DONE. Five more false premises, three of them R7's own
+
+Commits `6dcc4dbc1`, `a0ef34463`, `03ace92e6`, `69de895c5`, `29c3e4cbd`.
+
+**Gate, rerun by the MAIN THREAD on the worktree, not taken from the
+implementer:** vitest `src/components/v2 src/app` = **4424 total / 4422 passed /
+0 failed / 2 pending**, 1341 suites, **0 failed suites**; `jq -r
+'.testResults[].name' | grep -vc worktrees/r7-console` = **0** (no path resolved
+outside the worktree); `rtk proxy npx tsc --noEmit -p apps/web` **0 errors**;
+`rtk proxy npm run lint` **✖ 125 problems (0 errors, 125 warnings)** — the
+pre-existing baseline, unchanged. Baseline before the pass: 4370/4368/0, so +54.
+
+A bare `npx tsc --noEmit` returned the string **"TypeScript: No errors found"** —
+the exact fabrication signature `_RULES.md` §6 records. Rerun through
+`rtk proxy` it emitted nothing and exited 0, which is what a real clean tsc does.
+The trap is live; the first result was discarded.
+
+**FP-7 (R7's own, and the most important finding of the pass): the B2 fix as
+briefed would have shipped INERT.** `SportInfo.positionGroups` was
+`{key,name}[]`, so `PositionGroup.min` was stripped one layer ABOVE the lineup
+editor and nothing in the editor ever expressed a position requirement.
+Repointing the three bootstraps at `resolvePositions` — the entire fix as R7-8
+and the plan described it — would have resolved the conditional catalog
+correctly and then thrown the conditional part away one layer later. **A fix for
+an inert seam that was itself an inert seam.** Three layers had to land: resolve,
+CARRY `min`, RENDER it (new `lineup.needsPositions` string × 4 dictionaries, new
+`server/usecases/lineup-catalog.ts`).
+
+This is failure class 1 caught mid-flight by an implementer who checked the
+consumer instead of the producer. It is also the exact reason the wave's build
+rule says to fold a producer's output through its REAL consumer.
+
+**FP-8 (R7's own): the plan's column table mapped the wrong control.** It said
+role select `:330-345` gates on declared roles. `:330-345` is the
+engine-universal `LineupSlot.role` (player/coach/staff, `core/lineup.ts`, read by
+`playingSquad` and cricket's `orderFromLineup`). The design of record means
+Captain/Wicketkeeper **flags** — the checkboxes at `:366-390`, already gated by
+mapping over declared `roles`. Following the plan would have DELETED a working
+control from tennis, badminton and tabletennis. The implementer refused and was
+right to.
+
+**FP-9 (R7's own): "pair-order only for sports whose kernel consumes it" is
+TAUTOLOGICAL** once the hide predicate lands — every still-visible pair-capable
+sport consumes it, and carrom (the one that does not) is hidden. Expressing it
+would need a new `SportModule` declaration (module.ts + 4 modules + conformance)
+for a guard no test can kill. Left as `pairShaped`; out of blast radius.
+
+**FP-10: path typo carried by both the brief and the plan** — `positionsFor` is
+`packages/engine/src/**sports**/period/kernel.ts:2434`, not `sport/period/`.
+
+**FP-11: the dispatch's own verify command could not run as written.**
+`apps/web/vitest.config.ts` now hard-refuses an `.env.local` `DATABASE_URL`;
+`DATABASE_URL=` would have silently skipped ~22 DB-backed files. The live `r7`
+label env was used instead. Any later R7 dispatch must carry the label env, not
+a bare vitest line.
+
+Running total of premises this wave found false: **eleven**. Six in the
+brief/register/index, **five authored by R7 itself** (three here, two in R7-11).
