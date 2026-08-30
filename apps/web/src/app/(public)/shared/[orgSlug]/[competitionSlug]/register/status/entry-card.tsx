@@ -18,6 +18,7 @@ import { CompetitionProse } from "@/components/public-site/competition-prose";
 import { PayButton } from "./pay-button";
 import { CancelEntry } from "./cancel-entry";
 import {
+  assignedTeamName,
   awaitingTeamAssignment,
   canCancelEntry,
   canJoinEntry,
@@ -263,6 +264,17 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
             records entry MODE, not outcome) and must not be extended here. */}
         {awaitingTeamAssignment(entry) && (
           <p className="text-sm text-ink-muted">{t(ui, "register.status.entry.awaitingTeam")}</p>
+        )}
+        {/* RS009 — the receipt for the promise the stepper made at sign-up.
+            Mutually exclusive with the notice above by construction: both
+            read the same placement, so a card can never say "waiting for a
+            team" and name a team at the same time. */}
+        {assignedTeamName(entry) && (
+          <p className="text-sm text-ink-muted">
+            {t(ui, "register.status.entry.assignedToTeam", {
+              team: assignedTeamName(entry) as string,
+            })}
+          </p>
         )}
 
         {entry.players.length > 0 && (

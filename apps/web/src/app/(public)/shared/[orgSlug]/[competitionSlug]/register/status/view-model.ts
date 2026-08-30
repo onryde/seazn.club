@@ -177,8 +177,27 @@ export function canJoinEntry(status: EntryStatus): boolean {
  * finished. Do not add a separate `assignedToTeam` check here — that is
  * explicitly RS009's own follow-up, not this fix's.
  */
-export function awaitingTeamAssignment(entry: { free_agent: boolean }): boolean {
-  return entry.free_agent === true;
+export function awaitingTeamAssignment(entry: {
+  free_agent: boolean;
+  assigned_team_name?: string | null;
+}): boolean {
+  // NARROWED by RS009, as the comment above hands over. `free_agent` alone
+  // would keep telling a PLACED player they are still waiting — forever,
+  // since that column records how the entry was made and never flips back.
+  return entry.free_agent === true && !entry.assigned_team_name;
+}
+
+/** RS009 — the other half: the team they were placed on, or null.
+ *
+ *  Kept beside `awaitingTeamAssignment` deliberately. The two are the same
+ *  question asked twice, and a reader who changes one must see the other; if
+ *  they ever disagree, a solo sign-up's card says both "waiting for a team"
+ *  and "on Riverside Rovers" at once. */
+export function assignedTeamName(entry: {
+  free_agent: boolean;
+  assigned_team_name?: string | null;
+}): string | null {
+  return entry.free_agent ? (entry.assigned_team_name ?? null) : null;
 }
 
 export interface RosterCounts {

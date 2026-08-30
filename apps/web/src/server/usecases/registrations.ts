@@ -3838,6 +3838,12 @@ export interface GroupEntryView {
   status: RegistrationRow["status"];
   amount_cents: number;
   free_agent: boolean;
+  /** RS009 — the team an organiser placed this solo sign-up on, or null
+   *  while still in the pool. Null on every non-solo-sign-up entry. This is
+   *  what narrows RS008's `awaitingTeamAssignment`: `free_agent` records how
+   *  the entry was MADE and never flips back, so on its own it would tell a
+   *  placed player they are still waiting, forever. */
+  assigned_team_name: string | null;
   join_code: string | null;
   /** RS007: whether the GENERIC (no player_id) claim link is valid for this
    *  entry — false for a `pair` (its fixed two-person roster leaves no room
@@ -4048,7 +4054,15 @@ async function buildGroupStatusView(
     select r.id, r.division_id, d.name as division_name, r.display_name, r.status,
            r.amount_cents, r.refunded_cents, r.free_agent, r.join_code, r.promotion_expires_at,
            r.payment_intent_id as entry_payment_intent_id,
-           d.youth as division_youth, d.player_name_display as division_player_name_display
+           d.youth as division_youth, d.player_name_display as division_player_name_display,
+           -- RS009: the team an organiser placed this solo sign-up on, or
+           -- null while they are still in the pool. free_agent records how
+           -- the entry was MADE and never flips back, so it cannot answer
+           -- this on its own -- which is exactly what RS008 handed over in
+           -- awaitingTeamAssignment's doc comment.
+           (select tgt.display_name from registration_players rp
+             join registrations tgt on tgt.id = rp.registration_id
+             where rp.assigned_from_registration_id = r.id) as assigned_team_name
     from registrations r join divisions d on d.id = r.division_id
     where r.group_id = ${group.id}
     order by r.created_at, r.id`;

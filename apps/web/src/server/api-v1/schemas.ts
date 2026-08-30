@@ -2692,6 +2692,7 @@ export const PublicRegisterGroupEntryResult = z.object({
   free_agent: z.boolean(),
 });
 
+
 /** Cart-level outcome (`SubmitGroupResult` mirror, registration-
  *  submit.ts:121-130). `checkout_url` is required-but-nullable: wave 3 wires
  *  Stripe and starts returning a real URL when a payment is due now, but the

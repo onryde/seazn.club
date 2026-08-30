@@ -4636,6 +4636,7 @@
   "register.status.roster.claimLink": "Envoyer à {name} son lien de confirmation",
   "register.status.roster.genericClaimLink": "Inviter une nouvelle personne dans cette inscription",
   "register.status.entry.awaitingTeam": "En attente d'une équipe",
+  "register.status.entry.assignedToTeam": "Affecté à {team}",
   "register.status.waitlisted.note": "Vous êtes sur liste d'attente — aucun frais n'est dû sauf en cas de promotion.",
   "register.status.resend.cta": "Renvoyer l'e-mail de confirmation",
   "register.status.resend.busy": "Envoi en cours…",
