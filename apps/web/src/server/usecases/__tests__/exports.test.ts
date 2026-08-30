@@ -468,6 +468,40 @@ describe.skipIf(!HAS_DB)("rich exports (Jul3/06)", () => {
     expect(ticket.maskedName).toBe("Thunder Strikers");
   });
 
+  // Code-review fix (2026-08-30, item 2) — nonTeamRegIds above already
+  // excluded a team from the CONSENT axis, but resolvePersonDisplayName was
+  // still called for a team's own display_name regardless — the YOUTH axis
+  // (or an explicit player_name_display override, exercised here the same
+  // way this file's own "masked names" test above forces it) lives inside
+  // that function, not in nonTeamRegIds' filter, so a team's door ticket
+  // still printed a masked name.
+  it("admit tickets never mask a TEAM's own name by the division's player_name_display policy either", async () => {
+    const { auth } = await seedOrg("pro");
+    const comp = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "Team Cup Youth",
+      visibility: "private",
+      branding: {},
+    });
+    const division = await createDivision(auth, comp.id, {
+      name: "Open Teams",
+      sport_key: "generic",
+      variant_key: "score",
+      config: GENERIC_CONFIG,
+    });
+    await sql`update divisions set player_name_display = 'first_initial' where id = ${division.id}`;
+    await sql`
+      insert into registration_settings
+        (division_id, enabled, entrant_kind, fee_cents, payment_method, approval, allow_free_agents)
+      values (${division.id}, true, 'team', 0, 'offline', 'auto', false)`;
+    const group = await seedConfirmedRegistration(comp.id, division.id);
+    await sql`update registrations set display_name = 'Thunder Strikers' where group_id = ${group.id}`;
+
+    const model = await buildAdmitTicketsDoc(auth, comp.id, { printedAt: PRINTED });
+    const ticket = model.sections[0]!.ticket!;
+    expect(ticket.maskedName).toBe("Thunder Strikers");
+  });
+
   it("buildMyRotaDoc: SEAZN-neutral — no org branding", async () => {
     const model = await buildMyRotaDoc(randomUUID(), { printedAt: PRINTED });
     expect(model.kind).toBe("officials_rota");

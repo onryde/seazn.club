@@ -1480,6 +1480,39 @@ describe.skipIf(!HAS_DB)("registration flows (doc 16 §1.1, PROMPT-20a)", () => 
     expect(view.display_name).toBe("Thunder Strikers");
   });
 
+  // Code-review fix (2026-08-30, item 2) — the consent axis above was already
+  // bypassed for a team, but resolvePersonDisplayName was still CALLED for a
+  // team's display_name, and the youth axis lives inside that function, not
+  // in the isTeam guard around it — so a team on a YOUTH division still got
+  // masked. This is a DIFFERENT axis from the test above (consent), isolated
+  // here with no opted-out person on the roster at all.
+  it("publicRegistrationStatusByRef never masks a TEAM's display_name on a YOUTH division either", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division: created } = await rig(owner);
+    // RS007/V380: age band (and the youth flag it derives) is PATCH-only.
+    const division = await patchDivision(owner, created.id, { age_max: 15 });
+    expect(division.youth).toBe(true);
+    const settings = await putRegistrationSettings(owner, division.id, {
+      enabled: true,
+      entrant_kind: "team",
+      fee_cents: 0,
+      form_fields: [],
+      opens_at: null,
+      closes_at: null,
+      capacity: null,
+      refund_lock_at: null,
+    });
+    const { registration } = await seedRegistration(competition.id, division.id, settings, {
+      refCode: generateRefCode(),
+      displayName: "Thunder Strikers",
+      players: [{ name: "Cap Tain" }],
+    });
+
+    const view = await publicRegistrationStatusByRef(registration.ref_code!);
+    expect(view.display_name).toBe("Thunder Strikers");
+  });
+
   // RS008 review fix #3 (Important) — publicRegistrationStatus (the ?rid=
   // &token= status-page read, distinct from the ref-code sibling above) had
   // NO masking at all, not even by youth — bringing it to parity with
@@ -1539,6 +1572,33 @@ describe.skipIf(!HAS_DB)("registration flows (doc 16 §1.1, PROMPT-20a)", () => 
     await sql`
       update registration_players set person_id = ${personId}
       where registration_id = ${res.registration.id}`;
+
+    const status = await publicRegistrationStatus(res.registration.id, res.access_token);
+    expect(status.display_name).toBe("Thunder Strikers");
+  });
+
+  // Code-review fix (2026-08-30, item 2) — same youth-axis gap as
+  // publicRegistrationStatusByRef's own sibling test above.
+  it("publicRegistrationStatus never masks a TEAM's display_name on a YOUTH division either", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division: created } = await rig(owner);
+    const division = await patchDivision(owner, created.id, { age_max: 15 });
+    expect(division.youth).toBe(true);
+    const settings = await putRegistrationSettings(owner, division.id, {
+      enabled: true,
+      entrant_kind: "team",
+      fee_cents: 0,
+      form_fields: [],
+      opens_at: null,
+      closes_at: null,
+      capacity: null,
+      refund_lock_at: null,
+    });
+    const res = await seedRegistration(competition.id, division.id, settings, {
+      displayName: "Thunder Strikers",
+      players: [{ name: "Cap Tain" }],
+    });
 
     const status = await publicRegistrationStatus(res.registration.id, res.access_token);
     expect(status.display_name).toBe("Thunder Strikers");

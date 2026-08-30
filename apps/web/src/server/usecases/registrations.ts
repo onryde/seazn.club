@@ -3269,12 +3269,23 @@ export async function publicRegistrationStatus(
   // this session).
   const isTeam = (settings?.entrant_kind ?? "individual") === "team";
   const optedOut = isTeam ? new Set<string>() : await anyOptedOutByRegistration(sql, [reg.id]);
-  const displayName = resolvePersonDisplayName(
-    reg.display_name,
-    optedOut.has(reg.id) ? { public_name: false } : null,
-    div?.player_name_display ?? null,
-    div?.youth ?? false,
-  );
+  // Code-review fix (2026-08-30, item 2): `isTeam` above only ever bypassed
+  // the CONSENT axis (optedOut stays empty for a team) — resolvePersonDisplayName
+  // was still being CALLED for a team's own display_name, and the YOUTH axis
+  // lives INSIDE that function, not in the isTeam guard around it. A team on
+  // a youth division still fell into maskDisplayName via the youth branch,
+  // e.g. "Thunder Strikers" -> "Thunder S.", even though a team's own
+  // declared name carries no personal-consent OR safeguarding meaning at
+  // all. Bypass the resolver call itself for a team, same as every other
+  // already-correct site (maskPublicEntrantNames, public.ts's publicEntrants).
+  const displayName = isTeam
+    ? reg.display_name
+    : resolvePersonDisplayName(
+        reg.display_name,
+        optedOut.has(reg.id) ? { public_name: false } : null,
+        div?.player_name_display ?? null,
+        div?.youth ?? false,
+      );
   // Amount due follows the SNAPSHOT (reg row), not live settings — fee edits
   // never change what an in-flight registrant owes (spec issue #8).
   const paymentDue = reg.status === "pending" && reg.amount_cents > 0;
@@ -3443,12 +3454,18 @@ export async function publicRegistrationStatusByRef(
   // queried for one, so `optedOut` is always empty and the mask stays
   // youth-only, exactly like the pre-RS008 behaviour.
   const optedOut = isTeam ? new Set<string>() : await anyOptedOutByRegistration(sql, [reg.id]);
-  const displayName = resolvePersonDisplayName(
-    reg.display_name,
-    optedOut.has(reg.id) ? { public_name: false } : null,
-    div?.player_name_display ?? null,
-    div?.youth ?? false,
-  );
+  // Code-review fix (2026-08-30, item 2): same gap as publicRegistrationStatus
+  // above — `isTeam` only bypassed the consent axis; the youth axis lives
+  // inside resolvePersonDisplayName itself, so a team on a youth division
+  // still got masked. Bypass the resolver call entirely for a team.
+  const displayName = isTeam
+    ? reg.display_name
+    : resolvePersonDisplayName(
+        reg.display_name,
+        optedOut.has(reg.id) ? { public_name: false } : null,
+        div?.player_name_display ?? null,
+        div?.youth ?? false,
+      );
   // access_token_hash already rode the join in regByRef — no separate fetch
   // needed (it lives on the cart now, V364).
   const canWithdraw =
@@ -3635,20 +3652,31 @@ export async function publicCartByRef(ref: string, token?: string | null): Promi
     ends_on: ctx.ends_on,
     created_at: new Date(reg.created_at).toISOString(),
     can_withdraw: tokenValid,
-    entries: entries.map((e) => ({
-      id: e.id,
-      status: e.status,
-      display_name: resolvePersonDisplayName(
-        e.display_name,
-        optedOut.has(e.id) ? { public_name: false } : null,
-        e.player_name_display,
-        e.youth,
-      ),
-      division_name: e.division_name,
-      // Per-entry, not inherited from the cart's (oldest-entry-derived) reg
-      // row — see PublicCartEntryView.can_withdraw's doc comment for why.
-      can_withdraw: tokenValid && e.status !== "withdrawn",
-    })),
+    entries: entries.map((e) => {
+      // Code-review fix (2026-08-30, item 2): entrantKindByDivision already
+      // decided which entries feed nonTeamEntryIds (the consent axis) above,
+      // but this per-entry map still called resolvePersonDisplayName
+      // unconditionally — a team on a youth division was still masked via
+      // the youth axis living INSIDE that function, not in nonTeamEntryIds'
+      // filter around it.
+      const isTeam = (entrantKindByDivision.get(e.division_id) ?? "individual") === "team";
+      return {
+        id: e.id,
+        status: e.status,
+        display_name: isTeam
+          ? e.display_name
+          : resolvePersonDisplayName(
+              e.display_name,
+              optedOut.has(e.id) ? { public_name: false } : null,
+              e.player_name_display,
+              e.youth,
+            ),
+        division_name: e.division_name,
+        // Per-entry, not inherited from the cart's (oldest-entry-derived) reg
+        // row — see PublicCartEntryView.can_withdraw's doc comment for why.
+        can_withdraw: tokenValid && e.status !== "withdrawn",
+      };
+    }),
   };
 }
 

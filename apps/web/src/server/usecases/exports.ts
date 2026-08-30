@@ -962,13 +962,21 @@ export async function buildAdmitTicketsDoc(
     // person behind their display_name — a team's own name never does.
     const nonTeamRegIds = rows.filter((r) => r.entrant_kind !== "team").map((r) => r.registration_id);
     const optedOut = await anyOptedOutByRegistration(tx, nonTeamRegIds);
+    // Code-review fix (2026-08-30, item 2): nonTeamRegIds already excluded a
+    // team from the CONSENT axis above, but resolvePersonDisplayName was
+    // still called for a team's own display_name regardless — the YOUTH axis
+    // lives inside that function, not in nonTeamRegIds' filter, so a team on
+    // a youth division still printed a masked name on its door ticket.
     const tickets: ExportTicket[] = rows.map((r, i) => ({
-      maskedName: resolvePersonDisplayName(
-        r.display_name,
-        optedOut.has(r.registration_id) ? { public_name: false } : null,
-        r.player_name_display,
-        r.youth,
-      ),
+      maskedName:
+        r.entrant_kind === "team"
+          ? r.display_name
+          : resolvePersonDisplayName(
+              r.display_name,
+              optedOut.has(r.registration_id) ? { public_name: false } : null,
+              r.player_name_display,
+              r.youth,
+            ),
       competition: meta.name,
       dates,
       ref: r.ref_code,

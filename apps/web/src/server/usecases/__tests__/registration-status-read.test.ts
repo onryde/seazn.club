@@ -665,6 +665,34 @@ describe.skipIf(!HAS_DB)("publicCartByRef — token-less, masked cart read", () 
     expect(view.entries[0]!.display_name).toBe("Thunder Strikers");
   });
 
+  // Code-review fix (2026-08-30, item 2) — entrantKindByDivision already
+  // excluded a team from nonTeamEntryIds (the consent axis) above, but the
+  // per-entry map still called resolvePersonDisplayName unconditionally —
+  // the YOUTH axis lives inside that function, not in nonTeamEntryIds'
+  // filter, so a team on a youth division was still masked. Isolated from
+  // the consent test above: no opted-out person on this roster at all.
+  it("never masks a TEAM's display_name on a YOUTH division either — the youth axis, not just consent", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division: created } = await rig(owner);
+    const division = await patchDivision(owner, created.id, { age_max: 15 });
+    expect(division.youth).toBe(true);
+    await sql`
+      insert into registration_settings
+        (division_id, enabled, entrant_kind, fee_cents, payment_method, approval, allow_free_agents)
+      values (${division.id}, true, 'team', 0, 'offline', 'auto', false)`;
+    const refCode = freshRef();
+    await seedRegistration(
+      competition.id,
+      division.id,
+      { fee_cents: 0, currency: "gbp", payment_method: "offline" },
+      { refCode, displayName: "Thunder Strikers", players: [{ name: "Cap Tain" }] },
+    );
+
+    const view = await publicCartByRef(refCode);
+    expect(view.entries[0]!.display_name).toBe("Thunder Strikers");
+  });
+
   it("returns every entry in the cart, in creation order — not just the oldest", async () => {
     const { competition, division } = await stripeSettingsRig();
     const refCode = freshRef();
