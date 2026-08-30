@@ -5663,3 +5663,70 @@ read" and "a read is not a run".
 sorted A-Z on BOTH branches so the merge is "union, keep it sorted";
 `sport-theme.ts` stays neighbour-insert because it carries per-sport comment
 blocks a sort would tear apart; R6 gets a notice before each R7 skin lands.
+
+### R7-23 — A1 `generic` DONE and reviewed SHIP; rebase done; and C1 broke 14 e2e tests nobody ran
+
+**Rebase:** branch now sits on `origin/main` `fb81bd54f` (RS008 #682), 35 commits
+ahead, **zero conflicts**. A clean rebase is not proof — the real evidence is
+that `npm run i18n:gen-keys` and `npm run openapi:gen` BOTH produced **no
+drift**, which is what says the generated files merged correctly rather than
+merely textually. RS008 added no migrations. Post-rebase gate **4571/4569/0**,
+tsc 0, lint 0 errors, walkthrough still 6/6.
+
+**A1 (`generic`) reviewed SHIP.** Verified rather than asserted: the amount
+chips are genuinely wired — `generic.tsx:669-687` → `dockStore.mutateHeld`
+(`pad-host.tsx:1071-1087`) → `queue.ts:214-223`, which REPLACES the durable
+queue row that is later flushed. That is the exact path R3's two-step goal dock
+shipped inert on, and generic reuses the fixed one. Zero/non-integer `points`
+blocked three layers deep (UI clamp, `Math.max` in `buildPayload`, engine
+`.refine(p => p !== 0)` + `.int()`). The Draw tile is ABSENT, never disabled,
+when `!allowDraws`. Registry add-and-exclude in one commit, `LEGACY_SPORTS`
+still derived.
+
+**FP-15 (R7's ninth own): the `fidelityEntitlements` upsell claim was FALSE.**
+R7's own dispatch brief asserted that an empty map makes the recording chip
+render an upsell for a band nothing gates. `entitledBandsFrom({}, {})`
+(`pad-host.tsx:159-169`) adds EVERY band when `fidelityEntitlements[band]` is
+undefined, so `buildRecording` returns `locked:false` throughout and no upsell
+renders. Independently re-derived by the reviewer and confirmed on screen.
+**R6 had adopted this claim from R7 for their own sports — retracted to them.**
+
+### R7-24 — C1 BROKE 14 e2e TESTS, and four gates in a row missed it
+
+Task C shipped past a green unit gate, a reviewer SHIP, a visual pass AND a
+walkthrough. It still broke **14 e2e tests across five specs**, because none of
+those gates runs the converted sports' e2e specs and R7 never ran them:
+
+    scorepad-v3-cricket.spec.ts     3  (activity panel lists balls; void an
+                                        older event; bowler named at over boundary)
+    scorepad-v3-football.spec.ts    1  (shoot-out kick tiles)
+    scorepad-a11y-evidence.spec.ts  6  (openAmendDock, all widths, both pads)
+    scorepad-v2 / scorepad-offline  4  (pad-scoped activity row)
+
+**One root cause: C1 moved the ledger OUT of the pad root on the console** (the
+device link still renders it INSIDE). Every e2e locator scoping an activity
+selector under `[data-testid="score-pad"]` now resolves to zero.
+
+**The damning part is that we had already met this bug.** `gallery.capture.ts`'s
+`padEventRows` had exactly it, was found, and was fixed page-wide — and NOBODY
+SWEPT FOR ITS SIBLINGS. Five more sites sat in the cricket and football specs
+(`v3-activity-slot` at cricket `:462,:502,:903`, football `:946`, v2 `:353`).
+Fixing one instance of a pattern and not grepping for the rest is its own
+failure mode, and it cost more than the original bug.
+
+This is AGENTS.md class 2 verbatim — "changed something a user touches ⇒ re-run
+the e2e that covers it, not just the unit" — which R7's own plan §8 restates and
+R7 did not do.
+
+**STANDING CHANGE, effective now: a task that touches the pad or the console is
+not closed until the CONVERTED SPORTS' e2e specs have been run.** Unit gate +
+reviewer + walkthrough are not sufficient and have now been demonstrated
+insufficient. The walkthrough drives ONE journey; it cannot stand in for the
+per-sport specs.
+
+**Also owed (reviewer MAJOR, not a blocker):** `scorepad-v2.spec.ts:663` still
+names itself a universal-renderer + device-link test while its body now drives
+`generic` on the v3 lane. Nothing else covers universal-renderer + device-link +
+offline-drain, which is **still live in production for carrom and boardgame**.
+Coverage was deleted silently by a rename that no gate could see. Repoint a copy
+at carrom or boardgame.
