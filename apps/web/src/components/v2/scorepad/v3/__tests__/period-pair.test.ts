@@ -36,6 +36,7 @@ import {
 } from "../skins/period-shared";
 import {
   PERIOD_MODULES,
+  decidedShootout,
   foldPeriod,
   foldedPhases,
   hockey,
@@ -46,6 +47,7 @@ import {
   phaseVerdict,
   probePayload,
   shippedVariantCfgs,
+  shootoutCfgOf,
   summaryOf,
   type PeriodStateLike,
   type Spec,
@@ -713,6 +715,130 @@ describe("the strip owns the two facts the chassis headline is the only surface 
     expect(chip?.value).toBe(
       (summaryOf(sport.module, state) as { detail: { strength: string } }).detail.strength,
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 6a. THE NUMBER ON THE PAD IS THE ENGINE'S OFFICIAL SCORE
+//
+// R6 fix pass 2, gap 1. The scorebug read `state.goals`, which is NOT the
+// official score wherever `preset.shootoutWinnerGoal` is set: ice hockey
+// credits the shoot-out winner a goal in the record (IIHF Rule 87 / NHL Rule
+// 84.4), so a 2-2 match won on the shoot-out is RECORDED 3-2 while the fold's
+// `goals` stay 2-2. `kernel.ts:2526` derives it ONCE (`officialScore`) and
+// publishes it on both `headline` and `perSide`, precisely so the headline and
+// the standings ledger cannot fork — and the pad had forked from both.
+//
+// Every fixture below folds the shoot-out THROUGH to a decided result, which is
+// what the wave's original shoot-out tests never did: they stopped mid-attempt,
+// where `officialScore` credits nothing and the two numbers agree by accident.
+// ---------------------------------------------------------------------------
+
+describe("the pad shows the ENGINE's official score, not the goals it happened to fold", () => {
+  for (const sport of SPORTS) {
+    it(`${sport.key}: a shoot-out folded to a DECIDED result puts the headline's own numbers on the pad`, () => {
+      const { variant, cfg } = shootoutCfgOf(sport.module);
+      const e = eventTypesOf(sport.spec);
+      // A level match in PLAY, so the shoot-out is the only thing that can move
+      // the record — and so a pad reading `state.goals` shows a DRAW.
+      const { state } = decidedShootout(sport.module, cfg, [
+        [e.goal, { by: "H" }],
+        [e.goal, { by: "A" }],
+      ]);
+      expect(String(state.phase), variant).toBe("done");
+      expect((state.outcome as { kind: string; method: string }).method).toBe("shootout");
+      const goals = state.goals as { home: number; away: number };
+      expect(goals.home, "the fixture is not level in play").toBe(goals.away);
+
+      const summary = summaryOf(sport.module, state) as { headline: string };
+      const headline = /^(\d+) — (\d+)/.exec(summary.headline);
+      expect(headline, `unparseable headline "${summary.headline}"`).not.toBeNull();
+
+      const bug = sport.factory(T).scorebug(viewFor(sport, cfg, state));
+      expect(bug.halves[0]!.big, summary.headline).toBe(headline![1]);
+      expect(bug.halves[1]!.big, summary.headline).toBe(headline![2]);
+    });
+  }
+
+  it("both ends of `shootoutWinnerGoal` — ice hockey CREDITS the winner, field hockey deliberately does not", () => {
+    // The fixture that proves the fixture. If the pad were still reading
+    // `state.goals`, the field-hockey row below would pass unchanged — the two
+    // presets share ONE kernel and differ only in this flag, so a test that ran
+    // on field hockey alone could never see the defect at all.
+    const rows = SPORTS.map((sport) => {
+      const { cfg } = shootoutCfgOf(sport.module);
+      const e = eventTypesOf(sport.spec);
+      const { state } = decidedShootout(sport.module, cfg, [
+        [e.goal, { by: "H" }],
+        [e.goal, { by: "A" }],
+      ]);
+      const goals = state.goals as { home: number; away: number };
+      const bug = sport.factory(T).scorebug(viewFor(sport, cfg, state));
+      return { key: sport.key, goals, big: [bug.halves[0]!.big, bug.halves[1]!.big] as const };
+    });
+
+    const ice = rows.find((r) => r.key === "icehockey")!;
+    // The WINNER's number is one ahead of the goals actually scored…
+    expect(ice.big[0]).toBe(String(ice.goals.home + 1));
+    expect(ice.big[0]).not.toBe(String(ice.goals.home));
+    // …and the loser's is untouched.
+    expect(ice.big[1]).toBe(String(ice.goals.away));
+
+    const field = rows.find((r) => r.key === "hockey")!;
+    // FIH has already paid for the shoot-out win in points, so moving GF/GD
+    // would charge the same result twice (hockey/DOMAIN.md:67). The recorded
+    // score stays the drawn one, and so does the pad's.
+    expect(field.big[0]).toBe(String(field.goals.home));
+    expect(field.big[1]).toBe(String(field.goals.away));
+  });
+
+  it("the pad's whole half — number AND shoot-out tally — reproduces `perSide.line` exactly", () => {
+    // The kernel renders one string per side, `${official}${tally ? ` (${n})` : ""}`
+    // (kernel.ts:2541). The pad splits it across `big` and `sub` and reads the
+    // tally from `detail.shootout`; if those two ever came from different
+    // places, this is where it would show.
+    for (const sport of SPORTS) {
+      const { cfg } = shootoutCfgOf(sport.module);
+      const e = eventTypesOf(sport.spec);
+      const { state } = decidedShootout(sport.module, cfg, [[e.goal, { by: "H" }], [e.goal, { by: "A" }]]);
+      const summary = summaryOf(sport.module, state) as { perSide: { entrantId: string; line: string }[] };
+      const bug = sport.factory(T).scorebug(viewFor(sport, cfg, state));
+      const entrants = state.entrants as { home: string; away: string };
+      for (const [index, side] of (["home", "away"] as const).entries()) {
+        const line = summary.perSide.find((r) => r.entrantId === entrants[side])!.line;
+        const half = bug.halves[index]!;
+        expect(`${half.big}${half.sub === undefined ? "" : ` ${half.sub}`}`, `${sport.key}/${side}`).toBe(line);
+      }
+    }
+  });
+
+  it("falls back to the folded goals when the summary carries no side rows at all", () => {
+    // `PadHostView.summary` is `unknown` — the host hands `pipeline.summary`
+    // through without a schema. A summary with no `perSide` must not render a
+    // blank or a zero: the pre-fix reading is the honest failure, right
+    // everywhere except a credited shoot-out. (Mutation target: without this,
+    // the fallback arm is unreachable and any value would survive.)
+    const sport = SPORTS[1]!;
+    const cfg = periodCfg(sport.module);
+    const state = livePhaseState(sport, cfg, [["icehockey.goal", { by: "H" }], ["icehockey.goal", { by: "H" }]]);
+    const bug = sport.factory(T).scorebug({ ...viewFor(sport, cfg, state), summary: {} });
+    expect(bug.halves[0]!.big).toBe("2");
+    expect(bug.halves[1]!.big).toBe("0");
+  });
+
+  it("an UNDECIDED shoot-out credits nothing — the pad and the fold still agree mid-attempt", () => {
+    // `officialScore` is gated on the DECIDED outcome, so the pad must not run
+    // ahead of it. This is the case the wave's original test covered, kept so
+    // the fix cannot overshoot into crediting a goal the engine has not.
+    const sport = SPORTS[1]!; // ice hockey — the sport that credits at all
+    const { cfg } = shootoutCfgOf(sport.module);
+    const { specs } = decidedShootout(sport.module, cfg);
+    const midway = foldPeriod(sport.module, cfg, specs.slice(0, -1));
+    expect(String(midway.phase), "the fixture is no longer mid-shoot-out").toBe("SHOOTOUT");
+    const goals = midway.goals as { home: number; away: number };
+    const bug = sport.factory(T).scorebug(viewFor(sport, cfg, midway));
+    expect(bug.halves[0]!.big).toBe(String(goals.home));
+    expect(bug.halves[1]!.big).toBe(String(goals.away));
   });
 });
 

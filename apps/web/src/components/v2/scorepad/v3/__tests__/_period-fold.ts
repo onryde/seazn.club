@@ -153,6 +153,67 @@ export function nextAdvanceOf(module: AnySportModule, state: PeriodStateLike): s
   return detail?.nextAdvance ?? null;
 }
 
+/** `summary.detail.shootoutNext` — the kernel's own `expectedKicker`. NULL at a
+ *  shoot-out's opening, where either side may take the first attempt. */
+export function shootoutNextOf(module: AnySportModule, state: PeriodStateLike): "home" | "away" | null {
+  const detail = (summaryOf(module, state) as { detail?: { shootoutNext?: string | null } }).detail;
+  const next = detail?.shootoutNext;
+  return next === "home" || next === "away" ? next : null;
+}
+
+/** The first shipped variant whose cfg actually HAS a shoot-out — ice hockey's
+ *  default `iihf` does, field hockey's default `fih-outdoor` does not and its
+ *  `fih-shootout` variant is where the FIH one lives. Throws rather than
+ *  returning a variant with no shoot-out, which would make every caller below
+ *  pass vacuously against a match that never left regulation. */
+export function shootoutCfgOf(module: AnySportModule): { variant: string; cfg: unknown } {
+  const found = shippedVariantCfgs(module).find(({ cfg }) => (cfg as { shootout: unknown }).shootout !== null);
+  if (found === undefined) throw new Error(`${module.key} ships no variant with a shoot-out`);
+  return found;
+}
+
+/**
+ * A shoot-out folded THROUGH to a decided result, which is the state
+ * `period-pair.test.ts` had never reached: its shoot-out fixtures all stopped
+ * mid-attempt, where `officialScore` credits nothing and the pad's own
+ * `state.goals` still agrees with the engine's headline by accident.
+ *
+ * `regulation` is the level score the shoot-out is breaking — the goals both
+ * sides scored in play, which the shoot-out must NOT move. Attempts alternate
+ * by asking the kernel whose turn it is (`expectedKicker`, via the summary),
+ * home scoring and away missing, until the kernel itself leaves the SHOOTOUT
+ * phase. Nothing here decides how many attempts that takes: `attempts` and
+ * `suddenDeath` are the cfg's, and best-of-five with an early clinch ends at
+ * three apiece.
+ */
+export function decidedShootout(
+  module: AnySportModule,
+  cfg: unknown,
+  regulation: readonly Spec[] = [],
+): { specs: Spec[]; state: PeriodStateLike } {
+  const key = module.key;
+  const specs: Spec[] = [["core.start"], ...regulation];
+  for (let step = 0; step < 12; step += 1) {
+    const s = foldPeriod(module, cfg, specs);
+    if (s.phase === "SHOOTOUT") break;
+    const next = nextAdvanceOf(module, s);
+    if (next === null) break;
+    specs.push([`${key}.period.advance`, { to: next }]);
+  }
+  let state = foldPeriod(module, cfg, specs);
+  if (state.phase !== "SHOOTOUT") {
+    throw new Error(`${key}: the ladder never reached a shoot-out (stopped in "${String(state.phase)}")`);
+  }
+  for (let attempt = 0; attempt < 30 && state.phase === "SHOOTOUT"; attempt += 1) {
+    const side = shootoutNextOf(module, state) ?? "home";
+    const by = (state.entrants as Record<string, string>)[side]!;
+    specs.push([`${key}.shootout.attempt`, { by, scored: side === "home" }]);
+    state = foldPeriod(module, cfg, specs);
+  }
+  if (state.phase === "SHOOTOUT") throw new Error(`${key}: the shoot-out never decided`);
+  return { specs, state };
+}
+
 export type PhaseVerdict = "accepted" | "wrong-phase" | "other";
 
 /** Push a payload at the REAL reducer and report which of the three answers it

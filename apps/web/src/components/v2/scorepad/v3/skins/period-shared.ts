@@ -151,6 +151,8 @@ interface PeriodCfgShape {
 }
 
 interface PeriodSummaryShape {
+  headline?: string;
+  perSide?: { entrantId?: string; line?: string }[];
   detail?: {
     nextAdvance?: string | null;
     shootoutNext?: string | null;
@@ -501,6 +503,44 @@ export function escalatingOf(view: PadHostView): ReadonlySet<string> {
 // scorebug()
 // ---------------------------------------------------------------------------
 
+/**
+ * THE OFFICIAL SCORE — which is not `state.goals`, and the pad must never
+ * derive it a second time.
+ *
+ * Where a preset sets `shootoutWinnerGoal` (ice hockey, IIHF Rule 87 / NHL Rule
+ * 84.4), the recorded result of a 2-2 match won on the shoot-out is 3-2. The
+ * kernel derives that ONCE, in `officialScore` (kernel.ts:2255-2270), and
+ * publishes it on BOTH `summary.headline` and `summary.perSide` — its own
+ * comment says why: "the headline is the official score, so it and the
+ * standings ledger cannot fork — one derivation, read by both". The fold's
+ * `state.goals` deliberately stay the goals actually scored in play, because a
+ * shoot-out mints no scorer and every per-person stat reads them.
+ *
+ * So this reads `perSide`, the kernel's own per-side rendering of that one
+ * derivation, rather than restating the `+1` rule. A skin-side copy of the rule
+ * would be a THIRD number on the same screen: the pad said `2 — 2` while the
+ * chassis headline, `perSide`, the standings and every results surface said
+ * `3 — 2 (GWS 2–1)`, and R7 is about to make that headline suppressible, after
+ * which the pad's would be the only number left.
+ *
+ * `line` is `${goals}${tally ? ` (${tally})` : ""}` (kernel.ts:2541), so the
+ * leading integer is the whole of the official score and the parenthetical is
+ * the shoot-out tally the scorebug renders as `sub` from `detail.shootout` —
+ * the same `shootoutTally` the kernel put in the line. `period-pair.test.ts`
+ * pins the two against each other.
+ *
+ * Falls back to `state.goals` when the summary carries no row for this side:
+ * `PadHostView.summary` is `unknown`, and the pre-fix reading is the honest
+ * failure — right in every phase except the one credited shoot-out.
+ */
+export function officialScoreOf(view: PadHostView, side: Side): string {
+  const state = asState(view.state);
+  const entrantId = entrantOf(state, side);
+  const row = (asSummary(view.summary).perSide ?? []).find((r) => r?.entrantId === entrantId);
+  const leading = typeof row?.line === "string" ? /^-?\d+/.exec(row.line) : null;
+  return leading === null ? String(state.goals?.[side] ?? 0) : leading[0];
+}
+
 export function buildScorebug(spec: PeriodSkinSpec, view: PadHostView, t: TFn): ScorebugSpec {
   const state = asState(view.state);
   const cfg = asCfg(view.cfg);
@@ -594,12 +634,12 @@ export function buildScorebug(spec: PeriodSkinSpec, view: PadHostView, t: TFn): 
     halves: [
       {
         who: [{ name: t(SIDE_LABEL.home) }],
-        big: String(state.goals?.home ?? 0),
+        big: officialScoreOf(view, "home"),
         ...(tally === undefined ? {} : { sub: `(${tally.home ?? 0})` }),
       },
       {
         who: [{ name: t(SIDE_LABEL.away) }],
-        big: String(state.goals?.away ?? 0),
+        big: officialScoreOf(view, "away"),
         ...(tally === undefined ? {} : { sub: `(${tally.away ?? 0})` }),
       },
     ],
