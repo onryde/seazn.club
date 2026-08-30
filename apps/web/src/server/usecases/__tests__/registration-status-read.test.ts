@@ -693,6 +693,42 @@ describe.skipIf(!HAS_DB)("publicCartByRef — token-less, masked cart read", () 
     expect(view.entries[0]!.display_name).toBe("Thunder Strikers");
   });
 
+  // Post-merge review fix (2026-08-30, free-agent gap, Important) — a FREE
+  // AGENT entry carries `entrant_kind: "team"` at the division level (design
+  // §5: "an entry with no team of its own yet") but represents ONE
+  // unassigned person, not a named team — registration-submit.ts's own
+  // entryDisplayName falls through to the solo player's name for exactly
+  // this case. Nothing stops a division from being BOTH youth AND
+  // allow_free_agents (the only rule is "allow_free_agents requires
+  // entrant_kind 'team'"), so a solo minor's free-agent signup used to ride
+  // the team bypass above and print their real name unmasked, reachable by
+  // anyone with the bare ref code. Same fixture as the sibling test above,
+  // inverted: `free_agent` is patched onto the registration row directly
+  // (seedRegistration has no option for it — no flow in this suite submits
+  // one — same "raw fixture" convention linkPersonWithConsent above uses).
+  it("still masks a FREE AGENT's display_name on a YOUTH team division — free_agent is one person, not a team", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division: created } = await rig(owner);
+    const division = await patchDivision(owner, created.id, { age_max: 15 });
+    expect(division.youth).toBe(true);
+    await sql`
+      insert into registration_settings
+        (division_id, enabled, entrant_kind, fee_cents, payment_method, approval, allow_free_agents)
+      values (${division.id}, true, 'team', 0, 'offline', 'auto', true)`;
+    const refCode = freshRef();
+    const { registration } = await seedRegistration(
+      competition.id,
+      division.id,
+      { fee_cents: 0, currency: "gbp", payment_method: "offline" },
+      { refCode, displayName: "Cap Tain", players: [{ name: "Cap Tain" }] },
+    );
+    await sql`update registrations set free_agent = true where id = ${registration.id}`;
+
+    const view = await publicCartByRef(refCode);
+    expect(view.entries[0]!.display_name).toBe("Cap T.");
+  });
+
   it("returns every entry in the cart, in creation order — not just the oldest", async () => {
     const { competition, division } = await stripeSettingsRig();
     const refCode = freshRef();

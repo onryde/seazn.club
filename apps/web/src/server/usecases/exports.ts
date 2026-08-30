@@ -901,12 +901,18 @@ interface TicketRegistrationRow {
    *  LEFT JOIN + coalesce: a division with no registration_settings row at
    *  all (never blocked tickets before this) must not start doing so now. */
   entrant_kind: "team" | "individual" | "pair";
+  /** Post-merge review fix (2026-08-30, free-agent gap): a FREE AGENT
+   *  registration carries `entrant_kind: "team"` above but is one
+   *  unassigned person, not a named team (registration-submit.ts's
+   *  entryDisplayName draws this same distinction) — needed so the team
+   *  bypass below can exclude it. */
+  free_agent: boolean;
 }
 
 async function ticketRegistrationRows(tx: Tx, competitionId: string): Promise<TicketRegistrationRow[]> {
   return tx<TicketRegistrationRow[]>`
     select r.id as registration_id, g.ref_code, r.display_name, r.status,
-           d.player_name_display, d.youth,
+           d.player_name_display, d.youth, r.free_agent,
            coalesce(rs.entrant_kind, 'individual') as entrant_kind
     from registrations r
     join divisions d on d.id = r.division_id
@@ -960,16 +966,26 @@ export async function buildAdmitTicketsDoc(
     const dates = `${meta.starts_on ?? "—"} – ${meta.ends_on ?? meta.starts_on ?? "—"}`;
     // RS008: only individual/pair registrations can even have an opted-out
     // person behind their display_name — a team's own name never does.
-    const nonTeamRegIds = rows.filter((r) => r.entrant_kind !== "team").map((r) => r.registration_id);
+    // Post-merge review fix (2026-08-30, free-agent gap): `|| r.free_agent`
+    // pulls a free-agent entry back onto the consent axis — it carries
+    // entrant_kind "team" at the division level but is one unassigned
+    // person, not a named team (registration-submit.ts's entryDisplayName
+    // draws this same distinction).
+    const nonTeamRegIds = rows
+      .filter((r) => r.entrant_kind !== "team" || r.free_agent)
+      .map((r) => r.registration_id);
     const optedOut = await anyOptedOutByRegistration(tx, nonTeamRegIds);
     // Code-review fix (2026-08-30, item 2): nonTeamRegIds already excluded a
     // team from the CONSENT axis above, but resolvePersonDisplayName was
     // still called for a team's own display_name regardless — the YOUTH axis
     // lives inside that function, not in nonTeamRegIds' filter, so a team on
     // a youth division still printed a masked name on its door ticket.
+    // Post-merge review fix (2026-08-30, free-agent gap): `&& !r.free_agent`
+    // below keeps a free agent off this bypass too, same reasoning as
+    // nonTeamRegIds above.
     const tickets: ExportTicket[] = rows.map((r, i) => ({
       maskedName:
-        r.entrant_kind === "team"
+        r.entrant_kind === "team" && !r.free_agent
           ? r.display_name
           : resolvePersonDisplayName(
               r.display_name,

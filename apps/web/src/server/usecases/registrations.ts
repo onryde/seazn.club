@@ -3267,7 +3267,17 @@ export async function publicRegistrationStatus(
   // but a TEAM's own declared name for team — no personal consent applies
   // there (public.ts/public_entrants_v precedent, established throughout
   // this session).
-  const isTeam = (settings?.entrant_kind ?? "individual") === "team";
+  // Post-merge review fix (2026-08-30, free-agent gap): entrant_kind ===
+  // "team" at the DIVISION level also covers a FREE AGENT — design's own
+  // "one unassigned person, not a named team" case (registration-submit.ts's
+  // entryDisplayName treats `entrant_kind === "team" && !free_agent` as the
+  // actual team branch; a free agent falls through to the solo player's own
+  // name, same as individual). Nothing stops a division from being BOTH
+  // youth AND allow_free_agents (the only rule is "allow_free_agents
+  // requires entrant_kind 'team'") — without the `!reg.free_agent` guard, a
+  // solo minor's free-agent entry rode the team bypass below and printed
+  // their real name unmasked.
+  const isTeam = (settings?.entrant_kind ?? "individual") === "team" && !reg.free_agent;
   const optedOut = isTeam ? new Set<string>() : await anyOptedOutByRegistration(sql, [reg.id]);
   // Code-review fix (2026-08-30, item 2): `isTeam` above only ever bypassed
   // the CONSENT axis (optedOut stays empty for a team) — resolvePersonDisplayName
@@ -3449,7 +3459,14 @@ export async function publicRegistrationStatusByRef(
   // own declared name for team — no personal consent applies there, same
   // `kind === "team"` bypass public.ts's publicEntrants already established.
   const settings = await loadSettings(sql, reg.division_id);
-  const isTeam = (settings?.entrant_kind ?? "individual") === "team";
+  // Post-merge review fix (2026-08-30, free-agent gap): same as
+  // publicRegistrationStatus above — entrant_kind === "team" at the division
+  // level also covers a FREE AGENT (one unassigned person, not a named
+  // team; registration-submit.ts's entryDisplayName draws this same
+  // distinction). Without `!reg.free_agent`, a free-agent entry on a
+  // youth+allow_free_agents division rides the team bypass and prints the
+  // real person's name unmasked.
+  const isTeam = (settings?.entrant_kind ?? "individual") === "team" && !reg.free_agent;
   // A team entry's roster can still carry an opted-out member — never
   // queried for one, so `optedOut` is always empty and the mask stays
   // youth-only, exactly like the pre-RS008 behaviour.
@@ -3608,10 +3625,14 @@ export async function publicCartByRef(ref: string, token?: string | null): Promi
       division_name: string;
       youth: boolean;
       player_name_display: string | null;
+      // Post-merge review fix (2026-08-30, free-agent gap): needed below so
+      // the team bypass can exclude a free-agent entry (one unassigned
+      // person, not a named team) from its own division's team treatment.
+      free_agent: boolean;
     }[]
   >`
     select r.id, r.status, r.display_name, r.division_id, d.name as division_name,
-           d.youth, d.player_name_display
+           d.youth, d.player_name_display, r.free_agent
     from registrations r join divisions d on d.id = r.division_id
     where r.group_id = ${reg.group_id}
     order by r.created_at, r.id`;
@@ -3637,8 +3658,16 @@ export async function publicCartByRef(ref: string, token?: string | null): Promi
           where division_id in ${sql(divisionIds)}`
       : [];
   const entrantKindByDivision = new Map(settingsRows.map((s) => [s.division_id, s.entrant_kind]));
+  // Post-merge review fix (2026-08-30, free-agent gap): a FREE AGENT entry
+  // carries `entrant_kind: "team"` at the division level but is one
+  // unassigned person, not a named team (registration-submit.ts's
+  // entryDisplayName draws this same distinction) — it must still take the
+  // consent axis like any individual entry, or a free agent's real name
+  // rides the team bypass straight past `anyOptedOutByRegistration`.
   const nonTeamEntryIds = entries
-    .filter((e) => (entrantKindByDivision.get(e.division_id) ?? "individual") !== "team")
+    .filter(
+      (e) => (entrantKindByDivision.get(e.division_id) ?? "individual") !== "team" || e.free_agent,
+    )
     .map((e) => e.id);
   const optedOut = await anyOptedOutByRegistration(sql, nonTeamEntryIds);
 
@@ -3659,7 +3688,12 @@ export async function publicCartByRef(ref: string, token?: string | null): Promi
       // unconditionally — a team on a youth division was still masked via
       // the youth axis living INSIDE that function, not in nonTeamEntryIds'
       // filter around it.
-      const isTeam = (entrantKindByDivision.get(e.division_id) ?? "individual") === "team";
+      // Post-merge review fix (2026-08-30, free-agent gap): same `!e.free_agent`
+      // exclusion as nonTeamEntryIds above — a free agent must not take the
+      // team bypass on THIS axis either, or its youth-division real name
+      // renders unmasked even though the consent axis above now (correctly)
+      // catches it.
+      const isTeam = (entrantKindByDivision.get(e.division_id) ?? "individual") === "team" && !e.free_agent;
       return {
         id: e.id,
         status: e.status,
