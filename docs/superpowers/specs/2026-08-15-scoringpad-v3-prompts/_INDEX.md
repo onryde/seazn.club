@@ -4237,3 +4237,49 @@ reintroduce it:** the two fidelity models drift in BOTH directions.
 any migration that "aligns the server to `padSpec`" newly PAYWALLS it. R9 makes
 everything free, so the drift stops mattering; a future partial migration would
 resurrect it.
+
+### `V3_SKINS` — the sort was checked, the comments survived, it STAYS sorted
+
+R7 warned that `V3_SKINS` is not a literal at all — it is `Object.create(null)`
+plus individual assignments, each carrying a multi-line provenance comment, and
+that a sort which moved only the assignment lines would silently reattach every
+comment to the WRONG entry. tsc and every test pass either way, because comments
+are comments. The warning was exactly right in principle and is the same
+argument R6 used to refuse sorting `SPORT_PALETTES`.
+
+**Verified by reading the file, not by trusting the implementer:** the comments
+moved WITH their assignments — badminton's note sits on badminton, football's on
+football, and so on. The "same reason as football's own entry above" style
+cross-references, which a sort WOULD have broken, were rewritten: the shared
+factory-type rationale is now stated ONCE in a header above the block rather
+than repeated per entry with "above" pointers. Each remaining comment names its
+own wave and ordinal ("the fourth conversion", "the SECOND of the three
+`sports/setbased` sports"), so provenance is recoverable per entry without
+depending on file order.
+
+**Ruling: `V3_SKINS` and `CONVERTED_SPORTS` stay sorted A-Z.** The merge
+property is worth more than top-to-bottom narrative here, and the narrative
+survived. R7 sorts theirs to match rather than leaving the two branches
+divergent — a shared order agreed before either ships is the whole point.
+
+**The general rule, which is NOT "sorting is fine":** a sort is safe only where
+per-entry commentary either moves with its entry or does not exist.
+`SPORT_PALETTES` fails that test and stays in wave order; `V3_SKINS` passes it
+only because the sort was done carefully and then CHECKED. Two literals in one
+file, two answers — the same shape as `registry.ts` vs `sport-theme.ts`.
+
+### RETRACTION — the empty-`fidelityEntitlements` claim recorded earlier is FALSE
+
+An earlier entry in this block recorded, from R7 and endorsed by R6, that R7's
+three sports declaring `fidelityEntitlements: {}` would make the recording chip
+render an upsell for a band nothing gates, and that R6 was "clean" by contrast.
+**R7 has retracted it and R6 concurs:** `entitledBandsFrom({}, {})` returns all
+four bands, so `showUpsell` is false and the chip renders no chevron at all.
+Confirmed on screen by R7.
+
+R6's own position is unaffected on the facts — the period kernel really does
+declare `{2: "scoring.match_timeline", 3: same}` — but the CONTRAST drawn
+against R7's sports was wrong, and R6 recorded another session's unverified
+claim as fact for the second time today. Same shape as the goalkeeper
+retraction: a plausible statement about what a user would see, adopted without
+driving it.
