@@ -3778,6 +3778,44 @@ describe.skipIf(!HAS_DB)("inviteUnclaimedMembers (RS008 — claim-invite sweep)"
     expect(claims[0]!.revoked_at).toBeNull();
   });
 
+  // RS008 review fix #7 — the guard above only proves a STILL-LIVE open
+  // invite skips. This proves the other half: an EXPIRED (past its 14-day
+  // window), never-claimed, never-revoked invite must NOT lock the person
+  // out of ever being auto-invited again — the exact permanent-lockout bug
+  // this fix closes (person-claims.ts's natural-expiry path never sets
+  // revoked_at, so the pre-fix guard, which checked only
+  // claimed_at/revoked_at, read a merely-lapsed row as "open" forever).
+  it("an EXPIRED open invite is revoked and replaced by a later sweep; a still-live one still correctly skips", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const { division } = await rig(asOwner(orgId, ownerId));
+    const { entrantId, personIdByName } = await seedEntrantWithPlayers(orgId, division.id, [
+      { fullName: "Expired Invite", email: "expired@test.local", consentStatus: "granted" },
+    ]);
+    const personId = personIdByName.get("Expired Invite")!;
+
+    await inviteUnclaimedMembers(orgId, entrantId);
+    expect(emailMock.claimInvite).toHaveBeenCalledTimes(1);
+    // Backdate the invite past its window, WITHOUT touching claimed_at/
+    // revoked_at — the exact "open, but expired" shape this fix targets.
+    await sql`update person_claims set expires_at = now() - interval '1 day' where person_id = ${personId}`;
+
+    // A sweep while the (now-expired) invite is still nominally "open" must
+    // send a brand NEW one, not skip silently forever.
+    await inviteUnclaimedMembers(orgId, entrantId);
+    expect(emailMock.claimInvite).toHaveBeenCalledTimes(2);
+
+    const claims = await sql<{ revoked_at: string | null; expires_at: string }[]>`
+      select revoked_at, expires_at from person_claims where person_id = ${personId} order by created_at`;
+    expect(claims).toHaveLength(2);
+    expect(claims[0]!.revoked_at).not.toBeNull(); // the stale row was revoked, not left dangling
+    expect(claims[1]!.revoked_at).toBeNull(); // the fresh row is open
+
+    // And a THIRD sweep, while the fresh one is still live, correctly skips
+    // again — the fix does not turn every sweep into a resend.
+    await inviteUnclaimedMembers(orgId, entrantId);
+    expect(emailMock.claimInvite).toHaveBeenCalledTimes(2);
+  });
+
   it("a person who is ALREADY claimed by the time of a later sweep gets no invite, even though the row is still 'granted'", async () => {
     const { orgId, ownerId } = await seedOrg("pro");
     const { division } = await rig(asOwner(orgId, ownerId));

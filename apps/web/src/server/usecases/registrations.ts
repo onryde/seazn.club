@@ -1269,9 +1269,28 @@ export async function notifyPromoted(
  */
 async function maybeInviteClaim(orgId: string, personId: string, email: string): Promise<void> {
   try {
+    // RS008 review fix #7 — this guard used to check ONLY claimed_at/
+    // revoked_at, never expires_at. person-claims.ts's natural-expiry path
+    // never sets revoked_at (only claimPerson/revokeClaimInvite/unlinkPerson
+    // do), so an unclaimed invite that simply lapsed past its 14-day window
+    // still reads as "open" here forever — this guard returned early
+    // FOREVER, and createSystemClaimInvite (the only place that would ever
+    // revoke-and-replace that stale row) was never even reached again. A
+    // person whose one invite lapsed unclaimed could NEVER be auto-invited a
+    // second time, permanently defeating the whole point of C (RS008's
+    // claim-invite sweep). `expires_at > now()` makes an expired-but-not-
+    // revoked row read as NOT open, so the sweep proceeds to
+    // createSystemClaimInvite below — which ALREADY revokes any row matching
+    // `claimed_at is null and revoked_at is null` (regardless of its own
+    // expiry) before inserting the new one, so the stale row is revoked
+    // there rather than needing a second, redundant revoke here. This is
+    // also what keeps the partial unique index `person_claims_open_uq` (V276,
+    // `where claimed_at is null and revoked_at is null` — no expiry
+    // predicate of its own) from ever seeing two "open" rows at once.
     const [openClaim] = await sql<{ id: string }[]>`
       select id from person_claims
       where person_id = ${personId} and claimed_at is null and revoked_at is null
+        and expires_at > now()
       limit 1`;
     if (openClaim) return;
     const invite = await createSystemClaimInvite(sql, orgId, personId, email);
