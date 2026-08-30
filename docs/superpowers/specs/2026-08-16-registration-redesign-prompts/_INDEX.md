@@ -3181,11 +3181,11 @@ to the old wording reddens all four locale tests, the namespace test
 correctly surviving; restored, 5/5), dictionary-copy-truth 75/75,
 `i18n:check` parity OK, `i18n:gen-keys` no drift, `tsc --noEmit` clean.
 
-*(Numbering note: the decision log's product ruling 3, below, also cites
-"#20b" — for the captain-auto-claim behaviour. That is a different
-change, shipped under #20 itself in `d9e0c8d2d`. Two fixes end up
-sharing the label in this file; flagged here rather than silently
-resolved.)*
+*(Numbering note, resolved: the decision log's product ruling 3 below
+originally also cited "#20b" for the captain-auto-claim behaviour. That
+is a different change and it shipped under #20 itself (`d9e0c8d2d`), so
+ruling 3 now cites #20. "#20b" means the copy fix in `1ee609f28` and
+nothing else.)*
 
 ### #21 (NEW, 2026-08-30) — never claiming your spot costs you nothing, and consents you to everything
 
@@ -3410,7 +3410,8 @@ this is the decision layer over them.
    one-click merge, fusing two same-named juniors is not reversible.
    Out of scope, decided: splitting `full_name`, fuzzy matching,
    auto-merging existing duplicates.
-3. **The captain is auto-claimed against their own row** (#20b), via
+3. **The captain is auto-claimed against their own row** (#20, shipped
+   in `d9e0c8d2d` — NOT #20b, which is the copy fix), via
    `registering_self`/`self_player_index` ONLY — never name matching.
    Reason: they filled the form and consented at submit; today the person
    who PAID is the one the card lists as outstanding.
@@ -3524,3 +3525,24 @@ accumulated-DB pattern this file already documents under RS002
 keeps creating them while it runs). Full sweep numbers to record, all
 309 suite paths confirmed inside `/worktrees/rs007/`: **3251 total, 3213
 passed, 1 failed, 37 pending.**
+
+**Measured, 2026-08-30, rather than inferred** — the failing test is
+`sweepWeeklyDigests: creates for an active Pro org, skips a community
+org, skips a Pro org with nothing to report`, and its numbers say clock,
+not assertion:
+
+| | duration |
+| --- | --- |
+| in the full sweep | **30003 ms** — i.e. vitest's 30000 ms timeout |
+| run isolated (passing) | **15234 ms** — already half the budget |
+
+`seazn_rs007` held **30,910 organizations** at that point, accumulated
+over this session, and `sweepWeeklyDigests` walks every one. So the
+extra load of a 1004-suite sweep is only what tips an already-15-second
+walk past 30 seconds; the volume is the cause. **The remedy is a fresh
+database, not a code change** — re-deriving this as a regression is
+exactly the failure this file exists to prevent, and the RS002 entry
+above (line ~474) recorded the same trap before this wave. Note also
+that neither `rtk` nor a bare `--reporter=json` shows the real message:
+both render it `STACK_TRACE_ERROR`, and only `--reporter=verbose` says
+`Test timed out in 30000ms`.
