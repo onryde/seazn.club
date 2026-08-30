@@ -67,6 +67,8 @@ import { GuidedSheet } from "./guided-sheet";
 import { RecordingChip } from "./recording-chip";
 import { buildRibbon, type Ribbon } from "./ribbon";
 import {
+  CLOCK_NUDGE_SECONDS,
+  adjustClock,
   elapsedOf,
   formatClock,
   reseatClock,
@@ -738,44 +740,106 @@ function schemaFor(module: AnySportModule, type: string): PayloadSchemaProbe | u
  * so `__tests__/pad-host.test.ts` can render it and assert the real markup
  * instead of asserting a mirror of it.
  *
- * A DISPLAY PLUS ONE CONTROL, and no more. The scorer needs to see the time
- * that will be stamped and to start/stop it; anything else (adjusting the
- * clock, typing a time) is a manual-entry surface the engine already supports
- * through `at` on a submitted payload and this wave deliberately does not
- * build. `aria-live="off"` because a value that changes every second would
- * otherwise be read out every second.
+ * A DISPLAY PLUS TWO CONTROLS: start/stop it, and correct it. `aria-live="off"`
+ * because a value that changes every second would otherwise be read out every
+ * second.
+ *
+ * THE READOUT IS THE CONTROL (R6 fix pass 2, gap 7). The bar used to be
+ * start/pause only, and always seated at 0, paused, per period — so a scorer who
+ * reached the pad five minutes into a period stamped every `at` five minutes
+ * low, and watched a penalty countdown that was wrong by the same amount, with
+ * no way back. Starting late is the normal case, not the edge case.
+ *
+ * The correction is not a gear, a modal or a typed time. It is the time figure
+ * itself: it sits in a shallow slate tray, which is what says "this is a field,
+ * not a label", and pressing it reveals ONE subordinate row of two minute
+ * nudges. At rest the bar is byte-identical to the one that already carries a
+ * width sign-off, so the cost of the affordance is paid only by the scorer who
+ * asks for it.
+ *
+ * AND IT IS NOT A SECOND SCORING SURFACE. Everything in the correction group is
+ * monochrome — slate on slate, mono numerals, no accent — against a board whose
+ * recording controls are large and coloured. Nothing here dispatches, and the
+ * caption says so: a recorded time is a frozen fact and does not move.
+ *
+ * PURE, deliberately: `adjusting` is the HOST's state, not this component's, so
+ * `__tests__/clock.test.ts` can render both halves of the disclosure and assert
+ * the real markup rather than a mirror of it (apps/web vitest has no jsdom, so
+ * a `useState` here would put the open state beyond every test in the tree).
  */
 export function PadClockBar(props: {
   elapsed: number;
   running: boolean;
+  adjusting: boolean;
   onToggle: () => void;
+  onToggleAdjust: () => void;
+  onAdjust: (deltaSeconds: number) => void;
   t: TFn;
 }) {
   return (
-    <div
-      data-role="v3-clock"
-      data-running={props.running ? "yes" : "no"}
-      className="flex items-center justify-between gap-2 rounded-full border border-slate-200 bg-white px-4 py-2"
-    >
-      <span className="min-w-0 truncate text-xs font-semibold uppercase tracking-wider text-slate-500">
-        {props.t("scorepad.clock.label")}
-      </span>
-      <span
-        data-role="v3-clock-value"
-        aria-live="off"
-        className="flex-1 text-right font-mono text-lg font-semibold tabular-nums text-slate-900"
+    <div className="space-y-1.5">
+      <div
+        data-role="v3-clock"
+        data-running={props.running ? "yes" : "no"}
+        data-adjusting={props.adjusting ? "yes" : "no"}
+        className="flex items-center justify-between gap-2 rounded-full border border-slate-200 bg-white px-4 py-2"
       >
-        {formatClock(props.elapsed)}
-      </span>
-      <button
-        type="button"
-        data-role="v3-clock-toggle"
-        onClick={props.onToggle}
-        style={{ minHeight: 44, minWidth: 44 }}
-        className="shrink-0 rounded-full px-3 text-sm font-semibold text-violet-700 transition-colors hover:bg-violet-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400"
-      >
-        {props.t(props.running ? "scorepad.clock.pause" : "scorepad.clock.start")}
-      </button>
+        <span className="min-w-0 flex-1 truncate text-xs font-semibold uppercase tracking-wider text-slate-500">
+          {props.t("scorepad.clock.label")}
+        </span>
+        {/* The accessible name is the TIME, which is the information; what
+         *  pressing does is carried by `aria-expanded` and the group it opens,
+         *  and by the title. Naming the button "Correct the clock" instead would
+         *  put the one number a scorer needs out of a screen reader's reach. */}
+        <button
+          type="button"
+          data-role="v3-clock-value"
+          aria-live="off"
+          aria-expanded={props.adjusting}
+          aria-controls="v3-clock-adjust"
+          title={props.t("scorepad.clock.adjust")}
+          onClick={props.onToggleAdjust}
+          style={{ minHeight: 44 }}
+          className="shrink-0 rounded-lg bg-slate-50 px-2 text-right font-mono text-lg font-semibold tabular-nums text-slate-900 transition-colors hover:bg-slate-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400"
+        >
+          {formatClock(props.elapsed)}
+        </button>
+        <button
+          type="button"
+          data-role="v3-clock-toggle"
+          onClick={props.onToggle}
+          style={{ minHeight: 44, minWidth: 44 }}
+          className="shrink-0 rounded-full px-3 text-sm font-semibold text-violet-700 transition-colors hover:bg-violet-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400"
+        >
+          {props.t(props.running ? "scorepad.clock.pause" : "scorepad.clock.start")}
+        </button>
+      </div>
+
+      {props.adjusting && (
+        <div id="v3-clock-adjust" data-role="v3-clock-adjust" className="space-y-1">
+          {/* Right-aligned, and content-sized: the row hangs off the readout it
+             *  corrects rather than spanning the board like a tile. */}
+          <div className="flex items-stretch justify-end gap-1.5">
+            {[
+              { role: "v3-clock-minus", delta: -CLOCK_NUDGE_SECONDS, label: "scorepad.clock.minute.off" },
+              { role: "v3-clock-plus", delta: CLOCK_NUDGE_SECONDS, label: "scorepad.clock.minute.on" },
+            ].map((nudge) => (
+              <button
+                key={nudge.role}
+                type="button"
+                data-role={nudge.role}
+                onClick={() => props.onAdjust(nudge.delta)}
+                title={props.t(`${nudge.label}.hint`)}
+                style={{ minHeight: 44 }}
+                className="min-w-[88px] shrink-0 rounded-full border border-slate-200 bg-slate-50 px-4 font-mono text-sm font-semibold tabular-nums text-slate-700 transition-colors hover:bg-slate-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400"
+              >
+                {props.t(nudge.label)}
+              </button>
+            ))}
+          </div>
+          <p className="px-2 text-right text-[11px] leading-snug text-slate-500">{props.t("scorepad.clock.adjust.scope")}</p>
+        </div>
+      )}
     </div>
   );
 }
@@ -916,6 +980,10 @@ export function PadHostV3(props: PadHostV3Props) {
   // that starts it. Both facts are pinned in `__tests__/clock.test.ts`.
   const [clock, setClock] = useState<PadClock | null>(null);
   const [nowMs, setNowMs] = useState(0);
+  // R6 fix pass 2 (gap 7) — whether the clock's correction row is showing. Held
+  // HERE rather than inside `PadClockBar` so that component stays pure and both
+  // halves of the disclosure are renderable by a node test (see its own doc).
+  const [adjusting, setAdjusting] = useState(false);
 
   // R6 fix pass 2 (gap 2) — the live reading handed to the skins, so a skin can
   // render a number that moves between events. `stampOf` is THE derivation the
@@ -1008,7 +1076,13 @@ export function PadHostV3(props: PadHostV3Props) {
   // rebuilt from a fold that advances on every tap. See ../clock.ts.
   const clockSpec = props.skin.clock?.(view) ?? null;
   const nextClock = reseatClock(clock, clockSpec);
-  if (nextClock !== clock) setClock(nextClock);
+  if (nextClock !== clock) {
+    setClock(nextClock);
+    // A whistle re-seats the clock, and a correction row left open across it
+    // would be offering to nudge a period the scorer has already left. Closing
+    // here rather than in an effect keeps it in the same render as the re-seat.
+    if (adjusting) setAdjusting(false);
+  }
 
   const padViewCtx: PadViewCtx = useMemo(
     () => ({ state: pipeline.state, summary: pipeline.summary, phase, band: props.band, entitlements }),
@@ -1122,6 +1196,14 @@ export function PadHostV3(props: PadHostV3Props) {
 
   const toggleClockNow = useCallback(() => {
     setClock((prev) => (prev === null ? prev : toggleClock(prev, Date.now())));
+    setNowMs(Date.now());
+  }, []);
+
+  // R6 fix pass 2, gap 7. `adjustClock` touches `base` only — host state — so
+  // nothing already stamped moves and nothing is dispatched. `setNowMs` so a
+  // RUNNING clock repaints at the tap instead of up to half a second later.
+  const adjustClockNow = useCallback((deltaSeconds: number) => {
+    setClock((prev) => (prev === null ? prev : adjustClock(prev, deltaSeconds)));
     setNowMs(Date.now());
   }, []);
 
@@ -1334,7 +1416,10 @@ export function PadHostV3(props: PadHostV3Props) {
         <PadClockBar
           elapsed={elapsedOf(clock, nowMs)}
           running={clock.runningSince !== null}
+          adjusting={adjusting}
           onToggle={toggleClockNow}
+          onToggleAdjust={() => setAdjusting((open) => !open)}
+          onAdjust={adjustClockNow}
           t={t}
         />
       )}

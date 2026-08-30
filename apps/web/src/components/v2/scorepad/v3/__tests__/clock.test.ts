@@ -23,6 +23,8 @@ import type { AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { CORE_EVENT_SCHEMAS } from "@seazn/engine/core";
 import {
+  CLOCK_NUDGE_SECONDS,
+  adjustClock,
   elapsedOf,
   formatClock,
   initClock,
@@ -576,10 +578,20 @@ describe("END TO END: a tile tapped on a clocked pad reaches the fold WITH its `
 // 3. The one control, and the four dictionaries behind it
 // ---------------------------------------------------------------------------
 
-describe("PadClockBar renders the time that would be stamped, plus one control", () => {
+describe("PadClockBar renders the time that would be stamped, plus its controls", () => {
   const t = (key: string) => key;
-  const html = (elapsed: number, running: boolean) =>
-    renderToStaticMarkup(PadClockBar({ elapsed, running, onToggle: () => {}, t }) as never);
+  const html = (elapsed: number, running: boolean, adjusting = false) =>
+    renderToStaticMarkup(
+      PadClockBar({
+        elapsed,
+        running,
+        adjusting,
+        onToggle: () => {},
+        onToggleAdjust: () => {},
+        onAdjust: () => {},
+        t,
+      }) as never,
+    );
 
   it("shows M:SS and offers Start while paused", () => {
     const out = html(761, false);
@@ -605,15 +617,171 @@ describe("PadClockBar renders the time that would be stamped, plus one control",
 
   it("every key it renders exists in ALL FOUR dictionaries — nothing here has a gate but this", () => {
     // A v3 chassis string has no automatic i18n gate (the skins' own keys have
-    // none either), so the check is direct: read the dictionaries.
+    // none either), so the check is direct: read the dictionaries. The list is
+    // SCRAPED from the two rendered states rather than typed out, so a key added
+    // to the bar and forgotten in a locale fails here instead of shipping.
+    const rendered = `${html(0, false, false)}${html(0, false, true)}`;
+    const keys = [...new Set(rendered.match(/scorepad\.clock\.[a-zA-Z.]+/g) ?? [])];
+    expect(keys.length, "the bar rendered no dictionary keys at all").toBeGreaterThanOrEqual(7);
     for (const locale of ["en", "es", "fr", "nl"]) {
       const dict = JSON.parse(
         readFileSync(join(process.cwd(), `src/dictionaries/${locale}/ui.json`), "utf8"),
       ) as Record<string, string>;
-      for (const key of ["scorepad.clock.label", "scorepad.clock.start", "scorepad.clock.pause"]) {
+      for (const key of keys) {
         expect(dict[key], `${locale} is missing ${key}`).toBeTruthy();
       }
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 3b. The correction (R6 fix pass 2, gap 7)
+// ---------------------------------------------------------------------------
+
+describe("adjustClock puts time on and takes it off, and touches nothing that was recorded", () => {
+  it("moves `base` by whole minutes, in both directions", () => {
+    const seated = reseatClock(null, { period: "P1", seed: 0 })!;
+    const up = adjustClock(seated, CLOCK_NUDGE_SECONDS);
+    expect(elapsedOf(up, T0)).toBe(60);
+    expect(elapsedOf(adjustClock(up, CLOCK_NUDGE_SECONDS), T0)).toBe(120);
+    expect(elapsedOf(adjustClock(up, -CLOCK_NUDGE_SECONDS), T0)).toBe(0);
+  });
+
+  it("corrects a RUNNING clock without stopping it — the correction is the shift, not a reset", () => {
+    const running = startClock(reseatClock(null, { period: "P1", seed: 0 })!, T0);
+    expect(elapsedOf(running, T0 + 30_000)).toBe(30);
+    const corrected = adjustClock(running, 5 * CLOCK_NUDGE_SECONDS);
+    expect(corrected.runningSince, "the correction stopped the clock").not.toBeNull();
+    expect(elapsedOf(corrected, T0 + 30_000)).toBe(330);
+    // …and it keeps counting from there.
+    expect(elapsedOf(corrected, T0 + 90_000)).toBe(390);
+  });
+
+  it("clamps at 0:00 and returns the clock BY REFERENCE when the nudge changes nothing", () => {
+    // The reference identity is the load-bearing half: the host's render-phase
+    // `!==` checks and this file's own property-3 discipline both read it.
+    const seated = reseatClock(null, { period: "P1", seed: 0 })!;
+    expect(adjustClock(seated, -CLOCK_NUDGE_SECONDS)).toBe(seated);
+    expect(adjustClock(seated, 0)).toBe(seated);
+    expect(adjustClock(seated, Number.NaN)).toBe(seated);
+    expect(adjustClock(seated, Number.POSITIVE_INFINITY)).toBe(seated);
+    // A partial take-off lands on 0 rather than going negative — `at` is
+    // `DurationSeconds`, which refuses a negative outright.
+    const thirty = adjustClock(initClock("P1", 30), -CLOCK_NUDGE_SECONDS);
+    expect(elapsedOf(thirty, T0)).toBe(0);
+  });
+
+  it("a correction that MOVES the clock makes it known; one that does not, does not", () => {
+    // Property 6. Setting the time is an observation exactly as tapping Start
+    // is — a scorer who arrives five minutes in and nudges to 5:00 has told the
+    // pad what time it is, and its stamps become real. But a `-1` at 0:00 that
+    // changes nothing must NOT turn a pad displaying its placeholder zero into
+    // one claiming to know the time, which is the failure property 6 exists for.
+    const fresh = initClock("P1"); // no seed — nobody has told it anything
+    expect(fresh.known).toBe(false);
+    expect(stampOf(fresh, T0)).toBeUndefined();
+    expect(adjustClock(fresh, -CLOCK_NUDGE_SECONDS).known, "a no-op nudge claimed the time").toBe(false);
+    const told = adjustClock(fresh, 5 * CLOCK_NUDGE_SECONDS);
+    expect(told.known).toBe(true);
+    expect(stampOf(told, T0)).toEqual({ period: "P1", elapsed: 300 });
+  });
+
+  it("changes only the pad's own clock — no dispatch, no re-fold, no recorded `at` moves", () => {
+    // A recorded `at` is a frozen fact (core/time.ts:6-9). `adjustClock` is a
+    // pure function of a `PadClock`, so the strongest statement this tree can
+    // make is the structural one: nothing but `base` and `known` differs, and
+    // the period the stamps will name is untouched.
+    const seated = startClock(reseatClock(null, { period: "P2", seed: 240 })!, T0);
+    const corrected = adjustClock(seated, CLOCK_NUDGE_SECONDS);
+    expect(Object.keys(corrected).sort()).toEqual(Object.keys(seated).sort());
+    expect(corrected.period).toBe(seated.period);
+    expect(corrected.runningSince).toBe(seated.runningSince);
+    expect({ ...corrected, base: seated.base, known: seated.known }).toEqual(seated);
+  });
+});
+
+describe("the correction row is a disclosure, and stays out of the way until it is asked for", () => {
+  const t = (key: string) => key;
+  const html = (adjusting: boolean) =>
+    renderToStaticMarkup(
+      PadClockBar({
+        elapsed: 761,
+        running: false,
+        adjusting,
+        onToggle: () => {},
+        onToggleAdjust: () => {},
+        onAdjust: () => {},
+        t,
+      }) as never,
+    );
+
+  it("is absent at rest, so the resting bar is the one that already carries a width sign-off", () => {
+    const closed = html(false);
+    expect(closed).not.toContain('data-role="v3-clock-adjust"');
+    expect(closed).not.toContain('data-role="v3-clock-minus"');
+    expect(closed).not.toContain('data-role="v3-clock-plus"');
+    // `="` anchored — React serialises an omitted prop as `"$undefined"`.
+    expect(closed).toContain('data-adjusting="no"');
+  });
+
+  it("opens from the READOUT, which is the control — not a gear, a modal or a typed time", () => {
+    const closed = html(false);
+    expect(closed).toContain('data-role="v3-clock-value"');
+    expect(closed).toContain("<button");
+    expect(closed).toContain('aria-expanded="false"');
+    expect(closed).toContain('aria-controls="v3-clock-adjust"');
+    expect(closed).toContain("scorepad.clock.adjust");
+    expect(html(true)).toContain('aria-expanded="true"');
+    // No text entry anywhere: a typed time on a phone, in the rain, during play.
+    expect(html(true)).not.toContain("<input");
+  });
+
+  it("offers exactly two minute nudges, and says what they cannot reach", () => {
+    const open = html(true);
+    expect(open).toContain('data-adjusting="yes"');
+    expect(open).toContain('id="v3-clock-adjust"');
+    expect(open).toContain('data-role="v3-clock-minus"');
+    expect(open).toContain('data-role="v3-clock-plus"');
+    expect(open).toContain("scorepad.clock.minute.off");
+    expect(open).toContain("scorepad.clock.minute.on");
+    // The caption is the trust statement: a correction is not a retro-edit.
+    expect(open).toContain("scorepad.clock.adjust.scope");
+  });
+
+  it("keeps every control at the 44px tap floor, open and closed", () => {
+    for (const out of [html(false), html(true)]) {
+      const targets = out.split("<button").length - 1;
+      expect(targets).toBeGreaterThan(1);
+      expect(out.split("min-height:44px").length - 1, "a control is under the tap floor").toBe(targets);
+    }
+  });
+
+  it("hangs off the readout — right-aligned and content-sized, never spanning the board like a tile", () => {
+    // Measured in Chromium at 320/768/1280 before this was written: made
+    // full-width, the tray behind the time became a 1096px grey band at 1280
+    // and the two nudges became 625px slabs, which is the opposite of quiet.
+    // Content-sized and right-aligned, the group reads as a drawer pulled from
+    // the number it corrects, identical at every width.
+    const open = html(true);
+    const row = open.slice(open.indexOf('id="v3-clock-adjust"'));
+    expect(row).toContain("justify-end");
+    expect(row).toContain("min-w-[88px]");
+    expect(row, "a nudge stretched to fill the row").not.toContain("flex-1");
+    // The readout's tray hugs its digits; the LABEL takes the row's slack.
+    const bar = open.slice(0, open.indexOf('id="v3-clock-adjust"'));
+    expect(bar).toContain("min-w-0 flex-1 truncate text-xs");
+    expect(bar).toContain("shrink-0 rounded-lg bg-slate-50");
+  });
+
+  it("stays monochrome — the correction row must not read as a second scoring surface", () => {
+    // The board's recording controls are large and coloured; this group is
+    // slate on slate with mono numerals. A restyle that reaches for an accent
+    // here fails deliberately.
+    const open = html(true).slice(html(true).indexOf('id="v3-clock-adjust"'));
+    for (const accent of ["violet", "lime-400 bg", "emerald", "amber", "rose", "sport-"]) {
+      expect(open.includes(`bg-${accent}`), `the correction row painted itself ${accent}`).toBe(false);
+    }
+    expect(open).toContain("text-slate-700");
   });
 });
 

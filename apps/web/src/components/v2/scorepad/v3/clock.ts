@@ -208,6 +208,52 @@ export function toggleClock(clock: PadClock, nowMs: number): PadClock {
 }
 
 /**
+ * One minute, the only correction this pad offers.
+ *
+ * The error it exists for is measured in minutes — a scorer who reaches the pad
+ * five minutes into the period, or starts the clock at the second whistle
+ * rather than the first. Nobody at a table knows that a game is at 5:23, so
+ * offering seconds would offer a precision the scorer does not have; and a
+ * typed field would be a text entry on a phone, in the rain, during play.
+ * Repeated taps compose, so a five-minute correction is five taps of one
+ * control that cannot go anywhere unexpected.
+ */
+export const CLOCK_NUDGE_SECONDS = 60;
+
+/**
+ * PUT TIME ON, OR TAKE IT OFF — the pad's own clock, and nothing else.
+ *
+ * R6 fix pass 2, gap 7. `PadClockBar` was start/pause only and always seated at
+ * 0, paused, per period, so a clock started late was low by that amount for the
+ * rest of the period: every `at` it stamped, and — since the countdown now
+ * reads the live clock — every penalty expiry a scorer watched, with no way
+ * back.
+ *
+ * WHAT IT CANNOT REACH. `base` is host state. A recorded `at` is a frozen fact
+ * (`core/time.ts:6-9`: it is what the pad OBSERVED, not a derivation), and
+ * nothing here rewrites one, re-folds anything, or dispatches. Correcting the
+ * clock changes what the NEXT event will carry; the ones already recorded keep
+ * the time they were recorded at, which is why the bar says so in as many words.
+ *
+ * `base` rather than `runningSince`, so a RUNNING clock is corrected without
+ * being stopped: `elapsedOf` adds the current run on top, so the displayed time
+ * shifts by exactly the nudge and keeps counting.
+ *
+ * IT MAKES THE CLOCK KNOWN — but only when it actually MOVES. A scorer nudging
+ * the time is asserting what time it is, exactly as `startClock` treats the
+ * Start tap (property 6). A nudge that changes nothing asserts nothing: `-1` at
+ * 0:00 returns the clock BY REFERENCE, so it cannot quietly turn a pad
+ * displaying its placeholder zero into one that claims to know the time — which
+ * is the precise failure property 6 exists to prevent.
+ */
+export function adjustClock(clock: PadClock, deltaSeconds: number): PadClock {
+  if (!Number.isFinite(deltaSeconds)) return clock;
+  const base = Math.max(0, clock.base + Math.trunc(deltaSeconds));
+  if (base === clock.base) return clock;
+  return { ...clock, base, known: true };
+}
+
+/**
  * THE GUARD (property 3). Given what the host is holding and what the skin
  * declares right now, the clock the host should hold next.
  *
