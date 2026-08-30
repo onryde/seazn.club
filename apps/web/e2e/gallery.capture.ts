@@ -390,19 +390,28 @@ type StateProbe = () => Promise<void>;
  * [data-event-id]` (the legacy `Timeline` pad-renderer.tsx mounts for the nine
  * unconverted sports), so ONE probe is honest for all twelve captures.
  *
- * Scoped to the pad root, never the page: the fixture console mounts its OWN
- * `<Timeline>` outside the pad as well, and a page-wide count would double
- * every row. `[data-role="pad-v3"]` is the second anchor because the
- * device-link route carries no `data-testid="score-pad"` (that testid is
- * minted only by fixture-console.tsx — this file's own 05-devicelink note).
- * `.first()` takes the console's outer `score-pad` when both match, since a
- * locator resolves in DOM order and that element wraps the v3 root.
+ * PAGE-WIDE, and it has to be (R7/C1, found by the R7/C review sweep). This
+ * used to scope itself to `[data-testid="score-pad"], [data-role="pad-v3"]`
+ * because the fixture console mounted its OWN history outside the pad as well
+ * and a page-wide count would have doubled every row. R7/C1 merged the two
+ * into one ledger and moved it OUT of the pad on the console — `ScorePad`
+ * gained `hideActivity`, honoured on both lanes (v3 `showActivity`, legacy
+ * `timelineSlot={() => null}`, registry.tsx) — so the pad-scoped count became
+ * ZERO for every console capture of every sport, and the whole harness died at
+ * `02-live` with "must render the STARTED board".
+ *
+ * The double-count hazard that scoping existed for is gone with it: on the
+ * console exactly one ledger renders (outside the pad), on the device link
+ * exactly one (inside it).
+ *
+ * Page-wide is also the only version that survives `12-*-decided`, where the
+ * pad has unmounted entirely and the console's ledger is all that is left —
+ * the pad-scoped locator had nothing to resolve against there at all.
+ *
+ * Still deliberately spanning both lanes, for the same reason as before.
  */
 function padEventRows(page: Page) {
-  return page
-    .locator('[data-testid="score-pad"], [data-role="pad-v3"]')
-    .first()
-    .locator('[data-role="v3-activity-row"], [data-role="timeline"] [data-event-id]');
+  return page.locator('[data-role="v3-activity-row"], [data-role="timeline"] [data-event-id]');
 }
 
 /** The pad has caught up with the server: it renders at least `minEvents`
