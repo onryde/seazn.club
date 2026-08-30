@@ -3049,6 +3049,39 @@ per AGENTS.md — this is NOT stock Next).
 **Consequence for #17:** its client half is REVERTED and deferred behind
 this. The server half ships (see #17's own entry).
 
+### #19b (NEW, 2026-08-30) — the chunk gate covered ci.yml's smoke-e2e only; e2e.yml runs a different build with none
+
+`scripts/check-build-chunks.ts` (#19's own fix) was wired into ci.yml's
+smoke-e2e job only. `.github/workflows/e2e.yml` runs its OWN
+`npm run build --workspace apps/web` and stages its own standalone tree,
+in three separate jobs — `e2e-parallel`, `e2e-serial`, `e2e-mobile` — a
+DIFFERENT build, with no chunk gate on any of them.
+
+**What those jobs had instead was weaker than it looked.** The
+pre-existing probe picks an ARBITRARY chunk
+(`ls apps/web/.next/static/chunks/*.js | head -1`) and curls it, which
+proves only that the standalone tree was staged. Verified directly:
+deleting an unreferenced chunk left that probe, and the whole build,
+green. So #19's exact failure mode passed straight through it — the
+bundler's manifest naming a chunk id it never flushed, the server 500ing
+it as `text/plain`, React never hydrating — while the page, `/api/health`
+and the probe itself all stayed 200. In an e2e job that reads as N specs
+failing one at a time on clicks that do nothing: a flake, or the change
+under test. It cost this session a misattributed bisection before the
+real cause was found.
+
+**Fix (`c81e6408c`).** One step per job — `npm run check:build-chunks` —
+placed after "Start server" (which stages the standalone tree) and
+before the Playwright run. Additive only: 42 insertions, 0 deletions; the
+`on:` block, triggers, matrix and caching are untouched. Placement
+validated by parsing the YAML and asserting the new step lands between
+"Start server" and the Playwright step in each of the three jobs.
+
+**Verified:** the gate itself re-checked by hand before wiring it wider —
+green on the current tree (105 routes, 1117 unique asset references),
+exit 1 naming the missing chunk and every route referencing it when that
+chunk is removed, green again once restored.
+
 ### #20 (NEW, 2026-08-30) — "confirmed" means two different things on one card
 
 Spotted by the owner reading walkthrough frame 08. The paid status page
@@ -3097,6 +3130,62 @@ awaiting.
    themselves, at submit, on the cart. `registering_self` /
    `self_player_index` already record which row is theirs when they tick
    "I'm registering myself", so the information needed is present.
+
+### #20b (NEW, 2026-08-30) — the join flow's own copy re-conflated "checked in" with "claimed", right where a reader acts
+
+Found by the visual verification #20 owed, driving the real status page
+at 1280/768/320 — not a static-markup probe (the same copy had already
+passed one).
+
+#20's fix renamed the roster ROW STATES onto a check-in metaphor. It did
+not rename the ACTION that produces them, so one card read, three lines
+apart:
+
+    ROSTER                        0 of 2 checked in
+    Ada Lovelace       [Not checked in]
+    Send Ada Lovelace their claim link
+
+`claim.*` is an established, DIFFERENT product concept — an account
+taking ownership of a player profile ("Invite to claim", "Claimed",
+"claim link", `en/ui.json` `claim.*`). The registration join flow is not
+that: a person confirms they are the human a captain typed onto a roster
+row. #20's rename pulled the two concepts apart everywhere except this
+one leftover string, which re-merged them in the exact spot a reader
+clicks.
+
+Nine strings across four locales: en (`roster.claimLink`,
+`join.full.body`, `join.error.claimed`), fr/es/nl (`join.full.body`,
+`join.error.claimed`). Only English carried the claim verb on
+`roster.claimLink` — fr/es/nl already said "lien de confirmation" /
+"enlace de confirmación" / "bevestigingslink".
+
+**Fix (`1ee609f28`).** Reworded off the `claim.*` vocabulary in all four
+locales. Key NAMES unchanged (never reader-facing), so no `gen-keys`
+drift. The new test pins the VOCABULARY, not the wording — the copy may
+be reworded freely but may not reach back for each locale's own claim
+verb — and separately asserts the `claim.*` namespace still exists and
+carries a non-trivial key count, so the guard cannot pass vacuously once
+there is nothing left to collide with.
+
+**Still open, deliberately not changed here:** the English flow now
+reads "Not checked in" → "check-in link" → "Confirm my spot" → "You're
+in". Unifying that last verb needs the CTA and success copy retranslated
+in three languages where the natural check-in term does not carry
+("presentarse", "s'enregistrer"), and would break two walkthrough specs
+that click `/confirm my spot/i`
+(`rs007-invite-pay-cancel.spec.ts:371`, `rs007-money-matrix.spec.ts:531`).
+A wording call for the owner, not a defect — raised, not guessed at.
+
+**Verified:** 5/5 new (mutation-checked — reverting one string per locale
+to the old wording reddens all four locale tests, the namespace test
+correctly surviving; restored, 5/5), dictionary-copy-truth 75/75,
+`i18n:check` parity OK, `i18n:gen-keys` no drift, `tsc --noEmit` clean.
+
+*(Numbering note: the decision log's product ruling 3, below, also cites
+"#20b" — for the captain-auto-claim behaviour. That is a different
+change, shipped under #20 itself in `d9e0c8d2d`. Two fixes end up
+sharing the label in this file; flagged here rather than silently
+resolved.)*
 
 ### #21 (NEW, 2026-08-30) — never claiming your spot costs you nothing, and consents you to everything
 
@@ -3227,10 +3316,85 @@ disappear. The next lever, if directory quality outranks entry friction,
 is collecting teammate emails at the details step — which is also what
 would let those people be invited at all.
 
+**Status:** FIXED 2026-08-30 (`347aeaefa`) — see "#22 — FIXED" below.
+
+### #22 — FIXED 2026-08-30 (`347aeaefa`)
+
+Migration **V386**: `persons.email text`, nullable, no backfill
+(greenfield), indexed `persons_org_lane_email_idx (org_id, lane,
+lower(email)) where merged_into is null and email is not null`. Email is
+now the PRIMARY per-roster-row lookup, ahead of the dob probe — not an
+occasional fallback — with the same conservatism the dob rule already
+used: exactly one match reuses, zero or an ambiguous match creates a new
+person, never a guess. A match via EITHER rule backfills the found
+person's email if it had none; a differing email is never overwritten —
+`email is null` IS the guard. `registration_players.email` (on the table
+since V363, written by nothing until now) is now persisted at submit and
+at claim/insert.
+
+`joinTeamEntry`'s claim branch also reconciles against the directory: a
+row already materialised at submit time carries an anonymous dummy
+person (`materialise()` never revisits a row once `entrant_id` is set),
+and an email/user_id match now repoints `entrant_members` +
+`registration_players` onto the real person. The dummy is left orphaned,
+never auto-merged — #22's own explicit non-goal.
+
+**A real bug, caught by the test suite rather than by review.** The
+first version of the repoint used a bare `try/catch` on `tx`, which does
+not survive an aborted Postgres transaction — the guarded-conflict case
+(the resolved person already an `entrant_members` row on this entrant)
+failed for real, a raw `PostgresError` escaping, not a mutation. Fixed
+with `tx.savepoint`, matching this file's existing `join_code`-collision
+pattern.
+
+Out of scope, untouched, as ruled: splitting `full_name`, fuzzy or
+normalised name matching, auto-merging existing duplicates.
+`resolvePlayerPerson` (the signed-in path) is untouched — a `user_id` is
+already a stronger identity signal than email.
+
+**Verified:** `registration-materialise.test.ts` 27/27, mutation-checked
+(disabling the email branch reddens exactly the 3 ordering-dependent
+tests; removing the backfill guard reddens exactly the 1 test pinning
+it). `registration-submit.test.ts`'s new #22 cases 6/6, mutation-checked
+(disabling the reconciliation block reddens all 4 `joinTeamEntry` cases).
+Full sweep (`server/usecases` + `register/status` + `register/join`):
+3251 total / 3213 passed / 1 failed — `org-posts-digest.test.ts`, not
+this change (see the CORRECTION at the end of this file). `tsc --noEmit`
+and `lint` both clean; `openapi:gen` byte-identical — `email` already
+existed on the wire schema, only server persistence changed.
+
+Also found while verifying #22 against a real database, deliberately not
+folded in here — see **#23** below.
+
+### #23 (NEW, 2026-08-30) — a fresh join onto an already-materialised entry creates no roster membership at all
+
+Reported by the #22 lane, verified directly against a real database, and
+deliberately left unfixed as out of #22's scope.
+
+A join where the joiner is not already on the roster — the "I'm someone
+else" path on the join page, no `player_id` — against an entry that has
+ALREADY been materialised never gets an `entrant_members` row at all.
+`materialise()`'s own idempotency guard (`if (reg.entrant_id) return`)
+means it never runs again for that registration once `entrant_id` is
+set, and `joinTeamEntry`'s insert branch for this case writes only
+`registration_players` — nothing inserts into `entrant_members` for a
+row that arrives after materialisation.
+
+This is distinct from #22's framing. #22 fixes the CAPTAIN-TYPED
+duplicate — a roster row the captain already entered, reconciled against
+the real person at claim time. Here there is no captain-entered row to
+reconcile against: the joiner is adding themselves fresh, after the
+entry already has an entrant and a squad. #22's reconciliation has
+nothing to attach to.
+
+**In product terms:** that person has joined, and the page has told them
+"You're in" — but they are not a member of the squad that actually gets
+fielded. Needs its own task.
+
 ## DECISION LOG — session of 2026-08-29/30
 
 Every ruling taken in this session, with its reason, so none of it lives
-only in a conversation. Findings #16-#22 have their own sections above;
+only in a conversation. Findings #16-#23 have their own sections above;
 this is the decision layer over them.
 
 ### Product rulings (owner)
@@ -3317,3 +3481,46 @@ using the product:
 - **#20/#21/#22** — needed the owner to READ a screenshot and ask three
   ordinary questions: why does it say awaiting, who paid, what if nobody
   claims.
+
+## CORRECTION (2026-08-30) — "nothing pinned the `public_name: true` ruling" claim is FALSE
+
+Recorded in #21's "Owed" note as: "Nothing asserts it today — it is a
+comment and a default." Wrong, checked against the tree rather than
+re-asserted.
+
+`apps/web/src/server/usecases/__tests__/registration-materialise.test.ts:498`
+— `describe.skipIf(!HAS_DB)("new persons default to public_name consent
+(owner ruling 5)", …)` — has pinned it since **RS002 (#607, `4ff0bf8f9`)**,
+and covers exactly the ground the "Owed" note asked for: both insert
+paths (`findOrCreatePlayerPerson`'s anonymous path and
+`resolvePlayerPerson`'s signed-in path each get their own `it`), plus "a
+REUSED person that had opted out keeps its own consent" — a person is
+never re-opted-in by being matched onto a new entry.
+
+The captain-entered-unclaimed case the ruling is actually about is
+already the case this suite exercises: `seedPlayerEntry` (the file's own
+fixture helper) inserts `source = 'captain_entered'` and never sets
+`consent_status`, so it takes the column's `'pending'` default — exactly
+an unclaimed captain-typed row.
+
+**Proved by mutation, not by re-reading.** Flipping both `{ public_name:
+true }` occurrences in `registrations.ts` (one in `findOrCreatePlayerPerson`,
+one in `resolvePlayerPerson`) to `false` reddened exactly 2 tests;
+restored, 27/27.
+
+## CORRECTION (2026-08-30) — the `org-posts-digest.test.ts` sweep failure, precisely
+
+The #22 write-up above says only "not this change" without stating the
+evidence. Recorded here so the next session does not have to re-derive
+it:
+
+Isolated, `org-posts-digest.test.ts` is **7/7 green**. Run together with
+BOTH of #22's own new suites, it is **97/97 green**. Neither run shows
+any interaction with #22's change — the red is a whole-sweep artifact of
+this long session's shared, accumulated test database, not a defect in
+#22 or in the digest code, consistent with the sweep-suite-on-an-
+accumulated-DB pattern this file already documents under RS002
+(`sweepWeeklyDigests` walks every org in the schema, and a long session
+keeps creating them while it runs). Full sweep numbers to record, all
+309 suite paths confirmed inside `/worktrees/rs007/`: **3251 total, 3213
+passed, 1 failed, 37 pending.**
