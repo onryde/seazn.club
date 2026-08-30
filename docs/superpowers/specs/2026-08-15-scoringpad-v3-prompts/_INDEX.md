@@ -4350,3 +4350,104 @@ are both final, this is the verification record for them.] Baseline going
 in: 2204/2202/0/2 pending across `src/components/v2/scorepad`, 59 files. tsc
 clean on two full `apps/web` typecheck runs so far (one after the sheet/dock
 fix, one after the clock rewrite).
+
+---
+
+## R6 SESSION STATE #2 — supersedes SESSION STATE above (2026-08-31)
+
+**31 commits** on `feat/scorepad-v3-r6-period-pair`, tree clean, main clean.
+Worktree `.claude/worktrees/r6-period`, env label `r6` (pg 54834), prod server
+built FROM THIS WORKTREE at **http://localhost:3356** (`localhost` only —
+`127.0.0.1` 401s). **`origin/main` HAS MOVED** to `fb81bd54f` (RS008 #682), so a
+rebase is owed before the PR.
+
+**Gate, rerun by the orchestrator: 2204 total / 2202 passed / 0 failed /
+0 failed suites / 59 files**, zero paths outside the worktree.
+
+### Landed since SESSION STATE #1
+
+- **The transport defect — the biggest find of the wave, and it is NOT
+  hockey-specific.** `transport.ts` classified only 409 and 422, so every other
+  4xx fell through to `network-error`, which `sendOne`/`use-pad-pipeline`
+  deliberately answers by KEEPING the optimistic fold and going offline. A 402
+  was filed as flaky wifi and retried forever behind a pad still claiming the
+  write landed — and **400/401/403/404 had the identical silent symptom, on
+  every sport and BOTH pad lanes**. Fixed structurally via `isPermanentRefusal`
+  (4xx permanent except 409/408/429; 5xx and thrown fetch stay transient), with
+  rollback falling out of the existing `rejected` branch. New `refusal-copy.ts`,
+  5 keys × 4 locales, banner has `role="alert"`. Without the new copy the
+  scorer would have read the raw server prose "Plan upgrade required:
+  scoring.match_timeline". Found by driving a free org's pad for ten seconds;
+  invisible to ~2200 tests and three reviews.
+- **Card picker ordered by severity** — hockey Green→Yellow→Red, verified live.
+  NOTE: the brief's premise "order icehockey by ascending PIM 2/4/5/10/20/25"
+  was FALSE — `match` is 5 minutes carrying 25 PIM and `game_misconduct` has
+  `minutes: null`, so a minutes sort puts the worst penalty 5th of 7. The
+  implementer rejected the instruction and used skin declaration order. That is
+  the orchestrator's own false premise, the third of the session.
+- **`R6-review-branch-findings.md`** — the high-effort `/code-review` on the
+  whole branch, six findings, all recorded with evidence.
+- **`R9-scoring-free.md`** registered — see its own block above.
+- **Agent topology corrected.** All three roles are Sonnet at **xHigh**, set in
+  `.claude/agents/*.md` frontmatter (the only place effort takes effect). The
+  orchestrator had dispatched every implementer and reviewer on **opus** all
+  session, following a stale line in the v2 `_RULES.md`. Three duplicate copies
+  of the topology now POINT AT `docs/superpowers/RULES.md` instead of restating
+  it, each saying never to pass `model:` on a dispatch. **Everything R6 built
+  before this correction was produced by opus agents, not the specified
+  topology** — held up under three reviews and a walkthrough, not redone.
+
+### In flight at compaction
+
+**Fix pass 4** (Sonnet xHigh, no model override) — the six branch-review
+findings plus the narrow entitlement change. Ordered so finding 4 lands first:
+the suspension sheet claims the event type but collects only `class`/`reason`,
+dropping the `minutes` and `servedBy` fields the engine's `padSpec` declares and
+whose copy already ships in four locales — so every FIH yellow takes the class
+default and the countdown counts to the wrong moment. Also: `−1 min` is a dead
+button on a running never-paused clock, and a successful backward correction
+stamps below the high-water mark so `NON_MONOTONIC_TIME` refuses every later
+event for a real minute. **And the harness fix that matters more than either
+bug: `_period-fold.ts` passes no `strictFromSeq` and its accept-probe calls
+`module.apply`, which lacks the guard the server applies — a test harness more
+permissive than production cannot see a whole class of defect.**
+
+### R7's two chassis findings — CHECKED against R6's skins, both clean
+
+No reference to ribbon-undo anywhere in `hockey.tsx`, `icehockey.tsx` or
+`period-shared.ts`. Nothing reads `recordedBy`/`createdBy`; the chassis already
+documents that a device link has no user identity and uses
+`deviceLinkId`/`ownEventIds` as the void authority. All copy keys present in all
+four locales — 3/3 hockey card classes, 7/7 ice hockey penalty classes.
+
+**One judgement call left OPEN for the owner's walkthrough, deliberately not
+closed here:** the activity row joins class + person + reason with NO VERB
+("Yellow card · Jane Doe · dissent"), and the device pad shows no recorded-by,
+so it could be read as "Jane Doe entered this". R6's position is LEAVE IT — the
+convention is consistent (the named person is always the event's SUBJECT, never
+the recorder) and the dock asks "Who was carded?" explicitly — but a fresh
+reader catches what a familiar one cannot, so the owner reads that row cold at
+the walkthrough.
+
+**A scout's CONCERN that was a false alarm, recorded so it is not re-raised:**
+"no `hockey.test.ts`/`icehockey.test.ts` exist, zero direct skin tests". They
+exist as `v3/__tests__/period-pair.test.ts` (72KB) and `period-class-order.test.ts`
+— the implementer's declared deviation, one PAIR file because the two sports
+share a kernel. Verified nothing globs `skins/__tests__/`. A future reader WILL
+look in `skins/__tests__/` and find nothing; that is the only cost.
+
+### Owed before merge
+
+Re-drive the product (per-TASK gate, owner-set) · `captureExtra` for both
+sports, which DOES NOT EXIST and without which the gallery shows five screens
+identical to v2 · seven-width e2e · gallery published + owner per-screen
+verdicts · live walkthrough for HOC-04b and the swap sheet · rebase onto
+`fb81bd54f` and onto R7's `7dcab192a` (without it the gallery dies at `02-live`
+with zero rows, and that is NOT an R6 defect) · the period-skin demolition
+(9 production / 6 test / 4 e2e referrers) · UNVERIFIED: `npm run typecheck`
+reportedly fails in the MAIN checkout, main is clean and untouched by R6.
+
+**Walkthrough PNGs from the last drive (61 images + 4 report JSONs, 81
+measurements):** `<scratchpad>/r6-walkthrough/`. They PREDATE the transport fix
+and the picker reorder, so they still show the old `Red, Green, Yellow` and no
+refusal banner. Re-drive before publishing anything to the owner.
