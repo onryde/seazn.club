@@ -4133,3 +4133,64 @@ never render as recorded regardless of who is right about the band.
 - UNVERIFIED: an implementer reported `npm run typecheck` failing in the MAIN
   checkout. Main is clean and R6 never touched it, so probably pre-existing.
   Confirm when the machine is quiet — typecheck peaks ~2.8 GB.
+
+### THE 402 IS NOT A BUG — there are TWO fidelity models, by design
+
+Pinned 2026-08-30 before acting on the owner's "cards are free" ruling. The
+ruling stands; the IMPLEMENTATION is not what R6 assumed.
+
+**Where:** `server/usecases/scoring.ts:266-268` (`assertEntitledToScore`, from
+`scoreEvent:95`) via `server/usecases/fidelity.ts:28-33`. The predicate walks
+the module's **legacy `fidelityTiers` array** — the LOWEST tier declaring the
+event type wins, and `tier <= 1` is free. **It never reads `PadSpec.fidelity`.**
+
+**Why band 1 trips a band-2 key:** not a `>=`/`>` slip, not the org's band. Two
+parallel hand-kept models disagree for this event. `period/kernel.ts:1850-1853`
+lists only `[goal, advance, attempt]` in tiers 0-1; the suspension types first
+appear in `tier2Types` (:1838) with `entitlement: preset.timelineEntitlement`.
+The redesigned map at `:2161-2168` says `[suspStartType]: 1`. **The drift is
+DELIBERATE and documented** — `packages/engine/src/sport/module.ts:102-106`
+says the new map is additive and "the paywall (`fidelity.ts`) and every other
+`apps/web` read site keep reading `fidelityTiers` exactly as they do today".
+
+**Blast radius of a naive "align the server to `padSpec`" — 12 event types
+across 5 sports, NOT the two hockey ones:**
+icehockey + hockey `suspension.start`/`.end` (`scoring.match_timeline`);
+volleyball `timeout`/`sanction`/`sub`, badminton `sanction`, tabletennis
+`timeout`/`sanction`/`expedite.start`, tennis `sanction`/`interruption` (all
+`scoring.rally_by_rally`). **Football frees NOTHING** — `football.card`/`sub`/
+`penalty`/`sinbin.*` are band 2 in BOTH models (`football.ts:2374-2383`).
+Cricket frees nothing.
+
+**And it drifts the OTHER way once:** `cricket.superover.ball` is `fidelityTiers`
+tier 1 (FREE today, `cricket.ts:3471`) but `padSpec` band **3**
+(`cricket.ts:3000`). A naive realignment newly PAYWALLS it behind
+`scoring.ball_by_ball` — a revenue change in the opposite direction, on a sport
+this wave never touched.
+
+**Tests pinning today's behaviour:** `scripts/smoke.ts:5486-5525` asserts the
+402 + `feature_key` for `icehockey.suspension.start`, `tabletennis.expedite.start`
+and `tennis.interruption` — three of its four cases would red on a broad
+realignment. `server/usecases/__tests__/fidelity.test.ts:63-79`'s sweep iterates
+volleyball, so freeing its three reds it. No test outside smoke pins a
+hockey/icehockey suspension refusal.
+
+**One HTTP door:** `api/v1/fixtures/[id]/events/route.ts:16` → `scoreEvent`,
+used by BOTH console and device link (`scorepad/transport.ts:201` is the only
+POST path). The batch importer (`event-import.ts:246`) shares
+`requiredFeatureForEvent` and moves in lockstep.
+
+**R6's recommendation to the owner: the NARROW change** — move
+`suspension.start`/`.end` from `tier2Types` to tier 1 in `period/kernel.ts` for
+the period family only. It delivers the ruling exactly, frees nothing else,
+paywalls nothing, and reds one smoke case rather than four. **Explicitly NOT
+recommended:** realigning the server to `padSpec`, which is a programme-level
+decision about retiring a documented dual model and carries a cricket
+regression.
+
+**Inconsistency the owner should decide separately:** after the narrow change a
+HOCKEY card is free while a FOOTBALL card is paid, though R6's own argument for
+free — "a card is match state; it changes on-field strength, which changes how
+the score is reached" — applies to football identically. R6 has NOT extended the
+ruling to football on its own; that is a revenue decision, not a consistency
+tidy-up.
