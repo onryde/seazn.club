@@ -4003,7 +4003,7 @@
   "pad.generic.sheet.correction.points.title": "Punten om af te trekken",
   "pad.generic.sheet.correction.points.hint": "Tot nu toe vastgelegd: {home} – {away}",
   "pad.generic.dock.amount.title": "Meer waard dan 1?",
-  "pad.generic.dock.both.title": "Meer waard, of wie scoorde?",
+  "pad.generic.dock.both.title": "Pas dit punt aan",
   "pad.generic.dock.points": "{points} punten",
   "pad.generic.dock.person": "Speler",
   "pad.generic.ribbon.result": "Uitslag vastgelegd",

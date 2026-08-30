@@ -4003,7 +4003,7 @@
   "pad.generic.sheet.correction.points.title": "Points to remove",
   "pad.generic.sheet.correction.points.hint": "Recorded so far: {home} – {away}",
   "pad.generic.dock.amount.title": "Worth more than 1?",
-  "pad.generic.dock.both.title": "Worth more, or who scored it?",
+  "pad.generic.dock.both.title": "Adjust this point",
   "pad.generic.dock.points": "{points} points",
   "pad.generic.dock.person": "Player",
   "pad.generic.ribbon.result": "Result recorded",

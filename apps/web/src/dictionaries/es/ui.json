@@ -4003,7 +4003,7 @@
   "pad.generic.sheet.correction.points.title": "Puntos a restar",
   "pad.generic.sheet.correction.points.hint": "Registrado hasta ahora: {home} – {away}",
   "pad.generic.dock.amount.title": "¿Vale más de 1?",
-  "pad.generic.dock.both.title": "¿Vale más, o quién lo anotó?",
+  "pad.generic.dock.both.title": "Ajusta este punto",
   "pad.generic.dock.points": "{points} puntos",
   "pad.generic.dock.person": "Jugador",
   "pad.generic.ribbon.result": "Resultado registrado",
