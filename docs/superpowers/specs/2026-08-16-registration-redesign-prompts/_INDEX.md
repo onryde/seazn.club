@@ -4150,3 +4150,108 @@ is changed to exclude assigned solo sign-ups, do it by reading the
 ASSIGNMENT (`registration_players.assigned_from_registration_id`, unique
 where non-null), NEVER by mutating the source row's status. Withdrawing that
 row to free a slot would refund a person who is happily playing.
+
+### RS009 build log — what shipped, and the four things tests could not see
+
+**Status at 2026-08-30: 10 commits on `feat/rs009-free-agents`, NOT yet a
+PR.** Owner ruled RS009 **HOLDS until RS008 merges** (rs008 owns
+`register/status/entry-card.tsx` + `view-model.ts`); RS009 then rebases,
+adds `register.status.entry.assignedToTeam`, and narrows rs008's
+`awaitingTeam` gate in the same commit, so there is never a window where a
+placed solo sign-up's status page says "Waiting for a team".
+
+**Owner rulings taken this session** (both recorded above in the session-open
+block, restated here for the ones taken later):
+
+3. **Only the PLACED PLAYER is emailed**, not the receiving captain. The
+   captain sees the roster change on their own status page, and this system
+   already carries two unthrottled organiser-triggered mailers without
+   adding a third for the weaker half of the pair.
+
+**A `/code-review high` on the branch returned 12 findings. All 12 were
+real** — including the three I doubted enough to verify before acting, every
+one of which the reviewer had right and I had wrong. Nine were fixed
+directly; the remaining three were work already owed (notifications, the
+list schema, e2e/matrix) and are now done too.
+
+**FOUR defects this session that NO test could have caught.** Recorded
+together because the pattern, not the individual bug, is the lesson.
+
+1. **The picker 404'd in the browser with 5481 tests green.** `apiV1`
+   (`lib/client-v1.ts`) prepends NOTHING — it is named for the envelope it
+   parses, not a route prefix — and the sheet called
+   `/registrations/{id}/assign-targets`. Unit tests issue no real request;
+   the ROUTE tests call the handler function directly, so the URL never
+   reaches Next's router; `tsc` sees a template string; the openapi gate
+   compares spec to registry, never the client. Found by clicking the
+   button. Standing gate added:
+   `components/__tests__/api-v1-call-paths.test.ts`. **Its rule is `/api/`,
+   not `/api/v1/`** — the stricter version flagged
+   `news/composer.tsx → /api/orgs/{id}/content-upload`, which is a real
+   non-v1 route, so the gate was wrong and the code was right.
+2. **`materialise` had no `free_agent` guard**, contradicting design §6
+   ("free agents stay unmaterialized until assigned"). A card-paid solo
+   sign-up got their own schedulable one-person "team" entrant; assigning
+   them then put the person on two entrants with a phantom team left in the
+   fixture list. Fixing it immediately exposed a second bug via its own
+   test: **`materialise` owns the STATUS FLIP as well as the entrant
+   insert**, so returning early left a paid registrant stuck at `pending`
+   forever.
+3. **A placed solo sign-up survived every terminal transition.** Withdraw,
+   reject and expire are all STATUS changes, so V388's `on delete cascade`
+   never fires. A registrant who cancelled was refunded AND still fielded.
+   One shared `releaseSoloSignUpPlacement` now has four callers (the fourth
+   is unassign, which had been carrying its own inline copy).
+4. **The table called a solo sign-up "Team · 1/23".** They carry the
+   DIVISION's `entrant_kind`, so the team branch claimed one person was a
+   team and drew a roster meter for a roster they do not have. Every
+   assertion in that test file was about `entrant_kind`, and `entrant_kind`
+   was correct throughout.
+
+**THREE safety nets in this repo were found vacuous, and all three were
+fixed rather than worked around.** This is the most reusable finding of the
+session:
+
+- `deriveRegistrantActionFlags`' **completeness sweep** reads the status
+  enum from its real zod source but HAND-LISTED the seven flags. Two new
+  flags entered the return value and passed it unasserted — the file stayed
+  52/52 green. It now iterates what the function actually returned and
+  asserts the key set IS the interface.
+- `toRegistrationSettingsPutBody`'s **full-replace hazard test** could only
+  catch a field that should not be sent, never one that should be and was
+  not, because its expectation was hand-written beside the code it checks.
+  RS009 added `free_agent_fee_cents` to the endpoint and not to the body, so
+  **every settings save wrote NULL over the organiser's price**, silently
+  re-opening the double-charge V388 exists to close. The test now derives
+  its key set from `PutRegistrationSettings.shape`.
+- The **openapi drift gate** was green on three undocumented routes and four
+  undocumented response fields. It compares the generated spec to the
+  registry in `api-v1/openapi.ts`; a route or field missing from BOTH is not
+  drift, it is simply absent. All sixteen sibling registration routes were
+  listed; RS009's three were not.
+
+Pattern: **a gate that hand-lists the members of the thing it guards cannot
+see a new member.** All three failed the same way. When adding to a guarded
+set, check whether its guard enumerates or derives.
+
+**Also fixed, found by mutation rather than by a failing test:** the
+double-click guard on the assignment email was untested. The idempotent
+branch returned blank notify data "because the notification is skipped
+anyway", which made `alreadyPlaced` redundant with the null-email check —
+dropping `alreadyPlaced` still sent nothing, so the test passed for the
+wrong reason and the mutant SURVIVED. The branch now carries real data, so
+`alreadyPlaced` is the only thing preventing a second email.
+
+**Environmental, proved not asserted:** the four
+`schedule-build-honours-locks` failures seen in a full sweep are the
+documented missing-CP-SAT signature. With `seazn-env up --label rs009
+--placement` running, that suite and RS009's own are **40/40**.
+
+**Two traps worth carrying out of this session:**
+- **A concurrent session clobbers bare `/tmp` log paths.** `/tmp/rb5.log`
+  read back as a complete successful rebuild — of the **r5** session's
+  worktree, written seconds earlier. The rs009 rebuild had never run,
+  because it was `&&`-chained after a `git commit` that failed. Read the
+  `rebuilt from <path>` line, and write logs under the session scratchpad.
+- **`git commit -m` with double quotes inside the message fails** and takes
+  the whole `&&` chain with it. Use `-F <file>`.
