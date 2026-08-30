@@ -3968,3 +3968,115 @@ owes at the same closeout point.
 **Not done, and why:** no rebase onto current `origin/main` (matches the
 first review-fixes wave's own note — out of scope for a review-fix pass);
 no new PR (updates the existing PR #682 branch in place, per the dispatch).
+
+### RS009 (2026-08-30) — branch `feat/rs009-free-agents`, session open
+
+Rulings taken at session open, before any code.
+
+**Owner rulings (2026-08-30):**
+
+1. **A solo sign-up must not pay the full per-team fee.** Found before
+   writing anything: `registration-submit.ts:691` is
+   `const feeCents = waitlisted ? 0 : live.fee_cents` with **no
+   free-agent branch**, so a lone player entering a £60-per-team
+   division pays £60 — and once RS009 assigns them onto a team that
+   also paid £60, the organiser has collected twice for one roster of
+   eight. Nobody chose this; it fell out of RS002/RS006. Owner chose a
+   new nullable `registration_settings.free_agent_fee_cents`, **null =
+   fall back to `fee_cents`**, so every existing division keeps
+   today's behaviour and no backfill is owed. This widens RS009 past
+   its brief into the RS004 settings panel, the stepper's line items,
+   `api-v1/schemas.ts` + `openapi:gen`, and 4 dictionaries — asked and
+   approved before starting, per `_RULES.md` §1.
+2. **Assignment notifies, but nobody gets a veto.** The solo sign-up
+   and the receiving captain are both emailed; neither can block it.
+   Reason: entering the pool IS the request to be placed, and
+   declining is already expressible as `withdraw`. Rejected: a
+   pending-acceptance state (adds a new status, an expiry question,
+   and a roster that reads `6/7` with a seventh maybe-coming).
+
+**The user-facing word is "solo sign-up", never "free agent".**
+`reg.hub.row.freeAgents` is already `"Solo sign-ups"` and
+`register.entries.cart.freeAgentBadge` is `"Solo sign-up"` — RS005
+ruled the two vocabularies confusing when they sat three keys apart.
+`free_agent` / `allow_free_agents` remain the column and API names.
+
+**RS009 is delivering on a promise already live in production.**
+`register.details.freeAgent.note` tells the registrant, today, "the
+organiser will assign you to a team once one has space." There has
+never been any way for an organiser to do that. The status page also
+says nothing back, so the promise has had no receipt.
+
+**FALSE PREMISE — a scout sweep reported RS008 does not touch
+`registrations.ts`. It does.** The RS008 session, asked directly,
+confirmed **+217 lines** in `registrations.ts` and **+21** in
+`registration-submit.ts` (read-path name masking + claim-invite
+wiring). The sweep concluded "RS008's claim/consent code lives in
+`person-claims.ts`, so no usecase-file collision" — true of where the
+NEW code lives, false about what the branch edits. Lesson: for a
+collision check against a branch that is still being written, ask the
+session for its `git diff --stat`; a sweep can only see what has been
+committed, and reads a mid-flight branch as smaller than it is.
+
+**Cross-session contract with RS008 (agreed 2026-08-30):**
+
+- RS008 owns `register/status/entry-card.tsx` and `view-model.ts`
+  outright; RS009 does not open either file before RS008 merges.
+- **Flyway: RS008 takes no migration (confirmed zero new files under
+  `db/migration/deltas/` in its diff); RS009 takes V388.** High-water
+  is V387. This programme has already shipped two duplicate V367s
+  through a *clean* rebase, so the number is agreed out loud rather
+  than inferred.
+- RS008 ships `register.status.entry.awaitingTeam` only; RS009 owns
+  `assignedToTeam`, because its derivation needs the
+  `source = 'organiser_assigned'` value V388 introduces and RS008
+  should not duplicate a schema decision it does not own.
+
+**A DEFECT WITH A FUSE — RS009 owns closing it, and its PR does not
+merge with it open.** RS008's `awaitingTeam` is gated on
+`registrations.free_agent` alone. That is correct *today*, because
+nothing can assign a solo sign-up. It becomes a **lie the moment RS009
+merges**: `free_agent` records how an entry was ENTERED, not where it
+ended up, so an assigned player's status page would read "Waiting for
+a team" forever — contradicting the assignment email they just
+received. Same class as #20 (one card, two stories). Narrowing that
+gate ships in RS009's follow-up commit alongside `assignedToTeam`,
+after RS008 merges. Written here so it survives either session
+compacting.
+
+**Entry conditions verified at open (not assumed):**
+
+- `organiser_assigned` exists in **neither** the DB CHECK
+  (`V363__registration_groups_players.sql:185`) nor the TS union
+  (`registrations.ts:352`), and there is **no zod enum for
+  `registration_players.source` anywhere** — so those two sites are
+  the whole truth, and nothing catches updating only one of them.
+- `joinExistingEntrant` (`registrations.ts:973-1000`) carries a
+  docstring naming RS009 as its intended caller. The
+  assign-onto-materialised path is an extraction, not new code.
+- Roster fill has one source: `rosterCapExpr`
+  (`registrations.ts:4611-4616`), repointed by RS005 W1b
+  (`008b3da27`). Hand-copying the expression into the picker is the
+  fork.
+- The join path's lock is
+  `select status, free_agent, entrant_id from registrations where id = ${reg.id} for update`
+  (`registration-submit.ts:1117`). Assign takes the same one, or it
+  races join for the last roster slot.
+- `allow_free_agents` lives on **`registration_settings`**
+  (`V364:121-122`), NOT on `divisions` as design §5's prose implies.
+- **The registration hub has ZERO width coverage.** RS001 deleted the
+  old registrations panel from `mobile.spec.ts` and never replaced it;
+  the 54 `registration` hits in that file are LCP fixtures and setup
+  paths. The hub and the new picker go into the seven-width matrix
+  this session — a surface has no coverage until it is inside that
+  file.
+- `joinTeamEntry` (`registration-submit.ts:1036`) explicitly
+  **refuses** a free agent today rather than assigning one. There is
+  no existing assign/unassign code anywhere.
+
+**Guard promoted from RS005's close note, which addressed it to this
+session by name:** reversing the hub's page-level guard to admit
+viewers silently promoted every unconditional control on the page into
+one a read-only role can press. Assign and unassign are writes and are
+gated server-side on `canEdit`, not merely hidden — and the sweep is
+for the whole class of controls on that page, not just these two.
