@@ -4033,3 +4033,103 @@ that was disclosed. Recorded because the disclosure is the part worth keeping.
 containing `7dcab192a` will fail at `02-live` with zero rows and it is NOT an
 R6 defect. Do not spend a debugging pass on it. R6's own walkthrough captures
 use a throwaway script rather than `gallery.capture.ts`, so they are unaffected.
+
+---
+
+## R6 SESSION STATE — written for compaction, 2026-08-30
+
+**Branch** `feat/scorepad-v3-r6-period-pair`, 21 commits off `e23dcf241`.
+**Worktree** `.claude/worktrees/r6-period`. **Env label `r6`** — postgres 54834,
+prod server built FROM THIS WORKTREE at **http://localhost:3356** (assets
+verified; use `localhost`, `127.0.0.1` 401s every API call).
+**Walkthrough PNGs (61 images + 4 report JSONs, 81 measurements):**
+`/private/tmp/claude-501/-Users-ashokhein-github-seazn-club/d0758d6e-db26-4eb8-9fbd-a0c0fb857052/scratchpad/r6-walkthrough/`
+
+### Verified by the orchestrator, not taken on an agent's report
+
+Gate **2150 total / 2148 passed / 0 failed / 0 failed suites / 56 files**, every
+`.testResults[].name` under the r6 worktree. Clock exists and stamps `at`; never
+stamps unstarted (the regression that would have turned football's honest
+omission into a frozen `0:00`); correctable. Both skins declare `clock()` and
+`PadClockBar` is mounted and reachable. Registry flipped for both sports, both
+literals sorted A-Z. Palettes + `advisory` live and mutation-pinned.
+
+**Driven on the real product** (not asserted): decided shoot-out renders
+`3 — 2 (GWS 3–0)` matching `summary.headline` exactly at 320/768/1280 while
+`state.goals` stays `{2,2}` — the wrong-score defect is dead. Countdown ticks
+2:00 → 0:56 across 62s with `seqBefore === seqAfter`. Zero horizontal scroll,
+zero controls under 44×44 (tightest 44×45) across 81 measurements. Tokens
+resolve live: ice `#040a22`/`#67e8f9`, hockey `#06323c`/`#ffd23f`/`#3ddc84`.
+Type: big number 36px/700, side name 13–14px/600, strip 12px/600 — hierarchy
+from SIZE AND WEIGHT, which R6-1's glacier-cyan ruling requires.
+
+### TWO DEFECTS FOUND BY DRIVING IT, invisible to ~2150 passing tests
+
+1. **SHIP-BLOCKER — the pad renders a REFUSED write as recorded.** Band-1 (free)
+   org, ice hockey: `POST …/events` returns **402 `PAYMENT_REQUIRED —
+   scoring.match_timeline`**, server ledger keeps only `core.start`, and the pad
+   still shows ribbon "Penalty — Minor · Undo", TWO Activity rows, chips
+   "ON ICE 3V5" and "BACK ON MINOR", and a ticking countdown — **no rejection
+   banner anywhere**. The scorer believes a penalty is recorded and the side is
+   short; nothing is recorded and on reload it is all gone. Reproduced twice.
+   Evidence `icehockey-band1-penalty-320.png`, `report-band1.json`.
+   **Root cause is in `apps/web/src/components/v2/scorepad/transport.ts`** (fix
+   pass 3 found it there) — i.e. SHARED transport, not the v3 pad, so this
+   plausibly affects every sport and every refusal type, not just 402.
+2. **The card/penalty picker is in Postgres jsonb key order, not severity.**
+   Hockey's umpire is offered **Red, Green, Yellow**; ice hockey Major, Match,
+   Minor, Misconduct, Bench minor, Double minor, Game misconduct. Someone
+   reaching for green under pressure taps red. Evidence `hockey-cards-320.png`.
+
+### OWNER RULING — cards and penalties are FREE (2026-08-30)
+
+The engine puts `suspension.start`/`end` at **band 1**; the server demands
+**band 2** (`scoring.match_timeline`). Owner ruled the engine is right: in
+hockey a card IS match state — it changes on-ice strength, which changes how
+the score is reached — so a free org that cannot record one has a WRONG product
+(scorebug reads 5v5 when it is 4v5), not a smaller one. Gate the rich timeline,
+never the state-affecting event.
+
+**NOT YET APPLIED — deliberately.** A scout is enumerating, across all eleven
+sports, exactly what would newly become free if the gate is aligned, plus which
+tests pin the current refusal and which other surfaces (device link especially)
+share the gate. Moving this without that list risks silently freeing football's
+cards, cricket's wickets or tennis's code violations with a green suite. The
+lying UI (defect 1) is being fixed INDEPENDENTLY of this ruling — a refusal must
+never render as recorded regardless of who is right about the band.
+
+### In flight at compaction
+
+1. **Fix pass 3** — defect 1 + defect 2. Mid-write: `transport.ts`,
+   `v3/pad-host.tsx` modified; `refusal-copy.ts`, `v3/__tests__/refused-write.test.ts`
+   new. Instructed to STOP AND REPORT if the blast radius reaches shared write
+   plumbing — `transport.ts` is exactly that line, so hold it to the report.
+2. **`/code-review high`** across the whole branch — targeted at the BRANCH
+   explicitly, because `/code-review` reviews `main` here and from the main
+   checkout would have found an empty diff and reported clean.
+3. **Entitlement scout** — see the ruling above.
+4. **R7** (separate session) — converting `generic`, then boardgame, carrom.
+
+### Owed before merge
+
+- reviewer pass on fix pass 3, then RE-DRIVE the product (per-task walkthrough
+  is an owner-set gate, not per-wave)
+- **`captureExtra` for both sports — DOES NOT EXIST.** A gallery run today
+  captures the five shared `STATES`, none of which opens a dock or a sheet, so
+  the owner would be shown five screens identical to v2. Merge-gate item.
+- seven-width e2e; gallery published; **owner per-screen verdicts**; live
+  walkthrough for HOC-04b (card-flow presentation) and the swap sheet
+- check R7's two chassis findings against R6's skins: the ribbon stops offering
+  a take-back after a void (correct, by design), and a device link CAN void its
+  own rows but shows NO recorded-by attribution — R6's card and penalty rows
+  live in that panel
+- rebase onto a `main` containing R7's `7dcab192a`, or the gallery dies at
+  `02-live` with zero rows for a reason that is not R6's
+- follow-up recorded but NOT built: correcting the clock cannot retro-fix an
+  already-derived `expiresAt` (a stamped `at` is a frozen fact), so a penalty
+  recorded against a wrong clock stays wrong. Owner steer requested on whether
+  the void-and-re-record amend path belongs in R6 — R6's recommendation is NO,
+  it is a separate change with its own review.
+- UNVERIFIED: an implementer reported `npm run typecheck` failing in the MAIN
+  checkout. Main is clean and R6 never touched it, so probably pre-existing.
+  Confirm when the machine is quiet — typecheck peaks ~2.8 GB.
