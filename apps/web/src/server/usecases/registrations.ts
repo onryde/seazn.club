@@ -351,7 +351,21 @@ export interface RegistrationPlayerRow {
   dob: string | null;
   gender: string | null;
   guardian_name: string | null;
-  source: "captain_entered" | "self_joined";
+  /**
+   * How this roster row came to exist. `organiser_assigned` (RS009) is an
+   * organiser placing a pooled solo sign-up onto this team — nobody typed
+   * the name here and the player did not pick this team, so it is neither of
+   * the other two.
+   *
+   * This union and the `registration_players_source_check` CHECK constraint
+   * (`V363`, widened by `V388`) are the ONLY two definitions of this set —
+   * there is no zod enum for it anywhere. Nothing connects them: `tsc`
+   * cannot read a CHECK, Postgres cannot read a union. Change one and you
+   * must change the other, or you get code that compiles and then violates a
+   * constraint in production. `registration-player-source-contract.test.ts`
+   * asserts they agree, in both directions.
+   */
+  source: "captain_entered" | "self_joined" | "organiser_assigned";
   consent_status: "pending" | "granted" | "guardian";
   consent_at: Date | null;
   /**
