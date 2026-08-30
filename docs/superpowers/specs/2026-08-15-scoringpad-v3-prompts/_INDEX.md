@@ -5770,3 +5770,46 @@ YAML validated by parsing (`yaml.safe_load`) before commit, not by eye:
 `smoke-e2e` has 23 steps, the new one at index 19, `working-directory: apps/web`,
 both guards present, trigger `pull_request`. `ci.yml` gates every PR — a broken
 edit blocks the repo.
+
+### R7-26 — `scorepad-v2.spec.ts` must NOT survive the wave (owner ruling)
+
+Owner asked whether the file can be deleted outright rather than patched.
+Checked rather than assumed: **the filename lies, and most of it no longer
+tests v2.**
+
+905 lines. Its four subjects:
+- cricket — full over + dismissal, undo twice, no h-scroll at 375/320 →
+  drives the **v3** pad (cricket converted in R2)
+- football — goal with scorer and assist → **v3** (converted in R3)
+- "device link: score offline on the universal renderer, reconnect, drain,
+  converge" → genuinely the **v2 legacy lane**
+- "an expanded action form gets the whole row at 320" → **v2 legacy lane**
+  (A1 repointed it at boardgame)
+
+So it is two genuinely-v2 tests wrapped around a majority that tests v3 under a
+stale name — which is why A1 had to repoint selectors to `v3-activity-row`. The
+file was half-converted by earlier waves and nobody renamed it.
+
+**Not deletable TODAY:** the universal renderer is still in production for
+carrom, boardgame, hockey and icehockey. `LEGACY_SPORTS` is not empty until
+R7's three and R6's two both land. Deleting the offline-drain test now trades a
+real coverage hole for tidiness.
+
+**RULING — added to TASK G's acceptance:**
+1. When the legacy lane is deleted and `LEGACY_SPORTS` is empty, the two
+   universal-renderer tests die WITH the lane. Task G already owns that
+   demolition; this is the natural moment.
+2. Fold the cricket and football tests into `scorepad-v3-cricket.spec.ts` and
+   `scorepad-v3-football.spec.ts`, where they belong.
+3. **Then delete `apps/web/e2e/scorepad-v2.spec.ts` entirely.** The file must
+   not exist after R7 + R6 merge — deleted deliberately, not left as a fossil
+   whose name misdescribes it for the next wave to trip over.
+4. **CAVEAT, do not skip:** the file claims to cover "the headline flow S11
+   could not drive", so some of it may be UNIQUE rather than duplicated by the
+   sport specs. Diff the coverage before deleting; a fold that silently drops a
+   case repeats the very defect this row exists to fix.
+
+Immediate action (in the in-flight fix pass, not deferred): rename the test at
+`:663` so it stops advertising universal-renderer + device-link + offline-drain
+coverage it no longer provides. A test lying in its name is the actual defect —
+AGENTS.md class 4 — and it silently deleted coverage no gate could see.
