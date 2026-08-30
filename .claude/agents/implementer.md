@@ -2,7 +2,7 @@
 name: implementer
 description: Implements a single scoped coding task that has clear acceptance criteria. Use when a plan or task brief exists and code needs to be written or modified.
 model: sonnet
-effort: max
+effort: xhigh
 memory: project
 ---
 <!-- Save as .claude/agents/implementer.md -->
