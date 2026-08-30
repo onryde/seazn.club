@@ -408,7 +408,7 @@ test("volleyball v3 beach pair: the server is a named PERSON once anchored, no r
 // FIVB 15.6/19.3 — the libero swap, and its own refusal in the sport's words
 // ---------------------------------------------------------------------------
 
-test("volleyball v3: the libero swap surfaces via the Swap-sheet, and FIVB's one-return limit refuses in the sport's own words", async ({
+test("volleyball v3: the libero swap surfaces via the Swap-sheet, and a libero return is UNLIMITED (FIVB 19.3.2.1) rather than capped like a substitution", async ({
   page,
   request,
 }) => {
@@ -488,29 +488,138 @@ test("volleyball v3: the libero swap surfaces via the Swap-sheet, and FIVB's one
   await swap.locator(`[data-candidate-id="${liberoId}"]`).click();
   await expect(swap).toHaveCount(0, { timeout: 20_000 });
 
-  // NOW attempt the middle blocker's SECOND return — FIVB 15.6's one-return
-  // limit is spent. The candidate stays VISIBLE, disabled, with the reason
-  // beside the name (R2b's binding ruling), never silently removed.
+  // NOW the middle blocker's SECOND return. This block used to assert it was
+  // REFUSED, on the reading that FIVB 15.6's one-return cap governs here. It
+  // does not: a libero replacement is not a substitution (FIVB 19.3.2.1), so
+  // libero exchanges are UNLIMITED and this player may come and go as often
+  // as the libero does. `core/lineup.ts`'s `bringOn` skips both count
+  // refusals for the `on` half of a replacement naming a declared exemption,
+  // and this is the assertion that holds the pad to the same rule — the old
+  // one held it to the opposite.
   await v3Tile(page, "libero-home").click();
   await expect(swap).toBeVisible({ timeout: 10_000 });
   await swap.locator(`[data-candidate-id="${liberoId}"]`).click();
+  const returning = swap.locator(`[data-candidate-id="${middleBlockerId}"]`);
+  await expect(returning, "a second libero return stays offered, never blocked").toBeVisible({
+    timeout: 20_000,
+  });
+  await expect(returning).not.toHaveAttribute("data-blocked", "true");
+  await expect(returning).toBeEnabled();
+  await returning.click();
+  await expect(swap).toHaveCount(0, { timeout: 20_000 });
+
+  // FOUR exchanges: the seeded one plus three tapped. A cap surviving
+  // anywhere on this path — engine or skin — stops the ledger at three, and
+  // every assertion above it still passes.
+  await expect
+    .poll(
+      async () =>
+        (await ledger(request, fx.fixtureId)).filter((e) => e.type === "core.lineup.replacement").length,
+      { timeout: 20_000 },
+    )
+    .toBe(4);
+  const fourthExchange = (await ledger(request, fx.fixtureId)).filter(
+    (e) => e.type === "core.lineup.replacement",
+  )[3]!;
+  expect(fourthExchange.payload).toMatchObject({
+    side: fx.homeEntrantId,
+    off: liberoId,
+    on: { personId: middleBlockerId, positionKey: "MB" },
+    exemption: "libero",
+  });
+});
+
+/**
+ * The blocked-and-reasoned path, which the test above no longer covers now
+ * that FIVB 19.3.2.1 removed the cap it used to trip. R2b's binding ruling —
+ * a refused candidate stays VISIBLE, disabled, with the reason beside the
+ * name — still needs a live case, and there is exactly one a scorer can
+ * actually reach: an ordinary player offered when no libero is on court to
+ * come off. Before the engine grew its `requiresRole` bound (review of PR
+ * #678) that pair was ACCEPTED, laundering an ordinary re-entry through the
+ * exemption channel and past FIVB 15.6 entirely.
+ */
+test("volleyball v3: with no libero on court, an ordinary player is offered BLOCKED and reasoned, never laundered through the exemption", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(180_000);
+  const setter = `V3 VB NoLib S ${TAG}`;
+  const middleBlocker = `V3 VB NoLib MB1 ${TAG}`;
+  const libero = `V3 VB NoLib Lib ${TAG}`;
+  const bench = `V3 VB NoLib Bench ${TAG}`;
+  const fx = await seedRosteredFixture(request, {
+    label: `V3 Volleyball NoLibero ${TAG}`,
+    sportKey: "volleyball",
+    variantKey: "indoor",
+    home: [
+      { fullName: setter, positionKey: "S" },
+      { fullName: `V3 VB NoLib OH1 ${TAG}`, positionKey: "OH" },
+      { fullName: middleBlocker, positionKey: "MB" },
+      { fullName: `V3 VB NoLib OPP ${TAG}`, positionKey: "OPP" },
+      { fullName: `V3 VB NoLib OH2 ${TAG}`, positionKey: "OH" },
+      { fullName: `V3 VB NoLib MB2 ${TAG}`, positionKey: "MB" },
+      // NAMED but never brought on. `liberoNamed` reads the WHOLE squad, so
+      // the tile renders while the court itself holds no libero — which is
+      // the whole state under test.
+      { fullName: libero, slot: "bench", roles: ["libero"] },
+      { fullName: bench, slot: "bench" },
+    ],
+    away: indoorRoster("V3 VB NoLib Away"),
+    emitCoreStart: true,
+  });
+  const setterId = fx.personIds[setter]!;
+  const middleBlockerId = fx.personIds[middleBlocker]!;
+  const liberoId = fx.personIds[libero]!;
+  const benchId = fx.personIds[bench]!;
+
+  // An ORDINARY substitution, charged to FIVB 15.6's own cap: the middle
+  // blocker leaves the court the normal way. `core.lineup.substitution` is a
+  // different event from the `core.lineup.replacement` the libero sheet
+  // builds — the latter REQUIRES an `exemption` and so can never express an
+  // ordinary swap. That is what gives her `timesOff > 0` and puts her on the
+  // libero sheet's ON list at all; the libero herself has still never come on.
+  await postEvent(page.request, fx.fixtureId, "core.lineup.substitution", {
+    side: fx.homeEntrantId,
+    off: middleBlockerId,
+    on: { personId: benchId, positionKey: "MB", slot: "starting", orderNo: 7 },
+  });
+  await openPad(page, fx);
+
+  const swap = v3Swap(page);
+  await v3Tile(page, "libero-home").click();
+  await expect(swap).toBeVisible({ timeout: 10_000 });
+  // OFF: an on-court player who is not a libero — because none is on court.
+  // Whoever is named here, no ON pick could be the return leg of a libero
+  // exchange, which is precisely what the block below reports.
+  await swap.locator(`[data-candidate-id="${setterId}"]`).click();
+
   const blockedCandidate = swap.locator(`[data-candidate-id="${middleBlockerId}"]`);
-  await expect(blockedCandidate, "the exhausted candidate stays visible, never removed").toBeVisible({
+  await expect(blockedCandidate, "the refused candidate stays visible, never removed").toBeVisible({
     timeout: 20_000,
   });
   await expect(blockedCandidate).toHaveAttribute("data-blocked", "true");
   await expect(
     blockedCandidate,
     "sport-worded from the machine .reason slug — never the engine's own raw English/ID-bearing message",
-  ).toContainText("Already returned once this set");
+  ).toContainText("Not a libero exchange");
   await expect(blockedCandidate, "never the raw personId in the visible copy").not.toContainText(middleBlockerId);
   await expect(blockedCandidate).toBeDisabled();
 
-  // The refused attempt never reached the ledger — still exactly two
-  // exchanges recorded (the first, seeded; the second, tapped above).
-  expect(
-    (await ledger(request, fx.fixtureId)).filter((e) => e.type === "core.lineup.replacement").length,
-  ).toBe(2);
+  // The libero IS a legal pick in this same state, and is offered unblocked.
+  // Without this line the test would also pass against a sheet that refused
+  // every candidate for any reason at all.
+  await expect(
+    swap.locator(`[data-candidate-id="${liberoId}"]`),
+    "the one pick that IS a libero exchange stays offered",
+  ).not.toHaveAttribute("data-blocked", "true");
+
+  // No libero exchange ever reached the ledger — the refusal held at the
+  // sheet, and the only lineup event on file is the ordinary substitution
+  // this test seeded.
+  const lineupEvents = (await ledger(request, fx.fixtureId)).filter((e) => e.type.startsWith("core.lineup."));
+  expect(lineupEvents.filter((e) => e.type === "core.lineup.replacement").length).toBe(0);
+  expect(lineupEvents.length).toBe(1);
 });
 
 /** Dispatch a real ledger event directly, reading `last_seq` fresh each
