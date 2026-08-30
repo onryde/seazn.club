@@ -17,6 +17,10 @@ export {
   registrationPromotedTemplate,
   type RegistrationPromotedArgs,
 } from "./registration-promoted";
+export {
+  soloSignUpAssignedTemplate,
+  type SoloSignUpAssignedArgs,
+} from "./solo-signup-assigned";
 export { refundIssuedTemplate, type RefundIssuedArgs } from "./refund-issued";
 export { disputeAlertTemplate, type DisputeAlertArgs } from "./dispute-alert";
 export { disputeLostTemplate, type DisputeLostArgs } from "./dispute-lost";

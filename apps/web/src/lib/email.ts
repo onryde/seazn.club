@@ -24,6 +24,8 @@ import {
   type PaymentReminderArgs,
   registrationPromotedTemplate,
   type RegistrationPromotedArgs,
+  soloSignUpAssignedTemplate,
+  type SoloSignUpAssignedArgs,
   refundIssuedTemplate,
   type RefundIssuedArgs,
   disputeAlertTemplate,
@@ -454,6 +456,23 @@ export async function sendRegistrationPromotedEmail(
   const { to, locale = "en", ...args } = opts;
   const dict = await getDictionary(locale, "emails");
   return send({ to, ...registrationPromotedTemplate(args, dict) });
+}
+
+export interface SoloSignUpAssignedEmail extends SoloSignUpAssignedArgs {
+  to: string;
+  locale?: Locale;
+}
+
+/** RS009 — tells the person who entered alone that they are now on a team.
+ *  The answer to the promise the public stepper makes at sign-up; without it
+ *  the placement happens entirely inside the organiser's console and the
+ *  person it concerns is never told. */
+export async function sendSoloSignUpAssignedEmail(
+  opts: SoloSignUpAssignedEmail,
+): Promise<boolean> {
+  const { to, locale = "en", ...args } = opts;
+  const dict = await getDictionary(locale, "emails");
+  return send({ to, ...soloSignUpAssignedTemplate(args, dict) });
 }
 
 export interface RefundIssuedEmail extends RefundIssuedArgs {

@@ -356,5 +356,10 @@
   "groupOrgLeft.button": "Facturering bekijken",
   "groupOrgLeft.footer": "Je ontvangt dit omdat een organisatie een factuurgroep heeft verlaten die jij op Seazn Club betaalt.",
   "groupOrgLeft.textFreed": "{orgName} heeft je factuurgroep verlaten. Je hebt de plek die je hebt betaald behouden — voeg er gratis een andere organisatie aan toe totdat je abonnement wordt verlengd: {link}",
-  "groupOrgLeft.textSpent": "{orgName} heeft je factuurgroep verlaten en de plek meegenomen. Je volgende factuur telt één plek minder: {link}"
+  "groupOrgLeft.textSpent": "{orgName} heeft je factuurgroep verlaten en de plek meegenomen. Je volgende factuur telt één plek minder: {link}",
+  "soloSignUpAssigned.subject": "Je speelt bij {teamName}",
+  "soloSignUpAssigned.preheader": "De organisatie heeft je bij {teamName} ingedeeld.",
+  "soloSignUpAssigned.title": "Je hebt een team",
+  "soloSignUpAssigned.intro": "Hoi {playerName}, de organisatie heeft je ingedeeld bij {teamName} in {divisionName} van {competitionName}. Je hoeft verder niets te doen; je team neemt contact met je op.",
+  "soloSignUpAssigned.viewStatus": "Je inschrijving bekijk je hier: {url}"
 }

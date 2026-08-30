@@ -356,5 +356,10 @@
   "groupOrgLeft.button": "Ver facturación",
   "groupOrgLeft.footer": "Has recibido esto porque una organización ha salido de un grupo de facturación que pagas en Seazn Club.",
   "groupOrgLeft.textFreed": "{orgName} ha salido de tu grupo de facturación. Has conservado la plaza que pagaste: añade otra organización a ese espacio gratis hasta que se renueve tu suscripción: {link}",
-  "groupOrgLeft.textSpent": "{orgName} ha salido de tu grupo de facturación y se ha llevado su plaza. Tu próxima factura tendrá una plaza menos: {link}"
+  "groupOrgLeft.textSpent": "{orgName} ha salido de tu grupo de facturación y se ha llevado su plaza. Tu próxima factura tendrá una plaza menos: {link}",
+  "soloSignUpAssigned.subject": "Estás en {teamName}",
+  "soloSignUpAssigned.preheader": "La organización te ha asignado a {teamName}.",
+  "soloSignUpAssigned.title": "Ya tienes equipo",
+  "soloSignUpAssigned.intro": "Hola {playerName}: la organización te ha asignado a {teamName} en {divisionName} de {competitionName}. No tienes que hacer nada más; tu equipo se pondrá en contacto contigo.",
+  "soloSignUpAssigned.viewStatus": "Puedes consultar tu inscripción aquí: {url}"
 }

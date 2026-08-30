@@ -23,11 +23,16 @@ import { log } from "@/server/logger";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import {
   audit,
+  divisionCtx,
+  fallbackOrigin,
   joinExistingEntrant,
   orgReg,
   releaseSoloSignUpPlacement,
   rosterCapExpr,
 } from "./registrations";
+import { sql } from "@/lib/db";
+import { sendSoloSignUpAssignedEmail } from "@/lib/email";
+import { toLocale } from "@/lib/i18n-constants";
 
 type Tx = postgres.TransactionSql;
 
@@ -195,6 +200,10 @@ export async function assignSoloSignUp(
     if (existing) {
       if (existing.registration_id === targetId) {
         const state = await rosterState(tx, targetId);
+        const [{ full_name: existingPlayerName }] = await tx<{ full_name: string }[]>`
+          select full_name from registration_players where id = ${existing.id}`;
+        const [{ name: existingDivisionName }] = await tx<{ name: string }[]>`
+          select name from divisions where id = ${target.division_id}`;
         return {
           registration_id: sourceId,
           target_registration_id: targetId,
@@ -203,6 +212,21 @@ export async function assignSoloSignUp(
           roster_count: state.count,
           roster_cap: state.cap,
           alreadyPlaced: true,
+          // The REAL notification data, not blanks. An earlier version put
+          // nulls here "because the notification is skipped anyway", which
+          // made `alreadyPlaced` redundant with the null-email check and left
+          // the double-click guard untested: a mutant that dropped
+          // `!result.alreadyPlaced` still sent nothing, so the test passed
+          // for the wrong reason and the mutant SURVIVED. With real data
+          // here, `alreadyPlaced` is the only thing preventing a second
+          // email, which is exactly what the test should be pinning.
+          notify: {
+            email: source.contact_email,
+            locale: source.locale,
+            playerName: existingPlayerName,
+            divisionId: target.division_id,
+            divisionName: existingDivisionName,
+          },
         };
       }
       const [{ display_name: onTeam }] = await tx<{ display_name: string }[]>`
@@ -239,8 +263,8 @@ export async function assignSoloSignUp(
     }
 
     const capReached = state.cap !== null && state.count + 1 >= state.cap;
-    const [division] = await tx<{ category: string | null; competition_id: string }[]>`
-      select category, competition_id from divisions where id = ${target.division_id}`;
+    const [division] = await tx<{ category: string | null; competition_id: string; name: string }[]>`
+      select category, competition_id, name from divisions where id = ${target.division_id}`;
     const existingGenders = await tx<{ gender: string | null }[]>`
       select gender from registration_players where registration_id = ${targetId}`;
     if (!division) throw new HttpError(404, "That division no longer exists");
@@ -319,8 +343,48 @@ export async function assignSoloSignUp(
       roster_count: after.count,
       roster_cap: after.cap,
       alreadyPlaced: false,
+      // Carried out for the notification below — read inside the tx because
+      // that is where the row is already locked and consistent, but USED
+      // outside it: a mail send must never sit inside a transaction holding
+      // a row lock on a contended roster.
+      notify: {
+        email: source.contact_email,
+        locale: source.locale,
+        playerName: player.full_name,
+        divisionId: target.division_id,
+        divisionName: division.name,
+      },
     };
   });
+
+  // The one message this feature owes (owner ruling, 2026-08-30): the person
+  // who entered alone is told they now have a team. Fire-and-forget AFTER the
+  // transaction commits — a placement that succeeded must not be rolled back
+  // because a mail server was slow, and a send must never hold the roster
+  // lock. Skipped on an idempotent repeat: an organiser double-clicking
+  // Assign should not email the registrant twice.
+  if (!result.alreadyPlaced && result.notify.email) {
+    void (async () => {
+      try {
+        const ctx = await divisionCtx(sql, result.notify.divisionId);
+        await sendSoloSignUpAssignedEmail({
+          to: result.notify.email as string,
+          locale: toLocale(result.notify.locale),
+          orgName: ctx.org_name,
+          competitionName: ctx.comp_name,
+          divisionName: result.notify.divisionName,
+          playerName: result.notify.playerName,
+          teamName: result.target_display_name,
+          refStatusUrl: null,
+        });
+      } catch (err) {
+        log.warn(
+          { registrationId: result.registration_id, err: String(err) },
+          "registration: solo sign-up assigned, but the notification failed",
+        );
+      }
+    })();
+  }
 
   log.info(
     {

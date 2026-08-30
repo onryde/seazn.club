@@ -14,7 +14,7 @@
 // registration-materialise.test.ts's direct-SQL pattern for the V363/V364
 // shape, for the same reason it gives: `submitRegistration` was deleted in
 // the RS001 demolition, so a direct insert is the equivalent of a submit.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -30,6 +30,16 @@ import { assignSoloSignUp, unassignSoloSignUp } from "../registration-assign";
 import { seedFootballCatalog, seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
+
+// RS005 found `sendRegistrationEmail` had ZERO callers — the mailer existed,
+// the copy existed in four locales, and nothing ever sent it. So this asserts
+// the SEND, not the template: a notification nothing calls is the same defect
+// wearing a different name.
+const sendSpy = vi.hoisted(() => vi.fn(async () => true));
+vi.mock("@/lib/email", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/email")>()),
+  sendSoloSignUpAssignedEmail: sendSpy,
+}));
 
 /** A team division that accepts solo sign-ups, on a sport whose
  *  position_catalog declares a roster big enough to fill. */
@@ -492,6 +502,88 @@ describe.skipIf(!HAS_DB)("assignSoloSignUp onto an already-materialised entrant"
       select count(*)::text as n from persons
       where org_id = ${auth.orgId} and lower(full_name) = 'priya raman' and merged_into is null`;
     expect(Number(n)).toBe(1);
+  });
+});
+
+describe.skipIf(!HAS_DB)("the placed player is told", () => {
+  // Every assertion here counts calls FOR ONE TEAM NAME rather than counting
+  // the spy outright. The send is deliberately fire-and-forget after commit,
+  // so a send started by an earlier test in this file can land after this
+  // one's mockClear() and be attributed to it — an assertion on
+  // `calls[0]` read "Team A" while this test had placed someone on
+  // "Riverside Rovers". Scoping by the unique team name makes each case
+  // independent of what any other test left in flight.
+  function callsForTeam(teamName: string) {
+    return sendSpy.mock.calls.filter(
+      (c) => (c[0] as { teamName?: string }).teamName === teamName,
+    );
+  }
+  async function waitForTeam(teamName: string): Promise<void> {
+    for (let i = 0; i < 50 && callsForTeam(teamName).length === 0; i++) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+  }
+
+  it("emails the person who entered alone, naming the team", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId } = await seedTeamDivision(auth);
+    const teamName = `Riverside Rovers ${randomUUID().slice(0, 6)}`;
+    const team = await seedEntry(divisionId, { displayName: teamName });
+    const solo = await seedEntry(divisionId, {
+      displayName: "Priya Raman",
+      freeAgent: true,
+      players: [{ name: "Priya Raman" }],
+    });
+
+    await assignSoloSignUp(auth, { registration_id: solo.id, target_registration_id: team.id });
+    await waitForTeam(teamName);
+
+    expect(callsForTeam(teamName)).toHaveLength(1);
+    expect(callsForTeam(teamName)[0][0]).toMatchObject({
+      playerName: "Priya Raman",
+      teamName,
+    });
+  });
+
+  it("does not email again when the organiser double-clicks Assign", async () => {
+    // Assign is idempotent; the notification must be too, or a hesitant
+    // organiser mails the registrant twice for one placement.
+    const { auth } = await seedOrg();
+    const { divisionId } = await seedTeamDivision(auth);
+    const teamName = `Double Click ${randomUUID().slice(0, 6)}`;
+    const team = await seedEntry(divisionId, { displayName: teamName });
+    const solo = await seedEntry(divisionId, {
+      displayName: "Priya Raman",
+      freeAgent: true,
+      players: [{ name: "Priya Raman" }],
+    });
+
+    await assignSoloSignUp(auth, { registration_id: solo.id, target_registration_id: team.id });
+    await waitForTeam(teamName);
+    await assignSoloSignUp(auth, { registration_id: solo.id, target_registration_id: team.id });
+    await new Promise((r) => setTimeout(r, 200));
+
+    expect(callsForTeam(teamName)).toHaveLength(1);
+  });
+
+  it("still places the player when the mail fails", async () => {
+    // The placement is the thing that matters; a mail server having a bad
+    // day must not roll it back or surface as a failed assign.
+    sendSpy.mockRejectedValueOnce(new Error("smtp down"));
+    const { auth } = await seedOrg();
+    const { divisionId } = await seedTeamDivision(auth);
+    const teamName = `Smtp Down ${randomUUID().slice(0, 6)}`;
+    const team = await seedEntry(divisionId, { displayName: teamName });
+    const solo = await seedEntry(divisionId, {
+      displayName: "Priya Raman",
+      freeAgent: true,
+      players: [{ name: "Priya Raman" }],
+    });
+
+    await expect(
+      assignSoloSignUp(auth, { registration_id: solo.id, target_registration_id: team.id }),
+    ).resolves.toMatchObject({ target_display_name: teamName });
+    expect(await rosterOf(team.id)).toHaveLength(1);
   });
 });
 
