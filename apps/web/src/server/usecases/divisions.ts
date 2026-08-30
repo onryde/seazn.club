@@ -10,7 +10,12 @@ import { EngineError } from "@seazn/engine/core";
 import { effectiveEntrantModel, type EntrantKind } from "@seazn/engine/sport";
 import { resolveModule } from "@/server/engine-db";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import { AGE_MAX_BEFORE_MIN, type CreateDivision, type PatchDivision } from "@/server/api-v1/schemas";
+import {
+  AGE_MAX_BEFORE_MIN,
+  AGE_CUTOFF_BOTH_OR_NEITHER,
+  type CreateDivision,
+  type PatchDivision,
+} from "@/server/api-v1/schemas";
 import { captureServer } from "@/lib/posthog-server";
 import { EVENTS } from "@/lib/analytics-events";
 import { assertCompetitionNotFrozen } from "./entitlement-freeze";
@@ -38,14 +43,22 @@ export interface DivisionRow {
   variant_key: string;
   config: unknown;
   module_version: string;
-  eligibility: unknown[];
   tiebreakers: string[] | null;
-  /** V364 first-class eligibility columns (RS004): read alongside
-   *  `eligibility` above, never instead of it — see
+  /** V364/V380 first-class eligibility columns — the ONE eligibility
+   *  representation (RS007/V380 dropped the jsonb `eligibility` column this
+   *  comment used to say "read alongside"); see
    *  registration-eligibility.ts's EligibilityDivision. */
   category: string | null;
   age_min: number | null;
   age_max: number | null;
+  /** RS007/V380: both-or-neither (DB CHECK `divisions_age_cutoff_check`).
+   *  Null defaults to 1 January of the season-start year
+   *  (registration-rules.ts's `ageBandEligibilityIssues`). */
+  age_cutoff_month: number | null;
+  age_cutoff_day: number | null;
+  /** RS007/V380: the retired jsonb "custom rule" note, now a first-class
+   *  column the public entry/join pages render as a warning. */
+  eligibility_note: string | null;
   status: string;
   officials_hide_names: boolean;
   scheduling_mode: string;
@@ -74,7 +87,8 @@ export interface DivisionRow {
 
 const COLS = [
   "id", "competition_id", "name", "slug", "description", "sport_key", "variant_key", "config",
-  "module_version", "eligibility", "tiebreakers", "category", "age_min", "age_max", "status",
+  "module_version", "tiebreakers", "category", "age_min", "age_max", "age_cutoff_month",
+  "age_cutoff_day", "eligibility_note", "status",
   "officials_hide_names", "scheduling_mode", "auto_progress", "auto_posts", "schedule_locked",
   "archived_at", "created_at", "seq", "youth", "player_name_display", "logo_url",
   "logo_storage_path", "required_court_tags",
@@ -94,12 +108,16 @@ export async function listVariantOptions(
   );
 }
 
-/** U-anything eligibility (maxAgeAt below 18) marks a division youth. */
-export function eligibilityIsYouth(rules: unknown[]): boolean {
-  return rules.some((raw) => {
-    const rule = raw as { kind?: string; maxAgeAt?: number };
-    return rule.kind === "age" && (rule.maxAgeAt ?? 99) < 18;
-  });
+/**
+ * U-anything eligibility (age_max below 18) marks a division youth. RS007/
+ * V380 repoints this at the first-class `age_max` column — the ONE place
+ * `youth` derives from now, replacing three prior derivations (this
+ * function's old jsonb-scanning body, its INSERT-time call below, and its
+ * PATCH-time re-derive) plus a fourth, independent raw-SQL recompute in
+ * `settings/page.tsx` that now just reads the `youth` column directly.
+ */
+export function deriveYouth(ageMax: number | null): boolean {
+  return ageMax != null && ageMax < 18;
 }
 
 export async function listDivisions(
@@ -239,14 +257,29 @@ export async function createDivision(
     // Shared by both slug paths so the generated one can be RETRIED against
     // the unique index — `q` is the savepoint, and replaces `tx` inside it.
     const insert = async (slug: string, q: postgres.TransactionSql): Promise<DivisionRow> => {
+      // RS007/V380: category/age_min/age_max/age_cutoff_month/age_cutoff_day/
+      // eligibility_note are writable at create time now — the division-
+      // creation wizard's Eligibility tab writes them directly (see
+      // schemas.ts's CreateDivision; the registration hub config panel still
+      // edits the SAME columns via PATCH, which stays the only path for an
+      // already-created division). `??`, not the schema's own `undefined`,
+      // because postgres.js sends a bound JS `undefined` as literal SQL
+      // `undefined`, not `null` — every other create-time column here already
+      // follows this rule (e.g. `input.tiebreakers ? ... : null` two lines
+      // below). `deriveYouth` reads the effective age_max from THIS request —
+      // the SAME single derivation patchDivision re-runs on an age_max PATCH,
+      // not a second copy (deriveYouth's own doc comment).
+      const ageMax = input.age_max ?? null;
       const [row] = await q<DivisionRow[]>`
         insert into divisions (competition_id, name, slug, sport_key, variant_key, config,
-                               module_version, eligibility, tiebreakers, youth)
+                               module_version, tiebreakers, category, age_min, age_max,
+                               age_cutoff_month, age_cutoff_day, eligibility_note, youth)
         values (${competitionId}, ${input.name}, ${slug}, ${input.sport_key}, ${input.variant_key},
                 ${q.json(parsed.data as never)}, ${sport.module_version},
-                ${q.json(input.eligibility as never)},
                 ${input.tiebreakers ? q.json(input.tiebreakers as never) : null},
-                ${eligibilityIsYouth(input.eligibility)})
+                ${input.category ?? null}, ${input.age_min ?? null}, ${ageMax},
+                ${input.age_cutoff_month ?? null}, ${input.age_cutoff_day ?? null},
+                ${input.eligibility_note ?? null}, ${deriveYouth(ageMax)})
         returning ${q(COLS)}`;
       return row!;
     };
@@ -553,6 +586,21 @@ function isAgeBandCheckViolation(err: unknown): boolean {
   );
 }
 
+// Same precedent, for the RS007/V380 cutoff columns' own CHECK
+// (divisions_age_cutoff_check — both age_cutoff_month/age_cutoff_day or
+// neither). checkAgeCutoff (schemas.ts) catches the common single-request
+// case; this is the READ COMMITTED race backstop, same role
+// isAgeBandCheckViolation plays for the age band above.
+const AGE_CUTOFF_CHECK_CONSTRAINT = "divisions_age_cutoff_check";
+function isAgeCutoffCheckViolation(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    (err as { code?: string }).code === "23514" &&
+    (err as { constraint_name?: string }).constraint_name === AGE_CUTOFF_CHECK_CONSTRAINT
+  );
+}
+
 export async function patchDivision(
   auth: AuthCtx,
   id: string,
@@ -585,13 +633,44 @@ export async function patchDivision(
     // this transaction below is a race-condition backstop, not the primary
     // fix; this is what makes 422 the common path.
     if (patch.age_min !== undefined || patch.age_max !== undefined) {
-      const [currentBand] = await tx<{ age_min: number | null; age_max: number | null }[]>`
-        select age_min, age_max from divisions where id = ${id}`;
+      const [currentBand] = await tx<{ age_min: number | null; age_max: number | null; youth: boolean }[]>`
+        select age_min, age_max, youth from divisions where id = ${id}`;
       if (!currentBand) throw new HttpError(404, "division not found");
       const mergedMin = patch.age_min !== undefined ? patch.age_min : currentBand.age_min;
       const mergedMax = patch.age_max !== undefined ? patch.age_max : currentBand.age_max;
       if (mergedMin != null && mergedMax != null && mergedMax < mergedMin) {
         throw new HttpError(422, AGE_MAX_BEFORE_MIN);
+      }
+      // Youth re-derives from age_max alone (v3/11 gap 8; RS007/V380 repoints
+      // this from the retired jsonb-only eligibilityIsYouth — see
+      // deriveYouth's own comment). Gated on age_max specifically (age_min
+      // does not feed youth), and on the MERGED value fetched above — this
+      // fetch is shared with the age-band check, not a second query — so a
+      // single-field PATCH that only touches age_min leaves youth alone, and
+      // one that touches age_max compares against ITS OWN new value rather
+      // than a stale read. An explicit `patch.youth` in the SAME request
+      // always wins (organiser override).
+      //
+      // REGRESSION FIX (review, RS007): an override set by an EARLIER
+      // request must survive THIS one too — CreateDivision has no `youth`
+      // field (deriveYouth's own comment), so a PATCH naming `youth` on its
+      // own is the ONLY way an override is ever created, and
+      // toDivisionPatchBody (registration-hub-config-state.ts) sends
+      // age_max on EVERY hub Save, whatever the organiser actually touched,
+      // while never sending `youth` at all (no such control exists in the
+      // hub UI). Without this guard every hub Save silently re-derived over
+      // an override set through the API. `deriveYouth` is the only thing
+      // that ever writes `youth` on its own, so a STORED value that
+      // disagrees with what it would compute from the CURRENT (pre-patch)
+      // age_max can only be there because some earlier request explicitly
+      // set it — that is what "explicit override always wins over the
+      // derivation" (above) means in practice, not just same-request
+      // precedence. This flag governs player_name_display (safeguarding:
+      // whether children's names publish in full), so re-deriving over an
+      // active override by accident is the wrong default.
+      const currentIsOverride = currentBand.youth !== deriveYouth(currentBand.age_max);
+      if (patch.age_max !== undefined && patch.youth === undefined && !currentIsOverride) {
+        effective.youth = deriveYouth(mergedMax);
       }
     }
     // Format edits (v8 spec §2): allowed only while no stage owns fixtures,
@@ -678,11 +757,6 @@ export async function patchDivision(
       effective.variant_key = variantKey;
       effective.config = tx.json(finalConfig as never);
     }
-    // Eligibility edits re-derive the youth flag unless the same patch sets
-    // it explicitly (v3/11 gap 8 — auto with organiser override).
-    if (patch.eligibility !== undefined && patch.youth === undefined) {
-      effective.youth = eligibilityIsYouth(patch.eligibility);
-    }
     // Rename regenerates the slug (v3/01 §2); old slug keeps redirecting.
     let before: { name: string; slug: string; competition_id: string } | undefined;
     if (patch.name) {
@@ -706,13 +780,15 @@ export async function patchDivision(
       const cols = Object.keys(eff);
       const values = {
         ...eff,
-        ...(patch.eligibility ? { eligibility: q.json(patch.eligibility as never) } : {}),
         ...(patch.tiebreakers ? { tiebreakers: q.json(patch.tiebreakers as never) } : {}),
         // `required_court_tags` is a real `text[]` column (V367, not jsonb —
         // q.array, not q.json), normalised on write with the SAME helper the
-        // courts path uses. Truthy-checked like eligibility/tiebreakers
-        // above: an explicit `[]` (clearing the requirement back to "any
-        // court") is still a truthy array and takes this branch correctly.
+        // courts path uses. Truthy-checked like tiebreakers above: an
+        // explicit `[]` (clearing the requirement back to "any court") is
+        // still a truthy array and takes this branch correctly.
+        // (age_cutoff_month/age_cutoff_day/eligibility_note need no such
+        // special-casing — plain scalar columns flow through `...eff`
+        // unchanged, same as category/age_min/age_max already do.)
         ...(patch.required_court_tags
           ? { required_court_tags: q.array(normalizeTags(patch.required_court_tags)) }
           : {}),
@@ -751,6 +827,7 @@ export async function patchDivision(
     // then both write; whichever commits second still hits this CHECK. Must
     // not leak the raw constraint text either way.
     if (isAgeBandCheckViolation(err)) throw new HttpError(422, AGE_MAX_BEFORE_MIN);
+    if (isAgeCutoffCheckViolation(err)) throw new HttpError(422, AGE_CUTOFF_BOTH_OR_NEITHER);
     throw err;
   });
   // A rename busts the cached slug resolution (old + new key) — outside the

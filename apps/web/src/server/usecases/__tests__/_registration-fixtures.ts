@@ -23,6 +23,7 @@ import { createDivision } from "../divisions";
 import {
   putRegistrationSettings,
   hashRegistrationToken,
+  regGroupCols,
   REGISTRATION_TOKEN_PREFIX,
   type RegistrationRow,
   type RegistrationWithGroupRow,
@@ -73,10 +74,7 @@ export const asOwner = (orgId: string, userId: string): AuthCtx => ({
   keyId: null,
 });
 
-export async function rig(
-  owner: AuthCtx,
-  opts: { eligibility?: Record<string, unknown>[]; startsOn?: string } = {},
-) {
+export async function rig(owner: AuthCtx, opts: { startsOn?: string } = {}) {
   const competition = await createCompetition(owner, {
     name: "Reg Cup " + randomUUID().slice(0, 6),
     visibility: "public",
@@ -89,36 +87,31 @@ export async function rig(
     sport_key: "generic",
     variant_key: "score",
     config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
-    eligibility: opts.eligibility ?? [],
   });
   return { competition, division };
 }
 export type RigResult = Awaited<ReturnType<typeof rig>>;
 
-/** r.* ∪ g.* — the same join `regGroupCols` (registrations.ts, not exported)
- *  builds internally.
- *  NOTE: nothing enforces that these two column lists stay in sync.
- *  `registration-schema.test.ts` asserts only that each column EXISTS in the
- *  database, against its own separately hand-typed name array — it never
- *  compares against `regGroupCols` or against this list. So a column added to
- *  `registration_groups`/`registrations` and omitted from both hand-copied
- *  lists would go unnoticed here. They are in sync today; that is maintenance,
- *  not a guarantee.
- *  `g.refunded_cents` is aliased to `group_refunded_cents` (V368) so it never
- *  collides with `r.refunded_cents` — see the block comment above
- *  `RegistrationWithGroupRow` in registrations.ts. */
+/** r.* ∪ g.* — now built from `regGroupCols` itself (registrations.ts), which
+ *  is exported for exactly this reason.
+ *
+ *  It used to be a second, hand-copied list, with a note admitting "nothing
+ *  enforces that these two column lists stay in sync... that is maintenance,
+ *  not a guarantee". The guarantee was already gone: the copy was missing
+ *  `promotion_expires_at`, `waitlisted_at` and the media-consent pair, and
+ *  V387's `entry_payment_intent_id` made it visible — every test reading that
+ *  field off this helper got `undefined` and asserted against a column the
+ *  production query does return. That is the worst direction for a fixture to
+ *  drift: it makes a real defect look like a passing test. One list now. */
 export async function loadWithGroup(regId: string): Promise<RegistrationWithGroupRow> {
+  // Was a hand-copied column list, and it had already drifted: it was missing
+  // `promotion_expires_at`, `waitlisted_at`, the media-consent pair — and then
+  // V387's `entry_payment_intent_id`, which is what surfaced it. A fixture
+  // that silently returns `undefined` for a column the production type says
+  // exists makes a real defect look like a passing test, so this now shares
+  // the ONE list `registrations.ts` maintains.
   const [row] = await sql<RegistrationWithGroupRow[]>`
-    select r.id, r.division_id, r.org_id, r.status, r.display_name, r.answers,
-           r.amount_cents, r.refunded_cents, r.entrant_id, r.promoted_at, r.withdrawn_at,
-           r.group_id, r.join_code, r.free_agent, r.created_at, r.updated_at,
-           g.contact_name, g.contact_email, g.user_id, g.locale, g.ref_code,
-           g.access_token_hash, g.currency, g.payment_method, g.checkout_session_id,
-           g.payment_intent_id, g.expires_at, g.reminded_at,
-           g.refunded_cents as group_refunded_cents,
-           g.refunded_at, g.disputed_at, g.dispute_id, g.offline_marked_paid_at,
-           g.offline_marked_paid_by, g.fee_percent, g.privacy_consent_at,
-           g.privacy_consent_version
+    select ${regGroupCols(sql)}
     from registrations r join registration_groups g on g.id = r.group_id
     where r.id = ${regId}`;
   return row;

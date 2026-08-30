@@ -214,9 +214,9 @@ async function seedStripeDivision(
     const [{ id: divisionId }] = await sql<{ id: string }[]>`
       insert into divisions
         (competition_id, name, slug, sport_key, variant_key, config, module_version,
-         eligibility, tiebreakers, youth)
+         tiebreakers, youth)
       values (${compId}, 'Open', ${divSlug}, 'generic', 'score',
-              ${sql.json(GENERIC_CONFIG)}, ${moduleVersion}, ${sql.json([])}, null, false)
+              ${sql.json(GENERIC_CONFIG)}, ${moduleVersion}, null, false)
       returning id`;
     await sql`
       insert into registration_settings
@@ -424,7 +424,7 @@ test.describe("T1 · competition delete is blocked while money is on file", () =
       page.request,
       `/api/v1/competitions/${cardComp.data!.id}/divisions`,
       "POST",
-      { name: "Open", sport_key: "generic", variant_key: "score", config: GENERIC_CONFIG, eligibility: [] },
+      { name: "Open", sport_key: "generic", variant_key: "score", config: GENERIC_CONFIG },
     );
     await withDb(async (sql) => {
       // V363/V364: the payment envelope (payment_intent_id/refunded_cents/

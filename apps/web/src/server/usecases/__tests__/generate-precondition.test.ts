@@ -63,7 +63,6 @@ async function seedDivision(auth: AuthCtx, names: string[]) {
     sport_key: "generic",
     variant_key: "score",
     config: GENERIC_CONFIG,
-    eligibility: [],
   });
   const entrants = await createEntrants(
     auth,
@@ -170,7 +169,6 @@ describe.skipIf(!HAS_DB)(
         sport_key: "generic",
         variant_key: "score",
         config: GENERIC_CONFIG,
-        eligibility: [],
       });
     }
 

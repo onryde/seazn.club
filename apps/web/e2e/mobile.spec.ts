@@ -75,6 +75,11 @@ let compId = "";
 let compSlug = "";
 let divisionId = "";
 let orgSlug = "";
+/** RS007's two new public surfaces, with the query strings that make them
+ *  render populated rather than their (also valid, but far simpler) empty
+ *  state. Filled by the setup test below. */
+let statusPath = "";
+let joinPath = "";
 
 test("setup: public competition with an entrant-ready division", async ({ page, request }) => {
   const comp = await apiJson<{ id: string; slug: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31",
@@ -115,6 +120,62 @@ test("setup: public competition with an entrant-ready division", async ({ page, 
   expect(settings.status).toBeLessThan(300);
   const org = await activeOrg(page);
   orgSlug = org.slug;
+
+  // RS007. The two surfaces this wave ADDED — the group status page and the
+  // public join page — had zero width coverage, which in this repo means a
+  // new UI surface is unprotected until it appears in this file by name.
+  // Both need a real registration to render anything but their empty state,
+  // and the join page needs a TEAM entry, since only those mint a join_code.
+  const teamDiv = await apiJson<{ id: string }>(
+    request,
+    `/api/v1/competitions/${compId}/divisions`,
+    "POST",
+    {
+      name: "Mobile Teams",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    },
+  );
+  expect(teamDiv.status).toBeLessThan(300);
+  const teamSettings = await apiJson(
+    request,
+    `/api/v1/divisions/${teamDiv.data!.id}/registration-settings`,
+    "PUT",
+    { enabled: true, entrant_kind: "team", capacity: 10, fee_cents: 0, form_fields: [] },
+  );
+  expect(teamSettings.status).toBeLessThan(300);
+
+  // A captain plus ONE team-mate the captain enters on their behalf: that
+  // second row is `captain_entered`/`pending`, which is precisely the slot
+  // the join page exists to let someone claim. A roster of one would render
+  // a join page with nothing to pick.
+  const submitted = await apiJson<{
+    group_id: string;
+    access_token: string;
+    entries: { join_code: string | null }[];
+  }>(request, `/api/v1/public/orgs/${orgSlug}/competitions/${compSlug}/register`, "POST", {
+    contact: { name: `Mobile Captain ${TAG}`, email: `mobile-captain-${TAG}@example.com` },
+    privacy_consent: true,
+    entries: [
+      {
+        division_id: teamDiv.data!.id,
+        entrant_kind: "team",
+        // Required: `entryDisplayName` (registration-submit.ts) 422s a
+        // nameless team, which is the client/server split RS007 also closed.
+        team_name: `Mobile Team ${TAG}`,
+        players: [{ full_name: `Mobile Captain ${TAG}` }, { full_name: `Mobile Mate ${TAG}` }],
+        answers: {},
+      },
+    ],
+  });
+  expect(submitted.status, "the width matrix needs a real registration to render").toBeLessThan(300);
+  const joinCode = submitted.data!.entries[0]!.join_code;
+  expect(joinCode, "a team entry must mint a join_code or the join page has nothing to show").toBeTruthy();
+  statusPath =
+    `/shared/${orgSlug}/${compSlug}/register/status` +
+    `?rid=${submitted.data!.group_id}&token=${submitted.data!.access_token}`;
+  joinPath = `/shared/${orgSlug}/${compSlug}/register/join?join_code=${joinCode}`;
   // P11 (D6): import.events has no plan_entitlements row on any plan during
   // rollout (design doc §2.4/R6) — without this override the import route
   // added to "console routes" below renders page.tsx's notFound() instead of
@@ -516,12 +577,27 @@ test("public surfaces: no horizontal scroll (v3/11 gap 12)", async ({ browser })
       // and "/pricing" already on this list, not authed console pages.
       "/games",
       "/games/chess-quest",
+      // RS007's two new surfaces, POPULATED — an empty state holds at any
+      // width, so visiting them without a real rid/token/join_code would be
+      // the vacuous pass this file's own #349 comment warns about.
+      statusPath,
+      joinPath,
     ];
     for (const path of routes) {
+      // Guards the two RS007 entries: an unset module var would make `goto`
+      // hit "/" and pass while proving nothing about either page.
+      expect(path, "a route in this list is empty — setup did not fill it").toBeTruthy();
       await anon.goto(path, { waitUntil: "load" });
       await anon.waitForTimeout(300);
       await expectNoHorizontalScroll(anon);
     }
+    // Prove the two new pages actually rendered their populated state, not a
+    // designed "we couldn't find that registration" — which also holds at
+    // every width, and which a bad token or an expired code would produce.
+    await anon.goto(statusPath, { waitUntil: "load" });
+    await expect(anon.getByText(`Mobile Team ${TAG}`).first()).toBeVisible();
+    await anon.goto(joinPath, { waitUntil: "load" });
+    await expect(anon.getByText(`Mobile Mate ${TAG}`).first()).toBeVisible();
   } finally {
     await anonCtx.close();
   }

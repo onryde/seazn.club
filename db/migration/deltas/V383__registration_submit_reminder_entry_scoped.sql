@@ -1,0 +1,56 @@
+-- V383 — RS007 review fix (money-path defect #7): pass (1a)'s T-24h reminder
+-- for never-promoted entries becomes per-ENTRY, not per-cart.
+--
+-- registration_groups.reminded_at/reminder_claimed_at (V364/V381) are the
+-- CART's shared columns. sweepRegistrations' pass (1a) iterates PER ENTRY
+-- (its own `due` SELECT joins registrations to registration_groups) but
+-- claimed and marked the GROUP row. A cart with two still-pending,
+-- never-promoted entries produces two rows in that SELECT sharing one
+-- group_id: whichever entry's loop iteration runs first wins the group's
+-- claim and stamps reminded_at; the SECOND entry's own claim attempt then
+-- finds reminded_at already non-null, hits `continue`, and the SAME
+-- group-level filter excludes the whole cart — meaning that second entry —
+-- from every future sweep. Its fee is never presented to anyone (each
+-- reminder mints a checkout for `[reg.id]` alone, not the whole cart), and
+-- it eventually expires unpaid with no reminder ever sent for it
+-- specifically. V381's lease fix did not touch this: the lease it added is
+-- also on registration_groups, so it inherited the identical group-scoping.
+--
+-- Fixed the same way pass (1b) already handles a PROMOTED entry's own
+-- reminder (registrations.promotion_reminded_at/promotion_reminder_claimed_at,
+-- V379/V381): this entry's own mark, so a still-pending SIBLING's own,
+-- unrelated reminder can never be silenced by this one firing. Named
+-- `submit_*` (not a bare `reminded_at`) deliberately: a column on
+-- `registrations` literally named `reminded_at` would collide with
+-- `RegistrationWithGroupRow`'s existing `reminded_at` (picked from
+-- `registration_groups` in the same SELECT — see that type's own block
+-- comment on why a same-named pair silently drifts) and would also revive
+-- the exact column `registration-schema.test.ts`'s "registrations keeps only
+-- per-entry state; the cart columns are gone" test asserts is GONE
+-- (registrations.reminded_at was dropped at V364 — the group's is
+-- authoritative for the columns that stayed cart-level).
+--
+-- registration_groups.reminded_at/reminder_claimed_at are left in the schema
+-- unchanged — no other reader depends on pass (1a) continuing to write them
+-- (grepped repo-wide: only sweepRegistrations itself touches either column,
+-- and only within pass (1a)) — this migration is additive only, narrowing
+-- what pass (1a) writes without removing anything another surface might
+-- still read.
+--
+-- No new index: same reasoning as V378's promotion_expires_at index note —
+-- the sweep's own "due" SELECT already has registrations_promotion_expiry_idx
+-- (V378) to reuse for the analogous filter shape here would need its own
+-- index in a later wave if this pass's query plan ever needs it; today's
+-- `where status = 'pending' and promoted_at is null and ...` predicate is
+-- carried by existing selectivity on status/promoted_at, and the lease/mark
+-- columns themselves are only ever touched by a single-row UPDATE keyed on
+-- the table's own primary key, exactly like reminded_at/reminder_claimed_at
+-- and promotion_reminded_at/promotion_reminder_claimed_at before it.
+--
+-- Greenfield (RS001 demolition — prod holds zero registration rows): no
+-- backfill owed, no NOT NULL to satisfy.
+alter table registrations
+  add column if not exists submit_reminded_at timestamptz;
+
+alter table registrations
+  add column if not exists submit_reminder_claimed_at timestamptz;

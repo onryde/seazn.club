@@ -181,6 +181,20 @@ export function DivisionCard({
         )}
       </div>
 
+      {/* RS007/V380 — the retired jsonb "custom rule" note, now rendered
+          (defect #3 the V380 migration's own header describes: written by
+          the wizard, shown nowhere). Organiser-authored free text —
+          interpolated into the translated template and rendered as a plain
+          text child, never dangerouslySetInnerHTML, so it can never be
+          treated as HTML/markdown. Unconditional on imPlaying/eligibility:
+          it is general information about the division, not a per-viewer
+          verdict. */}
+      {division.eligibility_note && (
+        <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          {t("register.organiserNote", { note: division.eligibility_note })}
+        </p>
+      )}
+
       {imPlaying && selfEligibility && !selfEligibility.eligible && (
         <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
           {selfEligibility.issues

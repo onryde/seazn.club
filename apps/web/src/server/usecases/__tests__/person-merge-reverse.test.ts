@@ -70,7 +70,6 @@ async function seedDivision(auth: AuthCtx, entrantCount = 2) {
     sport_key: "generic",
     variant_key: "score",
     config: GENERIC_CONFIG,
-    eligibility: [],
   });
   const entrants = await createEntrants(
     auth,
@@ -444,7 +443,6 @@ describe.skipIf(!HAS_DB)("#404 reverseMerge", () => {
       sport_key: "football",
       variant_key: "default",
       config: {},
-      eligibility: [],
     });
     const survivor = await person(auth.orgId, { full_name: "Ada Striker" });
     const absorbed = await person(auth.orgId, { full_name: "Ada Striker" });

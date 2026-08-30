@@ -85,7 +85,6 @@ async function seedScheduledDivision(auth: AuthCtx) {
     // full config override: the shared test DB's variant row may be a stale
     // partial — don't depend on it
     config: GENERIC_CONFIG,
-    eligibility: [],
   });
   const entrants = await createEntrants(
     auth,

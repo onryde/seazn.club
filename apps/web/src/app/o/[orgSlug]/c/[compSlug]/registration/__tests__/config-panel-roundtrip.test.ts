@@ -50,6 +50,13 @@ describe.skipIf(!HAS_DB)("config panel round trip — real Postgres (RS004 W3c)"
       category: "mixed",
       age_min: 12,
       age_max: 17,
+      // RS007/V380 — non-null on purpose, same reasoning as every other
+      // field in this fixture: a null default would round-trip "correctly"
+      // even if patchDivision/fetchDivisionRows/initialConfigState silently
+      // dropped the column somewhere along the seam.
+      age_cutoff_month: 9,
+      age_cutoff_day: 1,
+      eligibility_note: "School-registered students only",
       enabled: true,
       entrant_kind: "team",
       opens_at: "2026-03-01T00:00:00.000Z",
@@ -79,6 +86,9 @@ describe.skipIf(!HAS_DB)("config panel round trip — real Postgres (RS004 W3c)"
       category: row.category,
       age_min: row.age_min,
       age_max: row.age_max,
+      age_cutoff_month: row.age_cutoff_month,
+      age_cutoff_day: row.age_cutoff_day,
+      eligibility_note: row.eligibility_note,
     });
 
     // The five new fields (RS004 W1/W3c) — the acceptance bar this test
@@ -88,6 +98,14 @@ describe.skipIf(!HAS_DB)("config panel round trip — real Postgres (RS004 W3c)"
     expect(reopened.age_max).toBe(17);
     expect(reopened.approval).toBe("manual");
     expect(reopened.allow_free_agents).toBe(true);
+
+    // RS007/V380 — the cutoff + note columns added alongside the five above:
+    // patchDivision persists them, fetchDivisionRows' SELECT actually reads
+    // them back (not just category/age_min/age_max), and initialConfigState
+    // reconstructs them onto the reopened edit state.
+    expect(reopened.age_cutoff_month).toBe(9);
+    expect(reopened.age_cutoff_day).toBe(1);
+    expect(reopened.eligibility_note).toBe("School-registered students only");
 
     // A representative sample of the pre-existing registration_settings
     // fields, so the same round trip is proven for the WHOLE edit surface,
@@ -118,6 +136,9 @@ describe.skipIf(!HAS_DB)("config panel round trip — real Postgres (RS004 W3c)"
       category: "open",
       age_min: null,
       age_max: null,
+      age_cutoff_month: null,
+      age_cutoff_day: null,
+      eligibility_note: null,
       enabled: true,
       entrant_kind: "individual",
       opens_at: null,

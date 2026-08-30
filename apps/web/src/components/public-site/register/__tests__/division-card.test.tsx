@@ -94,6 +94,7 @@ describe("DivisionCard's window badges — wired through the (now zone-labeled) 
     currency: "USD",
     payment_method: "offline",
     form_fields: [],
+    eligibility_note: null,
   };
 
   it("the Closes badge's date is exactly what windowDate(closes_at, locale) produces — same instant, no forked formatting", () => {
@@ -102,5 +103,68 @@ describe("DivisionCard's window badges — wired through the (now zone-labeled) 
     expect(closesBadge, "Closes badge not found").toBeTruthy();
     const expected = `register.entries.window.closes::${JSON.stringify({ date: windowDate(DIVISION.closes_at!, "en") })}`;
     expect(textOf(closesBadge!)).toBe(expected);
+  });
+});
+
+// RS007/V380 defect #3: the wizard's custom rule was written and shown
+// NOWHERE — the validator handled only 'age'/'gender', so an organiser's
+// "School-registered students only" landed in a void. eligibility_note is
+// now a first-class column; this proves DivisionCard actually renders it.
+describe("DivisionCard — the organiser's eligibility_note (RS007/V380 defect #3)", () => {
+  const DIVISION: DivisionLike = {
+    division_id: "div-1",
+    name: "Open Teams",
+    entrant_kind: "team",
+    category: null,
+    age_min: null,
+    age_max: null,
+    requires_dob: false,
+    requires_gender: false,
+    allow_free_agents: false,
+    open: true,
+    closed_reason: null,
+    capacity: null,
+    remaining: null,
+    taken: 0,
+    opens_at: null,
+    closes_at: null,
+    fee_cents: 0,
+    currency: "USD",
+    payment_method: "offline",
+    form_fields: [],
+    eligibility_note: "School-registered students only",
+  };
+
+  it("renders the note, interpolated into the organiser-speaking template", () => {
+    const tree = walk(DivisionCard({ division: DIVISION, locale: "en", selfEligibility: null, imPlaying: false }));
+    const note = tree.find((el) => el.type === "p" && textOf(el).includes("register.organiserNote"));
+    expect(note, "organiser note not found").toBeTruthy();
+    expect(textOf(note!)).toBe(
+      `register.organiserNote::${JSON.stringify({ note: "School-registered students only" })}`,
+    );
+  });
+
+  it("renders nothing when the division has no note set", () => {
+    const tree = walk(
+      DivisionCard({
+        division: { ...DIVISION, eligibility_note: null },
+        locale: "en",
+        selfEligibility: null,
+        imPlaying: false,
+      }),
+    );
+    expect(tree.some((el) => el.type === "p" && textOf(el).includes("register.organiserNote"))).toBe(false);
+  });
+
+  it("renders regardless of imPlaying (general info, not a per-viewer verdict)", () => {
+    const tree = walk(
+      DivisionCard({
+        division: DIVISION,
+        locale: "en",
+        selfEligibility: { eligible: true, issues: [] },
+        imPlaying: true,
+      }),
+    );
+    expect(tree.some((el) => el.type === "p" && textOf(el).includes("register.organiserNote"))).toBe(true);
   });
 });

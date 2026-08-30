@@ -79,7 +79,7 @@ async function makeDivision(
     request,
     `/api/v1/competitions/${comp.data!.id}/divisions`,
     "POST",
-    { name: opts.sport, sport_key: opts.sport, variant_key: opts.variant, config: {}, eligibility: [] },
+    { name: opts.sport, sport_key: opts.sport, variant_key: opts.variant, config: {} },
   );
   const divisionId = div.data!.id;
   const { ids } = await addEntrantsViaApi(request, divisionId, opts.entrants, opts.kind ?? "individual");

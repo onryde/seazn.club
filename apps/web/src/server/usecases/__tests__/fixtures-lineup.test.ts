@@ -68,7 +68,6 @@ describe.skipIf(!HAS_DB)("putLineup/getLineup — role and pair_order round-trip
       sport_key: "generic",
       variant_key: "score",
       config: GENERIC_CONFIG,
-      eligibility: [],
     });
     const [entrantA, entrantB] = await createEntrants(auth, division.id, [
       { kind: "individual" as const, display_name: "A", seed: 1, members: [] },
@@ -139,7 +138,6 @@ describe.skipIf(!HAS_DB)("putLineup/getLineup — role and pair_order round-trip
       sport_key: "generic",
       variant_key: "score",
       config: GENERIC_CONFIG,
-      eligibility: [],
     });
     const [entrantA] = await createEntrants(auth, division.id, [
       { kind: "individual" as const, display_name: "A", seed: 1, members: [] },

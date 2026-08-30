@@ -20,6 +20,9 @@ export type ConfigFieldKey =
   | "category"
   | "age_min"
   | "age_max"
+  | "age_cutoff_month"
+  | "age_cutoff_day"
+  | "eligibility_note"
   | "enabled"
   | "entrant_kind"
   | "opens_at"
@@ -42,6 +45,9 @@ export const ROUTABLE_FIELDS: readonly ConfigFieldKey[] = [
   "category",
   "age_min",
   "age_max",
+  "age_cutoff_month",
+  "age_cutoff_day",
+  "eligibility_note",
   "enabled",
   "entrant_kind",
   "opens_at",
@@ -75,6 +81,12 @@ interface ZodIssueLike {
  *  capacity limit's number) is deliberately left out of the pattern. */
 const MESSAGE_FIELD_PATTERNS: readonly [RegExp, ConfigFieldKey][] = [
   [/age_max must be greater than or equal to age_min/i, "age_max"],
+  // RS007/V380 — AGE_CUTOFF_BOTH_OR_NEITHER (schemas.ts): the merge-and-
+  // validate race backstop (divisions.ts's isAgeCutoffCheckViolation) can
+  // land a bare message string here the same way the age-band check
+  // already could, above. Anchored on the day field, mirroring age_max's
+  // own choice above of the LATER-typed side of a two-field pair.
+  [/age_cutoff_month and age_cutoff_day must be set together/i, "age_cutoff_day"],
   [/allow_free_agents requires entrant_kind/i, "allow_free_agents"],
   [/before choosing card payments/i, "payment_method"],
   [/card entry fees must be at least/i, "fee_cents"],

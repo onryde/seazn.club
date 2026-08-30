@@ -10,7 +10,12 @@
 // that the SERVER-SIDE behaviour is unchanged by this extraction; these
 // tests pin the extracted primitive directly.
 import { describe, expect, it } from "vitest";
-import { mixedCompositionTally, rosterCompositionIssues } from "../registration-rules";
+import {
+  ageBandEligibilityIssues,
+  isValidCutoffDay,
+  mixedCompositionTally,
+  rosterCompositionIssues,
+} from "../registration-rules";
 
 describe("mixedCompositionTally", () => {
   it("is false/false for an empty roster", () => {
@@ -64,5 +69,64 @@ describe("rosterCompositionIssues", () => {
     expect(rosterCompositionIssues({ category: "open" }, [{ gender: "m" }])).toEqual([]);
     expect(rosterCompositionIssues({ category: "womens" }, [{ gender: "m" }])).toEqual([]);
     expect(rosterCompositionIssues({ category: null }, [])).toEqual([]);
+  });
+});
+
+// RS007 review finding L1: age_cutoff_day was validated only 1-31, so
+// `new Date(Date.UTC(seasonStartYear, cutoffMonth - 1, cutoffDay))` silently
+// rolled an out-of-range day into the next month (31 September -> 1
+// October, 30 February -> 1/2 March) — eligibility shifted by days with no
+// error anywhere. The write path (checkAgeCutoff, api-v1/schemas.ts) now
+// rejects the combination before it is ever stored; these pin the shared
+// predicate it uses, and this file's own read-side backstop.
+describe("isValidCutoffDay (RS007 review fix L1)", () => {
+  it("accepts every real day of a 31-day month", () => {
+    expect(isValidCutoffDay(1, 1)).toBe(true);
+    expect(isValidCutoffDay(1, 31)).toBe(true);
+  });
+
+  it("rejects a day beyond a 30-day month", () => {
+    expect(isValidCutoffDay(9, 30)).toBe(true); // September genuinely has 30
+    expect(isValidCutoffDay(9, 31)).toBe(false); // no such day
+  });
+
+  it("caps February at 28 — 29 is rejected even though it is a real leap-year date", () => {
+    // Deliberate: the SAME month/day pair is re-evaluated every season
+    // against a different seasonStartYear (ageBandEligibilityIssues below),
+    // so a leap-only day would still roll over 3 years out of 4.
+    expect(isValidCutoffDay(2, 28)).toBe(true);
+    expect(isValidCutoffDay(2, 29)).toBe(false);
+    expect(isValidCutoffDay(2, 30)).toBe(false);
+  });
+
+  it("rejects an out-of-range month or a non-positive day", () => {
+    expect(isValidCutoffDay(0, 1)).toBe(false);
+    expect(isValidCutoffDay(13, 1)).toBe(false);
+    expect(isValidCutoffDay(1, 0)).toBe(false);
+  });
+});
+
+describe("ageBandEligibilityIssues — an invalid stored cutoff fails loudly instead of silently rolling (RS007 review fix L1)", () => {
+  const division = { age_min: 10, age_max: 15 };
+
+  it("throws for a day that does not exist in its month, rather than rolling into the next month", () => {
+    expect(() =>
+      ageBandEligibilityIssues(
+        { ...division, age_cutoff_month: 9, age_cutoff_day: 31 },
+        { dob: "2010-07-10" },
+        2026,
+      ),
+    ).toThrow(/does not exist/);
+  });
+
+  it("never throws for valid input — the 1-January default, or a real configured cutoff", () => {
+    expect(() => ageBandEligibilityIssues(division, { dob: "2010-07-10" }, 2026)).not.toThrow();
+    expect(() =>
+      ageBandEligibilityIssues(
+        { ...division, age_cutoff_month: 9, age_cutoff_day: 1 },
+        { dob: "2010-07-10" },
+        2026,
+      ),
+    ).not.toThrow();
   });
 });

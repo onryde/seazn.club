@@ -126,7 +126,6 @@ async function seedRig(request: import("@playwright/test").APIRequestContext): P
       sport_key: "generic",
       variant_key: "score",
       config: GENERIC_CONFIG,
-      eligibility: [],
     },
   );
   await addEntrantsViaApi(request, div.data!.id, ["Bolt", "Wire", "Coil", "Fuse"]);

@@ -140,7 +140,6 @@ async function seedDivision(
     sport_key: "generic",
     variant_key: "score",
     config: GENERIC_CONFIG,
-    eligibility: [],
   });
   await createEntrants(
     auth,

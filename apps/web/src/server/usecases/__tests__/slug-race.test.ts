@@ -64,7 +64,6 @@ const divInput = (name: string) => ({
   sport_key: "generic",
   variant_key: "score",
   config: GENERIC_CONFIG,
-  eligibility: [],
 });
 
 /** Block until some backend is waiting on a lock we have not granted — i.e.
@@ -145,9 +144,9 @@ describe.skipIf(!HAS_DB)("generated slugs under concurrency", () => {
     const created = await racingAgainst(
       (tx) => tx`
         insert into divisions (competition_id, name, slug, sport_key, variant_key, config,
-                               module_version, eligibility)
+                               module_version)
         values (${comp.id}, 'Open', 'open', 'generic', 'score',
-                ${tx.json(GENERIC_CONFIG as never)}, '1.0.0', '[]')`.then(() => undefined),
+                ${tx.json(GENERIC_CONFIG as never)}, '1.0.0')`.then(() => undefined),
       () => createDivision(auth, comp.id, divInput("Open")),
     );
     expect(created.slug).toBe("open-2");
@@ -245,9 +244,9 @@ describe.skipIf(!HAS_DB)("withUniqueSlug", () => {
           // slug and the SAME division slug — an error no suffix can fix.
           (_slug, sp) => sp`
             insert into divisions (competition_id, name, slug, sport_key, variant_key, config,
-                                   module_version, eligibility)
+                                   module_version)
             values (${comp.id}, 'Open', 'open', 'generic', 'score',
-                    ${sp.json(GENERIC_CONFIG as never)}, '1.0.0', '[]')`,
+                    ${sp.json(GENERIC_CONFIG as never)}, '1.0.0')`,
         ),
       ),
     ).rejects.toThrow(/divisions_competition_id_slug_key/);

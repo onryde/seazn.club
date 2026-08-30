@@ -8,9 +8,27 @@
 // later session appending "consent"/"review" needs no change here either.
 import type { StepId } from "./types";
 
-/** Design §4: "step 2 collapses when the competition has one open division." */
-export function shouldCollapseEntries(openDivisionCount: number): boolean {
-  return openDivisionCount === 1;
+/** Design §4: "step 2 collapses when the competition has one open division."
+ *
+ *  Narrowed (RS007, found by walking the shipped flow): collapse only when
+ *  that one division ALSO needs nothing typed or chosen on step 2. For a
+ *  team or pair division it does — step 2 is the only place the team/partner
+ *  name can be entered, and the only place "sign up solo" can be picked.
+ *  Collapsing it on a one-division TEAM competition auto-seeded a nameless
+ *  entry (cart.ts's autoSeedSingleDivision hardcodes `team_name: null,
+ *  free_agent: false`), walked the captain to Review showing "Unnamed team"
+ *  with a live Enter button, and then 422'd on submit with "A team name is
+ *  required" — a dead end, since no field to answer it renders anywhere in
+ *  the collapsed flow. A single-division competition is the commonest shape
+ *  a small club has, so that is the whole public funnel for those orgs.
+ *
+ *  An unknown kind never collapses: the extra step costs one click, the
+ *  wrong collapse costs the entry. */
+export function shouldCollapseEntries(
+  openDivisionCount: number,
+  entrantKind: "team" | "individual" | "pair" | undefined,
+): boolean {
+  return openDivisionCount === 1 && entrantKind === "individual";
 }
 
 /** The step list rendered today. `entries` drops out entirely (not merely
@@ -20,8 +38,11 @@ export function shouldCollapseEntries(openDivisionCount: number): boolean {
  *  always follow, uncollapsed: unlike step 2, the design never skips them
  *  (every cart, however it was built, still needs a roster/form-fields/
  *  consent step and a final review before payment). */
-export function buildStepOrder(openDivisionCount: number): StepId[] {
-  return shouldCollapseEntries(openDivisionCount)
+export function buildStepOrder(
+  openDivisionCount: number,
+  entrantKind: "team" | "individual" | "pair" | undefined,
+): StepId[] {
+  return shouldCollapseEntries(openDivisionCount, entrantKind)
     ? ["who", "details", "consent", "review"]
     : ["who", "entries", "details", "consent", "review"];
 }

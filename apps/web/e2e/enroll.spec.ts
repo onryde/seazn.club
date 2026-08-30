@@ -26,7 +26,6 @@ test("enroll an existing team into a division via the UI", async ({ page }) => {
       sport_key: "generic",
       variant_key: "score",
       config: { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 }, progressScore: false },
-      eligibility: [],
     },
   )).data!;
 
@@ -81,7 +80,6 @@ test("empty-squad enroll warns, then Sync from team squad pulls late players", a
       sport_key: "generic",
       variant_key: "score",
       config: { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 }, progressScore: false },
-      eligibility: [],
     },
   )).data!;
 

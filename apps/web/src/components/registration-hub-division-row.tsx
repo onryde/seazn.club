@@ -40,6 +40,12 @@ export interface RegistrationHubRowData {
   category: DivisionCategoryValue | null;
   age_min: number | null;
   age_max: number | null;
+  /** RS007/V380 — carried through to the row-click config panel's
+   *  Eligibility section (RegistrationHubConfigPanel's `division` prop);
+   *  not read by this row card itself, same as `waitlisted` below. */
+  age_cutoff_month: number | null;
+  age_cutoff_day: number | null;
+  eligibility_note: string | null;
   enabled: boolean;
   /** Null when the division has no `registration_settings` row yet
    *  (never configured) — rendered as a dash, matching the rest of the

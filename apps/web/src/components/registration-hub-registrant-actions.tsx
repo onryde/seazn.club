@@ -102,7 +102,7 @@ import { deriveRegistrantActionFlags } from "@/components/registration-hub-regis
 import type { RegistrationListRow } from "@/server/usecases/registrations";
 
 type Status = RegistrationListRow["status"];
-type ActionKey = "approve" | "reject" | "withdraw" | "promote" | "resend" | "mark-paid";
+type ActionKey = "approve" | "reject" | "withdraw" | "promote" | "resend" | "mark-paid" | "refund";
 
 export interface RegistrationHubRegistrantActionsProps {
   registrationId: string;
@@ -125,6 +125,11 @@ export interface RegistrationHubRegistrantActionsProps {
    *  offline/unpaid one. Both the approve-awaiting-payment exclusion and
    *  the markPaid gate key off this being null. */
   paymentIntentId: string | null;
+  /** THIS entry's own refunded total (V368 — `registrations.refunded_cents`,
+   *  not the cart's). With `amountCents` it is what decides whether anything
+   *  is left to refund, mirroring `refundRegistration`'s own
+   *  "Already fully refunded" refusal. */
+  refundedCents: number;
 }
 
 function errorText(err: unknown): string {
@@ -138,6 +143,7 @@ export function RegistrationHubRegistrantActions({
   amountCents,
   divisionFeeCents,
   paymentIntentId,
+  refundedCents,
 }: RegistrationHubRegistrantActionsProps) {
   const msg = useMsg();
   const router = useRouter();
@@ -192,6 +198,7 @@ export function RegistrationHubRegistrantActions({
       status: optimisticStatus,
       approval,
       amount_cents: amountCents,
+      refunded_cents: refundedCents,
       division_fee_cents: divisionFeeCents,
       payment_intent_id: paymentIntentId,
     },
@@ -308,6 +315,47 @@ export function RegistrationHubRegistrantActions({
     }
   }
 
+  // RS007 finding #16. `POST /api/v1/registrations/{id}/refund` and the
+  // `confirm.refundRegistration.*` copy have BOTH existed since RS002, in all
+  // four locales — nothing ever rendered them, so the endpoint had no caller
+  // anywhere in apps/web/src and the organiser's "discretion" past
+  // `refund_lock_at` was a promise the product could not keep. Their only
+  // remaining option was a refund from the Stripe dashboard, which never
+  // writes `registrations.refunded_cents`, so the hub, the registrant's
+  // status page and Stripe would disagree from that moment on with nothing
+  // in the app able to reconcile them.
+  //
+  // NOT routed through `runStatusAction`: a refund moves money without
+  // changing `status` at all (a withdrawn entry stays withdrawn; a confirmed
+  // one stays confirmed), so there is no next-status to guess and the whole
+  // optimistic-status machinery would be guessing at nothing. `router.refresh()`
+  // brings back the new `refunded_cents`, which is what actually changed and
+  // what re-derives `canRefund` to false.
+  //
+  // No amount is sent, so the server refunds the full remaining balance
+  // (`amountCents - refundedCents`) — partial refunds are supported by the
+  // endpoint but have no UI here yet, and a wrong partial is worse than none.
+  async function refund() {
+    const ok = await confirmDialog({
+      title: msg("confirm.refundRegistration.title"),
+      body: msg("confirm.refundRegistration.body"),
+      confirmLabel: msg("confirm.refundRegistration.label"),
+      tone: "danger",
+    });
+    if (!ok) return;
+    setBusy("refund");
+    setFeedback(null);
+    try {
+      await apiV1(`/api/v1/registrations/${registrationId}/refund`, { method: "POST", json: {} });
+      setFeedback({ tone: "success", text: msg("reg.hub.registrants.detail.paymentState.refunded") });
+      router.refresh();
+    } catch (err) {
+      setFeedback({ tone: "error", text: errorText(err) });
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function resend() {
     setBusy("resend");
     setFeedback(null);
@@ -398,6 +446,17 @@ export function RegistrationHubRegistrantActions({
             {busy === "withdraw"
               ? msg("reg.hub.registrants.detail.actions.withdrawing")
               : msg("reg.hub.registrants.detail.actions.withdraw")}
+          </button>
+        )}
+        {flags.canRefund && (
+          <button
+            type="button"
+            data-registration-hub-registrant-action="refund"
+            disabled={busy !== null}
+            onClick={refund}
+            className="btn btn-ghost text-xs"
+          >
+            {msg("confirm.refundRegistration.label")}
           </button>
         )}
         {flags.canResend && (

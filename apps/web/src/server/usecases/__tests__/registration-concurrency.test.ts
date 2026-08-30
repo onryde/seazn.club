@@ -10,6 +10,11 @@
 //   5. createRegistrationCheckout's checkout_session_id compare-and-swap
 //      (registrations.ts, the stamp inside createRegistrationCheckout) — see
 //      its own section below for why this one is staged differently from 1-4.
+//   6. joinTeamEntry's claim CAS + roster-cap insert (registration-submit.ts,
+//      RS007) — closes two windows a reading pass found: the entry's
+//      status/free_agent was never re-checked at write time (a concurrent
+//      withdraw could land a claim on a dead entry), and the roster-cap
+//      check was a plain SELECT-count ahead of an unguarded INSERT.
 //
 // Real Postgres required; every describe below is skipped without
 // DATABASE_URL, matching every other suite in this directory.
@@ -96,7 +101,7 @@ import {
   putRegistrationSettings,
   resumeRegistrationCheckout,
 } from "../registrations";
-import { submitRegistrationGroup, type SubmitGroupContact } from "../registration-submit";
+import { submitRegistrationGroup, joinTeamEntry, type SubmitGroupContact } from "../registration-submit";
 import {
   seedOrg,
   asOwner,
@@ -514,3 +519,175 @@ describe.skipIf(!HAS_DB)(
     });
   },
 );
+
+// ---------------------------------------------------------------------------
+// 6. joinTeamEntry — claim CAS + roster-cap insert (registration-submit.ts,
+//    RS007). Read the entry's status/free_agent ONCE, then did 3-4 more
+//    round-trips before ever writing — no `sql.begin` anywhere in the
+//    function. Two real windows:
+//      (a) the claim UPDATE's WHERE names only registration_players columns,
+//          so a concurrent withdraw (withdrawCore, registrations.ts — status
+//          flips to 'withdrawn'; join_code is deliberately left alone) could
+//          land a claim on a roster that no longer exists.
+//      (b) the insert path's cap check (rosterAtCap) was a plain
+//          SELECT-count ahead of an unguarded INSERT, so two joiners racing
+//          the last open spot could both pass and both insert.
+//
+// withdrawCore is reached only through its own `sql.begin` (registrations.ts)
+// with no external-tx hook to pause mid-flight — same situation the file
+// header's race 3 describes — so (a)'s holder performs ONLY the single
+// column withdrawCore's own commit would have written (status), never
+// business logic reimplemented. (b) needs no such stand-in: both racers are
+// the REAL joinTeamEntry, exactly like race 2's "two concurrent
+// confirmations" above.
+// ---------------------------------------------------------------------------
+
+describe.skipIf(!HAS_DB)("joinTeamEntry — closing two unguarded windows (genuine concurrency)", () => {
+  /** A team entry with ONE captain-entered/pending player row — the "slot" a
+   *  claim link targets — and a join_code stamped directly (seedRegistration
+   *  has no join_code column; joinTeamEntry only cares that the code
+   *  resolves, not how it was minted — same shortcut registration-submit.
+   *  test.ts's own forced-collision test uses). */
+  async function teamEntryWithPlayer(playerName: string): Promise<{
+    regId: string;
+    joinCode: string;
+    playerId: string;
+  }> {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    await putRegistrationSettings(owner, division.id, {
+      ...SETTINGS_BASE,
+      entrant_kind: "team",
+      payment_method: "offline",
+      fee_cents: 0,
+    });
+    const seeded = await seedRegistration(
+      competition.id,
+      division.id,
+      { fee_cents: 0, currency: "gbp", payment_method: "offline" },
+      { players: [{ name: playerName }] },
+    );
+    const regId = seeded.registration.id;
+    const joinCode = "SZ-RACE-" + randomUUID().slice(0, 8);
+    await sql`update registrations set join_code = ${joinCode} where id = ${regId}`;
+    const [player] = await sql<{ id: string }[]>`
+      select id from registration_players where registration_id = ${regId}`;
+    return { regId, joinCode, playerId: player!.id };
+  }
+
+  it("a claim racing a withdraw must not produce a granted consent row on a withdrawn entry", async () => {
+    const { regId, joinCode, playerId } = await teamEntryWithPlayer("Kid One");
+
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    let staged!: () => void;
+    const isStaged = new Promise<void>((resolve) => (staged = resolve));
+    // Stand-in for "withdrawCore committed" — see the section header above:
+    // withdrawCore has no external-tx pause hook, so this holder performs
+    // only the ONE column its commit would have written. withdrawCore
+    // deliberately does NOT clear join_code (RS007 dispatch note); neither
+    // does this holder.
+    const holder = sql.begin(async (tx) => {
+      await tx`select 1 from registrations where id = ${regId} for update`;
+      staged();
+      await held;
+      await tx`update registrations set status = 'withdrawn', withdrawn_at = now(), updated_at = now() where id = ${regId}`;
+    });
+    await isStaged;
+
+    // The REAL joinTeamEntry, issued while the holder's lock is still open —
+    // it clears every non-locking pre-check (status is still live at THIS
+    // read) and only blocks once its own tx reaches `for update` on the
+    // same row.
+    const joinPromise = joinTeamEntry(
+      {},
+      {
+        join_code: joinCode,
+        player_id: playerId,
+        player: { full_name: "Kid One", dob: "1995-05-01" },
+        // Consent is now gated server-side in joinTeamEntry (RS007 finding #4
+        // follow-up). Without it this call 422s on the consent check BEFORE
+        // reaching `for update`, so the lock race this test exists to observe
+        // would never happen and `waitForBlockedLocks(1)` would hang.
+        privacy_consent: true,
+      },
+    );
+    await waitForBlockedLocks(1);
+    release();
+    await holder;
+
+    await expect(joinPromise).rejects.toMatchObject({
+      status: 422,
+      message: "This entry is no longer accepting players",
+    });
+
+    const [row] = await sql<{ consent_status: string; user_id: string | null; consent_at: Date | null }[]>`
+      select consent_status, user_id, consent_at from registration_players where id = ${playerId}`;
+    expect(row!.consent_status).toBe("pending"); // never flipped to granted
+    expect(row!.user_id).toBeNull();
+    expect(row!.consent_at).toBeNull();
+  });
+
+  it("two inserts racing at cap-1 must not overrun the cap", async () => {
+    // seedOrg's 'generic' sport is { size: 1, benchMax: 0 } -> squad cap 1,
+    // and this entry is seeded with ZERO captain-entered players, so
+    // "cap-1" occupancy is 0 — the same cap registration-submit.test.ts's
+    // sequential "full-roster rejection" test relies on.
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    await putRegistrationSettings(owner, division.id, {
+      ...SETTINGS_BASE,
+      entrant_kind: "team",
+      payment_method: "offline",
+      fee_cents: 0,
+    });
+    const seeded = await seedRegistration(competition.id, division.id, {
+      fee_cents: 0,
+      currency: "gbp",
+      payment_method: "offline",
+    });
+    const regId = seeded.registration.id;
+    const joinCode = "SZ-RACE-" + randomUUID().slice(0, 8);
+    await sql`update registrations set join_code = ${joinCode} where id = ${regId}`;
+
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    let staged!: () => void;
+    const isStaged = new Promise<void>((resolve) => (staged = resolve));
+    // A third lock holder forces both REAL joinTeamEntry calls below to
+    // queue up simultaneously (same technique as race 2 above) — genuine
+    // overlap, not one call finishing before the other even starts.
+    const holder = sql.begin(async (tx) => {
+      await tx`select 1 from registrations where id = ${regId} for update`;
+      staged();
+      await held;
+    });
+    await isStaged;
+
+    const racing = Promise.allSettled([
+      // `privacy_consent` is required by joinTeamEntry's consent gate; without
+      // it both racers reject on consent instead of on the roster cap, and the
+      // cap race this test exists to observe never runs.
+      joinTeamEntry({}, { join_code: joinCode, player: { full_name: "Racer A" }, privacy_consent: true }),
+      joinTeamEntry({}, { join_code: joinCode, player: { full_name: "Racer B" }, privacy_consent: true }),
+    ]);
+    await waitForBlockedLocks(2);
+    release();
+    await holder;
+    const results = await racing;
+
+    const fulfilled = results.filter((r) => r.status === "fulfilled");
+    const rejected = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+    // Genuine overlap happened (not one call finishing before the other
+    // started) — both cleared the pre-tx checks and only one won the cap.
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0]!.reason).toMatchObject({ status: 422, message: "This roster is already full" });
+
+    const [{ n }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from registration_players where registration_id = ${regId}`;
+    expect(n).toBe(1); // never overran the cap
+  });
+});

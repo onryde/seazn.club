@@ -19,7 +19,16 @@ export type SectionId = (typeof SECTION_IDS)[number];
  *  the inline form-fields <section> at the bottom) — not a new taxonomy,
  *  just naming the grouping that already exists. */
 export const SECTION_FIELDS: Record<SectionId, readonly ConfigFieldKey[]> = {
-  eligibility: ["category", "age_min", "age_max", "approval", "allow_free_agents"],
+  eligibility: [
+    "category",
+    "age_min",
+    "age_max",
+    "age_cutoff_month",
+    "age_cutoff_day",
+    "eligibility_note",
+    "approval",
+    "allow_free_agents",
+  ],
   schedule: ["enabled", "entrant_kind", "opens_at", "closes_at"],
   capacity: ["capacity"],
   money: ["fee_cents", "payment_method", "payment_instructions", "refund_lock_at"],

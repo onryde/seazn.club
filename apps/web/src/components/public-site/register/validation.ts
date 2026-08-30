@@ -129,14 +129,41 @@ export interface EntriesValidation {
    *  reads this to say WHICH entry and offer its existing Remove control,
    *  rather than a single generic banner naming nothing. */
   staleClosedEntryId: string | null;
+  /** The id of a TEAM entry (not a free agent) left without a team name.
+   *  Same per-entry attribution shape as `staleClosedEntryId` above, and
+   *  for the same reason: up to ten entries can sit in one cart, so a
+   *  cart-wide banner names nothing.
+   *
+   *  This closes a straight CLIENT/SERVER DISAGREEMENT, not a missing
+   *  nicety. This file used to say naming was "encouraged in the UI but not
+   *  required — the schema itself leaves both nullish", and the schema does;
+   *  but `registration-submit.ts`'s `entryDisplayName` throws
+   *  422 "A team name is required" for exactly this case. So the registrant
+   *  filled in five steps, pressed ENTER, and got a rejection that named
+   *  neither the step nor which entry — while the client, believing the
+   *  field optional, could not highlight anything.
+   *
+   *  PAIRS ARE DELIBERATELY EXEMPT: the server composes their name from the
+   *  players ("A & B") and falls back to the contact's name, so a nameless
+   *  pair submits fine. Free agents likewise — they are `entrant_kind:
+   *  "team"` at the division level but represent one unassigned person, and
+   *  the server gives them the same fallback. Gating on `entrant_kind ===
+   *  "team" && !free_agent` mirrors that server condition exactly; widening
+   *  it would block submissions the server accepts, which is the same class
+   *  of bug in the other direction. */
+  missingTeamNameEntryId: string | null;
 }
 
 /** `PublicRegisterGroupRequest.entries` is `.min(1).max(10)`
  *  (schemas.ts:2421) — the max is already enforced at the point of adding
  *  (cart.ts's canAddEntry gates the "Add" control, so a cart can never grow
- *  past it), so the first thing gated here is non-empty. Per-entry naming
- *  (team_name/partner_name) is encouraged in the UI but not required — the
- *  schema itself leaves both nullish.
+ *  past it), so the first thing gated here is non-empty. Per-entry naming is
+ *  split, because the SERVER treats the two kinds differently and this file
+ *  used to claim otherwise: `partner_name` really is optional (the server
+ *  composes a pair's name from its players), but a TEAM entry's `team_name`
+ *  is REQUIRED — `registration-submit.ts`'s `entryDisplayName` 422s without
+ *  one. The zod schema leaves both nullish, so nothing between the two
+ *  layers caught the disagreement; see `missingTeamNameEntryId` above.
  *
  *  Second gate (review finding 2, 2026-08-27): ANY entry — self-linked or
  *  not — whose division has gone STALE-CLOSED since it was added
@@ -167,18 +194,51 @@ export interface EntriesValidation {
  *  whose division isn't in `divisions` (a data gap) is treated as unblocked
  *  rather than thrown on — the eligibility presentation layer's own contract
  *  elsewhere already degrades the same way. */
+/**
+ * Does this entry need a team name it hasn't got?
+ *
+ * Mirrors `registration-submit.ts`'s `entryDisplayName` condition exactly —
+ * `entrant_kind === "team" && !free_agent` — and exists so the rule lives in
+ * ONE place. `validateEntries` uses it to block the step; `entry-cart.tsx`
+ * uses the same predicate to mark the offending field, rather than re-deriving
+ * "is this required" beside the input and drifting from the server the moment
+ * either side moves.
+ *
+ * A free agent is `entrant_kind: "team"` at the division level but is one
+ * unassigned person, and the server names it from the contact — so it is NOT
+ * missing anything here.
+ */
+export function teamNameMissing(
+  entry: Pick<CartEntry, "entrant_kind" | "free_agent" | "team_name">,
+): boolean {
+  if (entry.entrant_kind !== "team" || entry.free_agent) return false;
+  return !entry.team_name?.trim();
+}
+
 export function validateEntries(
   cart: CartState,
   divisions: readonly Pick<DivisionLike, "division_id" | "category" | "age_min" | "age_max" | "closed_reason">[],
   contact: Pick<ContactState, "dob" | "gender">,
   seasonStartYear: number,
 ): EntriesValidation {
-  if (cart.entries.length === 0) return { valid: false, error: "cartEmpty", staleClosedEntryId: null };
+  if (cart.entries.length === 0) {
+    return { valid: false, error: "cartEmpty", staleClosedEntryId: null, missingTeamNameEntryId: null };
+  }
 
   for (const entry of cart.entries) {
     const division = divisions.find((d) => d.division_id === entry.division_id);
     if (division && division.closed_reason != null && division.closed_reason !== "full") {
-      return { valid: false, error: null, staleClosedEntryId: entry.id };
+      return { valid: false, error: null, staleClosedEntryId: entry.id, missingTeamNameEntryId: null };
+    }
+  }
+
+  // Checked BEFORE self-eligibility on purpose: a missing name is a typo the
+  // registrant fixes in the field right there, whereas an ineligible self-link
+  // needs them to change who is entering. Reporting the cheap, local fault
+  // first means one trip back to this step, not two.
+  for (const entry of cart.entries) {
+    if (teamNameMissing(entry)) {
+      return { valid: false, error: null, staleClosedEntryId: null, missingTeamNameEntryId: entry.id };
     }
   }
 
@@ -187,10 +247,12 @@ export function validateEntries(
     const division = divisions.find((d) => d.division_id === entry.division_id);
     if (!division) continue;
     const verdict = selfEligibilityForDivision(division, contact, seasonStartYear);
-    if (!verdict.eligible) return { valid: false, error: "selfIneligible", staleClosedEntryId: null };
+    if (!verdict.eligible) {
+      return { valid: false, error: "selfIneligible", staleClosedEntryId: null, missingTeamNameEntryId: null };
+    }
   }
 
-  return { valid: true, error: null, staleClosedEntryId: null };
+  return { valid: true, error: null, staleClosedEntryId: null, missingTeamNameEntryId: null };
 }
 
 // ---------------------------------------------------------------------------

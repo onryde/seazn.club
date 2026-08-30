@@ -63,6 +63,16 @@ export interface DivisionLike {
   category: string | null;
   age_min: number | null;
   age_max: number | null;
+  /** RS007/V380 — the age-band cutoff override (default 1 January when
+   *  absent), read by `ageBandEligibilityIssues` (@/lib/registration-rules)
+   *  via `selfEligibilityForDivision`/`rosterEligibilityForDivision` below.
+   *  Optional on this narrow type for the SAME reason `eligibility_note`
+   *  above is (and the same choice `ageBandEligibilityIssues`' own
+   *  parameter type makes) — every pre-existing `DivisionLike` fixture
+   *  across the stepper's test suite stays compiling unchanged; `undefined`
+   *  reads the same as the 1-January default everywhere this is checked. */
+  age_cutoff_month?: number | null;
+  age_cutoff_day?: number | null;
   requires_dob: boolean;
   requires_gender: boolean;
   allow_free_agents: boolean;
@@ -84,6 +94,18 @@ export interface DivisionLike {
    *  (schemas.ts:2153-2165), so a real `PublicRegistrationDivision` value
    *  satisfies this with no mapping step. */
   form_fields: FormFieldDef[];
+  /** RS007/V380 — the retired jsonb "custom rule" note, now a first-class
+   *  column DivisionCard renders as an organiser notice (design: "manual,
+   *  shown as a warning"). Organiser-authored free text: render as TEXT,
+   *  never as HTML/markdown. Optional on this narrow type (same "narrow on
+   *  purpose" reasoning as the rest of the interface, and the same choice
+   *  `ageBandEligibilityIssues`' own cutoff fields make, registration-
+   *  rules.ts): every OTHER `DivisionLike` fixture across the stepper's test
+   *  suite — cart.test.ts, entry-details.test.tsx, validation.test.ts,
+   *  register-stepper-interaction.test.tsx — predates this field and stays
+   *  compiling unchanged; a falsy `undefined` reads identically to `null`
+   *  everywhere this is checked. */
+  eligibility_note?: string | null;
 }
 
 /** See `DivisionLike.form_fields` above for why this is a local mirror of

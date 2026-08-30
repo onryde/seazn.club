@@ -62,7 +62,6 @@ async function seedDivision(auth: AuthCtx) {
     sport_key: "generic",
     variant_key: "score",
     config: GENERIC_CONFIG,
-    eligibility: [],
   });
   const entrants = await createEntrants(
     auth,

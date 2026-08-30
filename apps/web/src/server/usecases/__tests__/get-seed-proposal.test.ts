@@ -46,7 +46,6 @@ async function setup() {
     sport_key: "generic",
     variant_key: "score",
     config: GENERIC_CONFIG,
-    eligibility: [],
   });
   await createEntrants(
     auth,
@@ -100,7 +99,6 @@ describe.skipIf(!HAS_DB)("getSeedProposal — read-only, P6/D4b task B", () => {
       sport_key: "generic",
       variant_key: "score",
       config: GENERIC_CONFIG,
-      eligibility: [],
     });
     const stages = await createStages(auth, division.id, [
       { seq: 1, kind: "group", name: "Groups", config: { pools: { count: 2 } } },
@@ -164,7 +162,6 @@ describe.skipIf(!HAS_DB)("getSeedProposal — read-only, P6/D4b task B", () => {
       sport_key: "generic",
       variant_key: "score",
       config: GENERIC_CONFIG,
-      eligibility: [],
     });
     const stages = await createStages(auth, division.id, [
       { seq: 1, kind: "group", name: "Groups", config: { pools: { count: 2 } } },
@@ -226,7 +223,6 @@ describe.skipIf(!HAS_DB)("getSeedProposal — read-only, P6/D4b task B", () => {
       sport_key: "generic",
       variant_key: "score",
       config: GENERIC_CONFIG,
-      eligibility: [],
     });
     const stages = await createStages(auth, division.id, [
       { seq: 1, kind: "group", name: "Groups", config: { pools: { count: 2 } } },

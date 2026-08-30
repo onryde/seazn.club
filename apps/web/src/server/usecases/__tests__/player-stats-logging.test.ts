@@ -67,7 +67,6 @@ async function seedBadmintonSingles(
     sport_key: mod.key,
     variant_key: "default",
     config: {},
-    eligibility: [],
   });
   const alex = await createPerson(auth, {
     full_name: "Alex Log",
@@ -136,7 +135,6 @@ async function seedVolleyballTeams(
     sport_key: mod.key,
     variant_key: "default",
     config: {},
-    eligibility: [],
   });
   // Real, non-empty rosters — a person genuinely on the entrant's squad, so
   // the test is falsifiable: were the kind guard not enforced, this would

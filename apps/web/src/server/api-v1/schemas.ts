@@ -8,6 +8,17 @@ import { z } from "zod";
 // does, so the wire schema reuses the engine's zod rather than restating it —
 // a second declaration is a second thing to drift.
 import { HardConstraint, type ConflictDetailKind } from "@seazn/engine/scheduling";
+// RS007 review fix L1 — the SAME every-year-safe days-per-month predicate
+// ageBandEligibilityIssues (registration-rules.ts) uses to fail loudly on
+// the read side; pure and DB-free, so it is safe to reuse here. RELATIVE,
+// with the explicit .ts extension (matching this file's own sibling
+// openapi.ts, e.g. `from "./schemas.ts"`) — NOT the `@/` alias: this module
+// is shared with the standalone OpenAPI generator script
+// (scripts/openapi-gen.ts), which runs via bare
+// `node --experimental-strip-types` with no bundler and no tsconfig `paths`
+// resolution, so a `@/...` import throws ERR_MODULE_NOT_FOUND there even
+// though it resolves fine under tsc/Next.js/vitest.
+import { isValidCutoffDay } from "../../lib/registration-rules.ts";
 
 // ---------------------------------------------------------------------------
 // Common
@@ -173,16 +184,69 @@ function checkAgeBand(
   }
 }
 
-export const CreateDivision = z.object({
-  name: z.string().min(1).max(200),
-  slug: Slug.optional(),
-  sport_key: z.string().min(1),
-  variant_key: z.string().min(1),
-  /** Merged over the variant preset, then validated by the sport module. */
-  config: z.record(z.string(), z.unknown()).default({}),
-  eligibility: z.array(z.record(z.string(), z.unknown())).default([]),
-  tiebreakers: z.array(TiebreakerKeyS).nullish(),
-});
+// RS007/V380: the age-band cutoff override — both-or-neither, mirroring the
+// DB CHECK (`divisions_age_cutoff_check`). This catches the common
+// single-request case; usecases/divisions.ts's isAgeCutoffCheckViolation
+// backstops the READ COMMITTED race a merge-and-validate guard can't see,
+// same pattern as AGE_MAX_BEFORE_MIN/checkAgeBand above.
+export const AGE_CUTOFF_BOTH_OR_NEITHER =
+  "age_cutoff_month and age_cutoff_day must be set together, or both left null.";
+
+// RS007 review fix L1: age_cutoff_day was only range-checked 1-31 (this
+// schema's own min/max below, and the DB CHECK) — 31 September or
+// 30 February parsed successfully and silently rolled a month at READ time
+// (ageBandEligibilityIssues, @/lib/registration-rules — `new
+// Date(Date.UTC(...))` normalises an out-of-range day), shifting eligibility
+// by days with no error anywhere. No merge-and-validate/DB-race backstop is
+// needed for this one, unlike age_min/age_max: the both-or-neither check
+// just above already forces month and day to travel together in the SAME
+// request, so this can only ever be evaluated with both present, and either
+// PASSES self-contained or FAILS self-contained — there is no stale-stored-
+// value half to race against.
+export const AGE_CUTOFF_DAY_INVALID_FOR_MONTH = "age_cutoff_day is not a valid day for age_cutoff_month.";
+
+function checkAgeCutoff(
+  v: { age_cutoff_month?: number | null; age_cutoff_day?: number | null },
+  ctx: z.RefinementCtx,
+): void {
+  if ((v.age_cutoff_month != null) !== (v.age_cutoff_day != null)) {
+    ctx.addIssue({ code: "custom", path: ["age_cutoff_day"], message: AGE_CUTOFF_BOTH_OR_NEITHER });
+    return;
+  }
+  if (
+    v.age_cutoff_month != null &&
+    v.age_cutoff_day != null &&
+    !isValidCutoffDay(v.age_cutoff_month, v.age_cutoff_day)
+  ) {
+    ctx.addIssue({ code: "custom", path: ["age_cutoff_day"], message: AGE_CUTOFF_DAY_INVALID_FOR_MONTH });
+  }
+}
+
+export const CreateDivision = z
+  .object({
+    name: z.string().min(1).max(200),
+    slug: Slug.optional(),
+    sport_key: z.string().min(1),
+    variant_key: z.string().min(1),
+    /** Merged over the variant preset, then validated by the sport module. */
+    config: z.record(z.string(), z.unknown()).default({}),
+    tiebreakers: z.array(TiebreakerKeyS).nullish(),
+    /** RS007/V380: the SAME first-class eligibility columns PatchDivision
+     *  carries (field comments below), now writable at create time too — the
+     *  division-creation wizard's Eligibility tab used to POST a jsonb
+     *  `eligibility` array this (non-strict) schema didn't declare, which
+     *  zod silently dropped, so every wizard-created division shipped with
+     *  no restriction at all. All optional: a division created with none of
+     *  these set has no restriction, exactly as before. */
+    category: DivisionCategory.nullable().optional(),
+    age_min: z.number().int().min(0).max(120).nullable().optional(),
+    age_max: z.number().int().min(0).max(120).nullable().optional(),
+    age_cutoff_month: z.number().int().min(1).max(12).nullable().optional(),
+    age_cutoff_day: z.number().int().min(1).max(31).nullable().optional(),
+    eligibility_note: z.string().max(2000).nullable().optional(),
+  })
+  .superRefine(checkAgeBand)
+  .superRefine(checkAgeCutoff);
 export type CreateDivision = z.infer<typeof CreateDivision>;
 
 export const PatchDivision = z
@@ -190,17 +254,26 @@ export const PatchDivision = z
     name: z.string().min(1).max(200),
     /** Markdown (v3/06 §2), shown on the public division page. */
     description: z.string().max(20_000).nullable(),
-    eligibility: z.array(z.record(z.string(), z.unknown())),
     tiebreakers: z.array(TiebreakerKeyS).nullable(),
-    /** V364 first-class eligibility columns (RS004): read alongside the
-     *  jsonb `eligibility` rules above, never instead of them. */
+    /** V364/V380 first-class eligibility columns — the ONE eligibility
+     *  representation (RS007/V380 dropped the jsonb `eligibility` rules this
+     *  comment used to say "read alongside"). */
     category: DivisionCategory.nullable(),
-    /** Years, evaluated at 1 Jan of the season-start year. Nullable
-     *  independently of age_max; combined they must satisfy age_max >=
-     *  age_min (checkAgeBand below) — the DB CHECK backstops any caller
-     *  that bypasses this schema (e.g. a direct usecase call in a test). */
+    /** Years, evaluated at the age_cutoff_month/day below (1 Jan when
+     *  null) of the season-start year. Nullable independently of age_max;
+     *  combined they must satisfy age_max >= age_min (checkAgeBand below) —
+     *  the DB CHECK backstops any caller that bypasses this schema (e.g. a
+     *  direct usecase call in a test). */
     age_min: z.number().int().min(0).max(120).nullable(),
     age_max: z.number().int().min(0).max(120).nullable(),
+    /** RS007/V380: overrides the age band's cutoff date (default 1
+     *  January) — school-year age groups commonly run 1 September.
+     *  Both-or-neither (checkAgeCutoff below; DB CHECK backstops it). */
+    age_cutoff_month: z.number().int().min(1).max(12).nullable(),
+    age_cutoff_day: z.number().int().min(1).max(31).nullable(),
+    /** RS007/V380: the retired jsonb "custom rule" note, now a first-class
+     *  column the public entry/join pages render as a warning. */
+    eligibility_note: z.string().max(2000).nullable(),
     status: DivisionStatus,
     /** Hide official names on all public reads (Jul3/02, 25 Jun). */
     officials_hide_names: z.boolean(),
@@ -231,7 +304,8 @@ export const PatchDivision = z
   })
   .partial()
   .refine((p) => Object.keys(p).length > 0, "empty patch")
-  .superRefine(checkAgeBand);
+  .superRefine(checkAgeBand)
+  .superRefine(checkAgeCutoff);
 export type PatchDivision = z.infer<typeof PatchDivision>;
 
 export const Division = z.object({
@@ -244,15 +318,17 @@ export const Division = z.object({
   variant_key: z.string(),
   config: z.unknown(),
   module_version: z.string(),
-  eligibility: z.array(z.unknown()),
   tiebreakers: z.array(TiebreakerKeyS).nullable(),
-  // V364 first-class eligibility columns (RS004); see PatchDivision above.
+  // V364/V380 first-class eligibility columns; see PatchDivision above.
   category: DivisionCategory.nullable(),
   // Bounded 0-120, matching PatchDivision's request-side bounds above
   // (RS004 review finding 4) — the generated OpenAPI spec described this
   // field two different ways otherwise.
   age_min: z.number().int().min(0).max(120).nullable(),
   age_max: z.number().int().min(0).max(120).nullable(),
+  age_cutoff_month: z.number().int().min(1).max(12).nullable(),
+  age_cutoff_day: z.number().int().min(1).max(31).nullable(),
+  eligibility_note: z.string().max(2000).nullable(),
   status: DivisionStatus,
   officials_hide_names: z.boolean(),
   scheduling_mode: z.enum(["timed", "flexible"]),
@@ -2334,6 +2410,11 @@ export const PublicRegistrationDivision = z.object({
   category: z.string().nullable(),
   age_min: z.number().int().nullable(),
   age_max: z.number().int().nullable(),
+  /** RS007/V380 — the age-band cutoff override (default 1 January when
+   *  null), threaded onto the wire so the ENTRIES step's client-side self-
+   *  check evaluates the SAME cutoff the server enforces at submit. */
+  age_cutoff_month: z.number().int().nullable(),
+  age_cutoff_day: z.number().int().nullable(),
   /** Team-only; drives the ENTRIES step's free-agent option. */
   allow_free_agents: z.boolean(),
   requires_dob: z.boolean(),
@@ -2341,6 +2422,10 @@ export const PublicRegistrationDivision = z.object({
   /** Youth division (v3/11 gap 8): the form always adds guardian consent. */
   youth: z.boolean(),
   form_fields: z.array(RegistrationFormField),
+  /** RS007/V380 — the retired jsonb "custom rule" note, now a first-class
+   *  column the ENTRIES step renders as an organiser notice. Organiser-
+   *  authored free text: render as TEXT, never as HTML/markdown. */
+  eligibility_note: z.string().nullable(),
 });
 
 export const PublicRegistrationInfo = z.object({
@@ -2530,27 +2615,91 @@ export const PublicRegisterGroupResponse = z.object({
   entries: z.array(PublicRegisterGroupEntryResult),
 });
 
-/** Join an existing team entry via its `join_code` link (`JoinTeamEntryInput`
- *  mirror, registration-submit.ts:136-141). A joiner is one player row, so
- *  this reuses the same player shape submit uses. */
+/** Join an existing team OR pair entry via its `join_code` link
+ *  (`JoinTeamEntryInput` mirror, registration-submit.ts). A joiner is one
+ *  player row, so this reuses the same player shape submit uses.
+ *  `player_id` (optional) is a per-slot claim link naming ONE existing
+ *  captain-entered row to CLAIM in place — omitted, it falls back to
+ *  inserting a genuinely new player (refused for a `pair`, whose roster is
+ *  fixed at two). */
 export const PublicJoinRequest = z.object({
   join_code: z.string().min(1).max(80),
   player: PublicRegisterGroupPlayer,
+  player_id: Uuid.nullish(),
   guardian_name: z.string().max(120).nullish(),
   guardian_consent: z.boolean().optional(),
+  /** RS007 review defect #4 fix — collected by the join page's own CONSENT
+   *  step (StepConsent, reused verbatim) and persisted PER-PLAYER by
+   *  joinTeamEntry (registration_players.privacy_consent_at/.version,
+   *  V384), never on registration_groups — that would silently apply the
+   *  CAPTAIN's own choice to every later joiner, which is the bug that fix
+   *  closed. REQUIRED here, same as PublicRegisterGroupRequest.privacy_consent
+   *  (consent-asymmetry follow-up, 2026-08-28): this field was previously
+   *  optional, enforced only by the join form's own client-side gate
+   *  (validateConsent) — a direct API call could join with no consent
+   *  recorded at all, and an omitted value was indistinguishable from a
+   *  refusal. joinTeamEntry now throws 422 on a falsy value, mirroring
+   *  submitRegistrationGroup's own gate (registration-submit.ts:547),
+   *  identically on BOTH the claim and insert branches — a captain-typed
+   *  row's own consent was never collected either, so the claim moment is
+   *  exactly as much this player's first consent as a fresh insert's is. */
+  privacy_consent: z.boolean(),
+  /** Optional, never blocks — mirrors PublicRegisterGroupRequest.media_consent
+   *  structurally (RS006 §A: "media consent is OPTIONAL and never blocks
+   *  submit"). Stamped when true, left null otherwise (a deliberate `false`
+   *  persists as a refusal, same as that field). */
+  media_consent: z.boolean().optional(),
 });
 export type PublicJoinRequest = z.infer<typeof PublicJoinRequest>;
 
-/** (`JoinTeamEntryResult` mirror, registration-submit.ts:143-147).
- *  `consent_status` is deliberately the 2-value subset this path actually
- *  returns — 'pending' is `registration_players`' 3rd DB-level value, and a
- *  join never produces it (registration-submit.ts:761 only ever picks
- *  granted or guardian). */
+/** (`JoinTeamEntryResult` mirror, registration-submit.ts). `consent_status`
+ *  is deliberately the 2-value subset this path actually returns —
+ *  'pending' is `registration_players`' 3rd DB-level value, and neither the
+ *  claim nor the insert branch of `joinTeamEntry` ever produces it (both
+ *  only ever pick granted or guardian). */
 export const PublicJoinResponse = z.object({
   registration_id: Uuid,
   player_id: Uuid,
   consent_status: z.enum(["granted", "guardian"]),
 });
+
+/** One CAPTAIN-ENTERED, still-`pending` slot on an entry — claimable by
+ *  sending its `player_id` back as `PublicJoinRequest.player_id`
+ *  (`JoinPreviewSlot` mirror, registration-submit.ts). */
+export const PublicJoinPreviewSlot = z.object({
+  player_id: Uuid,
+  full_name: z.string(),
+});
+
+/** Join-link preview (`JoinPreviewResult` mirror, registration-submit.ts) —
+ *  the join page's first read, before it asks anyone to type anything: who/
+ *  where the link joins, which slots are still unclaimed, and whether the
+ *  page may offer an "add someone new" option (never for a `pair`; never
+ *  once the sport's roster cap is met). */
+export const PublicJoinPreviewResponse = z.object({
+  registration_id: Uuid,
+  display_name: z.string(),
+  division_name: z.string(),
+  competition_name: z.string(),
+  competition_slug: z.string(),
+  org_slug: z.string(),
+  org_name: z.string(),
+  unclaimed_slots: z.array(PublicJoinPreviewSlot),
+  allow_new_player: z.boolean(),
+  /** RS007 join page — whether the WHO-equivalent step must collect a
+   *  dob/gender before this division's eligibility can be evaluated
+   *  (`JoinPreviewResult` mirror, registration-submit.ts). */
+  requires_dob: z.boolean(),
+  requires_gender: z.boolean(),
+  /** This entry's WHOLE roster size — lets the join page compute a fill
+   *  meter after a successful join with no second round-trip. */
+  total_players: z.number().int().nonnegative(),
+  /** RS007/V380 — the retired jsonb "custom rule" note, now a first-class
+   *  column the join page renders as an organiser notice. Organiser-
+   *  authored free text: render as TEXT, never as HTML/markdown. */
+  eligibility_note: z.string().nullable(),
+});
+export type PublicJoinPreviewResponse = z.infer<typeof PublicJoinPreviewResponse>;
 
 /** Registrant-facing status view (token-gated; no dob, no payment ids). */
 export const PublicRegistrationStatus = z.object({

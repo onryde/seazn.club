@@ -54,7 +54,6 @@ async function seedDivision(auth: AuthCtx, visibility: "private" | "public" = "p
     sport_key: "generic",
     variant_key: "score",
     config: GENERIC_CONFIG,
-    eligibility: [],
   });
   return { comp, division };
 }

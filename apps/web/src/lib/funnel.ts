@@ -127,7 +127,6 @@ export async function createFromDraft(
     sport_key,
     variant_key,
     config: {},
-    eligibility: [],
   } as never);
 
   return {

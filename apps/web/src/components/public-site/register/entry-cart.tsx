@@ -10,6 +10,7 @@ import { formatMinor, type Currency } from "@/lib/currency";
 import { summarizeCart, type CartAction } from "./cart";
 import { INELIGIBLE_MESSAGE_KEY, selfEligibilityForDivision } from "./eligibility-presentation";
 import { BTN_TEXT } from "./styles";
+import { teamNameMissing } from "./validation";
 import { MAX_CART_ENTRIES, type CartEntry, type CartState, type ContactState, type DivisionLike } from "./types";
 
 // Exported for step-review.tsx (step 5) — a cart line reads the same either
@@ -109,6 +110,17 @@ export function EntryCart({
                     type="text"
                     maxLength={120}
                     className="mt-2 w-full rounded-md border border-zinc-200 bg-white px-2.5 py-1.5 text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent-soft"
+                    /* A placeholder is NOT an accessible name, and it vanishes
+                       the moment someone types — leaving an unlabelled text
+                       field, on what is now a REQUIRED one for teams. Naming
+                       it off the same key keeps the two in step, and follows
+                       RosterTable's convention where the accessible name
+                       doubles as the test locator, so a broken match here is a
+                       real a11y regression rather than a stale selector. */
+                    aria-label={t(
+                      entry.entrant_kind === "team" ? "register.entries.teamName.placeholder" : "register.entries.partnerName.placeholder",
+                    )}
+                    aria-invalid={teamNameMissing(entry) || undefined}
                     placeholder={t(
                       entry.entrant_kind === "team" ? "register.entries.teamName.placeholder" : "register.entries.partnerName.placeholder",
                     )}
@@ -124,6 +136,17 @@ export function EntryCart({
                       })
                     }
                   />
+                )}
+
+                {/* A team entry with no name 422s the WHOLE cart at submit
+                    ("A team name is required", naming neither the step nor
+                    which of up to ten entries). Say so here, against the
+                    field that fixes it, using validation.ts's own predicate
+                    so this cannot drift from the rule that blocks Next. */}
+                {teamNameMissing(entry) && (
+                  <p role="alert" className="mt-1.5 text-xs font-medium text-red-700">
+                    {t("register.entries.cart.teamNameRequired")}
+                  </p>
                 )}
 
                 {willWaitlist && <p className="mt-1.5 text-xs text-amber-700">{t("register.entries.cart.waitlistNote")}</p>}

@@ -2423,10 +2423,6 @@
                           "module_version": {
                             "type": "string"
                           },
-                          "eligibility": {
-                            "type": "array",
-                            "items": {}
-                          },
                           "tiebreakers": {
                             "anyOf": [
                               {
@@ -2501,6 +2497,41 @@
                               }
                             ]
                           },
+                          "age_cutoff_month": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 12
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "age_cutoff_day": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 31
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "eligibility_note": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "maxLength": 2000
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "status": {
                             "type": "string",
                             "enum": [
@@ -2556,11 +2587,13 @@
                           "variant_key",
                           "config",
                           "module_version",
-                          "eligibility",
                           "tiebreakers",
                           "category",
                           "age_min",
                           "age_max",
+                          "age_cutoff_month",
+                          "age_cutoff_day",
+                          "eligibility_note",
                           "status",
                           "officials_hide_names",
                           "scheduling_mode",
@@ -2592,15 +2625,15 @@
                       "variant_key": "example",
                       "config": null,
                       "module_version": "example",
-                      "eligibility": [
-                        null
-                      ],
                       "tiebreakers": [
                         "points"
                       ],
                       "category": "open",
                       "age_min": 0,
                       "age_max": 0,
+                      "age_cutoff_month": 1,
+                      "age_cutoff_day": 1,
+                      "eligibility_note": "example",
                       "status": "setup",
                       "officials_hide_names": true,
                       "scheduling_mode": "timed",
@@ -2811,17 +2844,6 @@
                     },
                     "additionalProperties": {}
                   },
-                  "eligibility": {
-                    "default": [],
-                    "type": "array",
-                    "items": {
-                      "type": "object",
-                      "propertyNames": {
-                        "type": "string"
-                      },
-                      "additionalProperties": {}
-                    }
-                  },
                   "tiebreakers": {
                     "anyOf": [
                       {
@@ -2855,14 +2877,88 @@
                         "type": "null"
                       }
                     ]
+                  },
+                  "category": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "enum": [
+                          "open",
+                          "mens",
+                          "womens",
+                          "mixed"
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "age_min": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 120
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "age_max": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 120
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "age_cutoff_month": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 12
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "age_cutoff_day": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 31
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "eligibility_note": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 2000
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   }
                 },
                 "required": [
                   "name",
                   "sport_key",
                   "variant_key",
-                  "config",
-                  "eligibility"
+                  "config"
                 ],
                 "additionalProperties": false
               },
@@ -2871,10 +2967,7 @@
                 "slug": "example",
                 "sport_key": "example",
                 "variant_key": "example",
-                "config": {},
-                "eligibility": [
-                  {}
-                ]
+                "config": {}
               }
             }
           }
@@ -2933,10 +3026,6 @@
                         "config": {},
                         "module_version": {
                           "type": "string"
-                        },
-                        "eligibility": {
-                          "type": "array",
-                          "items": {}
                         },
                         "tiebreakers": {
                           "anyOf": [
@@ -3012,6 +3101,41 @@
                             }
                           ]
                         },
+                        "age_cutoff_month": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 12
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "age_cutoff_day": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 31
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "eligibility_note": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "maxLength": 2000
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "status": {
                           "type": "string",
                           "enum": [
@@ -3067,11 +3191,13 @@
                         "variant_key",
                         "config",
                         "module_version",
-                        "eligibility",
                         "tiebreakers",
                         "category",
                         "age_min",
                         "age_max",
+                        "age_cutoff_month",
+                        "age_cutoff_day",
+                        "eligibility_note",
                         "status",
                         "officials_hide_names",
                         "scheduling_mode",
@@ -3101,15 +3227,15 @@
                     "variant_key": "example",
                     "config": null,
                     "module_version": "example",
-                    "eligibility": [
-                      null
-                    ],
                     "tiebreakers": [
                       "points"
                     ],
                     "category": "open",
                     "age_min": 0,
                     "age_max": 0,
+                    "age_cutoff_month": 1,
+                    "age_cutoff_day": 1,
+                    "eligibility_note": "example",
                     "status": "setup",
                     "officials_hide_names": true,
                     "scheduling_mode": "timed",
@@ -3430,10 +3556,6 @@
                         "module_version": {
                           "type": "string"
                         },
-                        "eligibility": {
-                          "type": "array",
-                          "items": {}
-                        },
                         "tiebreakers": {
                           "anyOf": [
                             {
@@ -3508,6 +3630,41 @@
                             }
                           ]
                         },
+                        "age_cutoff_month": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 12
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "age_cutoff_day": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 31
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "eligibility_note": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "maxLength": 2000
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "status": {
                           "type": "string",
                           "enum": [
@@ -3563,11 +3720,13 @@
                         "variant_key",
                         "config",
                         "module_version",
-                        "eligibility",
                         "tiebreakers",
                         "category",
                         "age_min",
                         "age_max",
+                        "age_cutoff_month",
+                        "age_cutoff_day",
+                        "eligibility_note",
                         "status",
                         "officials_hide_names",
                         "scheduling_mode",
@@ -3597,15 +3756,15 @@
                     "variant_key": "example",
                     "config": null,
                     "module_version": "example",
-                    "eligibility": [
-                      null
-                    ],
                     "tiebreakers": [
                       "points"
                     ],
                     "category": "open",
                     "age_min": 0,
                     "age_max": 0,
+                    "age_cutoff_month": 1,
+                    "age_cutoff_day": 1,
+                    "eligibility_note": "example",
                     "status": "setup",
                     "officials_hide_names": true,
                     "scheduling_mode": "timed",
@@ -3804,16 +3963,6 @@
                       }
                     ]
                   },
-                  "eligibility": {
-                    "type": "array",
-                    "items": {
-                      "type": "object",
-                      "propertyNames": {
-                        "type": "string"
-                      },
-                      "additionalProperties": {}
-                    }
-                  },
                   "tiebreakers": {
                     "anyOf": [
                       {
@@ -3882,6 +4031,41 @@
                         "type": "integer",
                         "minimum": 0,
                         "maximum": 120
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "age_cutoff_month": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 12
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "age_cutoff_day": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 31
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "eligibility_note": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 2000
                       },
                       {
                         "type": "null"
@@ -3961,12 +4145,10 @@
               "example": {
                 "name": "example",
                 "description": "example",
-                "eligibility": [
-                  {}
-                ],
                 "tiebreakers": [
                   "points"
-                ]
+                ],
+                "category": "open"
               }
             }
           }
@@ -4025,10 +4207,6 @@
                         "config": {},
                         "module_version": {
                           "type": "string"
-                        },
-                        "eligibility": {
-                          "type": "array",
-                          "items": {}
                         },
                         "tiebreakers": {
                           "anyOf": [
@@ -4104,6 +4282,41 @@
                             }
                           ]
                         },
+                        "age_cutoff_month": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 12
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "age_cutoff_day": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 31
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "eligibility_note": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "maxLength": 2000
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "status": {
                           "type": "string",
                           "enum": [
@@ -4159,11 +4372,13 @@
                         "variant_key",
                         "config",
                         "module_version",
-                        "eligibility",
                         "tiebreakers",
                         "category",
                         "age_min",
                         "age_max",
+                        "age_cutoff_month",
+                        "age_cutoff_day",
+                        "eligibility_note",
                         "status",
                         "officials_hide_names",
                         "scheduling_mode",
@@ -4193,15 +4408,15 @@
                     "variant_key": "example",
                     "config": null,
                     "module_version": "example",
-                    "eligibility": [
-                      null
-                    ],
                     "tiebreakers": [
                       "points"
                     ],
                     "category": "open",
                     "age_min": 0,
                     "age_max": 0,
+                    "age_cutoff_month": 1,
+                    "age_cutoff_day": 1,
+                    "eligibility_note": "example",
                     "status": "setup",
                     "officials_hide_names": true,
                     "scheduling_mode": "timed",
@@ -4800,10 +5015,6 @@
                         "module_version": {
                           "type": "string"
                         },
-                        "eligibility": {
-                          "type": "array",
-                          "items": {}
-                        },
                         "tiebreakers": {
                           "anyOf": [
                             {
@@ -4878,6 +5089,41 @@
                             }
                           ]
                         },
+                        "age_cutoff_month": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 12
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "age_cutoff_day": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 31
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "eligibility_note": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "maxLength": 2000
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "status": {
                           "type": "string",
                           "enum": [
@@ -4933,11 +5179,13 @@
                         "variant_key",
                         "config",
                         "module_version",
-                        "eligibility",
                         "tiebreakers",
                         "category",
                         "age_min",
                         "age_max",
+                        "age_cutoff_month",
+                        "age_cutoff_day",
+                        "eligibility_note",
                         "status",
                         "officials_hide_names",
                         "scheduling_mode",
@@ -4967,15 +5215,15 @@
                     "variant_key": "example",
                     "config": null,
                     "module_version": "example",
-                    "eligibility": [
-                      null
-                    ],
                     "tiebreakers": [
                       "points"
                     ],
                     "category": "open",
                     "age_min": 0,
                     "age_max": 0,
+                    "age_cutoff_month": 1,
+                    "age_cutoff_day": 1,
+                    "eligibility_note": "example",
                     "status": "setup",
                     "officials_hide_names": true,
                     "scheduling_mode": "timed",
@@ -5250,10 +5498,6 @@
                         "module_version": {
                           "type": "string"
                         },
-                        "eligibility": {
-                          "type": "array",
-                          "items": {}
-                        },
                         "tiebreakers": {
                           "anyOf": [
                             {
@@ -5328,6 +5572,41 @@
                             }
                           ]
                         },
+                        "age_cutoff_month": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 12
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "age_cutoff_day": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 31
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "eligibility_note": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "maxLength": 2000
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "status": {
                           "type": "string",
                           "enum": [
@@ -5383,11 +5662,13 @@
                         "variant_key",
                         "config",
                         "module_version",
-                        "eligibility",
                         "tiebreakers",
                         "category",
                         "age_min",
                         "age_max",
+                        "age_cutoff_month",
+                        "age_cutoff_day",
+                        "eligibility_note",
                         "status",
                         "officials_hide_names",
                         "scheduling_mode",
@@ -5417,15 +5698,15 @@
                     "variant_key": "example",
                     "config": null,
                     "module_version": "example",
-                    "eligibility": [
-                      null
-                    ],
                     "tiebreakers": [
                       "points"
                     ],
                     "category": "open",
                     "age_min": 0,
                     "age_max": 0,
+                    "age_cutoff_month": 1,
+                    "age_cutoff_day": 1,
+                    "eligibility_note": "example",
                     "status": "setup",
                     "officials_hide_names": true,
                     "scheduling_mode": "timed",
@@ -42838,6 +43119,30 @@
                                   }
                                 ]
                               },
+                              "age_cutoff_month": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "age_cutoff_day": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
                               "allow_free_agents": {
                                 "type": "boolean"
                               },
@@ -42897,6 +43202,16 @@
                                   ],
                                   "additionalProperties": false
                                 }
+                              },
+                              "eligibility_note": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               }
                             },
                             "required": [
@@ -42918,11 +43233,14 @@
                               "category",
                               "age_min",
                               "age_max",
+                              "age_cutoff_month",
+                              "age_cutoff_day",
                               "allow_free_agents",
                               "requires_dob",
                               "requires_gender",
                               "youth",
-                              "form_fields"
+                              "form_fields",
+                              "eligibility_note"
                             ],
                             "additionalProperties": false
                           }
@@ -42976,6 +43294,8 @@
                         "category": "example",
                         "age_min": -9007199254740991,
                         "age_max": -9007199254740991,
+                        "age_cutoff_month": -9007199254740991,
+                        "age_cutoff_day": -9007199254740991,
                         "allow_free_agents": true,
                         "requires_dob": true,
                         "requires_gender": true,
@@ -42990,7 +43310,8 @@
                             ],
                             "required": true
                           }
-                        ]
+                        ],
+                        "eligibility_note": "example"
                       }
                     ]
                   },
@@ -43756,8 +44077,312 @@
       }
     },
     "/api/v1/public/orgs/{orgSlug}/competitions/{slug}/register/join": {
+      "get": {
+        "summary": "Preview a join link before claiming — entry/division/competition/org context, unclaimed slots, whether a new person may be added",
+        "tags": [
+          "public"
+        ],
+        "parameters": [
+          {
+            "name": "orgSlug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "join_code",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "registration_id": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "display_name": {
+                          "type": "string"
+                        },
+                        "division_name": {
+                          "type": "string"
+                        },
+                        "competition_name": {
+                          "type": "string"
+                        },
+                        "competition_slug": {
+                          "type": "string"
+                        },
+                        "org_slug": {
+                          "type": "string"
+                        },
+                        "org_name": {
+                          "type": "string"
+                        },
+                        "unclaimed_slots": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "player_id": {
+                                "type": "string",
+                                "format": "uuid",
+                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              },
+                              "full_name": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "player_id",
+                              "full_name"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "allow_new_player": {
+                          "type": "boolean"
+                        },
+                        "requires_dob": {
+                          "type": "boolean"
+                        },
+                        "requires_gender": {
+                          "type": "boolean"
+                        },
+                        "total_players": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "eligibility_note": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "registration_id",
+                        "display_name",
+                        "division_name",
+                        "competition_name",
+                        "competition_slug",
+                        "org_slug",
+                        "org_name",
+                        "unclaimed_slots",
+                        "allow_new_player",
+                        "requires_dob",
+                        "requires_gender",
+                        "total_players",
+                        "eligibility_note"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                },
+                "example": {
+                  "ok": true,
+                  "data": {
+                    "registration_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                    "display_name": "example",
+                    "division_name": "example",
+                    "competition_name": "example",
+                    "competition_slug": "example",
+                    "org_slug": "example",
+                    "org_name": "example",
+                    "unclaimed_slots": [
+                      {
+                        "player_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                        "full_name": "example"
+                      }
+                    ],
+                    "allow_new_player": true,
+                    "requires_dob": true,
+                    "requires_gender": true,
+                    "total_players": 0,
+                    "eligibility_note": "example"
+                  },
+                  "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      },
       "post": {
-        "summary": "Join an existing team entry via its join_code link — mints one player row; squad-cap and eligibility enforced",
+        "summary": "Join an existing team or pair entry via its join_code link — claims an existing captain-entered slot (player_id given) or inserts a genuinely new player (refused for a pair); squad-cap and eligibility enforced",
         "tags": [
           "public"
         ],
@@ -43860,6 +44485,18 @@
                     ],
                     "additionalProperties": false
                   },
+                  "player_id": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "guardian_name": {
                     "anyOf": [
                       {
@@ -43873,11 +44510,18 @@
                   },
                   "guardian_consent": {
                     "type": "boolean"
+                  },
+                  "privacy_consent": {
+                    "type": "boolean"
+                  },
+                  "media_consent": {
+                    "type": "boolean"
                   }
                 },
                 "required": [
                   "join_code",
-                  "player"
+                  "player",
+                  "privacy_consent"
                 ],
                 "additionalProperties": false
               },
@@ -43889,8 +44533,9 @@
                   "gender": "m",
                   "email": "example"
                 },
+                "player_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                 "guardian_name": "example",
-                "guardian_consent": true
+                "privacy_consent": true
               }
             }
           }
@@ -44003,6 +44648,50 @@
           },
           "404": {
             "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
             "content": {
               "application/json": {
                 "schema": {
@@ -45315,6 +46004,227 @@
           },
           "404": {
             "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/api/v1/public/registrations/groups/{id}/resend": {
+      "post": {
+        "summary": "Registrant self-service resend of the cart-shaped confirmation email (token) — refused only once every entry in the cart is terminal",
+        "tags": [
+          "public"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "token": {
+                    "type": "string",
+                    "minLength": 10,
+                    "maxLength": 200
+                  }
+                },
+                "required": [
+                  "token"
+                ],
+                "additionalProperties": false
+              },
+              "example": {
+                "token": "example"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "sent": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "sent"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                },
+                "example": {
+                  "ok": true,
+                  "data": {
+                    "sent": true
+                  },
+                  "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Rejected by the engine",
             "content": {
               "application/json": {
                 "schema": {

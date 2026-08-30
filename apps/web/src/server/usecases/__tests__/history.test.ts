@@ -75,7 +75,6 @@ async function seedDivision(auth: AuthCtx, stageCfg: Record<string, unknown> = {
     sport_key: "generic",
     variant_key: "score",
     config: GENERIC_CONFIG,
-    eligibility: [],
   });
   const entrants = await createEntrants(
     auth,

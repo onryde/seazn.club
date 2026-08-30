@@ -182,7 +182,6 @@ describe.skipIf(!HAS_DB)("fetchRegistrantDetails — real Postgres", () => {
         sport_key: "generic",
         variant_key: "score",
         config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
-        eligibility: [],
       });
       await putRegistrationSettings(owner, divA.id, {
         ...SETTINGS_BASE,

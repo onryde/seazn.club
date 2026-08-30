@@ -68,7 +68,6 @@ async function seedDivision(auth: AuthCtx) {
     sport_key: "generic",
     variant_key: "score",
     config: GENERIC_CONFIG,
-    eligibility: [],
   });
   const entrants = await createEntrants(
     auth,
@@ -501,7 +500,6 @@ describe.skipIf(!HAS_DB)("rich exports (Jul3/06)", () => {
       sport_key: "generic",
       variant_key: "score",
       config: GENERIC_CONFIG,
-      eligibility: [],
     });
     await createEntrants(
       auth,
@@ -744,7 +742,6 @@ describe.skipIf(!HAS_DB)("rich exports (Jul3/06)", () => {
       sport_key: "generic",
       variant_key: "score",
       config: GENERIC_CONFIG,
-      eligibility: [],
     });
     await createEntrants(
       auth,
@@ -795,7 +792,6 @@ describe.skipIf(!HAS_DB)("rich exports (Jul3/06)", () => {
       sport_key: "generic",
       variant_key: "score",
       config: GENERIC_CONFIG,
-      eligibility: [],
     });
     await createEntrants(
       auth,
@@ -857,7 +853,6 @@ describe.skipIf(!HAS_DB)("rich exports (Jul3/06)", () => {
       sport_key: "generic",
       variant_key: "score",
       config: GENERIC_CONFIG,
-      eligibility: [],
     });
     await createEntrants(
       auth,
@@ -908,7 +903,6 @@ describe.skipIf(!HAS_DB)("rich exports (Jul3/06)", () => {
       sport_key: "generic",
       variant_key: "score",
       config: GENERIC_CONFIG,
-      eligibility: [],
     });
     // generatePagePlayoff (packages/engine/src/scheduling/bracket.ts) throws
     // CONFIG_INVALID unless entrants.length === 4 — the format is a fixed
@@ -963,7 +957,6 @@ describe.skipIf(!HAS_DB)("rich exports (Jul3/06)", () => {
       sport_key: "generic",
       variant_key: "score",
       config: GENERIC_CONFIG,
-      eligibility: [],
     });
     // generateStepladder (packages/engine/src/scheduling/bracket.ts) accepts
     // any k >= 2 entrants; 4 gives 3 rungs (two climb games + a final), enough

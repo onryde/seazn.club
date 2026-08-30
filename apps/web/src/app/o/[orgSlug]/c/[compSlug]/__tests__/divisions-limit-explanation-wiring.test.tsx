@@ -88,7 +88,10 @@ vi.mock("@/lib/db", () => {
     if (!Array.isArray(strings) || !("raw" in strings)) return { __fragment: strings };
     const text = (strings as TemplateStringsArray).join(" ");
     if (text.includes("organizations")) return Promise.resolve([{ trial_used_at: null }]);
-    if (text.includes("eligibility")) return Promise.resolve([{ youth: false }]);
+    // RS007/V380: the youth EXISTS query reads `d.youth` directly now
+    // (settings/page.tsx dropped the jsonb `eligibility` recompute this
+    // match used to key on) — "d.youth" is still unique to that query.
+    if (text.includes("d.youth")) return Promise.resolve([{ youth: false }]);
     if (text.includes("from sports")) return Promise.resolve([{ key: "generic", name: "Generic" }]);
     if (text.includes("sport_variants"))
       return Promise.resolve([

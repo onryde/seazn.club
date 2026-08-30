@@ -59,7 +59,6 @@ async function seedDivision(auth: AuthCtx): Promise<string> {
     sport_key: "generic",
     variant_key: "score",
     config: DIVISION_CONFIG,
-    eligibility: [],
   });
   return division.id;
 }

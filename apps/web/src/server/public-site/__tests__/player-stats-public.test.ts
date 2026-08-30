@@ -71,7 +71,6 @@ async function seed() {
     sport_key: "football",
     variant_key: "std",
     config: FOOTBALL_CONFIG,
-    eligibility: [],
   });
   const person = await createPerson(auth, {
     full_name: "Striker Nine",
@@ -114,7 +113,6 @@ async function secondDivision(
     sport_key: sportKey,
     variant_key: "std",
     config: FOOTBALL_CONFIG,
-    eligibility: [],
   });
   await createEntrants(auth, division.id, [
     {
@@ -254,7 +252,6 @@ describe.skipIf(!HAS_DB)("getPublicPlayer career rollup (S9/#418)", () => {
       sport_key: "football",
       variant_key: "std",
       config: FOOTBALL_CONFIG,
-      eligibility: [],
     });
     await createEntrants(auth, divisionB.id, [
       {

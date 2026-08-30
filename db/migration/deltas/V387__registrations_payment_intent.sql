@@ -1,0 +1,55 @@
+-- =============================================================================
+-- V387 — a payment intent belongs to an ENTRY, not only to the cart
+--
+-- PR #677 review, finding H1 (money, HIGH). Refunding one entry could send
+-- ANOTHER entry's charge to Stripe.
+--
+-- V364 moved the payment envelope onto `registration_groups` and said why:
+--   "One payment per cart is the design ruling, which makes a per-ENTRY
+--    checkout session or payment intent meaningless."
+-- That ruling was true when it was written. It is not true any more, and
+-- nothing revisited the schema when it stopped being true:
+--
+--   * Checkout sessions are minted against an explicit `registration_ids`
+--     SUBSET of the cart (registrations.ts, `metadata.registration_ids`),
+--     not the whole cart.
+--   * RS007 added pay-on-promotion, so an entry promoted off the waitlist
+--     pays later, in its OWN session, with its OWN intent.
+--
+-- So a cart can hold two live intents while the schema has one column for
+-- them, and `confirmPaidRegistration` writes that column last-writer-wins
+-- (coalesce with the NEW intent listed first, so it overwrites). A cart with
+-- entry A paid at submit (PI_A) and sibling B promoted and paid later
+-- (PI_B) ends up with
+-- `group.payment_intent_id = PI_B`. Cancelling A then ran
+-- `stripeRefund(PI_B, A.amount)`: B's charge refunded, B still confirmed,
+-- A never refunded — or a hard Stripe rejection when A's fee exceeded B's.
+--
+-- The status gate added earlier ('paid'/'confirmed' only) does not close
+-- this. It closes the case where the cancelled entry was NEVER charged; here
+-- both entries genuinely were, so the gate passes and the wrong intent still
+-- goes to Stripe.
+--
+-- This column records which intent actually paid THIS entry. Entries paid
+-- together in one session simply share the same value — that case was never
+-- broken and stays byte-identical.
+--
+-- Nullable, no backfill owed: greenfield (prod holds zero registration rows,
+-- the standing fact V378/V381/V383/V385/V386 already rely on). A null on a
+-- 'paid'/'confirmed' row is treated as fail-CLOSED by the refund path — no
+-- automatic refund, organiser refunds by hand — rather than silently falling
+-- back to the cart's intent, which is the exact behaviour being removed.
+--
+-- The group column STAYS and keeps its meaning: the cart's most recent
+-- intent, for cart-scoped concerns that are genuinely against the charge
+-- rather than the entry (disputes, the Stripe-dashboard refund mirror).
+--
+-- No index: every read is by registration id or through the existing join.
+-- No new RLS policy: `registrations` already has row-level security enabled
+-- and forced with a direct tenant policy (V227 `registrations_tenant`,
+-- `for all`), and RLS is row-scoped, not column-scoped, so a new nullable
+-- column on an already-policied table needs nothing further — confirmed
+-- against the policy rather than assumed.
+-- =============================================================================
+
+alter table registrations add column if not exists payment_intent_id text;

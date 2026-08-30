@@ -50,7 +50,6 @@ async function noLineupDivision(owner: ReturnType<typeof asOwner>, competitionId
     sport_key: "generic",
     variant_key: "score",
     config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
-    eligibility: [],
   });
   await sql`
     insert into sports (key, name, module_version, position_catalog)
@@ -111,7 +110,6 @@ describe.skipIf(!HAS_DB)("RS005 W1a: listRegistrations widened read model", () =
       sport_key: "generic",
       variant_key: "score",
       config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
-      eligibility: [],
     });
     const settingsB = await putRegistrationSettings(owner, divB.id, { ...SETTINGS_BASE, fee_cents: 0 });
 
@@ -251,7 +249,6 @@ describe.skipIf(!HAS_DB)("RS005 W1a: exportRegistrationsCsv (per-player)", () =>
       sport_key: "generic",
       variant_key: "score",
       config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
-      eligibility: [],
     });
     const settingsB = await putRegistrationSettings(owner, divB.id, {
       ...SETTINGS_BASE,
@@ -407,7 +404,6 @@ describe.skipIf(!HAS_DB)("RS005 W3 prep: the row carries its DIVISION's approval
       sport_key: "generic",
       variant_key: "score",
       config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
-      eligibility: [],
     });
     const manualSettings = await putRegistrationSettings(owner, manualDiv.id, {
       ...SETTINGS_BASE,

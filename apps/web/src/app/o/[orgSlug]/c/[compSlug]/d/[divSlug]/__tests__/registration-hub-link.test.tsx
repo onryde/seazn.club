@@ -41,7 +41,6 @@ vi.mock("@/server/usecases/divisions", () => ({
     module_version: "1.0.0",
     config: {},
     tiebreakers: undefined,
-    eligibility: [],
     auto_posts: false,
     logo_url: null,
     logo_storage_path: null,

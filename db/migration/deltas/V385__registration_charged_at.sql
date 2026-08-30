@@ -1,0 +1,36 @@
+-- V385 — Finding #18b (RS007 money-matrix follow-up to #18/V384's
+-- reconcile-replay fix). #18 gated confirmPaidRegistration's late-refund
+-- branch on `entrant_id`: a confirmed-then-withdrawn entry no-ops instead
+-- of being refunded twice as a spurious "late payment". But `entrant_id`
+-- is written by `materialise()`, which only runs once an entry is
+-- CONFIRMED — on a manual-approval division a paid entry sits at
+-- `status = 'paid'`, a real charge already on it, awaiting the organiser's
+-- decision, and is never materialised. Withdrawing it from there left the
+-- exact same reconcile-replay (register/status/page.tsx's
+-- reconcile-on-return, re-fired by cancel-entry.tsx's router.refresh())
+-- reading entrant_id null and refunding in full — refund_lock_at bypassed
+-- again, for a narrower (manual-approval) but otherwise identical
+-- population.
+--
+-- `charged_at` answers the question that branch actually needs answered —
+-- "did a live charge exist for THIS entry before it was withdrawn" —
+-- directly, for both approval modes: confirmPaidRegistration now stamps it
+-- (coalesce, so a replay cannot move it) in the SAME statement that writes
+-- `status = 'paid'`, before the manual/auto approval fork. entrant_id is a
+-- strict subset of it (materialise always runs after this statement, in
+-- the same function), so the guard now reads charged_at alone rather than
+-- two overlapping signals.
+--
+-- No index: like reminded_at/promotion_reminder_claimed_at before it
+-- (V381), this column is only ever touched by a single-row UPDATE/SELECT
+-- keyed on the table's own primary key (`where id = ...`) — never scanned
+-- or ordered by.
+--
+-- Greenfield (RS001 demolition — prod holds zero registration rows, same
+-- standing fact V378/V381/V383 already relied on): no backfill owed, no
+-- NOT NULL to satisfy. A null charged_at on any row that predates this
+-- migration is indistinguishable from "never charged" to the guard above —
+-- acceptable only because there is no pre-existing row for it to be wrong
+-- about.
+alter table registrations
+  add column if not exists charged_at timestamptz;

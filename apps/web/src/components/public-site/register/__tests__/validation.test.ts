@@ -143,12 +143,28 @@ describe("validateEntries", () => {
     expect(validateEntries(EMPTY_CART, [BASE_DIVISION], EMPTY_CONTACT, SEASON_START_YEAR).error).toBe("cartEmpty");
   });
 
-  it("one entry, any shape, is enough to proceed (naming is encouraged in the UI, not gated here — schemas.ts leaves team_name/partner_name nullish)", () => {
+  // INVERTED, RS007 — this test used to read "one entry, any shape, is enough
+  // to proceed (naming is encouraged in the UI, not gated here — schemas.ts
+  // leaves team_name/partner_name nullish)" and passed a NAMELESS TEAM entry.
+  // It was asserting one side of a client/server disagreement as though it
+  // were the contract: `registration-submit.ts`'s `entryDisplayName` 422s that
+  // exact entry with "A team name is required". The test froze the bug, which
+  // is why five waves of green never surfaced it. Kept and corrected rather
+  // than deleted, so the inversion stays visible to the next reader.
+  it("one NAMED entry is enough to proceed — the shape still doesn't matter beyond the name the server demands", () => {
+    const cart: CartState = {
+      ...EMPTY_CART,
+      entries: [entry({ id: "e1", division_id: "d1", entrant_kind: "team", team_name: "Rockets" })],
+    };
+    expect(validateEntries(cart, [BASE_DIVISION], EMPTY_CONTACT, SEASON_START_YEAR).valid).toBe(true);
+  });
+
+  it("the same entry WITHOUT a name does not proceed — the pre-RS007 assertion, now the defect probe", () => {
     const cart: CartState = {
       ...EMPTY_CART,
       entries: [entry({ id: "e1", division_id: "d1", entrant_kind: "team" })],
     };
-    expect(validateEntries(cart, [BASE_DIVISION], EMPTY_CONTACT, SEASON_START_YEAR).valid).toBe(true);
+    expect(validateEntries(cart, [BASE_DIVISION], EMPTY_CONTACT, SEASON_START_YEAR).valid).toBe(false);
   });
 
   describe("self-linked ineligible entry blocks progression (fix wave finding #3)", () => {
@@ -225,6 +241,77 @@ describe("validateEntries", () => {
       const female: ContactState = { ...EMPTY_CONTACT, gender: "f" };
       const r = validateEntries(cart, [BASE_DIVISION, WOMENS_DIVISION], female, SEASON_START_YEAR);
       expect(r.valid).toBe(true);
+    });
+  });
+
+  // RS007. This closed a CLIENT/SERVER DISAGREEMENT, not a missing nicety:
+  // validation.ts asserted naming was "encouraged in the UI but not required"
+  // while registration-submit.ts's `entryDisplayName` 422s a nameless TEAM
+  // entry. The zod schema leaves it nullish, so nothing in between caught it,
+  // and the registrant met "A team name is required" only after five steps —
+  // a message naming neither the step nor which of up to ten entries.
+  describe("a team entry with no name blocks its own step, attributed to the entry", () => {
+    it("blocks with missingTeamNameEntryId set — error stays null, per-entry cause like staleClosedEntryId", () => {
+      const cart: CartState = {
+        entries: [entry({ id: "e1", division_id: "d1", entrant_kind: "team", team_name: null })],
+      };
+      const r = validateEntries(cart, [BASE_DIVISION], EMPTY_CONTACT, SEASON_START_YEAR);
+      expect(r.valid).toBe(false);
+      expect(r.error).toBeNull();
+      expect(r.missingTeamNameEntryId).toBe("e1");
+    });
+
+    it("treats whitespace as absent — the server trims before deciding, so a space would 422 at submit", () => {
+      const cart: CartState = {
+        entries: [entry({ id: "e1", division_id: "d1", entrant_kind: "team", team_name: "   " })],
+      };
+      expect(validateEntries(cart, [BASE_DIVISION], EMPTY_CONTACT, SEASON_START_YEAR).missingTeamNameEntryId).toBe("e1");
+    });
+
+    it("names the OFFENDING entry, not the first one — the whole point of attributing it", () => {
+      const cart: CartState = {
+        entries: [
+          entry({ id: "e1", division_id: "d1", entrant_kind: "team", team_name: "Rockets" }),
+          entry({ id: "e2", division_id: "d1", entrant_kind: "team", team_name: null }),
+        ],
+      };
+      expect(validateEntries(cart, [BASE_DIVISION], EMPTY_CONTACT, SEASON_START_YEAR).missingTeamNameEntryId).toBe("e2");
+    });
+
+    // The three cases the SERVER accepts without a name. Blocking any of them
+    // would be the same defect in the opposite direction — a client refusing
+    // a submission the server would have taken.
+    it("does NOT block a free agent — entrant_kind 'team' but one person, named from the contact server-side", () => {
+      const cart: CartState = {
+        entries: [entry({ id: "e1", division_id: "d1", entrant_kind: "team", free_agent: true, team_name: null })],
+      };
+      const r = validateEntries(cart, [BASE_DIVISION], EMPTY_CONTACT, SEASON_START_YEAR);
+      expect(r.valid).toBe(true);
+      expect(r.missingTeamNameEntryId).toBeNull();
+    });
+
+    it("does NOT block a nameless pair — the server composes 'A & B' from the players", () => {
+      const cart: CartState = {
+        entries: [entry({ id: "e1", division_id: "d1", entrant_kind: "pair", team_name: null })],
+      };
+      expect(validateEntries(cart, [BASE_DIVISION], EMPTY_CONTACT, SEASON_START_YEAR).missingTeamNameEntryId).toBeNull();
+    });
+
+    it("does NOT block an individual", () => {
+      const cart: CartState = {
+        entries: [entry({ id: "e1", division_id: "d1", entrant_kind: "individual", team_name: null })],
+      };
+      expect(validateEntries(cart, [BASE_DIVISION], EMPTY_CONTACT, SEASON_START_YEAR).missingTeamNameEntryId).toBeNull();
+    });
+
+    it("reports a stale-closed division FIRST — that one loses the entire cart at submit, a missing name is a local typo", () => {
+      const stale: DivisionLike = { ...BASE_DIVISION, division_id: "d-stale", closed_reason: "window" };
+      const cart: CartState = {
+        entries: [entry({ id: "e1", division_id: "d-stale", entrant_kind: "team", team_name: null })],
+      };
+      const r = validateEntries(cart, [stale], EMPTY_CONTACT, SEASON_START_YEAR);
+      expect(r.staleClosedEntryId).toBe("e1");
+      expect(r.missingTeamNameEntryId).toBeNull();
     });
   });
 

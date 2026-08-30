@@ -236,4 +236,111 @@ describe("e2e CI wiring", () => {
     expect(yml).toContain("--shard=1/2");
     expect(yml).toContain("--shard=2/2");
   });
+
+  // RS007. The Connect walkthrough is the ONLY place in the suite that
+  // genuinely produces `checkout.session.completed`, and it can only do so
+  // with a real key AND a webhook forwarder — the webhook is registrations'
+  // sole fulfilment path, so without a forwarder a paid entry stays `pending`.
+  // Both halves are asserted here because either one missing degrades the leg
+  // to a silent skip, which reads in the summary exactly like a leg that ran.
+  it("wires the Connect walkthrough's real key and its webhook forwarder", () => {
+    const yml = readFileSync(join(REPO_ROOT, ".github/workflows/e2e.yml"), "utf8");
+
+    // Comments are NOT stripped here, unlike the slice test above: this
+    // assertion is about wiring that only the walkthrough leg may receive, and
+    // the surrounding prose is what stops the next reader handing the real key
+    // to every leg.
+    expect(
+      yml,
+      "the walkthrough leg no longer receives a real STRIPE_SECRET_KEY — the Connect walkthrough cannot reach checkout.stripe.com with the dummy",
+    ).toContain("matrix.project == 'walkthrough' && secrets.STRIPE_SECRET_KEY");
+    expect(
+      yml,
+      "STRIPE_CONNECT_TEST_ACCOUNT is not wired — a fabricated account id is rejected by Stripe as a transfer destination",
+    ).toContain("STRIPE_CONNECT_TEST_ACCOUNT");
+    expect(
+      yml,
+      "no `stripe listen` forwarder — without it a paid entry stays `pending` and the spec fails at the webhook wait",
+    ).toContain("stripe listen");
+    // The forwarder must publish the session's own secret to LATER steps: the
+    // server reads STRIPE_WEBHOOK_SECRET at boot, so a forwarder started after
+    // it, or one that never exports, silently verifies against the wrong key.
+    expect(
+      yml,
+      "the forwarder does not export STRIPE_WEBHOOK_SECRET to subsequent steps",
+    ).toContain('echo "STRIPE_WEBHOOK_SECRET=$secret" >> "$GITHUB_ENV"');
+    expect(
+      yml,
+      "nothing enables CONNECT_WALKTHROUGH, so the spec skips even when the secrets are present",
+    ).toContain("CONNECT_WALKTHROUGH=1");
+    // A missing secret must ANNOUNCE that the money path went unexercised,
+    // rather than leaving a green leg that proves nothing about fulfilment.
+    expect(
+      yml,
+      "an unconfigured Connect walkthrough skips silently — no ::warning:: telling the reader the money path was not exercised",
+    ).toMatch(/::warning::Connect walkthrough NOT run/);
+
+    // ORDER IS LOAD-BEARING, and asserting only on content missed it (review
+    // finding 6): `$GITHUB_ENV` applies to SUBSEQUENT steps, and the server
+    // reads STRIPE_WEBHOOK_SECRET at boot. A forwarder started after the
+    // server would leave the app verifying signatures against the job-level
+    // dummy while Stripe signs with the session secret — every webhook
+    // rejected, the entry stuck `pending`, and the failure surfacing as a
+    // timeout in the spec rather than as anything naming the real cause.
+    // Anchor on the STEP NAMES, not on `stripe listen` — the prose above the
+    // step mentions the command too, and that comment does not move when the
+    // steps do. Written the obvious way first, this assertion survived a
+    // mutation that swapped the two steps: it was matching the comment.
+    const forwarderAt = yml.indexOf("- name: Start Stripe webhook forwarder");
+    const serverAt = yml.indexOf("- name: Start server");
+    expect(forwarderAt, "no Stripe forwarder step at all").toBeGreaterThan(-1);
+    expect(serverAt, "no `Start server` step at all").toBeGreaterThan(-1);
+    expect(
+      forwarderAt,
+      "the Stripe forwarder starts AFTER the server — the server would boot with the wrong webhook secret and reject every event",
+    ).toBeLessThan(serverAt);
+  });
+
+  // RS007 follow-up. Two reviewers independently claimed the job-level `env:
+  // STRIPE_WEBHOOK_SECRET: whsec_e2e_payments` above is re-applied to every
+  // step and therefore clobbers the forwarder's `$GITHUB_ENV` write, so
+  // `Start server` would always boot with the placeholder. Checked against
+  // the actions/runner source (StepsRunner.cs / JobExtension.cs /
+  // FileCommandManager.cs, actions/runner@1d8e0dd6): the job-level `env:`
+  // block is folded into the job's one shared env dictionary EXACTLY ONCE,
+  // at job init, before any step runs. Every step then rebuilds its own env
+  // context fresh FROM that same shared, mutable dictionary, and a
+  // `$GITHUB_ENV` write mutates it in place — nothing ever re-applies the
+  // static job-level value afterward. So the claim is FALSE: the forwarder's
+  // write wins for every step that follows it, exactly as the comment above
+  // the forwarder step already says. The one thing that WOULD still shadow
+  // it is a STEP-LEVEL `env:` key on the step that actually reads the secret
+  // at boot — the real precedence rules give a step's own `env:` priority
+  // over the job's shared dictionary for that step alone. That is the one
+  // shape of "shadowing" that can really happen, so it is what this guards.
+  it("does not let a step-level env on `Start server` shadow the forwarder's dynamic secret", () => {
+    const yml = readFileSync(join(REPO_ROOT, ".github/workflows/e2e.yml"), "utf8");
+    const serverAt = yml.indexOf("- name: Start server");
+    const nextStepAt = yml.indexOf("- name: Run Playwright e2e");
+    expect(serverAt, "no `Start server` step at all").toBeGreaterThan(-1);
+    expect(nextStepAt, "no step follows `Start server`").toBeGreaterThan(serverAt);
+    const serverStep = yml.slice(serverAt, nextStepAt);
+    expect(
+      serverStep,
+      "`Start server` declares its own STRIPE_WEBHOOK_SECRET — a step-level env key wins over whatever the forwarder wrote to $GITHUB_ENV for THIS step, so the server would boot verifying against the wrong secret",
+    ).not.toContain("STRIPE_WEBHOOK_SECRET");
+  });
+
+  // The spec moved out of e2e/ into e2e/walkthrough/ (RS007). The project is
+  // directory-anchored, so the move is what enrols it — but a rename or a
+  // revert would leave the wiring above pointing at nothing.
+  it("keeps the Connect walkthrough inside the walkthrough project", async () => {
+    const unset = await configFor(undefined);
+    const walkthrough = projectNamed(unset, "walkthrough");
+    const selected = specFiles().filter((f) => selects(walkthrough, f));
+    expect(
+      selected,
+      "registration-connect.spec.ts is not selected by the walkthrough project",
+    ).toContain("walkthrough/registration-connect.spec.ts");
+  });
 });

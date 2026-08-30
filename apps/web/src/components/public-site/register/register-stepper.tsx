@@ -42,7 +42,7 @@ import { StepEntries } from "./step-entries";
 import { StepNav } from "./step-nav";
 import { StepReview } from "./step-review";
 import { StepWho } from "./step-who";
-import { buildStepOrder, nextStepIndex, prevStepIndex, stepFocusTransition } from "./steps";
+import { buildStepOrder, nextStepIndex, prevStepIndex, shouldCollapseEntries, stepFocusTransition } from "./steps";
 import { BTN_GHOST, BTN_PRIMARY } from "./styles";
 import {
   EMPTY_CART,
@@ -113,7 +113,13 @@ export function RegisterStepper({
 }) {
   const t = useT();
   const openDivisions = info.divisions.filter((d) => d.open);
-  const stepOrder = buildStepOrder(openDivisions.length);
+  // The collapse now depends on the single division's entrant kind, not just
+  // the count — see shouldCollapseEntries. Both this and the auto-seed below
+  // must ask the SAME predicate: they used to state the rule independently
+  // (`openDivisions.length === 1` inline), which is how a collapsed step 2
+  // and a seeded-but-unnameable team entry could disagree.
+  const collapseEntries = shouldCollapseEntries(openDivisions.length, openDivisions[0]?.entrant_kind);
+  const stepOrder = buildStepOrder(openDivisions.length, openDivisions[0]?.entrant_kind);
   const seasonStartYear = seasonStartYearFrom(info.competition.starts_on);
 
   const [hydrated, setHydrated] = useState(false);
@@ -194,13 +200,25 @@ export function RegisterStepper({
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setContact(saved.contact);
       setImPlaying(saved.imPlaying);
-      setCart(saved.cart);
+      // A restored snapshot can carry an EMPTY cart — the visitor advanced
+      // past WHO without adding an entry, or a division closed since they
+      // saved. When entries is collapsed there is no step on which to add
+      // one, so restoring that emptiness verbatim walks them to REVIEW with
+      // nothing to submit and a `.min(1)` 422 they cannot act on. The seed
+      // is therefore keyed on "the cart is empty and entries is collapsed",
+      // NOT on "this is a fresh visit" — the `else if` below only covers
+      // the fresh case, which is what left this route open.
+      setCart(
+        collapseEntries && saved.cart.entries.length === 0
+          ? { ...EMPTY_CART, entries: autoSeedSingleDivision(openDivisions[0]!, crypto.randomUUID()) }
+          : saved.cart,
+      );
       setConsent(saved.consent);
       // Clamped to the LAST real step, never stepOrder.length itself —
       // "review" (step 5) has its own Submit action, not a "coming soon"
       // end-cap one past it (storage.ts's own doc comment on this field).
       setStepIndex(Math.min(saved.stepIndex, stepOrder.length - 1));
-    } else if (openDivisions.length === 1) {
+    } else if (collapseEntries) {
       // FIX 2 (RS006 fix wave) — design §4: "step 2 collapses when the
       // competition has one open division," so that one division is
       // auto-added on a FRESH visit (no saved snapshot to restore

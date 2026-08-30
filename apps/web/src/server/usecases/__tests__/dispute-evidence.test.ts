@@ -41,7 +41,7 @@ async function seed(): Promise<{ owner: AuthCtx; orgId: string; divisionId: stri
   });
   const division = await createDivision(owner, competition.id, {
     name: "Open", sport_key: "generic", variant_key: "score",
-    config: DIVISION_CONFIG, eligibility: [],
+    config: DIVISION_CONFIG, 
   });
   return { owner, orgId, divisionId: division.id, compId: competition.id };
 }

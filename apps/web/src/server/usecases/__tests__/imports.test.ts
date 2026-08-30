@@ -52,7 +52,6 @@ async function seedDivision(auth: AuthCtx, slug = "u12") {
     sport_key: "football",
     variant_key: "default",
     config: {},
-    eligibility: [],
   });
   return { comp, division };
 }

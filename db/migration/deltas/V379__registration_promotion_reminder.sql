@@ -1,0 +1,21 @@
+-- V379 — RS007 continued: per-ENTRY idempotency for a promoted entry's own
+-- T-24h payment reminder.
+--
+-- registration_groups.reminded_at (V364) marks the CART's shared reminder —
+-- right for a never-promoted submit, wrong for a promotion: a cart can hold
+-- several entries (design §3), so writing a promoted entry's reminder mark
+-- to the GROUP would silence a still-pending SIBLING's own, unrelated
+-- group-level reminder the moment any one entry in the cart got reminded.
+-- This is the entry's OWN mark, mirroring promotion_expires_at's own
+-- entry-scoping (V378) rather than the group's — see sweepRegistrations'
+-- promoted-reminder pass (registrations.ts).
+--
+-- No new index: the sweep's promoted-reminder query filters
+-- `status = 'pending' and promotion_expires_at is not null` (plus this new
+-- column is null) and orders by promotion_expires_at — exactly the
+-- predicate registrations_promotion_expiry_idx (V378) already serves.
+--
+-- Greenfield (RS001 demolition — prod holds zero registration rows): no
+-- backfill owed, no NOT NULL to satisfy.
+alter table registrations
+  add column if not exists promotion_reminded_at timestamptz;

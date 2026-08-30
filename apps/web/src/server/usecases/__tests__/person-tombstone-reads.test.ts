@@ -36,7 +36,6 @@ async function seedPublicDivision(
     sport_key: "generic",
     variant_key: "score",
     config: DIVISION_CONFIG,
-    eligibility: [],
   });
   return { divisionId: division.id, orgSlug, compSlug: competition.slug };
 }

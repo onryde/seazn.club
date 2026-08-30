@@ -3010,7 +3010,6 @@ async function clubsSuite(): Promise<void> {
         points: { w: 3, d: 1, l: 0 },
         progressScore: false,
       },
-      eligibility: [],
     },
   );
   const syncDivId = v1data<{ id: string }>(syncDiv).id;
@@ -4610,6 +4609,32 @@ async function plgGrowthSuite(admin: Session, proOrgId: string, proOrgSlug: stri
     !proShared.body.includes("Run your own free"),
   );
 
+  // --- RS007: the `/shared/[orgSlug]` segment must MISS with a 404, never a
+  // 500. `not-found.tsx` there once called `resolveLocale()`, which reads
+  // cookies/headers; every page in that segment is statically generated
+  // (`revalidate = 30`), and a static page whose not-found boundary reads
+  // headers makes Next throw "Page changed from static to dynamic at runtime"
+  // — so the whole public surface 500'd, real org pages included, while the
+  // branded 404 it was supposed to render never appeared at all.
+  //
+  // This lives in SMOKE rather than e2e on purpose: `e2e.yml` triggers on push
+  // to `main` only, so an e2e test gives no pre-merge signal, and smoke is the
+  // PR-only gate. It also cannot be a unit test — the failure needs a real
+  // request against a production build, which is exactly what smoke does and
+  // what `tsc`, vitest and `next build` all missed.
+  const orgRoot = await html(newSession(), `/shared/${proOrgSlug}`);
+  check("public org page renders (not a 500)", orgRoot.status === 200);
+  const missingOrg = await html(newSession(), `/shared/no-such-org-${tag}`);
+  check(
+    `nonexistent org 404s rather than 500ing (got ${missingOrg.status})`,
+    missingOrg.status === 404,
+  );
+  const missingComp = await html(newSession(), `/shared/${proOrgSlug}/no-such-comp-${tag}`);
+  check(
+    `nonexistent competition under a real org 404s rather than 500ing (got ${missingComp.status})`,
+    missingComp.status === 404,
+  );
+
   // --- Free path: a fresh community owner's public page carries both the
   // attribution CTA and the fan ShareBar.
   const free = newSession();
@@ -5902,7 +5927,6 @@ async function regQueueSuite(admin: Session): Promise<void> {
       sport_key: "generic",
       variant_key: "score",
       config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
-      eligibility: [],
     }),
   );
   // RS001b: currency is ORG-level. The request schema has no `currency`, so a

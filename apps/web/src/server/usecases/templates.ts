@@ -245,10 +245,10 @@ export async function instantiateTemplate(
           async (divisionSlug, q) => {
             const [row] = await q<{ id: string }[]>`
               insert into divisions (competition_id, name, slug, sport_key, variant_key, config,
-                                      module_version, eligibility, tiebreakers)
+                                      module_version, tiebreakers)
               values (${competitionId}, ${divisionName}, ${divisionSlug}, ${templateDivision.sportKey},
                       ${templateDivision.variantKey}, ${q.json(parsedConfig.data as never)},
-                      ${sport.module_version}, '[]',
+                      ${sport.module_version},
                       ${templateDivision.tiebreakers ? q.json(templateDivision.tiebreakers as never) : null})
               returning id`;
             return row!;

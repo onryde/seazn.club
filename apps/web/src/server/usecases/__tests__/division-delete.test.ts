@@ -65,7 +65,6 @@ async function seedDivision(auth: AuthCtx, name = "Open") {
     sport_key: "generic",
     variant_key: "score",
     config: GENERIC_CONFIG,
-    eligibility: [],
   });
   return { comp, division };
 }
@@ -229,7 +228,6 @@ describe.skipIf(!HAS_DB)("division archive / restore (v3/09 §4)", () => {
       sport_key: "generic",
       variant_key: "score",
       config: GENERIC_CONFIG,
-      eligibility: [],
     });
 
     // The community quota (1) is used up — a second division is 402-gated.
@@ -240,7 +238,6 @@ describe.skipIf(!HAS_DB)("division archive / restore (v3/09 §4)", () => {
         sport_key: "generic",
         variant_key: "score",
         config: GENERIC_CONFIG,
-        eligibility: [],
       }),
     ).rejects.toBeInstanceOf(PaymentRequiredError);
 
@@ -262,7 +259,6 @@ describe.skipIf(!HAS_DB)("division archive / restore (v3/09 §4)", () => {
       sport_key: "generic",
       variant_key: "score",
       config: GENERIC_CONFIG,
-      eligibility: [],
     });
     expect(second.id).toBeTruthy();
 

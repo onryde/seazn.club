@@ -39,9 +39,18 @@ const RESPONSE: RegistrationSettingsResponse = {
   updated_at: "2026-01-05T00:00:00Z",
 };
 
+const NO_ELIGIBILITY = {
+  category: null,
+  age_min: null,
+  age_max: null,
+  age_cutoff_month: null,
+  age_cutoff_day: null,
+  eligibility_note: null,
+};
+
 describe("initialConfigState", () => {
   it("takes registration_settings fields from the GET response", () => {
-    const state = initialConfigState(RESPONSE, { category: null, age_min: null, age_max: null });
+    const state = initialConfigState(RESPONSE, NO_ELIGIBILITY);
     expect(state.enabled).toBe(true);
     expect(state.entrant_kind).toBe("team");
     expect(state.opens_at).toBe("2026-01-01T00:00:00Z");
@@ -55,20 +64,51 @@ describe("initialConfigState", () => {
     expect(state.allow_free_agents).toBe(true);
   });
 
-  it("takes category/age_min/age_max from the division eligibility argument, NOT the response (the GET has no such columns)", () => {
-    const state = initialConfigState(RESPONSE, { category: "mixed", age_min: 10, age_max: 18 });
+  it("takes category/age_min/age_max/age_cutoff_month/age_cutoff_day/eligibility_note from the division eligibility argument, NOT the response (the GET has no such columns)", () => {
+    const state = initialConfigState(RESPONSE, {
+      category: "mixed",
+      age_min: 10,
+      age_max: 18,
+      age_cutoff_month: 9,
+      age_cutoff_day: 1,
+      eligibility_note: "School-registered students only",
+    });
     expect(state.category).toBe("mixed");
     expect(state.age_min).toBe(10);
     expect(state.age_max).toBe(18);
+    expect(state.age_cutoff_month).toBe(9);
+    expect(state.age_cutoff_day).toBe(1);
+    expect(state.eligibility_note).toBe("School-registered students only");
   });
 });
 
 describe("toDivisionPatchBody", () => {
-  it("carries exactly category/age_min/age_max, never a fourth key", () => {
-    const state = initialConfigState(RESPONSE, { category: "mens", age_min: 18, age_max: null });
+  it("carries exactly category/age_min/age_max/age_cutoff_month/age_cutoff_day/eligibility_note, never a seventh key", () => {
+    const state = initialConfigState(RESPONSE, {
+      category: "mens",
+      age_min: 18,
+      age_max: null,
+      age_cutoff_month: 9,
+      age_cutoff_day: 1,
+      eligibility_note: "Note",
+    });
     const body = toDivisionPatchBody(state);
-    expect(body).toEqual({ category: "mens", age_min: 18, age_max: null });
-    expect(Object.keys(body).sort()).toEqual(["age_max", "age_min", "category"]);
+    expect(body).toEqual({
+      category: "mens",
+      age_min: 18,
+      age_max: null,
+      age_cutoff_month: 9,
+      age_cutoff_day: 1,
+      eligibility_note: "Note",
+    });
+    expect(Object.keys(body).sort()).toEqual([
+      "age_cutoff_day",
+      "age_cutoff_month",
+      "age_max",
+      "age_min",
+      "category",
+      "eligibility_note",
+    ]);
   });
 });
 
@@ -77,6 +117,9 @@ describe("toRegistrationSettingsPutBody — full replace hazard", () => {
     category: "open",
     age_min: null,
     age_max: null,
+    age_cutoff_month: null,
+    age_cutoff_day: null,
+    eligibility_note: null,
     enabled: true,
     entrant_kind: "team",
     opens_at: "2026-01-01T00:00:00Z",
@@ -109,11 +152,14 @@ describe("toRegistrationSettingsPutBody — full replace hazard", () => {
     });
   });
 
-  it("never includes category/age_min/age_max — those belong to the OTHER endpoint", () => {
+  it("never includes category/age_min/age_max/age_cutoff_month/age_cutoff_day/eligibility_note — those belong to the OTHER endpoint", () => {
     const body = toRegistrationSettingsPutBody(FULL_STATE);
     expect(body).not.toHaveProperty("category");
     expect(body).not.toHaveProperty("age_min");
     expect(body).not.toHaveProperty("age_max");
+    expect(body).not.toHaveProperty("age_cutoff_month");
+    expect(body).not.toHaveProperty("age_cutoff_day");
+    expect(body).not.toHaveProperty("eligibility_note");
   });
 
   // The hazard itself: editing ONE field (fee_cents) must not silently
@@ -147,6 +193,9 @@ describe("validateConfigState", () => {
     category: "open",
     age_min: null,
     age_max: null,
+    age_cutoff_month: null,
+    age_cutoff_day: null,
+    eligibility_note: null,
     enabled: true,
     entrant_kind: "team",
     opens_at: "2026-01-01T00:00:00.000Z",

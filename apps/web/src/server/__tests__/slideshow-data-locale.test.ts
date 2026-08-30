@@ -38,7 +38,6 @@ describe.skipIf(!HAS_DB)("buildDivisionSlides — locale threading", () => {
       sport_key: "generic",
       variant_key: "score",
       config: GENERIC_CONFIG,
-      eligibility: [],
     });
     await createEntrants(
       auth,

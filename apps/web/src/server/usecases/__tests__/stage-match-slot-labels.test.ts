@@ -47,7 +47,6 @@ async function makeKnockoutDivision(config: Record<string, unknown> = {}) {
     sport_key: "generic",
     variant_key: "score",
     config: GENERIC_CONFIG,
-    eligibility: [],
   });
   await createEntrants(
     auth,

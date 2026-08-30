@@ -1,7 +1,11 @@
 // RS002 wave 2 (rewritten per _INDEX.md "RS002 entry conditions" item 5,
 // 2026-08-17): eligibility extracted from registrations.ts, evaluating the
-// V364 first-class divisions.category/age_min/age_max columns alongside the
-// existing jsonb eligibility rules, plus roster-level rosterIssues.
+// V364 first-class divisions.category/age_min/age_max columns, plus
+// roster-level rosterIssues. RS007/V380 (owner ruling, _INDEX.md
+// "Eligibility consolidation") later dropped the jsonb `eligibility` rules
+// this file used to evaluate ALONGSIDE those columns — category/age_min/
+// age_max/age_cutoff_month/age_cutoff_day are now the only representation;
+// see registration-eligibility.ts's own header for the full account.
 //
 // Return shape is now STRUCTURED (EligibilityIssue[] with a machine `code`),
 // not string[] — RS011's organiser-side gates consume this same evaluator and
@@ -36,10 +40,11 @@ import {
 } from "../registrations";
 
 const NO_RULES: EligibilityDivision = {
-  eligibility: [],
   category: null,
   age_min: null,
   age_max: null,
+  age_cutoff_month: null,
+  age_cutoff_day: null,
 };
 
 /** Strip `message` for assertions that only care about the structured part —
@@ -61,69 +66,79 @@ describe("registrations.ts re-exports the moved eligibility helpers", () => {
     expect(reexportedIsMinor("2010-01-01", new Date("2026-01-01T00:00:00Z"))).toBe(
       isMinor("2010-01-01", new Date("2026-01-01T00:00:00Z")),
     );
-    expect(reexportedRequiresDob([])).toBe(false);
-    expect(reexportedRequiresDob([{ kind: "age", maxAgeAt: 10 }])).toBe(true);
+    expect(reexportedRequiresDob({ age_min: null, age_max: null })).toBe(false);
+    expect(reexportedRequiresDob({ age_min: null, age_max: 10 })).toBe(true);
   });
 });
 
-describe("requiresDob (division-aware overload, V364) — unaffected by the code rework, still boolean", () => {
-  it("is true for a division with only age_min/age_max set and no jsonb age rule", () => {
-    expect(requiresDob({ eligibility: [], age_min: 10, age_max: null })).toBe(true);
-    expect(requiresDob({ eligibility: [], age_min: null, age_max: 18 })).toBe(true);
+describe("requiresDob (division-aware, V364/V380) — unaffected by the code rework, still boolean", () => {
+  it("is true for a division with only age_min/age_max set", () => {
+    expect(requiresDob({ age_min: 10, age_max: null })).toBe(true);
+    expect(requiresDob({ age_min: null, age_max: 18 })).toBe(true);
   });
 
-  it("is false when neither the jsonb rules nor the age columns require one", () => {
-    expect(requiresDob({ eligibility: [], age_min: null, age_max: null })).toBe(false);
-  });
-
-  it("still honours the jsonb rules when passed as a division", () => {
-    expect(
-      requiresDob({ eligibility: [{ kind: "age", maxAgeAt: 15 }], age_min: null, age_max: null }),
-    ).toBe(true);
-  });
-
-  it("legacy bare-array call keeps working (jsonb-only overload)", () => {
-    expect(requiresDob([])).toBe(false);
-    expect(requiresDob([{ kind: "age", maxAgeAt: 15 }])).toBe(true);
-    expect(requiresDob([{ kind: "gender", allowed: ["f"] }])).toBe(false);
+  it("is false when neither age column requires one", () => {
+    expect(requiresDob({ age_min: null, age_max: null })).toBe(false);
   });
 });
 
 // RS006 chassis: the WHO step (design §4 step 1) shows a gender field only
 // when at least one open division needs one — mirrors requiresDob's own
-// "does the form need to collect this at all" role, but for gender. Must
-// agree EXACTLY with divisionEligibilityIssues's two gender sources (the
-// jsonb GenderRule loop and the mens/womens category block) or the public
-// read model would tell the client to hide a field the server's own
-// evaluator is about to require.
-describe("requiresGender (RS006) — mirrors divisionEligibilityIssues's gender sources", () => {
+// "does the form need to collect this at all" role, but for gender.
+//
+// RS007 review fix M2 (2026-08-29 — see requiresGender's own doc comment for
+// the full account): a 2026-08-27 revision ALSO fired this on any non-empty
+// `eligibility_note`, on the theory that V380 dropped the jsonb
+// `eligibility` rules without a first-class replacement for every
+// gender-rule shape a note might be the only remaining record of. In
+// practice that made an UNRELATED organiser note ("bring your own kit",
+// "club members only") force the public WHO step to demand gender on a
+// division `divisionEligibilityIssues` never gates on gender for — the
+// browser blocked a registrant the API would accept. Ruling: a free-text
+// note must never make a field mandatory. `category` mens/womens/mixed is
+// now the ONLY trigger — agrees EXACTLY with divisionEligibilityIssues's
+// gender source (categoryEligibilityIssues/rosterCompositionIssues).
+describe("requiresGender (RS007 review fix M2) — category alone; eligibility_note is NEVER a trigger", () => {
   it("is true for mens/womens category (first-class column alone)", () => {
-    expect(requiresGender({ eligibility: [], category: "mens" })).toBe(true);
-    expect(requiresGender({ eligibility: [], category: "womens" })).toBe(true);
+    expect(requiresGender({ category: "mens" })).toBe(true);
+    expect(requiresGender({ category: "womens" })).toBe(true);
   });
 
   it("is true for a mixed category (roster composition needs every player's gender)", () => {
-    expect(requiresGender({ eligibility: [], category: "mixed" })).toBe(true);
-  });
-
-  it("is false for open/null category with no jsonb gender rule", () => {
-    expect(requiresGender({ eligibility: [], category: "open" })).toBe(false);
-    expect(requiresGender({ eligibility: [], category: null })).toBe(false);
-  });
-
-  it("is true when a jsonb GenderRule is present, regardless of category", () => {
-    expect(
-      requiresGender({ eligibility: [{ kind: "gender", allowed: ["f"] }], category: null }),
-    ).toBe(true);
-    expect(
-      requiresGender({ eligibility: [{ kind: "gender", allowed: ["m"] }], category: "open" }),
-    ).toBe(true);
-  });
-
-  it("ignores non-gender jsonb rules", () => {
-    expect(requiresGender({ eligibility: [{ kind: "age", maxAgeAt: 18 }], category: null })).toBe(
-      false,
+    expect(requiresGender({ category: "mixed" })).toBe(true);
+    expect(requiresGender({ category: "mixed", eligibility_note: null })).toBe(true);
+    // Roster-wide, per the schema comment on `category` — it does NOT
+    // constrain an individual (categoryEligibilityIssues never fires for
+    // `mixed`), so requiresGender=true here is a collection signal only.
+    expect(divisionEligibilityIssues({ ...NO_RULES, category: "mixed" }, { gender: "x" }, 2026)).toEqual(
+      [],
     );
+  });
+
+  it("is false for open/null category with no eligibility_note", () => {
+    expect(requiresGender({ category: "open" })).toBe(false);
+    expect(requiresGender({ category: null })).toBe(false);
+  });
+
+  // THE regression this fix closes: a free-text note that has nothing to do
+  // with gender ("bring your own kit") — or one that happens to mention it
+  // ("Girls only (club rule)") — must NOT force gender collection on a
+  // division `category` alone already proves unrestricted.
+  // divisionEligibilityIssues never reads note text either way (nothing
+  // programmatically evaluates it — only a human, reading the note against
+  // the submitted roster, can), so this was purely a client-side dead end:
+  // blocking a registrant the API would happily accept.
+  it("a non-empty eligibility_note does NOT force gender collection on a null/open category", () => {
+    expect(requiresGender({ category: null, eligibility_note: "Girls only (club rule)" })).toBe(false);
+    expect(requiresGender({ category: "open", eligibility_note: "Girls only (club rule)" })).toBe(false);
+    expect(divisionEligibilityIssues(NO_RULES, { gender: "x" }, 2026)).toEqual([]);
+  });
+
+  it("blank, whitespace-only, null and absent eligibility_note all agree — false either way", () => {
+    expect(requiresGender({ category: null, eligibility_note: "" })).toBe(false);
+    expect(requiresGender({ category: null, eligibility_note: "   " })).toBe(false);
+    expect(requiresGender({ category: null, eligibility_note: null })).toBe(false);
+    expect(requiresGender({ category: null })).toBe(false);
   });
 });
 
@@ -140,52 +155,52 @@ describe("formatEligibilityIssues(divisionEligibilityIssues(...)) — literal En
   // `formatEligibilityIssues(divisionEligibilityIssues(...))` directly —
   // the REAL display path, not a wrapper around it — with the exact same
   // hardcoded expected strings, unchanged.
-  const ageRule = [
-    {
-      kind: "age",
-      maxAgeAt: 15,
-      minAgeAt: 10,
-      cutoff: { month: 1, day: 1, yearOf: "season_start" as const },
-    },
-  ];
-  const genderRule = [{ kind: "gender", allowed: ["f"] }];
-  const noCategoryOrAgeBand = { category: null, age_min: null, age_max: null };
+  //
+  // RS007/V380: the age/gender rule fixtures below used to be jsonb
+  // (`{kind:"age",maxAgeAt:15,minAgeAt:10}` / `{kind:"gender",allowed:["f"]}`)
+  // — rewritten onto age_min/age_max and category:"womens" respectively.
+  // `allowed:["f"]` maps onto `womens` exactly: categoryEligibilityIssues'
+  // own "x never blocks" rule means only `f` passes `womens` besides `x`,
+  // which the original jsonb rule excluded too — same admitted set, same
+  // expected sentences.
+  const ageRule = { age_min: 10, age_max: 15 };
+  const genderRule = { category: "womens" };
+  const noCategoryOrAgeBand = NO_RULES;
 
   it("MISSING_DOB", () => {
-    // Reverting registration-eligibility.ts's jsonb age branch's MISSING_DOB
-    // push changes this string and reds the test.
-    const division: EligibilityDivision = { eligibility: ageRule, ...noCategoryOrAgeBand };
+    // Reverting ageBandEligibilityIssues's MISSING_DOB push changes this
+    // string and reds the test.
+    const division: EligibilityDivision = { ...noCategoryOrAgeBand, ...ageRule };
     expect(formatEligibilityIssues(divisionEligibilityIssues(division, { dob: null }, 2026))).toEqual([
       "Date of birth is required for this age-restricted division.",
     ]);
   });
 
   it("AGE_TOO_OLD", () => {
-    // Pins the age-16-over-maxAgeAt-15 branch.
-    const division: EligibilityDivision = { eligibility: ageRule, ...noCategoryOrAgeBand };
+    // Pins the age-16-over-age_max-15 branch.
+    const division: EligibilityDivision = { ...noCategoryOrAgeBand, ...ageRule };
     expect(
       formatEligibilityIssues(divisionEligibilityIssues(division, { dob: "2010-01-01" }, 2026)),
     ).toEqual(["Too old for this division (must be 15 or younger on the cutoff date)."]);
   });
 
   it("AGE_TOO_YOUNG", () => {
-    // Pins the age-9-under-minAgeAt-10 branch.
-    const division: EligibilityDivision = { eligibility: ageRule, ...noCategoryOrAgeBand };
+    // Pins the age-9-under-age_min-10 branch.
+    const division: EligibilityDivision = { ...noCategoryOrAgeBand, ...ageRule };
     expect(
       formatEligibilityIssues(divisionEligibilityIssues(division, { dob: "2017-01-01" }, 2026)),
     ).toEqual(["Too young for this division (must be 10 or older on the cutoff date)."]);
   });
 
-  it("GENDER_NOT_ALLOWED", () => {
-    const division: EligibilityDivision = { eligibility: genderRule, ...noCategoryOrAgeBand };
+  it("GENDER_NOT_ALLOWED equivalent (CATEGORY_MISMATCH — the one gender-rejection code left)", () => {
+    const division: EligibilityDivision = { ...noCategoryOrAgeBand, ...genderRule };
     expect(formatEligibilityIssues(divisionEligibilityIssues(division, { gender: "m" }, 2026))).toEqual([
       "This division is not open to your gender category.",
     ]);
   });
 
   it("MISSING_GENDER", () => {
-    // Pins the jsonb gender branch.
-    const division: EligibilityDivision = { eligibility: genderRule, ...noCategoryOrAgeBand };
+    const division: EligibilityDivision = { ...noCategoryOrAgeBand, ...genderRule };
     expect(formatEligibilityIssues(divisionEligibilityIssues(division, { gender: null }, 2026))).toEqual([
       "Gender is required for this division.",
     ]);
@@ -208,21 +223,17 @@ describe("MISSING_DOB / MISSING_GENDER are plain codes — no severity, no baked
     expect(codesOf(genderIssues)).toEqual([{ code: "MISSING_GENDER" }]);
     expect(genderIssues[0]).not.toHaveProperty("severity");
 
-    // The jsonb-rule path emits the SAME codes for the SAME reason (no dob
-    // present for an age rule, no gender present for a gender rule) — one
-    // vocabulary, whichever source triggered it.
-    const jsonbAgeDivision: EligibilityDivision = {
-      ...NO_RULES,
-      eligibility: [{ kind: "age", maxAgeAt: 15 }],
-    };
-    expect(codesOf(divisionEligibilityIssues(jsonbAgeDivision, { dob: null }, 2026))).toEqual([
+    // Same MISSING_DOB code fires off age_max alone, not just age_min — one
+    // vocabulary regardless of which side of the band is set.
+    const ageMaxOnlyDivision: EligibilityDivision = { ...NO_RULES, age_max: 15 };
+    expect(codesOf(divisionEligibilityIssues(ageMaxOnlyDivision, { dob: null }, 2026))).toEqual([
       { code: "MISSING_DOB" },
     ]);
   });
 });
 
 describe("meta carries structured detail a consumer would otherwise have to re-parse from the sentence", () => {
-  it("AGE_TOO_OLD/AGE_TOO_YOUNG carry the limit, GENDER_NOT_ALLOWED the allowed list, CATEGORY_MISMATCH the category", () => {
+  it("AGE_TOO_OLD/AGE_TOO_YOUNG carry the limit, CATEGORY_MISMATCH the category", () => {
     const ageDivision: EligibilityDivision = { ...NO_RULES, age_min: 10, age_max: 15 };
     expect(codesOf(divisionEligibilityIssues(ageDivision, { dob: "2010-01-01" }, 2026))).toEqual([
       { code: "AGE_TOO_OLD", meta: { limit: 15 } },
@@ -230,14 +241,6 @@ describe("meta carries structured detail a consumer would otherwise have to re-p
     expect(codesOf(divisionEligibilityIssues(ageDivision, { dob: "2017-01-01" }, 2026))).toEqual([
       { code: "AGE_TOO_YOUNG", meta: { limit: 10 } },
     ]); // age 9
-
-    const jsonbGenderDivision: EligibilityDivision = {
-      ...NO_RULES,
-      eligibility: [{ kind: "gender", allowed: ["f", "x"] }],
-    };
-    expect(
-      codesOf(divisionEligibilityIssues(jsonbGenderDivision, { gender: "m" }, 2026)),
-    ).toEqual([{ code: "GENDER_NOT_ALLOWED", meta: { allowed: ["f", "x"] } }]);
 
     const mensDivision: EligibilityDivision = { ...NO_RULES, category: "mens" };
     expect(codesOf(divisionEligibilityIssues(mensDivision, { gender: "f" }, 2026))).toEqual([
@@ -294,54 +297,10 @@ describe("divisionEligibilityIssues — category (mens/womens), x never blocks",
   });
 });
 
-describe("divisionEligibilityIssues — one code per root cause (jsonb GenderRule + mens/womens category overlap)", () => {
-  // Review finding (MINOR 1): a division carrying BOTH a jsonb GenderRule and
-  // a mens/womens category used to double-emit for one person — MISSING_GENDER
-  // from both blocks, or GENDER_NOT_ALLOWED + CATEGORY_MISMATCH together.
-  // Ruling: the jsonb rule (organiser-authored, more specific) wins; the
-  // category block emits nothing further for gender once jsonb already has.
-  const bothSources: EligibilityDivision = {
-    eligibility: [{ kind: "gender", allowed: ["m"] }],
-    category: "mens",
-    age_min: null,
-    age_max: null,
-  };
-
-  it("gender=null yields exactly ONE MISSING_GENDER, not two", () => {
-    // Reverting the dedup guard on registration-eligibility.ts's category
-    // block (the `!jsonbGenderIssue &&` condition) makes this a 2-element
-    // array again and reds.
-    expect(codesOf(divisionEligibilityIssues(bothSources, { gender: null }, 2026))).toEqual([
-      { code: "MISSING_GENDER" },
-    ]);
-  });
-
-  it("a gender failing both sources yields only GENDER_NOT_ALLOWED — jsonb wins over CATEGORY_MISMATCH", () => {
-    expect(codesOf(divisionEligibilityIssues(bothSources, { gender: "f" }, 2026))).toEqual([
-      { code: "GENDER_NOT_ALLOWED", meta: { allowed: ["m"] } },
-    ]);
-  });
-
-  it("roster-level MIXED_NEEDS_BOTH_GENDERS still fires independently — it is a roster property, not a person one", () => {
-    const mixedWithJsonbRule: EligibilityDivision = {
-      eligibility: [{ kind: "gender", allowed: ["m", "f"] }], // both pass this jsonb rule
-      category: "mixed",
-      age_min: null,
-      age_max: null,
-    };
-    const players: EligibilityRosterPlayer[] = [
-      { full_name: "A", gender: "m" },
-      { full_name: "B", gender: "m" }, // both pass jsonb; roster still lacks an f
-    ];
-    expect(codesOf(rosterIssues(mixedWithJsonbRule, players, 2026))).toEqual([
-      { code: "MIXED_NEEDS_BOTH_GENDERS" },
-    ]);
-  });
-});
-
-describe("divisionEligibilityIssues — age band (first-class age_min/age_max)", () => {
-  // Cutoff = 1 Jan of seasonStartYear. Dobs land exactly on Jan 1 so the age
-  // math is exact: age = seasonStartYear - dobYear.
+describe("divisionEligibilityIssues — age band (first-class age_min/age_max/age_cutoff_month/age_cutoff_day)", () => {
+  // Cutoff = 1 Jan of seasonStartYear (default, no age_cutoff_month/day set).
+  // Dobs land exactly on Jan 1 so the age math is exact:
+  // age = seasonStartYear - dobYear.
   const division: EligibilityDivision = { ...NO_RULES, age_min: 10, age_max: 15 };
   const seasonStartYear = 2026;
 
@@ -371,7 +330,7 @@ describe("divisionEligibilityIssues — age band (first-class age_min/age_max)",
     ]);
   });
 
-  it("is evaluated at 1 January of seasonStartYear, not 'today'", () => {
+  it("is evaluated at 1 January of seasonStartYear BY DEFAULT, not 'today'", () => {
     // seasonStartYear deliberately far from the real current year: if the
     // production code used `new Date()` instead of the season-start cutoff,
     // this dob would read as 6 years OLDER than intended and fail age_max.
@@ -381,21 +340,52 @@ describe("divisionEligibilityIssues — age band (first-class age_min/age_max)",
     const dob = `${pastSeasonStartYear - 10}-01-01`; // age 10 AT the season-start cutoff
     expect(divisionEligibilityIssues(overAgeMax, { dob }, pastSeasonStartYear)).toEqual([]);
   });
+
+  // RS007/V380 criterion 2's proof: age_cutoff_month/age_cutoff_day must
+  // actually change the evaluated outcome vs the 1-January default — the
+  // whole reason the migration added them rather than just dropping the
+  // jsonb rules outright (V380 migration header, defect 1: dropping the
+  // cutoff without replacing it would silently re-anchor every school-year
+  // age group onto 1 January and change who is eligible).
+  it("a configured cutoff evaluates differently from the 1-January default", () => {
+    // A July dob falls strictly between 1 Jan and 1 Sept, so the two
+    // cutoffs disagree about whether the birthday has happened yet: on
+    // 1 Jan it hasn't (still 15, eligible for age_max 15); on 1 Sept it has
+    // (turned 16, AGE_TOO_OLD). Same division shape otherwise, same dob —
+    // only the cutoff differs.
+    const dob = "2010-07-10";
+    const defaultCutoff: EligibilityDivision = { ...NO_RULES, age_max: 15 };
+    const septCutoff: EligibilityDivision = {
+      ...NO_RULES,
+      age_max: 15,
+      age_cutoff_month: 9,
+      age_cutoff_day: 1,
+    };
+    expect(divisionEligibilityIssues(defaultCutoff, { dob }, seasonStartYear)).toEqual([]);
+    expect(codesOf(divisionEligibilityIssues(septCutoff, { dob }, seasonStartYear))).toEqual([
+      { code: "AGE_TOO_OLD", meta: { limit: 15 } },
+    ]);
+  });
 });
 
-describe("divisionEligibilityIssues — jsonb rules and first-class columns apply together", () => {
-  it("a division with both a jsonb gender rule and a first-class age_min yields both codes", () => {
+describe("divisionEligibilityIssues — category and age band apply together", () => {
+  // RS007/V380: this used to be a jsonb gender rule + a first-class
+  // age_min, proving the two SOURCES were additive. With one representation
+  // left there is nothing left to be additive ACROSS — this now proves the
+  // same thing about the two CHECKS within that one representation
+  // (categoryEligibilityIssues + ageBandEligibilityIssues): a division that
+  // sets both category and an age band gets issues from both, independently.
+  it("a division with both category and age_min yields both codes", () => {
     const division: EligibilityDivision = {
-      eligibility: [{ kind: "gender", allowed: ["f"] }],
-      category: null,
+      ...NO_RULES,
+      category: "womens",
       age_min: 21,
-      age_max: null,
     };
     expect(
       codesOf(divisionEligibilityIssues(division, { dob: "2015-01-01", gender: "m" }, 2026)),
     ).toEqual([
-      { code: "GENDER_NOT_ALLOWED", meta: { allowed: ["f"] } }, // jsonb rule
-      { code: "AGE_TOO_YOUNG", meta: { limit: 21 } }, // first-class column, age 11
+      { code: "CATEGORY_MISMATCH", meta: { category: "womens" } },
+      { code: "AGE_TOO_YOUNG", meta: { limit: 21 } }, // age 11
     ]);
   });
 });

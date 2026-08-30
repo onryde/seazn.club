@@ -1354,6 +1354,22 @@ jobs:
           fi
           echo "static assets serve ($asset)"
 
+      # #19: the check above only proves ONE chunk (whichever sorts first on
+      # disk) serves — it does not prove every chunk a route's HTML actually
+      # references was written. A client-side change can alter the module
+      # graph enough that the bundler's own manifest still lists a chunk id
+      # it never flushed to .next/static/chunks/: the page still answers
+      # 200, /api/health stays 200, and every gate above stays green, but
+      # the server 500s that one script with `content-type: text/plain`,
+      # the browser refuses to execute it, and React never hydrates — every
+      # control on the page goes dead. scripts/check-build-chunks.ts reads
+      # every route's own build manifest (same source Next's server reads
+      # to inject <script> tags) and fails, naming the missing asset and
+      # every route that references it, if any referenced chunk is absent
+      # from the standalone tree just staged above.
+      - name: Verify every route's referenced build chunks were written (#19)
+        run: npm run check:build-chunks
+
       - name: Run smoke test
         run: npm run test:smoke
 

@@ -135,7 +135,6 @@ async function seedRecursionClashBoard(): Promise<Board> {
     sport_key: "generic",
     variant_key: "score",
     config: GENERIC_CONFIG,
-    eligibility: [],
   });
   const divisionId = division.id;
   const courts = await courtIds(auth, ["Court 1", "Court 2"]);

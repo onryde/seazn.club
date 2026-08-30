@@ -145,7 +145,6 @@ async function seedOrgWithDivision(): Promise<{ auth: AuthCtx; orgId: string; di
     sport_key: "generic",
     variant_key: "score",
     config: GENERIC_CONFIG,
-    eligibility: [],
   });
   return { auth, orgId, divisionId: division.id };
 }

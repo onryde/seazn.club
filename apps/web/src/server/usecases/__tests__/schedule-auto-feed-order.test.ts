@@ -124,7 +124,6 @@ async function seed(): Promise<Bracket> {
     sport_key: "generic",
     variant_key: "score",
     config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
-    eligibility: [],
   });
   await createEntrants(
     auth,

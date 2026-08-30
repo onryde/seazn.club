@@ -69,7 +69,6 @@ export async function divisionRig(
   const division = await createDivision(auth, competition.id, {
     name: "Open", sport_key: "generic", variant_key: "score",
     config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
-    eligibility: [],
   });
   const names = Array.from({ length: opts.entrants ?? 2 }, (_, i) => String.fromCharCode(65 + i));
   await createEntrants(auth, division.id, names.map((n, i) => ({
@@ -207,7 +206,7 @@ export async function startedCricketDivisionWithFixture(
     visibility: "public", branding: {},
   });
   const division = await createDivision(auth, competition.id, {
-    name: "Open", sport_key: "cricket", variant_key: "t20", config: {}, eligibility: [],
+    name: "Open", sport_key: "cricket", variant_key: "t20", config: {}, 
   });
   await createEntrants(auth, division.id, [
     { kind: "team" as const, display_name: "A", seed: 1, members: [] },

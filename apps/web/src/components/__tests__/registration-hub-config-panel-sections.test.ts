@@ -10,10 +10,11 @@ import {
 } from "@/components/registration-hub-config-panel-sections";
 
 describe("SECTION_FIELDS — every ConfigFieldKey is covered exactly once", () => {
-  it("covers all 15 known fields with no duplicates across sections", () => {
+  // RS007/V380 added age_cutoff_month/age_cutoff_day/eligibility_note (15 -> 18).
+  it("covers all 18 known fields with no duplicates across sections", () => {
     const all = SECTION_IDS.flatMap((id) => SECTION_FIELDS[id]);
-    expect(all).toHaveLength(15);
-    expect(new Set(all).size).toBe(15);
+    expect(all).toHaveLength(18);
+    expect(new Set(all).size).toBe(18);
   });
 });
 
@@ -24,6 +25,12 @@ describe("sectionForField", () => {
     expect(sectionForField("capacity")).toBe("capacity");
     expect(sectionForField("form_fields")).toBe("form");
     expect(sectionForField("closes_at")).toBe("schedule");
+  });
+
+  it("maps the RS007/V380 cutoff + note fields to eligibility, alongside category/age_min/age_max", () => {
+    expect(sectionForField("age_cutoff_month")).toBe("eligibility");
+    expect(sectionForField("age_cutoff_day")).toBe("eligibility");
+    expect(sectionForField("eligibility_note")).toBe("eligibility");
   });
 });
 

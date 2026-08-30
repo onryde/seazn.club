@@ -38,6 +38,9 @@ import { routes } from "@/lib/routes";
 import { toLocale } from "@/lib/i18n-constants";
 import { isValidRefCode, normalizeRefCode } from "@/lib/ref-code";
 import { maskDisplayName, resolveNameDisplay } from "@/lib/name-display";
+import { isoFromZonedParts } from "@/lib/zoned-datetime";
+import { resolveVenueTz } from "@/lib/tz";
+import { rateLimit } from "@/lib/rate-limit";
 import { icsText, foldLine } from "@/lib/public-site";
 import { msgFor } from "@/lib/messages-i18n";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -251,7 +254,30 @@ export interface RegistrationRow {
   refunded_cents: number;
   entrant_id: string | null;
   promoted_at: Date | null;
+  /** V378/RS007: THIS entry's own pay-by deadline, set only when a
+   *  promotion out of the waitlist needs a Stripe window (mirrors
+   *  `promoted_at`'s null-ness — see `promoteWaitlistedRow`). Distinct from
+   *  the cart-level `expires_at` on `RegistrationGroupRow`, which still
+   *  governs a never-paid submit; see the block comment above
+   *  `promoteWaitlistedRow` for why the cart clock cannot serve both. */
+  promotion_expires_at: Date | null;
+  /** V378/RS007: when this row (re)joined the waitlist. Null for a row that
+   *  has never lapsed off a promotion — `promoteOldestWaitlisted` falls back
+   *  to `created_at` for those, so an ordinary first-time waitlist join is
+   *  unaffected. Set to `now()` only by `sweepRegistrations`' lapse branch,
+   *  which sorts a lapsed row BEHIND anyone still waiting on their original
+   *  `created_at` (the waitlist tail), rather than letting it keep its old
+   *  place in line. */
+  waitlisted_at: Date | null;
   withdrawn_at: Date | null;
+  /** Finding #18b: set exactly once, the moment a REAL Stripe charge lands
+   *  for THIS entry — in the SAME statement as `status = 'paid'`, before the
+   *  manual/auto approval fork, so it covers a manual-approval entry that
+   *  never reaches materialise() too. Never cleared afterwards (not even by
+   *  withdrawCore). Durable proof that "a live charge existed for this
+   *  entry before it was withdrawn", independent of whether it was ever
+   *  SEATED (entrant_id, #18's own signal, which only auto-approval sets). */
+  charged_at: Date | null;
   /** The cart this entry belongs to — every entry has exactly one (V364). */
   group_id: string;
   /** Set when this (team) entry can hand out a self-join link. */
@@ -401,6 +427,17 @@ export type RegistrationWithGroupRow = RegistrationRow &
      *  V363) — aliased so it can never collide with `RegistrationRow`'s own
      *  entry-scoped `refunded_cents` (V368) in the same SELECT. */
     group_refunded_cents: number;
+    /** THIS entry's own payment intent (`registrations.payment_intent_id`,
+     *  V387) — aliased for exactly the same reason `group_refunded_cents` is:
+     *  the group carries a `payment_intent_id` too, and `select r.*, g.*`
+     *  would silently yield whichever the list mentions last, with tsc unable
+     *  to see the collision. PR #677 finding H1: a cart can hold TWO live
+     *  intents (sessions are minted against a `registration_ids` subset, and
+     *  a promoted entry pays in its own session), so the unaliased
+     *  `payment_intent_id` — the cart's most recent — must never be what a
+     *  per-entry refund sends to Stripe. Null on a paid row means "not
+     *  recorded": fail CLOSED, never fall back to the cart's. */
+    entry_payment_intent_id: string | null;
   };
 
 /** r.* ∪ g.* for `RegistrationWithGroupRow` — every SELECT that needs the
@@ -410,10 +447,12 @@ export type RegistrationWithGroupRow = RegistrationRow &
  *  column list can only drift in one place. `g.refunded_cents` is aliased to
  *  `group_refunded_cents` so it never collides with `r.refunded_cents`
  *  (V368) — see the block comment above `RegistrationWithGroupRow`. */
-function regGroupCols(db: AnySql) {
+export function regGroupCols(db: AnySql) {
   return db`
     r.id, r.division_id, r.org_id, r.status, r.display_name, r.answers,
     r.amount_cents, r.refunded_cents, r.entrant_id, r.promoted_at, r.withdrawn_at,
+    r.charged_at, r.promotion_expires_at, r.waitlisted_at,
+    r.payment_intent_id as entry_payment_intent_id,
     r.group_id, r.join_code, r.free_agent, r.created_at, r.updated_at,
     g.contact_name, g.contact_email, g.user_id, g.locale, g.ref_code,
     g.access_token_hash, g.currency, g.payment_method, g.checkout_session_id,
@@ -475,7 +514,6 @@ export interface DivisionCtx {
   id: string;
   competition_id: string;
   org_id: string;
-  eligibility: unknown[];
   comp_name: string;
   comp_slug: string;
   comp_visibility: string;
@@ -489,6 +527,14 @@ export interface DivisionCtx {
   default_locale: string | null;
   payment_instructions: string | null;
   charges_enabled: boolean;
+  /** RS007: the org's scheduling timezone (`organizations.timezone`, nullable
+   *  — resolves to UTC via `resolveVenueTz`). Feeds `resolveRefundPolicy`'s
+   *  `starts_on` fallback — deliberately the ORG's zone only, never a
+   *  division's own `schedule_settings.tz` override (see that function's own
+   *  doc comment for why `starts_on`, a competition-level field, cannot
+   *  resolve per-division without risking two entries in one cart
+   *  disagreeing about the same date). */
+  org_timezone: string | null;
   /** The org's CURRENT currency (RS001b/RS003) — read fresh on every call so
    *  `createRegistrationCheckout` can 422 a group whose snapshot has gone
    *  stale (the org's currency moved since submit) BEFORE any Stripe call,
@@ -501,11 +547,11 @@ export interface DivisionCtx {
 
 export async function divisionCtx(db: AnySql, divisionId: string): Promise<DivisionCtx> {
   const [row] = await db<DivisionCtx[]>`
-    select d.id, d.competition_id, d.org_id, d.eligibility, d.slug as div_slug,
+    select d.id, d.competition_id, d.org_id, d.slug as div_slug,
            c.name as comp_name, c.slug as comp_slug, c.visibility as comp_visibility,
            c.starts_on, c.ends_on,
            o.slug as org_slug, o.name as org_name, o.default_locale, o.payment_instructions,
-           o.stripe_charges_enabled as charges_enabled, o.currency
+           o.stripe_charges_enabled as charges_enabled, o.currency, o.timezone as org_timezone
     from divisions d
     join competitions c on c.id = d.competition_id
     join organizations o on o.id = c.org_id
@@ -600,6 +646,46 @@ export async function resolvePlayerPerson(
 }
 
 /**
+ * #22 — exact-one player-lane person match by email, org-scoped, tombstones
+ * excluded. Same conservatism as the dob rule below: zero or ambiguous
+ * matches return null rather than guessing. Exported so
+ * `registration-submit.ts`'s `joinTeamEntry` can reconcile a claim against
+ * the directory too (module topology: that file already imports from this
+ * one; never the other way).
+ */
+export async function findPlayerPersonByEmail(
+  db: AnySql,
+  orgId: string,
+  email: string,
+): Promise<string | null> {
+  const trimmed = email.trim();
+  if (!trimmed) return null;
+  const matches = await db<{ id: string }[]>`
+    select id from persons
+    where org_id = ${orgId} and lane = 'player' and merged_into is null
+      and lower(email) = lower(${trimmed})`;
+  return matches.length === 1 ? matches[0]!.id : null;
+}
+
+/**
+ * #22 — fills a MISSING email onto an already-resolved person; never
+ * overwrites one that differs (the `email is null` guard IS the rule, not
+ * just an optimisation — a concurrent backfill from two rows racing the
+ * same person is then a harmless double no-op instead of a decision about
+ * which value wins). Matches the standing "never touch an existing
+ * person's own data" rule's one stated exception (#22 brief: "adding an
+ * email to a person that has none is acceptable"). Exported for
+ * `registration-submit.ts`'s `joinTeamEntry` — a claim that finds no
+ * BETTER match than the dummy person already on its row still gives that
+ * dummy the email it was minted without.
+ */
+export async function backfillPersonEmail(tx: Tx, personId: string, email: string): Promise<void> {
+  const trimmed = email.trim();
+  if (!trimmed) return;
+  await tx`update persons set email = ${trimmed} where id = ${personId} and email is null`;
+}
+
+/**
  * RS002 — person get-or-create for a player row with NO `user_id`.
  *
  * The only persons identity index (`persons_org_user_lane_uq`) is scoped to
@@ -614,6 +700,17 @@ export async function resolvePlayerPerson(
  * different humans (same-named juniors, for instance) is not cleanly
  * reversible. A small per-org query by design; no index added for it.
  *
+ * #22 (2026-08-30): EMAIL is now tried FIRST, ahead of dob — a captain-
+ * entered row essentially never carries a dob (nothing requires one unless
+ * the registrant ticks "I'm playing"), so the dob rule above rarely even
+ * runs; email is the signal that is actually usually present (the cart
+ * contact always has one, a claimer always gives one at their own claim
+ * moment). Same conservatism, same "never guess" shape — see
+ * `findPlayerPersonByEmail`. A person found via EITHER rule gets its email
+ * backfilled if (and only if) it doesn't have one yet, so the NEXT
+ * registration for the same human can match on email even if this one
+ * matched on dob.
+ *
  * Never touches an EXISTING person's own data (name/dob/gender/consent) —
  * that person may already carry answers, including a consent opt-out, that a
  * later same-named entry must not overwrite. New persons are created with
@@ -626,19 +723,68 @@ async function findOrCreatePlayerPerson(
   fullName: string,
   dob: string | null,
   gender: string | null,
+  email: string | null,
 ): Promise<string> {
+  const trimmedEmail = email?.trim() || null;
+  if (trimmedEmail) {
+    const matchId = await findPlayerPersonByEmail(tx, orgId, trimmedEmail);
+    if (matchId) {
+      await backfillPersonEmail(tx, matchId, trimmedEmail);
+      return matchId;
+    }
+  }
   if (dob) {
     const matches = await tx<{ id: string }[]>`
       select id from persons
       where org_id = ${orgId} and lane = 'player' and merged_into is null
         and dob = ${dob} and lower(trim(full_name)) = lower(trim(${fullName}))`;
-    if (matches.length === 1) return matches[0]!.id;
+    if (matches.length === 1) {
+      if (trimmedEmail) await backfillPersonEmail(tx, matches[0]!.id, trimmedEmail);
+      return matches[0]!.id;
+    }
   }
   const [created] = await tx<{ id: string }[]>`
-    insert into persons (org_id, full_name, dob, gender, consent)
-    values (${orgId}, ${fullName}, ${dob}, ${gender}, ${tx.json({ public_name: true } as never)})
+    insert into persons (org_id, full_name, dob, gender, email, consent)
+    values (${orgId}, ${fullName}, ${dob}, ${gender}, ${trimmedEmail}, ${tx.json({ public_name: true } as never)})
     returning id`;
   return created!.id;
+}
+
+/**
+ * #22 — reconciles a JOIN/CLAIM against the directory, for
+ * `registration-submit.ts`'s `joinTeamEntry` (a claim is the strongest
+ * identity moment in the whole flow: the human gives their own email, or is
+ * signed in). Returns an EXISTING person only — never creates one, unlike
+ * `findOrCreatePlayerPerson` — because a fresh person for a row that
+ * resolves to neither a user_id nor a known email is exactly what
+ * `materialise()` already handles correctly whenever it eventually runs
+ * (immediately for a free auto-approval entry, later for a paid or
+ * manual-approval one); this function's whole job is to catch the case
+ * `materialise()` CANNOT retry — a claim landing on an entry that is
+ * already confirmed, where `materialise()`'s own `if (reg.entrant_id)
+ * return` guard means it will never run again for this registration.
+ *
+ * `userId` (signed-in claimer) is the stronger signal and is tried first:
+ * `resolvePlayerPerson` already reuses-or-creates atomically via the
+ * unique `(org, user, lane)` index, so it always resolves to SOME person —
+ * matching materialise()'s own precedence (`p.user_id ? resolvePlayerPerson
+ * : findOrCreatePlayerPerson`). Email is the fallback, and unlike the
+ * userId branch it can genuinely find nothing (zero or ambiguous matches),
+ * in which case this returns null and the caller leaves the row exactly as
+ * it is today.
+ */
+export async function reconcileClaimedPerson(
+  tx: Tx,
+  orgId: string,
+  fullName: string,
+  dob: string | null,
+  gender: string | null,
+  userId: string | null,
+  email: string | null,
+): Promise<string | null> {
+  if (userId) return resolvePlayerPerson(tx, orgId, userId, fullName, dob, gender);
+  const trimmedEmail = email?.trim() || null;
+  return trimmedEmail ? findPlayerPersonByEmail(tx, orgId, trimmedEmail) : null;
 }
 
 /**
@@ -663,14 +809,18 @@ async function findOrCreatePlayerPerson(
 // table's shape, so a column that appears in the SELECT but never in the
 // interface (as `user_id` briefly did) fails the typecheck instead of drifting
 // quietly — this file has no other consumer of the type to catch it.
+// `email` added for #22 — materialise() below threads it through to
+// findOrCreatePlayerPerson so a captain-entered row that DOES carry one
+// (typed at submit, or persisted by a claim before this entry's own
+// materialise() call fires) dedupes on it.
 async function loadPlayers(tx: Tx, registrationId: string): Promise<
   Pick<
     RegistrationPlayerRow,
-    "id" | "full_name" | "dob" | "gender" | "squad_number" | "user_id" | "is_captain"
+    "id" | "full_name" | "dob" | "gender" | "email" | "squad_number" | "user_id" | "is_captain"
   >[]
 > {
   return tx`
-    select id, full_name, dob, gender, squad_number, user_id, is_captain from registration_players
+    select id, full_name, dob, gender, email, squad_number, user_id, is_captain from registration_players
     where registration_id = ${registrationId}
     order by is_captain desc, created_at`;
 }
@@ -729,14 +879,16 @@ export async function materialise(tx: Tx, reg: RegistrationRow, entrantKind: str
     const fullName = p?.full_name?.trim() || reg.display_name;
     const dob = p?.dob ?? null;
     const gender = p?.gender ?? null;
+    const email = p?.email ?? null;
     // A player row carrying a user_id (#402) resolves into that account's
     // linked person — see resolvePlayerPerson. Otherwise
-    // findOrCreatePlayerPerson applies the name+dob reuse rule (RS002), which
-    // also covers the no-player-row fallback above: a null dob there always
-    // mints fresh, byte-for-byte the old anonymous path.
+    // findOrCreatePlayerPerson applies the email/dob reuse rule (RS002, #22),
+    // which also covers the no-player-row fallback above: no email and a
+    // null dob there always mints fresh, byte-for-byte the old anonymous
+    // path.
     const personId = p?.user_id
       ? await resolvePlayerPerson(tx, reg.org_id, p.user_id, fullName, dob, gender)
-      : await findOrCreatePlayerPerson(tx, reg.org_id, fullName, dob, gender);
+      : await findOrCreatePlayerPerson(tx, reg.org_id, fullName, dob, gender, email);
     // A RESOLVED person can already sit on this entrant (re-confirm), which the
     // fresh-insert path could never hit — so the membership write is idempotent.
     await tx`
@@ -761,7 +913,7 @@ export async function materialise(tx: Tx, reg: RegistrationRow, entrantKind: str
       if (!name) continue;
       const personId = p.user_id
         ? await resolvePlayerPerson(tx, reg.org_id, p.user_id, name, p.dob, p.gender)
-        : await findOrCreatePlayerPerson(tx, reg.org_id, name, p.dob, p.gender);
+        : await findOrCreatePlayerPerson(tx, reg.org_id, name, p.dob, p.gender, p.email);
       await tx`
         insert into entrant_members (entrant_id, person_id, squad_number, is_captain)
         values (${entrant.id}, ${personId}, ${p.squad_number}, ${p.is_captain})
@@ -804,16 +956,40 @@ export async function materialise(tx: Tx, reg: RegistrationRow, entrantKind: str
  * Exported for `registration-approval.ts` (RS002 W5) — `promoteFromWaitlist`'s
  * default (no explicit id) mode calls this directly rather than re-deriving
  * the oldest-first pick.
+ *
+ * "Oldest" is `coalesce(waitlisted_at, created_at)`, not bare `created_at`
+ * (V378/RS007). A row that has never lapsed has `waitlisted_at = null`, so
+ * this is byte-for-byte the old ordering for every pre-existing waitlisted
+ * row. A row `sweepRegistrations`' lapse branch just returned to the
+ * waitlist carries a fresh `waitlisted_at = now()`, which sorts it BEHIND
+ * every row still waiting on its original `created_at` — the tail, not a
+ * reclaimed place in line — even though its OWN `created_at` may be far
+ * older than theirs.
+ */
+/**
+ * REVIEW FIX (money-path defect #5) — `excludeId` is optional, additive, and
+ * ONLY ever passed by `sweepRegistrations`' lapse branch. `for update skip
+ * locked` skips rows locked by an OTHER transaction, never one this same
+ * transaction already holds — so a call made in the SAME tx that just
+ * flipped a row to 'waitlisted' can, when that row is the only (or oldest)
+ * candidate, re-select and immediately re-promote the very row that just
+ * lapsed, in the same instant it was returned to the queue. Every OTHER
+ * caller (withdrawCore, the sweep's expiry branch, registration-approval.ts's
+ * promoteFromWaitlist) omits it and is byte-for-byte unchanged: none of them
+ * lock a waitlisted candidate ahead of this call the way the lapse branch
+ * does.
  */
 export async function promoteOldestWaitlisted(
   tx: Tx,
   divisionId: string,
   settings: RegistrationSettingsRow | null,
+  excludeId?: string,
 ): Promise<RegistrationWithGroupRow | null> {
   const [picked] = await tx<{ id: string; group_id: string }[]>`
     select id, group_id from registrations
     where division_id = ${divisionId} and status = 'waitlisted'
-    order by created_at, id limit 1
+      ${excludeId ? tx`and id <> ${excludeId}` : tx``}
+    order by coalesce(waitlisted_at, created_at), id limit 1
     for update skip locked`;
   if (!picked) return null;
   return promoteWaitlistedRow(tx, picked.id, picked.group_id, settings);
@@ -867,6 +1043,19 @@ export async function promoteOldestWaitlisted(
  * later) deadline; same additive pattern the refund paths already use
  * (`greatest(refunded_cents, …)`). When it does not (free/offline
  * promotion), the column is left exactly as it was.
+ *
+ * ── promotion_expires_at (V378/RS007) — ADDITIVE, alongside the group write
+ * above, not instead of it ────────────────────────────────────────────────
+ * The group's `expires_at` is shared by every entry in the cart, so
+ * `sweepRegistrations` cannot use it to decide THIS entry's own pay window
+ * without also catching (or missing) its siblings — see the STRUCTURAL
+ * finding in `_INDEX.md`'s RS007 section. `promotion_expires_at` is this
+ * row's own clock: same window, same `stripeWindow` gate, but scoped to
+ * `regId` alone via a plain overwrite rather than `greatest(...)` — unlike
+ * the group's column, nothing else ever writes this one, so there is no
+ * sibling deadline to protect from shortening. Left null on an
+ * offline/free promotion, exactly like the group's would be if nothing else
+ * in the cart needed it.
  * ───────────────────────────────────────────────────────────────────────── */
 export async function promoteWaitlistedRow(
   tx: Tx,
@@ -880,7 +1069,18 @@ export async function promoteWaitlistedRow(
   await tx`
     update registrations
     set status = 'pending', promoted_at = now(), updated_at = now(),
-        amount_cents = ${feeCents}
+        amount_cents = ${feeCents},
+        promotion_expires_at = case
+          when ${stripeWindow} then now() + interval '48 hours'
+          else null
+        end,
+        -- REVIEW FIX (money-path defect #12): every promotion opens a FRESH
+        -- reminder window — a re-promotion (lapsed once, re-offered later)
+        -- must not carry its FIRST promotion's "already reminded" mark into
+        -- this one. Unconditional: a row promoted for the first time already
+        -- has this null, so the write is a no-op there.
+        promotion_reminded_at = null,
+        promotion_reminder_claimed_at = null
     where id = ${regId}`;
   await tx`
     update registration_groups
@@ -915,8 +1115,18 @@ export async function notifyPromoted(
   origin: string,
 ): Promise<void> {
   try {
+    // REVIEW FIX (#10): the DIVISION's own payment method — never
+    // `promoted.payment_method` (registration_groups.payment_method, the
+    // cart's shared envelope column). promoteWaitlistedRow only writes that
+    // shared column when no OTHER entry in the cart is still 'pending' (see
+    // its own doc comment), so it can stay null/stale forever past exactly
+    // the promotion this function emails — reading it here silently dropped
+    // BOTH the pay link (stripe divisions) and the instructions (offline
+    // divisions). Same fallback convention promoteWaitlistedRow's own
+    // `method` already uses.
+    const method = settings?.payment_method ?? "offline";
     let payUrl: string | null = null;
-    if (promoted.payment_method === "stripe" && promoted.amount_cents > 0 && ctx.charges_enabled) {
+    if (method === "stripe" && promoted.amount_cents > 0 && ctx.charges_enabled) {
       try {
         payUrl = await createRegistrationCheckout(promoted.group_id, [promoted.id], ctx, origin, null);
       } catch {
@@ -932,9 +1142,17 @@ export async function notifyPromoted(
       feeCents: promoted.amount_cents,
       currency: promoted.currency,
       payUrl,
-      payDeadline: promoted.expires_at,
+      // REVIEW FIX (#13b): this entry's OWN promotion_expires_at, never
+      // `promoted.expires_at` (the GROUP's shared column, which a sibling's
+      // own earlier/later promotion can leave disagreeing with this row) —
+      // the lapse sweep enforces THIS entry's own clock (sweepRegistrations
+      // pass 1b, keyed on `r.promotion_expires_at`), so emailing the
+      // group's could tell a registrant they have longer than they
+      // actually do. Same column pass (1b)'s own reminder mail already
+      // uses. Null on an offline/free promotion, exactly as before.
+      payDeadline: promoted.promotion_expires_at,
       paymentInstructions:
-        promoted.payment_method === "offline" && promoted.amount_cents > 0
+        method === "offline" && promoted.amount_cents > 0
           ? (settings?.payment_instructions ?? ctx.payment_instructions)
           : null,
       refCode: promoted.ref_code,
@@ -1166,6 +1384,56 @@ export async function resendRegistrationConfirmation(
   return { sent };
 }
 
+/**
+ * Registrant self-service resend (RS007) — the token-gated sibling of
+ * `resendRegistrationConfirmation` above. Keyed on the GROUP (`rid`), not one
+ * entry: the confirmation mail is cart-shaped (`buildCartMail`), so gating on
+ * one arbitrarily-picked entry's own status — the way the organiser path's
+ * `regId` does — would refuse a resend for a cart that still has other
+ * active entries. This refuses only once EVERY entry in the cart is
+ * terminal.
+ *
+ * Unlike the organiser path — which never holds the plaintext token past
+ * submit, only its hash survives — this path is called from the very page
+ * that already has the real token in its URL, so it threads it through to
+ * `buildCartMail`: the resent mail's `statusUrl` is the full rid+token
+ * status page, not the masked `/r/[ref]` fallback `token: null` produces.
+ */
+export async function resendRegistrationConfirmationPublic(
+  groupId: string,
+  token: string,
+  origin: string,
+): Promise<{ sent: boolean }> {
+  const [group] = await sql<
+    Pick<RegistrationGroupRow, "org_id" | "competition_id" | "access_token_hash">[]
+  >`
+    select org_id, competition_id, access_token_hash
+    from registration_groups where id = ${groupId}`;
+  if (!group || !tokenMatchesHash(token, group.access_token_hash)) {
+    throw new HttpError(404, "registration not found");
+  }
+  const entries = await sql<{ status: RegistrationRow["status"] }[]>`
+    select status from registrations where group_id = ${groupId}`;
+  if (entries.length === 0 || entries.every((e) => isTerminalRegistrationStatus(e.status))) {
+    throw new HttpError(
+      422,
+      "This registration is no longer active — a confirmation would tell the registrant they are entered",
+    );
+  }
+  const mail = await buildCartMail(groupId, origin, token, null);
+  if (!mail) return { sent: false }; // buildCartMail already logged why
+  const sent = await sendRegistrationEmail({ to: mail.to, locale: toLocale(mail.locale), ...mail.args });
+  await audit(
+    sql,
+    group.competition_id,
+    group.org_id,
+    "registration.confirmation_resent",
+    { group_id: groupId },
+    null,
+  );
+  return { sent };
+}
+
 // ---------------------------------------------------------------------------
 // Organiser: settings
 // ---------------------------------------------------------------------------
@@ -1351,6 +1619,16 @@ export interface PublicDivisionInfo {
   category: string | null;
   age_min: number | null;
   age_max: number | null;
+  /** RS007/V380 — the age-band cutoff override (default 1 January when
+   *  null). Threaded onto the wire so the ENTRIES step's client-side self-
+   *  check (`ageBandEligibilityIssues`, @/lib/registration-rules) evaluates
+   *  the SAME cutoff the server enforces at submit — before this field
+   *  existed here, the client silently defaulted to 1 January for every
+   *  division, and would disagree with the server for any division with a
+   *  real cutoff (the exact "two cutoffs disagree" defect V380 exists to
+   *  kill, resurfaced client-side). */
+  age_cutoff_month: number | null;
+  age_cutoff_day: number | null;
   /** Team-only; drives the ENTRIES step's free-agent option. */
   allow_free_agents: boolean;
   requires_dob: boolean;
@@ -1360,6 +1638,12 @@ export interface PublicDivisionInfo {
   /** Queue length behind a full division (PROMPT-52) — public. */
   waitlisted: number;
   form_fields: RegistrationFormField[];
+  /** RS007/V380 — the retired jsonb "custom rule" note, now a first-class
+   *  `divisions` column the ENTRIES step renders as an organiser notice
+   *  (design: "manual, shown as a warning" — components/public-site/
+   *  register/division-card.tsx). Organiser-authored free text: render as
+   *  TEXT, never as HTML/markdown. */
+  eligibility_note: string | null;
 }
 
 export interface PublicRegistrationInfoResult {
@@ -1400,7 +1684,6 @@ export async function publicRegistrationInfo(
       name: string;
       slug: string;
       sport_key: string;
-      eligibility: unknown[];
       // V364 first-class columns: `age_min`/`age_max` also drive
       // `requires_dob` below (a category-only division needs no DOB).
       // `category` drives `requires_gender` the same way, and both ship on
@@ -1410,12 +1693,17 @@ export async function publicRegistrationInfo(
       category: string | null;
       age_min: number | null;
       age_max: number | null;
+      age_cutoff_month: number | null;
+      age_cutoff_day: number | null;
       youth: boolean;
       active: number;
       waitlisted: number;
+      eligibility_note: string | null;
     })[]
   >`
-    select rs.*, d.name, d.slug, d.sport_key, d.eligibility, d.category, d.age_min, d.age_max, d.youth,
+    select rs.*, d.name, d.slug, d.sport_key, d.category, d.age_min, d.age_max, d.youth,
+           d.age_cutoff_month, d.age_cutoff_day,
+           d.eligibility_note,
            (select count(*)::int from registrations r
              where r.division_id = rs.division_id
                and r.status in ${sql([...SPOT_HOLDERS])}) as active,
@@ -1473,24 +1761,30 @@ export async function publicRegistrationInfo(
       category: r.category,
       age_min: r.age_min,
       age_max: r.age_max,
+      age_cutoff_month: r.age_cutoff_month,
+      age_cutoff_day: r.age_cutoff_day,
       // Team-only (registration-eligibility's putRegistrationSettings rejects
       // `true` on a non-team division) — drives the ENTRIES step's free-agent
       // option (design §4 step 2).
       allow_free_agents: r.allow_free_agents,
-      // V364: a division can require a DOB via the jsonb rules OR via the
-      // first-class age_min/age_max columns alone — requiresDob's
-      // division-shaped overload checks both.
+      // V364/V380: a division requires a DOB when either first-class age
+      // column is set.
       requires_dob: requiresDob({
-        eligibility: r.eligibility ?? [],
         age_min: r.age_min,
         age_max: r.age_max,
       }),
-      // Same idea as requires_dob, for gender (RS006 WHO step): a jsonb
-      // GenderRule OR a mens/womens/mixed category.
-      requires_gender: requiresGender({ eligibility: r.eligibility ?? [], category: r.category }),
+      // Same idea as requires_dob, for gender (RS006 WHO step): a
+      // mens/womens/mixed category, OR a free-text eligibility_note, which
+      // after V380 is the only surviving channel for a restriction the
+      // category enum cannot express. Passing the note is not optional: the
+      // join-page preview (registration-submit.ts) already does, so omitting
+      // it here would make the SAME division collect gender on one public
+      // surface and not the other.
+      requires_gender: requiresGender({ category: r.category, eligibility_note: r.eligibility_note }),
       youth: r.youth,
       waitlisted: r.waitlisted,
       form_fields: r.form_fields ?? [],
+      eligibility_note: r.eligibility_note,
     };
   });
   return {
@@ -1600,9 +1894,16 @@ async function expireSupersededCheckoutSession(
 
 /**
  * Runs a Checkout Session create and translates Stripe's `amount_too_small`
- * refusal into a clean 422 with a stable code. Everything else rethrows
- * untouched — a blanket catch here would hide real integration failures behind
- * a friendly message, which is worse than the raw error.
+ * refusal into a clean 422 with a stable code. Every OTHER Stripe failure is
+ * now sanitized into a generic 502 (RS007 review finding) instead of
+ * rethrown untouched: v1()'s catch-all (http.ts) forwards a non-HttpError's
+ * `.message` to the client verbatim, and a Stripe-authored message can name
+ * the connected account, a session id, or another identifier that must never
+ * reach a registrant (concrete leak: a disconnected/restricted Connect
+ * account makes transfer_data.destination invalid below, and Stripe's
+ * invalid-request message echoes the account id). Logged server-side at
+ * error level before being replaced, so diagnosis stays possible while
+ * nothing Stripe-authored is ever rendered.
  */
 async function mintOrTranslate(
   create: () => Promise<Stripe.Checkout.Session>,
@@ -1618,7 +1919,8 @@ async function mintOrTranslate(
         "REGISTRATION_AMOUNT_TOO_SMALL",
       );
     }
-    throw err;
+    log.error({ err }, "registration: checkout session create failed (Stripe)");
+    throw new HttpError(502, "Stripe was unable to start this checkout — please try again shortly.");
   }
 }
 
@@ -2107,7 +2409,15 @@ async function confirmPaidRegistration(
     // DIFFERENT intent means the registrant paid twice (two open checkout
     // tabs, spec issue #2) — refund the duplicate, keep the original.
     if (reg.status === "confirmed" || reg.status === "paid") {
-      if (paymentIntentId && reg.payment_intent_id && paymentIntentId !== reg.payment_intent_id) {
+      // V387/H1: compare against THIS ENTRY's intent, never the cart's. The
+      // cart column is last-writer-wins, so on a two-session cart (a promoted
+      // sibling paying in its own session) it holds the SIBLING's intent by
+      // the time a webhook for this entry replays — and this comparison would
+      // then read a legitimate replay of PI_A as a duplicate and refund it.
+      // Falls back to the cart column only when the entry has none recorded,
+      // which is a pre-V387 row: same behaviour as before for those.
+      const ownIntent = reg.entry_payment_intent_id ?? reg.payment_intent_id;
+      if (paymentIntentId && ownIntent && paymentIntentId !== ownIntent) {
         return { kind: "duplicate", reg, competitionId: div.competition_id, intent: paymentIntentId };
       }
       return null;
@@ -2121,7 +2431,108 @@ async function confirmPaidRegistration(
     // replayed webhook. Rejected reuses this exact path unchanged: refund,
     // never confirm, is precisely what "the organiser said no" requires.
     // payment_intent_id lives on the cart now (V364).
-    if (reg.status === "withdrawn" || reg.status === "expired" || reg.status === "rejected") {
+    //
+    // REVIEW FIX (money-path defect #2): 'waitlisted' added to this list.
+    // A promoted entry that misses its OWN promotion_expires_at window
+    // lapses back to 'waitlisted' (V378/RS007's sweep lapse pass) — it is
+    // exactly as dead as withdrawn/expired/rejected here: its slot has
+    // already been re-offered to the next waitlist candidate by the time a
+    // late/in-flight checkout completes. Without this, the payment silently
+    // fell through to the branch below (status='paid', then materialised on
+    // auto-approval) — an entrant seated in a slot the sweep had already
+    // handed to someone else, and the late payer never refunded.
+    //
+    // Finding #18 (money-matrix S4, CRITICAL): 'withdrawn' is reachable two
+    // structurally different ways, and reg.status alone cannot tell them
+    // apart. (a) The row was NEVER paid/confirmed — it was cancelled before
+    // any money moved, and a stale checkout now completes for a spot the
+    // entrant never held; that is exactly what the branch below exists for
+    // (refund in full, ignore refund_lock_at — the organiser never had a
+    // seated entrant to keep the money for). (b) The row WAS confirmed —
+    // materialise() already ran, an entrant was seated — and was withdrawn
+    // AFTERWARDS: the ordinary post-lock cancellation refund_lock_at exists
+    // to govern. Reaching this function again for case (b) is not a late
+    // payment; it is a REPLAY of an already-fulfilled payment.
+    // reconcileRegistrationGroupBySession (the status page's
+    // reconcile-on-return, register/status/page.tsx) deliberately has no
+    // status pre-check — a multi-entry cart can have a settled
+    // representative sibling — so cancel-entry.tsx's router.refresh() right
+    // after a successful withdrawal re-renders the SAME URL (same
+    // ?checkout=success&session_id=... query string) and re-enters here
+    // with the SAME session, which Stripe still happily reports as paid —
+    // a refund never changes a Checkout Session's own payment_status.
+    // Refunding again here would silently overrule withdrawCore's own
+    // already-correct policy decision for this entry.
+    //
+    // Finding #18b (the residual gap #18 left open): #18 shipped this guard
+    // keyed on `entrant_id` — which only answers "was this entry ever
+    // SEATED". `entrant_id` is written by materialise(), and materialise()
+    // only runs on the auto-approval path a few lines below (or once an
+    // organiser later approves it). On a MANUAL-approval division, RULING B
+    // (above) stops confirmPaidRegistration's own auto-approval branch
+    // short: the entry sits at status = 'paid', a REAL charge already on
+    // it, entrant_id still null, awaiting the organiser's decision. If it
+    // is withdrawn from there — refund_lock_at long past, withdrawCore
+    // correctly declines to refund (its own `locked.status === 'paid'`
+    // branch already treats 'paid' as "genuinely charged") — the identical
+    // reconcile replay #18 pinned reads entrant_id null and falls straight
+    // through to the unconditional refund below. Same bug, narrower
+    // population (manual-approval divisions only), same money leaving past
+    // the lock.
+    //
+    // `charged_at` (added alongside this fix) answers the question this
+    // branch actually needs answered — "did a live charge exist for THIS
+    // entry before it was withdrawn" — directly, for both approval modes:
+    // it is stamped in the SAME statement that writes `status = 'paid'`,
+    // before the manual/auto fork, so a manual-approval entry gets it exactly
+    // as reliably as an auto-approval one. `entrant_id` is a strict subset
+    // (every row materialise() ever touches was charged_at-stamped first, in
+    // the same earlier statement of this same function), so this replaces
+    // rather than supplements it — one durable signal, not two overlapping
+    // ones. Like entrant_id, nothing ever clears it: withdrawCore only
+    // flips the linked ENTRANT row's own status (if one was ever
+    // materialised), never registrations.charged_at.
+    //
+    // Scoped to 'withdrawn' alone, by construction (the condition above
+    // only matches that one status) — 'expired'/'rejected'/'waitlisted'
+    // fall through to the unconditional refund below completely unchanged,
+    // regardless of charged_at. That is correct independent of this guard:
+    // only withdrawCore can ever act on an already-'paid'/'confirmed' row,
+    // and nothing else in this branch reaches it. 'expired'/'waitlisted'
+    // only ever fire from a still-'pending' row (sweepRegistrations' own
+    // `locked.status !== "pending"` guards on both its expiry and lapse
+    // passes) — charged_at would be null there regardless. 'rejected' is
+    // reachable from 'paid' too (rejectRegistration explicitly allows it,
+    // RULING B's declined counterpart), but rejectRegistration refunds a
+    // paid entry directly, in its own call, and never writes 'withdrawn' —
+    // so a rejected row never reaches this guard at all, whatever
+    // charged_at holds.
+    if (reg.status === "withdrawn" && reg.charged_at) {
+      // PR #677 finding H2. Returning null unconditionally kept a genuinely
+      // DUPLICATE charge: two open tabs, S1 pays and the entry is confirmed,
+      // the entry is withdrawn past the refund lock (correctly unrefunded),
+      // then S2 completes with a different intent — money neither refunded,
+      // nor recorded, nor audited.
+      //
+      // Symmetric with the paid/confirmed branch above rather than the fix
+      // first proposed in review (`&& paymentIntentId === reg.payment_intent_id`),
+      // which would let a differing intent fall through to the `late` branch
+      // below — and that branch refunds `reg.payment_intent_id ?? paymentIntentId`,
+      // i.e. the FIRST intent. It would have refunded the original charge,
+      // the one this guard exists to let the organiser keep, and still left
+      // the duplicate sitting there.
+      const ownIntent = reg.entry_payment_intent_id ?? reg.payment_intent_id;
+      if (paymentIntentId && ownIntent && paymentIntentId !== ownIntent) {
+        return { kind: "duplicate", reg, competitionId: div.competition_id, intent: paymentIntentId };
+      }
+      return null;
+    }
+    if (
+      reg.status === "withdrawn" ||
+      reg.status === "expired" ||
+      reg.status === "rejected" ||
+      reg.status === "waitlisted"
+    ) {
       await tx`update registration_groups
                set payment_intent_id = coalesce(payment_intent_id, ${paymentIntentId}),
                    updated_at = now()
@@ -2135,9 +2546,16 @@ async function confirmPaidRegistration(
       };
     }
     const settings = await loadSettings(tx, reg.division_id);
+    // Finding #18b: charged_at is stamped HERE, unconditionally, before the
+    // manual/auto approval fork below — the moment money actually lands for
+    // this entry, regardless of whether materialise() ever runs for it.
+    // `coalesce` makes it idempotent, the same convention entrant_id already
+    // relies on being written exactly once.
     await tx`
       update registrations
       set status = 'paid',
+          charged_at = coalesce(charged_at, now()),
+          payment_intent_id = coalesce(payment_intent_id, ${paymentIntentId}),
           updated_at = now()
       where id = ${regId}`;
     // payment_intent_id lives on the cart now (V364).
@@ -2539,6 +2957,69 @@ export async function reconcileRegistrationBySession(
   }
 }
 
+/**
+ * Reconcile-on-return for the rid+token status page (RS007) — the group-id
+ * sibling of `reconcileRegistrationBySession` above. That function resolves
+ * its group via `ref_code`, which is nullable (a submit whose ref-mint
+ * retries were exhausted still commits the cart) — exactly the case
+ * `groupById`'s own doc comment says THIS page exists to still serve, so
+ * reconciling here cannot depend on a ref existing either. Keyed on the
+ * group's DB id + the emailed access token instead, matching `groupById`'s
+ * own lookup exactly.
+ *
+ * Same security posture as the ref-based sibling: the caller-supplied
+ * `sessionId` is compared against the group's OWN stored
+ * `checkout_session_id` BEFORE any Stripe call, closing the identical
+ * arbitrary-retrieve hole that function's doc comment describes.
+ *
+ * Deliberately has NO "is some representative entry still pending" pre-check
+ * — `handleRegistrationCheckoutCompleted` already re-derives everything from
+ * the session's own `registration_ids` metadata and confirms each named
+ * entry independently (`confirmPaidRegistration`'s own row-locked status
+ * check), so such a gate would only be an optimisation, and the wrong one
+ * for a multi-entry cart: a promotion mints a checkout for a SINGLE entry
+ * (V378), so picking one arbitrary sibling to gate on could refuse to even
+ * look at Stripe for a session that is genuinely paid. Best-effort; never
+ * throws.
+ *
+ * RS007 follow-up: this is the ONLY reconcile path with no self-limit at
+ * all — `reconcileRegistration`/`reconcileRegistrationBySession` both gate
+ * on `status !== "pending"` before ever calling Stripe, but that exact gate
+ * is wrong HERE (see the paragraph above), so this is rate-limited instead,
+ * keyed on the group. The status page calls this on every qualifying GET
+ * (`?checkout=success&session_id=...`), and that URL sits in browser
+ * history and referrers — without a limiter, one repeat visit (or a leaked
+ * link) is unbounded outbound amplification, one `checkout.sessions.retrieve`
+ * per hit, against the platform's own Stripe read limit. A throttled call
+ * folds into the same `false` every other early-return here already means
+ * ("could not reconcile just now") — the caller discards the return value
+ * either way and simply falls through to reading the group's current DB
+ * state, so this never surfaces to the registrant.
+ */
+export async function reconcileRegistrationGroupBySession(
+  groupId: string,
+  token: string,
+  sessionId: string,
+): Promise<boolean> {
+  try {
+    if (!GROUP_ID_RE.test(groupId)) return false;
+    await rateLimit(`reg-reconcile:${groupId}`, { max: 5, windowSeconds: 60 });
+    const [group] = await sql<
+      Pick<RegistrationGroupRow, "access_token_hash" | "checkout_session_id">[]
+    >`
+      select access_token_hash, checkout_session_id
+      from registration_groups where id = ${groupId}`;
+    if (!group || !tokenMatchesHash(token, group.access_token_hash)) return false;
+    if (sessionId !== group.checkout_session_id) return false;
+    const session = await getStripe().checkout.sessions.retrieve(sessionId);
+    if (session.payment_status !== "paid") return false;
+    await handleRegistrationCheckoutCompleted(session);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Public: status / withdraw / resume payment (token-gated)
 // ---------------------------------------------------------------------------
@@ -2905,7 +3386,35 @@ export interface GroupEntryView {
   amount_cents: number;
   free_agent: boolean;
   join_code: string | null;
+  /** RS007: whether the GENERIC (no player_id) claim link is valid for this
+   *  entry — false for a `pair` (its fixed two-person roster leaves no room
+   *  for a new joiner; only its per-slot partner link is real), true
+   *  otherwise. Irrelevant when `join_code` itself is null. */
+  allows_new_joiner: boolean;
+  /** REVIEW FIX (#10, "a lapse timer with no way to pay"): this entry's OWN
+   *  division's payment method (registration_settings.payment_method) —
+   *  never `GroupStatusView.payment_method` (the cart's shared envelope
+   *  column). `promoteWaitlistedRow` only overwrites that shared column
+   *  when no OTHER entry in the cart is still 'pending' (see its own doc
+   *  comment), so it can stay null/stale forever past a promotion whose own
+   *  division genuinely charges — resolveMoneyState (register/status/
+   *  view-model.ts) reads THIS field now, per entry, so it can never be
+   *  fooled by a sibling's stale write. */
+  payment_method: "offline" | "stripe";
+  /** V378/RS007: this entry's OWN pay-by deadline when it was promoted out
+   *  of the waitlist — null for a never-promoted entry, whose deadline is
+   *  the CART's own `GroupStatusView.expires_at` instead (see
+   *  `promoteWaitlistedRow`'s doc comment for why one shared column cannot
+   *  serve both). The status page resolves `promotion_expires_at ??` the
+   *  cart's `expires_at`, mirroring the sweep's identical fallback. */
+  promotion_expires_at: string | null;
   players: GroupEntryPlayerView[];
+  /** V379/RS007: this entry's own resolved refund policy — so the status
+   *  page can tell a registrant which side of the line they are on BEFORE
+   *  they confirm a cancel. Same rule `withdrawCore`'s auto-refund uses
+   *  (see `resolveRefundPolicy`) — the status page's cancel-confirm copy
+   *  reads this directly rather than re-deriving it. */
+  refund_policy: ResolvedRefundPolicy;
 }
 
 /** The whole cart, for the status page (design §4 step 6; RS007 builds the
@@ -2915,7 +3424,15 @@ export interface GroupEntryView {
  *  the registrant (or someone they chose to share the link with), not the
  *  general public `/r/[ref]` serves. */
 export interface GroupStatusView {
-  ref_code: string;
+  /** Review fix (RS007): genuinely nullable — unlike `PublicRefView`/
+   *  `PublicCartView` above (both resolved BY `ref_code`, so a match
+   *  guarantees non-null), this view is also reachable via `groupById`,
+   *  which is keyed on the group's always-present DB id specifically
+   *  BECAUSE a submit whose ref-mint retries were exhausted still commits
+   *  the cart with `ref_code: null` (see that function's own doc comment).
+   *  The two current consumers (`fillPaymentInstructions`'s `reference`
+   *  param, and a bare JSX `{view.ref_code}`) already tolerate null. */
+  ref_code: string | null;
   contact_name: string;
   currency: string;
   amount_cents: number;
@@ -2927,6 +3444,28 @@ export interface GroupStatusView {
   org_slug: string;
   org_name: string;
   created_at: string;
+  /** RS007: whether the org's Connect account can currently take a payment —
+   *  gates the status page's "pay now" CTA so it never renders a button that
+   *  `resumeRegistrationCheckout` would just 503. Resolved off the first
+   *  entry that still carries a fee (else the first entry), mirroring
+   *  `buildCartMail`'s identical "one division is representative of the
+   *  whole cart" simplification (a cart's paid divisions already agree on
+   *  payment_method at submit — `assertUniformPaymentMethod`). */
+  charges_enabled: boolean;
+  /** RS007: the resolved offline instructions ({{reference}} left
+   *  un-substituted — the page fills it in with THIS cart's own ref_code),
+   *  division override falling back to the org's, or null for a
+   *  stripe-method cart. Same resolution order `buildCartMail`'s email
+   *  uses, so the page and the confirmation email never disagree about what
+   *  a registrant is told to do. */
+  payment_instructions: string | null;
+  /** REVIEW FIX (#13a): the org's own scheduling timezone, resolved exactly
+   *  once (`resolveVenueTz`, same call already used for `refund_policy`
+   *  below — no second resolution to drift from it) and always a valid IANA
+   *  zone (falls back to "UTC", never null) — entry-card.tsx renders every
+   *  pay-by deadline in THIS zone, with a zone label, instead of the
+   *  hardcoded UTC it used to. */
+  org_timezone: string;
   entries: GroupEntryView[];
 }
 
@@ -3008,18 +3547,106 @@ async function buildGroupStatusView(
   if (!group || !tokenOk) throw notFound();
 
   const [comp] = await sql<
-    { comp_name: string; comp_slug: string; org_slug: string; org_name: string }[]
+    {
+      comp_name: string; comp_slug: string; org_slug: string; org_name: string;
+      starts_on: string | null; charges_enabled: boolean; org_payment_instructions: string | null;
+      org_timezone: string | null;
+    }[]
   >`
-    select c.name as comp_name, c.slug as comp_slug, o.slug as org_slug, o.name as org_name
+    select c.name as comp_name, c.slug as comp_slug, o.slug as org_slug, o.name as org_name,
+           c.starts_on, o.stripe_charges_enabled as charges_enabled,
+           o.payment_instructions as org_payment_instructions, o.timezone as org_timezone
     from competitions c join organizations o on o.id = c.org_id
     where c.id = ${group.competition_id}`;
+  // RS007: same org-only governing clock resolveRefundPolicy's own doc
+  // comment requires — resolved ONCE for the whole group (never per
+  // division), since `starts_on` is this ONE competition's field.
+  const refundTz = resolveVenueTz(null, comp?.org_timezone ?? null);
 
-  const entries = await sql<Omit<GroupEntryView, "players">[]>`
+  const entries = await sql<
+    (Omit<
+      GroupEntryView,
+      "players" | "refund_policy" | "promotion_expires_at" | "allows_new_joiner" | "payment_method"
+    > & {
+      refunded_cents: number;
+      promotion_expires_at: Date | null;
+      /** V387/H1 — read to resolve THIS entry's refund policy, then
+       *  destructured OUT below so it never reaches the public view: a
+       *  Stripe intent id is not something a status page hands to whoever
+       *  holds the link. */
+      entry_payment_intent_id: string | null;
+    })[]
+  >`
     select r.id, r.division_id, d.name as division_name, r.display_name, r.status,
-           r.amount_cents, r.free_agent, r.join_code
+           r.amount_cents, r.refunded_cents, r.free_agent, r.join_code, r.promotion_expires_at,
+           r.payment_intent_id as entry_payment_intent_id
     from registrations r join divisions d on d.id = r.division_id
     where r.group_id = ${group.id}
     order by r.created_at, r.id`;
+
+  // refund_lock_at, entrant_kind and payment_method are all DIVISION
+  // settings (registration_settings), so a cart spanning more than one
+  // division can genuinely have one entry refundable and another not
+  // (V379/RS007), one entry a team and another a pair, or (REVIEW FIX #10)
+  // one entry billed via Stripe and another offline. Batched by distinct
+  // division_id, the same way `players` batches by entries.map(id) below —
+  // one query, not one per entry. Moved ABOVE the payment-instructions block
+  // below (it used to run after) so that block can resolve off the SAME
+  // division-sourced map instead of the cart's own (sometimes stale/null)
+  // `payment_method` column — see paymentMethodByDivision's own comment.
+  const divisionIds = [...new Set(entries.map((e) => e.division_id))];
+  const settingsRows =
+    divisionIds.length > 0
+      ? await sql<
+          {
+            division_id: string;
+            refund_lock_at: Date | null;
+            entrant_kind: RegistrationSettingsRow["entrant_kind"];
+            payment_method: RegistrationSettingsRow["payment_method"];
+          }[]
+        >`
+          select division_id, refund_lock_at, entrant_kind, payment_method from registration_settings
+          where division_id in ${sql(divisionIds)}`
+      : [];
+  const refundLockByDivision = new Map(settingsRows.map((s) => [s.division_id, s.refund_lock_at]));
+  // A pair's roster is fixed at exactly two (registration-submit.ts's own
+  // structural check + rosterIssues at submit) — its join_code only ever
+  // lets the PARTNER claim their already-typed-in slot; `joinTeamEntry`
+  // 422s a pair's insert-a-new-person path outright. Unknown (a division
+  // whose settings row is somehow missing) fails toward showing the link
+  // rather than hiding a legitimate one — a UX dead end the join route's own
+  // "defense in depth" 422 already catches safely, never a money/auth risk.
+  const entrantKindByDivision = new Map(settingsRows.map((s) => [s.division_id, s.entrant_kind]));
+  // REVIEW FIX (#10): the DIVISION's own payment method — never
+  // GroupStatusView.payment_method (group.payment_method, the cart's shared
+  // envelope column). promoteWaitlistedRow only writes that shared column
+  // when no OTHER entry in the cart is still 'pending' (see its own doc
+  // comment), so it can stay null/stale forever past a promotion whose own
+  // division genuinely charges. resolveMoneyState (view-model.ts) reads
+  // this per entry now. Falls back to 'offline' only when the settings row
+  // itself is missing — same convention promoteWaitlistedRow's own `method`
+  // already uses.
+  const paymentMethodByDivision = new Map(settingsRows.map((s) => [s.division_id, s.payment_method]));
+
+  // RS007: the resolved offline payment instructions — mirrors
+  // buildCartMail's own "first entry that still carries a fee is
+  // representative of the whole cart" rule exactly, so the status page and
+  // the confirmation email never disagree. Division override, else the
+  // org's own (already fetched above, no extra query for that half).
+  //
+  // REVIEW FIX (#10): gated on the representative entry's own DIVISION
+  // method (paymentMethodByDivision) rather than group.payment_method —
+  // same fix, same reason, as resolveMoneyState's own: the cart's shared
+  // column can be null/stale past exactly the promotion this resolves
+  // instructions for.
+  let paymentInstructions: string | null = null;
+  if (entries.length > 0) {
+    const firstPaid = entries.find((e) => e.amount_cents > 0) ?? entries[0]!;
+    if ((paymentMethodByDivision.get(firstPaid.division_id) ?? "offline") === "offline") {
+      const repSettings = await loadSettings(sql, firstPaid.division_id);
+      paymentInstructions = repSettings?.payment_instructions ?? comp?.org_payment_instructions ?? null;
+    }
+  }
 
   const players =
     entries.length > 0
@@ -3037,7 +3664,10 @@ async function buildGroupStatusView(
   }
 
   return {
-    ref_code: group.ref_code!,
+    // Review fix (RS007): was `group.ref_code!` — see GroupStatusView's own
+    // doc comment for why that was a lie (groupById reaches rows where this
+    // is genuinely null).
+    ref_code: group.ref_code,
     contact_name: group.contact_name,
     currency: group.currency,
     amount_cents: group.amount_cents,
@@ -3049,7 +3679,40 @@ async function buildGroupStatusView(
     org_slug: comp?.org_slug ?? "",
     org_name: comp?.org_name ?? "",
     created_at: new Date(group.created_at).toISOString(),
-    entries: entries.map((e) => ({ ...e, players: playersByEntry.get(e.id) ?? [] })),
+    charges_enabled: comp?.charges_enabled ?? false,
+    payment_instructions: paymentInstructions,
+    org_timezone: refundTz,
+    entries: entries.map(({ refunded_cents, promotion_expires_at, entry_payment_intent_id, ...e }) => ({
+      ...e,
+      promotion_expires_at: promotion_expires_at ? new Date(promotion_expires_at).toISOString() : null,
+      allows_new_joiner: entrantKindByDivision.get(e.division_id) !== "pair",
+      payment_method: paymentMethodByDivision.get(e.division_id) ?? "offline",
+      players: playersByEntry.get(e.id) ?? [],
+      refund_policy: resolveRefundPolicy(
+        refundLockByDivision.get(e.division_id) ?? null,
+        comp?.starts_on ?? null,
+        refundTz,
+        // REVIEW FIX (money-path defect #1): group.payment_intent_id is the
+        // CART's charge — every entry in a multi-entry cart shares one, but
+        // only the entries actually named in the checkout session that
+        // produced it were ever charged. A promoted-but-unpaid sibling
+        // ('pending', never itself billed) must never inherit a PAID
+        // sibling's payment_intent_id here — that reads as "refundable" and
+        // withdrawCore below would run a REAL Stripe refund against money
+        // this entry's registrant never paid. 'paid'/'confirmed' are the
+        // only statuses a Stripe checkout webhook (confirmPaidRegistration)
+        // ever leaves an entry in — see the block comment there.
+        // V387/H1: the ENTRY's own intent (read side twin of withdrawCore's
+        // fix). The cart's is last-writer-wins and, on a cart paid in two
+        // sessions, belongs to a sibling — so using it here would show a
+        // registrant "you will be refunded automatically" for a charge that
+        // is not theirs. Null reads as not-automatically-refundable, which
+        // is the honest answer when we cannot name this entry's charge.
+        e.status === "paid" || e.status === "confirmed" ? entry_payment_intent_id : null,
+        e.amount_cents,
+        refunded_cents,
+      ),
+    })),
   };
 }
 
@@ -3064,11 +3727,38 @@ export async function resumeRegistrationCheckout(
   if (reg.status !== "pending") {
     throw new HttpError(422, `Nothing to pay — registration is ${reg.status}`);
   }
-  if (reg.payment_method !== "stripe") {
+  // PR #677 finding M1: #10 fixed the READ side (buildGroupStatusView /
+  // resolveMoneyState resolve payment_method per DIVISION) and left this,
+  // the write side, still reading the CART column. `promoteWaitlistedRow`
+  // only overwrites that column when no other entry in the cart is still
+  // 'pending', so a promoted stripe entry sharing a cart with a pending
+  // sibling kept a live "Pay now" button whose POST 422'd with the message
+  // below — the same dead end #10 was raised for, moved from the button to
+  // the click. Resolve it the way the read side does: the DIVISION's
+  // setting, falling back to the cart's only when a division has no
+  // settings row at all.
+  const divSettings = await loadSettings(sql, reg.division_id);
+  const effectiveMethod = divSettings?.payment_method ?? reg.payment_method;
+  if (effectiveMethod !== "stripe") {
     throw new HttpError(422, "This entry fee is paid directly to the organiser");
   }
   if (reg.amount_cents <= 0) {
     throw new HttpError(422, "This registration has no entry fee");
+  }
+  // REVIEW FIX (#8, "pay-then-refund on a stale deadline"): the sweep that
+  // expires an overdue pending entry (and auto-refunds a paid Stripe one) is
+  // hourly (cron "37 * * * *"), so a cart whose deadline passed at 14:00 is
+  // still 'pending' at 14:36 — without this check a stale tab or a direct
+  // POST in that window would mint a REAL Stripe session, the registrant
+  // would pay, and the next sweep expires the row and auto-refunds it
+  // straight back out. Same precedence as the client's own
+  // effectivePayDeadline (register/status/view-model.ts): this entry's own
+  // promotion window if it was promoted out of the waitlist, else the
+  // cart's shared window — this is the LOAD-BEARING half; the client-side
+  // window_closed state is cosmetic without this.
+  const deadline = reg.promotion_expires_at ?? reg.expires_at;
+  if (deadline && deadline.getTime() <= Date.now()) {
+    throw new HttpError(422, "This payment window has closed");
   }
   const ctx = await divisionCtx(sql, reg.division_id);
   if (!ctx.charges_enabled) {
@@ -3169,6 +3859,83 @@ export async function maybeAlertRegistrationRefundFailed(opts: {
   }
 }
 
+export interface ResolvedRefundPolicy {
+  refundable: boolean;
+  /** ISO instant, or null only when NEITHER an explicit lock NOR the
+   *  competition's own `starts_on` exists to fall back to — see `reason`. */
+  deadline: string | null;
+  /** This entry's own remaining unrefunded balance — what would come back if
+   *  it were withdrawn right now, regardless of `refundable` (a registrant
+   *  past the deadline can still be shown what is at stake). */
+  amount_cents: number;
+  /** Set only when `refundable` is false because NO deadline could be
+   *  derived at all — no explicit `refund_lock_at` AND no competition
+   *  `starts_on` (owner ruling, RS007 follow-up to V379): an org that never
+   *  configured either is fail-CLOSED, not auto-refundable forever. Lets a
+   *  surface distinguish "we cannot know when this event begins, ask the
+   *  organiser" from an ordinary past-deadline decline. Null in every other
+   *  case, refundable or not (including a KNOWN deadline that has simply
+   *  passed). */
+  reason: "no_deadline" | null;
+}
+
+/**
+ * V379/RS007 — the refund policy an entry sits under RIGHT NOW. Shared by
+ * `withdrawCore`'s auto-refund decision and the read path
+ * (`buildGroupStatusView`) so a registrant can never be shown a policy on
+ * the status page that the write path would not actually honour.
+ *
+ * NULL `refundLockAt` no longer means "refundable forever" (owner ruling).
+ * The lock-DATE policy stays — the org still controls refunds by setting one
+ * date, not by actioning each refund individually — but an org that never
+ * configured a lock now falls back to the competition's own `starts_on`,
+ * rather than staying auto-refundable right up until (and past) kickoff,
+ * after the money is already committed to a venue. An EXPLICIT
+ * `refund_lock_at` always wins over this fallback — never averaged,
+ * never the earlier/later of the two, just a plain `??`.
+ *
+ * RS007 follow-up (this wave, closing a gap the V379 comment above did not):
+ * a NULL `refundLockAt` with a NULL `startsOn` used to leave the derived
+ * deadline null too, which the boolean below read as "no deadline, so still
+ * open" — refundable forever, the exact behaviour V379 claims it removed.
+ * Owner ruling: no derivable deadline at all is fail-CLOSED (`refundable:
+ * false`, `reason: "no_deadline"`), never fail-open — an organiser bleeding
+ * refunds through a window that never closes is a worse failure than a
+ * registrant having to ask a human.
+ *
+ * `startsOn` is a DATE column (`competitions.starts_on`, no time-of-day) and
+ * carries no zone of its own — `tz` resolves the fallback in the
+ * COMPETITION's governing clock (`resolveVenueTz(null, organizations.timezone)`,
+ * the same "orgTz, never a division's own schedule_settings.tz" rule
+ * `loadSettings`/`zoned-datetime.ts` document for every other value derived
+ * from a competition- rather than division-scoped field): `starts_on`
+ * belongs to the competition, not any one division, so every division of one
+ * competition must derive the identical instant from it — a per-division
+ * override here would silently disagree with a sibling entry in the same
+ * cart the exact way #397 already fixed for fixture scheduling. Real spread
+ * is UTC-12…UTC+14: parsing as bare UTC midnight (the old behaviour) could
+ * leave an Asia/Kolkata org auto-refunding until 05:30 local on the morning
+ * of play.
+ */
+export function resolveRefundPolicy(
+  refundLockAt: Date | null,
+  startsOn: string | null,
+  tz: string,
+  paymentIntentId: string | null,
+  amountCents: number,
+  refundedCents: number,
+): ResolvedRefundPolicy {
+  const startsOnDeadline = startsOn ? isoFromZonedParts(startsOn, "00:00", tz) : null;
+  const lockAt = refundLockAt ?? (startsOnDeadline ? new Date(startsOnDeadline) : null);
+  const remaining = amountCents - refundedCents;
+  return {
+    refundable: !!paymentIntentId && remaining > 0 && !!lockAt && new Date() < lockAt,
+    deadline: lockAt ? lockAt.toISOString() : null,
+    amount_cents: remaining,
+    reason: lockAt ? null : "no_deadline",
+  };
+}
+
 async function withdrawCore(reg: RegistrationWithGroupRow, actorId: string | null): Promise<void> {
   if (reg.status === "withdrawn") return; // idempotent
   // RULING A (RS002 W5 review, MAJOR): rejected is terminal from every
@@ -3243,20 +4010,47 @@ async function withdrawCore(reg: RegistrationWithGroupRow, actorId: string | nul
   }
 
   // Auto-refund policy (doc 16 §1.1): full refund when withdrawal lands
-  // before refund_lock_at (or no lock set). After the lock it's organiser
-  // discretion via the manual refund endpoint. Stripe call OUTSIDE the tx.
+  // before refund_lock_at (V379: or its starts_on fallback when unset — see
+  // resolveRefundPolicy). After the lock it's organiser discretion via the
+  // manual refund endpoint. Stripe call OUTSIDE the tx.
   const { locked } = outcome;
-  const refundable = locked.payment_intent_id && locked.refunded_cents < locked.amount_cents;
-  const beforeLock =
-    !settings?.refund_lock_at || new Date() < new Date(settings.refund_lock_at);
-  if (refundable && beforeLock) {
+  const policy = resolveRefundPolicy(
+    settings?.refund_lock_at ?? null,
+    ctx.starts_on,
+    resolveVenueTz(null, ctx.org_timezone),
+    // REVIEW FIX (money-path defect #1, write-side twin of buildGroupStatusView's
+    // fix above): `locked` is the pre-update row (read before the `status =
+    // 'withdrawn'` write above), so `locked.status` is this entry's OWN status
+    // right up to this withdrawal — 'pending'/'waitlisted' means it was never
+    // itself charged, even when the CART's payment_intent_id is live from a
+    // sibling's real payment. Passing the group PI unconditionally here used to
+    // let cancelling a never-charged promoted sibling run a REAL stripeRefund
+    // against the sibling's own money.
+    // V387/H1: THIS ENTRY's own intent, and no fallback to the cart's. The
+    // status gate above closes the never-charged sibling; it does NOT close
+    // the case where both entries were genuinely charged in two different
+    // sessions, because then the gate passes and the cart column holds the
+    // OTHER entry's intent. Fail CLOSED when the entry has none recorded: a
+    // null here makes `refundable` false, the registrant is told the refund
+    // is at the organiser's discretion, and #16's manual refund control
+    // handles it. Falling back to the cart's intent is precisely the
+    // behaviour being removed — an automatic refund against a charge that
+    // may not be this entry's.
+    locked.status === "paid" || locked.status === "confirmed"
+      ? locked.entry_payment_intent_id
+      : null,
+    locked.amount_cents,
+    locked.refunded_cents,
+  );
+  if (policy.refundable) {
     // RS002 (V368): THIS entry's own remaining balance — never the cart's
     // whole intent (hazard 1) — so a sibling that already carries a partial
     // refund (organiser discretion, then a late withdrawal) is never
     // double-counted here either.
-    const remaining = locked.amount_cents - locked.refunded_cents;
+    const remaining = policy.amount_cents;
     try {
-      const refund = await stripeRefund(locked.payment_intent_id as string, remaining);
+      // Same value the policy above was resolved from — never the cart's.
+      const refund = await stripeRefund(locked.entry_payment_intent_id as string, remaining);
       // Additive on BOTH tables (hazard 2 fixed), in ONE transaction (review
       // fixup — matches refundRegistration's withTenant-wrapped pattern
       // below: two separate autocommit statements could leave the entry and
@@ -3305,37 +4099,138 @@ async function withdrawCore(reg: RegistrationWithGroupRow, actorId: string | nul
 // ---------------------------------------------------------------------------
 
 /**
- * Two passes over card pendings: (1) T-24h payment reminders carrying a fresh
- * token-free checkout link, exactly once per registration (reminded_at);
- * (2) expire rows past their deadline and promote the oldest waitlisted with
- * a new window. Each expiry runs in its own row-locked tx, so a racing
- * webhook serialises: webhook first → paid wins; sweep first → the late
- * payment auto-refunds (confirmPaidRegistration).
+ * Four passes over card pendings: (1a) T-24h payment reminders for
+ * never-promoted entries, keyed on the CART's shared deadline, carrying a
+ * fresh token-free checkout link, exactly once per registration
+ * (registration_groups.reminded_at); (1b) the same T-24h reminder for
+ * PROMOTED entries, keyed on THEIR OWN deadline instead
+ * (registrations.promotion_reminded_at — V379/RS007: a group-level mark
+ * would silence a still-pending sibling's own, unrelated reminder the
+ * moment either one fired); (2) expire never-paid submits past the CART's
+ * deadline and promote the oldest waitlisted with a new window; (3) lapse
+ * PROMOTED entries past their OWN deadline back to the waitlist tail and
+ * re-offer the freed slot (V378/RS007). `r.promoted_at is null` vs
+ * `is not null` scopes (1a) from (1b) and (2) from (3) identically, so a row
+ * can only ever match one reminder pass and one expiry/lapse pass. Each
+ * expiry/lapse runs in its own row-locked tx, so a racing webhook
+ * serialises: webhook first → paid wins; sweep first → the late payment
+ * auto-refunds (confirmPaidRegistration).
  */
+
+// The reminder passes' claim window (V381) — long enough that a genuinely
+// in-flight mint+send is never double-claimed, short enough that a crashed
+// claim recovers well inside the sweep's own hourly cadence (registrations-
+// sweep.yml). The Stripe client this call chain uses has a hard 10s timeout
+// and zero retries (lib/stripe.ts's `timeout`/`maxNetworkRetries`), and the
+// reminder email is a single, unretried fetch (lib/email.ts) — so one row's
+// realistic worst-case mint+send is on the order of seconds, at most a
+// couple dozen. 5 minutes leaves roughly an order of magnitude of headroom
+// over that, while still being a twelfth of the hourly cadence, so an
+// ungraceful death recovers on the very next scheduled sweep rather than
+// sitting stale for hours.
+const REMINDER_LEASE_MINUTES = 5;
+
 export async function sweepRegistrations(
   origin: string,
-): Promise<{ reminded: number; expired: number; promoted: number }> {
+): Promise<{ reminded: number; expired: number; promoted: number; lapsed: number }> {
   let reminded = 0;
   let expired = 0;
   let promotedCount = 0;
+  let lapsedCount = 0;
 
-  // payment_method/expires_at/reminded_at live on the cart now (V364).
+  // payment_method/expires_at live on the cart now (V364).
+  // `r.promoted_at is null` (V379/RS007 — found while wiring the promoted-
+  // reminder pass below): a promotion into a stripe window EXTENDS the
+  // cart's shared expires_at too (promoteWaitlistedRow's `greatest(...)`
+  // write, so a still-pending sibling's own deadline is never shortened),
+  // which means a promoted entry's OWN clock and the cart's shared one can
+  // land in the SAME 24h window at the SAME time — without this filter, a
+  // promoted row would be reminded HERE (against the group's — possibly
+  // sibling-driven, not this entry's own — deadline) AND by the dedicated
+  // promoted pass below (against its real deadline), twice, from two marks.
+  // Promoted rows are this query's business no longer; see (1b) below.
+  //
+  // REVIEW FIX (money-path defect #7, V383) — `submit_reminded_at` replaces
+  // the old `g.reminded_at is null` filter. This pass iterates PER ENTRY but
+  // used to claim/mark the GROUP row: a cart with two still-pending,
+  // never-promoted entries produces two rows here sharing one group_id, and
+  // whichever entry's iteration ran first won the group's shared claim —
+  // permanently silencing the OTHER entry's own attempt from every future
+  // sweep (same group-level filter, now non-null), even though its fee was
+  // never presented to anyone (each reminder mints a checkout for the ONE
+  // named entry, never the whole cart). V381's lease fix did not touch this
+  // — the lease it added was on the SAME group columns. Fixed the same way
+  // pass (1b) already scopes a promoted entry's own reminder: this entry's
+  // OWN mark, so a still-pending sibling's own, unrelated reminder can never
+  // be silenced by this one firing. See the V383 migration's own doc comment
+  // for why this is named `submit_*`, not a bare `reminded_at`.
   const due = await sql<RegistrationWithGroupRow[]>`
     select ${regGroupCols(sql)}
     from registrations r join registration_groups g on g.id = r.group_id
-    where r.status = 'pending' and g.payment_method = 'stripe'
+    where r.status = 'pending' and r.promoted_at is null and g.payment_method = 'stripe'
       and g.expires_at is not null
       and g.expires_at < now() + interval '24 hours'
       and g.expires_at > now()
-      and g.reminded_at is null
+      and r.submit_reminded_at is null
     order by g.expires_at
     limit 200`;
   for (const reg of due) {
+    let claimed = false;
     try {
       const ctx = await divisionCtx(sql, reg.division_id);
       if (!ctx.charges_enabled) continue; // Connect broke — nothing to link to
+      // RS007 follow-up (V381) — the CAS-before-send claim (648c56503) only
+      // reverted on a THROWN failure. An ungraceful death (deploy, OOM,
+      // SIGKILL, container eviction) between this UPDATE committing and the
+      // send below completing runs no `catch`, so a permanent claim would
+      // stick forever and `where submit_reminded_at is null` would never
+      // match this row again — a silently lost reminder, worse than the
+      // double-send the claim exists to prevent (routine here:
+      // registrations-sweep.yml's own curl --max-time 60 --retry lands while
+      // a 200-row serial sweep is still running server-side).
+      // submit_reminder_claimed_at is a LEASE instead of a permanent mark: it
+      // blocks a concurrent claim for REMINDER_LEASE_MINUTES, then goes
+      // stale and the row is claimable again, so a crash costs a delay,
+      // never the reminder. submit_reminded_at — set only after a real send
+      // below — stays the permanent record; the "due" SELECT above filters
+      // on THAT column alone, never the lease.
+      //
+      // REVIEW FIX (money-path defect #9) — the mint used to run BEFORE this
+      // claim, unconditionally: a losing invocation (a concurrent sweep that
+      // loses THIS claim below) still ran createRegistrationCheckout and
+      // stamped registration_groups.checkout_session_id with a session
+      // nobody would ever hold — the loser never reaches the send below, so
+      // nobody is ever given that URL, yet the group's shared session
+      // pointer now names it. A registrant who already has the WINNER's
+      // session URL (from a real, sent email) then pays via a session the
+      // group row no longer names, and the reconcile-on-return path
+      // (`sessionId !== reg.checkout_session_id`) refuses to confirm it —
+      // the webhook remains the eventual fulfilment path, but the fast
+      // return-and-confirm UX breaks for a payment that genuinely succeeded.
+      // Minting now happens ONLY after a successful claim, so a losing
+      // invocation never reaches Stripe at all.
+      const [row] = await sql<{ id: string }[]>`
+        update registrations
+        set submit_reminder_claimed_at = now(), updated_at = now()
+        where id = ${reg.id} and submit_reminded_at is null
+          and (submit_reminder_claimed_at is null
+               or submit_reminder_claimed_at < now() - make_interval(mins => ${REMINDER_LEASE_MINUTES}))
+        returning id`;
+      if (!row) continue; // lease held by a concurrent sweep, or already sent
+      claimed = true;
       const url = await createRegistrationCheckout(reg.group_id, [reg.id], ctx, origin, null);
-      await sendPaymentReminderEmail({
+      // RS007 review fix — sendPaymentReminderEmail (lib/email.ts) NEVER
+      // throws on a provider-level failure: its own send() catches every
+      // failure mode (missing key, suppressed, non-2xx, fetch throw) and
+      // RETURNS false instead. This call used to discard that return value,
+      // so an ordinary Resend 4xx/5xx — far commoner than the process death
+      // the lease above exists for — fell through to the unconditional
+      // "sent" write below and permanently marked an email that never left
+      // this process. Branch on the result: only a genuinely delivered send
+      // may promote the lease; a `false` return is handled exactly like a
+      // thrown failure (see the `catch` below) — release the lease, leave
+      // the permanent mark null, and let the next sweep retry.
+      const delivered = await sendPaymentReminderEmail({
         to: reg.contact_email,
         locale: toLocale(reg.locale),
         orgName: ctx.org_name,
@@ -3347,11 +4242,105 @@ export async function sweepRegistrations(
         checkoutUrl: url,
         payDeadline: reg.expires_at,
       });
+      if (!delivered) {
+        await sql`update registrations set submit_reminder_claimed_at = null, updated_at = now()
+                  where id = ${reg.id}`;
+        continue; // submit_reminded_at (sent) stays null — a later sweep retries
+      }
+      // Send succeeded — promote the lease to the permanent SENT record.
+      await sql`update registrations set submit_reminded_at = now(), updated_at = now()
+                where id = ${reg.id}`;
     } catch {
-      continue; // reminded_at stays null — the next sweep retries
+      if (claimed) {
+        // Thrown failure: clear the LEASE, not the (still-null) sent mark,
+        // so the next sweep retries promptly instead of waiting out the
+        // window.
+        await sql`update registrations set submit_reminder_claimed_at = null, updated_at = now()
+                  where id = ${reg.id}`;
+      }
+      continue; // submit_reminded_at (sent) stays null either way — a later sweep retries
     }
-    await sql`update registration_groups set reminded_at = now(), updated_at = now()
-              where id = ${reg.group_id}`;
+    reminded++;
+  }
+
+  // (1b) V379/RS007 — the promoted counterpart to the pass immediately
+  // above: same T-24h window, same mailer, but keyed on THIS entry's own
+  // `promotion_expires_at` and marked on THIS entry's own
+  // `promotion_reminded_at` — never the group's `reminded_at`, which a cart
+  // can share with a still-pending sibling (see (1a)'s comment and the
+  // column's own doc comment on `registrations`, V379). `promotion_expires_at
+  // is not null` alone is enough to scope this to promoted, stripe-fee rows:
+  // `promoteWaitlistedRow` only ever sets it when the promotion itself
+  // needed a stripe window (`amount_cents` > 0 at that moment), and nothing
+  // else in the codebase writes it.
+  const duePromoted = await sql<RegistrationWithGroupRow[]>`
+    select ${regGroupCols(sql)}
+    from registrations r join registration_groups g on g.id = r.group_id
+    where r.status = 'pending' and r.promoted_at is not null
+      and r.promotion_expires_at is not null
+      and r.promotion_expires_at < now() + interval '24 hours'
+      and r.promotion_expires_at > now()
+      and r.promotion_reminded_at is null
+    order by r.promotion_expires_at
+    limit 200`;
+  for (const reg of duePromoted) {
+    let claimed = false;
+    try {
+      const ctx = await divisionCtx(sql, reg.division_id);
+      if (!ctx.charges_enabled) continue; // Connect broke — nothing to link to
+      // RS007 follow-up (V381) — same lease fix as pass (1a) above, on this
+      // entry's OWN mark (never the group's, per this pass's own doc
+      // comment on why).
+      //
+      // REVIEW FIX (money-path defect #9) — same reorder as pass (1a) above:
+      // this pass had the identical mint-before-claim shape (its own entry-
+      // scoped columns already avoided the CART-sibling repro #7 fixes, but
+      // a losing invocation under genuine concurrent sweep execution still
+      // wasted a mint and clobbered the group's shared checkout_session_id
+      // with a session nobody would ever hold). Claim first; a losing
+      // invocation now never reaches createRegistrationCheckout at all.
+      const [row] = await sql<{ id: string }[]>`
+        update registrations
+        set promotion_reminder_claimed_at = now(), updated_at = now()
+        where id = ${reg.id} and promotion_reminded_at is null
+          and (promotion_reminder_claimed_at is null
+               or promotion_reminder_claimed_at < now() - make_interval(mins => ${REMINDER_LEASE_MINUTES}))
+        returning id`;
+      if (!row) continue; // lease held by a concurrent sweep, or already sent
+      claimed = true;
+      const url = await createRegistrationCheckout(reg.group_id, [reg.id], ctx, origin, null);
+      // RS007 review fix — same false-vs-throw gap as pass (1a) above, on
+      // this pass's own lease/mark columns (never the group's — see this
+      // pass's own doc comment on why).
+      const delivered = await sendPaymentReminderEmail({
+        to: reg.contact_email,
+        locale: toLocale(reg.locale),
+        orgName: ctx.org_name,
+        competitionName: ctx.comp_name,
+        displayName: reg.display_name,
+        feeCents: reg.amount_cents,
+        currency: reg.currency,
+        paymentInstructions: null,
+        checkoutUrl: url,
+        payDeadline: reg.promotion_expires_at,
+      });
+      if (!delivered) {
+        await sql`update registrations set promotion_reminder_claimed_at = null, updated_at = now()
+                  where id = ${reg.id}`;
+        continue; // promotion_reminded_at (sent) stays null — a later sweep retries
+      }
+      // Send succeeded — promote the lease to the permanent SENT record.
+      await sql`update registrations set promotion_reminded_at = now(), updated_at = now()
+                where id = ${reg.id}`;
+    } catch {
+      if (claimed) {
+        // Thrown failure: clear the LEASE, not the (still-null) sent mark —
+        // see pass (1a)'s comment above.
+        await sql`update registrations set promotion_reminder_claimed_at = null, updated_at = now()
+                  where id = ${reg.id}`;
+      }
+      continue; // promotion_reminded_at (sent) stays null either way — a later sweep retries
+    }
     reminded++;
   }
 
@@ -3367,10 +4356,18 @@ export async function sweepRegistrations(
   // reminder pass uses, PLUS the entry's own fee (a `pending` row can be
   // `amount_cents = 0` even when its cart's method is 'stripe', if a sibling
   // established that method).
+  //
+  // `r.promoted_at is null` (V378/RS007): a PROMOTED entry now has its own
+  // clock (`promotion_expires_at`, checked by the lapse pass below) and must
+  // not also fall off the cart's shared one — the STRUCTURAL finding in
+  // `_INDEX.md`'s RS007 section is exactly this: promoting one entry in a
+  // multi-entry cart used to extend (and later expire) every sibling's
+  // deadline right along with it.
   const overdue = await sql<{ id: string; division_id: string; group_id: string }[]>`
     select r.id, r.division_id, r.group_id
     from registrations r join registration_groups g on g.id = r.group_id
-    where r.status = 'pending' and r.amount_cents > 0 and g.payment_method = 'stripe'
+    where r.status = 'pending' and r.promoted_at is null and r.amount_cents > 0
+      and g.payment_method = 'stripe'
       and g.expires_at is not null and g.expires_at < now()
     order by g.expires_at
     limit 200`;
@@ -3424,7 +4421,100 @@ export async function sweepRegistrations(
     }
   }
 
-  return { reminded, expired, promoted: promotedCount };
+  // Promotion lapse (V378/RS007) — the counterpart pass to the expiry loop
+  // above, over the OTHER half of `pending`: rows `promoted_at is null`
+  // never reaches. Falling off `promotion_expires_at` does not expire the
+  // entry — owner ruling (see `_INDEX.md`'s RS007 section, "FALSE PREMISE —
+  // verify RS002 shipped the lapse") is that it re-joins the waitlist TAIL
+  // (`waitlisted_at = now()`, so `promoteOldestWaitlisted`'s
+  // `coalesce(waitlisted_at, created_at)` sorts it behind anyone who has
+  // been waiting since before this moment) and the freed slot is
+  // immediately re-offered to the next candidate via the SAME
+  // `promoteOldestWaitlisted` the expiry pass above uses — never a forked
+  // copy. No join to `registration_groups` needed: every filter/order
+  // column here is the entry's own.
+  const lapsing = await sql<{ id: string; division_id: string }[]>`
+    select r.id, r.division_id
+    from registrations r
+    where r.status = 'pending' and r.promoted_at is not null
+      and r.promotion_expires_at is not null and r.promotion_expires_at < now()
+    order by r.promotion_expires_at
+    limit 200`;
+  for (const { id, division_id } of lapsing) {
+    const outcome = (await sql.begin(async (tx) => {
+      const [locked] = await tx<RegistrationWithGroupRow[]>`
+        select ${regGroupCols(tx)}
+        from registrations r join registration_groups g on g.id = r.group_id
+        where r.id = ${id} for update`;
+      if (
+        !locked ||
+        locked.status !== "pending" ||
+        !locked.promoted_at ||
+        !locked.promotion_expires_at ||
+        new Date(locked.promotion_expires_at) > new Date()
+      ) {
+        return null; // an organiser action won the race, or the deadline moved
+      }
+      // PR #677 finding L3, REJECTED after testing — `amount_cents` is
+      // deliberately RETAINED here, and clearing it is a money defect.
+      //
+      // The finding reads the retained fee as breaking a "waitlisted rows
+      // are 0 by construction" invariant. Two things are wrong with that.
+      // First, the consumer it cites does not rely on the invariant:
+      // `entryCountsTowardTotal`'s own comment says waitlisted is "excluded
+      // here defensively rather than relied upon to always be zero".
+      // Second, and decisively, this row's fee is still LOAD-BEARING after
+      // the lapse: a checkout session minted before the deadline can still
+      // complete afterwards, and `confirmPaidRegistration`'s `late` branch
+      // refunds that payment using this very column. Zeroing it here makes
+      // that refund £0.00 — the registrant pays, the entry stays
+      // waitlisted, and the money is silently kept. Caught by
+      // `registrations.test.ts`'s "a late payment against a promotion that
+      // already LAPSED to waitlisted" (expected 500, got 0) while trying
+      // the change; left here so the next reader does not retry it.
+      await tx`
+        update registrations
+        set status = 'waitlisted', waitlisted_at = now(),
+            promoted_at = null, promotion_expires_at = null, updated_at = now()
+        where id = ${id}`;
+      // Same stale-deadline gap as the expiry branch: if this was the cart's
+      // LAST pending entry, nothing else needs the group's shared clock.
+      await clearExpiresIfNoLongerNeeded(tx, locked.group_id, locked.id);
+      const settings = await loadSettings(tx, division_id);
+      const [div] = await tx<{ competition_id: string; org_id: string }[]>`
+        select competition_id, org_id from divisions where id = ${division_id}`;
+      // REVIEW FIX (money-path defect #5): exclude the row THIS pass just
+      // lapsed — see promoteOldestWaitlisted's own doc comment for why
+      // `for update skip locked` alone cannot stop this call from
+      // re-selecting it.
+      const promoted = await promoteOldestWaitlisted(tx, division_id, settings, id);
+      await audit(tx, div.competition_id, div.org_id, "registration.promotion_lapsed", {
+        registration_id: id,
+        promoted_registration_id: promoted?.id ?? null,
+      }, null);
+      if (promoted) {
+        await audit(tx, div.competition_id, div.org_id, "registration.promoted", {
+          registration_id: promoted.id,
+          from: "waitlist",
+        }, null);
+      }
+      return { promoted, settings, competitionId: div.competition_id };
+    })) as unknown as {
+      promoted: RegistrationWithGroupRow | null;
+      settings: RegistrationSettingsRow | null;
+      competitionId: string;
+    } | null;
+    if (!outcome) continue;
+    lapsedCount++;
+    fireDivisionRevalidate(division_id, outcome.competitionId);
+    if (outcome.promoted) {
+      promotedCount++;
+      const ctx = await divisionCtx(sql, division_id);
+      await notifyPromoted(outcome.promoted, ctx, outcome.settings, origin);
+    }
+  }
+
+  return { reminded, expired, promoted: promotedCount, lapsed: lapsedCount };
 }
 
 // ---------------------------------------------------------------------------

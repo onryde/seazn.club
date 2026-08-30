@@ -200,7 +200,7 @@ async function seedRrBoard(): Promise<{
   const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "AI Arch", visibility: "public", branding: {} });
   const division = await createDivision(auth, comp.id, {
     name: "Open", slug: "open", sport_key: "generic", variant_key: "score",
-    config: GENERIC_CONFIG, eligibility: [],
+    config: GENERIC_CONFIG, 
   });
   const divisionId = division.id;
   await createEntrants(
@@ -468,7 +468,7 @@ describe.skipIf(!HAS_DB)("buildSchedulePack (v4/01 §2)", () => {
     const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "Flex", visibility: "public", branding: {} });
     const flex = await createDivision(auth, comp.id, {
       name: "Flexi", slug: "flexi", sport_key: "generic", variant_key: "score",
-      config: GENERIC_CONFIG, eligibility: [],
+      config: GENERIC_CONFIG, 
     });
     await sql`update divisions set scheduling_mode = 'flexible' where id = ${flex.id}`;
     // It used to throw 409 AI_PLAN_UNSUPPORTED before reading anything else.
@@ -493,7 +493,7 @@ async function seedBigDivision(auth: AuthCtx, n: number): Promise<string> {
   });
   const division = await createDivision(auth, comp.id, {
     name: "Big", slug: `big-${randomUUID().slice(0, 6)}`, sport_key: "generic",
-    variant_key: "score", config: GENERIC_CONFIG, eligibility: [],
+    variant_key: "score", config: GENERIC_CONFIG, 
   });
   await setSettings(division.id, await courtId(auth, "Court 1"), await courtId(auth, "Court 2"));
   const [stage] = await createStages(auth, division.id, { seq: 1, kind: "league", name: "L", config: {} });
@@ -554,7 +554,7 @@ describe.skipIf(!HAS_DB)("P9 pass 3d: the model payload speaks court names, neve
     });
     const division = await createDivision(auth, comp.id, {
       name: "Open", slug: `open-${randomUUID().slice(0, 6)}`, sport_key: "generic",
-      variant_key: "score", config: GENERIC_CONFIG, eligibility: [],
+      variant_key: "score", config: GENERIC_CONFIG, 
     });
     await setSettings(division.id, court1, court2);
     const [stage] = await createStages(auth, division.id, { seq: 1, kind: "league", name: "L", config: {} });
@@ -622,7 +622,7 @@ async function seedKoDivision(
   });
   const division = await createDivision(auth, comp.id, {
     name, slug: `${name.toLowerCase()}-${tag}`, sport_key: "generic",
-    variant_key: "score", config: GENERIC_CONFIG, eligibility: [],
+    variant_key: "score", config: GENERIC_CONFIG, 
   });
   await setSettings(division.id, await courtId(auth, "Court 1"), await courtId(auth, "Court 2"));
   const [stage] = await createStages(auth, division.id, {
@@ -799,7 +799,7 @@ async function seedSmallKnockoutBracket(): Promise<{
   });
   const division = await createDivision(auth, comp.id, {
     name: "KO", slug: `ko-${tag}`, sport_key: "generic",
-    variant_key: "score", config: GENERIC_CONFIG, eligibility: [],
+    variant_key: "score", config: GENERIC_CONFIG, 
   });
   await setSettings(division.id, await courtId(auth, "Court 1"), await courtId(auth, "Court 2"));
   const [stage] = await createStages(auth, division.id, {

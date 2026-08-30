@@ -28,6 +28,7 @@ export function StepWho({
   onImPlayingChange,
   requirements,
   errors,
+  showSelfToggle = true,
 }: {
   contact: ContactState;
   onChange: (patch: Partial<ContactState>) => void;
@@ -35,6 +36,11 @@ export function StepWho({
   onImPlayingChange: (value: boolean) => void;
   requirements: WhoFieldRequirements;
   errors: ContactValidation["errors"];
+  /** RS007 join page — a joiner IS unambiguously the one playing (there is
+   *  no "I'm just facilitating this for someone else" case on a join
+   *  link), so this toggle has nothing to ask there. Defaults to true —
+   *  RS006's own register flow (every existing caller) is unchanged. */
+  showSelfToggle?: boolean;
 }) {
   const t = useT();
   return (
@@ -99,18 +105,20 @@ export function StepWho({
         </div>
       </div>
 
-      <label className="mt-5 flex cursor-pointer items-start gap-3 rounded-lg border border-zinc-200 bg-canvas px-3.5 py-3">
-        <input
-          type="checkbox"
-          className="mt-0.5 h-4 w-4 shrink-0 accent-accent"
-          checked={imPlaying}
-          onChange={(e) => onImPlayingChange(e.target.checked)}
-        />
-        <span>
-          <span className="block text-sm font-medium text-ink">{t("register.self.label")}</span>
-          <span className="mt-0.5 block text-xs text-ink-muted">{t("register.self.hint")}</span>
-        </span>
-      </label>
+      {showSelfToggle && (
+        <label className="mt-5 flex cursor-pointer items-start gap-3 rounded-lg border border-zinc-200 bg-canvas px-3.5 py-3">
+          <input
+            type="checkbox"
+            className="mt-0.5 h-4 w-4 shrink-0 accent-accent"
+            checked={imPlaying}
+            onChange={(e) => onImPlayingChange(e.target.checked)}
+          />
+          <span>
+            <span className="block text-sm font-medium text-ink">{t("register.self.label")}</span>
+            <span className="mt-0.5 block text-xs text-ink-muted">{t("register.self.hint")}</span>
+          </span>
+        </label>
+      )}
 
       {(requirements.dobRequired || requirements.genderRequired) && (
         <div className="mt-4 grid gap-4 sm:grid-cols-2">

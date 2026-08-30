@@ -98,7 +98,7 @@ async function seedOfficialsBoard(opts?: {
   const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "AI Off", visibility: "public", branding: {} });
   const division = await createDivision(auth, comp.id, {
     name: "Open", slug: "open", sport_key: "generic", variant_key: "score",
-    config: GENERIC_CONFIG, eligibility: [],
+    config: GENERIC_CONFIG, 
   });
   const divisionId = division.id;
   await createEntrants(
@@ -264,7 +264,7 @@ describe.skipIf(!HAS_DB)("buildOfficialsPack (v4/03 §2)", () => {
     const comp = await createCompetition(tieAuth, { ends_on: "2030-12-31", name: "Tie", visibility: "public", branding: {} });
     const div = await createDivision(tieAuth, comp.id, {
       name: "Tie", slug: `tie-${randomUUID().slice(0, 6)}`, sport_key: "generic",
-      variant_key: "score", config: GENERIC_CONFIG, eligibility: [],
+      variant_key: "score", config: GENERIC_CONFIG, 
     });
     await createEntrants(
       tieAuth, div.id,
@@ -394,7 +394,7 @@ describe.skipIf(!HAS_DB)("buildOfficialsPack (v4/03 §2)", () => {
     const comp = await createCompetition(emptyAuth, { ends_on: "2030-12-31", name: "Bare", visibility: "public", branding: {} });
     const div = await createDivision(emptyAuth, comp.id, {
       name: "Bare", slug: "bare", sport_key: "generic", variant_key: "score",
-      config: GENERIC_CONFIG, eligibility: [],
+      config: GENERIC_CONFIG, 
     });
     await setSettings(emptyAuth, div.id);
     await expect(
@@ -423,7 +423,7 @@ describe.skipIf(!HAS_DB)("buildOfficialsPack cross-org busy", () => {
     const compA = await createCompetition(orgA, { ends_on: "2030-12-31", name: "A Cup", visibility: "public", branding: {} });
     const divA = await createDivision(orgA, compA.id, {
       name: "Open", slug: "open", sport_key: "generic", variant_key: "score",
-      config: GENERIC_CONFIG, eligibility: [],
+      config: GENERIC_CONFIG, 
     });
     await createEntrants(orgA, divA.id, ["A", "B"].map((n, i) => ({
       kind: "individual" as const, display_name: n, seed: i + 1, members: [],
@@ -437,7 +437,7 @@ describe.skipIf(!HAS_DB)("buildOfficialsPack cross-org busy", () => {
     const compB = await createCompetition(orgB, { ends_on: "2030-12-31", name: "B Cup", visibility: "public", branding: {} });
     const divB = await createDivision(orgB, compB.id, {
       name: "Open", slug: "open", sport_key: "generic", variant_key: "score",
-      config: GENERIC_CONFIG, eligibility: [],
+      config: GENERIC_CONFIG, 
     });
     await createEntrants(orgB, divB.id, ["C", "D"].map((n, i) => ({
       kind: "individual" as const, display_name: n, seed: i + 1, members: [],
@@ -467,7 +467,7 @@ describe.skipIf(!HAS_DB)("buildOfficialsPack court naming (P9 cutover)", () => {
     const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "Stale", visibility: "public", branding: {} });
     const div = await createDivision(auth, comp.id, {
       name: "Stale", slug: "stale", sport_key: "generic", variant_key: "score",
-      config: GENERIC_CONFIG, eligibility: [],
+      config: GENERIC_CONFIG, 
     });
     await createEntrants(auth, div.id, ["A", "B"].map((n, i) => ({
       kind: "individual" as const, display_name: n, seed: i + 1, members: [],
@@ -494,7 +494,7 @@ describe.skipIf(!HAS_DB)("buildOfficialsPack court naming (P9 cutover)", () => {
     const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "Arch", visibility: "public", branding: {} });
     const div = await createDivision(auth, comp.id, {
       name: "Arch", slug: "arch", sport_key: "generic", variant_key: "score",
-      config: GENERIC_CONFIG, eligibility: [],
+      config: GENERIC_CONFIG, 
     });
     await createEntrants(auth, div.id, ["A", "B"].map((n, i) => ({
       kind: "individual" as const, display_name: n, seed: i + 1, members: [],

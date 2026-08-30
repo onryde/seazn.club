@@ -217,7 +217,6 @@ export async function seedClubNight(auth: AuthCtx): Promise<SeededTemplate> {
     sport_key: sport.sport_key,
     variant_key: sport.variant_key,
     config: sport.config,
-    eligibility: [],
   });
   await createEntrants(auth, division.id, entrantInputs(CLUB_NIGHT_ENTRANTS));
   await setScheduleSettings(division.id, {
@@ -418,7 +417,6 @@ export async function seedNorthsideOpen(auth: AuthCtx): Promise<SeededTemplate> 
       sport_key: sport.sport_key,
       variant_key: sport.variant_key,
       config: sport.config,
-      eligibility: [],
     });
     await createEntrants(auth, division.id, entrantInputs(spec.entrants));
     await setScheduleSettings(division.id, {
@@ -522,7 +520,6 @@ export async function seedFinalsDay(auth: AuthCtx): Promise<SeededTemplate> {
     sport_key: sport.sport_key,
     variant_key: sport.variant_key,
     config: sport.config,
-    eligibility: [],
   });
   await createEntrants(auth, division.id, entrantInputs(FINALS_DAY_ENTRANTS));
   await setScheduleSettings(division.id, {

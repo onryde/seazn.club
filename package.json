@@ -43,6 +43,7 @@
     "stripe:connect-fixture": "node --env-file-if-exists=apps/web/.env.local --experimental-strip-types scripts/stripe-connect-fixture.ts",
     "openapi:gen": "node --experimental-strip-types scripts/openapi-gen.ts",
     "check:rls": "node --experimental-strip-types scripts/check-rls.ts",
+    "check:build-chunks": "node --experimental-strip-types scripts/check-build-chunks.ts",
     "backfill:pass-credit-redemptions": "node --env-file-if-exists=apps/web/.env.local --experimental-strip-types scripts/backfill-pass-credit-redemptions.ts"
   },
   "dependencies": {

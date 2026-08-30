@@ -16,13 +16,19 @@
 // server-only half and a client-safe half); the stepper
 // (components/public-site/register/**) imports straight from here.
 //
-// What stays OUT of this file, on purpose: `divisionEligibilityIssues`'s
-// jsonb-rules loop. It reads `divisions.eligibility` (jsonb), which the
-// public read model never ships to the client (`PublicRegistrationDivision`
-// carries only the booleans `requires_dob`/`requires_gender` derived FROM
-// it) — so the client structurally cannot evaluate those rules, correctly.
-// Only the first-class `category`/`age_min`/`age_max` columns (V364) are
-// public (badges need the raw values), so only their predicates belong here.
+// RS007/V380 dropped the `divisions.eligibility` jsonb column entirely (owner
+// ruling, `_INDEX.md` "Eligibility consolidation") — `category`/`age_min`/
+// `age_max`/`age_cutoff_month`/`age_cutoff_day` are now the ONLY eligibility
+// representation, server and client alike, so this file's predicates are no
+// longer a deliberately-narrower subset of a wider server-side evaluator —
+// `divisionEligibilityIssues` (registration-eligibility.ts) is now a thin
+// wrapper over exactly these two functions plus nothing else. The public
+// read model (`PublicRegistrationDivision`) now ships `age_cutoff_month`/
+// `age_cutoff_day` alongside the derived `requires_dob`/`requires_gender`
+// booleans, so a client-side caller of `ageBandEligibilityIssues` (via
+// `DivisionLike`, components/public-site/register/types.ts) evaluates the
+// SAME cutoff the server enforces at submit — the 1-January default below
+// now only ever fires for a division that genuinely has no cutoff set.
 //
 // `rosterIssues`'s roster-composition check (`mixedCompositionTally`/
 // `rosterCompositionIssues` below) moved IN at RS006 W3 (step 3 — DETAILS):
@@ -94,28 +100,19 @@ export interface EligibilityIssue {
 }
 
 /**
- * Division has an age rule ⇒ the form must collect DOB.
+ * Division has an age band ⇒ the form must collect DOB.
  *
- * Overloaded: the legacy jsonb-only shape (a bare rules array), and a
- * division-shaped object so a division using ONLY `age_min`/`age_max` (no
- * jsonb age rule at all) still collects a DOB. Before V364 this inspected
- * only the jsonb rules, so a first-class-only age band silently collected no
- * DOB and then failed every player at eligibility time. Untouched by the
- * structured-issue rework — this returns a boolean, not an issue.
+ * RS007/V380: the jsonb `eligibility` rules (and this function's old
+ * bare-array overload, which read them) are gone — `age_min`/`age_max` are
+ * the only source left, so this is now a plain boolean-in boolean-out
+ * predicate. Untouched by the structured-issue rework — this returns a
+ * boolean, not an issue.
  */
-export function requiresDob(rules: unknown[]): boolean;
 export function requiresDob(division: {
-  eligibility: unknown[];
   age_min: number | null;
   age_max: number | null;
-}): boolean;
-export function requiresDob(
-  input: unknown[] | { eligibility: unknown[]; age_min: number | null; age_max: number | null },
-): boolean {
-  if (Array.isArray(input)) {
-    return input.some((r) => (r as { kind?: string })?.kind === "age");
-  }
-  return input.age_min != null || input.age_max != null || requiresDob(input.eligibility);
+}): boolean {
+  return division.age_min != null || division.age_max != null;
 }
 
 /**
@@ -128,12 +125,10 @@ export function requiresDob(
  *
  * Extracted from `divisionEligibilityIssues`'s first-class block
  * (server/usecases/registration-eligibility.ts) so the stepper's ENTRIES
- * step can grey a self-ineligible division with the literal same rule.
- * Deliberately does NOT know about the jsonb-vs-category gender precedence
- * rule (a jsonb GenderRule suppresses this block server-side) — the public
- * read model never ships jsonb rules to the client, so from the client's
- * vantage point this predicate IS the whole gender-eligibility story for a
- * division whose `requires_gender` is category-driven.
+ * step can grey a self-ineligible division with the literal same rule. RS007/
+ * V380 retired the jsonb `eligibility` rules (and the gender-precedence rule
+ * that used to arbitrate between them and this block) — `category` is now
+ * the whole gender-eligibility story, server and client alike.
  */
 export function categoryEligibilityIssues(
   division: { category: string | null },
@@ -155,18 +150,57 @@ export function categoryEligibilityIssues(
   return issues;
 }
 
+// Static days-per-month table for age_cutoff_day validity (RS007 review fix
+// L1). February is capped at 28, deliberately NOT 29: a cutoff is not a
+// one-off date — the SAME age_cutoff_month/age_cutoff_day pair is
+// re-evaluated every season against a DIFFERENT seasonStartYear
+// (ageBandEligibilityIssues below), so a leap-only day would still silently
+// roll over into 1 March in the three years out of four that are not leap
+// years. Rejecting it here guarantees every (month, day) pair that survives
+// this check is valid for EVERY year, not just some.
+const DAYS_IN_MONTH: readonly number[] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+/**
+ * Whether `day` is a real day-of-month for `month` (1-12), by the
+ * every-year-safe table above. Exported so the write path
+ * (`api-v1/schemas.ts`'s `checkAgeCutoff`) can reject an impossible
+ * age_cutoff_month/age_cutoff_day combination BEFORE it is ever stored —
+ * same "validate once, reuse everywhere" shape as every other predicate in
+ * this file. `ageBandEligibilityIssues` below uses it too, as a read-side
+ * backstop for a row that reached storage before this check existed (or
+ * bypassed it directly).
+ */
+export function isValidCutoffDay(month: number, day: number): boolean {
+  const max = DAYS_IN_MONTH[month - 1];
+  return max != null && day >= 1 && day <= max;
+}
+
 /**
  * First-class AGE BAND check only (`age_min`/`age_max`, V364). Evaluated at
- * 1 January of `seasonStartYear` — never "today" — matching the jsonb
- * rules' `cutoff.yearOf: "season_start"` branch exactly, deliberately: a
- * season-long division must not change who is eligible partway through the
- * season.
+ * `age_cutoff_month`/`age_cutoff_day` of `seasonStartYear` when the division
+ * sets them, else 1 January — never "today": a season-long division must not
+ * change who is eligible partway through the season. RS007/V380 moved the
+ * cutoff here from the retired jsonb rules' `cutoff.yearOf: "season_start"`
+ * branch, which this replaces exactly (same anchor, same reason).
+ *
+ * The two cutoff fields are OPTIONAL on this narrow parameter type (unlike
+ * `EligibilityDivision`, server-side, which always carries them) — RS007/
+ * V380 threads the real cutoff onto the wire (`PublicRegistrationDivision`)
+ * and the public stepper's `DivisionLike` now carries it too, but a caller
+ * that only has `category`/`age_min`/`age_max` in hand (a hand-built test
+ * fixture, or a narrower division shape elsewhere) still keeps compiling
+ * unchanged and gets the same 1-January default it always has.
  *
  * Extracted from `divisionEligibilityIssues`'s first-class block for the
  * same reason as `categoryEligibilityIssues` above.
  */
 export function ageBandEligibilityIssues(
-  division: { age_min: number | null; age_max: number | null },
+  division: {
+    age_min: number | null;
+    age_max: number | null;
+    age_cutoff_month?: number | null;
+    age_cutoff_day?: number | null;
+  },
   person: EligibilityPerson,
   seasonStartYear: number,
 ): EligibilityIssue[] {
@@ -179,7 +213,21 @@ export function ageBandEligibilityIssues(
     });
     return issues;
   }
-  const cutoffDate = new Date(Date.UTC(seasonStartYear, 0, 1));
+  const cutoffMonth = division.age_cutoff_month ?? 1;
+  const cutoffDay = division.age_cutoff_day ?? 1;
+  // RS007 review fix L1: the write path (checkAgeCutoff, api-v1/schemas.ts)
+  // now rejects a day that does not exist in its month, so this combination
+  // should be unreachable for any row written through the API. Fail loudly
+  // rather than let `Date.UTC` silently roll it into the next month (31
+  // September becoming 1 October, 30 February becoming 1/2 March) — that
+  // silent shift, with no error anywhere, is the defect this fix closes.
+  // Never fires for valid input, including the 1/1 default above.
+  if (!isValidCutoffDay(cutoffMonth, cutoffDay)) {
+    throw new Error(
+      `Invalid age cutoff: day ${cutoffDay} does not exist in month ${cutoffMonth}. This division's stored age_cutoff_month/age_cutoff_day should have been rejected at write time.`,
+    );
+  }
+  const cutoffDate = new Date(Date.UTC(seasonStartYear, cutoffMonth - 1, cutoffDay));
   const age = ageAt(person.dob, cutoffDate);
   if (division.age_max != null && age > division.age_max) {
     issues.push({

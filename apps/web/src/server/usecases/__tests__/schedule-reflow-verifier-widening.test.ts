@@ -90,7 +90,6 @@ async function seed(): Promise<{ auth: AuthCtx; stageId: string; courts: Map<str
     sport_key: "generic",
     variant_key: "score",
     config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
-    eligibility: [],
   });
   await createEntrants(
     auth,

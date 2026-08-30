@@ -431,7 +431,15 @@ export default async function DivisionPage({
             canEdit={editable}
             positionGroups={sportModule.positions.groups}
             roles={sportModule.positions.roles ?? []}
-            eligibility={division.eligibility as Record<string, unknown>[]}
+            // RS007/V380 dropped `divisions.eligibility` (jsonb) — the real
+            // first-class columns, so EntrantsPanel's badge reflects every
+            // division's actual restriction instead of always reading empty.
+            eligibility={{
+              category: division.category,
+              age_min: division.age_min,
+              age_max: division.age_max,
+              eligibility_note: division.eligibility_note,
+            }}
             entrantModel={entrantModel}
             suspensions={entrantSuspensions}
           />

@@ -87,6 +87,9 @@ export function RegistrationHubSettingsPanel({
             category: openRow.category,
             age_min: openRow.age_min,
             age_max: openRow.age_max,
+            age_cutoff_month: openRow.age_cutoff_month,
+            age_cutoff_day: openRow.age_cutoff_day,
+            eligibility_note: openRow.eligibility_note,
           }}
           orgTz={context.orgTz}
           orgSlug={orgSlug}

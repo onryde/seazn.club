@@ -485,6 +485,12 @@ describe("registration hub — Settings tab data wiring (RS004 W3)", () => {
         category: null,
         age_min: 10,
         age_max: 18,
+        // RS007/V380 — non-null on purpose: the mapping this test exists to
+        // prove would pass just as easily with the null default even if
+        // page.tsx's rawRows.map(...) forgot these two fields entirely.
+        age_cutoff_month: 9,
+        age_cutoff_day: 1,
+        eligibility_note: "School-registered students only",
         enabled: true,
         entrant_kind: "individual",
         opens_at: null,
@@ -511,6 +517,9 @@ describe("registration hub — Settings tab data wiring (RS004 W3)", () => {
         category: null,
         age_min: 10,
         age_max: 18,
+        age_cutoff_month: 9,
+        age_cutoff_day: 1,
+        eligibility_note: "School-registered students only",
         enabled: true,
         entrant_kind: "individual",
         opens_at: null,

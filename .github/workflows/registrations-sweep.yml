@@ -1,0 +1,104 @@
+# Registration money-path sweep (RS007): POST the registrations cron
+# endpoint once an hour, against BOTH staging and production.
+#
+# /api/cron/registrations (sweepRegistrations, apps/web/src/server/usecases/
+# registrations.ts) does four passes in one call: reminds pay-pending
+# entrants at T-24h (a never-promoted entry off the cart's shared deadline, a
+# promoted entry off its own), expires never-paid submits past the cart's
+# deadline (promoting the next waitlisted entrant), and lapses promoted
+# entries that missed THEIR OWN deadline back to the waitlist tail. Every
+# write inside it is idempotent/row-locked (see that function's own doc
+# comment), so an hourly cadence is enough.
+#
+# Before this workflow existed, NOTHING ever called this route, in either
+# environment: no payment reminder had ever sent, no unpaid entry had ever
+# expired, and the promotion-lapse branch was dead code in prod.
+#
+# Auth: the x-cron-secret header must match the app's CRON_SECRET env — ONE
+# GitHub secret, mirrored into BOTH Fly apps' own secret stores:
+#   gh secret set CRON_SECRET                                   # this workflow (both legs)
+#   flyctl secrets set -c fly.stg.toml CRON_SECRET=<same>       # the staging app
+#   flyctl secrets set -c fly.toml     CRON_SECRET=<same>       # the production app
+# All three must carry the SAME value — sharing one GitHub secret across both
+# legs only works because both Fly apps are set to match it. Miss one and a
+# leg looks scheduled (green workflow_dispatch runs, a cron entry in the
+# Actions tab) while silently doing nothing: it skips with a warning rather
+# than failing red, precisely so a missing secret does not fill the Actions
+# tab with red — see the "Secret missing" steps below.
+#
+# Fails loud on any non-200 so a real mismatch or a broken endpoint stays
+# visible.
+#
+# The PRODUCTION leg is gated on the `PROD_SWEEP_ENABLED` repo variable, and
+# it is off until someone turns it on. Reason: the `seazn-club-prod` Fly app
+# named in fly.toml DOES NOT EXIST YET (prod.yml's own header, owner-confirmed
+# 2026-08-11). Ungated, this leg would fail loud every hour — 24 red runs a
+# day, forever — which defeats the whole point of the skip-with-warning shape
+# above: a missing target must not fill the Actions tab with red and drown the
+# runs that mean something.
+#
+# It is a GATE, not a deletion, and it announces itself: the skip step prints a
+# warning naming the exact variable to flip, so this cannot quietly become a
+# leg nobody remembers. Turn it on the moment prod exists:
+#   gh variable set PROD_SWEEP_ENABLED --body true
+# The staging leg is NOT gated — staging exists and should sweep from now on.
+name: Registrations Sweep
+
+on:
+  schedule:
+    - cron: "37 * * * *" # hourly, offset from the other crons
+  workflow_dispatch: {} # manual run for testing
+
+permissions: {}
+
+concurrency:
+  group: registrations-sweep
+  cancel-in-progress: false
+
+jobs:
+  sweep-staging:
+    name: Sweep registrations (staging)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      CRON_SECRET: ${{ secrets.CRON_SECRET }}
+      BASE_URL: https://stg.seazn.club
+    steps:
+      - name: Secret missing — skip
+        if: env.CRON_SECRET == ''
+        run: echo "::warning::CRON_SECRET not set — registrations not swept (staging). Set it with 'gh secret set CRON_SECRET' and mirror it into the Fly app."
+
+      - name: POST /api/cron/registrations
+        if: env.CRON_SECRET != ''
+        run: |
+          body=$(curl --silent --show-error --fail-with-body \
+            --max-time 60 --retry 2 --retry-all-errors \
+            -X POST "$BASE_URL/api/cron/registrations" \
+            -H "x-cron-secret: $CRON_SECRET")
+          echo "response: $body"
+
+  sweep-production:
+    name: Sweep registrations (production)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      CRON_SECRET: ${{ secrets.CRON_SECRET }}
+      PROD_SWEEP: ${{ vars.PROD_SWEEP_ENABLED }}
+      BASE_URL: https://seazn.club
+    steps:
+      - name: Production sweep not enabled — skip
+        if: env.PROD_SWEEP != 'true'
+        run: echo "::warning::PROD_SWEEP_ENABLED is not 'true' — registrations not swept (production). The seazn-club-prod Fly app did not exist when this workflow was written; enable with 'gh variable set PROD_SWEEP_ENABLED --body true' once it does."
+
+      - name: Secret missing — skip
+        if: env.PROD_SWEEP == 'true' && env.CRON_SECRET == ''
+        run: echo "::warning::CRON_SECRET not set — registrations not swept (production). Set it with 'gh secret set CRON_SECRET' and mirror it into the Fly app."
+
+      - name: POST /api/cron/registrations
+        if: env.PROD_SWEEP == 'true' && env.CRON_SECRET != ''
+        run: |
+          body=$(curl --silent --show-error --fail-with-body \
+            --max-time 60 --retry 2 --retry-all-errors \
+            -X POST "$BASE_URL/api/cron/registrations" \
+            -H "x-cron-secret: $CRON_SECRET")
+          echo "response: $body"

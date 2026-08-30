@@ -110,7 +110,19 @@ const RESPONSE: RegistrationSettingsResponse = {
   updated_at: "2026-01-05T00:00:00Z",
 };
 
-const DIVISION = { division_id: "div-1", name: "Open Singles", category: "mixed" as const, age_min: 10, age_max: 18 };
+const DIVISION = {
+  division_id: "div-1",
+  name: "Open Singles",
+  category: "mixed" as const,
+  age_min: 10,
+  age_max: 18,
+  // RS007/V380 — non-null on purpose (not the vacuous null default every
+  // OTHER field here already avoids): a fixture where these read back as
+  // null would pass even if the render/patch wiring silently dropped them.
+  age_cutoff_month: 9,
+  age_cutoff_day: 1,
+  eligibility_note: "School-registered students only",
+};
 
 const BASE_PROPS = {
   division: DIVISION,
@@ -136,6 +148,9 @@ const FULL_STATE: RegistrationConfigState = {
   category: "mixed",
   age_min: 10,
   age_max: 18,
+  age_cutoff_month: 9,
+  age_cutoff_day: 1,
+  eligibility_note: "School-registered students only",
   enabled: true,
   entrant_kind: "team",
   opens_at: "2026-01-01T00:00:00Z",
@@ -259,6 +274,19 @@ describe("RegistrationHubConfigPanel — loading and data wiring", () => {
     // (feeDisplay), formatted from fee_cents whenever there's no in-progress
     // edit — see the "decimal entry fees (finding 3)" describe block below.
     expect(propsOf(findField(tree, "fee_cents")!).value).toBe("15.00");
+  });
+
+  // RS007/V380 — the cutoff + note fields the config panel gained alongside
+  // its pre-existing category/age_min/age_max. Sourced from the DIVISION row
+  // (not the GET response — same "GET has no such columns" reasoning
+  // registration-hub-config-state.ts's own DivisionEligibility documents).
+  it("renders age_cutoff_month/age_cutoff_day/eligibility_note from the row", async () => {
+    const island = renderIsland(RegistrationHubConfigPanel, BASE_PROPS, expandPanel);
+    await flush();
+    const tree = island.tree();
+    expect(propsOf(findField(tree, "age_cutoff_month")!).value).toBe(9);
+    expect(propsOf(findField(tree, "age_cutoff_day")!).value).toBe(1);
+    expect(propsOf(findField(tree, "eligibility_note")!).value).toBe("School-registered students only");
   });
 
   it("threads form_fields to the ported FormBuilder unchanged", async () => {
@@ -415,11 +443,18 @@ describe("RegistrationHubConfigPanel — save: full replace + both endpoints", (
     expect(body.capacity).toBe(32);
   });
 
-  it("sends the division PATCH with category/age_min/age_max", async () => {
+  it("sends the division PATCH with category/age_min/age_max/age_cutoff_month/age_cutoff_day/eligibility_note", async () => {
     await openAndSave(() => {});
     const patch = net.calls.find((c) => c.method === "PATCH")!;
     expect(patch.url).toBe("/api/v1/divisions/div-1");
-    expect(patch.json).toEqual({ category: "mixed", age_min: 10, age_max: 18 });
+    expect(patch.json).toEqual({
+      category: "mixed",
+      age_min: 10,
+      age_max: 18,
+      age_cutoff_month: 9,
+      age_cutoff_day: 1,
+      eligibility_note: "School-registered students only",
+    });
   });
 
   it("calls onSaved when both requests succeed", async () => {
@@ -445,7 +480,7 @@ describe("RegistrationHubConfigPanel — save: full replace + both endpoints", (
 // immediately, rather than shipping a silent repeat of this gap.
 describe("RegistrationHubConfigPanel — every routable field has a render site (finding 1)", () => {
   it("mapSaveError's full set of routable fields is rendered, never routed into a void", () => {
-    const commonProps = { state: FULL_STATE, errors: ALL_ROUTED_ERRORS, patch: vi.fn(), msg: testMsg };
+    const commonProps = { state: FULL_STATE, errors: ALL_ROUTED_ERRORS, patch: vi.fn(), msg: testMsg, locale: "en" };
     // RS005 R4 task 2 — OpenCloseSection/MoneySection now also take dtDrafts/
     // onDateTimeHalfChange (the lifted date/time-halves state). Empty here:
     // this test only proves every data-field-error PARAGRAPH has a render
@@ -1241,7 +1276,18 @@ describe("RegistrationHubConfigPanel — every field round-trips through save", 
     await clickSave(island);
     const patch = net.calls.find((c) => c.method === "PATCH")!;
     const put = net.calls.find((c) => c.method === "PUT")!;
-    expect(patch.json).toEqual({ category: "mens", age_min: 12, age_max: 20 });
+    // age_cutoff_month/age_cutoff_day/eligibility_note are untouched by this
+    // test, so they round-trip at their SEEDED (DIVISION fixture) values —
+    // toDivisionPatchBody sends all six every save (RS007/V380 widened it
+    // from three), never only the ones this test happened to edit.
+    expect(patch.json).toEqual({
+      category: "mens",
+      age_min: 12,
+      age_max: 20,
+      age_cutoff_month: 9,
+      age_cutoff_day: 1,
+      eligibility_note: "School-registered students only",
+    });
     const body = put.json as Record<string, unknown>;
     expect(body.approval).toBe("auto");
     expect(body.enabled).toBe(false);
@@ -1332,5 +1378,69 @@ describe("RegistrationHubConfigPanel — every field round-trips through save", 
     await clickSave(island);
     const put = net.calls.find((c) => c.method === "PUT")!;
     expect((put.json as Record<string, unknown>).form_fields).toEqual(next);
+  });
+});
+
+// Review fix (RS007): the age-band cutoff (age_cutoff_month/age_cutoff_day)
+// used to survive clearing the age band untouched. `hasAgeBand` only
+// DISABLES the cutoff controls once the band is gone — it never cleared
+// their STORED state — and toDivisionPatchBody sends all six eligibility
+// keys together on every save (see that function's own doc comment), so the
+// stale cutoff rode along in the PATCH body even though the band meant to
+// anchor it had just been removed. Not a DB rejection:
+// divisions_age_cutoff_check (V380) only enforces cutoff month/day
+// BOTH-OR-NEITHER and says nothing about the age band, so the pair 9/1 with
+// no band passes that constraint fine — this was a silently confusing,
+// stranded value, not a save-time 500/422. And once the band is gone the
+// cutoff controls are `disabled`, so the organiser had no way left in the
+// UI to clear the stray value either — hence "uncleanable".
+describe("RegistrationHubConfigPanel — clearing the age band clears a stranded cutoff (FIX 3)", () => {
+  it("clearing age_min then age_max also clears the cutoff in STATE, not just on save", async () => {
+    const island = await openPanel(); // DIVISION: age_min 10, age_max 18, cutoff month 9 / day 1
+    (propsOf(findField(island.tree(), "age_min")!).onChange as (e: { target: { value: string } }) => void)({
+      target: { value: "" },
+    });
+    (propsOf(findField(island.tree(), "age_max")!).onChange as (e: { target: { value: string } }) => void)({
+      target: { value: "" },
+    });
+    // Fails pre-fix: the cutoff select/input still show the stale 9 / 1,
+    // now behind `disabled` with no UI path left to clear them.
+    expect(propsOf(findField(island.tree(), "age_cutoff_month")!).value).toBe("");
+    expect(propsOf(findField(island.tree(), "age_cutoff_day")!).value).toBe("");
+
+    net.calls = [];
+    await clickSave(island);
+    const patch = net.calls.find((c) => c.method === "PATCH")!;
+    expect(patch.json).toEqual({
+      category: "mixed",
+      age_min: null,
+      age_max: null,
+      age_cutoff_month: null,
+      age_cutoff_day: null,
+      eligibility_note: "School-registered students only",
+    });
+  });
+
+  it("clearing age_max first, then age_min, clears the cutoff too — order-independent", async () => {
+    const island = await openPanel();
+    (propsOf(findField(island.tree(), "age_max")!).onChange as (e: { target: { value: string } }) => void)({
+      target: { value: "" },
+    });
+    (propsOf(findField(island.tree(), "age_min")!).onChange as (e: { target: { value: string } }) => void)({
+      target: { value: "" },
+    });
+    expect(propsOf(findField(island.tree(), "age_cutoff_month")!).value).toBe("");
+    expect(propsOf(findField(island.tree(), "age_cutoff_day")!).value).toBe("");
+  });
+
+  it("clearing only age_min while age_max stays set leaves the cutoff untouched — band still anchored", async () => {
+    const island = await openPanel();
+    (propsOf(findField(island.tree(), "age_min")!).onChange as (e: { target: { value: string } }) => void)({
+      target: { value: "" },
+    });
+    expect(propsOf(findField(island.tree(), "age_cutoff_month")!).value).toBe(9);
+    expect(propsOf(findField(island.tree(), "age_cutoff_day")!).value).toBe(1);
+    // Still enabled: hasAgeBand is true (age_max is still 18).
+    expect(propsOf(findField(island.tree(), "age_cutoff_month")!).disabled).toBe(false);
   });
 });

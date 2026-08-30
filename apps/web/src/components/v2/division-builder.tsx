@@ -23,6 +23,12 @@ import type { Venue } from "@/components/v2/shared/court-multi-picker";
 import { useMsg, useLocale } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
 import { sportLabel } from "@/lib/scoring-vocab";
+// RS007/V380: the wizard's Eligibility tab and the registration hub config
+// panel edit the SAME first-class `category` column now (the jsonb
+// `eligibility` array this replaced is gone) — the value union is imported
+// rather than redeclared so the two screens can never drift onto two
+// different "valid category" lists.
+import type { DivisionCategoryValue } from "@/components/registration-hub-row-derive";
 import {
   divisionEndBounds,
   divisionStartBounds,
@@ -90,10 +96,22 @@ interface PreviewPhase {
   sections: PreviewSection[];
 }
 
-const GENDERS: { key: string; labelKey: "wizard.gender.m" | "wizard.gender.f" | "wizard.gender.x" }[] = [
-  { key: "m", labelKey: "wizard.gender.m" },
-  { key: "f", labelKey: "wizard.gender.f" },
-  { key: "x", labelKey: "wizard.gender.x" },
+// RS007/V380: single-select, mirroring the registration hub config panel's
+// own category <select> (registration-hub-config-panel.tsx) — reusing ITS
+// labels (`reg.hub.row.category.*`) rather than the retired `wizard.gender.*`
+// keys, since both screens now edit the identical `category` column and the
+// owner ruling is explicit that "Mixed" is not a gender chip any more (a
+// roster-composition rule, `mixed`, not a per-person allow-list). A
+// single-select (radio, not checkbox) so two chips can never again express a
+// combination the column itself cannot hold.
+const CATEGORIES: {
+  key: DivisionCategoryValue;
+  labelKey: "reg.hub.row.category.open" | "reg.hub.row.category.mens" | "reg.hub.row.category.womens" | "reg.hub.row.category.mixed";
+}[] = [
+  { key: "open", labelKey: "reg.hub.row.category.open" },
+  { key: "mens", labelKey: "reg.hub.row.category.mens" },
+  { key: "womens", labelKey: "reg.hub.row.category.womens" },
+  { key: "mixed", labelKey: "reg.hub.row.category.mixed" },
 ];
 
 /** A COMPLETE `datetime-local` value: both halves present. Anything shorter (a
@@ -220,11 +238,14 @@ export function DivisionBuilder({
   // Match-rule values keyed by RuleField.key; "" = keep the variant default.
   const [ruleValues, setRuleValues] = useState<Record<string, string>>({});
 
-  // Eligibility template (doc 06 §2): age cutoff + gender + note.
+  // Eligibility template (doc 06 §2): age cutoff + category + note. RS007/
+  // V380: these map onto the first-class columns (category/age_max/
+  // age_cutoff_month/age_cutoff_day/eligibility_note) on submit — see
+  // eligibilityPatch() below — not the retired jsonb `eligibility` array.
   const [maxAge, setMaxAge] = useState("");
   const [cutoffMonth, setCutoffMonth] = useState("1");
   const [cutoffDay, setCutoffDay] = useState("1");
-  const [genders, setGenders] = useState<string[]>([]);
+  const [category, setCategory] = useState<DivisionCategoryValue>("open");
   const [customNote, setCustomNote] = useState("");
 
   const [template, setTemplate] = useState("league");
@@ -283,20 +304,34 @@ export function DivisionBuilder({
     // change any more; the organiser's own picked courts survive it.
   }
 
-  function buildEligibility(): Record<string, unknown>[] {
-    const rules: Record<string, unknown>[] = [];
+  /** RS007/V380: the CreateDivision columns this tab now writes directly
+   *  (schemas.ts) — replaces the retired jsonb `eligibility` array this
+   *  function used to build (a non-strict CreateDivision silently dropped
+   *  that field entirely, which is the regression V380 exists to close).
+   *  "open" collapses to `null` on write, mirroring the registration hub
+   *  config panel's own convention (registration-hub-config-panel.tsx) so
+   *  both screens store the SAME "no restriction" value, never two spellings
+   *  of it. `age_min` is left unset — this tab has only ever offered a
+   *  single "age group" (max-age) field; the fuller min+max band stays the
+   *  hub panel's own, unchanged surface. */
+  function eligibilityPatch(): {
+    category: DivisionCategoryValue | null;
+    age_max: number | null;
+    age_cutoff_month: number | null;
+    age_cutoff_day: number | null;
+    eligibility_note: string | null;
+  } {
     const age = Number(maxAge);
-    if (maxAge && Number.isInteger(age) && age > 0) {
-      // "U16" = 15 or younger on the cutoff (doc 06 §2.1) — always explicit.
-      rules.push({
-        kind: "age",
-        maxAgeAt: age - 1,
-        cutoff: { month: Number(cutoffMonth), day: Number(cutoffDay), yearOf: "season_start" },
-      });
-    }
-    if (genders.length > 0) rules.push({ kind: "gender", allowed: genders });
-    if (customNote.trim()) rules.push({ kind: "custom", note: customNote.trim() });
-    return rules;
+    // "U16" = 15 or younger on the cutoff (doc 06 §2.1) — always explicit,
+    // same arithmetic this tab has always used.
+    const hasAge = maxAge !== "" && Number.isInteger(age) && age > 0;
+    return {
+      category: category === "open" ? null : category,
+      age_max: hasAge ? age - 1 : null,
+      age_cutoff_month: hasAge ? Number(cutoffMonth) : null,
+      age_cutoff_day: hasAge ? Number(cutoffDay) : null,
+      eligibility_note: customNote.trim() ? customNote.trim() : null,
+    };
   }
 
   function buildStages(): StageDraft[] {
@@ -360,7 +395,7 @@ export function DivisionBuilder({
             sport_key: sportKey,
             variant_key: variantKey,
             config: overrides,
-            eligibility: buildEligibility(),
+            ...eligibilityPatch(),
           },
         },
       );
@@ -617,34 +652,28 @@ export function DivisionBuilder({
           </label>
         </div>
         <fieldset>
-          <legend className="label">{msg("wizard.gender")}</legend>
+          <legend className="label">{msg("reg.hub.config.category")}</legend>
           <div className="flex flex-wrap gap-2">
-            {GENDERS.map((g) => (
+            {CATEGORIES.map((c) => (
               <label
-                key={g.key}
+                key={c.key}
                 className={`cursor-pointer rounded-full border px-3 py-1 text-xs transition ${
-                  genders.includes(g.key)
+                  category === c.key
                     ? "border-purple-500 bg-purple-50 text-purple-700"
                     : "border-slate-200 text-slate-500 hover:border-purple-200"
                 }`}
               >
                 <input
-                  type="checkbox"
-                  checked={genders.includes(g.key)}
-                  onChange={(e) =>
-                    setGenders(
-                      e.target.checked
-                        ? [...genders, g.key]
-                        : genders.filter((k) => k !== g.key),
-                    )
-                  }
+                  type="radio"
+                  name="division-category"
+                  checked={category === c.key}
+                  onChange={() => setCategory(c.key)}
                   className="sr-only"
                 />
-                {msg(g.labelKey)}
+                {msg(c.labelKey)}
               </label>
             ))}
           </div>
-          <p className="mt-1 text-xs text-slate-400">{msg("wizard.genderNone")}</p>
         </fieldset>
         <label className="block">
           <span className="label">{msg("wizard.customRule")}</span>
@@ -652,6 +681,7 @@ export function DivisionBuilder({
             value={customNote}
             onChange={(e) => setCustomNote(e.target.value)}
             placeholder={msg("wizard.customRulePlaceholder")}
+            maxLength={2000}
             className="input"
           />
         </label>

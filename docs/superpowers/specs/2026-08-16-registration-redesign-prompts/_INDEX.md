@@ -1673,6 +1673,494 @@ it, each mutation-proven):
 - RS004 ruling 4's deferred item lands here: the division page re-points into
   the hub with its division pre-filtered.
 
+### RS007 (2026-08-27) — branch `feat/rs007-status-join-payments`
+
+Rulings taken at session open, from scout verification against `d165908e7`.
+Both open calls went to the owner and both took the recommendation.
+
+- **RULING — join becomes CLAIM-first, and the mint widens to pairs.**
+  The pair/`join_code` question in this file (lines 57-59) turned out to be
+  the smaller half of a bigger defect. `joinTeamEntry`
+  (`registration-submit.ts:738`) **INSERTs** a new `registration_players` row
+  (`:794-807`, `source='self_joined'`) — while submit already inserts every
+  non-self roster player as a real row (`:610-639`,
+  `source='captain_entered'`, `consent_status='pending'`). A captain-entered
+  player who follows the join link therefore gets a SECOND row: the roster
+  double-counts and the original pending consent stays pending forever.
+  `git grep` finds **zero** non-test write sites that flip a
+  `captain_entered` row from `pending` to `granted`, so **owner ruling 4**
+  ("join/claim is the consent moment for players entered by someone else")
+  is currently unimplementable. This is a defect in the DESIGN, not only the
+  code — design §4 specifies join as "inserts a `registration_players` row
+  (`source='self_joined'`)". §4 gets a correction line.
+  Shape: the join page lists the entry's unclaimed slots and asks "which one
+  are you?" — picking a name UPDATEs that row to `granted`/`guardian`;
+  "I'm someone else" keeps today's INSERT path, cap-checked. A **pair** has
+  exactly one unclaimed slot and no "someone else" option, so the
+  fixed-at-two rule falls out of the UI with no special case, and widening
+  the mint is deleting `entrant_kind === "team"` at `:565`. V364's partial
+  unique index and the collision-retry loop are untouched.
+  Consequence: `register.consent.rosterNotice` becomes true as written in
+  all 4 locales — **no copy retreat is owed**, which reverses the
+  contingency in RS007's acceptance criteria.
+- **`joinTeamEntry` has no dedupe of any kind** (`:738-817`) — not by name,
+  dob, `person_id` or `user_id`. The only guards are free_agent, status,
+  roster cap and eligibility. The same person can join repeatedly, one fresh
+  row each time. Worse, the cap comes from the sport's
+  `position_catalog.lineup.size + benchMax` (`:768-775`) and **null =
+  unlimited**, so on a sport with no declared lineup a leaked join code grows
+  a roster without bound. Claim-first plus "a granted row 409s on re-claim"
+  closes both.
+- **FALSE PREMISE — "verify RS002 shipped the lapse".** It did not, and what
+  exists does the opposite. `sweepRegistrations`
+  (`registrations.ts:3373-3391`) matches `r.status='pending' and
+  g.expires_at < now()` and sets `status='expired'`. A promoted entrant who
+  misses the window is dropped permanently. **Owner call: lapse returns them
+  to the waitlist TAIL and re-offers the slot** (RS007's AC as written).
+- **STRUCTURAL — the promotion deadline has nowhere to live.** RS001 moved
+  `expires_at` to `registration_groups`, so it is **cart-level**.
+  `promoteWaitlistedRow` (`:871`) sets `status='pending'` + `promoted_at =
+  now()` on the ENTRY but extends the deadline on the GROUP, so promoting one
+  entry in a 3-entry cart extends every sibling's deadline and one sweep pass
+  expires them together. Pay-on-promotion mints a checkout for a single
+  entry, so it needs a single entry's clock. **V378** adds
+  `registrations.promotion_expires_at` + a partial sweep index (Flyway
+  high-water was **V377**). The sweep splits in two: the group deadline still
+  expires never-paid submits, the entry deadline lapses promotions.
+  `promoted_at is not null` already distinguishes the two — no new flag.
+- **STALE GOTCHA — refunds are NOT cart-level.** RS007's brief warns against
+  an entry-level cancel calling a cart-level refund. `refundRegistration`
+  (`registrations.ts:3923`) is `(auth, regId, amountCents?)` — entry-keyed,
+  writing `registrations.refunded_cents` (V368) additively and aggregating to
+  the group. Entry-level cancel is safe to ship; the warning is out of date.
+- **Both surfaces have ZERO width coverage.** `mobile.spec.ts` references
+  neither `register/status` nor the join flow. A surface has no width
+  coverage until it is inside that file.
+- **RULING (FINAL, after correction) — keep the `refund_lock_at` policy;
+  fix its defaults and make it VISIBLE.** Owner call 2026-08-27, retaken
+  once the shipped behaviour was read correctly. The org controls refunds by
+  setting a date, not by actioning each cancellation — which is the better
+  deal for a volunteer club secretary than manual admin on every withdrawal.
+  No shipped code is reversed. What RS007 owes instead:
+  - **`refund_lock_at` NULL currently means auto-refund FOREVER** — including
+    the night before the tournament, after the club has committed the money
+    to a venue. That is the actual defect. Fix the default so "never set" is
+    not "always refundable".
+  - **The registrant must see which side of the line they are on BEFORE they
+    confirm a cancel**: "cancel now and £25 is refunded" vs "refunds are at
+    the organiser's discretion after 20 Aug". The behaviour is defensible;
+    being unable to see it is what generates the support email.
+  - Organisers likely do not know the setting exists — surface it in org
+    settings with a sensible suggested default.
+  An earlier version of this ruling said a paid self-cancel must NOT
+  auto-refund and that the org actions every refund. That was taken on the
+  false premise recorded below and is SUPERSEDED — do not reinstate it.
+  **CORRECTION 2026-08-27 — the premise this ruling was taken on was wrong,
+  and the ruling is therefore REOPENED (see below).** An earlier scout
+  reported the auto-refund lived in the caller
+  `withdrawRegistrationOrganiser`, not in `withdrawCore`. Reading the code:
+  the auto-refund is **inside `withdrawCore`** at `registrations.ts:3287-3301`
+  (direct `stripeRefund` call), and `withdrawRegistrationOrganiser` (`:4040`)
+  is a thin wrapper around it. Consequences:
+  - **A public token-authorised self-cancel ALREADY EXISTS and ALREADY
+    auto-refunds.** `api/v1/public/registrations/by-ref/[ref]/withdraw/route.ts:25`
+    → `withdrawRegistrationByRef` (`:2811`) → `withdrawCore` → refund. No
+    session auth. So "the org refunds" is not a new policy to add — it is a
+    REVERSAL of shipped behaviour, on a route that is already public.
+  - **A refund policy already exists and is org-controlled**: the refund is
+    gated on `refund_lock_at` — full auto-refund while the withdrawal lands
+    before the org's lock date, organiser discretion after it, via the manual
+    refund endpoint. The org already controls refunds, by setting a date
+    rather than by actioning each one. The gating comment cites "doc 16 §1.1";
+    **that document is NOT verified to exist** — this repo has form for
+    comments citing documents that do not (cf. the engine's "doc 14").
+  Corollary the ruling REQUIRES, or the money just sits: a paid self-cancel
+  must reach the organiser — the entry shows in the hub as withdrawn + paid
+  with a refund outstanding, and an email goes to the organiser. Free upside:
+  `withdrawCore` already auto-promotes the next waitlisted entry
+  (`:3216-3217`), so the slot recycles immediately while the club still holds
+  the money. Briefly two payments against one slot — correct, and the reason
+  the outstanding refund must be visible rather than implicit.
+- **CRITICAL — `sweepRegistrations` HAS NO SCHEDULER. Everything on the money
+  path is dead code in production.** Verified 2026-08-27 in the main checkout:
+  `/api/cron/registrations/route.ts:18` is the ONLY caller of
+  `sweepRegistrations`, it is `CRON_SECRET`-gated, and **nothing invokes that
+  route** — six cron workflows exist (`ai-preview-sweep-stg`,
+  `billing-events-stg`, `billing-grant-stg`, `billing-quantity-stg`,
+  `funnel-reminders-stg`, `news-digest-stg`, all STAGING-only and all hourly),
+  none for registrations; there is no `vercel.json` and no `"crons"` config
+  anywhere in the repo. Consequences in production TODAY:
+  - `sendPaymentReminderEmail` (`registrations.ts:3385-3396`) never fires —
+    the payment-reminder feature is built, wired, idempotent, and has never
+    sent a single mail.
+  - Unpaid pending entries never expire, so their slots are never freed.
+  - **W1a's new lapse branch is INERT** — green under test, dead in prod.
+    A promotion that "lapses back to the waitlist tail" never lapses at all.
+  **Owner call: add the scheduler this session** (asked first, since a new
+  `.github/workflows/` file widens the stated file set). Copy the
+  `funnel-reminders-stg.yml` pattern: hourly, `x-cron-secret` matching the
+  app's `CRON_SECRET`, skip-with-warning when the GitHub secret is absent so
+  a missing secret does not fill the Actions tab with red, fail loud on any
+  non-200. Note the secret must be set in BOTH places (`gh secret set` and
+  `flyctl secrets set`) or the leg is a no-op that looks scheduled.
+- **Scope additions taken as product calls (2026-08-27), each beyond the
+  literal brief**: (a) **per-slot claim links** — the captain copies a link
+  per unclaimed player rather than one code for the team, so claims land on
+  the right row and the captain stops playing switchboard; the picker stays
+  as the fallback for a generic link. (b) **pre-lapse reminder** before a
+  promotion expires — a silent expiry converts badly, and the whole point of
+  a waitlist is that promoted entrants actually pay. RESOLVED: the mailer and
+  the `reminded_at` bookkeeping already exist inside `sweepRegistrations`
+  (`registrations.ts:3385-3400`), so this is pure wiring — it starts working
+  the moment the scheduler above exists, and needs a promoted-entry branch
+  reading `promotion_expires_at` rather than the group's `expires_at`.
+  (c) **the deadline is shown** on the status page and in the promotion mail,
+  which removes the "I didn't know there was a deadline" refund argument the
+  organiser otherwise settles by hand.
+- **RULING — RS007 ships a WALKTHROUGH, and the wave is verified VISUALLY.**
+  Owner call 2026-08-27. `e2e/walkthrough/` is its own Playwright project and
+  its own CI leg. The folder's rule applies verbatim here: *setup may use the
+  API to REACH a state; every event that IS the thing under test must be
+  TAPPED*. RS007's value is a JOURNEY — captain registers, partner claims,
+  entry is promoted, money is paid, a promotion lapses — and no unit test can
+  see whether that journey holds together. It is the same risk shape that put
+  the folder there: two signed-off waves shipped broken deciders that no
+  code-asserting surface caught.
+  - Spec: `e2e/walkthrough/rs007-registration-journey.spec.ts`. Every step
+    TAPPED through the real stepper, the real claim link and the real
+    status page — never posted. An API-driven registration test is blind to
+    a payload the stepper never builds and a control the page disabled.
+  - **OWNER RULING — the walkthrough charter is GENERIC, not sport-scoped.**
+    The folder landed on `main` at `addd126c5` (2026-08-27) stating its
+    charter as sport-and-decider specific: "a walkthrough plays a whole match
+    by hand", "a sport belongs here once it has a decider". That scoping is
+    the bug. The folder's actual principle — *every other surface asserts on
+    CODE; none of them had ever tapped the thing* — is domain-independent,
+    and sport-scoping it leaves every non-sport journey (registration,
+    payments, onboarding, venues) with no home and no CI leg. That is the
+    same blindness that shipped two broken deciders, relocated to another
+    domain rather than fixed.
+    RS007 generalises the README: a walkthrough is ANY end-to-end journey a
+    customer completes; the deciders are one instance, not the definition.
+  - **Screenshots are a first-class output of EVERY walkthrough, not an
+    RS007 extra.** Ships as a SHARED helper emitting step shots at
+    1280 / 768 / 320 to a known directory, reusable by the existing sport
+    specs and every future one. The helper must FAIL LOUDLY if it writes
+    nothing — a screenshot step that silently no-ops is the same vacuous
+    green as an e2e that never ran.
+  - **ORDERING**: the worktree branched from `d165908e7` and does NOT contain
+    `e2e/walkthrough/` at all. Rebase onto `origin/main` BEFORE any
+    walkthrough work, or the spec is written against a folder that is not
+    there and the wiring guard cannot see it.
+  - `apps/web/src/lib/__tests__/e2e-ci-wiring.test.ts` proves the project is
+    dispatched and selects the files — a project nothing dispatches is
+    indistinguishable from a passing one. The `WALKTHROUGH` regex is
+    `/[\\/]e2e[\\/]walkthrough[\\/]/` (`playwright.config.ts:119`), deliberately
+    anchored: a bare `/walkthrough\//` once matched an entire worktree at
+    `.claude/worktrees/walkthrough/`. New spec MUST live in that folder.
+  - Screenshots at every step, at 1280 / 768 / 320, are the review artifact —
+    the owner verifies the journey by looking at it, and so does the session.
+    Visual verification is not optional here and is not satisfied by green
+    counts.
+- **DEFECT found by LOOKING at it — a stale status link renders Next's bare
+  framework 404.** Verified 2026-08-27 in a browser against the prod
+  standalone build at three widths: visible text is exactly "404 This page
+  could not be found", with no branding, no explanation and no route forward.
+  The only designed element on screen is the cookie banner. This is the page
+  **every registration email links to**, and links in this flow go stale
+  routinely — an entry is cancelled, an old mail is forwarded, a token
+  rotates. A registrant landing here cannot tell whether they are registered
+  and is given no prompt to ask the organiser to resend.
+  The 404 SHAPE is correct and must survive the fix: a wrong token and a
+  never-existed group have to stay indistinguishable, or the page leaks which
+  groups exist. Confirmed no data leak — a bogus rid+token body has ZERO
+  visible occurrences of roster/paid/registration; all 87 hits are inside
+  bundled script chunks. So the fix is a DESIGNED not-valid-link page that
+  reveals nothing, not a loosening of the check.
+  No horizontal scroll at 1280/768/320, so the layout bar itself passes.
+- **THREE MORE DEFECTS FOUND BY DRIVING THE REAL STEPPER** (2026-08-27,
+  prod standalone build, registered a team by hand and read the result).
+  Every one of these passes the unit suites.
+  1. **Payment instructions lose their line breaks — bank details run
+     together.** The status page renders the organiser's instructions as
+     markdown, where a SINGLE newline collapses to a space (the blank-line
+     paragraph break survives, which is the tell). A seeded instruction of
+     "Bank: … / Account name: … / Sort code: … / Account number: …" rendered
+     as one run-on paragraph. At **320px it is worse than cosmetic**: wrapping
+     then invents false groupings — "Account name: RS007 Seed / Org Sort code:
+     12-34-56" reads as a label called "Org Sort code". These are BANK
+     DETAILS on the width most people read registration email at; a transposed
+     digit means a failed payment the organiser then has to chase. Render with
+     line breaks preserved.
+  2. **The cookie banner covers the page's primary actions.** Fixed-position,
+     bottom-left. At 1280 it sits over "Cancel this entry"; at **320 it covers
+     the entire roster block** — every player's status AND the claim links,
+     which are the exact actions this page exists to prompt. First visit only,
+     but a registration email lands on a first visit by definition.
+  3. **Stepper validation timing is INVERTED across steps.** Step 2's team
+     name is required, yet NEXT stays enabled with it empty and no inline
+     error appears — you pass steps 3 and 4 INCLUDING GIVING CONSENT, and only
+     the step-5 submit says "A team name is required", naming neither the step
+     nor the entry, with the "Unnamed team" review row not clickable to fix
+     it. Meanwhile step 3 shows "Choose which player on this entry is you" in
+     red ON FIRST PAINT, when the roster is empty and the only option is "None
+     of these" — an error you cannot satisfy, contradicting the copy directly
+     above it ("or leave it blank — the organiser can fill it in later").
+     So the step that CANNOT yet be satisfied complains immediately, and the
+     step with a real missing value stays silent until the last click. This is
+     the top of the funnel: a paying captain hits a dead end after consenting.
+     NOTE: fixing this touches the RS006 stepper, widening RS007's file set.
+- **SESSION STATE (2026-08-27) — resume here.** Branch
+  `feat/rs007-status-join-payments`, worktree `.claude/worktrees/rs007`,
+  rebased on `addd126c5`. 8 commits, tree clean. Local env: DB
+  `postgresql://postgres@127.0.0.1:54515/seazn_rs007` (v379), prod server on
+  `http://localhost:3355` (built FROM this worktree), placement on 50451.
+  Seeded scenario: org `rs007-seed-mtblbdpu-7invf`, comp
+  `rs007-seed-competition-mtblbdpu-7invf`, divisions Teams (team) + Pairs
+  (pair), £25 offline, instructions carrying `{{reference}}`. A live status
+  page URL is in `/tmp/rs007-status-url.txt`. Seed/driver scripts live in the
+  session scratchpad (`seed-rs007.mjs`, `drive.mjs`, `shot.mjs`, `probe.mjs`).
+  DONE: promotion clock + lapse-to-tail (V378), claim-not-duplicate join +
+  pair join codes, sweep scheduler + per-entry reminders (V379), prod leg
+  gated, refund window bounded, status page rebuilt, 3 visual defects fixed.
+- **REVIEWER GAP LIST (first adversarial pass, 2026-08-27) — OPEN unless
+  marked.** Six waves ran implementer-only before this; that was a process
+  error and this list is what it cost.
+  1. **CRITICAL — the claim links are DEAD.** `entry-card.tsx:174,:187` link
+     to `/shared/{org}/{comp}/register/join`; **no such page exists** (only
+     the API route, at an unrelated path). Verified by hand: 404, no page
+     file. Cause is a brief error — W3 was told to render claim links AND
+     told not to touch the join page. Every team/pair registrant's link
+     404s. FIX = build the join page (RS007 scope item 2 all along).
+  2. **Refund fallback still has the hole it claims to close**:
+     `competitions.starts_on` is NULLABLE (`V207__competitions.sql:10`), so a
+     competition with neither `refund_lock_at` nor `starts_on` is STILL
+     refundable forever. Plus `new Date("YYYY-MM-DD")` = UTC midnight, so a US
+     club's lock fires ~20h early and an APAC club's stays open past kickoff.
+     Confirmed the fallback never WIDENS eligibility — direction is right,
+     trigger conditions are wrong.
+  3. **Reminder passes are not concurrency-safe**: `registrations.ts:3657`
+     and `:3702` send-then-UPDATE with no `for update` and no CAS guard,
+     unlike expire/lapse which lock and re-check. The workflow's own curl
+     retries can overlap a running invocation. Contradicts the route's and
+     the workflow's "idempotent/row-locked" claims — and this path runs in
+     prod for the FIRST TIME because of this PR.
+  4. **Claim vs organiser-withdraw TOCTOU**: the dead-status check runs on
+     the initial SELECT (~`registration-submit.ts:916`); the CAS WHERE
+     (`:965-979`) never re-checks status, so a withdraw landing between them
+     lets a claim write consent onto a dead entry. (Claim-vs-claim on the
+     same slot IS genuinely atomic — that part is clean.)
+  5. **Timing oracle on two NEW routes**: `resendRegistrationConfirmationPublic`
+     (`:1236`) and `reconcileRegistrationGroupBySession` (`:2671`) use
+     `!group || !tokenMatchesHash(...)`, short-circuiting when no row matches.
+     `buildGroupStatusView:3180` already carries the documented fix
+     (`DUMMY_ACCESS_HASH`, always compares) and they did not reuse it.
+  6. Reconcile-on-load has NO rate limit (`page.tsx:54`) unlike every sibling
+     public mutation. Cannot be triggered for someone else's session and
+     cannot double-apply — just uncapped external Stripe calls.
+  7. Concurrency claims are tested SEQUENTIALLY only — nothing fires two
+     claims or two sweeps in parallel, so nothing would have caught #3. The
+     workflow guard also never asserts the `concurrency:` block exists.
+  8. Three hardcoded English catch-block strings: `cancel-entry.tsx`,
+     `pay-button.tsx`, `resend-confirmation.tsx`. All other new strings are
+     present in all 4 dictionaries.
+  9. FYI only, self-acknowledged: join-code enumerability (`generateRefCode`,
+     not high-entropy), mitigated by the same 5/300s per-IP limit as POST.
+- **CORRECTION to this file's own earlier note**: the STATUS page's bad-token
+  state was NEVER the bare 404. It already renders a designed, branded "We
+  couldn't find that registration", and wrong-token vs nonexistent-group are
+  BYTE-IDENTICAL (same 200, same length, same visible text — verified). The
+  bare framework 404 came from the ORG-SLUG layer above it, which now has a
+  `not-found.tsx`. Copy nit outstanding: "Check your link and try again" asks
+  the reader to fix a link someone else sent them; the actionable line is
+  "ask the organiser to resend your confirmation".
+- **VERIFICATION LESSON, recorded because it repeated the folder's own
+  founding lesson**: 3098 unit tests were green while every claim link 404'd.
+  Screenshots caught the bank-details wrap, the banner overlap and the copy
+  failures — and still missed the dead links, because a screenshot proves a
+  link RENDERS, never that it RESOLVES. Only tapping it does. The walkthrough
+  spec this file already mandates was sequenced LAST; had it been first the
+  dead links would have failed immediately. It is now sequenced right after
+  the join page exists to tap.
+- **Owed to RS009, deliberately NOT built here**: the organiser needs to see
+  which entries still have unclaimed players ("2 teams have incomplete
+  rosters") before the draw. It belongs to RS005's Registrants tab and
+  reaching into it from RS007 widens the file set past this session.
+- Status page as inherited is **140 lines** (`groupById(rid, token)`,
+  `:64`): ref code, contact/org name, per-entry division/status/fee, cart
+  subtotal. No join link, no cancel, no pay-now, and no reference to
+  `session_id`, `checkout` or `reconcile`. `groupById` does not select
+  `payment_instructions`, which is why the offline case states a debt and
+  offers nothing — `paymentInstructionsText()`
+  (`lib/payment-instructions.ts:18`) is reachable from `/r/[ref]`'s data path
+  and the email builders only.
+
+#### Eligibility consolidation — owner ruling 2026-08-27, "go"
+
+Raised by the owner mid-RS007 ("do we have similar eligibility setting in
+division creation, do we need that? or deprecate it?"), then decided once
+greenfield was confirmed ("we are greenfield and no data in production").
+
+**Two eligibility representations were live at once, both enforced,
+additively** — `registration-eligibility.ts:163-174` says so in its own words
+("independent and additive"):
+
+| Axis | Wizard → jsonb | Hub panel → column |
+| --- | --- | --- |
+| Age | `{kind:"age",maxAgeAt,cutoff:{month,day}}` — `division-builder.tsx:286-293` | `age_min`/`age_max`, cutoff hardcoded **1 Jan** (`registration-rules.ts:182`) |
+| Sex | `{kind:"gender",allowed:[m,f,x]}` multi-select — `division-builder.tsx:619-647` | `category` enum — `registration-hub-config-panel.tsx:569-583` |
+
+Three defects fell out of that, none of which any test could see:
+
+1. **Two age rules with two different cutoff dates both fire.** Set U16/1-Sept
+   in the wizard and 15 in the hub and a player born Sept–Dec is eligible under
+   one and rejected by the other. Stricter silently wins; no screen shows both.
+2. **`youth` is derived from the jsonb ONLY** (`divisions.ts:97-103`,
+   re-derived only on `patch.eligibility` at `:681-684`; no UI writes it
+   directly). Set the age band in the registration hub instead of the wizard
+   and `youth` stays false — so OG share images publish full player names
+   (`og/model.ts:84-87,143`), the slideshow stops shortening them
+   (`slideshow-data.ts:150`), and the public-visibility dialog skips its youth
+   warning (`visibility-picker.tsx:53-55`). The replacement column was never
+   wired to the derivation the original fed. **Safeguarding, live in code —
+   but greenfield, so never live in production.**
+3. **"Custom rule (manual, shown as a warning)" is shown nowhere.** Written at
+   `division-builder.tsx:298`, and that write is the ONLY `kind:"custom"` match
+   in the repo. The validator handles `age` and `gender` only — no `custom`
+   branch, no fallthrough. The label makes two promises ("manual", "shown as a
+   warning") and keeps neither, so an organiser types "School-registered
+   students only" into a void while believing entrants get warned. The note IS
+   carried in `openapi/v1.public.json:2426`, so it leaves the building by API
+   while no UI renders it.
+
+**Also confirmed dead, unrelated to the above**: the `eligibility.enforced`
+plan entitlement. Seeded `V112:69-71`, bundled `V290:23`, then DELETEd by
+`V319__v17_phase1_reorg.sql:47`. No `requireFeature`/`has` call site survives
+anywhere in `apps/web/src` — it lives on only as paywall copy
+(`feature-copy.ts:52`), i.e. we advertise unlocking a gate that no longer
+exists. Safe to remove.
+
+**RULING: remove the jsonb, do not keep both.** `RULES.md:32-34` is explicit —
+"Prefer a correct schema over a backwards-compatible one; don't contort a
+design to dodge a migration." Keeping both was only ever backfill avoidance,
+and there is nothing to backfill. End state:
+
+```
+category                          open|mens|womens|mixed   exists
+age_min / age_max                                          exists
+age_cutoff_month / age_cutoff_day                NEW       recovers the wizard's cutoff
+eligibility_note                  text           NEW       the custom rule, actually rendered
+youth                             derived from age_max     repointed
+DROP divisions.eligibility jsonb
+```
+
+The wizard's Eligibility tab keeps its UI and writes columns instead. Both
+screens then edit ONE truth, so the two-surfaces problem dissolves without
+deleting a surface. The dual evaluator, the additive double-firing and the
+gender precedence rule below all delete with it — this is LESS code than
+keeping it.
+
+**Two behaviour changes, accepted deliberately by the owner, not refactors:**
+
+- **Non-binary players gain access.** jsonb `allowed:["m"]` rejects a player
+  whose gender is `x`; `category='mens'` deliberately allows them
+  (`registration-rules.ts:147` — `person.gender !== "x" && person.gender !==
+  needed`). Under today's precedence the jsonb wins, so the HARSHER rule is
+  what ships. Collapsing onto `category` makes the product more inclusive.
+- **The chip labelled "Mixed / other" is NOT `category='mixed'`.** The chip is
+  a person's own gender; `mixed` is a ROSTER rule (the roster must contain
+  both — `MIXED_NEEDS_BOTH_GENDERS`, which fires independently of any
+  per-person rule). Same word, different subject. Mapping is none→`open`,
+  m→`mens`, f→`womens`, and `mixed` becomes its own explicit choice rather
+  than a gender chip.
+
+**SUPERSEDES the gender precedence ruling of 2026-08-17** (recorded in this
+file's RS002 rulings, implemented at `registration-eligibility.ts:163-174`:
+"if the jsonb loop already emitted a gender-family code,
+`categoryEligibilityIssues` is skipped entirely"). With one representation
+there is no precedence left to arbitrate; delete the rule with the loop.
+
+**Sequencing, and why it is not a follow-up.** Delta `V380`, wizard rewire,
+one evaluator, the note rendered on the public entry + join pages, 4 dicts,
+OpenAPI regen (dropping the column trips the pre-commit drift gate), tests,
+visual pass at 1280/768/320. Lands as its own commit on the RS007 branch so
+the review stays together. **It absorbs the `youth` fix rather than preceding
+it** — repointing `eligibilityIsYouth` at `age_max` is one line of this
+change, and doing the standalone fix first means writing it twice.
+
+**Blocked on W5 while it was in flight**: W5 held `dictionaries/*/ui.json`,
+`i18n-keys.ts`, `schemas.ts`, `registration-submit.ts` and both `openapi/*`
+files dirty — every file this change needs. Only `_INDEX.md` and the new
+migration were conflict-free, which is why they went first.
+
+#### SESSION STATE at 26 commits (written for compaction, 2026-08-27)
+
+**Branch** `feat/rs007-status-join-payments`, rebased clean on `origin/main`
+(`28dda4bfd`), 26 commits, **no duplicate V-numbers** (checked post-rebase —
+this programme has been bitten by two V367s surviving a clean rebase).
+
+**Environment, all live:**
+- DB `postgresql://postgres@127.0.0.1:54515/seazn_rs007`, **schema v380**,
+  `divisions.eligibility` DROPPED. `sync:sports` HAS been re-run (a stale
+  `benchMax: 20` was reddening 3 roster-cap suites; source says 0).
+- Server `http://localhost:3355`, `seazn-env rebuild --label rs007`.
+- Placement on `localhost:50451`, secret `local-rs007-secret`. **Export
+  `PLACEMENT_SERVICE_HOST=localhost:50451` for any vitest run** or
+  `schedule-build-honours-locks` gives 4 environmental reds.
+- Scratchpad scripts (outside the repo): `sweep-eligibility.mjs` (the 275
+  fixture sweep, self-checking), `tap-join.mjs`, `probe-net.mjs` (logs
+  requests >=400 — this is what found the 500s), `drive.mjs`, `shot.mjs`.
+
+**Gate, run by the main thread (not taken from an agent):** 11984 total /
+11902 passed / 8 failed → all 8 resolved: 1 real regression (fixed), 3 stale
+seed, 4 missing placement env. `tsc` clean, lint `✖ 124 problems (0 errors)`.
+
+**Closed this session:** reviewer finding #1 (join page — VERIFIED BY TAPPING
+a real claim link, 200 at all three widths); the public-surface 500; the
+eligibility consolidation server half; the team-name client/server split; the
+walkthrough charter + Connect CI wiring; seven-width coverage; the journey
+walkthrough.
+
+**OPEN, in the order I would take them:**
+1. **UI-half implementer** was in flight at compaction — wizard rewire
+   (`d99e5176c`), hub panel (`bce2b0726`) committed; items 3-6 (note
+   rendering, `EntrantsPanel` real props, stale comment, cutoff on the public
+   wire) unfinished. `tsc` had 4 errors in `entrants-panel.tsx` /
+   `[divSlug]/page.tsx` — ITS in-flight edits, not defects.
+2. **Rerun the gate**, then a **second reviewer** over the UI-half diff.
+3. **Run the two unrun e2e specs** — `mobile.spec.ts`'s new RS007 routes and
+   `walkthrough/rs007-registration-journey.spec.ts`. Both committed UNRUN and
+   say so in their commit messages.
+4. **Live Connect walkthrough** — `CONNECT_WALKTHROUGH=1` +
+   `STRIPE_CONNECT_TEST_ACCOUNT` + `stripe listen`. Never yet run on this
+   branch.
+5. **First-pass reviewer findings 2-8, ALL STILL OPEN** (list above). #2
+   (refund `starts_on` nullable + UTC midnight) and #3 (reminder passes with
+   no lock/CAS, and that path runs in PROD for the first time because of this
+   PR) are the two that touch money.
+6. Whole-branch review, then the PR.
+
+**Traps this session paid for, beyond the ones already listed in this file:**
+- **A `git add` with a stale pathspec aborts WHOLESALE and stages nothing.**
+  Committed a rename with none of its content; `2>/dev/null` hid the error.
+  `git show --stat` after any commit whose `add` listed a moved file.
+- **Two assertions written this session could not fail.** The sweep script's
+  leftover check greppd the DISK during a dry run (so it reported every
+  pre-existing hit and could never go red), and the CI step-ORDER assertion
+  anchored on `stripe listen`, which also appears in the prose above the step
+  — swapping the steps left it green. Mutation-test every guard; both were
+  caught only that way.
+- **An agent will misattribute your own regression as pre-existing.** The
+  server-half implementer classified `stg-base-url.test.ts` as "GH-workflow
+  drift". It was `registrations-sweep.yml` — added earlier in THIS session,
+  the repo's first production `BASE_URL` — red for hours.
+- **Sequencing a UI half into "a later wave" broke the create path silently.**
+  `CreateDivision` is a NON-strict zod object, so the wizard's now-unknown
+  `eligibility` key was STRIPPED with no error and every wizard-created
+  division shipped with no restriction at all. The ruling above had said the
+  wizard rewire lands in the same session, "not a follow-up"; overriding that
+  for scheduling convenience is what opened it.
+
 ## RS011 — why #412 moved here (2026-08-17)
 
 `L1-412-w1-eligibility.md` in `../2026-08-06-scoringpad-v2-prompts/` was written
@@ -1760,3 +2248,1301 @@ sequencing only** and is deleted; `L2` now sequences against RS
   600s watchdog. Every RS dispatch since carries an explicit "the worktree
   exists; never create/remove one; never `git checkout|restore|reset|clean|
   stash`; commit at each milestone" block.
+
+## RS007 ruling — the entries-step collapse is entrant-kind dependent (2026-08-27)
+
+**Found by walking the shipped flow by hand, not by a test.** RS006 design §4
+collapses step 2 when a competition has one open division, and `cart.ts`
+auto-seeds that division as the only cart entry. For a TEAM division that seed
+is `team_name: null, free_agent: false`, and step 2 is the ONLY surface that
+renders a team-name input or the "sign up solo" choice. So the captain walked
+WHO → DETAILS → CONSENT → REVIEW, saw the entry rendered as **"Unnamed team"**
+beside an enabled Enter button, submitted, and got `422 A team name is
+required` — with no field anywhere in the flow to answer it. Unrecoverable.
+A single division is the commonest shape a small club has, so for those orgs
+this was the entire public registration funnel.
+
+**Ruling:** collapse step 2 only when the one open division needs nothing typed
+or chosen — i.e. `entrant_kind === "individual"`. Team and pair keep the step.
+An unknown kind does not collapse (an extra click costs less than a lost entry).
+`shouldCollapseEntries` now takes the entrant kind; `buildStepOrder` passes it.
+
+**Why no test caught it.** Three separate blind spots lined up:
+- `steps.test.ts` asserted `shouldCollapseEntries(1) === true` with no entrant
+  kind at all — it froze the defect as the specification. Inverted, not deleted.
+- The register interaction tests mount with `DIV_OPEN` fixtures and drive the
+  reducer; none of them submits, so the 422 is unreachable from unit tests.
+- `validateEntries`' `teamNameMissing` gate (RS007, commit `e50c9c6f3`) lives on
+  the entries step. When that step does not render, the gate never runs — the
+  fix for "a nameless team is rejected at the end" only covered the path where
+  the step exists.
+
+**Second copy of the rule.** `register-stepper.tsx`'s auto-seed branch stated
+the collapse condition independently as `openDivisions.length === 1` rather
+than calling the predicate. Both now ask `shouldCollapseEntries`, so a
+collapsed step 2 and a seeded entry cannot disagree again. (Same shape as the
+"TWO vocab paths drift" trap already recorded for this repo.)
+
+Commit `2d4d7b623`. Register component suite 304/304, from 4 red.
+
+## CORRECTION (2026-08-27) — the "non-strict zod stripped the wizard payload" claim is FALSE
+
+Recorded earlier this session as a CRITICAL defect, repeated in the PR body, and
+used as the reasoning that made V380's lossy gender backfill look harmless. It
+is wrong, and the correction matters more than the original claim.
+
+`origin/main:apps/web/src/server/api-v1/schemas.ts:183` declares, on
+`CreateDivision`:
+
+    eligibility: z.array(z.record(z.string(), z.unknown())).default([])
+
+The field is DECLARED, so zod never stripped it — wizard payloads were accepted
+and stored in the jsonb column all along. The ~150 test files this branch edits
+to delete `eligibility: []` from `createDivision` calls are themselves evidence
+it was accepted. There was no "every wizard-created division ships with no
+restriction" defect.
+
+**Why the correction is load-bearing.** If wizard divisions really had shipped
+empty, V380's backfill could lose nothing. They did not, so real jsonb rules
+exist on dev and staging (the rolled-back dry run counted 25 divisions carrying
+them) and possibly in production. V380 converts only exact `["m"]`/`["f"]` and
+only when `category is null`; `["m","f"]`, `["x"]`, and any list on a division
+that already had a category fall through unconverted, and the column is then
+dropped with no `eligibility_note` fallback and no notice to the organiser.
+Compounding it, `requiresGender` narrowed to `category in (mens, womens, mixed)`,
+so those divisions stopped COLLECTING gender on the public form as well.
+
+Being wrong about the premise is what let the backfill's losses read as
+acceptable for most of this session. Recorded here rather than quietly dropped:
+the greenfield stance covers registration ROWS (owner, 2026-08-16), it was never
+a statement about divisions, and this session conflated the two.
+
+Follow-up: V382 + the `requiresGender` predicate, dispatched 2026-08-27.
+
+## RS007 FINDINGS REGISTER — `/code-review max 677`, 2026-08-27
+
+Fifteen findings, every one marked CONFIRMED by the reviewer's own verify pass.
+Recorded here verbatim-in-substance because until now they lived only in a task
+notification — one compaction from being lost, while the PR body still said
+"two lower-severity review findings are recorded but unfixed".
+
+**Verdict as it stands: the branch is NOT mergeable.** Two CRITICAL money
+defects and one safeguarding HIGH that re-creates the exact bug V380 exists to
+fix. Statuses below are as of the moment of writing; update them in place.
+
+| # | Severity | Location | Status |
+| --- | --- | --- | --- |
+| 1 | CRITICAL | `registrations.ts:3332` | **FIXED** `af9c9021f` |
+| 2 | CRITICAL | `registrations.ts:2247` | **FIXED** `908196cb5` |
+| 3 | HIGH | `V380__…consolidation.sql:70` | **FIXED** `5cdb0dc99` + `ccecf09c5` |
+| 4 | HIGH | `register/join/view-model.ts:119` | **FIXED** `4009ae586` (+ gate in flight) |
+| 5 | HIGH | `registrations.ts:3983` | **FIXED** `4965c0093` |
+| 6 | HIGH | `registrations.ts:3768` | **FIXED** `097c1949b` |
+| 7 | HIGH | `registrations.ts:3762` | **FIXED** `57fa7fca3` (V383) |
+| 8 | HIGH | `register/status/view-model.ts:59` | **FIXED** `17594b849` |
+| 9 | HIGH | `registrations.ts:3740` | **FIXED** `57fa7fca3` |
+| 10 | HIGH | `register/status/view-model.ts:62` | **FIXED** `17594b849` (read side) + `f573d0650` (write side — see #677 M1) |
+| 11 | HIGH | `register/status/page.tsx:95` | **FIXED** `54b88fb9f` |
+| 12 | MEDIUM | `registrations.ts:929` | **FIXED** `4fc6cd1cb` |
+| 13 | MEDIUM | `register/status/entry-card.tsx:98` | **FIXED** `17594b849` |
+| 14 | MEDIUM | `register-stepper.tsx:209` | **FIXED** `d33ecea48` |
+| 15 | MEDIUM | `register/join/page.tsx:80` | **FIXED** `0f799edb7` |
+
+### The two CRITICALs
+
+1. **A cancel can refund against someone else's payment.**
+   `buildGroupStatusView` feeds the CART-level `group.payment_intent_id` into a
+   PER-ENTRY `resolveRefundPolicy`, so an entry that was never charged reads
+   `refundable: true`. Cart holds paid entry A (£25, sets
+   `group.payment_intent_id = pi_A`) and waitlisted B; B is promoted (pending,
+   2500, refunded 0); `refundable: !!paymentIntentId && remaining > 0 && …`
+   (`:3526`) passes on pi_A, the CancelEntry dialog promises "£25.00 will be
+   refunded", and `withdrawCore` runs a real `stripeRefund(pi_A, 2500)`. The
+   organiser loses £25 and A shows a phantom refund.
+   FIX: pass the ENTRY's own charge reference (or a per-entry `paid`
+   predicate), never `group.payment_intent_id`.
+2. **Paid, not entered, not queued, not refunded.**
+   `confirmPaidRegistration`'s late-payment branch matches only
+   `withdrawn|expired|rejected`, but RS007's own lapse pass parks rows in
+   `waitlisted`. Promoted entry X at T+48h: the sweep sets
+   `status='waitlisted'` while X's checkout is in flight; the webhook misses
+   the guard at `:2247` and falls through to `update registrations set status =
+   'paid'`; `promoteOldestWaitlisted` selects `status='waitlisted'` (`:850`) so
+   X is gone from the queue too.
+   FIX: add `waitlisted` to the terminal-status list at `:2247` so the `late`
+   refund branch fires. **This defect is CREATED BY THIS BRANCH** — the
+   `waitlisted` parking state is RS007's lapse pass.
+
+### #3 — the safeguarding one, and why the V380 amendment did not cover it
+
+`V380:70`'s `age_rule` and `gender_rule` CTEs `cross join lateral
+jsonb_array_elements(...)` with **no per-division dedup** (unlike
+`custom_rule`, which does have `distinct on`), and `:81` coalesces toward the
+stale column. Proven in psql: `[{minAgeAt:8},{maxAgeAt:15}]` yields `UPDATE 1`
+and lands `age_min=8, age_max=NULL`. `:150`'s recompute then reads
+`youth = (age_max is not null and age_max < 18)` as **false**,
+`resolveNameDisplay` returns `full`, and `og/model.ts:87` stops suppressing
+rows — **a genuine U16 division publishes minors' full names.**
+
+That is defect 2 from the migration's own header, re-created by the migration
+written to fix it. The 2026-08-27 amendment (`625bd9eac`) did not touch it:
+that amendment was scoped to the GENDER path (preserving unconvertible rules
+as `eligibility_note`), and the loss here is on the AGE path and is arithmetic,
+not conversion.
+
+FIX: `distinct on (d.id) … order by d.id, r.ord` on both CTEs, and **merge
+min/max across rules** rather than taking one arbitrary row — a division may
+legitimately carry a min rule and a max rule as two separate objects, which is
+precisely the shape that breaks.
+Blast radius: staging + dev only; production is greenfield.
+
+### The rest, in the reviewer's own terms
+
+4. **`register/join/view-model.ts:119` — the joiner's consent is collected and
+   discarded.** The join page renders a consent step and hard-blocks submit on
+   privacy consent, but `buildJoinBody` sends neither `privacy_consent` nor
+   `media_consent`, and `PublicJoinRequest` has no field to receive them.
+   `joinTeamEntry` derives `consent_status` purely from age, and the consent
+   columns live on `registration_groups` from the CAPTAIN's submit — so a
+   joiner's deliberate media REFUSAL is silently overridden by the captain's
+   choice, and the privacy consent is never recorded despite being a hard UI
+   gate. FIX: add both fields to `PublicJoinRequest`, persist per-player.
+5. **`registrations.ts:3983` — infinite re-promotion.** The lapse pass sets a
+   row to `waitlisted` then calls `promoteOldestWaitlisted` in the SAME
+   transaction; `for update skip locked` does **not** skip rows locked by the
+   current transaction, so the just-lapsed non-payer is immediately re-promoted
+   — every 48h forever, capacity never released, the sweep reporting
+   `{lapsed:1, promoted:1}` each cycle. FIX: exclude the just-lapsed id, or
+   promote in a separate transaction after commit.
+7. **`registrations.ts:3762` — the reminder claim is GROUP-scoped, so siblings
+   are never reminded.** Pass (1a) iterates PER ENTRY but claims and marks a
+   group column. In a cart with pending A and B, A wins the claim and sets
+   `reminded_at`; B hits `continue`, and the `g.reminded_at is null` filter
+   excludes the cart from every future sweep. B expires unpaid — and since each
+   mail mints a checkout for `[reg.id]` alone, B's fee is never presented to
+   anyone. **V381's lease did not fix this** — the lease is still group-scoped.
+   FIX: move the claim and the sent mark onto the ENTRY, as pass (1b) already
+   does with `promotion_reminded_at`.
+8. **`register/status/view-model.ts:59` — pay-then-refund on a stale deadline.**
+   `resolveMoneyState` gates on `status === "pending" && amount_cents > 0` and
+   never checks whether the deadline it is about to print has passed. The sweep
+   is hourly (`cron: "37 * * * *"`), so a cart whose `expires_at` passed at
+   14:00 is still pending at 14:36: the page renders a live Pay button above a
+   stale "Pay by", `resumeRegistrationCheckout` has no deadline guard either and
+   mints a real session, the registrant pays, and the 14:37 sweep expires the
+   row and auto-refunds. Money in and straight back out. FIX: return an expired
+   state when `effectivePayDeadline` is past, AND re-check server-side in
+   `resumeRegistrationCheckout`.
+9. **`registrations.ts:3740` — the Stripe session is minted BEFORE the claim.**
+   A losing iteration still stamps `registration_groups.checkout_session_id`
+   with a session nobody holds. A mints S_A, wins, emails S_A; B mints S_B
+   unconditionally (stamping the group), loses, and `continue`s. The registrant
+   pays via S_A and returns to `?session_id=S_A`, where
+   `if (sessionId !== reg.checkout_session_id) return false` (`:2652`) refuses.
+   **Registrations have no missed-webhook fallback** (billing does), so a paid
+   cart renders pending with no path back. FIX: mint after the claim succeeds.
+   V381 left the ordering unchanged.
+10. **`register/status/view-model.ts:62` — a lapse timer with no way to pay.**
+    The per-entry money state is decided from the CART-level `payment_method`,
+    while V378's 48h `promotion_expires_at` is set from the DIVISION's method.
+    A cart of {free manual-approval → pending} + {paid stripe → waitlisted}
+    commits with `payment_method = null`; on promotion the entry gets the 48h
+    clock while the group's method write is suppressed by its `not exists
+    (other pending)` guard. The page reads the null cart method, renders
+    `offline_due` with no PayButton and no instructions, `notifyPromoted` reads
+    the same column so the email carries no pay link — and 48h later it lapses.
+    FIX: resolve the money state from the DIVISION's payment method.
+11. **`register/status/page.tsx:95` — the subtotal never comes down.** It
+    filters only `status !== "waitlisted"`, so withdrawn, expired and rejected
+    entries keep contributing their full fee **on the very page that offers the
+    Cancel button**. Cancel B in a £50 cart and B is correctly badged
+    "Withdrawn" with its button gone while the footer still reads £50.00 —
+    `withdrawCore` never zeroes `amount_cents`. The new "Resend confirmation"
+    button emails the identical inflated figure. FIX: filter on the set of
+    statuses that actually owe money.
+12. **`registrations.ts:929` — a second promotion is never reminded.** Neither
+    `promoteWaitlistedRow` nor the lapse UPDATE clears
+    `promotion_reminded_at`, but pass (1b) filters
+    `and r.promotion_reminded_at is null`. A re-promoted entry is skipped
+    permanently, and cannot fall back to pass (1a) either (that requires
+    `r.promoted_at is null`). FIX: null it in the same UPDATE that sets a new
+    `promotion_expires_at`.
+13. **`register/status/entry-card.tsx:98` — the deadline shown is neither the
+    registrant's clock nor the one enforced.** Rendered
+    `fmtDateTime(UTC, money.deadline)` — hardcoded UTC, module-constant `en-GB`.
+    An Asia/Kolkata org's cart expiring `2026-09-01T19:00Z` (00:30 on 2 Sept
+    local) renders "01/09/2026, 19:00": wrong clock, wrong calendar day, no zone
+    label; identical at `:114`. Separately `notifyPromoted` sends
+    `payDeadline: promoted.expires_at` (`:987`) — the GROUP column — while the
+    lapse pass keys strictly on the ENTRY's `promotion_expires_at`, so an
+    entrant who pays by the emailed date is lapsed anyway. FIX: thread the org
+    timezone already resolved as `refundTz` onto `GroupStatusView`; send the
+    entry's own clock in the mail.
+15. **`register/join/page.tsx:80` — a throttled teammate is told the link is
+    dead.** 5 previews/300s per IP, and a throttled visit renders the terminal
+    "This join link isn't valid … it may have expired" at HTTP 200 with no
+    `Retry-After`. A captain sharing claim links with a team on one venue wifi
+    or CGNAT egress IP burns the bucket — which is shared byte-for-byte with the
+    GET route `refreshSlots()` also spends, so one visitor plus two refreshes is
+    3 of the 5. On the POST side `classifyJoinFailure` has no `rateLimited` arm
+    (429 is not 404, not 409, not ≥500), so it returns `rejected`, whose copy
+    its own doc comment scopes to roster cap and eligibility. FIX: add a
+    `rateLimited` arm and a distinct retry state.
+
+### What the findings say about this session's own process
+
+- **Five of these (#2, #5, #7, #9, #12) are defects RS007 CREATED**, all in
+  the promotion/lapse/reminder machinery this wave added, and all in code that
+  had never run in production because the sweep had no scheduler. This wave
+  turns that code on. The reminder path in particular goes live for the FIRST
+  TIME because of this PR — the same observation the first adversarial pass made
+  about its finding #3, still true, now with five confirmed defects behind it.
+- **V381 was a partial fix, twice over.** Written to stop a crash losing a
+  reminder forever, it left the claim group-scoped (#7) and the mint ordering
+  unchanged (#9). Both were visible in the same twenty lines. A lease that
+  fixes the crash window while leaving the scoping wrong reads as "reminders are
+  now safe" and is not.
+- **#14 is a hole in my own fix.** `2d4d7b623` narrowed the collapse rule to
+  close a 422 dead end; the hydration effect's `if (saved) … else if
+  (collapseEntries)` reopened it for a restored EMPTY cart. The whole-branch
+  review's probe (e) had explicitly reported "no dead path found" here — it
+  tested a narrower claim (a division whose entrant kind CHANGED) than the one
+  it appeared to settle. A refutation is only as strong as the case it tested.
+- **No walkthrough crosses invite-and-pay.** `rs007-registration-journey` is a
+  FREE division (captain enters, mate claims, no money);
+  `registration-connect` is a paid entry with NO invite and NO claim. Several of
+  these findings live exactly on that seam, and #4 (join consent collected then
+  discarded) would very likely have failed a walkthrough that crossed it. The
+  invite-and-pay-and-cancel walkthrough is the missing witness for #4, #10, #13.
+
+### Lane closed 2026-08-27 — youth override, `ref_code`, stranded cutoff
+
+Not part of the 15 above; these came from the gap review and were the "two
+lower-severity findings recorded but unfixed" the PR body used to mention.
+All three fixed, counts re-run by the main thread (80/80,
+`registration-hub-config-panel.test.tsx` + `divisions.test.ts`, paths confirmed
+inside the rs007 worktree).
+
+- **Youth override no longer lost on a hub Save** (`divisions.ts`,
+  `afbe8118c`). An active override is detected by comparing stored `youth`
+  against `deriveYouth(stored age_max)`; a mismatch can only have come from an
+  earlier explicit PATCH, so it survives. 2/4 red → 4/4.
+- **`ref_code` was non-null-asserted and genuinely can be null**
+  (`9cd05d9c6`). `groupById`'s own doc comment and the status page's both say a
+  ref-mint-exhausted submit still commits. **The trap worth keeping: `!` erases
+  at compile time, so a behavioral test passes identically with and without it**
+  — 2/2 green before the fix. The only red was `tsc --noEmit`, and only after
+  the declared type was widened to `string | null`: 1 error → 0. Recorded as
+  `reference_non_null_assertion_red_is_tsc_only`.
+- **Clearing an age band now clears its cutoff** (`c2ee0f0e6`). Not a DB
+  rejection — `divisions_age_cutoff_check` enforces cutoff month/day
+  both-or-neither and is indifferent to the band, so the value was silently
+  stranded, and the cutoff controls `disable` once the band clears, leaving no
+  UI path to remove it. 2/76 red → 76/76.
+
+Lane-boundary note: the sibling status-page lane's concurrent edits briefly
+contaminated one `tsc` run with an error on a file this lane was told not to
+touch. It cleared when they committed. Two lanes in one worktree share the
+index and the type graph — this is the shared-worktree contamination trap, and
+it presented here as someone else's compile error inside this lane's gate.
+
+### Lane closed 2026-08-27 — status-page money and claim links (closes #11)
+
+Counts re-run by the main thread: **152/152, 57 suites**, every path inside the
+rs007 worktree.
+
+- **#11 subtotal — CONFIRMED, not refuted.** The agent traced all three write
+  paths that end an entry — `withdrawCore` (`registrations.ts~3546`), the
+  rejection path (`registration-approval.ts:210`) and the expiry sweep
+  (`registrations.ts:3939`) — and **none of them clears `amount_cents`**. So a
+  cancelled entry's pre-cancellation fee stayed in the total permanently. Fixed
+  with `entryCountsTowardTotal` (pending/paid/confirmed only), shared by the
+  Subtotal filter and each card's new per-entry fee line, so the two cannot
+  drift the way the collapse rule did.
+- Dead claim links, the fail-closed refund reason (new key
+  `register.status.cancel.refund.noDeadline`, all 4 dicts + `i18n:gen-keys`),
+  the join form losing a valid "someone else" pick across a refresh, and the
+  `flex-1` → `grow` cascade fix.
+- Per-fix red→green, each stated separately rather than as one final green:
+  13→69/69, 5→74/74, 1→76/76, 5+1→67/67, 1→77/77.
+- **The layout fix was mutation-checked by hand** — removing `flex-wrap` still
+  reds the guard — and the mutation was restored from a `cp` backup, never
+  `git checkout`, which in a shared worktree would have taken a sibling lane's
+  uncommitted work with it.
+- Both lanes ran concurrently in one worktree for ~29 minutes and neither
+  cross-contaminated: every stage used explicit file pathspecs, verified clean
+  after each commit. That is the mitigation that makes two lanes in one
+  worktree survivable; ownership lists alone would not have.
+
+### Lanes in flight 2026-08-27 (written for compaction)
+
+Three implementer lanes dispatched at once, file sets provably disjoint. A
+fourth (invite-pay-cancel walkthrough) was already running and owns
+`apps/web/e2e/**`, which none of the three touch.
+
+| Lane | Findings | Owns |
+| --- | --- | --- |
+| money | #1, #2, #5, #7, #9, #12 | `registrations.ts` + its tests, `register/status/**` if a per-entry field must reach the UI |
+| migration | #3 | `V380__…consolidation.sql`, new `__tests__/v380-age-band-backfill.test.ts` |
+| join | #4, #15 | `register/join/**`, `registration-submit.ts`, `schemas.ts`, `openapi/*`, dicts |
+
+**Flyway V-numbers pre-allocated, because this programme has already shipped
+two V367s through a clean rebase:** high-water is **V382**; money lane takes
+**V383** (per-entry reminder claim, replacing the group-scoped one V381 left),
+join lane takes **V384** (per-player consent, only if
+`registration_players` has nowhere to put it). Check for duplicates before the
+next rebase regardless — a clean rebase does not detect them.
+
+**NOT yet assigned — #8, #10, #13.** All three land on the status page's money
+state and would collide with the money lane: #8 wants a deadline re-check
+inside `resumeRegistrationCheckout`, #10 wants the money state resolved from
+the DIVISION's payment method rather than the cart's, and #13 wants the org
+timezone (already resolved as `refundTz`) threaded onto `GroupStatusView` plus
+the entry's own clock sent in the promotion mail. All three reach into
+`registrations.ts`. They go in a fourth lane AFTER the money lane commits, not
+in parallel with it.
+
+**Instruction given to every lane, and the reason it matters here:** explicit
+file pathspecs on every `git add`, never `-A`. Two lanes already ran
+concurrently in this worktree for ~29 minutes without cross-contamination on
+exactly that discipline. The shared git index makes "disjoint file sets" a
+necessary condition, not a sufficient one.
+
+### Walkthrough lane closed 2026-08-27 — the invite→pay→claim→promote→cancel witness
+
+Commits `de7c115db` (spec) + `35450d248` (promotion tapped through the hub, not
+the API). Foreground run, real exit code: **1 failed, 2 passed (47.8s)**.
+
+**The failure is the point.** It reproduces CRITICAL **#1** through real UI,
+three runs identically: a promoted-but-never-charged entry's cancel dialog reads
+*"This frees your spot. £25 will be refunded automatically"* — sourced from a
+SIBLING entry's real PaymentIntent, not its own (£0). Until now #1 was a code
+reading plus a constructed repro; this is the product saying it out loud on the
+page a registrant actually uses. **The spec should turn green when the money
+lane lands #1, and that is the acceptance gate for it** — not the unit counts.
+
+**Every step of the seam is a real UI action, including the promotion.** That
+started as an API call and was reworked to click the hub's own "Promote from
+waitlist" button. API is used only to CREATE the competition/division/settings
+(matching `registration-connect.spec.ts`'s own precedent), to claim/release the
+Connect fixture, for public-API read-backs, and for cleanup — none of which is
+the seam under test. That is the folder charter applied correctly.
+
+**Two spec bugs found by tapping, both fixed inside `e2e/` only** (verified: both
+commits touch nothing outside that folder): row scoping — each row's detail
+panel lists the sibling entry, so an unscoped locator reads the wrong row — and
+a status pill rendered twice (phone + desktop), needing `:visible`.
+
+Asked back whether the row-scoping one was a product defect or correct cart
+behaviour. **Correct behaviour, confirmed**: the siblings section
+(`registration-hub-registrant-detail.tsx:223-248`) renders each sibling's own
+`display_name` beside its own `status` under a "Cart siblings" heading, as a
+link to jump to that row — properly labelled, no misattribution. The locator
+had matched the whole `<details>` subtree's text. The lane also volunteered
+that it fixed this defensively from reading the sibling-rendering code and
+**never observed the strict-mode failure empirically** — worth more than the
+tidier claim, because "I fixed a bug" and "I pre-empted one I never saw" are
+different evidence, and only the first belongs on a findings register.
+
+**What it does NOT catch, stated by the lane rather than discovered later:**
+#4, #10 and #13. No media-consent interaction in the join form, a single
+division and payment method throughout so no cart/division divergence, and no
+email inspection or deadline-format comparison. Those three still have no
+witness. Recording that plainly is worth more than a spec that implies coverage
+it does not have.
+
+**A stale claim from this lane, corrected.** It reported assertion (a) — the
+subtotal keeping a withdrawn entry's fee — as still live, from a direct source
+read. It is fixed, in `54b88fb9f`, by the sibling lane while this one was
+running; the read predates it. The assertion itself is fine: it asserts the
+CORRECT subtotal, so it is now a regression guard, not a reproduction. Only its
+prose was stale, and that is corrected in the file. Two lanes racing on one
+worktree means a source read is a point-in-time claim, not a standing fact.
+
+### Money lane closed 2026-08-28 — both CRITICALs plus #5/#7/#9/#12
+
+Counts re-run by the main thread: **178/178**, and that run deliberately
+INCLUDED `registration-checkout-guards.test.ts`, the suite the lane flagged as
+failing. It passes. The lane's diagnosis (accumulated `reminded_at` rows in
+this long-lived shared test DB — 90 of 98 "due" rows already carried the old
+group-level mark) is consistent with that, but the claim was checked rather
+than accepted: this repo has a recorded case of an agent classifying its own
+regression as pre-existing.
+
+Per-defect red→green, each stated separately: #1 155→155/155, #2 156→156/156,
+#5 157→165/165 (+ the concurrency file), #12 158→158/158, #7+#9 160/153/7 red
+→ 327/327.
+
+**Three deviations the lane declared rather than buried, all accepted:**
+- **#7 and #9 committed together** (`57fa7fca3`) because their edits interleave
+  in the same `sweepRegistrations` block. Splitting after the fact risks
+  introducing an error to satisfy a bookkeeping preference.
+- **#9's mint-after-claim reorder was extended to pass (1b)**, not just the
+  cited pass (1a). Same bug shape, one pass along. The finding named one line;
+  the defect was a pattern. Flagged in the commit body rather than silently
+  widened.
+- **#12 also nulls `promotion_reminder_claimed_at`**, not only
+  `promotion_reminded_at`, so the lease state is consistently fresh on
+  re-promotion. Fixing the mark but not the lease would have left the same
+  class of stale-bookkeeping bug one field over.
+
+**V383 was applied locally with `-outOfOrder=true`** because a sibling lane had
+already applied V384 to this shared DB. The FILE is correctly numbered and
+applies in order anywhere else — but anyone rebuilding this local DB should
+know why its history looks out of order.
+
+**The acceptance gate for #1 is NOT these counts.** The invite-pay-cancel
+walkthrough reproduces #1 through real UI and currently REDS on it. That spec
+going green against a rebuilt server is the evidence; a unit count cannot see
+the cancel dialog offering to refund a sibling's card. Pending — deliberately
+sequenced after the consent-gate lane stops editing, so the build is made from
+a still tree rather than a moving one.
+
+### #16 (NEW, found 2026-08-29) — the organiser's discretionary refund has no UI at all
+
+Found while scoping the money-matrix walkthrough the owner asked for
+("price change and refund for old price, withdraw, auto refund lock").
+Not from the review; not in the register of 15.
+
+**What is there.** `POST /api/v1/registrations/{id}/refund` (route,
+`refundRegistration` usecase, `RefundRegistration` schema, audit entry,
+partial amounts supported). And the copy is written, in all four
+locales: `confirm.refundRegistration.title` / `.body` / `.label`
+("Refund this registration?" / "Refund"). It is even declared in the
+generated `apps/web/src/lib/i18n-keys.ts:1286-1288`.
+
+**What is not there.** Nothing renders those keys. Grepping the whole of
+`apps/web/src` for `confirm.refundRegistration` outside the dictionaries
+and the generated key union returns NOTHING, and the only component that
+posts to a `/refund` path in the entire app is `sponsor-packages.tsx`,
+for sponsor orders. `registration-hub-registrant-actions.tsx` mentions
+refunds twice — both in comments about what `withdraw` does — and has no
+`canRefund` flag, no button, no confirm dialog.
+
+**Why this matters, in the organiser's terms.** `resolveRefundPolicy`
+(`registrations.ts:3585-3601`) auto-refunds a withdrawal only while
+`now() < refund_lock_at ?? starts_on`. Past that line the code comment
+says refunds are "organiser discretion via the manual refund endpoint" —
+and that endpoint is unreachable from the product. So an organiser who
+calls a rained-off competition off after the lock, or who agrees to
+refund one injured entrant as a goodwill gesture, cannot do it. Their
+two real options are to email us, or to refund from the Stripe dashboard
+directly — and a dashboard refund never writes `registrations.refunded_cents`
+or `registration_groups.refunded_cents`, so from that moment the hub's
+money column, the registrant's status page and Stripe permanently
+disagree, with no way to reconcile them from inside the app.
+
+The three-line copy sitting unused in four dictionaries says this was
+designed and then dropped, rather than deliberately deferred.
+
+**Status:** FIXED 2026-08-30 (`408e31df3`), and proven end to end by S4
+of the money matrix — the control renders, the organiser taps it, and the
+ledger records `"mode": "manual"`.
+
+### #17 (NEW, found 2026-08-30) — a pair's typed partner name never reaches its roster
+
+Found by walking the doubles journey by hand for the money matrix, in a
+screenshot — no test asserts either half of this, and both halves are
+individually correct.
+
+**What happens.** On the entries step a pair captain types the partner
+into `register.entries.partnerName.placeholder` ("Partner's name
+(optional for now)"). That value feeds `pairDisplayName`
+(`registration-submit.ts:344-360`), so the entry is named
+"Alice & Bob". The DETAILS step then renders the pair's TWO roster rows
+**empty** — the typed partner name does not seed row 2 — and refuses to
+advance until both are filled. So the captain types the partner's name a
+second time, into a different box, on a different screen.
+
+**Why that is worse than redundant.** The two values are never compared.
+The display name comes from the entries step; the roster comes from the
+details step; nothing validates that the second name matches the first.
+Type anything different the second time — a nickname, a typo, or the
+captain's own name — and the entry keeps the ORIGINAL display name
+forever while its roster says something else.
+
+**Where it surfaces, and to whom.** The join page. Its heading is the
+display name and its "Which one are you?" radio list is the roster, so a
+partner following their own invite link sees:
+
+> Joining **Pair Captain … & Pair Partner …** · Mixed Doubles
+> Which one are you?  ( ) Pair Captain …   ( ) Pair Captain …
+
+Two identical options, neither matching the name in the heading. There is
+no way for that partner to tell which row is theirs, and picking wrong
+claims the captain's own slot. (Screenshot:
+`apps/web/test-results/walkthrough-rs007-money-ma-6ee80--the-price-it-actually-paid-walkthrough/test-failed-2.png`
+from the S2 run of 2026-08-30.)
+
+The identical-names case above was produced by the walkthrough filling
+both rows the same way; the DISAGREEMENT between heading and roster needs
+nothing unusual at all, only a captain who types the partner's name
+slightly differently the second time — which is the ordinary case, since
+nothing on screen tells them the two are meant to match.
+
+**Status:** FIXED 2026-08-30 — see "#17 — FIXED" below.
+
+### #18 (NEW, found 2026-08-30) — CRITICAL: money leaves the organiser's account past `refund_lock_at`, audited as `late_payment`
+
+Found by the S4 scenario of the money matrix, against REAL Stripe. No
+unit test could have found it: it needs a live PaymentIntent and a live
+webhook stream.
+
+**Reproduction (S4, `rs007-money-matrix.spec.ts`).** A paid singles
+division whose `refund_lock_at` is one hour in the PAST. An entrant pays
+£40 by card, then cancels from the status page.
+
+**What the product tells them, correctly.** The cancel dialog renders
+`confirm.cancelEntry.bodyDiscretion` — "The refund window has passed —
+any refund is at the organiser's discretion." Both assertions on that
+copy PASS. `resolveRefundPolicy` returned `refundable: false`, and
+`withdrawCore` therefore issued no refund. The read side is right.
+
+**What actually happens to the money.** Three seconds later £40 is
+refunded anyway. From the ledger on the run of 2026-08-30:
+
+```
+00:21:54.431  registration.confirmed   {"paid": true, "amount_cents": 4000}
+00:22:02.620  registration.withdrawn   {"by": "registrant"}
+00:22:05.541  registration.refunded    {"mode": "late_payment",
+                                        "amount_cents": 4000,
+                                        "stripe_refund_id": "re_3U9vZM…"}
+```
+
+`refund_lock_at` was `2026-08-29 23:21:33+01`; `starts_on` was
+`2030-11-01`, so the `starts_on` fallback was not in play. Verified in
+the database afterwards: `status=withdrawn, amount_cents=4000,
+refunded_cents=4000`.
+
+**Why `late_payment` is the wrong verdict here.** That mode comes from
+`confirmPaidRegistration` (`registrations.ts:2481-2484`), whose
+withdrawn/expired/rejected/waitlisted branch (`:2311-2327`) exists for a
+payment that lands for a spot the entrant no longer holds — legitimately
+NOT bound by the refund lock, because the organiser never had a seated
+entrant to keep the money for. That is not this case. This payment
+arrived first, confirmed the entry, and the entrant withdrew afterwards
+— the ordinary post-lock cancellation the whole `refund_lock_at` feature
+exists to govern. The branch reads the row's status at the moment it
+runs, and cannot tell "paid late" from "paid, then withdrawn".
+
+The existing redelivery guard (`:2457`, `refunded_cents >=
+amount_cents`) only stops a SECOND late refund. It does not stop the
+first one from firing against an entry that was already confirmed.
+
+**Mechanism NOT yet pinned — do not assume one.** `billing_events` shows
+exactly ONE `checkout.session.completed` for this registration
+(`evt_1U9vZOAy22H0xqqxvQGtJVCi`, `replay_attempts 0`, processed
+00:21:54.473), and `handleRegistrationCheckoutCompleted` — the only
+caller of `confirmPaidRegistration` — is reached from that event type
+alone. So something re-entered that path ~11s later with no new recorded
+event, or another path writes this audit row. One suggestive detail: the
+server log shows the refund-receipt email attempted TWICE for the S4
+contact address on each of two separate runs, against a single
+`registration.refunded` audit row.
+
+**Why it is CRITICAL.** The organiser silently loses money their own
+published policy said they keep, on the ordinary late-cancellation path,
+with an audit trail that calls it a late payment so nothing looks wrong.
+It is invisible to the registrant (who was told they would get nothing)
+and invisible to the organiser (who has no reason to check).
+
+**Status:** FIXED 2026-08-30 (`dfdcfae95`), with the residual gap #18b
+fixed in `1a4d025b6`. See the two sections below. S4 (and S5, for the
+manual-approval half) are the reproductions; both now pass.
+
+### #18 — FIXED 2026-08-30 (`dfdcfae95`), with one residual gap (#18b)
+
+**Mechanism, pinned.** Not a webhook redelivery, and not a Connect
+duplicate — both were ruled out. `reconcileRegistrationGroupBySession`
+(`registrations.ts:2772-2794`), the status page's reconcile-on-return,
+deliberately carries no status pre-check and calls
+`handleRegistrationCheckoutCompleted` DIRECTLY, bypassing
+`billing_events`/`runEvent`'s dedupe entirely. `cancel-entry.tsx:75`
+fires `router.refresh()` after a successful withdrawal, which re-renders
+the SAME status URL with the same `?checkout=success&session_id=…` — so
+reconcile runs again against the same Checkout Session, which Stripe
+still reports as `payment_status: "paid"` forever (a refund never changes
+a session's own payment_status). That is why the ledger showed ONE
+`checkout.session.completed` and yet two refund-receipt sends: the second
+pass never went through the event table at all.
+
+**Fix.** The `'withdrawn'` arm is now gated on `reg.entrant_id`, written
+in the same UPDATE as `status = 'confirmed'` (`materialise`) and never
+cleared by `withdrawCore`. A confirmed-then-withdrawn replay no-ops; a
+never-confirmed withdrawn row still refunds in full, unchanged. No
+migration — the column already existed.
+
+**Verified end to end**, not just by unit test. S4 of the money matrix
+now passes against real Stripe, and its ledger reads:
+
+```
+registration.confirmed  {"paid": true, "entrant_id": "172b0bf8…"}
+registration.withdrawn  {"by": "registrant"}          ← no refund
+registration.refunded   {"mode": "manual", "amount_cents": 4000}
+```
+
+— the refund arriving ONLY after the organiser used #16's new control.
+That single run proves both fixes at once.
+
+#### #18b — the same hole remains on a MANUAL-approval division. OPEN.
+
+`entrant_id` is written by `materialise()`, which runs on CONFIRMATION.
+On a `manual`-approval division `confirmPaidRegistration` leaves a paid
+entry at `status = 'paid'` awaiting the organiser's decision and does NOT
+materialise it — so `entrant_id` is still null.
+
+So: manual-approval division, `refund_lock_at` in the past, entrant pays,
+entrant withdraws. `withdrawCore` correctly refuses to auto-refund (its
+own `locked.status === 'paid'` path passes the real PI and the policy
+says no). Then the same reconcile replay fires, reads `status =
+'withdrawn'` with `entrant_id` null, takes the "never confirmed" arm, and
+refunds in full — bypassing `refund_lock_at` exactly as before.
+
+Narrower population than #18 (it needs manual approval), but the same
+money consequence for exactly the clubs that vet their entries. The
+guard needs a signal that separates "never had a live charge" from
+"charged, then withdrawn" — `entrant_id` only answers "was ever seated",
+which is not the same question. `payment_intent_id` + `withdrawn_at`
+ordering, or a status snapshot taken before the withdrawal write, would
+answer it for both approval modes.
+
+**Owed:** a test on the manual-approval path (the #18 reproduction
+harness in `registrations.test.ts` already builds everything but the
+approval mode), then a guard that covers it.
+
+### #18b — FIXED 2026-08-30 (`1a4d025b6`), plus S5 added to the matrix
+
+`entrant_id` answered the wrong question. V385 adds
+`registrations.charged_at`, stamped with `coalesce(charged_at, now())` in
+the SAME statement that writes `status = 'paid'`, BEFORE the manual/auto
+approval fork — so a manual-approval entry is stamped exactly as reliably
+as an auto-approval one. `entrant_id` is a strict subset of it (every row
+`materialise()` touches was stamped first, in the same function), so the
+guard reads ONE durable signal now rather than two overlapping ones.
+
+The other three statuses are deliberately untouched and still refund
+unconditionally, lock or no lock: `expired`/`waitlisted` only ever fire
+from a still-`pending` row (`sweepRegistrations`' own
+`locked.status !== "pending"` guards), and `rejected` is refunded by
+`rejectRegistration` in its own call and never becomes `withdrawn`. A
+genuine late payment — money arriving for a spot the entrant never held —
+must keep being refunded in full, and does.
+
+**Not vacuous:** reverting the guard to `reg.entrant_id` reds F18b alone
+and leaves F18 green. That asymmetry is the proof the two signals differ.
+The F18b test also asserts `reconciledAgain === true`, so it cannot pass
+by the replay short-circuiting before it reaches fulfilment.
+
+`src/server/usecases/__tests__`: **3067 total / 3030 passed / 0 failed /
+37 pending**, every path inside `/worktrees/rs007/`. `tsc --noEmit` exit 0.
+
+**S5 added to the money matrix** — the manual-approval cell, the same
+journey as S4 on a division that VETS entries. It asserts the entry
+reaches `paid` and NOT `confirmed` first, so it cannot silently degrade
+into a second copy of S4 if the approval mode stops taking effect.
+
+#### The shape worth remembering from #16/#17/#18/#18b
+
+All four came out of ONE afternoon of walking the money paths by hand,
+and NONE of them was reachable from the unit suite:
+
+- **#16** needed someone to look for the control the copy promises. Three
+  dictionary keys existed in four locales with no component rendering
+  them; every test passed because nothing tested for an absence.
+- **#17** needed a screenshot. Both halves are individually correct — the
+  display name is built from one screen, the roster from another — and
+  the defect only exists in the gap between them, on a third screen.
+- **#18** needed REAL Stripe. The trigger is a Checkout Session that
+  still reports `payment_status: "paid"` after a refund, replayed by the
+  page's own `router.refresh()`. No mock reproduces that, and the audit
+  trail labelled the result `late_payment`, so it read as correct.
+- **#18b** needed the FIX to be questioned rather than accepted. The
+  guard was right about the case it was written for and wrong one
+  approval mode over.
+
+### #17 — FIXED 2026-08-30
+
+Fixed on BOTH sides of the divergence, because closing only one leaves the
+other free to reopen it.
+
+**Client — the name is typed once.** `cartReducer`'s `UPDATE_ENTRY` now
+seeds a pair's SECOND roster row from the entries-step partner field. Only
+ever a row the captain has not made their own: still blank, or still
+carrying exactly what the partner field said a keystroke ago. A row they
+edited themselves is never overwritten, and clearing the partner field
+never destroys a typed row — losing typed roster data to fix a naming
+mismatch would be the worse trade.
+
+**Server — the roster is the source of truth.** `entryDisplayName` now
+composes a pair's name from the two ROSTER rows. It used to join row 0's
+real name with `entry.partner_name`, a value typed on a different step and
+never compared with the roster, which is what let "Alice & Bob" sit
+permanently on a roster reading Alice and Robert.
+
+**A false premise corrected while writing the test.** The first version
+asserted a fallback to `partner_name` "while the second roster row is
+blank". That state does not exist: a pair is fixed at exactly two players
+(`registration-submit.ts`) and `full_name` is `z.string().min(1)`
+(`schemas.ts`), so `players[1]` is always present and non-empty by the time
+a display name is composed. **The `partner_name` fallback is unreachable at
+submit** — it is kept as defence only, and the comment now says so instead
+of describing behaviour that cannot happen. A test pins the 422 that makes
+it unreachable, so loosening either rule surfaces as a decision rather than
+a surprise.
+
+**Verified:** cart reducer 86/86 (4 of the 6 new cases go red under a
+mutant that removes the seeding — the 2 survivors are the negative cases,
+correctly indifferent); `registration-submit` 55/55 (the key case reds
+under a mutant that restores the old composition); whole register component
+suite 311/311; `tsc --noEmit` exit 0.
+
+### #19 (NEW, 2026-08-30) — CRITICAL, build: a client change can ship a page that references chunks the build never emits
+
+Found while verifying #17. The page renders, returns HTTP 200, and every
+asset check passes — and **nothing on it works**, because the JS never
+loads.
+
+**Symptom.** `/shared/{org}/{comp}/register` served HTML referencing
+`/_next/static/chunks/1e0nyjjz3x5pr.js`. That file exists nowhere in
+`.next`. The server answers it **500, `content-type: text/plain`**, the
+browser refuses it (`MIME type ('text/plain') is not executable`), React
+never hydrates, and every control on the page is dead. Clicking "Next" on
+the register stepper does nothing at all.
+
+**Why every gate missed it.** `/api/health` is 200. The page is 200. The
+seazn-env asset probe passes (it checks the FIRST chunk the HTML names,
+and that one exists — 17 of the 18 referenced chunks were fine). 3,000+
+unit tests pass, because the module is correct TypeScript and the reducer
+logic is right. `tsc --noEmit` is clean. Only a test that CLICKS
+something catches it, which is exactly what the walkthrough does.
+
+**Bisected, deterministically:**
+
+| change to `cart.ts` | result |
+| --- | --- |
+| none | clean |
+| comment-only line appended | clean |
+| new function added but never called (tree-shaken) | clean |
+| same logic inlined in the reducer's `UPDATE_ENTRY` arm | **1 chunk missing** |
+| same logic as a module-level helper the reducer calls | **1 chunk missing** |
+| logic as an exported pure helper called from `entry-cart.tsx` | **2 chunks missing** |
+
+Survives `npx turbo run build --force` (`0 cached, 1 total`, 1m48s), so
+it is not the turbo cache, and survives `rm -rf .next`. The missing chunk
+id is stable across rebuilds. Reverting the client change makes it clean
+again, every time.
+
+So: **any change that materially alters this page's client module graph
+can produce a build whose HTML points at chunks the bundler did not
+write.** It is not about where the code is put or how it is shaped.
+
+**Blast radius.** Every client change to every page, not just this one.
+A PR can be green on units, tsc, lint and a 200-check and still ship a
+completely inert page. Smoke passes. Only the walkthroughs would catch it.
+
+**Owed:** a build-time gate that parses the emitted HTML for every route
+and fails if any referenced `/_next/static/**` asset is absent — cheap,
+and it turns this from an invisible failure into a red build. Then the
+fork's chunking itself needs investigating (`node_modules/next/dist/docs/`,
+per AGENTS.md — this is NOT stock Next).
+
+**Consequence for #17:** its client half is REVERTED and deferred behind
+this. The server half ships (see #17's own entry).
+
+### #19b (NEW, 2026-08-30) — the chunk gate covered ci.yml's smoke-e2e only; e2e.yml runs a different build with none
+
+`scripts/check-build-chunks.ts` (#19's own fix) was wired into ci.yml's
+smoke-e2e job only. `.github/workflows/e2e.yml` runs its OWN
+`npm run build --workspace apps/web` and stages its own standalone tree,
+in three separate jobs — `e2e-parallel`, `e2e-serial`, `e2e-mobile` — a
+DIFFERENT build, with no chunk gate on any of them.
+
+**What those jobs had instead was weaker than it looked.** The
+pre-existing probe picks an ARBITRARY chunk
+(`ls apps/web/.next/static/chunks/*.js | head -1`) and curls it, which
+proves only that the standalone tree was staged. Verified directly:
+deleting an unreferenced chunk left that probe, and the whole build,
+green. So #19's exact failure mode passed straight through it — the
+bundler's manifest naming a chunk id it never flushed, the server 500ing
+it as `text/plain`, React never hydrating — while the page, `/api/health`
+and the probe itself all stayed 200. In an e2e job that reads as N specs
+failing one at a time on clicks that do nothing: a flake, or the change
+under test. It cost this session a misattributed bisection before the
+real cause was found.
+
+**Fix (`c81e6408c`).** One step per job — `npm run check:build-chunks` —
+placed after "Start server" (which stages the standalone tree) and
+before the Playwright run. Additive only: 42 insertions, 0 deletions; the
+`on:` block, triggers, matrix and caching are untouched. Placement
+validated by parsing the YAML and asserting the new step lands between
+"Start server" and the Playwright step in each of the three jobs.
+
+**Verified:** the gate itself re-checked by hand before wiring it wider —
+green on the current tree (105 routes, 1117 unique asset references),
+exit 1 naming the missing chunk and every route referencing it when that
+chunk is removed, green again once restored.
+
+### #20 (NEW, 2026-08-30) — "confirmed" means two different things on one card
+
+Spotted by the owner reading walkthrough frame 08. The paid status page
+shows, on a single entry card:
+
+- top right, green pill: **`CONFIRMED`** — the entry's lifecycle status,
+  i.e. the £20 landed and the spot is held;
+- inside the roster box, on every row: **"Awaiting confirmation"**, above
+  a meter reading **"0 of 2 confirmed"** — each PERSON's own claim state.
+
+Both are correct. The captain typed both names on everyone's behalf, so
+both rows are `captain_entered`, and each player must follow their own
+claim link because that is what records THEIR OWN privacy consent — a
+captain cannot consent on another adult's behalf.
+
+But an entrant who has just paid reads "Awaiting confirmation" as "my
+payment has not gone through", three inches under a badge that says
+CONFIRMED. The word is doing two jobs on one card, and the money reading
+is the one that alarms people.
+
+**And it is worse than ambiguous wording.** Read back from the database
+for the S2 runs:
+
+```
+Pair Captain …   consent_status = pending    <- the person who PAID
+Pair Partner …   consent_status = granted    <- the person who paid nothing
+```
+
+The fee is per ENTRY, and the CART's contact — the captain — pays it
+(`registration_groups.contact_email` carries the charge). The partner
+joins by invite link and pays nothing. But the captain is not
+auto-claimed against their own roster row, so **the payer is the one the
+card lists as outstanding**. A captain can pay £20, watch their partner
+claim, and see "1 of 2 confirmed" with themselves as the one still
+awaiting.
+
+**Owed, in two parts:**
+1. Copy: rename the roster-side vocabulary so it cannot be read as a
+   payment state — the roster asks *who is playing*, not whether the entry
+   is valid. `register.status.roster.pending` / `.claimed` / `.meter`,
+   all four locales.
+2. Behaviour, and the bigger of the two: decide whether the CAPTAIN
+   should be auto-claimed against their own row when they are on it. The
+   consent argument for making each adult claim their own row does not
+   apply to the captain — they filled the form and gave privacy consent
+   themselves, at submit, on the cart. `registering_self` /
+   `self_player_index` already record which row is theirs when they tick
+   "I'm registering myself", so the information needed is present.
+
+### #20b (NEW, 2026-08-30) — the join flow's own copy re-conflated "checked in" with "claimed", right where a reader acts
+
+Found by the visual verification #20 owed, driving the real status page
+at 1280/768/320 — not a static-markup probe (the same copy had already
+passed one).
+
+#20's fix renamed the roster ROW STATES onto a check-in metaphor. It did
+not rename the ACTION that produces them, so one card read, three lines
+apart:
+
+    ROSTER                        0 of 2 checked in
+    Ada Lovelace       [Not checked in]
+    Send Ada Lovelace their claim link
+
+`claim.*` is an established, DIFFERENT product concept — an account
+taking ownership of a player profile ("Invite to claim", "Claimed",
+"claim link", `en/ui.json` `claim.*`). The registration join flow is not
+that: a person confirms they are the human a captain typed onto a roster
+row. #20's rename pulled the two concepts apart everywhere except this
+one leftover string, which re-merged them in the exact spot a reader
+clicks.
+
+Nine strings across four locales: en (`roster.claimLink`,
+`join.full.body`, `join.error.claimed`), fr/es/nl (`join.full.body`,
+`join.error.claimed`). Only English carried the claim verb on
+`roster.claimLink` — fr/es/nl already said "lien de confirmation" /
+"enlace de confirmación" / "bevestigingslink".
+
+**Fix (`1ee609f28`).** Reworded off the `claim.*` vocabulary in all four
+locales. Key NAMES unchanged (never reader-facing), so no `gen-keys`
+drift. The new test pins the VOCABULARY, not the wording — the copy may
+be reworded freely but may not reach back for each locale's own claim
+verb — and separately asserts the `claim.*` namespace still exists and
+carries a non-trivial key count, so the guard cannot pass vacuously once
+there is nothing left to collide with.
+
+**Still open, deliberately not changed here:** the English flow now
+reads "Not checked in" → "check-in link" → "Confirm my spot" → "You're
+in". Unifying that last verb needs the CTA and success copy retranslated
+in three languages where the natural check-in term does not carry
+("presentarse", "s'enregistrer"), and would break two walkthrough specs
+that click `/confirm my spot/i`
+(`rs007-invite-pay-cancel.spec.ts:371`, `rs007-money-matrix.spec.ts:531`).
+A wording call for the owner, not a defect — raised, not guessed at.
+
+**Verified:** 5/5 new (mutation-checked — reverting one string per locale
+to the old wording reddens all four locale tests, the namespace test
+correctly surviving; restored, 5/5), dictionary-copy-truth 75/75,
+`i18n:check` parity OK, `i18n:gen-keys` no drift, `tsc --noEmit` clean.
+
+*(Numbering note, resolved: the decision log's product ruling 3 below
+originally also cited "#20b" for the captain-auto-claim behaviour. That
+is a different change and it shipped under #20 itself (`d9e0c8d2d`), so
+ruling 3 now cites #20. "#20b" means the copy fix in `1ee609f28` and
+nothing else.)*
+
+### #21 (NEW, 2026-08-30) — never claiming your spot costs you nothing, and consents you to everything
+
+Owner's question, walking the doubles journey: "what if you don't claim
+the profile or spot?" Traced through the code; the answer is that the
+claim flow is entirely advisory.
+
+**Nothing enforces it.** `materialise()` (`registrations.ts:786-806`)
+loops `for (const p of players)` with **no consent check of any kind**.
+Every roster row the captain typed becomes a `person` and an
+`entrant_members` row — squad number, captain flag and all — whether or
+not that human ever confirmed they exist. There is no deadline: nothing
+in `sweepRegistrations` touches `consent_status`, nothing chases an
+unclaimed row, nothing blocks confirmation, and nothing degrades.
+`consent_status = 'pending'` persists forever as a display chip on the
+captain's own status page plus one filter in the hub.
+
+**And the default is to publish them.** Both person-creation paths insert
+`consent: { public_name: true }`:
+
+- `findOrCreatePlayerPerson` (`:672-673`) — the anonymous path, which is
+  the one a captain-typed row takes;
+- `resolvePlayerPerson` (`:624-628`) — the signed-in path.
+
+So a person who never claimed, never consented, and may not know they
+were entered is created in the organisation **with their name set to
+public by default**, and published wherever entrant members appear.
+
+**Being fair to the ruling.** That default came from a deliberate owner
+ruling (the comment cites "ruling 5, review BLOCKER") and it is right for
+the path it was written for: a signed-in registrant's OWN first person,
+where the actor and the subject are the same human. The gap is that the
+identical default is applied to a name a THIRD PARTY typed for someone
+who never showed up to agree.
+
+**Why this matters more than it looks.** The whole claim mechanism —
+the join codes, the per-player `privacy_consent`, the consent gate this
+branch added — exists to collect each person's own consent because the
+captain cannot give it for them. That reasoning is sound and it is
+already in the code. Then the system proceeds exactly as if consent had
+been given. The gate is real; the enforcement behind it is not.
+
+Related: **#20** — the payer is the one shown as unconfirmed, and a
+captain is never auto-claimed against their own row.
+
+**Owed — needs an owner ruling before any code:**
+1. Should an unclaimed row's person default to `public_name: false`
+   until claimed? (Smallest change, removes the publication harm.)
+2. Should an unclaimed row be materialised at all, or held out of the
+   squad until claimed? (Larger; affects who can be fielded.)
+3. Is a claim deadline wanted, with the captain chased for unclaimed
+   rows the way unpaid carts are chased?
+
+Nothing here is a code defect against a stated rule — it is a rule that
+was never stated. Recorded rather than fixed for exactly that reason.
+
+### #21 — CLOSED 2026-08-30 by owner ruling: NOT a defect
+
+I recommended defaulting an unclaimed row's person to `public_name:
+false`. **The owner ruled the other way, and the ruling stands:** keep
+`public_name: true` for everyone; people claim and opt out later on.
+That is owner ruling 5 as already written in the code comments
+("registering is consent to a public name; opt-out happens later, on the
+person, never here").
+
+**Why the ruling is well-founded, which my recommendation understated.**
+Minors are protected by a SEPARATE, division-level control, not by this
+flag — `resolveNameDisplay(setting, youth)` (`lib/name-display.ts:8-14`)
+returns `first_initial` for a youth division unless explicitly
+overridden, and `maskDisplayName` renders "Arun Kumar" as "Arun K." So
+the safeguarding case never depended on the per-person consent flag. I
+should have checked that BEFORE recommending, not after.
+
+Residual, accepted with eyes open: an ADULT whose name a captain typed,
+who never claims, is listed in full without having personally agreed.
+The owner's answer is opt-out after the fact, consistent with the rest of
+the product, and the alternative buys privacy by making rosters
+invisible until people chase links they may never click.
+
+**Owed:** a test pinning `public_name: true` on BOTH insert paths
+(`findOrCreatePlayerPerson`, `resolvePlayerPerson`). Nothing asserts it
+today — it is a comment and a default, and a lane nearly reversed it this
+afternoon on my say-so. The ruling has now been made twice; it should
+fail a test, not a review.
+
+### #22 (NEW, 2026-08-30) — the directory fills with duplicate people
+
+Owner's question walking the doubles journey, then "fix it".
+
+`materialise()` creates a `persons` row (lane `player`) per roster row.
+`findOrCreatePlayerPerson` reuses an existing person ONLY when the row
+carries a `dob` AND exactly one non-merged player-lane person matches
+`(lower(trim(full_name)), dob)`. But `dobRequired` is false unless the
+registrant ticks "I'm playing" (`validation.ts:56`), and the details step
+asks roster rows for a full name only — so **captain-entered rows
+essentially never carry a dob and therefore never dedupe**. The same
+8-player squad entered into three competitions becomes 24 directory
+people, and the cost lands on the most active organisers as merge work.
+
+**Two facts that shape the fix, both checked against the live schema:**
+- `full_name` is a SINGLE free-text field everywhere. No first/last
+  split. So "Arun Kumar" / "arun kumar" / "A. Kumar" are three people and
+  there is no structured key to reconcile them.
+- `registration_players` collects an `email`. **`persons` has no email
+  column at all** — the one strong identity signal already collected is
+  discarded at the moment the directory record is created.
+
+**Ruling for the fix:** dedupe on EMAIL, exactly, and never on name.
+The existing "does NOT dedupe on name alone" ruling stands unchanged —
+fusing two same-named juniors is not cleanly reversible, a duplicate is a
+one-click #404 merge. Add `email` to `persons` (V386; high-water is
+V385), match on `(org_id, lane='player', merged_into is null,
+lower(email))` with the same conservatism as the dob path (exactly one
+match reuses; zero or ambiguous creates), fall through to the dob rule,
+and never overwrite a matched person's existing data — a differing email
+is "not a match", never an update. Also reconcile at CLAIM time, the
+strongest identity moment in the flow, which today reconciles nothing.
+
+Explicitly OUT of scope: splitting `full_name` (large, and it does not
+fix collisions — two people really are called the same thing), fuzzy or
+normalised name matching, and auto-merging existing duplicates.
+
+**Known limit, accepted:** this only works where an email exists. The
+captain has one and any claimer gives one, but a teammate who is typed in
+and never claims still has none, so those rows keep minting new people.
+#22 makes the fixable half exact; it does not make the unfixable half
+disappear. The next lever, if directory quality outranks entry friction,
+is collecting teammate emails at the details step — which is also what
+would let those people be invited at all.
+
+**Status:** FIXED 2026-08-30 (`347aeaefa`) — see "#22 — FIXED" below.
+
+### #22 — FIXED 2026-08-30 (`347aeaefa`)
+
+Migration **V386**: `persons.email text`, nullable, no backfill
+(greenfield), indexed `persons_org_lane_email_idx (org_id, lane,
+lower(email)) where merged_into is null and email is not null`. Email is
+now the PRIMARY per-roster-row lookup, ahead of the dob probe — not an
+occasional fallback — with the same conservatism the dob rule already
+used: exactly one match reuses, zero or an ambiguous match creates a new
+person, never a guess. A match via EITHER rule backfills the found
+person's email if it had none; a differing email is never overwritten —
+`email is null` IS the guard. `registration_players.email` (on the table
+since V363, written by nothing until now) is now persisted at submit and
+at claim/insert.
+
+`joinTeamEntry`'s claim branch also reconciles against the directory: a
+row already materialised at submit time carries an anonymous dummy
+person (`materialise()` never revisits a row once `entrant_id` is set),
+and an email/user_id match now repoints `entrant_members` +
+`registration_players` onto the real person. The dummy is left orphaned,
+never auto-merged — #22's own explicit non-goal.
+
+**A real bug, caught by the test suite rather than by review.** The
+first version of the repoint used a bare `try/catch` on `tx`, which does
+not survive an aborted Postgres transaction — the guarded-conflict case
+(the resolved person already an `entrant_members` row on this entrant)
+failed for real, a raw `PostgresError` escaping, not a mutation. Fixed
+with `tx.savepoint`, matching this file's existing `join_code`-collision
+pattern.
+
+Out of scope, untouched, as ruled: splitting `full_name`, fuzzy or
+normalised name matching, auto-merging existing duplicates.
+`resolvePlayerPerson` (the signed-in path) is untouched — a `user_id` is
+already a stronger identity signal than email.
+
+**Verified:** `registration-materialise.test.ts` 27/27, mutation-checked
+(disabling the email branch reddens exactly the 3 ordering-dependent
+tests; removing the backfill guard reddens exactly the 1 test pinning
+it). `registration-submit.test.ts`'s new #22 cases 6/6, mutation-checked
+(disabling the reconciliation block reddens all 4 `joinTeamEntry` cases).
+Full sweep (`server/usecases` + `register/status` + `register/join`):
+3251 total / 3213 passed / 1 failed — `org-posts-digest.test.ts`, not
+this change (see the CORRECTION at the end of this file). `tsc --noEmit`
+and `lint` both clean; `openapi:gen` byte-identical — `email` already
+existed on the wire schema, only server persistence changed.
+
+Also found while verifying #22 against a real database, deliberately not
+folded in here — see **#23** below.
+
+### #23 (NEW, 2026-08-30) — a fresh join onto an already-materialised entry creates no roster membership at all
+
+Reported by the #22 lane, verified directly against a real database, and
+deliberately left unfixed as out of #22's scope.
+
+A join where the joiner is not already on the roster — the "I'm someone
+else" path on the join page, no `player_id` — against an entry that has
+ALREADY been materialised never gets an `entrant_members` row at all.
+`materialise()`'s own idempotency guard (`if (reg.entrant_id) return`)
+means it never runs again for that registration once `entrant_id` is
+set, and `joinTeamEntry`'s insert branch for this case writes only
+`registration_players` — nothing inserts into `entrant_members` for a
+row that arrives after materialisation.
+
+This is distinct from #22's framing. #22 fixes the CAPTAIN-TYPED
+duplicate — a roster row the captain already entered, reconciled against
+the real person at claim time. Here there is no captain-entered row to
+reconcile against: the joiner is adding themselves fresh, after the
+entry already has an entrant and a squad. #22's reconciliation has
+nothing to attach to.
+
+**In product terms:** that person has joined, and the page has told them
+"You're in" — but they are not a member of the squad that actually gets
+fielded. Needs its own task.
+
+## DECISION LOG — session of 2026-08-29/30
+
+Every ruling taken in this session, with its reason, so none of it lives
+only in a conversation. Findings #16-#23 have their own sections above;
+this is the decision layer over them.
+
+### Product rulings (owner)
+
+1. **`public_name` stays `true` for everyone** (#21). People claim and
+   opt out later. Reverses my recommendation of `false`-until-claimed.
+   Reason it is safe: minors are masked by a SEPARATE division-level
+   control (`resolveNameDisplay`/`maskDisplayName`), so safeguarding never
+   depended on this flag. Accepted residual: an adult typed in by a
+   captain who never claims is listed in full.
+2. **Fix directory duplication by EMAIL, never by name** (#22). The
+   "never dedupe on name alone" ruling is untouched — a duplicate is a
+   one-click merge, fusing two same-named juniors is not reversible.
+   Out of scope, decided: splitting `full_name`, fuzzy matching,
+   auto-merging existing duplicates.
+3. **The captain is auto-claimed against their own row** (#20, shipped
+   in `d9e0c8d2d` — NOT #20b, which is the copy fix), via
+   `registering_self`/`self_player_index` ONLY — never name matching.
+   Reason: they filled the form and consented at submit; today the person
+   who PAID is the one the card lists as outstanding.
+4. **The refund control is not gated on status or on the refund lock**
+   (#16). A withdrawn-but-paid entry is exactly the case it exists for:
+   past the lock the registrant is told "any refund is at the organiser's
+   discretion", and that promise must be keepable.
+
+### Engineering rulings
+
+5. **#19's GATE ships before its root cause.** Build a check that fails
+   the build when emitted HTML references a `/_next/static/**` asset that
+   does not exist; do NOT open up the fork's chunker first. Reason: the
+   gate is hours and converts an invisible catastrophe into a red build;
+   the chunker is open-ended.
+6. **No client-side changes to the register page until that gate exists**
+   (#17's client half is reverted for this reason, `a7a0919f4`). Shipping
+   a naming convenience through a build path that can serve an inert page
+   is a bad trade.
+7. **`charged_at` (V385) over `entrant_id` or `payment_intent_id`** for
+   the #18b guard. `entrant_id` answers "was ever seated" (null on manual
+   approval); `payment_intent_id` lives on the shared CART, so a sibling's
+   payment makes it non-null for an entry never charged.
+8. **The `partner_name` fallback in `entryDisplayName` is UNREACHABLE**
+   and is documented as defence only, with a test pinning the 422 that
+   makes it so. A pair is fixed at two players and `full_name` is
+   `min(1)`. A false premise in my own first test caught this.
+9. **#20 and #22 are one lane, serialised.** Both live in
+   `registrations.ts`/`registration-submit.ts`. Ownership lists do not
+   make concurrent edits safe on a shared file and a shared git index.
+
+### Process rulings
+
+10. **`frontend-design` skill + visual verification at 1280/768/320 is
+    required for ALL UI/UX work, including inside subagents**, and every
+    dispatch brief that touches UI must restate it. Copy is design
+    material; "it's only three dictionary keys" is not an exemption.
+    Where a subagent cannot reach a token-gated surface, it hands back the
+    exact states and the main thread does the definitive visual pass.
+11. **Never accept "done, tests pass".** Raw counts from the JSON
+    reporter, paths confirmed inside the worktree, and the gate re-run at
+    the wave boundary. This session: a lane reported a tsc error as
+    "pre-existing" when it was 20 minutes old and mine; another reported
+    1 failure where my own run showed 0; a third stalled without
+    committing and a fourth reproduced a commit already on HEAD.
+12. **A fix is not done until a mutant kills its test.** Applied to #16
+    (10 red), #17 (4 of 6, the 2 survivors being negative cases), #18b
+    (F18b alone, F18 surviving — the asymmetry IS the proof).
+13. **The money matrix should become a release gate.** It needs a real
+    Stripe key so it cannot run in normal CI; run it before each release
+    or nightly with the key in a secret. Five scenarios, ~3 minutes. It
+    has already paid for itself: two CRITICAL money defects and one build
+    defect in one afternoon.
+
+### The pattern behind #16-#22
+
+Five findings, none reachable from the ~4,000-test suite, all found by
+using the product:
+- **#16** — copy written in four locales that nothing rendered. Tests
+  cannot see an absence.
+- **#17** — two individually-correct halves; the defect lives in the gap
+  between two screens, visible only on a third.
+- **#18/#18b** — needed a REAL Checkout Session, which still reports
+  `payment_status: paid` after a refund. No mock reproduces that, and the
+  audit trail labelled the loss `late_payment`, so it read as correct.
+- **#19** — needed a CLICK. HTTP 200, assets "verified", tsc clean,
+  4,000 green, page completely inert.
+- **#20/#21/#22** — needed the owner to READ a screenshot and ask three
+  ordinary questions: why does it say awaiting, who paid, what if nobody
+  claims.
+
+## CORRECTION (2026-08-30) — "nothing pinned the `public_name: true` ruling" claim is FALSE
+
+Recorded in #21's "Owed" note as: "Nothing asserts it today — it is a
+comment and a default." Wrong, checked against the tree rather than
+re-asserted.
+
+`apps/web/src/server/usecases/__tests__/registration-materialise.test.ts:498`
+— `describe.skipIf(!HAS_DB)("new persons default to public_name consent
+(owner ruling 5)", …)` — has pinned it since **RS002 (#607, `4ff0bf8f9`)**,
+and covers exactly the ground the "Owed" note asked for: both insert
+paths (`findOrCreatePlayerPerson`'s anonymous path and
+`resolvePlayerPerson`'s signed-in path each get their own `it`), plus "a
+REUSED person that had opted out keeps its own consent" — a person is
+never re-opted-in by being matched onto a new entry.
+
+The captain-entered-unclaimed case the ruling is actually about is
+already the case this suite exercises: `seedPlayerEntry` (the file's own
+fixture helper) inserts `source = 'captain_entered'` and never sets
+`consent_status`, so it takes the column's `'pending'` default — exactly
+an unclaimed captain-typed row.
+
+**Proved by mutation, not by re-reading.** Flipping both `{ public_name:
+true }` occurrences in `registrations.ts` (one in `findOrCreatePlayerPerson`,
+one in `resolvePlayerPerson`) to `false` reddened exactly 2 tests;
+restored, 27/27.
+
+## CORRECTION (2026-08-30) — the `org-posts-digest.test.ts` sweep failure, precisely
+
+The #22 write-up above says only "not this change" without stating the
+evidence. Recorded here so the next session does not have to re-derive
+it:
+
+Isolated, `org-posts-digest.test.ts` is **7/7 green**. Run together with
+BOTH of #22's own new suites, it is **97/97 green**. Neither run shows
+any interaction with #22's change — the red is a whole-sweep artifact of
+this long session's shared, accumulated test database, not a defect in
+#22 or in the digest code, consistent with the sweep-suite-on-an-
+accumulated-DB pattern this file already documents under RS002
+(`sweepWeeklyDigests` walks every org in the schema, and a long session
+keeps creating them while it runs). Full sweep numbers to record, all
+309 suite paths confirmed inside `/worktrees/rs007/`: **3251 total, 3213
+passed, 1 failed, 37 pending.**
+
+**Measured, 2026-08-30, rather than inferred** — the failing test is
+`sweepWeeklyDigests: creates for an active Pro org, skips a community
+org, skips a Pro org with nothing to report`, and its numbers say clock,
+not assertion:
+
+| | duration |
+| --- | --- |
+| in the full sweep | **30003 ms** — i.e. vitest's 30000 ms timeout |
+| run isolated (passing) | **15234 ms** — already half the budget |
+
+`seazn_rs007` held **30,910 organizations** at that point, accumulated
+over this session, and `sweepWeeklyDigests` walks every one. So the
+extra load of a 1004-suite sweep is only what tips an already-15-second
+walk past 30 seconds; the volume is the cause. **The remedy is a fresh
+database, not a code change** — re-deriving this as a regression is
+exactly the failure this file exists to prevent, and the RS002 entry
+above (line ~474) recorded the same trap before this wave. Note also
+that neither `rtk` nor a bare `--reporter=json` shows the real message:
+both render it `STACK_TRACE_ERROR`, and only `--reporter=verbose` says
+`Test timed out in 30000ms`.

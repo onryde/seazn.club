@@ -398,6 +398,103 @@ describe("division tiebreakers are validated keys (F5)", () => {
   });
 });
 
+// RS007/V380: the wizard's Eligibility tab used to POST a jsonb `eligibility`
+// array CreateDivision never declared — a NON-strict z.object, so zod parsed
+// successfully and silently DROPPED it, and every wizard-created division
+// shipped with no restriction at all. These columns are the replacement; the
+// regression this guards is exactly that silent strip, so every "accepts"
+// assertion below checks the PARSED value, not just `.success` (a schema
+// that still doesn't know a field would report `.success: true` on the rest
+// of an otherwise-valid payload too).
+describe("CreateDivision — eligibility columns (RS007 wizard rewire)", () => {
+  const base = { name: "Open", sport_key: "football", variant_key: "std" };
+
+  it("accepts and RETAINS category/age_max/age_cutoff_month/age_cutoff_day/eligibility_note", () => {
+    const r = CreateDivision.safeParse({
+      ...base,
+      category: "mens",
+      age_max: 15,
+      age_cutoff_month: 9,
+      age_cutoff_day: 1,
+      eligibility_note: "School-registered students only",
+    });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data.category).toBe("mens");
+      expect(r.data.age_max).toBe(15);
+      expect(r.data.age_cutoff_month).toBe(9);
+      expect(r.data.age_cutoff_day).toBe(1);
+      expect(r.data.eligibility_note).toBe("School-registered students only");
+    }
+  });
+
+  it("every eligibility field is optional — a create naming none of them still parses (no restriction)", () => {
+    const r = CreateDivision.safeParse(base);
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data.category).toBeUndefined();
+      expect(r.data.age_max).toBeUndefined();
+    }
+  });
+
+  it("rejects an unknown category value", () => {
+    expect(CreateDivision.safeParse({ ...base, category: "u12" }).success).toBe(false);
+  });
+
+  it("rejects age_max less than age_min — the SAME checkAgeBand refine PatchDivision uses", () => {
+    const r = CreateDivision.safeParse({ ...base, age_min: 12, age_max: 8 });
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      expect(r.error.issues.some((i) => i.path.join(".") === "age_max")).toBe(true);
+    }
+  });
+
+  it("rejects a cutoff month without its day — the SAME checkAgeCutoff refine PatchDivision uses", () => {
+    const r = CreateDivision.safeParse({ ...base, age_cutoff_month: 9 });
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      expect(r.error.issues.some((i) => i.path.join(".") === "age_cutoff_day")).toBe(true);
+    }
+  });
+
+  // RS007 review fix L1: age_cutoff_day was validated only as 1-31 (this
+  // schema's own min/max above, and the divisions_age_cutoff_check DB
+  // constraint), so 31 September or 30 February parsed successfully and
+  // silently rolled over a month later at read time
+  // (ageBandEligibilityIssues, @/lib/registration-rules — `new
+  // Date(Date.UTC(...))` normalises an out-of-range day). Reject the
+  // impossible combination HERE, at write time, so the organiser sees it
+  // immediately instead of eligibility silently shifting by days.
+  it("rejects a cutoff day that does not exist in its month (RS007 review fix L1)", () => {
+    const thirtyOneSept = CreateDivision.safeParse({ ...base, age_cutoff_month: 9, age_cutoff_day: 31 });
+    expect(thirtyOneSept.success).toBe(false);
+    if (!thirtyOneSept.success) {
+      expect(thirtyOneSept.error.issues.some((i) => i.path.join(".") === "age_cutoff_day")).toBe(true);
+    }
+    const thirtyFeb = CreateDivision.safeParse({ ...base, age_cutoff_month: 2, age_cutoff_day: 30 });
+    expect(thirtyFeb.success).toBe(false);
+    // 29 February is ALSO rejected, deliberately — it IS a real calendar
+    // date, but only in a leap year, and this same month/day pair is
+    // re-evaluated every season against a DIFFERENT seasonStartYear
+    // (ageBandEligibilityIssues anchors at cutoffMonth/cutoffDay of
+    // whatever season is being checked). A leap-only cutoff would still
+    // silently roll over into 1 March in three years out of four — capping
+    // February at 28 here guarantees whatever passes is valid for EVERY
+    // year, not just some.
+    const leapDay = CreateDivision.safeParse({ ...base, age_cutoff_month: 2, age_cutoff_day: 29 });
+    expect(leapDay.success).toBe(false);
+  });
+
+  it("accepts every genuinely valid day-of-month boundary", () => {
+    // September genuinely has 30 days.
+    expect(CreateDivision.safeParse({ ...base, age_cutoff_month: 9, age_cutoff_day: 30 }).success).toBe(true);
+    // January genuinely has 31.
+    expect(CreateDivision.safeParse({ ...base, age_cutoff_month: 1, age_cutoff_day: 31 }).success).toBe(true);
+    // February's cap (see the leap-year note above).
+    expect(CreateDivision.safeParse({ ...base, age_cutoff_month: 2, age_cutoff_day: 28 }).success).toBe(true);
+  });
+});
+
 // S12/#421 pass D, V361 — `pair_order` mirrors `order_no`'s own convention
 // exactly (`.nullish()`, not `.default()`): optional on the inferred
 // PutLineup TS type so every pre-existing caller that builds a slots array

@@ -67,7 +67,6 @@ async function seed(): Promise<{ secret: string; personId: string; divisionId: s
     sport_key: "football",
     variant_key: "default",
     config: {},
-    eligibility: [],
   });
   const person = await createPerson(auth, {
     full_name: "Route Player",

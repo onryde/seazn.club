@@ -143,7 +143,6 @@ async function seedOfficials(
     sport_key: "generic",
     variant_key: "score",
     config: GENERIC_CONFIG,
-    eligibility: [],
   });
   const n = opts.entrants ?? 3;
   await createEntrants(

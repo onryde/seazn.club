@@ -169,7 +169,6 @@ async function seedPlannable(
     sport_key: "generic",
     variant_key: "score",
     config: GENERIC_CONFIG,
-    eligibility: [],
   });
   await createEntrants(
     auth,
@@ -211,7 +210,6 @@ async function seedBigDivision(auth: AuthCtx, n: number): Promise<string> {
     sport_key: "generic",
     variant_key: "score",
     config: GENERIC_CONFIG,
-    eligibility: [],
   });
   await setSettings(auth, division.id);
   const [stage] = await createStages(auth, division.id, {

@@ -34,11 +34,13 @@ export interface SelfEligibility {
  *  key — shared by DivisionCard's grey-with-reason notice AND EntryCart's
  *  per-line self-link verdict (fix wave finding #3), so a cart line never
  *  re-derives or re-words the rule DivisionCard already evaluated. No entry
- *  for GENDER_NOT_ALLOWED: never produced by ANY client-safe predicate — it
- *  is jsonb-rule-only (server-side `divisionEligibilityIssues`), so a key
- *  here would be untestable dead code. MIXED_NEEDS_BOTH_GENDERS DOES have
- *  an entry (RS006 W3): `rosterEligibilityForDivision` below produces it via
- *  `rosterCompositionIssues`, which — unlike the jsonb loop — is client-safe. */
+ *  for GENDER_NOT_ALLOWED: RS007/V380 dropped the jsonb `eligibility` rules
+ *  that were its only producer — no evaluator, client or server, emits this
+ *  code any more (registration-rules.ts's `categoryEligibilityIssues` emits
+ *  CATEGORY_MISMATCH instead), so a key here would still be untestable dead
+ *  code, just for a different, current reason. MIXED_NEEDS_BOTH_GENDERS DOES
+ *  have an entry (RS006 W3): `rosterEligibilityForDivision` below produces
+ *  it via `rosterCompositionIssues`, which is client-safe. */
 export const INELIGIBLE_MESSAGE_KEY: Partial<Record<EligibilityCode, string>> = {
   CATEGORY_MISMATCH: "register.entries.ineligible.category",
   AGE_TOO_OLD: "register.entries.ineligible.age",
@@ -73,9 +75,22 @@ export function rosterIssueMessageKey(code: EligibilityCode): string | undefined
  * `MIXED_NEEDS_BOTH_GENDERS` — that is a roster-wide property
  * (`rosterEligibilityForDivision` below, step 3), not something one
  * person's own dob/gender can answer on its own.
+ *
+ * `age_cutoff_month`/`age_cutoff_day` are OPTIONAL on `division` — RS007/
+ * V380 threaded the real cutoff onto `DivisionLike`, but this function's own
+ * parameter type stays narrow ("a hand-built test fixture needs no cast",
+ * types.ts's own DivisionLike comment) and forwards whatever the caller
+ * passed straight into `ageBandEligibilityIssues`, which defaults to 1
+ * January itself when either side is absent.
  */
 export function selfEligibilityForDivision(
-  division: { category: string | null; age_min: number | null; age_max: number | null },
+  division: {
+    category: string | null;
+    age_min: number | null;
+    age_max: number | null;
+    age_cutoff_month?: number | null;
+    age_cutoff_day?: number | null;
+  },
   person: EligibilityPerson,
   seasonStartYear: number,
 ): SelfEligibility {
@@ -106,7 +121,13 @@ export interface RosterEligibility {
  * flags is CERTAIN to be rejected, so blocking "Next" on it is always safe.
  */
 export function rosterEligibilityForDivision(
-  division: { category: string | null; age_min: number | null; age_max: number | null },
+  division: {
+    category: string | null;
+    age_min: number | null;
+    age_max: number | null;
+    age_cutoff_month?: number | null;
+    age_cutoff_day?: number | null;
+  },
   players: readonly (EligibilityPerson & { full_name?: string | null })[],
   seasonStartYear: number,
 ): RosterEligibility {

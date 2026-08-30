@@ -18,7 +18,7 @@ import { mapSaveError } from "@/components/registration-hub-save-error";
 // the SAME message rather than a hand-typed copy. Other client-side tests
 // already import VALUES (not just types) from this module, e.g.
 // lib/__tests__/venue-tz.test.ts's PutScheduleSettings.
-import { AGE_MAX_BEFORE_MIN } from "@/server/api-v1/schemas";
+import { AGE_CUTOFF_BOTH_OR_NEITHER, AGE_MAX_BEFORE_MIN } from "@/server/api-v1/schemas";
 
 describe("mapSaveError — structured zod issues (400 VALIDATION)", () => {
   it("uses issue.path[0] as the field when both age_min and age_max are patched together", () => {
@@ -66,6 +66,14 @@ describe("mapSaveError — plain-message usecase 422s (finding 2 guard, characte
   it("age band violated with only ONE side sent — the real schemas.ts constant, not a hand-typed copy", () => {
     const err = new ApiV1Error(AGE_MAX_BEFORE_MIN, 422, "ERROR");
     expect(mapSaveError(err)).toEqual({ field: "age_max", message: AGE_MAX_BEFORE_MIN });
+  });
+
+  // RS007/V380 — the cutoff columns' own both-or-neither race backstop
+  // (divisions.ts's isAgeCutoffCheckViolation), same shape as the age-band
+  // case above: a bare HttpError(422, "...") string, no path.
+  it("cutoff month/day sent as a mismatched pair — the real schemas.ts constant, not a hand-typed copy", () => {
+    const err = new ApiV1Error(AGE_CUTOFF_BOTH_OR_NEITHER, 422, "ERROR");
+    expect(mapSaveError(err)).toEqual({ field: "age_cutoff_day", message: AGE_CUTOFF_BOTH_OR_NEITHER });
   });
 
   it("allow_free_agents on a non-team division (server/usecases/registrations.ts:1021)", () => {

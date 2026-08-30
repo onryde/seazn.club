@@ -62,6 +62,37 @@ describe("selfEligibilityForDivision", () => {
     expect(inBand.eligible).toBe(true);
   });
 
+  // RS007/V380 — registrations.ts's publicRegistrationInfo never selected
+  // age_cutoff_month/age_cutoff_day, so this client-side self-check always
+  // used the 1-January default and would disagree with the server for any
+  // division with a real cutoff (V380's own "two cutoffs disagree" defect,
+  // resurfaced client-side purely because the wire didn't carry the field
+  // yet — division-builder.tsx/registration-hub-config-panel.tsx both write
+  // it now). A dob with a birthday BETWEEN 1 January and the real cutoff is
+  // deliberately chosen: at the 1-Jan default the contact reads as 15 (in
+  // band); at the division's real 1-Sept cutoff they've already turned 16
+  // (out of band) — same person, same age_max, opposite verdicts.
+  it("honours a REAL cutoff (age_cutoff_month/age_cutoff_day) instead of silently defaulting to 1 January", () => {
+    const dob = "2010-05-15"; // turns 16 on 15 May 2026 — before Sept, after Jan.
+    const withCutoff = selfEligibilityForDivision(
+      { category: null, age_min: null, age_max: 15, age_cutoff_month: 9, age_cutoff_day: 1 },
+      { dob, gender: null },
+      2026,
+    );
+    expect(withCutoff.eligible).toBe(false);
+    expect(withCutoff.issues.map((i) => i.code)).toEqual(["AGE_TOO_OLD"]);
+
+    // The exact defect: no cutoff fields at all (the shape every caller had
+    // before the wire threaded them) silently reads the SAME person as
+    // eligible, anchored at 1 January instead of the division's real cutoff.
+    const withoutCutoff = selfEligibilityForDivision(
+      { category: null, age_min: null, age_max: 15 },
+      { dob, gender: null },
+      2026,
+    );
+    expect(withoutCutoff.eligible).toBe(true);
+  });
+
   it("category AND age band together yield BOTH issues (independent, additive — matches divisionEligibilityIssues)", () => {
     const r = selfEligibilityForDivision(
       { category: "mens", age_min: 18, age_max: 35 },

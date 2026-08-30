@@ -60,7 +60,6 @@ async function rig(owner: AuthCtx) {
     sport_key: "generic",
     variant_key: "score",
     config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
-    eligibility: [],
   });
   return { competition, division };
 }
@@ -222,6 +221,87 @@ describe.skipIf(!HAS_DB)("eligibility columns: category/age_min/age_max (V364/RS
   });
 });
 
+// RS007/V380: create-time eligibility columns. The division-creation
+// wizard's Eligibility tab used to POST a jsonb `eligibility` array
+// CreateDivision never declared, which a non-strict schema silently
+// dropped — every wizard-created division shipped with NO restriction at
+// all, however the organiser configured the tab. schemas.test.ts pins the
+// schema half (the payload is no longer silently stripped); this pins the
+// PERSISTENCE half — that createDivision actually WRITES what the schema
+// now accepts, into the DB, not just onto the in-memory return value.
+describe.skipIf(!HAS_DB)("createDivision persists eligibility columns (RS007 wizard rewire)", () => {
+  it("a create naming no eligibility fields still has no restriction (unchanged default)", async () => {
+    const owner = await seedOwner();
+    const { competition } = await rig(owner);
+    const division = await createDivision(owner, competition.id, {
+      name: "Open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    });
+    expect(division.category).toBeNull();
+    expect(division.age_min).toBeNull();
+    expect(division.age_max).toBeNull();
+    expect(division.age_cutoff_month).toBeNull();
+    expect(division.age_cutoff_day).toBeNull();
+    expect(division.eligibility_note).toBeNull();
+    expect(division.youth).toBe(false);
+  });
+
+  it("a wizard-shaped create payload PERSISTS its restriction — the RS007 regression", async () => {
+    const owner = await seedOwner();
+    const { competition } = await rig(owner);
+    const division = await createDivision(owner, competition.id, {
+      name: "U16 Girls",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+      category: "womens",
+      age_max: 15,
+      age_cutoff_month: 9,
+      age_cutoff_day: 1,
+      eligibility_note: "School-registered students only",
+    });
+    expect(division.category).toBe("womens");
+    expect(division.age_max).toBe(15);
+    expect(division.age_cutoff_month).toBe(9);
+    expect(division.age_cutoff_day).toBe(1);
+    expect(division.eligibility_note).toBe("School-registered students only");
+
+    // Not just the INSERT's own returning row — getDivision re-reads from
+    // the table, so this also proves the columns actually landed rather
+    // than the in-memory result merely echoing the input back.
+    const fetched = await getDivision(owner, division.id);
+    expect(fetched.category).toBe("womens");
+    expect(fetched.age_max).toBe(15);
+    expect(fetched.age_cutoff_month).toBe(9);
+    expect(fetched.age_cutoff_day).toBe(1);
+    expect(fetched.eligibility_note).toBe("School-registered students only");
+  });
+
+  it("derives youth from the create-time age_max — the SAME deriveYouth the PATCH path uses, not a second copy", async () => {
+    const owner = await seedOwner();
+    const { competition } = await rig(owner);
+    const youthDivision = await createDivision(owner, competition.id, {
+      name: "U16",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+      age_max: 15,
+    });
+    expect(youthDivision.youth).toBe(true);
+
+    const adultDivision = await createDivision(owner, competition.id, {
+      name: "Open 18+",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+      age_max: 99,
+    });
+    expect(adultDivision.youth).toBe(false);
+  });
+});
+
 describe.skipIf(!HAS_DB)("format lock (v8)", () => {
   it("variant/config edits work until fixtures exist, then 409 FORMAT_LOCKED", async () => {
     const owner = await seedOwner();
@@ -317,9 +397,9 @@ describe.skipIf(!HAS_DB)("cricket pairs-6-a-side removal (#431 ruling 3)", () =>
     };
     const [division] = await sql<{ id: string }[]>`
       insert into divisions (competition_id, name, slug, sport_key, variant_key, config,
-                             module_version, eligibility, tiebreakers, youth)
+                             module_version, tiebreakers, youth)
       values (${competition.id}, 'Pairs Legacy', ${slug}, 'cricket', 'pairs-6-a-side',
-              ${sql.json(staleConfig)}, ${cricket.version}, ${sql.json([])}, null, false)
+              ${sql.json(staleConfig)}, ${cricket.version}, null, false)
       returning id`;
 
     // A CONFIG-ONLY patch — variant_key is not even in the payload. The guard

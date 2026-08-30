@@ -148,7 +148,7 @@ async function seedDivision(
     request,
     `/api/v1/competitions/${comp.data!.id}/divisions`,
     "POST",
-    { name: "Open", sport_key: "generic", variant_key: "score", config: GENERIC_CONFIG, eligibility: [] },
+    { name: "Open", sport_key: "generic", variant_key: "score", config: GENERIC_CONFIG },
   );
   return { compId: comp.data!.id, divisionId: div.data!.id };
 }
