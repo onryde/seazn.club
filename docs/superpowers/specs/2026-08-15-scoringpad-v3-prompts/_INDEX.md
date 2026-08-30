@@ -5114,3 +5114,66 @@ Facts that change the Task A design, verified against the modules:
   clicks `"Draw / no result"` then `getByLabel("Method").selectOption`; carrom
   `:2295` clicks `"Board (queen covered)"`; generic `:2332` clicks
   `"Add points"`. All three must be rewritten in the same change.
+
+### R7-11 — R7's OWN false premises, and the pattern behind them
+
+Three premises R7 asserted and then had to withdraw, all on the same day, all
+against the R6 session. Recorded because the PATTERN is the finding, not the
+individual errors:
+
+1. **"Field hockey's green will collide with football's."** Measured at dE 16.6
+   — it is a teal. Wrong.
+2. **"`SPORT_PALETTES` is alphabetical, so keep entries alphabetical and the
+   conflict resolution is mechanical."** The literal was NEVER alphabetical: it
+   runs football, tennis, badminton, tabletennis, volleyball — **wave order**.
+   A contract rule was built on this and had to be rewritten as
+   "alphabetical AMONG NEIGHBOURS, never re-sort" — a reflow would have broken
+   the no-reflow rule the same contract sets.
+3. **"R6 owes `positionsFor` declarations for its two sports."** The period
+   kernel already declares it (`kernel.ts:2434-2443`), shared by both. No
+   declaration was owed; R7's read path is the ENTIRE fix.
+
+**The pattern: all three were assertions about files R7 had GREPPED but never
+READ.** A grep returns the keys and not their order, the hex and not its
+measured distance, the absence of a symbol in one file and not its presence in
+a shared kernel. Every one of these was stated with enough confidence that
+another session acted on it, and in case 2 a shared contract rule was written
+from it.
+
+This is AGENTS.md failure class 5 ("the brief is a hypothesis") turned around:
+the wave that was busy finding six false premises in other people's documents
+authored three of its own in a few hours. A premise is not more reliable for
+being newly derived — and the register's own unreliability, recorded as a
+programme-level finding, is what a fresh derivation is supposed to fix.
+
+Corollary now standing for the rest of this wave: **anything R7 asserts to
+another session, or writes into a contract, must come from a READ of the file
+or a MEASUREMENT — never from a grep hit.**
+
+### R7-12 — branch topology: R7 does NOT stack on R6
+
+R6 committed its token widening and both palettes on
+`feat/scorepad-v3-r6-period-pair` and invited R7 to rebase onto it. **Declined.**
+
+Rebasing R7 onto R6's branch makes R7 a stacked PR: R7's diff would carry R6's
+commits, R7's base would be a branch rather than `main`, and a squash-merge of
+R6 orphans R7's history against a base that no longer exists — a class this repo
+has already been bitten by.
+
+Instead both waves add their `SPORT_PALETTES` entries to their OWN branch and
+git resolves two inserts at merge. Safe here specifically because the anchors do
+not touch: R6's sit between `football` and `tennis`, R7's go above `football`,
+so neither insert lands in the other's hunk. There is no semantic overlap, so a
+conflict is resolved by taking both sides.
+
+The only thing genuinely gated on R6 remains the totality flip.
+
+### R7-13 — a tone value has a THREE-file compile-time fanout (from R6)
+
+R6's `advisory` widening touched `v3/types.ts` and `v3/sport-theme.ts` as
+briefed, and was then FORCED by tsc into `v3/tokens.ts` as well —
+`SPORT_TONE_CLASSES` is indexed by `SportTone` imported from
+`guided-sheet.tsx`. Recorded so a later wave adding an eighth tone does not
+size it as a two-file change: the tone set fans out to types.ts,
+sport-theme.ts, tokens.ts, a `.pad-*` rule in globals.css, and both
+`contrast.test.ts` and `sport-theme.test.ts`.
