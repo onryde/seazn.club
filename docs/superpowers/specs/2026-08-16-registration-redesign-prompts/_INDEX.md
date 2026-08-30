@@ -3097,3 +3097,58 @@ awaiting.
    themselves, at submit, on the cart. `registering_self` /
    `self_player_index` already record which row is theirs when they tick
    "I'm registering myself", so the information needed is present.
+
+### #21 (NEW, 2026-08-30) — never claiming your spot costs you nothing, and consents you to everything
+
+Owner's question, walking the doubles journey: "what if you don't claim
+the profile or spot?" Traced through the code; the answer is that the
+claim flow is entirely advisory.
+
+**Nothing enforces it.** `materialise()` (`registrations.ts:786-806`)
+loops `for (const p of players)` with **no consent check of any kind**.
+Every roster row the captain typed becomes a `person` and an
+`entrant_members` row — squad number, captain flag and all — whether or
+not that human ever confirmed they exist. There is no deadline: nothing
+in `sweepRegistrations` touches `consent_status`, nothing chases an
+unclaimed row, nothing blocks confirmation, and nothing degrades.
+`consent_status = 'pending'` persists forever as a display chip on the
+captain's own status page plus one filter in the hub.
+
+**And the default is to publish them.** Both person-creation paths insert
+`consent: { public_name: true }`:
+
+- `findOrCreatePlayerPerson` (`:672-673`) — the anonymous path, which is
+  the one a captain-typed row takes;
+- `resolvePlayerPerson` (`:624-628`) — the signed-in path.
+
+So a person who never claimed, never consented, and may not know they
+were entered is created in the organisation **with their name set to
+public by default**, and published wherever entrant members appear.
+
+**Being fair to the ruling.** That default came from a deliberate owner
+ruling (the comment cites "ruling 5, review BLOCKER") and it is right for
+the path it was written for: a signed-in registrant's OWN first person,
+where the actor and the subject are the same human. The gap is that the
+identical default is applied to a name a THIRD PARTY typed for someone
+who never showed up to agree.
+
+**Why this matters more than it looks.** The whole claim mechanism —
+the join codes, the per-player `privacy_consent`, the consent gate this
+branch added — exists to collect each person's own consent because the
+captain cannot give it for them. That reasoning is sound and it is
+already in the code. Then the system proceeds exactly as if consent had
+been given. The gate is real; the enforcement behind it is not.
+
+Related: **#20** — the payer is the one shown as unconfirmed, and a
+captain is never auto-claimed against their own row.
+
+**Owed — needs an owner ruling before any code:**
+1. Should an unclaimed row's person default to `public_name: false`
+   until claimed? (Smallest change, removes the publication harm.)
+2. Should an unclaimed row be materialised at all, or held out of the
+   squad until claimed? (Larger; affects who can be fielded.)
+3. Is a claim deadline wanted, with the captain chased for unclaimed
+   rows the way unpaid carts are chased?
+
+Nothing here is a code defect against a stated rule — it is a rule that
+was never stated. Recorded rather than fixed for exactly that reason.
