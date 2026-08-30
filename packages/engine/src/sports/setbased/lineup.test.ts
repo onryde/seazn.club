@@ -150,30 +150,61 @@ describe("volleyball — the libero replacement is recorded and folded", () => {
     );
   });
 
-  it("REFUSES a second return — re-entry is `once`", () => {
+  it("permits an unlimited libero cycle — FIVB 19.3.2.1, not the substitution re-entry allowance", () => {
+    // Formerly named "REFUSES a second return — re-entry is `once`", and
+    // asserted `toThrow(/already returned once/)` on exactly this cycle
+    // (through the 4th replacement below). That assertion encoded a defect,
+    // not a rule: FIVB 19.3.2.1 makes libero replacements UNLIMITED.
+    // `reentry: "once"` is volleyball's ordinary SUBSTITUTION re-entry
+    // allowance (FIVB 15.6) — a `core.lineup.replacement` carrying a declared
+    // exemption is not a substitution (19.3.2.1) and must not be measured
+    // against it. THIS IS A DELIBERATE REVERSAL: revert the `bringOn`
+    // exemption bypass in `core/lineup.ts` and this test reds again, at the
+    // same 4th replacement that used to throw.
+    //
+    // Driven past the old 4-replacement cutoff into FIVB-realistic
+    // repetition — a libero rotates in and out roughly every rotation — six
+    // replacements alternating libero-on / replaced-player-back.
     const events = [
       start,
-      liberoOn,
+      liberoOn, // 1st replacement — libero on for p3
       ev(3, "core.lineup.replacement", {
         side: "H",
         off: "H-lib",
         on: { personId: "H-p3", positionKey: "MB", slot: "starting", orderNo: 3 },
         exemption: "libero",
-      }),
+      }), // 2nd — p3 back
       ev(4, "core.lineup.replacement", {
         side: "H",
         off: "H-p3",
         on: { personId: "H-lib", positionKey: "MB", slot: "starting", orderNo: 7 },
         exemption: "libero",
-      }),
+      }), // 3rd — libero back
       ev(5, "core.lineup.replacement", {
         side: "H",
         off: "H-lib",
         on: { personId: "H-p3", positionKey: "MB", slot: "starting", orderNo: 3 },
         exemption: "libero",
-      }),
+      }), // 4th — p3's SECOND return: the old test refused exactly here
+      ev(6, "core.lineup.replacement", {
+        side: "H",
+        off: "H-p3",
+        on: { personId: "H-lib", positionKey: "MB", slot: "starting", orderNo: 7 },
+        exemption: "libero",
+      }), // 5th — libero's second return
+      ev(7, "core.lineup.replacement", {
+        side: "H",
+        off: "H-lib",
+        on: { personId: "H-p3", positionKey: "MB", slot: "starting", orderNo: 3 },
+        exemption: "libero",
+      }), // 6th — p3's third return
     ];
-    expect(() => fold(volleyball, cfg, volleyballLineups, events)).toThrow(/already returned once/);
+    const state = fold(volleyball, cfg, volleyballLineups, events);
+    expect(state.squads!.home.exemptUsed).toEqual({ libero: 6 });
+    expect(state.squads!.home.subsUsed).toBe(0);
+    // FIVB 15.6's position lock still held at every leg — the count never
+    // gated it, and the lock is not gated by the exemption bypass at all.
+    expect(personsAtPosition(state.squads!.home, "MB")).toEqual(["H-p3", "H-p6"]);
   });
 
   it("refuses an exemption key this sport never declared", () => {

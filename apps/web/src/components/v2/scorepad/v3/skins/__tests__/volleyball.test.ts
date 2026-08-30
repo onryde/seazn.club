@@ -954,10 +954,24 @@ describe("buildSwap() — the libero exchange", () => {
     expect(slot.blocked?.["H-p3"]).toBeUndefined();
   });
 
-  it("FIVB 15.6 — a candidate who has ALREADY used their one return is BLOCKED, worded from the machine .reason, never the engine's own ID-bearing English", () => {
+  it("FIVB 19.3.2.1 — a candidate who has already used a return is UNBLOCKED: a libero exchange is not bound by 15.6's substitution re-entry cap", () => {
+    // Formerly named "FIVB 15.6 — a candidate who has ALREADY used their one
+    // return is BLOCKED, worded from the machine .reason, never the engine's
+    // own ID-bearing English", and asserted `slot.blocked?.["H-p3"]` equalled
+    // the `reentryLimit` copy on exactly this cycle. That assertion encoded
+    // a defect, not a rule: FIVB 15.6's "once, and only once" cap bounds the
+    // ORDINARY substitution allowance; a libero replacement is a 19.3.2.1
+    // exchange, not a 15.6 substitution, and is UNLIMITED. `bringOn`
+    // (`core/lineup.ts`) now carries an `exemptReplacement` flag that skips
+    // both count refusals for the `on` half of a `core.lineup.replacement`
+    // naming a declared exemption — every candidate this sheet offers IS
+    // that `on` half. THIS IS A DELIBERATE REVERSAL: restore the old
+    // `liberoBlockedReason` count checks (or revert the `bringOn` exemption
+    // bypass) and this test reds again.
+    //
     // H-p3 off (lib on) -> H-p3 back on (his 1st return) -> H-p3 off again
-    // (lib on again). H-p3's bench record is now timesOff:2, timesOn:1 — his
-    // allowance is spent.
+    // (lib on again). H-p3's bench record is now timesOff:2, timesOn:1 —
+    // what used to be "his allowance is spent" no longer applies to him.
     const events = stream(
       liberoSwap("H", "H-p3", "H-lib", "MB", ["libero"]),
       liberoSwap("H", "H-lib", "H-p3", "MB"),
@@ -965,14 +979,21 @@ describe("buildSwap() — the libero exchange", () => {
     );
     const slot = buildSwap(view({ events }), t).find((s) => s.side === "home")!;
     expect(slot.candidates).toContain("H-p3");
-    expect(slot.blocked?.["H-p3"]).toBe(t("pad.volleyball.swap.refused.reentryLimit"));
-    // Never the engine's own raw message — an ID-bearing English sentence
-    // this skin's own header names as the exact thing R2b's ruling forbids.
-    expect(slot.blocked?.["H-p3"]).not.toContain("H-p3");
-    expect(slot.blocked?.["H-p3"]).not.toContain("already returned once" satisfies string);
+    expect(slot.blocked?.["H-p3"]).toBeUndefined();
   });
 
-  it("MUTATION PROOF — the blocked verdict is exactly what a REAL reduceLineupEvent refusal would say, not this file's own reading of itself", () => {
+  it("MUTATION PROOF — the pad's unblocked verdict is exactly what a REAL reduceLineupEvent now accepts, not this file's own reading of itself", () => {
+    // Formerly asserted `probe.ok === false` / `probe.reason ===
+    // "reentry-limit"` on this exact cycle, and `slot.blocked?.["H-p3"]`
+    // toBeDefined() to match it — proving the pad's restatement agreed with
+    // a real refusal. That refusal is gone: `bringOn` (`core/lineup.ts`) now
+    // exempts the `on` half of a `core.lineup.replacement` naming a declared
+    // exemption from both count refusals (FIVB 19.3.2.1 vs 15.6's `reentry:
+    // "once"`), and this probe names `exemption: "libero"`. THIS IS A
+    // DELIBERATE REVERSAL: revert the `bringOn` exemption bypass, or restore
+    // the old `liberoBlockedReason` count checks with nothing behind them in
+    // the engine, and this test reds — either the probe stops being `ok`, or
+    // the pad disagrees with an engine that is once again refusing it.
     const events = stream(
       liberoSwap("H", "H-p3", "H-lib", "MB", ["libero"]),
       liberoSwap("H", "H-lib", "H-p3", "MB"),
@@ -1000,11 +1021,10 @@ describe("buildSwap() — the libero exchange", () => {
       },
       policy,
     );
-    expect(probe.ok).toBe(false);
-    expect(!probe.ok && probe.reason).toBe("reentry-limit");
-    // And this file's own swap slot agrees with that real refusal.
+    expect(probe.ok).toBe(true);
+    // And this file's own swap slot agrees with that real acceptance.
     const slot = buildSwap(v, t).find((s) => s.side === "home")!;
-    expect(slot.blocked?.["H-p3"]).toBeDefined();
+    expect(slot.blocked?.["H-p3"]).toBeUndefined();
   });
 
   it("`reentry-position` is dedicated in the refusal table too (FIVB's own position lock, the brief's second named fact), even though this file's own auto-derivation makes it unreachable from its own UI", () => {
@@ -1156,15 +1176,20 @@ describe("factory wiring — every builder is threaded the REAL translator", () 
     expect(spec.slots[0]!.message!.startsWith("XLATED:")).toBe(true);
   });
 
-  it("threads it into the swap sheet's blocked reason", () => {
-    const events = stream(
-      liberoSwap("H", "H-p3", "H-lib", "MB", ["libero"]),
-      liberoSwap("H", "H-lib", "H-p3", "MB"),
-      liberoSwap("H", "H-p3", "H-lib", "MB", ["libero"]),
-    );
-    const slot = skin.swap!(view({ events })).find((s) => s.side === "home")!;
-    expect(slot.blocked?.["H-p3"]!.startsWith("XLATED:")).toBe(true);
-  });
+  // "threads it into the swap sheet's blocked reason" RETIRED 2026-08-30: it
+  // exercised the same FIVB 15.6 cycle as above to produce a blocked
+  // "H-p3", then asserted `blocked["H-p3"]!.startsWith("XLATED:")` — proving
+  // `liberoCandidatesFor`'s `t(LIBERO_REFUSAL_KEY[reason])` call used the
+  // REAL injected translator, not a hardcoded string. `bringOn`'s
+  // `exemptReplacement` change means `liberoBlockedReason` now always
+  // returns `null` (see its own doc comment) — that `t(...)` call site is
+  // dead code, unreachable from any input this file can construct, so no
+  // state exists that would make the old assertion true any more. Not
+  // replaced with a direct `t(LIBERO_REFUSAL_KEY[...])` call: that would
+  // test the map and the translator in isolation, exactly the "mirror" this
+  // suite's own header warns against, not whether THIS builder threads `t`
+  // through. If `blocked` ever becomes reachable from this file again,
+  // restore this test alongside whatever makes it reachable.
 
   it("declares swap() (unlike badminton/table tennis) and no contextSelect() — a readOnly slot's picker can never open", () => {
     expect(skin.swap).toBeDefined();

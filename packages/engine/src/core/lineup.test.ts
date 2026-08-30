@@ -458,6 +458,26 @@ describe("reduceLineupEvent — replacement exemptions", () => {
       ).ok,
     ).toBe(true);
   });
+
+  it("does NOT bypass reentry counting for an ORDINARY substitution — a second return is still refused", () => {
+    // The libero cycle in setbased/lineup.test.ts now folds cleanly because a
+    // `core.lineup.replacement` carrying a declared exemption does not
+    // consume this allowance (FIVB 19.3.2.1 vs 15.6's `reentry: "once"`). An
+    // ordinary `core.lineup.substitution` gets no such exemption — this is
+    // the test that fails if that bypass is ever widened to cover it.
+    const p = policy({ reentry: "once" });
+    const after = run(initSquads(lineups), p, [
+      substitution("H", "h-fw", { personId: "h-sub-mf", slot: "starting", orderNo: 5 }),
+      substitution("H", "h-sub-mf", { personId: "h-fw", slot: "starting", orderNo: 3 }), // h-fw's 1st return
+      substitution("H", "h-fw", { personId: "h-sub-mf", slot: "starting", orderNo: 5 }), // h-sub-mf's 1st return
+    ]);
+    const second = reduceLineupEvent(
+      after,
+      substitution("H", "h-sub-mf", { personId: "h-fw", slot: "starting", orderNo: 3 }), // h-fw's 2nd return
+      p,
+    );
+    expect(second.ok === false && second.reason).toBe("reentry-limit");
+  });
 });
 
 // ---------------------------------------------------------------------------

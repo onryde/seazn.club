@@ -426,8 +426,27 @@ function takeOff(members: Members, personId: string): Members | Refusal {
   return members.map((m, j) => (j === i ? next : m));
 }
 
-/** Put a person on the field — the only place ruling 1 and ruling 2 bite. */
-function bringOn(members: Members, slot: LineupSlot, policy: LineupPolicy): Members | Refusal {
+/**
+ * Put a person on the field — the only place ruling 1 and ruling 2 bite.
+ *
+ * `exemptReplacement` is true ONLY for the `on` half of a
+ * `core.lineup.replacement` that named a declared exemption (FIVB 19.3.2.1's
+ * libero, cricket/football's concussion swap). `reentry` bounds the ordinary
+ * SUBSTITUTION allowance (FIVB 15.6); a replacement carrying an exemption is
+ * by definition not a substitution, so the two COUNT refusals below
+ * (`reentry-forbidden`, `reentry-limit`) do not apply to it — each exemption
+ * is bounded instead by its own `LineupPolicy.exemptions[key].max`, already
+ * enforced by the caller before this function runs. `reentryPositionLock` is
+ * NOT part of that allowance — FIVB 15.6's lock applies to a libero exactly
+ * as it does to an ordinary substitute — so it stays live regardless of this
+ * flag.
+ */
+function bringOn(
+  members: Members,
+  slot: LineupSlot,
+  policy: LineupPolicy,
+  exemptReplacement = false,
+): Members | Refusal {
   const i = members.findIndex((m) => m.personId === slot.personId);
   const current = members[i];
 
@@ -460,17 +479,22 @@ function bringOn(members: Members, slot: LineupSlot, policy: LineupPolicy): Memb
   // starting bench player coming on for the first time, a person just added) is
   // not re-entering and must not be measured against this knob.
   if (current.timesOff > 0) {
-    if (policy.reentry === "none") {
-      return {
-        reason: "reentry-forbidden",
-        message: `"${slot.personId}" has left the field and this variant does not permit a return`,
-      };
-    }
-    if (policy.reentry === "once" && current.timesOn >= 1) {
-      return {
-        reason: "reentry-limit",
-        message: `"${slot.personId}" has already returned once and this variant permits no more`,
-      };
+    // The two COUNT refusals ARE the substitution allowance (FIVB 15.6) and
+    // do not bind an exempt replacement (19.3.2.1) — see the doc comment
+    // above. The position lock a few lines down is NOT skipped.
+    if (!exemptReplacement) {
+      if (policy.reentry === "none") {
+        return {
+          reason: "reentry-forbidden",
+          message: `"${slot.personId}" has left the field and this variant does not permit a return`,
+        };
+      }
+      if (policy.reentry === "once" && current.timesOn >= 1) {
+        return {
+          reason: "reentry-limit",
+          message: `"${slot.personId}" has already returned once and this variant permits no more`,
+        };
+      }
     }
     if (
       policy.reentryPositionLock &&
@@ -582,7 +606,9 @@ export function reduceLineupEvent(
     >;
     const afterOff = takeOff(members, swap.off);
     if (isRefusal(afterOff)) return refuse(afterOff.reason, afterOff.message);
-    const afterOn = bringOn(afterOff, swap.on, policy);
+    // Exempt ONLY for a replacement — see `bringOn`'s doc comment. An
+    // ordinary substitution still measures fully against `policy.reentry`.
+    const afterOn = bringOn(afterOff, swap.on, policy, event.type === "core.lineup.replacement");
     if (isRefusal(afterOn)) return refuse(afterOn.reason, afterOn.message);
     members = afterOn;
   } else if (event.type === "core.lineup.entry") {

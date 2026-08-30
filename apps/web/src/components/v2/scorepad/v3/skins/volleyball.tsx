@@ -177,18 +177,31 @@
 //    `reduceLineupEvent`'s OWN `.message`. `SwapSlot.policyMessage`'s
 //    documented contract (types.ts) is "pass the engine's own sport-worded
 //    prose straight through" — the shape `swap-sheet.tsx` and football's own
-//    swap both take. This file does NOT take that shape for the one refusal
-//    it can reach (FIVB 15.6's reentry limit): the engine's own message
-//    interpolates a raw person ID ("`"${personId}" has already returned
-//    once...`", `core/lineup.ts`), which is exactly the "engine's own English
-//    ID-bearing prose" R2b's binding ruling forbids surfacing (see
-//    `_INDEX.md`'s "R5 — what is already true", the paragraph this brief's own
-//    dispatch quotes). So `LIBERO_REFUSAL_KEY` below maps every
-//    `LineupRejectionReason` this engine can return to this skin's OWN
-//    localised copy, in all four dictionaries, and NEVER reads
-//    `LineupReduceResult.message`. `refusalMessage()`'s brand does not forbid
-//    this — it forbids passing `.reason` itself as the message, and every
-//    value this file passes is a real translated string.
+//    swap both take. This file does NOT take that shape for any refusal
+//    `LIBERO_REFUSAL_KEY` below might need to surface: every
+//    `LineupRejectionReason` message `core/lineup.ts` returns interpolates a
+//    raw person ID ("`"${personId}" has already returned once...`",
+//    `core/lineup.ts`, and every sibling `refuse(...)` call), which is
+//    exactly the "engine's own English ID-bearing prose" R2b's binding
+//    ruling forbids surfacing (see `_INDEX.md`'s "R5 — what is already
+//    true", the paragraph this brief's own dispatch quotes). So
+//    `LIBERO_REFUSAL_KEY` below maps every `LineupRejectionReason` this
+//    engine can return to this skin's OWN localised copy, in all four
+//    dictionaries, and NEVER reads `LineupReduceResult.message`.
+//    `refusalMessage()`'s brand does not forbid this — it forbids passing
+//    `.reason` itself as the message, and every value this file passes is a
+//    real translated string.
+//
+//    NEITHER COUNT REASON IS REACHABLE HERE ANY MORE (2026-08-30 — do not
+//    "restore" this): `bringOn` (`core/lineup.ts`) grew an
+//    `exemptReplacement` flag that skips both `reentry-forbidden` and
+//    `reentry-limit` for the `on` half of a `core.lineup.replacement`
+//    carrying a declared exemption (FIVB 19.3.2.1's libero swap is not a
+//    15.6 substitution, and libero replacements are UNLIMITED), and every
+//    candidate this file offers here IS that `on` half (`buildLiberoEvent`
+//    below always sets `exemption: "libero"`). See `liberoBlockedReason`'s
+//    own doc comment below, and `LIBERO_REFUSAL_KEY`'s, for the full
+//    reasoning.
 "use client";
 import type { LineupPolicy, LineupRejectionReason, SquadMember, SquadState } from "@seazn/engine/core";
 import { DEFAULT_LINEUP_POLICY, memberOf } from "@seazn/engine/core";
@@ -1186,20 +1199,31 @@ export function buildSheets(view: PadHostView, t: TFn): Record<string, GuidedShe
  * reds this file's own typecheck rather than shipping a silently-uncovered
  * reason.
  *
- * ONLY TWO reasons carry volleyball's own dedicated wording:
- *  - `reentry-limit` — FIVB 15.6's "once, and only once" cap. The ONE
- *    reason `liberoCandidatesFor` below can actually produce, because it is
- *    the only one computable from a bench candidate's own recorded history
- *    (`timesOff`/`timesOn`) without knowing which specific player is coming
- *    OFF at the same time (`bringOn`'s own reentry checks, `core/lineup.ts`,
- *    read only the candidate going ON).
- *  - `reentry-position` — FIVB 15.6's position lock. NOT reachable from this
- *    file's own `blocked` computation (see `buildLiberoEvent`'s own doc: the
- *    position sent is always auto-derived to be the historically correct
- *    one), but dedicated anyway, defensively, for the same reason
- *    `RALLY_ENTITLEMENT`/`SANCTION_LEVELS` are restated rather than assumed
- *    — the wave's own brief names both "once" AND "position lock" as facts
- *    this skin owes wording for.
+ * ONLY TWO reasons carry volleyball's own dedicated wording — and, as of the
+ * `exemptReplacement` kernel change (`bringOn`, `core/lineup.ts`, this file's
+ * header note), NEITHER is reachable from this file's own `blocked`
+ * computation any more. Both stay dedicated anyway, defensively, the same
+ * reason `RALLY_ENTITLEMENT`/`SANCTION_LEVELS` are restated rather than
+ * assumed — the wave's own brief names both "once" AND "position lock" as
+ * facts this skin owes wording for:
+ *  - `reentry-limit` — FIVB 15.6's "once, and only once" cap. Before the
+ *    kernel change this was the ONE reason `liberoCandidatesFor` below could
+ *    actually produce, computed from a bench candidate's own recorded
+ *    history (`timesOff`/`timesOn`) without knowing which specific player is
+ *    coming OFF at the same time. `bringOn` now skips this refusal (and
+ *    `reentry-forbidden`, never reachable for volleyball's own `reentry:
+ *    "once"` policy regardless) for the `on` half of any
+ *    `core.lineup.replacement` naming a declared exemption: FIVB 19.3.2.1's
+ *    libero swap is not a 15.6 substitution, and every candidate this file
+ *    offers IS that `on` half (`buildLiberoEvent` always sets `exemption:
+ *    "libero"`) — see `liberoBlockedReason`'s own doc comment below.
+ *  - `reentry-position` — FIVB 15.6's position lock, UNAFFECTED by the
+ *    kernel change above (`reentryPositionLock` binds a libero exactly as it
+ *    binds an ordinary substitute; only the two COUNT refusals are
+ *    exempt-skipped). Not reachable from this file's own `blocked`
+ *    computation for the separate, PRE-EXISTING reason `buildLiberoEvent`'s
+ *    own doc gives: the position sent is always auto-derived to be the
+ *    historically correct one.
  *
  * Every other reason is either impossible by construction from this file's
  * own calls (`exemption-cap-reached` — the exemption is uncapped;
@@ -1232,13 +1256,33 @@ const LIBERO_REFUSAL_KEY: Readonly<Record<LineupRejectionReason, string>> = {
  *  ONE candidate, independent of who is coming off — restated, never
  *  re-derived as a second policy, and `__tests__/volleyball.test.ts` proves
  *  this restatement equal to a REAL `reduceLineupEvent` refusal rather than
- *  merely asserting its own reading of itself back. `null` for a candidate
- *  who has never left the field at all (not a re-entry, unconstrained) and
- *  for one whose return is still within the allowance. */
+ *  merely asserting its own reading of itself back.
+ *
+ *  ALWAYS `null` NOW (2026-08-30). `bringOn` grew an `exemptReplacement`
+ *  flag that skips BOTH count refusals (`reentry-forbidden`,
+ *  `reentry-limit`) for the `on` half of a `core.lineup.replacement` naming
+ *  a declared exemption: `policy.reentry` bounds the ordinary SUBSTITUTION
+ *  allowance (FIVB 15.6), and a libero replacement is not a substitution
+ *  (FIVB 19.3.2.1) — libero replacements are UNLIMITED. Every candidate this
+ *  file offers here IS that `on` half (`buildLiberoEvent` below always sets
+ *  `exemption: "libero"`), so neither count check can fire through this UI
+ *  again. DO NOT "FIX" THIS BACK: `member`/`policy` stay in the signature to
+ *  match `liberoCandidatesFor`'s call site; re-deriving the old
+ *  `reentry-forbidden`/`reentry-limit` checks from them — even correctly
+ *  against `policy.reentry` — would silently reintroduce exactly the
+ *  refusal `bringOn` now exempts. `reentryPositionLock` was never this
+ *  function's concern and is untouched by the exemption; it is unreachable
+ *  here for the separate, pre-existing reason that the position this file
+ *  sends is always auto-derived correct (see `LIBERO_REFUSAL_KEY`'s own
+ *  doc). */
+// `member`/`policy` are retained deliberately, not left over: they keep this
+// function's shape matching `liberoCandidatesFor`'s call site, so restoring a
+// refusal here — if the engine's exemption ruling is ever narrowed, or
+// `buildLiberoEvent`'s auto-derivation stops making the position lock
+// unreachable — is a one-line change to this body and nothing else. The
+// disable is scoped to this one signature rather than the file.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function liberoBlockedReason(member: SquadMember, policy: LineupPolicy): LineupRejectionReason | null {
-  if (member.timesOff === 0) return null;
-  if (policy.reentry === "none") return "reentry-forbidden";
-  if (policy.reentry === "once" && member.timesOn >= 1) return "reentry-limit";
   return null;
 }
 
