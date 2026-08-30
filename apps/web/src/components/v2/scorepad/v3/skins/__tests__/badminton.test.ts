@@ -318,6 +318,31 @@ describe("serving (D-17) — from the engine's ledger reader, never a placeholde
     expect(buildScorebug(done, t).context).not.toContain('"game":4');
   });
 
+  it("REVIEW #678/5 — a DECIDED board shows the match result, not a giant 0-0", () => {
+    // `pointsOf` reads the OPEN game and returns 0 when there is none. Every
+    // game is closed once a match is decided, so the biggest number on the
+    // screen — the one a player looks at from across the court — read 0 for
+    // both sides, with only the small games strip carrying the result.
+    const done = view({ cfg: SHORT_CFG, events: stream(summary(3, 1), summary(1, 3), summary(3, 1)) });
+    const [home, away] = buildScorebug(done, t).halves;
+    expect([home.big, away.big], "a decided board showed 0-0 as its headline number").not.toEqual([
+      "0",
+      "0",
+    ]);
+    // The LAST game's score is what the board should rest on — the one just
+    // played, which is also what a paper scoresheet shows.
+    expect(home.big).toBe("3");
+    expect(away.big).toBe("1");
+  });
+
+  it("REVIEW #678/7 — a DECIDED board names only games actually PLAYED, not `bestOf`", () => {
+    // The clamp to `bestOf` removed "Game 6" but not the class: a best-of-3
+    // won 2-0 has two games in the book and `gameNumber` (closed + 1) says 3.
+    const straight = view({ cfg: SHORT_CFG, events: stream(summary(3, 1), summary(3, 1)) });
+    expect(buildScorebug(straight, t).context, "named a game nobody played").toContain('"game":2');
+    expect(buildScorebug(straight, t).context).not.toContain('"game":3');
+  });
+
   it("names a SIDE, never a person, for a doubles pair — BWF Law 10.5 reads the service COURT", () => {
     // The engine declares no `serverFromPairOrder` for badminton precisely
     // because the laws pick the server from a fact this kernel does not fold.
@@ -1069,7 +1094,14 @@ describe("copy truth", () => {
   // generic "{event} recorded" fallback forever, with nothing failing.
   it("every event type this skin dispatches has a REGISTERED ribbon key", () => {
     const registered = new Set<string>(PAD_LABEL_KEYS);
-    for (const type of [RALLY_TYPE, SUMMARY_TYPE, SANCTION_TYPE]) {
+    // TIMEOUT_TYPE belongs in this list (review of PR #678). It was left out
+    // on the reasoning that BWF play has no time-out so the fold always
+    // refuses it — true of every DECLARED variant, false of the schema:
+    // `records.timeouts` is a plain `z.boolean()` on the shared set-based
+    // config (`kernel.ts`), and the skin only refuses the type when the flag
+    // is off. A division that sets it on got the tile, the fold accepted, and
+    // the ribbon printed "badminton.timeout recorded" at a scoring desk.
+    for (const type of [RALLY_TYPE, SUMMARY_TYPE, SANCTION_TYPE, TIMEOUT_TYPE]) {
       const key = ribbonKeyFor(type);
       expect(registered.has(key), `${key} is not in PAD_LABEL_KEYS — the ribbon stays on the fallback`).toBe(true);
       expect(key in (uiEn as Record<string, string>), `${key} has no English copy`).toBe(true);

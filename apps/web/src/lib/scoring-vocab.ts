@@ -684,12 +684,23 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   // dictionary copy with no entry in this list stays silently on the generic
   // `pad.ribbon.fallback` ("{event} recorded") forever, with nothing failing.
   // One key per event type this skin's own halves/tiles/sheets dispatch
-  // directly — the three unrecordable types (timeout, sub, expedite.start) are
-  // refused by the fold and reach no surface, so they stay on the fallback,
-  // the same graceful degradation ribbon.ts's header documents.
+  // directly. `sub`/`expedite.start` stay on the fallback: BWF Law 16 has no
+  // substitution at all, so no config can turn one on.
+  //
+  // `timeout` is REGISTERED, and the reasoning that once grouped it with those
+  // two was wrong (review of PR #678). `records.timeouts` is a plain
+  // `z.boolean()` on the shared set-based schema (`kernel.ts`), so a division
+  // config can set it even though every DECLARED badminton variant leaves it
+  // false — and the skin's own guard only refuses the type when the flag is
+  // off. With the flag on, the tile appears, the fold accepts, and the ribbon
+  // fell through to `pad.ribbon.fallback`, printing "badminton.timeout
+  // recorded" at a scoring desk. That is the exact defect volleyball's own
+  // `sub` block was fixed for a few blocks down; "unreachable" is a claim
+  // about config, and config is the thing that varies.
   "pad.badminton.ribbon.game.summary",
   "pad.badminton.ribbon.rally",
   "pad.badminton.ribbon.sanction",
+  "pad.badminton.ribbon.timeout",
   // R5 — tap model S's own hint. `ScorebugHalf.hintKey` resolves through the
   // SAME `padLabel()` gate (scorebug.tsx) as the ribbon copy above, so an
   // unregistered key prints its own raw dotted name as the visible hint text

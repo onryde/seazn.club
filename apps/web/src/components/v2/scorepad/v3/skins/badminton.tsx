@@ -312,11 +312,23 @@ function openGame(state: BadmintonStateShape): OpenGame | null {
   return { home: set.home ?? 0, away: set.away ?? 0, index };
 }
 
-/** Points in the current game for one side — 0 when no game is open (between
- *  games, and before the first rally of the match). */
+/** Points a side has in the game the board is resting on.
+ *
+ *  The open game while one is open; otherwise the LAST GAME PLAYED. Returning
+ *  0 with no game open (review of PR #678, finding 5) meant a DECIDED match
+ *  — every game closed by definition — showed 0 as the biggest number on the
+ *  screen, the one read from across the court, with only the small games
+ *  strip carrying the result. Between games it was equally wrong for the same
+ *  reason: the game just banked is what a paper scoresheet leaves showing.
+ *
+ *  0 survives for exactly one case, and it is the true one: a match with no
+ *  games at all, before the first rally. */
 function pointsOf(state: BadmintonStateShape, side: Side): number {
   const open = openGame(state);
-  return open === null ? 0 : open[side];
+  if (open !== null) return open[side];
+  const sets = state.sets ?? [];
+  const last = sets[sets.length - 1];
+  return last?.[side] ?? 0;
 }
 
 /** `setInProgress`'s badminton twin (`applySummary`'s strict branch,
@@ -522,7 +534,15 @@ function buildContext(state: BadmintonStateShape, cfg: BadmintonCfgShape, t: TFn
   // The scorebug renders its context line in EVERY phase (`scorebug.tsx`) and
   // `pad-host.tsx` renders the scorebug in "post", so the decided board is a
   // real screen a scorer reads, not a transient. Found in review of PR #678.
-  const game = Math.min(gameNumber(state), bestOf);
+  // Clamping to `bestOf` removed "Game 6" but not the class of defect: a
+  // best-of-3 won 2-0 has TWO games in the book and `gameNumber` (closed + 1)
+  // still says 3 — a game nobody played, and `Math.min` cannot see it because
+  // 3 <= bestOf. Once the match is over the board names the LAST game played;
+  // while it is live "closed + 1" is exactly right, and that is the case that
+  // makes "Game 2" appear the instant game 1 banks.
+  const played = (state.sets ?? []).length;
+  const decided = POST_PHASES.has(readPhase(state));
+  const game = decided ? Math.max(played, 1) : Math.min(gameNumber(state), bestOf);
   const base = t("pad.badminton.context.line", { bestOf, game });
   const open = openGame(state);
   if (open === null || open.home !== open.away) return base;
@@ -1192,9 +1212,16 @@ export function buildDock(
 // defect D2).
 // ---------------------------------------------------------------------------
 
+/** DE-DUPES, and that is not a nicety: in SINGLES `buildHalf` stamps the same
+ *  personId as both `scorer` and `server` on every rally the server wins —
+ *  roughly half of them — so the activity row read "Lin Dan · Lin Dan". A
+ *  name repeated against itself tells a reader nothing and looks like a bug in
+ *  the scoring, which for one rally in two is most of the log. Found in review
+ *  of PR #678. Order-preserving: the first mention wins its position. */
 function join(parts: (string | undefined)[]): string | undefined {
   const kept = parts.filter((part): part is string => part !== undefined && part.length > 0);
-  return kept.length > 0 ? kept.join(" · ") : undefined;
+  const unique = [...new Set(kept)];
+  return unique.length > 0 ? unique.join(" · ") : undefined;
 }
 
 export function badmintonDetail(ctx: ActivityDetailContext): string | undefined {

@@ -306,9 +306,17 @@ function openGame(state: TableTennisStateShape): OpenGame | null {
   return { home: set.home ?? 0, away: set.away ?? 0, index };
 }
 
+/** Points a side has in the game the board is resting on — the open game
+ *  while one is open, otherwise the LAST GAME PLAYED. Returning 0 with no
+ *  game open (review of PR #678, finding 5) meant a DECIDED match showed 0 as
+ *  the biggest number on the screen, with only the small games strip carrying
+ *  the result. 0 survives for the one true case: no games played at all. */
 function pointsOf(state: TableTennisStateShape, side: Side): number {
   const open = openGame(state);
-  return open === null ? 0 : open[side];
+  if (open !== null) return open[side];
+  const sets = state.sets ?? [];
+  const last = sets[sets.length - 1];
+  return last?.[side] ?? 0;
 }
 
 /** `applySummary`'s strict branch (kernel.ts): a game with ANY point already
@@ -474,7 +482,13 @@ function buildContext(state: TableTennisStateShape, cfg: TableTennisCfgShape, t:
   // The scorebug renders its context line in EVERY phase (`scorebug.tsx`) and
   // `pad-host.tsx` renders the scorebug in "post", so the decided board is a
   // real screen a scorer reads, not a transient. Found in review of PR #678.
-  const game = Math.min(gameNumber(state), bestOf);
+  // Clamping to `bestOf` removed "Game 6" but not the class: a best-of-5 won
+  // 3-0 has THREE games in the book and `gameNumber` (closed + 1) says 4 — a
+  // game nobody played, which `Math.min` cannot see because 4 <= bestOf.
+  // Once the match is over the board names the LAST game played.
+  const played = (state.sets ?? []).length;
+  const decided = POST_PHASES.has(readPhase(state));
+  const game = decided ? Math.max(played, 1) : Math.min(gameNumber(state), bestOf);
   const base = t("pad.tabletennis.context.line", { bestOf, game });
   const open = openGame(state);
   if (open === null || open.home !== open.away) return base;
@@ -483,7 +497,12 @@ function buildContext(state: TableTennisStateShape, cfg: TableTennisCfgShape, t:
     return `${base} · ${t("pad.tabletennis.context.goldenPoint")}`;
   }
   const target = targetOf(cfg, gameNumber(state) - 1);
-  if (open.home === target - 1) return `${base} · ${t("pad.tabletennis.context.deuce")}`;
+  // `>=`, not `===`. ITTF 2.13.3's win-by-two stays in force at EVERY
+  // subsequent tie, and the kernel agrees — `accelerateFromNow()` is a floor,
+  // not an equality. The exact test showed "Deuce" at 10-10 and then dropped
+  // it at 11-11, 12-12, 13-13, which is precisely where a scorer needs the
+  // reminder most. Found in review of PR #678.
+  if (open.home >= target - 1) return `${base} · ${t("pad.tabletennis.context.deuce")}`;
   return base;
 }
 
@@ -1185,9 +1204,16 @@ export function buildDock(
 // activityDetail() — the ribbon's varying half.
 // ---------------------------------------------------------------------------
 
+/** DE-DUPES, and that is not a nicety: in SINGLES `buildHalf` stamps the same
+ *  personId as both `scorer` and `server` on every rally the server wins —
+ *  roughly half of them — so the activity row read "Lin Dan · Lin Dan". A
+ *  name repeated against itself tells a reader nothing and looks like a bug in
+ *  the scoring, which for one rally in two is most of the log. Found in review
+ *  of PR #678. Order-preserving: the first mention wins its position. */
 function join(parts: (string | undefined)[]): string | undefined {
   const kept = parts.filter((part): part is string => part !== undefined && part.length > 0);
-  return kept.length > 0 ? kept.join(" · ") : undefined;
+  const unique = [...new Set(kept)];
+  return unique.length > 0 ? unique.join(" · ") : undefined;
 }
 
 export function tabletennisDetail(ctx: ActivityDetailContext): string | undefined {
