@@ -7,8 +7,26 @@
 // .superpowers/sdd/2026-08-15-scorepad-v3-r1-chassis/pins.md §7 — scout-
 // verified 2026-08-16 against globals.css:436-439, no disagreement found).
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+
+/**
+ * Every v3 source file — the ten chassis primitives and every skin — as paths
+ * relative to `v3/`. Globbed rather than listed (R6 review, gap 6): the two
+ * source scans in this file and the two in `sport-theme.test.ts` all carried
+ * their own hardcoded name list, and four skins had been missing from them
+ * since R4. `__tests__` is excluded because a test naming a token in an
+ * assertion is not a paint.
+ */
+function v3SourceFiles(): string[] {
+  const root = join(process.cwd(), "src/components/v2/scorepad/v3");
+  const namesIn = (dir: string) =>
+    readdirSync(dir, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && /\.tsx?$/.test(entry.name))
+      .map((entry) => entry.name)
+      .sort();
+  return [...namesIn(root), ...namesIn(join(root, "skins")).map((name) => `skins/${name}`)];
+}
 import {
   NIGHT_TILE_PAIRS,
   NIGHT_TILE_CLASSES,
@@ -798,13 +816,24 @@ describe("the tones are NON-TEXT colours, and this is where that stops being a c
     },
   );
 
-  // R6/the period pair (owner ruling R6-3, 2026-08-30) — hockey and ice hockey,
-  // both pinned HERE and both pinned NOW, one wave before either skin exists.
-  // Same reasoning the R4 and R5 blocks above each record, and it was
-  // established by MUTATION rather than assumed: the licence scan below is
-  // USAGE-driven, so with no `skins/hockey.tsx` in the tree it can say nothing
-  // whatsoever about these hexes, and reverting one to an unreadable value
-  // would red exactly nothing without this block.
+  // R6/the period pair (owner ruling R6-3, 2026-08-30) — hockey and ice hockey.
+  //
+  // WHAT THIS BLOCK IS FOR, corrected in the R6 review. It first claimed that
+  // "reverting one of these hexes to an unreadable value would red exactly
+  // nothing without this block", which is false: `PALETTES` (this file, above)
+  // is built from `Object.keys(SPORT_PALETTES)`, so both palettes joined the
+  // `describe.each(PALETTES)` board sweep and the tone sheet's
+  // `it.each([...SPORT_TONES])` the moment they landed in `sport-theme.ts` —
+  // ink, band and the three tones' sheet obligations were already covered.
+  //
+  // It earns its place on what those sweeps CANNOT say. They apply one floor
+  // to every sport, and these two sports owe DIFFERENT ones (below); the
+  // generic sweep therefore cannot pin `dismissal` two-sided — that it clears
+  // 3.0 AND stays under 4.5, which is the assertion that keeps hockey's swatch
+  // licence from being quietly "fixed" into a text colour. Nor can it see that
+  // the three card tones are three DISTINCT values, which is the whole claim
+  // the seventh token makes and which `resolveSportPalette`'s default fallback
+  // would silently satisfy with two.
   //
   // THE TWO SPORTS OWE DIFFERENT FLOORS, which is why this is two tests and
   // not one `it.each` — the racquet family could share a body because all
@@ -970,20 +999,20 @@ describe("the tones are NON-TEXT colours, and this is where that stops being a c
       // The two routes that never touch globals.css at all: Tailwind's
       // arbitrary-value syntax, and a React `style={{ color: … }}`. Comments
       // stripped first so prose naming a token cannot false-positive.
-      const files = [
-        "scorebug.tsx",
-        "tile-grid.tsx",
-        "guided-sheet.tsx",
-        "detail-dock.tsx",
-        "swap-sheet.tsx",
-        "context-strip.tsx",
-        "activity.tsx",
-        "action-form.tsx",
-        "recording-chip.tsx",
-        "pad-host.tsx",
-        "skins/football.tsx",
-        "skins/cricket.tsx",
-      ];
+      //
+      // R6 review, gap 6. This used to be TWELVE HARDCODED NAMES — ten chassis
+      // primitives plus football and cricket — and a hardcoded list is exactly
+      // how tennis, badminton, tabletennis and volleyball went unscanned for
+      // two waves, and how hockey and ice hockey would have joined them. R6
+      // adds a THIRD tone that must never be painted as text, so appending two
+      // more names would have set the same trap for the eighth sport. Globbed
+      // instead: every source file in `v3/` and in `v3/skins/`, so a new skin
+      // is covered by existing.
+      const files = v3SourceFiles();
+      // A glob that resolved nothing would pass this test having read no
+      // files at all, so pin the floor and the names that were here before.
+      expect(files).toEqual(expect.arrayContaining(["pad-host.tsx", "skins/football.tsx", "skins/cricket.tsx", "skins/tennis.tsx", "skins/badminton.tsx", "skins/tabletennis.tsx", "skins/volleyball.tsx"]));
+      expect(files.length).toBeGreaterThanOrEqual(22);
       const aliases = [...toneAliases()];
       for (const file of files) {
         const src = readFileSync(join(process.cwd(), "src/components/v2/scorepad/v3", file), "utf8")

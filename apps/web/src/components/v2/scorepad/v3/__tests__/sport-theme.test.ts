@@ -29,8 +29,35 @@
 // from globals.css's own `--mk-*` block and Tailwind's shipped palette. See
 // its own comment for the one entry that needed real work (lime-400).
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+
+const V3_DIR = join(process.cwd(), "src/components/v2/scorepad/v3");
+
+/** Source file names in `dir`, sorted. Files only, so `skins/__tests__` never
+ *  joins a scan — a test naming a hex in an assertion is not a paint. */
+function sourcesIn(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && /\.tsx?$/.test(entry.name))
+    .map((entry) => entry.name)
+    .sort();
+}
+
+/**
+ * Every v3 skin, and every v3 chassis file, as paths relative to `v3/`.
+ *
+ * R6 review, gap 6. Both source scans in this file used a HARDCODED name list
+ * — one of them just `["football.tsx", "cricket.tsx"]` — which is how tennis,
+ * badminton, tabletennis and volleyball went unscanned for two waves, and how
+ * hockey and ice hockey would have joined them. Globbed, so a new skin is
+ * covered by existing rather than by somebody remembering this file.
+ */
+function skinFiles(): string[] {
+  return sourcesIn(join(V3_DIR, "skins"));
+}
+function v3SourceFiles(): string[] {
+  return [...sourcesIn(V3_DIR), ...skinFiles().map((name) => `skins/${name}`)];
+}
 import { renderToStaticMarkup } from "react-dom/server";
 import {
   DEFAULT_SPORT_PALETTE,
@@ -123,10 +150,14 @@ describe("the token vocabulary is CLOSED and small (skins pick from it, never su
   });
 
   it("no SKIN file carries a colour of its own — the whole point of a token layer", () => {
-    // Mutation-proved: pasting `#0b1f16` into skins/football.tsx reds this.
+    // Mutation-proved: pasting `#0b1f16` into any scanned skin reds this.
     // Comments stripped first so prose naming a hex can never false-positive.
-    for (const skin of ["football.tsx", "cricket.tsx"]) {
-      const src = readFileSync(join(process.cwd(), "src/components/v2/scorepad/v3/skins", skin), "utf8")
+    const skins = skinFiles();
+    // A glob that resolved nothing would pass having read no files at all.
+    expect(skins).toEqual(expect.arrayContaining(["football.tsx", "cricket.tsx", "tennis.tsx", "badminton.tsx", "tabletennis.tsx", "volleyball.tsx"]));
+    expect(skins.length).toBeGreaterThanOrEqual(6);
+    for (const skin of skins) {
+      const src = readFileSync(join(V3_DIR, "skins", skin), "utf8")
         .replace(/\/\*[\s\S]*?\*\//g, "")
         .replace(/\/\/.*$/gm, "");
       expect(/#[0-9a-fA-F]{3,8}\b/.test(src), `${skin} carries a raw colour literal`).toBe(false);
@@ -405,9 +436,16 @@ describe("the token layer is actually WIRED, not merely defined", () => {
     expect(host).toMatch(/data-role="pad-v3"[^>]*data-sport-theme=\{sportThemeAttr\(props\.skin\.key\)\}/);
   });
 
-  it("and nothing else in the chassis emits a --sport-* property of its own", () => {
-    for (const file of ["scorebug.tsx", "tile-grid.tsx", "guided-sheet.tsx", "skins/football.tsx"]) {
-      const src = readFileSync(join(process.cwd(), "src/components/v2/scorepad/v3", file), "utf8")
+  it("and nothing else in the chassis or in ANY skin emits a --sport-* property of its own", () => {
+    // Widened from four hardcoded names to the whole tree (R6 review, gap 6).
+    // `sport-theme.ts` is the one legitimate site — it is the JS half of the
+    // token authority, which is what `sportCustomProperty` exists to be — so it
+    // is excluded BY NAME rather than by having been left off a list.
+    const files = v3SourceFiles().filter((file) => file !== "sport-theme.ts");
+    expect(files).toEqual(expect.arrayContaining(["scorebug.tsx", "tile-grid.tsx", "guided-sheet.tsx", "skins/football.tsx", "skins/volleyball.tsx"]));
+    expect(files.length).toBeGreaterThanOrEqual(21);
+    for (const file of files) {
+      const src = readFileSync(join(V3_DIR, file), "utf8")
         .replace(/\/\*[\s\S]*?\*\//g, "")
         .replace(/\/\/.*$/gm, "");
       expect(src, `${file} sets a --sport-* property outside the pad root`).not.toContain("--sport-");
