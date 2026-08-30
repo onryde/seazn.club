@@ -46,8 +46,8 @@ function side(id: string, name: string): SideInfo {
 }
 
 function consoleHtml(sportKey: string): string {
-  const module = builtinModules.find((m) => m.key === sportKey)!;
-  const catalog = lineupCatalogFor(module, {});
+  const mod = builtinModules.find((m) => m.key === sportKey)!;
+  const catalog = lineupCatalogFor(mod, {});
   return renderToStaticMarkup(
     <FixtureConsole
       fixture={{
@@ -59,9 +59,9 @@ function consoleHtml(sportKey: string): string {
         round_no: 1,
       }}
       sport={{
-        key: module.key,
+        key: mod.key,
         config: {},
-        scorerLabel: module.officialLabel.scorer,
+        scorerLabel: mod.officialLabel.scorer,
         positionGroups: catalog.groups,
         roles: catalog.roles ?? [],
         lineupSize: catalog.lineup.size,
@@ -78,10 +78,10 @@ function consoleHtml(sportKey: string): string {
 }
 
 describe("lineupEditorApplies — the declaration, swept over every shipped sport", () => {
-  for (const module of builtinModules) {
-    const catalog = lineupCatalogFor(module, {});
-    const expected = !HIDDEN.has(module.key);
-    it(`${module.key}: ${expected ? "has" : "has no"} lineup to edit`, () => {
+  for (const mod of builtinModules) {
+    const catalog = lineupCatalogFor(mod, {});
+    const expected = !HIDDEN.has(mod.key);
+    it(`${mod.key}: ${expected ? "has" : "has no"} lineup to edit`, () => {
       expect(
         lineupEditorApplies({
           lineupSize: catalog.lineup.size,
@@ -140,8 +140,8 @@ describe("lineup columns render only where the module declares them", () => {
   const ROLE_FLAG = 'data-testid="lineup-role-flag"';
 
   for (const key of VISIBLE) {
-    const module = builtinModules.find((m) => m.key === key)!;
-    const catalog = lineupCatalogFor(module, {});
+    const mod = builtinModules.find((m) => m.key === key)!;
+    const catalog = lineupCatalogFor(mod, {});
     const hasGroups = catalog.groups.length > 0;
     const hasRoles = (catalog.roles ?? []).length > 0;
 
