@@ -8,7 +8,7 @@ import { sql } from "@/lib/db";
 import { cacheGet, cacheSet } from "@/lib/cache";
 import { HttpError } from "@/lib/errors";
 import { rateLimit } from "@/lib/rate-limit";
-import { maskDisplayName, resolveNameDisplay } from "@/lib/name-display";
+import { anyOptedOut, maskDisplayName, resolveNameDisplay, resolvePersonDisplayName } from "@/lib/name-display";
 import {
   withCourtVenueName,
   withCourtVenueNames,
@@ -155,7 +155,7 @@ export async function publicEntrants(
   const division = await findDivision(orgSlug, compSlug, divSlug);
   return cached(`pub:v1:div:${division.id}:entrants`, async () => {
     const entrants = await sql<
-      { kind: string; display_name: string; members: { name?: string | null }[] | null }[]
+      { id: string; kind: string; display_name: string; members: { name?: string | null }[] | null }[]
     >`
       select id, kind, display_name, seed, status, members
       from public_entrants_v where division_id = ${division.id}
@@ -168,18 +168,54 @@ export async function publicEntrants(
     const [priv] = await sql<{ youth: boolean; player_name_display: string | null }[]>`
       select youth, player_name_display from divisions where id = ${division.id}`;
     const mode = resolveNameDisplay(priv?.player_name_display ?? null, priv?.youth ?? false);
-    const masked =
-      mode === "full"
-        ? entrants
-        : entrants.map((e) => ({
-            ...e,
-            display_name:
-              e.kind === "team" ? e.display_name : maskDisplayName(e.display_name, mode),
-            members: (e.members ?? [])?.map((m) => ({
+
+    // RS008 review fix #4 (Important) — display_name (a non-team entrant's
+    // own name) was masked by YOUTH ONLY; a person's explicit /me opt-out
+    // never reached this endpoint, unlike every other public display_name
+    // site this session has already swept. Small local, parallel query for
+    // the same "any current roster member opted out" signal
+    // buildGroupStatusView/buildDivisionSlides/etc already compute for their
+    // own entrants — never derived from public_entrants_v.members[].name,
+    // which is a DIFFERENT, already-masked string with no raw consent
+    // alongside it (that field's own masking, below, is untouched).
+    const nonTeamIds = entrants.filter((e) => e.kind !== "team").map((e) => e.id);
+    const consentRows =
+      nonTeamIds.length > 0
+        ? await sql<{ entrant_id: string; consent: { public_name?: boolean } | null }[]>`
+            select em.entrant_id, p.consent
+            from entrant_members em
+            join persons p on p.id = em.person_id
+            where em.entrant_id in ${sql(nonTeamIds)}`
+        : [];
+    const consentsByEntrant = new Map<string, ({ public_name?: boolean } | null)[]>();
+    for (const r of consentRows) {
+      const list = consentsByEntrant.get(r.entrant_id) ?? [];
+      list.push(r.consent);
+      consentsByEntrant.set(r.entrant_id, list);
+    }
+
+    const masked = entrants.map((e) => ({
+      ...e,
+      display_name:
+        e.kind === "team"
+          ? e.display_name
+          : resolvePersonDisplayName(
+              e.display_name,
+              anyOptedOut(consentsByEntrant.get(e.id) ?? []) ? { public_name: false } : null,
+              priv?.player_name_display ?? null,
+              priv?.youth ?? false,
+            ),
+      // Unchanged by this fix: member names mask by division youth policy
+      // ALONE (mode) when not "full" — already consent-gated once, SQL-side
+      // (public_person_name inside public_entrants_v); never re-derived here.
+      members:
+        mode === "full"
+          ? e.members
+          : (e.members ?? [])?.map((m) => ({
               ...m,
               name: m.name ? maskDisplayName(m.name, mode) : m.name,
             })),
-          }));
+    }));
     return { division_id: division.id, entrants: masked };
   });
 }
