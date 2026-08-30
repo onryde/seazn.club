@@ -351,7 +351,11 @@ describe("submit — designed failure states, never a raw server string", () => 
     const m = mount({ initialPlayerId: "p1" });
     fillMinimalValidForm(m);
     await submit(m);
-    expect(m.pageText()).toContain("Someone already claimed that spot");
+    // RS007 #20b renamed this string off the profile-claim verb
+    // (`register.join.error.claimed`). The assertion is on the DESIGNED
+    // message rather than the server's, which is the point of the test, so it
+    // tracks the dictionary — it is not a wording-agnostic check by accident.
+    expect(m.pageText()).toContain("Someone else already checked in for that spot");
     expect(m.pageText()).not.toContain("This player has already joined");
     expect(m.pageText()).toContain("Refresh available spots");
   });
