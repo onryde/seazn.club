@@ -263,6 +263,86 @@ describe.skipIf(!HAS_DB)("submitRegistrationGroup", () => {
     expect(group!.privacy_consent_version).toBe(LEGAL_VERSION);
   });
 
+  // Code-review fix (2026-08-30, item 1, CRITICAL) — this inline auto-confirm
+  // branch called materialise() directly but was the one convergence point
+  // that never fired the post-commit claim-invite sweep: confirmRegistration/
+  // confirmPaidRegistration/markRegistrationPaidOffline/
+  // confirmRegistrationWaived/joinTeamEntry all already do (see this file's
+  // own "RS008: fires the claim-invite sweep" describe block below). A free,
+  // auto-approval registration got no claim invite at all.
+  it("RS008 gap fix: a free, auto-approval entry ALSO fires the claim-invite sweep after commit", async () => {
+    const { orgId, orgSlug, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    await seedSettings(division.id, { entrant_kind: "individual", fee_cents: 0 });
+
+    const res = await submitRegistrationGroup(
+      { orgSlug, compSlug: competition.slug },
+      {
+        contact: baseContact(),
+        privacy_consent: true,
+        entries: [
+          {
+            division_id: division.id,
+            entrant_kind: "individual",
+            players: [{ full_name: "Sweep Solo" }],
+            answers: {},
+          },
+        ],
+      },
+    );
+    expect(res.entries[0]!.status).toBe("confirmed");
+    const [{ entrant_id }] = await sql<{ entrant_id: string | null }[]>`
+      select entrant_id from registrations where id = ${res.entries[0]!.registration_id}`;
+    expect(entrant_id).not.toBeNull();
+
+    expect(inviteSweepMock.fn).toHaveBeenCalledTimes(1);
+    expect(inviteSweepMock.fn).toHaveBeenCalledWith(orgId, entrant_id);
+  });
+
+  // A cart can hold more than one free/auto-approval division at once — each
+  // materialised entrant must get its OWN sweep call, not just the first.
+  it("RS008 gap fix: a cart with TWO free auto-approval entries sweeps BOTH entrants", async () => {
+    const { orgId, orgSlug, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division: divisionA } = await rig(owner);
+    // A second division in the SAME competition — rig() mints a fresh
+    // competition each call, and this cart's ctx is scoped to the first one.
+    const divisionB = await createDivision(owner, competition.id, {
+      name: "Second",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    });
+    await seedSettings(divisionA.id, { entrant_kind: "individual", fee_cents: 0 });
+    await seedSettings(divisionB.id, { entrant_kind: "individual", fee_cents: 0 });
+
+    const res = await submitRegistrationGroup(
+      { orgSlug, compSlug: competition.slug },
+      {
+        contact: baseContact(),
+        privacy_consent: true,
+        entries: [
+          { division_id: divisionA.id, entrant_kind: "individual", players: [{ full_name: "First Entry" }], answers: {} },
+          { division_id: divisionB.id, entrant_kind: "individual", players: [{ full_name: "Second Entry" }], answers: {} },
+        ],
+      },
+    );
+    expect(res.entries.map((e) => e.status)).toEqual(["confirmed", "confirmed"]);
+    const entrantIds = await Promise.all(
+      res.entries.map(async (e) => {
+        const [row] = await sql<{ entrant_id: string | null }[]>`
+          select entrant_id from registrations where id = ${e.registration_id}`;
+        return row!.entrant_id;
+      }),
+    );
+    expect(entrantIds.every((id) => id !== null)).toBe(true);
+
+    expect(inviteSweepMock.fn).toHaveBeenCalledTimes(2);
+    expect(inviteSweepMock.fn).toHaveBeenCalledWith(orgId, entrantIds[0]);
+    expect(inviteSweepMock.fn).toHaveBeenCalledWith(orgId, entrantIds[1]);
+  });
+
   it("media consent, when given, stamps media_consent_at/media_consent_version the same way privacy_consent does", async () => {
     const { orgId, orgSlug, ownerId } = await seedOrg("pro");
     const owner = asOwner(orgId, ownerId);
@@ -1501,6 +1581,11 @@ describe.skipIf(!HAS_DB)("joinTeamEntry", () => {
       const [{ entrant_id }] = await sql<{ entrant_id: string | null }[]>`
         select entrant_id from registrations where id = ${entry.registration_id}`;
       expect(entrant_id).not.toBeNull();
+      // teamRig()'s own submitRegistrationGroup call is free + auto-approval,
+      // so it now fires its OWN sweep too (code-review fix, item 1) — cleared
+      // here so this test isolates joinTeamEntry's wiring specifically, which
+      // is what it actually asserts below.
+      inviteSweepMock.fn.mockClear();
 
       await joinTeamEntry(
         {},
@@ -1516,6 +1601,9 @@ describe.skipIf(!HAS_DB)("joinTeamEntry", () => {
       const [{ entrant_id }] = await sql<{ entrant_id: string | null }[]>`
         select entrant_id from registrations where id = ${entry.registration_id}`;
       expect(entrant_id).not.toBeNull();
+      // rosterRig()'s own submitRegistrationGroup call is free + auto-
+      // approval too — same isolation as the insert-branch test above.
+      inviteSweepMock.fn.mockClear();
 
       await joinTeamEntry(
         {},
