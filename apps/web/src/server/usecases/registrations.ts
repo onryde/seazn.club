@@ -955,6 +955,12 @@ export async function materialise(
       update registrations
       set status = 'confirmed', updated_at = now()
       where id = ${reg.id}`;
+    // ...and clear the cart's payment clock, exactly as the normal path
+    // below does. `materialise` owns this as well as the status flip, so
+    // returning before it left `registration_groups.expires_at` set forever
+    // when a solo sign-up was the cart's LAST pending entry — the same gap
+    // RS002 W5 closed for every other confirm site.
+    await clearExpiresIfNoLongerNeeded(tx, reg.group_id, reg.id);
     return null;
   }
   const [entrant] = await tx<{ id: string }[]>`
@@ -4460,21 +4466,41 @@ export async function releaseSoloSignUpPlacement(
   tx: Tx,
   registrationId: string,
 ): Promise<string | null> {
-  const [placement] = await tx<
+  // BOTH directions, because a registration can be either end of a
+  // placement:
+  //
+  //  - as the SOURCE, it is the solo sign-up who was placed somewhere;
+  //  - as the TARGET, it is a team other solo sign-ups were placed ONTO.
+  //
+  // The first version handled only the source side, so withdrawing a TEAM
+  // released none of the players borrowed onto it: their roster rows
+  // survived pointing at a withdrawn entrant, and because they still read as
+  // "already placed" the organiser could not re-assign them anywhere either.
+  // A team pulling out has to put its borrowed players back in the pool.
+  const placements = await tx<
     { id: string; registration_id: string; person_id: string | null }[]
   >`
     select id, registration_id, person_id from registration_players
-    where assigned_from_registration_id = ${registrationId}`;
-  if (!placement) return null;
-  const [target] = await tx<{ entrant_id: string | null }[]>`
-    select entrant_id from registrations where id = ${placement.registration_id} for update`;
-  if (target?.entrant_id && placement.person_id) {
-    await tx`
-      delete from entrant_members
-      where entrant_id = ${target.entrant_id} and person_id = ${placement.person_id}`;
+    where assigned_from_registration_id = ${registrationId}
+       or (registration_id = ${registrationId} and source = 'organiser_assigned')`;
+  if (placements.length === 0) return null;
+
+  let releasedFrom: string | null = null;
+  for (const placement of placements) {
+    const [target] = await tx<{ entrant_id: string | null }[]>`
+      select entrant_id from registrations where id = ${placement.registration_id} for update`;
+    if (target?.entrant_id && placement.person_id) {
+      await tx`
+        delete from entrant_members
+        where entrant_id = ${target.entrant_id} and person_id = ${placement.person_id}`;
+    }
+    await tx`delete from registration_players where id = ${placement.id}`;
+    // The source-side answer is the interesting one for the audit trail —
+    // "this person came off that team". A target-side release removes
+    // several at once and has no single such answer.
+    if (placement.registration_id !== registrationId) releasedFrom = placement.registration_id;
   }
-  await tx`delete from registration_players where id = ${placement.id}`;
-  return placement.registration_id;
+  return releasedFrom;
 }
 
 async function withdrawCore(reg: RegistrationWithGroupRow, actorId: string | null): Promise<void> {
@@ -5933,14 +5959,30 @@ export async function buildDisputeEvidence(
   // fixtures.venue (frozen since pass 3a) would silently blank the "service
   // provided" venue line on this Stripe dispute evidence document for any
   // fixture played after the cutover.
-  const fixtures = reg.entrant_id
+  // RS009 — a PLACED SOLO SIGN-UP has no entrant of its own (design §6: they
+  // are fielded through the TEAM they were assigned to), so keying the
+  // "service provided" evidence on `reg.entrant_id` alone returned zero
+  // fixtures for someone who actually played — the weakest possible answer
+  // in the one document whose job is to prove they did. Resolve through the
+  // placement for those rows.
+  const evidenceEntrantId =
+    reg.entrant_id ??
+    (
+      await sql<{ entrant_id: string | null }[]>`
+        select tgt.entrant_id from registration_players rp
+        join registrations tgt on tgt.id = rp.registration_id
+        where rp.assigned_from_registration_id = ${regId}`
+    )[0]?.entrant_id ??
+    null;
+
+  const fixtures = evidenceEntrantId
     ? await sql<
         { round_no: number | null; status: string; outcome: unknown; scheduled_at: Date | null; venue: string | null }[]
       >`
       select f.round_no, f.status, f.outcome, f.scheduled_at, ven.name as venue
       from fixtures f
       left join venues ven on ven.id = f.venue_id
-      where f.home_entrant_id = ${reg.entrant_id} or f.away_entrant_id = ${reg.entrant_id}
+      where f.home_entrant_id = ${evidenceEntrantId} or f.away_entrant_id = ${evidenceEntrantId}
       order by f.round_no nulls last, f.scheduled_at nulls last`
     : [];
 

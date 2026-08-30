@@ -24,7 +24,6 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import {
   audit,
   divisionCtx,
-  fallbackOrigin,
   joinExistingEntrant,
   orgReg,
   releaseSoloSignUpPlacement,
@@ -180,6 +179,17 @@ export async function assignSoloSignUp(
     // place for free; and a waitlisted TEAM is not in the division yet, so
     // filling its roster commits a player to an entry that may never be
     // promoted. Promote first, then assign.
+    // Neither terminal nor waitlisted, and still not seatable: a `pending`
+    // entry has not paid (or has not been approved on a manual division), and
+    // nothing downstream ever charges or confirms someone who was seated
+    // early — assign is not a payment path. `paid` is fine: the money is in
+    // and only the organiser's own confirm step is outstanding.
+    if (!["confirmed", "paid"].includes(source.status)) {
+      throw new HttpError(
+        422,
+        `This entry is ${source.status} — confirm it (or mark it paid) before placing them on a team`,
+      );
+    }
     if (source.status === "waitlisted") {
       throw new HttpError(
         422,
@@ -447,17 +457,21 @@ export async function unassignSoloSignUp(
     //  - The competition's own `starts_on` has passed. A date can arrive
     //    before anyone builds a schedule, and once a competition is under way
     //    its rosters should be settled regardless.
-    const [division] = await tx<
-      { competition_id: string; starts_on: string | null; fixtures: string }[]
-    >`
-      select d.competition_id, c.starts_on,
-             (select count(*)::text from fixtures f where f.division_id = d.id) as fixtures
+    // `started` is computed IN SQL, by the same expression `listRegistrations`
+    // uses for its `division_started` column. The first version compared
+    // `new Date(starts_on) <= new Date()` in JS while the read path compared
+    // `c.starts_on <= current_date` in Postgres: two different clocks, which
+    // disagree for hours around a start-date boundary. The hub would then
+    // show Remove on a row the server refuses, or hide it on one the server
+    // would have accepted. One expression, one answer.
+    const [division] = await tx<{ competition_id: string; started: boolean }[]>`
+      select d.competition_id,
+             (exists (select 1 from fixtures f where f.division_id = d.id)
+               or (c.starts_on is not null and c.starts_on <= current_date)) as started
       from divisions d join competitions c on c.id = d.competition_id
       where d.id = ${source.division_id}`;
     if (!division) throw new HttpError(404, "That division no longer exists");
-    const started =
-      Number(division.fixtures) > 0 ||
-      (!!division.starts_on && new Date(division.starts_on) <= new Date());
+    const started = division.started;
     if (started) {
       throw new HttpError(
         422,

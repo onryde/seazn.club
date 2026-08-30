@@ -370,8 +370,14 @@ export function deriveRegistrantActionFlags(
     // on an entry that holds no capacity spot and was charged nothing — the
     // server refuses it, and a control the server refuses is worse than no
     // control (the same rule canApprove follows for the division's live fee).
+    // Only a confirmed or paid entry may be seated — a pending one has not
+    // paid, and assign is not a payment path. Mirrors assignSoloSignUp's own
+    // refusal so the control is never offered where the server refuses.
     canAssign:
-      row.free_agent && row.assigned_team_id === null && nonTerminal && row.status !== "waitlisted",
+      row.free_agent &&
+      row.assigned_team_id === null &&
+      nonTerminal &&
+      (row.status === "confirmed" || row.status === "paid"),
     canUnassign: row.free_agent && row.assigned_team_id !== null && !row.division_started,
   };
 }

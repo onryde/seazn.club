@@ -642,6 +642,104 @@ describe.skipIf(!HAS_DB)("a solo sign-up is never a team of one", () => {
   });
 });
 
+describe.skipIf(!HAS_DB)("an unpaid entry cannot be seated", () => {
+  it("refuses a solo sign-up that has not been confirmed yet", async () => {
+    // `pending` is not terminal and not waitlisted, so it slipped through
+    // every guard: an unpaid (or unapproved) person got seated on the live
+    // entrant via joinExistingEntrant, and nothing afterwards ever charged
+    // or confirmed them. Promote/mark paid/confirm first, then assign —
+    // the same shape as the waitlist refusal beside it.
+    const { auth } = await seedOrg();
+    const { divisionId } = await seedTeamDivision(auth);
+    const team = await seedEntry(divisionId, { displayName: "Team A" });
+    const solo = await seedEntry(divisionId, {
+      displayName: "Priya Raman",
+      freeAgent: true,
+      status: "pending",
+      players: [{ name: "Priya Raman" }],
+    });
+
+    await expect(
+      assignSoloSignUp(auth, { registration_id: solo.id, target_registration_id: team.id }),
+    ).rejects.toThrow(/confirm|paid/i);
+  });
+
+  it("allows a paid one — the money is in, only the organiser step is outstanding", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId } = await seedTeamDivision(auth);
+    const team = await seedEntry(divisionId, { displayName: "Team A" });
+    const solo = await seedEntry(divisionId, {
+      displayName: "Priya Raman",
+      freeAgent: true,
+      status: "paid",
+      players: [{ name: "Priya Raman" }],
+    });
+
+    await assignSoloSignUp(auth, { registration_id: solo.id, target_registration_id: team.id });
+    expect(await rosterOf(team.id)).toHaveLength(1);
+  });
+});
+
+describe.skipIf(!HAS_DB)("a withdrawn TEAM returns its assigned players to the pool", () => {
+  it("releases every solo sign-up placed on it, not just its own placement", async () => {
+    // releaseSoloSignUpPlacement was keyed on the registration as the SOURCE
+    // only. Withdrawing a TEAM that other solo sign-ups had been placed onto
+    // released none of them: their roster rows survived pointing at a
+    // withdrawn entrant, and because they still counted as "already placed"
+    // the organiser could not re-assign them anywhere either. A team pulling
+    // out must put its borrowed players back in the pool.
+    const { auth } = await seedOrg();
+    const { divisionId } = await seedTeamDivision(auth);
+    const team = await seedEntry(divisionId, { displayName: "Team A" });
+    const solo = await seedEntry(divisionId, {
+      displayName: "Priya Raman",
+      freeAgent: true,
+      players: [{ name: "Priya Raman" }],
+    });
+    await assignSoloSignUp(auth, { registration_id: solo.id, target_registration_id: team.id });
+
+    await withdrawRegistrationOrganiser(auth, team.id);
+
+    const [{ n }] = await sql<{ n: string }[]>`
+      select count(*)::text as n from registration_players
+      where assigned_from_registration_id = ${solo.id}`;
+    expect(Number(n), "the placement must be gone").toBe(0);
+
+    // ...and they are assignable again, which is the point of releasing it.
+    const other = await seedEntry(divisionId, { displayName: "Team B" });
+    await assignSoloSignUp(auth, { registration_id: solo.id, target_registration_id: other.id });
+    expect(await rosterOf(other.id)).toHaveLength(1);
+  });
+});
+
+describe.skipIf(!HAS_DB)("confirming a solo sign-up clears the cart's payment clock", () => {
+  it("does not leave registration_groups.expires_at stale", async () => {
+    // materialise owns clearExpiresIfNoLongerNeeded as well as the status
+    // flip and the entrant insert. RS009's free_agent branch returned before
+    // it, so a solo sign-up confirming as the cart's LAST pending entry left
+    // expires_at set forever — the exact gap RS002 W5 closed for every other
+    // confirm site.
+    const { auth } = await seedOrg();
+    const { divisionId } = await seedTeamDivision(auth);
+    const solo = await seedEntry(divisionId, {
+      displayName: "Priya Raman",
+      freeAgent: true,
+      status: "pending",
+      players: [{ name: "Priya Raman" }],
+    });
+    const [{ group_id: groupId }] = await sql<{ group_id: string }[]>`
+      select group_id from registrations where id = ${solo.id}`;
+    await sql`
+      update registration_groups set expires_at = now() + interval '2 days' where id = ${groupId}`;
+
+    await confirmRegistration(auth, solo.id);
+
+    const [{ expires_at: expiresAt }] = await sql<{ expires_at: Date | null }[]>`
+      select expires_at from registration_groups where id = ${groupId}`;
+    expect(expiresAt).toBeNull();
+  });
+});
+
 describe.skipIf(!HAS_DB)("waitlisted entries are not assignable in either direction", () => {
   // A waitlisted entry holds NO capacity spot and was charged nothing
   // (`registration-submit.ts` sets feeCents = waitlisted ? 0 : ...). The
@@ -692,7 +790,10 @@ describe.skipIf(!HAS_DB)("a placed solo sign-up who leaves does not stay on the 
   // entrant_members row both survive, the team still reads full, and the
   // organiser is never told. Three separate paths, so the release is one
   // shared helper rather than three copies that can drift.
-  async function seedPlacedAndMaterialised(auth: AuthCtx) {
+  async function seedPlacedAndMaterialised(
+    auth: AuthCtx,
+    soloStatus: "confirmed" | "paid" = "confirmed",
+  ) {
     const { divisionId } = await seedTeamDivision(auth);
     const team = await seedEntry(divisionId, {
       displayName: "Team A",
@@ -702,10 +803,12 @@ describe.skipIf(!HAS_DB)("a placed solo sign-up who leaves does not stay on the 
     await confirmRegistration(auth, team.id);
     const [{ entrant_id: entrantId }] = await sql<{ entrant_id: string | null }[]>`
       select entrant_id from registrations where id = ${team.id}`;
+    // Confirmed or paid, never pending: assign refuses an unpaid entry, and
+    // this helper is about what happens AFTER a legitimate placement.
     const solo = await seedEntry(divisionId, {
       displayName: "Priya Raman",
       freeAgent: true,
-      status: "pending",
+      status: soloStatus,
       players: [{ name: "Priya Raman" }],
     });
     await assignSoloSignUp(auth, { registration_id: solo.id, target_registration_id: team.id });
@@ -731,8 +834,14 @@ describe.skipIf(!HAS_DB)("a placed solo sign-up who leaves does not stay on the 
   });
 
   it("rejecting releases it too", async () => {
+    // A PAID solo sign-up, not a confirmed one: assign accepts paid (the
+    // money is in, only the organiser's confirm step is outstanding) and
+    // rejectRegistration refuses a confirmed row outright. Paid-then-rejected
+    // on a manual division is the only route by which a PLACED solo sign-up
+    // can be rejected at all — which is exactly why the release has to be on
+    // that path and not only on withdraw.
     const { auth } = await seedOrg();
-    const { divisionId, team, solo, entrantId } = await seedPlacedAndMaterialised(auth);
+    const { divisionId, team, solo, entrantId } = await seedPlacedAndMaterialised(auth, "paid");
     await sql`
       update registration_settings set approval = 'manual' where division_id = ${divisionId}`;
 
