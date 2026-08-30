@@ -21,6 +21,7 @@ import { join } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
+import { CORE_EVENT_SCHEMAS } from "@seazn/engine/core";
 import {
   elapsedOf,
   formatClock,
@@ -245,13 +246,16 @@ describe("stampPayload asks the ENGINE whether a stamp is legal, and never mirro
   });
 
   it("leaves a payload alone when the real schema is a strictObject with no `at` — the case a blanket stamp would break", () => {
-    // `core.note` is `z.strictObject({text})`. Proven against the engine's own
-    // schema in the same breath, so this is not a claim about zod.
-    const noteSchema = {
-      safeParse: (v: unknown) => ({ success: typeof (v as { text?: unknown }).text === "string" && !("at" in (v as object)) }),
-    };
+    // R6 review, gap 4. This test used to hand `stampPayload` a HAND-WRITTEN
+    // `noteSchema` fake while claiming to be "proven against the engine's own
+    // schema" — a fixture proving a fixture, and the only cover the FALSE arm
+    // had. `CORE_EVENT_SCHEMAS` is exported; there was never a reason to
+    // invent one.
     const payload = { text: "floodlight failure" };
-    expect(stampPayload(payload, stamp, noteSchema)).toBe(payload); // by reference
+    expect(stampPayload(payload, stamp, CORE_EVENT_SCHEMAS["core.note"])).toBe(payload); // by reference
+    // …and the engine really would have refused the stamped form, rather than
+    // this file asserting that it would.
+    expect(CORE_EVENT_SCHEMAS["core.note"].safeParse({ ...payload, at: stamp }).success).toBe(false);
   });
 
   it("is a no-op with no clock, no registered schema, or a payload that is not a plain object", () => {
@@ -279,6 +283,50 @@ describe("stampPayload asks the ENGINE whether a stamp is legal, and never mirro
     // a legal one off a wrong stamp).
     const skinStamped = { by: "H", at: { period: "H1", elapsed: 3 } };
     expect(stampPayload(skinStamped, stamp, footballSchemas["football.goal"])).toBe(skinStamped); // by reference
+  });
+
+  // R6 review, gap 3. The whole `CORE_EVENT_SCHEMAS` table, both arms, from the
+  // engine's own export — the claim `stampPayload`'s doc makes is the claim
+  // under test, and it was wrong about the lineup family until this ran.
+  // Enumerated rather than sampled (AGENTS.md failure class 7).
+  const CORE_TAKES_AT = ["core.suspend", "core.resume", "core.lineup.substitution", "core.lineup.replacement", "core.lineup.position", "core.lineup.retirement", "core.lineup.entry"] as const;
+  const CORE_REFUSES_AT = ["core.start", "core.void", "core.forfeit", "core.abandon", "core.finalize", "core.note", "core.award"] as const;
+
+  it("covers every core type — the two arms partition CORE_EVENT_SCHEMAS with nothing left over", () => {
+    expect([...CORE_TAKES_AT, ...CORE_REFUSES_AT].sort()).toEqual(Object.keys(CORE_EVENT_SCHEMAS).sort());
+  });
+
+  it.each(CORE_TAKES_AT)("%s declares `at`, so the probe keeps the stamp", (type) => {
+    const onSlot = { personId: "p2", slot: "bench" as const, orderNo: 12 };
+    const body: Record<string, unknown> = {
+      "core.suspend": {},
+      "core.resume": {},
+      "core.lineup.substitution": { side: "H", off: "p1", on: onSlot },
+      "core.lineup.replacement": { side: "H", off: "p1", on: onSlot, exemption: "concussion" },
+      "core.lineup.position": { side: "H", personId: "p1", positionKey: "GK" },
+      "core.lineup.retirement": { side: "H", personId: "p1" },
+      "core.lineup.entry": { side: "H", on: onSlot },
+    }[type] as Record<string, unknown>;
+    // The body must be VALID before the stamp, or `stampPayload`'s documented
+    // "already invalid for an unrelated reason" arm would mask the answer.
+    expect(CORE_EVENT_SCHEMAS[type].safeParse(body).success, `${type}: unstamped body is not valid`).toBe(true);
+    const out = stampPayload(body, stamp, CORE_EVENT_SCHEMAS[type]);
+    expect(out).toMatchObject({ at: { period: "H1", elapsed: 761 } });
+    expect(CORE_EVENT_SCHEMAS[type].safeParse(out).success, `${type} rejected its own stamped payload`).toBe(true);
+  });
+
+  it.each(CORE_REFUSES_AT)("%s is a strictObject with no `at`, so the probe's FALSE arm drops the stamp", (type) => {
+    const body: Record<string, unknown> = {
+      "core.start": {},
+      "core.void": {},
+      "core.forfeit": { by: "H", reason: "walkover" },
+      "core.abandon": { reason: "floodlight failure" },
+      "core.finalize": {},
+      "core.note": { text: "n" },
+      "core.award": { person: "p1", key: "motm" },
+    }[type] as Record<string, unknown>;
+    expect(stampPayload(body, stamp, CORE_EVENT_SCHEMAS[type])).toBe(body); // by reference
+    expect(CORE_EVENT_SCHEMAS[type].safeParse({ ...body, at: stamp }).success).toBe(false);
   });
 
   it("and treats an EXPLICIT `at: undefined` as a deliberate refusal, not as a blank to fill", () => {
@@ -380,6 +428,53 @@ describe("END TO END: a tile tapped on a clocked pad reaches the fold WITH its `
     expect(stampFor(footballModule!, "football.goal", original, null, T0)).toBe(original);
     expect((foldFootball(cfg, [["core.start"], ["football.goal", original]]) as { asOf?: unknown }).asOf).toBeUndefined();
     expect((state as { asOf?: unknown }).asOf).toBeUndefined();
+  });
+
+  it("stamps a KERNEL-owned event too — no module registers `core.*`, so the host falls back to CORE_EVENT_SCHEMAS", () => {
+    // R6 review, gap 3. `stampFor` used to consult `module.eventSchemas` and
+    // nothing else, and NO module registers a `core.*` key — so every
+    // kernel-owned event the pad can send fell through the `schema ===
+    // undefined` arm and went out unstamped, whatever the clock said. That is
+    // not a detail: `skins/period-shared.ts`'s SWAP_TYPE is
+    // `core.lineup.substitution`, so a hockey line change — the event whose
+    // `at` a window calculation would read — was the one event a clocked pad
+    // could never stamp.
+    const live = startClock(reseatClock(null, { period: "H1" })!, T0);
+    expect(footballModule!.eventSchemas!["core.lineup.substitution"]).toBeUndefined();
+    const sub = { side: "H", off: "p1", on: { personId: "p2", slot: "bench" as const, orderNo: 12 } };
+    const swap = stampFor(footballModule!, "core.lineup.substitution", sub, live, T0 + 761_000);
+    expect(swap).toMatchObject({ at: { period: "H1", elapsed: 761 } });
+    expect(CORE_EVENT_SCHEMAS["core.lineup.substitution"].safeParse(swap).success).toBe(true);
+
+    // …and the FALSE arm is live in the same path, which is the half that had
+    // no proof at all: `core.note` is a strictObject and comes back untouched.
+    const note = { text: "floodlight failure" };
+    expect(stampFor(footballModule!, "core.note", note, live, T0 + 761_000)).toBe(note);
+  });
+
+  it("prefers the MODULE's own schema when it has one, so a sport can never be overruled by the core table", () => {
+    const live = startClock(reseatClock(null, { period: "H1" })!, T0);
+    // The reachable half: a module type the core table knows nothing about.
+    expect(stampFor(footballModule!, "football.goal", { by: "H" }, live, T0 + 761_000)).toEqual({
+      by: "H",
+      at: { period: "H1", elapsed: 761 },
+    });
+    // A type NEITHER side declares stays unstamped rather than guessing.
+    const unknown = { by: "H" };
+    expect(stampFor(footballModule!, "football.nonesuch", unknown, live, T0)).toBe(unknown);
+
+    // THE ORDERING ITSELF, which nothing above can see: no shipped module
+    // registers a `core.*` key, so module-first and core-first agree on every
+    // real input and a mutation swapping them survives. Driven here with a
+    // module that DOES claim one — and with real engine schemas at both ends,
+    // never a hand-written probe: `core.suspend`'s schema (which takes `at`)
+    // filed under the key `core.note` (whose own schema refuses it). Stamped
+    // ⇒ the module answered; untouched ⇒ the core table overruled it.
+    const overriding = {
+      key: "fake",
+      eventSchemas: { "core.note": CORE_EVENT_SCHEMAS["core.suspend"] },
+    } as unknown as AnySportModule;
+    expect(stampFor(overriding, "core.note", {}, live, T0 + 761_000)).toEqual({ at: { period: "H1", elapsed: 761 } });
   });
 
   it("the REAL swap slot's own `at` survives the chassis — the producer the deleted decision was written for", () => {

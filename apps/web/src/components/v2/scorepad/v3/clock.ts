@@ -248,11 +248,17 @@ export interface PayloadSchemaProbe {
  * ENGINE'S OWN SCHEMA FOR THAT EVENT TYPE ACCEPTS IT.
  *
  * WHY THE SCHEMA AND NOT A LIST. `at` is `GameTime.optional()` on all nine of
- * football's payloads and on the period kernel's, but it is absent from most
- * of `CORE_EVENT_SCHEMAS` (`core.start`, `core.void`, `core.note`, the whole
- * `core.lineup.*` family) — and every one of those is a `z.strictObject`, so
- * an unexpected `at` is a hard parse failure, not a harmless extra key. A
- * blanket stamp would therefore break the very events it touched.
+ * football's payloads and on the period kernel's seven, and on seven of the
+ * fourteen `CORE_EVENT_SCHEMAS` (`core.suspend`, `core.resume` and all five
+ * `core.lineup.*`). The other seven — `core.start`, `core.void`,
+ * `core.forfeit`, `core.abandon`, `core.finalize`, `core.note`, `core.award` —
+ * are `z.strictObject`s WITHOUT it, so an unexpected `at` is a hard parse
+ * failure there, not a harmless extra key. A blanket stamp would break the
+ * very events it touched, and a hand-kept list would have to know which half
+ * each type is in. (This paragraph itself got that wrong first time: it filed
+ * the whole `core.lineup.*` family under "no `at`", when all five declare one.
+ * The enumeration now lives in `__tests__/clock.test.ts` as an assertion over
+ * the engine's own export, so prose cannot drift from the table again.)
  *
  * The obvious fix is for the skin to declare which of its types are
  * stampable. That is a MIRROR of the engine, and this programme has now paid

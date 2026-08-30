@@ -39,7 +39,7 @@
 // own suite proves every DECISION, not the DOM.
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { EventEnvelope, LineupPair, SquadState } from "@seazn/engine/core";
-import { initSquads } from "@seazn/engine/core";
+import { CORE_EVENT_SCHEMAS, initSquads, isCoreEventType } from "@seazn/engine/core";
 import type { AnySportModule, FidelityBand, PadSpec } from "@seazn/engine/sport";
 import { useMsg } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
@@ -74,6 +74,7 @@ import {
   stampPayload,
   toggleClock,
   type PadClock,
+  type PayloadSchemaProbe,
 } from "./clock";
 import { ActivityPanel, latestRowDetail, type ActivityDetailResolver, type ActivityEvent } from "./activity";
 import { MORE_SHEET_KEY, type DockSpec, type GuidedSheetSpec, type PadHostView, type PadPhase, type ScorebugSpec, type SkinDefV3, type SwapSlot, type TapEvent, type TileSpec } from "./types";
@@ -672,16 +673,18 @@ export function adaptSwapSlot(
  * does exactly that: real skin tile -> this -> real `foldMatch`).
  *
  * The whole decision is delegated: `stampPayload` (../clock.ts) probes the
- * module's OWN `eventSchemas[type]` with the stamp applied and keeps it only
- * if the engine's schema parses. Nothing here mirrors which event types accept
- * an `at` — `at` is `GameTime.optional()` on all nine football payloads and on
- * the period kernel's, but ABSENT from most of `CORE_EVENT_SCHEMAS`, every one
- * of which is a `z.strictObject` that would reject the extra key outright. See
- * `stampPayload`'s own doc for why asking the engine beats a skin-side list.
+ * owning schema — `schemaFor` below — with the stamp applied, and keeps it
+ * only if that schema parses. Nothing here mirrors which event types accept an
+ * `at`: `at` is `GameTime.optional()` on all nine football payloads, on the
+ * period kernel's seven, and on seven of the fourteen `CORE_EVENT_SCHEMAS`,
+ * while the other seven are `z.strictObject`s that would reject the extra key
+ * outright. See `stampPayload`'s own doc for why asking the engine beats a
+ * skin-side list, and `schemaFor` for why the core table has to be reachable
+ * at all.
  *
  * `eventSchemas` is OPTIONAL on `AnySportModule`, and a module without one
- * stamps nothing — the same fail-safe direction every branch in this path
- * takes: a pad that would have dispatched still dispatches.
+ * stamps nothing but its kernel events — the same fail-safe direction every
+ * branch in this path takes: a pad that would have dispatched still dispatches.
  */
 export function stampFor(
   module: AnySportModule,
@@ -690,7 +693,41 @@ export function stampFor(
   clock: PadClock | null,
   nowMs: number,
 ): unknown {
-  return stampPayload(payload, stampOf(clock, nowMs), module.eventSchemas?.[type]);
+  return stampPayload(payload, stampOf(clock, nowMs), schemaFor(module, type));
+}
+
+/**
+ * The schema that owns `type` — the module's registry first, the KERNEL's
+ * second.
+ *
+ * R6 review, gap 3. Consulting `module.eventSchemas` alone made the probe's
+ * refusal arm dead code and left a real hole behind it: NO module registers a
+ * `core.*` key (they are kernel-owned — `core/events.ts` validates them and
+ * never forwards them to `module.apply`), so every kernel event a pad can send
+ * fell through `stampPayload`'s `schema === undefined` arm and went out
+ * unstamped however the clock read. `skins/period-shared.ts`'s `SWAP_TYPE` is
+ * `core.lineup.substitution`, so a hockey line change — precisely the event a
+ * window calculation reads `at` from — was the one thing a clocked pad could
+ * never stamp.
+ *
+ * Both arms are now live and both are enumerated in `__tests__/clock.test.ts`
+ * against the engine's own export: seven core types DECLARE `at`
+ * (`core.suspend`, `core.resume`, and all five `core.lineup.*`) and seven are
+ * `z.strictObject`s without it (`core.start`, `core.void`, `core.forfeit`,
+ * `core.abandon`, `core.finalize`, `core.note`, `core.award`), which the probe
+ * drops the stamp for rather than turning a dispatch that would have worked
+ * into one that does not.
+ *
+ * `isCoreEventType` is the engine's own membership test rather than a bare
+ * index, so an arbitrary type string cannot reach `Object.prototype` and hand
+ * the probe something that merely looks callable. The module wins on a tie: a
+ * sport that ever did register a `core.*` key of its own is answering about
+ * its own payload.
+ */
+function schemaFor(module: AnySportModule, type: string): PayloadSchemaProbe | undefined {
+  const own = module.eventSchemas?.[type];
+  if (own !== undefined) return own;
+  return isCoreEventType(type) ? CORE_EVENT_SCHEMAS[type] : undefined;
 }
 
 /**
