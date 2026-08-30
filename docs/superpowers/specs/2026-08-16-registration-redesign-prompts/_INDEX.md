@@ -31,7 +31,7 @@ prompts dir) also writes — those two are **sequential, never parallel**.
 | RS005 | `RS005-hub-registrants-tab.md` | RS004 | **DONE** — merged `9d2ad39bc` (PR #651, 2026-08-26), 16/16 checks green. Known-open and stated in the PR: no pagination in the read path; `resend-confirmation` has no throttle (mirrors the pre-existing `/remind`). Smoke still owed by RS010 |
 | RS006 | `RS006-public-stepper.md` | RS003 | **DONE** — merged `ec5cc6e3a` (PR #666, 2026-08-27), 9/9 checks + seven-width e2e green. Follow-ups merged `81f2198a1` (PR #668) fixed three defects found by USING the flow, none of which three review passes caught: RS005's "public sign-up page isn't live yet" notices were still telling organisers the link and QR do not work; "This is me" was not exclusive within a division (one person, two slots, charged twice); step 3 blocked with a step-wide message and no field marked. Smoke still owed by RS010 |
 | RS007 | `RS007-status-page-join-payments.md` | RS006 | **DONE** — merged (PR #677 `a6fca57f2` + PR #680 `2b743185e`, 2026-08-30). Table was stale here; see git log. |
-| RS008 | `RS008-consent-claim-optout.md` (superseded by an inline brief, 2026-08-30 — that file's premises were checked against shipped code and found stale) | RS007 | **PR #682 updated** — branch `feat/rs008-consent-claim-optout`, 24 commits on `origin/main` (`e23dcf241`): the original 11 (A/B1-4/C1-3/#24), then a review-fixes wave closing findings #1–#10 (10 commits). See closing notes below. |
+| RS008 | `RS008-consent-claim-optout.md` (superseded by an inline brief, 2026-08-30 — that file's premises were checked against shipped code and found stale) | RS007 | **PR #682 updated** — branch `feat/rs008-consent-claim-optout`, 25 commits on `origin/main` (`e23dcf241`, unchanged merge-base — branch not rebased): the original 11 (A/B1-4/C1-3/#24), a review-fixes wave closing findings #1–#10, then a second `/code-review --high` pass closing 2 more (youth-axis gap in `previewJoinEntry`'s unclaimed-slot masking; `anyOptedOutByRegistration` dedupe). See closing notes below. |
 | RS009 | `RS009-free-agents.md` | RS005, RS003 | TODO |
 | RS011 | `RS011-organiser-eligibility-gates.md` | RS002 | TODO — issue #412, re-homed from `L1` |
 | RS010 | `RS010-closeout-e2e-smoke-help.md` | all | TODO |
@@ -3885,3 +3885,86 @@ scoped a ruling for. Owed: a decision on whether `public_person_name()`'s
 default should flip to match RS007/RS008's "registering is consent" ruling
 5, or whether the two surfaces are intentionally different and that should
 be documented at both definitions.
+
+### RS008 review-fixes wave 2 (2026-08-30) — PR #682, `/code-review --high` pass, 2 findings closed
+
+A second `/code-review --high` pass over PR #682 (after the 9-finding wave
+above) returned two real, cheap-to-fix issues. Both closed, one commit each,
+each with a regression test — `288d04584` then `8d6494f27` on top of the 20
+commits already on the branch.
+
+**Fix 1 (Safeguarding gap, `288d04584`)** `previewJoinEntry`'s unclaimed-slot
+masking (`registration-submit.ts`, the join page's "which one are you?"
+picker) only ever checked the per-person consent axis (email-match lookup,
+#24/finding #8) — it never applied the division's youth/safeguarding policy
+the way the SAME function's heading does three lines below
+(`resolvePersonDisplayName`'s `divPolicy.youth` argument). A youth
+division's still-pending, captain-entered slot showed a minor's real name
+unmasked to anyone holding the join link, regardless of the division's
+youth setting. Fixed: the per-slot mask now routes through
+`resolvePersonDisplayName` with `divPolicy.youth`/`divPolicy.player_name_display`
+threaded in, identical shape to the heading. Regression test uses a slot
+with NO email at all, isolating the youth axis from the consent axis (#24's
+existing tests already cover consent) — masks purely on youth.
+
+**Fix 2 (Dedupe, `8d6494f27`)** `exports.ts` carried a byte-for-byte
+duplicate of `registrations.ts`'s `anyOptedOutByRegistration` (introduced by
+review fix #6 above), differing only in which sql/tx client was passed —
+this codebase's own documented "two lookup paths drift" defect class.
+Extracted to ONE function in `registrations.ts`, now taking the client as an
+explicit `AnySql` (`Tx | postgres.Sql`) parameter — the same polymorphism
+`loadSettings`/`divisionCtx`/`findPlayerPersonByEmail` already use in that
+file; `exports.ts` imports and calls it instead of keeping its own copy. No
+behavior change. Regression test calls the shared function once via the
+plain pooled `sql` and once via a `withTenant` transaction against the same
+fixture, asserting identical output — the exact two call shapes the dedupe
+must keep agreeing on. Mutation-checked across all four affected files at
+once (`exports.test.ts`, `registrations.test.ts`,
+`registration-status-read.test.ts`, `registration-submit.test.ts`): breaking
+the shared function reddened 7 tests spread across all four, proving they
+now share one path rather than two that happened to agree.
+
+**Verification.** Both fixes TDD'd (fix 1: red confirmed before the source
+change; fix 2: mutation-checked, a true pre-refactor red being moot for a
+signature that didn't exist yet). Gate for fix 1:
+`registration-submit.test.ts` 76/76. Gate for fix 2: the four-file sweep
+above, 347/347, 0 failed, 0 failed suites — both via
+`--reporter=json --outputFile`, both reruns after restoring each mutation
+confirmed byte-identical via `cmp`/`shasum` (a wrapped `diff` in this
+environment printed a misleading multi-thousand-line summary for a 2-line
+mutation — do not trust it here; use `cmp`/`shasum` to judge restoration).
+`seazn-env gate --label rs008` (`turbo typecheck`+`lint`, matching CI): 0
+errors, 125 warnings — the exact same pre-existing count the first
+review-fixes wave recorded, unchanged by either fix. No schema or
+user-facing string changes, so `openapi:gen`/`i18n:gen-keys` are N/A here.
+
+**Three accepted-limitation rulings, recorded rather than fixed or
+silently dropped:**
+
+(a) **The 30s Redis cache on `publicEntrants` (`public.ts`) and the public
+division page's stale-while-revalidate window do not bust on a `/me`
+opt-out.** An opted-out name can render for up to one more request/cache
+cycle after the person opts out. This is the same eventual-consistency
+pattern already accepted elsewhere in this product (cache/SWR windows
+generally, not something this session introduced) — not a regression, not
+reachable by anything this PR touched, and not worth a cache-invalidation
+hook for a privacy window measured in seconds.
+
+(b) **`previewJoinEntry` does one consent lookup per roster slot (N+1)
+rather than a single batched query.** Correctness is fine — each slot's
+`playerPersonConsentsByEmail` call is independent and cheap (indexed,
+per-email lookup) — this is a pure efficiency concern for a page that lists
+at most a roster's worth of slots. Worth a follow-up (batch by the slots'
+emails in one query) but not blocking; no user-visible behavior depends on
+it.
+
+(c) **Smoke coverage for the new masking sites was deferred to RS010 by
+RS008's own original brief**, not an oversight of either review-fixes wave.
+Consistent with every other RS branch in this programme (RS004–RS007 all
+recorded the identical "smoke still owed by RS010" deferral in the table
+above) — RS008 owes nothing beyond what the rest of the programme already
+owes at the same closeout point.
+
+**Not done, and why:** no rebase onto current `origin/main` (matches the
+first review-fixes wave's own note — out of scope for a review-fix pass);
+no new PR (updates the existing PR #682 branch in place, per the dispatch).
