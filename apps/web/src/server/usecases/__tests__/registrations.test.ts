@@ -1952,16 +1952,16 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
     expect(div.payment_method).toBe("stripe");
   });
 
-  // V380 dropped the jsonb gender rules, so a free-text `eligibility_note` is
-  // the only surviving channel for a restriction the category enum cannot
-  // express, and `requiresGender` now treats a non-empty note as "collect
-  // gender" (collection only — nothing programmatically evaluates note text).
-  // The join-page preview wired that immediately; publicRegistrationInfo did
-  // not, because the two live in different files and only one lane touched it.
-  // Without the note passed through here, the SAME division collects gender on
-  // the join page and silently skips it on the main register flow — the split
-  // that makes a half-applied fix read as a working one.
-  it("collects gender on the register page when a note is the only restriction left", async () => {
+  // RS007 review fix M2 (2026-08-29): a 2026-08-27 revision made
+  // `requiresGender` treat any non-empty `eligibility_note` as "collect
+  // gender" too — but that note has nothing to do with gender on most
+  // divisions, and divisionEligibilityIssues never gated on gender for a
+  // null category either way, so it forced the public WHO step to demand a
+  // field the API never required. Ruling: a free-text note must never make
+  // a field mandatory — `category` mens/womens/mixed is the ONLY trigger,
+  // same as before that revision (registration-eligibility.ts's own doc
+  // comment on requiresGender has the full account).
+  it("does NOT collect gender on the register page for a note-only division — the note is not a gender rule", async () => {
     const { orgSlug, competition, division } = await stripeRig();
     await sql`
       update divisions
@@ -1969,7 +1969,7 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
       where id = ${division.id}`;
     const info = await publicRegistrationInfo(orgSlug, competition.slug);
     const div = info.divisions.find((d) => d.division_id === division.id)!;
-    expect(div.requires_gender, "a note-only division must still collect gender").toBe(true);
+    expect(div.requires_gender, "a free-text note must never make gender mandatory").toBe(false);
   });
 
   it("does not collect gender for a division with no category and no note", async () => {

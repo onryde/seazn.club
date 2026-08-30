@@ -80,6 +80,14 @@ export function JoinForm({
   const t = useT();
   const [slots, setSlots] = useState(unclaimedSlots);
   const [allowNew, setAllowNew] = useState(allowNewPlayer);
+  // RS007 review fix L4: promoted alongside slots/allowNew above, for the
+  // same reason — `totalPlayers` is only the page-load snapshot; refreshSlots
+  // below keeps this in sync with it so the success meter never mixes a
+  // stale total with a fresh unclaimed count (view-model.ts's own
+  // rosterMeterAfterJoin doc comment: "computed entirely from what the page
+  // already knew" — that promise only holds if EVERY number it reads is kept
+  // fresh together, not just some of them).
+  const [total, setTotal] = useState(totalPlayers);
   const [selected, setSelected] = useState<SlotChoice | null>(() =>
     defaultSlotChoice(unclaimedSlots, allowNewPlayer, initialPlayerId),
   );
@@ -100,11 +108,17 @@ export function JoinForm({
   async function refreshSlots() {
     setRefreshing(true);
     try {
-      const fresh = await apiV1<{ unclaimed_slots: JoinSlot[]; allow_new_player: boolean }>(
-        joinPreviewUrl(orgSlug, competitionSlug, joinCode),
-      );
+      const fresh = await apiV1<{
+        unclaimed_slots: JoinSlot[];
+        allow_new_player: boolean;
+        total_players: number;
+      }>(joinPreviewUrl(orgSlug, competitionSlug, joinCode));
       setSlots(fresh.unclaimed_slots);
       setAllowNew(fresh.allow_new_player);
+      // RS007 review fix L4 — refreshed in the SAME round-trip as slots
+      // above, never separately, so the two can never disagree about which
+      // moment in time they describe.
+      setTotal(fresh.total_players);
       // FIX 4 (RS007 review): NEW_PLAYER_CHOICE is never a real player_id,
       // so a bare "still in the fresh list" check always read it as gone —
       // selectionAfterRefresh (view-model.ts) special-cases it against
@@ -130,7 +144,12 @@ export function JoinForm({
         method: "POST",
         json: buildJoinBody(joinCode, selected!, contact, consent),
       });
-      setMeter(rosterMeterAfterJoin(totalPlayers, slots.length, selected === NEW_PLAYER_CHOICE));
+      // RS007 review fix L4: read `total` (state, kept fresh by
+      // refreshSlots), never the `totalPlayers` prop directly — both
+      // numbers must come from the SAME snapshot, the freshest one
+      // available, or a post-conflict-refresh claim can report a stale
+      // "X of Y" (e.g. "4 of 4" for a roster that just reached 5 of 5).
+      setMeter(rosterMeterAfterJoin(total, slots.length, selected === NEW_PLAYER_CHOICE));
     } catch (err) {
       const status = err instanceof ApiV1Error ? err.status : undefined;
       setFailure(classifyJoinFailure(status));

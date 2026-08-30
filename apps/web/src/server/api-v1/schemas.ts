@@ -8,6 +8,17 @@ import { z } from "zod";
 // does, so the wire schema reuses the engine's zod rather than restating it —
 // a second declaration is a second thing to drift.
 import { HardConstraint, type ConflictDetailKind } from "@seazn/engine/scheduling";
+// RS007 review fix L1 — the SAME every-year-safe days-per-month predicate
+// ageBandEligibilityIssues (registration-rules.ts) uses to fail loudly on
+// the read side; pure and DB-free, so it is safe to reuse here. RELATIVE,
+// with the explicit .ts extension (matching this file's own sibling
+// openapi.ts, e.g. `from "./schemas.ts"`) — NOT the `@/` alias: this module
+// is shared with the standalone OpenAPI generator script
+// (scripts/openapi-gen.ts), which runs via bare
+// `node --experimental-strip-types` with no bundler and no tsconfig `paths`
+// resolution, so a `@/...` import throws ERR_MODULE_NOT_FOUND there even
+// though it resolves fine under tsc/Next.js/vitest.
+import { isValidCutoffDay } from "../../lib/registration-rules.ts";
 
 // ---------------------------------------------------------------------------
 // Common
@@ -181,12 +192,33 @@ function checkAgeBand(
 export const AGE_CUTOFF_BOTH_OR_NEITHER =
   "age_cutoff_month and age_cutoff_day must be set together, or both left null.";
 
+// RS007 review fix L1: age_cutoff_day was only range-checked 1-31 (this
+// schema's own min/max below, and the DB CHECK) — 31 September or
+// 30 February parsed successfully and silently rolled a month at READ time
+// (ageBandEligibilityIssues, @/lib/registration-rules — `new
+// Date(Date.UTC(...))` normalises an out-of-range day), shifting eligibility
+// by days with no error anywhere. No merge-and-validate/DB-race backstop is
+// needed for this one, unlike age_min/age_max: the both-or-neither check
+// just above already forces month and day to travel together in the SAME
+// request, so this can only ever be evaluated with both present, and either
+// PASSES self-contained or FAILS self-contained — there is no stale-stored-
+// value half to race against.
+export const AGE_CUTOFF_DAY_INVALID_FOR_MONTH = "age_cutoff_day is not a valid day for age_cutoff_month.";
+
 function checkAgeCutoff(
   v: { age_cutoff_month?: number | null; age_cutoff_day?: number | null },
   ctx: z.RefinementCtx,
 ): void {
   if ((v.age_cutoff_month != null) !== (v.age_cutoff_day != null)) {
     ctx.addIssue({ code: "custom", path: ["age_cutoff_day"], message: AGE_CUTOFF_BOTH_OR_NEITHER });
+    return;
+  }
+  if (
+    v.age_cutoff_month != null &&
+    v.age_cutoff_day != null &&
+    !isValidCutoffDay(v.age_cutoff_month, v.age_cutoff_day)
+  ) {
+    ctx.addIssue({ code: "custom", path: ["age_cutoff_day"], message: AGE_CUTOFF_DAY_INVALID_FOR_MONTH });
   }
 }
 

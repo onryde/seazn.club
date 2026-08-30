@@ -1585,6 +1585,88 @@ describe.skipIf(!HAS_DB)("joinTeamEntry", () => {
   });
 
   // ---------------------------------------------------------------------------
+  // RS007 review fix L2 — a claim may fill a blank or correct a value, NEVER
+  // erase one. The join form renders dob/gender inputs only when
+  // requires_dob/requires_gender (JoinForm's own props) — if an organiser
+  // removes the division's age band or gender rule between the captain's
+  // submit and the joiner's claim, `input.player.dob`/`.gender` arrive
+  // undefined/null even though the captain already typed a real value in.
+  // The CAS used to write `dob = ${input.player.dob ?? null}` unconditionally
+  // — an absent input ERASED a stored value that findOrCreatePlayerPerson's
+  // own dob rule (and any later youth handling) depends on.
+  // ---------------------------------------------------------------------------
+
+  it("a claim that omits dob/gender does NOT erase a value the captain already typed in (RS007 review fix L2)", async () => {
+    const { entry, players } = await rosterRig("team", ["Kid One"]);
+    // Simulate a captain-typed dob/gender already sitting on the row before
+    // this claim — same end state whether it came from the original submit
+    // or an earlier partial claim; the CAS below doesn't care which.
+    await sql`
+      update registration_players set dob = '2010-06-15', gender = 'm' where id = ${players[0]!.id}`;
+
+    const res = await joinTeamEntry(
+      {},
+      {
+        join_code: entry.join_code!,
+        player_id: players[0]!.id,
+        // Deliberately NO dob/gender — the requires_dob/requires_gender-gated
+        // inputs a joiner's browser never rendered.
+        player: { full_name: "Kid One" },
+        privacy_consent: true,
+      },
+    );
+    expect(res.consent_status).toBe("granted"); // the claim itself still succeeds
+
+    const [row] = await sql<{ dob: string | null; gender: string | null }[]>`
+      select dob, gender from registration_players where id = ${players[0]!.id}`;
+    expect(row!.dob).toBe("2010-06-15"); // NOT erased
+    expect(row!.gender).toBe("m"); // NOT erased
+  });
+
+  it("a claim CAN still fill a blank dob/gender (RS007 review fix L2) — coalesce must not turn into 'never overwrite'", async () => {
+    const { entry, players } = await rosterRig("team", ["Kid One"]);
+    // Starts blank (rosterRig seeds only full_name).
+    const filled = await joinTeamEntry(
+      {},
+      {
+        join_code: entry.join_code!,
+        player_id: players[0]!.id,
+        player: { full_name: "Kid One", dob: "1999-03-20", gender: "f" },
+        privacy_consent: true,
+      },
+    );
+    expect(filled.consent_status).toBe("granted");
+    const [afterFill] = await sql<{ dob: string | null; gender: string | null }[]>`
+      select dob, gender from registration_players where id = ${players[0]!.id}`;
+    expect(afterFill!.dob).toBe("1999-03-20");
+    expect(afterFill!.gender).toBe("f");
+  });
+
+  it("a claim CAN still correct a previously stored dob/gender when the joiner submits a different one (RS007 review fix L2)", async () => {
+    const { entry, players } = await rosterRig("team", ["Kid One"]);
+    // A captain-typed value already on the row — wrong, and the joiner
+    // corrects it at claim time. Both dobs are comfortably adult (this test
+    // is about which VALUE wins, not the separate minor/guardian gate).
+    await sql`
+      update registration_players set dob = '1985-06-15', gender = 'm' where id = ${players[0]!.id}`;
+
+    const corrected = await joinTeamEntry(
+      {},
+      {
+        join_code: entry.join_code!,
+        player_id: players[0]!.id,
+        player: { full_name: "Kid One", dob: "1990-08-22", gender: "f" },
+        privacy_consent: true,
+      },
+    );
+    expect(corrected.consent_status).toBe("granted");
+    const [afterCorrect] = await sql<{ dob: string | null; gender: string | null }[]>`
+      select dob, gender from registration_players where id = ${players[0]!.id}`;
+    expect(afterCorrect!.dob).toBe("1990-08-22"); // the joiner's own value wins
+    expect(afterCorrect!.gender).toBe("f");
+  });
+
+  // ---------------------------------------------------------------------------
   // #22 — reconcile a claim against the directory. `rosterRig` entries are
   // `fee_cents: 0` / `approval: "auto"`, so they materialise INLINE at
   // submit (registration-submit.ts's own "confirm INLINE" branch) — every
@@ -2084,14 +2166,17 @@ describe.skipIf(!HAS_DB)("joinTeamEntry", () => {
       await sql`update divisions set eligibility_note = 'School-registered students only' where id = ${division.id}`;
       const preview = await previewJoinEntry(entry.join_code!);
       expect(preview.eligibility_note).toBe("School-registered students only");
-      // Review fix (2026-08-27): a null-category division carrying a note
-      // now also collects gender defensively (requiresGender,
-      // registration-eligibility.ts) — V380 could not convert every jsonb
-      // gender-rule shape onto `category`, so `category` alone can no
-      // longer prove this division unrestricted. Proves the wiring from
-      // divCtx.eligibility_note into requiresGender actually reaches this
-      // preview, not just the pure function in isolation.
-      expect(preview.requires_gender).toBe(true);
+      // RS007 review fix M2 (2026-08-29): a 2026-08-27 revision made a
+      // null-category division carrying ANY note also collect gender
+      // defensively — but this note has nothing to do with gender, and
+      // divisionEligibilityIssues never gated on gender for a null category
+      // either way, so that made the public WHO step demand a field the API
+      // never required. Ruling: a free-text note must never make a field
+      // mandatory (requiresGender, registration-eligibility.ts — full
+      // account there). Proves the wiring from divCtx.eligibility_note into
+      // requiresGender no longer forces collection, not just the pure
+      // function in isolation.
+      expect(preview.requires_gender).toBe(false);
     });
 
     it("eligibility_note is null when the division has none set", async () => {

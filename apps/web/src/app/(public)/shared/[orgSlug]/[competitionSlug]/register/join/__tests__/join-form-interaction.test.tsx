@@ -375,6 +375,53 @@ describe("submit — designed failure states, never a raw server string", () => 
     expect(apiV1Mock.calls[1]!.method ?? undefined).not.toBe("POST");
   });
 
+  // RS007 review finding L4: totalPlayers is the PROP captured at page load;
+  // `slots` gets replaced by refreshSlots's own setSlots. If the roster's
+  // TOTAL also changed between page load and a successful claim (e.g.
+  // someone else's insert-path join landed in the same window as this
+  // joiner's conflict), mixing the stale prop with the fresh unclaimed count
+  // reports a WRONG "X of Y" — a roster that reached 5 of 5 could still show
+  // 4 of 4. Fix: promote total to state (mirrors slots/allowNew's own
+  // pattern) and refresh it from the SAME preview response, so the meter
+  // always reads one snapshot, the freshest one available.
+  it("409 -> refresh -> successful claim reports the meter from the FRESH total, not the stale page-load prop", async () => {
+    apiV1Mock.queue.push({ ok: false, error: new ApiV1Error("already joined", 409, "CONFLICT") });
+    // The fresh preview: p1 is gone (claimed by someone else), AND total
+    // grew from 4 to 5 — someone else's INSERT-path join landed in the same
+    // window, which `unclaimed_slots` alone can never reveal.
+    apiV1Mock.queue.push({
+      ok: true,
+      data: {
+        unclaimed_slots: [{ player_id: "p2", full_name: "Jordan Player" }],
+        allow_new_player: true,
+        total_players: 5,
+      },
+    });
+    apiV1Mock.queue.push({ ok: true, data: { registration_id: "reg-1", player_id: "p2", consent_status: "granted" } });
+
+    const m = mount({
+      initialPlayerId: "p1",
+      totalPlayers: 4,
+      unclaimedSlots: [
+        { player_id: "p1", full_name: "Sam Player" },
+        { player_id: "p2", full_name: "Jordan Player" },
+      ],
+    });
+    fillMinimalValidForm(m);
+    await submit(m); // 409
+    m.clickByText("Refresh available spots");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Only p2 remains after the refresh — pick it and submit again.
+    const remaining = m.radios()[0]!;
+    (propsOf(remaining).onChange as () => void)();
+    await submit(m);
+
+    expect(m.pageText()).toContain("5 of 5 checked in");
+    expect(m.pageText()).not.toContain("4 of 4 checked in");
+  });
+
   // Bug (2026-08-27 review, FIX 4): NEW_PLAYER_CHOICE ("new") is never a
   // real player_id, so refreshSlots's old "does the selection still exist
   // in the fresh unclaimed list" check silently reset a valid "I'm someone

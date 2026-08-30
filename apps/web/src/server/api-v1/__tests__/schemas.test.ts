@@ -456,6 +456,43 @@ describe("CreateDivision — eligibility columns (RS007 wizard rewire)", () => {
       expect(r.error.issues.some((i) => i.path.join(".") === "age_cutoff_day")).toBe(true);
     }
   });
+
+  // RS007 review fix L1: age_cutoff_day was validated only as 1-31 (this
+  // schema's own min/max above, and the divisions_age_cutoff_check DB
+  // constraint), so 31 September or 30 February parsed successfully and
+  // silently rolled over a month later at read time
+  // (ageBandEligibilityIssues, @/lib/registration-rules — `new
+  // Date(Date.UTC(...))` normalises an out-of-range day). Reject the
+  // impossible combination HERE, at write time, so the organiser sees it
+  // immediately instead of eligibility silently shifting by days.
+  it("rejects a cutoff day that does not exist in its month (RS007 review fix L1)", () => {
+    const thirtyOneSept = CreateDivision.safeParse({ ...base, age_cutoff_month: 9, age_cutoff_day: 31 });
+    expect(thirtyOneSept.success).toBe(false);
+    if (!thirtyOneSept.success) {
+      expect(thirtyOneSept.error.issues.some((i) => i.path.join(".") === "age_cutoff_day")).toBe(true);
+    }
+    const thirtyFeb = CreateDivision.safeParse({ ...base, age_cutoff_month: 2, age_cutoff_day: 30 });
+    expect(thirtyFeb.success).toBe(false);
+    // 29 February is ALSO rejected, deliberately — it IS a real calendar
+    // date, but only in a leap year, and this same month/day pair is
+    // re-evaluated every season against a DIFFERENT seasonStartYear
+    // (ageBandEligibilityIssues anchors at cutoffMonth/cutoffDay of
+    // whatever season is being checked). A leap-only cutoff would still
+    // silently roll over into 1 March in three years out of four — capping
+    // February at 28 here guarantees whatever passes is valid for EVERY
+    // year, not just some.
+    const leapDay = CreateDivision.safeParse({ ...base, age_cutoff_month: 2, age_cutoff_day: 29 });
+    expect(leapDay.success).toBe(false);
+  });
+
+  it("accepts every genuinely valid day-of-month boundary", () => {
+    // September genuinely has 30 days.
+    expect(CreateDivision.safeParse({ ...base, age_cutoff_month: 9, age_cutoff_day: 30 }).success).toBe(true);
+    // January genuinely has 31.
+    expect(CreateDivision.safeParse({ ...base, age_cutoff_month: 1, age_cutoff_day: 31 }).success).toBe(true);
+    // February's cap (see the leap-year note above).
+    expect(CreateDivision.safeParse({ ...base, age_cutoff_month: 2, age_cutoff_day: 28 }).success).toBe(true);
+  });
 });
 
 // S12/#421 pass D, V361 — `pair_order` mirrors `order_no`'s own convention

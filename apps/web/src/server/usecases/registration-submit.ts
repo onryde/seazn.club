@@ -955,10 +955,10 @@ export async function previewJoinEntry(joinCode: string): Promise<JoinPreviewRes
       age_min: divCtx.age_min,
       age_max: divCtx.age_max,
     }),
-    // eligibility_note included (RS007 review fix) — requiresGender now
-    // also collects gender defensively for a division whose category alone
-    // can no longer prove it unrestricted (registration-eligibility.ts's
-    // own doc comment on requiresGender has the full account).
+    // eligibility_note passed through for compatibility only — requiresGender
+    // (RS007 review fix M2) never reads it: a free-text note must never make
+    // a field mandatory (registration-eligibility.ts's own doc comment on
+    // requiresGender has the full account).
     requires_gender: requiresGender({ category: divCtx.category, eligibility_note: divCtx.eligibility_note }),
     total_players: totalPlayers,
     eligibility_note: divCtx.eligibility_note,
@@ -1125,10 +1125,19 @@ export async function joinTeamEntry(
       // itself fills. `email` added for #22 — the claimer's own email wins
       // over whatever (if anything) the captain guessed at submit, same as
       // dob/gender/guardian_name here already do.
+      //
+      // dob/gender use coalesce (RS007 review fix L2), not a bare overwrite:
+      // the join form renders those inputs only when requires_dob/
+      // requires_gender, so if an organiser removes the division's age band
+      // or gender rule between the captain's submit and this claim,
+      // input.player.dob/.gender arrive undefined even though the captain
+      // already typed a real value in. A claim may fill a blank or correct
+      // a value, never ERASE one — findOrCreatePlayerPerson's own dob rule
+      // (and any later youth handling) depends on it surviving.
       const [claimed] = await tx<{ id: string; person_id: string | null }[]>`
         update registration_players
-        set dob = ${input.player.dob ?? null},
-            gender = ${input.player.gender ?? null},
+        set dob = coalesce(${input.player.dob ?? null}, dob),
+            gender = coalesce(${input.player.gender ?? null}, gender),
             email = ${claimedEmail},
             consent_status = ${consentStatus},
             consent_at = now(),

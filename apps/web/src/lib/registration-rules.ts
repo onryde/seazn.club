@@ -150,6 +150,31 @@ export function categoryEligibilityIssues(
   return issues;
 }
 
+// Static days-per-month table for age_cutoff_day validity (RS007 review fix
+// L1). February is capped at 28, deliberately NOT 29: a cutoff is not a
+// one-off date — the SAME age_cutoff_month/age_cutoff_day pair is
+// re-evaluated every season against a DIFFERENT seasonStartYear
+// (ageBandEligibilityIssues below), so a leap-only day would still silently
+// roll over into 1 March in the three years out of four that are not leap
+// years. Rejecting it here guarantees every (month, day) pair that survives
+// this check is valid for EVERY year, not just some.
+const DAYS_IN_MONTH: readonly number[] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+/**
+ * Whether `day` is a real day-of-month for `month` (1-12), by the
+ * every-year-safe table above. Exported so the write path
+ * (`api-v1/schemas.ts`'s `checkAgeCutoff`) can reject an impossible
+ * age_cutoff_month/age_cutoff_day combination BEFORE it is ever stored —
+ * same "validate once, reuse everywhere" shape as every other predicate in
+ * this file. `ageBandEligibilityIssues` below uses it too, as a read-side
+ * backstop for a row that reached storage before this check existed (or
+ * bypassed it directly).
+ */
+export function isValidCutoffDay(month: number, day: number): boolean {
+  const max = DAYS_IN_MONTH[month - 1];
+  return max != null && day >= 1 && day <= max;
+}
+
 /**
  * First-class AGE BAND check only (`age_min`/`age_max`, V364). Evaluated at
  * `age_cutoff_month`/`age_cutoff_day` of `seasonStartYear` when the division
@@ -190,6 +215,18 @@ export function ageBandEligibilityIssues(
   }
   const cutoffMonth = division.age_cutoff_month ?? 1;
   const cutoffDay = division.age_cutoff_day ?? 1;
+  // RS007 review fix L1: the write path (checkAgeCutoff, api-v1/schemas.ts)
+  // now rejects a day that does not exist in its month, so this combination
+  // should be unreachable for any row written through the API. Fail loudly
+  // rather than let `Date.UTC` silently roll it into the next month (31
+  // September becoming 1 October, 30 February becoming 1/2 March) — that
+  // silent shift, with no error anywhere, is the defect this fix closes.
+  // Never fires for valid input, including the 1/1 default above.
+  if (!isValidCutoffDay(cutoffMonth, cutoffDay)) {
+    throw new Error(
+      `Invalid age cutoff: day ${cutoffDay} does not exist in month ${cutoffMonth}. This division's stored age_cutoff_month/age_cutoff_day should have been rejected at write time.`,
+    );
+  }
   const cutoffDate = new Date(Date.UTC(seasonStartYear, cutoffMonth - 1, cutoffDay));
   const age = ageAt(person.dob, cutoffDate);
   if (division.age_max != null && age > division.age_max) {
