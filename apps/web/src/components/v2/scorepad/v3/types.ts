@@ -20,8 +20,14 @@
 // exact failure `SPORT_TONES`'s own doc (a SUBSET of `SPORT_TOKENS`, never a
 // parallel list) exists to prevent. Keep any future sibling import to that
 // same bar: leaf module, vocabulary owner, `import type`.
+//
+// R6/task A admits a SECOND sibling, `./clock`, against that same bar and for
+// the same reason: clock.ts imports nothing at all (not even React), it owns
+// the clock vocabulary, and restating `PadClockSpec` here would fork the shape
+// the chassis reads from the shape the skin writes.
 import type { EventEnvelope, SquadState } from "@seazn/engine/core";
 import type { FidelityBand } from "@seazn/engine/sport";
+import type { PadClockSpec } from "./clock";
 import type { SportTone } from "./sport-theme";
 
 export type TapModel = "S" | "T";
@@ -1099,6 +1105,37 @@ export interface SkinDefV3<View = unknown> {
    * live in `padSpec` never needs it.
    */
   refusedEventTypes?(view: View): readonly string[];
+  /**
+   * R6/task A (owner ruling R6-4) — THE PAD'S CLOCK, opted into one sport at a
+   * time exactly like `phase`/`context`/`swap` above.
+   *
+   * Returns the engine phase the clock counts within (plus, optionally, the
+   * seconds the FOLD already knows about in that phase), or `null` when this
+   * sport has no clock right now — before kick-off, at full time, or in a
+   * phase where a running clock would be a lie. Omit the method entirely for a
+   * sport with no clock at all, which is every skin written before this wave
+   * and most of the ones after it.
+   *
+   * WHY THIS IS THE SEAM AND NOT A CHASSIS-WIDE FLAG. `../clock.ts` explains
+   * what the clock IS; what only the skin can supply is the two facts in
+   * `PadClockSpec`. The chassis has no sport vocabulary — `PadHostView.phase`
+   * is the three-value UI concept and NEVER an engine phase token — so it
+   * cannot name the period a stamp belongs to. And the seed is
+   * `state.asOf.elapsed` guarded against a stamp left over from a phase the
+   * match has since left, which needs the state's own shape.
+   *
+   * DECLARING THIS TURNS ON THE STAMP. `pad-host.tsx` attaches `at` to every
+   * event it dispatches while a clock exists, and this method is the only
+   * switch. That is deliberate: an unclocked pad's payloads are the tile's own
+   * objects, untouched and byte-identical to the pre-R6 build.
+   *
+   * WHAT IT DOES NOT DO: it never says whether the clock is RUNNING. Starting
+   * and pausing is the scorer's, held in the host's own state and reset only
+   * when this method's `period` changes. A skin returning a different `period`
+   * is therefore declaring a whistle, and the origin resets; returning the
+   * same one every render costs nothing and is the normal case.
+   */
+  clock?(view: View): PadClockSpec | null;
 }
 
 /**
