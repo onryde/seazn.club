@@ -270,12 +270,28 @@ export interface PayloadSchemaProbe {
  * already invalid for an unrelated reason, the probe fails and the stamp is
  * dropped; the event still goes out and still gets refused, exactly as before.
  *
- * THE CHASSIS STAMP WINS over an `at` the skin already put on the payload, and
- * that is forced rather than preferred. `skins/football.tsx`'s `buildSwap`
- * stamps from `state.asOf` — the PREVIOUS event's time. Once this file makes
- * `asOf` non-empty, deferring to the skin would freeze every later swap at the
- * first stamped event's time. The live clock is strictly closer to now than
- * any fold-derived echo of the past, so it takes precedence.
+ * THE SKIN OWNS THE FIELD; THE CHASSIS FILLS A BLANK. If the payload already
+ * carries an `at` KEY this function returns it untouched, by reference —
+ * whatever the key's value, `undefined` included.
+ *
+ * The first cut of this file did the opposite, overwriting a skin-supplied
+ * `at` on the grounds that "the live clock is strictly closer to now". That
+ * deleted a decision `skins/football.tsx` records in its own `stampOf`, whose
+ * comment ends "Do not 'fix' this later by stamping unconditionally": a wrong
+ * `at` on a substitution feeds `applySub`'s window arithmetic and can refuse a
+ * legal sub or admit an illegal one, so football derives it from `state.asOf`
+ * with an explicit staleness guard. The chassis cannot see any of that. Nor is
+ * the live clock reliably closer to now — before property 6 it read zero on a
+ * pad nobody had started, and overwriting a real fold stamp with that zero is
+ * the exact failure the skin's guard exists to prevent.
+ *
+ * THE KEY IS THE SIGNAL, NOT THE VALUE, so a skin that declares a clock for
+ * the match can still refuse a stamp on ONE payload by writing `at: undefined`
+ * explicitly. `GameTime.optional()` accepts that, so the event dispatches and
+ * folds exactly as it would have; it simply carries no time. A skin that
+ * OMITS the key entirely has expressed no opinion and gets the clock's stamp —
+ * which is what keeps this wave from being inert, since every tile payload in
+ * the tree omits `at`.
  */
 export function stampPayload(
   payload: unknown,
@@ -284,6 +300,7 @@ export function stampPayload(
 ): unknown {
   if (stamp === undefined || schema === undefined) return payload;
   if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return payload;
+  if ("at" in payload) return payload;
   const stamped = { ...(payload as Record<string, unknown>), at: { period: stamp.period, elapsed: stamp.elapsed } };
   try {
     return schema.safeParse(stamped).success ? stamped : payload;

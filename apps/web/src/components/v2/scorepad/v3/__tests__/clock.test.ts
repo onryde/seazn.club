@@ -268,12 +268,27 @@ describe("stampPayload asks the ENGINE whether a stamp is legal, and never mirro
     expect(stampPayload(payload, stamp, boom)).toBe(payload);
   });
 
-  it("OVERRIDES an `at` the skin derived from the fold — the live clock beats an echo of the past", () => {
-    // football's `buildSwap` stamps from `state.asOf`, i.e. the PREVIOUS
-    // event's time. Once this wave makes `asOf` non-empty, deferring to the
-    // skin would freeze every later swap at the first stamped event's time.
-    const out = stampPayload({ by: "H", at: { period: "H1", elapsed: 3 } }, stamp, footballSchemas["football.goal"]);
-    expect(out).toEqual({ by: "H", at: { period: "H1", elapsed: 761 } });
+  it("DEFERS to an `at` the skin already put on the payload — the skin owns the field, the chassis fills a blank", () => {
+    // R6 review, gap 2. The first cut of this file overwrote a skin-supplied
+    // `at` unconditionally, on the grounds that "the live clock is strictly
+    // closer to now". That destroyed a decision `skins/football.tsx`'s own
+    // `stampOf` records in a comment ending "Do not 'fix' this later by
+    // stamping unconditionally" — a skin knows things about its own `at` that
+    // the chassis cannot see, and its refusals are load-bearing (football's
+    // `applySub` window arithmetic can admit an illegal substitution or refuse
+    // a legal one off a wrong stamp).
+    const skinStamped = { by: "H", at: { period: "H1", elapsed: 3 } };
+    expect(stampPayload(skinStamped, stamp, footballSchemas["football.goal"])).toBe(skinStamped); // by reference
+  });
+
+  it("and treats an EXPLICIT `at: undefined` as a deliberate refusal, not as a blank to fill", () => {
+    // The channel a skin uses to say "this event has no game time" for ONE
+    // payload while still declaring a clock for the match. The KEY is the
+    // signal, not the value: `GameTime.optional()` accepts `undefined`, so the
+    // event still dispatches and still folds — it simply carries no stamp.
+    const refused = { by: "H", at: undefined };
+    expect(stampPayload(refused, stamp, footballSchemas["football.goal"])).toBe(refused);
+    expect(footballSchemas["football.goal"]!.safeParse(refused).success).toBe(true);
   });
 });
 
@@ -365,6 +380,37 @@ describe("END TO END: a tile tapped on a clocked pad reaches the fold WITH its `
     expect(stampFor(footballModule!, "football.goal", original, null, T0)).toBe(original);
     expect((foldFootball(cfg, [["core.start"], ["football.goal", original]]) as { asOf?: unknown }).asOf).toBeUndefined();
     expect((state as { asOf?: unknown }).asOf).toBeUndefined();
+  });
+
+  it("the REAL swap slot's own `at` survives the chassis — the producer the deleted decision was written for", () => {
+    // Gap 2, driven end to end rather than argued. `buildSwap` stamps from
+    // `state.asOf` through football's `stampOf`, which is a DIFFERENT source
+    // from the pad clock and deliberately so. Here the fold says 761 and the
+    // live clock says 1200; the payload that reaches the engine must say 761,
+    // because football chose it.
+    const stampedState = foldFootball(cfg, [
+      ["core.start"],
+      ["football.goal", { by: "H", at: { period: "H1", elapsed: 761 } }],
+    ]);
+    const slots = footballSkinV3((key: string) => key).swap!({
+      cfg,
+      state: stampedState,
+      summary: {},
+      phase: "live",
+      band: 3,
+      entitlements: {},
+      personNames: {},
+      squads: { home: { entrantId: "H", members: [], subsUsed: 0, exemptUsed: {} }, away: { entrantId: "A", members: [], subsUsed: 0, exemptUsed: {} } },
+      events: [],
+      contextOverrides: {},
+    });
+    const built = slots[0]!.buildEvent("p-off", "p-on");
+    expect(built.payload).toMatchObject({ at: { period: "H1", elapsed: 761 } });
+
+    const live = startClock(reseatClock(null, { period: "H1" })!, T0);
+    const out = stampFor(footballModule!, built.type, built.payload, live, T0 + 1_200_000);
+    expect(out).toBe(built.payload); // by reference — the chassis did not touch it
+    expect(footballSchemas[built.type]!.safeParse(out).success).toBe(true);
   });
 
   it("and so is a pad whose clock was never started — thirty minutes of taps, and the strip STILL renders no clock", () => {
