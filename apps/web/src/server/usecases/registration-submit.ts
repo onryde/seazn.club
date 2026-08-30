@@ -33,6 +33,7 @@ import {
   rosterCapExpr,
   reconcileClaimedPerson,
   backfillPersonEmail,
+  joinExistingEntrant,
   type RegistrationRow,
   type RegistrationSettingsRow,
 } from "./registrations";
@@ -991,7 +992,11 @@ export async function previewJoinEntry(joinCode: string): Promise<JoinPreviewRes
  *    same as before — cap-checked against the sport's roster cap, and now
  *    refused outright (422) for a `pair`, whose roster is fixed at exactly
  *    two by the structural check at submit: the second seat can only ever
- *    be CLAIMED, never grown.
+ *    be CLAIMED, never grown. `#23`: if the entry was ALREADY materialised
+ *    (an entrant_id is already set) before this joiner arrived,
+ *    `materialise()` will never revisit this registration to roster them —
+ *    so this path also calls `joinExistingEntrant` to write the
+ *    `entrant_members` row itself.
  *
  * A joiner is, by construction, registering themselves — `deriveLinkUserId`
  * is reused verbatim with `registering_self: true` hardcoded, so the SAME
@@ -1247,6 +1252,21 @@ export async function joinTeamEntry(
         ${input.media_consent ? tx`now()` : null}, ${input.media_consent ? LEGAL_VERSION : null}
       )
       returning id`;
+    // #23 — a join landing on an entry ALREADY materialised (entrant_id set
+    // before this joiner ever showed up) gets no entrant_members row from
+    // materialise() itself: its `if (reg.entrant_id) return` guard means it
+    // never runs again for this registration. Without this, the row above
+    // exists but the person is never actually rostered.
+    if (locked.entrant_id) {
+      await joinExistingEntrant(tx, reg.org_id, locked.entrant_id, {
+        id: player!.id,
+        full_name: input.player.full_name,
+        dob: input.player.dob ?? null,
+        gender: input.player.gender ?? null,
+        email: claimedEmail,
+        user_id: linkUserId,
+      });
+    }
     return player!.id;
   });
 

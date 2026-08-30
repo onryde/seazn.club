@@ -1444,6 +1444,33 @@ describe.skipIf(!HAS_DB)("joinTeamEntry", () => {
     expect(row!.user_id).toBe(sessionUserId);
   });
 
+  it("#23: a join landing on an ALREADY-materialised entry still creates an entrant_members row", async () => {
+    const { entry } = await teamRig();
+    // teamRig's fee is 0 under auto-approval, so submitRegistrationGroup
+    // already confirmed/materialised this entry before the join below ever
+    // runs — materialise()'s own `if (reg.entrant_id) return` guard means it
+    // will never revisit this registration to roster a player who joins
+    // after. Before the #23 fix, the join below wrote registration_players
+    // but no entrant_members row.
+    const [{ entrant_id }] = await sql<{ entrant_id: string | null }[]>`
+      select entrant_id from registrations where id = ${entry.registration_id}`;
+    expect(entrant_id).not.toBeNull();
+
+    const res = await joinTeamEntry(
+      {},
+      { join_code: entry.join_code!, player: { full_name: "Late Joiner" }, privacy_consent: true },
+    );
+
+    const [row] = await sql<{ person_id: string | null }[]>`
+      select person_id from registration_players where id = ${res.player_id}`;
+    expect(row!.person_id).not.toBeNull();
+
+    const members = await sql<{ person_id: string }[]>`
+      select person_id from entrant_members
+       where entrant_id = ${entrant_id as string} and person_id = ${row!.person_id as string}`;
+    expect(members).toHaveLength(1);
+  });
+
   it("a minor joiner needs guardian consent; consent_status records 'guardian'", async () => {
     const { entry } = await teamRig();
     await expect(

@@ -907,20 +907,21 @@ export async function materialise(tx: Tx, reg: RegistrationRow, entrantKind: str
     // registration_players now carries real rows for a pair entry, so it
     // takes the same per-player path team always has) carries squad_number
     // and is_captain exactly as team does — both columns already exist on
-    // entrant_members and loadPlayers already selects them.
+    // entrant_members and loadPlayers already selects them. Delegates to
+    // `joinExistingEntrant` (#23) — same person-resolution precedence, same
+    // idempotent entrant_members upsert, one copy instead of two that could
+    // silently drift apart (RS007 review, medium).
     for (const p of players) {
-      const name = p.full_name.trim();
-      if (!name) continue;
-      const personId = p.user_id
-        ? await resolvePlayerPerson(tx, reg.org_id, p.user_id, name, p.dob, p.gender)
-        : await findOrCreatePlayerPerson(tx, reg.org_id, name, p.dob, p.gender, p.email);
-      await tx`
-        insert into entrant_members (entrant_id, person_id, squad_number, is_captain)
-        values (${entrant.id}, ${personId}, ${p.squad_number}, ${p.is_captain})
-        on conflict (entrant_id, person_id) do nothing`;
-      await tx`
-        update registration_players set person_id = ${personId}, updated_at = now()
-        where id = ${p.id}`;
+      await joinExistingEntrant(tx, reg.org_id, entrant.id, {
+        id: p.id,
+        full_name: p.full_name,
+        dob: p.dob,
+        gender: p.gender,
+        email: p.email,
+        user_id: p.user_id,
+        squad_number: p.squad_number,
+        is_captain: p.is_captain,
+      });
     }
   }
   await tx`
@@ -940,6 +941,62 @@ export async function materialise(tx: Tx, reg: RegistrationRow, entrantKind: str
   // helper withdrawCore and sweepRegistrations' expiry branch now call too.
   await clearExpiresIfNoLongerNeeded(tx, reg.group_id, reg.id);
   return entrant.id;
+}
+
+/**
+ * Person-resolve one player row onto an entrant that already exists, and
+ * write its `entrant_members` row + `registration_players.person_id` stamp.
+ * Shared by two callers with different reasons for needing it:
+ *
+ *  - `materialise()`'s own team/pair branch, above — every player row
+ *    present AT materialise time, `squad_number`/`is_captain` carried
+ *    through as-is.
+ *  - `joinTeamEntry`'s INSERT branch (#23, 2026-08-30) — a self-joiner
+ *    landing on an entry that was ALREADY materialised before they joined.
+ *    `materialise()`'s own idempotency guard (`if (reg.entrant_id) return`,
+ *    above) means it never revisits that registration once confirmed, so
+ *    the per-player `entrant_members` insert above never runs for a row
+ *    inserted after — the joiner's `registration_players` row would exist
+ *    and the join page would tell them "you're in", but nothing rosters
+ *    them onto the entrant that actually gets fielded. Called with no
+ *    `squad_number`/`is_captain` (a self-joiner is never seeded as either).
+ *    Never called for the CLAIM branch — a claimed row's person resolution
+ *    is `reconcileClaimedPerson`'s job, not this one's, because a claim
+ *    UPDATES a row `materialise()` already turned into a member (dummy or
+ *    real); there is no membership missing to create.
+ *
+ * Extracted (RS007 review, medium, 2026-08-30) rather than left as two
+ * hand-copies of the same person-resolution + idempotent-upsert sequence —
+ * a future change to it (a new column, a different resolution precedence)
+ * is easy to apply to one copy and forget in the other.
+ */
+export async function joinExistingEntrant(
+  tx: Tx,
+  orgId: string,
+  entrantId: string,
+  player: {
+    id: string;
+    full_name: string;
+    dob: string | null;
+    gender: string | null;
+    email: string | null;
+    user_id: string | null;
+    squad_number?: number | null;
+    is_captain?: boolean;
+  },
+): Promise<void> {
+  const name = player.full_name.trim();
+  if (!name) return;
+  const personId = player.user_id
+    ? await resolvePlayerPerson(tx, orgId, player.user_id, name, player.dob, player.gender)
+    : await findOrCreatePlayerPerson(tx, orgId, name, player.dob, player.gender, player.email);
+  await tx`
+    insert into entrant_members (entrant_id, person_id, squad_number, is_captain)
+    values (${entrantId}, ${personId}, ${player.squad_number ?? null}, ${player.is_captain ?? false})
+    on conflict (entrant_id, person_id) do nothing`;
+  await tx`
+    update registration_players set person_id = ${personId}, updated_at = now()
+    where id = ${player.id}`;
 }
 
 /**

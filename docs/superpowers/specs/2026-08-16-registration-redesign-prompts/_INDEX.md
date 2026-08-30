@@ -3366,10 +3366,10 @@ existed on the wire schema, only server persistence changed.
 Also found while verifying #22 against a real database, deliberately not
 folded in here — see **#23** below.
 
-### #23 (NEW, 2026-08-30) — a fresh join onto an already-materialised entry creates no roster membership at all
+### #23 — FIXED 2026-08-30 (`0a8d29afe`) — a fresh join onto an already-materialised entry creates no roster membership at all
 
 Reported by the #22 lane, verified directly against a real database, and
-deliberately left unfixed as out of #22's scope.
+deliberately left unfixed there as out of #22's scope.
 
 A join where the joiner is not already on the roster — the "I'm someone
 else" path on the join page, no `player_id` — against an entry that has
@@ -3387,9 +3387,31 @@ reconcile against: the joiner is adding themselves fresh, after the
 entry already has an entrant and a squad. #22's reconciliation has
 nothing to attach to.
 
-**In product terms:** that person has joined, and the page has told them
-"You're in" — but they are not a member of the squad that actually gets
-fielded. Needs its own task.
+**In product terms:** that person had joined, and the page told them
+"You're in" — but they were not a member of the squad that actually gets
+fielded.
+
+**Fix:** `joinExistingEntrant` (`registrations.ts`), called from
+`joinTeamEntry`'s INSERT branch only when `locked.entrant_id` is already
+set. Mirrors `materialise()`'s own per-player `entrant_members` write —
+same person-resolution precedence (`user_id` → `resolvePlayerPerson`,
+else `findOrCreatePlayerPerson`), same idempotent
+`on conflict (entrant_id, person_id) do nothing` insert — for this one
+late-arrival case `materialise()` itself can never revisit. Never called
+from the CLAIM branch: a claimed row's person resolution is
+`reconcileClaimedPerson`'s job (#22, above) — a claim UPDATES a row
+`materialise()` already turned into a member, so there is no membership
+missing to create.
+
+**Verified:** new case in `registration-submit.test.ts`
+(`joinTeamEntry` describe block) — joins onto `teamRig()`'s entry, which
+is already confirmed/materialised at submit (fee 0, auto-approval),
+asserts the resulting `entrant_members` row exists. Mutation-checked:
+disabling the `joinExistingEntrant` call reddens exactly this 1 test,
+none other, across the full `registration-submit.test.ts` +
+`registration-materialise.test.ts` pair (94 tests). `tsc --noEmit` and
+`lint` both clean (0 errors; pre-existing warnings only, none on the
+touched lines).
 
 ## DECISION LOG — session of 2026-08-29/30
 
