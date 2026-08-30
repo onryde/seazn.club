@@ -5869,3 +5869,44 @@ disagree) and must be corrected in the same commit.
 end and returned SHIP. What it could not see is that the skin agreed with ONE of
 two disagreeing authorities. Reading a seam proves it is connected; it does not
 prove the two ends were ever asked whether they agree.
+
+### R7-28 — generic's REAL screens: three design defects found by looking (A1 follow-up, OWED)
+
+Captures at `/tmp/r7a1-gallery/generic/` — 21 PNGs, 21 unique md5s, 7 states ×
+3 widths (dies with the session; re-run the gallery to regenerate). Read at
+1280 and 320. **Every automated gate was green on these screens and they are
+still wrong** — this is the recorded "no-horizontal-scroll cannot see layout"
+trap, in the flesh.
+
+1. **`"Point recorded — Home · 1 pts"`** — must be "1 pt". A singular/plural bug
+   in NEW copy, so it needs the fix in all four dictionaries.
+2. **The entrant names render THREE TIMES on one scorebug tile** — once per
+   half, then again in the footer sentence ("X / Y leads by 1").
+3. **At 320 with pair entrants the score is SUBORDINATE to the names** — four
+   lines of name above a single digit per half. On a scoreboard the score must
+   dominate; here the names do.
+
+Not fixture noise: `generic` accepts PAIR entrants, and it is the pad for sports
+this product does not model — the audience least likely to have short tidy names
+and most likely to hit this.
+
+**Recommended (owed by A1 follow-up, not yet done):** cap the half's name block
+at two lines with ellipsis; suppress the footer sentence when it only restates
+the two halves — and do that by REUSING D-11's conditional-headline mechanism
+rather than growing a second one; fix `1 pts`.
+
+### R7-29 — R7 dispatched on the WRONG MODEL for most of this session
+
+`docs/superpowers/RULES.md:38-45` and the owner's own memory both state:
+**Scout = Sonnet High, Implementer = Sonnet MAX, Reviewer = Sonnet MAX.**
+`feedback_subagent_model.md` says explicitly "Do not dispatch an Implementer on
+Opus based on anything below — that guidance is history, not current."
+
+R7 dispatched every implementer and reviewer on **opus** until the A1 review.
+The topology section of `_RULES.md` was read at session start and the wrong
+model carried anyway. Corrected from the A1 review onward; every dispatch since
+passes `model: "sonnet"`.
+
+Worth stating because it is the same failure shape as the false premises: the
+correct information was READ and then not acted on. R6 made the identical error
+in the same session, from the same stale line in v2's `_RULES.md`.
