@@ -925,6 +925,79 @@ describe.skipIf(!HAS_DB)("registration flows (doc 16 §1.1, PROMPT-20a)", () => 
     expect(row.refunded_cents).toBe(0);
   });
 
+  // Finding #18b (CRITICAL, the residual gap #18 left open): #18's guard
+  // reads `entrant_id`, which `materialise()` only sets on CONFIRMATION —
+  // a manual-approval division leaves a paid entry sitting at
+  // `status = 'paid'` awaiting the organiser's decision and never
+  // materialises it (RULING B), so entrant_id stays null even though a
+  // REAL charge landed. Same reconcile-replay mechanism as #18, same
+  // refund_lock_at bypass, narrower population (manual-approval divisions
+  // only) but identical money consequence — and it lands on exactly the
+  // clubs that vet their entries before seating them.
+  it("F18b CRITICAL: a reconcile replay on a MANUAL-approval division (entrant never materialised) must not refund as 'late'", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    await sql`update organizations
+              set stripe_account_id = ${"acct_" + randomUUID().slice(0, 8)}, stripe_charges_enabled = true
+              where id = ${orgId}`;
+    const { competition, division } = await rig(owner);
+    const settings = await putRegistrationSettings(owner, division.id, {
+      enabled: true,
+      entrant_kind: "individual",
+      payment_method: "stripe",
+      approval: "manual",
+      fee_cents: 4000,
+      form_fields: [],
+      opens_at: null,
+      closes_at: null,
+      capacity: null,
+      refund_lock_at: "2020-01-01T00:00:00Z", // lock long past — organiser discretion only
+    });
+
+    const res = await seedRegistration(competition.id, division.id, settings);
+    const session = fakeSession(res.registration.id, 4000);
+    await sql`update registration_groups set checkout_session_id = ${session.id}
+              where id = ${res.registration.group_id}`;
+    stripeMock.checkoutRetrieve.mockResolvedValue(session);
+
+    // Reconcile-on-return, first visit: RULING B stops the automatic
+    // confirmation — the entry sits at 'paid', awaiting the organiser, with
+    // NO entrant materialised.
+    expect(
+      await reconcileRegistrationGroupBySession(res.registration.group_id, res.access_token, session.id),
+    ).toBe(true);
+    const afterPay = await loadWithGroup(res.registration.id);
+    expect(afterPay.status).toBe("paid");
+    expect(afterPay.entrant_id).toBeNull(); // the exact gap #18's guard cannot see
+
+    // Registrant cancels from the status page. withdrawCore's own
+    // `locked.status === 'paid'` branch passes the REAL payment_intent_id
+    // into resolveRefundPolicy — the lock is long past, so this is
+    // organiser-discretion only and withdrawCore correctly issues no
+    // refund (same policy, same assertion shape as the auto-approval #18
+    // test above).
+    await withdrawRegistrationPublic(res.registration.id, res.access_token);
+    expect(stripeMock.refundCreate).not.toHaveBeenCalled();
+
+    // cancel-entry.tsx's router.refresh() re-renders the SAME URL — the
+    // identical replay #18 pinned — reaching confirmPaidRegistration with
+    // status='withdrawn' and entrant_id still null.
+    const reconciledAgain = await reconcileRegistrationGroupBySession(
+      res.registration.group_id,
+      res.access_token,
+      session.id,
+    );
+
+    expect(reconciledAgain).toBe(true); // reached fulfilment, not an early miss
+    expect(
+      stripeMock.refundCreate,
+      "the replay must not touch Stripe's refund API even though entrant_id is null",
+    ).not.toHaveBeenCalled();
+    const row = await loadWithGroup(res.registration.id);
+    expect(row.status).toBe("withdrawn");
+    expect(row.refunded_cents).toBe(0);
+  });
+
   // V379/RS007 — NULL refund_lock_at no longer means refundable forever; it
   // falls back to the competition's own starts_on (resolveRefundPolicy).
   // Wired end-to-end through withdrawCore here — the pure rule itself has

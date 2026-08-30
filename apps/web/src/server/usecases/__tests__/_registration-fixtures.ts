@@ -107,6 +107,7 @@ export async function loadWithGroup(regId: string): Promise<RegistrationWithGrou
   const [row] = await sql<RegistrationWithGroupRow[]>`
     select r.id, r.division_id, r.org_id, r.status, r.display_name, r.answers,
            r.amount_cents, r.refunded_cents, r.entrant_id, r.promoted_at, r.withdrawn_at,
+           r.charged_at,
            r.group_id, r.join_code, r.free_agent, r.created_at, r.updated_at,
            g.contact_name, g.contact_email, g.user_id, g.locale, g.ref_code,
            g.access_token_hash, g.currency, g.payment_method, g.checkout_session_id,

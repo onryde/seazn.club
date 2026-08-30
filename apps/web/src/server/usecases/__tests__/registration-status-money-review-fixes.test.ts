@@ -277,6 +277,10 @@ describe("#10/#13b — notifyPromoted (pure function, offline branch — no DB)"
       promotion_expires_at: null,
       waitlisted_at: null,
       withdrawn_at: null,
+      // #18b (registrations.ts): stamped once a real Stripe charge lands —
+      // every fixture in this describe is a still-'pending'/promoted
+      // waitlist entry that has never been charged.
+      charged_at: null,
       group_id: "grp-1",
       join_code: null,
       free_agent: false,

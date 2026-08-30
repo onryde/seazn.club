@@ -270,6 +270,14 @@ export interface RegistrationRow {
    *  place in line. */
   waitlisted_at: Date | null;
   withdrawn_at: Date | null;
+  /** Finding #18b: set exactly once, the moment a REAL Stripe charge lands
+   *  for THIS entry — in the SAME statement as `status = 'paid'`, before the
+   *  manual/auto approval fork, so it covers a manual-approval entry that
+   *  never reaches materialise() too. Never cleared afterwards (not even by
+   *  withdrawCore). Durable proof that "a live charge existed for this
+   *  entry before it was withdrawn", independent of whether it was ever
+   *  SEATED (entrant_id, #18's own signal, which only auto-approval sets). */
+  charged_at: Date | null;
   /** The cart this entry belongs to — every entry has exactly one (V364). */
   group_id: string;
   /** Set when this (team) entry can hand out a self-join link. */
@@ -432,7 +440,7 @@ function regGroupCols(db: AnySql) {
   return db`
     r.id, r.division_id, r.org_id, r.status, r.display_name, r.answers,
     r.amount_cents, r.refunded_cents, r.entrant_id, r.promoted_at, r.withdrawn_at,
-    r.promotion_expires_at, r.waitlisted_at,
+    r.charged_at, r.promotion_expires_at, r.waitlisted_at,
     r.group_id, r.join_code, r.free_agent, r.created_at, r.updated_at,
     g.contact_name, g.contact_email, g.user_id, g.locale, g.ref_code,
     g.access_token_hash, g.currency, g.payment_method, g.checkout_session_id,
@@ -2330,21 +2338,50 @@ async function confirmPaidRegistration(
     // Refunding again here would silently overrule withdrawCore's own
     // already-correct policy decision for this entry.
     //
-    // `entrant_id` is the durable, already-on-the-row signal for "was this
-    // ever case (b)": it is written in the SAME update as `status =
-    // 'confirmed'` (materialise, above) and nothing ever clears it —
-    // withdrawCore only flips the linked ENTRANT row's own status to
-    // 'withdrawn', never registrations.entrant_id. Scoped to 'withdrawn'
-    // alone, not the other three statuses below: only withdrawCore can act
-    // on an already-confirmed row. 'expired'/'waitlisted' only ever fire
-    // from a still-'pending' row (sweepRegistrations' own
+    // Finding #18b (the residual gap #18 left open): #18 shipped this guard
+    // keyed on `entrant_id` — which only answers "was this entry ever
+    // SEATED". `entrant_id` is written by materialise(), and materialise()
+    // only runs on the auto-approval path a few lines below (or once an
+    // organiser later approves it). On a MANUAL-approval division, RULING B
+    // (above) stops confirmPaidRegistration's own auto-approval branch
+    // short: the entry sits at status = 'paid', a REAL charge already on
+    // it, entrant_id still null, awaiting the organiser's decision. If it
+    // is withdrawn from there — refund_lock_at long past, withdrawCore
+    // correctly declines to refund (its own `locked.status === 'paid'`
+    // branch already treats 'paid' as "genuinely charged") — the identical
+    // reconcile replay #18 pinned reads entrant_id null and falls straight
+    // through to the unconditional refund below. Same bug, narrower
+    // population (manual-approval divisions only), same money leaving past
+    // the lock.
+    //
+    // `charged_at` (added alongside this fix) answers the question this
+    // branch actually needs answered — "did a live charge exist for THIS
+    // entry before it was withdrawn" — directly, for both approval modes:
+    // it is stamped in the SAME statement that writes `status = 'paid'`,
+    // before the manual/auto fork, so a manual-approval entry gets it exactly
+    // as reliably as an auto-approval one. `entrant_id` is a strict subset
+    // (every row materialise() ever touches was charged_at-stamped first, in
+    // the same earlier statement of this same function), so this replaces
+    // rather than supplements it — one durable signal, not two overlapping
+    // ones. Like entrant_id, nothing ever clears it: withdrawCore only
+    // flips the linked ENTRANT row's own status (if one was ever
+    // materialised), never registrations.charged_at.
+    //
+    // Scoped to 'withdrawn' alone, by construction (the condition above
+    // only matches that one status) — 'expired'/'rejected'/'waitlisted'
+    // fall through to the unconditional refund below completely unchanged,
+    // regardless of charged_at. That is correct independent of this guard:
+    // only withdrawCore can ever act on an already-'paid'/'confirmed' row,
+    // and nothing else in this branch reaches it. 'expired'/'waitlisted'
+    // only ever fire from a still-'pending' row (sweepRegistrations' own
     // `locked.status !== "pending"` guards on both its expiry and lapse
-    // passes), and 'rejected' only from 'pending'/'paid'
-    // (rejectRegistration's own guard) — never from 'confirmed' — so
-    // entrant_id is always null on those three already, and a genuinely
-    // rejected (or expired/lapsed) entry must keep refunding in full here
-    // regardless of any lock, unchanged.
-    if (reg.status === "withdrawn" && reg.entrant_id) {
+    // passes) — charged_at would be null there regardless. 'rejected' is
+    // reachable from 'paid' too (rejectRegistration explicitly allows it,
+    // RULING B's declined counterpart), but rejectRegistration refunds a
+    // paid entry directly, in its own call, and never writes 'withdrawn' —
+    // so a rejected row never reaches this guard at all, whatever
+    // charged_at holds.
+    if (reg.status === "withdrawn" && reg.charged_at) {
       return null;
     }
     if (
@@ -2366,9 +2403,15 @@ async function confirmPaidRegistration(
       };
     }
     const settings = await loadSettings(tx, reg.division_id);
+    // Finding #18b: charged_at is stamped HERE, unconditionally, before the
+    // manual/auto approval fork below — the moment money actually lands for
+    // this entry, regardless of whether materialise() ever runs for it.
+    // `coalesce` makes it idempotent, the same convention entrant_id already
+    // relies on being written exactly once.
     await tx`
       update registrations
       set status = 'paid',
+          charged_at = coalesce(charged_at, now()),
           updated_at = now()
       where id = ${regId}`;
     // payment_intent_id lives on the cart now (V364).
