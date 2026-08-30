@@ -70,6 +70,7 @@
 //     npx playwright test e2e/walkthrough/rs007-invite-pay-cancel.spec.ts --project=walkthrough
 import { expect, test } from "@playwright/test";
 import { apiJson, activeOrg, TAG } from "../helpers";
+import { fillHostedCheckout } from "../stripe-checkout-kit";
 import {
   CONNECT_ACCOUNT,
   ENABLED,
@@ -313,13 +314,7 @@ test("RS007 witness — cancelling one of two cart entries drops the subtotal to
     await anon.waitForTimeout(2000);
     await anon.screenshot({ path: `${SHOTS}/08-stripe-checkout.png`, fullPage: true });
 
-    await anon.locator("#cardNumber").fill("4242424242424242");
-    await anon.locator("#cardExpiry").fill("12/34");
-    await anon.locator("#cardCvc").fill("123");
-    const holder = anon.locator("#billingName");
-    if (await holder.count()) await holder.fill(CAPTAIN_NAME);
-    const postal = anon.locator("#billingPostalCode");
-    if (await postal.count()) await postal.fill("SW1A 1AA");
+    await fillHostedCheckout(anon, CAPTAIN_NAME);
     await anon.waitForTimeout(1000);
     await anon.screenshot({ path: `${SHOTS}/09-card-filled.png`, fullPage: true });
     await anon.locator(".SubmitButton, button[type=submit]").first().click();

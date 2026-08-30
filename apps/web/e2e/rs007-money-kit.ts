@@ -11,6 +11,7 @@
 import { expect } from "@playwright/test";
 import type { APIRequestContext, Page } from "@playwright/test";
 import { apiJson } from "./helpers";
+import { fillHostedCheckout } from "./stripe-checkout-kit";
 
 export const ENABLED = process.env.CONNECT_WALKTHROUGH === "1";
 export const WATCH = process.env.WALKTHROUGH_WATCH === "1";
@@ -293,23 +294,8 @@ export async function payOnStripeCheckout(
   shots?: (name: string) => Promise<void>,
 ): Promise<string> {
   await page.waitForURL(/checkout\.stripe\.com/, { timeout: 60_000 });
-  // Stripe's hosted page renders a skeleton first and hydrates the card form
-  // afterwards, and how long that takes is Stripe's business, not ours. A
-  // fixed pause here fails intermittently against a grey placeholder with
-  // "locator.fill: element not found" — which reads like a selector that has
-  // rotted rather than a page that had not finished loading. Wait for the
-  // field itself.
-  await page.locator("#cardNumber").waitFor({ state: "visible", timeout: 60_000 });
-  await page.waitForTimeout(500);
   await shots?.("stripe-checkout");
-
-  await page.locator("#cardNumber").fill("4242424242424242");
-  await page.locator("#cardExpiry").fill("12/34");
-  await page.locator("#cardCvc").fill("123");
-  const holder = page.locator("#billingName");
-  if (await holder.count()) await holder.fill(cardholder);
-  const postal = page.locator("#billingPostalCode");
-  if (await postal.count()) await postal.fill("SW1A 1AA");
+  await fillHostedCheckout(page, cardholder);
   await page.waitForTimeout(1000);
   await shots?.("card-filled");
   await page.locator(".SubmitButton, button[type=submit]").first().click();
