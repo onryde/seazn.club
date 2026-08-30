@@ -15,6 +15,15 @@ After RS003 two lanes are file-disjoint and may run in either order or
 interleaved: **org lane** RS004 → RS005 → RS009, **public lane** RS006 → RS007
 → RS008. RS010 is last, after both lanes.
 
+**RS012** was scoped on 2026-08-30, during RS009, and is NOT part of the
+original redesign set. It depends on RS009 and is file-disjoint from
+RS010/RS011 in its usecase layer but NOT in its UI, so it runs after RS009
+merges. It carries one VERIFIED money-adjacent defect (a solo sign-up
+consumes a team's capacity slot and never releases it) and one product gap
+(the pool promises nothing and has no exit). **Two owner rulings are owed
+before any RS012 code**: what `capacity` counts, and what happens to a
+registrant nobody ever placed.
+
 **RS011** (organiser-side eligibility gates, re-homed from the scoringpad-v2
 `L1`/#412 on 2026-08-17) depends only on RS002 and is file-disjoint from
 RS004–RS009, so it runs alongside either lane, before RS010. It writes
@@ -35,6 +44,7 @@ prompts dir) also writes — those two are **sequential, never parallel**.
 | RS009 | `RS009-free-agents.md` | RS005, RS003 | TODO |
 | RS011 | `RS011-organiser-eligibility-gates.md` | RS002 | TODO — issue #412, re-homed from `L1` |
 | RS010 | `RS010-closeout-e2e-smoke-help.md` | all | TODO |
+| RS012 | `RS012-solo-signup-pool-promises.md` | RS009 | TODO — scoped 2026-08-30 from what RS009 exposed; needs TWO owner rulings before code |
 
 Public registration was **intentionally down** between the RS001 and RS006
 merges (owner-accepted; prod has zero registration usage). That window
@@ -4080,3 +4090,63 @@ viewers silently promoted every unconditional control on the page into
 one a read-only role can press. Assign and unassign are writes and are
 gated server-side on `canEdit`, not merely hidden — and the sweep is
 for the whole class of controls on that page, not just these two.
+
+
+### RS012 scoped 2026-08-30 — the pool's unpaid promises (found while building RS009)
+
+Raised to the owner at the end of the RS009 session and deferred into its
+own prompt (`RS012-solo-signup-pool-promises.md`) rather than widened into
+RS009, per the no-new-issues rule: the assignment loop had to exist before
+the promises around it were worth designing. Neither finding is a defect in
+RS009 — both predate it — but RS009 is what makes them reachable, because
+until it shipped nobody could be placed and therefore nobody was really
+waiting.
+
+**FINDING 1 — VERIFIED, and the reason RS012 is not merely a nice-to-have.
+An unplaced solo sign-up consumes a team's capacity slot, and keeps
+consuming it after being placed.** `registration-submit.ts`'s capacity check
+is:
+
+```sql
+select count(*)::int as n from registrations
+where division_id = ${division_id} and status in ${SPOT_HOLDERS}
+```
+
+`SPOT_HOLDERS` is `pending|paid|confirmed`. There is **no
+`free_agent = false` filter anywhere in that count** — checked, not assumed.
+Two consequences:
+
+- A team division with `capacity: 8`, which an organiser sets meaning EIGHT
+  TEAMS, admits only 2 more teams once 6 people have signed up solo.
+- The slot is never released. RS009 deliberately leaves the solo sign-up's
+  own `registrations` row `confirmed` with `free_agent = true` after
+  assignment — that row holds their money, consent and answers, and its
+  survival is pinned by a test. So it still matches the count. **A division
+  can read 8/8 FULL while holding two actual teams and six people folded
+  into them**, and will waitlist teams it has room for.
+
+The question is a product one and is the owner's: does `capacity` count
+ENTRIES or the things that will actually take the field? The current
+behaviour is neither — it is an unexamined consequence of solo sign-ups
+being stored as `registrations` rows. Recorded here rather than fixed in
+RS009 because either answer changes waitlist behaviour, which is well
+outside that session's stated file set.
+
+**FINDING 2 — the pool promises nothing and has no exit.** A solo sign-up
+pays, reads `register.details.freeAgent.note` ("the organiser will assign
+you to a team once one has space"), and then: no deadline, no status beyond
+"waiting", and no path that refunds or withdraws them if the division starts
+without them. They hold a receipt for a place that may not exist. The
+organiser has the mirror-image blind spot — nothing surfaces "4 waiting, 2
+free slots" until they go looking.
+
+**Do not let an implementer guess the unplaced path.** Auto-refund versus
+organiser-decided is a money decision, and this file's own findings register
+records several money defects that shipped because an unexamined default
+looked correct.
+
+**Warning carried into RS012's prompt, worth repeating here:** if capacity
+is changed to exclude assigned solo sign-ups, do it by reading the
+ASSIGNMENT (`registration_players.assigned_from_registration_id`, unique
+where non-null), NEVER by mutating the source row's status. Withdrawing that
+row to free a slot would refund a person who is happily playing.
