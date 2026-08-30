@@ -2262,6 +2262,13 @@ export const PutRegistrationSettings = z
     /** V364/RS004: meaningful only when entrant_kind is 'team' — the usecase
      *  rejects `true` on a non-team division (putRegistrationSettings). */
     allow_free_agents: z.boolean().default(false),
+    /** V388/RS009: what ONE person pays to enter this team division alone.
+     *  `null` (the default) means "no separate price — charge fee_cents",
+     *  which is what every division did before this existed. 0 is a real
+     *  price meaning free, so this is nullish rather than optional-with-0:
+     *  the two must not collapse. The usecase rejects a value here when
+     *  allow_free_agents is off, and rejects a negative one. */
+    free_agent_fee_cents: z.number().int().min(0).nullish(),
   })
   .superRefine((s, ctx) => {
     const keys = s.form_fields.map((f) => f.key);
@@ -2291,6 +2298,9 @@ export const RegistrationSettings = z.object({
   payment_instructions: z.string().nullable(),
   approval: RegistrationApproval,
   allow_free_agents: z.boolean(),
+  /** V388/RS009. `null` = no separate price; the panel renders the team fee
+   *  as the effective price in that case. */
+  free_agent_fee_cents: z.number().int().nullable(),
   /** Org fallbacks for the settings UI (spec §3). */
   org_payment_instructions: z.string().nullable(),
   org_default_payment_method: z.string(),

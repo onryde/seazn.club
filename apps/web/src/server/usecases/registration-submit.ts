@@ -262,7 +262,8 @@ async function loadSubmitSettings(divisionId: string): Promise<SubmitSettingsRow
   const [row] = await sql<SubmitSettingsRow[]>`
     select division_id, enabled, entrant_kind, opens_at, closes_at, capacity,
            fee_cents, refund_lock_at, form_fields, payment_method,
-           payment_instructions, updated_at, approval, allow_free_agents
+           payment_instructions, updated_at, approval, allow_free_agents,
+           free_agent_fee_cents
     from registration_settings where division_id = ${divisionId}`;
   return row ?? null;
 }
@@ -631,7 +632,8 @@ export async function submitRegistrationGroup(
       const [live] = await tx<SubmitSettingsRow[]>`
         select division_id, enabled, entrant_kind, opens_at, closes_at, capacity,
                fee_cents, refund_lock_at, form_fields, payment_method,
-               payment_instructions, updated_at, approval, allow_free_agents
+               payment_instructions, updated_at, approval, allow_free_agents,
+               free_agent_fee_cents
         from registration_settings where division_id = ${id} for update`;
       if (!live || !windowOpen(live, now)) {
         throw new HttpError(422, "Registration is not open for this division");
@@ -702,7 +704,19 @@ export async function submitRegistrationGroup(
         planLimit ?? Number.POSITIVE_INFINITY,
       );
       const waitlisted = taken >= hardCap;
-      const feeCents = waitlisted ? 0 : live.fee_cents;
+      // On a TEAM division `fee_cents` is the price of a team. Someone
+      // entering that division alone is buying one place, not a team, so they
+      // pay `free_agent_fee_cents` when the organiser has set one (RS009).
+      //
+      // `?? live.fee_cents`, never `||`: NULL means "no separate price, use
+      // the team price" and is the default on every division, while 0 is a
+      // real price meaning free. `||` would collapse the two and charge the
+      // full team fee to a registrant the public page told was free.
+      const entryFeeCents =
+        p.input.free_agent && live.free_agent_fee_cents !== null
+          ? live.free_agent_fee_cents
+          : live.fee_cents;
+      const feeCents = waitlisted ? 0 : entryFeeCents;
       if (!waitlisted && feeCents > 0) paymentMethodsSeen.add(live.payment_method);
       const status: RegistrationRow["status"] = waitlisted ? "waitlisted" : "pending";
 

@@ -226,6 +226,20 @@ export interface RegistrationSettingsRow {
   /** V364/RS004: team divisions only — putRegistrationSettings rejects
    *  `true` on a non-team division. Read by registration-submit.ts. */
   allow_free_agents: boolean;
+  /**
+   * V388/RS009 — what ONE person pays to enter this team division alone.
+   *
+   * NULL is meaningful and is the default: "no separate price, charge
+   * `fee_cents`". On a team division `fee_cents` is a price PER TEAM, so
+   * before this column a lone player entering a £60-per-team division paid
+   * £60, and an organiser who then placed them on a team that also paid £60
+   * had collected twice for one roster.
+   *
+   * 0 is a real price (a free solo sign-up in a paid division), NOT "unset" —
+   * `?? fee_cents` is therefore the only correct fallback, and `|| fee_cents`
+   * would charge the full team fee to someone told it was free.
+   */
+  free_agent_fee_cents: number | null;
   updated_at: Date | null;
 }
 
@@ -482,7 +496,8 @@ export function regGroupCols(db: AnySql) {
 const SETTINGS_COLS = [
   "division_id", "enabled", "entrant_kind", "opens_at", "closes_at",
   "capacity", "fee_cents", "refund_lock_at", "form_fields",
-  "payment_method", "payment_instructions", "approval", "allow_free_agents", "updated_at",
+  "payment_method", "payment_instructions", "approval", "allow_free_agents",
+  "free_agent_fee_cents", "updated_at",
 ] as const;
 
 /** Statuses that hold a capacity spot. Imported from `@/lib/registration-
@@ -1649,6 +1664,7 @@ const DEFAULT_SETTINGS: Omit<RegistrationSettingsRow, "division_id"> = {
   payment_instructions: null,
   approval: "auto",
   allow_free_agents: false,
+  free_agent_fee_cents: null,
   updated_at: null,
 };
 
@@ -1709,6 +1725,10 @@ export async function putRegistrationSettings(
   const formFields = input.form_fields ?? [];
   const approval = input.approval ?? "auto";
   const allowFreeAgents = input.allow_free_agents ?? false;
+  // `?? null`, never `|| null`: 0 is a real price ("solo sign-ups are free in
+  // this paid division") and `||` would silently turn it back into "unset",
+  // charging the full team fee to someone the panel told was free.
+  const freeAgentFeeCents = input.free_agent_fee_cents ?? null;
   // Free agents (an entry with no roster yet, RS004/V364) only make sense
   // where there IS a roster to join later — registration-submit.ts's own
   // guard already refuses a free-agent submit outside entrant_kind 'team';
@@ -1716,6 +1736,24 @@ export async function putRegistrationSettings(
   // organiser turn on a toggle that can never take effect.
   if (allowFreeAgents && entrantKind !== "team") {
     throw new HttpError(422, "allow_free_agents requires entrant_kind 'team'");
+  }
+  // A price for something the division does not offer is a setting that reads
+  // as a promise: the panel would show a solo sign-up fee on a division where
+  // nobody can sign up solo. Same rule the toggle itself already follows.
+  if (freeAgentFeeCents !== null && !allowFreeAgents) {
+    throw new HttpError(
+      422,
+      "A solo sign-up price only applies where solo sign-ups are allowed — turn those on first",
+    );
+  }
+  if (freeAgentFeeCents !== null && freeAgentFeeCents < 0) {
+    throw new HttpError(422, "A solo sign-up price cannot be negative");
+  }
+  // The Stripe minimum applies to whatever is actually CHARGED, and a solo
+  // sign-up is charged this instead of fee_cents — so a division can pass the
+  // fee_cents check below and still mint a checkout Stripe rejects.
+  if (method === "stripe" && freeAgentFeeCents !== null && freeAgentFeeCents > 0 && freeAgentFeeCents < 100) {
+    throw new HttpError(422, "Card entry fees must be at least 1.00 (or 0 for free)");
   }
   if (method === "stripe") {
     if (!org.charges_enabled) {
@@ -1753,14 +1791,15 @@ export async function putRegistrationSettings(
       insert into registration_settings
         (division_id, enabled, entrant_kind, opens_at, closes_at, capacity,
          fee_cents, refund_lock_at, form_fields,
-         payment_method, payment_instructions, approval, allow_free_agents, updated_at)
+         payment_method, payment_instructions, approval, allow_free_agents,
+         free_agent_fee_cents, updated_at)
       values
         (${divisionId}, ${input.enabled}, ${entrantKind},
          ${input.opens_at ?? null}, ${input.closes_at ?? null},
          ${input.capacity ?? null}, ${feeCents},
          ${input.refund_lock_at ?? null}, ${tx.json(formFields as never)},
          ${method}, ${input.payment_instructions?.trim() || null},
-         ${approval}, ${allowFreeAgents}, now())
+         ${approval}, ${allowFreeAgents}, ${freeAgentFeeCents}, now())
       on conflict (division_id) do update set
         enabled              = excluded.enabled,
         entrant_kind         = excluded.entrant_kind,
@@ -1774,6 +1813,7 @@ export async function putRegistrationSettings(
         payment_instructions = excluded.payment_instructions,
         approval             = excluded.approval,
         allow_free_agents    = excluded.allow_free_agents,
+        free_agent_fee_cents = excluded.free_agent_fee_cents,
         updated_at           = now()
       returning ${sql(SETTINGS_COLS as unknown as string[])}`;
     return { ...row, ...org };

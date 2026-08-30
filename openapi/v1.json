@@ -49126,6 +49126,18 @@
                         "allow_free_agents": {
                           "type": "boolean"
                         },
+                        "free_agent_fee_cents": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "org_payment_instructions": {
                           "anyOf": [
                             {
@@ -49168,6 +49180,7 @@
                         "payment_instructions",
                         "approval",
                         "allow_free_agents",
+                        "free_agent_fee_cents",
                         "org_payment_instructions",
                         "org_default_payment_method",
                         "charges_enabled",
@@ -49208,6 +49221,7 @@
                     "payment_instructions": "example",
                     "approval": "auto",
                     "allow_free_agents": true,
+                    "free_agent_fee_cents": -9007199254740991,
                     "org_payment_instructions": "example",
                     "org_default_payment_method": "example",
                     "charges_enabled": true,
@@ -49530,6 +49544,18 @@
                   "allow_free_agents": {
                     "default": false,
                     "type": "boolean"
+                  },
+                  "free_agent_fee_cents": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   }
                 },
                 "required": [
@@ -49727,6 +49753,18 @@
                         "allow_free_agents": {
                           "type": "boolean"
                         },
+                        "free_agent_fee_cents": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "org_payment_instructions": {
                           "anyOf": [
                             {
@@ -49769,6 +49807,7 @@
                         "payment_instructions",
                         "approval",
                         "allow_free_agents",
+                        "free_agent_fee_cents",
                         "org_payment_instructions",
                         "org_default_payment_method",
                         "charges_enabled",
@@ -49809,6 +49848,7 @@
                     "payment_instructions": "example",
                     "approval": "auto",
                     "allow_free_agents": true,
+                    "free_agent_fee_cents": -9007199254740991,
                     "org_payment_instructions": "example",
                     "org_default_payment_method": "example",
                     "charges_enabled": true,
