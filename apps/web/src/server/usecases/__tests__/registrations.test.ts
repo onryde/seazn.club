@@ -3652,22 +3652,22 @@ describe.skipIf(!HAS_DB)("inviteUnclaimedMembers (RS008 — claim-invite sweep)"
     const [, args] = emailMock.claimInvite.mock.calls[0]!;
     expect(args).toMatchObject({ personName: "Sam Captain" });
     const claims = await sql<{ person_id: string; email: string }[]>`
-      select person_id, email from person_claims where person_id = ${personIdByName.get("Sam Captain")}`;
+      select person_id, email from person_claims where person_id = ${personIdByName.get("Sam Captain")!}`;
     expect(claims).toHaveLength(1);
     expect(claims[0]!.email).toBe("sam@test.local");
     // The pending row's person never gets a claim row at all.
     const pendingClaims = await sql<{ id: string }[]>`
-      select id from person_claims where person_id = ${personIdByName.get("Jordan Pending")}`;
+      select id from person_claims where person_id = ${personIdByName.get("Jordan Pending")!}`;
     expect(pendingClaims).toHaveLength(0);
   });
 
   it("never invites a signed-in (already-linked) player", async () => {
     const { orgId, ownerId } = await seedOrg("pro");
     const { division } = await rig(asOwner(orgId, ownerId));
-    const signedInUserId = await sql<{ id: string }[]>`
+    const [{ id: signedInUserId }] = await sql<{ id: string }[]>`
       insert into users (email, display_name, password_hash)
       values (${`u-${randomUUID().slice(0, 8)}@test.local`}, 'Signed In', 'x')
-      returning id`.then((r) => r[0]!.id);
+      returning id`;
     const { entrantId, personIdByName } = await seedEntrantWithPlayers(orgId, division.id, [
       {
         fullName: "Already Linked",
@@ -3681,7 +3681,7 @@ describe.skipIf(!HAS_DB)("inviteUnclaimedMembers (RS008 — claim-invite sweep)"
 
     expect(emailMock.claimInvite).not.toHaveBeenCalled();
     const [{ n }] = await sql<{ n: number }[]>`
-      select count(*)::int as n from person_claims where person_id = ${personIdByName.get("Already Linked")}`;
+      select count(*)::int as n from person_claims where person_id = ${personIdByName.get("Already Linked")!}`;
     expect(n).toBe(0);
   });
 
@@ -3709,7 +3709,7 @@ describe.skipIf(!HAS_DB)("inviteUnclaimedMembers (RS008 — claim-invite sweep)"
     expect(emailMock.claimInvite).toHaveBeenCalledTimes(1); // still one
 
     const claims = await sql<{ id: string; revoked_at: string | null }[]>`
-      select id, revoked_at from person_claims where person_id = ${personIdByName.get("Invited Once")}`;
+      select id, revoked_at from person_claims where person_id = ${personIdByName.get("Invited Once")!}`;
     expect(claims).toHaveLength(1); // never revoked-and-replaced by the second sweep
     expect(claims[0]!.revoked_at).toBeNull();
   });
@@ -3720,17 +3720,17 @@ describe.skipIf(!HAS_DB)("inviteUnclaimedMembers (RS008 — claim-invite sweep)"
     const { entrantId, personIdByName } = await seedEntrantWithPlayers(orgId, division.id, [
       { fullName: "Claims Later", email: "later@test.local", consentStatus: "granted" },
     ]);
-    const laterUserId = await sql<{ id: string }[]>`
+    const [{ id: laterUserId }] = await sql<{ id: string }[]>`
       insert into users (email, display_name, password_hash)
       values (${`u-${randomUUID().slice(0, 8)}@test.local`}, 'Later User', 'x')
-      returning id`.then((r) => r[0]!.id);
-    await sql`update persons set user_id = ${laterUserId} where id = ${personIdByName.get("Claims Later")}`;
+      returning id`;
+    await sql`update persons set user_id = ${laterUserId} where id = ${personIdByName.get("Claims Later")!}`;
 
     await inviteUnclaimedMembers(orgId, entrantId);
 
     expect(emailMock.claimInvite).not.toHaveBeenCalled();
     const [{ n }] = await sql<{ n: number }[]>`
-      select count(*)::int as n from person_claims where person_id = ${personIdByName.get("Claims Later")}`;
+      select count(*)::int as n from person_claims where person_id = ${personIdByName.get("Claims Later")!}`;
     expect(n).toBe(0);
   });
 
@@ -3740,6 +3740,73 @@ describe.skipIf(!HAS_DB)("inviteUnclaimedMembers (RS008 — claim-invite sweep)"
     const { entrantId } = await seedEntrantWithPlayers(orgId, division.id, []);
     await expect(inviteUnclaimedMembers(orgId, entrantId)).resolves.toBeUndefined();
     expect(emailMock.claimInvite).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RS008 — wiring: confirmRegistration/confirmPaidRegistration call
+// inviteUnclaimedMembers post-commit. Both live in THIS module, so
+// inviteUnclaimedMembers cannot be mocked here (a same-file call binds
+// directly, not through the module's live-binding export — vi.mock cannot
+// intercept it); these prove the REAL end-to-end wiring instead, via the
+// mocked @/lib/email boundary and vi.waitFor (the call is fire-and-forget,
+// not awaited by production code, so the assertion must tolerate the
+// microtask gap). markRegistrationPaidOffline/confirmRegistrationWaived
+// carry the IDENTICAL one-line wiring (same `if (row.entrant_id) void
+// inviteUnclaimedMembers(row.org_id, row.entrant_id)` shape, verified by
+// reading the diff) and are not separately re-proven end-to-end here.
+// ---------------------------------------------------------------------------
+describe.skipIf(!HAS_DB)("RS008: confirmRegistration/confirmPaidRegistration fire the claim-invite sweep", () => {
+  it("confirmRegistration invites a granted, emailed, unlinked player once materialised", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    const settings = await putRegistrationSettings(owner, division.id, {
+      enabled: true,
+      entrant_kind: "individual",
+      fee_cents: 0,
+      form_fields: [],
+      opens_at: null,
+      closes_at: null,
+      capacity: null,
+      refund_lock_at: null,
+    });
+    const { registration } = await seedRegistration(competition.id, division.id, settings, {
+      players: [{ name: "Confirm Sweep Person", dob: "1998-01-01" }],
+    });
+    // seedRegistration's own player insert leaves consent_status at its table
+    // default ('pending') — bump it to 'granted' with an email, the state a
+    // real self-registration's OWN row is written in at submit.
+    await sql`
+      update registration_players
+      set consent_status = 'granted', email = 'confirmsweep@test.local'
+      where registration_id = ${registration.id}`;
+
+    await confirmRegistration(owner, registration.id);
+
+    await vi.waitFor(() => expect(emailMock.claimInvite).toHaveBeenCalledTimes(1));
+    const [, args] = emailMock.claimInvite.mock.calls[0]!;
+    expect(args).toMatchObject({ personName: "Confirm Sweep Person" });
+  });
+
+  it("confirmPaidRegistration (via the checkout webhook) invites too", async () => {
+    const { competition, division } = await stripeRig();
+    const { registration } = await seedRegistration(
+      competition.id,
+      division.id,
+      { fee_cents: 500, currency: "gbp", payment_method: "stripe" },
+      { players: [{ name: "Webhook Sweep Person", dob: "1997-01-01" }] },
+    );
+    await sql`
+      update registration_players
+      set consent_status = 'granted', email = 'webhooksweep@test.local'
+      where registration_id = ${registration.id}`;
+
+    await handleRegistrationCheckoutCompleted(fakeSession(registration.id, 500));
+
+    await vi.waitFor(() => expect(emailMock.claimInvite).toHaveBeenCalledTimes(1));
+    const [, args] = emailMock.claimInvite.mock.calls[0]!;
+    expect(args).toMatchObject({ personName: "Webhook Sweep Person" });
   });
 });
 

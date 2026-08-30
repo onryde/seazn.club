@@ -37,6 +37,22 @@ vi.mock("@/lib/email", async (importOriginal) => {
   };
 });
 
+// RS008: inviteUnclaimedMembers is a fire-and-forget, post-commit side
+// effect — mocked so approveRegistration's WIRING (does it call this, with
+// the right args) is deterministic and provable without racing a detached
+// promise. Everything else from "../registrations" (materialise via
+// registration-approval.ts, promoteWaitlistedRow imported directly below,
+// etc.) stays REAL via importOriginal.
+const inviteSweepMock = vi.hoisted(() => ({ fn: vi.fn().mockResolvedValue(undefined) }));
+vi.mock("../registrations", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../registrations")>();
+  return {
+    ...actual,
+    inviteUnclaimedMembers: (...args: Parameters<typeof actual.inviteUnclaimedMembers>) =>
+      inviteSweepMock.fn(...args),
+  };
+});
+
 import { sql, statementCount } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { seedRegistration } from "@/server/usecases/__tests__/_registration-fixtures";
@@ -69,6 +85,7 @@ beforeEach(() => {
   });
   stripeMock.refundCreate.mockReset().mockResolvedValue({ id: "re_test_1" });
   emailMock.registrationRefundFailedAlert.mockClear();
+  inviteSweepMock.fn.mockClear();
 });
 
 // ---------------------------------------------------------------------------
@@ -259,6 +276,31 @@ describe.skipIf(!HAS_DB)("approveRegistration", () => {
     const approvedAgain = await approveRegistration(owner, regId);
     expect(approvedAgain.entrant_id).toBe(approved.entrant_id);
     expect(await auditCount("registration.approved", regId)).toBe(1);
+  });
+
+  // RS008 — materialise() convergence point, via approveRegistration: fires
+  // the post-commit claim-invite sweep for the entrant it just materialised.
+  it("RS008: fires the claim-invite sweep after materialising, post-commit", async () => {
+    const { orgId, orgSlug, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    await seedSettings(division.id, { entrant_kind: "individual", fee_cents: 0, approval: "manual" });
+    const submitted = await submitRegistrationGroup(
+      { orgSlug, compSlug: competition.slug },
+      {
+        contact: baseContact(),
+        privacy_consent: true,
+        entries: [
+          { division_id: division.id, entrant_kind: "individual", players: [{ full_name: "Approval Sweep" }], answers: {} },
+        ],
+      },
+    );
+    const regId = submitted.entries[0]!.registration_id;
+
+    const approved = await approveRegistration(owner, regId);
+
+    expect(inviteSweepMock.fn).toHaveBeenCalledTimes(1);
+    expect(inviteSweepMock.fn).toHaveBeenCalledWith(orgId, approved.entrant_id);
   });
 
   it("rejected is terminal: approve after reject fails; reject-after-reject is idempotent, not a second transition", async () => {

@@ -2516,7 +2516,7 @@ export async function handleRegistrationCheckoutAsyncPaymentFailed(
 }
 
 type PayOutcome =
-  | { kind: "confirmed"; divisionId: string; competitionId: string; orgId: string }
+  | { kind: "confirmed"; divisionId: string; competitionId: string; orgId: string; entrantId: string }
   // RULING B (RS002 W5 review): a Stripe payment is the MACHINE, not the
   // organiser — on a manual-approval division it leaves the entry at 'paid'
   // and waits for a human (approveRegistration). Distinct from "confirmed"
@@ -2752,6 +2752,7 @@ async function confirmPaidRegistration(
       divisionId: reg.division_id,
       competitionId: div.competition_id,
       orgId: reg.org_id,
+      entrantId,
     };
   })) as unknown as PayOutcome;
 
@@ -2769,6 +2770,9 @@ async function confirmPaidRegistration(
       "registration: checkout confirmed",
     );
     fireDivisionRevalidate(outcome.divisionId, outcome.competitionId);
+    // RS008: fire-and-forget, strictly AFTER the transaction above has
+    // committed — see confirmRegistration's identical wiring for why.
+    void inviteUnclaimedMembers(outcome.orgId, outcome.entrantId);
     // Growth loop (SPEC-5 §2 C): the organiser's FIRST competition to take a paid
     // registration earns free AI credits. Fires only on a genuine first-time paid
     // CONFIRMATION (not a replay, a double-pay duplicate, or a late payment to a
@@ -5082,6 +5086,12 @@ export async function confirmRegistration(auth: AuthCtx, regId: string): Promise
     return orgRegAfter(tx, regId);
   });
   fireDivisionRevalidate(row.division_id);
+  // RS008: fire-and-forget, strictly AFTER the transaction above has
+  // committed. `row.entrant_id` is null on an early-return before
+  // materialise() ever ran (never happens for this function today, but
+  // harmless either way); the open-claim guard inside makes a repeat sweep
+  // of an already-confirmed row a cheap no-op.
+  if (row.entrant_id) void inviteUnclaimedMembers(row.org_id, row.entrant_id);
   return row;
 }
 
@@ -5136,6 +5146,9 @@ export async function markRegistrationPaidOffline(
     return orgRegAfter(tx, regId);
   });
   fireDivisionRevalidate(row.division_id);
+  // RS008: fire-and-forget, strictly AFTER the transaction above has
+  // committed — see confirmRegistration's identical wiring for why.
+  if (row.entrant_id) void inviteUnclaimedMembers(row.org_id, row.entrant_id);
   return row;
 }
 
@@ -5174,6 +5187,9 @@ export async function confirmRegistrationWaived(
     return orgRegAfter(tx, regId);
   });
   fireDivisionRevalidate(row.division_id);
+  // RS008: fire-and-forget, strictly AFTER the transaction above has
+  // committed — see confirmRegistration's identical wiring for why.
+  if (row.entrant_id) void inviteUnclaimedMembers(row.org_id, row.entrant_id);
   return row;
 }
 
