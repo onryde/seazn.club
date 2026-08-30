@@ -230,6 +230,26 @@ export const SPORT_PALETTES: Readonly<Record<string, Partial<SportPalette>>> = O
    *
    *   board       the arena in the dark, past the boards
    *   board-2     the band, one step up
+   *
+   * THE GROUND CARRIES A BLUE CAST ON PURPOSE (owner-ruled 2026-08-30, R6-1b,
+   * reversing R6-1a's "leave it"). The first value was `#08090c`, a neutral
+   * near-black, and it measured **dE 4.2 from table tennis's `#101418`** —
+   * below the ~8 at which two colours stop being distinguishable side by side.
+   * On screen that is harmless (one sport at a time, and the accents are a full
+   * hue apart), but the sign-off sheet shows all nine grounds at once and two
+   * of them read as one black rectangle.
+   *
+   * `#040a22` takes the worst pair from **4.2 to 11.4** while keeping L* at 3.2
+   * — still a near-black clock face, not a navy. Chroma 16.0 is the deliberate
+   * ceiling: `#020430` scored a better dE 14.6 but at chroma 29.5 it reads as
+   * deep navy, which is a different design than the one signed off. The
+   * separation from table tennis is now carried by HUE rather than by
+   * lightness, which is the robust axis — two near-blacks can drift together
+   * as either is retuned; two different hues cannot.
+   *
+   * Contrast is unchanged in kind and recomputed, not assumed: ink 17.4/16.1,
+   * led 13.5/12.5, caution 12.1, dismissal 7.0. The band moved with the ground
+   * (`#0c1430`) to hold the same dE 6.6 gap the original pair had at 7.1.
    *   led         cold rink cyan — the power-play clock and the score digits
    *   caution     the minor/major end of the penalty ladder
    *   dismissal   misconduct through match penalty
@@ -248,8 +268,8 @@ export const SPORT_PALETTES: Readonly<Record<string, Partial<SportPalette>>> = O
    * of hockey's, one entry above.
    */
   icehockey: {
-    board: "#08090c",
-    "board-2": "#14181f",
+    board: "#040a22",
+    "board-2": "#0c1430",
     ink: "#eef2f6",
     led: "#67e8f9",
     caution: "#ffc233",

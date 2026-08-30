@@ -117,6 +117,12 @@ shipped at least twice, and the first four shipped **past a green suite**.
    were dead taps, defect rows owed by a different wave. Re-pin every line
    number and re-verify every capability claim against the tree before building
    on it. A false premise is a finding to record, not a blocker.
+   **A grep is not a read.** Three assertions were made and withdrawn in one
+   day — a table "is alphabetical" (it was wave order), a colour "reads as
+   green" (it was a teal, blue channel leading), a seam "never reaches the UI"
+   (static values arrived; only the conditional shape was dead). Each came from
+   a grep that showed what exists and was then asserted to show how it is
+   ordered, shaped, or routed. Open the file before asserting a property of it.
 6. **An absent symptom can mean suppressed, not safe.** An over-refusing guard
    silently dropped a wave's headline stat and looked clean.
 7. **One sample is not a parity sweep.** Serve/rotation/alternation bugs hid

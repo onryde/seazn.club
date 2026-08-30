@@ -3742,3 +3742,166 @@ This lands squarely on ice hockey, whose goal payload carries an `emptyNet`
 field: the pad can RECORD an empty-net goal while the lineup UI insists a keeper
 is mandatory. R6 fixes the read path for its two sports and records the
 remaining sports as owed.
+
+### R6 — D-8's disposition is DATED PROVENANCE, not "could not reproduce"
+
+R7's point, taken and recorded in the stronger form: `f5a1628750` (2026-08-13)
+created `period-skin.tsx` with the collapsed-by-default `ActionForm` already in
+place, **two days before D-8 was filed on 2026-08-15**. So the row was filed
+against a build that already had the behaviour it claims was missing. That is a
+dated provenance argument and it closes the row for good; "could not reproduce"
+would invite a later wave to re-open it on a different machine.
+
+### PROGRAMME-LEVEL FINDING — the defect register is no longer a reliable input
+
+Across R6 and R7 running concurrently on 2026-08-30, **five register/index rows
+were wrong** — R6's D-8 and D-9 (filed against behaviour that did not exist),
+R7's D-3 (closed by R4, still listed open), D-13 (listed closed, boardgame half
+open) and D-11 (listed closed by R1 while R1 itself shipped a third score
+render) — **plus two brief premises**: the "fallback branch" in
+`pad-renderer.tsx` that does not exist, and `resolvePositions` being described
+as reaching the lineup editor when it has zero production callers.
+
+Both waves now re-pin every register row against the tree before sizing.
+Recorded ONCE here as a programme-level finding rather than as separate rows in
+each wave; R8's sweep owns the register's own accuracy. R7 points at this line
+rather than restating it.
+
+### R6 — the third score render (R7's find), and what R6's headline says
+
+`pad-host.tsx:1075` renders `data-role="v3-headline"` — a slate-900 bar carrying
+the engine's `summaryHeadline` — ABOVE the scorebug. D-11/GF-2 ("score rendered
+3× above the fold") is recorded closed by R1, and R1 shipped this third render.
+
+For R6's two sports the period kernel builds it at `period/kernel.ts:2537`:
+`${home} — ${away}${soSuffix}${otSuffix}${phaseSuffix}` — e.g. `3 — 2 · P2`.
+Against R6's own surfaces that is **entirely duplicated**: the scorebug halves
+already carry `3` and `2`, and the strip already carries `P2`.
+
+**Except in two states**, where the headline carries the only statement of a
+fact nothing else shows: the shootout tally (`(GWS 2–1)`) and the extra-time
+marker (`(OT)`).
+
+**R6's position, sent to R7:** do not hardcode a per-sport suppression list in
+the chassis. A skin should DECLARE whether it owns the headline's information,
+the same opt-in shape `phase?(view)` already uses — then hockey and ice hockey
+suppress it once their own strip surfaces shootout and OT, cricket keeps it
+(the chase equation earns its place), and no chassis-side list has to be kept in
+sync with eleven skins.
+
+### R6 — three cross-checks run at R7's prompt (2026-08-30), one is a real gap
+
+R7 flagged three things from its own engine pinning. Checked all three against
+R6's surface rather than assumed:
+
+1. **`fidelityEntitlements` — R6 is CLEAN.** R7's three sports declare `{}`
+   (empty), which renders a recording-chip upsell for a band nothing gates. The
+   period kernel declares real ones: `{2: preset.timelineEntitlement, 3: same}`
+   (`period/kernel.ts:2170-2193`), and both presets set
+   `timelineEntitlement: "scoring.match_timeline"` (`hockey.ts:216`,
+   `icehockey.ts:253`). Band 2 and band 3 gate on the SAME entitlement — correct,
+   with a stale comment citing football's shape, which R6 fixes
+   (`kernel.ts:2172-2178`).
+
+2. **Accent contrast against the BAND, not just the ground — R6 is CLEAN**, and
+   this is the check R7 nearly shipped a fail on (`#e5484d` measures 4.40:1 on
+   its ground and **3.79:1 on its band**, and `led` paints strip digits, which
+   are small text). R6's were computed against both from the start:
+   hockey `led` 9.51 board / **7.18 band**; ice hockey `led` 13.74 / **12.28**.
+   Recorded because the band is the harder surface and the one that fails
+   quietly.
+
+3. **`captureExtra` — R6 HAS THE GAP.** VERIFIED: `captureExtra` is defined at
+   seven recipes in `gallery.capture.ts` (:1082, :1541, :1677, :1854, :2063,
+   :2119, :2177). **Neither icehockey (:2205) nor hockey (:2231) has one.** So
+   the gallery captures only the five shared `STATES`, none of which opens a
+   dock or a sheet — exactly R2c's recorded ruling that "the gallery is BLIND to
+   a narrowing wave unless it adds states", and the R4 zero-screenshot class in a
+   quieter form: the capture SUCCEEDS and photographs nothing that changed.
+
+   Left unfixed, R6's sign-off sheet would show the owner five screens that look
+   almost identical to v2 while the entire wave — the dock-driven goal flow, the
+   card ladder, the penalty countdown, the running clock, the swap sheet — never
+   appears in a single frame. **R6 owes `captureExtra` for BOTH sports**, and it
+   is a merge-gate item, not a nicety. States owed: goal → dock with
+   scorer/assist, penalty with a live countdown, hockey's three-card ladder,
+   swap sheet at step 2, and the clock running.
+
+R7's own warning to R6 (field hockey's ground would read as football's) was
+tested in CIELAB and REJECTED — dE 16.6, hue 226° vs 161°, `#06323c` is a teal
+whose blue channel leads its green. R7 reproduced the whole matrix
+independently, agreed, and recorded it as a false premise of its own making.
+
+### A SPORT TONE HAS A THREE-FILE FANOUT, NOT TWO (recorded 2026-08-30, R6+R7)
+
+Adding `advisory` was scoped as "sport-theme.ts + types.ts + a CSS rule". It is
+not. The complete set a tone touches:
+
+1. `v3/sport-theme.ts` — `SPORT_TOKENS` and the palette values
+2. `v3/types.ts` — `SheetChoiceStep.tone`'s accepted subset
+3. **`v3/tokens.ts` — `SPORT_TONE_CLASSES`**, which `guided-sheet.tsx` indexes
+   with a `SportTone`. **tsc forces this one and no brief listed it.**
+4. `apps/web/src/app/globals.css` — the `.pad-*` rule reading `var(--sport-*)`
+5. `v3/__tests__/contrast.test.ts` — the new token's pairs on BOTH grounds
+6. `v3/__tests__/sport-theme.test.ts` — the identity/default locks
+
+R7's framing, taken: if a later wave adds an eighth tone believing it is a
+two-file change, that is a trap. It is a compile-time fanout, so it fails loudly
+rather than silently — but only after the work is done and only in a file the
+author did not expect.
+
+### `SPORT_PALETTES` IS NOT ALPHABETICAL — it is WAVE ORDER
+
+football, tennis, badminton, tabletennis, volleyball. R6 and R7 built a
+cross-session contract rule ("alphabetical, so a conflict resolves
+mechanically") on a grep that showed the keys and not their order. R6's
+implementer refused to re-sort — correctly, since re-sorting is a reflow and
+would have broken the same contract's no-reflow rule.
+
+**Amended rule, in force for both waves:** insert a new palette among its
+NEIGHBOURS, never re-sort the literal. R6's two sit between `football` and
+`tennis`; R7's two go above `football`. The anchors do not touch, so the two
+inserts cannot land in one another's hunk — the mechanical-resolution property
+survives without the alphabetical premise that was never true.
+
+### R7 DECLINED THE REBASE — and was right to (recorded because it is a rule)
+
+R6 offered R7 a rebase onto R6's branch for a clean palette insert. R7 declined:
+rebasing onto a feature branch makes R7 a STACKED PR whose base is a branch
+rather than `main`, so a squash-merge of R6 orphans R7's history against a base
+that no longer exists. This repo has already been bitten by that class once. The
+coupling is also asymmetric — only the totality flip is genuinely gated on R6.
+
+**Rule: concurrent waves stay based on `main` and resolve additive conflicts at
+merge time. Never rebase one wave onto another for convenience.**
+
+### THE META-LESSON BOTH WAVES CONVERGED ON, 2026-08-30
+
+Three cross-session assertions were made and withdrawn in one day: field hockey's
+ground "would read as football's" (it is a teal, dE 16.6), `SPORT_PALETTES` "is
+alphabetical" (wave order), and `resolvePositions` "means positions never reach
+the editor" (static positions arrive; only the cfg-conditional shape is dead).
+
+**All three were assertions about files that had been GREPPED, never READ.** A
+grep answers what exists. It does not answer how a thing is ordered, what
+channel dominates a hex, or which of two paths a value actually takes. Every one
+was caught by the other session computing or reading rather than agreeing —
+which is the argument for two concurrent waves reviewing each other, and the
+argument against either of them trusting a one-line claim from the other.
+
+### R6-1a — ice hockey's ground STAYS at `#08090c` (owner ruled 2026-08-30)
+
+Raised because it measures **dE 4.2 from table tennis's `#101418`** — below the
+~8 threshold at which two colours read as one side by side. Owner ruled: LEAVE
+IT.
+
+Reasoning recorded so no later wave "fixes" this as a defect: on screen only one
+sport is ever shown at a time, and the two accents are a full hue apart (glacier
+cyan `#67e8f9` vs the 40mm orange ball `#ff9440`), so no scorer can confuse
+them. The collision exists only on a comps sheet showing all nine grounds at
+once, which is a review artifact, not a product surface.
+
+**This is polish that was declined, not a defect that was missed.** A future
+session measuring the palette set will find this pair and should read this line
+rather than re-raising it. If the sign-off sheet itself ever becomes a customer
+surface, revisit.
