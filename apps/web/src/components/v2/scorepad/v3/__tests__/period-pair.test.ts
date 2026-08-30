@@ -29,6 +29,7 @@ import {
   buildClock,
   eventTypesOf,
   isPlayPhaseToken,
+  boxOf,
   releasableBox,
   SWAP_TYPE,
   type PeriodSkinSpec,
@@ -678,6 +679,168 @@ describe("the strip owns the two facts the chassis headline is the only surface 
       (summaryOf(sport.module, state) as { detail: { strength: string } }).detail.strength,
     );
   });
+});
+
+// ---------------------------------------------------------------------------
+// 6b. The penalty box, and the four guards a mutation sweep found untested
+// ---------------------------------------------------------------------------
+
+describe("the box's countdown says only what it can honestly say", () => {
+  const sport = SPORTS[0]!; // hockey — the only sport with a PERMANENT class
+  const cfg = periodCfg(sport.module);
+
+  it("a PERMANENT card shows the rest-of-match word, even when the umpire awarded minutes", () => {
+    // `expiryOf` derives an expiry from `payload.minutes ?? cls.minutes`, so a
+    // red card carrying the umpire's own five minutes DOES get an `expiresAt`
+    // — the team is back to full strength then. The PLAYER never returns, so a
+    // countdown beside their name would be a lie about the person even while
+    // it is true about the side.
+    const phase = firstPlayPhase(sport, cfg);
+    const state = foldPeriod(sport.module, cfg, [
+      ["core.start"],
+      ["hockey.suspension.start", { by: "H", person: "H-p2", class: "red", minutes: 5, at: { period: phase, elapsed: 60 } }],
+    ]);
+    const susp = (state.suspensions as { permanent: boolean; expiresAt?: unknown }[])[0]!;
+    expect(susp.permanent, "the fixture is not a permanent card").toBe(true);
+    expect(susp.expiresAt, "the fixture has no expiry to be tempted by").toBeDefined();
+
+    const view = viewFor(sport, cfg, state);
+    expect(boxOf(view)[0]!.remaining).toBeNull();
+    const item = sport.factory(T).scorebug(view).strip.find((i) => i.id === "box");
+    expect(item?.value).toBe("pad.hockey.strip.permanent");
+    expect(item?.value).not.toMatch(/\d:\d{2}/);
+  });
+
+  it("a card whose time runs into the NEXT period counts down only once the fold is in that period", () => {
+    // 14:00 of a fifteen-minute quarter plus a two-minute green: `expiryOf`
+    // carries the remainder into the next period rather than clipping it.
+    const first = firstPlayPhase(sport, cfg);
+    const carded: Spec[] = [
+      ["core.start"],
+      ["hockey.suspension.start", { by: "H", person: "H-p2", class: "green", at: { period: first, elapsed: 840 } }],
+    ];
+    const beforeWhistle = foldPeriod(sport.module, cfg, carded);
+    const expiry = (beforeWhistle.suspensions as { expiresAt: { period: string; elapsed: number } }[])[0]!.expiresAt;
+    expect(expiry.period, "the fixture no longer straddles a whistle").not.toBe(first);
+
+    const next = nextAdvanceOf(sport.module, beforeWhistle)!;
+    const afterWhistle = foldPeriod(sport.module, cfg, [...carded, ["hockey.period.advance", { to: next }]]);
+    expect(afterWhistle.suspensions, "the whistle swept a card that had not run out").toHaveLength(1);
+    // `state.asOf` still names the CLOSED period. Subtracting across the
+    // whistle would print a number that is arithmetic on two different clocks.
+    expect(boxOf(viewFor(sport, cfg, afterWhistle))[0]!.remaining).toBeNull();
+    expect(
+      sport.factory(T).scorebug(viewFor(sport, cfg, afterWhistle)).strip.find((i) => i.id === "box"),
+    ).toBeUndefined();
+
+    // Once a STAMPED event lands in the new period, the two agree again.
+    const inNext = foldPeriod(sport.module, cfg, [
+      ...carded,
+      ["hockey.period.advance", { to: next }],
+      ["hockey.goal", { by: "A", at: { period: expiry.period, elapsed: expiry.elapsed - 20 } }],
+    ]);
+    expect(boxOf(viewFor(sport, cfg, inNext))[0]!.remaining).toBe(20);
+    expect(sport.factory(T).scorebug(viewFor(sport, cfg, inNext)).strip.find((i) => i.id === "box")?.value).toBe("0:20");
+  });
+});
+
+describe("the release sheet ends the suspension the scorer actually picked", () => {
+  it("names the CARDED side, not a default — the fold refuses an end event aimed at the wrong entrant", () => {
+    const sport = SPORTS[1]!;
+    const cfg = periodCfg(sport.module);
+    // AWAY only, deliberately: a payload that fell back to the home entrant
+    // would fold on a home-carded fixture and hide itself.
+    const carded: Spec[] = [
+      ["core.start"],
+      ["icehockey.suspension.start", { by: "A", person: "A-p2", class: "minor" }],
+    ];
+    const state = foldPeriod(sport.module, cfg, carded);
+    const view = viewFor(sport, cfg, state);
+    const sheet = sport.factory(T).sheets!(view)[SHEET_RELEASE] as GuidedSheetSpec;
+    const option = (sheet.steps[0] as { options: { id: string }[] }).options[0]!;
+    const payload = sheet.buildPayload({ target: option.id });
+    expect(payload.by).toBe((state.entrants as { away: string }).away);
+    expect(payload.person).toBe("A-p2");
+    expect(payload.class).toBe("minor");
+    expect(phaseVerdict(sport.module, state, sheet.event, payload)).toBe("accepted");
+    // …and the wrong side really is refused, which is what makes the line above
+    // an assertion rather than a coincidence.
+    expect(
+      phaseVerdict(sport.module, state, sheet.event, { by: (state.entrants as { home: string }).home }),
+    ).not.toBe("accepted");
+  });
+});
+
+describe("the shoot-out tile disables the side whose turn it is not", () => {
+  it("follows the kernel's own alternation, which refuses an out-of-turn attempt outright", () => {
+    const sport = SPORTS[1]!;
+    const cfg = periodCfg(sport.module);
+    const specs: Spec[] = [["core.start"]];
+    for (let i = 0; i < 8; i += 1) {
+      const s = foldPeriod(sport.module, cfg, specs);
+      if (s.phase === "SHOOTOUT") break;
+      const next = nextAdvanceOf(sport.module, s);
+      if (next === null) break;
+      specs.push(["icehockey.period.advance", { to: next }]);
+    }
+    const check = (state: PeriodStateLike, expected: "home" | "away") => {
+      const view = viewFor(sport, cfg, state);
+      const tiles = sport.factory(T).tiles(view);
+      const other = expected === "home" ? "away" : "home";
+      expect(tiles.find((t2) => t2.id === `attempt-${expected}`)?.disabled).toBeUndefined();
+      expect(tiles.find((t2) => t2.id === `attempt-${other}`)?.disabled, `${other} should be disabled`).toBe(true);
+      // The disabled side is not merely greyed: the fold would refuse it.
+      const sheet = sport.factory(T).sheets!(view)[`attempt-${other}`] as GuidedSheetSpec;
+      expect(phaseVerdict(sport.module, state, sheet.event, sheet.buildPayload({ outcome: "scored" }))).toBe("other");
+    };
+    // AT THE START, NEITHER IS DISABLED — and that is the engine's rule, not a
+    // gap. `expectedKicker([])` returns null ("either side may start",
+    // `period/shootout.ts:80-81`) and `applyShootoutAttempt` only refuses once
+    // an order exists, so a pad that greyed one side here would be inventing an
+    // alternation the kernel does not have.
+    const opening = foldPeriod(sport.module, cfg, specs);
+    const openingView = viewFor(sport, cfg, opening);
+    for (const side of ["home", "away"] as const) {
+      expect(sport.factory(T).tiles(openingView).find((t2) => t2.id === `attempt-${side}`)?.disabled).toBeUndefined();
+      const sheet = sport.factory(T).sheets!(openingView)[`attempt-${side}`] as GuidedSheetSpec;
+      expect(phaseVerdict(sport.module, opening, sheet.event, sheet.buildPayload({ outcome: "scored" })), side).toBe(
+        "accepted",
+      );
+    }
+    // Once the first attempt fixes the order, the pad follows it — both ways.
+    check(foldPeriod(sport.module, cfg, [...specs, ["icehockey.shootout.attempt", { by: "H", scored: true }]]), "away");
+    check(
+      foldPeriod(sport.module, cfg, [
+        ...specs,
+        ["icehockey.shootout.attempt", { by: "A", scored: true }],
+      ]),
+      "home",
+    );
+  });
+});
+
+describe("the swap slot is offered only where a line change is recordable", () => {
+  for (const sport of SPORTS) {
+    it(`${sport.key}: band 2 and a play phase, and nothing else`, () => {
+      const cfg = periodCfg(sport.module);
+      const live = livePhaseState(sport, cfg);
+
+      for (const band of [0, 1] as const) {
+        const view = viewFor(sport, cfg, live, band);
+        expect(sport.factory(T).swap!(view), `band ${band} offers a slot`).toEqual([]);
+        expect(sport.factory(T).tiles(view).map((t2) => t2.id)).not.toContain("sub-home");
+      }
+      const ok = viewFor(sport, cfg, live, 2);
+      expect(sport.factory(T).swap!(ok)).toHaveLength(2);
+      expect(sport.factory(T).tiles(ok).map((t2) => t2.id)).toContain("sub-home");
+
+      // Before the first whistle, and after the last, there is no line to change.
+      const pre = viewFor(sport, cfg, foldPeriod(sport.module, cfg, []), 3);
+      expect(sport.factory(T).swap!(pre)).toEqual([]);
+      const done = foldedPhases(sport.module).find((row) => row.phase === "done")!;
+      expect(sport.factory(T).swap!(viewFor(sport, done.cfg, done.state, 3))).toEqual([]);
+    });
+  }
 });
 
 // ---------------------------------------------------------------------------

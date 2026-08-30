@@ -346,18 +346,19 @@ describe("PadClockBar renders the time that would be stamped, plus one control",
 // READ THIS BEFORE TRUSTING IT. These four assertions are a SOURCE AUDIT, and
 // a source audit is a mirror: it proves the wiring is written, never that it
 // runs. They are here because the alternative is nothing at all. `PadHostV3`
-// renders seven independently-stateful nested primitives, apps/web vitest is
-// `environment: "node"` with no jsdom, and no skin declares `clock()` yet — so
-// there is no e2e that can reach this surface until R6's skin task lands, and
-// until then a `send` that quietly stopped calling `stampFor` would leave
-// every test above green (the exact "inert seam" shape this file's header
-// quotes). Mutation-checked like everything else: deleting the `stampFor` call
-// from `send` reds the first of these.
+// renders seven independently-stateful nested primitives and apps/web vitest is
+// `environment: "node"` with no jsdom, so a `send` that quietly stopped calling
+// `stampFor` would leave every test above green (the exact "inert seam" shape
+// this file's header quotes). Mutation-checked like everything else: deleting
+// the `stampFor` call from `send` reds the first of these.
 //
-// THE OBLIGATION THIS CARRIES: the moment a skin declares `clock()`, that
-// wave owes a real e2e that starts the clock in a browser and reads the stamp
-// back off a recorded event. These four go no further than "the call site
-// exists".
+// R6/task C DISCHARGED THE FIRST HALF OF THE OBLIGATION THIS USED TO CARRY.
+// `skins/hockey.tsx` and `skins/icehockey.tsx` declare `clock()`, so the bar is
+// now reachable in the running product and `__tests__/period-pair.test.ts`
+// drives the whole loop — the skin's own clock spec, `reseatClock`, `stampFor`,
+// and the real kernel folding the stamp into `state.asOf` — with no
+// hand-written fixture at either end. What these four still cannot see is the
+// React shell around it, and the BROWSER e2e for that is R6/task E's.
 describe("the host's own wiring, audited at the source (a mirror — see the note above)", () => {
   const src = readFileSync(join(process.cwd(), "src/components/v2/scorepad/v3/pad-host.tsx"), "utf8")
     .replace(/\/\*[\s\S]*?\*\//g, "")
@@ -380,15 +381,12 @@ describe("the host's own wiring, audited at the source (a mirror — see the not
   });
 
   it("wears the RIBBON's own container and button classes, so it inherits a width sign-off instead of claiming a new one", () => {
-    // The honest form of the responsive gate for this wave. No skin declares
-    // `clock()` yet, so `PadClockBar` is unreachable in the running product
-    // and cannot be screenshotted at 320/768/1280 against anything real — and
-    // a hand-written CSS approximation would verify the approximation, which
-    // is `AGENTS.md`'s "the visual gate has its own vacuous mode". What CAN be
-    // asserted is that this row is the SAME row as the ribbon directly below
-    // it, which has been through that gate: same flex container, same pill,
-    // same 44px control. The wave that first mounts this owes the real
-    // screenshots.
+    // Kept as a STRUCTURAL lock now that R6's two skins mount this row for
+    // real: it is the SAME row as the ribbon directly below it — same flex
+    // container, same pill, same 44px control — so a later restyle of one that
+    // forgets the other fails here rather than at a screenshot nobody retakes.
+    // The live 320/768/1280 measurement is R6/task C's own, taken against the
+    // real hockey and ice-hockey boards.
     const RIBBON_ROW = "flex items-center justify-between gap-2 rounded-full border border-slate-200 bg-white px-4 py-2";
     const RIBBON_BUTTON =
       "shrink-0 rounded-full px-3 text-sm font-semibold text-violet-700 transition-colors hover:bg-violet-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400";
