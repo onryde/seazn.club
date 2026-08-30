@@ -24,6 +24,7 @@
 // successful charge.
 import { expect, test } from "@playwright/test";
 import { apiJson } from "../helpers";
+import { fillHostedCheckout } from "../stripe-checkout-kit";
 
 /** Never on by accident: absent the flag this skips visibly rather than
  *  silently passing, so a CI run that cannot reach Stripe reports a skip
@@ -285,13 +286,7 @@ test("RS006 — organiser settings, team entry, Stripe Connect payment", async (
     await anon.waitForTimeout(3000);
     await anon.screenshot({ path: `${SHOTS}/7-stripe-checkout.png`, fullPage: true });
 
-    await anon.locator("#cardNumber").fill("4242424242424242");
-    await anon.locator("#cardExpiry").fill("12/34");
-    await anon.locator("#cardCvc").fill("123");
-    const holder = anon.locator("#billingName");
-    if (await holder.count()) await holder.fill("Priya Raman");
-    const postal = anon.locator("#billingPostalCode");
-    if (await postal.count()) await postal.fill("SW1A 1AA");
+    await fillHostedCheckout(anon, "Priya Raman");
     await anon.waitForTimeout(1200);
     await anon.screenshot({ path: `${SHOTS}/8-card-filled.png`, fullPage: true });
     await anon.waitForTimeout(1000);
