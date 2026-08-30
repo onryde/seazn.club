@@ -27,7 +27,7 @@
 // the chassis reads from the shape the skin writes.
 import type { EventEnvelope, SquadState } from "@seazn/engine/core";
 import type { FidelityBand } from "@seazn/engine/sport";
-import type { PadClockSpec } from "./clock";
+import type { GameTimeStamp, PadClockSpec } from "./clock";
 import type { SportTone } from "./sport-theme";
 
 export type TapModel = "S" | "T";
@@ -1197,6 +1197,42 @@ export interface PadHostView {
   readonly squads: SquadState;
   readonly events: readonly EventEnvelope[];
   readonly contextOverrides: Readonly<Record<string, string>>;
+  /**
+   * R6 fix pass 2 (gap 2) — THE HOST CLOCK'S LIVE READING, so a skin can show a
+   * number that changes between events.
+   *
+   * The `at` this host would put on an event dispatched right now: exactly
+   * `stampOf(clock, nowMs)`, the SAME derivation the `send` gateway stamps
+   * with, never a second one. `undefined` when this pad has no clock, or has
+   * one that has never been told the time (`PadClock.known` — a pad displaying
+   * 0:00 because it has nothing better to display must not drive a countdown
+   * from that zero).
+   *
+   * WHY IT EXISTS. `ActiveSuspension.expiresAt` is derived once, at the card,
+   * from the stamped `at` plus the awarded minutes, and the kernel's release is
+   * LAZY — swept at the next stamped event and at each whistle (kernel.ts:
+   * 842-843 says so in as many words). A skin measuring a countdown against
+   * `state.asOf` therefore measures against the last thing anybody RECORDED:
+   * hockey showed "back on 2:00" at the card and still 2:00 two minutes later,
+   * and still 2:00 after the player was back. The most urgent number on the
+   * band never moved. Nothing in this bag could reach live seconds, so no skin
+   * could fix it on its own.
+   *
+   * WHY THE PERIOD COMES WITH IT, and why this is not "a second clock". The
+   * countdown must not subtract across a whistle — `expiresAt.period` routinely
+   * differs from the period being played — so a bare number would force every
+   * reader to ASSUME the host is counting within the phase it happens to be
+   * looking at. The host knows which period it is stamping; it says so. What a
+   * skin must NOT be handed is `PadClock` itself (`base`/`runningSince`/
+   * `known`), which would let it run its own arithmetic and drift from the
+   * stamp `send` actually applies.
+   *
+   * DISPLAY ONLY. This never becomes an `at` on a payload and never corrects
+   * the fold: the ENGINE's laziness is correct and is not to be "fixed" from
+   * here. A ticking display and a lazily-swept state legitimately disagree
+   * between events.
+   */
+  readonly clockAt?: GameTimeStamp;
 }
 
 export function assertScorebugSpec(spec: ScorebugSpec): string[] {

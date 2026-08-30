@@ -417,8 +417,9 @@ export interface BoxEntry {
   readonly classKey: string;
   readonly person?: string;
   readonly permanent: boolean;
-  /** Whole game seconds still to run at the fold's own `asOf`, or `null` when
-   *  this suspension has no expiry to count down to. */
+  /** Whole game seconds still to run at the moment the pad is displaying —
+   *  `view.clockAt` where the host has a live clock, the fold's own `asOf`
+   *  otherwise — or `null` when this suspension has no countdown to show. */
   readonly remaining: number | null;
 }
 
@@ -429,20 +430,42 @@ export interface BoxEntry {
  * plus the awarded minutes (`suspensions.ts:137-153`), and release is LAZY —
  * swept at the next stamped event and at each phase whistle. The kernel says so
  * itself (kernel.ts:842-843): the engine and a ticking display legitimately
- * disagree BETWEEN events. So the countdown here is measured against
- * `state.asOf` — the last stamped moment the fold actually knows about — and it
- * re-derives on every tap, which since R6/task A is every event. The pad's own
- * live seconds sit in `pad-host.tsx`'s clock state and never reach a skin;
- * `PadClockBar` renders them one row below this strip, which is where a scorer
- * reads "now" from.
+ * disagree BETWEEN events.
+ *
+ * WHICH IS WHY THE COUNTDOWN IS MEASURED AGAINST THE HOST'S LIVE CLOCK
+ * (`PadHostView.clockAt`, R6 fix pass 2 gap 2) AND NOT AGAINST `state.asOf`.
+ * `asOf` is the last moment anybody RECORDED, so a countdown against it stands
+ * still through every second of play in which nothing happened — which is most
+ * of them, and all of the ones a scorer is watching the box for. The fold's own
+ * stamp remains the fallback for a pad with no clock, or one nobody has started.
  *
  * A suspension whose expiry names a DIFFERENT phase is reported with no
  * countdown rather than a wrong one: minutes across a whistle are the kernel's
- * arithmetic (`sweepThroughPhase`), not the pad's.
+ * arithmetic (`sweepThroughPhase`), not the pad's. That is why `clockAt` carries
+ * its period — the live clock is only comparable within the period it counts in.
  */
 export function boxOf(view: PadHostView): BoxEntry[] {
   const state = asState(view.state);
-  const asOf = state.asOf;
+  // NOW, as the scorer is watching it — the host clock's live reading when it
+  // has one it trusts, and the fold's last stamp otherwise.
+  //
+  // R6 fix pass 2, gap 2. Measured against `state.asOf` alone, the box was a
+  // countdown that never counted: `asOf` moves only when an event is stamped,
+  // so a hockey green at Q1 60s read "back on 2:00" at the card, still 2:00
+  // after two minutes of play with nothing recorded, and still 2:00 after the
+  // player was back. `PadHostView.clockAt` is the host's own `stampOf(clock,
+  // nowMs)` — the same value the `send` gateway stamps with — and it advances a
+  // second at a time, so this re-derives to a smaller number on every tick.
+  //
+  // THE FALLBACK IS NOT DEAD. `clockAt` is absent for a pad whose clock nobody
+  // has started and whose fold left no stamp in this period (`PadClock.known`
+  // is false, so the host refuses to speak), and for any skin that declares no
+  // clock at all. `asOf` is then the only honest source there is.
+  //
+  // THE ENGINE'S LAZINESS STAYS. This is a DISPLAY, and the kernel says itself
+  // (kernel.ts:842-843) that its lazily-swept state and a ticking display
+  // legitimately disagree between events. Nothing here writes back.
+  const asOf = view.clockAt ?? state.asOf;
   const out: BoxEntry[] = [];
   (state.suspensions ?? []).forEach((susp, index) => {
     const side = susp.side === "home" || susp.side === "away" ? susp.side : null;

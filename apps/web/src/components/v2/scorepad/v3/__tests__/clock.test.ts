@@ -682,6 +682,24 @@ describe("the host's own wiring, audited at the source (a mirror — see the not
     expect(src).toContain("elapsedOf(clock, nowMs)");
   });
 
+  it("hands the SKINS the same live stamp `send` records with, and lets the view follow it", () => {
+    // R6 fix pass 2, gap 2. `PadHostView.clockAt` is what lets a skin render a
+    // number that changes between events — the penalty countdown was measured
+    // against `state.asOf`, which moves only when something is stamped, so it
+    // never moved. Two things have to be written for that to work, and neither
+    // is visible to any behavioural test in this tree:
+    //   1. the value is `stampOf(clock, nowMs)` — the SAME derivation the send
+    //      gateway stamps with, so watch-and-record cannot disagree; and
+    //   2. `clockAt` is in the view memo's dependency list, without which the
+    //      view is built once and the countdown freezes at its first reading
+    //      while `PadClockBar` above it keeps ticking.
+    expect(src).toContain("const liveStamp = stampOf(clock, nowMs);");
+    expect(src).toContain("contextOverrides, clockAt]");
+    // Split into primitives before the memo, so a 2 Hz tick does not rebuild
+    // every tile, sheet, dock and swap slot in the pad twice a second.
+    expect(src).toContain("[livePeriod, liveElapsed]");
+  });
+
   it("does NOT read the wall clock on every pad mount — seven of the nine skins have no clock at all", () => {
     // R6 review, gap 7. The lazy initialiser ran `Date.now()` for every pad in
     // the product to produce a value only a clocked skin ever reads. The two

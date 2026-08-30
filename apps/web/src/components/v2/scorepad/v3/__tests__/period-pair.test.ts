@@ -19,7 +19,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AnySportModule, PadSpec } from "@seazn/engine/sport";
 import { initSquads } from "@seazn/engine/core";
-import { initClock, startClock, reseatClock, elapsedOf } from "../clock";
+import { initClock, startClock, reseatClock, elapsedOf, stampOf } from "../clock";
 import { stampFor } from "../pad-host";
 import type { GuidedSheetSpec, PadHostView, SwapSlot, TileSpec } from "../types";
 import { SPORT_PALETTES, SPORT_TONES } from "../sport-theme";
@@ -980,6 +980,106 @@ describe("the box's countdown says only what it can honestly say", () => {
     ]);
     expect(boxOf(viewFor(sport, cfg, inNext))[0]!.remaining).toBe(20);
     expect(sport.factory(T).scorebug(viewFor(sport, cfg, inNext)).strip.find((i) => i.id === "box")?.value).toBe("0:20");
+  });
+});
+
+describe("the box countdown counts DOWN — against the host's live clock, not the last thing recorded", () => {
+  // R6 fix pass 2, gap 2. `state.asOf` moves only when an event is STAMPED, so
+  // a countdown measured against it stands still through every second of play
+  // in which nothing happened — which is most of them, and all of the ones a
+  // scorer is watching the box for. Commit 0909063bf lit this as the band's
+  // "most urgent number" and it never changed.
+  //
+  // Every `clockAt` below comes out of the REAL host derivation — `stampOf` on
+  // a clock built by `initClock`/`startClock` — never a hand-written literal,
+  // because it is the same function `pad-host.tsx`'s `send` gateway stamps
+  // with and a literal would prove only this test's own arithmetic.
+  const sport = SPORTS[0]!; // hockey
+  const cfg = periodCfg(sport.module);
+  const T0 = 1_700_000_000_000;
+
+  /** The view the host would build `secondsIn` seconds into the period, with a
+   *  clock a scorer started at the whistle. */
+  function viewAt(state: PeriodStateLike, period: string, secondsIn: number): PadHostView {
+    const running = startClock(initClock(period, 0), T0);
+    return { ...viewFor(sport, cfg, state), clockAt: stampOf(running, T0 + secondsIn * 1000) };
+  }
+
+  function boxValue(view: PadHostView): string | undefined {
+    return sport.factory(T).scorebug(view).strip.find((i) => i.id === "box")?.value;
+  }
+
+  it("the SAME state, with no event stamped, shows a smaller number as the host clock advances", () => {
+    const phase = firstPlayPhase(sport, cfg);
+    const state = foldPeriod(sport.module, cfg, [
+      ["core.start"],
+      ["hockey.suspension.start", { by: "H", person: "H-p2", class: "green", at: { period: phase, elapsed: 60 } }],
+    ]);
+    const expiry = (state.suspensions as { expiresAt: { period: string; elapsed: number } }[])[0]!.expiresAt;
+    expect(expiry.period, "the fixture straddles a whistle").toBe(phase);
+
+    // One state object, three readings. Nothing is folded in between: this is
+    // exactly the two minutes of play in which a scorer records nothing.
+    expect(boxOf(viewAt(state, phase, 60))[0]!.remaining).toBe(expiry.elapsed - 60);
+    expect(boxOf(viewAt(state, phase, 100))[0]!.remaining).toBe(expiry.elapsed - 100);
+    expect(boxOf(viewAt(state, phase, 140))[0]!.remaining).toBe(expiry.elapsed - 140);
+
+    const readings = [60, 100, 140].map((s) => boxValue(viewAt(state, phase, s)));
+    expect(new Set(readings).size, `the band never moved: ${readings.join(" / ")}`).toBe(3);
+    for (const reading of readings) expect(reading).toMatch(/^\d+:\d{2}$/);
+    // …and it is strictly decreasing, not merely different.
+    expect(boxOf(viewAt(state, phase, 100))[0]!.remaining!).toBeLessThan(boxOf(viewAt(state, phase, 60))[0]!.remaining!);
+  });
+
+  it("reaches 0:00 while the ENGINE still holds the suspension — the lazy sweep is not to be `fixed` from here", () => {
+    const phase = firstPlayPhase(sport, cfg);
+    const state = foldPeriod(sport.module, cfg, [
+      ["core.start"],
+      ["hockey.suspension.start", { by: "H", person: "H-p2", class: "green", at: { period: phase, elapsed: 60 } }],
+    ]);
+    const expiry = (state.suspensions as { expiresAt: { elapsed: number } }[])[0]!.expiresAt;
+    const past = viewAt(state, phase, expiry.elapsed + 45);
+    expect(boxOf(past)[0]!.remaining, "the countdown went negative").toBe(0);
+    expect(boxValue(past)).toBe("0:00");
+    // The fold has NOT released them — release is swept at the next stamped
+    // event (kernel.ts:842-843). The display and the state disagreeing here is
+    // the documented behaviour, not a bug to close by writing back.
+    expect(state.suspensions).toHaveLength(1);
+  });
+
+  it("a live clock in ANOTHER period is not subtracted across the whistle", () => {
+    const first = firstPlayPhase(sport, cfg);
+    const carded: Spec[] = [
+      ["core.start"],
+      ["hockey.suspension.start", { by: "H", person: "H-p2", class: "green", at: { period: first, elapsed: 840 } }],
+    ];
+    const beforeWhistle = foldPeriod(sport.module, cfg, carded);
+    const next = nextAdvanceOf(sport.module, beforeWhistle)!;
+    const afterWhistle = foldPeriod(sport.module, cfg, [...carded, ["hockey.period.advance", { to: next }]]);
+    const expiry = (afterWhistle.suspensions as { expiresAt: { period: string } }[])[0]!.expiresAt;
+
+    // The scorer has restarted the clock in the CLOSED period's successor…
+    const inFirstAgain = viewAt(afterWhistle, first, 30);
+    expect(expiry.period, "the fixture no longer straddles a whistle").not.toBe(first);
+    expect(boxOf(inFirstAgain)[0]!.remaining, "subtracted two different clocks").toBeNull();
+    // …and once the live clock IS in the expiry's own period, the number is back.
+    expect(boxOf(viewAt(afterWhistle, expiry.period, 10))[0]!.remaining).not.toBeNull();
+  });
+
+  it("falls back to the fold's own stamp when the host offers no live clock", () => {
+    // A pad nobody has started and whose fold left no stamp in this period is a
+    // clock that has never been told the time (`PadClock.known`), and the host
+    // says nothing rather than offering its placeholder zero.
+    const phase = firstPlayPhase(sport, cfg);
+    const state = foldPeriod(sport.module, cfg, [
+      ["core.start"],
+      ["hockey.suspension.start", { by: "H", person: "H-p2", class: "green", at: { period: phase, elapsed: 60 } }],
+    ]);
+    expect(stampOf(initClock(phase), T0 + 90_000), "an unknown clock spoke").toBeUndefined();
+    const view = { ...viewFor(sport, cfg, state), clockAt: stampOf(initClock(phase), T0 + 90_000) };
+    const expiry = (state.suspensions as { expiresAt: { elapsed: number } }[])[0]!.expiresAt;
+    // `state.asOf` is the card's own stamp, 60s in — the pre-fix reading.
+    expect(boxOf(view)[0]!.remaining).toBe(expiry.elapsed - 60);
   });
 });
 

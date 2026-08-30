@@ -917,6 +917,27 @@ export function PadHostV3(props: PadHostV3Props) {
   const [clock, setClock] = useState<PadClock | null>(null);
   const [nowMs, setNowMs] = useState(0);
 
+  // R6 fix pass 2 (gap 2) — the live reading handed to the skins, so a skin can
+  // render a number that moves between events. `stampOf` is THE derivation the
+  // `send` gateway below stamps with, called here as well rather than
+  // re-derived, so what a scorer watches count down and what an event records
+  // cannot disagree. `known` gates it, so a pad nobody has started drives no
+  // countdown from its placeholder zero.
+  //
+  // Split into its two primitives before the memo on purpose: `stampOf` builds
+  // a fresh object every render and `nowMs` moves twice a second, so keying the
+  // memo on the object would rebuild every tile, sheet, dock and swap slot in
+  // the pad at 2 Hz. `elapsedOf` returns WHOLE seconds, so keyed on the values
+  // the view's identity changes once a second while the clock runs and not at
+  // all while it is paused.
+  const liveStamp = stampOf(clock, nowMs);
+  const livePeriod = liveStamp?.period;
+  const liveElapsed = liveStamp?.elapsed;
+  const clockAt = useMemo(
+    () => (livePeriod === undefined || liveElapsed === undefined ? undefined : { period: livePeriod, elapsed: liveElapsed }),
+    [livePeriod, liveElapsed],
+  );
+
   const view: PadHostView = useMemo(
     () => ({
       cfg: props.cfg,
@@ -927,6 +948,9 @@ export function PadHostV3(props: PadHostV3Props) {
       entitlements,
       personNames,
       squads,
+      // The host clock's live reading — see PadHostView.clockAt (types.ts) for
+      // why the period travels with the number and why this is display-only.
+      clockAt,
       // C-gaps §G1 (docs/superpowers/plans/2026-08-16-scorepad-v3-r2-cricket.md):
       // state/summary alone cannot answer "what happened on ball N" — a skin
       // building an over-dots strip needs the raw stream. The SAME list this
@@ -937,7 +961,7 @@ export function PadHostV3(props: PadHostV3Props) {
       // contextOverridesStale/render-phase-reset block above.
       contextOverrides,
     }),
-    [props.cfg, pipeline.state, pipeline.summary, phase, props.band, entitlements, personNames, squads, pipeline.events, contextOverrides],
+    [props.cfg, pipeline.state, pipeline.summary, phase, props.band, entitlements, personNames, squads, pipeline.events, contextOverrides, clockAt],
   );
 
   // `sheets` is resolved BEFORE the tiles so the band filter below can read a
