@@ -524,11 +524,15 @@ export async function maskPublicEntrantNames<
   const nonTeamIds = entrants.filter((e) => e.kind !== "team").map((e) => e.id);
   const consentRows =
     nonTeamIds.length > 0
-      ? await sql<{ entrant_id: string; consent: { public_name?: boolean } | null }[]>`
+      ? // Post-merge review fix (2026-08-30, minor): `p.merged_into is null`
+        // added for consistency with the fresh-members query below (item 5's
+        // own fix) — a tombstoned/merged duplicate's stale consent must not
+        // count toward `anyOptedOut`.
+        await sql<{ entrant_id: string; consent: { public_name?: boolean } | null }[]>`
           select em.entrant_id, p.consent
           from entrant_members em
           join persons p on p.id = em.person_id
-          where em.entrant_id in ${sql(nonTeamIds)}`
+          where em.entrant_id in ${sql(nonTeamIds)} and p.merged_into is null`
       : [];
   const consentsByEntrant = new Map<string, ({ public_name?: boolean } | null)[]>();
   for (const r of consentRows) {
