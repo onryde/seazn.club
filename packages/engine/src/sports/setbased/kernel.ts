@@ -1054,7 +1054,16 @@ interface ServeWalk {
  * derivation of "did that close a set?" drifts from the fold silently, and the
  * whole point of this reader is not to be a second source of truth.
  *
- * Total and never throws: every refusal is a returned value.
+ * Total and never throws: every refusal is a returned value — INCLUDING a
+ * malformed or dangling `core.void`. That was aspirational until this pass:
+ * every `applyRally`/`applySummary`/`applyExpedite` call below was already
+ * wrapped to flip `ledgerAgrees` on a catch, but the `resolveVoids(events)`
+ * that FEEDS the loop was not, so a bad void reached the caller as a thrown
+ * `INVALID_EVENT` (core/events.ts) instead of a refused value. That matters
+ * here specifically because a v3 skin reads this walk synchronously during
+ * render with no try/catch of its own — the throw reached
+ * `ScoringErrorBoundary` rather than degrading like every other failure in
+ * this function already does. Wrapped the same way as the rest of them now.
  */
 function setBasedServeWalk(
   source: SetBasedServeSource,
@@ -1153,7 +1162,19 @@ function setBasedServeWalk(
     startSet(previousOpener === null ? null : opponent(previousOpener), "undeclared");
   };
 
-  for (const event of resolveVoids(events)) {
+  // See the doc comment above: `resolveVoids` throws on a malformed or
+  // dangling void, and this function must degrade instead, exactly like
+  // every `applyRally`/`applySummary`/`applyExpedite` call below already
+  // does on its own catch.
+  let resolvedEvents: readonly EventEnvelope[];
+  try {
+    resolvedEvents = resolveVoids(events);
+  } catch {
+    ledgerAgrees = false;
+    resolvedEvents = [];
+  }
+
+  for (const event of resolvedEvents) {
     if (!ledgerAgrees) break;
 
     if (event.type === expediteType) {

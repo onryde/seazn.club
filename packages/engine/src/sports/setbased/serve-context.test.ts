@@ -363,6 +363,33 @@ describe("drift detection stays as narrow as the fact justifies", () => {
     // puts the serve back with H, who won the rally that still stands.
     expect(ctx(badminton, cfg, SINGLES, events).servingSide).toBe("H");
   });
+
+  it("degrades to `ledger-mismatch` rather than throwing on a void with no legal target", () => {
+    // `resolveVoids` throws `INVALID_EVENT` for a `core.void` whose target is
+    // unknown, later, or itself a void (core/events.ts). This reader is read
+    // synchronously during render by a v3 skin with no try/catch of its own,
+    // so it must degrade exactly like every other refusal `setBasedServeWalk`
+    // produces, not crash the caller — see that function's doc comment in
+    // kernel.ts.
+    const events = stream(
+      ["core.start"],
+      rally(badminton, { wonBy: "H", serving: "H" }),
+      rally(badminton, { wonBy: "A" }),
+    );
+    const state = foldMatch(badminton, cfg, SINGLES, events, STRICT_ALL);
+    const danglingVoid = [
+      ...events,
+      makeEnvelope(3, { type: "core.void", payload: {} }, "no-such-event-id"),
+    ];
+    expect(() => setBasedServeContext(badminton, state, danglingVoid)).not.toThrow();
+    expect(setBasedServeContext(badminton, state, danglingVoid)).toEqual({
+      servingSide: null,
+      side: null,
+      serverPersonId: null,
+      serveOrderKnown: false,
+      unknownBecause: "ledger-mismatch",
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
