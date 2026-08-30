@@ -245,7 +245,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           # Manual runs can target a PR by number; otherwise the pushed ref.
-          ref: ${{ inputs.pr && format('refs/pull/{0}/head', inputs.pr) || github.ref }}
+          ref: ${{ inputs.pr && format('refs/pull/{0}/head', inputs.pr) || github.sha }}
       - uses: pnpm/action-setup@v4
         with:
           version: 10.34.5
@@ -588,7 +588,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ inputs.pr && format('refs/pull/{0}/head', inputs.pr) || github.ref }}
+          ref: ${{ inputs.pr && format('refs/pull/{0}/head', inputs.pr) || github.sha }}
       - uses: pnpm/action-setup@v4
         with:
           version: 10.34.5
@@ -860,7 +860,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ inputs.pr && format('refs/pull/{0}/head', inputs.pr) || github.ref }}
+          ref: ${{ inputs.pr && format('refs/pull/{0}/head', inputs.pr) || github.sha }}
       - uses: pnpm/action-setup@v4
         with:
           version: 10.34.5
