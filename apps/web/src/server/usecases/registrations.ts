@@ -943,6 +943,50 @@ export async function materialise(tx: Tx, reg: RegistrationRow, entrantKind: str
 }
 
 /**
+ * #23 (2026-08-30) — a self-joiner (`joinTeamEntry`'s INSERT branch, no
+ * `player_id`) landing on an entry that was ALREADY materialised before they
+ * joined. `materialise()`'s own idempotency guard (`if (reg.entrant_id)
+ * return`, above) means it never revisits this registration once confirmed,
+ * so the per-player `entrant_members` insert its team/pair branch does for
+ * every row present AT materialise time never runs for a row inserted
+ * after — the joiner's `registration_players` row exists and the join page
+ * tells them "you're in", but nothing rosters them onto the entrant that
+ * actually gets fielded. This mirrors that team/pair block's per-player
+ * logic verbatim (same person-resolution precedence, same idempotent
+ * `entrant_members` insert) so a late joiner ends up fielded exactly like an
+ * on-time one. Never called for the CLAIM branch — a claimed row's person
+ * resolution is `reconcileClaimedPerson`'s job, not this one's, because a
+ * claim UPDATES a row `materialise()` already turned into a member (dummy or
+ * real); there is no membership missing to create.
+ */
+export async function joinExistingEntrant(
+  tx: Tx,
+  orgId: string,
+  entrantId: string,
+  player: {
+    id: string;
+    full_name: string;
+    dob: string | null;
+    gender: string | null;
+    email: string | null;
+    user_id: string | null;
+  },
+): Promise<void> {
+  const name = player.full_name.trim();
+  if (!name) return;
+  const personId = player.user_id
+    ? await resolvePlayerPerson(tx, orgId, player.user_id, name, player.dob, player.gender)
+    : await findOrCreatePlayerPerson(tx, orgId, name, player.dob, player.gender, player.email);
+  await tx`
+    insert into entrant_members (entrant_id, person_id, squad_number, is_captain)
+    values (${entrantId}, ${personId}, null, false)
+    on conflict (entrant_id, person_id) do nothing`;
+  await tx`
+    update registration_players set person_id = ${personId}, updated_at = now()
+    where id = ${player.id}`;
+}
+
+/**
  * Oldest waitlisted → pending (doc 16 §1.1 auto-promotion). Waitlisted rows
  * hold amount 0, so promotion SNAPSHOTS the current fee + method (spec §2);
  * card divisions get a fresh 48h pay window. Returns the promoted row.
