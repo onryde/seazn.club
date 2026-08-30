@@ -35,9 +35,11 @@ import {
   backfillPersonEmail,
   joinExistingEntrant,
   inviteUnclaimedMembers,
+  findPlayerPersonByEmail,
   type RegistrationRow,
   type RegistrationSettingsRow,
 } from "./registrations";
+import { maskDisplayName } from "@/lib/name-display";
 import {
   divisionEligibilityIssues,
   requiresDob,
@@ -924,10 +926,34 @@ export async function previewJoinEntry(joinCode: string): Promise<JoinPreviewRes
 
   const divCtx = await loadEntryDivisionCtx(reg.division_id);
 
-  const slots = await sql<{ id: string; full_name: string }[]>`
-    select id, full_name from registration_players
+  const slots = await sql<{ id: string; full_name: string; email: string | null }[]>`
+    select id, full_name, email from registration_players
     where registration_id = ${reg.id} and source = 'captain_entered' and consent_status = 'pending'
     order by squad_number nulls last, created_at`;
+
+  // #24 — a `pending` slot's own consent is genuinely undecided, so ordinarily
+  // it previews raw. But #22's email dedupe means a captain-typed row CAN
+  // already match an EXISTING person elsewhere in the org's directory who has
+  // separately opted out — that person's own choice, already on record, must
+  // not be overridden just because THIS particular row hasn't been claimed
+  // yet. Read-only lookup, same email-exact-match rule `findOrCreatePlayerPerson`
+  // uses at materialise time (never a guess): zero or ambiguous matches preview
+  // raw, same as no email at all.
+  const unclaimedSlots = await Promise.all(
+    slots.map(async (s) => {
+      const trimmedEmail = s.email?.trim() || null;
+      if (!trimmedEmail) return { player_id: s.id, full_name: s.full_name };
+      const matchId = await findPlayerPersonByEmail(sql, divCtx.org_id, trimmedEmail);
+      if (!matchId) return { player_id: s.id, full_name: s.full_name };
+      const [person] = await sql<{ consent: { public_name?: boolean } | null }[]>`
+        select consent from persons where id = ${matchId}`;
+      const optedOut = person?.consent?.public_name === false;
+      return {
+        player_id: s.id,
+        full_name: optedOut ? maskDisplayName(s.full_name, "first_initial") : s.full_name,
+      };
+    }),
+  );
 
   // Never for a `pair` (fixed at two — claim only), and never once the
   // sport's cap is already met. Short-circuited so a pair never even issues
@@ -951,7 +977,7 @@ export async function previewJoinEntry(joinCode: string): Promise<JoinPreviewRes
     competition_slug: divCtx.comp_slug,
     org_slug: divCtx.org_slug,
     org_name: divCtx.org_name,
-    unclaimed_slots: slots.map((s) => ({ player_id: s.id, full_name: s.full_name })),
+    unclaimed_slots: unclaimedSlots,
     allow_new_player: allowNewPlayer,
     requires_dob: requiresDob({
       age_min: divCtx.age_min,

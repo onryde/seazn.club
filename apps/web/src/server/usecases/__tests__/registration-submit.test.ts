@@ -2327,6 +2327,35 @@ describe.skipIf(!HAS_DB)("joinTeamEntry", () => {
       expect(preview.total_players).toBe(3);
       expect(preview.unclaimed_slots).toHaveLength(2);
     });
+
+    // #24 — a captain-typed row's email can already match an existing,
+    // opted-out person elsewhere in the org's directory (someone who played
+    // before under a different registration and opted out via /me since).
+    // The slot's OWN consent_status is still 'pending', but the person it
+    // resolves to has already made their choice — the picker must not show
+    // their real name just because this particular row hasn't been claimed.
+    it("masks an unclaimed slot whose email already matches an opted-out person", async () => {
+      const { orgId, entry, players } = await rosterRig("team", ["Ada Lovelace"]);
+      const slot = players[0]!;
+      await sql`
+        insert into persons (org_id, full_name, email, consent, lane)
+        values (${orgId}, 'Ada Lovelace', 'ada@example.com', ${sql.json({ public_name: false })}, 'player')`;
+      await sql`update registration_players set email = 'ada@example.com' where id = ${slot.id}`;
+
+      const preview = await previewJoinEntry(entry.join_code!);
+      const slotPreview = preview.unclaimed_slots.find((s) => s.player_id === slot.id);
+      expect(slotPreview?.full_name).toBe("Ada L.");
+    });
+
+    it("previews an unclaimed slot's raw name when its email matches nobody opted out", async () => {
+      const { entry, players } = await rosterRig("team", ["Ada Lovelace"]);
+      const slot = players[0]!;
+      await sql`update registration_players set email = 'nobody-matches@example.com' where id = ${slot.id}`;
+
+      const preview = await previewJoinEntry(entry.join_code!);
+      const slotPreview = preview.unclaimed_slots.find((s) => s.player_id === slot.id);
+      expect(slotPreview?.full_name).toBe("Ada Lovelace");
+    });
   });
 });
 
