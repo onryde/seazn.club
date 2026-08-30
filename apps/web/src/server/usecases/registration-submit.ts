@@ -40,7 +40,7 @@ import {
   type RegistrationRow,
   type RegistrationSettingsRow,
 } from "./registrations";
-import { anyOptedOut, maskDisplayName, resolvePersonDisplayName } from "@/lib/name-display";
+import { anyOptedOut, resolvePersonDisplayName } from "@/lib/name-display";
 import {
   divisionEligibilityIssues,
   requiresDob,
@@ -950,16 +950,28 @@ export async function previewJoinEntry(joinCode: string): Promise<JoinPreviewRes
   // not fail OPEN into "preview raw." playerPersonConsentsByEmail returns
   // every match's consent; anyOptedOut masks if ANY of them opted out, same
   // "stricter wins" rule applied everywhere else in this session. Zero
-  // matches (or no email at all) previews raw, unchanged.
+  // matches (or no email at all) means no CONSENT-based opt-out was found —
+  // that alone no longer decides the outcome: `resolvePersonDisplayName`
+  // below also applies the DIVISION's youth/safeguarding policy (code review
+  // fix, 2026-08-30), the same second axis the join page's own HEADING
+  // already applies via `divPolicy.youth` a few lines further down. A youth
+  // division masks every slot regardless of consent; the consent check here
+  // only ever ADDS masking on top, never removes youth's.
   const unclaimedSlots = await Promise.all(
     slots.map(async (s) => {
       const trimmedEmail = s.email?.trim() || null;
-      if (!trimmedEmail) return { player_id: s.id, full_name: s.full_name };
-      const consents = await playerPersonConsentsByEmail(sql, divCtx.org_id, trimmedEmail);
+      const consents = trimmedEmail
+        ? await playerPersonConsentsByEmail(sql, divCtx.org_id, trimmedEmail)
+        : [];
       const optedOut = anyOptedOut(consents);
       return {
         player_id: s.id,
-        full_name: optedOut ? maskDisplayName(s.full_name, "first_initial") : s.full_name,
+        full_name: resolvePersonDisplayName(
+          s.full_name,
+          optedOut ? { public_name: false } : null,
+          divPolicy?.player_name_display ?? null,
+          divPolicy?.youth ?? false,
+        ),
       };
     }),
   );

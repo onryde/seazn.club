@@ -2379,6 +2379,26 @@ describe.skipIf(!HAS_DB)("joinTeamEntry", () => {
       expect(slotPreview?.full_name).toBe("Ada L.");
     });
 
+    // Code-review fix (2026-08-30) — the unclaimed-slot masking above (#24/
+    // finding #8) only ever checked the PERSON's own consent via the email
+    // lookup; it never applied the DIVISION's youth/safeguarding policy the
+    // way the join page's own HEADING does (resolvePersonDisplayName's
+    // `divPolicy.youth` argument, tested below). A youth division's
+    // still-pending, captain-entered slot showed the minor's raw full name
+    // to anyone holding the join link, consent axis notwithstanding. This
+    // slot deliberately carries NO email (rosterRig never sets one), so the
+    // consent lookup contributes nothing — isolating the youth axis from
+    // the consent axis #24's tests above already cover.
+    it("masks an unclaimed slot in a YOUTH division even when no matching opted-out person exists", async () => {
+      const { division, entry, players } = await rosterRig("team", ["Kid Runner"]);
+      await sql`update divisions set youth = true where id = ${division.id}`;
+      const slot = players[0]!;
+
+      const preview = await previewJoinEntry(entry.join_code!);
+      const slotPreview = preview.unclaimed_slots.find((s) => s.player_id === slot.id);
+      expect(slotPreview?.full_name).toBe("Kid R.");
+    });
+
     // RS008 review fix #1/#6 — the join page's own HEADING (display_name) had
     // no masking at all. A pair's is a compound of two people's names (design
     // #17: the roster wins), so a per-partner opt-out must mask the whole
