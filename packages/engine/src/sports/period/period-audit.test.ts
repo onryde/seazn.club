@@ -731,4 +731,46 @@ describe("W4 audit — module identity is unchanged", () => {
       expect(tier0?.eventTypes, module.key).not.toContain(`${module.key}.set_piece`);
     }
   });
+
+  // ---------------------------------------------------------------------------
+  // R6 fix pass 4, finding E (owner ruling, 2026-08-30) — hockey/ice-hockey
+  // cards and penalties are FREE. `apps/web`'s `requiredFeatureForEvent`
+  // (server/usecases/fidelity.ts) walks this LEGACY `fidelityTiers` array —
+  // never `padSpec(cfg).fidelity` — and treats the LOWEST tier declaring a
+  // type as its price: `tier <= 1` is free. `suspension.start`/`.end` used to
+  // first appear at tier 2 (`entitlement: preset.timelineEntitlement`), which
+  // is what made a free-plan org's hockey card 402. Scoped to the PERIOD
+  // FAMILY ONLY, per the owner's own narrow ruling — no other sport's
+  // `fidelityTiers` moves, and `PadSpec.fidelity` (the OTHER model,
+  // `sport/module.ts:102-106`) is untouched; the two are documented to
+  // disagree and stay that way until R9.
+  // ---------------------------------------------------------------------------
+
+  it("R6 fix pass 4: suspension.start/.end are tier 1 (free), not tier 2 (Pro-gated)", () => {
+    for (const module of [hockey, icehockey]) {
+      const startType = `${module.key}.suspension.start`;
+      const endType = `${module.key}.suspension.end`;
+      const tier1 = module.fidelityTiers.find((t) => t.tier === 1);
+      expect(tier1?.eventTypes, `${module.key}: tier 1 must declare suspension.start`).toContain(startType);
+      expect(tier1?.eventTypes, `${module.key}: tier 1 must declare suspension.end`).toContain(endType);
+      // Not merely present at tier 1 — ABSENT from tier 2, so the
+      // LOWEST-tier-wins rule `requiredFeatureForEvent` applies actually
+      // reads 1, not a stale "declared at 1 AND still at 2" state that a
+      // careless additive edit could have left behind.
+      const tier2 = module.fidelityTiers.find((t) => t.tier === 2);
+      expect(tier2?.eventTypes, `${module.key}: tier 2 must no longer declare suspension.start`).not.toContain(startType);
+      expect(tier2?.eventTypes, `${module.key}: tier 2 must no longer declare suspension.end`).not.toContain(endType);
+    }
+  });
+
+  it("R6 fix pass 4: the set piece (and, where declared, the shot) stay Pro-gated — the change is narrow", () => {
+    // The regression a careless fix could introduce: moving suspStart/suspEnd
+    // by widening `attributed` wholesale rather than narrowing it, which would
+    // silently free the set piece and shot alongside them.
+    for (const module of [hockey, icehockey]) {
+      const tier1 = module.fidelityTiers.find((t) => t.tier === 1);
+      expect(tier1?.eventTypes, `${module.key}: set_piece must stay Pro-gated`).not.toContain(`${module.key}.set_piece`);
+      expect(tier1?.eventTypes, `${module.key}: shot must stay Pro-gated`).not.toContain(`${module.key}.shot`);
+    }
+  });
 });

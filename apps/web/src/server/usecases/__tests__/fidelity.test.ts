@@ -29,11 +29,24 @@ describe("requiredFeatureForEvent (doc 14 §4 derivation)", () => {
     ["volleyball", "volleyball.set.summary", null],
     ["boardgame", "boardgame.result", null],
     ["generic", "generic.result", null],
+    // R6 fix pass 4, finding E (owner ruling, 2026-08-30) — hockey/ice-hockey
+    // cards and penalties are FREE. `period/kernel.ts` moved suspStart/
+    // suspEnd out of the Pro-gated tier and into tier 1; this is the exact
+    // gate (`requiredFeatureForEvent`) that used to answer 402 here.
+    ["hockey", "hockey.suspension.start", null],
+    ["hockey", "hockey.suspension.end", null],
+    ["icehockey", "icehockey.suspension.start", null],
+    ["icehockey", "icehockey.suspension.end", null],
     // Fine-grained tiers carry their declared entitlement (doc 10 §1).
     ["cricket", "cricket.ball", "scoring.ball_by_ball"],
     ["cricket", "cricket.player.line", "stats.player"], // the Tier-2 scorecard
     ["football", "football.card", "scoring.match_timeline"],
     ["football", "football.sub", "scoring.match_timeline"],
+    // The narrowness of the change above, pinned by contrast: the period
+    // kernel's OWN set piece (band 2/3 in both fidelity models) stays paid —
+    // this was never a "free the whole sport" ruling.
+    ["hockey", "hockey.set_piece", "scoring.match_timeline"],
+    ["icehockey", "icehockey.set_piece", "scoring.match_timeline"],
     // R3-3 — band 3 is its OWN key. Bands 2 and 3 differ by exactly one
     // event (`football.shot`), so the two bands must be distinguishable:
     // `requiredFeatureForEvent` walks the LOWEST tier declaring the type, so

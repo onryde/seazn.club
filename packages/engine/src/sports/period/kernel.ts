@@ -1835,9 +1835,30 @@ export function makePeriodModule(
   // between two sports sharing this kernel (see `sports/squad-state.ts`).
   const squadAdopter = makeSquadAdopter<PeriodState>();
 
+  // R6 fix pass 4, finding E (owner ruling, 2026-08-30 — see _INDEX.md's "R6
+  // FIX PASS 4" entry for the full analysis this executes). Hockey/ice-hockey
+  // cards and penalties are FREE: in these sports a suspension IS match
+  // state — it changes on-field strength, which changes how the score is
+  // reached — so a free-plan org that cannot record one has a WRONG
+  // scorebug, not merely a plainer one. `suspStartType`/`suspEndType` move
+  // OUT of the attributed-scoring (Pro-gated) group and into the tier-0/1
+  // group instead — PERIOD FAMILY ONLY. This is the legacy `fidelityTiers`
+  // model `server/usecases/fidelity.ts`'s `requiredFeatureForEvent` actually
+  // walks (lowest tier wins, `tier <= 1` is free); `PadSpec.fidelity` (the
+  // OTHER, newer model `padSpec` below publishes) already had suspStart/
+  // suspEnd at band 1 and is untouched by this change — the two models are
+  // DOCUMENTED to disagree until R9 reconciles them (`sport/module.ts:
+  // 102-106`). Do not extend this reasoning to any other sport's
+  // `fidelityTiers` here: football's card/sin-bin, cricket's wickets and
+  // every racquet sport's sanction stay exactly as gated as they were —
+  // that is a separate, registered wave (`R9-scoring-free.md`), and a
+  // wholesale realignment to `padSpec` would newly PAYWALL
+  // `cricket.superover.ball` (tier 1 today, `padSpec` band 3) in the
+  // opposite direction.
+  const tier1Types = [goalType, advanceType, attemptType, suspStartType, suspEndType];
   // Set pieces are attributed-scoring detail (who took it, did it convert), so
   // they join tiers 2/3 only — a tier-0 scorer taps goals, not awards.
-  const attributed = [goalType, advanceType, attemptType, suspStartType, suspEndType];
+  const attributed = [goalType, advanceType, attemptType];
   const tier2Types = setPieceKinds === undefined ? attributed : [...attributed, setPieceType];
   // S8/#417 W6 — shots are band-3 ("detail") ONLY, per S2/#430's ruling
   // (parked as "the T2 lane... not built here" until this session): tier 2
@@ -1848,7 +1869,7 @@ export function makePeriodModule(
   const tier3Types = shotTracking ? [...tier2Types, shotType] : tier2Types;
   const fidelityTiers: FidelityTier[] = [
     { tier: 0, eventTypes: [goalType, advanceType, attemptType] },
-    { tier: 1, eventTypes: [goalType, advanceType, attemptType] },
+    { tier: 1, eventTypes: tier1Types },
     { tier: 2, eventTypes: tier2Types, entitlement: preset.timelineEntitlement },
     { tier: 3, eventTypes: tier3Types, entitlement: preset.timelineEntitlement },
   ];

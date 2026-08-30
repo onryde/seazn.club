@@ -5431,12 +5431,19 @@ async function w4aTimeModelSuite(admin: Session): Promise<void> {
       sameStamp(tenSet2[3]!.at, stamp("S2", 60)),
   );
 
-  // === FREE path — the time model is Tier-2 scoring on all four sports. ===
-  // Every W4a event sits in fidelityTiers 2/3 behind scoring.match_timeline
+  // === FREE path — the time model is Tier-2 scoring on three of four sports. ===
+  // Every W4a event sat in fidelityTiers 2/3 behind scoring.match_timeline
   // (period/football) or scoring.rally_by_rally (nested/set-based), so a
-  // community org is paywalled out of it. The Tier-0 stamped advance below is
+  // community org was paywalled out of it. The Tier-0 stamped advance below is
   // the control: a gate that answered 402 to EVERY stamped event would pass the
-  // four checks above and fail this one.
+  // three checks below and fail this one.
+  //
+  // R6 fix pass 4, finding E (owner ruling, 2026-08-30) — icehockey (and
+  // hockey) suspension.start/.end are the ONE exception now: `period/
+  // kernel.ts` moved them to tier 1 (free), period family only. Football's
+  // sin bin and both racquet interruptions below are untouched and stay
+  // Pro-gated — see the icehockey-suspension check further down, which used
+  // to sit in the loop below asserting the opposite.
   const free = newSession();
   await signIn(free, `w4a_free_${tag}@example.com`);
   const freeComp = v1data<{ id: string }>(
@@ -5484,13 +5491,6 @@ async function w4aTimeModelSuite(admin: Session): Promise<void> {
   });
   gated.push(
     [
-      "icehockey suspension",
-      freeIce.fixtureId,
-      "icehockey.suspension.start",
-      "scoring.match_timeline",
-      { by: freeIce.entrantIds[1]!, class: "minor", at: stamp("P1", 100) },
-    ],
-    [
       "football sin bin",
       freeFoot.fixtureId,
       "football.sinbin.start",
@@ -5524,10 +5524,29 @@ async function w4aTimeModelSuite(admin: Session): Promise<void> {
         (res.json.error as { feature_key?: string } | undefined)?.feature_key === featureKey,
     );
   }
-  // The control — a Tier-0 event carrying the SAME `at` shape is free. Reuses
-  // the ice ledger above: the fixture is already started, and its `seq` is
-  // still 1 because the 402 never reached the ledger.
-  const freeIceLedger = freeLedgers.get(freeIce.fixtureId)!;
+  // R6 fix pass 4, finding E (owner ruling, 2026-08-30). This case used to
+  // sit in the `gated` loop above and assert a 402 + `scoring.match_timeline`
+  // feature_key for icehockey.suspension.start, the same as football's sin
+  // bin and the two racquet interruptions still do. `period/kernel.ts`'s
+  // `fidelityTiers` now lists suspStart/suspEnd at tier 1 (free) for the
+  // period family ONLY — every other sport's timeline event above is
+  // untouched and stays Pro. Verified through the REAL HTTP door, not at the
+  // usecase: a free-plan org's own suspension.start now succeeds outright.
+  const freeIceLedger = ledger(free, freeIce.fixtureId);
+  freeLedgers.set(freeIce.fixtureId, freeIceLedger);
+  await freeIceLedger.send("core.start", {});
+  const freeSuspension = await freeIceLedger.send("icehockey.suspension.start", {
+    by: freeIce.entrantIds[1]!,
+    class: "minor",
+    at: stamp("P1", 100),
+  });
+  check(
+    "w4a free: icehockey suspension.start is NO LONGER Pro-gated (owner ruling, R6 fix pass 4)",
+    freeSuspension.status === 201,
+  );
+  // The control — a Tier-0 event carrying the SAME `at` shape is ALSO free.
+  // Reuses the ice ledger above, which now carries `core.start` plus the
+  // free suspension.start check just above it.
   const freeAdvance = await freeIceLedger.send("icehockey.period.advance", {
     to: "P2",
     at: stamp("P1", 1200),
