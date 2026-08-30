@@ -121,12 +121,37 @@ describe("device link — the only history a courtside scorer sees (C1)", () => 
 });
 
 describe("ribbon undo cannot target a void (C4, ruling R7-5)", () => {
-  it("offers undo while the newest event is a real, un-voided entry", () => {
+  // R7/C review fix #2. C4 said the ribbon applies "deliberately the SAME
+  // rule the console applies" — and it did, on BOTH surfaces, which is the
+  // bug: this one is not the console. `ownEventIds` holds only what THIS
+  // mount submitted ("an event loaded from `initialEvents` is never in this
+  // set — honestly unknown, never a guess", use-pad-pipeline.ts), and the
+  // server refuses anything else outright: "A device link can only undo its
+  // own events", 403 (server/usecases/scoring.ts). So a courtside scorer
+  // whose newest row came from the console — or from before their last
+  // reload — was offered a control that could only fail, while the panel one
+  // line below had already hidden Void for that very row.
+  //
+  // The positive half of this rule is NOT assertable here and that is a fact
+  // about the surface, not a gap: nothing rendered server-side can put an id
+  // into `ownEventIds`. It is pinned twice instead — on the console's own
+  // real render ("the console's ribbon still offers Take back",
+  // fixture-console-one-ledger.test.tsx) and over the whole rule table
+  // (`ribbonUndoTarget`, scorepad/v3/__tests__/pad-host.test.ts).
+  it("withdraws undo for a row this device did not record — the server would 403", () => {
     const html = deviceHtml([START, GOAL]);
+
+    // The strip itself still renders, so the absence below is the RULE and
+    // not a missing ribbon.
     expect(html).toContain('data-role="v3-ribbon"');
-    expect(html, "the newest event is a goal — taking it back is legal").toContain(
-      'data-role="v3-ribbon-undo"',
-    );
+    expect(
+      html,
+      "these rows arrived as server history, so this device cannot void them",
+    ).not.toContain('data-role="v3-ribbon-undo"');
+    // ...and the panel one line below agrees about the same rows — which is
+    // the whole point: two controls that both write `core.void` on one screen
+    // must not disagree.
+    expect(html).not.toContain('data-role="v3-activity-void"');
   });
 
   it("withdraws undo once the newest event is itself a core.void", () => {

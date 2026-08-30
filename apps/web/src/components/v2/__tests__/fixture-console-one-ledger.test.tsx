@@ -159,6 +159,24 @@ describe("the console renders ONE ledger (D-4)", () => {
     ).not.toContain('data-testid="audit-strip"');
   });
 
+  // R7/C review fix #2 — the DISCRIMINATING half of the device link's own
+  // negatives (device-pad-history-and-undo.test.tsx). `ribbonUndoTarget` now
+  // delegates to `activityRowState` with `authority` following the surface,
+  // so the console — which owns the whole ledger — must keep offering Take
+  // back for exactly the rows whose Void it offers. Without this case, that
+  // file's `not.toContain('v3-ribbon-undo')` would still pass with the
+  // control deleted outright.
+  it("still offers the ribbon's Take back, for a row nobody on this device recorded", () => {
+    const html = consoleHtml();
+    expect(html).toContain('data-role="v3-ribbon"');
+    expect(
+      html,
+      "ev-2 came from a device link and the console never submitted it — the console owns it anyway",
+    ).toContain('data-role="v3-ribbon-undo"');
+    // The ledger beside it says the same thing about the same row.
+    expect(html).toContain('data-role="v3-activity-void"');
+  });
+
   it("still shows history once the fixture is over and the pad has unmounted", () => {
     // `scorePadV2 && scoring && !decided` unmounts the pad on a decided
     // fixture, and the page panel used to be the only thing left saying what

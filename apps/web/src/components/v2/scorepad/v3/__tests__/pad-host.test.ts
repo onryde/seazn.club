@@ -36,9 +36,11 @@ import {
   resolvePadPhase,
   resolveSheet,
   resolveSwapSlot,
+  ribbonUndoTarget,
   sidePool,
   squadStateOf,
 } from "../pad-host";
+import type { ActivityEvent } from "../activity";
 
 // --- squadStateOf ------------------------------------------------------
 
@@ -919,5 +921,115 @@ describe("resolveSwapSlot — per-side swap tiles reach DIFFERENT slots", () => 
 
   it("a skin declaring no swap slots at all resolves to null for any id", () => {
     expect(resolveSwapSlot("subHome", [])).toBeNull();
+  });
+});
+
+// --- ribbonUndoTarget --------------------------------------------------
+
+// R7 / Task C review fix #2 — TWO CONTROLS ON ONE SCREEN MUST NOT DISAGREE.
+//
+// C4 fixed the ribbon's ledger rules (a void is not voidable; neither is a row
+// some void already cancelled) and CLAIMED, in its own doc comment, to apply
+// "deliberately the SAME rule the console applies". It applied the console's
+// rule on the DEVICE LINK too — no ownership test and no `isVoidableEventType`
+// — where the activity panel one line below hides Void for exactly those rows
+// and the server answers 403 ("A device link can only undo its own events",
+// server/usecases/scoring.ts). A courtside scorer whose newest row came from
+// the console was offered a Take back that could only fail.
+//
+// The rule is now `activityRowState`'s, delegated rather than restated, with
+// `authority` following the SURFACE the way each `<ActivityPanel>` mount's own
+// props already do: the in-app console (`deviceLinkId === null`) mounts its
+// ledger with authority, the device link does not.
+describe("ribbonUndoTarget", () => {
+  const NOBODY: ReadonlySet<string> = new Set<string>();
+
+  function ev(id: string, seq: number, type: string, voids: string | null = null): ActivityEvent {
+    return { id, seq, type, payload: {}, voids };
+  }
+
+  const START = ev("ev-1", 1, "core.start");
+  const GOAL = ev("ev-2", 2, "football.goal");
+
+  describe("the in-app console (deviceLinkId === null)", () => {
+    it("offers the newest real entry", () => {
+      expect(ribbonUndoTarget([START, GOAL], null, NOBODY, null)).toBe("ev-2");
+    });
+
+    it("offers a row it did not record itself — it owns the whole ledger", () => {
+      // The console has no `ownEventIds` to speak of (its own mount passes an
+      // empty set); gating it on one would take away every capability the
+      // merged ledger exists to keep.
+      expect(ribbonUndoTarget([START, GOAL], null, NOBODY, null)).toBe("ev-2");
+    });
+
+    it("offers a core.* type the device link may not touch", () => {
+      // Ruling R7/C1: the console's ledger widens the rule back to "anything
+      // that is not itself a void". `core.start` is the case that separates
+      // the two surfaces.
+      expect(ribbonUndoTarget([START], null, NOBODY, null)).toBe("ev-1");
+    });
+
+    it("withdraws once the newest event is itself a void (C4, unchanged)", () => {
+      const events = [START, GOAL, ev("ev-3", 3, "core.void", GOAL.id)];
+      expect(ribbonUndoTarget(events, null, NOBODY, null)).toBeNull();
+    });
+
+    it("withdraws when some void already cancelled the newest event (C4, unchanged)", () => {
+      // The void is not LAST here — a later, unrelated row hides it from a
+      // naive "is the tail a void" check.
+      const events = [START, GOAL, ev("ev-3", 3, "core.void", GOAL.id), ev("ev-4", 4, "core.note")];
+      expect(ribbonUndoTarget([...events.slice(0, 3)], null, NOBODY, null)).toBeNull();
+    });
+
+    it("offers nothing on an empty ledger", () => {
+      expect(ribbonUndoTarget([], null, NOBODY, null)).toBeNull();
+    });
+  });
+
+  describe("the device link", () => {
+    it("offers a row THIS device recorded", () => {
+      expect(ribbonUndoTarget([START, GOAL], null, new Set(["ev-2"]), "link-1")).toBe("ev-2");
+    });
+
+    it("withdraws a row the console recorded — the server would answer 403", () => {
+      expect(ribbonUndoTarget([START, GOAL], null, NOBODY, "link-1")).toBeNull();
+    });
+
+    it("withdraws its OWN core.start, exactly as the panel beside it does", () => {
+      // `isVoidableEventType`'s allowlist: ownership is not enough on this
+      // surface, and the panel one line below already hid this row.
+      expect(ribbonUndoTarget([START], null, new Set(["ev-1"]), "link-1")).toBeNull();
+    });
+
+    it("still offers its own core.note — the allowlist is not a blanket refusal", () => {
+      const note = ev("ev-2", 2, "core.note");
+      expect(ribbonUndoTarget([START, note], null, new Set(["ev-2"]), "link-1")).toBe("ev-2");
+    });
+
+    it("withdraws its own row once something voided it", () => {
+      const events = [GOAL, ev("ev-3", 3, "core.void", GOAL.id)];
+      expect(ribbonUndoTarget(events, null, new Set(["ev-2", "ev-3"]), "link-1")).toBeNull();
+    });
+  });
+
+  describe("the held/drop short-circuit", () => {
+    it("offers a held tap even on a device link that owns nothing", () => {
+      // Inside the soft-commit window take-back does not void at all
+      // (`decideUndo` returns {kind:"drop"} and the submission never reaches
+      // the server), so NO ledger rule can apply to it. Gating this on
+      // ownership would delete the only cancel-before-send path there is.
+      expect(ribbonUndoTarget([START, GOAL], "held-1", NOBODY, "link-1")).toBe("held-1");
+    });
+
+    it("offers a held tap whose type the ledger rules would refuse", () => {
+      expect(ribbonUndoTarget([START], "held-start", new Set<string>(), "link-1")).toBe(
+        "held-start",
+      );
+    });
+
+    it("offers a held tap on an empty ledger", () => {
+      expect(ribbonUndoTarget([], "held-1", NOBODY, "link-1")).toBe("held-1");
+    });
   });
 });

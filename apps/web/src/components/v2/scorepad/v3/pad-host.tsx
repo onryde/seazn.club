@@ -80,7 +80,13 @@ import {
   type PadClock,
   type PayloadSchemaProbe,
 } from "./clock";
-import { ActivityPanel, latestRowDetail, type ActivityDetailResolver, type ActivityEvent } from "./activity";
+import {
+  ActivityPanel,
+  activityRowState,
+  latestRowDetail,
+  type ActivityDetailResolver,
+  type ActivityEvent,
+} from "./activity";
 import { MORE_SHEET_KEY, type DockSpec, type GuidedSheetSpec, type PadHostView, type PadPhase, type ScorebugSpec, type SkinDefV3, type SwapSlot, type TapEvent, type TileSpec } from "./types";
 import { sportThemeAttr, sportThemeStyle } from "./sport-theme";
 
@@ -464,19 +470,41 @@ export function decideUndo(eventId: string, heldId: string | null): UndoDecision
  * cancel-before-send path for any skin whose held event happens to be a
  * `core.*` type.
  *
- * Deliberately the SAME rule the console applies, not a second one: two
- * controls that both write `core.void` must agree on what is voidable.
+ * Deliberately the SAME rule the panel beside it applies, not a second one:
+ * two controls that both write `core.void` must agree on what is voidable.
+ *
+ * R7/C review fix #2 — and "the same rule" now means the same FUNCTION.
+ * C4 restated the console's half of the rule and applied it on BOTH surfaces,
+ * so a device link whose newest row came from the console was still offered a
+ * take-back — one the activity panel one line below already hid, and one the
+ * server refuses outright (`server/usecases/scoring.ts`: "A device link can
+ * only undo its own events", 403). `activityRowState` (activity.tsx) is the
+ * one place that rule lives; this delegates to it with the same arguments the
+ * sibling `<ActivityPanel>` mount receives, and `authority` follows the
+ * SURFACE exactly as those mounts' own props do — the in-app console
+ * (`deviceLinkId === null`) mounts its ledger with authority and may void
+ * anything that is not itself a void; the device link keeps
+ * `isVoidableEventType`'s allowlist and its own rows. `voidingEnabled` is
+ * `true` here because reaching this function IS the pad offering the control.
  */
 export function ribbonUndoTarget(
   events: readonly ActivityEvent[],
   heldId: string | null,
+  ownEventIds: ReadonlySet<string>,
+  deviceLinkId: string | null,
 ): string | null {
   if (heldId !== null) return heldId;
   const latest = events.length > 0 ? events[events.length - 1]! : null;
   if (latest === null) return null;
-  if (latest.type === "core.void") return null;
-  if (events.some((v) => v.voids === latest.id)) return null;
-  return latest.id;
+  const { canVoid } = activityRowState(
+    latest,
+    events,
+    ownEventIds,
+    deviceLinkId,
+    true,
+    deviceLinkId === null,
+  );
+  return canVoid ? latest.id : null;
 }
 
 /**
@@ -1467,7 +1495,15 @@ export function PadHostV3(props: PadHostV3Props) {
   // R7/C4 — see `ribbonUndoTarget`. Resolved next to the ribbon it belongs to
   // rather than inside the JSX so the rule is one named, testable function
   // instead of a condition buried in a `!`-asserted call site.
-  const undoTarget = ribbonUndoTarget(activityEvents, held?.id ?? null);
+  const undoTarget = ribbonUndoTarget(
+    activityEvents,
+    held?.id ?? null,
+    // The SAME two the `<ActivityPanel>` below is handed — pass anything
+    // else and the ribbon and the ledger start answering differently
+    // about the same row, which is the defect this rule was unified for.
+    pipeline.ownEventIds,
+    props.identity.deviceLinkId,
+  );
 
   const [voidingId, setVoidingId] = useState<string | null>(null);
 
