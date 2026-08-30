@@ -2913,3 +2913,53 @@ answer it for both approval modes.
 **Owed:** a test on the manual-approval path (the #18 reproduction
 harness in `registrations.test.ts` already builds everything but the
 approval mode), then a guard that covers it.
+
+### #18b — FIXED 2026-08-30 (`1a4d025b6`), plus S5 added to the matrix
+
+`entrant_id` answered the wrong question. V385 adds
+`registrations.charged_at`, stamped with `coalesce(charged_at, now())` in
+the SAME statement that writes `status = 'paid'`, BEFORE the manual/auto
+approval fork — so a manual-approval entry is stamped exactly as reliably
+as an auto-approval one. `entrant_id` is a strict subset of it (every row
+`materialise()` touches was stamped first, in the same function), so the
+guard reads ONE durable signal now rather than two overlapping ones.
+
+The other three statuses are deliberately untouched and still refund
+unconditionally, lock or no lock: `expired`/`waitlisted` only ever fire
+from a still-`pending` row (`sweepRegistrations`' own
+`locked.status !== "pending"` guards), and `rejected` is refunded by
+`rejectRegistration` in its own call and never becomes `withdrawn`. A
+genuine late payment — money arriving for a spot the entrant never held —
+must keep being refunded in full, and does.
+
+**Not vacuous:** reverting the guard to `reg.entrant_id` reds F18b alone
+and leaves F18 green. That asymmetry is the proof the two signals differ.
+The F18b test also asserts `reconciledAgain === true`, so it cannot pass
+by the replay short-circuiting before it reaches fulfilment.
+
+`src/server/usecases/__tests__`: **3067 total / 3030 passed / 0 failed /
+37 pending**, every path inside `/worktrees/rs007/`. `tsc --noEmit` exit 0.
+
+**S5 added to the money matrix** — the manual-approval cell, the same
+journey as S4 on a division that VETS entries. It asserts the entry
+reaches `paid` and NOT `confirmed` first, so it cannot silently degrade
+into a second copy of S4 if the approval mode stops taking effect.
+
+#### The shape worth remembering from #16/#17/#18/#18b
+
+All four came out of ONE afternoon of walking the money paths by hand,
+and NONE of them was reachable from the unit suite:
+
+- **#16** needed someone to look for the control the copy promises. Three
+  dictionary keys existed in four locales with no component rendering
+  them; every test passed because nothing tested for an absence.
+- **#17** needed a screenshot. Both halves are individually correct — the
+  display name is built from one screen, the roster from another — and
+  the defect only exists in the gap between them, on a third screen.
+- **#18** needed REAL Stripe. The trigger is a Checkout Session that
+  still reports `payment_status: "paid"` after a refund, replayed by the
+  page's own `router.refresh()`. No mock reproduces that, and the audit
+  trail labelled the result `late_payment`, so it read as correct.
+- **#18b** needed the FIX to be questioned rather than accepted. The
+  guard was right about the case it was written for and wrong one
+  approval mode over.
