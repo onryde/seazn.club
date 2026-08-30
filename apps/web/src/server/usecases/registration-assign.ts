@@ -13,7 +13,7 @@ import "server-only";
 // file is where this programme's lanes keep colliding (its index records
 // two waves serialised behind exactly that), and everything here is reached
 // through paths it already exports — `joinExistingEntrant`, `rosterCapExpr`,
-// `loadSettings`, `audit`, `orgReg`. Nothing is reimplemented; the roster
+// `audit`, `orgReg`. Nothing is reimplemented; the roster
 // write, the person resolution and the cap expression each have one home
 // and this is a caller, not a second copy.
 import type postgres from "postgres";
@@ -21,7 +21,7 @@ import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { log } from "@/server/logger";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import { audit, joinExistingEntrant, loadSettings, orgReg, rosterCapExpr } from "./registrations";
+import { audit, joinExistingEntrant, orgReg, rosterCapExpr } from "./registrations";
 
 type Tx = postgres.TransactionSql;
 
@@ -309,8 +309,14 @@ export async function assignSoloSignUp(
     "registration: solo sign-up assigned to a team",
   );
 
-  const { alreadyPlaced: _ignored, ...payload } = result;
-  return payload;
+  return {
+    registration_id: result.registration_id,
+    target_registration_id: result.target_registration_id,
+    player_id: result.player_id,
+    target_display_name: result.target_display_name,
+    roster_count: result.roster_count,
+    roster_cap: result.roster_cap,
+  };
 }
 
 /**
@@ -424,4 +430,111 @@ export async function unassignSoloSignUp(
     "registration: solo sign-up returned to the pool",
   );
   return result;
+}
+
+/** One assignable team in `listAssignTargets`' response. */
+export interface AssignTarget {
+  registration_id: string;
+  display_name: string;
+  roster_count: number;
+  /** null = unlimited (the sport declares no lineup config) — same
+   *  convention as `AssignSoloSignUpResult.roster_cap`. */
+  roster_cap: number | null;
+  is_full: boolean;
+  genders: ("m" | "f" | "x" | null)[];
+}
+
+export interface ListAssignTargetsResult {
+  division_id: string;
+  division_category: string | null;
+  targets: AssignTarget[];
+}
+
+/**
+ * Every team `registrationId` (a pooled solo sign-up) could be assigned to:
+ * the other registrations in its division that are NOT themselves free
+ * agents and are not terminal (`withdrawn`/`rejected`/`expired` — the same
+ * three statuses `assignSoloSignUp` refuses a TARGET for, above).
+ *
+ * `genders` rides along per target so the caller can explain, BEFORE the
+ * click, why a mixed division will refuse a placement — the same rule
+ * `compositionRefusal` (above) enforces server-side once the organiser
+ * actually presses Assign. This is read-only and does not run that check
+ * itself; it hands over what a caller would need to.
+ *
+ * `roster_cap` is a division/sport property (`rosterCapExpr`), so it is
+ * identical across every target here — repeated per row rather than lifted
+ * to the top level because a caller reading one target should not have to
+ * cross-reference a sibling field to know whether it is full.
+ *
+ * Throws 404 when `registrationId` does not exist OR is not itself a solo
+ * sign-up (`free_agent = false`) — the list is meaningless for anything
+ * else. `assignSoloSignUp` refuses a non-free-agent SOURCE with a 422
+ * instead, because that call is already committed to acting; a listing has
+ * nothing to act on, so 404 (nothing to list) is the honest status.
+ */
+export async function listAssignTargets(
+  auth: AuthCtx,
+  registrationId: string,
+): Promise<ListAssignTargetsResult> {
+  return withTenant(auth.orgId, async (tx) => {
+    const [source] = await tx<{ division_id: string; free_agent: boolean }[]>`
+      select division_id, free_agent from registrations where id = ${registrationId}`;
+    if (!source) throw new HttpError(404, "registration not found");
+    if (!source.free_agent) {
+      throw new HttpError(404, "This entry is not a solo sign-up");
+    }
+
+    const [division] = await tx<{ category: string | null }[]>`
+      select category from divisions where id = ${source.division_id}`;
+
+    const rows = await tx<
+      {
+        registration_id: string;
+        display_name: string;
+        roster_count: number;
+        roster_cap: number | null;
+        genders: (string | null)[];
+      }[]
+    >`
+      select
+        r.id as registration_id,
+        r.display_name,
+        (select count(*)::int from registration_players rp
+          where rp.registration_id = r.id) as roster_count,
+        ${rosterCapExpr(tx)} as roster_cap,
+        -- jsonb_agg, not array_agg: postgres.js's text-array-literal parser
+        -- collapses a genuine SQL NULL element to the STRING "NULL" (proven
+        -- with a raw script against this exact driver version — a one-player
+        -- roster with no gender set came back as genders: ["NULL"], not
+        -- [null]). jsonb_agg decodes through the driver's JSON path instead,
+        -- which round-trips SQL NULL as JS null correctly.
+        coalesce(
+          (select jsonb_agg(rp.gender) from registration_players rp
+            where rp.registration_id = r.id),
+          '[]'::jsonb
+        ) as genders
+      from registrations r
+      join divisions d on d.id = r.division_id
+      join sports sp on sp.key = d.sport_key
+      where r.division_id = ${source.division_id}
+        and r.free_agent = false
+        and r.status not in ('withdrawn', 'rejected', 'expired')
+      order by r.display_name`;
+
+    const targets: AssignTarget[] = rows.map((row) => ({
+      registration_id: row.registration_id,
+      display_name: row.display_name,
+      roster_count: row.roster_count,
+      roster_cap: row.roster_cap,
+      is_full: row.roster_cap !== null && row.roster_count >= row.roster_cap,
+      genders: row.genders as ("m" | "f" | "x" | null)[],
+    }));
+
+    return {
+      division_id: source.division_id,
+      division_category: division?.category ?? null,
+      targets,
+    };
+  });
 }

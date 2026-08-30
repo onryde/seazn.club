@@ -201,6 +201,17 @@ export function RegistrationHubRegistrantActions({
       refunded_cents: refundedCents,
       division_fee_cents: divisionFeeCents,
       payment_intent_id: paymentIntentId,
+      // RS009's two flags are computed by the same shared function so that
+      // `hasAnyAction` counts them, but this component does not render either
+      // control — the assign sheet is its own component, mounted beside this
+      // one, because it opens a dialog and owns a fetch. These three are
+      // therefore fixed at "not a solo sign-up": whatever canAssign/
+      // canUnassign come back as is unread here, and hard-coding them keeps
+      // this component's prop list to what it actually renders rather than
+      // widening it for a value it ignores.
+      free_agent: false,
+      assigned_team_id: null,
+      division_started: false,
     },
   );
 

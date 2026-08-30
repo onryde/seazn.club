@@ -2392,6 +2392,66 @@ export const PromoteRegistration = z.object({
 });
 export type PromoteRegistration = z.infer<typeof PromoteRegistration>;
 
+/** `POST /registrations/{id}/assign` body (RS009) — places the solo sign-up
+ *  `id` onto `target_registration_id`, a team entry in the same division.
+ *  `assignSoloSignUp` (registration-assign.ts) owns every rule this can
+ *  fail: same-division, roster cap, mixed-division composition, idempotent
+ *  re-assign, 409 when the player is already on a different team. */
+export const AssignSoloSignUp = z.object({
+  target_registration_id: Uuid,
+});
+export type AssignSoloSignUp = z.infer<typeof AssignSoloSignUp>;
+
+/** `GET /registrations/{id}/assign-targets` response (RS009) — every
+ *  assignable team entry in `id`'s division: non-free-agent, non-terminal
+ *  registrations, with enough roster state for the UI to explain, BEFORE
+ *  the click, why a mixed division will refuse a placement (the same rule
+ *  `assignSoloSignUp` enforces server-side). */
+export const AssignTargets = z.object({
+  division_id: Uuid,
+  division_category: z.string().nullable(),
+  targets: z.array(
+    z.object({
+      registration_id: Uuid,
+      display_name: z.string(),
+      roster_count: z.number().int(),
+      /** null = unlimited (the sport declares no lineup config) — same
+       *  convention as `RegistrationListEntry.roster_cap`. */
+      roster_cap: z.number().int().nullable(),
+      is_full: z.boolean(),
+      genders: z.array(z.enum(["m", "f", "x"]).nullable()),
+    }),
+  ),
+});
+export type AssignTargets = z.infer<typeof AssignTargets>;
+
+/** `POST /registrations/{id}/assign` response (RS009). Carries the roster
+ *  state AFTER the placement so a caller need not re-fetch to render the new
+ *  fill — the same reason `RegistrationListEntry` carries roster_count and
+ *  roster_cap rather than letting each consumer recompute them. */
+export const AssignSoloSignUpResult = z.object({
+  registration_id: Uuid,
+  target_registration_id: Uuid,
+  /** The roster row created — or the one already there, since assign is
+   *  idempotent and a repeat returns the existing placement. */
+  player_id: Uuid,
+  target_display_name: z.string(),
+  roster_count: z.number().int(),
+  /** null = unlimited, never zero. */
+  roster_cap: z.number().int().nullable(),
+});
+export type AssignSoloSignUpResult = z.infer<typeof AssignSoloSignUpResult>;
+
+/** `POST /registrations/{id}/unassign` response (RS009). */
+export const UnassignSoloSignUpResult = z.object({
+  registration_id: Uuid,
+  /** The team they were removed from, or null when they were already in the
+   *  pool — unassign is idempotent, and "already where you asked for" is a
+   *  success, not an error. */
+  target_registration_id: Uuid.nullable(),
+});
+export type UnassignSoloSignUpResult = z.infer<typeof UnassignSoloSignUpResult>;
+
 // Public register flow -------------------------------------------------------
 
 /** One division on the public register panel. */

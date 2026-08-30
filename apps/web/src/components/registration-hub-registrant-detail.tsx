@@ -37,6 +37,7 @@ import {
 import { RegistrationHubRegistrantJoinCode } from "@/components/registration-hub-registrant-join-code";
 import { deriveRegistrantActionFlags } from "@/components/registration-hub-registrant-derive";
 import { RegistrationHubRegistrantActions } from "@/components/registration-hub-registrant-actions";
+import { RegistrationHubAssignPicker } from "@/components/registration-hub-assign-picker";
 
 export interface RegistrationHubRegistrantDetailProps {
   row: RegistrationListRow;
@@ -93,7 +94,11 @@ export function RegistrationHubRegistrantDetail({
   // ONE source with the buttons themselves — the actions component calls the
   // same function internally, so the heading can never advertise a control set
   // the row does not actually offer.
-  const hasAnyAction = Object.values(deriveRegistrantActionFlags(row)).some(Boolean);
+  // ONE call, reused for both the section gate and the assign controls below
+  // — a second call would be a second chance for the two to disagree about
+  // which controls exist.
+  const actionFlags = deriveRegistrantActionFlags(row);
+  const hasAnyAction = Object.values(actionFlags).some(Boolean);
   const answers = Object.entries(row.answers ?? {});
   // RS005 F2 finding 2 — same waitlisted override as registration-hub-
   // registrant-table.tsx's renderRegistrantPaymentCell (this file
@@ -273,6 +278,27 @@ export function RegistrationHubRegistrantDetail({
             paymentIntentId={row.payment_intent_id}
             refundedCents={row.refunded_cents}
           />
+          {/* RS009 — placing a solo sign-up on a team. Its own component
+              because it opens a sheet and owns a fetch, while the controls
+              above are one-shot POSTs; folding it in would have given that
+              component a second, unrelated lifecycle.
+
+              Inside the SAME `canEdit` gate, and rendered only when one of
+              the two flags is legal — both derived by
+              deriveRegistrantActionFlags alongside every other control, so
+              `hasAnyAction` counts them automatically. Deriving them here
+              instead would have let a solo sign-up whose ONLY legal action
+              is Assign fall under a section that never renders. */}
+          {(actionFlags.canAssign || actionFlags.canUnassign) && (
+            <RegistrationHubAssignPicker
+              registrationId={row.id}
+              registrantName={row.display_name}
+              registrantGender={row.player_gender}
+              currentTeamId={actionFlags.canUnassign ? row.assigned_team_id : null}
+              currentTeamName={actionFlags.canUnassign ? row.assigned_team_name : null}
+              divisionName={row.division_name}
+            />
+          )}
         </section>
       )}
     </div>

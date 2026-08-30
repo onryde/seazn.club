@@ -5062,6 +5062,34 @@ export interface RegistrationListRow extends Omit<RegistrationWithGroupRow, "acc
    *  on, correct on FIRST render. Costs nothing: `registration_settings` is
    *  already LEFT JOINed for `entrant_kind`/`approval`. */
   division_fee_cents: number;
+  /**
+   * RS009 — where a SOLO SIGN-UP currently sits, or null while they are
+   * still in the pool. Null on every non-solo-sign-up row.
+   *
+   * Derived from the roster row pointing back at this entry
+   * (`registration_players.assigned_from_registration_id`, unique where
+   * non-null), never from a mirrored column on `registrations` — the pool
+   * and the roster must not be able to disagree.
+   */
+  assigned_team_id: string | null;
+  assigned_team_name: string | null;
+  /**
+   * RS009 — the solo sign-up's OWN gender, when the division collected one.
+   * The assign sheet needs it to predict a mixed division's refusal BEFORE
+   * the organiser spends a click. Null means unknown, and the sheet must
+   * then predict nothing rather than guess.
+   */
+  player_gender: string | null;
+  /**
+   * RS009 — has this row's division started, in the sense that its rosters
+   * are no longer the organiser's to shuffle? True once the division has any
+   * fixture, or once the competition's own `starts_on` has passed. Mirrors
+   * `unassignSoloSignUp`'s refusal exactly, so the hub never renders a
+   * Remove button the server will refuse — the same rule
+   * `division_fee_cents` was added for (a control that cannot work is worse
+   * than no control).
+   */
+  division_started: boolean;
 }
 
 /** Raw wire shape — `RegistrationListRow` plus the hash the query still
@@ -5172,6 +5200,17 @@ export async function listRegistrations(
         ${rosterCapExpr(tx)} as roster_cap,
         (select count(*)::int from registration_players rp
           where rp.registration_id = r.id and rp.consent_status = 'pending') as consent_pending_count,
+        (select tgt.id from registration_players rp
+          join registrations tgt on tgt.id = rp.registration_id
+          where rp.assigned_from_registration_id = r.id) as assigned_team_id,
+        (select tgt.display_name from registration_players rp
+          join registrations tgt on tgt.id = rp.registration_id
+          where rp.assigned_from_registration_id = r.id) as assigned_team_name,
+        (select rp.gender from registration_players rp
+          where rp.registration_id = r.id
+          order by rp.created_at, rp.id limit 1) as player_gender,
+        (exists (select 1 from fixtures f where f.division_id = r.division_id)
+          or (c.starts_on is not null and c.starts_on <= current_date)) as division_started,
         case when r.status = 'waitlisted' then (
           (select count(*)::int from registrations w
             where w.division_id = r.division_id and w.status = 'waitlisted'
@@ -5180,6 +5219,7 @@ export async function listRegistrations(
       from registrations r
       join registration_groups g on g.id = r.group_id
       join divisions d on d.id = r.division_id
+      join competitions c on c.id = d.competition_id
       join sports sp on sp.key = d.sport_key
       left join registration_settings rs on rs.division_id = r.division_id
       where d.competition_id = ${competitionId}
