@@ -47,7 +47,7 @@
 import { useState } from "react";
 import type { SideSquad } from "@seazn/engine/core";
 import { onFieldPersons, playingSquad } from "@seazn/engine/core";
-import type { Blocked, ContextSlot, ContextStripSpec } from "./types";
+import type { Blocked, CandidateMeta, ContextSlot, ContextStripSpec } from "./types";
 
 export interface PoolView {
   readonly squad: SideSquad;
@@ -96,6 +96,7 @@ export function renderCandidateRow(
   onPick: (personId: string) => void,
   emptyText: string,
   blocked?: Blocked,
+  meta?: Readonly<Record<string, CandidateMeta>>,
 ) {
   if (ids.length === 0) {
     return <p className="text-xs text-slate-600">{emptyText}</p>;
@@ -125,7 +126,45 @@ export function renderCandidateRow(
                 : candidateButtonClass
             }
           >
+            {/* R5 (owner ruling 2026-08-30): the position code LEADS. Six
+                teammates render as six identical wrapping names otherwise,
+                and the person tapping this between rallies scans by position.
+                Absent meta renders neither element, so every picker that
+                supplies none — cricket's bowler, football's subs, every
+                context strip — is byte-identical to before.
+
+                `tabular-nums` and a fixed `min-w` keep the badges in a column
+                so the eye can run down them; `shrink-0` is safe HERE and only
+                here, because this badge's content is a 1-3 character code
+                from the sport's own catalogue, never a name. The name beside
+                it keeps `break-words` and is the element allowed to grow.
+
+                NOT `aria-hidden`: the badge carries real information, and a
+                screen-reader user picking between six teammates needs the
+                position as much as a sighted one — hiding it would leave the
+                row announcing a bare name. The accessible name becomes
+                "MB <player> Libero", which reads correctly.
+
+                `min-w` fits the LONGEST code the sport uses ("OPP"), not the
+                average: one wider code pushing its neighbour's name out of
+                line defeats exactly the scan this was built for. */}
+            {meta?.[id]?.lead !== undefined && (
+              <span
+                data-candidate-lead={meta[id].lead}
+                className="mr-2 inline-block min-w-[2.75rem] shrink-0 rounded bg-slate-100 px-1.5 text-center text-xs font-semibold tabular-nums text-slate-600"
+              >
+                {meta[id].lead}
+              </span>
+            )}
             <span className="break-words">{personNames[id] ?? t("eventCopy.unknownPerson")}</span>
+            {meta?.[id]?.tag !== undefined && (
+              <span
+                data-candidate-tag={meta[id].tag}
+                className="ml-2 break-words rounded-full border border-violet-300 px-2 text-xs font-medium text-violet-700"
+              >
+                {meta[id].tag}
+              </span>
+            )}
             {reason !== undefined && (
               <span className="ml-2 break-words text-xs font-normal text-red-600">{reason}</span>
             )}

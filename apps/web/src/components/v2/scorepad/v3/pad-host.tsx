@@ -630,6 +630,11 @@ export function adaptSwapSlot(
       candidates: slot.candidates,
       offCandidates: slot.offCandidates,
       blocked: slot.blocked,
+      // R5: same verbatim crossing, and the same reason. This adapter copies
+      // BY HAND, so a field added to `SwapSlot` and to `SwapSheetSpec` but not
+      // here is dead on the production path while both ends' unit tests stay
+      // green — the defect this comment block was written for.
+      candidateMeta: slot.candidateMeta,
     },
     view: sidePool(slot.side, squads),
     policyVerdict: slot.policyOk

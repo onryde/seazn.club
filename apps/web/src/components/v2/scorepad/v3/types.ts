@@ -664,6 +664,37 @@ export const MORE_SHEET_KEY = "__pad-host/more__";
  * own render, not tsc at the skin's call site). Flagged here deliberately,
  * not silently accepted as equivalent.
  */
+/**
+ * Optional per-candidate decoration for a picker row (R5, owner ruling
+ * 2026-08-30). A LOOKUP, not a list: keyed by person id, so one table serves
+ * both steps of a swap sheet without either step needing to know how the
+ * other resolved its pool.
+ *
+ * Exists because a picker of six teammates is six visually identical rows —
+ * wrapping names and nothing else — and the person tapping it between rallies
+ * scans by POSITION, not by name. The information was always in the fold
+ * (`SquadMember.positionKey`, `.roles`); the row simply threw it away.
+ *
+ * Both fields are optional and both default to rendering NOTHING, so every
+ * caller that supplies no meta keeps its exact current row. That default is
+ * load-bearing: `renderCandidateRow` is chassis shared by cricket's bowler
+ * picker, football's subs and every context strip in the app.
+ */
+export interface CandidateMeta {
+  /** Short leading badge — a position CODE ("S", "OH", "MB", "OPP"), not a
+   *  translated word. Deliberately untranslated: these codes are volleyball's
+   *  own vernacular, identical across the four locales this app ships, and
+   *  short enough to hold 320px beside a two-line name. A sport whose
+   *  positions are NOT code-like should pass a translated string here
+   *  instead — this field is prose to the renderer either way. */
+  readonly lead?: string;
+  /** Trailing tag, ALREADY TRANSLATED by the skin ("Libero"). Marks a role
+   *  the position code cannot express: a libero on court holds whichever
+   *  position they replaced, so `lead` reads "MB" and only this says which
+   *  player is the one the sheet is actually about. */
+  readonly tag?: string;
+}
+
 export interface SwapSlot {
   /**
    * R3 chassis sub-wave (owner ruling 2026-08-24, defect 1). Stable, skin-
@@ -706,6 +737,9 @@ export interface SwapSlot {
    * dispatch, but only after the taps have already been spent.
    */
   eventType: string;
+  /** Per-candidate row decoration for BOTH steps — see `CandidateMeta`.
+   *  Absent keeps every row exactly as it renders without it. */
+  candidateMeta?: Readonly<Record<string, CandidateMeta>>;
   /** The module's own `lineupPolicy(cfg)` verdict for whether a
    *  substitution is currently legal for this side at all (design §2.7) —
    *  `reduceLineupEvent`'s `{ok}`, computed by the skin from its own folded

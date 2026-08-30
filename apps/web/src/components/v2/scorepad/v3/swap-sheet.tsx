@@ -95,7 +95,7 @@
 import { useState } from "react";
 import type { LineupRejectionReason } from "@seazn/engine/core";
 import { renderCandidateRow, resolvePool, type PoolView, type TFn } from "./context-strip";
-import type { Blocked } from "./types";
+import type { Blocked, CandidateMeta } from "./types";
 
 /**
  * `T` collapses to `never` when its STATIC type is (a subtype of)
@@ -253,6 +253,13 @@ export interface SwapSheetSpec {
    *  selectable. Rendered by `renderCandidateRow`, the same function the
    *  context strip's own picker uses. */
   readonly blocked?: Blocked;
+  /** R5 — per-candidate row decoration for BOTH steps, `SwapSlot.
+   *  candidateMeta` carried through verbatim by `adaptSwapSlot`
+   *  (pad-host.tsx). Same name on both sides for the same reason
+   *  `candidates` is: a rename at the adapter is where two idioms start to
+   *  drift. Absent renders every row exactly as it did before this field
+   *  existed — see `CandidateMeta` (types.ts). */
+  readonly candidateMeta?: Readonly<Record<string, CandidateMeta>>;
 }
 
 export interface SwapSheetProps {
@@ -349,7 +356,15 @@ export function SwapSheet({
               {policyVerdict.message ?? t("pad.swap.refused")}
             </p>
           ) : (
-            renderCandidateRow(spec.offCandidates ?? resolvePool({ pool: "onfield" }, view), personNames, t, setOffId, emptyText)
+            renderCandidateRow(
+              spec.offCandidates ?? resolvePool({ pool: "onfield" }, view),
+              personNames,
+              t,
+              setOffId,
+              emptyText,
+              undefined,
+              spec.candidateMeta,
+            )
           )}
         </div>
         <div className="flex justify-end px-4 pb-3">
@@ -419,7 +434,7 @@ export function SwapSheet({
           // strip's picker uses, so a blocked ON candidate is a real disabled
           // button showing its reason beside the name — never removed, and
           // never a control that merely looks dimmed.
-          renderCandidateRow(candidates, personNames, t, (id) => onSwap(offId, id), emptyText, spec.blocked)
+          renderCandidateRow(candidates, personNames, t, (id) => onSwap(offId, id), emptyText, spec.blocked, spec.candidateMeta)
         )}
       </div>
       <div className="flex justify-end px-4 pb-3">

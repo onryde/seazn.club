@@ -1055,6 +1055,84 @@ describe("SwapSheet — R3/football scope narrowing (SwapSlot.offCandidates) on 
   });
 });
 
+describe("SwapSheet — R5 candidate row decoration (SwapSheetSpec.candidateMeta)", () => {
+  const names = { a: "Player A", b: "Player B", c: "Player C", d: "Player D" };
+  const kickoff = squad([
+    member({ personId: "a", onField: true }),
+    member({ personId: "b", onField: true }),
+    member({ personId: "c", onField: false }),
+    member({ personId: "d", onField: false }),
+  ]);
+
+  function open(over: Partial<SwapSheetProps["spec"]>) {
+    return renderIsland(SwapSheet, {
+      spec: { ...swapSpec, ...over },
+      view: { squad: kickoff },
+      policyVerdict: { ok: true },
+      personNames: names,
+      t,
+      onSwap: () => {},
+    });
+  }
+
+  it("renders the position code AHEAD of the name on the OFF step", () => {
+    const island = open({ candidateMeta: { a: { lead: "MB" }, b: { lead: "S" } } });
+    const rowA = buttonsOf(island.tree()).find((btn) => textOf(btn).includes("Player A"))!;
+    // AHEAD, not merely present: the whole point of the ruling is that the eye
+    // runs down a column of codes, so an implementation that appended the code
+    // after the name would satisfy "contains" and defeat the purpose.
+    expect(textOf(rowA).indexOf("MB")).toBeLessThan(textOf(rowA).indexOf("Player A"));
+  });
+
+  it("carries the SAME table into the ON step — one lookup serves both, keyed by person", () => {
+    const island = open({ candidateMeta: { c: { lead: "OPP" } }, candidates: ["c"] });
+    click(buttonsOf(island.tree()).find((btn) => textOf(btn).includes("Player A"))!);
+    const rowC = buttonsOf(island.tree()).find((btn) => textOf(btn).includes("Player C"))!;
+    expect(textOf(rowC)).toContain("OPP");
+  });
+
+  it("marks the tagged player — the position code CANNOT say it, because a libero on court holds the position they replaced", () => {
+    const island = open({ candidateMeta: { a: { lead: "MB", tag: "Libero" }, b: { lead: "S" } } });
+    const rowA = buttonsOf(island.tree()).find((btn) => textOf(btn).includes("Player A"))!;
+    const rowB = buttonsOf(island.tree()).find((btn) => textOf(btn).includes("Player B"))!;
+    // Both read "MB"/"S" as their position; only one is the libero, and the
+    // tag is the only thing that says so.
+    expect(textOf(rowA)).toContain("Libero");
+    expect(textOf(rowB)).not.toContain("Libero");
+  });
+
+  it("ABSENT meta renders exactly the row every other picker already had — cricket's bowler, football's subs, every context strip", () => {
+    const island = open({});
+    const labels = buttonsOf(island.tree()).map((btn) => textOf(btn));
+    expect(labels).toContain("Player A");
+    expect(labels).toContain("Player B");
+  });
+
+  it("a PARTIAL table decorates only the people it names, and never drops an undecorated row", () => {
+    const island = open({ candidateMeta: { a: { lead: "MB" } } });
+    const labels = buttonsOf(island.tree()).map((btn) => textOf(btn));
+    expect(labels.some((l) => l.includes("MB") && l.includes("Player A"))).toBe(true);
+    expect(labels).toContain("Player B");
+  });
+
+  it("picking a decorated row still completes the swap — decoration is not a hit-target change", () => {
+    let swapped: [string, string] | null = null;
+    const island = renderIsland(SwapSheet, {
+      spec: { ...swapSpec, candidateMeta: { a: { lead: "MB", tag: "Libero" }, c: { lead: "OPP" } }, candidates: ["c"] },
+      view: { squad: kickoff },
+      policyVerdict: { ok: true },
+      personNames: names,
+      t,
+      onSwap: (off, on) => {
+        swapped = [off, on];
+      },
+    });
+    click(buttonsOf(island.tree()).find((btn) => textOf(btn).includes("Player A"))!);
+    click(buttonsOf(island.tree()).find((btn) => textOf(btn).includes("Player C"))!);
+    expect(swapped).toEqual(["a", "c"]);
+  });
+});
+
 describe("SwapSheet — R3 eligibility narrowing (SwapSlot.blocked) on the ON list", () => {
   const s = squad([
     member({ personId: "a", onField: true }),
