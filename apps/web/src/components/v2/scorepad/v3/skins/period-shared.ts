@@ -545,18 +545,22 @@ export function buildScorebug(spec: PeriodSkinSpec, view: PadHostView, t: TFn): 
     .filter((entry): entry is BoxEntry & { remaining: number } => entry.remaining !== null)
     .sort((a, b) => a.remaining - b.remaining)[0];
   if (soonest !== undefined) {
+    // LED, like the period and the strength beside it: these three are one
+    // machine readout of the same state — which period, how many are on, and
+    // when the box empties — and rendering the third as cream prose made the
+    // most urgent of the three the quietest thing on the band (320px read).
     strip.push({
       id: "box",
       label: t(`pad.${spec.key}.strip.box`),
       value: formatSeconds(soonest.remaining),
-      accent: true,
+      tone: "led",
     });
   } else if (box.some((entry) => entry.permanent)) {
     strip.push({
       id: "box",
       label: t(`pad.${spec.key}.strip.box`),
       value: t(`pad.${spec.key}.strip.permanent`),
-      accent: true,
+      tone: "led",
     });
   }
 
@@ -730,11 +734,14 @@ export function buildTiles(spec: PeriodSkinSpec, view: PadHostView, t: TFn): Til
   }
 
   if (offerable(e.setPiece)) {
+    // FULL WIDTH, not a half tile: the release tile above comes and goes with
+    // the box, so a span-2 set piece sat alone on its own row exactly half the
+    // time. A full-width minor row pairs with More below it instead.
     tiles.push({
       id: SET_PIECE_SHEET,
       label: `pad.${spec.key}.action.setPiece`,
       kind: "minor",
-      span: 2,
+      span: 4,
       phases: ["live"],
       action: { sheet: SET_PIECE_SHEET },
     });

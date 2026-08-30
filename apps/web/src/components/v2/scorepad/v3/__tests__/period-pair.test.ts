@@ -665,6 +665,41 @@ describe("the strip owns the two facts the chassis headline is the only surface 
     expect(sport.factory(T).scorebug(viewFor(sport, cfg, inOt)).strip.find((i) => i.id === "ot")).toBeUndefined();
   });
 
+  it("period, strength and box are ONE lit readout — the band's three machine values", () => {
+    // A 320px read of the real board: the box countdown rendered as cream prose
+    // beside two lit pills made the most urgent value on the band the quietest.
+    // All three are machine readouts of the same state and are lit together.
+    for (const sport of SPORTS) {
+      const cfg = periodCfg(sport.module);
+      const classKey = Object.keys(
+        (cfg as { suspensions: { classes: Record<string, unknown> } }).suspensions.classes,
+      )[0]!;
+      const phase = firstPlayPhase(sport, cfg);
+      const state = foldPeriod(sport.module, cfg, [
+        ["core.start"],
+        [
+          `${sport.key}.suspension.start`,
+          { by: "H", person: "H-p2", class: classKey, at: { period: phase, elapsed: 30 } },
+        ],
+      ]);
+      const strip = sport.factory(T).scorebug(viewFor(sport, cfg, state)).strip;
+      expect(strip.map((i) => i.id)).toEqual(["period", "strength", "box"]);
+      for (const item of strip) expect(item.tone, `${sport.key}/${item.id}`).toBe("led");
+    }
+  });
+
+  it("the set-piece tile is FULL WIDTH, so the optional release tile cannot strand it on half a row", () => {
+    for (const sport of SPORTS) {
+      const cfg = periodCfg(sport.module);
+      const tiles = sport.factory(T).tiles(viewFor(sport, cfg, livePhaseState(sport, cfg)));
+      expect(tiles.find((t2) => t2.id === SHEET_SET_PIECE)?.span).toBe(4);
+      // Every other tile on the board is a half — the grid is two lanes of 2.
+      for (const tile of tiles) {
+        expect([2, 4], `${sport.key}/${tile.id}`).toContain(tile.span);
+      }
+    }
+  });
+
   it("the strength chip is the KERNEL's, including ice hockey's inverted overtime advantage", () => {
     const sport = SPORTS[1]!;
     const cfg = periodCfg(sport.module);
