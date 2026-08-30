@@ -5488,3 +5488,43 @@ work.
 The operational conclusion for any future concurrent-wave setup: the second
 session is not redundancy, it is the control. Budget for the checking, and
 treat an agreeable peer as a failed control rather than a fast one.
+
+### R7-21 — OWNER RULING: walk through at every TASK boundary, not just wave end
+
+`_RULES.md` §1 makes the gallery + walkthrough a MERGE gate — i.e. once, at the
+end of a wave. The owner has raised it: the walkthrough happens at every task or
+task-group boundary.
+
+Reason, stated as cost: a defect found at wave end has later tasks built on top
+of it. R7 has already produced two defects that only a browser pass sees — the
+ribbon offering a `core.void` as the next thing to undo (`resolveVoids` refuses
+it: "voids are not themselves voidable"), and a per-row Void that looks enabled
+and is silently inert during pad sync. Neither is visible to a passing unit
+suite, and the second survived an implementer's own screenshots.
+
+**The per-task loop is now, in order:**
+
+  frontend-design (any UI) → implement → main thread reruns the gate →
+  reviewer pass → visual verification → WALKTHROUGH → next task
+
+No task closes on green tests. No UI task closes on a screenshot alone — a
+screenshot proves a state was painted, a walkthrough proves the state is
+REACHABLE and that the control does what it says.
+
+**Debt recorded honestly: Tasks B and B2 closed WITHOUT one.** They had a gate
+rerun, a reviewer pass and implementer screenshots, and nobody drove them. They
+carry a customer-visible behaviour change — default-config football and hockey
+sides now show "Starting line-up still needs: Goalkeeper × 1" where they
+previously showed nothing. That is precisely what a walkthrough exists to catch,
+and the task was closed without one. Owed, and folded into the Task C
+walkthrough since both live on the same console screen.
+
+**Walkthrough specs land in `apps/web/e2e/walkthrough/`**, which has its own
+Playwright project and CI leg (added with R3.5, #671). A hand-walk that finds a
+blocker and leaves no spec behind guarantees the next wave re-finds it.
+
+Standing conditions, both paid for by earlier failures in this programme:
+confirm the captures EXIST and DIFFER (R4's harness errored before a single
+screenshot and would have collected a sign-off on zero pictures), and sign-off
+means the owner's PER-SCREEN verdicts, never "CI green" (taken as approval twice
+and it is not).
