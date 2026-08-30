@@ -8,7 +8,7 @@ import "server-only";
 import { sql } from "@/lib/db";
 import { hasFeature } from "@/lib/entitlements";
 import { resolveSponsors, type ResolvedSponsor } from "@/server/usecases/sponsors";
-import { withCourtVenueNames } from "@/server/public-site/data";
+import { maskPublicEntrantNames, withCourtVenueNames } from "@/server/public-site/data";
 import type {
   PublicCompetition,
   PublicDivision,
@@ -58,9 +58,14 @@ export async function embedDivisionData(divisionId: string): Promise<EmbedResolu
   const [division] = await sql<PublicDivision[]>`
     select d.id, d.competition_id, d.name, d.slug, d.description,
            d.sport_key, d.variant_key, d.status, d.module_version, d.tiebreakers,
-           s.name as sport_name, 0 as entrant_count
+           s.name as sport_name, 0 as entrant_count,
+           -- RS008 review fix #5: public_divisions_v does not expose these
+           -- (see PublicDivision's own doc comment, public-site/data.ts) —
+           -- a cheap primary-key join rather than widening that view.
+           dv.youth, dv.player_name_display
     from public_divisions_v d
     left join sports s on s.key = d.sport_key
+    join divisions dv on dv.id = d.id
     where d.id = ${divisionId}`;
   if (!division) return { ok: false, reason: "not_found" };
 
@@ -107,7 +112,12 @@ export async function embedDivisionData(divisionId: string): Promise<EmbedResolu
     sql<PublicEntrant[]>`
       select id, division_id, kind, display_name, seed, status, members, team_display, badge_url
       from public_entrants_v where division_id = ${divisionId}
-      order by seed nulls last, display_name`,
+      order by seed nulls last, display_name`
+      // RS008 review fix #5 — this embeds door ran its own separate entrants
+      // query (structurally identical to getPublicDivision's) with ZERO
+      // masking, not even by youth. Reuses the SAME shared helper rather
+      // than a parallel implementation.
+      .then((rows) => maskPublicEntrantNames(rows, division)),
     // Venue lane (V305): the division's override, else the org's timezone.
     sql<{ tz: string }[]>`
       select coalesce(ss.tz, o.timezone, 'UTC') as tz
