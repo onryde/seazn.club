@@ -241,6 +241,27 @@ export interface ActivityPanelProps {
   onVoid?: (eventId: string) => void;
   voidingId?: string | null;
   /**
+   * R7/C review fix #1 — "a Void that will refuse must LOOK unavailable".
+   *
+   * The console gates its ledger on `busy || padSyncing` (fixture-console.tsx):
+   * acting on a half-refreshed ledger sends a stale `expected_seq` and earns a
+   * 409 where a clean void was expected. C1 carried that rule over as an early
+   * `return` inside `onVoid` and nothing else, which made every row's Void a
+   * DEAD TAP for the width of a resync — `setPadSyncing(true)` fires after
+   * every pad event, so a live console opens that window on every tap, and the
+   * button stayed bright, hover-able and silent.
+   *
+   * Deliberately a whole-panel flag rather than a per-row one: the condition it
+   * carries is about the LEDGER's freshness, not about any one event, so a
+   * per-row shape would invite a caller to disable one row and leave its
+   * neighbours lying. `voidingId` stays the per-row control, for the single row
+   * whose own void is in flight.
+   *
+   * Defaults false, and the device link (pad-host.tsx) passes nothing — its
+   * pipeline has no separate resync to be stale against.
+   */
+  voidDisabled?: boolean;
+  /**
    * D2 fix (sign-off review, 2026-08-17): a per-event distinguishing
    * detail — e.g. runs scored / extra kind / wicket kind for a cricket
    * ball — woven into the ribbon caption via `buildRibbon`'s own `detail`
@@ -372,6 +393,7 @@ export function ActivityPanel({
   t,
   onVoid,
   voidingId = null,
+  voidDisabled = false,
   resolveDetail,
   authority = false,
   footer,
@@ -460,7 +482,7 @@ export function ActivityPanel({
                   <button
                     type="button"
                     onClick={() => onVoid?.(event.id)}
-                    disabled={voidingId === event.id}
+                    disabled={voidDisabled || voidingId === event.id}
                     data-role="v3-activity-void"
                     className="min-h-11 min-w-11 shrink-0 rounded-lg border border-slate-200 px-3 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400"
                   >

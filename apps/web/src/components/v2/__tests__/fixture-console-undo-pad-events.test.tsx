@@ -15,6 +15,7 @@
 // reload, "Undo last" targets the just-scored event's REAL server id.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import type { EventEnvelope } from "@seazn/engine/core";
 import { FixtureConsole } from "@/components/v2/fixture-console";
 import type { EventIn, SideInfo, SportInfo } from "@/components/v2/fixture-console";
@@ -251,5 +252,83 @@ describe("FixtureConsole — Undo last after a pad-driven submit", () => {
 
     const settledUndo = findUndoLast(island.tree());
     expect(propsOf(settledUndo).disabled).toBe(false);
+  });
+});
+
+// R7 / Task C review fix #1 — THE PER-ROW VOID MUST LOOK DISABLED, NOT JUST
+// BE INERT.
+//
+// C1 replaced the per-row Void's `disabled={busy || padSyncing}` (which the
+// deleted page-level ledger had) with a silent `if (busy || padSyncing)
+// return;` inside `onVoid`. `setPadSyncing(true)` fires after EVERY pad event,
+// so on a live console every tap opens a window in which every Void button in
+// the ledger LOOKS enabled and does nothing — no dim, no cursor change, no
+// message. A dead tap: the class this programme has already paid for once.
+//
+// Driven through the REAL producer and the REAL consumer — the console's own
+// mid-resync render, handed to the actual `<ActivityPanel>` element it built,
+// serialised. Never a fixture on both ends.
+describe("FixtureConsole — the ledger's per-row Void during a pad resync", () => {
+  /** Every per-row Void's OPENING TAG, so `disabled` is read off the same
+   *  element the probe found rather than off "somewhere in the panel" —
+   *  React serialises `disabled=""` BEFORE `data-role` (JSX prop order), so a
+   *  one-directional regex silently reports every row enabled. Anchored on
+   *  `="` throughout: an omitted prop serialises as `"$undefined"`, and a
+   *  bare `disabled` probe would pass in both states. */
+  function voidButtonTags(tree: ReactElement[]): string[] {
+    const panel = tree.find((e) => e.type === ActivityPanel);
+    if (!panel) throw new Error("<ActivityPanel/> not found in the rendered tree");
+    const html = renderToStaticMarkup(panel);
+    return [...html.matchAll(/<button[^>]*data-role="v3-activity-void"[^>]*>/g)].map((m) => m[0]);
+  }
+
+  function firePadEvent(island: ReturnType<typeof renderIsland<ReturnType<typeof baseProps>>>) {
+    const onEvents = propsOf(findScorePad(island.tree())).onEvents as (
+      events: readonly EventEnvelope[],
+    ) => void;
+    api.events = [SEEDED, PAD_SCORED];
+    onEvents([
+      {
+        id: "idem-client-fabricated",
+        fixtureId: "f1",
+        seq: 2,
+        type: "football.goal",
+        payload: {},
+        recordedAt: "2026-08-14T10:05:00.000Z",
+        recordedBy: null,
+      },
+    ]);
+  }
+
+  it("renders every row's Void disabled while a pad-triggered resync is in flight", async () => {
+    const island = renderIsland(FixtureConsole, baseProps());
+
+    // Discriminating baseline: before any pad event the control is present
+    // AND enabled, so the assertion below cannot pass by the button being
+    // absent, or by every button in this panel always being disabled.
+    const idle = voidButtonTags(island.tree());
+    expect(idle.length, "the console's ledger offers a per-row Void at rest").toBeGreaterThan(0);
+    expect(idle.filter((tag) => tag.includes('disabled=""'))).toEqual([]);
+
+    firePadEvent(island);
+
+    // The resync's GETs went out synchronously but nothing has resolved, so
+    // this render is inside the padSyncing window the user taps into.
+    expect(api.calls.some((c) => c.url.includes("/events"))).toBe(true);
+    const midFlight = voidButtonTags(island.tree());
+    expect(midFlight.length, "the row control must still be offered, not vanish").toBeGreaterThan(0);
+    expect(
+      midFlight.filter((tag) => !tag.includes('disabled=""')),
+      "a Void that silently returns is a dead tap — every row has to READ as unavailable",
+    ).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(1000);
+
+    const settled = voidButtonTags(island.tree());
+    expect(settled.length).toBeGreaterThan(0);
+    expect(
+      settled.filter((tag) => tag.includes('disabled=""')),
+      "and it must come back once the ledger is fresh again",
+    ).toEqual([]);
   });
 });

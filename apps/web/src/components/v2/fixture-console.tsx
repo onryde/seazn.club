@@ -702,11 +702,9 @@ export function FixtureConsole({
         onVoid={
           scoring && !decidedLock(live.status)
             ? (eventId) => {
-                // `busy || padSyncing` gated every row button before the
-                // merge, and for a reason worth keeping: acting on a
-                // half-refreshed ledger sends a stale `expected_seq` and
-                // earns a 409 where a clean void was expected (see
-                // `padSyncing`'s own doc above).
+                // Belt to `voidDisabled`'s braces: the button is disabled for
+                // the whole window, and a click that beats a re-render (or
+                // arrives from a synthetic caller) still cannot send.
                 if (busy || padSyncing) return;
                 setVoidingId(eventId);
                 void send("core.void", { event_id: eventId }).finally(() => setVoidingId(null));
@@ -714,6 +712,13 @@ export function FixtureConsole({
             : undefined
         }
         voidingId={voidingId}
+        // `busy || padSyncing` gated every row button before the merge, and for
+        // a reason worth keeping: acting on a half-refreshed ledger sends a
+        // stale `expected_seq` and earns a 409 where a clean void was expected
+        // (see `padSyncing`'s own doc above). C1 kept the RULE but dropped the
+        // affordance, leaving a bright, silent, dead button for the width of
+        // every resync — review fix #1 puts the `disabled` back.
+        voidDisabled={busy || padSyncing}
         footer={
           (audit || lastVoidable) && (
             <div className="flex flex-wrap items-center justify-between gap-2">
