@@ -132,9 +132,16 @@ async function openDeviceLink(page: Page, secret: string): Promise<void> {
  *  every locator action below would retry silently until the whole test timed
  *  out (confirmed: exactly what happened before this was parameterised —
  *  three device-pad tests each ran the full 90s with no error until the
- *  deadline). */
+ *  deadline).
+ *
+ *  `[data-role="v3-scorebug-half"]` (scorebug.tsx, added in review) replaces
+ *  a `.grid > * >> .app-display.font-bold` structural chain: it reached
+ *  through the score figure's OWN layout classes to find the half, so it
+ *  broke on any restyle of either. `.nth(0)` is home, by the chassis's own
+ *  render order (scorebug.tsx: `spec.halves.map`) — every half tap site in
+ *  this suite relies on the same order. */
 async function openAmendDock(scope: Locator): Promise<void> {
-  await scope.locator('[data-role="v3-scorebug"] .grid > *').nth(0).locator(".app-display.font-bold").click();
+  await scope.locator('[data-role="v3-scorebug-half"]').nth(0).click();
   await expect(scope.locator('[data-role="v3-dock"]'), "a tally tap must open the amend dock").toBeVisible({
     timeout: 20_000,
   });

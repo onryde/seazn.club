@@ -134,14 +134,21 @@ async function openDeviceLink(page: Page, secret: string): Promise<void> {
  *  there is no "Add points" form to expand. Indexed positionally, home first
  *  (scorebug.tsx's own render order) — a tappable half's accessible name is
  *  the player's name plus the hint text, which this file has no fixed string
- *  for. The same locator shape scorepad-skins.spec.ts's `scorebugHalf` and
- *  gallery.capture.ts's `v3Half` already use, restated here because the
- *  device surface renders no `data-testid="score-pad"` wrapper to scope to. */
+ *  for. The device surface renders no `data-testid="score-pad"` wrapper to
+ *  scope to, hence the explicit `[data-role="v3-scorebug"]` root here.
+ *
+ *  `[data-role="v3-scorebug-half"]` (scorebug.tsx, added in review) replaces
+ *  a `.grid > * >> .app-display.font-bold` structural chain: it reached
+ *  through the score figure's OWN layout classes to find the half, so it
+ *  broke on any restyle of either — clicking the half is equivalent, since
+ *  the figure's click bubbles to the same `onClick`. scorepad-skins.spec.ts's
+ *  `scorebugHalf` and gallery.capture.ts's `v3Half` still use the old chain;
+ *  out of scope here. */
 function scorebug(page: Page) {
   return page.locator('[data-role="v3-scorebug"]');
 }
 function homeHalf(page: Page) {
-  return scorebug(page).locator(".grid > *").nth(0).locator(".app-display.font-bold");
+  return scorebug(page).locator('[data-role="v3-scorebug-half"]').nth(0);
 }
 
 /**

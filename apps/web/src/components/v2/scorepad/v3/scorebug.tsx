@@ -211,6 +211,16 @@ export function Scorebug({ spec, t, onTap, onOpenSheet }: ScorebugProps) {
               <button
                 key={i}
                 type="button"
+                // Stable e2e handle (R7 review) — `nth(0)`/`nth(1)` is home/
+                // away by this map's own render order (documented at every
+                // e2e call site). Replaces a `.grid > * >> .app-display.font-
+                // bold` structural chain three call sites reached through
+                // instead: brittle because it depends on the score figure's
+                // OWN layout classes rather than on the half itself, and it
+                // breaks the moment either restyles. Clicking the half
+                // (anywhere in the button) is equivalent to clicking the
+                // score figure inside it — same `onClick`.
+                data-role="v3-scorebug-half"
                 // `tapSheet` WINS where a skin set it. The half still carries
                 // its `tapEvent` — the sheet's job is to build that same
                 // event with one more fact attached — so the order here is
@@ -232,7 +242,11 @@ export function Scorebug({ spec, t, onTap, onOpenSheet }: ScorebugProps) {
             );
           }
           return (
-            <div key={i} className="flex min-w-0 flex-col items-center justify-center gap-1 px-3 py-3 text-center">
+            <div
+              key={i}
+              data-role="v3-scorebug-half"
+              className="flex min-w-0 flex-col items-center justify-center gap-1 px-3 py-3 text-center"
+            >
               {content}
             </div>
           );
