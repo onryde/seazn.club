@@ -72,11 +72,66 @@ that anyone can see:
   people are waiting and there are 2 free slots across 3 teams" until they
   go looking for it. The pool is a queue nobody is told is a queue.
 
+## Owner rulings (2026-08-31) — BOTH decisions are made; do not re-open them
+
+Recorded before any RS012 code exists, because both were flagged in the
+prompt as owed and an implementer must not re-derive either. Provenance:
+these were put to the owner as recommendations with their trade-offs and
+accepted as recommended, in the RS009 session. If a detail below turns out
+to matter more than it looks, confirm the wording rather than guessing —
+but the direction is settled.
+
+**RULING 1 — `capacity` counts TEAM ENTRIES. Solo sign-ups never consume a
+team slot.**
+
+An organiser who sets `capacity: 8` on a team division means EIGHT TEAMS.
+Today they get two teams and six individuals and the division reads full,
+because the count is `count(*) … where status in SPOT_HOLDERS` with no
+`free_agent` filter. Taking solo sign-ups out of that count restores the
+meaning of the number the organiser actually set, and stops the division
+waitlisting teams it has room for.
+
+**The pool gets its own bound, DERIVED, not typed by the organiser:**
+`capacity × roster_cap` minus players already on rosters — the number of
+places that could conceivably exist. No new settings field, no new organiser
+decision, and it is honest: you cannot sign up solo when there is no
+possible place for you. Leaving the pool unbounded is how an organiser ends
+up owing 200 refunds for eight teams' worth of places.
+
+Implementation constraint carried from RS009 and still binding: free a slot
+by reading the ASSIGNMENT (`registration_players.assigned_from_registration_id`,
+unique where non-null), NEVER by mutating the source row's status.
+Withdrawing that row to free a slot would refund a person who is happily
+playing.
+
+**RULING 2 — auto-refund and withdraw at the place-by date. The organiser
+may place them, or extend the date, right up to it.**
+
+The promise made at sign-up was "the organiser will assign you to a team
+once one has space". If that does not happen, the registrant's money back is
+the only honest outcome.
+
+The reasoning that decided it, because the alternative is defensible and a
+future session will reconsider it otherwise: **the common failure is an
+organiser who forgets the pool exists, not one who decides against
+somebody.** A default that requires organiser diligence fails in exactly the
+case where diligence already lapsed. Prompting the organiser instead was the
+rejected option.
+
+Accepted cost: each refund carries Stripe fees the org absorbs. That is why
+the place-by date defaults to the DIVISION'S REGISTRATION CLOSE — the
+organiser sees the deadline coming with the whole window to act. Judged the
+lesser harm than a registrant silently out of pocket for a place that never
+existed, which also generates the support load and the disputes.
+
+Reuse the `expires_at` sweep machinery RS002 already proved (the unpaid-entry
+expiry pass) rather than inventing a second money path.
+
 ## Scope
 
-1. **Capacity semantics** — implement whichever answer the owner gives to
-   the question in finding 1, and make the count say what it means in ONE
-   place. If `capacity` is to mean teams, an assigned solo sign-up must stop
+1. **Capacity semantics** — RULED (see above): capacity counts team entries,
+   and the pool is bounded by `capacity × roster_cap` minus players already
+   on rosters. Make the count say what it means in ONE place. If `capacity` is to mean teams, an assigned solo sign-up must stop
    consuming a slot, and the waitlist has to re-evaluate when one is freed
    (the `promoteOldestWaitlisted` path already exists — reuse it, do not
    fork it). Every changed count needs a test that fails without it.
@@ -91,12 +146,10 @@ that anyone can see:
    something needing action, not as a filter chip you have to know to click:
    how many are waiting, how many free slots exist across that division's
    teams, and how close the place-by date is.
-5. **The unplaced path.** What actually happens when the date passes and
-   somebody is still in the pool. **This is a money decision and needs an
-   explicit owner ruling before implementation** — auto-refund and withdraw,
-   or surface it to the organiser and let them choose. Do not guess. The
-   RS007 findings register is full of money defects that shipped because an
-   unexamined default looked correct.
+5. **The unplaced path.** RULED (see above): auto-refund and withdraw at the
+   place-by date, organiser free to place or extend until then. Audit it on
+   the competition_events ledger like every other money event, and reuse the
+   `expires_at` sweep rather than adding a second money path.
 6. **Notifications.** They are told when they are placed (RS009 ships this),
    and they are told if the deadline passes without a placement. Reuse the
    existing mailers; do not add a third unthrottled organiser-triggered one

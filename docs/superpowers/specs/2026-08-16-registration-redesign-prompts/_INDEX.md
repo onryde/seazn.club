@@ -44,7 +44,7 @@ prompts dir) also writes — those two are **sequential, never parallel**.
 | RS009 | `RS009-free-agents.md` | RS005, RS003 | TODO |
 | RS011 | `RS011-organiser-eligibility-gates.md` | RS002 | TODO — issue #412, re-homed from `L1` |
 | RS010 | `RS010-closeout-e2e-smoke-help.md` | all | TODO |
-| RS012 | `RS012-solo-signup-pool-promises.md` | RS009 | TODO — scoped 2026-08-30 from what RS009 exposed; needs TWO owner rulings before code |
+| RS012 | `RS012-solo-signup-pool-promises.md` | RS009 | TODO — scoped 2026-08-30 from what RS009 exposed. **Both owner rulings taken 2026-08-31** and written into the prompt: capacity counts TEAM ENTRIES with a derived pool bound; unplaced solo sign-ups are auto-refunded and withdrawn at the place-by date |
 
 Public registration was **intentionally down** between the RS001 and RS006
 merges (owner-accepted; prod has zero registration usage). That window
@@ -4255,3 +4255,32 @@ documented missing-CP-SAT signature. With `seazn-env up --label rs009
   `rebuilt from <path>` line, and write logs under the session scratchpad.
 - **`git commit -m` with double quotes inside the message fails** and takes
   the whole `&&` chain with it. Use `-F <file>`.
+
+
+### RS012 rulings taken 2026-08-31 — both, before any code
+
+Put to the owner as recommendations with their trade-offs and accepted as
+recommended. Written into `RS012-solo-signup-pool-promises.md` in full; the
+short form, so a compacted session still has them:
+
+1. **`capacity` counts TEAM ENTRIES.** A solo sign-up never consumes a team
+   slot. The pool is bounded instead by `capacity × roster_cap` minus
+   players already on rosters — derived, so no new settings field and no new
+   organiser decision. Reason: `capacity: 8` on a team division means eight
+   TEAMS, and today it can mean two teams plus six individuals with the
+   division reading full. Unbounded pools are how an org ends up owing 200
+   refunds for eight teams' worth of places.
+2. **An unplaced solo sign-up is auto-refunded and withdrawn at the place-by
+   date**, which defaults to the division's registration close; the
+   organiser may place them or extend the date right up to it. Reason: the
+   common failure is an organiser who FORGETS the pool, not one who decides
+   against somebody, so the default must not require diligence that has
+   already lapsed. Accepted cost: Stripe fees on each refund, judged the
+   lesser harm than a registrant silently out of pocket for a place that
+   never existed. Rejected alternative: prompt the organiser instead.
+
+Still binding from RS009, and the trap most likely to be re-derived wrongly:
+free a capacity slot by reading the ASSIGNMENT
+(`registration_players.assigned_from_registration_id`, unique where
+non-null), NEVER by mutating the source registration's status. Withdrawing
+that row to free a slot refunds a person who is happily playing.
