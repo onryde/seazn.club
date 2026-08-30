@@ -19,7 +19,7 @@
 // `at`. No `at` means no `expiresAt`, so the power-play countdown never ran
 // either. One missing stamp, two dead features.
 //
-// FIVE PROPERTIES, each forced rather than chosen:
+// SIX PROPERTIES, each forced rather than chosen:
 //
 //  1. PAD-LOCAL AND SCORER-CONTROLLED. It starts on a tap, it pauses on a tap,
 //     and nothing persists the ticking value. Persisting it would be inventing
@@ -52,6 +52,28 @@
 //     awarded at the whistle happened at the whistle. Refusing to stamp while
 //     paused would leave the commonest events in these two sports unstamped,
 //     which is the state this file exists to end.
+//  6. BUT A CLOCK THAT HAS NEVER BEEN TOLD THE TIME STAMPS NOTHING. Properties
+//     4 and 5 together, on their own, said something this file never meant: a
+//     pad mounted on a fresh match seats PAUSED at zero and stamps while
+//     paused, so every event would carry `{period, 0}` until somebody tapped
+//     Start — and property 3 guarantees nothing ever corrects it, because
+//     `reseatClock` refuses to follow `spec.seed` once seated. Thirty minutes
+//     of scoring, every event claiming minute zero.
+//
+//     That is WORSE than the emptiness this file replaced, not better. An
+//     absent `at` is visibly absent: `skins/football.tsx`'s `readClock` drops
+//     the strip item, and `period/suspensions.ts` leaves `expiresAt`
+//     underivable. A fabricated zero makes both present and WRONG — a clock
+//     frozen at 0:00, and a card awarded at minute 30 whose `expiresAt` is
+//     `0 + minutes`, already past, so the lazy sweep can never fire and
+//     release-on-goal turns on a `startedAt` that never happened.
+//
+//     `PadClock.known` is the flag, and it gates the STAMP alone. The bar
+//     still renders, still shows 0:00, still offers Start. What it will not do
+//     is invent an observation nobody made. It flips true on the first Start
+//     tap, or immediately when the FOLD seeds it (`PadClockSpec.seed` present
+//     — the reload and second-device path), and it goes false again at a
+//     period change, because a new period genuinely has no observation yet.
 //
 // PURE, and deliberately in its own file rather than inside `pad-host.tsx`:
 // apps/web vitest is `environment: "node"` with NO jsdom, so anything needing
@@ -105,14 +127,31 @@ export interface PadClock {
   readonly base: number;
   /** Wall ms when the current run began, or `null` when paused. */
   readonly runningSince: number | null;
+  /**
+   * PROPERTY 6 — has this clock ever been told what time it is?
+   *
+   * TRUE once either source of truth has spoken: the FOLD handed it one
+   * (`PadClockSpec.seed` present — a reload, or a second device joining a match
+   * already stamped), or a SCORER tapped Start at least once. FALSE means the
+   * pad is displaying 0:00 because it has nothing better to display, not
+   * because the match is at second zero — and `stampOf` refuses to turn that
+   * into an observation. See property 6's own note in this file's header.
+   */
+  readonly known: boolean;
 }
 
 /** A paused clock at `seed` seconds into `period`. Non-integer, negative and
  *  non-finite seeds are floored/clamped rather than trusted: `DurationSeconds`
  *  is `int().nonnegative()`, and an `at` the engine rejects would take the
- *  whole event down with it. */
-export function initClock(period: string, seed = 0): PadClock {
-  return { period, base: sanitiseSeconds(seed), runningSince: null };
+ *  whole event down with it.
+ *
+ *  `seed` OMITTED and `seed: 0` are DIFFERENT, and the difference is the whole
+ *  of property 6: omitted means "the fold has no stamp in this period", while 0
+ *  means "the fold has a stamp, and it sits at second 0". `initClock(p)` is
+ *  therefore unknown and `initClock(p, 0)` is known — do not "simplify" this
+ *  back to a `seed = 0` default parameter. */
+export function initClock(period: string, seed?: number): PadClock {
+  return { period, base: sanitiseSeconds(seed ?? 0), runningSince: null, known: seed !== undefined };
 }
 
 /** Whole game seconds at `nowMs`. Constant while paused — property 2. */
@@ -130,13 +169,17 @@ export function elapsedOf(clock: PadClock, nowMs: number): number {
  *  seconds already banked. */
 export function startClock(clock: PadClock, nowMs: number): PadClock {
   if (clock.runningSince !== null) return clock;
-  return { ...clock, runningSince: nowMs };
+  // The Start tap IS the observation (property 6): a scorer pressing it is
+  // asserting that play is running now, at the displayed time.
+  return { ...clock, runningSince: nowMs, known: true };
 }
 
-/** Stop, banking what the current run accrued. Already-paused is unchanged. */
+/** Stop, banking what the current run accrued. Already-paused is unchanged.
+ *  Spreads rather than rebuilding, so a field added to `PadClock` later cannot
+ *  be silently dropped here — `known` was, in the first draft of this file. */
 export function pauseClock(clock: PadClock, nowMs: number): PadClock {
   if (clock.runningSince === null) return clock;
-  return { period: clock.period, base: elapsedOf(clock, nowMs), runningSince: null };
+  return { ...clock, base: elapsedOf(clock, nowMs), runningSince: null };
 }
 
 export function toggleClock(clock: PadClock, nowMs: number): PadClock {
@@ -168,14 +211,18 @@ export function toggleClock(clock: PadClock, nowMs: number): PadClock {
  */
 export function reseatClock(prev: PadClock | null, spec: PadClockSpec | null): PadClock | null {
   if (spec === null) return null;
-  if (prev === null || prev.period !== spec.period) return initClock(spec.period, spec.seed ?? 0);
+  // `spec.seed` is forwarded VERBATIM, undefined included — `?? 0` here would
+  // erase property 6's whole distinction and make every fresh period claim to
+  // know that it is at second zero.
+  if (prev === null || prev.period !== spec.period) return initClock(spec.period, spec.seed);
   return prev;
 }
 
 /** The `at` for an event dispatched at `nowMs`, or `undefined` when this pad
- *  has no clock. Stamps while PAUSED too — property 5. */
+ *  has no clock, or has one that has never been told the time (property 6).
+ *  Stamps while PAUSED too — property 5. */
 export function stampOf(clock: PadClock | null, nowMs: number): GameTimeStamp | undefined {
-  if (clock === null) return undefined;
+  if (clock === null || !clock.known) return undefined;
   return { period: clock.period, elapsed: elapsedOf(clock, nowMs) };
 }
 

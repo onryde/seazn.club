@@ -106,7 +106,7 @@ describe("a pad clock counts GAME seconds, and only while it runs", () => {
 describe("reseatClock — the seed is a bootstrap, not a leash", () => {
   it("seats a fresh clock from the fold when there is none yet", () => {
     const seated = reseatClock(null, { period: "P2", seed: 240 });
-    expect(seated).toEqual({ period: "P2", base: 240, runningSince: null });
+    expect(seated).toEqual({ period: "P2", base: 240, runningSince: null, known: true });
   });
 
   it("RESETS THE ORIGIN when the period changes, seeding from the new period's own stamp", () => {
@@ -148,9 +148,78 @@ describe("reseatClock — the seed is a bootstrap, not a leash", () => {
   });
 
   it("stamps while PAUSED as well as while running — in a stop-clock sport the whistle time IS the game time", () => {
-    const paused = pauseClock(startClock(initClock("P1"), T0), T0 + 45_000);
+    const paused = pauseClock(startClock(initClock("P1", 0), T0), T0 + 45_000);
     expect(stampOf(paused, T0 + 900_000)).toEqual({ period: "P1", elapsed: 45 });
     expect(stampOf(null, T0)).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 1b. THE CLOCK THAT HAS NEVER BEEN TOLD THE TIME
+// ---------------------------------------------------------------------------
+//
+// R6 review — the regression this half exists to close. A clock seats PAUSED at
+// zero (property 4) and stamps while paused (property 5), so before `known` the
+// two properties together said: a pad mounted on a fresh match stamps
+// `{period, 0}` on EVERY event until somebody taps Start. Nothing corrects it
+// later — `reseatClock` refuses to follow `spec.seed` once seated (property 3),
+// by design — so a scorer writing up thirty minutes from a paper sheet would
+// have banked thirty minutes of events all claiming minute zero.
+//
+// That is strictly WORSE than the "no clock at all" state this wave replaced.
+// An absent `at` makes `skins/football.tsx`'s `readClock` DROP the strip item
+// and leaves `period/suspensions.ts`'s `expiresAt` underivable — visibly
+// missing. A fabricated zero makes both of them present and wrong: a clock
+// frozen at 0:00, and a card awarded at minute 30 whose `expiresAt` is
+// `0 + minutes`, already in the past, so the lazy sweep can never fire and
+// release-on-goal eligibility turns on a `startedAt` that never happened.
+//
+// So `PadClock.known` gates the STAMP and nothing else. The bar still shows
+// 0:00 and still offers Start; what it will not do is invent an observation.
+describe("PadClock.known — a clock with no observation stamps nothing at all", () => {
+  it("refuses to stamp a clock the scorer has not started and the fold could not seed", () => {
+    // `skins/period-shared.ts`'s `buildClock` returns `{period}` with NO seed
+    // until a stamped event exists in this phase — which, on a fresh match, is
+    // never, because the stamp is the thing that would create it.
+    const fresh = reseatClock(null, { period: "P1" });
+    expect(fresh).not.toBeNull();
+    expect(fresh!.known).toBe(false);
+    // Half an hour of scoring later it STILL has nothing to say, and it still
+    // displays 0:00 — the display was never the problem.
+    expect(elapsedOf(fresh!, T0 + 1_800_000)).toBe(0);
+    expect(stampOf(fresh!, T0 + 1_800_000)).toBeUndefined();
+  });
+
+  it("starts stamping on the first Start tap, and keeps stamping through every later pause", () => {
+    const started = startClock(reseatClock(null, { period: "P1" })!, T0);
+    expect(started.known).toBe(true);
+    expect(stampOf(started, T0 + 30_000)).toEqual({ period: "P1", elapsed: 30 });
+    // `pauseClock` rebuilds the object rather than spreading it, so this is
+    // also the assertion that it does not DROP the flag on the way through.
+    const paused = pauseClock(started, T0 + 30_000);
+    expect(paused.known).toBe(true);
+    expect(stampOf(paused, T0 + 900_000)).toEqual({ period: "P1", elapsed: 30 });
+  });
+
+  it("but a clock SEEDED from the fold stamps at once — a reload already knows the time, with no tap", () => {
+    // The property-3 bootstrap: a second device joining a match in progress,
+    // or the same device after a refresh. `seed: 0` is a real observation (the
+    // fold says a stamped event sits at elapsed 0), which is why the flag
+    // tracks the PRESENCE of `PadClockSpec.seed` and not its value.
+    expect(stampOf(reseatClock(null, { period: "P1", seed: 0 })!, T0)).toEqual({ period: "P1", elapsed: 0 });
+    expect(stampOf(reseatClock(null, { period: "P1", seed: 761 })!, T0)).toEqual({ period: "P1", elapsed: 761 });
+  });
+
+  it("and goes back to unknown at a period change, until the new period is started", () => {
+    // `buildClock` deliberately drops the seed when `state.asOf` names the
+    // period the match has just left, so P2 opens with no observation — and an
+    // event recorded between the whistle and the face-off goes unstamped
+    // rather than claiming second 0 of P2.
+    const running = startClock(reseatClock(null, { period: "P1", seed: 12 })!, T0);
+    const next = reseatClock(running, { period: "P2" });
+    expect(next!.known).toBe(false);
+    expect(stampOf(next, T0 + 600_000)).toBeUndefined();
+    expect(stampOf(startClock(next!, T0 + 600_000), T0 + 630_000)).toEqual({ period: "P2", elapsed: 30 });
   });
 });
 
@@ -238,6 +307,26 @@ describe("END TO END: a tile tapped on a clocked pad reaches the fold WITH its `
     };
   }
 
+  /** The REAL football skin's own header strip, built from a folded state — the
+   *  read side, unchanged by this wave, used here as the consumer end of the
+   *  seam rather than a hand-written mirror of it. */
+  const stripOf = (state: unknown) =>
+    buildScorebug(
+      {
+        cfg,
+        state,
+        summary: {},
+        phase: "live",
+        band: 3,
+        entitlements: {},
+        personNames: {},
+        squads: { home: { entrantId: "H", members: [], subsUsed: 0, exemptUsed: {} }, away: { entrantId: "A", members: [], subsUsed: 0, exemptUsed: {} } },
+        events: [],
+        contextOverrides: {},
+      },
+      (key: string) => key,
+    ).strip ?? [];
+
   it("the real engine folds the stamped tap and REMEMBERS the time — state.asOf, which nothing could set before", () => {
     const clock = startClock(initClock("H1"), T0);
     const tap = tapThroughHost(clock, T0 + 761_000);
@@ -261,36 +350,54 @@ describe("END TO END: a tile tapped on a clocked pad reaches the fold WITH its `
     expect(readClock(before, "H1")).toBeUndefined();
     expect(readClock(after, "H1")).toBe("12:41");
 
-    const stripOf = (state: unknown) =>
-      buildScorebug(
-        {
-          cfg,
-          state,
-          summary: {},
-          phase: "live",
-          band: 3,
-          entitlements: {},
-          personNames: {},
-          squads: { home: { entrantId: "H", members: [], subsUsed: 0, exemptUsed: {} }, away: { entrantId: "A", members: [], subsUsed: 0, exemptUsed: {} } },
-          events: [],
-          contextOverrides: {},
-        },
-        (key: string) => key,
-      ).strip ?? [];
     expect(stripOf(before).map((item) => item.id)).not.toContain("clock");
     const item = stripOf(after).find((s) => s.id === "clock");
     expect(item?.value).toBe("12:41");
   });
 
   it("an UNCLOCKED pad is byte-identical to today — the payload is the tile's own object, untouched", () => {
-    // Football does not declare `clock()` yet (R6's skin task does that), and
-    // every other v3 skin never will. `reseatClock(null, null)` is what the
-    // host holds for all of them, and this asserts that costs them nothing.
+    // Football does not declare `clock()` (R6's skin task gave one to hockey
+    // and ice hockey only), and most v3 skins never will. `reseatClock(null,
+    // null)` is what the host holds for all of them, and this asserts that
+    // costs them nothing.
     const state = foldFootball(cfg, [["core.start"]]);
     const original = { by: "H" };
     expect(stampFor(footballModule!, "football.goal", original, null, T0)).toBe(original);
     expect((foldFootball(cfg, [["core.start"], ["football.goal", original]]) as { asOf?: unknown }).asOf).toBeUndefined();
     expect((state as { asOf?: unknown }).asOf).toBeUndefined();
+  });
+
+  it("and so is a pad whose clock was never started — thirty minutes of taps, and the strip STILL renders no clock", () => {
+    // THE REGRESSION GATE (R6 review, gap 1). This is the same assertion as the
+    // test above, driven through a clock that EXISTS: seated, mounted, showing
+    // 0:00, and never started. Before `known` this path stamped `{H1, 0}` on
+    // every tap, `state.asOf` became `{H1,0}`, and football's strip rendered a
+    // clock frozen at "0:00" where it correctly drops the item today. The
+    // by-reference identity is the strong form — not merely "no `at` key", but
+    // the tile's own object arriving at `dispatch` untouched.
+    const never = reseatClock(null, { period: "H1" })!;
+    const tap = tapThroughHost(never, T0 + 1_800_000);
+    const untouched = footballSkinV3((key: string) => key)
+      .tiles({
+        cfg,
+        state: foldFootball(cfg, [["core.start"]]),
+        summary: {},
+        phase: "live",
+        band: 3,
+        entitlements: {},
+        personNames: {},
+        squads: { home: { entrantId: "H", members: [], subsUsed: 0, exemptUsed: {} }, away: { entrantId: "A", members: [], subsUsed: 0, exemptUsed: {} } },
+        events: [],
+        contextOverrides: {},
+      })
+      .find((tile) => "event" in tile.action && tile.action.event.type === "football.goal")!;
+    expect(tap.payload).toEqual((untouched.action as { event: { payload: unknown } }).event.payload);
+    expect(tap.payload).not.toHaveProperty("at");
+
+    const folded = foldFootball(cfg, [["core.start"], [tap.type, tap.payload]]);
+    expect((folded as { asOf?: unknown }).asOf).toBeUndefined();
+    expect(readClock(folded, "H1")).toBeUndefined();
+    expect(stripOf(folded).map((item) => item.id)).not.toContain("clock");
   });
 });
 
