@@ -46,6 +46,10 @@ export interface ScorebugProps {
    *  wiring is Task 4's, not this file's) — a caller not yet ready to
    *  dispatch can render a fully-formed, real, still-inert button. */
   onTap?: (event: TapEvent) => void;
+  /** Fires with the half's own `tapSheet` key when one is set, INSTEAD of
+   *  `onTap`. The host opens it through the same `resolveSheet` path a tile
+   *  uses, so a half-opened sheet and a tile-opened sheet cannot diverge. */
+  onOpenSheet?: (sheetKey: string) => void;
 }
 
 /**
@@ -178,7 +182,7 @@ function HalfContent({ half, hintText }: { half: ScorebugHalf; hintText: string 
  * combining the who-line with the hint; a non-tappable one is a plain,
  * unfocusable <div>), the context line, and the stat strip.
  */
-export function Scorebug({ spec, t, onTap }: ScorebugProps) {
+export function Scorebug({ spec, t, onTap, onOpenSheet }: ScorebugProps) {
   return (
     <div
       className={`overflow-hidden rounded-2xl border-t-2 ${NIGHT_TILE_CLASSES.ledEdge} ${NIGHT_TILE_CLASSES.tileBg} shadow-lg`}
@@ -207,7 +211,18 @@ export function Scorebug({ spec, t, onTap }: ScorebugProps) {
               <button
                 key={i}
                 type="button"
-                onClick={() => half.tapEvent && onTap?.(half.tapEvent)}
+                // `tapSheet` WINS where a skin set it. The half still carries
+                // its `tapEvent` — the sheet's job is to build that same
+                // event with one more fact attached — so the order here is
+                // the contract, not a preference: a skin that sets both means
+                // "ask first, then score", never "score and also ask".
+                onClick={() => {
+                  if (half.tapSheet !== undefined) {
+                    onOpenSheet?.(half.tapSheet);
+                    return;
+                  }
+                  if (half.tapEvent) onTap?.(half.tapEvent);
+                }}
                 aria-label={[whoNames(half.who), hintText].filter(Boolean).join(" ")}
                 style={{ minHeight: 44 }}
                 className={`${NIGHT_TILE_CLASSES.half} flex min-w-0 flex-col items-center justify-center gap-1 px-3 py-3 text-center outline-offset-[-3px] transition-colors focus-visible:outline focus-visible:outline-2`}

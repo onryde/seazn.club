@@ -1078,7 +1078,12 @@ export function PadHostV3(props: PadHostV3Props) {
       )}
 
       <div data-role="v3-scorebug">
-        <Scorebug spec={scorebugSpec} t={t} onTap={(event: TapEvent) => send(event.type, event.payload)} />
+        <Scorebug
+          spec={scorebugSpec}
+          t={t}
+          onTap={(event: TapEvent) => send(event.type, event.payload)}
+          onOpenSheet={handleOpenSheet}
+        />
       </div>
 
       {/* The server's own 422-class refusal (`pipeline.lastRejection`) and a

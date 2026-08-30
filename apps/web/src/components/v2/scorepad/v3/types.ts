@@ -108,6 +108,25 @@ export interface ScorebugHalf {
   hintKey?: string;
   tappable?: boolean;             // MODEL-S halves only
   tapEvent?: TapEvent;            // REQUIRED iff tappable
+  /**
+   * R5 — open this SHEET instead of posting `tapEvent`, for the one case
+   * where scoring silently would destroy information the pad can never
+   * recover (volleyball's set opener, FIVB 7.6.2).
+   *
+   * A tap on a model-S half normally IS the score, and that immediacy is the
+   * whole point of the model — so this exists for a single, narrow shape:
+   * the question must be unanswerable later, and the sheet must ask it once
+   * and then get out of the way. Volleyball's case is exactly that. Under
+   * side-out the next server is simply the last rally's winner, so once ONE
+   * point is scored, who opened the set is gone for good and the rotation
+   * number with it. Before that first point the scorer knows the answer and
+   * nobody has asked them for it.
+   *
+   * `tapEvent` stays REQUIRED alongside it (`assertScorebugSpec`), because
+   * the sheet's whole job is to build that same event with one more fact
+   * attached — the half still knows which side won.
+   */
+  tapSheet?: string;
 }
 export interface ScorebugSpec {
   context: string;                // "T20 · Over 0.5 · RR 14.4" (already localised)

@@ -92,6 +92,53 @@ const stripSpans = (spec: ScorebugSpec) =>
     (el) => propsOf(el)["data-strip-item-id"] !== undefined,
   );
 
+describe("a half that must ASK before it scores (ScorebugHalf.tapSheet)", () => {
+  const half = (over: Record<string, unknown>) => ({
+    who: [{ name: "Home" }],
+    big: "0",
+    tappable: true,
+    hintKey: "pad.hint",
+    tapEvent: { type: "volleyball.rally", payload: { wonBy: "H" } },
+    ...over,
+  });
+  const spec = (over: Record<string, unknown>): ScorebugSpec => ({
+    context: "",
+    phase: "live",
+    halves: [half(over), half({})] as ScorebugSpec["halves"],
+    strip: [],
+  });
+  const firstButton = (s: ScorebugSpec, onTap?: unknown, onOpenSheet?: unknown) =>
+    walk(renderIsland(Scorebug, { spec: s, t, onTap, onOpenSheet } as never).tree() as never).find(
+      (el) => propsOf(el).onClick !== undefined,
+    )!;
+
+  it("opens the sheet INSTEAD of posting, so the question cannot be skipped by tapping", () => {
+    const posted: unknown[] = [];
+    const opened: string[] = [];
+    const btn = firstButton(
+      spec({ tapSheet: "serveOpener:home" }),
+      (e: unknown) => posted.push(e),
+      (k: string) => opened.push(k),
+    );
+    (propsOf(btn).onClick as () => void)();
+    expect(opened[0], "the half must route to its sheet").toBe("serveOpener:home");
+    expect(posted, "and must NOT also score — that would ask and answer at once").toHaveLength(0);
+  });
+
+  it("posts as before when no sheet is named — every half shipped before this is unchanged", () => {
+    const posted: { type?: string }[] = [];
+    const opened: string[] = [];
+    const btn = firstButton(
+      spec({}),
+      (e: { type?: string }) => posted.push(e),
+      (k: string) => opened.push(k),
+    );
+    (propsOf(btn).onClick as () => void)();
+    expect(posted[0]?.type).toBe("volleyball.rally");
+    expect(opened).toHaveLength(0);
+  });
+});
+
 describe("the strip's LED board (StripItem.tone)", () => {
   it("renders a toned item as the LED panel, with a stable tone hook and its label split from its value", () => {
     const [panel] = stripSpans(specWithStrip([{ id: "added", label: "Added", value: "+3", tone: "led" }]));
