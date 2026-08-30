@@ -31,6 +31,8 @@ import {
   windowOpen,
   materialise,
   rosterCapExpr,
+  reconcileClaimedPerson,
+  backfillPersonEmail,
   type RegistrationRow,
   type RegistrationSettingsRow,
 } from "./registrations";
@@ -521,12 +523,20 @@ export async function submitRegistrationGroup(
       }
     }
 
-    // The self row's dob/gender fall back to the contact's cart-level values
-    // (design §4 step 1: "collected once") when the row itself didn't repeat
-    // them; any other row is untouched.
+    // The self row's dob/gender/email fall back to the contact's cart-level
+    // values (design §4 step 1: "collected once") when the row itself didn't
+    // repeat them; any other row is untouched. `email` added for #22 — the
+    // captain's OWN email (`contact.email`, always present) is exactly the
+    // identity signal that lets a LATER registration for the same captain
+    // dedupe instead of minting a fresh person every time they self-link.
     const players = rawPlayers.map((p, i) =>
       i === selfIndex
-        ? { ...p, dob: p.dob ?? input.contact.dob ?? null, gender: p.gender ?? input.contact.gender ?? null }
+        ? {
+            ...p,
+            dob: p.dob ?? input.contact.dob ?? null,
+            gender: p.gender ?? input.contact.gender ?? null,
+            email: p.email ?? input.contact.email ?? null,
+          }
         : p,
     );
 
@@ -762,10 +772,11 @@ export async function submitRegistrationGroup(
           : null;
         await tx`
           insert into registration_players
-            (registration_id, full_name, dob, gender, source, consent_status,
+            (registration_id, full_name, dob, gender, email, source, consent_status,
              consent_at, guardian_name, user_id, squad_number, is_captain)
           values (
             ${regRow.id}, ${player.full_name}, ${player.dob ?? null}, ${player.gender ?? null},
+            ${player.email ?? null},
             'captain_entered', ${isSelf ? "granted" : "pending"},
             ${isSelf ? tx`now()` : null}, ${isSelf ? (input.contact.guardian_name ?? null) : null},
             ${playerUserId}, ${player.squad_number ?? null}, ${player.is_captain ?? false}
@@ -1094,9 +1105,11 @@ export async function joinTeamEntry(
   // of an unguarded INSERT. Both close the same way withdrawCore closes its
   // own: lock the row, re-read it LIVE, then write — inside one short
   // transaction holding nothing but this claim/insert (RS007).
+  const claimedEmail = input.player.email?.trim() || null;
+
   const playerId = await sql.begin(async (tx) => {
-    const [locked] = await tx<{ status: string; free_agent: boolean }[]>`
-      select status, free_agent from registrations where id = ${reg.id} for update`;
+    const [locked] = await tx<{ status: string; free_agent: boolean; entrant_id: string | null }[]>`
+      select status, free_agent, entrant_id from registrations where id = ${reg.id} for update`;
     if (!locked) throw new HttpError(404, "This join link is not valid");
     if (locked.free_agent) throw new HttpError(422, "This entry has no roster to join yet");
     if (["withdrawn", "rejected", "expired"].includes(locked.status)) {
@@ -1109,11 +1122,14 @@ export async function joinTeamEntry(
       // concurrent double-claim of the same slot can make at most one
       // caller win, no separate SELECT-then-UPDATE race window. full_name
       // is deliberately NOT overwritten — only the fields the insert path
-      // itself fills.
-      const [claimed] = await tx<{ id: string }[]>`
+      // itself fills. `email` added for #22 — the claimer's own email wins
+      // over whatever (if anything) the captain guessed at submit, same as
+      // dob/gender/guardian_name here already do.
+      const [claimed] = await tx<{ id: string; person_id: string | null }[]>`
         update registration_players
         set dob = ${input.player.dob ?? null},
             gender = ${input.player.gender ?? null},
+            email = ${claimedEmail},
             consent_status = ${consentStatus},
             consent_at = now(),
             guardian_name = ${minor ? (input.guardian_name ?? null) : null},
@@ -1127,7 +1143,7 @@ export async function joinTeamEntry(
           and registration_id = ${reg.id}
           and source = 'captain_entered'
           and consent_status = 'pending'
-        returning id`;
+        returning id, person_id`;
       if (!claimed) {
         // Distinguish "already claimed" (409, a real conflict) from every
         // other reason the compare-and-swap could miss — wrong code, wrong
@@ -1140,6 +1156,65 @@ export async function joinTeamEntry(
         if (existing) throw new HttpError(409, "This player has already joined");
         throw new HttpError(404, "This join link is not valid");
       }
+
+      // #22 — reconcile against the directory. `claimed.person_id` is only
+      // ever non-null when this entry was ALREADY materialised BEFORE the
+      // claim (materialise() sets it once, at confirm time, and never
+      // revisits a row): that dummy, anonymous person was minted from
+      // whatever the captain typed with no consent behind it — exactly the
+      // "captain-typed duplicate" #22 exists to close. A row claimed BEFORE
+      // its entry is materialised needs no extra write here: `email` (just
+      // persisted above) and `user_id` now sit on the row, so
+      // materialise()'s own findOrCreatePlayerPerson/resolvePlayerPerson
+      // call — whenever it eventually fires — dedupes correctly on its own.
+      if (claimed.person_id) {
+        const resolved = await reconcileClaimedPerson(
+          tx,
+          reg.org_id,
+          input.player.full_name,
+          input.player.dob ?? null,
+          input.player.gender ?? null,
+          linkUserId,
+          claimedEmail,
+        );
+        if (resolved && resolved !== claimed.person_id) {
+          // Repoint the ONE entrant_members row this claim owns from the
+          // dummy person to the resolved one. Guarded: entrant_members'
+          // primary key is (entrant_id, person_id) — if `resolved` is
+          // somehow ALREADY a member of this same entrant (a second row on
+          // this roster independently resolving to the same human — not
+          // expected in practice, but not impossible), the UPDATE below
+          // would violate it. A raw try/catch cannot recover from that on
+          // its own: Postgres marks the WHOLE transaction aborted the
+          // instant one statement errors, so every later statement
+          // (including this claim's own outer COMMIT) fails too, even
+          // though the JS exception was caught — same reason the join_code
+          // collision retry above this function uses `tx.savepoint`, not a
+          // bare try/catch on `tx`. Caught here rather than failing the
+          // claim: the dummy stays in place, same as any other duplicate
+          // #22 leaves for the existing #404 merge flow rather than
+          // auto-merging.
+          try {
+            await tx.savepoint(async (sp) => {
+              await sp`
+                update entrant_members set person_id = ${resolved}
+                where entrant_id = ${locked.entrant_id} and person_id = ${claimed.person_id}`;
+              await sp`
+                update registration_players set person_id = ${resolved}, updated_at = now()
+                where id = ${claimed.id}`;
+            });
+          } catch (err) {
+            const pg = err as { code?: string };
+            if (pg.code !== "23505") throw err;
+          }
+        } else if (!resolved && claimedEmail) {
+          // No existing person to repoint to — this claimer's email is new
+          // to the directory. The dummy IS the right person going forward;
+          // give it the email it was minted without, so the NEXT
+          // registration for this same human can match on it.
+          await backfillPersonEmail(tx, claimed.person_id, claimedEmail);
+        }
+      }
       return claimed.id;
     }
 
@@ -1151,12 +1226,13 @@ export async function joinTeamEntry(
     }
     const [player] = await tx<{ id: string }[]>`
       insert into registration_players
-        (registration_id, full_name, dob, gender, source, consent_status,
+        (registration_id, full_name, dob, gender, email, source, consent_status,
          consent_at, guardian_name, user_id,
          privacy_consent_at, privacy_consent_version,
          media_consent_at, media_consent_version)
       values (
         ${reg.id}, ${input.player.full_name}, ${input.player.dob ?? null}, ${input.player.gender ?? null},
+        ${claimedEmail},
         'self_joined', ${consentStatus}, now(), ${minor ? (input.guardian_name ?? null) : null}, ${linkUserId},
         ${input.privacy_consent ? tx`now()` : null}, ${input.privacy_consent ? LEGAL_VERSION : null},
         ${input.media_consent ? tx`now()` : null}, ${input.media_consent ? LEGAL_VERSION : null}

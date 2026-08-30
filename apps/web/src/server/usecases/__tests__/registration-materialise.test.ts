@@ -69,6 +69,7 @@ async function seedPlayerEntry(
     name: string;
     dob?: string | null;
     gender?: string | null;
+    email?: string | null;
     userId?: string | null;
     squadNumber?: number | null;
     isCaptain?: boolean;
@@ -92,9 +93,9 @@ async function seedPlayerEntry(
   for (const p of players) {
     await sql`
       insert into registration_players
-        (registration_id, full_name, dob, gender, user_id, squad_number, is_captain, source)
+        (registration_id, full_name, dob, gender, email, user_id, squad_number, is_captain, source)
       values (
-        ${reg.id}, ${p.name}, ${p.dob ?? null}, ${p.gender ?? null}, ${p.userId ?? null},
+        ${reg.id}, ${p.name}, ${p.dob ?? null}, ${p.gender ?? null}, ${p.email ?? null}, ${p.userId ?? null},
         ${p.squadNumber ?? null}, ${p.isCaptain ?? false}, 'captain_entered'
       )`;
   }
@@ -109,15 +110,16 @@ async function seedPerson(
   over: {
     fullName: string;
     dob?: string | null;
+    email?: string | null;
     lane?: "player" | "official" | "coach" | "staff";
     mergedInto?: string | null;
     consent?: Record<string, unknown>;
   },
 ): Promise<{ id: string }> {
   const [p] = await sql<{ id: string }[]>`
-    insert into persons (org_id, full_name, dob, lane, merged_into, consent)
+    insert into persons (org_id, full_name, dob, email, lane, merged_into, consent)
     values (
-      ${orgId}, ${over.fullName}, ${over.dob ?? null}, ${over.lane ?? "player"},
+      ${orgId}, ${over.fullName}, ${over.dob ?? null}, ${over.email ?? null}, ${over.lane ?? "player"},
       ${over.mergedInto ?? null}, ${sql.json((over.consent ?? {}) as never)}
     )
     returning id`;
@@ -231,6 +233,203 @@ describe.skipIf(!HAS_DB)("player person get-or-create by (org, name, dob) — no
       select person_id from entrant_members where entrant_id = ${confirmed.entrant_id as string}`;
     expect(person_id).not.toBe(dup1.id);
     expect(person_id).not.toBe(dup2.id);
+  });
+});
+
+// #22 — email is tried BEFORE dob (registrations.ts findOrCreatePlayerPerson).
+// Same "exactly one match reuses, zero or ambiguous creates" conservatism as
+// the dob rule above; never dedupes on name alone, unchanged.
+describe.skipIf(!HAS_DB)("player person get-or-create by EMAIL — tried before dob (#22 ruling)", () => {
+  it("same email, no dob on either row, two registrations → ONE person, reused", async () => {
+    const { auth } = await seedOrg("pro");
+    const divA = await seedOpenDivision(auth);
+    const divB = await seedOpenDivision(auth);
+    const before = await personCount(auth.orgId);
+    const email = `${tag("email-dedupe")}@test.local`;
+
+    // Different NAMES on purpose — email alone must be enough; the dob
+    // rule's name+dob AND is not required here.
+    const a = await seedPlayerEntry(divA.divisionId, [{ name: tag("Alex A"), email }]);
+    const b = await seedPlayerEntry(divB.divisionId, [{ name: tag("Alex B"), email }]);
+    const ca = await confirmRegistration(auth, a.id);
+    const cb = await confirmRegistration(auth, b.id);
+
+    expect(await personCount(auth.orgId)).toBe(before + 1);
+    const members = await sql<{ person_id: string }[]>`
+      select person_id from entrant_members
+      where entrant_id in (${ca.entrant_id as string}, ${cb.entrant_id as string})`;
+    expect(members).toHaveLength(2);
+    expect(members[0]!.person_id).toBe(members[1]!.person_id);
+  });
+
+  it("email match wins over an available dob+name match that would resolve to a DIFFERENT person", async () => {
+    const { auth } = await seedOrg("pro");
+    const div = await seedOpenDivision(auth);
+    const name = tag("Priority Case");
+    const dob = "1996-06-06";
+    const email = `${tag("priority")}@test.local`;
+    // Two PRE-EXISTING, distinct persons: one only the dob+name rule would
+    // find, one only the email rule would find.
+    const dobMatch = await seedPerson(auth.orgId, { fullName: name, dob });
+    const emailMatch = await seedPerson(auth.orgId, { fullName: tag("Someone Else"), email });
+    const before = await personCount(auth.orgId);
+
+    // The incoming row matches BOTH — same name+dob as dobMatch, same email
+    // as emailMatch. Email must win.
+    const a = await seedPlayerEntry(div.divisionId, [{ name, dob, email }]);
+    const confirmed = await confirmRegistration(auth, a.id);
+
+    expect(await personCount(auth.orgId)).toBe(before); // no new person
+    const [{ person_id }] = await sql<{ person_id: string }[]>`
+      select person_id from entrant_members where entrant_id = ${confirmed.entrant_id as string}`;
+    expect(person_id).toBe(emailMatch.id);
+    expect(person_id).not.toBe(dobMatch.id);
+  });
+
+  it("no email on the row → falls through to the dob rule unchanged", async () => {
+    const { auth } = await seedOrg("pro");
+    const divA = await seedOpenDivision(auth);
+    const divB = await seedOpenDivision(auth);
+    const before = await personCount(auth.orgId);
+    const name = tag("No Email Fallthrough");
+
+    const a = await seedPlayerEntry(divA.divisionId, [{ name, dob: "1998-01-01" }]);
+    const b = await seedPlayerEntry(divB.divisionId, [{ name, dob: "1998-01-01" }]);
+    const ca = await confirmRegistration(auth, a.id);
+    const cb = await confirmRegistration(auth, b.id);
+
+    expect(await personCount(auth.orgId)).toBe(before + 1);
+    const members = await sql<{ person_id: string }[]>`
+      select person_id from entrant_members
+      where entrant_id in (${ca.entrant_id as string}, ${cb.entrant_id as string})`;
+    expect(members[0]!.person_id).toBe(members[1]!.person_id);
+  });
+
+  it("same email, TWO existing matching persons already present → a NEW person, never an arbitrary pick", async () => {
+    const { auth } = await seedOrg("pro");
+    const div = await seedOpenDivision(auth);
+    const email = `${tag("ambiguous")}@test.local`;
+    const dup1 = await seedPerson(auth.orgId, { fullName: tag("Twin One"), email });
+    const dup2 = await seedPerson(auth.orgId, { fullName: tag("Twin Two"), email });
+    const before = await personCount(auth.orgId);
+
+    const a = await seedPlayerEntry(div.divisionId, [{ name: tag("Ambiguous Email"), email }]);
+    const confirmed = await confirmRegistration(auth, a.id);
+
+    expect(await personCount(auth.orgId)).toBe(before + 1);
+    const [{ person_id }] = await sql<{ person_id: string }[]>`
+      select person_id from entrant_members where entrant_id = ${confirmed.entrant_id as string}`;
+    expect(person_id).not.toBe(dup1.id);
+    expect(person_id).not.toBe(dup2.id);
+  });
+
+  it("email match is case- and whitespace-insensitive", async () => {
+    const { auth } = await seedOrg("pro");
+    const divA = await seedOpenDivision(auth);
+    const divB = await seedOpenDivision(auth);
+    const before = await personCount(auth.orgId);
+    const local = tag("case-fold").replace(/\s+/g, "").toLowerCase();
+
+    const a = await seedPlayerEntry(divA.divisionId, [
+      { name: tag("Case A"), email: `${local}@Test.Local` },
+    ]);
+    const b = await seedPlayerEntry(divB.divisionId, [
+      { name: tag("Case B"), email: `  ${local}@test.local  ` },
+    ]);
+    const ca = await confirmRegistration(auth, a.id);
+    const cb = await confirmRegistration(auth, b.id);
+
+    expect(await personCount(auth.orgId)).toBe(before + 1);
+    const members = await sql<{ person_id: string }[]>`
+      select person_id from entrant_members
+      where entrant_id in (${ca.entrant_id as string}, ${cb.entrant_id as string})`;
+    expect(members[0]!.person_id).toBe(members[1]!.person_id);
+  });
+
+  it("a REUSED person's email is never overwritten by a DIFFERING one on the matching row", async () => {
+    const { auth } = await seedOrg("pro");
+    const div = await seedOpenDivision(auth);
+    const name = tag("Keeps Own Email");
+    const dob = "1994-04-04";
+    const existing = await seedPerson(auth.orgId, { fullName: name, dob, email: "original@test.local" });
+
+    // Matches by dob+name (NOT by email — the row's email differs, so the
+    // email rule finds nothing and this exercises the dob path's own
+    // never-overwrite guard specifically).
+    const a = await seedPlayerEntry(div.divisionId, [{ name, dob, email: "different@test.local" }]);
+    await confirmRegistration(auth, a.id);
+
+    const [{ email }] = await sql<{ email: string | null }[]>`select email from persons where id = ${existing.id}`;
+    expect(email).toBe("original@test.local");
+  });
+
+  it("a REUSED (dob-matched) person that had NO email gets one backfilled", async () => {
+    const { auth } = await seedOrg("pro");
+    const div = await seedOpenDivision(auth);
+    const name = tag("Backfill Target");
+    const dob = "1993-03-03";
+    const existing = await seedPerson(auth.orgId, { fullName: name, dob }); // no email
+
+    const a = await seedPlayerEntry(div.divisionId, [{ name, dob, email: "backfilled@test.local" }]);
+    const confirmed = await confirmRegistration(auth, a.id);
+
+    const [{ person_id }] = await sql<{ person_id: string }[]>`
+      select person_id from entrant_members where entrant_id = ${confirmed.entrant_id as string}`;
+    expect(person_id).toBe(existing.id);
+    const [{ email }] = await sql<{ email: string | null }[]>`select email from persons where id = ${existing.id}`;
+    expect(email).toBe("backfilled@test.local");
+  });
+
+  it("a newly created person persists its email", async () => {
+    const { auth } = await seedOrg("pro");
+    const div = await seedOpenDivision(auth);
+    const email = `${tag("fresh")}@test.local`;
+
+    const a = await seedPlayerEntry(div.divisionId, [{ name: tag("Fresh Email Person"), email }]);
+    const confirmed = await confirmRegistration(auth, a.id);
+
+    const [{ stored }] = await sql<{ stored: string | null }[]>`
+      select p.email as stored from persons p join entrant_members em on em.person_id = p.id
+      where em.entrant_id = ${confirmed.entrant_id as string}`;
+    expect(stored).toBe(email);
+  });
+
+  it("a person in ANOTHER org with the same email is never reused", async () => {
+    const { auth: authA } = await seedOrg("pro");
+    const { auth: authB } = await seedOrg("pro");
+    const email = `${tag("cross-org")}@test.local`;
+    const other = await seedPerson(authB.orgId, { fullName: tag("Cross Org Email"), email });
+    const div = await seedOpenDivision(authA);
+    const before = await personCount(authA.orgId);
+
+    const a = await seedPlayerEntry(div.divisionId, [{ name: tag("Cross Org Entrant"), email }]);
+    const confirmed = await confirmRegistration(authA, a.id);
+
+    expect(await personCount(authA.orgId)).toBe(before + 1);
+    const [{ person_id }] = await sql<{ person_id: string }[]>`
+      select person_id from entrant_members where entrant_id = ${confirmed.entrant_id as string}`;
+    expect(person_id).not.toBe(other.id);
+  });
+
+  it("a merged_into (tombstoned) person with the same email is never reused", async () => {
+    const { auth } = await seedOrg("pro");
+    const div = await seedOpenDivision(auth);
+    const email = `${tag("merged")}@test.local`;
+    const survivor = await seedPerson(auth.orgId, { fullName: tag("Survivor Email") });
+    const tombstone = await seedPerson(auth.orgId, {
+      fullName: tag("Tombstone Email"),
+      email,
+      mergedInto: survivor.id,
+    });
+    const before = await personCount(auth.orgId);
+
+    const a = await seedPlayerEntry(div.divisionId, [{ name: tag("Merged Entrant"), email }]);
+    const confirmed = await confirmRegistration(auth, a.id);
+
+    expect(await personCount(auth.orgId)).toBe(before + 1);
+    const [{ person_id }] = await sql<{ person_id: string }[]>`
+      select person_id from entrant_members where entrant_id = ${confirmed.entrant_id as string}`;
+    expect(person_id).not.toBe(tombstone.id);
   });
 });
 

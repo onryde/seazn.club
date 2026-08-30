@@ -634,6 +634,46 @@ export async function resolvePlayerPerson(
 }
 
 /**
+ * #22 — exact-one player-lane person match by email, org-scoped, tombstones
+ * excluded. Same conservatism as the dob rule below: zero or ambiguous
+ * matches return null rather than guessing. Exported so
+ * `registration-submit.ts`'s `joinTeamEntry` can reconcile a claim against
+ * the directory too (module topology: that file already imports from this
+ * one; never the other way).
+ */
+export async function findPlayerPersonByEmail(
+  db: AnySql,
+  orgId: string,
+  email: string,
+): Promise<string | null> {
+  const trimmed = email.trim();
+  if (!trimmed) return null;
+  const matches = await db<{ id: string }[]>`
+    select id from persons
+    where org_id = ${orgId} and lane = 'player' and merged_into is null
+      and lower(email) = lower(${trimmed})`;
+  return matches.length === 1 ? matches[0]!.id : null;
+}
+
+/**
+ * #22 — fills a MISSING email onto an already-resolved person; never
+ * overwrites one that differs (the `email is null` guard IS the rule, not
+ * just an optimisation — a concurrent backfill from two rows racing the
+ * same person is then a harmless double no-op instead of a decision about
+ * which value wins). Matches the standing "never touch an existing
+ * person's own data" rule's one stated exception (#22 brief: "adding an
+ * email to a person that has none is acceptable"). Exported for
+ * `registration-submit.ts`'s `joinTeamEntry` — a claim that finds no
+ * BETTER match than the dummy person already on its row still gives that
+ * dummy the email it was minted without.
+ */
+export async function backfillPersonEmail(tx: Tx, personId: string, email: string): Promise<void> {
+  const trimmed = email.trim();
+  if (!trimmed) return;
+  await tx`update persons set email = ${trimmed} where id = ${personId} and email is null`;
+}
+
+/**
  * RS002 — person get-or-create for a player row with NO `user_id`.
  *
  * The only persons identity index (`persons_org_user_lane_uq`) is scoped to
@@ -648,6 +688,17 @@ export async function resolvePlayerPerson(
  * different humans (same-named juniors, for instance) is not cleanly
  * reversible. A small per-org query by design; no index added for it.
  *
+ * #22 (2026-08-30): EMAIL is now tried FIRST, ahead of dob — a captain-
+ * entered row essentially never carries a dob (nothing requires one unless
+ * the registrant ticks "I'm playing"), so the dob rule above rarely even
+ * runs; email is the signal that is actually usually present (the cart
+ * contact always has one, a claimer always gives one at their own claim
+ * moment). Same conservatism, same "never guess" shape — see
+ * `findPlayerPersonByEmail`. A person found via EITHER rule gets its email
+ * backfilled if (and only if) it doesn't have one yet, so the NEXT
+ * registration for the same human can match on email even if this one
+ * matched on dob.
+ *
  * Never touches an EXISTING person's own data (name/dob/gender/consent) —
  * that person may already carry answers, including a consent opt-out, that a
  * later same-named entry must not overwrite. New persons are created with
@@ -660,19 +711,68 @@ async function findOrCreatePlayerPerson(
   fullName: string,
   dob: string | null,
   gender: string | null,
+  email: string | null,
 ): Promise<string> {
+  const trimmedEmail = email?.trim() || null;
+  if (trimmedEmail) {
+    const matchId = await findPlayerPersonByEmail(tx, orgId, trimmedEmail);
+    if (matchId) {
+      await backfillPersonEmail(tx, matchId, trimmedEmail);
+      return matchId;
+    }
+  }
   if (dob) {
     const matches = await tx<{ id: string }[]>`
       select id from persons
       where org_id = ${orgId} and lane = 'player' and merged_into is null
         and dob = ${dob} and lower(trim(full_name)) = lower(trim(${fullName}))`;
-    if (matches.length === 1) return matches[0]!.id;
+    if (matches.length === 1) {
+      if (trimmedEmail) await backfillPersonEmail(tx, matches[0]!.id, trimmedEmail);
+      return matches[0]!.id;
+    }
   }
   const [created] = await tx<{ id: string }[]>`
-    insert into persons (org_id, full_name, dob, gender, consent)
-    values (${orgId}, ${fullName}, ${dob}, ${gender}, ${tx.json({ public_name: true } as never)})
+    insert into persons (org_id, full_name, dob, gender, email, consent)
+    values (${orgId}, ${fullName}, ${dob}, ${gender}, ${trimmedEmail}, ${tx.json({ public_name: true } as never)})
     returning id`;
   return created!.id;
+}
+
+/**
+ * #22 — reconciles a JOIN/CLAIM against the directory, for
+ * `registration-submit.ts`'s `joinTeamEntry` (a claim is the strongest
+ * identity moment in the whole flow: the human gives their own email, or is
+ * signed in). Returns an EXISTING person only — never creates one, unlike
+ * `findOrCreatePlayerPerson` — because a fresh person for a row that
+ * resolves to neither a user_id nor a known email is exactly what
+ * `materialise()` already handles correctly whenever it eventually runs
+ * (immediately for a free auto-approval entry, later for a paid or
+ * manual-approval one); this function's whole job is to catch the case
+ * `materialise()` CANNOT retry — a claim landing on an entry that is
+ * already confirmed, where `materialise()`'s own `if (reg.entrant_id)
+ * return` guard means it will never run again for this registration.
+ *
+ * `userId` (signed-in claimer) is the stronger signal and is tried first:
+ * `resolvePlayerPerson` already reuses-or-creates atomically via the
+ * unique `(org, user, lane)` index, so it always resolves to SOME person —
+ * matching materialise()'s own precedence (`p.user_id ? resolvePlayerPerson
+ * : findOrCreatePlayerPerson`). Email is the fallback, and unlike the
+ * userId branch it can genuinely find nothing (zero or ambiguous matches),
+ * in which case this returns null and the caller leaves the row exactly as
+ * it is today.
+ */
+export async function reconcileClaimedPerson(
+  tx: Tx,
+  orgId: string,
+  fullName: string,
+  dob: string | null,
+  gender: string | null,
+  userId: string | null,
+  email: string | null,
+): Promise<string | null> {
+  if (userId) return resolvePlayerPerson(tx, orgId, userId, fullName, dob, gender);
+  const trimmedEmail = email?.trim() || null;
+  return trimmedEmail ? findPlayerPersonByEmail(tx, orgId, trimmedEmail) : null;
 }
 
 /**
@@ -697,14 +797,18 @@ async function findOrCreatePlayerPerson(
 // table's shape, so a column that appears in the SELECT but never in the
 // interface (as `user_id` briefly did) fails the typecheck instead of drifting
 // quietly — this file has no other consumer of the type to catch it.
+// `email` added for #22 — materialise() below threads it through to
+// findOrCreatePlayerPerson so a captain-entered row that DOES carry one
+// (typed at submit, or persisted by a claim before this entry's own
+// materialise() call fires) dedupes on it.
 async function loadPlayers(tx: Tx, registrationId: string): Promise<
   Pick<
     RegistrationPlayerRow,
-    "id" | "full_name" | "dob" | "gender" | "squad_number" | "user_id" | "is_captain"
+    "id" | "full_name" | "dob" | "gender" | "email" | "squad_number" | "user_id" | "is_captain"
   >[]
 > {
   return tx`
-    select id, full_name, dob, gender, squad_number, user_id, is_captain from registration_players
+    select id, full_name, dob, gender, email, squad_number, user_id, is_captain from registration_players
     where registration_id = ${registrationId}
     order by is_captain desc, created_at`;
 }
@@ -763,14 +867,16 @@ export async function materialise(tx: Tx, reg: RegistrationRow, entrantKind: str
     const fullName = p?.full_name?.trim() || reg.display_name;
     const dob = p?.dob ?? null;
     const gender = p?.gender ?? null;
+    const email = p?.email ?? null;
     // A player row carrying a user_id (#402) resolves into that account's
     // linked person — see resolvePlayerPerson. Otherwise
-    // findOrCreatePlayerPerson applies the name+dob reuse rule (RS002), which
-    // also covers the no-player-row fallback above: a null dob there always
-    // mints fresh, byte-for-byte the old anonymous path.
+    // findOrCreatePlayerPerson applies the email/dob reuse rule (RS002, #22),
+    // which also covers the no-player-row fallback above: no email and a
+    // null dob there always mints fresh, byte-for-byte the old anonymous
+    // path.
     const personId = p?.user_id
       ? await resolvePlayerPerson(tx, reg.org_id, p.user_id, fullName, dob, gender)
-      : await findOrCreatePlayerPerson(tx, reg.org_id, fullName, dob, gender);
+      : await findOrCreatePlayerPerson(tx, reg.org_id, fullName, dob, gender, email);
     // A RESOLVED person can already sit on this entrant (re-confirm), which the
     // fresh-insert path could never hit — so the membership write is idempotent.
     await tx`
@@ -795,7 +901,7 @@ export async function materialise(tx: Tx, reg: RegistrationRow, entrantKind: str
       if (!name) continue;
       const personId = p.user_id
         ? await resolvePlayerPerson(tx, reg.org_id, p.user_id, name, p.dob, p.gender)
-        : await findOrCreatePlayerPerson(tx, reg.org_id, name, p.dob, p.gender);
+        : await findOrCreatePlayerPerson(tx, reg.org_id, name, p.dob, p.gender, p.email);
       await tx`
         insert into entrant_members (entrant_id, person_id, squad_number, is_captain)
         values (${entrant.id}, ${personId}, ${p.squad_number}, ${p.is_captain})

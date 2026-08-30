@@ -41,6 +41,7 @@ import { LEGAL_VERSION } from "@/lib/legal";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
+import { confirmRegistration } from "../registrations";
 import {
   submitRegistrationGroup,
   joinTeamEntry,
@@ -974,6 +975,46 @@ describe.skipIf(!HAS_DB)("submitRegistrationGroup", () => {
     expect(row!.user_id).toBe(sessionUserId);
   });
 
+  // #22 — registration_players.email exists on the table (V363) but nothing
+  // wrote it before this. A captain-typed row keeps whatever it typed; the
+  // self row falls back to the cart-level contact.email the same way it
+  // already falls back to dob/gender (design §4 step 1: "collected once").
+  it("#22: registration_players.email is persisted — a plain row keeps its own, the self row falls back to contact.email", async () => {
+    const { orgId, orgSlug, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    await seedSettings(division.id, { entrant_kind: "pair", fee_cents: 0 });
+
+    const res = await submitRegistrationGroup(
+      { orgSlug, compSlug: competition.slug },
+      {
+        contact: baseContact({ name: "Email Captain", email: "captain@example.com", dob: "1990-01-01" }),
+        privacy_consent: true,
+        entries: [
+          {
+            division_id: division.id,
+            entrant_kind: "pair",
+            partner_name: "Partner",
+            registering_self: true,
+            self_player_index: 0,
+            players: [
+              { full_name: "Email Captain" }, // no email typed on the row itself
+              { full_name: "Typed Partner", email: "partner-typed@example.com" },
+            ],
+            answers: {},
+          },
+        ],
+      },
+    );
+    const rows = await sql<{ full_name: string; email: string | null }[]>`
+      select full_name, email from registration_players
+      where registration_id = ${res.entries[0]!.registration_id} order by full_name`;
+    const captainRow = rows.find((r) => r.full_name === "Email Captain")!;
+    const partnerRow = rows.find((r) => r.full_name === "Typed Partner")!;
+    expect(captainRow.email).toBe("captain@example.com"); // fell back to contact.email
+    expect(partnerRow.email).toBe("partner-typed@example.com"); // kept its own
+  });
+
   it("cart of 3 with 1 waitlisted: group amount_cents charges 2; the waitlisted entry's own amount_cents is 0", async () => {
     const { orgId, orgSlug, ownerId } = await seedOrg("pro");
     const owner = asOwner(orgId, ownerId);
@@ -1541,6 +1582,311 @@ describe.skipIf(!HAS_DB)("joinTeamEntry", () => {
     expect(row!.consent_status).toBe("granted");
     expect(row!.source).toBe("captain_entered"); // provenance unchanged by a claim
     expect(row!.dob).toBe("1995-05-01");
+  });
+
+  // ---------------------------------------------------------------------------
+  // #22 — reconcile a claim against the directory. `rosterRig` entries are
+  // `fee_cents: 0` / `approval: "auto"`, so they materialise INLINE at
+  // submit (registration-submit.ts's own "confirm INLINE" branch) — every
+  // test below claims AFTER materialisation, exactly the S2 walkthrough
+  // scenario #22 was written for: the captain-typed row already has a
+  // dummy, anonymous person (and entrant_members row) from that submit-time
+  // materialise() call, made with no consent behind it, before this player
+  // ever claims anything.
+  // ---------------------------------------------------------------------------
+
+  async function personIdFor(playerRowId: string): Promise<string> {
+    const [{ person_id }] = await sql<{ person_id: string | null }[]>`
+      select person_id from registration_players where id = ${playerRowId}`;
+    expect(person_id, "expected this row to already be materialised (a dummy person on it)").not.toBeNull();
+    return person_id!;
+  }
+
+  async function entrantIdFor(registrationId: string): Promise<string> {
+    const [{ entrant_id }] = await sql<{ entrant_id: string | null }[]>`
+      select entrant_id from registrations where id = ${registrationId}`;
+    expect(entrant_id).not.toBeNull();
+    return entrant_id!;
+  }
+
+  it("#22: a claim whose email matches an EXISTING player-lane person repoints entrant_members off the dummy, onto that person", async () => {
+    const { orgId, entry, players } = await rosterRig("pair", ["Pair Captain", "Pair Partner"]);
+    const partner = players.find((p) => p.full_name === "Pair Partner")!;
+    const dummyPersonId = await personIdFor(partner.id);
+    const entrantId = await entrantIdFor(entry.registration_id);
+
+    // A person who registered elsewhere in this SAME org, already carrying
+    // this email — exactly the directory entry #22 exists to reuse instead
+    // of minting a third duplicate.
+    const [existing] = await sql<{ id: string }[]>`
+      insert into persons (org_id, full_name, email, lane, consent)
+      values (${orgId}, 'Pair Partner Elsewhere', 'partner@example.com', 'player', ${sql.json({ public_name: true } as never)})
+      returning id`;
+
+    const res = await joinTeamEntry(
+      {},
+      {
+        join_code: entry.join_code!,
+        player_id: partner.id,
+        player: { full_name: "Pair Partner", email: "partner@example.com" },
+        privacy_consent: true,
+      },
+    );
+    expect(res.consent_status).toBe("granted");
+
+    // The claimed row now points at the REAL person, not the dummy.
+    const nowLinked = await personIdFor(partner.id);
+    expect(nowLinked).toBe(existing.id);
+    expect(nowLinked).not.toBe(dummyPersonId);
+
+    // entrant_members has the SAME two rows as before (never grew, never
+    // shrank) — the dummy's row was REPOINTED, not duplicated.
+    const members = await sql<{ person_id: string }[]>`
+      select person_id from entrant_members where entrant_id = ${entrantId}`;
+    expect(members).toHaveLength(2);
+    expect(members.map((m) => m.person_id)).toContain(existing.id);
+    expect(members.map((m) => m.person_id)).not.toContain(dummyPersonId);
+
+    // The dummy is left ORPHANED, not deleted or merged (#22: no
+    // auto-merging of existing duplicates) — an organiser can still find
+    // and #404-merge it if they choose to.
+    const [stillExists] = await sql<{ id: string }[]>`select id from persons where id = ${dummyPersonId}`;
+    expect(stillExists).toBeDefined();
+  });
+
+  it("#22: a claim with no directory match backfills the dummy person's own email instead of repointing", async () => {
+    const { entry, players } = await rosterRig("pair", ["Pair Captain", "Pair Partner"]);
+    const partner = players.find((p) => p.full_name === "Pair Partner")!;
+    const dummyPersonId = await personIdFor(partner.id);
+    const entrantId = await entrantIdFor(entry.registration_id);
+
+    await joinTeamEntry(
+      {},
+      {
+        join_code: entry.join_code!,
+        player_id: partner.id,
+        player: { full_name: "Pair Partner", email: "brand-new@example.com" },
+        privacy_consent: true,
+      },
+    );
+
+    // No existing match anywhere — the dummy person IS this human going
+    // forward, unmoved, but the row's person_id is unchanged (still the
+    // dummy) and the dummy now carries the email it was minted without.
+    expect(await personIdFor(partner.id)).toBe(dummyPersonId);
+    const members = await sql<{ person_id: string }[]>`
+      select person_id from entrant_members where entrant_id = ${entrantId}`;
+    expect(members.map((m) => m.person_id)).toContain(dummyPersonId);
+    const [{ email }] = await sql<{ email: string | null }[]>`select email from persons where id = ${dummyPersonId}`;
+    expect(email).toBe("brand-new@example.com");
+  });
+
+  it("#22: when the resolved person is ALREADY a member of this same entrant, the repoint is skipped and the claim still succeeds", async () => {
+    const { orgId, entry, players } = await rosterRig("pair", ["Pair Captain", "Pair Partner"]);
+    const captain = players.find((p) => p.full_name === "Pair Captain")!;
+    const partner = players.find((p) => p.full_name === "Pair Partner")!;
+    const entrantId = await entrantIdFor(entry.registration_id);
+    const captainDummyBefore = await personIdFor(captain.id);
+    const partnerDummyBefore = await personIdFor(partner.id);
+
+    // The captain claims first — repoints the CAPTAIN's row onto a shared
+    // inbox's existing person (a plausible real accident: a family email
+    // typed for both halves of a junior pair).
+    const sharedEmail = "shared-family-inbox@example.com";
+    const [familyInbox] = await sql<{ id: string }[]>`
+      insert into persons (org_id, full_name, email, lane, consent)
+      values (${orgId}, 'Family Inbox', ${sharedEmail}, 'player', ${sql.json({ public_name: true } as never)})
+      returning id`;
+    await joinTeamEntry(
+      {},
+      {
+        join_code: entry.join_code!,
+        player_id: captain.id,
+        player: { full_name: "Pair Captain", email: sharedEmail },
+        privacy_consent: true,
+      },
+    );
+    const sharedPersonId = await personIdFor(captain.id);
+    // Pins the test's OWN precondition — without this, a build that skips
+    // reconciliation entirely would still pass every assertion below (the
+    // partner's dummy is untouched either way), making the test vacuous
+    // against exactly the mutation it exists to catch.
+    expect(sharedPersonId).toBe(familyInbox.id);
+    expect(sharedPersonId).not.toBe(captainDummyBefore);
+
+    // The partner ALSO claims with the SAME shared email — would resolve to
+    // the SAME person the captain's row now points at. entrant_members'
+    // primary key (entrant_id, person_id) forbids that person appearing
+    // twice on one roster, so the repoint must be skipped, not crash the
+    // claim (409/500) or silently duplicate the membership row.
+    const res = await joinTeamEntry(
+      {},
+      {
+        join_code: entry.join_code!,
+        player_id: partner.id,
+        player: { full_name: "Pair Partner", email: sharedEmail },
+        privacy_consent: true,
+      },
+    );
+    expect(res.consent_status).toBe("granted"); // the claim itself still succeeds
+
+    // The partner's row keeps its OWN dummy — never repointed onto the
+    // captain's person.
+    expect(await personIdFor(partner.id)).toBe(partnerDummyBefore);
+    const members = await sql<{ person_id: string }[]>`
+      select person_id from entrant_members where entrant_id = ${entrantId}`;
+    expect(members).toHaveLength(2); // still exactly one row per player, no duplicate
+    expect(members.map((m) => m.person_id)).toContain(sharedPersonId);
+    expect(members.map((m) => m.person_id)).toContain(partnerDummyBefore);
+  });
+
+  it("#22: a signed-in claimer also reconciles, via resolvePlayerPerson's own (org, user, lane) identity", async () => {
+    const { orgId, orgSlug, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division: soloDivision } = await rig(owner);
+    await seedSettings(soloDivision.id, { entrant_kind: "individual", fee_cents: 0 });
+    const sessionUserId = await makeUser("reconciler");
+
+    // Establishes the REAL linked person via the ordinary self-link path
+    // (resolvePlayerPerson's own upsert) — a prior, unrelated registration
+    // for the same signed-in human.
+    const solo = await submitRegistrationGroup(
+      { orgSlug, compSlug: competition.slug, sessionUserId },
+      {
+        contact: baseContact({ dob: "1990-01-01" }),
+        privacy_consent: true,
+        entries: [
+          {
+            division_id: soloDivision.id,
+            entrant_kind: "individual",
+            registering_self: true,
+            self_player_index: 0,
+            players: [{ full_name: "Reconciler Self" }],
+            answers: {},
+          },
+        ],
+      },
+    );
+    const [{ person_id: linkedPersonId }] = await sql<{ person_id: string | null }[]>`
+      select person_id from registration_players where registration_id = ${solo.entries[0]!.registration_id}`;
+    expect(linkedPersonId).not.toBeNull();
+
+    const teamDivision = await createDivision(owner, competition.id, {
+      name: "Team Div " + randomUUID().slice(0, 6),
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    });
+    await seedSettings(teamDivision.id, { entrant_kind: "pair", fee_cents: 0 });
+    const teamSubmit = await submitRegistrationGroup(
+      { orgSlug, compSlug: competition.slug },
+      {
+        contact: baseContact(),
+        privacy_consent: true,
+        entries: [
+          {
+            division_id: teamDivision.id,
+            entrant_kind: "pair",
+            partner_name: "Reconciler Self",
+            players: [{ full_name: "Reconciler Self" }, { full_name: "Other Half" }],
+            answers: {},
+          },
+        ],
+      },
+    );
+    const teamEntry = teamSubmit.entries[0]!;
+    const [selfRow] = await sql<{ id: string; person_id: string | null }[]>`
+      select id, person_id from registration_players
+      where registration_id = ${teamEntry.registration_id} and full_name = 'Reconciler Self'`;
+    const dummyPersonId = selfRow!.person_id;
+    expect(dummyPersonId).not.toBe(linkedPersonId); // materialised independently — two different persons so far
+
+    await joinTeamEntry(
+      { sessionUserId },
+      {
+        join_code: teamEntry.join_code!,
+        player_id: selfRow!.id,
+        player: { full_name: "Reconciler Self", dob: "1990-01-01" },
+        privacy_consent: true,
+      },
+    );
+
+    const [{ person_id: afterClaim }] = await sql<{ person_id: string | null }[]>`
+      select person_id from registration_players where id = ${selfRow!.id}`;
+    expect(afterClaim).toBe(linkedPersonId); // repointed onto the ALREADY-linked account person
+  });
+
+  it("#22: a claim BEFORE its entry is materialised needs no repoint of its own — materialise() dedupes on the persisted email when it eventually runs", async () => {
+    const { orgId, orgSlug, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    // manual approval: the entry stays `pending`, entrant_id null, until an
+    // organiser confirms it — materialise() has NOT run yet when the claim
+    // below happens.
+    await seedSettings(division.id, { entrant_kind: "pair", fee_cents: 0, approval: "manual" });
+
+    const submitted = await submitRegistrationGroup(
+      { orgSlug, compSlug: competition.slug },
+      {
+        contact: baseContact(),
+        privacy_consent: true,
+        entries: [
+          {
+            division_id: division.id,
+            entrant_kind: "pair",
+            partner_name: "Partner",
+            players: [{ full_name: "Pending Captain" }, { full_name: "Pending Partner" }],
+            answers: {},
+          },
+        ],
+      },
+    );
+    const entry = submitted.entries[0]!;
+    expect(entry.status).toBe("pending");
+    const [{ entrant_id: entrantIdBefore }] = await sql<{ entrant_id: string | null }[]>`
+      select entrant_id from registrations where id = ${entry.registration_id}`;
+    expect(entrantIdBefore).toBeNull(); // confirms materialise() has not run
+
+    // A person who already exists in the directory with this email, from
+    // some earlier, unrelated registration.
+    const [existing] = await sql<{ id: string }[]>`
+      insert into persons (org_id, full_name, email, lane, consent)
+      values (${orgId}, 'Pending Partner Elsewhere', 'pending-partner@example.com', 'player', ${sql.json({ public_name: true } as never)})
+      returning id`;
+
+    const partnerRow = await sql<{ id: string }[]>`
+      select id from registration_players where registration_id = ${entry.registration_id} and full_name = 'Pending Partner'`;
+    await joinTeamEntry(
+      {},
+      {
+        join_code: entry.join_code!,
+        player_id: partnerRow[0]!.id,
+        player: { full_name: "Pending Partner", email: "pending-partner@example.com" },
+        privacy_consent: true,
+      },
+    );
+    // No person exists to link to yet — joinTeamEntry's own reconciliation
+    // is a no-op here (nothing in the `if (claimed.person_id)` branch can
+    // run), by design: this is the case the brief calls "handled for free".
+    const [{ person_id: personIdAfterClaim }] = await sql<{ person_id: string | null }[]>`
+      select person_id from registration_players where id = ${partnerRow[0]!.id}`;
+    expect(personIdAfterClaim).toBeNull();
+
+    // The organiser confirms later — THIS is what runs materialise() for
+    // the first time on this registration.
+    const confirmed = await confirmRegistration(owner, entry.registration_id);
+    expect(confirmed.entrant_id).not.toBeNull();
+
+    const [{ person_id: personIdAfterMaterialise }] = await sql<{ person_id: string | null }[]>`
+      select person_id from registration_players where id = ${partnerRow[0]!.id}`;
+    // The email persisted at claim time reached materialise() through the
+    // ordinary registration_players.email column — findOrCreatePlayerPerson
+    // found the SAME pre-existing person, with no extra code needed for
+    // this ordering.
+    expect(personIdAfterMaterialise).toBe(existing.id);
+    const members = await sql<{ person_id: string }[]>`
+      select person_id from entrant_members where entrant_id = ${confirmed.entrant_id as string}`;
+    expect(members.map((m) => m.person_id)).toContain(existing.id);
   });
 
   it("claiming an already-granted slot is a 409 conflict, not a duplicate", async () => {
