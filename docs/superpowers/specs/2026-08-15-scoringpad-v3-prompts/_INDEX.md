@@ -5236,3 +5236,67 @@ a bare vitest line.
 
 Running total of premises this wave found false: **eleven**. Six in the
 brief/register/index, **five authored by R7 itself** (three here, two in R7-11).
+
+### R7-14 — REVIEW of B/B2: SHIP, with a false premise of R7's own at the centre
+
+Reviewer pass run after the owner pointed out that B/B2 had gone
+implementer → gate-rerun → commit with ZERO reviewer passes. That is AGENTS.md
+failure class 12 exactly, and rerunning a gate is NOT a review: it proves the
+tests that exist pass, never that they test anything. Reviewer loop is now
+standing for every pass in this wave.
+
+**VERIFIED GOOD** (this is what the loop was for):
+- The seam is genuinely wired end to end. Every hop reads `min`:
+  `sports/period/kernel.ts:2434-2443` → `sport/catalog.ts:53-56` →
+  `server/usecases/lineup-catalog.ts:33` → `f/[no]/page.tsx:68,168` +
+  `score/[token]/page.tsx:107,167` → `fixture-console.tsx:168` → `:620` →
+  `lineup-editor.tsx:313` → `:256` (`g.min ?? 0`) → `:370-376`. Not inert.
+- Tests drive REAL modules through REAL renders, no fixture on both ends. Every
+  absence probe anchored on `="`. No test name disagrees with its assertion.
+  Reviewer re-ran independently: 54/54, 3 suites.
+- The implementer's REFUSAL was correct. `lineup-editor.tsx:421-436` is the
+  engine-universal `LineupSlot.role` (player/coach/staff, read by
+  `core/lineup.ts:333` `playingSquad`); Captain/Wicketkeeper are the checkboxes
+  at `:457-485`, already self-gating on an empty `roles`. Gating the select
+  would have deleted a working control from tennis, badminton and tabletennis.
+
+**FP-12 — R7's SIXTH false premise, and the worst kind: R7-8's customer fact
+did not exist.** R7-8 asserted, and the plan and two dispatch briefs repeated:
+"a competition configured to play without a goalkeeper still shows the lineup
+editor demanding one." Pre-wave (`ac207cb71`) the editor had **no minimum logic
+at all** — nothing demanded a keeper, because nothing expressed a requirement.
+
+So the wave did not FIX a nag; it ADDED one. The real change is that the editor
+now expresses position minima for the first time, and it expresses them
+cfg-correctly. That is still worth having, but it is a FEATURE, not a defect fix,
+and it has a user-visible consequence nobody asked for: default-config hockey and
+football sides will now newly see "Starting line-up still needs: Goalkeeper × 1".
+
+R6 adopted R7's wording verbatim into their own index. Correction sent.
+
+**Gaps to close (queued behind Task C — same worktree, one implementer at a
+time):**
+
+- **MAJOR, false comment + a SECOND inert seam.**
+  `lineup-editor.tsx:227-229,366-368` claim the amber notice is the engine's
+  `group_min` refusal "said in advance instead of as a 422 after Save".
+  **No such 422 exists.** `validateLineup`/`assertLineup`
+  (`sport/catalog.ts:73,143`) have ZERO production callers, and the lineup PUT
+  route (`lineups/[entrantId]/route.ts:17-24`) does no catalog validation at
+  all. The notice is advisory and Save never blocks. Two inert seams sitting
+  adjacent, and the fix for one wrote a comment asserting the other works.
+- **MAJOR, the win is not reachable by an organiser.** `goalkeeper` is settable
+  NOWHERE in the UI — no hockey variant sets it (`hockey.ts:137+`), only the
+  divisions API accepts it (`usecases/divisions.ts:250,719`). The chain is wired
+  and correct and no organiser can produce the state that exercises it. This is
+  the inert-seam class one level up: not dead code, but dead REACH. Football's
+  `teamSize` half IS UI-reachable (`match-rules.tsx:286`), so the chain is not
+  wholly unreachable.
+- **MINOR, coverage shrank.** `fixture-console-ssr.test.tsx:34` and
+  `fixture-console-undo-pad-events.test.tsx:86` got `benchMax: 0` beside a
+  pre-existing `lineupSize: 0`, making `lineupEditorApplies` false, so both
+  suites now render no lineup editor where they previously did. Nothing
+  inverted, but SSR-determinism coverage is smaller. Use `benchMax: 1`.
+
+Running total of premises found false this wave: **twelve**. Six in the
+brief/register/index, **six authored by R7 itself**.
