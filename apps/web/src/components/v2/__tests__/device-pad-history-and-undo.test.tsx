@@ -118,6 +118,42 @@ describe("device link — the only history a courtside scorer sees (C1)", () => 
     expect(html).toContain('data-event-id="ev-2"');
     expect(html).toContain('data-event-id="ev-1"');
   });
+
+  // R7/C review fix #4 — PIN THE THREE NON-LEAKS.
+  //
+  // The merge made one component serve both surfaces, and everything that
+  // separates them is now a DEFAULT or an omitted prop: `authority` defaults
+  // false, `voidDisabled` defaults false, pad-host resolves no
+  // `recordedByLabel`, and the audit strip is a `footer` the device link
+  // simply never passes. Each of those is one keystroke from flipping, and
+  // nothing above would notice. So each is pinned as an absence.
+  //
+  // Every probe anchors on `="`: React serialises an omitted prop as
+  // `"$undefined"`, so a bare `data-*` / attribute-name probe passes in BOTH
+  // states and proves nothing.
+  it("keeps the console-only chrome off the courtside surface", () => {
+    const html = deviceHtml([START, GOAL]);
+
+    // Discriminating anchor: the panel really did render, so each absence
+    // below is a rule and not an empty string.
+    expect(html).toContain('data-role="v3-activity-list"');
+
+    expect(
+      html,
+      "the audit strip is a footer only the authority mount passes — chain verification and a paid download have no place on a handed device",
+    ).not.toContain('data-testid="audit-strip"');
+    expect(
+      html,
+      "voiding here is the ribbon's take-back, confined to this device's own rows; the console's per-row Void must not appear",
+    ).not.toContain('data-role="v3-activity-void"');
+    // The provenance BLOCK does render — pad-host answers `recordedAt`, and a
+    // courtside scorer seeing the time of each row is the point of it. What
+    // must never appear is the ATTRIBUTION half: `recordedBy` is a user id
+    // this surface cannot resolve, and `score_events.device_link_id` never
+    // reaches an `EventEnvelope` at all, so any name here would be a guess.
+    expect(html).toContain('data-role="v3-activity-provenance"');
+    expect(html, "no row may claim to know who recorded it").not.toContain("recorded by");
+  });
 });
 
 describe("ribbon undo cannot target a void (C4, ruling R7-5)", () => {
