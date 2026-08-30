@@ -8,7 +8,7 @@ import { listDivisionFixtures } from "@/server/usecases/fixtures";
 import { listEntrants } from "@/server/usecases/entrants";
 import { listEntrantLogoUrls } from "@/server/usecases/teams";
 import { hasFeature } from "@/lib/entitlements";
-import { maskDisplayName, resolveNameDisplay } from "@/lib/name-display";
+import { anyOptedOut, resolvePersonDisplayName } from "@/lib/name-display";
 import { BRACKET_SLIDE_KINDS, bracketSlideLaysOut } from "@/components/v2/slideshow-rotation";
 import { resolveLogoUrl } from "@/server/public-site/data";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -117,7 +117,7 @@ export async function buildDivisionSlides(
   divisionId: string,
   divisionName: string,
 ): Promise<Slide[]> {
-  const [stages, fixtures, entrants, logos, priv, org] = await Promise.all([
+  const [stages, fixtures, entrants, logos, priv, org, consentRows] = await Promise.all([
     listStages(auth, divisionId),
     listDivisionFixtures(auth, divisionId),
     listEntrants(auth, divisionId),
@@ -142,16 +142,48 @@ export async function buildDivisionSlides(
       tx<{ default_locale: string | null }[]>`
         select default_locale from organizations where id = ${auth.orgId}`,
     ),
+    // RS008 — every roster member's own consent, keyed by entrant (fetched
+    // for every entrant kind uniformly, including team: a team roster IS
+    // people, even though the team's OWN display_name below never takes
+    // this axis — same `kind === "team"` bypass public.ts's publicEntrants
+    // already established). `listEntrants` stays untouched (a general,
+    // widely-used usecase); this is a small, local, PARALLEL query instead.
+    withTenant(auth.orgId, (tx) =>
+      tx<{ entrant_id: string; consent: { public_name?: boolean } | null }[]>`
+        select em.entrant_id, p.consent
+        from entrant_members em
+        join persons p on p.id = em.person_id
+        join entrants e on e.id = em.entrant_id
+        where e.division_id = ${divisionId}`,
+    ),
   ]);
   const locale = toLocale(org[0]?.default_locale);
   const lookup: SlotLabelLookup = (k, v) => msgFor(locale, k, v);
+  // RS008: "stricter wins" per entrant — ANY roster member's explicit
+  // opt-out masks that entrant's own display_name (a solo "individual"
+  // entrant has exactly one member; a "pair"/"team" can have several).
+  const consentByEntrant = new Map<string, ({ public_name?: boolean } | null)[]>();
+  for (const r of consentRows) {
+    const list = consentByEntrant.get(r.entrant_id) ?? [];
+    list.push(r.consent);
+    consentByEntrant.set(r.entrant_id, list);
+  }
   // Slideshow renders on venue screens — a public surface for name-display
-  // purposes (v3/11 gap 8). Team names pass through; person names mask.
-  const mode = resolveNameDisplay(priv[0]?.player_name_display ?? null, priv[0]?.youth ?? false);
+  // purposes (v3/11 gap 8). Team names pass through; person names mask by
+  // division youth policy OR the roster's own consent opt-out (RS008),
+  // whichever is stricter — resolvePersonDisplayName is the single
+  // canonical resolver for both axes at once.
   const names = Object.fromEntries(
     entrants.map((e) => [
       e.id,
-      e.kind === "team" ? e.display_name : maskDisplayName(e.display_name, mode),
+      e.kind === "team"
+        ? e.display_name
+        : resolvePersonDisplayName(
+            e.display_name,
+            anyOptedOut(consentByEntrant.get(e.id) ?? []) ? { public_name: false } : null,
+            priv[0]?.player_name_display ?? null,
+            priv[0]?.youth ?? false,
+          ),
     ]),
   );
   const slides: Slide[] = [];

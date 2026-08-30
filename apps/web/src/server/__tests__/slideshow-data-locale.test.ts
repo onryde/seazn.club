@@ -67,3 +67,92 @@ describe.skipIf(!HAS_DB)("buildDivisionSlides — locale threading", () => {
     expect(homeTexts).not.toContain("Winner of Group A");
   });
 });
+
+// RS008: the slideshow renders on venue screens (a public surface, per this
+// file's own comment) and masked ONLY by division youth policy — a person
+// who opted out via /me still printed in full on the noticeboard. Fixtures
+// slides carry entrant names via home/away, which both read through the
+// SAME `names` lookup standings slides use — either surface proves the fix.
+describe.skipIf(!HAS_DB)("buildDivisionSlides — consent masking (RS008)", () => {
+  it("masks an individual entrant's name when its linked person opted out — even on a non-youth division", async () => {
+    const { auth } = await seedOrg();
+    const comp = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "Consent Cup",
+      visibility: "public",
+      branding: {},
+    });
+    const division = await createDivision(auth, comp.id, {
+      name: "Open",
+      slug: "open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: GENERIC_CONFIG,
+    });
+    const [{ id: personId }] = await sql<{ id: string }[]>`
+      insert into persons (org_id, full_name, consent)
+      values (${auth.orgId}, 'Arun Kumar', ${sql.json({ public_name: false } as never)})
+      returning id`;
+    await createEntrants(auth, division.id, [
+      {
+        kind: "individual",
+        display_name: "Arun Kumar",
+        seed: 1,
+        members: [{ person_id: personId, is_captain: false, roles: [] }],
+      },
+      { kind: "individual", display_name: "Dev Patel", seed: 2, members: [] },
+    ]);
+    const [stage] = await createStages(auth, division.id, { seq: 1, kind: "league", name: "League", config: {} });
+    await generateStageFixtures(auth, stage!.id);
+
+    const slides = await buildDivisionSlides(auth, division.id, "Open");
+    const fixturesSlides = slides.filter(
+      (s): s is Extract<(typeof slides)[number], { kind: "fixtures" }> => s.kind === "fixtures",
+    );
+    const texts = fixturesSlides.flatMap((s) => s.items.flatMap((i: FixtureSlideItem) => [i.home, i.away]));
+    expect(texts).not.toContain("Arun Kumar");
+    expect(texts).toContain("Arun K.");
+    // The non-opted-out entrant stays full — this is a per-entrant mask, not
+    // a blanket one triggered by ANY opt-out on the division.
+    expect(texts).toContain("Dev Patel");
+  });
+
+  it("never masks a TEAM's own name by a roster member's opt-out", async () => {
+    const { auth } = await seedOrg();
+    const comp = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "Consent Team Cup",
+      visibility: "public",
+      branding: {},
+    });
+    const division = await createDivision(auth, comp.id, {
+      name: "Open",
+      slug: "open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: GENERIC_CONFIG,
+    });
+    const [{ id: personId }] = await sql<{ id: string }[]>`
+      insert into persons (org_id, full_name, consent)
+      values (${auth.orgId}, 'Cap Tain', ${sql.json({ public_name: false } as never)})
+      returning id`;
+    await createEntrants(auth, division.id, [
+      {
+        kind: "team",
+        display_name: "Thunder Strikers",
+        seed: 1,
+        members: [{ person_id: personId, is_captain: true, roles: [] }],
+      },
+      { kind: "team", display_name: "Lightning Bolts", seed: 2, members: [] },
+    ]);
+    const [stage] = await createStages(auth, division.id, { seq: 1, kind: "league", name: "League", config: {} });
+    await generateStageFixtures(auth, stage!.id);
+
+    const slides = await buildDivisionSlides(auth, division.id, "Open");
+    const fixturesSlides = slides.filter(
+      (s): s is Extract<(typeof slides)[number], { kind: "fixtures" }> => s.kind === "fixtures",
+    );
+    const texts = fixturesSlides.flatMap((s) => s.items.flatMap((i: FixtureSlideItem) => [i.home, i.away]));
+    expect(texts).toContain("Thunder Strikers");
+  });
+});
