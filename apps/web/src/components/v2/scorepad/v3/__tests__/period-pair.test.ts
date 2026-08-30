@@ -764,7 +764,52 @@ describe("the minutes step asks for every class with a numeric duration, and non
       }
       expect(sawPermanent, `${sport.key}'s default cfg declares no permanent class to prove the gate with`).toBe(true);
     });
+  }
+});
 
+// ---------------------------------------------------------------------------
+// 4d. R6 fix pass 4, finding 4 — the goalkeeper is the DEFENDING side, never
+// the acting side's own roster. `dock()` does not gate on phase, so the
+// ordinary live-phase view is enough to exercise both the attempt's and the
+// set piece's goalkeeper chip; a shoot-out-phase view would test nothing this
+// one does not.
+// ---------------------------------------------------------------------------
+
+describe("the goalkeeper chip pool is the OPPOSING side, never the acting side's own roster", () => {
+  for (const sport of SPORTS) {
+    it(`${sport.key}: attempt + set piece goalkeeper candidates never include a HOME-side player when HOME is acting`, () => {
+      const cfg = periodCfg(sport.module);
+      const state = livePhaseState(sport, cfg);
+      const view = viewFor(sport, cfg, state);
+      const homeIds = new Set(view.squads.home.members.map((m) => m.personId));
+      const awayIds = new Set(view.squads.away.members.map((m) => m.personId));
+      expect(homeIds.size, "fixture has no home roster to test with").toBeGreaterThan(0);
+      expect(awayIds.size, "fixture has no away roster to test with").toBeGreaterThan(0);
+
+      const e = eventTypesOf(sport.spec);
+      const attemptDock = sport.factory(T).dock(e.attempt, view, { by: "H" })!;
+      const attemptGoalkeepers = attemptDock.chips.filter((c) => c.id.startsWith("goalkeeper:"));
+      expect(attemptGoalkeepers.length, "attempt dock offered no goalkeeper chips").toBeGreaterThan(0);
+      for (const chip of attemptGoalkeepers) {
+        const id = chip.id.slice("goalkeeper:".length);
+        expect(homeIds.has(id), `${id}: attempt's goalkeeper drawn from the SHOOTING side`).toBe(false);
+        expect(awayIds.has(id), `${id}: attempt's goalkeeper not on the defending roster at all`).toBe(true);
+      }
+
+      const setPieceDock = sport.factory(T).dock(e.setPiece, view, { by: "H" })!;
+      const setPieceGoalkeepers = setPieceDock.chips.filter((c) => c.id.startsWith("goalkeeper:"));
+      expect(setPieceGoalkeepers.length, "set piece dock offered no goalkeeper chips").toBeGreaterThan(0);
+      for (const chip of setPieceGoalkeepers) {
+        const id = chip.id.slice("goalkeeper:".length);
+        expect(homeIds.has(id), `${id}: set piece's goalkeeper drawn from the AWARDED side`).toBe(false);
+        expect(awayIds.has(id), `${id}: set piece's goalkeeper not on the defending roster at all`).toBe(true);
+      }
+    });
+  }
+});
+
+describe("the minutes step and its own dedicated behavioural checks", () => {
+  for (const sport of SPORTS) {
     it(`${sport.key}: a non-permanent minutes answer reaches the fold`, () => {
       const cfg = periodCfg(sport.module);
       const state = livePhaseState(sport, cfg);
