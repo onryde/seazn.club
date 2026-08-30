@@ -107,6 +107,26 @@ async function seedConfirmedRegistration(competitionId: string, divisionId: stri
   return group!;
 }
 
+/** RS008 — links a fresh person (with the given consent) onto a roster row
+ *  of the given full_name for this registration, mirroring
+ *  registration-materialise.test.ts's own "raw fixture, not a full submit"
+ *  convention (materialise() is the only PRODUCTION writer of person_id). */
+async function linkPersonWithConsent(
+  orgId: string,
+  registrationId: string,
+  playerFullName: string,
+  consent: Record<string, unknown>,
+): Promise<string> {
+  const [person] = await sql<{ id: string }[]>`
+    insert into persons (org_id, full_name, consent)
+    values (${orgId}, ${playerFullName}, ${sql.json(consent as never)})
+    returning id`;
+  await sql`
+    insert into registration_players (registration_id, full_name, source, consent_status, person_id)
+    values (${registrationId}, ${playerFullName}, 'captain_entered', 'granted', ${person!.id})`;
+  return person!.id;
+}
+
 afterAll(async () => {
   if (!HAS_DB) return;
   const globalForDb = globalThis as { _sql?: { end(): Promise<void> } };
@@ -399,6 +419,53 @@ describe.skipIf(!HAS_DB)("rich exports (Jul3/06)", () => {
     expect(ticket.maskedName).toBeTruthy();
     expect(ticket.maskedName).not.toBe("Jamie Doe"); // youth-default division masks
     expect(ticket.qrUrl).toContain(`/r/${ref_code}`);
+  });
+
+  // RS008: admit tickets masked ONLY by division youth policy — a person who
+  // opted out via /me still printed in full on the door ticket. A non-youth
+  // division on purpose here (isolates the consent axis from the youth one
+  // the test above already covers).
+  it("admit tickets mask a name when the registrant's linked person opted out of a public name", async () => {
+    const { auth } = await seedOrg("pro");
+    const { division, comp } = await seedDivision(auth);
+    const group = await seedConfirmedRegistration(comp.id, division.id);
+    await sql`update registrations set display_name = 'Arun Kumar' where group_id = ${group.id}`;
+    const [{ id: registrationId }] = await sql<{ id: string }[]>`
+      select id from registrations where group_id = ${group.id}`;
+    await linkPersonWithConsent(auth.orgId, registrationId, "Arun Kumar", { public_name: false });
+
+    const model = await buildAdmitTicketsDoc(auth, comp.id, { printedAt: PRINTED });
+    const ticket = model.sections[0]!.ticket!;
+    expect(ticket.maskedName).toBe("Arun K.");
+  });
+
+  it("admit tickets never mask a TEAM's own name by a roster member's opt-out", async () => {
+    const { auth } = await seedOrg("pro");
+    const comp = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "Team Cup",
+      visibility: "private",
+      branding: {},
+    });
+    const division = await createDivision(auth, comp.id, {
+      name: "Open Teams",
+      sport_key: "generic",
+      variant_key: "score",
+      config: GENERIC_CONFIG,
+    });
+    await sql`
+      insert into registration_settings
+        (division_id, enabled, entrant_kind, fee_cents, payment_method, approval, allow_free_agents)
+      values (${division.id}, true, 'team', 0, 'offline', 'auto', false)`;
+    const group = await seedConfirmedRegistration(comp.id, division.id);
+    await sql`update registrations set display_name = 'Thunder Strikers' where group_id = ${group.id}`;
+    const [{ id: registrationId }] = await sql<{ id: string }[]>`
+      select id from registrations where group_id = ${group.id}`;
+    await linkPersonWithConsent(auth.orgId, registrationId, "Cap Tain", { public_name: false });
+
+    const model = await buildAdmitTicketsDoc(auth, comp.id, { printedAt: PRINTED });
+    const ticket = model.sections[0]!.ticket!;
+    expect(ticket.maskedName).toBe("Thunder Strikers");
   });
 
   it("buildMyRotaDoc: SEAZN-neutral — no org branding", async () => {

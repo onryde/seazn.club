@@ -31,7 +31,7 @@ import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { hasFeature, requireFeature } from "@/lib/entitlements";
 import { fixtureWhen } from "@/lib/email-templates/official-assigned";
-import { maskDisplayName, resolveNameDisplay } from "@/lib/name-display";
+import { anyOptedOut, resolvePersonDisplayName } from "@/lib/name-display";
 import { resolveEntrantBadge } from "@/lib/entrant-badge";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { resolveModule } from "@/server/engine-db";
@@ -889,22 +889,60 @@ async function competitionTicketMeta(tx: Tx, competitionId: string): Promise<Com
 }
 
 interface TicketRegistrationRow {
+  registration_id: string;
   ref_code: string;
   display_name: string;
   status: string;
   player_name_display: string | null;
   youth: boolean;
+  /** RS008: a TEAM's own declared name carries no personal consent — never
+   *  routed through the consent axis (public.ts's publicEntrants precedent).
+   *  LEFT JOIN + coalesce: a division with no registration_settings row at
+   *  all (never blocked tickets before this) must not start doing so now. */
+  entrant_kind: "team" | "individual" | "pair";
 }
 
 async function ticketRegistrationRows(tx: Tx, competitionId: string): Promise<TicketRegistrationRow[]> {
   return tx<TicketRegistrationRow[]>`
-    select g.ref_code, r.display_name, r.status, d.player_name_display, d.youth
+    select r.id as registration_id, g.ref_code, r.display_name, r.status,
+           d.player_name_display, d.youth,
+           coalesce(rs.entrant_kind, 'individual') as entrant_kind
     from registrations r
     join divisions d on d.id = r.division_id
     join registration_groups g on g.id = r.group_id
+    left join registration_settings rs on rs.division_id = d.id
     where d.competition_id = ${competitionId}
       and r.status = 'confirmed' and g.ref_code is not null
     order by r.created_at`;
+}
+
+/**
+ * RS008 — batched "does ANY roster player on this registration have an
+ * explicit consent opt-out" check, keyed by registration id — the same rule
+ * `registrations.ts`'s own `anyOptedOutByRegistration` applies to the public
+ * status-page reads, kept as a small LOCAL query here rather than importing
+ * that (much heavier, Stripe/email-coupled) module for one helper. Both
+ * delegate the actual "stricter wins across several people" decision to the
+ * one canonical `anyOptedOut` (lib/name-display.ts) — never re-implemented.
+ */
+async function anyOptedOutByRegistration(tx: Tx, regIds: string[]): Promise<Set<string>> {
+  if (regIds.length === 0) return new Set();
+  const rows = await tx<{ registration_id: string; consent: { public_name?: boolean } | null }[]>`
+    select rp.registration_id, p.consent
+    from registration_players rp
+    join persons p on p.id = rp.person_id
+    where rp.registration_id in ${tx(regIds)}`;
+  const consentsByReg = new Map<string, ({ public_name?: boolean } | null)[]>();
+  for (const r of rows) {
+    const list = consentsByReg.get(r.registration_id) ?? [];
+    list.push(r.consent);
+    consentsByReg.set(r.registration_id, list);
+  }
+  const optedOut = new Set<string>();
+  for (const [regId, consents] of consentsByReg) {
+    if (anyOptedOut(consents)) optedOut.add(regId);
+  }
+  return optedOut;
 }
 
 /** Admit tickets for a competition (v12/Task 13): every confirmed
@@ -940,8 +978,17 @@ export async function buildAdmitTicketsDoc(
       );
     }
     const dates = `${meta.starts_on ?? "—"} – ${meta.ends_on ?? meta.starts_on ?? "—"}`;
+    // RS008: only individual/pair registrations can even have an opted-out
+    // person behind their display_name — a team's own name never does.
+    const nonTeamRegIds = rows.filter((r) => r.entrant_kind !== "team").map((r) => r.registration_id);
+    const optedOut = await anyOptedOutByRegistration(tx, nonTeamRegIds);
     const tickets: ExportTicket[] = rows.map((r, i) => ({
-      maskedName: maskDisplayName(r.display_name, resolveNameDisplay(r.player_name_display, r.youth)),
+      maskedName: resolvePersonDisplayName(
+        r.display_name,
+        optedOut.has(r.registration_id) ? { public_name: false } : null,
+        r.player_name_display,
+        r.youth,
+      ),
       competition: meta.name,
       dates,
       ref: r.ref_code,
