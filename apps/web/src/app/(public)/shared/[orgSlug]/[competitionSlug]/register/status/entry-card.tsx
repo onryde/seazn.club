@@ -315,7 +315,15 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
                       href={claimHref(orgSlug, competitionSlug, entry.join_code!, p.id)}
                       className="text-xs font-medium text-accent-strong underline underline-offset-2"
                     >
-                      {t(ui, "register.status.roster.claimLink", { name: displayNameById.get(p.id) ?? p.full_name })}
+                      {/* Code-review fix (2026-08-30, item 6): this used to
+                          fall back to the RAW p.full_name on a miss — the
+                          roster-name span above never has (it renders
+                          blank), so a map lookup that should structurally
+                          never miss (built from this same entry.players
+                          array, just above) leaked the unmasked name instead
+                          of failing the same safe way. Both now agree: blank
+                          on a miss, never p.full_name. */}
+                      {t(ui, "register.status.roster.claimLink", { name: displayNameById.get(p.id) ?? "" })}
                     </a>
                   </li>
                 ))}
