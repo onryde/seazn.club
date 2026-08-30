@@ -22,6 +22,13 @@
 //                        discretion afterwards, because that is what the copy
 //                        promises them.
 //
+//   S5  MANUAL APPROVAL — the same journey as S4 on a division that VETS
+//       + REFUND LOCK      entries. A paid entry waits at `status = 'paid'`
+//                          for the organiser, so it is never materialised and
+//                          carries no `entrant_id`. Cancelled past the lock,
+//                          it must be refunded no more automatically than an
+//                          auto-approval one.
+//
 // S4 IS CURRENTLY RED, DELIBERATELY. It is the reproduction for finding #18
 // (`_INDEX.md`), a CRITICAL money defect it found on its first run: the dialog
 // correctly promises no automatic refund, `withdrawCore` correctly issues
@@ -840,6 +847,120 @@ test("S4 refund lock — cancelling after the lock refunds nothing automatically
     await page.reload({ waitUntil: "load" });
     await page.waitForTimeout(1500);
     await page.screenshot({ path: `${s.shots}/s4-12-hub-after-refund.png`, fullPage: true });
+
+    expect(entry.pageErrors, `page errors: ${entry.pageErrors.join(" | ")}`).toEqual([]);
+    expect(entry.badResponses, `HTTP >= 400: ${entry.badResponses.join(" | ")}`).toEqual([]);
+  } finally {
+    await entry?.ctx.close();
+    await cleanupCompetition(request, comp.id);
+    await releaseConnectAccount(claim);
+  }
+});
+
+// ===========================================================================
+// S5 — the refund lock on a division that VETS entries (finding #18b)
+// ===========================================================================
+
+test("S5 manual approval — a vetted entry that pays and then cancels past the lock is refunded no more automatically than any other", async ({
+  page,
+  browser,
+  request,
+}, testInfo) => {
+  skipUnlessEnabled();
+  test.setTimeout(600_000);
+  const s: Scenario = { page, browser, request, shots: testInfo.outputPath() };
+
+  const FEE_CENTS = 3500;
+  const NAME = `Vetted Entrant ${TAG}`;
+  const comp = await createCompetition(request, "Vetted Open");
+  let claim: ConnectClaim | null = null;
+  let entry: PaidEntry | null = null;
+
+  try {
+    const org = await activeOrg(page);
+    claim = await claimConnectAccount(org.id);
+    const divId = await openPaidDivision(request, comp.id, {
+      name: "Vetted Singles",
+      entrant_kind: "individual",
+      fee_cents: FEE_CENTS,
+      // The whole point of this scenario. On a `manual` division
+      // confirmPaidRegistration stops at `status = 'paid'` awaiting the
+      // organiser and never calls materialise(), so the entry carries NO
+      // entrant_id — the signal #18's first fix keyed its guard on. #18b is
+      // that the identical reconcile replay therefore still read the entry
+      // as "never confirmed" and refunded it in full, past the lock.
+      approval: "manual",
+    });
+
+    // Same backdating as S4, same reason: the settings PUT will not accept a
+    // past lock (an organiser cannot retroactively close a window through the
+    // UI), and this is a state the clock reaches on its own.
+    await withDb(async (sql) => {
+      const past = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+      const rows = await sql`
+        update registration_settings
+        set refund_lock_at = ${past}
+        where division_id = ${divId}
+        returning division_id`;
+      if (rows.length !== 1) {
+        throw new Error(`could not backdate refund_lock_at for division ${divId} (updated ${rows.length} rows)`);
+      }
+    });
+
+    entry = await enterAndPay(s, {
+      orgSlug: org.slug,
+      compSlug: comp.slug,
+      entrantKind: "individual",
+      captainName: NAME,
+      captainEmail: `vetted-${TAG}@example.com`,
+      shotPrefix: "s5",
+    });
+    const { anon, rid, token } = entry;
+
+    // 'paid', NOT 'confirmed' — an organiser still has to say yes. If this
+    // ever reads 'confirmed' the division is not actually on manual approval
+    // and the rest of this scenario would be a second copy of S4.
+    const paid = await waitForStatus(request, rid, token, ["paid"]);
+    expect(
+      paid.status,
+      "S5 needs an entry that is PAID but not yet confirmed — otherwise it is not exercising the manual-approval path #18b lives on",
+    ).toBe("paid");
+    expect(paid.amount_cents).toBe(FEE_CENTS);
+
+    await anon.reload({ waitUntil: "load" });
+    await anon.waitForTimeout(1200);
+    await anon.screenshot({ path: `${s.shots}/s5-07-status-paid-awaiting-approval.png`, fullPage: true });
+
+    // ---- cancel, past the lock -----------------------------------------
+    await anon.getByRole("button", { name: "Cancel this entry", exact: true }).first().click();
+    const dialog = anon.getByRole("alertdialog");
+    await expect(dialog).toBeVisible({ timeout: 10_000 });
+    const dialogText = (await dialog.textContent()) ?? "";
+    await anon.screenshot({ path: `${s.shots}/s5-08-cancel-dialog.png` });
+    expect(
+      dialogText,
+      `S5: the refund window closed an hour ago, but the cancel dialog reads "${dialogText.trim()}".`,
+    ).not.toMatch(/refunded automatically/);
+
+    await dialog.getByRole("button", { name: "Cancel entry", exact: true }).click();
+    await expect(dialog).toHaveCount(0, { timeout: 15_000 });
+    await expect(anon.getByText("withdrawn", { exact: true }).first()).toBeVisible({ timeout: 20_000 });
+    await anon.screenshot({ path: `${s.shots}/s5-09-after-cancel.png`, fullPage: true });
+
+    // The replay #18b rides on is fired by cancel-entry.tsx's own
+    // router.refresh() immediately above, so by the time this settles the
+    // wrong refund would already have happened. The wait is for a SLOW wrong
+    // refund, not for a right one.
+    await anon.waitForTimeout(6000);
+    const after = await publicRegSnapshot(request, rid, token);
+    expect(after.status, "the entry is withdrawn either way").toBe("withdrawn");
+    expect(
+      after.refunded_cents,
+      `S5 (finding #18b): ${after.refunded_cents} cents were refunded automatically past refund_lock_at on a ` +
+        `MANUAL-approval division. This entry was never materialised, so it carries no entrant_id — and a guard ` +
+        `that reads entrant_id alone cannot tell "never charged" from "charged, awaiting approval, then withdrawn". ` +
+        `The organiser's own refund policy was overruled.`,
+    ).toBe(0);
 
     expect(entry.pageErrors, `page errors: ${entry.pageErrors.join(" | ")}`).toEqual([]);
     expect(entry.badResponses, `HTTP >= 400: ${entry.badResponses.join(" | ")}`).toEqual([]);

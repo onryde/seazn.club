@@ -237,6 +237,10 @@ export interface DivisionSpec {
   capacity?: number | null;
   /** ISO instant. Past = the auto-refund window has already closed. */
   refund_lock_at?: string | null;
+  /** `manual` holds a PAID entry at `status = 'paid'` awaiting the
+   *  organiser's decision, so `materialise()` never runs and the entry
+   *  carries no `entrant_id` — the population finding #18b lives in. */
+  approval?: "auto" | "manual";
 }
 
 /** Create a division and open registration on it. Setup, through the API —
@@ -267,6 +271,7 @@ export async function openPaidDivision(
       fee_cents: spec.fee_cents,
       payment_method: "stripe",
       form_fields: [],
+      ...(spec.approval ? { approval: spec.approval } : {}),
       ...(spec.refund_lock_at !== undefined ? { refund_lock_at: spec.refund_lock_at } : {}),
     },
   );
