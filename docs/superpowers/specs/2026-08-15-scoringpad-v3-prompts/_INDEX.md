@@ -4283,3 +4283,70 @@ against R7's sports was wrong, and R6 recorded another session's unverified
 claim as fact for the second time today. Same shape as the goalkeeper
 retraction: a plausible statement about what a user would see, adopted without
 driving it.
+
+---
+
+## R6 FIX PASS 4 (2026-08-30) — the six branch-review findings, plus the narrow entitlement change
+
+Branch `feat/scorepad-v3-r6-period-pair`, still open. Closes all six rows in
+`R6-review-branch-findings.md` and executes the "R6's recommendation to the
+owner" from the entitlement section above — the owner ruling for it arrived
+directly in this fix pass's own dispatch brief, so it is no longer a
+recommendation awaiting one.
+
+### THE CLOCK-CORRECTION RULE (findings 1+2) — decided and stated, per the brief
+
+**Rule: clamp the CORRECTION at the high-water mark — never let the display
+move below what the fold has already accepted in the current period.** Not
+the alternative the brief also offered (clamp only the stamp, let the display
+lie below it). Reasoning: this whole file's design is that the display IS
+what gets stamped (`stampOf` reads the exact `elapsedOf` `PadClockBar`
+renders) — a display that no longer matches its own future stamp would be a
+SECOND silent disagreement, the same shape of defect `PadHostView.clockAt`
+(fix pass 2) was built to close, not one to reopen while fixing its sibling.
+
+**Mechanically:** `adjustClock` (`v3/clock.ts`) now takes `nowMs` (closing
+finding 1: it clamps against the LIVE total, `elapsedOf`, not the banked
+`base` alone — a running clock that has never been paused can move again) and
+an optional `floor: GameTimeStamp` (closing finding 2: the corrected total
+cannot go below `floor.elapsed` when `floor.period` matches the clock's own
+period). `pad-host.tsx`'s `adjustClockNow` sources that floor from
+`clockSpec.seed` — the SKIN's clock declaration, rebuilt fresh every render
+from the live fold — rather than from anything the host itself is holding,
+so the floor cannot go stale between renders the way the held `clock` state
+deliberately does (property 3).
+
+**Why the ~2200-test suite could not see finding 2 at all, and the fix for
+that too:** `__tests__/_period-fold.ts` folded with no `strictFromSeq`
+anywhere, and its one "did the fold accept this" probe (`phaseVerdict`)
+called `module.apply` directly — which does not contain the monotonic-time
+guard; that guard lives one layer up, in `foldMatchWithStoppage`. A NEW,
+additive `appendVerdict` export folds the whole stream with `strictFromSeq`
+naming the freshly-appended candidate, exactly as `server/engine-db/
+append-event.ts` does for a real HTTP append. `phaseVerdict` itself was left
+untouched — it has ~20 call sites across the WRONG_PHASE sweep in
+`period-pair.test.ts`, and routing it through a full strict replay risked a
+second, unrelated behaviour change landing on all of them for a fix scoped to
+one guard.
+
+### The entitlement change — EXECUTED, exactly as recommended above
+
+`period/kernel.ts`: `suspStartType`/`suspEndType` moved out of `tier2Types`
+into `tier1Types` (renamed from the old `attributed`/`tier2Types` split),
+**period family only** — nothing else in `fidelityTiers` moved, `PadSpec
+.fidelity` is untouched (the two models still disagree by design, per
+`sport/module.ts:102-106`; R9 is still the wave that reconciles them).
+`scripts/smoke.ts:5486-5525`'s icehockey-suspension case moved from the
+`gated`-402 loop to its own 201 check, reusing the SAME `freeIce` fixture and
+ledger so the existing tier-0-advance control right after it still exercises
+one continuous stream. `tabletennis.expedite.start` and `tennis.interruption`
+are untouched and still assert 402 — this remains the narrow change, not R9.
+
+### Verified by the orchestrator
+
+[IN PROGRESS AT TIME OF WRITING — this paragraph is being filled in as fix
+pass 4 completes; the clock-correction rule and the entitlement change above
+are both final, this is the verification record for them.] Baseline going
+in: 2204/2202/0/2 pending across `src/components/v2/scorepad`, 59 files. tsc
+clean on two full `apps/web` typecheck runs so far (one after the sheet/dock
+fix, one after the clock rewrite).
