@@ -86,6 +86,71 @@ before diagnosing a real bug:
   an omitted prop as `"$undefined"`, so a bare `data-*` probe passes in
   both states.
 
+## Recurring failure classes — read before claiming anything works
+
+Generalized from ScoringPad v3 (R1–R5) and Registration (RS001–RS011); full
+per-wave detail lives in each programme's `_INDEX.md`. Every class below
+shipped at least twice, and the first four shipped **past a green suite**.
+
+1. **The inert seam.** Code declared, typed and unit-green, but nothing in
+   production ever sends or reads it. Recurred 6× (football `subWindows`, the
+   two-step goal dock, tennis `pairOrder`, volleyball's anchor, the RS wizard
+   payload) despite being named explicitly each time. A seam is proven only by
+   driving it through its REAL producer and consumer — fold the builder's own
+   output through the real engine/handler, or through the browser. A fixture on
+   both ends proves the fixture.
+2. **Pure-builder tests cannot see wiring.** `apps/web` vitest is
+   `environment: "node"` — no DOM. A green builder suite is blind to stale
+   closures and re-invocation, to CSS cascade, and to real tap area
+   (`boundingBox()` measures paint; hit-test with `elementFromPoint`). Changed
+   something a user touches ⇒ re-run the e2e that covers it, not just the unit.
+3. **A guard nothing kills is not tested.** Mutate it — delete the predicate,
+   `return true`, comment out the taps. Still green ⇒ the test is decoration (a
+   97-test suite stayed green with a predicate body replaced; a probe passed
+   with both its taps commented out). Two guards covering for each other are
+   each untested: mutate them one at a time.
+4. **Tests lie in their names.** One asserted the opposite of its title; one
+   froze a live bug as its expected value and carried it through two sign-offs.
+   Read what a test ASSERTS, never what it is called.
+5. **The brief is a hypothesis.** 15 briefed premises proved false in one
+   programme — engine capabilities that did not exist, "layout complaints" that
+   were dead taps, defect rows owed by a different wave. Re-pin every line
+   number and re-verify every capability claim against the tree before building
+   on it. A false premise is a finding to record, not a blocker.
+6. **An absent symptom can mean suppressed, not safe.** An over-refusing guard
+   silently dropped a wave's headline stat and looked clean.
+7. **One sample is not a parity sweep.** Serve/rotation/alternation bugs hid
+   behind a single lucky score. Enumerate the table.
+8. **Green and pushed is not done.** Reviews run after a green push still found
+   live defects, twice. Run the final review anyway; re-run a flaky-shaped gate
+   three times before believing it.
+9. **The runner lies about scope.** `--root apps/web` loses 208 tests and
+   invents 21 ENOENT failures; vitest from a worktree root reported
+   `numFailedTests: 0` while 25 suites failed to COLLECT. Use
+   `cd apps/web && vitest`, the JSON reporter, and confirm `.testResults[].name`.
+10. **The visual gate has its own vacuous mode.** The capture harness once
+    errored before a single screenshot and would have collected a sign-off on
+    zero pictures; shared states were pixel-identical because nothing opened; a
+    width raced the fold. Confirm the images exist, DIFFER, and that the last
+    check runs after the state being proven.
+11. **Sign-off means per-screen verdicts.** "CI green" / "no gaps" was taken as
+    merge sign-off twice. It is not.
+12. **Never skip the review loop.** Five implementers once ran back-to-back with
+    zero reviewer passes; the wave was green and still Needs Fixes.
+13. **An idempotency guard can skip a legitimate new arrival.** `if (already)
+    return` also swallowed a late join, seating nobody. Check both directions.
+14. **Environment before defect.** An unstarted local service, a turbo cache hit
+    from another worktree, an accumulated test DB — reproduce on a clean
+    detached worktree before calling any red pre-existing.
+15. **A green suite is not a working product.** Findings reachable from ~4,000
+    passing tests: untranslated copy nothing renders, a defect in the gap
+    between two individually-correct screens, a build serving a page whose
+    chunks were never emitted (HTTP 200, tsc clean, page inert). Use the
+    product and ask plain questions of the screen.
+16. **Sweep by behaviour, never by filename.** An e2e sweep filtered on
+    `registration*.spec.ts` missed the spec that actually exercised the path.
+    Grep the selector, route or SQL pattern.
+
 ## Standing project rules
 
 - **Read `docs/superpowers/RULES.md` first.** Owner's full standing

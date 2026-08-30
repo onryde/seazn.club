@@ -3627,3 +3627,118 @@ The two new lint warnings the UI change introduced (unused `member`/`policy`)
 were cleared with a scoped disable and its reason: removing the parameters
 cascades into `t` and `LIBERO_REFUSAL_KEY` going unused, a strictly larger
 blast radius than the seam is worth.
+
+---
+
+## R6 (2026-08-30) — period pair: hockey + ice hockey
+
+Wave opened 2026-08-30. R5 (#678) merged as `e23dcf241`. R6 and **R7 run
+CONCURRENTLY** by owner ruling, separate worktrees, separate PRs. The
+cross-session file contract with R7 is recorded at the end of this block.
+
+### R6 — owner rulings, taken before any code
+
+| id | ruling | reason recorded with it |
+| --- | --- | --- |
+| R6-1 | **Ice hockey palette = candidate A, glacier cyan** (`board #08090c`, `board-2 #14181f`, `ink #eef2f6`, `led #67e8f9`, `caution #ffc233`, `dismissal #ff6b6b`) | Owner ruled A off the published comps sheet. Recorded because it went **against the session's recommendation of B**: A measures ink 17.70 / accent 13.74 on the board, a separation of only **1.29**, so score and labels sit at near-identical luminance; B measured 8.96 / 17.84, separation 1.99, the only candidate where the score out-glows everything. **Mitigation owed by the build:** the scorebug's hierarchy must come from SIZE and WEIGHT, not luminance, or the score stops dominating. Verify at sign-off. |
+| R6-2 | **Field hockey palette approved as drawn** — the blue water pitch (`board #06323c`, `board-2 #0a4657`, `ink #eef6f8`, `led #ffd23f`, `advisory #3ddc84`, `caution #ffd60a`, `dismissal #ff5a4d`) | Only teal ground in the set, a full hue from tennis's navy. All floors pass: ink 12.54, accent 9.51, green swatch 7.70, red 4.46. |
+| R6-3 | **A SEVENTH sport token, `advisory`, is APPROVED** for the FIH green card | FIH umpires carry three cards and all three are SWATCHES held up, not words; every class sets `teamShort: true`, so they are one signal at three strengths. Two tokens cannot express a three-step ladder, and collapsing green into prose loses colour at the exact place colour IS the information. Tennis's "ends take the tones, middles read as words" precedent does not transfer: tennis's ladder genuinely is words. **Blast radius, approved explicitly:** `SPORT_TOKENS` + the hockey palette (`sport-theme.ts`), `SheetChoiceStep.tone` (`types.ts`), one `.pad-*` rule (`globals.css`), `contrast.test.ts`, `sport-theme.test.ts`. Record under `Unplanned fixes` in the PR. |
+| R6-4 | **D-10 CLOCK = option B — the pad builds a local clock that stamps `at`** | See the false premise below; this is the wave's biggest scope change and it was taken deliberately. Options offered were A (match football: read `asOf`, omit when absent — ships ice hockey with no clock AND no PP countdown, D-10 slips to R8), B (build it), C (derive from wall time — rejected: both sports are stop-clock, so it drifts on every stoppage). **Football inherits a working clock for free.** |
+| R6-5 | **HOC-04b card-flow presentation: build the straightforward version, owner rules LIVE in the walkthrough** | The question is tap sequence and how the person lands, which a mockup cannot judge. The walkthrough is already a merge gate, so it costs nothing extra. |
+| R6-6 | **44px tile delta (left open by R5): CLOSED at 44px** | It is the accessibility floor and already the standing bar. **Hit-test with `elementFromPoint`, never `boundingBox()`** — R5's defect was that the measurement lied (it measures paint, not tap area), not that the number was wrong. |
+| R6-7 | **Swap-sheet "who comes off" row (left open by R5): position-led, built in R6, walkthrough verdict** | Both sports declare position slots with `reentry: "unlimited"` and a keeper group (hockey 11 + 7 bench, `GK`; icehockey 6 + 17, `G`). Rolling subs run through this sheet constantly; no other wave exercises it as hard. **CONDITIONAL — see the `resolvePositions` finding below.** |
+| R6-8 | Concussion-replacement origination (no pad can send `core.lineup.replacement` with `exemption`) — **proposed routing to R7, owner silent, NOT yet ruled** | It is a lineup-editor surface and R7 owns the lineup editor (D-1, D-18). Recorded as PROPOSED, not decided. Re-raise before R6's PR, or it dies in the gap between two waves — which is the exact failure mode this register exists to prevent. |
+
+### R6 — false premises found (verified against the tree, before any code)
+
+- **"Football's R3-2 stamps `at` from a view clock, so R6 reuses the precedent" — FALSE, and it is the reason R6-4 exists.** `v3/skins/football.tsx:312` `readClock` reads `state.asOf` and returns `undefined` when absent or stale; the strip item is then OMITTED. The skin's own comment (:305-310) states it outright: `state.asOf` is set ONLY by a stamped event's `at`, and **no v3 tile sends `at`** except the swap, which copies an `asOf` that already exists. A stream recorded entirely through the pad therefore has **no clock at all, ever**. Football renders none and is honest about it.
+  **The consequence nobody had drawn:** `ActiveSuspension.expiresAt` (`sports/period/suspensions.ts:137-153`) derives from `startedAt`, which comes from the suspension event's own `at`. No `at` ⇒ no `expiresAt` ⇒ **the power-play countdown never runs either.** D-10 is not a rendering bug — the number was never produced. Ice hockey's headline strip (period · clock · PP countdown) was two-thirds dead on arrival.
+- **The R6 brief's "period-skin deleted, `git grep -a` zero refs" understates the deletion.** R7 re-pinned the referrer set independently: 5 e2e specs, 5 unit tests, `skins/registry.ts:50`, `pad-renderer.tsx:303`, `skins/types.ts:272`, `cricket-skin.tsx`, `football-skin.tsx`, `tennis-skin.tsx`, `attribution-picker.tsx:189`, `timeline.tsx:194,197`. R6 is re-pinning it independently rather than taking either brief on trust.
+- **`pad-renderer.tsx` has NO sport-specific fallback branch** (R7, verified). It renders off `props.module.padSpec?.(props.cfg)` and is sport-agnostic. So R6's period-skin deletion and R7's legacy-lane deletion are **one demolition**, and both briefs understate it.
+- **`resolvePositions` (`packages/engine/src/sport/catalog.ts:53`) has ZERO production callers** (R7, verified; R6 re-verifying independently). The three page bootstraps read `sportModule.positions.groups` directly. If confirmed, hockey's and ice hockey's declared per-variant positions **do not reach the lineup editor**, and R6-7's position-led swap row would be built on a dead seam. R6-7 is conditional on this.
+- **The defect register has been wrong in BOTH directions** (R7, verified): it listed D-3 as open after R4 closed it, and D-13 as closed while boardgame's half is open. D-8/D-9/D-10 are therefore being re-pinned against the tree, not trusted.
+
+### R6 — the R5 review findings file was stale; all 8 open rows are REJECTED
+
+`R5-review-678-findings.md` carried 8 rows marked CLAIMED (#1, #3–#9), and the
+main thread flagged them as customer-visible defects shipped in #678. **That
+flag was wrong.** All eight were found and fixed during #678's own review cycle
+BEFORE merge — each fix carries a comment citing "review of PR #678, finding N"
+— and none survives on `main`. Verified by reading the fixes and running
+`skins/__tests__/{volleyball,badminton,tabletennis}.test.ts`: **273/273 passed**.
+The scorebug shows the last game's score on a decided match, the deuce clause
+reads `>= target - 1`, the decided branch uses games actually played, and
+`join` de-dupes through a `Set`. `pad.badminton.ribbon.timeout` is registered in
+`PAD_LABEL_KEYS` (`lib/scoring-vocab.ts:703`) and present in all four
+dictionaries.
+
+**One real gap survives and R6 takes it:** finding #7's dedupe has **no test
+where `scorer === server`** — the actual singles collision the `Set` exists for.
+Existing tests only cover `scorer !== server`, so the fix is structurally
+correct and unverified.
+
+### R6 — cross-session file contract with R7 (closed 2026-08-30)
+
+R7: worktree `.claude/worktrees/r7-console`, branch
+`feat/scorepad-v3-r7-universal-console` off `e23dcf241`, env label `r7`.
+
+| file | split |
+| --- | --- |
+| `v3/registry.ts` | R6 adds hockey + icehockey, R7 adds boardgame + carrom + generic, to `V3_SKINS` AND `CONVERTED_SPORTS`. **Alphabetical order inside both literals** so the conflict resolves mechanically. |
+| `e2e/gallery.capture.ts` | R6 owns the icehockey (:2215) and hockey (:2245) recipes only. **No reflow, no recipe reordering** by either side. |
+| `pad-renderer.tsx` | R6 owns :303 and the period-skin deletion. |
+| `v3/sport-theme.ts` | R6 adds two palettes. **R7 adds ZERO** — `generic` must be ABSENT, not present-with-defaults, or `sportThemeStyle` stops returning `undefined` for the one sport whose job is to look like the default. R7 will message before adding any. |
+| `v3/types.ts` | `advisory` / `SheetChoiceStep.tone` / `SPORT_TOKENS` are **R6's alone**; R7 will not touch them. |
+| i18n | Own-sport key blocks only, no neighbour reflow. **`i18n-keys.ts` is GENERATED — never hand-merge; take either side and rerun `npm run i18n:gen-keys`.** Same for openapi drift output. |
+
+**Sequencing:** R7's headline acceptance ("`LEGACY_SPORTS` is empty, totality
+proves on the v3 lane alone") needs FIVE sports gone — R7's three plus R6's two.
+R7 holds that flip as a single unstarted commit at its branch tip and will not
+write it on an assumption about R6's timeline. R6 pings R7 on (a) gated green
+and (b) merged.
+
+### R6 — D-8/D-9/D-10 re-pinned against the tree (2026-08-30, before any code)
+
+R7's caution was right and it paid immediately: **two of R6's three register
+rows are MISSTATED.** The rows were filed 2026-08-15 against the v2 pad; the
+tree does not support two of them.
+
+| row | verdict | evidence |
+| --- | --- | --- |
+| **D-8** "icehockey goal form permanently open with a resting validation error" | **MISSTATED — the claim never matched this file** | The goal form is the shared `ActionForm` (`v2/scorepad/action-form.tsx`, used by `period-skin.tsx:68,744`). `:192` `const [expanded, setExpanded] = useState(false)` — **collapsed by default**, a single-tap button while `!expanded` (:229). Validation text renders only inside the expanded branch, gated on `!validity.ok` (:265), never at rest. That chassis has been unchanged since `period-skin.tsx` was created (`f5a1628750`, 2026-08-13) — **two days BEFORE the register filed the row.** |
+| **D-9** "person chips overflow the card (clipped names)" | **MISSTATED — spill, not clip; does not reproduce** | Chip row is `period-skin.tsx:453` `flex gap-2 overflow-x-auto pb-1 -mx-1 px-1`; chips use `shared.tsx:42` `chipClass` (`shrink-0`, no `max-w-full`) — the same class shape R5 fixed in `v3/swap-sheet.tsx` (`120f0b0f1`). **But R5's bug needed an `overflow-hidden` ancestor to turn spill into a clip, and none exists here:** the row is `overflow-x-auto` (scrolls) and `.card` (`globals.css:207-209`) declares no `overflow` at all. Names scroll into view rather than clipping. R5's fix was never applied to `shared.tsx`/`period-skin.tsx`, which is true and moot — v3 replaces both. |
+| **D-10** "icehockey CLOCK renders '—'" | **STILL PRESENT, and deeper than filed** | `period-skin.tsx:268` `{ id: "clock", value: readClock(ctx.state) ?? "—" }`; `readClock` (:227-233) returns `null` when `asOf.elapsed` is absent, and the field is force-coerced to a literal em-dash **at rest**. v3 football took the opposite posture (`football.tsx:313-320` returns `undefined`, `:590-593` omits the item); period-skin never adopted it. The em-dash is only the symptom — see the clock false premise above: nothing has ever produced a stamp to read. |
+
+**Ruling: D-8 and D-9 are CLOSED as misstatements, not as fixes.** R6 still
+ships a tile-based goal flow and wrapping chips, because that is the v3 design,
+but neither is repairing a defect that existed. Recorded so a later wave does
+not "re-fix" them or treat their absence as a regression.
+
+### R6 — `resolvePositions` re-verified, and the real defect is narrower than feared
+
+**Confirmed: `resolvePositions` (`packages/engine/src/sport/catalog.ts:53`) has
+ZERO non-test callers.** All ~70 call sites are `*.test.ts` or
+`packages/engine/src/testkit/**`. The three page bootstraps read
+`sportModule.positions.*` directly: `f/[no]/page.tsx:165-167`,
+`d/[divSlug]/page.tsx:432-433`, `score/[token]/page.tsx:166-168`.
+`catalog.ts:43` documents the direct read as intentional.
+
+**R6-7 is therefore NOT blocked.** Hockey's `GK {min:1,max:1}` +
+`lineup {size:11, benchMax:7}` (`hockey.ts:33,39,168`) and ice hockey's
+`G {min:1,max:1}` + `lineup {size:6, benchMax:17}` (`icehockey.ts:43,48,204`)
+are STATIC declarations, so they reach the lineup editor and swap sheet fine
+through the direct-read path.
+
+**What does NOT reach the UI is the cfg-conditional relaxation**, and that is a
+real defect R6 owns: the period kernel declares `positionsFor`
+(`period/kernel.ts:2434-2443`) which, when `cfg.goalkeeper === "optional"`,
+relaxes the keeper group's `min` to 0. Only `resolvePositions` invokes it, and
+nothing in the app calls that. So **a competition configured to allow an empty
+net still presents `GK`/`G` as min 1 in the lineup editor and swap sheet** — a
+keeper is always shown as required. The relaxation is visible only to the
+engine's own `validateLineup`.
+
+This lands squarely on ice hockey, whose goal payload carries an `emptyNet`
+field: the pad can RECORD an empty-net goal while the lineup UI insists a keeper
+is mandatory. R6 fixes the read path for its two sports and records the
+remaining sports as owed.
