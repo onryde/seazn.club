@@ -189,6 +189,18 @@ const EXTRA_STATES = [
   "22-suspensionservedby",
   "23-shootout",
   "24-shootoutdecided",
+  // R7/A1 (2026-08-30) — generic. Two states the five shared STATES are
+  // structurally blind to, for the two reasons this list keeps recording:
+  //   11 — the OTHER pad the one generic skin builds. `resultMode` is the only
+  //        variant knob in this wave that changes the board, and this recipe's
+  //        own fixture is a `score` division, so win_loss — no tally, no dock,
+  //        two names and a winner — cannot be reached from it at all.
+  //   12 — the amend dock WITH its attribution row. The primary fixture seeds
+  //        one player a side, and a one-person side has its scorer stamped at
+  //        tap time, so the person chips never render there. A pair is the
+  //        only shape that shows both halves of the dock at once.
+  "11-genericwinloss",
+  "12-genericamenddock",
 ] as const;
 type ExtraGalleryState = (typeof EXTRA_STATES)[number];
 
@@ -2778,27 +2790,113 @@ const SPORTS: GallerySport[] = [
       home: [{ fullName: `Gallery Generic Home ${tag}` }],
       away: [{ fullName: `Gallery Generic Away ${tag}` }],
     }),
-    // Verified live: scorepad-a11y-evidence.spec.ts (open the panel, fill
-    // Points) carried to a submit the way scorepad-v2.spec.ts's device route
-    // does. Confirm/attribution are clicked only if the panel actually gates
-    // them — generic's plain path may not need either.
+    // R7/A1 cutover — v3 tapModel S: the scoreboard half IS the point button
+    // (`v3/skins/generic.tsx`), never an "Add points" form. The universal
+    // renderer's ActionForm this recipe used to drive no longer renders for
+    // this sport at all.
     scoreOne: async (page) => {
-      await pad(page).getByRole("button", { name: "Add points", exact: true }).click();
-      await pad(page).getByLabel("Points", { exact: true }).fill("3");
-      const home = pad(page).getByRole("button", { name: "Home", exact: true });
-      if (await home.isVisible({ timeout: 3_000 }).catch(() => false)) await home.click();
-      const confirm = pad(page).locator('[data-role="confirm"]');
-      if (await confirm.isVisible({ timeout: 3_000 }).catch(() => false)) await confirm.click();
+      await v3Half(page, "home").click();
     },
-    // Verified live precedent, verbatim: open the panel, fill Points, STOP.
+    // Reached by a SECOND, away point rather than by reopening the first —
+    // same reasoning as football's and tennis's own `openDock` above: the
+    // Detail Dock is a property of a held tap, and there is no way to reopen
+    // one that has already flushed.
     openDock: async (page) => {
-      const addPoints = pad(page).getByRole("button", { name: "Add points", exact: true });
-      if (!(await addPoints.isVisible({ timeout: 3_000 }).catch(() => false))) return false;
-      await addPoints.click();
-      const points = pad(page).getByLabel("Points", { exact: true });
-      if (!(await points.isVisible({ timeout: 3_000 }).catch(() => false))) return false;
-      await points.fill("3");
+      await v3Half(page, "away").click();
+      await expect(
+        pad(page).locator('[data-role="v3-dock"]'),
+        "gallery(generic): a tally tap must open the amend dock",
+      ).toBeVisible({ timeout: 10_000 });
       return true;
+    },
+    // v3's Detail Dock is a TIMED surface (closes itself HOLD_MS=6s after the
+    // tap that opened it) — same risk football's and tennis's docks carry, and
+    // the same fix: fail the capture rather than silently keep a `04-dock`
+    // photograph of a dock that already closed under a slow run.
+    dockProbe: async (page) => {
+      await expect(
+        pad(page).locator('[data-role="v3-dock"]'),
+        "gallery(generic): the dock closed before this width was captured — the 6s hold " +
+          "window elapsed mid-capture, so this PNG would have shown a different state to its siblings",
+      ).toBeVisible({ timeout: 5_000 });
+    },
+    captureExtra: async (page, dir, tag, measurements) => {
+      // 11-genericwinloss — the OTHER board this one skin builds. Fresh
+      // fixture: this entry's primary one is a `score` division and no
+      // sequence of taps can turn it into a win_loss one.
+      const wlTag = `${tag}wl`;
+      const wl = await seedRosteredFixture(page.request, {
+        label: `Gallery Generic WinLoss ${wlTag}`,
+        sportKey: "generic",
+        variantKey: "win_loss",
+        entrantKind: "individual",
+        home: [{ fullName: `Gallery Generic WL Home ${wlTag}` }],
+        away: [{ fullName: `Gallery Generic WL Away ${wlTag}` }],
+        emitCoreStart: true,
+      });
+      await page.goto(await fixturePath(page.request, wl.fixtureId));
+      const wlBug = pad(page).locator('[data-role="v3-scorebug"]');
+      await expect(wlBug, "gallery(generic): the win_loss board must render").toBeVisible({ timeout: 20_000 });
+      // Positive anchor, not merely "the board rendered": the whole point of
+      // this capture is that win_loss says RESULT ONLY where score mode says
+      // running score, and a board that failed to build its context line would
+      // satisfy a bare visibility check just as well.
+      await expect(
+        wlBug,
+        "gallery(generic): win_loss must state what it records, and that draws are refused",
+      ).toContainText("Result only");
+      await captureState(
+        page,
+        dir,
+        "11-genericwinloss",
+        "generic",
+        measurements,
+        visibleProbe(wlBug, "gallery(generic): 11-genericwinloss must still show the win_loss board"),
+      );
+
+      // 12-genericamenddock — the dock with BOTH halves on screen: the amount
+      // chips that rewrite the held payload, and the attribution row a
+      // one-person side never renders (its scorer is stamped at tap time).
+      const prTag = `${tag}pr`;
+      const first = `Gallery Generic Pair Home A ${prTag}`;
+      const pr = await seedRosteredFixture(page.request, {
+        label: `Gallery Generic Pair ${prTag}`,
+        sportKey: "generic",
+        variantKey: "score",
+        entrantKind: "pair",
+        home: [{ fullName: first }, { fullName: `Gallery Generic Pair Home B ${prTag}` }],
+        away: [
+          { fullName: `Gallery Generic Pair Away A ${prTag}` },
+          { fullName: `Gallery Generic Pair Away B ${prTag}` },
+        ],
+        emitCoreStart: true,
+      });
+      await page.goto(await fixturePath(page.request, pr.fixtureId));
+      await v3Half(page, "home").click();
+      const prDock = pad(page).locator('[data-role="v3-dock"]');
+      await expect(prDock, "gallery(generic): a tally tap must open the amend dock").toBeVisible({
+        timeout: 20_000,
+      });
+      await expect(
+        prDock.getByRole("button", { name: "3 points", exact: true }),
+        "gallery(generic): the dock must offer the amounts that rewrite this same point",
+      ).toBeVisible({ timeout: 4_000 }); // under HOLD_MS, so a miss is diagnosed with the dock still up
+      await expect(
+        prDock.getByRole("button", { name: first, exact: true }),
+        "gallery(generic): a two-person side must be offered its OWN players to attribute to",
+      ).toBeVisible({ timeout: 4_000 });
+      await captureState(page, dir, "12-genericamenddock", "generic", measurements, async () => {
+        await expect(
+          prDock,
+          "gallery(generic): the dock closed before this width was captured",
+        ).toBeVisible({ timeout: 5_000 });
+        await expect(
+          prDock.getByRole("button", { name: first, exact: true }),
+          "gallery(generic): 12-genericamenddock must still show the attribution row",
+        ).toBeVisible();
+      });
+
+      return ["11-genericwinloss", "12-genericamenddock"];
     },
   },
   {

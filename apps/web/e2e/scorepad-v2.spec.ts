@@ -715,31 +715,37 @@ test("device link: score offline on the universal renderer, reconnect, drain, co
         .poll(async () => (await fixtureState(request, fx.fixtureId)).last_seq, { timeout: 20_000 })
         .toBeGreaterThanOrEqual(1);
     }
-    const scoreButton = page.getByRole("button", { name: "Add points", exact: true });
-    await expect(scoreButton).toBeVisible({ timeout: 20_000 });
+    const scorebug = page.locator('[data-role="v3-scorebug"]');
+    await expect(scorebug, "the v3 board must render on the device link").toBeVisible({ timeout: 20_000 });
 
-    // `generic.score` declares a REQUIRED `by` side attribution, so the action
-    // tap opens the picker rather than submitting. The offline batch below
-    // repeats both steps — a single-tap loop would queue nothing and the drain
-    // assertions would pass vacuously against an empty queue.
+    // R7/A1 — `generic` is on the v3 lane now, tapModel S: the scoreboard HALF
+    // is the button, and there is no "Add points" form or side picker to walk.
+    // The AMOUNT is amended afterwards, on the same held submission, through
+    // the detail dock's own chips (2/3/5) — one event either way.
+    //
     // `points` VARIES per call, and that is load-bearing rather than cosmetic:
     // `usePadPipeline`'s double-submit guard compares (type, payload)
-    // structurally, so three identical `points:1, by:Home` taps are one action
-    // repeated and the guard correctly swallows two of them. Measured — a
-    // fixed value queued 2, not 3. A courtside scorer entering the same score
-    // three times in a row within the guard window is the case the guard
-    // exists for; three genuinely different entries is what this test needs.
+    // structurally AT SUBMIT TIME — before any chip has run — so four half
+    // taps are four IDENTICAL submissions and the guard would legitimately
+    // swallow the ones landing inside its 600ms window. Polling the durable
+    // queue after each press is what actually separates them; the old fixed
+    // 200ms wait was already measured queueing 2 of 3 on the v2 form.
     async function scoreOnce(points: number): Promise<void> {
-      await scoreButton.click();
-      // `generic.score` needs its `points` number as well as the `by` side.
-      await page.locator('input[type="number"]').first().fill(String(points));
-      await page.getByRole("button", { name: "Home", exact: true }).click();
-      const c = page.getByRole("button", { name: "Confirm", exact: true });
-      if ((await c.count()) > 0) await c.click();
+      await scorebug.locator(".grid > *").nth(0).locator(".app-display.font-bold").click();
+      const dock = page.locator('[data-role="v3-dock"]');
+      await expect(dock, "a tally tap must open the amend dock").toBeVisible({ timeout: 20_000 });
+      if (points !== 1) {
+        await dock.getByRole("button", { name: `${points} points`, exact: true }).click();
+      }
     }
 
+    // Must match registry.tsx's own `queueDbName` literal exactly — this
+    // reads the browser's real IndexedDB by name.
+    const dbName = `scorepad-${fx.fixtureId}`;
+
     // Land one online first, so the offline batch is provably additive rather
-    // than the whole ledger.
+    // than the whole ledger. v3 soft-commits: the tap is held for HOLD_MS (6s)
+    // before it is sent, which the 20s poll below waits out.
     const seqBeforeFirstTap = (await fixtureState(request, fx.fixtureId)).last_seq;
     await scoreOnce(1);
     await expect
@@ -751,14 +757,15 @@ test("device link: score offline on the universal renderer, reconnect, drain, co
     // because this scenario never navigates again — `setOffline(true)` blocks
     // every request from the page including a reload's own document fetch.
     await anonCtx.setOffline(true);
-    for (const points of [2, 3, 4]) {
+    let queued = 0;
+    for (const points of [2, 3, 5]) {
       await scoreOnce(points);
-      await page.waitForTimeout(200);
+      queued += 1;
+      await expect
+        .poll(() => queueDepth(page, dbName), { timeout: 20_000, message: `press worth ${points} must queue` })
+        .toBe(queued);
     }
 
-    // Must match registry.tsx's own `queueDbName` literal exactly — this
-    // reads the browser's real IndexedDB by name.
-    const dbName = `scorepad-${fx.fixtureId}`;
     await expect
       .poll(() => queueDepth(page, dbName), { timeout: 15_000 })
       .toBe(3);
@@ -806,10 +813,26 @@ test("an expanded action form gets the whole row at 320, not half of one", async
   // own width is a function of page chrome and card padding, and pinning that
   // number would make this test fail on any unrelated layout change while
   // still not saying what it means. The claim is "the form spans its row".
+  //
+  // THE SUBJECT IS THE LANE, NOT THE SPORT (R7/A1). This regression lives in
+  // `panel.tsx` + `action-form.tsx` — the UNIVERSAL renderer — and generic,
+  // which used to carry it here, moved to the v3 lane, where an expanded form
+  // does not exist: a v3 sheet is full-width by construction. `boardgame` is
+  // the remaining universal sport with a `layout: "grid"` panel
+  // (`pad.boardgame.panel.draw`, boardgame.ts), so it is what still exercises
+  // the two-column squeeze. Its own conversion (R7 task A) has to move this
+  // test once more, and the demolition task deletes the lane and this test
+  // with it — noted here so neither is a surprise.
+  //
+  // Anchored on the expanded form's OWN Confirm control rather than on
+  // `[data-role="attribution-picker"]`: boardgame's drawn-result action
+  // declares `attribution: []` (a draw names no winner), so there is no
+  // picker to find, while `data-role="confirm"` is rendered by every expanded
+  // ActionForm regardless of what it collects.
   const fx = await seedRosteredFixture(request, {
     label: `S12 Narrow ${TAG}`,
-    sportKey: "generic",
-    variantKey: "score",
+    sportKey: "boardgame",
+    variantKey: "classical",
     entrantKind: "individual",
     home: [{ fullName: `Narrow Home ${TAG}` }],
     away: [{ fullName: `Narrow Away ${TAG}` }],
@@ -831,15 +854,15 @@ test("an expanded action form gets the whole row at 320, not half of one", async
     const accept = page.getByRole("button", { name: "Accept", exact: true });
     if ((await accept.count()) > 0) await accept.click();
 
-    const addBtn = page.getByRole("button", { name: "Add points", exact: true });
+    const addBtn = page.getByRole("button", { name: "Draw / no result", exact: true });
     await expect(addBtn).toBeVisible({ timeout: 20_000 });
     await addBtn.click();
-    // The attribution picker only exists once the form is expanded, so this
-    // also proves the tap opened a form rather than submitting outright.
-    await expect(page.locator('[data-role="attribution-picker"]')).toBeVisible({ timeout: 10_000 });
+    // Confirm/Cancel only exist once the form is EXPANDED, so this also proves
+    // the tap opened a form rather than submitting outright.
+    await expect(page.locator('[data-role="confirm"]')).toBeVisible({ timeout: 10_000 });
 
     const measured = await page.evaluate(() => {
-      const form = document.querySelector('[data-role="attribution-picker"]')?.closest("div.card");
+      const form = document.querySelector('[data-role="confirm"]')?.closest("div.card");
       const panel = form?.parentElement;
       if (!form || !panel) return null;
       return {

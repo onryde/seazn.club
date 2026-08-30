@@ -37,19 +37,21 @@ import { apiJson, fixturePath, seedRosteredFixture, expectNoHorizontalScroll, TA
  * `state.phase === "pre"`, so the device-link surface needs no `core.start`
  * at all.
  *
- * Each test drives exactly one interaction — open "Add points" and fill the
- * Points field, then measure immediately, BEFORE choosing a side or
- * confirming. That state is guaranteed stable (nothing has been submitted,
- * so there is no race with an async auto-submit/collapse — generic/score
- * may or may not have a separate confirm step, and clicking Home first
- * would leave that ambiguous) while still being richer than the pad's idle
- * state: phase nav, the fidelity switcher and the expanded Add-points form
- * (Points input, Home, Away chips) are all on screen together. Completing
- * the score (a Timeline entry + its own void control) is deliberately out
- * of scope — scorepad-skins.spec.ts and scorepad-v2.spec.ts already drive
- * that to completion elsewhere; duplicating it here only adds an extra
- * ledger-poll race, six times over, for a control type this file does not
- * claim to cover.
+ * Each test drives exactly one interaction — tap the home half of the
+ * scoreboard (ScoringPad v3, tapModel S: the half IS the button) and measure
+ * with the detail dock open, BEFORE any chip is chosen. R7/A1 moved `generic`
+ * onto the v3 lane, so the "Add points" form this file used to expand no
+ * longer exists; the dock is its direct successor as the one state that is
+ * both richer than idle and stable enough to measure — the tap has already
+ * been soft-committed, so nothing is mid-submit, and the dock's own amount
+ * chips, the board, the tile row and the recording chip are all on screen
+ * together. It is also the denser measurement of the two: the dock adds a
+ * countdown and a flush control the old form never had.
+ *
+ * ONE RACE THIS FILE MUST RESPECT: the dock closes itself after queue.ts's
+ * HOLD_MS (6s). Every measurement below therefore runs against a dock the
+ * caller has just opened, and `openAmendDock` asserts it is visible rather
+ * than assuming it.
  *
  * The horizontal-scroll number is measured with the SAME clip-lifting
  * technique `expectNoHorizontalScroll` (helpers.ts) uses, not a naive
@@ -116,21 +118,26 @@ async function openDeviceLink(page: Page, secret: string): Promise<void> {
   await page.goto(`/score/${secret}`);
   const accept = page.getByRole("button", { name: "Accept", exact: true });
   if ((await accept.count()) > 0) await accept.click();
-  await expect(page.getByRole("button", { name: "Add points", exact: true })).toBeVisible({ timeout: 20_000 });
+  await expect(page.locator('[data-role="v3-scorebug"]'), "the v3 board must render").toBeVisible({
+    timeout: 20_000,
+  });
 }
 
-/** Open the "Add points" form and fill Points, then STOP — see file header
- *  for why this state, not a completed score, is what gets measured. Takes
- *  an explicit scope rather than assuming `[data-testid="score-pad"]`:
- *  that testid exists only on fixture-console.tsx (grepped — the console
- *  surface). device-score-pad.tsx never renders it, so a scope hardcoded to
- *  it resolves to nothing there and every locator action below would retry
- *  silently until the whole test timed out (confirmed: exactly what
- *  happened before this was parameterised — three device-pad tests each
- *  ran the full 90s with no error until the deadline). */
-async function openScoreForm(page: Page, points: number, scope: Locator): Promise<void> {
-  await scope.getByRole("button", { name: "Add points", exact: true }).click();
-  await scope.getByLabel("Points", { exact: true }).fill(String(points));
+/** Tap the home half — the point is recorded on the way in — and STOP with
+ *  the amend dock open; see the file header for why this state, not a
+ *  completed score, is what gets measured. Takes an explicit scope rather
+ *  than assuming `[data-testid="score-pad"]`: that testid exists only on
+ *  fixture-console.tsx (grepped — the console surface). device-score-pad.tsx
+ *  never renders it, so a scope hardcoded to it resolves to nothing there and
+ *  every locator action below would retry silently until the whole test timed
+ *  out (confirmed: exactly what happened before this was parameterised —
+ *  three device-pad tests each ran the full 90s with no error until the
+ *  deadline). */
+async function openAmendDock(scope: Locator): Promise<void> {
+  await scope.locator('[data-role="v3-scorebug"] .grid > *').nth(0).locator(".app-display.font-bold").click();
+  await expect(scope.locator('[data-role="v3-dock"]'), "a tally tap must open the amend dock").toBeVisible({
+    timeout: 20_000,
+  });
 }
 
 interface HitTarget {
@@ -476,7 +483,7 @@ for (const width of WIDTHS) {
     });
     await page.setViewportSize({ width, height: HEIGHT[width] });
     await openLiveConsole(page, fx);
-    await openScoreForm(page, 7, pad(page));
+    await openAmendDock(pad(page));
     await recordEvidence(page, `console-${width}`, '[data-testid="score-pad"]');
   });
 }
@@ -513,7 +520,7 @@ for (const width of WIDTHS) {
       // the proven `openDeviceLink` flow above), so the page's own `<main>`
       // landmark is the faithful equivalent scope: everything a scorer sees
       // here, nothing from a toast/alert region outside it.
-      await openScoreForm(dpage, 7, dpage.locator("main"));
+      await openAmendDock(dpage.locator("main"));
       // `body`, not `main`: the device page's own header (org strip, status,
       // team line, courtside footer) renders OUTSIDE `<main>`, so a `main`
       // scope silently excluded it — and that is not hypothetical, it hid four

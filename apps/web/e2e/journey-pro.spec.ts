@@ -127,25 +127,28 @@ test.describe.serial("pro lifecycle", () => {
       }
     }
     expect(padFixtureId).not.toBe("");
-    // v2 universal pad (S13/#422 W11 cutover — the v1 generic pad this test
-    // used to drive, with its own always-visible number pair and "Record
-    // result" button, is deleted). This division's "score" variant resolves
-    // generic.ts's own padSpec to a "Score" panel with one action, "Enter
-    // final score": two number fields (p1Score, p2Score), no attribution.
-    // Tapping it expands the form rather than firing immediately
-    // (action-form.tsx: any non-empty `fields` expands instead of auto-
-    // submitting) — fill both sides, then confirm. No "Start match" tap
-    // first: generic.result tolerates phase "pre" as well as "live"
-    // (generic.ts's own applyResult), so the panel is already live and
-    // usable the moment the console renders it.
+    // ScoringPad v3 (R7/A1 — `generic` moved onto `V3_SKINS`; the v2
+    // universal renderer's own "Enter final score" ActionForm this test used
+    // to drive no longer renders for this sport). The score-mode board's
+    // `scoreEntry` TILE opens the skin's own guided sheet: two number steps,
+    // each with its own Confirm, prefilled from the running tally (0-0 here).
+    // No "Start match" tap first: generic.result tolerates phase "pre" as
+    // well as "live" (generic.ts's own applyResult), so the tile is on screen
+    // the moment the console renders.
     const pad = page.locator('[data-testid="score-pad"]');
-    const scoreEntry = pad.getByRole("button", { name: "Enter final score", exact: true });
+    const scoreEntry = pad.locator('[data-tile-id="scoreEntry"]');
     await expect(scoreEntry).toBeVisible({ timeout: 20_000 });
     await scoreEntry.click();
-    const scoreInputs = pad.getByRole("spinbutton");
-    await scoreInputs.nth(0).fill("3");
-    await scoreInputs.nth(1).fill("1");
-    await pad.locator('[data-role="confirm"]').click();
+    const sheet = pad.locator('[data-role="v3-sheet"]');
+    await expect(sheet, "the score-entry tile must open the skin's own sheet").toBeVisible({ timeout: 20_000 });
+    for (const value of ["3", "1"]) {
+      await sheet.getByRole("spinbutton").fill(value);
+      await sheet.getByRole("button", { name: "Confirm", exact: true }).click();
+    }
+    // v3 soft-commits: the result is HELD for queue.ts's HOLD_MS (6s) before
+    // it is sent, so the status poll below — 20s — is what waits it out.
+    // `generic.result` declares no dock (nothing to enrich on a terminal
+    // card), so there is no flush control to press instead.
     // The result is decided when the API says so (UI copy churns during save).
     await expect
       .poll(
