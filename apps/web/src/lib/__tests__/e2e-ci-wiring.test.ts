@@ -331,6 +331,37 @@ describe("e2e CI wiring", () => {
     ).not.toContain("STRIPE_WEBHOOK_SECRET");
   });
 
+  // Run 33315548699 reported itself as testing 4c606a302 while three of its
+  // eight jobs had actually checked out 203395b6a -- "P9.5 -- one
+  // court-availability function (#638)", weeks old. The checkout pinned
+  // `ref: refs/heads/main`, a BRANCH NAME, which each job resolves for itself
+  // against Blacksmith's git proxy; that mirror was serving a stale tip.
+  //
+  // Nothing caught it for as long as it had been happening, because every
+  // other step exists in both trees and passes either way. It surfaced only
+  // when a step whose SCRIPT postdates the stale commit ran from YAML that
+  // came from the new one -- `npm error Missing script: "check:build-chunks"`.
+  // A green e2e run is worth nothing if it cannot say which commit it ran.
+  //
+  // `github.sha` is immutable, so a stale mirror fails to produce the object
+  // and the job dies loudly instead of quietly testing old code. This does not
+  // make the mirror fresher; it makes staleness impossible to mistake for a
+  // pass. (Line 88's concurrency group keeps `github.ref` on purpose --
+  // grouping by SHA would stop a superseded run from cancelling its
+  // predecessor.)
+  it("pins every checkout to an immutable SHA, never a branch name", () => {
+    const yml = readFileSync(join(REPO_ROOT, ".github/workflows/e2e.yml"), "utf8");
+    const refs = yml.match(/^\s*ref: \$\{\{.*$/gm) ?? [];
+    expect(refs.length, "no `ref:` on any checkout — has the workflow changed shape?").toBe(3);
+    for (const ref of refs) {
+      expect(
+        ref,
+        "a checkout resolves a BRANCH NAME, so jobs in one run can test different commits (and did: run 33315548699)",
+      ).not.toMatch(/github\.ref/);
+      expect(ref, "a checkout is not pinned to github.sha").toContain("github.sha");
+    }
+  });
+
   // The spec moved out of e2e/ into e2e/walkthrough/ (RS007). The project is
   // directory-anchored, so the move is what enrols it — but a rename or a
   // revert would leave the wiring above pointing at nothing.
