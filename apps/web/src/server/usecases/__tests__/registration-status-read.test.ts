@@ -566,6 +566,105 @@ describe.skipIf(!HAS_DB)("publicCartByRef — token-less, masked cart read", () 
     expect(youthEntry.display_name).toBe("Jamie Y.");
   });
 
+  // RS008: the OTHER axis — a person's own consent.public_name opt-out
+  // (RS007's claim/opt-out surface) must mask here too, independently of
+  // youth. `seedRegistration`'s player rows carry no person_id on their own
+  // (materialise() is the only writer) — this fixture links one directly,
+  // the same "raw fixture, not a full submit" convention
+  // registration-materialise.test.ts's own seedPerson uses.
+  async function linkPersonWithConsent(
+    orgIdArg: string,
+    registrationId: string,
+    playerFullName: string,
+    consent: Record<string, unknown>,
+  ): Promise<string> {
+    const [person] = await sql<{ id: string }[]>`
+      insert into persons (org_id, full_name, consent)
+      values (${orgIdArg}, ${playerFullName}, ${sql.json(consent as never)})
+      returning id`;
+    await sql`
+      update registration_players set person_id = ${person.id}
+      where registration_id = ${registrationId} and full_name = ${playerFullName}`;
+    return person.id;
+  }
+
+  it("masks an individual entry's display_name when the linked person opted out — even on a non-youth division", async () => {
+    const { orgId, competition, division } = await stripeSettingsRig();
+    const refCode = freshRef();
+    const { registration } = await seedRegistration(
+      competition.id,
+      division.id,
+      { fee_cents: 500, currency: "gbp", payment_method: "stripe" },
+      { refCode, displayName: "Arun Kumar", players: [{ name: "Arun Kumar" }] },
+    );
+    await linkPersonWithConsent(orgId, registration.id, "Arun Kumar", { public_name: false });
+
+    const view = await publicCartByRef(refCode);
+    expect(view.entries[0]!.display_name).toBe("Arun K.");
+  });
+
+  it("a person who has NOT opted out (or has no linked person yet) stays full on a non-youth division", async () => {
+    const { orgId, competition, division } = await stripeSettingsRig();
+    const refCode = freshRef();
+    const { registration } = await seedRegistration(
+      competition.id,
+      division.id,
+      { fee_cents: 500, currency: "gbp", payment_method: "stripe" },
+      { refCode, displayName: "Dev Patel", players: [{ name: "Dev Patel" }] },
+    );
+    // Explicit opt-IN, and no link at all — both must stay full.
+    await linkPersonWithConsent(orgId, registration.id, "Dev Patel", { public_name: true });
+    const optedIn = await publicCartByRef(refCode);
+    expect(optedIn.entries[0]!.display_name).toBe("Dev Patel");
+  });
+
+  it("masks a pair's compound display_name when EITHER partner opted out — never one mask for one, none for the other", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    await sql`
+      insert into registration_settings
+        (division_id, enabled, entrant_kind, fee_cents, payment_method, approval, allow_free_agents)
+      values (${division.id}, true, 'pair', 0, 'offline', 'auto', false)`;
+    const refCode = freshRef();
+    const { registration } = await seedRegistration(
+      competition.id,
+      division.id,
+      { fee_cents: 0, currency: "gbp", payment_method: "offline" },
+      {
+        refCode,
+        displayName: "Arun Kumar & Dev Patel",
+        players: [{ name: "Arun Kumar" }, { name: "Dev Patel" }],
+      },
+    );
+    await linkPersonWithConsent(orgId, registration.id, "Arun Kumar", { public_name: true });
+    await linkPersonWithConsent(orgId, registration.id, "Dev Patel", { public_name: false });
+
+    const view = await publicCartByRef(refCode);
+    expect(view.entries[0]!.display_name).toBe("Arun K. & Dev P.");
+  });
+
+  it("never masks a TEAM's display_name by consent — a team name carries no personal consent (public.ts precedent)", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    await sql`
+      insert into registration_settings
+        (division_id, enabled, entrant_kind, fee_cents, payment_method, approval, allow_free_agents)
+      values (${division.id}, true, 'team', 0, 'offline', 'auto', false)`;
+    const refCode = freshRef();
+    const { registration } = await seedRegistration(
+      competition.id,
+      division.id,
+      { fee_cents: 0, currency: "gbp", payment_method: "offline" },
+      { refCode, displayName: "Thunder Strikers", players: [{ name: "Cap Tain" }] },
+    );
+    await linkPersonWithConsent(orgId, registration.id, "Cap Tain", { public_name: false });
+
+    const view = await publicCartByRef(refCode);
+    expect(view.entries[0]!.display_name).toBe("Thunder Strikers");
+  });
+
   it("returns every entry in the cart, in creation order — not just the oldest", async () => {
     const { competition, division } = await stripeSettingsRig();
     const refCode = freshRef();

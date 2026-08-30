@@ -68,6 +68,10 @@ const emailMock = vi.hoisted(() => ({
   // that proxy breaks once a race can mint twice but send once (or vice
   // versa), which is exactly what this fix separates.
   paymentReminder: vi.fn().mockResolvedValue(true),
+  // RS008: the system claim-invite mail — observed directly (bare vi.fn,
+  // same "no-op without RESEND_API_KEY anyway" convention as paymentReminder
+  // above), so the invite-sweep tests can count sends deterministically.
+  claimInvite: vi.fn().mockResolvedValue(true),
 }));
 vi.mock("@/lib/email", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/email")>();
@@ -82,6 +86,7 @@ vi.mock("@/lib/email", async (importOriginal) => {
     },
     sendRegistrationRefundFailedAlertEmail: emailMock.registrationRefundFailedAlert,
     sendPaymentReminderEmail: emailMock.paymentReminder,
+    sendClaimInviteEmail: emailMock.claimInvite,
   };
 });
 
@@ -101,7 +106,7 @@ vi.mock("@/lib/credits", async (importOriginal) => {
   };
 });
 
-import { sql } from "@/lib/db";
+import { sql, withTenant } from "@/lib/db";
 import { log } from "@/server/logger";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
@@ -150,6 +155,8 @@ import {
   resolveRefundPolicy,
   groupById,
   reconcileRegistrationGroupBySession,
+  inviteUnclaimedMembers,
+  anyOptedOutByRegistration,
   type GroupStatusView,
 } from "../registrations";
 // RS005 F1: rendering the REAL production template off captured
@@ -383,6 +390,7 @@ beforeEach(() => {
   // mockImplementation on this one — reset the implementation back to its
   // default too, or it leaks into every later test in this file.
   emailMock.paymentReminder.mockReset().mockResolvedValue(true);
+  emailMock.claimInvite.mockReset().mockResolvedValue(true);
 });
 
 afterEach(() => {
@@ -1362,6 +1370,178 @@ describe.skipIf(!HAS_DB)("registration flows (doc 16 §1.1, PROMPT-20a)", () => 
     await expect(
       publicRegistrationStatusByRef(`SZ-${chars.slice(0, 4).join("")}-${chars.slice(4).join("")}`),
     ).rejects.toThrow(/not found/);
+  });
+
+  // RS008: publicRegistrationStatusByRef's own consent-masking sibling to
+  // publicCartByRef's (registration-status-read.test.ts owns the youth
+  // baseline + the pair/team cases) — pinned here since this file already
+  // owns the ref-resolution tests for this specific function.
+  it("publicRegistrationStatusByRef masks display_name when the linked person opted out — even on a non-youth division", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    const settings = await putRegistrationSettings(owner, division.id, {
+      enabled: true,
+      entrant_kind: "individual",
+      fee_cents: 0,
+      form_fields: [],
+      opens_at: null,
+      closes_at: null,
+      capacity: null,
+      refund_lock_at: null,
+    });
+    const { registration } = await seedRegistration(competition.id, division.id, settings, {
+      refCode: generateRefCode(),
+      displayName: "Priya Singh",
+      players: [{ name: "Priya Singh" }],
+    });
+    const [{ id: personId }] = await sql<{ id: string }[]>`
+      insert into persons (org_id, full_name, consent)
+      values (${orgId}, 'Priya Singh', ${sql.json({ public_name: false } as never)})
+      returning id`;
+    await sql`
+      update registration_players set person_id = ${personId}
+      where registration_id = ${registration.id}`;
+
+    const view = await publicRegistrationStatusByRef(registration.ref_code!);
+    expect(view.display_name).toBe("Priya S.");
+  });
+
+  // Code-review fix (2026-08-30) — `anyOptedOutByRegistration` used to have a
+  // byte-for-byte duplicate in exports.ts, differing only in which sql/tx
+  // client was passed (the "two lookup paths drift" defect class). Deduped
+  // into this ONE function, now taking the client as an explicit parameter.
+  // Pins that it returns the identical result whether called with the plain
+  // pooled `sql` (every caller in THIS file) or a `withTenant` transaction
+  // (how exports.ts's `buildAdmitTicketsDoc` must call it) — the exact two
+  // call shapes the dedupe needs to serve without behaviour drifting again.
+  it("anyOptedOutByRegistration returns the identical result via plain sql and via a withTenant transaction", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    const settings = await putRegistrationSettings(owner, division.id, {
+      enabled: true,
+      entrant_kind: "individual",
+      fee_cents: 0,
+      form_fields: [],
+      opens_at: null,
+      closes_at: null,
+      capacity: null,
+      refund_lock_at: null,
+    });
+    const { registration } = await seedRegistration(competition.id, division.id, settings, {
+      refCode: generateRefCode(),
+      displayName: "Opted Out Person",
+      players: [{ name: "Opted Out Person" }],
+    });
+    const [{ id: personId }] = await sql<{ id: string }[]>`
+      insert into persons (org_id, full_name, consent)
+      values (${orgId}, 'Opted Out Person', ${sql.json({ public_name: false } as never)})
+      returning id`;
+    await sql`
+      update registration_players set person_id = ${personId}
+      where registration_id = ${registration.id}`;
+
+    const viaPlainSql = await anyOptedOutByRegistration(sql, [registration.id]);
+    const viaTx = await withTenant(orgId, (tx) => anyOptedOutByRegistration(tx, [registration.id]));
+
+    expect(viaPlainSql.has(registration.id)).toBe(true);
+    expect([...viaTx]).toEqual([...viaPlainSql]);
+  });
+
+  it("publicRegistrationStatusByRef never masks a TEAM's display_name by a roster member's opt-out", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    const settings = await putRegistrationSettings(owner, division.id, {
+      enabled: true,
+      entrant_kind: "team",
+      fee_cents: 0,
+      form_fields: [],
+      opens_at: null,
+      closes_at: null,
+      capacity: null,
+      refund_lock_at: null,
+    });
+    const { registration } = await seedRegistration(competition.id, division.id, settings, {
+      refCode: generateRefCode(),
+      displayName: "Thunder Strikers",
+      players: [{ name: "Cap Tain" }],
+    });
+    const [{ id: personId }] = await sql<{ id: string }[]>`
+      insert into persons (org_id, full_name, consent)
+      values (${orgId}, 'Cap Tain', ${sql.json({ public_name: false } as never)})
+      returning id`;
+    await sql`
+      update registration_players set person_id = ${personId}
+      where registration_id = ${registration.id}`;
+
+    const view = await publicRegistrationStatusByRef(registration.ref_code!);
+    expect(view.display_name).toBe("Thunder Strikers");
+  });
+
+  // RS008 review fix #3 (Important) — publicRegistrationStatus (the ?rid=
+  // &token= status-page read, distinct from the ref-code sibling above) had
+  // NO masking at all, not even by youth — bringing it to parity with
+  // publicRegistrationStatusByRef, which has had both axes since RS008.
+  it("publicRegistrationStatus masks display_name when the linked person opted out — even on a non-youth division", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    const settings = await putRegistrationSettings(owner, division.id, {
+      enabled: true,
+      entrant_kind: "individual",
+      fee_cents: 0,
+      form_fields: [],
+      opens_at: null,
+      closes_at: null,
+      capacity: null,
+      refund_lock_at: null,
+    });
+    const res = await seedRegistration(competition.id, division.id, settings, {
+      displayName: "Priya Singh",
+      players: [{ name: "Priya Singh" }],
+    });
+    const [{ id: personId }] = await sql<{ id: string }[]>`
+      insert into persons (org_id, full_name, consent)
+      values (${orgId}, 'Priya Singh', ${sql.json({ public_name: false } as never)})
+      returning id`;
+    await sql`
+      update registration_players set person_id = ${personId}
+      where registration_id = ${res.registration.id}`;
+
+    const status = await publicRegistrationStatus(res.registration.id, res.access_token);
+    expect(status.display_name).toBe("Priya S.");
+  });
+
+  it("publicRegistrationStatus never masks a TEAM's display_name by a roster member's opt-out", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    const settings = await putRegistrationSettings(owner, division.id, {
+      enabled: true,
+      entrant_kind: "team",
+      fee_cents: 0,
+      form_fields: [],
+      opens_at: null,
+      closes_at: null,
+      capacity: null,
+      refund_lock_at: null,
+    });
+    const res = await seedRegistration(competition.id, division.id, settings, {
+      displayName: "Thunder Strikers",
+      players: [{ name: "Cap Tain" }],
+    });
+    const [{ id: personId }] = await sql<{ id: string }[]>`
+      insert into persons (org_id, full_name, consent)
+      values (${orgId}, 'Cap Tain', ${sql.json({ public_name: false } as never)})
+      returning id`;
+    await sql`
+      update registration_players set person_id = ${personId}
+      where registration_id = ${res.registration.id}`;
+
+    const status = await publicRegistrationStatus(res.registration.id, res.access_token);
+    expect(status.display_name).toBe("Thunder Strikers");
   });
 
   it("self-withdraw by ref requires the email token — the ref alone is a lookup, not auth", async () => {
@@ -3503,6 +3683,275 @@ describe.skipIf(!HAS_DB)("RS003 W3b: group checkout webhook", () => {
     const [{ n }] = await sql<{ n: number }[]>`
       select count(*)::int as n from entrants where division_id = ${division.id}`;
     expect(n).toBe(2); // exactly A and B, no duplicates
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RS008 — inviteUnclaimedMembers: the post-materialise/post-claim claim-
+// invite sweep. Fire-and-forget in production (`void inviteUnclaimedMembers`
+// at every convergence point) but called directly + awaited here so the
+// guard logic itself is deterministic and provable without racing a
+// detached promise. Real DB rows built by hand (materialise() is not the
+// only writer this needs to prove against — the sweep must work off
+// whatever STATE a registration/entrant is in, regardless of how it got
+// there), same "raw fixture, not a full submit" convention
+// registration-materialise.test.ts's own seedPlayerEntry/seedPerson use.
+// ---------------------------------------------------------------------------
+describe.skipIf(!HAS_DB)("inviteUnclaimedMembers (RS008 — claim-invite sweep)", () => {
+  async function seedEntrantWithPlayers(
+    orgId: string,
+    divisionId: string,
+    players: {
+      fullName: string;
+      email?: string | null;
+      consentStatus: "pending" | "granted" | "guardian";
+      /** Person-level state — omit for "no linked person yet". */
+      person?: { userId?: string | null } | null;
+    }[],
+  ): Promise<{ entrantId: string; personIdByName: Map<string, string> }> {
+    const [{ competition_id: competitionId }] = await sql<{ competition_id: string }[]>`
+      select competition_id from divisions where id = ${divisionId}`;
+    const [group] = await sql<{ id: string }[]>`
+      insert into registration_groups
+        (competition_id, contact_name, contact_email, access_token_hash, currency)
+      values (${competitionId}, 'Contact', ${`c-${randomUUID().slice(0, 8)}@test.local`},
+              ${`tok-${randomUUID()}`}, 'gbp')
+      returning id`;
+    const [entrant] = await sql<{ id: string }[]>`
+      insert into entrants (division_id, kind, display_name, status)
+      values (${divisionId}, 'team', 'Sweep Test Team', 'confirmed')
+      returning id`;
+    const [reg] = await sql<{ id: string }[]>`
+      insert into registrations (group_id, division_id, entrant_id, display_name, status)
+      values (${group!.id}, ${divisionId}, ${entrant!.id}, 'Sweep Test Team', 'confirmed')
+      returning id`;
+    const personIdByName = new Map<string, string>();
+    for (const p of players) {
+      let personId: string | null = null;
+      if (p.person !== null) {
+        const [person] = await sql<{ id: string }[]>`
+          insert into persons (org_id, full_name, lane, email, user_id, consent)
+          values (${orgId}, ${p.fullName}, 'player', ${p.email ?? null}, ${p.person?.userId ?? null},
+                  ${sql.json({ public_name: true } as never)})
+          returning id`;
+        personId = person!.id;
+        personIdByName.set(p.fullName, personId);
+      }
+      await sql`
+        insert into registration_players
+          (registration_id, full_name, email, source, consent_status, person_id)
+        values (${reg!.id}, ${p.fullName}, ${p.email ?? null}, 'captain_entered', ${p.consentStatus}, ${personId})`;
+    }
+    return { entrantId: entrant!.id, personIdByName };
+  }
+
+  it("invites a granted player with an email and no linked account; skips a still-pending row", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const { division } = await rig(asOwner(orgId, ownerId));
+    const { entrantId, personIdByName } = await seedEntrantWithPlayers(orgId, division.id, [
+      { fullName: "Sam Captain", email: "sam@test.local", consentStatus: "granted" },
+      { fullName: "Jordan Pending", email: "jordan@test.local", consentStatus: "pending" },
+    ]);
+
+    await inviteUnclaimedMembers(orgId, entrantId);
+
+    expect(emailMock.claimInvite).toHaveBeenCalledTimes(1);
+    const [, args] = emailMock.claimInvite.mock.calls[0]!;
+    expect(args).toMatchObject({ personName: "Sam Captain" });
+    const claims = await sql<{ person_id: string; email: string }[]>`
+      select person_id, email from person_claims where person_id = ${personIdByName.get("Sam Captain")!}`;
+    expect(claims).toHaveLength(1);
+    expect(claims[0]!.email).toBe("sam@test.local");
+    // The pending row's person never gets a claim row at all.
+    const pendingClaims = await sql<{ id: string }[]>`
+      select id from person_claims where person_id = ${personIdByName.get("Jordan Pending")!}`;
+    expect(pendingClaims).toHaveLength(0);
+  });
+
+  it("never invites a signed-in (already-linked) player", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const { division } = await rig(asOwner(orgId, ownerId));
+    const [{ id: signedInUserId }] = await sql<{ id: string }[]>`
+      insert into users (email, display_name, password_hash)
+      values (${`u-${randomUUID().slice(0, 8)}@test.local`}, 'Signed In', 'x')
+      returning id`;
+    const { entrantId, personIdByName } = await seedEntrantWithPlayers(orgId, division.id, [
+      {
+        fullName: "Already Linked",
+        email: "linked@test.local",
+        consentStatus: "granted",
+        person: { userId: signedInUserId },
+      },
+    ]);
+
+    await inviteUnclaimedMembers(orgId, entrantId);
+
+    expect(emailMock.claimInvite).not.toHaveBeenCalled();
+    const [{ n }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from person_claims where person_id = ${personIdByName.get("Already Linked")!}`;
+    expect(n).toBe(0);
+  });
+
+  it("skips a granted player with no email on file — never crashes, never invites", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const { division } = await rig(asOwner(orgId, ownerId));
+    const { entrantId } = await seedEntrantWithPlayers(orgId, division.id, [
+      { fullName: "No Email Given", email: null, consentStatus: "granted" },
+    ]);
+
+    await expect(inviteUnclaimedMembers(orgId, entrantId)).resolves.toBeUndefined();
+    expect(emailMock.claimInvite).not.toHaveBeenCalled();
+  });
+
+  it("a second sweep of the SAME entrant sends no additional invite — the open-claim guard", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const { division } = await rig(asOwner(orgId, ownerId));
+    const { entrantId, personIdByName } = await seedEntrantWithPlayers(orgId, division.id, [
+      { fullName: "Invited Once", email: "once@test.local", consentStatus: "granted" },
+    ]);
+
+    await inviteUnclaimedMembers(orgId, entrantId);
+    expect(emailMock.claimInvite).toHaveBeenCalledTimes(1);
+    await inviteUnclaimedMembers(orgId, entrantId);
+    expect(emailMock.claimInvite).toHaveBeenCalledTimes(1); // still one
+
+    const claims = await sql<{ id: string; revoked_at: string | null }[]>`
+      select id, revoked_at from person_claims where person_id = ${personIdByName.get("Invited Once")!}`;
+    expect(claims).toHaveLength(1); // never revoked-and-replaced by the second sweep
+    expect(claims[0]!.revoked_at).toBeNull();
+  });
+
+  // RS008 review fix #7 — the guard above only proves a STILL-LIVE open
+  // invite skips. This proves the other half: an EXPIRED (past its 14-day
+  // window), never-claimed, never-revoked invite must NOT lock the person
+  // out of ever being auto-invited again — the exact permanent-lockout bug
+  // this fix closes (person-claims.ts's natural-expiry path never sets
+  // revoked_at, so the pre-fix guard, which checked only
+  // claimed_at/revoked_at, read a merely-lapsed row as "open" forever).
+  it("an EXPIRED open invite is revoked and replaced by a later sweep; a still-live one still correctly skips", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const { division } = await rig(asOwner(orgId, ownerId));
+    const { entrantId, personIdByName } = await seedEntrantWithPlayers(orgId, division.id, [
+      { fullName: "Expired Invite", email: "expired@test.local", consentStatus: "granted" },
+    ]);
+    const personId = personIdByName.get("Expired Invite")!;
+
+    await inviteUnclaimedMembers(orgId, entrantId);
+    expect(emailMock.claimInvite).toHaveBeenCalledTimes(1);
+    // Backdate the invite past its window, WITHOUT touching claimed_at/
+    // revoked_at — the exact "open, but expired" shape this fix targets.
+    await sql`update person_claims set expires_at = now() - interval '1 day' where person_id = ${personId}`;
+
+    // A sweep while the (now-expired) invite is still nominally "open" must
+    // send a brand NEW one, not skip silently forever.
+    await inviteUnclaimedMembers(orgId, entrantId);
+    expect(emailMock.claimInvite).toHaveBeenCalledTimes(2);
+
+    const claims = await sql<{ revoked_at: string | null; expires_at: string }[]>`
+      select revoked_at, expires_at from person_claims where person_id = ${personId} order by created_at`;
+    expect(claims).toHaveLength(2);
+    expect(claims[0]!.revoked_at).not.toBeNull(); // the stale row was revoked, not left dangling
+    expect(claims[1]!.revoked_at).toBeNull(); // the fresh row is open
+
+    // And a THIRD sweep, while the fresh one is still live, correctly skips
+    // again — the fix does not turn every sweep into a resend.
+    await inviteUnclaimedMembers(orgId, entrantId);
+    expect(emailMock.claimInvite).toHaveBeenCalledTimes(2);
+  });
+
+  it("a person who is ALREADY claimed by the time of a later sweep gets no invite, even though the row is still 'granted'", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const { division } = await rig(asOwner(orgId, ownerId));
+    const { entrantId, personIdByName } = await seedEntrantWithPlayers(orgId, division.id, [
+      { fullName: "Claims Later", email: "later@test.local", consentStatus: "granted" },
+    ]);
+    const [{ id: laterUserId }] = await sql<{ id: string }[]>`
+      insert into users (email, display_name, password_hash)
+      values (${`u-${randomUUID().slice(0, 8)}@test.local`}, 'Later User', 'x')
+      returning id`;
+    await sql`update persons set user_id = ${laterUserId} where id = ${personIdByName.get("Claims Later")!}`;
+
+    await inviteUnclaimedMembers(orgId, entrantId);
+
+    expect(emailMock.claimInvite).not.toHaveBeenCalled();
+    const [{ n }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from person_claims where person_id = ${personIdByName.get("Claims Later")!}`;
+    expect(n).toBe(0);
+  });
+
+  it("never throws when the entrant has no qualifying rows at all", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const { division } = await rig(asOwner(orgId, ownerId));
+    const { entrantId } = await seedEntrantWithPlayers(orgId, division.id, []);
+    await expect(inviteUnclaimedMembers(orgId, entrantId)).resolves.toBeUndefined();
+    expect(emailMock.claimInvite).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RS008 — wiring: confirmRegistration/confirmPaidRegistration call
+// inviteUnclaimedMembers post-commit. Both live in THIS module, so
+// inviteUnclaimedMembers cannot be mocked here (a same-file call binds
+// directly, not through the module's live-binding export — vi.mock cannot
+// intercept it); these prove the REAL end-to-end wiring instead, via the
+// mocked @/lib/email boundary and vi.waitFor (the call is fire-and-forget,
+// not awaited by production code, so the assertion must tolerate the
+// microtask gap). markRegistrationPaidOffline/confirmRegistrationWaived
+// carry the IDENTICAL one-line wiring (same `if (row.entrant_id) void
+// inviteUnclaimedMembers(row.org_id, row.entrant_id)` shape, verified by
+// reading the diff) and are not separately re-proven end-to-end here.
+// ---------------------------------------------------------------------------
+describe.skipIf(!HAS_DB)("RS008: confirmRegistration/confirmPaidRegistration fire the claim-invite sweep", () => {
+  it("confirmRegistration invites a granted, emailed, unlinked player once materialised", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    const settings = await putRegistrationSettings(owner, division.id, {
+      enabled: true,
+      entrant_kind: "individual",
+      fee_cents: 0,
+      form_fields: [],
+      opens_at: null,
+      closes_at: null,
+      capacity: null,
+      refund_lock_at: null,
+    });
+    const { registration } = await seedRegistration(competition.id, division.id, settings, {
+      players: [{ name: "Confirm Sweep Person", dob: "1998-01-01" }],
+    });
+    // seedRegistration's own player insert leaves consent_status at its table
+    // default ('pending') — bump it to 'granted' with an email, the state a
+    // real self-registration's OWN row is written in at submit.
+    await sql`
+      update registration_players
+      set consent_status = 'granted', email = 'confirmsweep@test.local'
+      where registration_id = ${registration.id}`;
+
+    await confirmRegistration(owner, registration.id);
+
+    await vi.waitFor(() => expect(emailMock.claimInvite).toHaveBeenCalledTimes(1));
+    const [, args] = emailMock.claimInvite.mock.calls[0]!;
+    expect(args).toMatchObject({ personName: "Confirm Sweep Person" });
+  });
+
+  it("confirmPaidRegistration (via the checkout webhook) invites too", async () => {
+    const { competition, division } = await stripeRig();
+    const { registration } = await seedRegistration(
+      competition.id,
+      division.id,
+      { fee_cents: 500, currency: "gbp", payment_method: "stripe" },
+      { players: [{ name: "Webhook Sweep Person", dob: "1997-01-01" }] },
+    );
+    await sql`
+      update registration_players
+      set consent_status = 'granted', email = 'webhooksweep@test.local'
+      where registration_id = ${registration.id}`;
+
+    await handleRegistrationCheckoutCompleted(fakeSession(registration.id, 500));
+
+    await vi.waitFor(() => expect(emailMock.claimInvite).toHaveBeenCalledTimes(1));
+    const [, args] = emailMock.claimInvite.mock.calls[0]!;
+    expect(args).toMatchObject({ personName: "Webhook Sweep Person" });
   });
 });
 

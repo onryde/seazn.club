@@ -61,6 +61,11 @@ const BASE_ENTRY = {
   division_name: "Mixed Doubles",
   display_name: "Team Alpha",
   status: "pending" as const,
+  // RS008 review fix #1: "Team Alpha" is semantically a team already (this
+  // fixture predates the field) — the heading-masking regression it cannot
+  // see is exercised by its own dedicated test below, with an explicit
+  // "individual" override.
+  entrant_kind: "team" as const,
   amount_cents: 2500,
   free_agent: false,
   join_code: null as string | null,
@@ -70,7 +75,16 @@ const BASE_ENTRY = {
   // division's registration_settings.payment_method), never the cart —
   // see resolveMoneyState's own doc comment (view-model.ts).
   payment_method: "stripe" as const,
-  players: [] as { id: string; full_name: string; consent_status: "pending" | "granted" | "guardian" }[],
+  // RS008: this entry's own division youth/player_name_display policy —
+  // threaded onto GroupEntryView (buildGroupStatusView, registrations.ts).
+  division_youth: false,
+  division_player_name_display: null as string | null,
+  players: [] as {
+    id: string;
+    full_name: string;
+    consent_status: "pending" | "granted" | "guardian";
+    consent: { public_name?: boolean } | null;
+  }[],
   refund_policy: { refundable: true, deadline: "2026-09-15T00:00:00.000Z", amount_cents: 2500 },
 };
 
@@ -120,6 +134,24 @@ describe("register status page (RS007 rebuild)", () => {
     // single pending entry's own fee.
     expect(html).toContain("£25");
     expect(usecaseMock.groupById).toHaveBeenCalledWith("g1", "tok");
+  });
+
+  // RS008 review fix #9 (RS009 handoff) — gated ONLY on free_agent, no other
+  // condition (see awaitingTeamAssignment's own doc comment for why this is
+  // deliberately incomplete and owed to RS009).
+  it("shows 'Waiting for a team' for a free-agent entry, and never for an ordinary one", async () => {
+    usecaseMock.groupById.mockResolvedValueOnce({
+      ...BASE_VIEW,
+      entries: [{ ...BASE_ENTRY, free_agent: true }],
+    });
+    const html = await render({ rid: "g1", token: "tok" });
+    expect(html).toContain("Waiting for a team");
+  });
+
+  it("never shows 'Waiting for a team' for an ordinary (non-free-agent) entry", async () => {
+    usecaseMock.groupById.mockResolvedValueOnce(BASE_VIEW); // both entries free_agent: false
+    const html = await render({ rid: "g1", token: "tok" });
+    expect(html).not.toContain("Waiting for a team");
   });
 
   it("shows a plain not-found message, and never calls groupById, when rid/token are missing", async () => {
@@ -451,8 +483,8 @@ describe("register status page (RS007 rebuild)", () => {
             ...BASE_ENTRY,
             join_code: "JOIN123",
             players: [
-              { id: "p1", full_name: "Sam Player", consent_status: "granted" as const },
-              { id: "p2", full_name: "Jordan Player", consent_status: "pending" as const },
+              { id: "p1", full_name: "Sam Player", consent_status: "granted" as const, consent: null },
+              { id: "p2", full_name: "Jordan Player", consent_status: "pending" as const, consent: null },
             ],
           },
         ],
@@ -472,6 +504,79 @@ describe("register status page (RS007 rebuild)", () => {
       expect(html.match(/JOIN123/g)?.length).toBe(2); // the two hrefs only
     });
 
+    // RS008: a roster row backed by a person who opted out via /me
+    // (persons.consent.public_name = false) must render masked here too —
+    // this page is one of the sites named in the gap (RS007 shipped the
+    // consent gate; nothing enforced it on THIS render until now). A sibling
+    // row with no opt-out (consent: null, e.g. never claimed) stays full, on
+    // a non-youth division — proves the fix is additive, not a blanket mask.
+    it("masks a roster row whose linked person opted out of a public name; a non-opted-out row stays full", async () => {
+      usecaseMock.groupById.mockResolvedValueOnce({
+        ...BASE_VIEW,
+        entries: [
+          {
+            ...BASE_ENTRY,
+            join_code: "JOIN456",
+            players: [
+              {
+                id: "p1",
+                full_name: "Arun Kumar",
+                consent_status: "granted" as const,
+                consent: { public_name: false },
+              },
+              {
+                id: "p2",
+                full_name: "Dev Patel",
+                consent_status: "pending" as const,
+                consent: null,
+              },
+            ],
+          },
+        ],
+      });
+      const html = await render({ rid: "g1", token: "tok" });
+      expect(html).not.toContain("Arun Kumar");
+      expect(html).toContain("Arun K.");
+      expect(html).toContain("Dev Patel");
+      // The claim-link text for the STILL-unclaimed row names it in full too
+      // (consent: null is not an opt-out) — masking is per-person, not
+      // blanket once any row on the entry has opted out.
+      expect(html).toContain("Dev Patel");
+    });
+
+    // RS008 review fix #1 (Critical): the entry-card HEADING (entry.display_name)
+    // had ZERO masking — only the roster rows above (the previous test) were
+    // routed through the consent resolver. BASE_ENTRY's own "Team Alpha"
+    // fixture can never see this (a team's own name never takes the consent
+    // axis) — this uses an "individual" entrant, whose display_name IS a
+    // person's name, realistically the SAME person as its own sole roster row.
+    it("masks the entry-card HEADING too, not just the roster rows below it, for a non-team entry whose linked person opted out", async () => {
+      usecaseMock.groupById.mockResolvedValueOnce({
+        ...BASE_VIEW,
+        entries: [
+          {
+            ...BASE_ENTRY,
+            entrant_kind: "individual" as const,
+            display_name: "Arun Kumar",
+            players: [
+              {
+                id: "p1",
+                full_name: "Arun Kumar",
+                consent_status: "granted" as const,
+                consent: { public_name: false },
+              },
+            ],
+          },
+        ],
+      });
+      const html = await render({ rid: "g1", token: "tok" });
+      expect(html).not.toContain("Arun Kumar");
+      // Both the heading AND the roster row below it now read "Arun K." —
+      // before this fix, only the roster row did; the heading leaked
+      // "Arun Kumar" raw.
+      expect(html.match(/Arun K\./g)?.length).toBe(2);
+    });
+
     // Finding #20: the entry's own lifecycle pill can say CONFIRMED (fee
     // landed, auto-approved) on the SAME card where a roster row is still
     // unclaimed. Before this fix both used the word "confirm" — a paying
@@ -488,8 +593,8 @@ describe("register status page (RS007 rebuild)", () => {
             ...BASE_ENTRY,
             status: "confirmed" as const,
             players: [
-              { id: "p1", full_name: "Pair Captain", consent_status: "granted" as const },
-              { id: "p2", full_name: "Pair Partner", consent_status: "pending" as const },
+              { id: "p1", full_name: "Pair Captain", consent_status: "granted" as const, consent: null },
+              { id: "p2", full_name: "Pair Partner", consent_status: "pending" as const, consent: null },
             ],
           },
         ],
@@ -538,8 +643,8 @@ describe("register status page (RS007 rebuild)", () => {
             join_code: "PAIR456",
             allows_new_joiner: false,
             players: [
-              { id: "p1", full_name: "Sam Player", consent_status: "granted" as const },
-              { id: "p2", full_name: "Jordan Player", consent_status: "pending" as const },
+              { id: "p1", full_name: "Sam Player", consent_status: "granted" as const, consent: null },
+              { id: "p2", full_name: "Jordan Player", consent_status: "pending" as const, consent: null },
             ],
           },
         ],
@@ -566,8 +671,8 @@ describe("register status page (RS007 rebuild)", () => {
               join_code: "DEAD789",
               allows_new_joiner: true,
               players: [
-                { id: "p1", full_name: "Sam Player", consent_status: "granted" as const },
-                { id: "p2", full_name: "Jordan Player", consent_status: "pending" as const },
+                { id: "p1", full_name: "Sam Player", consent_status: "granted" as const, consent: null },
+                { id: "p2", full_name: "Jordan Player", consent_status: "pending" as const, consent: null },
               ],
             },
           ],

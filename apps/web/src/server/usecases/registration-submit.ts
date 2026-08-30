@@ -34,9 +34,13 @@ import {
   reconcileClaimedPerson,
   backfillPersonEmail,
   joinExistingEntrant,
+  inviteUnclaimedMembers,
+  playerPersonConsentsByEmail,
+  anyOptedOutByRegistration,
   type RegistrationRow,
   type RegistrationSettingsRow,
 } from "./registrations";
+import { anyOptedOut, resolvePersonDisplayName } from "@/lib/name-display";
 import {
   divisionEligibilityIssues,
   requiresDob,
@@ -922,11 +926,55 @@ export async function previewJoinEntry(joinCode: string): Promise<JoinPreviewRes
   }
 
   const divCtx = await loadEntryDivisionCtx(reg.division_id);
+  // RS008 review fix #1: this join-page HEADING's own consent rule — see
+  // `entryDisplayName`'s doc comment (register/status/view-model.ts) for why
+  // a team's own name is exempt but this can be a person's (individual) or
+  // a pair's compound name.
+  const [divPolicy] = await sql<{ youth: boolean; player_name_display: string | null }[]>`
+    select youth, player_name_display from divisions where id = ${reg.division_id}`;
 
-  const slots = await sql<{ id: string; full_name: string }[]>`
-    select id, full_name from registration_players
+  const slots = await sql<{ id: string; full_name: string; email: string | null }[]>`
+    select id, full_name, email from registration_players
     where registration_id = ${reg.id} and source = 'captain_entered' and consent_status = 'pending'
     order by squad_number nulls last, created_at`;
+
+  // #24 — a `pending` slot's own consent is genuinely undecided, so ordinarily
+  // it previews raw. But #22's email dedupe means a captain-typed row CAN
+  // already match an EXISTING person elsewhere in the org's directory who has
+  // separately opted out — that person's own choice, already on record, must
+  // not be overridden just because THIS particular row hasn't been claimed
+  // yet. Read-only lookup: unlike materialise time (which needs the
+  // EXACT-ONE identity guarantee findOrCreatePlayerPerson relies on), this is
+  // a masking decision — RS008 review fix #8 — so an AMBIGUOUS match (2+
+  // persons sharing one email; duplicates exist per the merge feature) must
+  // not fail OPEN into "preview raw." playerPersonConsentsByEmail returns
+  // every match's consent; anyOptedOut masks if ANY of them opted out, same
+  // "stricter wins" rule applied everywhere else in this session. Zero
+  // matches (or no email at all) means no CONSENT-based opt-out was found —
+  // that alone no longer decides the outcome: `resolvePersonDisplayName`
+  // below also applies the DIVISION's youth/safeguarding policy (code review
+  // fix, 2026-08-30), the same second axis the join page's own HEADING
+  // already applies via `divPolicy.youth` a few lines further down. A youth
+  // division masks every slot regardless of consent; the consent check here
+  // only ever ADDS masking on top, never removes youth's.
+  const unclaimedSlots = await Promise.all(
+    slots.map(async (s) => {
+      const trimmedEmail = s.email?.trim() || null;
+      const consents = trimmedEmail
+        ? await playerPersonConsentsByEmail(sql, divCtx.org_id, trimmedEmail)
+        : [];
+      const optedOut = anyOptedOut(consents);
+      return {
+        player_id: s.id,
+        full_name: resolvePersonDisplayName(
+          s.full_name,
+          optedOut ? { public_name: false } : null,
+          divPolicy?.player_name_display ?? null,
+          divPolicy?.youth ?? false,
+        ),
+      };
+    }),
+  );
 
   // Never for a `pair` (fixed at two — claim only), and never once the
   // sport's cap is already met. Short-circuited so a pair never even issues
@@ -942,15 +990,29 @@ export async function previewJoinEntry(joinCode: string): Promise<JoinPreviewRes
   const [{ n: totalPlayers }] = await sql<{ n: number }[]>`
     select count(*)::int as n from registration_players where registration_id = ${reg.id}`;
 
+  // RS008 review fix #6 (Minor) — this heading was reg.display_name raw; for
+  // a `pair` (a `team`'s never takes the consent axis) this is a compound
+  // person name. Masked the same way /r/[ref] (publicRegistrationStatusByRef)
+  // already does for the identical field: anyOptedOutByRegistration reuses
+  // the SAME aggregate this session's other compound-string sites use.
+  const isTeam = reg.entrant_kind === "team";
+  const optedOutRegs = isTeam ? new Set<string>() : await anyOptedOutByRegistration(sql, [reg.id]);
+  const displayName = resolvePersonDisplayName(
+    reg.display_name,
+    optedOutRegs.has(reg.id) ? { public_name: false } : null,
+    divPolicy?.player_name_display ?? null,
+    divPolicy?.youth ?? false,
+  );
+
   return {
     registration_id: reg.id,
-    display_name: reg.display_name,
+    display_name: displayName,
     division_name: divCtx.division_name,
     competition_name: divCtx.comp_name,
     competition_slug: divCtx.comp_slug,
     org_slug: divCtx.org_slug,
     org_name: divCtx.org_name,
-    unclaimed_slots: slots.map((s) => ({ player_id: s.id, full_name: s.full_name })),
+    unclaimed_slots: unclaimedSlots,
     allow_new_player: allowNewPlayer,
     requires_dob: requiresDob({
       age_min: divCtx.age_min,
@@ -1111,11 +1173,21 @@ export async function joinTeamEntry(
   // own: lock the row, re-read it LIVE, then write — inside one short
   // transaction holding nothing but this claim/insert (RS007).
   const claimedEmail = input.player.email?.trim() || null;
+  // RS008: captured from `locked` (below) for the post-commit claim-invite
+  // sweep — set on BOTH the claim (player_id given) and insert branches,
+  // since either can land on an entry ALREADY materialised (claimed.person_id
+  // non-null on the claim branch; #23's own gap on the insert branch), which
+  // is exactly the "already materialised" condition RS008's invite convergence
+  // point requires. null when the entry has never been materialised (nothing
+  // to sweep yet — materialise() itself will trigger the sweep whenever it
+  // eventually runs).
+  let materialisedEntrantId: string | null = null;
 
   const playerId = await sql.begin(async (tx) => {
     const [locked] = await tx<{ status: string; free_agent: boolean; entrant_id: string | null }[]>`
       select status, free_agent, entrant_id from registrations where id = ${reg.id} for update`;
     if (!locked) throw new HttpError(404, "This join link is not valid");
+    materialisedEntrantId = locked.entrant_id;
     if (locked.free_agent) throw new HttpError(422, "This entry has no roster to join yet");
     if (["withdrawn", "rejected", "expired"].includes(locked.status)) {
       throw new HttpError(422, "This entry is no longer accepting players");
@@ -1269,6 +1341,16 @@ export async function joinTeamEntry(
     }
     return player!.id;
   });
+
+  // RS008: fire-and-forget, strictly AFTER the transaction above has
+  // committed (never inside it — see inviteUnclaimedMembers's own doc
+  // comment). Covers BOTH branches at once: a claim (player_id given) whose
+  // `claimed.person_id` was non-null landed here with `locked.entrant_id`
+  // set, and an insert (#23) landing on an already-materialised entry sets
+  // the same field via `joinExistingEntrant`'s write above — either way,
+  // this joiner (and any other already-granted, unclaimed member of the
+  // SAME entrant) is swept in one call.
+  if (materialisedEntrantId) void inviteUnclaimedMembers(reg.org_id, materialisedEntrantId);
 
   log.info(
     {

@@ -33,6 +33,7 @@ import {
   stripeRefund,
   notifyRefund,
   maybeAlertRegistrationRefundFailed,
+  inviteUnclaimedMembers,
   type RegistrationWithGroupRow,
   type RegistrationSettingsRow,
 } from "./registrations";
@@ -142,6 +143,10 @@ export async function approveRegistration(
     return orgRegAfter(tx, regId);
   });
   fireDivisionRevalidate(row.division_id);
+  // RS008: fire-and-forget, strictly AFTER the transaction above has
+  // committed — see registrations.ts's confirmRegistration for the
+  // identical wiring and its own doc comment for why.
+  if (row.entrant_id) void inviteUnclaimedMembers(row.org_id, row.entrant_id);
   log.info(
     { event: "registration.approved", registration_id: regId, org_id: auth.orgId, status: row.status },
     "registration approved",

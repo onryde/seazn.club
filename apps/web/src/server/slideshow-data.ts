@@ -8,7 +8,7 @@ import { listDivisionFixtures } from "@/server/usecases/fixtures";
 import { listEntrants } from "@/server/usecases/entrants";
 import { listEntrantLogoUrls } from "@/server/usecases/teams";
 import { hasFeature } from "@/lib/entitlements";
-import { maskDisplayName, resolveNameDisplay } from "@/lib/name-display";
+import { anyOptedOut, resolvePersonDisplayName } from "@/lib/name-display";
 import { BRACKET_SLIDE_KINDS, bracketSlideLaysOut } from "@/components/v2/slideshow-rotation";
 import { resolveLogoUrl } from "@/server/public-site/data";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -117,7 +117,7 @@ export async function buildDivisionSlides(
   divisionId: string,
   divisionName: string,
 ): Promise<Slide[]> {
-  const [stages, fixtures, entrants, logos, priv, org] = await Promise.all([
+  const [stages, fixtures, entrants, logos, priv, org, consentRows] = await Promise.all([
     listStages(auth, divisionId),
     listDivisionFixtures(auth, divisionId),
     listEntrants(auth, divisionId),
@@ -142,16 +142,48 @@ export async function buildDivisionSlides(
       tx<{ default_locale: string | null }[]>`
         select default_locale from organizations where id = ${auth.orgId}`,
     ),
+    // RS008 — every roster member's own consent, keyed by entrant (fetched
+    // for every entrant kind uniformly, including team: a team roster IS
+    // people, even though the team's OWN display_name below never takes
+    // this axis — same `kind === "team"` bypass public.ts's publicEntrants
+    // already established). `listEntrants` stays untouched (a general,
+    // widely-used usecase); this is a small, local, PARALLEL query instead.
+    withTenant(auth.orgId, (tx) =>
+      tx<{ entrant_id: string; consent: { public_name?: boolean } | null }[]>`
+        select em.entrant_id, p.consent
+        from entrant_members em
+        join persons p on p.id = em.person_id
+        join entrants e on e.id = em.entrant_id
+        where e.division_id = ${divisionId}`,
+    ),
   ]);
   const locale = toLocale(org[0]?.default_locale);
   const lookup: SlotLabelLookup = (k, v) => msgFor(locale, k, v);
+  // RS008: "stricter wins" per entrant — ANY roster member's explicit
+  // opt-out masks that entrant's own display_name (a solo "individual"
+  // entrant has exactly one member; a "pair"/"team" can have several).
+  const consentByEntrant = new Map<string, ({ public_name?: boolean } | null)[]>();
+  for (const r of consentRows) {
+    const list = consentByEntrant.get(r.entrant_id) ?? [];
+    list.push(r.consent);
+    consentByEntrant.set(r.entrant_id, list);
+  }
   // Slideshow renders on venue screens — a public surface for name-display
-  // purposes (v3/11 gap 8). Team names pass through; person names mask.
-  const mode = resolveNameDisplay(priv[0]?.player_name_display ?? null, priv[0]?.youth ?? false);
+  // purposes (v3/11 gap 8). Team names pass through; person names mask by
+  // division youth policy OR the roster's own consent opt-out (RS008),
+  // whichever is stricter — resolvePersonDisplayName is the single
+  // canonical resolver for both axes at once.
   const names = Object.fromEntries(
     entrants.map((e) => [
       e.id,
-      e.kind === "team" ? e.display_name : maskDisplayName(e.display_name, mode),
+      e.kind === "team"
+        ? e.display_name
+        : resolvePersonDisplayName(
+            e.display_name,
+            anyOptedOut(consentByEntrant.get(e.id) ?? []) ? { public_name: false } : null,
+            priv[0]?.player_name_display ?? null,
+            priv[0]?.youth ?? false,
+          ),
     ]),
   );
   const slides: Slide[] = [];
@@ -294,7 +326,19 @@ export async function buildDivisionSlides(
 // ---------------------------------------------------------------------------
 
 export interface PublicSlideInput {
-  division: { id: string; name: string };
+  division: {
+    id: string;
+    name: string;
+    /** RS008 review fix #2 — this builder's own youth/player_name_display
+     *  policy for the `names` map below (`resolvePersonDisplayName`,
+     *  mirroring `buildDivisionSlides`'s identical fields). Optional and
+     *  defaults to "full" (false/null) so every existing caller/test that
+     *  predates this keeps its current behaviour; every real /present page
+     *  reads `PublicDivision.youth`/`player_name_display`
+     *  (public-site/data.ts) and should pass both through. */
+    youth?: boolean;
+    player_name_display?: string | null;
+  };
   stages: { id: string; kind: string; name: string }[];
   pools: { id: string; stage_id: string; name: string }[];
   fixtures: {
@@ -312,7 +356,26 @@ export interface PublicSlideInput {
     summary: { headline?: string } | null;
   }[];
   standings: { stage_id: string; pool_id: string | null; rows: StandingsSlideSnapshotRow[] }[];
-  entrants: { id: string; display_name: string; badge_url?: string | null }[];
+  entrants: {
+    id: string;
+    display_name: string;
+    badge_url?: string | null;
+    /** RS008 review fix #2 — a `team`'s own declared name never takes the
+     *  consent axis (public.ts/public_entrants_v precedent, established
+     *  throughout this session). Optional: absent bypasses masking exactly
+     *  like a genuine team entrant would, matching every existing test that
+     *  predates this field. */
+    kind?: string;
+    /** RS008 review fix #2 — true when ANY current roster member of this
+     *  entrant has explicitly opted out (`consent.public_name === false`).
+     *  Computed by the caller (`public-site/data.ts`'s `getPublicDivision`/
+     *  `getPublicFixture`, which already derive this same signal to mask
+     *  `display_name` themselves before it ever reaches here) — this
+     *  builder stays pure/DB-free, so it cannot derive it independently.
+     *  Absent/false never masks, matching `resolvePersonDisplayName`'s own
+     *  "absence is never an opt-out" contract. */
+    opted_out?: boolean;
+  }[];
   /** P6 fix round 1, finding #2 (CRITICAL) — spectator-facing locale (v5
    *  i18n §4), `PublicOrg.default_locale` (same field data.ts:502-503
    *  already resolves from). Optional and defaults to English so every
@@ -334,7 +397,28 @@ interface StandingsSlideSnapshotRow {
 export function buildPublicDivisionSlides(data: PublicSlideInput): Slide[] {
   const orgLocale = toLocale(data.orgLocale);
   const lookup: SlotLabelLookup = (k, v) => msgFor(orgLocale, k, v);
-  const names = Object.fromEntries(data.entrants.map((e) => [e.id, e.display_name]));
+  // RS008 review fix #2 — this "pure public twin" of buildDivisionSlides had
+  // NO masking at all, not even by youth: the anonymous kiosk (/present)
+  // could show an opted-out (or underage) person's full name where the
+  // AUTHED noticeboard already masked it. Same resolver, same "team never
+  // takes the consent axis" bypass; the caller (public-site/data.ts) already
+  // masks display_name at the source too (belt and suspenders — see
+  // PublicSlideInput's own doc comments), so this is correct even for a
+  // caller that predates `kind`/`opted_out`/`youth`/`player_name_display`
+  // and passes none of them (every field defaults to "never mask").
+  const names = Object.fromEntries(
+    data.entrants.map((e) => [
+      e.id,
+      e.kind === "team"
+        ? e.display_name
+        : resolvePersonDisplayName(
+            e.display_name,
+            e.opted_out ? { public_name: false } : null,
+            data.division.player_name_display ?? null,
+            data.division.youth ?? false,
+          ),
+    ]),
+  );
   const stageById = new Map(data.stages.map((s) => [s.id, s]));
   const poolById = new Map(data.pools.map((p) => [p.id, p]));
   const slides: Slide[] = [];

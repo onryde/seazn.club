@@ -18,7 +18,15 @@
 // walkthrough charter permits that). Every step that IS the journey — typing,
 // ticking, adding roster rows, submitting, claiming — is done through the UI.
 import { expect, test } from "@playwright/test";
-import { activeOrg, apiJson, expectNoHorizontalScroll, TAG } from "../helpers";
+import {
+  activeOrg,
+  apiJson,
+  expectNoHorizontalScroll,
+  loginUi,
+  mintClaimPathForPlayerRow,
+  screenshotAtWidths,
+  TAG,
+} from "../helpers";
 
 const GENERIC_CONFIG = { points: { w: 3, d: 1, l: 0 }, progressScore: false };
 
@@ -136,6 +144,9 @@ test("a captain enters a team, and a team-mate claims their spot from the link t
 
     // --------------------------------------------------- the STATUS page
     await anon.waitForURL(/\/register\/status\?/, { timeout: 30_000 });
+    // Captured for the RS008 review fix #10 segment at the end of this spec,
+    // which revisits this exact URL after Mate Two's own claim+opt-out.
+    const statusUrl = anon.url();
     await expect(anon.getByText(`Journey Team ${TAG}`).first()).toBeVisible();
     await shot(anon, "06-status");
     await expectNoHorizontalScroll(anon);
@@ -188,6 +199,106 @@ test("a captain enters a team, and a team-mate claims their spot from the link t
       "GET",
     );
     expect(stillOpen.status).toBeLessThan(300);
+
+    // ------------------------------------------------------------------
+    // RS008 review fix #10 — a SECOND player follows their OWN claim link,
+    // opts out of a public name on /me (built in RS007 — no new UI here),
+    // and the status page's roster must show them masked while Mate One
+    // (claimed above, never opted out) still renders in full. The status
+    // page is `export const dynamic = "force-dynamic"` (verified by reading
+    // register/status/page.tsx directly) — no ISR revalidation window to
+    // race, a plain reload is always fresh.
+    // ------------------------------------------------------------------
+    const mate2Email = `journey-mate2-${TAG}@example.com`;
+    const mate2Ctx = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+    try {
+      // Mate Two's OWN join is not what this segment tests — Mate One's UI
+      // join above already covers that path end to end. Reaching "granted,
+      // with an email on file" via the same PUBLIC API the join page itself
+      // calls (never the signed-in `request` fixture — this must be the
+      // anonymous caller the real route sees) is the fastest, least-flaky
+      // route to the state this segment DOES test: claim-accept, the /me
+      // opt-out, and its effect on a re-rendered status page.
+      await anon.goto(statusUrl, { waitUntil: "load" });
+      const secondClaim = anon.locator('a[href*="/register/join"]').first();
+      await expect(secondClaim, "the status page emits no second claim link for Mate Two").toBeVisible();
+      const secondHref = await secondClaim.getAttribute("href");
+      const secondUrl = new URL(secondHref!, anon.url());
+      const joinCode = secondUrl.searchParams.get("join_code")!;
+      const player2Id = secondUrl.searchParams.get("player_id")!;
+      expect(player2Id, "expected Mate Two's own per-slot claim link, not the generic one").toBeTruthy();
+
+      const joined = await apiJson(
+        mate2Ctx.request,
+        `/api/v1/public/orgs/${org.slug}/competitions/${comp.data!.slug}/register/join`,
+        "POST",
+        {
+          join_code: joinCode,
+          player_id: player2Id,
+          player: { full_name: MATES[1], email: mate2Email },
+          privacy_consent: true,
+        },
+      );
+      expect(joined.status, "Mate Two's own join failed").toBeLessThan(300);
+
+      // The REAL claim-invite secret went to an inbox this process can never
+      // read (only its sha256 lands in the DB) — mint an equivalent one
+      // directly, the same shortcut this file's helpers already take for
+      // magic links (mintLoginPathBySql). Everything from here IS a real
+      // click through the real /claim/[token] UI.
+      const claimPath = await mintClaimPathForPlayerRow(player2Id, org.id, mate2Email);
+      const mate2Page = await mate2Ctx.newPage();
+      // loginUi itself waits until the post-login URL leaves /login and
+      // /magic-link behind — by the time it returns, the app's own `next`
+      // redirect has already landed on claimPath.
+      await loginUi(mate2Page, mate2Email, claimPath);
+
+      const claimButton = mate2Page.getByRole("button", { name: /this is me/i });
+      await expect(claimButton, "the claim-accept page never rendered its own accept button").toBeVisible();
+      await screenshotAtWidths(mate2Page, testInfo, "10-claim-accept");
+      await claimButton.click();
+
+      // ClaimAccept redirects to /me?claimed=1 on success.
+      await mate2Page.waitForURL(/\/me(\?|$)/, { timeout: 20_000 });
+
+      // The opt-out toggle (RS007's own ConsentCard, /me — no new UI built
+      // for this task). Toggling it OFF is the whole point of this segment.
+      const nameConsent = mate2Page.getByLabel(/show my name publicly/i);
+      await expect(nameConsent, "could not find the existing /me public-name opt-out toggle").toBeVisible();
+      await expect(nameConsent).toBeChecked(); // RS007 default: consent, not silence
+      // consent-card.tsx applies the toggle OPTIMISTICALLY, then PATCHes —
+      // wait for that PATCH to actually land, not just the checkbox's own
+      // (revertible) optimistic state, before trusting the write happened.
+      const [patchResponse] = await Promise.all([
+        mate2Page.waitForResponse((r) => r.url().includes("/consent") && r.request().method() === "PATCH"),
+        nameConsent.uncheck(),
+      ]);
+      expect(patchResponse.status(), "the /me consent opt-out PATCH failed").toBeLessThan(300);
+      await expect(nameConsent).not.toBeChecked();
+      await screenshotAtWidths(mate2Page, testInfo, "11-opted-out");
+
+      // Back to the CAPTAIN's own status page — same URL, no rebuild, no
+      // cache to invalidate (force-dynamic). Mate Two must now read masked;
+      // Mate One (claimed earlier, never opted out) must still read in full.
+      await anon.goto(statusUrl, { waitUntil: "load" });
+      const mate2Masked = `Mate ${TAG[0]}.`; // maskDisplayName's own "first + last-initial" rule
+      await expect(
+        anon.getByText(MATES[1]!),
+        "Mate Two's raw full name is still visible after their own opt-out",
+      ).not.toBeVisible();
+      await expect(
+        anon.getByText(mate2Masked),
+        `expected Mate Two's masked name ("${mate2Masked}") to be visible`,
+      ).toBeVisible();
+      await expect(
+        anon.getByText(MATES[0]!),
+        "Mate One (never opted out) must still render in full",
+      ).toBeVisible();
+      await screenshotAtWidths(anon, testInfo, "12-standings-mixed-consent");
+      await expectNoHorizontalScroll(anon);
+    } finally {
+      await mate2Ctx.close();
+    }
 
     expect(pageErrors, `the journey logged page errors: ${pageErrors.join(" | ")}`).toEqual([]);
   } finally {

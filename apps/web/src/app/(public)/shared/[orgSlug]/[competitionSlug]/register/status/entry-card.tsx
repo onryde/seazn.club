@@ -18,12 +18,15 @@ import { CompetitionProse } from "@/components/public-site/competition-prose";
 import { PayButton } from "./pay-button";
 import { CancelEntry } from "./cancel-entry";
 import {
+  awaitingTeamAssignment,
   canCancelEntry,
   canJoinEntry,
   claimHref,
   entryCountsTowardTotal,
+  entryDisplayName,
   resolveMoneyState,
   rosterCounts,
+  rosterPlayerDisplayName,
   type EntryStatus,
 } from "./view-model";
 
@@ -53,6 +56,11 @@ export interface EntryCardProps {
     division_id: string;
     division_name: string;
     display_name: string;
+    /** RS008 review fix #1: which consent rule the HEADING itself follows —
+     *  a `team`'s own declared name never takes the consent axis, but an
+     *  `individual`/`pair`'s `display_name` IS a person's (or a pair's
+     *  compound) name. See `entryDisplayName` (view-model.ts). */
+    entrant_kind: "team" | "individual" | "pair";
     status: EntryStatus;
     amount_cents: number;
     free_agent: boolean;
@@ -65,7 +73,19 @@ export interface EntryCardProps {
      *  see resolveMoneyState's own doc comment (view-model.ts) for why this
      *  moved off the cart. */
     payment_method: "offline" | "stripe";
-    players: { id: string; full_name: string; consent_status: "pending" | "granted" | "guardian" }[];
+    /** RS008: this entry's OWN division's youth/player_name_display policy —
+     *  see `rosterPlayerDisplayName` (view-model.ts) for why it travels with
+     *  the entry rather than the cart. */
+    division_youth: boolean;
+    division_player_name_display: string | null;
+    players: {
+      id: string;
+      full_name: string;
+      consent_status: "pending" | "granted" | "guardian";
+      /** RS008: null when this row has no linked person yet (unclaimed,
+       *  entry never materialised) — masked by youth alone in that case. */
+      consent: { public_name?: boolean } | null;
+    }[];
     refund_policy: {
       refundable: boolean;
       deadline: string | null;
@@ -106,6 +126,31 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
   const money = resolveMoneyState(entry, cart);
   const roster = rosterCounts(entry.players);
   const unclaimed = entry.players.filter((p) => p.consent_status === "pending");
+  // RS008: every roster row's name, masked by division youth policy OR the
+  // linked person's own consent opt-out. Resolved ONCE, by id, so the
+  // roster list below and the claim-link text (which names the SAME person
+  // to the captain deciding who to invite) can never show two different
+  // spellings of "masked" for one player. A plain for-of over the roster,
+  // not a `.map` call, so the literal source text this file's own layout
+  // test anchors its wrap-class search on stays unique to the JSX render
+  // further down.
+  const displayNameById = new Map<string, string>();
+  for (const p of entry.players) {
+    displayNameById.set(
+      p.id,
+      rosterPlayerDisplayName(p, {
+        youth: entry.division_youth,
+        player_name_display: entry.division_player_name_display,
+      }),
+    );
+  }
+  // RS008 review fix #1: the card's own HEADING, same stricter-wins rule as
+  // the roster rows above — a team's own name is exempt, an individual/pair
+  // entrant's is not.
+  const headingName = entryDisplayName(entry, {
+    youth: entry.division_youth,
+    player_name_display: entry.division_player_name_display,
+  });
 
   // FIX 1 (RS007 status-page review): formatMinor(entry.amount_cents, …)
   // used to appear ONLY inside the stripe_due "Pay now — {amount}" label,
@@ -202,7 +247,7 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
             <p className="truncate text-xs font-semibold tracking-wide text-ink-muted uppercase">
               {entry.division_name}
             </p>
-            <p className="truncate font-display text-lg font-semibold text-ink">{entry.display_name}</p>
+            <p className="truncate font-display text-lg font-semibold text-ink">{headingName}</p>
           </div>
           <span
             className={`shrink-0 rounded-full border px-2.5 py-1 text-xs font-semibold tracking-wide uppercase ${tone.badge}`}
@@ -212,6 +257,13 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
         </div>
 
         {moneyNode}
+
+        {/* RS009 handoff — see awaitingTeamAssignment's own doc comment
+            (view-model.ts) for why this check is INCOMPLETE (free_agent
+            records entry MODE, not outcome) and must not be extended here. */}
+        {awaitingTeamAssignment(entry) && (
+          <p className="text-sm text-ink-muted">{t(ui, "register.status.entry.awaitingTeam")}</p>
+        )}
 
         {entry.players.length > 0 && (
           <div className="rounded-lg bg-canvas p-3">
@@ -236,7 +288,7 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
             <ul className="mt-2 space-y-1.5">
               {entry.players.map((p) => (
                 <li key={p.id} className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-sm">
-                  <span className="min-w-0 grow basis-40 truncate text-ink">{p.full_name}</span>
+                  <span className="min-w-0 grow basis-40 truncate text-ink">{displayNameById.get(p.id)}</span>
                   <span
                     className={
                       p.consent_status === "pending"
@@ -263,7 +315,7 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
                       href={claimHref(orgSlug, competitionSlug, entry.join_code!, p.id)}
                       className="text-xs font-medium text-accent-strong underline underline-offset-2"
                     >
-                      {t(ui, "register.status.roster.claimLink", { name: p.full_name })}
+                      {t(ui, "register.status.roster.claimLink", { name: displayNameById.get(p.id) ?? p.full_name })}
                     </a>
                   </li>
                 ))}

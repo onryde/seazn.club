@@ -107,3 +107,64 @@ describe("buildPublicDivisionSlides — orgLocale (P6 finding #2)", () => {
     expect(kf.home).toBe("Winner of Group A");
   });
 });
+
+// RS008 review fix #2 — the anonymous public kiosk (/shared/{org}/{comp}/
+// present) had NO masking at all, not even by youth: buildDivisionSlides
+// (the AUTHED /slideshow/competitions/[id] twin) already masked by both
+// youth and consent, but this "pure public twin" never did. Standings slides
+// are the simplest surface to prove the `names` map on (see
+// buildDivisionSlides — consent masking, slideshow-data-locale.test.ts, for
+// the DB-backed sibling of this same fix on the authed builder).
+describe("buildPublicDivisionSlides — consent masking (RS008 review fix #2)", () => {
+  it("masks a non-team entrant's name when opted_out is true, even on a non-youth division", () => {
+    const slides = buildPublicDivisionSlides({
+      ...input,
+      entrants: [
+        { id: "e1", display_name: "Arun Kumar", kind: "individual", opted_out: true },
+        { id: "e2", display_name: "Dev Patel", kind: "individual", opted_out: false },
+        { id: "e3", display_name: "Japan", kind: "individual" },
+        { id: "e4", display_name: "Ghana", kind: "individual" },
+      ],
+    });
+    const standings = slides.find((s) => s.kind === "standings") as { rows: { name: string }[] };
+    // Per-entrant, not blanket: e2 (not opted out) stays full.
+    expect(standings.rows.map((r) => r.name)).toEqual(["Arun K.", "Dev Patel"]);
+  });
+
+  it("never masks a TEAM's own name, even when opted_out is (incorrectly) true", () => {
+    const slides = buildPublicDivisionSlides({
+      ...input,
+      entrants: [
+        { id: "e1", display_name: "Thunder Strikers", kind: "team", opted_out: true },
+        { id: "e2", display_name: "Dev Patel", kind: "individual" },
+        { id: "e3", display_name: "Japan", kind: "individual" },
+        { id: "e4", display_name: "Ghana", kind: "individual" },
+      ],
+    });
+    const standings = slides.find((s) => s.kind === "standings") as { rows: { name: string }[] };
+    expect(standings.rows.map((r) => r.name)).toContain("Thunder Strikers");
+  });
+
+  it("masks by division youth policy alone, with no explicit opt-out", () => {
+    const slides = buildPublicDivisionSlides({
+      ...input,
+      division: { ...input.division, youth: true },
+      entrants: [
+        { id: "e1", display_name: "Arun Kumar", kind: "individual" },
+        { id: "e2", display_name: "Dev Patel", kind: "individual" },
+        { id: "e3", display_name: "Japan", kind: "individual" },
+        { id: "e4", display_name: "Ghana", kind: "individual" },
+      ],
+    });
+    const standings = slides.find((s) => s.kind === "standings") as { rows: { name: string }[] };
+    expect(standings.rows.map((r) => r.name)).toEqual(["Arun K.", "Dev P."]);
+  });
+
+  it("omitting kind/opted_out/youth entirely never masks — back-compat with every existing caller/test", () => {
+    // The base `input` fixture (top of file) predates this fix and sets none
+    // of kind/opted_out/youth/player_name_display anywhere.
+    const slides = buildPublicDivisionSlides(input);
+    const standings = slides.find((s) => s.kind === "standings") as { rows: { name: string }[] };
+    expect(standings.rows.map((r) => r.name)).toEqual(["Mexico", "Canada"]);
+  });
+});

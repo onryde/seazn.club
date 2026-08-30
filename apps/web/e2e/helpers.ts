@@ -1,4 +1,4 @@
-import { expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
+import { expect, type APIRequestContext, type Locator, type Page, type TestInfo } from "@playwright/test";
 // Type-only, so nothing from the app is pulled into the Playwright runtime —
 // the same import event-pass.spec.ts already makes. Naming the rung union here
 // rather than re-declaring it is what keeps a new rung from needing a sixth
@@ -162,6 +162,93 @@ export async function mintLoginPathBySql(email: string): Promise<string> {
       values (${users[0].id}, ${token}, ${expiresAt})`;
   });
   return `/magic-link?token=${token}`;
+}
+
+/**
+ * Mint a `/claim/{token}` path directly in the DB for the person a SPECIFIC
+ * `registration_players` row currently resolves to — the same "would
+ * otherwise need a real inbox" problem {@link mintLoginPathBySql} solves for
+ * magic links, applied to RS008's player-account claim invites
+ * (person-claims.ts). The real invite-sending path (createSystemClaimInvite,
+ * fired by the registration flow's own claim-invite sweep) mails a secret
+ * this process can never read back — only its sha256 is ever persisted
+ * (person_claims.token_hash) — so a spec that needs to drive the REAL
+ * `/claim/[token]` UI (the point of this helper) mints its own row with a
+ * KNOWN secret instead, the exact same shortcut `mintLoginPathBySql` already
+ * takes for magic links.
+ *
+ * Resolved via the roster row's OWN `person_id`, not an email lookup: a
+ * player-row CLAIM (join with `player_id`) persists the claimer's email onto
+ * `registration_players.email`, but only backfills it onto `persons.email`
+ * when `reconcileClaimedPerson` finds an EXISTING person by that email
+ * (registration-submit.ts) — an entry materialised before the claim (this
+ * helper's own intended caller) already minted a fresh "dummy" person at
+ * submit time with no email at all, so looking this up by email would find
+ * nothing. The row's live `person_id` is correct regardless of which of
+ * those two paths fired.
+ *
+ * `email` here is the CLAIM's own (`person_claims.email`), checked against
+ * the signer-in account by `assertClaimEmail` (person-claims.ts) — it need
+ * not match `persons.email` for the claim to succeed.
+ *
+ * Revokes any existing open invite for the person first (mirrors
+ * createSystemClaimInvite's own revoke-then-insert, and keeps
+ * `person_claims_open_uq`, V276, from ever seeing two open rows at once) — a
+ * prior real sweep may already have minted one whose secret this process
+ * cannot use. Does NOT import person-claims.ts (a "server-only" module
+ * pulling in the whole app's DB/auth graph) — this file's own `withDb`
+ * convention stays a lightweight, independent `postgres` client; the sha256
+ * hash scheme is duplicated by hand here, same as this file already does
+ * for `login_links`-shaped tokens.
+ */
+export async function mintClaimPathForPlayerRow(
+  playerRowId: string,
+  orgId: string,
+  email: string,
+): Promise<string> {
+  const { randomBytes, createHash } = await import("node:crypto");
+  const secret = "pc_" + randomBytes(32).toString("base64url");
+  const tokenHash = createHash("sha256").update(secret, "utf8").digest("hex");
+  await withDb(async (sql) => {
+    const rows = await sql<{ person_id: string | null }[]>`
+      select person_id from registration_players where id = ${playerRowId}`;
+    const personId = rows[0]?.person_id;
+    if (!personId) {
+      throw new Error(`mintClaimPathForPlayerRow: registration_players ${playerRowId} has no person_id yet`);
+    }
+    await sql`
+      update person_claims set revoked_at = now()
+      where person_id = ${personId} and claimed_at is null and revoked_at is null`;
+    await sql`
+      insert into person_claims (org_id, person_id, email, token_hash, invited_by, expires_at)
+      values (${orgId}, ${personId}, ${email}, ${tokenHash}, null, now() + interval '14 days')`;
+  });
+  return `/claim/${secret}`;
+}
+
+const DEFAULT_SHOT_WIDTHS = [1280, 768, 320];
+
+/**
+ * Screenshot one page at several widths, restoring the original viewport
+ * afterward. No shared screenshot helper existed in this directory before
+ * (every walkthrough spec defines its own single-width `shot()` closure
+ * inline) — this one is for the rarer case of a spec needing the SAME
+ * moment captured at more than one width (RS008 review fix #10's own
+ * claim/consent/opt-out/standings moments). Kept minimal on purpose: a
+ * single-width spec should keep using its own local `shot()`, not this.
+ */
+export async function screenshotAtWidths(
+  page: Page,
+  testInfo: TestInfo,
+  name: string,
+  widths: number[] = DEFAULT_SHOT_WIDTHS,
+): Promise<void> {
+  const original = page.viewportSize();
+  for (const width of widths) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.screenshot({ path: `${testInfo.outputPath()}/${name}-${width}.png`, fullPage: true });
+  }
+  if (original) await page.setViewportSize(original);
 }
 
 /**

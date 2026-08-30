@@ -1,14 +1,29 @@
 // Consent matrix + visibility + entitlement tests for the public read model
 // (PROMPT-12 acceptance; doc 06 §4.7 — legal requirement, doc 09 §1/§4).
 // Real Postgres required (views + SQL functions); skipped without DATABASE_URL.
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
+
+// RS008 review fix #5's new tests below call getPublicDivision/
+// getPublicFixture directly (this file's own pre-existing tests never did —
+// they query the public_*_v views straight). unstable_cache is a Next
+// server-runtime API with no incrementalCache outside a real request —
+// passthrough under vitest, the same double
+// data-court-venue-names.test.ts/pass-scope-public-realtime.test.ts already
+// use for the identical reason.
+vi.mock("next/cache", () => ({
+  unstable_cache: (fn: (...args: unknown[]) => unknown) => fn,
+  revalidateTag: vi.fn(),
+}));
+
 import { sql } from "@/lib/db";
 import { PaymentRequiredError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition, patchCompetition } from "@/server/usecases/competitions";
 import { createDivision } from "@/server/usecases/divisions";
 import { createEntrants } from "@/server/usecases/entrants";
+import { createStages, generateStageFixtures } from "@/server/usecases/stages";
+import { getPublicDivision, getPublicFixture } from "../data";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -241,5 +256,125 @@ describe.skipIf(!HAS_DB)("entitlement split (doc 09 §4, doc 10)", () => {
     await expect(
       patchCompetition(auth, unlisted.id, { visibility: "public" }),
     ).rejects.toThrow(PaymentRequiredError);
+  });
+});
+
+// RS008 review fix #5 (Important, largest) — getPublicDivision's own
+// entrants query (feeding the division page, calendar.ics, poster.pdf, and
+// via the {...data} spread the /present kiosk too) and getPublicFixture's
+// separate entrantNames query both read public_entrants_v.display_name with
+// ZERO masking — not even by youth, the pre-existing safeguarding control
+// every other public display_name site already honours.
+describe.skipIf(!HAS_DB)("getPublicDivision / getPublicFixture — entrant display_name consent (RS008 review fix #5)", () => {
+  it("getPublicDivision masks a non-team entrant's display_name when its linked person opted out — even on a non-youth division", async () => {
+    const { auth, orgId } = await seedOrg();
+    const [{ slug: orgSlug }] = await sql<{ slug: string }[]>`
+      select slug from organizations where id = ${orgId}`;
+    const comp = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "Fix5 Cup",
+      visibility: "public",
+      branding: {},
+    });
+    const division = await createDivision(auth, comp.id, {
+      name: "Open",
+      slug: "open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: DIVISION_CONFIG,
+    });
+    const [{ id: personId }] = await sql<{ id: string }[]>`
+      insert into persons (org_id, full_name, consent)
+      values (${orgId}, 'Arun Kumar', ${sql.json({ public_name: false })})
+      returning id`;
+    await createEntrants(auth, division.id, [
+      {
+        kind: "individual",
+        display_name: "Arun Kumar",
+        seed: 1,
+        members: [{ person_id: personId, squad_number: null, default_position_key: null, is_captain: false, roles: [] }],
+      },
+      { kind: "individual", display_name: "Dev Patel", seed: 2, members: [] },
+    ]);
+
+    const data = await getPublicDivision(orgSlug, comp.slug, division.slug);
+    const names = data!.entrants.map((e) => e.display_name);
+    expect(names).not.toContain("Arun Kumar");
+    expect(names).toContain("Arun K.");
+    expect(names).toContain("Dev Patel"); // per-entrant, not blanket
+  });
+
+  it("getPublicDivision never masks a TEAM's own display_name by a roster member's opt-out", async () => {
+    const { auth, orgId } = await seedOrg();
+    const [{ slug: orgSlug }] = await sql<{ slug: string }[]>`
+      select slug from organizations where id = ${orgId}`;
+    const comp = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "Fix5 Team Cup",
+      visibility: "public",
+      branding: {},
+    });
+    const division = await createDivision(auth, comp.id, {
+      name: "Open",
+      slug: "open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: DIVISION_CONFIG,
+    });
+    const [{ id: personId }] = await sql<{ id: string }[]>`
+      insert into persons (org_id, full_name, consent)
+      values (${orgId}, 'Cap Tain', ${sql.json({ public_name: false })})
+      returning id`;
+    await createEntrants(auth, division.id, [
+      {
+        kind: "team",
+        display_name: "Thunder Strikers",
+        seed: 1,
+        members: [{ person_id: personId, squad_number: null, default_position_key: null, is_captain: true, roles: [] }],
+      },
+    ]);
+
+    const data = await getPublicDivision(orgSlug, comp.slug, division.slug);
+    expect(data!.entrants.map((e) => e.display_name)).toContain("Thunder Strikers");
+  });
+
+  it("getPublicFixture's entrantNames mask a non-team entrant the same way, on the individual fixture page", async () => {
+    const { auth, orgId } = await seedOrg();
+    const [{ slug: orgSlug }] = await sql<{ slug: string }[]>`
+      select slug from organizations where id = ${orgId}`;
+    const comp = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "Fix5 Fixture Cup",
+      visibility: "public",
+      branding: {},
+    });
+    const division = await createDivision(auth, comp.id, {
+      name: "Open",
+      slug: "open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: DIVISION_CONFIG,
+    });
+    const [{ id: personId }] = await sql<{ id: string }[]>`
+      insert into persons (org_id, full_name, consent)
+      values (${orgId}, 'Arun Kumar', ${sql.json({ public_name: false })})
+      returning id`;
+    await createEntrants(auth, division.id, [
+      {
+        kind: "individual",
+        display_name: "Arun Kumar",
+        seed: 1,
+        members: [{ person_id: personId, squad_number: null, default_position_key: null, is_captain: false, roles: [] }],
+      },
+      { kind: "individual", display_name: "Dev Patel", seed: 2, members: [] },
+    ]);
+    const [stage] = await createStages(auth, division.id, { seq: 1, kind: "league", name: "League", config: {} });
+    const { fixtures } = await generateStageFixtures(auth, stage!.id);
+
+    const detail = await getPublicFixture(orgSlug, comp.slug, division.slug, fixtures[0]!.id);
+    const names = Object.values(detail!.entrantNames);
+    expect(names).not.toContain("Arun Kumar");
+    expect(names).toContain("Arun K.");
+    expect(names).toContain("Dev Patel");
   });
 });

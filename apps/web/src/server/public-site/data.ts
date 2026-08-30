@@ -22,6 +22,7 @@ import { toLocale, type Locale } from "@/lib/i18n-constants";
 import { msgFor } from "@/lib/messages-i18n";
 import type { MessageKey } from "@/lib/messages";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
+import { anyOptedOut, resolvePersonDisplayName } from "@/lib/name-display";
 
 /**
  * `{count}`-pluralized org-default-locale copy — the `public-site/data.ts`
@@ -190,6 +191,16 @@ export interface PublicDivision {
   tiebreakers: string[] | null; // override cascade; null = sport default
   sport_name: string | null;
   entrant_count: number;
+  /** RS008 review fix #5 — this division's own youth/player_name_display
+   *  policy, joined from the base `divisions` table (public_divisions_v does
+   *  NOT expose these — appending them to that widely-read view was a wider
+   *  blast radius than needed for a two-column, single-query join). Feeds
+   *  `maskPublicEntrantNames` below, wherever this division's entrants are
+   *  read. Optional so a caller that predates this field (a hand-built test
+   *  fixture) still type-checks; every real query that builds a
+   *  `PublicDivision` now selects both. */
+  youth?: boolean;
+  player_name_display?: string | null;
 }
 
 export interface PublicFixture {
@@ -312,6 +323,16 @@ export interface PublicEntrant {
   } | null;
   /** PROMPT-60: the entrant's own crest — wins over team_display.logo_path. */
   badge_url?: string | null;
+  /** RS008 review fix #5 — true when ANY current roster member of this
+   *  (non-team) entrant has explicitly opted out of a public name. Set by
+   *  `maskPublicEntrantNames` alongside its own `display_name` masking;
+   *  never present before that function runs. Exposed (rather than kept
+   *  purely internal) so `buildPublicDivisionSlides`'s own independent
+   *  masking pass (fix #2) gets a REAL, live signal via the `{...data}`
+   *  spread the two /present page.tsx files already do — re-masking an
+   *  already-masked name is a safe no-op (resolvePersonDisplayName is
+   *  idempotent under re-application). */
+  opted_out?: boolean;
 }
 
 export interface PublicPlayer {
@@ -411,9 +432,15 @@ export async function getPublicCompetition(
                d.sport_key, d.variant_key,
                d.status, d.module_version, d.tiebreakers, s.name as sport_name,
                (select count(*)::int from public_entrants_v e
-                 where e.division_id = d.id) as entrant_count
+                 where e.division_id = d.id) as entrant_count,
+               -- RS008 review fix #5: public_divisions_v does not expose
+               -- these (see PublicDivision's own doc comment) — a cheap
+               -- primary-key join to the base table rather than widening
+               -- that view for every other consumer of it.
+               dv.youth, dv.player_name_display
         from public_divisions_v d
         left join sports s on s.key = d.sport_key
+        join divisions dv on dv.id = d.id
         where d.competition_id = ${competition.id}
         order by d.created_at, d.id`;
       // P9 sweep (pass 3c-4): venue/court_label dropped from this SELECT
@@ -457,6 +484,63 @@ export async function getPublicCompetition(
   )();
   if (!shell) return null;
   return shell;
+}
+
+/**
+ * RS008 review fix #5 — every public surface reading an entrant's own
+ * display_name (this division page, its calendar/poster exports, the
+ * present/slideshow kiosk, the embeds door) fed straight off
+ * `public_entrants_v.display_name` with ZERO masking — not even by youth,
+ * the pre-existing safeguarding control every other public display_name
+ * site already honours. Mirrors `buildDivisionSlides`/`buildGroupStatusView`'s
+ * own local, parallel consent query (never widens `public_entrants_v`
+ * itself, which many other, already-correct consumers read unmodified) —
+ * a `team`'s own declared name never takes the consent axis, same bypass
+ * established everywhere else this session. Exported so `embed-data.ts`,
+ * which runs its own separate (structurally identical) entrants query,
+ * reuses the SAME masking decision rather than a parallel one.
+ *
+ * Generic over the caller's own row shape (`getPublicFixture` below only
+ * needs `{id, kind, display_name}`, not a full `PublicEntrant`) — every
+ * caller gets `opted_out` back too, alongside the masked `display_name`,
+ * so a caller building a `PublicEntrant` (this file's own two below) can
+ * expose it for `buildPublicDivisionSlides`'s OWN independent masking pass
+ * (fix #2) to also see a real signal via the `{...data}` spread.
+ */
+export async function maskPublicEntrantNames<
+  T extends { id: string; kind: string; display_name: string },
+>(entrants: T[], division: { youth?: boolean; player_name_display?: string | null }): Promise<(T & { opted_out: boolean })[]> {
+  const nonTeamIds = entrants.filter((e) => e.kind !== "team").map((e) => e.id);
+  const consentRows =
+    nonTeamIds.length > 0
+      ? await sql<{ entrant_id: string; consent: { public_name?: boolean } | null }[]>`
+          select em.entrant_id, p.consent
+          from entrant_members em
+          join persons p on p.id = em.person_id
+          where em.entrant_id in ${sql(nonTeamIds)}`
+      : [];
+  const consentsByEntrant = new Map<string, ({ public_name?: boolean } | null)[]>();
+  for (const r of consentRows) {
+    const list = consentsByEntrant.get(r.entrant_id) ?? [];
+    list.push(r.consent);
+    consentsByEntrant.set(r.entrant_id, list);
+  }
+  return entrants.map((e) => {
+    const optedOut = e.kind !== "team" && anyOptedOut(consentsByEntrant.get(e.id) ?? []);
+    return {
+      ...e,
+      opted_out: optedOut,
+      display_name:
+        e.kind === "team"
+          ? e.display_name
+          : resolvePersonDisplayName(
+              e.display_name,
+              optedOut ? { public_name: false } : null,
+              division.player_name_display ?? null,
+              division.youth ?? false,
+            ),
+    };
+  });
 }
 
 /** Division home: schedule + standings + entrants + stage skeleton. */
@@ -503,11 +587,17 @@ export async function getPublicDivision(
       const standings = await sql<PublicStandings[]>`
         select stage_id, pool_id, rows, updated_at
         from public_standings_v where division_id = ${division.id}`;
-      const entrants = await sql<PublicEntrant[]>`
+      const rawEntrants = await sql<PublicEntrant[]>`
         select id, division_id, kind, display_name, seed, status, members,
                team_display, badge_url
         from public_entrants_v where division_id = ${division.id}
         order by seed nulls last, display_name`;
+      // RS008 review fix #5 — masks a non-team entrant's own display_name by
+      // consent (and, unlike before this fix, by youth too). Feeds THIS
+      // page's own render, the calendar.ics/poster.pdf exports, and (via the
+      // `{...data}` spread in the two /present page.tsx files) the
+      // slideshow kiosk's own independent masking pass (fix #2).
+      const entrants = await maskPublicEntrantNames(rawEntrants, division);
       // Venue lane (V305): the division's override, else the org's timezone.
       const [ss] = await sql<{ tz: string }[]>`
         select coalesce(ss.tz, o.timezone, 'UTC') as tz
@@ -564,9 +654,12 @@ export async function getPublicFixture(
         where id = ${fixtureId} and division_id = ${division.id} limit 1`;
       if (!fixtureRow) return null;
       const fixture = await withCourtVenueName(normalizeFixture(fixtureRow));
-      const names = await sql<{ id: string; display_name: string }[]>`
-        select id, display_name from public_entrants_v
+      const rawNames = await sql<{ id: string; kind: string; display_name: string }[]>`
+        select id, kind, display_name from public_entrants_v
         where division_id = ${division.id}`;
+      // RS008 review fix #5 — entrantNames fed the fixture page's own
+      // home/away display with ZERO masking, not even by youth.
+      const names = await maskPublicEntrantNames(rawNames, division);
       // Competition-scoped: an Event Pass grants realtime for the competition it
       // was bought for, so the org-wide 2-arg overload denies a paid-for fixture.
       // This is the SPECTATOR side of the grant — the organiser's own noticeboard

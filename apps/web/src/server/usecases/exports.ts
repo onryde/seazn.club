@@ -31,10 +31,11 @@ import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { hasFeature, requireFeature } from "@/lib/entitlements";
 import { fixtureWhen } from "@/lib/email-templates/official-assigned";
-import { maskDisplayName, resolveNameDisplay } from "@/lib/name-display";
+import { resolvePersonDisplayName } from "@/lib/name-display";
 import { resolveEntrantBadge } from "@/lib/entrant-badge";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { resolveModule } from "@/server/engine-db";
+import { anyOptedOutByRegistration } from "./registrations";
 import { participantRows } from "./clubs";
 import { resolveSponsors } from "./sponsors";
 import { getMyOfficiating } from "./me-officiating";
@@ -889,23 +890,40 @@ async function competitionTicketMeta(tx: Tx, competitionId: string): Promise<Com
 }
 
 interface TicketRegistrationRow {
+  registration_id: string;
   ref_code: string;
   display_name: string;
   status: string;
   player_name_display: string | null;
   youth: boolean;
+  /** RS008: a TEAM's own declared name carries no personal consent — never
+   *  routed through the consent axis (public.ts's publicEntrants precedent).
+   *  LEFT JOIN + coalesce: a division with no registration_settings row at
+   *  all (never blocked tickets before this) must not start doing so now. */
+  entrant_kind: "team" | "individual" | "pair";
 }
 
 async function ticketRegistrationRows(tx: Tx, competitionId: string): Promise<TicketRegistrationRow[]> {
   return tx<TicketRegistrationRow[]>`
-    select g.ref_code, r.display_name, r.status, d.player_name_display, d.youth
+    select r.id as registration_id, g.ref_code, r.display_name, r.status,
+           d.player_name_display, d.youth,
+           coalesce(rs.entrant_kind, 'individual') as entrant_kind
     from registrations r
     join divisions d on d.id = r.division_id
     join registration_groups g on g.id = r.group_id
+    left join registration_settings rs on rs.division_id = d.id
     where d.competition_id = ${competitionId}
       and r.status = 'confirmed' and g.ref_code is not null
     order by r.created_at`;
 }
+
+// Code-review fix (2026-08-30): this file used to carry its own LOCAL copy of
+// `anyOptedOutByRegistration`, near-identical to registrations.ts's own —
+// same SQL/grouping, differing only in which sql/tx client was passed — the
+// exact "two lookup paths drift" defect class this codebase has hit before.
+// Deduped: registrations.ts's version now takes the client as an explicit
+// parameter (`AnySql = Tx | postgres.Sql`), so this file's `tx` (from its own
+// `withTenant` transaction below) passes straight through, imported above.
 
 /** Admit tickets for a competition (v12/Task 13): every confirmed
  *  registration becomes a 2-up ticket, name-masked the same way the public
@@ -940,8 +958,17 @@ export async function buildAdmitTicketsDoc(
       );
     }
     const dates = `${meta.starts_on ?? "—"} – ${meta.ends_on ?? meta.starts_on ?? "—"}`;
+    // RS008: only individual/pair registrations can even have an opted-out
+    // person behind their display_name — a team's own name never does.
+    const nonTeamRegIds = rows.filter((r) => r.entrant_kind !== "team").map((r) => r.registration_id);
+    const optedOut = await anyOptedOutByRegistration(tx, nonTeamRegIds);
     const tickets: ExportTicket[] = rows.map((r, i) => ({
-      maskedName: maskDisplayName(r.display_name, resolveNameDisplay(r.player_name_display, r.youth)),
+      maskedName: resolvePersonDisplayName(
+        r.display_name,
+        optedOut.has(r.registration_id) ? { public_name: false } : null,
+        r.player_name_display,
+        r.youth,
+      ),
       competition: meta.name,
       dates,
       ref: r.ref_code,

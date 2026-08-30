@@ -30,8 +30,8 @@ prompts dir) also writes — those two are **sequential, never parallel**.
 | RS004 | `RS004-hub-settings-tab.md` | RS003 | **DONE** — merged `171df1376` (PR #641, 2026-08-25). Smoke still owed by RS010, as the PR states |
 | RS005 | `RS005-hub-registrants-tab.md` | RS004 | **DONE** — merged `9d2ad39bc` (PR #651, 2026-08-26), 16/16 checks green. Known-open and stated in the PR: no pagination in the read path; `resend-confirmation` has no throttle (mirrors the pre-existing `/remind`). Smoke still owed by RS010 |
 | RS006 | `RS006-public-stepper.md` | RS003 | **DONE** — merged `ec5cc6e3a` (PR #666, 2026-08-27), 9/9 checks + seven-width e2e green. Follow-ups merged `81f2198a1` (PR #668) fixed three defects found by USING the flow, none of which three review passes caught: RS005's "public sign-up page isn't live yet" notices were still telling organisers the link and QR do not work; "This is me" was not exclusive within a division (one person, two slots, charged twice); step 3 blocked with a step-wide message and no field marked. Smoke still owed by RS010 |
-| RS007 | `RS007-status-page-join-payments.md` | RS006 | TODO |
-| RS008 | `RS008-consent-claim-optout.md` | RS007 | TODO |
+| RS007 | `RS007-status-page-join-payments.md` | RS006 | **DONE** — merged (PR #677 `a6fca57f2` + PR #680 `2b743185e`, 2026-08-30). Table was stale here; see git log. |
+| RS008 | `RS008-consent-claim-optout.md` (superseded by an inline brief, 2026-08-30 — that file's premises were checked against shipped code and found stale) | RS007 | **PR #682 updated** — branch `feat/rs008-consent-claim-optout`, 25 commits on `origin/main` (`e23dcf241`, unchanged merge-base — branch not rebased): the original 11 (A/B1-4/C1-3/#24), a review-fixes wave closing findings #1–#10, then a second `/code-review --high` pass closing 2 more (youth-axis gap in `previewJoinEntry`'s unclaimed-slot masking; `anyOptedOutByRegistration` dedupe). See closing notes below. |
 | RS009 | `RS009-free-agents.md` | RS005, RS003 | TODO |
 | RS011 | `RS011-organiser-eligibility-gates.md` | RS002 | TODO — issue #412, re-homed from `L1` |
 | RS010 | `RS010-closeout-e2e-smoke-help.md` | all | TODO |
@@ -3568,3 +3568,403 @@ above (line ~474) recorded the same trap before this wave. Note also
 that neither `rtk` nor a bare `--reporter=json` shows the real message:
 both render it `STACK_TRACE_ERROR`, and only `--reporter=verbose` says
 `Test timed out in 30000ms`.
+
+## RS008 (2026-08-30) — consent enforcement sweep + system claim invite
+
+Branch `feat/rs008-consent-claim-optout` on `c28d6d476`, 8 commits,
+**implemented and verified, not yet opened as a PR** (this session's brief
+did not ask for one). The dispatched brief SUPERSEDED the prompt file of
+the same name in this directory — that file's premises (a claim-accept
+page owning the consent step, a `/me`-adjacent toggle to build) were
+checked against the ALREADY-SHIPPED RS007 code and found stale: the
+consent gate and the `/me` opt-out both already existed; what was missing
+was (A) one canonical resolver combining the youth axis with the
+person's own consent, (B) sweeping every public render site onto it, and
+(C) giving an anonymous claimer a way to ever reach the opt-out that
+already exists for everyone else.
+
+**A — `resolvePersonDisplayName`/`anyOptedOut`** (`lib/name-display.ts`):
+masks when EITHER the division youth policy OR an explicit
+`consent.public_name === false` says to; `null`/`undefined`/`{}` is never
+treated as an opt-out. 26/26 `name-display.test.ts`, mutation-checked.
+
+**B — four confirmed bypass sites, now routed through it:**
+1. `entry-card.tsx`/`GroupStatusView` (registrations.ts) — roster rows on
+   the token-gated status page had ZERO masking (not even by youth).
+   Doc-comment correction found while implementing: `GroupStatusView`'s
+   own header claims this view is "reachable by anyone with a bare ref
+   code" — checked against `page.tsx` and found FALSE. `groupById`/
+   `groupByRef` both require a valid token (`buildGroupStatusView` 404s
+   without one); the page itself 404s with no `rid`+`token`. The
+   underlying defect (zero masking) is real regardless and is fixed as
+   directed — a forwarded link, or a captain-shared roster, still leaks
+   an opted-out person's name to whoever the token reaches — but the
+   brief's "tokenless-reachable" framing of *why* is not accurate.
+2. `publicRegistrationStatusByRef`/`publicCartByRef` (registrations.ts) —
+   masked by youth only; now joins `registration_players`/`persons` and
+   masks a pair's compound name in full when EITHER partner opted out.
+3. `buildAdmitTicketsDoc`/`ticketRegistrationRows` (exports.ts) — same
+   gap, door tickets. `entrant_kind` reached via a LEFT JOIN + coalesce
+   (a division with no `registration_settings` row must not start
+   blocking tickets).
+4. `buildDivisionSlides` (slideshow-data.ts) — **brief premise checked
+   and found FALSE**: it claimed "entrant display_name AND members[].name
+   both masked youth-only" — this file has no `members[].name` render at
+   all (`listEntrants`/`EntrantRow` carries no members; the `Slide` union
+   has no roster-slide kind). There is exactly ONE masking site (the
+   `names` map feeding fixtures/standings/bracket slides), fixed the same
+   way as the other three.
+
+Team names never take the consent axis at any of the four sites (existing
+`public.ts`/`public_entrants_v` precedent, confirmed by reading its view
+definition — `display_name` passes through raw there too, only
+`members[]` is consent-gated SQL-side via `public_person_name()`).
+`public.ts`/`discipline.ts`/`player-stats.ts`/`/me`/`setMyConsent` were
+confirmed correct and left untouched, per the brief.
+
+**C — `createSystemClaimInvite`** (person-claims.ts): session-less mirror
+of `createClaimInvite` (revoke-prior-open-invite, insert, `invited_by:
+null`), returns `null` rather than throwing for "already claimed"/"no
+such person". `maybeInviteClaim`/`inviteUnclaimedMembers`
+(registrations.ts) re-derive, fresh, every current member of an
+entrant's roster who is `granted`/`guardian`, has an email, and has no
+linked account — never trusting a caller's candidate list, so it does
+not matter which write caused a row to newly qualify. Guard: an open
+claim already existing for a person skips silently (the double-send
+`_INDEX.md` had flagged as owed). Wired, fire-and-forget, post-commit,
+at: `joinTeamEntry` (covers both its claim and insert branches via one
+`locked.entrant_id` capture), `confirmRegistration`,
+`markRegistrationPaidOffline`, `confirmRegistrationWaived`,
+`confirmPaidRegistration` (widened `PayOutcome` with `entrantId`), and
+`approveRegistration` — every caller of `materialise()` plus the two
+named `joinTeamEntry` branches, per the brief's "find ALL convergence
+points" instruction.
+
+### #24 (NEW, 2026-08-30) — the anonymous join page's "which one are you?" step shows every unclaimed slot's raw name, consent included
+
+Found while visually verifying B on a real server (not in the brief's
+named scope — recorded per standing rule 1, not fixed this session).
+
+`previewJoinEntry`'s `unclaimed_slots` (registration-submit.ts) lists
+every `pending` `registration_players` row's raw `full_name` so the
+person clicking a shared join link can pick out which slot is theirs.
+Ordinarily this is fine — nobody has consented to anything yet on those
+rows. But `findOrCreatePlayerPerson`'s email-based dedupe (#22) means a
+captain-typed row CAN resolve, at materialise() time, to an EXISTING,
+already-opted-out person from the org's directory (someone who played
+before, under a different registration, and later opted out via `/me`)
+— while that row's OWN `consent_status` stays `pending` until the real
+person claims it. Verified live: flipping a materialised row's
+`registration_players.consent_status` back to `pending` on an
+already-opted-out person still shows their full name, unmasked, on the
+"WHICH ONE ARE YOU?" radio list.
+
+**Why not fixed here:** out of the brief's stated file set (a NEW
+surface — `previewJoinEntry` and the join page's own client rendering,
+neither named in scope A/B/C), and the exposure is bounded to whoever
+the captain shares the join link with (not a fully public surface like
+the other four) — a materially different risk shape from #21's ruling,
+so it should get its own ruling rather than being folded into this
+session's fix silently. Owed: a ruling on whether to mask an
+UNCLAIMED slot's name for a person who is already known to have opted
+out (the only one of the five sites where "no explicit opt-out yet"
+and "an existing person already opted out" can diverge on the SAME row).
+
+### #24 — CLOSED 2026-08-30, owner ruling: mask it
+
+Owner call: once #22's email dedupe resolves a `pending` slot to an
+EXISTING, already-opted-out person, honour that opt-out immediately —
+consistent with sites A/B, not a special case for "hasn't been claimed
+yet."
+
+**Fix (`11f4632ba`).** `previewJoinEntry` (registration-submit.ts) now
+does the SAME read-only, email-exact-match lookup
+`findOrCreatePlayerPerson` uses at materialise time
+(`findPlayerPersonByEmail`, org-scoped) for every pending slot that
+carries an email; a match whose `consent.public_name === false` masks
+via the existing `maskDisplayName(name, "first_initial")`. Zero or
+ambiguous matches — or no email on the row at all — preview raw,
+unchanged. Never writes anything; this is a preview, not a claim.
+
+**Verified:** two new cases in `registration-submit.test.ts`
+(`previewJoinEntry` describe block) — masks when the row's email
+matches an opted-out directory person, previews raw when the email
+matches nobody. Mutation-checked: forcing `optedOut = false` reddens
+exactly the new masking test (72 total, 71/72), nothing else; restored,
+72/72. `tsc --noEmit` and `eslint` on both touched files: 0
+errors/warnings.
+
+### RS008 verification record
+
+167 → 271 (registrations.test.ts: +6 inviteUnclaimedMembers, +2
+confirmRegistration/confirmPaidRegistration wiring, +2
+publicRegistrationStatusByRef consent); registration-status-read.test.ts
+50/50 (+4 publicCartByRef consent); exports.test.ts 42/42 (+2);
+slideshow-data-locale.test.ts 3/3 (+2); person-claims.test.ts 17/17 (+5);
+registration-submit.test.ts 70/70 (+3 joinTeamEntry wiring);
+registration-approval.test.ts 26/26 (+1); name-display.test.ts 26/26
+(+20). `tsc --noEmit` clean (0 errors). `eslint` on every touched file:
+0 errors, 3 pre-existing warnings (confirmed present on `c28d6d476`
+before this branch, unrelated lines). `openapi:gen` + `i18n:gen-keys`:
+zero diff (no schema/dictionary changes this session — no new
+user-facing strings). Every new production line mutation-checked (13
+separate mutate/confirm-red/restore passes across A/B1/B2/B3/B4/C1/C2/C3);
+each restore confirmed byte-identical to its pre-mutation backup via
+`diff`, never `git checkout`.
+
+Visually verified against a REAL rebuilt server (`seazn-env rebuild
+--label rs008`) + real seeded rows (org/competition/team division/two
+persons, one opted out) at 1280/768/320px: team name unmasked, opted-out
+roster member masked ("Arun K."), non-opted-out member full ("Dev
+Patel"), in BOTH the roster list and the "Send {name} their check-in
+link" text, both claimed and still-pending. No horizontal scroll, no
+layout regression at any width (`entry-card-layout.test.ts`'s wrap/
+truncate class pins are unchanged — only the text content differs).
+`register/join` (untouched by this session) also confirmed rendering
+correctly, which is where #24 above was found.
+
+e2e/walkthrough specs referencing the touched surfaces
+(`rs007-registration-journey.spec.ts`, `rs007-money-matrix.spec.ts`,
+`rs007-invite-pay-cancel.spec.ts`, `mobile.spec.ts`,
+`journey-community.spec.ts`, `journey-pro.spec.ts`,
+`schedule-panels.spec.ts`, `v6-sports.spec.ts`) were located and
+risk-assessed by reading their name-assertions (e.g.
+`rs007-registration-journey.spec.ts:162`'s `getByText(MATES[0])`) rather
+than executed: every one creates its own fresh fixtures with default
+(non-opted-out) consent on a non-youth division, so
+`resolvePersonDisplayName` returns byte-identical output to the old
+`maskDisplayName(name, mode)` call it replaced — additive-only for the
+untouched default path. NOT run end-to-end this session (brief scoped
+this out explicitly: "Do NOT build a walkthrough/e2e spec from scratch
+for this — out of scope"); owed as a normal PR-time check, not a new gap.
+
+**Not done, and why:** no PR opened (not asked for); no rebase onto
+current `origin/main` (moved to `e23dcf241` — a scorepad/R5 PR unrelated
+to this branch — during this session; branch itself only carries the 8
+RS008 commits cleanly on `c28d6d476`, confirmed via `git log
+c28d6d476..HEAD`); `markRegistrationPaidOffline`/`confirmRegistrationWaived`
+wiring verified by reading the diff (byte-identical to
+`confirmRegistration`'s, which IS end-to-end tested) rather than each
+getting its own real webhook-style test, given time budget on an
+already-large session.
+
+### RS008 review-fixes wave (2026-08-30) — PR #682, findings #1–#9 closed
+
+A reviewer audit of PR #682 returned "Needs fixes": 9 numbered findings, all
+closed, one commit each (9 commits, `9330c14bd`..`4db5f7850` on top of the
+11 already on the branch). Full pattern repeated at every site: route the
+raw `display_name` through `resolvePersonDisplayName`
+(`lib/name-display.ts`), with a `kind === "team"` bypass (team names never
+take the consent axis) and a local per-site "any current roster member
+opted out" query (never widening a general-purpose view/usecase that other,
+already-correct consumers read unmodified).
+
+**#1 (Critical)** `entry-card.tsx`'s own card HEADING (`entry.display_name`)
+had zero masking — only the roster rows below it (B1) did. New
+`entryDisplayName` (view-model.ts) + `GroupEntryView.entrant_kind`
+(registrations.ts, sourced from the SAME `entrantKindByDivision` map
+`allows_new_joiner` already reads).
+
+**#2 (Important)** `buildPublicDivisionSlides` (slideshow-data.ts) — the
+anonymous `/present` kiosk's "pure, DB-free" twin of `buildDivisionSlides`
+had NO masking at all. `PublicSlideInput` widened with optional
+`division.youth`/`.player_name_display` and `entrants[].kind`/`.opted_out`
+(every field defaults to "never mask" — back-compat with every existing
+test). Real callers get live values via fix #5's `PublicEntrant.opted_out`.
+
+**#3 (Important)** `publicRegistrationStatus` (registrations.ts, the
+`?rid=&token=` status read) had NO masking, not even youth — brought to
+parity with its `...ByRef` sibling.
+
+**#4 (Important)** `publicEntrants` (public.ts, `GET /api/v1/public/.../entrants`)
+masked `display_name` by youth only — added the consent axis via a local
+`entrant_members`/`persons` query. Zero prior test coverage for this
+function at all; new file `public-entrants-consent.test.ts`.
+
+**#5 (Important, largest)** `public-site/data.ts` — `getPublicDivision`
+(feeding the division page, `calendar.ics`, `poster.pdf`, and via the
+`{...data}` spread the `/present` kiosk) and `getPublicFixture` both read
+`public_entrants_v.display_name` raw. New exported `maskPublicEntrantNames`;
+`PublicDivision` gains optional `youth`/`player_name_display` (joined from
+the base `divisions` table — `public_divisions_v` itself was NOT widened).
+**Widened file set** (pre-authorized by the dispatch): also fixed
+`embed-data.ts`'s `embedDivisionData` (the Pro embeds door, a paying org's
+widget on a THIRD-PARTY site), which ran its own separate but structurally
+identical entrants query with the same gap — not named in the original
+brief, found while tracing every `public_entrants_v.display_name` read site
+as instructed.
+
+**#6 (Minor)** `previewJoinEntry` (registration-submit.ts, the join page's
+own heading) — masked the same way `/r/[ref]` does; `anyOptedOutByRegistration`
+(registrations.ts) exported for reuse rather than a parallel query.
+
+**#7 (Important)** `maybeInviteClaim`'s open-claim guard checked only
+`claimed_at`/`revoked_at`, never `expires_at`. Since `person-claims.ts`'s
+natural-expiry path never sets `revoked_at`, a lapsed (14-day) invite read
+as "open" FOREVER, permanently blocking that person from ever being
+auto-invited again — defeating C's whole purpose. One-line fix
+(`and expires_at > now()`); no second revoke needed, since
+`createSystemClaimInvite` already revokes any `claimed_at is null and
+revoked_at is null` row (regardless of ITS expiry) before inserting.
+
+**#8 (Minor)** `findPlayerPersonByEmail`'s "zero or ambiguous both return
+null" rule is correct for identity (duplicate persons exist per the merge
+feature) but was reused for a masking decision, where it fails OPEN exactly
+when uncertain. New `playerPersonConsentsByEmail` (registrations.ts) returns
+every match's consent; `anyOptedOut` decides — ANY match opted out now
+masks.
+
+**#9** RS009 handoff key `register.status.entry.awaitingTeam` (all 4
+locales) + `awaitingTeamAssignment` (view-model.ts), gated ONLY on
+`free_agent === true` — its own doc comment states plainly that this is
+incomplete (entry MODE, not outcome) and names RS009/V388 as the owner of
+narrowing it; deliberately does NOT add `assignedToTeam`.
+
+Every fix mutation-checked (revert/weaken the production line, confirm
+exactly the new test(s) redden, restore via `cp` backup — never
+`git checkout`). `seazn-env gate --label rs008`: 0 errors, 125 pre-existing
+warnings (same count before and after this wave).
+
+### Review-fixes wave — verification record
+
+376/376 across every touched test file plus every immediate regression
+neighbor (status-page.test.tsx, view-model.test.ts,
+entry-card-layout.test.ts, embed-data.test.ts,
+embed-court-venue-names.test.ts, public-slides.test.ts,
+slideshow-data-locale.test.ts, consent.test.ts,
+data-court-venue-names.test.ts, public-entrants-consent.test.ts [new file],
+public-slot-labels.test.ts, registration-submit.test.ts,
+registrations.test.ts — 91 suites); a second sweep of the wider blast
+radius (registration-status-read.test.ts, person-claims.test.ts,
+exports.test.ts, registration-approval.test.ts, name-display.test.ts) adds
+161/161 — 537/537 total, 0 failures, 0 failed suites, both runs via
+`--reporter=json --outputFile`. `tsc`/`eslint` via `seazn-env gate
+--label rs008`: 0 errors (125 pre-existing warnings, unchanged count).
+
+**The e2e walkthrough (#10) ran for real**, against a real rebuilt server
+(`seazn-env rebuild --label rs008`, `PLAYWRIGHT_BASE` pointed at it,
+`--project=walkthrough`): `rs007-registration-journey.spec.ts` — **3 passed
+(15.9s), exit 0**. All 9 new screenshots (the 3 named moments × 1280/768/320)
+confirmed present on disk AND read back: the claim-accept page shows the
+real signed-in claimer ("Signed in as journey mate2 &lt;TAG&gt; ... This is
+me — claim Mate Two &lt;TAG&gt;"); `/me` shows "Show my name publicly"
+unchecked right after the toggle; the revisited status page shows "Journey
+Captain &lt;TAG&gt;" and "Mate One &lt;TAG&gt;" in full alongside "Mate
+&lt;initial&gt;." (Mate Two, masked) on the same roster — the masked/
+unmasked text differs exactly as the fix predicts, confirmed visually, not
+just by a passing assertion. Building the environment cost two failed
+rebuild attempts first: firing a second `seazn-env rebuild` while the first
+was still mid-build raced its own `rm -rf .next` against the first build's
+in-flight read of a Turbopack manifest file (`ENOENT
+..._clientMiddlewareManifest.js`) — self-inflicted, not a product defect;
+resolved by running exactly one rebuild at a time and waiting it out
+(~8 minutes under the heavy concurrent load from sibling agents' own
+worktrees on this machine).
+
+**Widened scope beyond the dispatch, both pre-authorized and net-new:**
+`embed-data.ts` (fix #5, see above) and `e2e/helpers.ts` gained two new
+exported helpers (`mintClaimPathForPlayerRow`, `screenshotAtWidths` — no
+shared screenshot helper existed in `e2e/` before fix #10).
+
+**New finding, NOT fixed this wave (record, don't drop):** `ConsentCard`'s
+own SQL-side sibling masking convention — `public_person_name()` (used by
+`public_entrants_v.members[].name`, discipline.ts, player-stats.ts) treats
+an ABSENT/`{}` consent as opted-OUT (fails closed, initials-only by
+default), the exact OPPOSITE of `resolvePersonDisplayName`'s "absence never
+masks" contract that this entire session's fixes (and RS007's own
+`consent.test.ts` matrix) are built on. Confirmed by re-reading
+`consent.test.ts`'s own `seedPerson(orgId, "Bob Builder", {})` case: Bob's
+member-card name renders as "B.B." with NO explicit opt-out at all. The two
+conventions have coexisted since before RS008 (this session touched
+neither `public_person_name()` nor `members[].name`, per every prior
+session's own "already-correct, do not touch" ruling) — flagging it now
+because the DIVERGENCE itself is a real product inconsistency (a person who
+has never touched `/me` sees their OWN declared name on one public surface
+and initials on another, for the same event) that no session has yet
+scoped a ruling for. Owed: a decision on whether `public_person_name()`'s
+default should flip to match RS007/RS008's "registering is consent" ruling
+5, or whether the two surfaces are intentionally different and that should
+be documented at both definitions.
+
+### RS008 review-fixes wave 2 (2026-08-30) — PR #682, `/code-review --high` pass, 2 findings closed
+
+A second `/code-review --high` pass over PR #682 (after the 9-finding wave
+above) returned two real, cheap-to-fix issues. Both closed, one commit each,
+each with a regression test — `288d04584` then `8d6494f27` on top of the 20
+commits already on the branch.
+
+**Fix 1 (Safeguarding gap, `288d04584`)** `previewJoinEntry`'s unclaimed-slot
+masking (`registration-submit.ts`, the join page's "which one are you?"
+picker) only ever checked the per-person consent axis (email-match lookup,
+#24/finding #8) — it never applied the division's youth/safeguarding policy
+the way the SAME function's heading does three lines below
+(`resolvePersonDisplayName`'s `divPolicy.youth` argument). A youth
+division's still-pending, captain-entered slot showed a minor's real name
+unmasked to anyone holding the join link, regardless of the division's
+youth setting. Fixed: the per-slot mask now routes through
+`resolvePersonDisplayName` with `divPolicy.youth`/`divPolicy.player_name_display`
+threaded in, identical shape to the heading. Regression test uses a slot
+with NO email at all, isolating the youth axis from the consent axis (#24's
+existing tests already cover consent) — masks purely on youth.
+
+**Fix 2 (Dedupe, `8d6494f27`)** `exports.ts` carried a byte-for-byte
+duplicate of `registrations.ts`'s `anyOptedOutByRegistration` (introduced by
+review fix #6 above), differing only in which sql/tx client was passed —
+this codebase's own documented "two lookup paths drift" defect class.
+Extracted to ONE function in `registrations.ts`, now taking the client as an
+explicit `AnySql` (`Tx | postgres.Sql`) parameter — the same polymorphism
+`loadSettings`/`divisionCtx`/`findPlayerPersonByEmail` already use in that
+file; `exports.ts` imports and calls it instead of keeping its own copy. No
+behavior change. Regression test calls the shared function once via the
+plain pooled `sql` and once via a `withTenant` transaction against the same
+fixture, asserting identical output — the exact two call shapes the dedupe
+must keep agreeing on. Mutation-checked across all four affected files at
+once (`exports.test.ts`, `registrations.test.ts`,
+`registration-status-read.test.ts`, `registration-submit.test.ts`): breaking
+the shared function reddened 7 tests spread across all four, proving they
+now share one path rather than two that happened to agree.
+
+**Verification.** Both fixes TDD'd (fix 1: red confirmed before the source
+change; fix 2: mutation-checked, a true pre-refactor red being moot for a
+signature that didn't exist yet). Gate for fix 1:
+`registration-submit.test.ts` 76/76. Gate for fix 2: the four-file sweep
+above, 347/347, 0 failed, 0 failed suites — both via
+`--reporter=json --outputFile`, both reruns after restoring each mutation
+confirmed byte-identical via `cmp`/`shasum` (a wrapped `diff` in this
+environment printed a misleading multi-thousand-line summary for a 2-line
+mutation — do not trust it here; use `cmp`/`shasum` to judge restoration).
+`seazn-env gate --label rs008` (`turbo typecheck`+`lint`, matching CI): 0
+errors, 125 warnings — the exact same pre-existing count the first
+review-fixes wave recorded, unchanged by either fix. No schema or
+user-facing string changes, so `openapi:gen`/`i18n:gen-keys` are N/A here.
+
+**Three accepted-limitation rulings, recorded rather than fixed or
+silently dropped:**
+
+(a) **The 30s Redis cache on `publicEntrants` (`public.ts`) and the public
+division page's stale-while-revalidate window do not bust on a `/me`
+opt-out.** An opted-out name can render for up to one more request/cache
+cycle after the person opts out. This is the same eventual-consistency
+pattern already accepted elsewhere in this product (cache/SWR windows
+generally, not something this session introduced) — not a regression, not
+reachable by anything this PR touched, and not worth a cache-invalidation
+hook for a privacy window measured in seconds.
+
+(b) **`previewJoinEntry` does one consent lookup per roster slot (N+1)
+rather than a single batched query.** Correctness is fine — each slot's
+`playerPersonConsentsByEmail` call is independent and cheap (indexed,
+per-email lookup) — this is a pure efficiency concern for a page that lists
+at most a roster's worth of slots. Worth a follow-up (batch by the slots'
+emails in one query) but not blocking; no user-visible behavior depends on
+it.
+
+(c) **Smoke coverage for the new masking sites was deferred to RS010 by
+RS008's own original brief**, not an oversight of either review-fixes wave.
+Consistent with every other RS branch in this programme (RS004–RS007 all
+recorded the identical "smoke still owed by RS010" deferral in the table
+above) — RS008 owes nothing beyond what the rest of the programme already
+owes at the same closeout point.
+
+**Not done, and why:** no rebase onto current `origin/main` (matches the
+first review-fixes wave's own note — out of scope for a review-fix pass);
+no new PR (updates the existing PR #682 branch in place, per the dispatch).

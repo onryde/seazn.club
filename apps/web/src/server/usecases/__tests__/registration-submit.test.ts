@@ -34,6 +34,24 @@ vi.mock("@/lib/ref-code", async (importOriginal) => {
   };
 });
 
+// RS008: inviteUnclaimedMembers is a fire-and-forget, post-commit side
+// effect (registrations.ts's own doc comment) — mocked here so joinTeamEntry's
+// WIRING (does it call this, with the right args, at the right times) is
+// deterministic and provable without racing a detached promise. Everything
+// else from "../registrations" (materialise, the auto-confirm path
+// submitRegistrationGroup/teamRig rely on, etc.) stays REAL via
+// importOriginal — same partial-mock convention the sibling ref-code mock
+// above uses.
+const inviteSweepMock = vi.hoisted(() => ({ fn: vi.fn().mockResolvedValue(undefined) }));
+vi.mock("../registrations", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../registrations")>();
+  return {
+    ...actual,
+    inviteUnclaimedMembers: (...args: Parameters<typeof actual.inviteUnclaimedMembers>) =>
+      inviteSweepMock.fn(...args),
+  };
+});
+
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
@@ -202,6 +220,7 @@ beforeEach(() => {
   refCodeMock.failOnCall = null;
   refCodeMock.callCount = 0;
   refCodeMock.fixedNextCalls = [];
+  inviteSweepMock.fn.mockClear();
 });
 
 // ---------------------------------------------------------------------------
@@ -1471,6 +1490,84 @@ describe.skipIf(!HAS_DB)("joinTeamEntry", () => {
     expect(members).toHaveLength(1);
   });
 
+  // RS008 — convergence points 1 & 3: joinTeamEntry's claim (UPDATE) branch
+  // and its insert branch both fire the post-commit claim-invite sweep when
+  // the entry they land on is ALREADY materialised (the exact condition
+  // #23's own fix targets). A not-yet-materialised entry has nothing to
+  // sweep yet — materialise() itself will trigger it later.
+  describe("RS008: fires the claim-invite sweep after commit, only when already materialised", () => {
+    it("insert branch: a fresh joiner on an already-materialised entry sweeps that entrant", async () => {
+      const { orgId, entry } = await teamRig();
+      const [{ entrant_id }] = await sql<{ entrant_id: string | null }[]>`
+        select entrant_id from registrations where id = ${entry.registration_id}`;
+      expect(entrant_id).not.toBeNull();
+
+      await joinTeamEntry(
+        {},
+        { join_code: entry.join_code!, player: { full_name: "Sweep Joiner" }, privacy_consent: true },
+      );
+
+      expect(inviteSweepMock.fn).toHaveBeenCalledTimes(1);
+      expect(inviteSweepMock.fn).toHaveBeenCalledWith(orgId, entrant_id);
+    });
+
+    it("claim branch: claiming a captain-entered slot on an already-materialised entry ALSO sweeps it", async () => {
+      const { orgId, entry, players } = await rosterRig("team", ["Pending Slot"]);
+      const [{ entrant_id }] = await sql<{ entrant_id: string | null }[]>`
+        select entrant_id from registrations where id = ${entry.registration_id}`;
+      expect(entrant_id).not.toBeNull();
+
+      await joinTeamEntry(
+        {},
+        {
+          join_code: entry.join_code!,
+          player_id: players[0]!.id,
+          player: { full_name: players[0]!.full_name },
+          privacy_consent: true,
+        },
+      );
+
+      expect(inviteSweepMock.fn).toHaveBeenCalledTimes(1);
+      expect(inviteSweepMock.fn).toHaveBeenCalledWith(orgId, entrant_id);
+    });
+
+    it("a join onto an entry that has NEVER been materialised does not sweep yet", async () => {
+      const { orgId, orgSlug, ownerId } = await seedOrg("pro");
+      const owner = asOwner(orgId, ownerId);
+      const { competition, division } = await rig(owner);
+      // manual approval → submitRegistrationGroup never auto-confirms, even
+      // though the fee is 0 — materialise() has not run for anyone yet.
+      await seedSettings(division.id, { entrant_kind: "team", fee_cents: 0, approval: "manual" });
+      const submitted = await submitRegistrationGroup(
+        { orgSlug, compSlug: competition.slug },
+        {
+          contact: baseContact(),
+          privacy_consent: true,
+          entries: [
+            {
+              division_id: division.id,
+              entrant_kind: "team",
+              team_name: "Unmaterialised Team",
+              players: [],
+              answers: {},
+            },
+          ],
+        },
+      );
+      const entry = submitted.entries[0]!;
+      const [{ entrant_id }] = await sql<{ entrant_id: string | null }[]>`
+        select entrant_id from registrations where id = ${entry.registration_id}`;
+      expect(entrant_id).toBeNull();
+
+      await joinTeamEntry(
+        {},
+        { join_code: entry.join_code!, player: { full_name: "Early Joiner" }, privacy_consent: true },
+      );
+
+      expect(inviteSweepMock.fn).not.toHaveBeenCalled();
+    });
+  });
+
   it("a minor joiner needs guardian consent; consent_status records 'guardian'", async () => {
     const { entry } = await teamRig();
     await expect(
@@ -2229,6 +2326,112 @@ describe.skipIf(!HAS_DB)("joinTeamEntry", () => {
       const preview = await previewJoinEntry(entry.join_code!);
       expect(preview.total_players).toBe(3);
       expect(preview.unclaimed_slots).toHaveLength(2);
+    });
+
+    // #24 — a captain-typed row's email can already match an existing,
+    // opted-out person elsewhere in the org's directory (someone who played
+    // before under a different registration and opted out via /me since).
+    // The slot's OWN consent_status is still 'pending', but the person it
+    // resolves to has already made their choice — the picker must not show
+    // their real name just because this particular row hasn't been claimed.
+    it("masks an unclaimed slot whose email already matches an opted-out person", async () => {
+      const { orgId, entry, players } = await rosterRig("team", ["Ada Lovelace"]);
+      const slot = players[0]!;
+      await sql`
+        insert into persons (org_id, full_name, email, consent, lane)
+        values (${orgId}, 'Ada Lovelace', 'ada@example.com', ${sql.json({ public_name: false })}, 'player')`;
+      await sql`update registration_players set email = 'ada@example.com' where id = ${slot.id}`;
+
+      const preview = await previewJoinEntry(entry.join_code!);
+      const slotPreview = preview.unclaimed_slots.find((s) => s.player_id === slot.id);
+      expect(slotPreview?.full_name).toBe("Ada L.");
+    });
+
+    it("previews an unclaimed slot's raw name when its email matches nobody opted out", async () => {
+      const { entry, players } = await rosterRig("team", ["Ada Lovelace"]);
+      const slot = players[0]!;
+      await sql`update registration_players set email = 'nobody-matches@example.com' where id = ${slot.id}`;
+
+      const preview = await previewJoinEntry(entry.join_code!);
+      const slotPreview = preview.unclaimed_slots.find((s) => s.player_id === slot.id);
+      expect(slotPreview?.full_name).toBe("Ada Lovelace");
+    });
+
+    // RS008 review fix #8 (Minor) — an AMBIGUOUS email match (2+ persons
+    // sharing one email; duplicates exist per the merge feature) used to
+    // fail OPEN into "no known opt-out, preview raw" because
+    // findPlayerPersonByEmail returns null for both zero AND ambiguous
+    // matches. A privacy control must fail CLOSED: if EITHER of the two
+    // same-email persons opted out, mask.
+    it("masks an unclaimed slot whose email matches TWO persons, when either one opted out", async () => {
+      const { orgId, entry, players } = await rosterRig("team", ["Ada Lovelace"]);
+      const slot = players[0]!;
+      await sql`
+        insert into persons (org_id, full_name, email, consent, lane)
+        values (${orgId}, 'Ada Lovelace', 'ada-dup@example.com', ${sql.json({ public_name: true })}, 'player')`;
+      await sql`
+        insert into persons (org_id, full_name, email, consent, lane)
+        values (${orgId}, 'Ada Someone Else', 'ada-dup@example.com', ${sql.json({ public_name: false })}, 'player')`;
+      await sql`update registration_players set email = 'ada-dup@example.com' where id = ${slot.id}`;
+
+      const preview = await previewJoinEntry(entry.join_code!);
+      const slotPreview = preview.unclaimed_slots.find((s) => s.player_id === slot.id);
+      expect(slotPreview?.full_name).toBe("Ada L.");
+    });
+
+    // Code-review fix (2026-08-30) — the unclaimed-slot masking above (#24/
+    // finding #8) only ever checked the PERSON's own consent via the email
+    // lookup; it never applied the DIVISION's youth/safeguarding policy the
+    // way the join page's own HEADING does (resolvePersonDisplayName's
+    // `divPolicy.youth` argument, tested below). A youth division's
+    // still-pending, captain-entered slot showed the minor's raw full name
+    // to anyone holding the join link, consent axis notwithstanding. This
+    // slot deliberately carries NO email (rosterRig never sets one), so the
+    // consent lookup contributes nothing — isolating the youth axis from
+    // the consent axis #24's tests above already cover.
+    it("masks an unclaimed slot in a YOUTH division even when no matching opted-out person exists", async () => {
+      const { division, entry, players } = await rosterRig("team", ["Kid Runner"]);
+      await sql`update divisions set youth = true where id = ${division.id}`;
+      const slot = players[0]!;
+
+      const preview = await previewJoinEntry(entry.join_code!);
+      const slotPreview = preview.unclaimed_slots.find((s) => s.player_id === slot.id);
+      expect(slotPreview?.full_name).toBe("Kid R.");
+    });
+
+    // RS008 review fix #1/#6 — the join page's own HEADING (display_name) had
+    // no masking at all. A pair's is a compound of two people's names (design
+    // #17: the roster wins), so a per-partner opt-out must mask the whole
+    // string, same "stricter wins" rule applied to every other compound
+    // display_name site this session has swept.
+    it("masks the join page's own HEADING (display_name) for a pair when either partner opted out", async () => {
+      const pair = await rosterRig("pair", ["Alice Wonder", "Bob Builder"]);
+      const bob = pair.players.find((p) => p.full_name === "Bob Builder")!;
+      const [{ id: personId }] = await sql<{ id: string }[]>`
+        insert into persons (org_id, full_name, consent, lane)
+        values (${pair.orgId}, 'Bob Builder', ${sql.json({ public_name: false })}, 'player')
+        returning id`;
+      await sql`update registration_players set person_id = ${personId} where id = ${bob.id}`;
+
+      const preview = await previewJoinEntry(pair.entry.join_code!);
+      // anyOptedOut's "stricter wins" rule masks the WHOLE compound once
+      // EITHER side opts out (same as publicRegistrationStatusByRef's own
+      // "a pair's compound name masks in full when EITHER partner opted
+      // out") — not just the opted-out half.
+      expect(preview.display_name).toBe("Alice W. & Bob B.");
+    });
+
+    it("never masks a TEAM's own HEADING by a roster member's opt-out", async () => {
+      const { orgId, entry, players } = await rosterRig("team", ["Cap Tain"]);
+      const captain = players[0]!;
+      const [{ id: personId }] = await sql<{ id: string }[]>`
+        insert into persons (org_id, full_name, consent, lane)
+        values (${orgId}, 'Cap Tain', ${sql.json({ public_name: false })}, 'player')
+        returning id`;
+      await sql`update registration_players set person_id = ${personId} where id = ${captain.id}`;
+
+      const preview = await previewJoinEntry(entry.join_code!);
+      expect(preview.display_name).toBe("Rosterful Team");
     });
   });
 });

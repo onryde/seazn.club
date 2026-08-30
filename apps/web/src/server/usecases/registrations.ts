@@ -32,12 +32,13 @@ import {
   sendDisputeAlertEmail,
   sendDisputeLostEmail,
   sendRegistrationRefundFailedAlertEmail,
+  sendClaimInviteEmail,
 } from "@/lib/email";
 import type { RegistrationEmailArgs } from "@/lib/email-templates";
 import { routes } from "@/lib/routes";
 import { toLocale } from "@/lib/i18n-constants";
 import { isValidRefCode, normalizeRefCode } from "@/lib/ref-code";
-import { maskDisplayName, resolveNameDisplay } from "@/lib/name-display";
+import { anyOptedOut, resolvePersonDisplayName } from "@/lib/name-display";
 import { isoFromZonedParts } from "@/lib/zoned-datetime";
 import { resolveVenueTz } from "@/lib/tz";
 import { rateLimit } from "@/lib/rate-limit";
@@ -50,6 +51,7 @@ import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
 import { resolveLogoUrl } from "@/server/public-site/data";
 import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
 import { recoverDisputedTransfer as recoverDisputedTransferCore } from "./dispute-recovery";
+import { createSystemClaimInvite } from "./person-claims";
 import {
   FIRST_PAID_EARN,
   recordEarnGrant,
@@ -668,6 +670,37 @@ export async function findPlayerPersonByEmail(
 }
 
 /**
+ * RS008 review fix #8 (Minor) — like `findPlayerPersonByEmail` above, but for
+ * a DISPLAY-NAME MASKING decision rather than identity resolution.
+ * `findPlayerPersonByEmail`'s "zero or ambiguous both return null" rule is
+ * correct for IDENTITY (never guess which of several duplicate people —
+ * merge/#404 — a row belongs to), but wrong for a PRIVACY decision built on
+ * top of it: treating "ambiguous" the same as "no match" makes the decision
+ * fail OPEN (preview raw) exactly when it is least certain it should. This
+ * returns every matching person's consent, org-scoped, tombstones excluded —
+ * `anyOptedOut` (lib/name-display.ts) then applies its own "stricter wins
+ * across several people" rule (ANY match opted out masks) the same way it
+ * already does for a pair/team's several roster members. Zero matches
+ * returns `[]` (`anyOptedOut([])` is `false`, identical to today's
+ * behaviour for that case). Never used for identity/reconciliation — those
+ * callers need `findPlayerPersonByEmail`'s EXACT-ONE guarantee and must keep
+ * failing toward "create/leave as-is," not toward a privacy default.
+ */
+export async function playerPersonConsentsByEmail(
+  db: AnySql,
+  orgId: string,
+  email: string,
+): Promise<({ public_name?: boolean } | null)[]> {
+  const trimmed = email.trim();
+  if (!trimmed) return [];
+  const matches = await db<{ consent: { public_name?: boolean } | null }[]>`
+    select consent from persons
+    where org_id = ${orgId} and lane = 'player' and merged_into is null
+      and lower(email) = lower(${trimmed})`;
+  return matches.map((m) => m.consent);
+}
+
+/**
  * #22 — fills a MISSING email onto an already-resolved person; never
  * overwrites one that differs (the `email is null` guard IS the rule, not
  * just an optimisation — a concurrent backfill from two rows racing the
@@ -1217,6 +1250,100 @@ export async function notifyPromoted(
     });
   } catch {
     /* fire-and-forget */
+  }
+}
+
+/**
+ * RS008 — invite ONE person to claim their profile, post-commit,
+ * best-effort. Guards against the double-send `_INDEX.md` calls out: an
+ * unclaimed person with several registrations (across unrelated
+ * competitions, or a materialise() re-run) must never be re-invited (and
+ * have their still-pending invite silently revoked) every time one of them
+ * converges here — so this checks for an OPEN (unclaimed, unrevoked) claim
+ * FIRST and skips silently if one already exists, rather than relying on
+ * `createSystemClaimInvite`'s own revoke-and-replace (correct for the
+ * deliberate, session-authed organiser action it was written for; wrong for
+ * an automatic sweep that can run many times for the same person). Never
+ * throws — a mail-provider hiccup, or any other failure here, must never
+ * break the registration flow that triggered it.
+ */
+async function maybeInviteClaim(orgId: string, personId: string, email: string): Promise<void> {
+  try {
+    // RS008 review fix #7 — this guard used to check ONLY claimed_at/
+    // revoked_at, never expires_at. person-claims.ts's natural-expiry path
+    // never sets revoked_at (only claimPerson/revokeClaimInvite/unlinkPerson
+    // do), so an unclaimed invite that simply lapsed past its 14-day window
+    // still reads as "open" here forever — this guard returned early
+    // FOREVER, and createSystemClaimInvite (the only place that would ever
+    // revoke-and-replace that stale row) was never even reached again. A
+    // person whose one invite lapsed unclaimed could NEVER be auto-invited a
+    // second time, permanently defeating the whole point of C (RS008's
+    // claim-invite sweep). `expires_at > now()` makes an expired-but-not-
+    // revoked row read as NOT open, so the sweep proceeds to
+    // createSystemClaimInvite below — which ALREADY revokes any row matching
+    // `claimed_at is null and revoked_at is null` (regardless of its own
+    // expiry) before inserting the new one, so the stale row is revoked
+    // there rather than needing a second, redundant revoke here. This is
+    // also what keeps the partial unique index `person_claims_open_uq` (V276,
+    // `where claimed_at is null and revoked_at is null` — no expiry
+    // predicate of its own) from ever seeing two "open" rows at once.
+    const [openClaim] = await sql<{ id: string }[]>`
+      select id from person_claims
+      where person_id = ${personId} and claimed_at is null and revoked_at is null
+        and expires_at > now()
+      limit 1`;
+    if (openClaim) return;
+    const invite = await createSystemClaimInvite(sql, orgId, personId, email);
+    if (!invite) return;
+    const claimUrl = `${fallbackOrigin()}${routes.claim(invite.secret)}`;
+    await sendClaimInviteEmail(email, {
+      orgName: invite.org_name,
+      personName: invite.person_name,
+      claimUrl,
+    });
+  } catch (err) {
+    log.error({ err, event: "registration.claim_invite_failed", org_id: orgId, person_id: personId }, "RS008 claim invite failed");
+  }
+}
+
+/**
+ * RS008 — fire-and-forget, called AFTER the caller's own transaction has
+ * committed (never from inside one: this reads via the pooled `sql`, so a
+ * call from inside an open tx would see none of that tx's own uncommitted
+ * writes, and the email send below is network I/O that must never run
+ * inside a held connection). Re-derives, fresh, every current member of
+ * `entrantId`'s roster whose row is consented (`granted`/`guardian`, never
+ * `pending` — nobody has agreed to anything for those yet) with an email on
+ * file and no linked account — the exact gap RS008 closes: a captain-
+ * entered player (or an anonymous captain's own row) whose consent is real
+ * but who has no way to ever reach the `/me` opt-out that already exists
+ * for everyone else.
+ *
+ * Safe to call unconditionally, repeatedly, from every convergence point
+ * (`materialise()`'s callers, `joinTeamEntry`) — re-deriving fresh rather
+ * than trusting a caller-supplied candidate list means it never matters
+ * WHICH write caused a row to newly qualify, and `maybeInviteClaim`'s own
+ * open-claim guard makes a repeat sweep of the same entrant a cheap no-op.
+ * `person_id is not null` excludes a row nobody has resolved a person for
+ * yet (an unmaterialised captain-entered slot) — nothing to invite there.
+ */
+export async function inviteUnclaimedMembers(orgId: string, entrantId: string): Promise<void> {
+  try {
+    const rows = await sql<{ person_id: string; email: string | null }[]>`
+      select rp.person_id, coalesce(rp.email, p.email) as email
+      from registration_players rp
+      join registrations r on r.id = rp.registration_id
+      join persons p on p.id = rp.person_id
+      where r.entrant_id = ${entrantId}
+        and rp.consent_status in ('granted', 'guardian')
+        and rp.person_id is not null
+        and p.user_id is null`;
+    for (const row of rows) {
+      if (!row.email) continue;
+      await maybeInviteClaim(orgId, row.person_id, row.email);
+    }
+  } catch (err) {
+    log.error({ err, event: "registration.claim_invite_sweep_failed", org_id: orgId, entrant_id: entrantId }, "RS008 claim invite sweep failed");
   }
 }
 
@@ -2439,7 +2566,7 @@ export async function handleRegistrationCheckoutAsyncPaymentFailed(
 }
 
 type PayOutcome =
-  | { kind: "confirmed"; divisionId: string; competitionId: string; orgId: string }
+  | { kind: "confirmed"; divisionId: string; competitionId: string; orgId: string; entrantId: string }
   // RULING B (RS002 W5 review): a Stripe payment is the MACHINE, not the
   // organiser — on a manual-approval division it leaves the entry at 'paid'
   // and waits for a human (approveRegistration). Distinct from "confirmed"
@@ -2675,6 +2802,7 @@ async function confirmPaidRegistration(
       divisionId: reg.division_id,
       competitionId: div.competition_id,
       orgId: reg.org_id,
+      entrantId,
     };
   })) as unknown as PayOutcome;
 
@@ -2692,6 +2820,9 @@ async function confirmPaidRegistration(
       "registration: checkout confirmed",
     );
     fireDivisionRevalidate(outcome.divisionId, outcome.competitionId);
+    // RS008: fire-and-forget, strictly AFTER the transaction above has
+    // committed — see confirmRegistration's identical wiring for why.
+    void inviteUnclaimedMembers(outcome.orgId, outcome.entrantId);
     // Growth loop (SPEC-5 §2 C): the organiser's FIRST competition to take a paid
     // registration earns free AI credits. Fires only on a genuine first-time paid
     // CONFIRMATION (not a replay, a double-pay duplicate, or a late payment to a
@@ -3128,8 +3259,22 @@ export async function publicRegistrationStatus(
   const reg = await regByToken(regId, token);
   const ctx = await divisionCtx(sql, reg.division_id);
   const settings = await loadSettings(sql, reg.division_id);
-  const [div] = await sql<{ name: string }[]>`
-    select name from divisions where id = ${reg.division_id}`;
+  const [div] = await sql<{ name: string; youth: boolean; player_name_display: string | null }[]>`
+    select name, youth, player_name_display from divisions where id = ${reg.division_id}`;
+  // RS008 review fix #3 — bring this to parity with its sibling
+  // publicRegistrationStatusByRef, which has had both the youth AND consent
+  // axes since RS008: display_name is a PERSON's name for individual/pair,
+  // but a TEAM's own declared name for team — no personal consent applies
+  // there (public.ts/public_entrants_v precedent, established throughout
+  // this session).
+  const isTeam = (settings?.entrant_kind ?? "individual") === "team";
+  const optedOut = isTeam ? new Set<string>() : await anyOptedOutByRegistration(sql, [reg.id]);
+  const displayName = resolvePersonDisplayName(
+    reg.display_name,
+    optedOut.has(reg.id) ? { public_name: false } : null,
+    div?.player_name_display ?? null,
+    div?.youth ?? false,
+  );
   // Amount due follows the SNAPSHOT (reg row), not live settings — fee edits
   // never change what an in-flight registrant owes (spec issue #8).
   const paymentDue = reg.status === "pending" && reg.amount_cents > 0;
@@ -3150,7 +3295,7 @@ export async function publicRegistrationStatus(
     id: reg.id,
     status: reg.status,
     ref_code: reg.ref_code,
-    display_name: reg.display_name,
+    display_name: displayName,
     division_name: div?.name ?? "",
     competition_name: ctx.comp_name,
     competition_slug: ctx.comp_slug,
@@ -3232,6 +3377,52 @@ async function regByRef(ref: string): Promise<RegistrationWithGroupRow> {
   return reg;
 }
 
+/**
+ * RS008 — batched "does ANY roster player on this registration have an
+ * explicit consent opt-out" check, keyed by registration id, for the
+ * PERSON-shaped public reads below (`publicRegistrationStatus`,
+ * `publicRegistrationStatusByRef`, `publicCartByRef`) — a multi-entry cart
+ * costs ONE query here, not one per entry. INNER JOINs persons on purpose: a
+ * row with no `person_id` yet (unclaimed, never materialised) has no consent
+ * object to check and can never contribute an opt-out, so it is correctly
+ * invisible to this query rather than needing an explicit null-check.
+ * Delegates the actual "stricter wins across several people sharing one
+ * display_name" rule to `anyOptedOut` (lib/name-display.ts) — never
+ * re-implements it.
+ *
+ * Exported (RS008 review fix #6): `registration-submit.ts`'s
+ * `previewJoinEntry` reuses this SAME function for its own join-page
+ * heading mask, rather than a parallel local query — this file already
+ * flows one way into that one (module topology comment, registration-submit.ts),
+ * never the reverse.
+ *
+ * Takes the sql/tx client as an explicit first parameter (code-review fix,
+ * 2026-08-30): `exports.ts`'s `buildAdmitTicketsDoc` needs to run this same
+ * query from inside its own `withTenant` transaction and used to carry a
+ * byte-for-byte duplicate differing only in that one parameter — the exact
+ * "two lookup paths drift" defect class this codebase has hit before.
+ * Deduped: `exports.ts` now imports and calls this function directly.
+ */
+export async function anyOptedOutByRegistration(db: AnySql, regIds: string[]): Promise<Set<string>> {
+  if (regIds.length === 0) return new Set();
+  const rows = await db<{ registration_id: string; consent: { public_name?: boolean } | null }[]>`
+    select rp.registration_id, p.consent
+    from registration_players rp
+    join persons p on p.id = rp.person_id
+    where rp.registration_id in ${db(regIds)}`;
+  const consentsByReg = new Map<string, ({ public_name?: boolean } | null)[]>();
+  for (const r of rows) {
+    const list = consentsByReg.get(r.registration_id) ?? [];
+    list.push(r.consent);
+    consentsByReg.set(r.registration_id, list);
+  }
+  const optedOut = new Set<string>();
+  for (const [regId, consents] of consentsByReg) {
+    if (anyOptedOut(consents)) optedOut.add(regId);
+  }
+  return optedOut;
+}
+
 export async function publicRegistrationStatusByRef(
   ref: string,
   token?: string | null,
@@ -3243,7 +3434,21 @@ export async function publicRegistrationStatusByRef(
   >`
     select name, slug, youth, player_name_display from divisions
     where id = ${reg.division_id}`;
-  const mode = resolveNameDisplay(div?.player_name_display ?? null, div?.youth ?? false);
+  // RS008: display_name is a PERSON's name for individual/pair, but a TEAM's
+  // own declared name for team — no personal consent applies there, same
+  // `kind === "team"` bypass public.ts's publicEntrants already established.
+  const settings = await loadSettings(sql, reg.division_id);
+  const isTeam = (settings?.entrant_kind ?? "individual") === "team";
+  // A team entry's roster can still carry an opted-out member — never
+  // queried for one, so `optedOut` is always empty and the mask stays
+  // youth-only, exactly like the pre-RS008 behaviour.
+  const optedOut = isTeam ? new Set<string>() : await anyOptedOutByRegistration(sql, [reg.id]);
+  const displayName = resolvePersonDisplayName(
+    reg.display_name,
+    optedOut.has(reg.id) ? { public_name: false } : null,
+    div?.player_name_display ?? null,
+    div?.youth ?? false,
+  );
   // access_token_hash already rode the join in regByRef — no separate fetch
   // needed (it lives on the cart now, V364).
   const canWithdraw =
@@ -3251,7 +3456,7 @@ export async function publicRegistrationStatusByRef(
   return {
     ref_code: reg.ref_code!,
     status: reg.status,
-    display_name: maskDisplayName(reg.display_name, mode),
+    display_name: displayName,
     division_name: div?.name ?? "",
     division_slug: div?.slug ?? "",
     competition_name: ctx.comp_name,
@@ -3342,10 +3547,12 @@ export interface PublicCartEntryView {
  * token-GATED and deliberately unmasked for that reason. This is reachable
  * by anyone with a bare ref code, so contact info, amounts/fees/currency,
  * payment method and the access token are never on this shape, and every
- * entry's `display_name` is masked through `resolveNameDisplay`/
- * `maskDisplayName` for ITS OWN division — a cart can span a youth division
- * and a non-youth one at once, so one mask for the whole cart would be
- * wrong in either direction.
+ * entry's `display_name` is masked through `resolvePersonDisplayName` for
+ * ITS OWN division AND its own roster's consent (RS008) — a cart can span a
+ * youth division and a non-youth one at once, so one mask for the whole cart
+ * would be wrong in either direction. A `team` entry's own name is never
+ * personal, so it skips the consent axis entirely (`entrantKindByDivision`
+ * below) — same bypass `public.ts`'s `publicEntrants` already established.
  */
 export interface PublicCartView {
   ref_code: string;
@@ -3380,12 +3587,13 @@ export async function publicCartByRef(ref: string, token?: string | null): Promi
       id: string;
       status: RegistrationRow["status"];
       display_name: string;
+      division_id: string;
       division_name: string;
       youth: boolean;
       player_name_display: string | null;
     }[]
   >`
-    select r.id, r.status, r.display_name, d.name as division_name,
+    select r.id, r.status, r.display_name, r.division_id, d.name as division_name,
            d.youth, d.player_name_display
     from registrations r join divisions d on d.id = r.division_id
     where r.group_id = ${reg.group_id}
@@ -3398,6 +3606,24 @@ export async function publicCartByRef(ref: string, token?: string | null): Promi
   // is no ref-vs-token enumeration distinction to protect (same rule
   // publicRegistrationStatusByRef's canWithdraw already applies).
   const tokenValid = !!token && hashRegistrationToken(token) === reg.access_token_hash;
+
+  // RS008: entrant_kind per DIVISION (a cart can span more than one, same
+  // reason buildGroupStatusView's own entrantKindByDivision map exists) —
+  // a TEAM entry's display_name is the team's own name, never a person's,
+  // so it never takes the consent axis. Batched: one query for the whole
+  // cart's distinct divisions, not one per entry.
+  const divisionIds = [...new Set(entries.map((e) => e.division_id))];
+  const settingsRows =
+    divisionIds.length > 0
+      ? await sql<{ division_id: string; entrant_kind: RegistrationSettingsRow["entrant_kind"] }[]>`
+          select division_id, entrant_kind from registration_settings
+          where division_id in ${sql(divisionIds)}`
+      : [];
+  const entrantKindByDivision = new Map(settingsRows.map((s) => [s.division_id, s.entrant_kind]));
+  const nonTeamEntryIds = entries
+    .filter((e) => (entrantKindByDivision.get(e.division_id) ?? "individual") !== "team")
+    .map((e) => e.id);
+  const optedOut = await anyOptedOutByRegistration(sql, nonTeamEntryIds);
 
   return {
     ref_code: reg.ref_code!,
@@ -3412,9 +3638,11 @@ export async function publicCartByRef(ref: string, token?: string | null): Promi
     entries: entries.map((e) => ({
       id: e.id,
       status: e.status,
-      display_name: maskDisplayName(
+      display_name: resolvePersonDisplayName(
         e.display_name,
-        resolveNameDisplay(e.player_name_display, e.youth),
+        optedOut.has(e.id) ? { public_name: false } : null,
+        e.player_name_display,
+        e.youth,
       ),
       division_name: e.division_name,
       // Per-entry, not inherited from the cart's (oldest-entry-derived) reg
@@ -3432,6 +3660,14 @@ export interface GroupEntryPlayerView {
   id: string;
   full_name: string;
   consent_status: "pending" | "granted" | "guardian";
+  /** RS008: this roster row's linked person's own consent — `null` when the
+   *  row has no `person_id` yet (a captain-entered row nobody has claimed,
+   *  and this entry has never been materialised — `materialise`/
+   *  `joinExistingEntrant` are the only writers of `person_id`). The status
+   *  page (`entry-card.tsx`) masks by youth alone in that case, via
+   *  `resolvePersonDisplayName`'s own null-is-not-opted-out contract — never
+   *  blocked on a person existing yet. */
+  consent: { public_name?: boolean } | null;
 }
 
 export interface GroupEntryView {
@@ -3465,6 +3701,21 @@ export interface GroupEntryView {
    *  serve both). The status page resolves `promotion_expires_at ??` the
    *  cart's `expires_at`, mirroring the sweep's identical fallback. */
   promotion_expires_at: string | null;
+  /** RS008: this entry's OWN division's youth/player_name_display policy —
+   *  `entry-card.tsx` needs it per entry (never a cart-wide value) because a
+   *  cart can span a youth division and a non-youth one at once, same reason
+   *  `refund_policy`/`payment_method` are already resolved per entry rather
+   *  than inherited from the cart. Threaded down (not pre-masked here)
+   *  because a per-player consent opt-out must combine with it — see
+   *  `GroupEntryPlayerView.consent`. */
+  division_youth: boolean;
+  division_player_name_display: string | null;
+  /** RS008 review fix #1: the entry-card HEADING's own consent rule — a
+   *  `team`'s declared name never takes the consent axis, but an
+   *  `individual`/`pair`'s `display_name` IS a person's (or a pair's
+   *  compound) name. Sourced from `entrantKindByDivision` below (the SAME
+   *  map `allows_new_joiner` already reads), never a second lookup. */
+  entrant_kind: "team" | "individual" | "pair";
   players: GroupEntryPlayerView[];
   /** V379/RS007: this entry's own resolved refund policy — so the status
    *  page can tell a registrant which side of the line they are on BEFORE
@@ -3636,7 +3887,8 @@ async function buildGroupStatusView(
   >`
     select r.id, r.division_id, d.name as division_name, r.display_name, r.status,
            r.amount_cents, r.refunded_cents, r.free_agent, r.join_code, r.promotion_expires_at,
-           r.payment_intent_id as entry_payment_intent_id
+           r.payment_intent_id as entry_payment_intent_id,
+           d.youth as division_youth, d.player_name_display as division_player_name_display
     from registrations r join divisions d on d.id = r.division_id
     where r.group_id = ${group.id}
     order by r.created_at, r.id`;
@@ -3705,18 +3957,37 @@ async function buildGroupStatusView(
     }
   }
 
+  // RS008: LEFT JOIN persons (never inner) — a captain-entered row nobody
+  // has claimed, on an entry that has never been materialised, has no
+  // `person_id` yet at all (materialise()/joinExistingEntrant are the only
+  // writers of it). That row still belongs on the roster list; it just has
+  // nothing to mask by consent — `person_consent` reads null, and
+  // `resolvePersonDisplayName` already treats null as "not opted out",
+  // masking by division youth policy alone.
   const players =
     entries.length > 0
-      ? await sql<(GroupEntryPlayerView & { registration_id: string })[]>`
-          select id, registration_id, full_name, consent_status
-          from registration_players
-          where registration_id in ${sql(entries.map((e) => e.id))}
-          order by created_at`
+      ? await sql<
+          (Omit<GroupEntryPlayerView, "consent"> & {
+            registration_id: string;
+            person_consent: { public_name?: boolean } | null;
+          })[]
+        >`
+          select rp.id, rp.registration_id, rp.full_name, rp.consent_status,
+                 p.consent as person_consent
+          from registration_players rp
+          left join persons p on p.id = rp.person_id
+          where rp.registration_id in ${sql(entries.map((e) => e.id))}
+          order by rp.created_at`
       : [];
   const playersByEntry = new Map<string, GroupEntryPlayerView[]>();
   for (const p of players) {
     const list = playersByEntry.get(p.registration_id) ?? [];
-    list.push({ id: p.id, full_name: p.full_name, consent_status: p.consent_status });
+    list.push({
+      id: p.id,
+      full_name: p.full_name,
+      consent_status: p.consent_status,
+      consent: p.person_consent,
+    });
     playersByEntry.set(p.registration_id, list);
   }
 
@@ -3743,6 +4014,13 @@ async function buildGroupStatusView(
       ...e,
       promotion_expires_at: promotion_expires_at ? new Date(promotion_expires_at).toISOString() : null,
       allows_new_joiner: entrantKindByDivision.get(e.division_id) !== "pair",
+      // Unknown (a division whose settings row is somehow missing) fails
+      // toward "individual" — the masked side of the bypass — matching this
+      // review's own "a privacy control fails CLOSED, not open" rule (#8),
+      // not the "fails toward showing a legitimate link" bias
+      // allows_new_joiner uses just above (a UX dead end vs. a privacy leak
+      // are not the same risk, and do not share a default).
+      entrant_kind: entrantKindByDivision.get(e.division_id) ?? "individual",
       payment_method: paymentMethodByDivision.get(e.division_id) ?? "offline",
       players: playersByEntry.get(e.id) ?? [],
       refund_policy: resolveRefundPolicy(
@@ -4899,6 +5177,12 @@ export async function confirmRegistration(auth: AuthCtx, regId: string): Promise
     return orgRegAfter(tx, regId);
   });
   fireDivisionRevalidate(row.division_id);
+  // RS008: fire-and-forget, strictly AFTER the transaction above has
+  // committed. `row.entrant_id` is null on an early-return before
+  // materialise() ever ran (never happens for this function today, but
+  // harmless either way); the open-claim guard inside makes a repeat sweep
+  // of an already-confirmed row a cheap no-op.
+  if (row.entrant_id) void inviteUnclaimedMembers(row.org_id, row.entrant_id);
   return row;
 }
 
@@ -4953,6 +5237,9 @@ export async function markRegistrationPaidOffline(
     return orgRegAfter(tx, regId);
   });
   fireDivisionRevalidate(row.division_id);
+  // RS008: fire-and-forget, strictly AFTER the transaction above has
+  // committed — see confirmRegistration's identical wiring for why.
+  if (row.entrant_id) void inviteUnclaimedMembers(row.org_id, row.entrant_id);
   return row;
 }
 
@@ -4991,6 +5278,9 @@ export async function confirmRegistrationWaived(
     return orgRegAfter(tx, regId);
   });
   fireDivisionRevalidate(row.division_id);
+  // RS008: fire-and-forget, strictly AFTER the transaction above has
+  // committed — see confirmRegistration's identical wiring for why.
+  if (row.entrant_id) void inviteUnclaimedMembers(row.org_id, row.entrant_id);
   return row;
 }
 

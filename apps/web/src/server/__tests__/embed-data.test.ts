@@ -3,7 +3,9 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
-import { embedDivisionData } from "@/server/embed-data";
+import { embedDivisionData, type EmbedPayload } from "@/server/embed-data";
+import { createEntrants } from "@/server/usecases/entrants";
+import type { AuthCtx } from "@/server/api-v1/auth";
 
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -63,5 +65,58 @@ describe.skipIf(!HAS_DB)("embedDivisionData", () => {
       ok: false,
       reason: "not_found",
     });
+  });
+});
+
+// RS008 review fix #5 — this embeds door ran its OWN separate entrants query
+// (structurally identical to public-site/data.ts's getPublicDivision) with
+// ZERO masking, not even by youth. A paying org's embed widget, live on a
+// THIRD-PARTY website, could show an opted-out (or underage) person's full
+// name to any visitor of that external page.
+describe.skipIf(!HAS_DB)("embedDivisionData — consent masking (RS008 review fix #5)", () => {
+  it("masks a non-team entrant's display_name when its linked person opted out — even on a non-youth division", async () => {
+    const { orgId, divId } = await seed("public", "pro");
+    const auth: AuthCtx = { orgId, via: "session", userId: null, role: "owner", keyId: null };
+    const [{ id: personId }] = await sql<{ id: string }[]>`
+      insert into persons (org_id, full_name, consent)
+      values (${orgId}, 'Arun Kumar', ${sql.json({ public_name: false } as never)})
+      returning id`;
+    await createEntrants(auth, divId, [
+      {
+        kind: "individual",
+        display_name: "Arun Kumar",
+        seed: 1,
+        members: [{ person_id: personId, is_captain: false, roles: [] }],
+      },
+      { kind: "individual", display_name: "Dev Patel", seed: 2, members: [] },
+    ]);
+
+    const res = await embedDivisionData(divId);
+    expect(res.ok).toBe(true);
+    const names = (res as { ok: true; data: EmbedPayload }).data.entrants.map((e) => e.display_name);
+    expect(names).not.toContain("Arun Kumar");
+    expect(names).toContain("Arun K.");
+    expect(names).toContain("Dev Patel"); // per-entrant, not blanket
+  });
+
+  it("never masks a TEAM's own display_name by a roster member's opt-out", async () => {
+    const { orgId, divId } = await seed("public", "pro");
+    const auth: AuthCtx = { orgId, via: "session", userId: null, role: "owner", keyId: null };
+    const [{ id: personId }] = await sql<{ id: string }[]>`
+      insert into persons (org_id, full_name, consent)
+      values (${orgId}, 'Cap Tain', ${sql.json({ public_name: false } as never)})
+      returning id`;
+    await createEntrants(auth, divId, [
+      {
+        kind: "team",
+        display_name: "Thunder Strikers",
+        seed: 1,
+        members: [{ person_id: personId, is_captain: true, roles: [] }],
+      },
+    ]);
+
+    const res = await embedDivisionData(divId);
+    const names = (res as { ok: true; data: EmbedPayload }).data.entrants.map((e) => e.display_name);
+    expect(names).toContain("Thunder Strikers");
   });
 });

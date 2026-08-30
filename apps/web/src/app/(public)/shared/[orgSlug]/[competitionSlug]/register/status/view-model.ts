@@ -3,6 +3,7 @@
 // the money/roster/link rules that matter most (never dangle a debt with no
 // route to settle; cancel must call the PUBLIC write path, never the
 // organiser one) are provable without a render.
+import { anyOptedOut, resolvePersonDisplayName } from "@/lib/name-display";
 
 export type EntryStatus =
   | "pending"
@@ -160,6 +161,26 @@ export function canJoinEntry(status: EntryStatus): boolean {
   return status !== "withdrawn" && status !== "rejected" && status !== "expired";
 }
 
+/**
+ * RS009 handoff (2026-08-30) — gates the "Waiting for a team" notice.
+ *
+ * INCOMPLETE BY DESIGN: `free_agent` records this entry's ENTRY MODE
+ * (design §5: "an entry with no team of its own yet"), not its current
+ * OUTCOME. RS009 (branch `feat/rs009-free-agents`, adding
+ * `registration_players.source = 'organiser_assigned'` via V388) owns
+ * narrowing this once an organiser can actually assign a free agent onto a
+ * team — at that point an assigned free agent must stop showing this notice
+ * even though `free_agent` itself never flips back to `false`. Until RS009
+ * merges, `free_agent` is the only signal that exists, and every free agent
+ * genuinely IS still waiting (there is no "assigned" state yet) — but a
+ * future reader must NOT read this function's current one-line body as
+ * finished. Do not add a separate `assignedToTeam` check here — that is
+ * explicitly RS009's own follow-up, not this fix's.
+ */
+export function awaitingTeamAssignment(entry: { free_agent: boolean }): boolean {
+  return entry.free_agent === true;
+}
+
 export interface RosterCounts {
   claimed: number;
   total: number;
@@ -176,6 +197,63 @@ export function rosterCounts(
     total: players.length,
     claimed: players.filter((p) => p.consent_status !== "pending").length,
   };
+}
+
+/**
+ * RS008 — this roster row's own display name, masked by the entry's OWN
+ * division youth/player_name_display policy OR the linked person's own
+ * consent opt-out, whichever is stricter. A pure pass-through to the single
+ * canonical resolver (`lib/name-display.ts`) so this page never grows a
+ * second masking rule to drift from it — kept here (rather than called
+ * directly from `entry-card.tsx`) only so it sits alongside this file's
+ * other roster-shaped pure logic (`rosterCounts`) and is provable without a
+ * render, matching this file's own stated convention.
+ */
+export function rosterPlayerDisplayName(
+  player: { full_name: string; consent: { public_name?: boolean } | null },
+  division: { youth: boolean; player_name_display: string | null },
+): string {
+  return resolvePersonDisplayName(
+    player.full_name,
+    player.consent,
+    division.player_name_display,
+    division.youth,
+  );
+}
+
+/**
+ * RS008 review fix #1 (Critical) — the entry-card HEADING (this entry's own
+ * `display_name`) had ZERO masking, even though the roster rows right below
+ * it (`rosterPlayerDisplayName` above) already did. For an `individual`/
+ * `pair` entrant `display_name` IS a person's (or a pair's compound) name;
+ * `anyOptedOut` aggregates every CURRENT roster member's consent the same
+ * "stricter wins across several people sharing one display_name string" way
+ * `publicRegistrationStatusByRef`/`buildAdmitTicketsDoc`/`buildDivisionSlides`
+ * already do elsewhere in this session — this page has a per-person
+ * breakdown available (`entry.players`) but the HEADING itself is one
+ * string with no single person it belongs to (a pair's is a compound of
+ * two), so it uses the aggregate helper rather than resolving one row.
+ *
+ * A `team`'s own declared name never takes the consent axis — same bypass
+ * established at every other RS008 site (public.ts/public_entrants_v
+ * precedent) — checked FIRST and unconditionally, regardless of what the
+ * roster's own consents say.
+ */
+export function entryDisplayName(
+  entry: {
+    display_name: string;
+    entrant_kind: "team" | "individual" | "pair";
+    players: { consent: { public_name?: boolean } | null }[];
+  },
+  division: { youth: boolean; player_name_display: string | null },
+): string {
+  if (entry.entrant_kind === "team") return entry.display_name;
+  return resolvePersonDisplayName(
+    entry.display_name,
+    anyOptedOut(entry.players.map((p) => p.consent)) ? { public_name: false } : null,
+    division.player_name_display,
+    division.youth,
+  );
 }
 
 /**
