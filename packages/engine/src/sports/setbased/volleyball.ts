@@ -87,7 +87,10 @@ export const volleyball = makeSetBasedModule({
     reentry: "once",
     reentryPositionLock: true,
     allowSquadGrowth: false,
-    exemptions: { libero: {} },
+    // `requiresRole` is what keeps this uncapped channel honest: one of the
+    // two players must actually BE the libero, or an ordinary substitute
+    // could be cycled through it past 15.6's one-return cap.
+    exemptions: { libero: { requiresRole: "libero" } },
   }),
   unitLabel: { one: "Set", many: "Sets" },
   // spec 04 §3.4 — points → matches won → set ratio → point ratio → h2h.

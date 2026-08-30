@@ -204,7 +204,7 @@
 //    reasoning.
 "use client";
 import type { LineupPolicy, LineupRejectionReason, SquadMember, SquadState } from "@seazn/engine/core";
-import { DEFAULT_LINEUP_POLICY, memberOf } from "@seazn/engine/core";
+import { DEFAULT_LINEUP_POLICY, memberOf, onFieldPersons } from "@seazn/engine/core";
 import type { FidelityBand } from "@seazn/engine/sport";
 import {
   volleyball as volleyballModule,
@@ -232,6 +232,7 @@ import {
   type ScorebugSpec,
   type SkinDefV3,
   type StripItem,
+  type CandidateMeta,
   type SwapSlot,
   type TileSpec,
   type WhoLine,
@@ -468,9 +469,17 @@ function openSet(state: VolleyballStateShape): OpenSet | null {
   return { home: set.home ?? 0, away: set.away ?? 0, index };
 }
 
+/** Points a side has in the set the board is resting on — the open set while
+ *  one is open, otherwise the LAST SET PLAYED. Returning 0 with no set open
+ *  (review of PR #678, finding 5) meant a DECIDED match showed 0 as the
+ *  biggest number on the screen, with only the small sets strip carrying the
+ *  result. 0 survives for the one true case: no sets played at all. */
 function pointsOf(state: VolleyballStateShape, side: Side): number {
   const open = openSet(state);
-  return open === null ? 0 : open[side];
+  if (open !== null) return open[side];
+  const sets = state.sets ?? [];
+  const last = sets[sets.length - 1];
+  return last?.[side] ?? 0;
 }
 
 /** `applySummary`'s strict branch (kernel.ts): a set with ANY point already
@@ -662,6 +671,23 @@ function buildHalf(
     ...(tappable
       ? {
           hintKey: "pad.volleyball.scorebug.rally.hint",
+          // ASK BEFORE THE FIRST POINT, because after it the answer is gone.
+          //
+          // Under side-out the next server IS the last rally's winner, so the
+          // moment one point is scored, who OPENED the set is unrecoverable —
+          // and the FIVB 7.6.2 rotation number, which needs the opener, is
+          // lost for the whole set. The anchor tile has always been there to
+          // supply it, but nothing asks a scorer to press a tile before their
+          // first point, and the natural flow is to tap a half and start
+          // scoring. That flow silently destroyed the rotation (owner ruling
+          // R5-7 named the loss; review of PR #678 established that the
+          // mid-set recovery it assumed does not exist).
+          //
+          // So at 0-0 with the chain still undeclared, the half asks the one
+          // question that is only answerable now, then records the very rally
+          // that was tapped. One question, once per set, on the one tap where
+          // the information is still there to capture.
+          ...(needsSetOpener(view, state) ? { tapSheet: openerSheetKey(side) } : {}),
           tapEvent: {
             type: RALLY_TYPE,
             payload: {
@@ -812,23 +838,28 @@ const ROTATION_CYCLE = 6;
  * Pinned against real folds of BOTH variants rather than asserted, because a
  * hand-copied engine rule is TSC-blind if the engine's own moves.
  */
-function fieldsTheRotation(view: PadHostView, state: VolleyballStateShape, side: Side): boolean {
-  // Read `state.squads`, NOT `view.squads`. The kernel asks "was a squad
-  // DECLARED?" and, once one was, sizes it and never consults the cfg flag.
-  // `state.squads` is absent exactly where a squad adds no information, which
-  // is what makes that fallback reachable — whereas the pad's `view.squads` is
-  // always materialised from the team sheet, so keying off it would make the
-  // fallback dead and the sizing check answer for a squad the engine never
-  // saw. A first cut of this gated on "are there on-field players?" instead:
-  // for a declared squad yielding none, the kernel answers false while that
-  // test fell through to the flag and answered true, leaving the anchor tile
-  // permanently offered for a rotation the engine can never resolve — the
-  // exact failure this helper exists to prevent (review of PR #678).
-  const squad = state.squads?.[side];
-  if (squad !== undefined) {
-    return squad.members.filter((m) => m.onField && m.role === "player").length === ROTATION_CYCLE;
-  }
-  return recordsFlag(view, "substitutions");
+function fieldsTheRotation(view: PadHostView, _state: VolleyballStateShape, side: Side): boolean {
+  // Size `view.squads`, with NO cfg fallback, because that is what the engine
+  // actually receives. `sideFieldsTheRotation` (kernel.ts) reads
+  // `state.squads` off the state it is HANDED, and the state this skin hands
+  // it is `serveInput`'s shim — whose `squads` is `view.squads`, always
+  // materialised (`pad-host.tsx`'s `squadStateOf` falls back to
+  // `initSquads(lineups)`). So the kernel's own `rotationImpliedBy` fallback
+  // is unreachable for volleyball, and a skin that took a fallback the engine
+  // never takes disagreed with it by construction.
+  //
+  // The failure that caused (review of PR #678): an indoor fixture with no
+  // team sheet has NO `state.squads` on the folded state but a materialised
+  // `view.squads` with zero on court. The old reading fell through to
+  // `records.substitutions` and answered TRUE; the kernel sized the shim,
+  // got 0 ≠ 6, and left `ctx.rotation` undefined forever. The anchor tile
+  // became permanent furniture for a rotation the engine can never resolve —
+  // the precise thing this helper's own comment claimed to prevent.
+  //
+  // `onFieldPersons` is the ENGINE'S own function, not a hand-rolled filter,
+  // so the count cannot drift from the one being compared against.
+  const squad = view.squads[side];
+  return onFieldPersons(squad).length === ROTATION_CYCLE;
 }
 
 /**
@@ -869,6 +900,31 @@ function needsServeAnchor(view: PadHostView, state: VolleyballStateShape): boole
     return false;
   }
   if (ctx.side === null) return true;
+  // ...AND ONLY WHILE A DECLARATION CAN STILL LAND (review of PR #678,
+  // finding 3). The clause above was written on the premise that a fresh
+  // declaration clears `chainBroken`. That is true for table tennis, whose
+  // `fixed-turns` rotation lets the kernel combine the declared server with
+  // the score to name the set's opener mid-set. It is FALSE here, and not as
+  // an engine limitation: under side-out the server of the next rally simply
+  // IS the winner of the last one, so once a rally has been scored,
+  // "who is serving now" carries no information about who OPENED the set —
+  // and the opener is the only thing the rotation number is missing.
+  // `setBasedServeWalk` reflects exactly that: the non-`fixed-turns` branch
+  // clears `chainBroken` only at `before === 0`.
+  //
+  // Verified rather than argued: declaring on the fourth rally of a set
+  // leaves `rotation` and `side` both null, and declaring the OTHER side
+  // sets `recorded-disagrees`, blanking the server strip for the rest of the
+  // set. So offering the tile after the first point promised a fix the pad
+  // could not deliver, and one of the two answers made things worse.
+  //
+  // R5-7's ruling stands as written — "keep offering it while anything it can
+  // fix is unresolved" — this corrects the FACT the ruling was given on. The
+  // set boundary is the real second chance: `openNextSet` re-anchors, and the
+  // tile returns at 0-0 of the next set.
+  const open = openSet(state);
+  const scoredThisSet = open !== null && open.home + open.away > 0;
+  if (scoredThisSet) return false;
   return ctx.rotation === undefined && fieldsTheRotation(view, state, ctx.side);
 }
 
@@ -1154,6 +1210,68 @@ function sanctionSheet(view: PadHostView, side: Side, t: TFn): GuidedSheetSpec {
  * inventing a second attribution path here would just be a parallel copy of
  * that same question.
  */
+/** The sheet a HALF opens at 0-0, one per side — the side is in the key
+ *  because the half already told us who won, and asking that again would make
+ *  the prompt feel like a form rather than a single question. */
+export function openerSheetKey(side: Side): string {
+  return `serveOpener:${side}`;
+}
+
+/**
+ * Is the set's opener still capturable, and still unknown?
+ *
+ * BOTH halves matter. Unknown, or there is nothing worth asking. Still
+ * capturable, or asking is pointless: after the first point of a set,
+ * side-out makes the next server a function of the last rally, so no answer
+ * the scorer gives can name the opener any more. That is the same fact
+ * `needsServeAnchor` withdraws the anchor tile on.
+ *
+ * Deliberately silent for a BEACH pair: `fieldsTheRotation` is false there,
+ * so there is no six-position rotation for the opener to number, and no
+ * reason to interrupt a two-tap sport with a question.
+ */
+function needsSetOpener(view: PadHostView, state: VolleyballStateShape): boolean {
+  if (resolvePhase(view) !== "live") return false;
+  const open = openSet(state);
+  if (open !== null && open.home + open.away > 0) return false;
+  const ctx = serveContextOf(view, state);
+  if (ctx === null) return false;
+  if (ctx.unknownBecause === "recorded-disagrees" || ctx.unknownBecause === "ledger-mismatch") {
+    return false;
+  }
+  if (ctx.rotation !== undefined) return false;
+  return fieldsTheRotation(view, state, ctx.side ?? "home");
+}
+
+/**
+ * ONE STEP. The half already carries the winner, so this asks only what the
+ * pad cannot derive — who is serving this first rally, which at 0-0 IS the
+ * set's opener. Answering posts the very rally that was tapped, with
+ * `serving` attached, which is exactly what `setBasedServeWalk` anchors on at
+ * `before === 0`.
+ */
+function serveOpenerSheet(view: PadHostView, winner: Side, t: TFn): GuidedSheetSpec {
+  const state = asState(view.state);
+  return {
+    event: RALLY_TYPE,
+    steps: [
+      {
+        id: "serving",
+        kind: "choice",
+        title: t("pad.volleyball.sheet.serveAnchor.serving.title"),
+        options: SIDES.map((side) => ({ id: side, label: SIDE_LABEL[side] })),
+      },
+    ],
+    buildPayload: (answers) => {
+      const servingSide: Side = answers.serving === "away" ? "away" : "home";
+      return {
+        wonBy: entrantOf(state, winner),
+        serving: entrantOf(state, servingSide),
+      };
+    },
+  };
+}
+
 function serveAnchorSheet(view: PadHostView, t: TFn): GuidedSheetSpec {
   const state = asState(view.state);
   const options = SIDES.map((side) => ({ id: side, label: SIDE_LABEL[side] }));
@@ -1179,6 +1297,11 @@ export function buildSheets(view: PadHostView, t: TFn): Record<string, GuidedShe
     [SET_SCORE_TILE_ID]: setScoreSheet(view, t),
     [SERVE_ANCHOR_TILE_ID]: serveAnchorSheet(view, t),
   };
+  // Registered unconditionally, like every other sheet here: `buildSheets`
+  // carries no phase gate, and the HALF is what decides whether either is
+  // reachable (`needsSetOpener`). A sheet nobody opens is inert — the same
+  // posture `sanctionSheetKey`'s pair already takes.
+  for (const side of SIDES) sheets[openerSheetKey(side)] = serveOpenerSheet(view, side, t);
   for (const side of SIDES) sheets[sanctionSheetKey(side)] = sanctionSheet(view, side, t);
   return sheets;
 }
@@ -1248,6 +1371,12 @@ const LIBERO_REFUSAL_KEY: Readonly<Record<LineupRejectionReason, string>> = {
   "invalid-payload": "pad.swap.refused",
   "squad-growth-forbidden": "pad.swap.refused",
   "sub-cap-reached": "pad.swap.refused",
+  // Dedicated wording: this is the one exemption refusal a scorer can
+  // actually cause, by picking two ordinary players on a sheet whose whole
+  // subject is the libero. `liberoBlockedReason` now blocks that pair before
+  // the tap, so this is the belt to that braces — but a refusal a user can
+  // reach deserves its own sentence rather than the generic fallback.
+  "exemption-role-absent": "pad.volleyball.swap.refused.notLibero",
   "exemption-not-declared": "pad.swap.refused",
   "exemption-cap-reached": "pad.swap.refused",
 };
@@ -1281,6 +1410,21 @@ const LIBERO_REFUSAL_KEY: Readonly<Record<LineupRejectionReason, string>> = {
 // `buildLiberoEvent`'s auto-derivation stops making the position lock
 // unreachable — is a one-line change to this body and nothing else. The
 // disable is scoped to this one signature rather than the file.
+/** Is a libero currently ON COURT for this side — i.e. is there someone the
+ *  OFF step could legally name to make an ORDINARY player's entry a 19.3.2.1
+ *  exchange rather than a 15.6 substitution?
+ *
+ *  This is the pair rule expressed in the only terms this function can see.
+ *  The engine's bound (`exemption-role-absent`, `core/lineup.ts`) asks
+ *  whether one of the two players is the libero, but the ON list is built
+ *  BEFORE the scorer has picked who comes off, so the sheet cannot ask that
+ *  question directly. What it can ask is whether such an OFF pick exists at
+ *  all — and if no libero is on court, none does, so every ordinary
+ *  candidate would be refused whichever player were named. */
+function liberoOnCourt(squads: SquadState, side: Side): boolean {
+  return squads[side].members.some((member) => member.onField && hasLiberoRole(member));
+}
+
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 function liberoBlockedReason(member: SquadMember, policy: LineupPolicy): LineupRejectionReason | null {
   return null;
@@ -1306,7 +1450,17 @@ function liberoCandidatesFor(
 ): { candidates: string[]; blocked: Blocked } {
   const eligible = benchPlayers(squads, side).filter((member) => hasLiberoRole(member) || member.timesOff > 0);
   const blocked: Record<string, string> = {};
+  const exchangePossible = liberoOnCourt(squads, side);
   for (const member of eligible) {
+    // An ORDINARY player may come on ONLY as the return leg of a libero
+    // exchange — which needs a libero on court to come off. Without this the
+    // sheet offers a pair the engine now refuses, and worse, before the
+    // engine grew its bound it ACCEPTED that pair and laundered an ordinary
+    // re-entry past FIVB 15.6's one-return cap (review, PR #678).
+    if (!hasLiberoRole(member) && !exchangePossible) {
+      blocked[member.personId] = t(LIBERO_REFUSAL_KEY["exemption-role-absent"]);
+      continue;
+    }
     const reason = liberoBlockedReason(member, policy);
     if (reason !== null) blocked[member.personId] = t(LIBERO_REFUSAL_KEY[reason]);
   }
@@ -1316,14 +1470,16 @@ function liberoCandidatesFor(
 /**
  * Builds the real `core.lineup.replacement` for one libero swap. The
  * `positionKey` sent is AUTO-DERIVED, never asked (this sheet has no
- * position step): a player returning to the field goes back to their own
- * `lastPositionKey` (FIVB 15.6's own lock — recorded at the moment they
- * left, `core/lineup.ts`'s own `takeOff`), and the libero replacing someone
- * takes over the departing player's CURRENT position. Both are the
- * historically/contextually correct value by construction, which is what
- * makes `reentry-position` unreachable from this file's own UI (see
- * `LIBERO_REFUSAL_KEY`'s own doc) — this function is the reason why, not an
- * assertion made elsewhere.
+ * position step): it is the position of the player COMING OFF — the slot the
+ * exchange actually vacates.
+ *
+ * `reentry-position` is therefore REACHABLE from this UI, and deliberately
+ * so. An earlier version derived the position from the incoming player's own
+ * `lastPositionKey`, which made the lock unreachable and, with it, FIVB
+ * 19.3.2.3 unenforced: any previously-substituted player could take the
+ * libero's place while the player the libero replaced stayed stranded off
+ * court. Sending the vacated slot turns the engine's own lock into that
+ * rule's enforcement (review of PR #678, finding 4).
  */
 function buildLiberoEvent(
   view: PadHostView,
@@ -1335,10 +1491,22 @@ function buildLiberoEvent(
   const squad = view.squads[side];
   const onMember = memberOf(squad, on);
   const offMember = memberOf(squad, off);
-  const positionKey =
-    onMember !== undefined && onMember.timesOff > 0 && onMember.lastPositionKey !== undefined
-      ? onMember.lastPositionKey
-      : offMember?.positionKey;
+  // The SLOT BEING VACATED leads, not the incoming player's own history.
+  //
+  // The other order (review of PR #678, finding 4) stranded a player: with
+  // libero L holding MB for A, a scorer picking OFF = L and ON = B — someone
+  // who had earlier left OH — sent `positionKey: "OH"`. That satisfied B's
+  // OWN `reentryPositionLock` and was accepted, so the MB slot L was holding
+  // was silently vacated and A, whom FIVB 19.3.2.3 requires back, was left
+  // off the court with nothing saying so.
+  //
+  // Sending the vacated position makes the engine's EXISTING lock enforce
+  // 19.3.2.3 with no new machinery: B's own `lastPositionKey` is OH, the
+  // event says MB, and `reentry-position` refuses it. A, whose
+  // `lastPositionKey` IS MB, is accepted. Both legs of a real exchange are
+  // unaffected — the libero coming on takes the position of the player they
+  // replace, which is this same value.
+  const positionKey = offMember?.positionKey ?? onMember?.lastPositionKey;
   return {
     type: LIBERO_TYPE,
     payload: {
@@ -1356,6 +1524,50 @@ function buildLiberoEvent(
   };
 }
 
+/**
+ * Row decoration for BOTH steps of the libero sheet (owner ruling
+ * 2026-08-30). Six teammates otherwise render as six identical wrapping
+ * names, and the person tapping this between rallies is scanning for a
+ * POSITION, not reading names — the whole squad is already in the fold with
+ * `positionKey` on it, and the picker simply discarded it.
+ *
+ * Keyed over the WHOLE squad, on field and bench alike, deliberately: the
+ * OFF step's pool is resolved by the CHASSIS (`resolvePool({pool:
+ * "onfield"})`, swap-sheet.tsx) and the ON step's by this file, so a table
+ * built for only one of them would silently decorate one step and not the
+ * other. A lookup costs nothing for ids that never render.
+ *
+ * The `tag` is the part the position code cannot say. A libero ON COURT
+ * holds whichever position they replaced — `positionKey` reads "MB" — so
+ * without this the one player the entire sheet is about is the one player it
+ * does not mark. `hasLiberoRole` is the same gate the tile itself uses, so
+ * the marking and the sheet's existence cannot disagree.
+ */
+function liberoCandidateMeta(
+  squads: SquadState,
+  side: Side,
+  t: TFn,
+): Readonly<Record<string, CandidateMeta>> {
+  const meta: Record<string, CandidateMeta> = {};
+  for (const member of squads[side].members) {
+    // `lastPositionKey` is the FALLBACK, not an afterthought. Taking a player
+    // off clears `positionKey` and records where they were (`takeOff`,
+    // core/lineup.ts), so every bench candidate — which is the entire ON step
+    // — would otherwise render with no code at all, on the very step where
+    // the code matters most. And the value it falls back to is precisely the
+    // one `buildLiberoEvent` will send for that player, so the badge states
+    // where they are about to go rather than where they once were.
+    const lead = member.positionKey ?? member.lastPositionKey;
+    const tag = hasLiberoRole(member) ? t("pad.volleyball.swap.liberoTag") : undefined;
+    if (lead === undefined && tag === undefined) continue;
+    meta[member.personId] = {
+      ...(lead !== undefined ? { lead } : {}),
+      ...(tag !== undefined ? { tag } : {}),
+    };
+  }
+  return meta;
+}
+
 export function buildSwap(view: PadHostView, t: TFn): SwapSlot[] {
   const state = asState(view.state);
   if (resolvePhase(view) !== "live" || view.band < LIBERO_BAND) return [];
@@ -1366,6 +1578,7 @@ export function buildSwap(view: PadHostView, t: TFn): SwapSlot[] {
     const { candidates, blocked } = liberoCandidatesFor(squads, side, policy, t);
     return {
       id: liberoSwapSlotId(side),
+      candidateMeta: liberoCandidateMeta(squads, side, t),
       offLabel: "pad.volleyball.sheet.libero.off.title",
       onLabel: "pad.volleyball.sheet.libero.on.title",
       side,
@@ -1430,9 +1643,16 @@ export function buildDock(
 // activityDetail() — the ribbon's varying half.
 // ---------------------------------------------------------------------------
 
+/** DE-DUPES, and that is not a nicety: in SINGLES `buildHalf` stamps the same
+ *  personId as both `scorer` and `server` on every rally the server wins —
+ *  roughly half of them — so the activity row read "Lin Dan · Lin Dan". A
+ *  name repeated against itself tells a reader nothing and looks like a bug in
+ *  the scoring, which for one rally in two is most of the log. Found in review
+ *  of PR #678. Order-preserving: the first mention wins its position. */
 function join(parts: (string | undefined)[]): string | undefined {
   const kept = parts.filter((part): part is string => part !== undefined && part.length > 0);
-  return kept.length > 0 ? kept.join(" · ") : undefined;
+  const unique = [...new Set(kept)];
+  return unique.length > 0 ? unique.join(" · ") : undefined;
 }
 
 export function volleyballDetail(ctx: ActivityDetailContext): string | undefined {

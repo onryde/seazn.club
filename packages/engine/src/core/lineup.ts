@@ -112,6 +112,26 @@ export interface SquadState {
 export interface LineupExemption {
   /** Absent = uncapped. `{max: 1}` is cricket's one concussion replacement. */
   readonly max?: number;
+  /**
+   * The squad role one of the two players MUST carry for this exemption to
+   * apply (FIVB 19.3.2.1: `{ libero: { requiresRole: "libero" } }`). Absent
+   * keeps the exemption open to any pair — cricket's `concussion` is the
+   * shape that needs that, since neither the concussed player nor their
+   * replacement carries a "concussion" role.
+   *
+   * EITHER side satisfies it, deliberately. A libero replacement runs in two
+   * directions and both are 19.3.2.1 exchanges: the libero coming ON for a
+   * back-row player, and that player coming back ON for the libero. Requiring
+   * the role of the incoming player alone would exempt the first and refuse
+   * the second.
+   *
+   * Why this exists: the exemption channel skips the re-entry COUNT refusals,
+   * so without a bound an ordinary substitute could be cycled through it
+   * indefinitely and FIVB 15.6's "once, and only once" would mean nothing —
+   * a pad has only to stamp the key. Found by review on PR #678, after the
+   * bypass shipped without it.
+   */
+  readonly requiresRole?: string;
 }
 
 export interface LineupPolicy {
@@ -280,6 +300,7 @@ export type LineupRejectionReason =
   | "reentry-position"
   | "sub-cap-reached"
   | "exemption-not-declared"
+  | "exemption-role-absent"
   | "exemption-cap-reached";
 
 /** The shape the reducer reads — structurally satisfied by an EventEnvelope,
@@ -587,6 +608,32 @@ export function reduceLineupEvent(
           "exemption-cap-reached",
           `this side has used all ${declared.max} "${exemption}" replacements`,
         );
+      }
+      // The exemption must be EARNED, not merely claimed. Without this a pad
+      // stamps the key on any pair and the channel launders an ordinary
+      // substitution past FIVB 15.6's re-entry cap — the exemption skips the
+      // COUNT refusals, so an unbounded key makes "once, and only once" mean
+      // nothing at all. (Review, PR #678: reproduced against this engine —
+      // an ordinary player who had already used their one return was accepted
+      // for a second through `exemption: "libero"`.)
+      //
+      // EITHER player satisfies it: a libero replacement runs both ways, and
+      // the return leg brings an ORDINARY player on for the libero.
+      if (declared.requiresRole !== undefined) {
+        const replacement = payload as z.infer<typeof LineupReplacement>;
+        const offRoles = side.members.find((m) => m.personId === replacement.off)?.roles ?? [];
+        const onExisting = side.members.find((m) => m.personId === replacement.on.personId)?.roles ?? [];
+        const onDeclared = replacement.on.roles ?? [];
+        const carried =
+          offRoles.includes(declared.requiresRole) ||
+          onExisting.includes(declared.requiresRole) ||
+          onDeclared.includes(declared.requiresRole);
+        if (!carried) {
+          return refuse(
+            "exemption-role-absent",
+            `a "${exemption}" replacement needs one of the two players to be ${declared.requiresRole}`,
+          );
+        }
       }
     }
     exemptUsed = { ...exemptUsed, [exemption]: (exemptUsed[exemption] ?? 0) + 1 };

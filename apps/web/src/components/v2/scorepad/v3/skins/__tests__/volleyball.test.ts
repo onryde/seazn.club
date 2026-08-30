@@ -50,6 +50,7 @@ import {
   buildDock,
   buildScorebug,
   buildSheets,
+  openerSheetKey,
   buildSwap,
   buildTiles,
   liberoSwapSlotId,
@@ -522,22 +523,100 @@ describe("the serve anchor — offered while a declaration could still resolve E
     expect(tileById(buildTiles(view(), t), SERVE_ANCHOR_TILE_ID)).toBeDefined();
   });
 
-  // R5 review, finding 4 — this test and the decider one below USED to assert
-  // the opposite, on the reasoning that the tile "does not linger asking for a
-  // rotation number `side` alone cannot fix". True of `side`; false of the
-  // tile, which posts a DECLARATION, and a declaration is exactly what clears
-  // `chainBroken` and brings the rotation back (proven in this same file by
-  // the anchored fixtures below, and driven live in a browser).
+  // REVERSED in review of PR #678, finding 3, and the reversal is a
+  // correction of FACT, not of the owner's ruling.
   //
-  // Withdrawing on `side` alone made the natural flow lossy: a scorer who
-  // simply started tapping — nothing asks them to visit a tile first — lost
-  // the FIVB 7.6.2 rotation number for the whole set, and was left with
-  // sanction, time-out and More. Owner ruling R5-7: keep offering it.
-  it("STAYS OFFERED after an ordinary (undeclared) rally, because the ROTATION is still unresolved and a declaration would fix it", () => {
+  // This test asserted the tile STAYS OFFERED after an ordinary rally, on the
+  // reasoning that it posts a declaration "and a declaration is exactly what
+  // clears `chainBroken`". That is true of table tennis, whose `fixed-turns`
+  // rotation lets the kernel combine a declared server with the score to name
+  // the set's opener mid-set. It is false of volleyball, and not because of
+  // any engine shortcoming: under side-out the next server simply IS the last
+  // rally's winner, so once a point has been scored "who serves now" says
+  // nothing about who OPENED the set — and the opener is the only thing the
+  // rotation is missing. `setBasedServeWalk`'s non-`fixed-turns` branch says
+  // exactly that, clearing `chainBroken` only at `before === 0`.
+  //
+  // Measured, not argued: declaring on the fourth rally leaves BOTH `rotation`
+  // and `side` null, and declaring the other side sets `recorded-disagrees`,
+  // which blanks the server strip for the rest of the set. So the tile was
+  // promising a repair it could not perform, and one of its two answers made
+  // the board worse. R5-7's rule — "offer it while anything it can fix is
+  // unresolved" — is what this now implements, against the true facts.
+  it("WITHDRAWS once a point is scored, because a side-out declaration can no longer name the set's opener", () => {
     const v = view({ events: stream(rally("H")) });
     expect(ctxOf(v).side, "`side` self-heals from any rally").toBe("home");
-    expect(ctxOf(v).rotation, "but the rotation does not").toBeUndefined();
-    expect(tileById(buildTiles(v, t), SERVE_ANCHOR_TILE_ID)).toBeDefined();
+    expect(ctxOf(v).rotation, "but the rotation does not, and now cannot").toBeUndefined();
+    expect(
+      tileById(buildTiles(v, t), SERVE_ANCHOR_TILE_ID),
+      "offering it here promises a fix the engine cannot perform",
+    ).toBeUndefined();
+  });
+
+  it("a MID-SET declaration really does resolve nothing — the fact the withdrawal is built on", () => {
+    const late = view({
+      events: stream(rally("H"), rally("A"), rally("H"), rally("A", { serving: "A" })),
+    });
+    expect(ctxOf(late).rotation, "declaring mid-set cannot recover the rotation").toBeUndefined();
+    // Nor does it even restore the SERVER: the walk's non-`fixed-turns`
+    // branch sets `serving` but leaves `chainBroken`, so the reader still
+    // declines to name a side.
+    expect(ctxOf(late).side, "and it does not restore the server either").toBeNull();
+  });
+
+  it("ASKS on the first tap of a set, because after one point the opener is unrecoverable", () => {
+    // The gap owner ruling R5-7 named and the anchor tile never closed:
+    // nothing tells a scorer to press a tile before their first point, so the
+    // natural flow — tap a half, start scoring — destroyed the set's opener
+    // and the FIVB 7.6.2 rotation with it. The half now routes to a
+    // one-question sheet on that first tap only.
+    const fresh = view({ events: stream() });
+    const [home, away] = buildScorebug(fresh, t).halves;
+    expect(home.tapSheet, "the home half must ask before it scores").toBe(openerSheetKey("home"));
+    expect(away.tapSheet).toBe(openerSheetKey("away"));
+    // The event is still there: the sheet's job is to build THAT rally with
+    // one more fact attached, not to replace it.
+    expect(home.tapEvent?.type).toBe(RALLY_TYPE);
+  });
+
+  it("asks ONCE — the second tap of a set scores immediately", () => {
+    // A prompt on every tap would be intolerable in a sport scored rally by
+    // rally, and unnecessary: once a point exists the chain runs itself.
+    const afterOne = view({ events: stream(rally("H", { serving: "H" })) });
+    const [home] = buildScorebug(afterOne, t).halves;
+    expect(home.tapSheet, "tap model S must stay one tap after the opener is known").toBeUndefined();
+    expect(home.tapEvent?.type).toBe(RALLY_TYPE);
+  });
+
+  it("does not ask once the opener is already unrecoverable — a question nobody can answer is worse than none", () => {
+    const undeclared = view({ events: stream(rally("H")) });
+    const [home] = buildScorebug(undeclared, t).halves;
+    expect(home.tapSheet).toBeUndefined();
+  });
+
+  it("never asks a BEACH pair, which fields no rotation for an opener to number", () => {
+    const beach = view({ lineups: PAIR, cfg: BEACH_CFG, events: stream() });
+    const [home] = buildScorebug(beach, t).halves;
+    expect(home.tapSheet, "a two-tap sport must not be interrupted for a number it has no use for").toBeUndefined();
+  });
+
+  it("the sheet it opens asks ONE question and posts the tapped rally anchored", () => {
+    const fresh = view({ events: stream() });
+    const sheet = buildSheets(fresh, t)[openerSheetKey("away")]!;
+    expect(sheet.event).toBe(RALLY_TYPE);
+    expect(sheet.steps.length, "the half already knows the winner — only the server is missing").toBe(1);
+    const payload = sheet.buildPayload({ serving: "home" }) as { wonBy: unknown; serving: unknown };
+    // The AWAY half was tapped, so away won; home was declared serving.
+    expect(payload.wonBy).not.toBe(payload.serving);
+    // And the anchored rally really does resolve the rotation, which is the
+    // whole point — asserted against a real fold, not the payload alone.
+    const anchored = view({ events: stream(rally("A", { serving: "H" })) });
+    expect(ctxOf(anchored).rotation, "the answer must actually buy the rotation number").not.toBeUndefined();
+  });
+
+  it("is still offered at 0-0, where a declaration DOES anchor the set", () => {
+    const fresh = view({ events: stream() });
+    expect(tileById(buildTiles(fresh, t), SERVE_ANCHOR_TILE_ID)).toBeDefined();
   });
 
   it("withdraws once the pad can report the rotation too — the tile answers a question, it is not permanent furniture", () => {
@@ -562,19 +641,38 @@ describe("the serve anchor — offered while a declaration could still resolve E
   // anchor tile FOREVER for a question no declaration could settle. Exactly
   // the permanence this helper exists to prevent.
   //
-  // `state.squads` is overridden directly because that IS the input under
-  // test; nothing else in this file needs to fake it.
-  it("does not offer the tile forever for a DECLARED squad that fields nobody — the rotation can never resolve there", () => {
+  // REWRITTEN in review of PR #678, because the version here before it faked
+  // the wrong input and so could never have caught the real defect.
+  //
+  // It overrode `v.state.squads` — on the premise that the kernel reads the
+  // folded state's squads. The kernel reads the squads of the state it is
+  // HANDED, and what this skin hands it is `serveInput`'s SHIM, whose
+  // `squads` is `view.squads`. Overriding `state.squads` therefore changed
+  // nothing the engine ever saw: the shim still carried six on-court players,
+  // the engine still answered "yes, this side fields a rotation", and the old
+  // pad code answered "no" off its fallback. The two disagreed in production
+  // and this test could not see it, because it was faking a field neither
+  // side reads.
+  //
+  // `view.squads` is faked instead — the input the engine actually sizes.
+  it("does not offer the tile for a side that fields no rotation — the input the ENGINE sizes, not the folded state's", () => {
     const v = view({ events: stream(rally("H")) });
-    const state = v.state as { squads?: Record<string, { members: readonly unknown[] }> };
-    expect(state.squads, "an ordinary indoor fold persists no squad").toBeUndefined();
-    state.squads = { home: { members: [] }, away: { members: [] } };
-
-    expect(ctxOf(v).rotation, "the engine cannot number a rotation nobody fields").toBeUndefined();
     expect(
-      tileById(buildTiles(v, t), SERVE_ANCHOR_TILE_ID),
-      "a declaration cannot fix this, so the tile must not be offered",
+      (v.state as { squads?: unknown }).squads,
+      "an ordinary indoor fold persists no squad — which is why the shim, not the fold, is what the engine reads",
     ).toBeUndefined();
+    const emptied = {
+      ...v,
+      squads: { ...v.squads, home: { ...v.squads.home, members: [] } },
+    } as typeof v;
+
+    expect(
+      tileById(buildTiles(emptied, t), SERVE_ANCHOR_TILE_ID),
+      "nobody on court means no rotation to number, so a declaration cannot settle anything",
+    ).toBeUndefined();
+    // And the engine agrees on the very same input, which is the whole point:
+    // this predicate is a restatement, so it is pinned against the original.
+    expect(ctxOf(emptied).rotation).toBeUndefined();
   });
 
   it("never lingers for a BEACH pair, which fields no six to rotate", () => {
@@ -588,16 +686,26 @@ describe("the serve anchor — offered while a declaration could still resolve E
     expect(tileById(buildTiles(v, t), SERVE_ANCHOR_TILE_ID)).toBeUndefined();
   });
 
-  it("is offered again at 0-0 of the DECIDING set (the toss resets it), and stays until that set's rotation is resolved", () => {
+  it("is offered again at 0-0 of the DECIDING set — the set boundary IS the second chance", () => {
     const toDecider = [summary(3, 0), summary(0, 3), summary(3, 0), summary(0, 3)] as const;
     const before = view({ cfg: SHORT_CFG, events: stream(...toDecider) });
-    expect(tileById(buildTiles(before, t), SERVE_ANCHOR_TILE_ID)).toBeDefined();
-    // An ORDINARY first rally resolves the decider's side but not its
-    // rotation, so the tile is still there to fix it — same rule as set 1.
+    expect(
+      tileById(buildTiles(before, t), SERVE_ANCHOR_TILE_ID),
+      "the deciding set is tossed, so its opener is genuinely undeclared again",
+    ).toBeDefined();
+
+    // REVERSED in review of PR #678, finding 3: this used to assert the tile
+    // survived an ordinary first rally of the decider "same rule as set 1".
+    // It does not, and must not — once a point is scored, side-out makes the
+    // next server a function of the last rally, so a declaration can no longer
+    // name the opener. Offering it here would promise a repair the engine
+    // cannot perform. The genuine second chance is the SET BOUNDARY, which is
+    // what the first assertion above pins.
     const ordinary = view({ cfg: SHORT_CFG, events: stream(...toDecider, rally("H")) });
     expect(ctxOf(ordinary).rotation).toBeUndefined();
-    expect(tileById(buildTiles(ordinary, t), SERVE_ANCHOR_TILE_ID)).toBeDefined();
-    // A DECLARED one resolves both, and the tile withdraws.
+    expect(tileById(buildTiles(ordinary, t), SERVE_ANCHOR_TILE_ID)).toBeUndefined();
+
+    // A DECLARED first rally resolves both, and the tile withdraws.
     const declared = view({ cfg: SHORT_CFG, events: stream(...toDecider, rally("H", { serving: "H" })) });
     expect(ctxOf(declared).rotation).not.toBeUndefined();
     expect(tileById(buildTiles(declared, t), SERVE_ANCHOR_TILE_ID)).toBeUndefined();
@@ -1004,10 +1112,18 @@ describe("buildSwap() — the libero exchange", () => {
     const p3 = memberOf(v.squads.home, "H-p3")!;
     expect(p3.timesOff).toBe(2);
     expect(p3.timesOn).toBe(1);
-    // The REAL engine call this file's own `liberoBlockedReason` restates —
-    // any real on-field player works as the OFF half of the probe, since
-    // `bringOn`'s reentry checks read only the candidate coming ON.
-    const anyOnField: SquadMember = v.squads.home.members.find((m) => m.onField)!;
+    // The REAL engine call this file's own `liberoBlockedReason` restates.
+    // The OFF half must be the LIBERO, and that is no longer incidental: an
+    // earlier version of this probe took "any on-field player", on the stated
+    // premise that the checks read only the candidate coming ON. That premise
+    // died with the `requiresRole` bound (review PR #678) — the exemption now
+    // reads BOTH players, and it must, or the channel launders an ordinary
+    // re-entry past FIVB 15.6. Naming the libero is also the only transaction
+    // a scorer could really be performing here: H-p3 returns FOR the libero
+    // who replaced them.
+    const anyOnField: SquadMember = v.squads.home.members.find(
+      (m) => m.onField && (m.roles?.includes("libero") ?? false),
+    )!;
     const probe = reduceLineupEvent(
       v.squads,
       {
@@ -1025,6 +1141,122 @@ describe("buildSwap() — the libero exchange", () => {
     // And this file's own swap slot agrees with that real acceptance.
     const slot = buildSwap(v, t).find((s) => s.side === "home")!;
     expect(slot.blocked?.["H-p3"]).toBeUndefined();
+  });
+
+  it("REVIEW #678/4 — the wrong player cannot take the libero's slot and strand the one FIVB 19.3.2.3 requires back", () => {
+    // H-p3 (MB) goes off for the libero; separately H-p5 has left from OH.
+    // A scorer picking OFF = the libero, ON = H-p5 would, before this fix,
+    // send H-p5's OWN last position (OH) — which satisfied H-p5's own lock,
+    // was accepted, and silently vacated the MB slot the libero was holding,
+    // leaving H-p3 stranded off court.
+    const events = stream(
+      // H-p5 leaves from OH and STAYS off — they are the wrong player for the
+      // libero's MB slot, and the point of the test.
+      liberoSwap("H", "H-p5", "H-p7", "OH"),
+      liberoSwap("H", "H-p3", "H-lib", "MB", ["libero"]),
+    );
+    const v = view({ events });
+    const policy: LineupPolicy = volleyball.lineupPolicy!(VB_CFG);
+    const slot = buildSwap(v, t).find((s) => s.side === "home")!;
+
+    // The WRONG player for that slot is refused, by the engine's own position
+    // lock, because the event now names the position being VACATED.
+    const wrong = reduceLineupEvent(v.squads, slot.buildEvent("H-lib", "H-p5") as never, policy);
+    expect(wrong.ok).toBe(false);
+    expect(!wrong.ok && wrong.reason).toBe("reentry-position");
+
+    // The player the libero actually replaced is still accepted — the rule
+    // must not be enforced by refusing everyone.
+    const right = reduceLineupEvent(v.squads, slot.buildEvent("H-lib", "H-p3") as never, policy);
+    expect(right.ok, "the player the libero replaced must still be able to return").toBe(true);
+  });
+
+  it("REVIEW #678/2 — an ORDINARY player must not be cycled unlimited times through the libero channel (FIVB 15.6 still binds them)", () => {
+    // The hole this pins: `buildLiberoEvent` stamps `exemption: "libero"` on
+    // EVERY event this sheet produces, and `liberoCandidatesFor` offers any
+    // bench member with `timesOff > 0` — not only a libero, and not only the
+    // player a libero replaced. With `bringOn` now skipping the count
+    // refusals for a declared exemption, an ordinary substitute could be
+    // returned again and again on the libero's uncapped channel, which is
+    // exactly the 15.6 allowance the exemption was never meant to touch.
+    //
+    // H-p3 here is an ordinary middle blocker. No libero takes part in the
+    // transaction at all: H-lib is never named.
+    const events = stream(
+      liberoSwap("H", "H-p3", "H-p7", "MB"),
+      liberoSwap("H", "H-p7", "H-p3", "MB"),
+      liberoSwap("H", "H-p3", "H-p7", "MB"),
+    );
+    const v = view({ events });
+    const policy: LineupPolicy = volleyball.lineupPolicy!(VB_CFG);
+    const p3 = memberOf(v.squads.home, "H-p3")!;
+    expect(p3.timesOn, "H-p3 has already used 15.6's one return").toBeGreaterThanOrEqual(1);
+    expect(p3.roles?.includes("libero") ?? false, "H-p3 is an ORDINARY player").toBe(false);
+    const anyOnField: SquadMember = v.squads.home.members.find((m) => m.onField)!;
+    // The REAL production path: the slot the sheet builds, and the event its
+    // own `buildEvent` produces for the pair a scorer could actually pick.
+    const slot = buildSwap(v, t).find((s) => s.side === "home")!;
+    expect(slot.candidates, "the sheet offers this ordinary player at all").toContain("H-p3");
+    const probe = reduceLineupEvent(v.squads, slot.buildEvent(anyOnField.personId, "H-p3") as never, policy);
+    // A second return for an ordinary player is 15.6's business, not
+    // 19.3.2.1's. The exemption must not launder it.
+    expect(probe.ok).toBe(false);
+    // `exemption-role-absent`, not `reentry-limit`, and the distinction is the
+    // fix itself: the engine refuses because this pair is not a 19.3.2.1
+    // exchange AT ALL, so it never reaches the 15.6 count it would otherwise
+    // have been laundered past. Restoring the old count check in the skin
+    // would refuse the same pair for the wrong reason and re-break the real
+    // libero along with it.
+    expect(!probe.ok && probe.reason).toBe("exemption-role-absent");
+    // And the sheet greys it out BEFORE the tap, rather than earning the
+    // refusal at the scoring door.
+    expect(slot.blocked?.["H-p3"]).toBeDefined();
+  });
+
+  it("decorates every candidate with the POSITION CODE the fold already holds — the picker used to discard it", () => {
+    // One completed libero exchange, so the squad holds a libero, a player
+    // it replaced, and the rest of the six on court.
+    const v = view({ events: stream(liberoSwap("H", "H-p3", "H-lib", "MB", ["libero"])) });
+    const slot = buildSwap(v, t).find((s) => s.side === "home")!;
+    // Not a lookup this file invents: `positionKey` is on the folded squad
+    // member, and the row simply threw it away before this ruling.
+    // H-p3 came OFF, so `positionKey` is cleared and `lastPositionKey` holds
+    // MB — the position they will return to, and the one `buildLiberoEvent`
+    // will actually send for them.
+    expect(slot.candidateMeta?.["H-p3"]?.lead).toBe("MB");
+    // The libero on court reads MB TOO, because they took over the middle
+    // blocker's position — not "L". This is not a defect, it is the whole
+    // reason `tag` exists: after one exchange the position code alone cannot
+    // tell these two players apart, and the sheet is entirely about which of
+    // them is the libero.
+    expect(slot.candidateMeta?.["H-lib"]?.lead).toBe("MB");
+  });
+
+  it("tags the LIBERO, whom the position code cannot identify once they are on court", () => {
+    // One completed libero exchange, so the squad holds a libero, a player
+    // it replaced, and the rest of the six on court.
+    const v = view({ events: stream(liberoSwap("H", "H-p3", "H-lib", "MB", ["libero"])) });
+    const slot = buildSwap(v, t).find((s) => s.side === "home")!;
+    expect(slot.candidateMeta?.["H-lib"]?.tag).toBe(t("pad.volleyball.swap.liberoTag"));
+    // An ordinary middle blocker carries a position and no tag — otherwise
+    // the marker would say nothing, being on every row.
+    expect(slot.candidateMeta?.["H-p3"]?.tag).toBeUndefined();
+  });
+
+  it("keys the table over the WHOLE squad, not just the ON list — the OFF step's pool is resolved by the CHASSIS", () => {
+    // One completed libero exchange, so the squad holds a libero, a player
+    // it replaced, and the rest of the six on court.
+    const v = view({ events: stream(liberoSwap("H", "H-p3", "H-lib", "MB", ["libero"])) });
+    const slot = buildSwap(v, t).find((s) => s.side === "home")!;
+    // `liberoCandidatesFor` returns bench-side candidates; the OFF step draws
+    // from `resolvePool({pool:"onfield"})` inside swap-sheet.tsx. A table
+    // built from the ON list alone would decorate one step and not the other,
+    // and no test of the ON list could ever see it.
+    const onCourt = v.squads.home.members.filter((m) => m.onField).map((m) => m.personId);
+    expect(onCourt.length).toBeGreaterThan(0);
+    for (const id of onCourt) {
+      expect(slot.candidateMeta?.[id], `on-court ${id} is undecorated`).toBeDefined();
+    }
   });
 
   it("`reentry-position` is dedicated in the refusal table too (FIVB's own position lock, the brief's second named fact), even though this file's own auto-derivation makes it unreachable from its own UI", () => {
