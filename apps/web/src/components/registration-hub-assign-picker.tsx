@@ -342,7 +342,13 @@ export function RegistrationHubAssignPicker({
             aria-modal="true"
             aria-label={msg("reg.hub.registrants.assign.title", { name: registrantName })}
             onClick={(e) => e.stopPropagation()}
-            className="flex max-h-[85dvh] w-full flex-col overflow-hidden rounded-t-2xl border border-purple-100 bg-white shadow-2xl sm:max-w-md sm:rounded-2xl"
+            // `focus:outline-none`: the container is focused programmatically
+            // on open (tabIndex -1) so Esc and the focus trap work, and the
+            // browser then drew its default ring around the ENTIRE sheet.
+            // A focus ring's job is to say which control is focused; one
+            // around the whole dialog says nothing and reads as a rendering
+            // fault. The controls inside keep their own rings.
+            className="flex max-h-[85dvh] w-full flex-col overflow-hidden rounded-t-2xl border border-purple-100 bg-white shadow-2xl focus:outline-none sm:max-w-md sm:rounded-2xl"
           >
             <div className="shrink-0 px-6 pt-6">
               <div aria-hidden className="mx-auto mb-4 h-1 w-10 rounded-full bg-slate-200 sm:hidden" />
