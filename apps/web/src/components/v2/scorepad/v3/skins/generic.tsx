@@ -631,17 +631,139 @@ export function buildSheets(view: PadHostView, t: TFn): Record<string, GuidedShe
   return sheets;
 }
 
-export function buildDock(
-  _eventType: string,
-  _view: PadHostView,
-  _t: TFn,
-  _payload?: Record<string, unknown>,
-): DockSpec | null {
-  return null;
+// ---------------------------------------------------------------------------
+// dock() — RULING R7-2: tap decides, dock enriches.
+//
+// A sport with no vocabulary has exactly one thing worth enriching: HOW MUCH
+// that point was worth. So the dock AMENDS the amount on the held submission
+// (`DockChip.mutate` rewrites `points` on the queued payload — queue.ts's
+// `mutateHeld`) and never posts a second event. That is the honest reading of
+// "tap decides, dock enriches" for generic, and it is why one tap can stay
+// worth exactly one point: the common case costs nothing and the uncommon one
+// costs one more tap inside the same ~6s window.
+//
+// EVERY CHIP STAYS ON SCREEN FOR THE WHOLE HOLD, deliberately — this dock has
+// no steps. `resolveDockSpec` (pad-host.tsx) calls this with the ORIGINAL tap
+// payload for the life of the held entry, so a stepped dock would have to be
+// driven by facts stamped at tap time, and there are none here worth stepping
+// on. Keeping every chip visible also makes a mis-tap correctable: the
+// controller refuses only a REPEAT of the same chip, so tapping 3 and then 2
+// leaves 2, which is what a scorer who mis-tapped actually wants. It is also
+// what keeps the dock — and its "Send now" control — from vanishing the
+// instant a chip is chosen, the exact defect R5 found on table tennis.
+//
+// win_loss DECLARES NO DOCK AT ALL. A terminal result card has nothing to
+// enrich, and inventing an enrichment step for one would be furniture.
+// ---------------------------------------------------------------------------
+
+/** The amounts worth one tap. Well inside the engine's own `MAX_TALLY_STEP`,
+ *  and deliberately short: a scorer scanning under a countdown reads three
+ *  options, not fifty. Anything else is a Correction plus a re-tap, which is
+ *  the honest cost of an unusual answer. */
+export const DOCK_AMOUNTS: readonly number[] = [2, 3, 5];
+
+/** A MODIFIER of the point already recorded, rendered as a tab rather than a
+ *  pill (`DockChip.kind`, football's own precedent): shape is legible in
+ *  peripheral vision before colour is, and this dock can mix modifiers with
+ *  person pills in one row. */
+function amountChip(points: number, t: TFn): DockChip {
+  return {
+    id: `points:${points}`,
+    label: "pad.generic.dock.points",
+    labelText: t("pad.generic.dock.points", { points }),
+    kind: "flag",
+    mutate: (payload) => ({ ...payload, points }),
+  };
 }
 
-export function genericDetail(_ctx: ActivityDetailContext): string | undefined {
-  return undefined;
+/** ATTRIBUTION — stays the pill it already was. */
+function personChip(personId: string, labelText: string): DockChip {
+  return {
+    id: `person:${personId}`,
+    label: "pad.generic.dock.person",
+    labelText,
+    mutate: (payload) => ({ ...payload, person: personId }),
+  };
+}
+
+export function buildDock(
+  eventType: string,
+  view: PadHostView,
+  t: TFn,
+  payload?: Record<string, unknown>,
+): DockSpec | null {
+  if (resultModeOf(cfgOf(view)) !== "score") return null;
+  if (eventType !== SCORE_TYPE) return null;
+  const state = asState(view.state);
+  const side = typeof payload?.by === "string" ? sideOfEntrant(state, payload.by) : null;
+  // Already answered at tap time (`buildHalf`'s sole-player auto-set), or
+  // unanswerable because the payload names no side this fold knows.
+  const named = typeof payload?.person === "string" && payload.person.length > 0;
+  const roster = side === null || named ? [] : onFieldPlayers(view.squads, side);
+  // A one-person side has nothing to choose. Offering a picker with a single
+  // row is the D-15 defect this chassis exists to remove.
+  const people = roster.length > 1 ? roster : [];
+  return {
+    title: t(people.length > 0 ? "pad.generic.dock.both.title" : "pad.generic.dock.amount.title"),
+    chips: [
+      ...DOCK_AMOUNTS.map((points) => amountChip(points, t)),
+      ...people.map((member) => personChip(member.personId, nameOf(view, member.personId, t))),
+    ],
+  };
+}
+
+// ---------------------------------------------------------------------------
+// activityDetail() — the ribbon's varying half.
+//
+// Without it every row reads "Point recorded", and a ledger of identical rows
+// each carrying its own Void button is how the wrong point gets voided at a
+// scoring desk.
+// ---------------------------------------------------------------------------
+
+/** Order-preserving, de-duplicating join — a name repeated against itself
+ *  tells a reader nothing (table tennis paid for this one in review). */
+function join(parts: (string | undefined)[]): string | undefined {
+  const kept = parts.filter((part): part is string => part !== undefined && part.length > 0);
+  const unique = [...new Set(kept)];
+  return unique.length > 0 ? unique.join(" · ") : undefined;
+}
+
+export function genericDetail(ctx: ActivityDetailContext): string | undefined {
+  const { t, eventType, payload, personNames } = ctx;
+  const state = asState(ctx.state);
+  const named = (id: unknown): string | undefined =>
+    typeof id === "string" && id.length > 0 ? (personNames?.[id] ?? t("eventCopy.unknownPerson")) : undefined;
+  const sideLabel = (entrantId: unknown): string | undefined => {
+    const side = sideOfEntrant(state, entrantId);
+    return side ? t(SIDE_LABEL[side]) : undefined;
+  };
+
+  switch (eventType) {
+    case SCORE_TYPE: {
+      // The person first where one is known, because that is what a scorer
+      // scans for when correcting a misattribution; the SIDE otherwise, so a
+      // row is never nameless. The signed amount carries a correction's own
+      // meaning without a second key: "-2 pts" needs no further explanation.
+      const who = named(payload.person) ?? sideLabel(payload.by);
+      const amount =
+        typeof payload.points === "number"
+          ? t("pad.generic.ribbon.points", { points: payload.points })
+          : undefined;
+      return join([who, amount]);
+    }
+    case RESULT_TYPE: {
+      const home = payload.p1Score;
+      const away = payload.p2Score;
+      const score = typeof home === "number" && typeof away === "number" ? `${home} – ${away}` : undefined;
+      // `ActivityDetailContext` carries no squads, so a winner resolves to a
+      // SIDE and not to a person — stated rather than faked.
+      return join([score, sideLabel(payload.winnerId), payload.isDraw === true ? t("pad.generic.ribbon.draw") : undefined]);
+    }
+    default:
+      // A settle-from-tally card carries no facts at all, and `core.*` rows
+      // are the chassis's own (`buildRibbon`'s CORE_RIBBON_KEY map).
+      return undefined;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -662,10 +784,3 @@ export function genericSkinV3(t: TFn): SkinDefV3<PadHostView> {
     // file's header.
   };
 }
-
-// Referenced so the sentinel's import is not dead weight once `buildTiles`
-// grows its More tile in cycle 2.
-export const MORE_TILE_SHEET = MORE_SHEET_KEY;
-// Kept for the dock's chip helpers in cycle 3.
-export type { DockChip };
-export { sideOfEntrant, hasTally, tallyOf, allowsDraws };

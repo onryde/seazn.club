@@ -17,21 +17,33 @@ import { initSquads } from "@seazn/engine/core";
 import type { FidelityBand, ModuleEvent } from "@seazn/engine/sport";
 import { makeEnvelope } from "@seazn/engine/testkit";
 import { generic, padSpec as genericPadSpec } from "@seazn/engine/sports/generic";
+import uiEn from "@/dictionaries/en/ui.json";
+import { PAD_LABEL_KEYS } from "@/lib/scoring-vocab";
 import { foldClient } from "../../../module-client";
-import { dedicatedEventTypes, moreActions } from "../../pad-host";
+import { dedicatedEventTypes, entitledBandsFrom, moreActions } from "../../pad-host";
+import { buildRecording } from "../../recording-chip";
+import { LEGACY_SPORTS, resolvePad } from "../../registry";
+import { ribbonKeyFor } from "../../ribbon";
 import { MORE_SHEET_KEY, assertScorebugSpec, type PadHostView, type TileSpec } from "../../types";
 import {
   CORRECTION_TILE_ID,
   DRAW_TILE_ID,
+  EVENT_BAND,
+  MAX_PLAUSIBLE_SCORE,
+  MAX_TALLY_STEP,
   MORE_TILE_ID,
+  RESULT_HINT_KEY,
   RESULT_TYPE,
   SCORE_ENTRY_TILE_ID,
   SCORE_TYPE,
   SETTLE_TILE_ID,
+  TALLY_HINT_KEY,
+  buildDock,
   buildScorebug,
   buildSheets,
   buildTiles,
   cfgOf,
+  genericDetail,
   resolvePhase,
   type TFn,
 } from "../generic";
@@ -557,5 +569,267 @@ describe("every payload this pad can produce folds through the real engine", () 
     expect(() => foldOne(SCORE_NO_DRAWS_CFG, level, RESULT_TYPE, {})).toThrow(/draws are not allowed/);
     // Offered where draws ARE allowed, and the fold accepts it there.
     expect(() => foldOne(SCORE_CFG, level, RESULT_TYPE, {})).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// dock() — RULING R7-2: tap decides, dock enriches. Generic's only enrichment
+// is "actually, that was worth more", so the dock AMENDS the held payload and
+// never posts a second event.
+// ---------------------------------------------------------------------------
+
+const tap = (v: PadHostView, side: 0 | 1): Record<string, unknown> =>
+  buildScorebug(v, t).halves[side]!.tapEvent!.payload;
+
+describe("buildDock", () => {
+  it("win_loss declares NO dock at all — a terminal card has nothing to enrich", () => {
+    const v = view({ cfg: WIN_LOSS_DRAWS_CFG });
+    for (const type of [RESULT_TYPE, SCORE_TYPE]) {
+      expect(buildDock(type, v, t, { winnerId: "H" })).toBeNull();
+    }
+  });
+
+  it("score mode opens nothing for the result card either", () => {
+    expect(buildDock(RESULT_TYPE, view(), t, {})).toBeNull();
+  });
+
+  it("offers the three amounts, as MODIFIERS of the point already recorded", () => {
+    const v = view();
+    const dock = buildDock(SCORE_TYPE, v, t, tap(v, 0))!;
+    expect(dock.title).toBe("pad.generic.dock.amount.title");
+    expect(dock.chips.map((chip) => chip.id)).toEqual(["points:2", "points:3", "points:5"]);
+    expect(dock.chips.every((chip) => chip.kind === "flag")).toBe(true);
+  });
+
+  it("a chip REPLACES the amount on the same payload — it never adds a second event", () => {
+    const v = view();
+    const held = tap(v, 0);
+    const dock = buildDock(SCORE_TYPE, v, t, held)!;
+    const three = dock.chips.find((chip) => chip.id === "points:3")!;
+    expect(three.mutate(held)).toEqual({ ...held, points: 3 });
+    // And a second, different chip corrects the first rather than stacking:
+    // `dockController` refuses only a REPEAT of the same chip.
+    const two = dock.chips.find((chip) => chip.id === "points:2")!;
+    expect(two.mutate(three.mutate(held))).toEqual({ ...held, points: 2 });
+  });
+
+  it("every amended payload still folds through the real engine", () => {
+    const base = stream(start());
+    const v = view({ events: base });
+    const held = tap(v, 0);
+    const dock = buildDock(SCORE_TYPE, v, t, held)!;
+    for (const chip of dock.chips) {
+      const amended = chip.mutate(held);
+      expect(
+        () => foldClient(generic, SCORE_CFG, SOLO, [...base, ev(base.length, SCORE_TYPE, amended)]),
+        `chip ${chip.id}`,
+      ).not.toThrow();
+    }
+  });
+
+  it("asks who scored ONLY when the side has more than one player", () => {
+    const solo = view();
+    expect(buildDock(SCORE_TYPE, solo, t, tap(solo, 0))!.chips.map((c) => c.id)).toEqual([
+      "points:2",
+      "points:3",
+      "points:5",
+    ]);
+    const paired = view({ lineups: PAIRED });
+    const dock = buildDock(SCORE_TYPE, paired, t, tap(paired, 0))!;
+    expect(dock.title).toBe("pad.generic.dock.both.title");
+    expect(dock.chips.map((chip) => chip.id)).toEqual([
+      "points:2",
+      "points:3",
+      "points:5",
+      "person:H-first",
+      "person:H-second",
+    ]);
+    // Person chips stay PILLS; only the amounts are flags.
+    expect(dock.chips.filter((chip) => chip.id.startsWith("person:")).every((chip) => chip.kind === undefined)).toBe(
+      true,
+    );
+  });
+
+  it("does not re-ask a question the tap already answered", () => {
+    const paired = view({ lineups: PAIRED });
+    const dock = buildDock(SCORE_TYPE, paired, t, { ...tap(paired, 0), person: "H-first" })!;
+    expect(dock.chips.some((chip) => chip.id.startsWith("person:"))).toBe(false);
+    expect(dock.title).toBe("pad.generic.dock.amount.title");
+  });
+
+  it("names the winning side's OWN players, never the other side's", () => {
+    const paired = view({ lineups: PAIRED });
+    const away = buildDock(SCORE_TYPE, paired, t, tap(paired, 1))!;
+    expect(away.chips.some((chip) => chip.id.startsWith("person:"))).toBe(false);
+  });
+
+  it("degrades to the amounts alone when the payload names no resolvable side", () => {
+    const paired = view({ lineups: PAIRED });
+    const dock = buildDock(SCORE_TYPE, paired, t, { points: 1 })!;
+    expect(dock.chips.map((chip) => chip.id)).toEqual(["points:2", "points:3", "points:5"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// activityDetail() — the ribbon's varying half
+// ---------------------------------------------------------------------------
+
+function detail(v: PadHostView, eventType: string, payload: Record<string, unknown>): string | undefined {
+  return genericDetail({ t, eventType, payload, state: v.state, personNames: NAMES });
+}
+
+describe("genericDetail", () => {
+  it("names the person and the amount for a tallied point", () => {
+    expect(detail(view(), SCORE_TYPE, { by: "H", points: 3, person: "H1" })).toBe(
+      'Hana Otieno · pad.generic.ribbon.points({"points":3})',
+    );
+  });
+
+  it("falls back to the SIDE when nobody was attributed — never an empty row", () => {
+    expect(detail(view(), SCORE_TYPE, { by: "A", points: 1 })).toBe(
+      'scorepad.attribution.away · pad.generic.ribbon.points({"points":1})',
+    );
+  });
+
+  it("carries the sign, so a correction is legible in the log", () => {
+    expect(detail(view(), SCORE_TYPE, { by: "H", points: -2 })).toContain('{"points":-2}');
+  });
+
+  it("reads a typed result as its score", () => {
+    expect(detail(view(), RESULT_TYPE, { p1Score: 21, p2Score: 19 })).toBe("21 – 19");
+  });
+
+  it("names the winning side for a win_loss card", () => {
+    expect(detail(view({ cfg: WIN_LOSS_CFG }), RESULT_TYPE, { winnerId: "A" })).toBe("scorepad.attribution.away");
+  });
+
+  it("words a declared draw", () => {
+    expect(detail(view({ cfg: WIN_LOSS_DRAWS_CFG }), RESULT_TYPE, { isDraw: true })).toBe(
+      "pad.generic.ribbon.draw",
+    );
+  });
+
+  it("adds nothing it cannot see — a settle-from-tally card carries no facts", () => {
+    expect(detail(view(), RESULT_TYPE, {})).toBeUndefined();
+    expect(detail(view(), "core.start", {})).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The registry, the vocabulary, and the four dictionaries
+// ---------------------------------------------------------------------------
+
+describe("registry", () => {
+  it("resolves generic to the v3 lane, and hands back a real skin", () => {
+    const lane = resolvePad("generic", t);
+    expect(lane.lane).toBe("v3");
+    if (lane.lane === "v3") {
+      expect(lane.skin.key).toBe("generic");
+      expect(lane.skin.tapModel).toBe("S");
+      expect(typeof lane.skin.phase).toBe("function");
+    }
+  });
+
+  it("no longer routes generic down the legacy lane", () => {
+    expect(LEGACY_SPORTS.has("generic")).toBe(false);
+  });
+});
+
+describe("the engine surface this skin restates", () => {
+  it("EVENT_BAND is the module's own fidelity map, not a second scale", () => {
+    for (const cfg of [SCORE_CFG, WIN_LOSS_CFG]) {
+      expect(EVENT_BAND).toEqual(genericPadSpec(cfg as never).fidelity);
+    }
+  });
+
+  it("MAX_TALLY_STEP and MAX_PLAUSIBLE_SCORE are the engine's own field bounds", () => {
+    const fields = genericPadSpec(SCORE_CFG as never).panels
+      .flatMap((panel) => panel.actions)
+      .flatMap((action) => action.fields);
+    const points = fields.find((field) => field.path === "points" && "max" in field && field.max > 0);
+    const p1 = fields.find((field) => field.path === "p1Score");
+    expect((points as { max: number }).max).toBe(MAX_TALLY_STEP);
+    expect((p1 as { max: number }).max).toBe(MAX_PLAUSIBLE_SCORE);
+  });
+
+  it("the recording chip renders NO upsell for generic: an empty entitlement map entitles every band", () => {
+    const entitlements = genericPadSpec(SCORE_CFG as never).fidelityEntitlements;
+    expect(entitlements).toEqual({});
+    const bands = entitledBandsFrom(entitlements, {});
+    expect([...bands].sort()).toEqual([0, 1, 2, 3]);
+    // `RecordingChip` shows its upsell only when the NEXT band is locked, and
+    // no band is: generic ships free at every level it declares.
+    for (const band of [0, 1, 2] as FidelityBand[]) {
+      const nextBand = (band + 1) as FidelityBand;
+      const next = buildRecording(nextBand, band, bands, entitlements[nextBand] ?? "", (k) => k);
+      expect(next.locked, `band ${nextBand}`).toBe(false);
+      expect(next.upsell).toBeUndefined();
+    }
+  });
+});
+
+describe("vocabulary and copy", () => {
+  it("both ribbon keys are REGISTERED, not merely translated", () => {
+    for (const type of [RESULT_TYPE, SCORE_TYPE]) {
+      expect(PAD_LABEL_KEYS).toContain(ribbonKeyFor(type));
+    }
+  });
+
+  it("both scorebug hints are registered — padLabel prints the raw key otherwise", () => {
+    expect(PAD_LABEL_KEYS).toContain(TALLY_HINT_KEY);
+    expect(PAD_LABEL_KEYS).toContain(RESULT_HINT_KEY);
+  });
+
+  /** Every key this skin can put on screen, collected from BUILT specs rather
+   *  than from a hand list — a skin's tile/step/chip i18n keys have no gate of
+   *  their own, so a list written by hand would miss exactly the key that was
+   *  forgotten. */
+  function keysOn(v: PadHostView): Set<string> {
+    const seen = new Set<string>();
+    const recording: TFn = (key) => {
+      seen.add(key);
+      return key;
+    };
+    const bug = buildScorebug(v, recording);
+    for (const half of bug.halves) if (half.hintKey) seen.add(half.hintKey);
+    for (const tile of buildTiles(v, recording)) {
+      seen.add(tile.label);
+      if (tile.sublabel) seen.add(tile.sublabel);
+    }
+    for (const sheet of Object.values(buildSheets(v, recording))) {
+      for (const step of sheet.steps) if (step.kind === "choice") for (const o of step.options) seen.add(o.label);
+    }
+    for (const payload of [{ by: "H", points: 1 }, { by: "H", points: 1, person: "H-first" }]) {
+      const dock = buildDock(SCORE_TYPE, v, recording, payload);
+      if (dock) for (const chip of dock.chips) seen.add(chip.label);
+    }
+    for (const [type, payload] of [
+      [SCORE_TYPE, { by: "H", points: 2, person: "H1" }],
+      [SCORE_TYPE, { by: "H", points: 2 }],
+      [RESULT_TYPE, { p1Score: 3, p2Score: 1 }],
+      [RESULT_TYPE, { winnerId: "H" }],
+      [RESULT_TYPE, { isDraw: true }],
+    ] as const) {
+      genericDetail({ t: recording, eventType: type, payload, state: v.state, personNames: NAMES });
+    }
+    for (const type of [RESULT_TYPE, SCORE_TYPE]) seen.add(ribbonKeyFor(type));
+    return seen;
+  }
+
+  it("every key it can render exists in the English dictionary", () => {
+    const all = new Set<string>();
+    for (const cfg of [SCORE_CFG, SCORE_NO_DRAWS_CFG, WIN_LOSS_CFG, WIN_LOSS_DRAWS_CFG]) {
+      for (const band of [0, 1, 3] as FidelityBand[]) {
+        for (const lineups of [SOLO, PAIRED]) {
+          for (const events of [stream(), stream(start()), stream(start(), point("H", 3), point("A"))]) {
+            for (const key of keysOn(view({ cfg, band, lineups, events }))) all.add(key);
+          }
+        }
+      }
+    }
+    // Guard the guard: a sweep that collected nothing would pass silently.
+    expect(all.size).toBeGreaterThan(15);
+    const missing = [...all].filter((key) => !(key in (uiEn as Record<string, string>)));
+    expect(missing).toEqual([]);
   });
 });

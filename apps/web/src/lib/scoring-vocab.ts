@@ -827,6 +827,18 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   "pad.generic.panel.score",
   "pad.generic.panel.settle",
   "pad.generic.panel.tally",
+  // R7/A1 — the v3 generic skin's own ribbon copy and its two scorebug hints.
+  // Registered HERE, not only in the four dictionaries: `ribbon.ts`'s
+  // `buildRibbon` and `scorebug.tsx`'s hint both gate their per-sport lookup on
+  // PAD_LABEL_KEYS MEMBERSHIP before calling `padLabel`, so dictionary copy
+  // with no entry in this list leaves the ribbon on the generic
+  // `pad.ribbon.fallback` ("{event} recorded") and prints the raw dotted key
+  // as the visible hint on the board — both paid for once already this
+  // programme, on badminton and volleyball respectively.
+  "pad.generic.ribbon.result",
+  "pad.generic.ribbon.score",
+  "pad.generic.scorebug.result.hint",
+  "pad.generic.scorebug.tally.hint",
 
   "pad.hockey.action.advance",
   "pad.hockey.action.goal",

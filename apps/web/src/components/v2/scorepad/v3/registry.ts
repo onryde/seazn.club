@@ -56,6 +56,7 @@ import { icehockeySkinV3 } from "./skins/icehockey";
 import { tabletennisSkinV3 } from "./skins/tabletennis";
 import { tennisSkinV3 } from "./skins/tennis";
 import { volleyballSkinV3 } from "./skins/volleyball";
+import { genericSkinV3 } from "./skins/generic";
 
 /**
  * Sport key -> v3 skin FACTORY. Empty through R1; populated sport-by-sport
@@ -114,6 +115,13 @@ V3_SKINS.tennis = tennisSkinV3;
 // `sports/setbased` sports. `skins/racquet-skin.tsx` (v2) is now unreferenced
 // by any sport and is deleted in that wave's own follow-up task, not here.
 V3_SKINS.volleyball = volleyballSkinV3;
+// R7/A1 — generic, the seventh conversion. NOT a fallback: `generic` is a
+// first-class, user-selectable catalog entry ("Generic"), and therefore the
+// scoring surface for every sport this engine does not model. It is also the
+// first conversion whose VARIANT changes the pad — `padSpec` branches on
+// `cfg.resultMode` — so `skins/generic.tsx` builds two boards from one skin.
+// The FACTORY, never `genericSkinV3(t)`, same reason as every entry above.
+V3_SKINS.generic = genericSkinV3;
 
 /**
  * Every engine sport key NOT already owned by `V3_SKINS`, computed from
@@ -130,7 +138,9 @@ V3_SKINS.volleyball = volleyballSkinV3;
  * change — R2/task E did exactly that for cricket, R3/task B2 for football,
  * R4 for tennis, R5/C1 for badminton, R5/C2 for table tennis and R5/C3 for
  * volleyball — the third and last `sports/setbased` sibling, closing out the
- * racquet family.
+ * racquet family, and R7/A1 for generic — the
+ * universal renderer's first sport, which leaves `../registry.tsx`'s
+ * `RESOLUTION_KIND: "universal"` lane serving carrom and boardgame only.
  *
  * `CONVERTED_SPORTS` below is a LITERAL list, deliberately not
  * `Object.keys(V3_SKINS)`: deriving one from the other would make the totality
@@ -150,6 +160,7 @@ const CONVERTED_SPORTS: ReadonlySet<string> = new Set([
   "tabletennis",
   "tennis",
   "volleyball",
+  "generic",
 ]);
 
 export const LEGACY_SPORTS: ReadonlySet<string> = new Set(
