@@ -119,12 +119,30 @@ describe("registry totality", () => {
     expect(resolvePad("volleyball", T).lane).toBe("v3");
   });
 
-  it("every other builtinModules sport still resolves to legacy — the flips touch cricket, football, tennis, badminton, table tennis and volleyball alone", () => {
-    const converted = new Set(["cricket", "football", "tennis", "badminton", "tabletennis", "volleyball"]);
+  it("hockey and ice hockey specifically resolve to the v3 lane — R6 flips the period pair in ONE change", () => {
+    // BOTH, in one assertion, deliberately: the two share
+    // `skins/period-shared.ts`, so a half-flipped pair would leave that module
+    // carrying a sport whose pad never reaches it — the shape this programme
+    // calls an inert seam.
+    expect(resolvePad("hockey", T).lane).toBe("v3");
+    expect(resolvePad("icehockey", T).lane).toBe("v3");
+  });
+
+  it("every other builtinModules sport still resolves to legacy — the flips touch cricket, football, tennis, badminton, table tennis, volleyball, hockey and ice hockey alone", () => {
+    const converted = new Set([
+      "cricket",
+      "football",
+      "tennis",
+      "badminton",
+      "tabletennis",
+      "volleyball",
+      "hockey",
+      "icehockey",
+    ]);
     const others = builtinModules.map((m) => m.key).filter((key) => !converted.has(key));
     // Pins today's known-good shape, same convention registry.test.tsx's own
     // "the table names exactly the 11 shipped sports" assertion uses.
-    expect(others.length).toBe(5);
+    expect(others.length).toBe(3);
     for (const key of others) {
       expect(resolvePad(key, T).lane, key).toBe("legacy");
     }
