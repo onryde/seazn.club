@@ -152,13 +152,17 @@ describe("no engine padSpec declares an authority action (the More-sheet premise
     }
   }
 
-  const specs = builtinModules.map((m) => ({
-    key: m.key,
+  const specs = builtinModules.map((m) => {
+    // `padSpec` is optional on `SportModule` (it landed module by module).
+    // Throwing rather than filtering, for the same reason `anyCfg` throws: a
+    // module quietly dropped from an audit is how the audit goes vacuous.
+    const build = m.padSpec;
+    if (build === undefined) throw new Error(`module ${m.key} declares no padSpec`);
     // A variant cannot introduce a NEW action type — `padSpec` builds its
     // panels from a closed list per module and gates them with `PadGate` — so
     // one resolution per module is the whole universe of declared types here.
-    spec: m.padSpec(anyCfg(m) as never),
-  }));
+    return { key: m.key, spec: build.call(m, anyCfg(m) as never) };
+  });
 
   const declaredTypes = specs.flatMap(({ key, spec }) =>
     spec.panels.flatMap((panel) => panel.actions.map((a) => ({ key, type: a.type }))),
