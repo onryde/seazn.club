@@ -332,7 +332,7 @@ test("R3.5 — cricket: undo a super-over ball, then undo the result the super o
   expect(soBefore!.innings![0]!.runs).toBe(1);
   await shot(page, "undo", "super-over-ball-recorded");
 
-  await pad(page).locator('[data-role="v3-ribbon"]').getByRole("button", { name: "Undo", exact: true }).click();
+  await pad(page).locator('[data-role="v3-ribbon"]').getByRole("button", { name: "Take back", exact: true }).click();
   // Undoing the ONLY delivery empties `superOver.innings` rather than leaving a
   // 0-run innings behind — the innings had not started before that ball.
   await expect

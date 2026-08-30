@@ -2681,7 +2681,7 @@
   "pad.dock.title": "Detail toevoegen — optioneel",
   "pad.ribbon.fallback": "{event} vastgelegd",
   "pad.ribbon.justNow": "zojuist",
-  "pad.ribbon.undo": "Ongedaan maken",
+  "pad.ribbon.takeBack": "Terugnemen",
   "pad.ribbon.withDetail": "{base} — {detail}",
   "pad.ribbon.core.start": "Wedstrijd gestart",
   "pad.ribbon.core.void": "Invoer ongedaan gemaakt",

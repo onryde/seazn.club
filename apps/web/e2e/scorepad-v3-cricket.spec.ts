@@ -318,7 +318,7 @@ test("cricket v3: undo INSIDE the soft-commit hold window drops silently, no cor
   // decideUndo (pad-host.tsx): `heldId === eventId` -> "drop", queue.ts's
   // `dropHeld` — the event is removed from the LOCAL queue, never sent, no
   // `core.void` (there is nothing on the server to void).
-  await pad(page).locator('[data-role="v3-ribbon"]').getByRole("button", { name: "Undo", exact: true }).click();
+  await pad(page).locator('[data-role="v3-ribbon"]').getByRole("button", { name: "Take back", exact: true }).click();
   await expect(dock, "a dropped held tap clears `held` immediately, no network round trip needed").not.toBeVisible({
     timeout: 5_000,
   });
@@ -368,7 +368,7 @@ test("cricket v3: undo AFTER send voids through core.void", async ({ page }) => 
     .toBe(1);
   await expect(pad(page).locator('[data-role="v3-dock"]')).not.toBeVisible({ timeout: 20_000 });
 
-  await pad(page).locator('[data-role="v3-ribbon"]').getByRole("button", { name: "Undo", exact: true }).click();
+  await pad(page).locator('[data-role="v3-ribbon"]').getByRole("button", { name: "Take back", exact: true }).click();
   await expect
     .poll(
       async () => (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "core.void").length,

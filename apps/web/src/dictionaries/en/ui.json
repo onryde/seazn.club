@@ -2726,7 +2726,7 @@
   "pad.dock.title": "Add detail — optional",
   "pad.ribbon.fallback": "{event} recorded",
   "pad.ribbon.justNow": "just now",
-  "pad.ribbon.undo": "Undo",
+  "pad.ribbon.takeBack": "Take back",
   "pad.ribbon.withDetail": "{base} — {detail}",
   "pad.ribbon.core.start": "Match started",
   "pad.ribbon.core.void": "Entry undone",

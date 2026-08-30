@@ -443,6 +443,43 @@ export function decideUndo(eventId: string, heldId: string | null): UndoDecision
 }
 
 /**
+ * WHICH event the ribbon's take-back acts on, or `null` for "offer nothing".
+ *
+ * R7/C4 (ruling R7-5, the open item the design of record left to verify —
+ * and it was a real defect). The ribbon used to hand `handleUndo` the raw
+ * `events[events.length - 1]`, UNFILTERED, where the console's own control
+ * (`lastVoidable`, fixture-console.tsx) had always skipped `core.void` rows.
+ * After ANY void the newest event IS a `core.void`, so the ribbon offered a
+ * control the engine hard-refuses: `resolveVoids`
+ * (packages/engine/src/core/events.ts) throws INVALID_EVENT — "voids are not
+ * themselves voidable" — and an event some other void already cancelled is
+ * refused for the same reason it is struck through in the panel. Offering
+ * either is the pad promising what the engine will reject, which is the
+ * defect class this programme exists to remove.
+ *
+ * A HELD tap short-circuits both rules and is ALWAYS offered. Inside the
+ * soft-commit window take-back does not void at all — `decideUndo` returns
+ * `{kind:"drop"}` and the submission never reaches the server (spec 2.3) —
+ * so no ledger rule can apply to it, and gating it on one would delete the
+ * cancel-before-send path for any skin whose held event happens to be a
+ * `core.*` type.
+ *
+ * Deliberately the SAME rule the console applies, not a second one: two
+ * controls that both write `core.void` must agree on what is voidable.
+ */
+export function ribbonUndoTarget(
+  events: readonly ActivityEvent[],
+  heldId: string | null,
+): string | null {
+  if (heldId !== null) return heldId;
+  const latest = events.length > 0 ? events[events.length - 1]! : null;
+  if (latest === null) return null;
+  if (latest.type === "core.void") return null;
+  if (events.some((v) => v.voids === latest.id)) return null;
+  return latest.id;
+}
+
+/**
  * The event type a tile will dispatch, or `null` when it cannot be known
  * statically.
  *
@@ -1314,7 +1351,6 @@ export function PadHostV3(props: PadHostV3Props) {
   const headline = summaryHeadline(pipeline.summary);
 
   const events = pipeline.events;
-  const latestEvent = events.length > 0 ? events[events.length - 1]! : null;
 
   // The activity panel reads four fields; `voids` is what makes a row show
   // as cancelled (activity.tsx derives it by looking for some OTHER event
@@ -1366,6 +1402,10 @@ export function PadHostV3(props: PadHostV3Props) {
   );
 
   const ribbon = buildTopRibbon(activityEvents, (id) => personNames[id] ?? id, t, resolveDetail);
+  // R7/C4 — see `ribbonUndoTarget`. Resolved next to the ribbon it belongs to
+  // rather than inside the JSX so the rule is one named, testable function
+  // instead of a condition buried in a `!`-asserted call site.
+  const undoTarget = ribbonUndoTarget(activityEvents, held?.id ?? null);
 
   const [voidingId, setVoidingId] = useState<string | null>(null);
 
@@ -1486,14 +1526,22 @@ export function PadHostV3(props: PadHostV3Props) {
           className="flex items-center justify-between gap-2 rounded-full border border-slate-200 bg-white px-4 py-2"
         >
           <span className="min-w-0 flex-1 truncate text-sm text-slate-700">{ribbon.text}</span>
-          <button
-            type="button"
-            onClick={() => void handleUndo(latestEvent!.id)}
-            style={{ minHeight: 44, minWidth: 44 }}
-            className="shrink-0 rounded-full px-3 text-sm font-semibold text-violet-700 transition-colors hover:bg-violet-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400"
-          >
-            {msg("pad.ribbon.undo")}
-          </button>
+          {/* Withdrawn, not disabled, when nothing on the strip can be taken
+              back (R7/C4) — a disabled control still reads as "there is an
+              action here", and after a void there is not. The strip's TEXT
+              stays either way: losing the last-event line would be a
+              different regression. */}
+          {undoTarget !== null && (
+            <button
+              type="button"
+              data-role="v3-ribbon-undo"
+              onClick={() => void handleUndo(undoTarget)}
+              style={{ minHeight: 44, minWidth: 44 }}
+              className="shrink-0 rounded-full px-3 text-sm font-semibold text-violet-700 transition-colors hover:bg-violet-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400"
+            >
+              {msg("pad.ribbon.takeBack")}
+            </button>
+          )}
         </div>
       )}
 

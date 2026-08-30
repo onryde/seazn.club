@@ -467,7 +467,7 @@ test("tennis v3: the Set-score tile is withheld while the set is in progress, re
   // The pad's OWN ribbon (not the console's separate "Undo last" chrome) —
   // undoing the just-scored point through the pad's own live state.
   const ribbon = pad(page).locator('[data-role="v3-ribbon"]');
-  const undoBtn = ribbon.getByRole("button", { name: "Undo", exact: true });
+  const undoBtn = ribbon.getByRole("button", { name: "Take back", exact: true });
   await expect(undoBtn).toBeVisible({ timeout: 20_000 });
   await undoBtn.click();
   await expect

@@ -3102,7 +3102,7 @@ export type DictionaryKey =
   | "pad.ribbon.core.void"
   | "pad.ribbon.fallback"
   | "pad.ribbon.justNow"
-  | "pad.ribbon.undo"
+  | "pad.ribbon.takeBack"
   | "pad.ribbon.withDetail"
   | "pad.sheet.back"
   | "pad.sheet.cancel"

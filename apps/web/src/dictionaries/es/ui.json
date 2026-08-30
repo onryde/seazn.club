@@ -2681,7 +2681,7 @@
   "pad.dock.title": "Añadir detalle — opcional",
   "pad.ribbon.fallback": "{event} registrado",
   "pad.ribbon.justNow": "ahora mismo",
-  "pad.ribbon.undo": "Deshacer",
+  "pad.ribbon.takeBack": "Retirar",
   "pad.ribbon.withDetail": "{base} — {detail}",
   "pad.ribbon.core.start": "Partido iniciado",
   "pad.ribbon.core.void": "Entrada anulada",

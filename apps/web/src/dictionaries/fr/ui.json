@@ -2726,7 +2726,7 @@
   "pad.dock.title": "Ajouter un détail — facultatif",
   "pad.ribbon.fallback": "{event} enregistré",
   "pad.ribbon.justNow": "à l’instant",
-  "pad.ribbon.undo": "Annuler",
+  "pad.ribbon.takeBack": "Retirer",
   "pad.ribbon.withDetail": "{base} — {detail}",
   "pad.ribbon.core.start": "Match commencé",
   "pad.ribbon.core.void": "Entrée annulée",
