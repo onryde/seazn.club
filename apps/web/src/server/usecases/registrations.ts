@@ -3268,7 +3268,7 @@ export async function publicRegistrationStatus(
   // there (public.ts/public_entrants_v precedent, established throughout
   // this session).
   const isTeam = (settings?.entrant_kind ?? "individual") === "team";
-  const optedOut = isTeam ? new Set<string>() : await anyOptedOutByRegistration([reg.id]);
+  const optedOut = isTeam ? new Set<string>() : await anyOptedOutByRegistration(sql, [reg.id]);
   const displayName = resolvePersonDisplayName(
     reg.display_name,
     optedOut.has(reg.id) ? { public_name: false } : null,
@@ -3395,14 +3395,21 @@ async function regByRef(ref: string): Promise<RegistrationWithGroupRow> {
  * heading mask, rather than a parallel local query — this file already
  * flows one way into that one (module topology comment, registration-submit.ts),
  * never the reverse.
+ *
+ * Takes the sql/tx client as an explicit first parameter (code-review fix,
+ * 2026-08-30): `exports.ts`'s `buildAdmitTicketsDoc` needs to run this same
+ * query from inside its own `withTenant` transaction and used to carry a
+ * byte-for-byte duplicate differing only in that one parameter — the exact
+ * "two lookup paths drift" defect class this codebase has hit before.
+ * Deduped: `exports.ts` now imports and calls this function directly.
  */
-export async function anyOptedOutByRegistration(regIds: string[]): Promise<Set<string>> {
+export async function anyOptedOutByRegistration(db: AnySql, regIds: string[]): Promise<Set<string>> {
   if (regIds.length === 0) return new Set();
-  const rows = await sql<{ registration_id: string; consent: { public_name?: boolean } | null }[]>`
+  const rows = await db<{ registration_id: string; consent: { public_name?: boolean } | null }[]>`
     select rp.registration_id, p.consent
     from registration_players rp
     join persons p on p.id = rp.person_id
-    where rp.registration_id in ${sql(regIds)}`;
+    where rp.registration_id in ${db(regIds)}`;
   const consentsByReg = new Map<string, ({ public_name?: boolean } | null)[]>();
   for (const r of rows) {
     const list = consentsByReg.get(r.registration_id) ?? [];
@@ -3435,7 +3442,7 @@ export async function publicRegistrationStatusByRef(
   // A team entry's roster can still carry an opted-out member — never
   // queried for one, so `optedOut` is always empty and the mask stays
   // youth-only, exactly like the pre-RS008 behaviour.
-  const optedOut = isTeam ? new Set<string>() : await anyOptedOutByRegistration([reg.id]);
+  const optedOut = isTeam ? new Set<string>() : await anyOptedOutByRegistration(sql, [reg.id]);
   const displayName = resolvePersonDisplayName(
     reg.display_name,
     optedOut.has(reg.id) ? { public_name: false } : null,
@@ -3616,7 +3623,7 @@ export async function publicCartByRef(ref: string, token?: string | null): Promi
   const nonTeamEntryIds = entries
     .filter((e) => (entrantKindByDivision.get(e.division_id) ?? "individual") !== "team")
     .map((e) => e.id);
-  const optedOut = await anyOptedOutByRegistration(nonTeamEntryIds);
+  const optedOut = await anyOptedOutByRegistration(sql, nonTeamEntryIds);
 
   return {
     ref_code: reg.ref_code!,

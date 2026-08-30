@@ -31,10 +31,11 @@ import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { hasFeature, requireFeature } from "@/lib/entitlements";
 import { fixtureWhen } from "@/lib/email-templates/official-assigned";
-import { anyOptedOut, resolvePersonDisplayName } from "@/lib/name-display";
+import { resolvePersonDisplayName } from "@/lib/name-display";
 import { resolveEntrantBadge } from "@/lib/entrant-badge";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { resolveModule } from "@/server/engine-db";
+import { anyOptedOutByRegistration } from "./registrations";
 import { participantRows } from "./clubs";
 import { resolveSponsors } from "./sponsors";
 import { getMyOfficiating } from "./me-officiating";
@@ -916,34 +917,13 @@ async function ticketRegistrationRows(tx: Tx, competitionId: string): Promise<Ti
     order by r.created_at`;
 }
 
-/**
- * RS008 — batched "does ANY roster player on this registration have an
- * explicit consent opt-out" check, keyed by registration id — the same rule
- * `registrations.ts`'s own `anyOptedOutByRegistration` applies to the public
- * status-page reads, kept as a small LOCAL query here rather than importing
- * that (much heavier, Stripe/email-coupled) module for one helper. Both
- * delegate the actual "stricter wins across several people" decision to the
- * one canonical `anyOptedOut` (lib/name-display.ts) — never re-implemented.
- */
-async function anyOptedOutByRegistration(tx: Tx, regIds: string[]): Promise<Set<string>> {
-  if (regIds.length === 0) return new Set();
-  const rows = await tx<{ registration_id: string; consent: { public_name?: boolean } | null }[]>`
-    select rp.registration_id, p.consent
-    from registration_players rp
-    join persons p on p.id = rp.person_id
-    where rp.registration_id in ${tx(regIds)}`;
-  const consentsByReg = new Map<string, ({ public_name?: boolean } | null)[]>();
-  for (const r of rows) {
-    const list = consentsByReg.get(r.registration_id) ?? [];
-    list.push(r.consent);
-    consentsByReg.set(r.registration_id, list);
-  }
-  const optedOut = new Set<string>();
-  for (const [regId, consents] of consentsByReg) {
-    if (anyOptedOut(consents)) optedOut.add(regId);
-  }
-  return optedOut;
-}
+// Code-review fix (2026-08-30): this file used to carry its own LOCAL copy of
+// `anyOptedOutByRegistration`, near-identical to registrations.ts's own —
+// same SQL/grouping, differing only in which sql/tx client was passed — the
+// exact "two lookup paths drift" defect class this codebase has hit before.
+// Deduped: registrations.ts's version now takes the client as an explicit
+// parameter (`AnySql = Tx | postgres.Sql`), so this file's `tx` (from its own
+// `withTenant` transaction below) passes straight through, imported above.
 
 /** Admit tickets for a competition (v12/Task 13): every confirmed
  *  registration becomes a 2-up ticket, name-masked the same way the public

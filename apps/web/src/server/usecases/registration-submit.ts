@@ -996,7 +996,7 @@ export async function previewJoinEntry(joinCode: string): Promise<JoinPreviewRes
   // already does for the identical field: anyOptedOutByRegistration reuses
   // the SAME aggregate this session's other compound-string sites use.
   const isTeam = reg.entrant_kind === "team";
-  const optedOutRegs = isTeam ? new Set<string>() : await anyOptedOutByRegistration([reg.id]);
+  const optedOutRegs = isTeam ? new Set<string>() : await anyOptedOutByRegistration(sql, [reg.id]);
   const displayName = resolvePersonDisplayName(
     reg.display_name,
     optedOutRegs.has(reg.id) ? { public_name: false } : null,

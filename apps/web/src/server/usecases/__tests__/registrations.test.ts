@@ -106,7 +106,7 @@ vi.mock("@/lib/credits", async (importOriginal) => {
   };
 });
 
-import { sql } from "@/lib/db";
+import { sql, withTenant } from "@/lib/db";
 import { log } from "@/server/logger";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
@@ -156,6 +156,7 @@ import {
   groupById,
   reconcileRegistrationGroupBySession,
   inviteUnclaimedMembers,
+  anyOptedOutByRegistration,
   type GroupStatusView,
 } from "../registrations";
 // RS005 F1: rendering the REAL production template off captured
@@ -1404,6 +1405,48 @@ describe.skipIf(!HAS_DB)("registration flows (doc 16 §1.1, PROMPT-20a)", () => 
 
     const view = await publicRegistrationStatusByRef(registration.ref_code!);
     expect(view.display_name).toBe("Priya S.");
+  });
+
+  // Code-review fix (2026-08-30) — `anyOptedOutByRegistration` used to have a
+  // byte-for-byte duplicate in exports.ts, differing only in which sql/tx
+  // client was passed (the "two lookup paths drift" defect class). Deduped
+  // into this ONE function, now taking the client as an explicit parameter.
+  // Pins that it returns the identical result whether called with the plain
+  // pooled `sql` (every caller in THIS file) or a `withTenant` transaction
+  // (how exports.ts's `buildAdmitTicketsDoc` must call it) — the exact two
+  // call shapes the dedupe needs to serve without behaviour drifting again.
+  it("anyOptedOutByRegistration returns the identical result via plain sql and via a withTenant transaction", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    const settings = await putRegistrationSettings(owner, division.id, {
+      enabled: true,
+      entrant_kind: "individual",
+      fee_cents: 0,
+      form_fields: [],
+      opens_at: null,
+      closes_at: null,
+      capacity: null,
+      refund_lock_at: null,
+    });
+    const { registration } = await seedRegistration(competition.id, division.id, settings, {
+      refCode: generateRefCode(),
+      displayName: "Opted Out Person",
+      players: [{ name: "Opted Out Person" }],
+    });
+    const [{ id: personId }] = await sql<{ id: string }[]>`
+      insert into persons (org_id, full_name, consent)
+      values (${orgId}, 'Opted Out Person', ${sql.json({ public_name: false } as never)})
+      returning id`;
+    await sql`
+      update registration_players set person_id = ${personId}
+      where registration_id = ${registration.id}`;
+
+    const viaPlainSql = await anyOptedOutByRegistration(sql, [registration.id]);
+    const viaTx = await withTenant(orgId, (tx) => anyOptedOutByRegistration(tx, [registration.id]));
+
+    expect(viaPlainSql.has(registration.id)).toBe(true);
+    expect([...viaTx]).toEqual([...viaPlainSql]);
   });
 
   it("publicRegistrationStatusByRef never masks a TEAM's display_name by a roster member's opt-out", async () => {
