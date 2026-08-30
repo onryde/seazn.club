@@ -3069,7 +3069,31 @@ payment has not gone through", three inches under a badge that says
 CONFIRMED. The word is doing two jobs on one card, and the money reading
 is the one that alarms people.
 
-**Owed:** rename the roster-side vocabulary so it cannot be read as a
-payment state — the roster is asking *who is playing*, not whether the
-entry is valid. `register.status.roster.pending` / `.claimed` / `.meter`
-are the three keys, all four locales. Copy only; no logic change.
+**And it is worse than ambiguous wording.** Read back from the database
+for the S2 runs:
+
+```
+Pair Captain …   consent_status = pending    <- the person who PAID
+Pair Partner …   consent_status = granted    <- the person who paid nothing
+```
+
+The fee is per ENTRY, and the CART's contact — the captain — pays it
+(`registration_groups.contact_email` carries the charge). The partner
+joins by invite link and pays nothing. But the captain is not
+auto-claimed against their own roster row, so **the payer is the one the
+card lists as outstanding**. A captain can pay £20, watch their partner
+claim, and see "1 of 2 confirmed" with themselves as the one still
+awaiting.
+
+**Owed, in two parts:**
+1. Copy: rename the roster-side vocabulary so it cannot be read as a
+   payment state — the roster asks *who is playing*, not whether the entry
+   is valid. `register.status.roster.pending` / `.claimed` / `.meter`,
+   all four locales.
+2. Behaviour, and the bigger of the two: decide whether the CAPTAIN
+   should be auto-claimed against their own row when they are on it. The
+   consent argument for making each adult claim their own row does not
+   apply to the captain — they filled the form and gave privacy consent
+   themselves, at submit, on the cart. `registering_self` /
+   `self_player_index` already record which row is theirs when they tick
+   "I'm registering myself", so the information needed is present.

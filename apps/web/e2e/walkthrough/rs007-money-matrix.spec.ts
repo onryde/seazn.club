@@ -181,7 +181,14 @@ async function enterAndPay(
   // the CONSOLE, not as a pageerror — so a stepper that silently stops
   // advancing shows up here and nowhere else.
   anon.on("console", (m) => {
-    if (m.type() === "error") pageErrors.push(`[console] ${m.text().slice(0, 300)}`);
+    if (m.type() !== "error") return;
+    const text = m.text();
+    // The report-only CSP header makes Chrome log this on EVERY page load.
+    // It is not a fault and it is not ours; leaving it in made the final
+    // "no page errors" assertion fail on noise, which trains a reader to
+    // ignore that assertion — the opposite of what it is for.
+    if (text.includes("upgrade-insecure-requests")) return;
+    pageErrors.push(`[console] ${text.slice(0, 300)}`);
   });
   anon.on("response", (res) => {
     if (res.url().includes("/api/") && res.status() >= 400) {
