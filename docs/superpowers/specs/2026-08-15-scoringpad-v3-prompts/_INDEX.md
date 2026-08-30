@@ -4194,3 +4194,46 @@ free — "a card is match state; it changes on-field strength, which changes how
 the score is reached" — applies to football identically. R6 has NOT extended the
 ruling to football on its own; that is a revenue decision, not a consistency
 tidy-up.
+
+---
+
+## R9 REGISTERED — scoring goes free (owner ruling, 2026-08-30)
+
+New wave, prompt at `R9-scoring-free.md`. **Runs AFTER R6 and R7 merge.** The
+Order table at the top of this file does not list it — that table has gone
+stale three times already and this note is the authority.
+
+**Ruling:** keep the fidelity bands, make them free and open. Bands stay as a
+UX choice about how much detail a scorer records — a volunteer picks "just the
+score", a club recording for stats picks ball-by-ball — and stop being a price
+boundary. Every band reachable on every plan. **Principle: charge for leverage,
+never for correctness.** Entitlements elsewhere (AI credits, seats, scale,
+registration, payments) are explicitly untouched; those gate real marginal
+cost, and a scoring event is a cheap row.
+
+**Why it is a wave and not a deletion:** three things move together — the
+server gate stops refusing, `fidelityTiers` retires (with nothing paywalled it
+has no job), and the recording chip loses its lock and upsell. That third piece
+closes **D-7** ("raw fidelity picker + unexplained 🔒"), which R1 addressed by
+explaining the lock rather than removing it.
+
+**Why NOT folded into R6**, recorded so it is not re-litigated: the pricing
+page would still advertise scoring as paid on the day it goes free; a billing
+change deserves a reviewer reading it AS a billing change rather than as the
+tail of a pad wave; and R6 already carries a clock, two skins, a seventh token,
+a chassis transport fix and a joint demolition with R7. R6 does ONLY the narrow
+piece the earlier ruling requires — period-family `suspension.start`/`.end` to
+tier 1, so hockey cards work free today.
+
+**Instrumentation is recommended, in parallel, and is NOT a gate:** log scoring
+refusals (event type, org, plan) before removal, so the owner learns afterwards
+what the gate was actually worth. The owner has already decided; this measures
+rather than blocks.
+
+**The trap R9 defuses by construction, recorded because a half-read could
+reintroduce it:** the two fidelity models drift in BOTH directions.
+`cricket.superover.ball` is `fidelityTiers` tier 1 — FREE today
+(`cricket.ts:3471`) — but `PadSpec.fidelity` band **3** (`cricket.ts:3000`), so
+any migration that "aligns the server to `padSpec`" newly PAYWALLS it. R9 makes
+everything free, so the drift stops mattering; a future partial migration would
+resurrect it.
