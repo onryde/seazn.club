@@ -2508,6 +2508,7 @@
   "lineup.checkedInTitle": "Registrado en la sede",
   "lineup.failed": "Error",
   "lineup.title": "Alineación de {name}",
+  "lineup.needsPositions": "A la alineación titular todavía le falta: {list}",
   "lineup.starting": "{n}/{total} titulares",
   "lineup.emptyEdit": "No se envió ninguna alineación — añade jugadores abajo.",
   "lineup.empty": "No se envió ninguna alineación.",

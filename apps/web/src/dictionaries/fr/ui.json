@@ -2553,6 +2553,7 @@
   "lineup.checkedInTitle": "Enregistré sur le lieu",
   "lineup.failed": "Échec",
   "lineup.title": "Composition de {name}",
+  "lineup.needsPositions": "Il manque encore dans la composition de départ : {list}",
   "lineup.starting": "{n}/{total} titulaires",
   "lineup.emptyEdit": "Aucune composition soumise — ajoutez des joueurs ci-dessous.",
   "lineup.empty": "Aucune composition soumise.",

@@ -2508,6 +2508,7 @@
   "lineup.checkedInTitle": "Ingecheckt op de locatie",
   "lineup.failed": "Mislukt",
   "lineup.title": "Opstelling van {name}",
+  "lineup.needsPositions": "De basisopstelling mist nog: {list}",
   "lineup.starting": "{n}/{total} in de basis",
   "lineup.emptyEdit": "Geen opstelling ingediend — voeg hieronder spelers toe.",
   "lineup.empty": "Geen opstelling ingediend.",

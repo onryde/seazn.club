@@ -2298,6 +2298,7 @@ export type DictionaryKey =
   | "lineup.failed"
   | "lineup.moveDown"
   | "lineup.moveUp"
+  | "lineup.needsPositions"
   | "lineup.noAnswer"
   | "lineup.noRoster"
   | "lineup.pairOrder.first"

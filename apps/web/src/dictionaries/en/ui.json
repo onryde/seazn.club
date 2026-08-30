@@ -2553,6 +2553,7 @@
   "lineup.checkedInTitle": "Checked in at the venue",
   "lineup.failed": "Failed",
   "lineup.title": "{name} lineup",
+  "lineup.needsPositions": "Starting line-up still needs: {list}",
   "lineup.starting": "{n}/{total} starting",
   "lineup.emptyEdit": "No lineup submitted — add players below.",
   "lineup.empty": "No lineup submitted.",
