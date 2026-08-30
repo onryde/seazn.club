@@ -31,7 +31,7 @@ prompts dir) also writes — those two are **sequential, never parallel**.
 | RS005 | `RS005-hub-registrants-tab.md` | RS004 | **DONE** — merged `9d2ad39bc` (PR #651, 2026-08-26), 16/16 checks green. Known-open and stated in the PR: no pagination in the read path; `resend-confirmation` has no throttle (mirrors the pre-existing `/remind`). Smoke still owed by RS010 |
 | RS006 | `RS006-public-stepper.md` | RS003 | **DONE** — merged `ec5cc6e3a` (PR #666, 2026-08-27), 9/9 checks + seven-width e2e green. Follow-ups merged `81f2198a1` (PR #668) fixed three defects found by USING the flow, none of which three review passes caught: RS005's "public sign-up page isn't live yet" notices were still telling organisers the link and QR do not work; "This is me" was not exclusive within a division (one person, two slots, charged twice); step 3 blocked with a step-wide message and no field marked. Smoke still owed by RS010 |
 | RS007 | `RS007-status-page-join-payments.md` | RS006 | **DONE** — merged (PR #677 `a6fca57f2` + PR #680 `2b743185e`, 2026-08-30). Table was stale here; see git log. |
-| RS008 | `RS008-consent-claim-optout.md` (superseded by an inline brief, 2026-08-30 — that file's premises were checked against shipped code and found stale) | RS007 | **IMPLEMENTED, not yet a PR** — branch `feat/rs008-consent-claim-optout`, 8 commits on top of `c28d6d476`. See closing note below. |
+| RS008 | `RS008-consent-claim-optout.md` (superseded by an inline brief, 2026-08-30 — that file's premises were checked against shipped code and found stale) | RS007 | **IMPLEMENTED, PR in progress** — branch `feat/rs008-consent-claim-optout`, 9 commits on top of `c28d6d476` (#24 fixed in the 9th). See closing note below. |
 | RS009 | `RS009-free-agents.md` | RS005, RS003 | TODO |
 | RS011 | `RS011-organiser-eligibility-gates.md` | RS002 | TODO — issue #412, re-homed from `L1` |
 | RS010 | `RS010-closeout-e2e-smoke-help.md` | all | TODO |
@@ -3669,6 +3669,30 @@ session's fix silently. Owed: a ruling on whether to mask an
 UNCLAIMED slot's name for a person who is already known to have opted
 out (the only one of the five sites where "no explicit opt-out yet"
 and "an existing person already opted out" can diverge on the SAME row).
+
+### #24 — CLOSED 2026-08-30, owner ruling: mask it
+
+Owner call: once #22's email dedupe resolves a `pending` slot to an
+EXISTING, already-opted-out person, honour that opt-out immediately —
+consistent with sites A/B, not a special case for "hasn't been claimed
+yet."
+
+**Fix (`11f4632ba`).** `previewJoinEntry` (registration-submit.ts) now
+does the SAME read-only, email-exact-match lookup
+`findOrCreatePlayerPerson` uses at materialise time
+(`findPlayerPersonByEmail`, org-scoped) for every pending slot that
+carries an email; a match whose `consent.public_name === false` masks
+via the existing `maskDisplayName(name, "first_initial")`. Zero or
+ambiguous matches — or no email on the row at all — preview raw,
+unchanged. Never writes anything; this is a preview, not a claim.
+
+**Verified:** two new cases in `registration-submit.test.ts`
+(`previewJoinEntry` describe block) — masks when the row's email
+matches an opted-out directory person, previews raw when the email
+matches nobody. Mutation-checked: forcing `optedOut = false` reddens
+exactly the new masking test (72 total, 71/72), nothing else; restored,
+72/72. `tsc --noEmit` and `eslint` on both touched files: 0
+errors/warnings.
 
 ### RS008 verification record
 
