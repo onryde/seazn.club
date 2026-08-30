@@ -37324,6 +37324,41 @@
                                 "type": "null"
                               }
                             ]
+                          },
+                          "assigned_team_id": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "format": "uuid",
+                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "assigned_team_name": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "player_gender": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "division_started": {
+                            "type": "boolean"
                           }
                         },
                         "required": [
@@ -37357,7 +37392,11 @@
                           "roster_count",
                           "roster_cap",
                           "consent_pending_count",
-                          "waitlist_position"
+                          "waitlist_position",
+                          "assigned_team_id",
+                          "assigned_team_name",
+                          "player_gender",
+                          "division_started"
                         ],
                         "additionalProperties": false
                       }
@@ -37402,7 +37441,11 @@
                       "roster_count": -9007199254740991,
                       "roster_cap": -9007199254740991,
                       "consent_pending_count": -9007199254740991,
-                      "waitlist_position": -9007199254740991
+                      "waitlist_position": -9007199254740991,
+                      "assigned_team_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                      "assigned_team_name": "example",
+                      "player_gender": "example",
+                      "division_started": true
                     }
                   ],
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
@@ -38138,6 +38181,41 @@
                                 "type": "null"
                               }
                             ]
+                          },
+                          "assigned_team_id": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "format": "uuid",
+                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "assigned_team_name": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "player_gender": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "division_started": {
+                            "type": "boolean"
                           }
                         },
                         "required": [
@@ -38171,7 +38249,11 @@
                           "roster_count",
                           "roster_cap",
                           "consent_pending_count",
-                          "waitlist_position"
+                          "waitlist_position",
+                          "assigned_team_id",
+                          "assigned_team_name",
+                          "player_gender",
+                          "division_started"
                         ],
                         "additionalProperties": false
                       }
@@ -38216,7 +38298,11 @@
                       "roster_count": -9007199254740991,
                       "roster_cap": -9007199254740991,
                       "consent_pending_count": -9007199254740991,
-                      "waitlist_position": -9007199254740991
+                      "waitlist_position": -9007199254740991,
+                      "assigned_team_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                      "assigned_team_name": "example",
+                      "player_gender": "example",
+                      "division_started": true
                     }
                   ],
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"

@@ -35,7 +35,13 @@ const HAS_DB = !!process.env.DATABASE_URL;
 // the copy existed in four locales, and nothing ever sent it. So this asserts
 // the SEND, not the template: a notification nothing calls is the same defect
 // wearing a different name.
-const sendSpy = vi.hoisted(() => vi.fn(async () => true));
+// Typed with the arg it actually receives: an untyped `vi.fn(async () => …)`
+// gives the mock a zero-length tuple, so `calls[n][0]` is a tsc error even
+// though it works at runtime — and vitest does NOT typecheck test files, so
+// this only shows up in the tsc gate.
+const sendSpy = vi.hoisted(() =>
+  vi.fn(async (_opts: { teamName?: string; playerName?: string }) => true),
+);
 vi.mock("@/lib/email", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/email")>()),
   sendSoloSignUpAssignedEmail: sendSpy,
@@ -514,9 +520,7 @@ describe.skipIf(!HAS_DB)("the placed player is told", () => {
   // "Riverside Rovers". Scoping by the unique team name makes each case
   // independent of what any other test left in flight.
   function callsForTeam(teamName: string) {
-    return sendSpy.mock.calls.filter(
-      (c) => (c[0] as { teamName?: string }).teamName === teamName,
-    );
+    return sendSpy.mock.calls.filter((c) => c[0]?.teamName === teamName);
   }
   async function waitForTeam(teamName: string): Promise<void> {
     for (let i = 0; i < 50 && callsForTeam(teamName).length === 0; i++) {
@@ -539,7 +543,7 @@ describe.skipIf(!HAS_DB)("the placed player is told", () => {
     await waitForTeam(teamName);
 
     expect(callsForTeam(teamName)).toHaveLength(1);
-    expect(callsForTeam(teamName)[0][0]).toMatchObject({
+    expect(callsForTeam(teamName)[0]?.[0]).toMatchObject({
       playerName: "Priya Raman",
       teamName,
     });

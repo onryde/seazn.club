@@ -2379,6 +2379,23 @@ export const RegistrationListEntry = Registration.extend({
   /** 1-based rank within the division's waitlist; null for every other
    *  status. */
   waitlist_position: z.number().int().nullable(),
+  /** RS009 — where a SOLO SIGN-UP currently sits, or null while still in the
+   *  pool. Null on every non-solo-sign-up row. Derived from the roster row
+   *  pointing back at this entry, never mirrored onto `registrations`, so the
+   *  pool and the roster cannot disagree. */
+  assigned_team_id: Uuid.nullable(),
+  assigned_team_name: z.string().nullable(),
+  /** RS009 — the solo sign-up's own gender when the division collected one.
+   *  The assign sheet predicts a mixed division's refusal from it BEFORE the
+   *  organiser spends a click; null means unknown, and it then predicts
+   *  nothing rather than guessing. */
+  player_gender: z.string().nullable(),
+  /** RS009 — has this row's division started, in the sense that its rosters
+   *  are no longer the organiser's to shuffle? True once the division has any
+   *  fixture, or once its competition's `starts_on` has passed. Mirrors
+   *  `unassignSoloSignUp`'s own refusal so the hub never renders a Remove
+   *  button the server will refuse. */
+  division_started: z.boolean(),
 });
 
 /** `POST /registrations/{id}/promote` body. `id` in the URL resolves which
