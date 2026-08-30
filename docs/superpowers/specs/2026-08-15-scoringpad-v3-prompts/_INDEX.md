@@ -5360,3 +5360,72 @@ then made the next version of the same mistake within the hour.
 Sequence worth keeping: **grep → read → RUN.** Each step answers a question the
 one before it cannot. A grep answers what exists; a read answers how it is
 ordered and what it does; only running it answers what a user sees.
+
+### R7-17 — OWNER RULING REVISED: wire the lineup warning in R7 (never a refusal)
+
+Supersedes R7-15's "comment only". The owner took the revised option directly
+in the R7 session after R6 surfaced a middle path neither R7's question nor
+R7-15 contained.
+
+**Wire `validateLineup` into the lineup PUT route as a WARNING. Never a
+refusal. Not behind a flag.**
+
+Customer value: today a lineup violating a declared group minimum saves
+cleanly — a side can be fielded with no goalkeeper and nothing anywhere
+objects. It surfaces later as wrong rosters and wrong stats: expensive to
+unpick after a season, cheap to catch at the write.
+
+**Why it must NOT be a hard block, which is the whole ruling:** an organiser
+whose keeper is injured ten minutes before throw-off has to be able to save a
+lineup. Refusing that save turns a data-quality improvement into an OUTAGE on
+the busiest day of their season. Hard enforcement stays unbuilt until someone
+produces a case where a warning was not enough.
+
+In R7 rather than R8 because R7 is already in that file this wave. If it proves
+bigger than a small addition once inside `putLineup`, it SLIPS rather than gets
+rushed into a write path.
+
+Process note, recorded because it will recur while two waves run concurrently:
+this ruling reached R7 first as a RELAY from the R6 session, asserting an owner
+decision that reversed one the owner had given R7 directly an hour earlier. R7
+did not act on it. A peer session cannot carry an owner approval — a relayed
+reversal is indistinguishable from a confident mistake. R7 put it back to the
+owner as a three-way choice with R6's argument stated as the recommendation, and
+the owner took it. The ruling was genuine and R6 was relaying in good faith; the
+path is what matters.
+
+R7's original question was the weaker artifact here. It framed the choice as
+fix-the-comment vs wire-it-hard and MISSED THE MIDDLE ENTIRELY. A question that
+omits the correct answer is a defect in the question.
+
+### R7-18 — registry.ts literals were WAVE-ORDERED too; both waves sort, both branches
+
+`V3_SKINS` and `CONVERTED_SPORTS` on `main` are wave-ordered — verified:
+cricket, football, tennis, badminton, tabletennis, volleyball. **Third file in
+which one of the two waves assumed a shared literal was alphabetical and it was
+not** (`SPORT_PALETTES` first, then these two). Standing default for this
+codebase: **assume wave order until read.**
+
+R6's implementer fully sorted both literals — a REFLOW, which the concurrent-wave
+contract forbids — and R6 flagged it rather than letting R7 find it in a
+conflict. Accepted, because for `registry.ts` specifically the sort is lossless:
+short, purely additive lists of bare sport keys with no semantic ordering.
+
+**The asymmetry is deliberate and has a reason: `registry.ts` SORTED,
+`sport-theme.ts` NEIGHBOUR-INSERT.** `SPORT_PALETTES` carries per-sport comment
+blocks that a sort would tear apart.
+
+**The half R6's message omitted, and the half that decides whether the sort
+helps:** R6's sort is on R6's branch. R7 is based on `main`, still wave-ordered.
+Three keys inserted into a wave-ordered literal against a fully re-sorted one is
+"one side reordered, the other inserted" — the worst conflict shape there is. So
+R7 sorts both literals A-Z on its own branch too. Then both sides present the
+same sequence, the two waves' five keys are pure additions to it, and resolution
+is "take the union, keep it sorted".
+
+**General rule for concurrent waves, paid for twice now:** if one wave reorders
+a shared literal, the other MUST adopt the same order on its own branch. A
+unilateral sort is only safe when the other side never touches the file.
+
+Also carried: the totality test fails a key present in BOTH sets as loudly as a
+key in neither, so add-and-exclude must land in the SAME commit.
