@@ -131,17 +131,22 @@ export async function assignSoloSignUp(
   }
 
   const result = await withTenant(auth.orgId, async (tx) => {
-    // Lock the TARGET first and always — the roster being written is the
-    // contended resource. A consistent lock order also keeps two concurrent
-    // assignments onto each other's targets from deadlocking.
+    // LOCK ORDER: source, then target. Both functions in this file must use
+    // the SAME order or they deadlock against each other — `orgReg` is not
+    // just a read, it ends in `for update`, so it is the source-side lock.
+    // The first version of this function locked target-then-source while
+    // `unassignSoloSignUp` locked source-then-target, which is the textbook
+    // AB/BA cycle: an assign and an unassign touching the same pair would
+    // have had one side aborted by Postgres with a raw deadlock error, not a
+    // clean refusal. Found in review, not by a test — a deadlock needs two
+    // live transactions and nothing here runs two.
+    const source = await orgReg(tx, sourceId);
     const [target] = await tx<
       { id: string; division_id: string; display_name: string; free_agent: boolean; status: string; entrant_id: string | null }[]
     >`
       select id, division_id, display_name, free_agent, status, entrant_id
       from registrations where id = ${targetId} for update`;
     if (!target) throw new HttpError(404, "That team entry no longer exists");
-
-    const source = await orgReg(tx, sourceId);
     if (!source.free_agent) {
       throw new HttpError(422, "Only a solo sign-up can be assigned to a team");
     }
@@ -188,10 +193,20 @@ export async function assignSoloSignUp(
     // The solo sign-up's OWN roster row is the person being placed. A solo
     // entry has exactly one; if it somehow has none there is no name to put
     // on the roster and nothing sensible to invent.
+    // consent_status/consent_at are read HERE, with the rest of the player,
+    // rather than re-fetched inside the INSERT by a cross join. The cross
+    // join made the insert silently write ZERO rows if that subselect ever
+    // returned nothing, and `inserted.id` was then dereferenced three times
+    // on undefined. One read, one guard, no second lookup that can disagree
+    // with the first.
     const [player] = await tx<
-      { id: string; full_name: string; email: string | null; dob: string | null; gender: string | null; user_id: string | null }[]
+      {
+        id: string; full_name: string; email: string | null; dob: string | null;
+        gender: string | null; user_id: string | null;
+        consent_status: string; consent_at: Date | null;
+      }[]
     >`
-      select id, full_name, email, dob, gender, user_id
+      select id, full_name, email, dob, gender, user_id, consent_status, consent_at
       from registration_players where registration_id = ${sourceId}
       order by created_at, id limit 1`;
     if (!player) {
@@ -217,19 +232,30 @@ export async function assignSoloSignUp(
     // a consent-pending player who has in fact consented. This is the one
     // way an `organiser_assigned` row differs from a `captain_entered` one,
     // where 'pending' is right because someone else typed the name.
-    const [inserted] = await tx<{ id: string }[]>`
-      insert into registration_players
-        (registration_id, org_id, full_name, email, dob, gender, source,
-         consent_status, consent_at, assigned_from_registration_id)
-      select ${targetId}, r.org_id, ${player.full_name}, ${player.email}, ${player.dob},
-             ${player.gender}, 'organiser_assigned', src.consent_status, src.consent_at,
-             ${sourceId}
-      from registrations r
-      cross join (
-        select consent_status, consent_at from registration_players where id = ${player.id}
-      ) src
-      where r.id = ${targetId}
-      returning id`;
+    let inserted: { id: string } | undefined;
+    try {
+      [inserted] = await tx<{ id: string }[]>`
+        insert into registration_players
+          (registration_id, org_id, full_name, email, dob, gender, source,
+           consent_status, consent_at, assigned_from_registration_id)
+        select ${targetId}, r.org_id, ${player.full_name}, ${player.email}, ${player.dob},
+               ${player.gender}, 'organiser_assigned', ${player.consent_status},
+               ${player.consent_at}, ${sourceId}
+        from registrations r where r.id = ${targetId}
+        returning id`;
+    } catch (err) {
+      // 23505 is the partial unique index on assigned_from_registration_id:
+      // one person, one team. The `existing` check above catches the ordinary
+      // case, but two organisers pressing Assign on the same pooled player at
+      // the same instant both pass it and the index decides. Without this the
+      // loser gets a raw Postgres error as a 500; the refusal it deserves is
+      // the same 409 the checked path already gives.
+      if ((err as { code?: string }).code === "23505") {
+        throw new HttpError(409, "This player has just been placed on another team");
+      }
+      throw err;
+    }
+    if (!inserted) throw new HttpError(404, "That team entry no longer exists");
 
     // Already materialised? Then `materialise()` will never revisit this
     // registration (it returns early once `entrant_id` is set), so the row
@@ -306,15 +332,29 @@ export async function unassignSoloSignUp(
 
   const result = await withTenant(auth.orgId, async (tx) => {
     const source = await orgReg(tx, sourceId);
-    const existing = await placementOf(tx, sourceId);
-    if (!existing) return { registration_id: sourceId, target_registration_id: null };
+    const found = await placementOf(tx, sourceId);
+    if (!found) return { registration_id: sourceId, target_registration_id: null };
 
-    // Lock the roster being written, same as assign, so an unassign racing an
-    // assign onto the same team resolves in one order rather than both
-    // reading a stale roster.
+    // Lock the roster being written — same source-then-target order assign
+    // uses, so the two can never deadlock against each other.
     const [target] = await tx<{ id: string; entrant_id: string | null; display_name: string }[]>`
       select id, entrant_id, display_name from registrations
-      where id = ${existing.registration_id} for update`;
+      where id = ${found.registration_id} for update`;
+
+    // Re-read the placement AFTER taking the lock, and use only this copy.
+    //
+    // `person_id` is written by `materialise()` at confirm time, which can
+    // land between the unlocked read above and this lock. Trusting the
+    // pre-lock snapshot meant a person_id that was null when we looked and
+    // non-null by the time we deleted: the entrant_members delete below is
+    // guarded on it, so it would have been SKIPPED while the
+    // registration_players row was deleted anyway — an orphaned roster
+    // membership on a live entrant, left behind by an unassign that reported
+    // success, with nothing pointing at it to explain why. Found in review;
+    // no single-threaded test can reach it.
+    const [existing] = await tx<{ id: string; person_id: string | null }[]>`
+      select id, person_id from registration_players where id = ${found.id}`;
+    if (!existing) return { registration_id: sourceId, target_registration_id: null };
 
     // "Has the division started?" has two honest answers and this refuses on
     // either, because either one means the roster is no longer the
@@ -367,11 +407,11 @@ export async function unassignSoloSignUp(
       division.competition_id,
       auth.orgId,
       "registration.solo_signup_unassigned",
-      { registration_id: sourceId, target_registration_id: existing.registration_id },
+      { registration_id: sourceId, target_registration_id: found.registration_id },
       auth.userId,
     );
 
-    return { registration_id: sourceId, target_registration_id: existing.registration_id };
+    return { registration_id: sourceId, target_registration_id: found.registration_id };
   });
 
   log.info(

@@ -77,7 +77,12 @@ async function seedEntry(
      *  'confirmed' here is what made the two entrant_members tests assert
      *  `expected null not to be null` — nothing had ever materialised. */
     status?: "pending" | "paid" | "confirmed";
-    players?: { name: string; gender?: string | null; dob?: string | null }[];
+    players?: {
+      name: string;
+      gender?: string | null;
+      dob?: string | null;
+      consentStatus?: "pending" | "granted" | "guardian";
+    }[];
   },
 ): Promise<{ id: string }> {
   const [{ competition_id: competitionId }] = await sql<{ competition_id: string }[]>`
@@ -96,8 +101,13 @@ async function seedEntry(
     returning id`;
   for (const p of opts.players ?? []) {
     await sql`
-      insert into registration_players (registration_id, full_name, gender, dob, source)
-      values (${reg.id}, ${p.name}, ${p.gender ?? null}, ${p.dob ?? null}, 'captain_entered')`;
+      insert into registration_players
+        (registration_id, full_name, gender, dob, source, consent_status, consent_at)
+      values (
+        ${reg.id}, ${p.name}, ${p.gender ?? null}, ${p.dob ?? null}, 'captain_entered',
+        ${p.consentStatus ?? "pending"},
+        ${p.consentStatus === "granted" || p.consentStatus === "guardian" ? sql`now()` : null}
+      )`;
   }
   return reg;
 }
@@ -256,6 +266,64 @@ describe.skipIf(!HAS_DB)("assignSoloSignUp", () => {
     await assignSoloSignUp(auth, { registration_id: solo.id, target_registration_id: team.id });
 
     expect(await rosterOf(team.id)).toHaveLength(1);
+  });
+});
+
+describe.skipIf(!HAS_DB)("assignSoloSignUp carries the solo sign-up's own consent forward", () => {
+  // The headline behaviour of the assign path, and it was EXERCISED by every
+  // other test in this file without being CHECKED by any of them: the seeded
+  // solo player defaults to consent_status 'pending', so a regression that
+  // dropped the carry-forward and started the placed row at 'pending' would
+  // have left all 19 tests green. Caught in review, not by the suite.
+  //
+  // Why it matters beyond correctness: a solo sign-up filled in the form
+  // themselves and consented at their own submit. Resetting them to pending
+  // would ask a second time for something already given, and would show the
+  // organiser a consent-pending player on the roster who has in fact
+  // consented — which is what the Registrants tab's consent-pending filter
+  // reads.
+  it("keeps a granted consent granted, with its original timestamp", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId } = await seedTeamDivision(auth);
+    const team = await seedEntry(divisionId, { displayName: "Team A" });
+    const solo = await seedEntry(divisionId, {
+      displayName: "Priya Raman",
+      freeAgent: true,
+      players: [{ name: "Priya Raman", consentStatus: "granted" }],
+    });
+    const [before] = await sql<{ consent_status: string; consent_at: Date | null }[]>`
+      select consent_status, consent_at from registration_players
+      where registration_id = ${solo.id}`;
+
+    await assignSoloSignUp(auth, { registration_id: solo.id, target_registration_id: team.id });
+
+    const [placed] = await sql<{ consent_status: string; consent_at: Date | null }[]>`
+      select consent_status, consent_at from registration_players
+      where assigned_from_registration_id = ${solo.id}`;
+    expect(placed.consent_status).toBe("granted");
+    expect(placed.consent_at?.toISOString()).toBe(before.consent_at?.toISOString());
+  });
+
+  it("does not invent consent the registrant never gave", async () => {
+    // The other direction, and the one that would be a safeguarding problem
+    // rather than an annoyance: assignment must never upgrade a pending
+    // consent to granted on the registrant's behalf.
+    const { auth } = await seedOrg();
+    const { divisionId } = await seedTeamDivision(auth);
+    const team = await seedEntry(divisionId, { displayName: "Team A" });
+    const solo = await seedEntry(divisionId, {
+      displayName: "Sam Blake",
+      freeAgent: true,
+      players: [{ name: "Sam Blake", consentStatus: "pending" }],
+    });
+
+    await assignSoloSignUp(auth, { registration_id: solo.id, target_registration_id: team.id });
+
+    const [placed] = await sql<{ consent_status: string; consent_at: Date | null }[]>`
+      select consent_status, consent_at from registration_players
+      where assigned_from_registration_id = ${solo.id}`;
+    expect(placed.consent_status).toBe("pending");
+    expect(placed.consent_at).toBeNull();
   });
 });
 
