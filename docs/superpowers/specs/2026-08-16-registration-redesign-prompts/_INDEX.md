@@ -2339,12 +2339,12 @@ fix. Statuses below are as of the moment of writing; update them in place.
 | 5 | HIGH | `registrations.ts:3983` | **FIXED** `4965c0093` |
 | 6 | HIGH | `registrations.ts:3768` | **FIXED** `097c1949b` |
 | 7 | HIGH | `registrations.ts:3762` | **FIXED** `57fa7fca3` (V383) |
-| 8 | HIGH | `register/status/view-model.ts:59` | OPEN |
+| 8 | HIGH | `register/status/view-model.ts:59` | **FIXED** `17594b849` |
 | 9 | HIGH | `registrations.ts:3740` | **FIXED** `57fa7fca3` |
-| 10 | HIGH | `register/status/view-model.ts:62` | OPEN |
+| 10 | HIGH | `register/status/view-model.ts:62` | **FIXED** `17594b849` (read side) + `f573d0650` (write side — see #677 M1) |
 | 11 | HIGH | `register/status/page.tsx:95` | **FIXED** `54b88fb9f` |
 | 12 | MEDIUM | `registrations.ts:929` | **FIXED** `4fc6cd1cb` |
-| 13 | MEDIUM | `register/status/entry-card.tsx:98` | OPEN |
+| 13 | MEDIUM | `register/status/entry-card.tsx:98` | **FIXED** `17594b849` |
 | 14 | MEDIUM | `register-stepper.tsx:209` | **FIXED** `d33ecea48` |
 | 15 | MEDIUM | `register/join/page.tsx:80` | **FIXED** `0f799edb7` |
 
