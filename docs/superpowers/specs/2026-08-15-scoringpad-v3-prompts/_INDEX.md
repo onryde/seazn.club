@@ -5528,3 +5528,60 @@ confirm the captures EXIST and DIFFER (R4's harness errored before a single
 screenshot and would have collected a sign-off on zero pictures), and sign-off
 means the owner's PER-SCREEN verdicts, never "CI green" (taken as approval twice
 and it is not).
+
+### R7-22 — Tasks B/B2/C WALKTHROUGH: 6/6, and it corrected two of R7's own beliefs
+
+`apps/web/e2e/walkthrough/scorepad-v3-r7-console-chrome.spec.ts` — driven by
+hand against a prod build on `localhost:3348`, four journeys, six tests, all
+green. Captures: `walk-console-1280`, `walk-undo-twice`, `walk-devicelink`,
+`walk-lineup-needs`, `walk-lineup-absent` — five files, all different sizes,
+confirmed to DIFFER (R4's harness once errored before a single screenshot and
+would have collected a sign-off on zero pictures).
+
+**Three of the four failures on the first run were the SPEC's, not the
+product's** — recorded because each is a reusable trap:
+
+1. `getByRole("button", {name:/accept/i}).first().click().catch(()=>{})` to
+   dismiss a cookie banner **hangs for the whole test timeout** when no banner
+   exists (the auth storage state already dismissed it). Playwright's click
+   WAITS for the element rather than throwing, so `.catch()` never fires and
+   the failure surfaces 180s later pointing at the NEXT line. No walkthrough
+   spec in this folder dismisses the banner; do not add one.
+2. `data-role="device-handover"` **IS the disclosure button**, not a wrapper —
+   `handover.getByRole("button")` searches inside a button, finds nothing, and
+   hangs the same way.
+3. The first absence probe anchored on `data-role="lineup-editor"`, **a string
+   that component never renders**, so it would have passed in both states.
+   Replaced with a PAIRED probe: `data-testid="availability-chip"` asserted
+   PRESENT on football and ABSENT on chess in the same run, plus a check that
+   the chess page actually loaded — otherwise "the editor is absent" quietly
+   means "the page is absent".
+
+**FP-13 — R7 asserted the wrong rule for the ribbon after a void.** The spec
+expected the ribbon to keep offering a take-back. It does not, and should not:
+`ribbonUndoTarget` asks whether the LATEST event is voidable, and after a
+take-back the latest event IS the `core.void`. **The C4 fix does not make a
+second take-back work — it makes the pad stop OFFERING one**, which is the
+honest answer. Verified on screen: the ribbon reads "Entry undone" with no
+control beside it, and the ledger shows the voided goal struck through and
+labelled VOIDED. The earlier goal stays retractable from the ledger's per-row
+Void, which is the surface that owns "strike a specific recorded row".
+
+**FP-14 — R7 asserted a device link cannot void. It can, and the real rule is
+better.** Observed on the device page: the device's OWN `#2 Goal recorded`
+carries a Void; the console's `#1 Match started` does NOT. So the invariant is
+**"a courtside scorer may retract their own mistake and may not touch a row
+somebody else recorded"** — which is exactly what `server/usecases/scoring.ts`
+enforces with a 403. A pad offering more would promise what the server rejects.
+The spec now encodes that finer rule instead of the coarse one R7 assumed.
+
+Also confirmed on the device page, which is C1's whole regression risk: history
+RENDERS (`/score/[token]` has no page chrome, so the pad's panel is the only
+history a courtside scorer sees), with timestamps but **no recorded-by
+attribution and no audit strip** — the attribution half is console-only.
+
+**The walkthrough's yield, stated plainly:** it found no product defect. Both
+its "failures" were R7 believing something false about its own product, and
+both beliefs are now written down as tests. That is the value — the gate does
+not only catch broken code, it catches a wave shipping on a wrong model of what
+it built.
