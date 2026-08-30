@@ -74,9 +74,11 @@ function newestRowCaption(events: readonly ActivityEvent[], resolveDetail: Param
       resolveDetail,
     }) as never,
   );
-  // Rows render newest-first (`orderedActivity`), and the caption is the first
-  // <span> inside the row <li>.
-  const row = /<li[^>]*data-role="v3-activity-row"[^>]*>\s*<span[^>]*>([\s\S]*?)<\/span>/.exec(html);
+  // Rows render newest-first (`orderedActivity`). Targeted by the caption's
+  // OWN marker rather than "the first <span> in the <li>", which is what this
+  // used to do and what R7/C1 broke: the merged panel put the #seq column
+  // ahead of the caption, and a positional regex read "#2" as the sentence.
+  const row = /data-role="v3-activity-caption"[^>]*>([\s\S]*?)<\/span>/.exec(html);
   expect(row, "no activity row rendered").not.toBeNull();
   return row![1]!.replace(/&quot;/g, '"').replace(/&#x27;/g, "'").replace(/&amp;/g, "&");
 }

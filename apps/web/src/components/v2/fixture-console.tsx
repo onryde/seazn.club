@@ -7,8 +7,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
-import { describeEvent, EVENT_TONE_STYLE } from "@/lib/event-copy";
 import { UpgradeGate } from "@/components/upgrade-gate";
+import { AuditStrip } from "@/components/v2/audit-strip";
 import { ClientTime } from "@/components/client-time";
 import { ShareButton } from "@/components/share-button";
 import {
@@ -29,6 +29,16 @@ import type { MessageKey } from "@/lib/messages";
 // server-side bootstrap-resolution failure (fidelity.ts's own doc) means
 // "no pad renders", never a fallback to a v1 chain that no longer exists.
 import { ScorePad, type ScorePadBootstrap } from "@/components/v2/scorepad/registry";
+// R7/C1 (D-4, ruling R7-1) — the ONE ledger. This console used to hand-roll
+// its own `<ul>` beside the pad's panel; the two were not duplicates (the
+// pad's named people in sentences, the page's carried #seq, the timestamp,
+// who recorded each row and the audit controls), so the row was a MERGE and
+// this is where the surviving component now mounts. The pad is told to drop
+// its own copy (`hideActivity`), which keeps exactly one on the screen while
+// letting this one OUTLIVE the pad — it unmounts the moment a fixture is
+// decided, and a finalized fixture must still show what happened.
+import { ActivityPanel, type ActivityDetailResolver, type ActivityEvent } from "@/components/v2/scorepad/v3/activity";
+import { resolvePad } from "@/components/v2/scorepad/v3/registry";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
 
@@ -235,12 +245,24 @@ interface Props {
    *  than a fallback, since S13/#422 removed the v1 pad it used to fall
    *  back to. */
   scorePadV2?: ScorePadBootstrap | null;
+  /**
+   * Ledger chain-verification + the signed-export entitlement, resolved
+   * server-side (`page.tsx`). R7/C1 moved `AuditStrip` off the page and into
+   * the activity panel's footer, where the ledger it describes actually is —
+   * it used to render as a loose strip below the whole console, two cards
+   * away from the rows it is a verdict about. Null when there is nothing to
+   * audit (no events yet), which renders no strip at all.
+   */
+  audit?: { verified: boolean; tamperedSeq: number | null; entitled: boolean } | null;
 }
 
 /** Payload keys that carry a person id across the sport modules (card, goal,
  *  sub, award). The pad warning fires when a recorded event names a suspended
  *  person via any of them. */
 const ATTRIBUTION_KEYS = ["person", "scorer", "assist", "off", "on"] as const;
+
+/** Module-level so the panel's props keep a stable identity across renders. */
+const NO_OWN_EVENTS: ReadonlySet<string> = new Set();
 
 function personIdsInEvents(events: EventIn[]): Set<string> {
   const ids = new Set<string>();
@@ -291,6 +313,7 @@ export function FixtureConsole({
   availability = {},
   activeSuspensions = [],
   scorePadV2 = null,
+  audit = null,
 }: Props) {
   const msg = useMsg();
   const router = useRouter();
@@ -310,6 +333,8 @@ export function FixtureConsole({
    *  clean undo was expected. Found in review (S13 follow-ups). */
   const [padSyncing, setPadSyncing] = useState(false);
   const [abandonPrompt, setAbandonPrompt] = useState(false);
+  /** The row whose Void is in flight — the panel dims exactly that button. */
+  const [voidingId, setVoidingId] = useState<string | null>(null);
 
   const resync = useCallback(async () => {
     const [state, all] = await Promise.all([
@@ -433,6 +458,56 @@ export function FixtureConsole({
   const lastVoidable = [...events]
     .reverse()
     .find((e) => e.type !== "core.void" && !events.some((v) => v.voids_event_id === e.id));
+
+  // ---- the one ledger (R7/C1) -------------------------------------------
+  //
+  // Provenance is resolved HERE, not in the panel: `recorded_by` is a USER id
+  // (so `personNames` cannot answer it) and `device_link_id` — the fact that
+  // makes a row "the handed device" rather than a named person — never
+  // survives into the pad pipeline's `EventEnvelope` at all. This component
+  // is the only surface that holds both. The wording is the deleted panel's
+  // own, verbatim.
+  const provenanceOf = (e: EventIn): string | null =>
+    e.device_link_id
+      ? msg("score.courtsidePad", { scorer: sport.scorerLabel.toLowerCase() })
+      : e.recorded_by
+        ? (recorderNames[e.recorded_by] ?? sport.scorerLabel)
+        : null;
+  const activityRows: ActivityEvent[] = events.map((e) => ({
+    id: e.id,
+    seq: e.seq,
+    type: e.type,
+    payload: e.payload,
+    voids: e.voids_event_id,
+    recordedAt: e.recorded_at,
+    recordedByLabel: provenanceOf(e),
+  }));
+  // The SKIN's own per-event detail, resolved the same way `pad-host.tsx`
+  // resolves it. Without this the merge would silently DOWNGRADE cricket's
+  // ledger back to three identical "Ball recorded" rows — the 2026-08-17
+  // sign-off's D2, reintroduced by a consolidation meant to lose nothing.
+  // `resolvePad` throws for a key in neither registry, which must never take
+  // the console down over a caption.
+  const padT = (key: string, vars?: Record<string, string | number>) => msg(key as MessageKey, vars);
+  let activityDetail: ActivityDetailResolver | undefined;
+  try {
+    const lane = resolvePad(sport.key, padT);
+    const skinDetail = lane.lane === "v3" ? lane.skin.activityDetail : undefined;
+    if (skinDetail) {
+      activityDetail = (eventType, payload, history) =>
+        skinDetail({
+          t: padT,
+          eventType,
+          payload,
+          history,
+          cfg: scorePadV2?.resolvedConfig ?? sport.config,
+          state: live.state,
+          personNames: entrantNames,
+        });
+    }
+  } catch {
+    activityDetail = undefined;
+  }
 
   // Soft discipline warning (SPEC-1 / D8): a suspended player has been recorded
   // in this fixture's ledger. Never blocks — it just flags.
@@ -600,6 +675,8 @@ export function FixtureConsole({
               entitlements={scorePadV2.entitlements}
               band={scorePadV2.band}
               onEvents={handlePadEvents}
+              // R7/C1 — this console mounts the one ledger itself, below.
+              hideActivity
             />
           </ScoringErrorBoundary>
         </section>
@@ -629,72 +706,51 @@ export function FixtureConsole({
         </div>
       )}
 
-      {/* Event ledger */}
-      <section className="card overflow-hidden">
-        <header className="border-b border-slate-100 px-4 py-3">
-          <h2 className="text-sm font-semibold text-slate-700">
-            {msg("score.activity")} <span className="font-normal text-slate-600">({events.length})</span>
-          </h2>
-        </header>
-        {events.length === 0 ? (
-          <p className="px-4 py-4 text-sm text-slate-600">{msg("score.noEvents")}</p>
-        ) : (
-          <ul className="max-h-96 divide-y divide-slate-50 overflow-y-auto">
-            {[...events].reverse().map((e) => {
-              const voided = events.some((v) => v.voids_event_id === e.id);
-              const desc = describeEvent(e.type, e.payload, entrantNames, msg);
-              // Attribution: device-link events come from the handed device;
-              // signed-in recorders show by name.
-              const recorder = e.device_link_id
-                ? msg("score.courtsidePad", { scorer: sport.scorerLabel.toLowerCase() })
-                : e.recorded_by
-                  ? (recorderNames[e.recorded_by] ?? sport.scorerLabel)
-                  : null;
-              return (
-                <li
-                  key={e.id}
-                  title={`${e.type} ${JSON.stringify(e.payload)}`}
-                  className={`flex items-center gap-3 px-4 py-2 text-xs ${voided ? "line-through opacity-40" : ""}`}
-                >
-                  <span className="w-8 shrink-0 font-mono text-slate-300">#{e.seq}</span>
-                  {/* `normal-case` overrides .badge's `capitalize`: badges are
-                      dictionary copy now, and capitalize would rewrite
-                      "Fin de la prolongation" as "Fin De La Prolongation".
-                      Localized event names are also longer than the English
-                      literals this used to hold, so let them wrap inside the
-                      column instead of overflowing it. */}
-                  <span
-                    className={`badge w-24 shrink-0 break-words text-center leading-tight normal-case sm:w-32 ${EVENT_TONE_STYLE[desc.tone]}`}
-                  >
-                    {desc.label}
-                  </span>
-                  <span className="min-w-0 flex-1 truncate text-slate-700">
-                    {desc.text}
-                    {recorder ? <span className="text-slate-600"> ({recorder})</span> : null}
-                  </span>
-                  {/* ClientTime: locale time renders differently on server vs
-                      browser (17:59 vs 5:59 PM) — the mismatch forced a full
-                      client re-render that ate early clicks. SSR emits an
-                      empty span; the viewer-local time fills in after mount. */}
-                  <span className="shrink-0 text-slate-600">
-                    <ClientTime value={e.recorded_at} mode="time" />
-                  </span>
-                  {scoring && !voided && e.type !== "core.void" && !decidedLock(live.status) && (
-                    <button
-                      type="button"
-                      disabled={busy || padSyncing}
-                      onClick={() => send("core.void", { event_id: e.id })}
-                      className="shrink-0 text-red-500 hover:underline"
-                    >
-                      {msg("score.void")}
-                    </button>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </section>
+      {/* THE ledger (R7/C1, D-4). One panel, one component — the same
+          `ActivityPanel` `/score/[token]` mounts, here with authority:
+          console-wide void rights, the provenance the deleted page panel
+          carried, and the audit strip in its footer. Rendered OUTSIDE the
+          `scoring && !decided` gate above on purpose: the pad unmounts the
+          moment a fixture is decided and a finalized fixture must still say
+          what happened. */}
+      <ActivityPanel
+        events={activityRows}
+        // Irrelevant while `deviceLinkId` is null — `activityRowState`'s own
+        // ownership rule short-circuits for the in-app scorer — and passing
+        // the real thing is impossible anyway: this component never submits
+        // through the pad's queue, so it owns no client-stamped ids.
+        ownEventIds={NO_OWN_EVENTS}
+        deviceLinkId={null}
+        personNames={entrantNames}
+        t={msg}
+        authority
+        resolveDetail={activityDetail}
+        onVoid={
+          scoring && !decidedLock(live.status)
+            ? (eventId) => {
+                // `busy || padSyncing` gated every row button before the
+                // merge, and for a reason worth keeping: acting on a
+                // half-refreshed ledger sends a stale `expected_seq` and
+                // earns a 409 where a clean void was expected (see
+                // `padSyncing`'s own doc above).
+                if (busy || padSyncing) return;
+                setVoidingId(eventId);
+                void send("core.void", { event_id: eventId }).finally(() => setVoidingId(null));
+              }
+            : undefined
+        }
+        voidingId={voidingId}
+        footer={
+          audit && (
+            <AuditStrip
+              fixtureId={fixture.id}
+              verified={audit.verified}
+              tamperedSeq={audit.tamperedSeq}
+              entitled={audit.entitled}
+            />
+          )
+        }
+      />
     </div>
   );
 }

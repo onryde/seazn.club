@@ -25,7 +25,6 @@ import { DeviceLinkPanel } from "@/components/v2/device-link-panel";
 import { listFixtureAvailability } from "@/server/usecases/me";
 import { CheckinQr } from "@/components/v2/checkin-qr";
 import { FixtureOfficialsStrip } from "@/components/v2/fixture-officials-strip";
-import { AuditStrip } from "@/components/v2/audit-strip";
 import { hasFeature } from "@/lib/entitlements";
 import { suspensionsForFixture } from "@/server/usecases/discipline";
 import { sql } from "@/lib/db";
@@ -205,16 +204,11 @@ export default async function FixturePage({
               : null
           }
           scorePadV2={scorePadV2}
+          // R7/C1 — the audit verdict now renders in the activity panel's
+          // own footer, beside the rows it is a verdict ABOUT. It used to be
+          // a loose strip below the whole console, two cards away from them.
+          audit={audit}
         />
-
-        {audit !== null && (
-          <AuditStrip
-            fixtureId={fixture.id}
-            verified={audit.verified}
-            tamperedSeq={audit.tamperedSeq}
-            entitled={audit.entitled}
-          />
-        )}
 
         {/* Day-of device link (doc 13 §7): editors only — scorers never mint. */}
         {canEdit &&

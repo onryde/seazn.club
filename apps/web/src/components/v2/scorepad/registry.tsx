@@ -260,6 +260,16 @@ export interface ScorePadProps {
    *  list for "Undo last" and cannot otherwise see what the pad submitted. */
   onEvents?: (events: readonly EventEnvelope[]) => void;
   auth: PadAuthMode;
+  /**
+   * R7/C1 (D-4) — the chrome around this pad already mounts the one activity
+   * ledger itself, so the pad must not mount a second. Passed by the fixture
+   * console only; every other mount (the device pad) leaves it unset and the
+   * pad keeps its own panel, which on `/score/[token]` is the ONLY history
+   * there is. Honoured on BOTH lanes — v3's `showActivity`, and the legacy
+   * lane's existing `timelineSlot` override — because the legacy lane serves
+   * the sports this wave has not converted yet and it has the same panel.
+   */
+  hideActivity?: boolean;
   identity: OwnIdentity;
   entitlements: Readonly<Record<string, boolean>>;
   band: FidelityBand;
@@ -353,6 +363,7 @@ export function ScorePad(props: ScorePadProps) {
         onEvents={props.onEvents}
         queueDbName={`scorepad-${props.fixtureId}`}
         personNames={personNames}
+        showActivity={!props.hideActivity}
         skin={padLane.skin}
       />
     );
@@ -378,6 +389,12 @@ export function ScorePad(props: ScorePadProps) {
       // `scorepad-harness-${sportKey}` naming, harness-client.tsx).
       queueDbName={`scorepad-${props.fixtureId}`}
       personNames={personNames}
+      // R7/C1 — the legacy lane's own history panel, suppressed through the
+      // override `PadRenderer` already declares for exactly this (its
+      // `timelineSlot` doc). Not a new seam and not a deletion: the sports
+      // still on this lane keep their `Timeline` everywhere the chrome does
+      // not supply one.
+      timelineSlot={props.hideActivity ? () => null : undefined}
       skin={padResolution.kind === "universal" ? null : padResolution.skin}
     />
   );

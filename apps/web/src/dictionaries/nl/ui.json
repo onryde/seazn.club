@@ -4510,6 +4510,7 @@
   "pad.cricket.sheet.overSummary.balls.title": "Ballen van deze over",
   "pad.activity.heading": "Activiteit",
   "pad.activity.empty": "Nog niets vastgelegd.",
+  "pad.activity.recordedBy": "vastgelegd door {name}",
   "pad.activity.void": "Ongeldig maken",
   "pad.activity.voiding": "Bezig…",
   "pad.activity.voided": "Ongeldig",

@@ -4510,6 +4510,7 @@
   "pad.cricket.sheet.overSummary.balls.title": "Balles de cet over",
   "pad.activity.heading": "Activité",
   "pad.activity.empty": "Rien d'enregistré pour le moment.",
+  "pad.activity.recordedBy": "saisi par {name}",
   "pad.activity.void": "Annuler",
   "pad.activity.voiding": "Annulation…",
   "pad.activity.voided": "Annulé",

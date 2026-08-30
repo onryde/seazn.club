@@ -4510,6 +4510,7 @@
   "pad.cricket.sheet.overSummary.balls.title": "Balls this over",
   "pad.activity.heading": "Activity",
   "pad.activity.empty": "Nothing recorded yet.",
+  "pad.activity.recordedBy": "recorded by {name}",
   "pad.activity.void": "Void",
   "pad.activity.voiding": "Voiding…",
   "pad.activity.voided": "Voided",

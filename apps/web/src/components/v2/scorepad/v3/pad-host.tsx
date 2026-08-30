@@ -940,6 +940,18 @@ export interface PadHostV3Props {
   initialEvents?: readonly EventEnvelope[];
   queueDbName?: string;
   personNames?: Readonly<Record<string, string>>;
+  /**
+   * R7/C1 (D-4, ruling R7-1) — whether THIS host also mounts the activity
+   * ledger. Default true, which is the device link and every other surface
+   * with no chrome of its own: `/score/[token]` has no page around the pad,
+   * so the panel here is the only history a courtside scorer ever sees.
+   *
+   * The organiser console passes false and mounts the SAME component itself,
+   * one level out — with void authority, provenance and the audit strip, and
+   * outliving the pad, which unmounts the moment a fixture is decided. Two
+   * mounts of one component, never two panels on one screen.
+   */
+  showActivity?: boolean;
   /** The resolved v3 skin — a REQUIRED prop, unlike the legacy renderer's
    *  registry-consulting default: registry.tsx already resolves this
    *  before choosing the v3 lane at all, so passing it explicitly keeps
@@ -1360,7 +1372,20 @@ export function PadHostV3(props: PadHostV3Props) {
   // panel does, because it now resolves the same per-event detail for the
   // newest of them.
   const activityEvents = useMemo<ActivityEvent[]>(
-    () => events.map((e) => ({ id: e.id, seq: e.seq, type: e.type, payload: e.payload, voids: e.voids ?? null })),
+    () =>
+      events.map((e) => ({
+        id: e.id,
+        seq: e.seq,
+        type: e.type,
+        payload: e.payload,
+        voids: e.voids ?? null,
+        // R7/C1 — the panel gained a provenance line. `recordedAt` is the
+        // half this surface can answer; `recordedByLabel` is not, because
+        // `recordedBy` is a USER id and `score_events.device_link_id` never
+        // reaches an `EventEnvelope` at all — the console resolves that one
+        // at its own mount.
+        recordedAt: e.recordedAt,
+      })),
     [events],
   );
 
@@ -1675,6 +1700,7 @@ export function PadHostV3(props: PadHostV3Props) {
        *  had a single call site passing `latestEvent.id`), so on cricket a
        *  scorer could not correct anything but the last ball once the hold
        *  window elapsed. Restored on the CHASSIS so R3-R6 inherit it. */}
+      {(props.showActivity ?? true) && (
       <div data-role="v3-activity-slot">
         <ActivityPanel
           events={activityEvents}
@@ -1695,6 +1721,7 @@ export function PadHostV3(props: PadHostV3Props) {
           resolveDetail={resolveDetail}
         />
       </div>
+      )}
     </div>
   );
 }
