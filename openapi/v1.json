@@ -58502,6 +58502,18 @@
                                 "minimum": -9007199254740991,
                                 "maximum": 9007199254740991
                               },
+                              "free_agent_fee_cents": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
                               "currency": {
                                 "type": "string"
                               },
@@ -58710,6 +58722,7 @@
                               "sport_key",
                               "entrant_kind",
                               "fee_cents",
+                              "free_agent_fee_cents",
                               "currency",
                               "payment_method",
                               "opens_at",
@@ -58771,6 +58784,7 @@
                         "sport_key": "example",
                         "entrant_kind": "team",
                         "fee_cents": -9007199254740991,
+                        "free_agent_fee_cents": -9007199254740991,
                         "currency": "example",
                         "payment_method": "offline",
                         "opens_at": "example",

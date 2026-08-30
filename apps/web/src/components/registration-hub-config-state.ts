@@ -35,6 +35,10 @@ export interface RegistrationConfigState {
   closes_at: string | null;
   capacity: number | null;
   fee_cents: number;
+  /** RS009 — what ONE person pays to enter this team division alone. `null`
+   *  means no separate price: charge `fee_cents`, the per-team price. 0 is a
+   *  real price meaning free, so the two must never collapse. */
+  free_agent_fee_cents: number | null;
   refund_lock_at: string | null;
   form_fields: FormField[];
   payment_method: PaymentMethodValue;
@@ -96,6 +100,7 @@ export function initialConfigState(
     closes_at: settings.closes_at,
     capacity: settings.capacity,
     fee_cents: settings.fee_cents,
+    free_agent_fee_cents: settings.free_agent_fee_cents,
     refund_lock_at: settings.refund_lock_at,
     form_fields: settings.form_fields,
     payment_method: settings.payment_method,
@@ -140,6 +145,7 @@ export function toRegistrationSettingsPutBody(
     closes_at,
     capacity,
     fee_cents,
+    free_agent_fee_cents,
     refund_lock_at,
     form_fields,
     payment_method,
@@ -154,6 +160,7 @@ export function toRegistrationSettingsPutBody(
     closes_at,
     capacity,
     fee_cents,
+    free_agent_fee_cents,
     refund_lock_at,
     form_fields,
     payment_method,

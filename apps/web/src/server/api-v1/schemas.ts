@@ -2462,6 +2462,10 @@ export const PublicRegistrationDivision = z.object({
   sport_key: z.string(),
   entrant_kind: EntrantKind,
   fee_cents: z.number().int(),
+  /** RS009 — what ONE person pays to enter this team division alone. null =
+   *  no separate price; the stepper then quotes `fee_cents`. Present so the
+   *  public quote and the server's charge cannot disagree. */
+  free_agent_fee_cents: z.number().int().nullable(),
   currency: z.string(),
   payment_method: RegistrationPaymentMethod,
   opens_at: z.string().nullable(),

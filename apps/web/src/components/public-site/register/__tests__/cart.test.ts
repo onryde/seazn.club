@@ -10,6 +10,7 @@ import {
   cartHasOtherPlayers,
   cartReducer,
   clearSelfLinkWhenNotPlaying,
+  lineFeeCents,
   payableDivision,
   registeringSelfAnywhere,
   summarizeCart,
@@ -43,6 +44,7 @@ const TEAM_DIVISION: DivisionLike = {
   opens_at: null,
   closes_at: null,
   fee_cents: 1000,
+  free_agent_fee_cents: null,
   currency: "gbp",
   payment_method: "offline",
   form_fields: [],
@@ -860,6 +862,7 @@ describe("summarizeCart", () => {
     open: false,
     closed_reason: "window",
     fee_cents: 1500,
+    free_agent_fee_cents: null,
   };
 
   it("sums only OPEN (non-closed) entries into the subtotal, in that division's currency", () => {
@@ -923,5 +926,36 @@ describe("summarizeCart", () => {
       const division = payableDivision(summarizeCart(cart, [WAITLIST_DIV, OPEN_PAID]));
       expect(division?.division_id).toBe("open-paid");
     });
+  });
+});
+
+
+describe("lineFeeCents — the quote must equal what the server charges (RS009)", () => {
+  // The defect: `summarizeCart` and step-review both read
+  // `division.fee_cents` directly while `registration-submit.ts` charged
+  // `free_agent_fee_cents` for a solo line. A 6000-per-team division with a
+  // 500 solo price quoted 6000 on the review step and took 500 at Stripe.
+  const division = {
+    ...TEAM_DIVISION,
+    fee_cents: 6000,
+    free_agent_fee_cents: 500,
+  };
+
+  it("quotes the solo price for a solo sign-up", () => {
+    expect(lineFeeCents({ free_agent: true }, division)).toBe(500);
+  });
+
+  it("quotes the team price for a team entry in the same division", () => {
+    expect(lineFeeCents({ free_agent: false }, division)).toBe(6000);
+  });
+
+  it("falls back to the team price when no solo price is set", () => {
+    expect(lineFeeCents({ free_agent: true }, { ...division, free_agent_fee_cents: null })).toBe(6000);
+  });
+
+  it("treats a zero solo price as free, not as unset", () => {
+    // The `|| fee_cents` mistake would quote 6000 here — the full team fee
+    // to someone the page is telling is free.
+    expect(lineFeeCents({ free_agent: true }, { ...division, free_agent_fee_cents: 0 })).toBe(0);
   });
 });

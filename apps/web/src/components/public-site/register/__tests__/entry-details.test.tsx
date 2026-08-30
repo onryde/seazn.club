@@ -54,6 +54,7 @@ const DIVISION: DivisionLike = {
   opens_at: null,
   closes_at: null,
   fee_cents: 0,
+  free_agent_fee_cents: null,
   currency: "USD",
   payment_method: "offline",
   form_fields: [

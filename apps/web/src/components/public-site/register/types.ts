@@ -84,6 +84,10 @@ export interface DivisionLike {
   opens_at: string | null;
   closes_at: string | null;
   fee_cents: number;
+  /** RS009 — the price for ONE person entering alone. null = no separate
+   *  price, so the team fee applies. 0 is a real price (free) and must not
+   *  collapse into null. */
+  free_agent_fee_cents: number | null;
   currency: string;
   payment_method: "offline" | "stripe";
   /** Step 3's custom-questions renderer (design §4 step 3). A LOCAL shape,

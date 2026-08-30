@@ -1870,6 +1870,11 @@ export interface PublicDivisionInfo {
   // ever be one of these three.
   entrant_kind: "team" | "individual" | "pair";
   fee_cents: number;
+  /** RS009 — what ONE person pays to enter this team division alone. null =
+   *  no separate price, charge `fee_cents`. The public stepper needs it to
+   *  QUOTE what the server will actually charge: without it, a solo line was
+   *  priced at the per-team fee on screen and at the solo fee in Stripe. */
+  free_agent_fee_cents: number | null;
   currency: string;
   /** How the entry fee is collected (spec §3). */
   payment_method: "offline" | "stripe";
@@ -2012,6 +2017,7 @@ export async function publicRegistrationInfo(
       sport_key: r.sport_key,
       entrant_kind: r.entrant_kind,
       fee_cents: r.fee_cents,
+      free_agent_fee_cents: r.free_agent_fee_cents,
       // Org-level (RS001b): every division on this panel quotes the same
       // currency, which is what makes a multi-division cart payable in one
       // Stripe session.
