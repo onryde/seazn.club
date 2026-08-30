@@ -3905,3 +3905,94 @@ once, which is a review artifact, not a product surface.
 session measuring the palette set will find this pair and should read this line
 rather than re-raising it. If the sign-off sheet itself ever becomes a customer
 surface, revisit.
+
+### RETRACTION — the goalkeeper "customer fact" recorded above is FALSE
+
+Earlier in this block R6 recorded, in R7's words and with R6's endorsement:
+*"a competition configured to play without a goalkeeper still shows the editor
+demanding one."* **That never happened and cannot have happened.**
+
+At `ac207cb71` the lineup editor had **no minimum logic at all** —
+`SportInfo.positionGroups` is `{key,name}[]`, with `PositionGroup.min` stripped
+a layer above the editor. Nothing in that UI has ever expressed a position
+requirement, so nothing ever demanded a keeper. There was no nag to fix.
+
+**R7's change is therefore a FEATURE, not a defect fix**: the editor expresses
+position minima for the first time, and expresses them cfg-correctly.
+
+**R6's share of this is not zero and is recorded deliberately.** R7 stated it;
+R6 called it "better than my framing", adopted it verbatim, sharpened it into
+"the single point of failure for the empty-net case", and wrote it into this
+index — all without reproducing it. R6 had, in the same session, written "a grep
+is not a read" into `AGENTS.md`. The next step of the same failure is **a read
+is not a run**: `resolvePositions` having no production callers is true and
+grep-checkable; what a user therefore SEES is neither, and neither of us looked.
+
+This register is unreliable because people wrote down what must be true instead
+of what they saw. Both waves did it again today while complaining about it.
+
+**Consequence R6 accepts:** default-config hockey and ice hockey sides will
+NEWLY show "Starting line-up still needs: Goalkeeper × 1" at R7's merge. R6 has
+ruled to KEEP it — both modules genuinely declare `GK`/`G` at `min 1, max 1`, so
+the notice is true and useful to an organiser building a lineup — but it must
+appear in R6's OWN gallery captures deliberately, and be named at the
+walkthrough, rather than arriving in the owner's captures as a surprise. Added
+to the `captureExtra` states R6 owes.
+
+**Still unreachable, and NOT R6's to fix:** `cfg.goalkeeper` is settable
+nowhere — no hockey variant sets it (`hockey.ts:137+`) and only the divisions
+API accepts it (`usecases/divisions.ts:250,719`). The cfg-conditional path is
+now correctly wired to a state no organiser can produce. Dead REACH rather than
+dead code. R7 owns the `goalkeeper` rule field (`match-rules.tsx`).
+
+**Adjacent, recorded for R8:** `validateLineup` and `assertLineup`
+(`sport/catalog.ts:73,143`) also have ZERO production callers, and the lineup
+PUT route (`lineups/[entrantId]/route.ts:17-24`) does no catalog validation at
+all — a lineup violating a group minimum saves fine. Two more inert seams side
+by side.
+
+### R6 SHIPS AS ONE PR — the split recommendation is WITHDRAWN
+
+R6 proposed splitting the clock into its own PR ahead of the skins, on the
+argument that football has never had a working match clock and that value
+should not wait behind a seven-width matrix and a visual sign-off.
+
+**Withdrawn, on evidence found after the proposal.** The skins reviewer showed
+the clock and the skins are entangled AT THE CHASSIS: the penalty countdown is
+measured against `state.asOf`, which moves only on a stamped event, and
+`PadHostView` (`types.ts:1189-1200`) carries no clock — so no skin can reach
+live seconds and the countdown is STATIC. Fixing it means passing the host's
+elapsed into the view, which is a clock change whose only consumer is the
+skins.
+
+A split would therefore have shipped a foundation PR whose actual consumer was
+broken, and a reviewer of the clock alone could not have seen it — the defect
+is only visible where the two meet. **One PR.**
+
+Recorded because the reasoning generalises: a "ship the foundation early" split
+is safe only when the foundation's consumers are already proven against it.
+Here the consumer did not exist when the split was proposed, which is exactly
+when the argument sounded strongest and was least supportable.
+
+### R6 — the visual sign-off plan (owner instruction, 2026-08-30)
+
+Owner restated two standing rules and they govern task E: `frontend-design`
+loads before ANY UI work, and every change is verified VISUALLY including
+cosmetic ones. Task E owes, on a real prod build (`E2E_PROD_TARGET`,
+`localhost` — `127.0.0.1` 401s every API call), at **320 / 768 / 1280**:
+
+- goal → dock with scorer and assists
+- **penalty with the countdown visibly TICKING** — static until fix pass 2, and
+  the wave's headline
+- hockey's three-card ladder (green/yellow/red) as swatches
+- swap sheet at step 2, position-led
+- the clock bar INCLUDING the new set/correct control
+- the "Starting line-up still needs: Goalkeeper × 1" notice arriving from R7 —
+  captured deliberately so the owner does not meet new UI in a screenshot
+
+Cosmetic items that no test count can prove and that the gallery must show:
+the score dominating by SIZE AND WEIGHT (the glacier-cyan ruling leaves only
+1.29 luminance separation), the ice hockey ground at `#040a22`, and the card
+swatches. No horizontal page scroll at any width; tap targets hit-tested with
+`elementFromPoint`, never `boundingBox` (R5's defect was the measurement, not
+the number).

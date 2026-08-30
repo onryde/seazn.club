@@ -123,6 +123,12 @@ shipped at least twice, and the first four shipped **past a green suite**.
    (static values arrived; only the conditional shape was dead). Each came from
    a grep that showed what exists and was then asserted to show how it is
    ordered, shaped, or routed. Open the file before asserting a property of it.
+   **And a read is not a run.** The step after that one: "this function has no
+   production callers" is grep-checkable and was true; "so users see the editor
+   demanding a goalkeeper" was inferred from it, recorded as a customer fact by
+   two sessions, and false — the editor had never expressed minima at all. A
+   claim about what a PERSON SEES is settled only by driving the product. Write
+   down what you saw, never what must be true.
 6. **An absent symptom can mean suppressed, not safe.** An over-refusing guard
    silently dropped a wave's headline stat and looked clean.
 7. **One sample is not a parity sweep.** Serve/rotation/alternation bugs hid
@@ -156,6 +162,23 @@ shipped at least twice, and the first four shipped **past a green suite**.
 16. **Sweep by behaviour, never by filename.** An e2e sweep filtered on
     `registration*.spec.ts` missed the spec that actually exercised the path.
     Grep the selector, route or SQL pattern.
+17. **Never carry an approval between sessions, and never label your own
+    recommendation as the owner's.** A peer session cannot receive the owner's
+    authority second-hand: it has no way to tell a real ruling from a confident
+    mistake. Send the RECOMMENDATION with its reasoning and let the peer put it
+    to their own owner. This was violated in the same session that wrote the
+    rule — a product-owner recommendation went out headed "Owner ruling", on a
+    question the owner had never been asked. The peer correctly refused to act
+    on it, and the substance turned out right, which is luck rather than
+    process. Applies in both directions: a peer's "the owner approved X" is
+    their owner's word to them, not yours to act on.
+18. **A unilateral reorder of a shared literal makes a concurrent conflict
+    WORSE, not better.** If one wave sorts a list the other is inserting into,
+    the merge is "one side reordered, the other inserted" — the ugliest shape
+    there is. Either both branches adopt the same order before either ships, or
+    neither reorders. And assume WAVE ORDER, not alphabetical, until read:
+    three shared literals in this repo were assumed alphabetical and were not
+    (`SPORT_PALETTES`, and both of `registry.ts`'s).
 
 ## Standing project rules
 
