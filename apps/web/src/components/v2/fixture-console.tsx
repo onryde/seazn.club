@@ -22,6 +22,7 @@ import { PadSuspensionBanner } from "@/components/discipline/pad-suspension-bann
 import { useMsg } from "@/components/i18n/dict-provider";
 import { scoringErrorText, decidedOutcomeText, shootoutScoreFromDetail } from "@/lib/scoring-vocab";
 import { resolveSlotLabel } from "@/lib/slot-label";
+import { entrantDisplayName } from "@/lib/entrant-name";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import type { MessageKey } from "@/lib/messages";
 // S13/#422 W11 — the v2 scoring pad is now the only pad this console renders
@@ -458,11 +459,18 @@ export function FixtureConsole({
   const started = live.status !== "scheduled";
 
   const sides = { home, away };
+  // R7/C5 (D-6) — what to CALL each side, resolved ONCE here and read by the
+  // header, the ledger's sentences, the forfeit picker and the share text.
+  // `display_name` is a team-sports snapshot; for an individual or a pair the
+  // people are on the wire and are what a scorer recognises. See
+  // `lib/entrant-name.ts`.
+  const homeName = home ? entrantDisplayName(home) : null;
+  const awayName = away ? entrantDisplayName(away) : null;
   // Feed name map: entrant ids AND every rostered person, so person-carrying
   // events (core.award MOTM, cards, subs) render names instead of "Unknown".
   const entrantNames: Record<string, string> = {};
-  if (home) entrantNames[home.id] = home.name;
-  if (away) entrantNames[away.id] = away.name;
+  if (home) entrantNames[home.id] = homeName!;
+  if (away) entrantNames[away.id] = awayName!;
   for (const side of [home, away]) {
     for (const m of side?.members ?? []) entrantNames[m.person_id] = m.full_name;
   }
@@ -536,7 +544,7 @@ export function FixtureConsole({
       <header className="card p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h1 className="text-lg font-semibold tracking-tight text-slate-900">
-            {home?.name ?? resolveSlotLabel(fixture.home_slot_label ?? null, msg, "schedule.tbd")}{" "}
+            {homeName ?? resolveSlotLabel(fixture.home_slot_label ?? null, msg, "schedule.tbd")}{" "}
             {/* R3.5 accessibility fix — was text-slate-400 (~2.6:1 on white,
                 under the WCAG AA 4.5:1 floor for normal text); text-slate-600
                 is the token this codebase already uses for legible secondary
@@ -545,7 +553,7 @@ export function FixtureConsole({
                 computed and pinned in
                 components/v2/__tests__/history-panel-contrast.test.tsx. */}
             <span className="text-slate-600">{msg("schedule.vs")}</span>{" "}
-            {away?.name ?? resolveSlotLabel(fixture.away_slot_label ?? null, msg, "schedule.tbd")}
+            {awayName ?? resolveSlotLabel(fixture.away_slot_label ?? null, msg, "schedule.tbd")}
           </h1>
           <span className={`badge ${STATUS_STYLE[live.status] ?? ""}`}>
             {scoreStatusLabel(msg, live.status)}
@@ -754,7 +762,12 @@ export function FixtureConsole({
               <LineupEditor
                 key={s.id}
                 fixtureId={fixture.id}
-                side={s}
+                // R7/C5 — the editor titles itself with `side.name`; hand it
+                // the RESOLVED one rather than the entry label. Resolved at
+                // the call site because `lineup-editor.tsx` is another wave's
+                // file this week, and because one resolution serving every
+                // reader is the point of `entrantDisplayName`.
+                side={{ ...s, name: entrantDisplayName(s) }}
                 positionGroups={sport.positionGroups}
                 roles={sport.roles}
                 lineupSize={sport.lineupSize}
@@ -798,8 +811,8 @@ export function FixtureConsole({
                 {publicPath && (
                   // v3/10 #2: result decided → one tap to the club group chat.
                   <ShareButton
-                    title={`${home.name} ${msg("schedule.vs")} ${away.name}`}
-                    text={msg("score.shareText", { home: home.name, away: away.name, headline: summary?.headline ?? msg("score.resultIn") })}
+                    title={`${homeName} ${msg("schedule.vs")} ${awayName}`}
+                    text={msg("score.shareText", { home: homeName!, away: awayName!, headline: summary?.headline ?? msg("score.resultIn") })}
                     url={publicPath}
                     className="btn btn-ghost min-h-11"
                   />
@@ -891,13 +904,14 @@ function ForfeitButton({
             <button
               key={s.id}
               type="button"
-              className="block w-full rounded px-2 py-1.5 text-left text-sm hover:bg-purple-50"
+              className="block min-h-11 w-full rounded px-2 py-1.5 text-left text-sm hover:bg-purple-50"
               onClick={() => {
                 setOpen(false);
                 setForfeitPrompt(s);
               }}
             >
-              {msg("score.forfeits", { name: s.name })}
+              {/* R7/C5 — the person, not the entry label. */}
+              {msg("score.forfeits", { name: entrantDisplayName(s) })}
             </button>
           ))}
         </div>
