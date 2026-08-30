@@ -1691,3 +1691,64 @@ describe.skipIf(!HAS_DB)("joinTeamEntry", () => {
     });
   });
 });
+
+// RS007 finding #17 — a pair's display name used to compose roster row 0's
+// real name with `entry.partner_name`, a value typed on a DIFFERENT step of
+// the public stepper and never compared with the roster. The two could
+// disagree permanently, and the join page shows the display name as its
+// heading and the roster as its "Which one are you?" list — so the partner
+// following their own invite link saw a heading naming someone who was not
+// among the options they could pick.
+describe.skipIf(!HAS_DB)("a pair's display name follows its ROSTER, not the entries-step field (#17)", () => {
+  async function submitPair(
+    partnerName: string | null,
+    playerNames: string[],
+  ): Promise<string> {
+    const { orgId, orgSlug, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    await seedSettings(division.id, { entrant_kind: "pair", fee_cents: 0 });
+    const submitted = await submitRegistrationGroup(
+      { orgSlug, compSlug: competition.slug },
+      {
+        contact: baseContact(),
+        privacy_consent: true,
+        entries: [
+          {
+            division_id: division.id,
+            entrant_kind: "pair",
+            partner_name: partnerName,
+            players: playerNames.map((full_name) => ({ full_name })),
+            answers: {},
+          } as SubmitGroupEntryInput,
+        ],
+      },
+    );
+    const [row] = await sql<{ display_name: string }[]>`
+      select display_name from registrations where id = ${submitted.entries[0]!.registration_id}`;
+    return row!.display_name;
+  }
+
+  it("names the two people actually on the roster, even when the partner field says someone else", async () => {
+    expect(
+      await submitPair("Bob Vance", ["Alice Byrne", "Robert Vance"]),
+      "the roster is who is playing; the entries-step partner field is a convenience typed earlier",
+    ).toBe("Alice Byrne & Robert Vance");
+  });
+
+  // Why the `partner_name` fallback in entryDisplayName cannot fire at
+  // submit, pinned so a future schema change that CAN reach it is a
+  // deliberate decision rather than a surprise: a pair is fixed at exactly
+  // two players, and `full_name` is `z.string().min(1)`, so players[1] is
+  // always present and always non-empty by the time a display name is
+  // composed. The fallback stays as defence, not as live behaviour.
+  it("refuses a pair with only one player, which is why the roster can always be trusted here", async () => {
+    await expect(submitPair("Bob Vance", ["Alice Byrne"])).rejects.toThrow(
+      /A pair entry needs exactly two players/,
+    );
+  });
+
+  it("agrees with itself when both were filled from the same name", async () => {
+    expect(await submitPair("Bob Vance", ["Alice Byrne", "Bob Vance"])).toBe("Alice Byrne & Bob Vance");
+  });
+});

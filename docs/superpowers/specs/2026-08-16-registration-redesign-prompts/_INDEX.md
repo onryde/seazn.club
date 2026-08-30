@@ -2735,9 +2735,9 @@ disagree, with no way to reconcile them from inside the app.
 The three-line copy sitting unused in four dictionaries says this was
 designed and then dropped, rather than deliberately deferred.
 
-**Status:** OPEN. Owed: the control in the registrant detail panel,
-gated on the same conditions the endpoint enforces, plus a walkthrough
-scenario that taps it after the lock (scenario S4 of the matrix below).
+**Status:** FIXED 2026-08-30 (`408e31df3`), and proven end to end by S4
+of the money matrix — the control renders, the organiser taps it, and the
+ledger records `"mode": "manual"`.
 
 ### #17 (NEW, found 2026-08-30) — a pair's typed partner name never reaches its roster
 
@@ -2780,11 +2780,7 @@ nothing unusual at all, only a captain who types the partner's name
 slightly differently the second time — which is the ordinary case, since
 nothing on screen tells them the two are meant to match.
 
-**Status:** OPEN. Owed: seed the pair's second roster row from the
-entries-step partner name (and keep them in step if it is edited), so the
-name is typed once. `entrant_kind === "pair"` is fixed at exactly two
-players (`registration-submit.ts:487`), so there is no ambiguity about
-which row it seeds.
+**Status:** FIXED 2026-08-30 — see "#17 — FIXED" below.
 
 ### #18 (NEW, found 2026-08-30) — CRITICAL: money leaves the organiser's account past `refund_lock_at`, audited as `late_payment`
 
@@ -2850,9 +2846,9 @@ with an audit trail that calls it a late payment so nothing looks wrong.
 It is invisible to the registrant (who was told they would get nothing)
 and invisible to the organiser (who has no reason to check).
 
-**Status:** OPEN, mechanism under diagnosis. The S4 walkthrough scenario
-is the reproduction and is currently RED on this assertion, deliberately.
-Reproduce with `KEEP_FIXTURES=1` to keep the ledger.
+**Status:** FIXED 2026-08-30 (`dfdcfae95`), with the residual gap #18b
+fixed in `1a4d025b6`. See the two sections below. S4 (and S5, for the
+manual-approval half) are the reproductions; both now pass.
 
 ### #18 — FIXED 2026-08-30 (`dfdcfae95`), with one residual gap (#18b)
 
@@ -2963,3 +2959,39 @@ and NONE of them was reachable from the unit suite:
 - **#18b** needed the FIX to be questioned rather than accepted. The
   guard was right about the case it was written for and wrong one
   approval mode over.
+
+### #17 — FIXED 2026-08-30
+
+Fixed on BOTH sides of the divergence, because closing only one leaves the
+other free to reopen it.
+
+**Client — the name is typed once.** `cartReducer`'s `UPDATE_ENTRY` now
+seeds a pair's SECOND roster row from the entries-step partner field. Only
+ever a row the captain has not made their own: still blank, or still
+carrying exactly what the partner field said a keystroke ago. A row they
+edited themselves is never overwritten, and clearing the partner field
+never destroys a typed row — losing typed roster data to fix a naming
+mismatch would be the worse trade.
+
+**Server — the roster is the source of truth.** `entryDisplayName` now
+composes a pair's name from the two ROSTER rows. It used to join row 0's
+real name with `entry.partner_name`, a value typed on a different step and
+never compared with the roster, which is what let "Alice & Bob" sit
+permanently on a roster reading Alice and Robert.
+
+**A false premise corrected while writing the test.** The first version
+asserted a fallback to `partner_name` "while the second roster row is
+blank". That state does not exist: a pair is fixed at exactly two players
+(`registration-submit.ts`) and `full_name` is `z.string().min(1)`
+(`schemas.ts`), so `players[1]` is always present and non-empty by the time
+a display name is composed. **The `partner_name` fallback is unreachable at
+submit** — it is kept as defence only, and the comment now says so instead
+of describing behaviour that cannot happen. A test pins the 422 that makes
+it unreachable, so loosening either rule surfaces as a decision rather than
+a surprise.
+
+**Verified:** cart reducer 86/86 (4 of the 6 new cases go red under a
+mutant that removes the seeding — the 2 survivors are the negative cases,
+correctly indifferent); `registration-submit` 55/55 (the key case reds
+under a mutant that restores the old composition); whole register component
+suite 311/311; `tsc --noEmit` exit 0.

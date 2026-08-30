@@ -360,7 +360,26 @@ function entryDisplayName(
   if (entry.entrant_kind === "pair") {
     const named = entry.team_name?.trim();
     if (named) return named;
-    const composed = [players[0]?.full_name, entry.partner_name].filter(Boolean).join(" & ");
+    // RS007 finding #17: the ROSTER wins over the cosmetic partner field.
+    // This used to compose row 0's real name with `entry.partner_name`, a
+    // value typed on a DIFFERENT step and never compared with the roster —
+    // so an entry could carry "Alice & Bob" for a roster that actually read
+    // Alice and Robert, permanently. The join page shows the display name as
+    // its heading and the roster as its "Which one are you?" list, so the
+    // partner following their own invite link saw a heading naming someone
+    // who was not among the options.
+    //
+    // `partner_name` stays only as DEFENCE, and is unreachable as things
+    // stand — do not read this line as live behaviour. A pair is fixed at
+    // exactly two players (the `rawPlayers.length !== 2` check above) and
+    // `full_name` is `z.string().min(1)` (schemas.ts), so players[1] is
+    // always present and non-empty here. Kept so that loosening either rule
+    // degrades to the old name instead of to `contact.name`; its own test
+    // pins the 422 that makes it unreachable.
+    const partnerFromRoster = players[1]?.full_name?.trim();
+    const composed = [players[0]?.full_name, partnerFromRoster || entry.partner_name]
+      .filter(Boolean)
+      .join(" & ");
     return composed || contact.name;
   }
   return players[0]?.full_name?.trim() || contact.name;

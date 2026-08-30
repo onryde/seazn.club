@@ -157,7 +157,39 @@ export function cartReducer(state: CartState, action: CartAction): CartState {
       }
       return {
         ...state,
-        entries: state.entries.map((e) => (e.id === action.id ? { ...e, ...patch } : e)),
+        entries: state.entries.map((e) => {
+          if (e.id !== action.id) return e;
+          const next = { ...e, ...patch };
+          // RS007 finding #17. A pair's partner is typed on the ENTRIES step
+          // ("Partner's name"), and the DETAILS step then renders the pair's
+          // TWO roster rows EMPTY — so the captain types the same person
+          // twice, on two screens, and nothing compares the two values. Type
+          // anything different the second time and the entry keeps the
+          // display name built from the FIRST while its roster says the
+          // second, permanently and with no warning. It surfaces on the join
+          // page, whose heading is the display name and whose "Which one are
+          // you?" list is the roster: the partner following their own invite
+          // link sees a heading naming someone who is not in the list.
+          //
+          // Seeding row 1 means the name is typed once. Only ever seeded when
+          // the captain has not made that row their own — it is still blank,
+          // or still carries exactly what the partner field said a keystroke
+          // ago. A row they have edited themselves is never overwritten, and
+          // clearing the partner field never destroys a typed row (`next`
+          // must be non-empty), because losing typed roster data to fix a
+          // naming mismatch would be the worse trade.
+          if (next.entrant_kind !== "pair" || !("partner_name" in patch)) return next;
+          const typed = (patch.partner_name ?? "").trim();
+          const previous = (e.partner_name ?? "").trim();
+          const row = next.players[1];
+          if (!row || !typed) return next;
+          const rowName = row.full_name.trim();
+          if (rowName !== "" && rowName !== previous) return next;
+          return {
+            ...next,
+            players: next.players.map((p, i) => (i === 1 ? { ...p, full_name: typed } : p)),
+          };
+        }),
       };
     }
 
