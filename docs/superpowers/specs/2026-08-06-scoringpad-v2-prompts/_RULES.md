@@ -57,10 +57,15 @@ its line numbers predate the 54 W4 commits — **re-pin before trusting any of t
 
 ## 4. Agent topology
 
-- **Scout (sonnet)** — all read-only exploration, file discovery, codebase Q&A.
+- **Scout** — all read-only exploration, file discovery, codebase Q&A.
   Never pull file dumps into the main thread.
-- **Implementer (opus, high effort)** — writes code. All skills and tools.
-- **Reviewer (sonnet)** — reviews the implementer's diff, returns a gap list.
+- **Implementer** — writes code. All skills and tools.
+- **Reviewer** — reviews the implementer's diff, returns a gap list.
+- **Models and effort are NOT restated here.** They live in
+  `docs/superpowers/RULES.md` and the `.claude/agents/*.md` frontmatter.
+  This file said "Implementer (opus, high effort)" until 2026-08-30 and was
+  wrong for weeks; a rule copied into four files disagrees with itself.
+  **Never pass `model:` on an implementer or reviewer dispatch.**
 - **Loop**: implementer → reviewer → gaps → implementer → reviewer → … until the
   review is clean **and** the gate is green. The main thread reruns the gate
   itself at the session boundary; never accept "done, tests pass" without the

@@ -35,8 +35,10 @@ backwards-compatible one; don't contort a design to dodge a migration.
 
 ## Agent topology
 
-- **Scout — Sonnet, High effort.** All read-only exploration, file
-  discovery, codebase Q&A.
+- **Scout — Sonnet, xHigh effort** (raised from High by the owner
+  2026-08-30; set in `.claude/agents/scout.md` frontmatter, which is where
+  effort actually lives — the Agent tool cannot set it per-dispatch). All
+  read-only exploration, file discovery, codebase Q&A.
 - **Implementer — Sonnet, MAX effort** (raised from xHigh by the owner
   2026-08-10; set in `.claude/agents/implementer.md` frontmatter, which is
   where effort actually lives — the Agent tool cannot set it per-dispatch).

@@ -184,8 +184,9 @@ shipped at least twice, and the first four shipped **past a green suite**.
 
 - **Read `docs/superpowers/RULES.md` first.** Owner's full standing
   policy — skills to actually use (not just cite), TS7/Node26, agent
-  topology (Scout/Implementer/Reviewer, all Sonnet, xHigh for
-  Implementer/Reviewer), all 4 required test types per task
+  topology (Scout/Implementer/Reviewer — models and effort live in
+  `RULES.md` and the `.claude/agents/*.md` frontmatter; never restate them
+  here, and never override `model:` on a dispatch), all 4 required test types per task
   (unit/E2E/smoke/regression), greenfield schema stance, mobile+desktop
   UI bar, pre-commit OpenAPI drift check, and the no-new-issues /
   fix-inline-unless-blast-radius rule. Every dispatch brief should
