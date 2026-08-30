@@ -121,13 +121,36 @@ describe("FOOTBALL keeps its own ring — the identity ruling, without the colla
     // sport: the rule fires only under `[data-sport-theme]`, and that
     // attribute is emitted only when a palette override exists — so
     // `--sport-led` inside it is always the overriding sport's own colour.
-    // R4 adds tennis. The list is pinned rather than counted so a sport that
-    // gains a palette without gaining an entry here is a red, not a silent
-    // pass — the point of the assertion is that EVERY key in this table has
-    // its own `led`, which is what makes the scoped rule safe.
-    expect(Object.keys(SPORT_PALETTES)).toEqual(["football", "tennis"]);
+    // R4 adds tennis; R5 adds the whole racquet family at once (badminton,
+    // table tennis and volleyball — the palettes land together even though R5
+    // converts only badminton's skin, see `SPORT_PALETTES`'s own note). The
+    // list is pinned rather than counted so a sport that gains a palette
+    // without gaining an entry here is a red, not a silent pass — the point of
+    // the assertion is that EVERY key in this table has its own `led`, which
+    // is what makes the scoped rule safe.
+    expect(Object.keys(SPORT_PALETTES)).toEqual([
+      "football",
+      "tennis",
+      "badminton",
+      "tabletennis",
+      "volleyball",
+    ]);
     expect(SPORT_PALETTES.football!.led).toBe("#ffb703");
     expect(SPORT_PALETTES.tennis!.led).toBe("#d9f000");
+    expect(SPORT_PALETTES.badminton!.led).toBe("#2fe0bd");
+    expect(SPORT_PALETTES.tabletennis!.led).toBe("#ff9440");
+    expect(SPORT_PALETTES.volleyball!.led).toBe("#4aa8ff");
+  });
+
+  it("and every palette in the table declares a `led` of its own, which is what the scoped rule leans on", () => {
+    // The GENERAL form of the pinned list above — stated separately so the
+    // invariant survives the next wave's edit to that list rather than being
+    // re-derived from it. A future palette that overrides `board` but not
+    // `led` would leave `[data-sport-theme]`'s ring resolving to the shared
+    // `:root` default the scoping exists to avoid.
+    for (const [key, palette] of Object.entries(SPORT_PALETTES)) {
+      expect(palette.led, `${key} declares no --sport-led of its own`).toMatch(/^#[0-9a-f]{6}$/);
+    }
   });
 
   it("the scoped rule outranks the platform ring, or football would silently inherit violet", () => {

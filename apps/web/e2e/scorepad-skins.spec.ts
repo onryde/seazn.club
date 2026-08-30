@@ -279,7 +279,7 @@ test("tennis skin: play points to deuce", async ({ page, request }) => {
   ]);
 });
 
-test("racquet skin (volleyball): a set summary then a rally", async ({ page, request }) => {
+test("volleyball skin: a set summary then a rally", async ({ page, request }) => {
   test.setTimeout(120_000);
   const fx = await seedRosteredFixture(request, {
     label: `Skins Volleyball ${TAG}`,
@@ -290,14 +290,39 @@ test("racquet skin (volleyball): a set summary then a rally", async ({ page, req
   });
   await openLiveConsole(page, fx);
 
+  // R5/C3 cutover — v3 tapModel S: the scoreboard halves ARE the rally
+  // buttons (v3/skins/volleyball.tsx), so the v2-era one-tap "Home"/"Away"
+  // pair this test used to click no longer exists, and neither does the v2
+  // `[data-role="racquet-header"]` this test used to read the score off.
+  // Every half's own `who` is the SIDE label ("Home"/"Away") plus hint text,
+  // so it is addressed POSITIONALLY, never by an exact accessible name — the
+  // identical badminton/tennis reasoning `scorebugHalf`'s own doc states.
+  //
   // ORDER IS LOAD-BEARING (setbased/kernel.ts's own fold, via the server's
   // actual rejection): a set is scored EITHER rally-by-rally OR by summary,
   // never both, so the only way to drive both actions for real is to close
   // set 1 by summary FIRST, then open+score set 2 with a rally.
-  await pad(page).getByRole("button", { name: "Set score", exact: true }).click();
-  await pad(page).getByLabel("Home", { exact: true }).fill("25");
-  await pad(page).getByLabel("Away", { exact: true }).fill("20");
-  await pad(page).locator('[data-role="confirm"]').click();
+  // R5 — THE SET SCORE SHEET IS GUIDED, one field per STEP. The three lines
+  // that used to stand here were written against the v2 form and had never
+  // been run since the cutover: `getByLabel("Points — Away")` timed out at
+  // 120s, and `[data-role="confirm"]` has ZERO producers anywhere in v3. Same
+  // idiom as `scorepad-v3-volleyball.spec.ts`, which does run: fill the ONE
+  // spinbutton the current step shows, Confirm, and the sheet advances to the
+  // next. HOME is step one, AWAY step two — the order the sheet asks in.
+  await v3Tile(page, "setScore").click();
+  const setScoreSheet = v3Sheet(page);
+  await expect(setScoreSheet).toBeVisible({ timeout: 20_000 });
+  for (const value of ["25", "20"]) {
+    const field = setScoreSheet.getByRole("spinbutton");
+    // The retry wraps BOTH the fill and the read-back: the step's own field
+    // remounts between steps, so a fill racing that remount lands in a node
+    // that is already gone.
+    await expect(async () => {
+      await field.fill(value);
+      await expect(field).toHaveValue(value, { timeout: 1_000 });
+    }).toPass({ timeout: 20_000 });
+    await setScoreSheet.getByRole("button", { name: "Confirm", exact: true }).click();
+  }
   await expect
     .poll(
       async () => (await ledger(request, fx.fixtureId)).filter((e) => e.type === "volleyball.set.summary").length,
@@ -305,9 +330,12 @@ test("racquet skin (volleyball): a set summary then a rally", async ({ page, req
     )
     .toBe(1);
 
-  const rallyHome = pad(page).getByRole("button", { name: "Home", exact: true });
-  await expect(rallyHome).toBeVisible();
-  await rallyHome.click();
+  await expect(pad(page).locator('[data-role="v3-scorebug"] button'), "both halves must be live (tappable) before the tap").toHaveCount(
+    2,
+    { timeout: 20_000 },
+  );
+  const homeHalf = scorebugHalf(page, 0);
+  await homeHalf.click();
   await expect
     .poll(
       async () => (await ledger(request, fx.fixtureId)).filter((e) => e.type === "volleyball.rally").length,
@@ -315,12 +343,15 @@ test("racquet skin (volleyball): a set summary then a rally", async ({ page, req
     )
     .toBe(1);
 
-  const racquetHeader = pad(page).locator('[data-role="racquet-header"]');
-  const setsField = racquetHeader.getByText("Sets", { exact: true }).locator("..");
-  const pointsField = racquetHeader.getByText("Points", { exact: true }).locator("..");
-  await expect(setsField).toContainText("1–0");
-  await expect(pointsField).toContainText("1–0");
-  // S13/#422 W11 cutover — racquet's own scan.
+  // v3 renders each half's OWN points via `ScorebugHalf.big`, not the v2
+  // header's combined "Points" field this test used to read; the sets tally
+  // moved to the strip's own "games"-id item (D-11's retirement of the old
+  // three-times-stated score, the identical proof the siblings' own tests
+  // make).
+  await expect(homeHalf).toContainText("1");
+  const strip = pad(page).locator('[data-role="v3-scorebug"] [data-strip-item-id="games"]');
+  await expect(strip).toContainText("1–0");
+  // S13/#422 W11 cutover — volleyball's own scan.
   await expectPadAxeClean(page);
   await expectNoHorizontalScroll(page);
 

@@ -87,7 +87,10 @@ export const volleyball = makeSetBasedModule({
     reentry: "once",
     reentryPositionLock: true,
     allowSquadGrowth: false,
-    exemptions: { libero: {} },
+    // `requiresRole` is what keeps this uncapped channel honest: one of the
+    // two players must actually BE the libero, or an ordinary substitute
+    // could be cycled through it past 15.6's one-return cap.
+    exemptions: { libero: { requiresRole: "libero" } },
   }),
   unitLabel: { one: "Set", many: "Sets" },
   // spec 04 §3.4 — points → matches won → set ratio → point ratio → h2h.
@@ -98,6 +101,36 @@ export const volleyball = makeSetBasedModule({
   // S7/#427 — the FIVB ladder verbatim; the kernel enum IS volleyball's own
   // vocabulary (DOMAIN.volleyball.md:38), so all four steps are on the pad.
   sanctionLevels: ["warning", "penalty", "expulsion", "disqualification"],
+  // R5-1 — FIVB service.
+  //  * 12.2.2: the team winning a rally serves the next one (side-out).
+  //  * 7.1: sets 2-4 alternate the first service, and THE DECIDING SET IS
+  //    TOSSED AFRESH — the one place the alternation stops. The reader reports
+  //    `deciding-set-toss` at 0-0 of set five and recovers the moment the
+  //    first rally of it is recorded, because side-out then answers for itself.
+  //  * Beach 13.2 / 12.2: a pair keeps its service order through the set, so
+  //    the declared `pairOrder` names the server for beach. Indoor sheets
+  //    declare no pair order (and a six-long one is not a pair), so indoor
+  //    names nobody: FIVB 7.6's court rotation is not folded here.
+  //  * 19.3.2.4: a libero may not serve, so a libero is never NAMED even where
+  //    the order would otherwise reach them. The side is still reported — the
+  //    side is not in doubt.
+  //  * 7.6.2: six positions, rotated one place each time the team takes the
+  //    serve back. Reported only for a side with six players on court — and
+  //    an ordinary indoor sheet does not persist a squad to count (six
+  //    starters and their positions declare nothing the pre-wave lineup model
+  //    could not hold), so `rotationImpliedBy` names the cfg fact that stands
+  //    in for it: indoor has a bench and records substitutions, the beach
+  //    pair has neither (FIVB Beach §7, the same fact `records` moved into
+  //    cfg for in S6/#416). A declared squad still wins where there is one.
+  serve: {
+    within: "rally-winner",
+    setStart: "alternate",
+    decidingSetTossed: true,
+    serverFromPairOrder: true,
+    rotationImpliedBy: "substitutions",
+    nonServingRoles: ["libero"],
+    rotationCycle: 6,
+  },
   // Entrant shapes are declared per sport, not per variant: indoor is 6v6 teams
   // (the default), `beach` is 2v2 pairs. Both kinds stay open at the sport level
   // and a division narrows them via config.entrants when the organiser wants.

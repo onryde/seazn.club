@@ -2822,3 +2822,350 @@ test("register stepper: ENTRIES/DETAILS/CONSENT/REVIEW hold at this width, no ho
     await apiJson(request, `/api/v1/competitions/${comp.data!.id}`, "DELETE").catch(() => undefined);
   }
 });
+
+// ---------------------------------------------------------------------------
+// T17 — the ScoringPad v3 RACQUET pads (R5/tasks C1-C3: badminton, table
+// tennis, volleyball) at all SEVEN width projects.
+//
+// Same reasoning T16 gives for cricket, and it applies three more times over:
+// R5 split these sports off a SHARED v2 skin (`racquet-skin.tsx`) onto three
+// separate v3 skins, each a new render tree, and this file's own seven
+// projects are the ONLY place any new surface gets width coverage narrower
+// than 375/768 at all (reference_new_ui_surface_uncovered_until_in_mobile_
+// spec). Before this block, `git grep -a` for badminton/tabletennis/
+// volleyball across mobile.spec.ts returned ZERO matches — three brand-new
+// pads with no width bar whatsoever.
+//
+// One test per sport rather than one walking all three: a 320px failure that
+// reads "badminton pad" is a different alarm from one that reads "the R5
+// pads", and the extra fixture seeding is cheap next to losing that.
+//
+// Every fixture here seeds with `emitCoreStart: true`, so none of these pay
+// T16's Start-match hydration dance — the pad is live on first paint.
+// ---------------------------------------------------------------------------
+
+/** Both scoreboard halves, scoped to `button` deliberately: a half renders
+ *  EITHER a `<button>` (tappable — live, band 3) or a plain `<div>` at the
+ *  same grid position, and a wildcard locator happily resolves the untappable
+ *  div. Tap model S — the halves ARE the scoring control on all three of
+ *  these sports, so they are the touch target that matters most here. */
+function padHalf(page: Page, side: "home" | "away"): Locator {
+  return page
+    .getByTestId("score-pad")
+    .locator('[data-role="v3-scorebug"]')
+    .locator(".grid > button")
+    .nth(side === "home" ? 0 : 1);
+}
+
+function padTile(page: Page, id: string): Locator {
+  return page.getByTestId("score-pad").locator(`[data-tile-id="${id}"]`);
+}
+
+async function assertTouchFloor(locator: Locator, label: string): Promise<void> {
+  await expect(locator, `${label} not visible`).toBeVisible({ timeout: 20_000 });
+  const box = await locator.boundingBox();
+  expect(box, `${label} has no box`).not.toBeNull();
+  expect(box!.height, `${label} touch target is ${box!.height}px`).toBeGreaterThanOrEqual(44);
+}
+
+/**
+ * The floor asserted the way a finger meets it: hit-test the extremes of the
+ * control's own box and require both to land on the control.
+ *
+ * `boundingBox()` alone cannot see whether a control is genuinely tappable
+ * across its painted height — this is how tile-grid.tsx's `minor` kind stayed
+ * wrong for four waves. It painted 40px and claimed 44 via a `::before` bleed
+ * of 2px top and bottom; a click dispatched into that bleed in a real browser
+ * lands on the GRID CONTAINER and never opens the tile's sheet. A box
+ * assertion cannot tell a real 44 from a claimed one, in either direction.
+ *
+ * `scrollIntoViewIfNeeded` first, and deliberately: `elementFromPoint` is
+ * viewport-relative and answers `null` for everything below the fold, so
+ * without it this probe reports "not tappable" for any control that merely
+ * happens to be off-screen — the first version of this helper did exactly
+ * that, and read as a product defect.
+ */
+async function assertTapFloor(locator: Locator, label: string): Promise<void> {
+  await expect(locator, `${label} not visible`).toBeVisible({ timeout: 20_000 });
+  // CENTRE it, don't merely bring it on-screen. `scrollIntoViewIfNeeded()`
+  // scrolls the minimum distance, which parks the element FLUSH with the
+  // viewport top — directly beneath the app's sticky nav — and the top-edge
+  // hit test below then lands on the nav and reports a control as untappable
+  // when nothing is wrong with it. That is scroll position, not geometry: it
+  // fired only at 320px, where the taller page happens to produce that exact
+  // resting place. Centring removes the artifact while leaving what this
+  // probe is actually for — occlusion by the element's own neighbours —
+  // fully intact.
+  await locator.evaluate((el) => {
+    el.scrollIntoView({ block: "center", inline: "nearest" });
+  });
+  const probe = await locator.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    const cx = r.left + r.width / 2;
+    const hit = (y: number): boolean => {
+      const at = document.elementFromPoint(cx, y);
+      return at !== null && (at === el || el.contains(at));
+    };
+    // 1px inside each edge — a fractional layout must not put the probe on
+    // the boundary pixel itself and read as a miss.
+    return { height: r.height, top: hit(r.top + 1), bottom: hit(r.bottom - 1) };
+  });
+  expect(probe.height, `${label} touch target is ${probe.height}px`).toBeGreaterThanOrEqual(44);
+  expect(probe.top, `${label} is not tappable at its TOP edge`).toBe(true);
+  expect(probe.bottom, `${label} is not tappable at its BOTTOM edge`).toBe(true);
+}
+
+/** A control must stay INSIDE the box that paints it. Measured against the
+ *  element's own container, never the page: `swap-sheet.tsx`'s "who came off"
+ *  chip once carried `shrink-0` with no max-width and took its full content
+ *  width (375px) inside a 314px row, spilling 77px past a wrapper whose
+ *  `overflow-hidden rounded-2xl` then CLIPPED the player's name mid-string.
+ *
+ *  `expectNoHorizontalScroll` is blind to that by construction, which is why
+ *  it survived: the clip means `documentElement.scrollWidth` never grows, so
+ *  the page gate reports clean while the name is unreadable (verified:
+ *  `pageHScroll: 0` while the element spilled 77px). An `overflowsX` check on
+ *  the element is blind too — its own `scrollWidth` is not greater than its
+ *  own box, because the BOX is what grew past the parent. */
+async function assertNoContainerSpill(locator: Locator, label: string): Promise<void> {
+  await expect(locator, `${label} not visible`).toBeVisible({ timeout: 20_000 });
+  await locator.scrollIntoViewIfNeeded();
+  const probe = await locator.evaluate((el) => {
+    const parent = el.parentElement;
+    if (parent === null) return null;
+    const r = el.getBoundingClientRect();
+    const pr = parent.getBoundingClientRect();
+    return {
+      spillRight: Math.round(r.right - pr.right),
+      spillLeft: Math.round(pr.left - r.left),
+      width: Math.round(r.width),
+      parentWidth: Math.round(pr.width),
+    };
+  });
+  expect(probe, `${label} has no parent element to measure against`).not.toBeNull();
+  expect(
+    probe!.spillRight,
+    `${label} spills ${probe!.spillRight}px past its container's RIGHT edge ` +
+      `(${probe!.width}px inside ${probe!.parentWidth}px) — it is being clipped, ` +
+      `and the page-level scroll gate cannot see it`,
+  ).toBeLessThanOrEqual(0);
+  expect(
+    probe!.spillLeft,
+    `${label} spills ${probe!.spillLeft}px past its container's LEFT edge`,
+  ).toBeLessThanOrEqual(0);
+}
+
+/** The three checks every racquet pad owes at every width, before any
+ *  sport-specific surface: the pad rendered at all (not just a 2xx shell),
+ *  both scoring halves clear the 44px floor, and the page does not scroll
+ *  sideways. */
+async function assertRacquetPadFloor(page: Page): Promise<void> {
+  const pad = page.getByTestId("score-pad");
+  await expect(pad).toBeVisible({ timeout: 20_000 });
+  await assertTouchFloor(padHalf(page, "home"), "home scoreboard half");
+  await assertTouchFloor(padHalf(page, "away"), "away scoreboard half");
+  await expectNoHorizontalScroll(page);
+}
+
+test("badminton v3 pad: both scoring halves and the Set-score tile hold the 44px floor, no horizontal scroll", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(90_000);
+  const fx = await seedRosteredFixture(request, {
+    label: `Mobile Badminton V3 ${TAG}-${projectTag()}`,
+    sportKey: "badminton",
+    // The variant is `bwf`, not "singles" — and a badminton division refuses
+    // `team` entrants, which is `seedRosteredFixture`'s default, so
+    // `entrantKind` is required rather than optional here.
+    variantKey: "bwf",
+    entrantKind: "individual",
+    // PERSON NAMES CARRY `projectTag()`, not just the fixture label — review
+    // finding 5's rule (this file's own header, line ~303), and the reason is
+    // structural rather than stylistic: `e2e.yml`'s `phones-large` leg runs
+    // `--project=mobile-14 --project=mobile-430` in ONE process, and `TAG` is
+    // per PROCESS. Two width projects therefore seed the SAME person name, and
+    // `seedRosteredFixture` get-or-creates a person by name — so the second
+    // fixture rosters the first one's person. The fixture label alone does not
+    // save it: the collision is on the PERSON row, not the fixture.
+    home: [{ fullName: `Mobile BD Home ${TAG}-${projectTag()}` }],
+    away: [{ fullName: `Mobile BD Away ${TAG}-${projectTag()}` }],
+    emitCoreStart: true,
+  });
+
+  await page.goto(await fixturePath(page.request, fx.fixtureId), { waitUntil: "load" });
+  await assertRacquetPadFloor(page);
+
+  // The Set-score tile is the band-0 action that survives at every fidelity
+  // band, so it is the one tile guaranteed present on a fresh live pad.
+  await assertTouchFloor(padTile(page, "setScore"), "Set-score tile");
+
+  // A real rally tap, then the context strip it brings on screen — the strip
+  // is a new v3 surface and only renders once the reader can name a server,
+  // which for badminton takes the SECOND rally (the first has no prior rally
+  // to derive the serve from). Two taps, spaced past the pipeline's 600ms
+  // double-submit guard, which compares the whole payload.
+  await padHalf(page, "home").click();
+  await page.waitForTimeout(750);
+  await padHalf(page, "home").click();
+  // The SERVER item specifically, never `.first()`. `buildStrip` pushes an
+  // unconditional "games" item ahead of everything else, so a `.first()` probe
+  // resolves whether or not a single rally was ever tapped — proven by
+  // commenting out both taps above and watching this test still pass. The
+  // server item is gated on the reader being able to NAME a server, which for
+  // badminton takes the second rally, so it fails if the taps stop landing.
+  const serverItem = page
+    .getByTestId("score-pad")
+    .locator('[data-role="v3-scorebug"] [data-strip-item-id="server"]');
+  await expect(serverItem, "two tapped rallies must bring the server onto the strip").toBeVisible({
+    timeout: 20_000,
+  });
+  await expectNoHorizontalScroll(page);
+});
+
+test("table tennis v3 pad: the serve-anchor tile and its sheet hold the 44px floor, no horizontal scroll", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(90_000);
+  const fx = await seedRosteredFixture(request, {
+    label: `Mobile TT V3 ${TAG}-${projectTag()}`,
+    sportKey: "tabletennis",
+    variantKey: "bo5",
+    entrantKind: "individual",
+    // `projectTag()` for the same reason the badminton test above states: the
+    // two projects that share a CI process are exactly the two that failed
+    // without it (mobile-14 and mobile-430).
+    home: [{ fullName: `Mobile TT Home ${TAG}-${projectTag()}` }],
+    away: [{ fullName: `Mobile TT Away ${TAG}-${projectTag()}` }],
+    emitCoreStart: true,
+  });
+
+  await page.goto(await fixturePath(page.request, fx.fixtureId), { waitUntil: "load" });
+  await assertRacquetPadFloor(page);
+  await assertTouchFloor(padTile(page, "setScore"), "Set-score tile");
+
+  // D-17's serve anchor: table tennis's `within: "fixed-turns"` NEVER
+  // self-heals, so the tile is on screen from the first paint of a fresh
+  // fixture and its two-step sheet is a brand-new surface at every width.
+  await assertTapFloor(padTile(page, "serveAnchor"), "serve-anchor tile");
+  await padTile(page, "serveAnchor").click();
+  const sheet = page.getByTestId("score-pad").locator('[data-role="v3-sheet"]');
+  await expect(sheet, "the anchor sheet must open").toBeVisible({ timeout: 20_000 });
+  await assertTouchFloor(sheet.locator('[data-choice-option-id="home"]'), "anchor sheet: home option");
+  await assertTouchFloor(sheet.locator('[data-choice-option-id="away"]'), "anchor sheet: away option");
+  await expectNoHorizontalScroll(page);
+});
+
+test("volleyball v3 pad: the anchor sheet and the libero Swap-sheet hold the 44px floor, no horizontal scroll", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(120_000);
+  // A full indoor starting six, S/OH/MB/OPP/OH/MB — FIVB's own catalog shape.
+  // Six a side is what makes volleyball the widest of the three scorebugs, so
+  // it is the one most likely to overflow a 320px viewport.
+  const court = ["S", "OH", "MB", "OPP", "OH", "MB"] as const;
+  // Six on court plus a BENCH libero. The seventh is not decoration: a libero
+  // exchange brings someone ON, so the player it names has to be off the
+  // court to start with — seeding all seven as starters made the exchange
+  // below 422 with the engine's own words, "P6 … is already on the field".
+  const roster = (label: string) => [
+    ...court.map((positionKey, i) => ({ fullName: `${label} P${i + 1} ${TAG}`, positionKey })),
+    // `roles: ["libero"]` is the tile's own gate, not decoration: the skin
+    // shows the Swap tile only for a side whose squad NAMES a libero
+    // (`sideHasLibero` → `hasLiberoRole`), and a bare position_key of "L"
+    // does not set that role.
+    { fullName: `${label} P7 ${TAG}`, positionKey: "L", slot: "bench" as const, roles: ["libero"] as const },
+  ];
+  const fx = await seedRosteredFixture(request, {
+    label: `Mobile VB V3 ${TAG}-${projectTag()}`,
+    sportKey: "volleyball",
+    variantKey: "indoor",
+    home: roster(`Mobile VB Home ${TAG}-${projectTag()}`),
+    away: roster(`Mobile VB Away ${TAG}-${projectTag()}`),
+    emitCoreStart: true,
+  });
+
+  await page.goto(await fixturePath(page.request, fx.fixtureId), { waitUntil: "load" });
+  await assertRacquetPadFloor(page);
+
+  await assertTapFloor(padTile(page, "serveAnchor"), "serve-anchor tile");
+  await padTile(page, "serveAnchor").click();
+  const sheet = page.getByTestId("score-pad").locator('[data-role="v3-sheet"]');
+  await expect(sheet, "the anchor sheet must open").toBeVisible({ timeout: 20_000 });
+  await assertTouchFloor(sheet.locator('[data-choice-option-id="away"]'), "anchor sheet: away option");
+  await expectNoHorizontalScroll(page);
+  await sheet.locator('[data-choice-option-id="away"]').click();
+  await page.waitForTimeout(400);
+  await sheet.locator('[data-choice-option-id="home"]').click();
+  await expect(sheet, "the anchor sheet closes once both steps are answered").toHaveCount(0, {
+    timeout: 20_000,
+  });
+  await expectNoHorizontalScroll(page);
+
+  // The libero Swap-sheet (`[data-role="v3-swap"]`) is the one surface
+  // NEITHER sibling has at all, and its candidate rows are the densest thing
+  // any of these three pads renders — twelve names in one scrolling list, at
+  // 320px. The tile only appears once a side has ACTUALLY used a libero, so
+  // the first exchange is established directly; the SHEET is what this test
+  // is measuring, not the act of bringing the libero on.
+  const middleBlocker = `Mobile VB Home ${TAG}-${projectTag()} P3 ${TAG}`;
+  const libero = `Mobile VB Home ${TAG}-${projectTag()} P7 ${TAG}`;
+  const state = await apiJson<{ last_seq: number }>(
+    page.request,
+    `/api/v1/fixtures/${fx.fixtureId}/state`,
+  );
+  expect(state.status, "state read before the libero exchange").toBe(200);
+  const posted = await apiJson(
+    page.request,
+    `/api/v1/fixtures/${fx.fixtureId}/events`,
+    "POST",
+    {
+      expected_seq: state.data!.last_seq,
+      type: "core.lineup.replacement",
+      payload: {
+        side: fx.homeEntrantId,
+        off: fx.personIds[middleBlocker]!,
+        on: {
+          personId: fx.personIds[libero]!,
+          positionKey: "MB",
+          slot: "starting",
+          orderNo: 7,
+          roles: ["libero"],
+        },
+        exemption: "libero",
+      },
+    },
+  );
+  expect(posted.status, `libero exchange POST: ${JSON.stringify(posted.error)}`).toBeLessThan(300);
+
+  await page.reload({ waitUntil: "load" });
+  await expect(page.getByTestId("score-pad")).toBeVisible({ timeout: 20_000 });
+  await assertTapFloor(padTile(page, "libero-home"), "libero tile");
+  await padTile(page, "libero-home").click();
+  const swap = page.getByTestId("score-pad").locator('[data-role="v3-swap"]');
+  await expect(swap, "the libero Swap-sheet must open").toBeVisible({ timeout: 20_000 });
+  await assertTouchFloor(
+    swap.locator(`[data-candidate-id="${fx.personIds[libero]!}"]`),
+    "swap sheet: the libero's own candidate row",
+  );
+  await expectNoHorizontalScroll(page);
+
+  // Step 2 of the sheet — the half NO earlier gate reached. Answering "who
+  // comes off" replaces that step with a chip naming the player chosen, and
+  // the chip is the ONLY place a referee re-reads who is leaving the court
+  // before committing the exchange. Its content is a PERSON NAME, so it is
+  // the one control on this sheet whose width is unbounded by the dictionary
+  // — which is exactly why it is the one that spilled its card and got
+  // clipped. Assert it against its container, not the page: see
+  // `assertNoContainerSpill`.
+  await swap.locator("[data-candidate-id]").first().click();
+  // Strict-unique on purpose: the chip carries the ONLY `aria-label` in
+  // swap-sheet.tsx, so a second labelled button appearing here should fail
+  // this locator loudly rather than be silently skipped by a `.first()`.
+  const offChip = swap.locator("button[aria-label]");
+  await assertNoContainerSpill(offChip, "swap sheet: the who-came-off chip");
+  await assertTapFloor(offChip, "swap sheet: the who-came-off chip");
+  await expectNoHorizontalScroll(page);
+});

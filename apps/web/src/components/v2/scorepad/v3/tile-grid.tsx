@@ -130,11 +130,22 @@ export function assertDisabledTilesExplained(
 
 /** Visual weight by kind — the hierarchy contract itself, table-driven so
  *  no per-tile special case can drift from it. */
+// R5 — `minor` is 44, not 40. It was 40 painted plus a `::before` bleed of
+// 2px top and bottom, on the reasoning that a pseudo-element expands the HIT
+// area without growing the visible box. MEASURED in a real browser against a
+// real pad (table tennis's serve-anchor tile, mobile-430): a click dispatched
+// 1px above the tile lands on the GRID CONTAINER and the tile's sheet does not
+// open — `document.elementFromPoint` there returns the grid, never the button.
+// The bleed never worked, so every `minor` tile across every v3 skin has been
+// a 40px touch target, under the 44px floor this repo holds itself to. The
+// technique's own comment also warned that any ancestor with `overflow:
+// hidden` would clip it back, undetectably — two ways to be wrong for one
+// technique that was buying 4px. Paint the real height instead.
 const KIND_MIN_HEIGHT: Record<TileKind, number> = {
   primary: 52,
   standard: 52,
   destructive: 52,
-  minor: 40,
+  minor: 44,
 };
 
 /** Column span -> literal Tailwind class. A template-interpolated
@@ -249,35 +260,7 @@ function Tile({
       disabled={isDisabled}
       onClick={handleClick}
       style={{ minHeight }}
-      className={`relative min-w-0 flex flex-col items-center justify-center gap-0.5 rounded-xl px-2 py-1.5 text-center transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${spanClass} ${KIND_CLASS[tile.kind]} ${
-        tile.kind === "minor"
-          ? // The 40px minor tile is visually smaller than the 44px touch
-            // floor every other tile meets by height alone. Rather than
-            // grow the visible box (and blow the deliberately-smaller
-            // "quietest tile" size), a `::before` pseudo-element expands
-            // the HIT area only: absolutely positioned, 2px negative
-            // inset top and bottom (40 + 2 + 2 = 44px), zero visual paint
-            // (no `content` other than Tailwind's default empty string —
-            // the SAME after:absolute after:inset-0 idiom
-            // ui/entity-card.tsx already uses in this repo to stretch a
-            // hit area, applied here to add 2px top/bottom instead of
-            // covering the whole card). A pseudo-element is generated
-            // content of its host <button>, not a separate hit-test
-            // target or DOM node, so a click landing in that 2px margin
-            // still fires this button's own onClick — no extra element,
-            // no aria workaround needed.
-            //
-            // CAVEAT (review finding 2, fix round 1): this bleed is
-            // escapable. Any ancestor sized flush to this tile with
-            // `overflow: hidden`/`clip` (a scroll sheet, a tightly
-            // clipped card) silently clips the pseudo-element back to a
-            // real 40px hit area with no warning anywhere at runtime. A
-            // future integrator wiring this grid into such a container
-            // must either keep clearance around minor tiles or stop
-            // relying on this technique for the 44px floor.
-            "before:absolute before:inset-x-0 before:-inset-y-0.5"
-          : ""
-      }`}
+      className={`relative min-w-0 flex flex-col items-center justify-center gap-0.5 rounded-xl px-2 py-1.5 text-center transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${spanClass} ${KIND_CLASS[tile.kind]}`}
     >
       <span className={`break-words ${tile.kind === "minor" ? "text-xs" : "text-sm"}`}>
         {tile.labelText ?? t(tile.label)}

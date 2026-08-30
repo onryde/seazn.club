@@ -736,6 +736,68 @@ describe("the tones are NON-TEXT colours, and this is where that stops being a c
     expect(contrastRatio(tennis["board-2"], tennis.ink)).toBeGreaterThanOrEqual(4.5);
   });
 
+  // R5/racquet family (owner ruling R5-3, 2026-08-27) — badminton, table
+  // tennis and volleyball, all three pinned HERE and all three pinned NOW,
+  // one wave before two of the three skins exist.
+  //
+  // WHY ALL THREE AT ONCE, AND WHY EXPLICITLY. The licence scan below is
+  // USAGE-driven: it can only hold a tone to the text floor once it finds a
+  // skin actually rendering text in that tone, so it says exactly nothing
+  // about a palette that lands ahead of its skin. R4 established this by
+  // mutation and it is the reason tennis's own block above exists; the same
+  // arithmetic applies with two sports' worth of extra exposure here, because
+  // R5 converts badminton ONLY. Leave table tennis and volleyball to their own
+  // waves and their hexes sit in `SPORT_PALETTES` completely unmeasured until
+  // then — reverting either to an unreadable value would red nothing at all.
+  //
+  // WHY THE FULL 4.5 FOR BOTH TONES, on all three. Football's swatch licence
+  // (the block above) is football-shaped: a card IS a graphic, so a tone that
+  // misses the text floor is correct there. All three of these sports WORD
+  // their sanctions instead — the set-based kernel's ladder is an enum of four
+  // levels rendered as choice-row LABELS (`sanctionAction`'s `{kind: "enum",
+  // path: "level"}`, setbased/kernel.ts), never a colour swatch — so every one
+  // of these tones lands on text and owes the strict floor.
+  //
+  // Each `led` is spent on the SERVE and nothing else (see `SPORT_PALETTES`'s
+  // own per-sport notes), which is a text-adjacent mark at minimum, so it
+  // holds the same floor rather than the score digits' large-text 3.0.
+  it.each([
+    ["badminton", "the maple sports-hall floor with the BWF mat's teal"],
+    ["tabletennis", "the two-colour bat: graphite ground, ITTF-blue band, the orange ball as the signal"],
+    ["volleyball", "arena slate with the playing court's azure"],
+  ])("%s's tones are TEXT, not swatches, so both clear the 4.5 floor on its own board — %s", (key) => {
+    const palette = resolveSportPalette(key);
+    for (const tone of ["caution", "dismissal"] as const) {
+      const ratio = contrastRatio(palette.board, palette[tone]);
+      expect(ratio, `${key} --sport-${tone} is ${ratio.toFixed(2)}:1 on its own board`).toBeGreaterThanOrEqual(4.5);
+    }
+    // The sanction sheet is not the only place a level is worded: the ribbon
+    // and the activity panel restate it on the BAND, so both grounds are owed.
+    for (const tone of ["caution", "dismissal"] as const) {
+      const ratio = contrastRatio(palette["board-2"], palette[tone]);
+      expect(ratio, `${key} --sport-${tone} is ${ratio.toFixed(2)}:1 on its own band`).toBeGreaterThanOrEqual(4.5);
+    }
+    const led = contrastRatio(palette.board, palette.led);
+    expect(led, `${key} --sport-led is ${led.toFixed(2)}:1 on its own board`).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(palette["board-2"], palette.led)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(palette.board, palette.ink)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(palette["board-2"], palette.ink)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  // The other half of "pinned now, not when the skin lands": the three keys
+  // must actually BE in `SPORT_PALETTES`. Without this, deleting badminton's
+  // entry outright would silently route the block above through
+  // `resolveSportPalette`'s documented full-default fallback — a complete,
+  // readable palette — and every assertion in it would keep passing while the
+  // sport rendered in cricket's colours.
+  it.each(["badminton", "tabletennis", "volleyball"])(
+    "%s declares its OWN palette entry, so the pins above are measuring it and not the default fallback",
+    (key) => {
+      expect(Object.keys(SPORT_PALETTES)).toContain(key);
+      expect(resolveSportPalette(key).board).not.toBe(DEFAULT_SPORT_PALETTE.board);
+    },
+  );
+
   // R3 review round — THIS LICENCE HAD ALMOST NO TEETH. It grepped globals.css
   // for the literal `color: var(--sport-<tone>)` and therefore missed the
   // unspaced form, any wrapper (`color-mix(...)`), an arbitrary Tailwind value

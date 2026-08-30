@@ -108,6 +108,25 @@ export interface ScorebugHalf {
   hintKey?: string;
   tappable?: boolean;             // MODEL-S halves only
   tapEvent?: TapEvent;            // REQUIRED iff tappable
+  /**
+   * R5 — open this SHEET instead of posting `tapEvent`, for the one case
+   * where scoring silently would destroy information the pad can never
+   * recover (volleyball's set opener, FIVB 7.6.2).
+   *
+   * A tap on a model-S half normally IS the score, and that immediacy is the
+   * whole point of the model — so this exists for a single, narrow shape:
+   * the question must be unanswerable later, and the sheet must ask it once
+   * and then get out of the way. Volleyball's case is exactly that. Under
+   * side-out the next server is simply the last rally's winner, so once ONE
+   * point is scored, who opened the set is gone for good and the rotation
+   * number with it. Before that first point the scorer knows the answer and
+   * nobody has asked them for it.
+   *
+   * `tapEvent` stays REQUIRED alongside it (`assertScorebugSpec`), because
+   * the sheet's whole job is to build that same event with one more fact
+   * attached — the half still knows which side won.
+   */
+  tapSheet?: string;
 }
 export interface ScorebugSpec {
   context: string;                // "T20 · Over 0.5 · RR 14.4" (already localised)
@@ -381,6 +400,26 @@ export interface ContextSlot {
    */
   message?: string;
   /**
+   * R5 — WHAT KIND of message this is, because the chassis had exactly one
+   * answer and it was the wrong one for the second caller.
+   *
+   * `message` shipped hard-coded `text-red-600` (context-strip.tsx), which is
+   * right for its first and only case: cricket's "the resolved bowler is
+   * ineligible" is a fault, it blocks every run tile, and red is the register
+   * a scorer should read it in. Badminton's own message is not a fault at all
+   * — "rally-by-rally scoring needs Pro" is a TIER, the pad is working exactly
+   * as configured, and putting it in the same red as a rejected submission
+   * teaches a scorer that red on this pad means nothing in particular. The
+   * recording chip already words a plan lock a few pixels away, in amber; this
+   * makes the two agree instead of arguing.
+   *
+   * DEFAULTS TO `"alert"`, so every pre-existing slot — cricket's bowler, and
+   * every future one that says nothing — renders byte-identically to before.
+   * A skin opts into `"info"` deliberately, the same additive posture
+   * `readOnly`/`candidates`/`blocked` above already take.
+   */
+  messageTone?: "alert" | "info";
+  /**
    * R2c — SCOPE. When present, SUPERSEDES `pool` entirely: the identical
    * contract, wording and semantics `SheetPersonStep.candidates` (G6) already
    * ships, extended to the strip, and honoured by the same
@@ -644,6 +683,37 @@ export const MORE_SHEET_KEY = "__pad-host/more__";
  * own render, not tsc at the skin's call site). Flagged here deliberately,
  * not silently accepted as equivalent.
  */
+/**
+ * Optional per-candidate decoration for a picker row (R5, owner ruling
+ * 2026-08-30). A LOOKUP, not a list: keyed by person id, so one table serves
+ * both steps of a swap sheet without either step needing to know how the
+ * other resolved its pool.
+ *
+ * Exists because a picker of six teammates is six visually identical rows —
+ * wrapping names and nothing else — and the person tapping it between rallies
+ * scans by POSITION, not by name. The information was always in the fold
+ * (`SquadMember.positionKey`, `.roles`); the row simply threw it away.
+ *
+ * Both fields are optional and both default to rendering NOTHING, so every
+ * caller that supplies no meta keeps its exact current row. That default is
+ * load-bearing: `renderCandidateRow` is chassis shared by cricket's bowler
+ * picker, football's subs and every context strip in the app.
+ */
+export interface CandidateMeta {
+  /** Short leading badge — a position CODE ("S", "OH", "MB", "OPP"), not a
+   *  translated word. Deliberately untranslated: these codes are volleyball's
+   *  own vernacular, identical across the four locales this app ships, and
+   *  short enough to hold 320px beside a two-line name. A sport whose
+   *  positions are NOT code-like should pass a translated string here
+   *  instead — this field is prose to the renderer either way. */
+  readonly lead?: string;
+  /** Trailing tag, ALREADY TRANSLATED by the skin ("Libero"). Marks a role
+   *  the position code cannot express: a libero on court holds whichever
+   *  position they replaced, so `lead` reads "MB" and only this says which
+   *  player is the one the sheet is actually about. */
+  readonly tag?: string;
+}
+
 export interface SwapSlot {
   /**
    * R3 chassis sub-wave (owner ruling 2026-08-24, defect 1). Stable, skin-
@@ -686,6 +756,9 @@ export interface SwapSlot {
    * dispatch, but only after the taps have already been spent.
    */
   eventType: string;
+  /** Per-candidate row decoration for BOTH steps — see `CandidateMeta`.
+   *  Absent keeps every row exactly as it renders without it. */
+  candidateMeta?: Readonly<Record<string, CandidateMeta>>;
   /** The module's own `lineupPolicy(cfg)` verdict for whether a
    *  substitution is currently legal for this side at all (design §2.7) —
    *  `reduceLineupEvent`'s `{ok}`, computed by the skin from its own folded

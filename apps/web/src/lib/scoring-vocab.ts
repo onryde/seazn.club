@@ -678,6 +678,39 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   "pad.badminton.panel.setScore",
   "pad.badminton.panel.subs",
   "pad.badminton.panel.timeouts",
+  // R5 — the v3 badminton skin's own ribbon copy. Registered HERE, not only in
+  // the four dictionaries: `ribbon.ts`'s `buildRibbon` gates its per-sport
+  // lookup on PAD_LABEL_KEYS MEMBERSHIP before calling `padLabel`, so
+  // dictionary copy with no entry in this list stays silently on the generic
+  // `pad.ribbon.fallback` ("{event} recorded") forever, with nothing failing.
+  // One key per event type this skin's own halves/tiles/sheets dispatch
+  // directly. `sub`/`expedite.start` stay on the fallback: BWF Law 16 has no
+  // substitution at all, so no config can turn one on.
+  //
+  // `timeout` is REGISTERED, and the reasoning that once grouped it with those
+  // two was wrong (review of PR #678). `records.timeouts` is a plain
+  // `z.boolean()` on the shared set-based schema (`kernel.ts`), so a division
+  // config can set it even though every DECLARED badminton variant leaves it
+  // false — and the skin's own guard only refuses the type when the flag is
+  // off. With the flag on, the tile appears, the fold accepts, and the ribbon
+  // fell through to `pad.ribbon.fallback`, printing "badminton.timeout
+  // recorded" at a scoring desk. That is the exact defect volleyball's own
+  // `sub` block was fixed for a few blocks down; "unreachable" is a claim
+  // about config, and config is the thing that varies.
+  "pad.badminton.ribbon.game.summary",
+  "pad.badminton.ribbon.rally",
+  "pad.badminton.ribbon.sanction",
+  "pad.badminton.ribbon.timeout",
+  // R5 — tap model S's own hint. `ScorebugHalf.hintKey` resolves through the
+  // SAME `padLabel()` gate (scorebug.tsx) as the ribbon copy above, so an
+  // unregistered key prints its own raw dotted name as the visible hint text
+  // on the board — which is exactly what a 320px screenshot of this wave
+  // caught, one line below the score, with every unit test green. Tennis's own
+  // entry a few blocks down carries the identical warning; this wave paid the
+  // price of not reading it, so `skins/__tests__/badminton.test.ts` now asserts
+  // MEMBERSHIP (not merely dictionary presence) for every hintKey the skin
+  // emits, which is the gate that would have caught it.
+  "pad.badminton.scorebug.rally.hint",
 
   "pad.boardgame.action.draw",
   "pad.boardgame.action.pairing",
@@ -850,6 +883,29 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   "pad.tabletennis.panel.setScore",
   "pad.tabletennis.panel.subs",
   "pad.tabletennis.panel.timeouts",
+  // R5/C2 — the v3 table tennis skin's own ribbon copy. Registered HERE, not
+  // only in the four dictionaries: `ribbon.ts`'s `buildRibbon` gates its
+  // per-sport lookup on PAD_LABEL_KEYS MEMBERSHIP before calling `padLabel`,
+  // so dictionary copy with no entry in this list stays silently on the
+  // generic `pad.ribbon.fallback` ("{event} recorded") forever, with nothing
+  // failing. FIVE of the six kernel-union types — unlike badminton (which
+  // records only three of its own six), this skin dedicates a real tile to
+  // timeout and expedite.start too, so their own ribbon copy is reachable;
+  // `sub` alone stays on the fallback (`records.substitutions` is false for
+  // every shipped table tennis config, and no tile for it exists at all).
+  "pad.tabletennis.ribbon.game.summary",
+  "pad.tabletennis.ribbon.rally",
+  "pad.tabletennis.ribbon.sanction",
+  "pad.tabletennis.ribbon.timeout",
+  "pad.tabletennis.ribbon.expedite.start",
+  // R5/C2 — tap model S's own hint, the identical
+  // `padLabel()`/PAD_LABEL_KEYS gate `ScorebugHalf.hintKey` resolves through
+  // (scorebug.tsx). Badminton's own entry a few blocks up carries the
+  // incident this guards: a hint key present in all four dictionaries but
+  // absent from this list still prints its own raw dotted name on the board,
+  // caught only by a 320px screenshot, not by any unit test that asserts the
+  // KEY rather than membership.
+  "pad.tabletennis.scorebug.rally.hint",
 
   "pad.tennis.action.gameAward",
   "pad.tennis.action.interruption",
@@ -897,6 +953,40 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   "pad.volleyball.panel.setScore",
   "pad.volleyball.panel.subs",
   "pad.volleyball.panel.timeouts",
+  // R5/C3 — the v3 volleyball skin's own ribbon copy. Registered HERE, not
+  // only in the four dictionaries: `ribbon.ts`'s `buildRibbon` gates its
+  // per-sport lookup on PAD_LABEL_KEYS MEMBERSHIP before calling `padLabel`,
+  // so dictionary copy with no entry in this list stays silently on the
+  // generic `pad.ribbon.fallback` ("{event} recorded") forever, with nothing
+  // failing. FOUR of the six kernel-union types get a dedicated tile (set
+  // summary, rally, sanction, timeout); `expedite.start` never reaches this
+  // pad at all (FIVB has no ITTF-style system).
+  //
+  // `sub` was left "on the fallback" here on the reasoning that it has no
+  // dedicated tile — and that reasoning was WRONG, because the ribbon is fed
+  // by the EVENT, not by the tile that raised it. Reachable through the
+  // generic More sheet is still reachable: every substitution rendered
+  // `pad.ribbon.fallback` with the raw wire type in it, so a scorer read
+  // "volleyball.sub recorded" — in all four locales — up to six times a set
+  // per side, which is the single most repeated row this panel can show.
+  // Registered now; copy added to all four dictionaries with it.
+  "pad.volleyball.ribbon.set.summary",
+  "pad.volleyball.ribbon.rally",
+  "pad.volleyball.ribbon.sanction",
+  "pad.volleyball.ribbon.timeout",
+  "pad.volleyball.ribbon.sub",
+  // The pair line ("{on} for {off}") the Activity row hangs off — NOT a
+  // ribbon base label, so `buildRibbon` never looks it up; `volleyballDetail`
+  // resolves it directly. Registered anyway because `padLabel` membership is
+  // what makes a key legible to the vocab gate, and an unregistered key here
+  // is how the libero row would print its own dotted name.
+  "pad.volleyball.ribbon.sub.pair",
+  // R5/C3 — tap model S's own hint. `ScorebugHalf.hintKey` resolves through
+  // the SAME `padLabel()` gate (scorebug.tsx) as the ribbon copy above, so an
+  // unregistered key prints its own raw dotted name as the visible hint text
+  // on the board — the exact defect a 320px screenshot caught on badminton's
+  // own entry above, paid for once already this wave and not repeated here.
+  "pad.volleyball.scorebug.rally.hint",
 ];
 
 const PAD_LABEL_SET: ReadonlySet<string> = new Set<string>(PAD_LABEL_KEYS);

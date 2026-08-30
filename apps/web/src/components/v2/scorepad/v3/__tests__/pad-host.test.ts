@@ -467,6 +467,26 @@ describe("adaptSwapSlot", () => {
     expect(adapted.policyVerdict).toEqual({ ok: true });
   });
 
+  it("carries candidateMeta through VERBATIM — this adapter copies by hand, so an unlisted field is dead on the production path", () => {
+    const s = squads();
+    const meta = { h1: { lead: "MB", tag: "Libero" }, h2: { lead: "S" } };
+    const slot: SwapSlot = {
+      id: "liberoHome",
+      offLabel: "pad.volleyball.sheet.libero.off.title",
+      onLabel: "pad.volleyball.sheet.libero.on.title",
+      side: "home",
+      eventType: "core.lineup.replacement",
+      policyOk: true,
+      candidateMeta: meta,
+      buildEvent: () => ({ type: "core.lineup.replacement", payload: {} }),
+    };
+    // The failure this guards is silent by construction: both `SwapSlot` and
+    // `SwapSheetSpec` can declare the field, both ends' own unit tests can be
+    // green, and the sheet still renders undecorated rows because the hand
+    // copy in the middle never learned about it.
+    expect(adaptSwapSlot(slot, s).spec.candidateMeta).toEqual(meta);
+  });
+
   it("carries a refusal's sport-worded message through, never a bare boolean", () => {
     const s = squads();
     const slot = {

@@ -112,6 +112,26 @@ export interface SquadState {
 export interface LineupExemption {
   /** Absent = uncapped. `{max: 1}` is cricket's one concussion replacement. */
   readonly max?: number;
+  /**
+   * The squad role one of the two players MUST carry for this exemption to
+   * apply (FIVB 19.3.2.1: `{ libero: { requiresRole: "libero" } }`). Absent
+   * keeps the exemption open to any pair — cricket's `concussion` is the
+   * shape that needs that, since neither the concussed player nor their
+   * replacement carries a "concussion" role.
+   *
+   * EITHER side satisfies it, deliberately. A libero replacement runs in two
+   * directions and both are 19.3.2.1 exchanges: the libero coming ON for a
+   * back-row player, and that player coming back ON for the libero. Requiring
+   * the role of the incoming player alone would exempt the first and refuse
+   * the second.
+   *
+   * Why this exists: the exemption channel skips the re-entry COUNT refusals,
+   * so without a bound an ordinary substitute could be cycled through it
+   * indefinitely and FIVB 15.6's "once, and only once" would mean nothing —
+   * a pad has only to stamp the key. Found by review on PR #678, after the
+   * bypass shipped without it.
+   */
+  readonly requiresRole?: string;
 }
 
 export interface LineupPolicy {
@@ -280,6 +300,7 @@ export type LineupRejectionReason =
   | "reentry-position"
   | "sub-cap-reached"
   | "exemption-not-declared"
+  | "exemption-role-absent"
   | "exemption-cap-reached";
 
 /** The shape the reducer reads — structurally satisfied by an EventEnvelope,
@@ -426,8 +447,27 @@ function takeOff(members: Members, personId: string): Members | Refusal {
   return members.map((m, j) => (j === i ? next : m));
 }
 
-/** Put a person on the field — the only place ruling 1 and ruling 2 bite. */
-function bringOn(members: Members, slot: LineupSlot, policy: LineupPolicy): Members | Refusal {
+/**
+ * Put a person on the field — the only place ruling 1 and ruling 2 bite.
+ *
+ * `exemptReplacement` is true ONLY for the `on` half of a
+ * `core.lineup.replacement` that named a declared exemption (FIVB 19.3.2.1's
+ * libero, cricket/football's concussion swap). `reentry` bounds the ordinary
+ * SUBSTITUTION allowance (FIVB 15.6); a replacement carrying an exemption is
+ * by definition not a substitution, so the two COUNT refusals below
+ * (`reentry-forbidden`, `reentry-limit`) do not apply to it — each exemption
+ * is bounded instead by its own `LineupPolicy.exemptions[key].max`, already
+ * enforced by the caller before this function runs. `reentryPositionLock` is
+ * NOT part of that allowance — FIVB 15.6's lock applies to a libero exactly
+ * as it does to an ordinary substitute — so it stays live regardless of this
+ * flag.
+ */
+function bringOn(
+  members: Members,
+  slot: LineupSlot,
+  policy: LineupPolicy,
+  exemptReplacement = false,
+): Members | Refusal {
   const i = members.findIndex((m) => m.personId === slot.personId);
   const current = members[i];
 
@@ -460,17 +500,22 @@ function bringOn(members: Members, slot: LineupSlot, policy: LineupPolicy): Memb
   // starting bench player coming on for the first time, a person just added) is
   // not re-entering and must not be measured against this knob.
   if (current.timesOff > 0) {
-    if (policy.reentry === "none") {
-      return {
-        reason: "reentry-forbidden",
-        message: `"${slot.personId}" has left the field and this variant does not permit a return`,
-      };
-    }
-    if (policy.reentry === "once" && current.timesOn >= 1) {
-      return {
-        reason: "reentry-limit",
-        message: `"${slot.personId}" has already returned once and this variant permits no more`,
-      };
+    // The two COUNT refusals ARE the substitution allowance (FIVB 15.6) and
+    // do not bind an exempt replacement (19.3.2.1) — see the doc comment
+    // above. The position lock a few lines down is NOT skipped.
+    if (!exemptReplacement) {
+      if (policy.reentry === "none") {
+        return {
+          reason: "reentry-forbidden",
+          message: `"${slot.personId}" has left the field and this variant does not permit a return`,
+        };
+      }
+      if (policy.reentry === "once" && current.timesOn >= 1) {
+        return {
+          reason: "reentry-limit",
+          message: `"${slot.personId}" has already returned once and this variant permits no more`,
+        };
+      }
     }
     if (
       policy.reentryPositionLock &&
@@ -489,6 +534,18 @@ function bringOn(members: Members, slot: LineupSlot, policy: LineupPolicy): Memb
     onField: true,
     ...(current.timesOff > 0 ? { timesOn: current.timesOn + 1 } : {}),
     ...(slot.positionKey === undefined ? {} : { positionKey: slot.positionKey }),
+    // ROLES are recorded here for the same reason `positionKey` is, and by
+    // the same rule as `memberFromSlot`: the event states a fact about this
+    // person, and dropping it loses information the fold cannot recover.
+    //
+    // It became load-bearing with `LineupExemption.requiresRole`. A libero
+    // whose role is declared on the replacement that brings them ON — rather
+    // than on the team sheet — never carried it on the member, so the RETURN
+    // leg of that same exchange found no libero on either side and was
+    // refused `exemption-role-absent`. Half of normal play, broken by a
+    // silent omission. Absent `roles` still changes nothing, so a member's
+    // existing roles survive an event that does not mention them.
+    ...(slot.roles === undefined ? {} : { roles: [...slot.roles] }),
   };
   return members.map((m, j) => (j === i ? next : m));
 }
@@ -564,6 +621,32 @@ export function reduceLineupEvent(
           `this side has used all ${declared.max} "${exemption}" replacements`,
         );
       }
+      // The exemption must be EARNED, not merely claimed. Without this a pad
+      // stamps the key on any pair and the channel launders an ordinary
+      // substitution past FIVB 15.6's re-entry cap — the exemption skips the
+      // COUNT refusals, so an unbounded key makes "once, and only once" mean
+      // nothing at all. (Review, PR #678: reproduced against this engine —
+      // an ordinary player who had already used their one return was accepted
+      // for a second through `exemption: "libero"`.)
+      //
+      // EITHER player satisfies it: a libero replacement runs both ways, and
+      // the return leg brings an ORDINARY player on for the libero.
+      if (declared.requiresRole !== undefined) {
+        const replacement = payload as z.infer<typeof LineupReplacement>;
+        const offRoles = side.members.find((m) => m.personId === replacement.off)?.roles ?? [];
+        const onExisting = side.members.find((m) => m.personId === replacement.on.personId)?.roles ?? [];
+        const onDeclared = replacement.on.roles ?? [];
+        const carried =
+          offRoles.includes(declared.requiresRole) ||
+          onExisting.includes(declared.requiresRole) ||
+          onDeclared.includes(declared.requiresRole);
+        if (!carried) {
+          return refuse(
+            "exemption-role-absent",
+            `a "${exemption}" replacement needs one of the two players to be ${declared.requiresRole}`,
+          );
+        }
+      }
     }
     exemptUsed = { ...exemptUsed, [exemption]: (exemptUsed[exemption] ?? 0) + 1 };
   }
@@ -582,7 +665,9 @@ export function reduceLineupEvent(
     >;
     const afterOff = takeOff(members, swap.off);
     if (isRefusal(afterOff)) return refuse(afterOff.reason, afterOff.message);
-    const afterOn = bringOn(afterOff, swap.on, policy);
+    // Exempt ONLY for a replacement — see `bringOn`'s doc comment. An
+    // ordinary substitution still measures fully against `policy.reentry`.
+    const afterOn = bringOn(afterOff, swap.on, policy, event.type === "core.lineup.replacement");
     if (isRefusal(afterOn)) return refuse(afterOn.reason, afterOn.message);
     members = afterOn;
   } else if (event.type === "core.lineup.entry") {

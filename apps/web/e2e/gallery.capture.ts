@@ -163,6 +163,12 @@ const EXTRA_STATES = [
   "12-superover-decided",
   "11-shootout",
   "12-shootout-decided",
+  // R5 (2026-08-27) — the racquet family (badminton / table tennis /
+  // volleyball, one shared component: racquet-skin.tsx), captured BEFORE the
+  // conversion on purpose. See the block comment above `SPORTS` for the three
+  // defects each one photographs and which assertion the conversion FLIPS.
+  "11-servingplaceholder",
+  "12-bandlimited",
 ] as const;
 type ExtraGalleryState = (typeof EXTRA_STATES)[number];
 
@@ -229,8 +235,41 @@ async function mergeDivisionConfig(
   await setDivisionConfigSql(divisionId, { ...div.data.config, ...patch });
 }
 
-function tennisHalf(page: Page, side: "home" | "away") {
+/**
+ * One TAPPABLE v3 scoreboard half. Scoped to `button` deliberately: a half
+ * renders EITHER a `<button>` (tappable — live, at the action's band) OR a
+ * plain `<div>` at the same grid position, so a wildcard locator happily
+ * resolves the still-present pre-fold `<div>`, clicks it, and dispatches
+ * nothing. Narrowing to `button` restores Playwright's own auto-wait as the
+ * race fix (scorepad-v3-tennis.spec.ts's own `tennisHalf` carries the full
+ * reasoning).
+ *
+ * R5 — generalised out of `tennisHalf` below, unchanged in behaviour: tap
+ * model S is no longer tennis-only now that badminton has converted, and
+ * two copies of this locator would be two things to keep in step.
+ */
+function v3Half(page: Page, side: "home" | "away") {
   return pad(page).locator('[data-role="v3-scorebug"] .grid > button').nth(side === "home" ? 0 : 1);
+}
+
+/**
+ * One v3 half's SCORE readout specifically, as opposed to the half's whole
+ * text. `ScorebugHalf.big` carries no data attribute of its own, so it is
+ * addressed by the two classes only it wears — `app-display` plus `font-bold`
+ * (the optional `sub` figure beside it is `font-semibold`, scorebug.tsx).
+ * Needed rather than a `toContainText` on the half, because these scores are
+ * bare small integers and every fixture label in this harness ends in a
+ * numeric TAG: `toContainText("2")` would match the player's own name.
+ */
+function v3HalfScore(page: Page, side: "home" | "away") {
+  return pad(page)
+    .locator('[data-role="v3-scorebug"] .grid > *')
+    .nth(side === "home" ? 0 : 1)
+    .locator(".app-display.font-bold");
+}
+
+function tennisHalf(page: Page, side: "home" | "away") {
+  return v3Half(page, side);
 }
 
 /**
@@ -501,6 +540,421 @@ interface GallerySport {
     tag: string,
     measurements: Measurement320[],
   ) => Promise<ExtraGalleryState[]>;
+}
+
+// ---------------------------------------------------------------------------
+// R5 (2026-08-27) — the racquet family's BEFORE captures.
+//
+// Badminton, table tennis and volleyball share ONE component today
+// (`racquetSkin.sports = ["volleyball","badminton","tabletennis"]`,
+// v2/scorepad/skins/racquet-skin.tsx). These states are captured BEFORE R5
+// converts them, deliberately: R3.5's reusable lesson is that the gallery is
+// blind by omission of a STATE, not of a sport — R2 and R3 both signed off
+// legitimately against a harness that could not render the screen carrying
+// the defect — and R2c's standing instruction for R3-R7 is to ask, before
+// publishing a sign-off sheet, which of the wave's changes is visible in the
+// five shared states. None of these three is.
+//
+// Three defects, and each probe below is written so the conversion INVERTS
+// its expectation rather than deleting it (R3.5: "deleting it stops the
+// capture failing and does nothing to stop the defect returning"). Each one
+// names its own flipping assertion inline.
+//
+//  * D-17 — WHO IS SERVING IS A PLACEHOLDER. racquet-skin.tsx's header
+//    declares its `serving` field a deliberate placeholder ("—") because the
+//    set-based kernel folded no serving fact (`SetBasedRally`'s own doc,
+//    setbased/kernel.ts: "the set-based kernel holds no serving state ... so
+//    the engine cannot name the receiver from what it stores"). Photographed
+//    by `11-servingplaceholder`, on all three sports.
+//
+//  * D-7 — BELOW BAND 3 THE PAD SAYS NOTHING. The kernel keys only band 3
+//    (`fidelityEntitlements: { 3: preset.rallyEntitlement }`, i.e.
+//    "scoring.rally_by_rally"), and `view-model.ts` DROPS an action above the
+//    org's band rather than locking it (`if (band === undefined || band >
+//    ctx.band) return null`) — so an org without that entitlement gets a live
+//    scoring pad with no rally control and no reason on screen. The
+//    register's own BAD-03 evidence line, never photographed. `12-bandlimited`,
+//    badminton only (BAD-03's own sport; the kernel is shared, so the same
+//    screen is reachable on the other two).
+//
+//    NAMED `bandlimited`, NOT `bandzero`, and the difference is a real
+//    finding: the defect register calls this "a free / band-0 org", but a
+//    community org actually resolves to band TWO here. `resolveFidelityBand`
+//    walks 0..3 and only breaks on a band that NAMES an entitlement the org
+//    lacks; this kernel keys band 3 alone, so bands 0, 1 and 2 are all free.
+//    What the free org therefore loses is the rally action only — the band-1
+//    interruptions (sanctions, and on the other two sports timeouts/subs)
+//    survive, so the screen is a Set score panel AND a Sanctions drawer, not
+//    the "lone Set score button" the register describes.
+//
+//  * D-13 — TABLE TENNIS HAS NEVER BEEN DRIVEN IN A BROWSER beyond this
+//    harness's single `scoreOne` tap (see this file's own tabletennis note:
+//    "No e2e precedent exists anywhere in this repo for table tennis
+//    specifically"). Its `11-servingplaceholder` taps real rallies in a real
+//    browser past a 2-serve rotation boundary (`turnLength: 2`,
+//    setbased/tabletennis.ts) — new coverage in itself.
+//
+// NOT TURN 0, EVER. R4's D-21 shipped a wrong human name live because
+// `11-doublesserve` photographed service turn 0, and turn 0 names the right
+// player under every derivation anyone has shipped, correct or not. Every
+// serving capture below banks a whole game/set FIRST and then plays into the
+// next one, so both the set-transition rule and (for table tennis) the
+// within-game rotation have already had to fire.
+// ---------------------------------------------------------------------------
+
+/** racquet-skin.tsx's own placeholder glyph for the serving field — an EM
+ *  dash (U+2014), deliberately NOT the EN dash (U+2013) `scoreline()` joins a
+ *  score with. The two are one code point apart and look almost identical in
+ *  a diff, so they are named here once rather than typed inline three times. */
+const RACQUET_SERVING_PLACEHOLDER = "—";
+
+/** The EN dash `scoreline()` (racquet-skin.tsx) joins a header score with —
+ *  spelled as an escape so a reviewer can tell it apart from the EM dash
+ *  placeholder above without reaching for a hex editor. */
+function racquetScoreline(home: number, away: number): string {
+  return `${home}\u2013${away}`;
+}
+
+interface RacquetServingRecipe {
+  slug: string;
+  label: string;
+  sportKey: string;
+  variantKey: string;
+  entrantKind?: "individual" | "team" | "pair";
+  /**
+   * The exact name the serving field must read after the three rallies
+   * below. REQUIRED (asserted at run time, not left optional-and-forgotten),
+   * because "not the placeholder" alone is a far weaker statement than "this
+   * person": a pad that named the WRONG player would satisfy the negative
+   * and is precisely R4's D-21.
+   *
+   * R5 (2026-08-27): all three racquet sports (badminton C1, table tennis
+   * C2, volleyball C3) have now converted to v3, closing out this family —
+   * this recipe used to also carry a `lane?: "v2" | "v3"` field so an
+   * unconverted sport's entry could stay byte-identical to the pre-R5
+   * BEFORE run; that field, and the v2 locators/assertions it selected, were
+   * retired as dead code in the same wave that deleted racquet-skin.tsx
+   * (v2) itself — nothing can construct a "v2" recipe here any more.
+   */
+  expectedServer: string;
+  /**
+   * R5/C2 — table tennis's own requirement, badminton never needed this.
+   * `serve.within: "fixed-turns"` (ITTF 2.13.3) is a pure function of the
+   * SCORE once the set's first server is known, and — unlike badminton's
+   * side-out rotation — is NEVER updated by an individual rally's own
+   * winner: `setBasedServeContext` answers `serveOrderKnown: false` FOREVER
+   * on this sport until something declares who served one rally
+   * (`packages/engine/src/sports/setbased/kernel.ts`'s own
+   * `believedServer`). The FIRST of the three rallies below is therefore
+   * routed through the skin's own `serveAnchor` tile + guided sheet (two
+   * choice steps: who served, who won) instead of a plain tappable-half
+   * click, naming the side that served it; the remaining two rallies tap the
+   * scoreboard half exactly as every other recipe does. Absent (the default)
+   * for every sport whose rotation self-heals from an ordinary tap.
+   */
+  declareServingAnchor?: "home" | "away";
+  /** The kernel's FULLY QUALIFIED coarse event type, `${sportKey}.${preset.
+   *  coarseEventType}` (setbased/kernel.ts:1560) — "badminton.game.summary",
+   *  "tabletennis.game.summary", "volleyball.set.summary". The bare
+   *  `coarseEventType` half is NOT an event type: the API answers a bare
+   *  "game.summary" with 422 INVALID_EVENT, which is how this was found. */
+  coarseType: string;
+  /** A COMPLETED first game/set, posted as ONE summary before any rally
+   *  touches it. It must be the set's first event: `applySummary`'s strict
+   *  branch refuses a summary for a set that already has points ("this set is
+   *  being scored rally-by-rally"). Between sets the two fidelities mix
+   *  freely — which is exactly what this recipe needs and why the PRIMARY
+   *  fixture cannot be reused (by the time `captureExtra` runs, `scoreOne`
+   *  has already put a rally into set 1). */
+  summary: { home: number; away: number };
+  /** The scoreline the header must read afterwards. Asserted exactly, not
+   *  merely "not 0-0": an exact expectation cannot pass vacuously against a
+   *  locator that resolved to nothing, and it fails LOUDLY with the real
+   *  value when a fold surprises us. */
+  expectedSets: string;
+  expectedPoints: string;
+}
+
+/**
+ * `11-servingplaceholder` — the board mid-game with the serving field empty.
+ *
+ * Its own fixture, seeded live (`emitCoreStart: true`), because the primary
+ * one is the wrong vehicle: `scoreOne` has already scored a rally into set 1
+ * (so no summary can close it) and `openDock` has left the Set score panel
+ * open on top of the board. Same reasoning, and the same fix, as R2b's
+ * cricket over-tile hook.
+ *
+ * Three rallies are TAPPED in the browser rather than posted: for table
+ * tennis those taps are D-13's whole point, and for all three they prove the
+ * rally control is genuinely live at band 3 — which is what makes
+ * `12-bandlimited` below a comparison and not just a different picture.
+ */
+async function captureRacquetServing(
+  page: Page,
+  dir: string,
+  tag: string,
+  measurements: Measurement320[],
+  recipe: RacquetServingRecipe,
+): Promise<ExtraGalleryState> {
+  const svTag = `${tag}sv`;
+  const fx = await seedRosteredFixture(page.request, {
+    label: `Gallery ${recipe.label} Serving ${svTag}`,
+    sportKey: recipe.sportKey,
+    variantKey: recipe.variantKey,
+    entrantKind: recipe.entrantKind,
+    home: [{ fullName: `Gallery ${recipe.slug} SV Home ${svTag}` }],
+    away: [{ fullName: `Gallery ${recipe.slug} SV Away ${svTag}` }],
+    emitCoreStart: true,
+  });
+  // Bank game/set 1 by summary — one event, and the set-transition rule the
+  // serving derivation has to get right has now fired at least once.
+  await postEvent(page.request, fx.fixtureId, recipe.coarseType, recipe.summary);
+
+  await page.goto(await fixturePath(page.request, fx.fixtureId));
+  await expect(pad(page), `gallery(${recipe.slug}): the serving fixture must render a pad`).toBeVisible({
+    timeout: 20_000,
+  });
+  // Home, away, home — 3 points into the SECOND game. Three, not one: table
+  // tennis rotates the serve every 2 points (`turnLength: 2`), so a third
+  // point is what puts the capture on the far side of a rotation boundary
+  // instead of on it. The same three taps leave badminton and volleyball
+  // (serve follows the rally winner) equally past their own first handover.
+  for (const [index, side] of (["home", "away", "home"] as const).entries()) {
+    const before = await ledgerCount(page.request, fx.fixtureId);
+    if (index === 0 && recipe.declareServingAnchor !== undefined) {
+      // Table tennis's own requirement (`RacquetServingRecipe.
+      // declareServingAnchor`'s own doc) — the FIRST rally is routed through
+      // the `serveAnchor` tile + its two-step guided sheet instead of a
+      // plain tap, because this sport's rotation cannot resolve at all
+      // without a declaration.
+      await pad(page).locator('[data-tile-id="serveAnchor"]').click();
+      const sheet = pad(page).locator('[data-role="v3-sheet"]');
+      await expect(sheet, `gallery(${recipe.slug}): the serve anchor sheet must open`).toBeVisible({ timeout: 20_000 });
+      await sheet.locator(`[data-choice-option-id="${recipe.declareServingAnchor}"]`).click();
+      await sheet.locator(`[data-choice-option-id="${side}"]`).click();
+    } else {
+      // tap model S — the scoreboard HALF is the rally button, and its
+      // accessible name is the player's own name plus hint text, so it can
+      // only be addressed positionally.
+      await v3Half(page, side).click();
+    }
+    await waitForLedgerGrowth(page.request, fx.fixtureId, before);
+  }
+
+  // The same three facts: the strip's games item, the two halves' own score
+  // readouts, and the strip's server item.
+  const [expectedHomePoints, expectedAwayPoints] = recipe.expectedPoints.split("\u2013");
+  const sets = pad(page).locator('[data-strip-item-id="games"]');
+  const serving = pad(page).locator('[data-strip-item-id="server"]');
+  const probe: StateProbe = async () => {
+    // PRECONDITION, not the defect — this pair does NOT flip at conversion.
+    // It is what stops this capture degenerating into R4's D-21: a banked
+    // game/set AND a current game away from 0-0, so no derivation can be
+    // right here by accident of being asked at turn 0.
+    await expect(
+      sets,
+      `gallery(${recipe.slug}): 11-servingplaceholder needs a BANKED game/set (${recipe.expectedSets})`,
+    ).toContainText(recipe.expectedSets, { timeout: 20_000 });
+    await expect(
+      v3HalfScore(page, "home"),
+      `gallery(${recipe.slug}): 11-servingplaceholder must be MID-game, never turn 0`,
+    ).toHaveText(expectedHomePoints!, { timeout: 20_000 });
+    await expect(v3HalfScore(page, "away")).toHaveText(expectedAwayPoints!, { timeout: 20_000 });
+    // ===== D-11, ASSERTED RATHER THAN ASSUMED. The v2 lane stated the score
+    // THREE times above the fold — the fixture header, the LCD panel, and
+    // the SETS/POINTS board — and the single v3 scorebug retires two of
+    // them. Left unasserted, that retirement would be something a reviewer
+    // has to notice in a screenshot; here it fails the run instead.
+    //
+    // Structural first: the v2 board is gone outright, and exactly one
+    // scorebug replaces it. `[data-role="racquet-header"]` itself has had no
+    // producer anywhere in this codebase since R5 deleted racquet-skin.tsx
+    // (the v2 skin that rendered it) — this assertion stays regardless,
+    // because "gone" is exactly the fact worth pinning, not merely assumed.
+    const scorebug = pad(page).locator('[data-role="v3-scorebug"]');
+    await expect(
+      pad(page).locator('[data-role="racquet-header"]'),
+      `gallery(${recipe.slug}): D-11 — the v2 SETS/POINTS board must be gone, not rendered beside the scorebug`,
+    ).toHaveCount(0, { timeout: 20_000 });
+    await expect(
+      scorebug,
+      `gallery(${recipe.slug}): D-11 — exactly one scorebug states the score`,
+    ).toHaveCount(1, { timeout: 20_000 });
+    // Then textually, which is the half a structural check cannot see: each
+    // side's current points appear ONCE inside it. The strip beside them
+    // carries GAMES (a different fact, `1–0`), never a second copy of
+    // the points — so a skin that put the points back on the strip reds here.
+    for (const value of [expectedHomePoints!, expectedAwayPoints!]) {
+      await expect(
+        scorebug.getByText(value, { exact: true }),
+        `gallery(${recipe.slug}): D-11 — "${value}" must be stated once above the fold, not twice`,
+      ).toHaveCount(1, { timeout: 20_000 });
+    }
+    // ===== D-17. This used to be the assertion a per-sport conversion
+    // inverted rather than deleted (v2: the header prints an em dash where
+    // the server belongs; v3: the field must name the real server) — sound
+    // advice while at least one racquet sport still had a v2 placeholder to
+    // guard. R5 (2026-08-27) closed that out: badminton (C1), table tennis
+    // (C2) and volleyball (C3) have ALL converted, so there is no sport left
+    // for a "still the placeholder" branch to ever be true for. That is the
+    // same runtime-unreachability this wave's own cleanup task was scoped to
+    // remove (racquet-skin.tsx itself went with it, and with it the only
+    // producer `[data-role="racquet-header"]`'s serving field could ever
+    // have had). What survives, unconditionally, is the stronger half the
+    // inversion always built toward: the field must not be the placeholder
+    // AND must name the real server. Both halves matter — "not an em dash"
+    // alone is satisfied by a confidently WRONG name, which is R4's D-21
+    // exactly.
+    await expect(
+      serving,
+      `gallery(${recipe.slug}): D-17 — the serving field must no longer be the placeholder`,
+    ).not.toHaveText(RACQUET_SERVING_PLACEHOLDER, { timeout: 20_000 });
+    await expect(
+      serving,
+      `gallery(${recipe.slug}): D-17 — and it must name the real server, not merely something`,
+    ).toContainText(recipe.expectedServer, { timeout: 20_000 });
+  };
+
+  await captureState(page, dir, "11-servingplaceholder", recipe.slug, measurements, probe);
+  return "11-servingplaceholder";
+}
+
+/**
+ * `12-bandlimited` (D-7) — the same live badminton pad, for an org that does not
+ * hold `scoring.rally_by_rally`.
+ *
+ * The lever is the org's PLAN, flipped to community and restored in a
+ * `finally`: that is literally the org the defect is about, and it exercises
+ * the real plan matrix rather than a staff-deny override. It is restored
+ * before this hook returns because the shared body mints a device link
+ * afterwards and device links are Pro-only.
+ *
+ * NO cache invalidation on purpose. `invalidateOrgEntitlements` exists for
+ * Redis-backed targets, and it works by flipping the org OWNER to superadmin
+ * and back — a side effect on the very account the next four captures are
+ * taken as. Local and CI have no Redis (`cache.ts`'s `client()` returns null,
+ * so `cacheGet` is inert), which is where the runbook already says to run
+ * this harness; against a Redis-backed target this state's probe FAILS,
+ * loudly and by name, rather than photographing a band-3 board and calling it
+ * band-limited. A loud wrong-environment failure is the honest outcome here.
+ */
+async function captureRacquetBandLimited(
+  page: Page,
+  dir: string,
+  tag: string,
+  measurements: Measurement320[],
+): Promise<ExtraGalleryState> {
+  const bzTag = `${tag}bz`;
+  // Seeded (and started) while the org is still Pro: a community org has
+  // lower creation caps, and none of that is what this state is about.
+  const fx = await seedRosteredFixture(page.request, {
+    label: `Gallery Badminton BandLimited ${bzTag}`,
+    sportKey: "badminton",
+    variantKey: "bwf",
+    entrantKind: "individual",
+    home: [{ fullName: `Gallery Badminton BZ Home ${bzTag}` }],
+    away: [{ fullName: `Gallery Badminton BZ Away ${bzTag}` }],
+    emitCoreStart: true,
+  });
+  const org = await activeOrg(page);
+  try {
+    await setOrgPlanBySql({ orgId: org.id }, "community");
+    await page.goto(await fixturePath(page.request, fx.fixtureId));
+    await expect(pad(page), "gallery(badminton): 12-bandlimited must render a pad").toBeVisible({
+      timeout: 20_000,
+    });
+
+    // R5 — RE-POINTED AT THE v3 DOM, and INVERTED. Badminton renders
+    // `v3/skins/badminton.tsx` now, so every locator below moved: the v2 lane's
+    // panel HEADINGS became tiles carrying `data-tile-id`, and the amber
+    // `renderLockedTile` path (skins/shared.tsx) does not exist in v3 at all —
+    // `filterTilesByBand` DROPS an above-band tile rather than locking it, so
+    // the skin itself has to author the notice. What each assertion means is
+    // unchanged; only where it looks, and which way round it reads.
+    //
+    // The rally affordance, band-limited: the skin's own disabled tile
+    // (`RALLY_LOCKED_TILE_ID`). At band 3 this tile does not exist and the two
+    // scoreboard halves are real buttons instead.
+    const rallyGroup = pad(page).locator('[data-tile-id="rallyLocked"]');
+    const setScoreGroup = pad(page).locator('[data-tile-id="setScore"]');
+    // THE ENTITLEMENT PRECONDITION, RE-POINTED (R5). The v2 lane proved this
+    // with the FidelitySwitcher's own `[data-band="3"]` chip being disabled —
+    // but `RecordingChip` REPLACES that four-button picker the moment a sport
+    // converts (recording-chip.tsx's own doc), so on a v3 pad `[data-band]`
+    // does not exist at all and the old locator silently found nothing.
+    //
+    // The chip's equivalent, and it is a tighter statement rather than a
+    // looser one: the collapsed pill states the ACTIVE band in words ("Full
+    // timeline" — band 2, which is what a community org actually resolves to
+    // on this kernel, NOT band 0: `resolveFidelityBand` breaks only on a band
+    // that NAMES a missing entitlement and this kernel keys band 3 alone), and
+    // it carries `aria-expanded` ONLY when a next tier exists AND is genuinely
+    // locked. So the attribute's mere presence IS "this org lacks
+    // scoring.rally_by_rally", read off the control the scorer can actually
+    // see. Deliberately not clicked open: `probe()` re-runs once per captured
+    // width, and a toggle would close what the previous width opened.
+    const recordingChip = pad(page).getByRole("button", { name: "Full timeline", exact: true });
+    // The skin's own worded reason, on the context strip
+    // (`ContextSlot.message`, rendered verbatim by context-strip.tsx with a
+    // stable `data-role`). This REPLACES the v2 lane's `scorepad.locked.reason`
+    // string, which was never reachable for a band gap in the first place.
+    const lockedReason = pad(page).locator('[data-role="context-slot-message"][data-slot-id="recording"]');
+    const probe: StateProbe = async () => {
+      // PRECONDITIONS, not the defect. Neither flips.
+      //  (a) The band-0 summary action survives, so this is a real, rendered,
+      //      LIVE pad and not a blank or failed page.
+      //  (b) The band-3 chip is locked — which is what makes the rally
+      //      affordance below attributable to the ENTITLEMENT. Without it this
+      //      probe would pass just as happily against a pad that rendered its
+      //      rally control for some entirely unrelated reason, and would
+      //      photograph that instead while claiming D-7.
+      await expect(
+        setScoreGroup,
+        "gallery(badminton): 12-bandlimited must still be a live pad — the band-0 summary survives",
+      ).toBeVisible({ timeout: 20_000 });
+      await expect(
+        recordingChip,
+        "gallery(badminton): 12-bandlimited needs the org to actually LACK scoring.rally_by_rally",
+      ).toHaveAttribute("aria-expanded", "false", { timeout: 20_000 });
+      // ===== D-7, INVERTED (R5). The BEFORE run pinned this screen as
+      // SILENCE: `toHaveCount(0)` on both — no rally affordance anywhere, and
+      // no sentence explaining why, with the only signal a hover-only `title`
+      // on a DIFFERENT control (the fidelity chip's
+      // `scorepad.fidelity.locked`, unreachable on the phone this pad is built
+      // for). Both lines are inverted here rather than deleted: a deleted
+      // probe stops the capture failing and does nothing to stop the silence
+      // coming back.
+      //
+      // The rally tile is present AND still genuinely untappable — asserting
+      // presence alone would pass against a pad that had simply been handed
+      // the entitlement, which is not the fix.
+      await expect(
+        rallyGroup,
+        "gallery(badminton): D-7 — below band 3 the rally affordance must be VISIBLE, not silently absent",
+      ).toHaveCount(1, { timeout: 20_000 });
+      await expect(
+        rallyGroup,
+        "gallery(badminton): D-7 — visible, but never tappable: the org still lacks the entitlement",
+      ).toBeDisabled({ timeout: 20_000 });
+      await expect(
+        lockedReason,
+        "gallery(badminton): D-7 — and a VISIBLE sentence must now explain why",
+      ).toBeVisible({ timeout: 20_000 });
+      // Worded in badminton's own vocabulary and naming a real plan — not a
+      // padlock glyph, and not a band number a scorer has no use for.
+      await expect(
+        lockedReason,
+        "gallery(badminton): D-7 — the sentence must name the plan that unlocks it",
+      ).toContainText("Pro", { timeout: 20_000 });
+    };
+
+    await captureState(page, dir, "12-bandlimited", "badminton", measurements, probe);
+    return "12-bandlimited";
+  } finally {
+    // Device links (05-devicelink, minted by the shared body right after this
+    // hook returns) are Pro-only.
+    await setOrgPlanBySql({ orgId: org.id }, "pro");
+  }
 }
 
 const SPORTS: GallerySport[] = [
@@ -1570,26 +2024,57 @@ const SPORTS: GallerySport[] = [
       home: [{ fullName: `Gallery Volleyball Home ${tag}` }],
       away: [{ fullName: `Gallery Volleyball Away ${tag}` }],
     }),
-    // Verified live: scorepad-skins.spec.ts "racquet skin (volleyball): a
-    // set summary then a rally" — this harness only needs ONE representative
-    // event, so it drives the plain rally tap. (That test's "close set 1 by
-    // summary FIRST" ordering is about driving BOTH mechanisms for the same
-    // set in one test, not a precondition for either alone.)
+    // R5/C3 — VOLLEYBALL HAS CONVERTED. It no longer shares racquet-skin.tsx
+    // with anything (badminton R5/C1, table tennis R5/C2 converted first):
+    // tap model S makes the scoreboard HALF the rally button, addressed
+    // positionally exactly as badminton's and table tennis's own entries
+    // document. The old `getByRole("button", {name: "Home"})` does not merely
+    // mis-target here — it throws before a single screenshot is written.
     scoreOne: async (page) => {
-      await pad(page).getByRole("button", { name: "Home", exact: true }).click();
+      await v3Half(page, "home").click();
     },
-    // "Set score" is a genuine multi-field panel (Home/Away number fields),
-    // opened after the rally above and left unconfirmed.
+    // The v3 lane's genuine multi-field entry surface, opened and left
+    // unconfirmed — the siblings' own choice of tile and the same reason:
+    // `scoreOne` above has just put a rally into set 1, and D-16's fix
+    // withholds the Set score tile for a set already being scored
+    // rally-by-rally, so reaching for it here would find nothing.
     openDock: async (page) => {
-      const setScore = pad(page).getByRole("button", { name: "Set score", exact: true });
-      if (!(await setScore.isVisible({ timeout: 3_000 }).catch(() => false))) return false;
-      await setScore.click();
-      const homeField = pad(page).getByLabel("Home", { exact: true });
-      if (!(await homeField.isVisible({ timeout: 3_000 }).catch(() => false))) return false;
-      await homeField.fill("25");
-      await pad(page).getByLabel("Away", { exact: true }).fill("20");
+      const sanction = pad(page).locator('[data-tile-id="sanction-home"]');
+      if (!(await sanction.isVisible({ timeout: 3_000 }).catch(() => false))) return false;
+      await sanction.click();
+      const sheet = pad(page).locator('[data-role="v3-sheet"]');
+      if (!(await sheet.isVisible({ timeout: 3_000 }).catch(() => false))) return false;
       return true;
     },
+    // R5/C3 — D-17. Indoor volleyball's serve follows the rally winner (FIVB
+    // 12.2.2, side-out — the identical rule badminton plays), so `side`
+    // itself would answer "who serves next" from the second rally onward
+    // even unanchored. `declareServingAnchor` is used anyway (away served,
+    // home won the anchor) — NOT for `side` (which self-heals regardless)
+    // but so the ROTATION NUMBER (FIVB 7.6.2) is genuinely resolved in this
+    // photograph too, matching volleyball.tsx's own header: without one
+    // declared rally somewhere, `chainComplete` never clears for an
+    // "alternate" sport and the rotation stays permanently dark. This
+    // recipe's own one-person-per-side roster carries no `pairOrder`, so the
+    // server field still names the SIDE ("Home"), never a person — the
+    // honest indoor answer (badminton's own singles convenience does not
+    // exist for this sport; see volleyball.tsx's header, "THE DOCK ALWAYS
+    // ASKS").
+    captureExtra: async (page, dir, tag, measurements) => [
+      await captureRacquetServing(page, dir, tag, measurements, {
+        slug: "volleyball",
+        label: "Volleyball",
+        sportKey: "volleyball",
+        variantKey: "indoor",
+        coarseType: "volleyball.set.summary",
+        // Indoor set 1 is to 25 (setbased/volleyball.ts).
+        summary: { home: 25, away: 20 },
+        expectedSets: racquetScoreline(1, 0),
+        expectedPoints: racquetScoreline(2, 1),
+        declareServingAnchor: "away",
+        expectedServer: "Home",
+      }),
+    ],
   },
   {
     slug: "badminton",
@@ -1601,28 +2086,56 @@ const SPORTS: GallerySport[] = [
       home: [{ fullName: `Gallery Badminton Home ${tag}` }],
       away: [{ fullName: `Gallery Badminton Away ${tag}` }],
     }),
-    // badminton/tabletennis/volleyball share ONE component, racquet-skin.tsx
-    // — the plain rally tap verified for volleyball above is the same
-    // control here.
+    // R5 — BADMINTON HAS CONVERTED (the first of the three, C1; table tennis
+    // and volleyball below followed in C2/C3, and racquet-skin.tsx itself is
+    // now deleted — nothing shares it any more): tap model S makes the
+    // scoreboard HALF the rally button, and its accessible name is the
+    // player's own name plus hint text, so it can only be addressed
+    // positionally. The old
+    // `getByRole("button", {name: "Home"})` does not merely mis-target here —
+    // it throws before a single screenshot is written, which is how R4 nearly
+    // asked for a sign-off on a wave with zero pictures.
     scoreOne: async (page) => {
-      await pad(page).getByRole("button", { name: "Home", exact: true }).click();
+      await v3Half(page, "home").click();
     },
-    // Verified live: scoring.spec.ts's badminton flow uses this same
-    // "Set score" summary panel (shared racquet-skin.tsx), wrapped in a
-    // retry because a same-tick fill can land before React hydrates —
-    // mirrored here even though this harness does not confirm the panel.
+    // The v3 lane's genuine multi-field entry surface, opened and left
+    // unconfirmed. NOT the Set score sheet: `scoreOne` above has just put a
+    // rally into game 1, and D-16's fix withholds the Set score tile for a
+    // game already being scored rally-by-rally — so reaching for it here would
+    // find nothing. The sanction sheet is the honest picture of what a badminton
+    // scorer can still open at this moment.
     openDock: async (page) => {
-      const setScore = pad(page).getByRole("button", { name: "Set score", exact: true });
-      if (!(await setScore.isVisible({ timeout: 3_000 }).catch(() => false))) return false;
-      await setScore.click();
-      const homeField = pad(page).getByLabel("Home", { exact: true });
-      if (!(await homeField.isVisible({ timeout: 3_000 }).catch(() => false))) return false;
-      await expect(async () => {
-        await homeField.fill("21");
-        await expect(homeField).toHaveValue("21");
-      }).toPass({ timeout: 10_000 });
+      const sanction = pad(page).locator('[data-tile-id="sanction-home"]');
+      if (!(await sanction.isVisible({ timeout: 3_000 }).catch(() => false))) return false;
+      await sanction.click();
+      const sheet = pad(page).locator('[data-role="v3-sheet"]');
+      if (!(await sheet.isVisible({ timeout: 3_000 }).catch(() => false))) return false;
       return true;
     },
+    // R5 — D-17 and D-7. Badminton is the sport BAD-03 names, so it carries
+    // the band-limited capture as well as the serving one. Order matters:
+    // 11 runs at Pro (its three rally taps only exist at band 3), 12 flips
+    // the plan and restores it before this hook returns.
+    captureExtra: async (page, dir, tag, measurements) => [
+      await captureRacquetServing(page, dir, tag, measurements, {
+        slug: "badminton",
+        label: "Badminton",
+        sportKey: "badminton",
+        variantKey: "bwf",
+        entrantKind: "individual",
+        coarseType: "badminton.game.summary",
+        // BWF game 1 is to 21 (setbased/badminton.ts).
+        summary: { home: 21, away: 15 },
+        expectedSets: racquetScoreline(1, 0),
+        expectedPoints: racquetScoreline(2, 1),
+        // Three rallies, home/away/home, and BWF Law 10.1 gives the serve to
+        // the rally winner — so the third rally's winner is due to serve next,
+        // and that is HOME. Named in full, not merely "not the placeholder":
+        // see `expectedServer`'s own doc.
+        expectedServer: `Gallery badminton SV Home ${tag}sv`,
+      }),
+      await captureRacquetBandLimited(page, dir, tag, measurements),
+    ],
   },
   {
     slug: "tabletennis",
@@ -1634,23 +2147,59 @@ const SPORTS: GallerySport[] = [
       home: [{ fullName: `Gallery Tabletennis Home ${tag}` }],
       away: [{ fullName: `Gallery Tabletennis Away ${tag}` }],
     }),
-    // No e2e precedent exists anywhere in this repo for table tennis
-    // specifically (confirmed by search) — this mirrors badminton/volleyball
-    // by construction: all three share racquet-skin.tsx
-    // (`racquetSkin.sports = ["volleyball","badminton","tabletennis"]`),
-    // verified live against the running server before this harness shipped.
+    // R5/C2 — TABLE TENNIS HAS CONVERTED (volleyball below followed in C3,
+    // closing out the family; racquet-skin.tsx itself is now deleted):
+    // tap model S makes the scoreboard HALF the rally button, addressed
+    // positionally exactly as badminton's own entry above documents.
     scoreOne: async (page) => {
-      await pad(page).getByRole("button", { name: "Home", exact: true }).click();
+      await v3Half(page, "home").click();
     },
+    // The v3 lane's genuine multi-field entry surface, opened and left
+    // unconfirmed — badminton's own choice of tile and the same reason:
+    // `scoreOne` above has just put a rally into game 1, and D-16's fix
+    // withholds the Set score tile for a game already being scored
+    // rally-by-rally, so reaching for it here would find nothing.
     openDock: async (page) => {
-      const setScore = pad(page).getByRole("button", { name: "Set score", exact: true });
-      if (!(await setScore.isVisible({ timeout: 3_000 }).catch(() => false))) return false;
-      await setScore.click();
-      const homeField = pad(page).getByLabel("Home", { exact: true });
-      if (!(await homeField.isVisible({ timeout: 3_000 }).catch(() => false))) return false;
-      await homeField.fill("11");
+      const sanction = pad(page).locator('[data-tile-id="sanction-home"]');
+      if (!(await sanction.isVisible({ timeout: 3_000 }).catch(() => false))) return false;
+      await sanction.click();
+      const sheet = pad(page).locator('[data-role="v3-sheet"]');
+      if (!(await sheet.isVisible({ timeout: 3_000 }).catch(() => false))) return false;
       return true;
     },
+    // R5/C2 — D-17 and D-13. Table tennis's OWN rotation cannot resolve at
+    // all without a declaration (`declareServingAnchor`'s own doc), so the
+    // first of the three rally taps here is routed through the `serveAnchor`
+    // tile + sheet — away serves it, home wins it — and the remaining two are
+    // TAPPED on the scoreboard halves, past the `turnLength: 2` rotation
+    // boundary this sport alone among the three R5 racquet sports has to
+    // walk. The first time table tennis has been driven in a browser at all.
+    captureExtra: async (page, dir, tag, measurements) => [
+      await captureRacquetServing(page, dir, tag, measurements, {
+        slug: "tabletennis",
+        label: "Table Tennis",
+        sportKey: "tabletennis",
+        variantKey: "bo5",
+        entrantKind: "individual",
+        coarseType: "tabletennis.game.summary",
+        // ITTF game 1 is to 11 (setbased/tabletennis.ts).
+        summary: { home: 11, away: 7 },
+        expectedSets: racquetScoreline(1, 0),
+        expectedPoints: racquetScoreline(2, 1),
+        declareServingAnchor: "away",
+        // Anchor (rally 1): away served, home won. Before rally 2 away is
+        // still due to serve (turnLength: 2 — the SAME turn's second serve),
+        // and away is the side tapped, so away also wins it. That completes
+        // away's turn: before rally 3 home is due to serve (their FIRST serve
+        // of the next turn), and home is the side tapped, so home wins it
+        // too. After all three, home is due to serve next — their SECOND
+        // serve of that same turn. The identical side/turn-index walk
+        // `__tests__/tabletennis.test.ts`'s own "resolves once the anchor
+        // declares it" test proves against the real fold, tapped here in a
+        // real browser instead.
+        expectedServer: `Gallery tabletennis SV Home ${tag}sv`,
+      }),
+    ],
   },
   {
     slug: "icehockey",

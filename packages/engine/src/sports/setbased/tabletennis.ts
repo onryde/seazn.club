@@ -66,6 +66,27 @@ export const tabletennis = makeSetBasedModule({
   // that belongs on the umpire's pad. Still accepted by `eventSchema`, so a
   // removal that was recorded (or a golden corpus payload) parses unchanged.
   sanctionLevels: ["warning", "penalty"],
+  // R5-1 — ITTF service.
+  //  * 2.13.3: two points each, whoever wins them — so the serve is a pure
+  //    function of the game's score once the game's first server is known,
+  //    and a partial score summary costs the rotation nothing.
+  //  * 2.13.3's own deuce clause: once both are one short of the target, one
+  //    point each. Derived from `setTo`/`finalSetTo`, so `hardbat-21`
+  //    accelerates at 20-all with nothing extra declared. Expedite (2.15.3) is
+  //    the same mechanic on an earlier trigger and the kernel already folds
+  //    `state.expedite`.
+  //  * 2.13.6: the first server of a game received first in the one before, so
+  //    the sides alternate the opening serve.
+  //  * 2.13.4: in doubles the pair alternates its own service turns, which IS
+  //    the team sheet's declared `pairOrder` — the DOMAIN.tabletennis.md row
+  //    `expectedDoublesServer` was built for, finally with a caller.
+  serve: {
+    within: "fixed-turns",
+    turnLength: 2,
+    acceleratesAtDeuce: true,
+    setStart: "alternate",
+    serverFromPairOrder: true,
+  },
   entrantModel: { kinds: ["individual", "pair"], defaultKind: "individual" },
   // `tabletennis.expedite.start` records that the umpire introduced the
   // expedite system, and every later rally carrying `returns` + `serving` is

@@ -13,9 +13,9 @@ import type { LiveState, SportInfo, SideInfo } from "@/components/v2/fixture-con
 // hardcoded English) chrome. Removed rather than re-pinned: v1's specific
 // implementation (a `touch-manipulation` class, `bg-purple-600`, a literal
 // "+ point" string, its own `pad.*` dictionary keys) has no v2 equivalent to
-// point at — the replacement is `racquet-skin.tsx`'s completely different
-// `ActionForm`-driven rendering, already covered by `racquet-skin.test.ts`.
-// The two PROPERTIES those tests were really guarding — a real tap target
+// point at — the replacement is the shared, per-skin `ActionForm`-driven
+// rendering every scoring skin now uses (badminton's own skin, in v3, since
+// R5). The two PROPERTIES those tests were really guarding — a real tap target
 // and real i18n, not the specific class/key names — are structural
 // guarantees of the shared chassis now: `action-form.tsx`'s own primary
 // action button is `h-14` (56px, well past the 44px bar), and every skin

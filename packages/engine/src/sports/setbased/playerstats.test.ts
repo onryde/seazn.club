@@ -292,6 +292,10 @@ describe("kernel-default playerStats: merge + collisions (S8/#417)", () => {
         records: { timeouts: false, sanctions: false, substitutions: false, expedite: false },
       },
       variants: {},
+      // R5-1 — `serve` is required on every preset (a sport on this kernel
+      // states its own service rules); these two throwaway presets exist only
+      // to exercise `mergePlayerStats`, so they take the simplest legal one.
+      serve: { within: "rally-winner", setStart: "set-winner" },
       positions: { groups: [], lineup: { size: 1, benchMax: 1 } },
       unitLabel: { one: "Set", many: "Sets" },
       defaultTiebreakers: ["points"],
@@ -349,6 +353,10 @@ describe("kernel-default playerStats: merge + collisions (S8/#417)", () => {
         records: { timeouts: false, sanctions: false, substitutions: false, expedite: false },
       },
       variants: {},
+      // R5-1 — `serve` is required on every preset (a sport on this kernel
+      // states its own service rules); these two throwaway presets exist only
+      // to exercise `mergePlayerStats`, so they take the simplest legal one.
+      serve: { within: "rally-winner", setStart: "set-winner" },
       positions: { groups: [], lineup: { size: 1, benchMax: 1 } },
       unitLabel: { one: "Set", many: "Sets" },
       defaultTiebreakers: ["points"],

@@ -37,13 +37,27 @@ describe("whoNames", () => {
     expect(whoNames([{ name: "Alice", servingLabel: "Serving" }])).toBe("Alice");
   });
 
-  it("joins multiple who-lines with a comma, independent per entry", () => {
+  // R5 — this expectation USED TO BE "Alice, Serving, Bob", and that string was
+  // the defect rather than the contract: with a comma at both levels, a
+  // listener gets three flat items and cannot tell that "Serving" belongs to
+  // Alice rather than to Bob. The label is folded in with a comma; the LINES
+  // are separated with a semicolon, so the two levels stay distinguishable.
+  it("separates who-lines with a semicolon, so a folded-in servingLabel stays attached to its own name", () => {
     expect(
       whoNames([
         { name: "Alice", serving: true, servingLabel: "Serving" },
         { name: "Bob" },
       ]),
-    ).toBe("Alice, Serving, Bob");
+    ).toBe("Alice, Serving; Bob");
+  });
+
+  // The blast-radius claim, pinned rather than asserted in a comment: every
+  // half that carries ONE name (cricket's two halves, football's two, and
+  // every singles fixture in every sport) joins a single-element array, so no
+  // separator of any kind can appear.
+  it("leaves a single who-line untouched, whichever separator the multi-line case uses", () => {
+    expect(whoNames([{ name: "Alice" }])).toBe("Alice");
+    expect(whoNames([{ name: "Alice", serving: true, servingLabel: "Serving" }])).toBe("Alice, Serving");
   });
 });
 
@@ -77,6 +91,53 @@ const stripSpans = (spec: ScorebugSpec) =>
   walk(renderIsland(Scorebug, { spec, t }).tree() as never).filter(
     (el) => propsOf(el)["data-strip-item-id"] !== undefined,
   );
+
+describe("a half that must ASK before it scores (ScorebugHalf.tapSheet)", () => {
+  const half = (over: Record<string, unknown>) => ({
+    who: [{ name: "Home" }],
+    big: "0",
+    tappable: true,
+    hintKey: "pad.hint",
+    tapEvent: { type: "volleyball.rally", payload: { wonBy: "H" } },
+    ...over,
+  });
+  const spec = (over: Record<string, unknown>): ScorebugSpec => ({
+    context: "",
+    phase: "live",
+    halves: [half(over), half({})] as ScorebugSpec["halves"],
+    strip: [],
+  });
+  const firstButton = (s: ScorebugSpec, onTap?: unknown, onOpenSheet?: unknown) =>
+    walk(renderIsland(Scorebug, { spec: s, t, onTap, onOpenSheet } as never).tree() as never).find(
+      (el) => propsOf(el).onClick !== undefined,
+    )!;
+
+  it("opens the sheet INSTEAD of posting, so the question cannot be skipped by tapping", () => {
+    const posted: unknown[] = [];
+    const opened: string[] = [];
+    const btn = firstButton(
+      spec({ tapSheet: "serveOpener:home" }),
+      (e: unknown) => posted.push(e),
+      (k: string) => opened.push(k),
+    );
+    (propsOf(btn).onClick as () => void)();
+    expect(opened[0], "the half must route to its sheet").toBe("serveOpener:home");
+    expect(posted, "and must NOT also score — that would ask and answer at once").toHaveLength(0);
+  });
+
+  it("posts as before when no sheet is named — every half shipped before this is unchanged", () => {
+    const posted: { type?: string }[] = [];
+    const opened: string[] = [];
+    const btn = firstButton(
+      spec({}),
+      (e: { type?: string }) => posted.push(e),
+      (k: string) => opened.push(k),
+    );
+    (propsOf(btn).onClick as () => void)();
+    expect(posted[0]?.type).toBe("volleyball.rally");
+    expect(opened).toHaveLength(0);
+  });
+});
 
 describe("the strip's LED board (StripItem.tone)", () => {
   it("renders a toned item as the LED panel, with a stable tone hook and its label split from its value", () => {

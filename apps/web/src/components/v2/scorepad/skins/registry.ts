@@ -18,10 +18,6 @@
 //                                       tennis.game.award) and a gated
 //                                       gameAward panel the setbased three
 //                                       have no equivalent of
-//   volleyball        -> racquet-skin   all three from setbased/kernel.ts, one
-//   badminton                           action family ({key}.rally/.timeout/
-//   tabletennis                         .sanction/.sub); the skin reacts to the
-//                                       records flags that add or drop panels
 //   football          -> football-skin   hand-written module; has subs +
 //                                       penalties panels the period pair
 //                                       lacks, lacks their setPiece + shootout
@@ -29,18 +25,31 @@
 //   icehockey                           byte-identical to each other apart from
 //                                       the key prefix
 //
+// NOT LISTED: volleyball, badminton, tabletennis. All three used to share
+// ONE row here (-> racquet-skin, setbased/kernel.ts's common action family)
+// until R5 (2026-08-27) converted each to its own v3 skin
+// (`v3/registry.ts`'s `V3_SKINS`, unconditionally — no flag, no fallback).
+// `ScorePad` (../registry.tsx) consults `v3/registry.ts`'s `resolvePad`
+// FIRST and returns before this registry is ever reached for those three
+// keys, so racquet-skin.tsx had zero remaining callers and was deleted as
+// dead code in the same wave, not merely deprioritised — there is no row to
+// restore here later. Contrast cricket/tennis/football above: also fully
+// v3-owned, but their v2 skin files were NOT part of that deletion (nothing
+// else in this repo shares them, so nothing forced the question), so they
+// keep a real, honest row despite being equally unreachable through
+// `ScorePad` today.
+//
 // Everything else (generic, carrom, boardgame, …) stays on the universal
 // renderer DELIBERATELY — the universal renderer guarantees coverage, and a
 // sport without the match volume to earn hand-crafted ergonomics is better
 // served by the layout that is proven across every module.
 import type { SkinDef } from "./types";
 import { cricketSkin } from "./cricket-skin";
-import { racquetSkin } from "./racquet-skin";
 import { tennisSkin } from "./tennis-skin";
 import { footballSkin } from "./football-skin";
 import { periodSkin } from "./period-skin";
 
-export const SKINS: readonly SkinDef[] = [cricketSkin, racquetSkin, tennisSkin, footballSkin, periodSkin];
+export const SKINS: readonly SkinDef[] = [cricketSkin, tennisSkin, footballSkin, periodSkin];
 
 const BY_SPORT: ReadonlyMap<string, SkinDef> = new Map(
   SKINS.flatMap((skin) => skin.sports.map((sport) => [sport, skin] as const)),

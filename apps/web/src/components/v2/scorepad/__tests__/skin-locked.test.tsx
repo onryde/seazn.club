@@ -63,7 +63,6 @@ import { ActionForm } from "../action-form";
 import { cricketSkin } from "../skins/cricket-skin";
 import { tennisSkin } from "../skins/tennis-skin";
 import { footballSkin } from "../skins/football-skin";
-import { racquetSkin } from "../skins/racquet-skin";
 import { periodSkin } from "../skins/period-skin";
 import type { SkinLayout, SkinLayoutCtx, SkinProps } from "../skins/types";
 import type { PadActionView, PadPanelView, PadView } from "../view-model";
@@ -83,10 +82,14 @@ const isNamed = (name: string) => (el: ReactElement) => typeof el.type === "func
 /** Function components hand-verified (by reading their bodies) to call no
  *  React hooks — see this file's own header for why that is the bar, and
  *  why `ThisOverGroup`/`ActionForm`/`QuickActionCard` are deliberately
- *  absent. `AdminGroup` (cricket-skin.tsx) and `GroupBody` (racquet-
- *  skin.tsx) are the only two nested, JSX-instantiated components either
- *  skin ever routes a placed action's rendering through. */
-const EXPANDABLE = new Set(["AdminGroup", "GroupBody"]);
+ *  absent. `AdminGroup` (cricket-skin.tsx) is the only nested,
+ *  JSX-instantiated component any surviving skin here routes a placed
+ *  action's rendering through — `GroupBody` (racquet-skin.tsx, deleted R5:
+ *  the sport it served converted to v3 and the file had zero remaining
+ *  callers) used to be the other one; tennis/football/period all compose
+ *  their action lists through plain function calls instead (this file's own
+ *  header, below), so they never needed a second entry here. */
+const EXPANDABLE = new Set(["AdminGroup"]);
 
 /** `walk()` (_hook-harness.tsx) plus one rule: an allowlisted function
  *  component is CALLED directly (props exactly as its JSX-instantiating
@@ -123,15 +126,14 @@ const REASON_KEY = "scorepad.locked.reason";
 const REASON_TEXT = "Upgrade your plan to unlock this action.";
 const LOCKED_REASON = { key: REASON_KEY, label: REASON_TEXT } as const;
 
-/** Mirrors racquet-skin.test.ts's own `action()` fixture helper exactly
- *  (same `pad.test.${type}` fake-key convention, proven there to typecheck
- *  and to resolve to `label` verbatim via `padLabel`'s own fallback rule —
- *  scoring-vocab.ts: an unrecognised key returns `engineLabel` unchanged).
- *  `fields`/`attribution` both empty on purpose: an empty `attribution`
- *  makes racquet-skin.tsx's own `isSideTapOnly` false regardless of type
- *  name, which is what routes this fixture through `GroupBody`'s "detailed"
- *  branch (`ActionForm`) rather than `SideTapAction` — the one live-control
- *  shape every one of these five cases actually shares. */
+/** The `pad.test.${type}` fake-key convention resolves to `label` verbatim
+ *  via `padLabel`'s own fallback rule (scoring-vocab.ts: an unrecognised key
+ *  returns `engineLabel` unchanged) — proven to typecheck and resolve the
+ *  same way across every skin case below. `fields`/`attribution` both empty
+ *  on purpose: every skin here routes an action shaped like this through its
+ *  own generic "detailed" form branch (`ActionForm`) rather than any
+ *  skin-specific plain-tap shortcut, which is the one live-control shape
+ *  every one of these four cases actually shares. */
 function lockedAction(type: string, label: string): PadActionView {
   return {
     type,
@@ -232,8 +234,8 @@ describe("football skin — locked action (control group: must pass with zero pr
     // "Cards" (src/dictionaries/en/ui.json's scorepad.skin.football.group.
     // cards), which contains "Card" as a bare substring — asserting that
     // exact word would pass even if the tile itself rendered nothing, off
-    // the group heading alone. Same reasoning for racquet's/period's labels
-    // below (measured against "Timeouts"/"Goals" the same way).
+    // the group heading alone. Same reasoning for period's label below
+    // (measured against "Goals" the same way).
     const action = lockedAction("football.card", "Book a player");
     const layout: SkinLayout = { header: null, groups: [{ id: "cards", prominence: "secondary", actions: ["football.card"] }] };
     const island = renderSkin(footballSkin.Component, {
@@ -251,29 +253,6 @@ describe("football skin — locked action (control group: must pass with zero pr
     expect(text).toContain(REASON_TEXT);
     expect(findAll(tree, isType(ActionForm)).length).toBe(0);
     expect(findAll(tree, isNamed("QuickActionCard")).length).toBe(0);
-  });
-});
-
-describe("racquet skin — locked action (S11/#420 W9 fix: racquet-skin.tsx never checked availability)", () => {
-  it("renders the label and locked reason in a static tile, never an ActionForm", () => {
-    // Label deliberately NOT "Timeout" — see the football case's comment on
-    // why: this group's own heading resolves to "Timeouts".
-    const action = lockedAction("volleyball.timeout", "Pause the clock");
-    const layout: SkinLayout = { header: null, groups: [{ id: "timeouts", prominence: "drawer", actions: ["volleyball.timeout"] }] };
-    const island = renderSkin(racquetSkin.Component, {
-      view: view(action),
-      layout,
-      ctx: EMPTY_CTX,
-      dispatch: async () => {},
-      queueDepth: 0,
-      offline: false,
-      submittingType: null,
-    });
-    const tree = island.tree();
-    const text = allText(tree);
-    expect(text).toContain("Pause the clock");
-    expect(text).toContain(REASON_TEXT);
-    expect(findAll(tree, isType(ActionForm)).length).toBe(0);
   });
 });
 
@@ -300,30 +279,7 @@ describe("period skin — locked action (S11/#420 W9 fix: period-skin.tsx never 
   });
 });
 
-describe("racquet + period skins — an AVAILABLE action still renders its real control (fix must not over-lock)", () => {
-  it("racquet: an available action still gets a real ActionForm, wired to dispatch", () => {
-    const action: PadActionView = {
-      type: "volleyball.timeout",
-      labelKey: { key: "pad.test.volleyball.timeout", label: "Timeout" },
-      fields: [],
-      attribution: [],
-      availability: { kind: "available" },
-    };
-    const layout: SkinLayout = { header: null, groups: [{ id: "timeouts", prominence: "drawer", actions: ["volleyball.timeout"] }] };
-    const island = renderSkin(racquetSkin.Component, {
-      view: view(action),
-      layout,
-      ctx: EMPTY_CTX,
-      dispatch: async () => {},
-      queueDepth: 0,
-      offline: false,
-      submittingType: null,
-    });
-    const tree = island.tree();
-    const formEl = find(tree, isType(ActionForm));
-    expect((propsOf(formEl).action as PadActionView).type).toBe("volleyball.timeout");
-  });
-
+describe("period skin — an AVAILABLE action still renders its real control (fix must not over-lock)", () => {
   it("period: an available action still gets a real ActionForm, wired to dispatch", () => {
     const action: PadActionView = {
       type: "hockey.goal",

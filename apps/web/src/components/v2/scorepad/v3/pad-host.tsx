@@ -630,6 +630,11 @@ export function adaptSwapSlot(
       candidates: slot.candidates,
       offCandidates: slot.offCandidates,
       blocked: slot.blocked,
+      // R5: same verbatim crossing, and the same reason. This adapter copies
+      // BY HAND, so a field added to `SwapSlot` and to `SwapSheetSpec` but not
+      // here is dead on the production path while both ends' unit tests stay
+      // green — the defect this comment block was written for.
+      candidateMeta: slot.candidateMeta,
     },
     view: sidePool(slot.side, squads),
     policyVerdict: slot.policyOk
@@ -866,6 +871,38 @@ export function PadHostV3(props: PadHostV3Props) {
   );
   const dispatch = useMemo(() => createSkinDispatch(padView, heldSubmit), [padView, heldSubmit]);
 
+  /**
+   * THE send. Every dispatch site in this host goes through it.
+   *
+   * R5 blocker, found in a browser and not by any unit test: each of these six
+   * call sites used to be a bare `void dispatch(...)`. `dispatch` is
+   * `createSkinDispatch`'s async guard, so `void` DISCARDS a rejected promise —
+   * and the one rejection it can raise (a type the spec does not declare) then
+   * produced no event, no banner, no console line, and no clue. The volleyball
+   * libero swap hit exactly that: the sheet closed on a completed off/on pick
+   * and NOTHING was written. The type gate is fixed at its own end
+   * (`skins/types.ts`'s `KERNEL_DISPATCHABLE`), but a swallow that turns any
+   * future dispatch fault into a silent no-op is the deeper defect, so it is
+   * closed here rather than only at the one type that tripped it.
+   *
+   * Human copy only, `scorepad.rejection.fallback` — the same string the 422
+   * path already shows, already in all four dictionaries. The raw reason names
+   * internal event types and is useless to a scorer, so it goes to the console
+   * exactly as `org-payment-instructions.tsx` does with Stripe's own errors.
+   * Cleared on the next send, so one bad tap does not leave a stuck banner.
+   */
+  const [dispatchRefusal, setDispatchRefusal] = useState<string | null>(null);
+  const send = useCallback(
+    (type: string, payload: unknown): void => {
+      setDispatchRefusal(null);
+      void dispatch(type, payload).catch((err: unknown) => {
+        console.error("scorepad v3: dispatch failed", type, err);
+        setDispatchRefusal(msg("scorepad.rejection.fallback"));
+      });
+    },
+    [dispatch, msg],
+  );
+
   const handleTileAction = useCallback(
     (action: TileSpec["action"]) => {
       if ("swap" in action) {
@@ -875,9 +912,9 @@ export function PadHostV3(props: PadHostV3Props) {
         setOpenSwapId(action.swap);
         return;
       }
-      if ("event" in action) void dispatch(action.event.type, action.event.payload);
+      if ("event" in action) send(action.event.type, action.event.payload);
     },
-    [dispatch],
+    [send],
   );
   const handleOpenSheet = useCallback(
     (sheetKey: string) => {
@@ -1041,15 +1078,27 @@ export function PadHostV3(props: PadHostV3Props) {
       )}
 
       <div data-role="v3-scorebug">
-        <Scorebug spec={scorebugSpec} t={t} onTap={(event: TapEvent) => void dispatch(event.type, event.payload)} />
+        <Scorebug
+          spec={scorebugSpec}
+          t={t}
+          onTap={(event: TapEvent) => send(event.type, event.payload)}
+          onOpenSheet={handleOpenSheet}
+        />
       </div>
 
-      {rejectionMsg && (
+      {/* The server's own 422-class refusal (`pipeline.lastRejection`) and a
+       *  CLIENT-side dispatch fault (`dispatchRefusal`, see `send` above) share
+       *  one surface deliberately: to a scorer they are the same event — the tap
+       *  did not stick — and a second banner would only ask them to tell two
+       *  kinds of failure apart. Server first when both are set, because it
+       *  carries a real reason code while the client one is always the generic
+       *  fallback. */}
+      {(rejectionMsg ?? dispatchRefusal) && (
         <p
           data-role="v3-rejection"
           className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
         >
-          {rejectionMsg}
+          {rejectionMsg ?? dispatchRefusal}
         </p>
       )}
 
@@ -1092,7 +1141,7 @@ export function PadHostV3(props: PadHostV3Props) {
               // no conflict between the two mechanisms.
               setContextOverrides((prev) => ({ ...prev, [slotId]: personId }));
               const event = props.skin.contextSelect?.(slotId, personId, view);
-              if (event) void dispatch(event.type, event.payload);
+              if (event) send(event.type, event.payload);
             }}
           />
         </div>
@@ -1143,7 +1192,7 @@ export function PadHostV3(props: PadHostV3Props) {
             onSwap={(off, on) => {
               setOpenSwapId(null);
               const event = openSwapSlot.buildEvent(off, on);
-              void dispatch(event.type, event.payload);
+              send(event.type, event.payload);
             }}
             onCancel={() => setOpenSwapId(null)}
           />
@@ -1160,7 +1209,7 @@ export function PadHostV3(props: PadHostV3Props) {
               t={t}
               onComplete={(event) => {
                 setOpenSheet(null);
-                void dispatch(event.type, event.payload);
+                send(event.type, event.payload);
               }}
               onCancel={() => setOpenSheet(null)}
             />
@@ -1182,7 +1231,7 @@ export function PadHostV3(props: PadHostV3Props) {
                   actions={moreActionsList}
                   t={t}
                   submittingType={null}
-                  onSubmit={(type, payload) => void dispatch(type, payload)}
+                  onSubmit={(type, payload) => send(type, payload)}
                   squads={squads}
                   lineups={props.lineups}
                   personNames={personNames}

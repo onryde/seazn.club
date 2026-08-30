@@ -1,11 +1,15 @@
 // S12/#421 W10 — the drift guard over registry.tsx's `resolveScorePad` table.
-// S11's skins/registry.ts only names the 8 skinned sports (an unlisted sport
+// S11's skins/registry.ts only names the skinned sports (an unlisted sport
 // resolves to `null` = universal, which is fine for PadRenderer's own
-// question); THIS table must name all 11 `builtinModules` keys explicitly,
-// because "universal" here is meant to be a WRITTEN decision, not a
-// fallthrough — a new engine sport shipping with no row must fail CI, not
-// silently render on the universal path with nobody having decided that was
-// right. See registry.tsx's own header for the full reasoning.
+// question); THIS table must name every `builtinModules` key that still has
+// a v2 story explicitly, because "universal" here is meant to be a WRITTEN
+// decision, not a fallthrough — a new engine sport shipping with no row and
+// no `NO_V2_SKIN_SPORTS` entry must fail CI, not silently render on the
+// universal path with nobody having decided that was right. `NO_V2_SKIN_
+// SPORTS` (registry.tsx) is the one recognised exception: volleyball,
+// badminton and tabletennis converted fully to v3 and their shared v2 skin
+// (racquet-skin.tsx) was deleted as dead code (R5) — see registry.tsx's own
+// header for the full reasoning on both.
 import { describe, expect, it, vi } from "vitest";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
@@ -13,7 +17,7 @@ import { makeEnvelope } from "@seazn/engine/testkit";
 import type { SideInfo } from "@/components/v2/fixture-console";
 import { renderIsland } from "@/components/__tests__/_hook-harness";
 import { skinFor } from "../skins/registry";
-import { RESOLUTION_KIND, ScorePad, lineupPairFrom, personNamesFrom, resolveScorePad } from "../registry";
+import { NO_V2_SKIN_SPORTS, RESOLUTION_KIND, ScorePad, lineupPairFrom, personNamesFrom, resolveScorePad } from "../registry";
 import { eventOutToEnvelope } from "../wire";
 import { foldClient } from "../module-client";
 import { PadRenderer } from "../pad-renderer";
@@ -21,9 +25,20 @@ import { PadHostV3 } from "../v3/pad-host";
 import type { SkinDefV3 } from "../v3/types";
 
 describe("resolveScorePad — drift guard over every builtinModules key", () => {
-  it("assertion 1: every builtinModules key has a table row", () => {
-    const missing = builtinModules.map((m) => m.key).filter((key) => !(key in RESOLUTION_KIND));
+  it("assertion 1: every builtinModules key has a table row, unless it's in NO_V2_SKIN_SPORTS", () => {
+    const missing = builtinModules
+      .map((m) => m.key)
+      .filter((key) => !(key in RESOLUTION_KIND) && !NO_V2_SKIN_SPORTS.has(key));
     expect(missing, "a new engine sport shipped with no registry decision").toEqual([]);
+  });
+
+  it("assertion 1b: NO_V2_SKIN_SPORTS is absent from the table AND genuinely has no v2 skin (the exclusion is honest, not just claimed)", () => {
+    for (const key of NO_V2_SKIN_SPORTS) {
+      expect(key in RESOLUTION_KIND, `"${key}" is in NO_V2_SKIN_SPORTS but still has a RESOLUTION_KIND row`).toBe(
+        false,
+      );
+      expect(skinFor(key), `"${key}" is in NO_V2_SKIN_SPORTS but skinFor("${key}") still returns a skin`).toBeNull();
+    }
   });
 
   it("assertion 2: every table row is a real module key (no dead rows)", () => {
@@ -87,14 +102,15 @@ describe("resolveScorePad — drift guard over every builtinModules key", () => 
     expect(resolveScorePad("totally-unknown-sport")).toEqual({ kind: "universal" });
   });
 
-  it("the table names exactly the 11 shipped sports — 8 skinned, 3 universal (pins the known-good shape)", () => {
+  it("the table + NO_V2_SKIN_SPORTS together account for exactly the 11 shipped sports — 5 skinned, 3 universal, 3 with no v2 story left (pins the known-good shape)", () => {
     expect(builtinModules.length).toBe(11);
-    expect(Object.keys(RESOLUTION_KIND).length).toBe(11);
+    expect(Object.keys(RESOLUTION_KIND).length).toBe(8);
+    expect(NO_V2_SKIN_SPORTS.size).toBe(3);
     const byKind = Object.values(RESOLUTION_KIND).reduce<Record<string, number>>((acc, kind) => {
       acc[kind] = (acc[kind] ?? 0) + 1;
       return acc;
     }, {});
-    expect(byKind).toEqual({ skin: 8, universal: 3 });
+    expect(byKind).toEqual({ skin: 5, universal: 3 });
   });
 });
 

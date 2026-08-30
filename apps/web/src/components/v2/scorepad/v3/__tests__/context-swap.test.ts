@@ -449,6 +449,68 @@ describe("ContextStrip rendering — slot message (R2b bowler-eligibility block)
     expect(island.text()).toContain("Kannan has bowled his 4 overs.");
   });
 
+  // R5 — `ContextSlot.messageTone` (types.ts). The chassis shipped ONE
+  // register, hard-coded `text-red-600`, which is right for cricket's
+  // ineligible bowler (a fault) and wrong for badminton's "rally-by-rally
+  // needs Pro" (a tier, on a pad that is working exactly as configured).
+  // Reusing rejection red for a plan boundary teaches a scorer that red on
+  // this pad means nothing in particular.
+  //
+  // The DEFAULT is asserted first and separately, because that is the half
+  // that keeps cricket byte-identical: a slot that says nothing about tone
+  // must render exactly what it rendered before this field existed.
+  it("a message with no declared tone stays the ALERT red — cricket's own slot is unchanged", () => {
+    const island = renderIsland(ContextStrip, {
+      spec: {
+        slots: [
+          {
+            id: "bowler",
+            label: "pad.context.bowler",
+            pool: "onfield",
+            required: true,
+            message: "Kannan has bowled his 4 overs.",
+          },
+        ],
+      },
+      view: { squad: baseSquad },
+      personNames: names,
+      t,
+      onSelect: () => {},
+    });
+    const el = messageEl(island.tree(), "bowler")!;
+    expect(propsOf(el)["data-message-tone"]).toBe("alert");
+    expect(String(propsOf(el).className)).toContain("text-red-600");
+    expect(String(propsOf(el).className)).not.toContain("text-amber-700");
+  });
+
+  it('a slot declaring messageTone: "info" renders the tier register instead, not rejection red', () => {
+    const island = renderIsland(ContextStrip, {
+      spec: {
+        slots: [
+          {
+            id: "recording",
+            label: "pad.context.recording",
+            pool: "onfield",
+            required: false,
+            readOnly: true,
+            message: "Rally-by-rally scoring needs Pro.",
+            messageTone: "info",
+          },
+        ],
+      },
+      view: { squad: baseSquad },
+      personNames: names,
+      t,
+      onSelect: () => {},
+    });
+    const el = messageEl(island.tree(), "recording")!;
+    expect(propsOf(el)["data-message-tone"]).toBe("info");
+    expect(String(propsOf(el).className)).toContain("text-amber-700");
+    expect(String(propsOf(el).className)).not.toContain("text-red-600");
+    // Still real visible text, which is the rule the whole block exists for.
+    expect(island.text()).toContain("Rally-by-rally scoring needs Pro.");
+  });
+
   it("a slot with no message renders no message element for that slot", () => {
     const island = renderIsland(ContextStrip, {
       spec: contextSpec(), // neither slot sets `message`
@@ -990,6 +1052,84 @@ describe("SwapSheet — R3/football scope narrowing (SwapSlot.offCandidates) on 
     click(buttonsOf(island.tree()).find((btn) => textOf(btn) === "Player C")!);
     click(buttonsOf(island.tree()).find((btn) => textOf(btn) === "Player B")!);
     expect(swapped).toEqual(["c", "b"]);
+  });
+});
+
+describe("SwapSheet — R5 candidate row decoration (SwapSheetSpec.candidateMeta)", () => {
+  const names = { a: "Player A", b: "Player B", c: "Player C", d: "Player D" };
+  const kickoff = squad([
+    member({ personId: "a", onField: true }),
+    member({ personId: "b", onField: true }),
+    member({ personId: "c", onField: false }),
+    member({ personId: "d", onField: false }),
+  ]);
+
+  function open(over: Partial<SwapSheetProps["spec"]>) {
+    return renderIsland(SwapSheet, {
+      spec: { ...swapSpec, ...over },
+      view: { squad: kickoff },
+      policyVerdict: { ok: true },
+      personNames: names,
+      t,
+      onSwap: () => {},
+    });
+  }
+
+  it("renders the position code AHEAD of the name on the OFF step", () => {
+    const island = open({ candidateMeta: { a: { lead: "MB" }, b: { lead: "S" } } });
+    const rowA = buttonsOf(island.tree()).find((btn) => textOf(btn).includes("Player A"))!;
+    // AHEAD, not merely present: the whole point of the ruling is that the eye
+    // runs down a column of codes, so an implementation that appended the code
+    // after the name would satisfy "contains" and defeat the purpose.
+    expect(textOf(rowA).indexOf("MB")).toBeLessThan(textOf(rowA).indexOf("Player A"));
+  });
+
+  it("carries the SAME table into the ON step — one lookup serves both, keyed by person", () => {
+    const island = open({ candidateMeta: { c: { lead: "OPP" } }, candidates: ["c"] });
+    click(buttonsOf(island.tree()).find((btn) => textOf(btn).includes("Player A"))!);
+    const rowC = buttonsOf(island.tree()).find((btn) => textOf(btn).includes("Player C"))!;
+    expect(textOf(rowC)).toContain("OPP");
+  });
+
+  it("marks the tagged player — the position code CANNOT say it, because a libero on court holds the position they replaced", () => {
+    const island = open({ candidateMeta: { a: { lead: "MB", tag: "Libero" }, b: { lead: "S" } } });
+    const rowA = buttonsOf(island.tree()).find((btn) => textOf(btn).includes("Player A"))!;
+    const rowB = buttonsOf(island.tree()).find((btn) => textOf(btn).includes("Player B"))!;
+    // Both read "MB"/"S" as their position; only one is the libero, and the
+    // tag is the only thing that says so.
+    expect(textOf(rowA)).toContain("Libero");
+    expect(textOf(rowB)).not.toContain("Libero");
+  });
+
+  it("ABSENT meta renders exactly the row every other picker already had — cricket's bowler, football's subs, every context strip", () => {
+    const island = open({});
+    const labels = buttonsOf(island.tree()).map((btn) => textOf(btn));
+    expect(labels).toContain("Player A");
+    expect(labels).toContain("Player B");
+  });
+
+  it("a PARTIAL table decorates only the people it names, and never drops an undecorated row", () => {
+    const island = open({ candidateMeta: { a: { lead: "MB" } } });
+    const labels = buttonsOf(island.tree()).map((btn) => textOf(btn));
+    expect(labels.some((l) => l.includes("MB") && l.includes("Player A"))).toBe(true);
+    expect(labels).toContain("Player B");
+  });
+
+  it("picking a decorated row still completes the swap — decoration is not a hit-target change", () => {
+    let swapped: [string, string] | null = null;
+    const island = renderIsland(SwapSheet, {
+      spec: { ...swapSpec, candidateMeta: { a: { lead: "MB", tag: "Libero" }, c: { lead: "OPP" } }, candidates: ["c"] },
+      view: { squad: kickoff },
+      policyVerdict: { ok: true },
+      personNames: names,
+      t,
+      onSwap: (off, on) => {
+        swapped = [off, on];
+      },
+    });
+    click(buttonsOf(island.tree()).find((btn) => textOf(btn).includes("Player A"))!);
+    click(buttonsOf(island.tree()).find((btn) => textOf(btn).includes("Player C"))!);
+    expect(swapped).toEqual(["a", "c"]);
   });
 });
 

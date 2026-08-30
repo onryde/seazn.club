@@ -127,6 +127,16 @@ export interface LedgerSlotEvent {
   recorded_at?: string;
   recorded_by: string | null;
   device_link_id: string | null;
+  /** score_events.voids_event_id — the row this event undoes, non-null ONLY
+   *  on a core.void. R5: carried through the poll/realtime path so a void
+   *  THIS device did not submit still names its target. Before that this
+   *  field was parsed at the transport boundary and thrown away, and every
+   *  foreign undo (a second referee's, or the fixture console's) reached
+   *  use-pad-pipeline.ts as a `core.void` targeting nothing — the engine's
+   *  `resolveVoids` then rejected every fold from that seq onward. Optional
+   *  on the TYPE for the same compile-time reason as `id`/`recorded_at`
+   *  above: the hand-rolled doubles across this tree predate it. */
+  voids_event_id?: string | null;
 }
 
 /** AppendEventResponse / ScoreOutcome (schemas.ts:644-648,

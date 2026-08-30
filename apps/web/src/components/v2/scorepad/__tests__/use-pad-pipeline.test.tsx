@@ -2139,3 +2139,273 @@ describe("usePadPipeline — R2 soft-commit entry point (submitHeld / dropHeldSu
     expect(appendCalls[0]!.body.payload).toEqual({ by: "A", points: 9 });
   });
 });
+
+// R5 (file header, "SCOPE BOUNDARY, R5 UPDATE" — a FOREIGN core.void crashes
+// the pad): passes G-J above only ever fixed a void THIS hook itself
+// submitted. This is the other direction — a THIRD PARTY (the fixture
+// console) undoes an event THIS pad just scored, live, and that undo arrives
+// back as a foreign write: a fresh `initialEvents` batch, exactly what a
+// console `router.refresh()` hands this hook after its own "Undo last". The
+// console always names the SERVER's real row id (it never fabricates one) —
+// but `ledgerEvents` had kept the SAME event under the CLIENT-fabricated
+// idempotency key `pendingToEnvelope` stamps on it at ack time (pass F), and
+// `mergeEnvelopesIntoLedger`'s own "existing wins" default silently
+// discarded the fresher, correctly-id'd copy the SAME batch carried for it —
+// so the void's target was never resolvable. Reproduced here entirely
+// through this hook's own public surface: no cricket, no skin needed —
+// `generic.score`/`core.void` are enough.
+describe("usePadPipeline — a foreign console-driven void resolves against a locally-scored event (R5)", () => {
+  it("MUTATION TARGET: a fresh initialEvents batch carrying BOTH the real id for a locally-scored event AND a void naming it reconciles cleanly — no rejection, the score genuinely reverts", async () => {
+    const REAL_SERVER_ID = "server-real-score-id-r5";
+    const { transport } = fakeTransport({ appendResults: [success(1)] });
+    const pad = mountPipeline(baseParams({ transport }));
+
+    // Scored LIVE, through this pad, and acked — `ledgerEvents` now holds it
+    // under the CLIENT-fabricated idempotency key forever within this mount
+    // (pass F's own documented behaviour: AppendSuccess carries no row id).
+    await pad.current.submit("generic.score", { by: "H", points: 2 });
+    const scoredClientId = pad.current.events.find((e) => e.type === "generic.score")!.id;
+    expect(pad.current.ownEventIds.has(scoredClientId)).toBe(true);
+    expect((pad.current.state as { running: { home: number; away: number } }).running).toEqual({
+      home: 2,
+      away: 0,
+    });
+
+    // The console's own undo round trip: a fresh `initialEvents` batch, built
+    // server-side (`eventOutToEnvelope`, wire.ts), containing the SERVER's
+    // canonical copy of the SAME scored event (same seq, REAL id — never the
+    // client-fabricated one) AND the console's own core.void, naming that
+    // real id — exactly what a real `router.refresh()` after
+    // fixture-console.tsx's "Undo last" hands this hook.
+    const serverScoreRow: EventEnvelope = {
+      id: REAL_SERVER_ID,
+      fixtureId: "fx-1",
+      seq: 1,
+      type: "generic.score",
+      payload: { by: "H", points: 2 },
+      recordedAt: "2026-08-28T00:00:00.000Z",
+      recordedBy: "user-1",
+    };
+    const consoleVoid: EventEnvelope = {
+      id: "console-void-1",
+      fixtureId: "fx-1",
+      seq: 2,
+      type: "core.void",
+      payload: {},
+      recordedAt: "2026-08-28T00:00:05.000Z",
+      recordedBy: "console-user",
+      voids: REAL_SERVER_ID,
+    };
+    pad.rerender(baseParams({ transport, initialEvents: [serverScoreRow, consoleVoid] }));
+
+    // THE regression: without the fix, resolveVoids (packages/engine/src/
+    // core/events.ts) can never find `REAL_SERVER_ID` in the folded list —
+    // ledgerEvents still only knows the scored event under the CLIENT id —
+    // and throws INVALID_EVENT on every fold from here on, degrading to the
+    // frozen pre-undo state (S3/#426 OWNER RULING 2) instead of reflecting
+    // the undo. Fixed: the seq-1 collision now adopts the wire-sourced id.
+    expect(pad.current.lastRejection).toBeNull();
+    expect((pad.current.state as { running: unknown }).running).toBeUndefined();
+
+    // And directly, on the reconciliation itself: the scored event's id in
+    // this hook's own ledger must have been corrected to the server's real
+    // one, not merely have the crash suppressed over a still-broken fold.
+    const scoredInLedger = pad.current.events.find((e) => e.seq === 1);
+    expect(scoredInLedger?.id).toBe(REAL_SERVER_ID);
+    expect(scoredInLedger?.id).not.toBe(scoredClientId);
+  });
+});
+
+// R5, the OTHER half of the same defect (file header, "A SECOND, INDEPENDENT
+// half"): the test above routes the console's undo through a fresh
+// `initialEvents` batch, which carries a full envelope. Reached through a
+// POLL instead — the path ANY void this device did not itself submit takes,
+// a second referee's as much as the console's — the void used to arrive with
+// no target at all, because `LedgerSlotEvent` did not carry
+// `voids_event_id` and the transport boundary parsed-then-DROPPED it. The
+// engine rejects a `core.void` naming nothing exactly as it rejects one
+// naming an unknown id, so the pad froze behind a rejection banner on
+// whichever of the two paths won the race — which is why the volleyball
+// walkthrough passed twice and failed once against the id fix alone.
+describe("usePadPipeline — a foreign void arriving by POLL still names its target (R5)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("MUTATION TARGET: a polled core.void carrying voids_event_id reverts the locally-scored event it names — no rejection", async () => {
+    const REAL_SERVER_ID = "server-real-score-id-poll-r5";
+    const listEventsSince = vi.fn(
+      async (): Promise<LedgerSlotEvent[]> => [
+        // The SERVER's own copy of the event this pad scored (same seq, REAL
+        // id) followed by the foreign void naming it — one poll batch, which
+        // is what a real `/events?since_seq=` read returns after someone
+        // else's undo lands.
+        {
+          id: REAL_SERVER_ID,
+          seq: 1,
+          type: "generic.score",
+          payload: { by: "H", points: 2 },
+          recorded_at: "2026-08-28T00:00:00.000Z",
+          recorded_by: "user-1",
+          device_link_id: null,
+          voids_event_id: null,
+        },
+        {
+          id: "poll-void-1",
+          seq: 2,
+          type: "core.void",
+          payload: {},
+          recorded_at: "2026-08-28T00:00:05.000Z",
+          recorded_by: "console-user",
+          device_link_id: null,
+          voids_event_id: REAL_SERVER_ID,
+        },
+      ],
+    );
+    const transport: PadTransport = {
+      async appendEvent() {
+        return success(1);
+      },
+      listEventsSince,
+      async getLastSeq() {
+        return 2;
+      },
+      async fetchState() {
+        return { status: "in_play", last_seq: 2, state: null, summary: null, outcome: null };
+      },
+    };
+    const pad = mountPipeline(
+      baseParams({ transport, streamConnector: neverConfirmConnector(), streamPollMs: 1_000 }),
+    );
+
+    await pad.current.submit("generic.score", { by: "H", points: 2 });
+    expect((pad.current.state as { running: { home: number; away: number } }).running).toEqual({
+      home: 2,
+      away: 0,
+    });
+
+    await vi.advanceTimersByTimeAsync(0); // settle into polling
+    await vi.advanceTimersByTimeAsync(1_000); // the poll delivers the foreign undo
+    await vi.advanceTimersByTimeAsync(0); // let the follow-up fetchState resolve
+
+    // Without voids_event_id crossing the wire boundary this void names
+    // nothing, resolveVoids throws INVALID_EVENT, and the pad degrades to the
+    // frozen pre-undo state behind a rejection banner instead of reverting.
+    expect(pad.current.lastRejection).toBeNull();
+    const polledVoid = pad.current.events.find((e) => e.seq === 2);
+    expect(polledVoid?.voids).toBe(REAL_SERVER_ID);
+    expect((pad.current.state as { running: unknown }).running).toBeUndefined();
+  });
+});
+
+// R5 — the third and final shape of the same walkthrough red, and the one
+// neither fix above touches. A tap's POST is ABORTED client-side by a page
+// reload that lands mid-flight, but the SERVER had already committed the row:
+// the pad only ever saw a network error, so the entry stays in the durable
+// queue. After the reload the ledger has moved on (someone undid that very
+// row from the console), and the resumed entry's `expectedSeq` now points
+// BEHIND the ledger head. Reproduced from the real trace of
+// walkthrough/scorepad-v3-volleyball-match.spec.ts: `POST -1` (aborted),
+// then on resume `409 {"code":"SEQ_CONFLICT","message":"expected seq 9 but
+// ledger is at 11"}`. This is why that walkthrough was red ~2 runs in 3 with
+// both merge fixes in place — whether the reload catches the POST in flight
+// is a race, decided differently run to run.
+describe("usePadPipeline — a queued event the server already applied, resumed after a reload (R5)", () => {
+  it("MUTATION TARGET: the resumed duplicate reconciles silently — no rejection banner, and the board shows the server's post-undo fold", async () => {
+    const REAL_SERVER_ID = "server-real-scored-id-abort-r5";
+    const DB_NAME = "r5-aborted-post-repro";
+    let appendMode: "ok" | "fail" | "conflict" = "ok";
+    const appendCalls: AppendEventBody[] = [];
+    const ledgerRows: LedgerSlotEvent[] = [
+      {
+        id: REAL_SERVER_ID,
+        seq: 1,
+        type: "generic.score",
+        payload: { by: "H", points: 2 },
+        recorded_at: "2026-08-29T23:03:00.000Z",
+        recorded_by: "user-1",
+        device_link_id: null,
+        voids_event_id: null,
+      },
+      {
+        id: "console-void-abort-r5",
+        seq: 2,
+        type: "core.void",
+        payload: { event_id: REAL_SERVER_ID },
+        recorded_at: "2026-08-29T23:04:00.000Z",
+        recorded_by: "user-1",
+        device_link_id: null,
+        voids_event_id: REAL_SERVER_ID,
+      },
+    ];
+    const transport: PadTransport = {
+      async appendEvent(_fixtureId, body) {
+        appendCalls.push(body);
+        if (appendMode === "fail") return { kind: "network-error", message: "aborted by navigation" };
+        if (appendMode === "conflict") return { kind: "conflict", currentSeq: 2, message: "expected seq 0 but ledger is at 2" };
+        return success(1);
+      },
+      async listEventsSince(_fixtureId, sinceSeq): Promise<LedgerSlotEvent[]> {
+        return ledgerRows.filter((r) => r.seq > sinceSeq);
+      },
+      async getLastSeq() {
+        return 2;
+      },
+      async fetchState() {
+        return { status: "in_play", last_seq: 2, state: null, summary: null, outcome: null };
+      },
+    };
+
+    // Mount 1: the tap goes out and the response never arrives — the reload
+    // killed it. The row IS on the server; this pad has no way to know.
+    appendMode = "fail";
+    const pad1 = mountPipeline(baseParams({ transport, queueDbName: DB_NAME }));
+    await pad1.current.submit("generic.score", { by: "H", points: 2 });
+    expect(pad1.current.queueDepth).toBe(1); // queued, exactly as an abort leaves it
+    pad1.unmount();
+
+    // Mount 2: the reload. `initialEvents` is the server's own list — the
+    // committed row AND the console's void of it — and the resumed queue
+    // entry still carries the now-stale expectedSeq.
+    appendMode = "conflict";
+    const pad2 = mountPipeline(
+      baseParams({
+        transport,
+        queueDbName: DB_NAME,
+        initialEvents: ledgerRows.map((r) => ({
+          id: r.id!,
+          fixtureId: "fx-1",
+          seq: r.seq,
+          type: r.type,
+          payload: r.payload,
+          recordedAt: r.recorded_at!,
+          recordedBy: r.recorded_by,
+          ...(r.voids_event_id ? { voids: r.voids_event_id } : {}),
+        })),
+      }),
+    );
+    for (let i = 0; i < 8; i += 1) {
+      await tick();
+    }
+
+    // The 409's own ledger-slot inspection proves the row is already there
+    // and is ours, so the entry must be dropped silently. Before the fix the
+    // resumed duplicate sat in `pendingEnvelopes` and the optimistic fold
+    // folded it ON TOP of the void, which throws — the pad then degraded to
+    // its last good state (the PRE-undo board) behind a rejection banner,
+    // which is exactly what the walkthrough screenshot showed.
+    expect(pad2.current.lastRejection).toBeNull();
+    expect(pad2.current.queueDepth).toBe(0);
+    expect((pad2.current.state as { running: unknown }).running).toBeUndefined();
+    // Directly on the mechanism, not just the symptom: the ledger's copy of
+    // the scored event must still be the SERVER's row, under the id the
+    // console's void actually names.
+    expect(pad2.current.events.find((e) => e.seq === 1)?.id).toBe(REAL_SERVER_ID);
+    // And "is this mine" must follow the surviving copy, or the undo-own
+    // affordance silently disowns an event this device really did record.
+    expect(pad2.current.ownEventIds.has(REAL_SERVER_ID)).toBe(true);
+  });
+});

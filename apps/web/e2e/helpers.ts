@@ -1111,6 +1111,17 @@ export interface RosterSlotSpec {
    *  omitted below rather than sent as an explicit `null`, so every existing
    *  caller keeps declaring nothing and stays byte-identical. */
   pairOrder?: number;
+  /** Squad ROLES this slot declares — FIVB 19.1's libero is the only one any
+   *  sport reads today (`roles: ["libero"]`). Additive: the seeder used to
+   *  hardcode `roles: []` for every slot with no way to override it, so no
+   *  seeded fixture could ever name a libero and volleyball's libero swap —
+   *  R5/C3's headline feature — had no reachable e2e at all. Declaring it here
+   *  matches the domain: FIVB designates the libero on the match roster BEFORE
+   *  the match, and `core/lineup.ts`'s `bringOn` deliberately does not carry
+   *  `slot.roles` onto a member already on the sheet, so a mid-match
+   *  replacement cannot invent one. Spread-omitted below, so every existing
+   *  caller keeps sending `[]` and stays byte-identical. */
+  roles?: readonly string[];
 }
 
 export interface RosteredFixture {
@@ -1248,7 +1259,7 @@ export async function seedRosteredFixture(
         person_id: personIds[s.fullName],
         slot: s.slot ?? "starting",
         order_no: i + 1,
-        roles: [],
+        roles: s.roles === undefined ? [] : [...s.roles],
         ...(s.positionKey ? { position_key: s.positionKey } : {}),
         ...(s.pairOrder === undefined ? {} : { pair_order: s.pairOrder }),
       })),
