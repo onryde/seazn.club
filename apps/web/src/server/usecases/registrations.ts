@@ -3209,8 +3209,22 @@ export async function publicRegistrationStatus(
   const reg = await regByToken(regId, token);
   const ctx = await divisionCtx(sql, reg.division_id);
   const settings = await loadSettings(sql, reg.division_id);
-  const [div] = await sql<{ name: string }[]>`
-    select name from divisions where id = ${reg.division_id}`;
+  const [div] = await sql<{ name: string; youth: boolean; player_name_display: string | null }[]>`
+    select name, youth, player_name_display from divisions where id = ${reg.division_id}`;
+  // RS008 review fix #3 — bring this to parity with its sibling
+  // publicRegistrationStatusByRef, which has had both the youth AND consent
+  // axes since RS008: display_name is a PERSON's name for individual/pair,
+  // but a TEAM's own declared name for team — no personal consent applies
+  // there (public.ts/public_entrants_v precedent, established throughout
+  // this session).
+  const isTeam = (settings?.entrant_kind ?? "individual") === "team";
+  const optedOut = isTeam ? new Set<string>() : await anyOptedOutByRegistration([reg.id]);
+  const displayName = resolvePersonDisplayName(
+    reg.display_name,
+    optedOut.has(reg.id) ? { public_name: false } : null,
+    div?.player_name_display ?? null,
+    div?.youth ?? false,
+  );
   // Amount due follows the SNAPSHOT (reg row), not live settings — fee edits
   // never change what an in-flight registrant owes (spec issue #8).
   const paymentDue = reg.status === "pending" && reg.amount_cents > 0;
@@ -3231,7 +3245,7 @@ export async function publicRegistrationStatus(
     id: reg.id,
     status: reg.status,
     ref_code: reg.ref_code,
-    display_name: reg.display_name,
+    display_name: displayName,
     division_name: div?.name ?? "",
     competition_name: ctx.comp_name,
     competition_slug: ctx.comp_slug,
