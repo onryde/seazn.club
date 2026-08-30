@@ -14,6 +14,7 @@
 // nothing in the product declared it.
 
 import { describe, it, expect } from "vitest";
+import { AttemptOutcome } from "@seazn/engine/core";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AnySportModule, PadSpec } from "@seazn/engine/sport";
@@ -334,7 +335,8 @@ describe("what the pad emits is what the fold accepts", () => {
         const kinds = (cfg as { setPieceKinds: string[] }).setPieceKinds;
         expect(kinds.length).toBeGreaterThan(0);
         for (const kind of kinds) {
-          for (const outcome of ["scored", "saved", "missed", "post"]) {
+          // The ENGINE's enum, never a second copy of it (R6 fix pass 2, gap 4).
+        for (const outcome of AttemptOutcome.options) {
             const payload = sheet.buildPayload({ by: "H", kind, outcome });
             expect(phaseVerdict(sport.module, state, sheet.event, payload), `${kind}/${outcome}`).toBe("accepted");
           }
@@ -488,14 +490,45 @@ describe("the skin's restatements of engine data are pinned to the engine", () =
       expect(values, "padSpec no longer publishes a reason enum").not.toBeNull();
       expect(sport.reasons).toEqual(values);
     });
+
+    it(`${sport.key}: the set-piece sheet offers exactly the outcomes padSpec declares, in every shipped variant`, () => {
+      // R6 fix pass 2, gap 4. The sheet's four result options were a literal in
+      // `period-shared.ts` restating `AttemptOutcome` (core/types.ts:29), and
+      // this file restated the SAME four strings — so a fifth engine member
+      // would have left skin and test in perfect agreement while the scorer was
+      // offered one result fewer than the fold accepts. The skin now reads
+      // `AttemptOutcome.options`; this is the referee, per sport and per
+      // variant, the way the fidelity and offence mirrors above are refereed.
+      for (const { variant, cfg: variantCfg } of shippedVariantCfgs(sport.module)) {
+        const declared = enumValuesOf((sport.module.padSpec as (c: unknown) => PadSpec)(variantCfg), "outcome");
+        expect(declared, `${variant}: padSpec no longer publishes an outcome enum`).not.toBeNull();
+        const state = livePhaseState(sport, variantCfg);
+        const sheet = sport.factory(T).sheets!(viewFor(sport, variantCfg, state))[SHEET_SET_PIECE] as GuidedSheetSpec;
+        const step = sheet.steps.find((s) => s.id === "outcome") as { options: { id: string }[] };
+        expect(step.options.map((o) => o.id), variant).toEqual(declared);
+        // …and the fold takes every one of them, so the pin is not merely
+        // list-to-list agreement between two mirrors of the same wrong thing.
+        for (const outcome of declared!) {
+          const payload = sheet.buildPayload({ by: "H", kind: (variantCfg as { setPieceKinds: string[] }).setPieceKinds[0]!, outcome });
+          expect(phaseVerdict(sport.module, state, sheet.event, payload), `${variant}/${outcome}`).toBe("accepted");
+        }
+      }
+    });
   }
 });
 
 function reasonEnumOf(spec: PadSpec): readonly string[] | null {
+  return enumValuesOf(spec, "reason");
+}
+
+/** The values `padSpec` publishes for one enum field, wherever it declares it —
+ *  the same walk `reasonEnumOf` has always done, generalised so the set-piece
+ *  outcome enum can be refereed by the engine too. */
+function enumValuesOf(spec: PadSpec, path: string): readonly string[] | null {
   for (const panel of spec.panels) {
     for (const action of panel.actions) {
       for (const field of action.fields ?? []) {
-        if (field.kind === "enum" && field.path === "reason") return field.values;
+        if (field.kind === "enum" && field.path === path) return field.values;
       }
     }
   }

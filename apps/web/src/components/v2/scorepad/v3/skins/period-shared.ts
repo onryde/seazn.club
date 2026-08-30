@@ -34,6 +34,7 @@
 //                SHOOTOUT | done/final/abandoned) mapped DOWN to the three-value
 //                UI concept here, never by widening `PadPhase`.
 
+import { AttemptOutcome } from "@seazn/engine/core";
 import type { FidelityBand } from "@seazn/engine/sport";
 import type { MessageKey } from "@/lib/messages";
 import { ENUM_VOCAB } from "@/lib/scoring-vocab";
@@ -914,7 +915,22 @@ function attemptSheet(spec: PeriodSkinSpec, view: PadHostView, side: Side): Guid
   };
 }
 
-const SET_PIECE_OUTCOMES: readonly string[] = ["scored", "saved", "missed", "post"];
+/**
+ * The set-piece result control's options — the ENGINE's own `AttemptOutcome`, not a
+ * copy of it.
+ *
+ * `PeriodSetPiece.outcome` is `AttemptOutcome.optional()` (kernel.ts:383) and
+ * the kernel's own `padSpec` builds its enum field from `[...AttemptOutcome
+ * .options]` (kernel.ts:2027), so the sheet reads the same export both do. The
+ * four strings used to be restated here and restated AGAIN in
+ * `period-pair.test.ts`, which meant a fifth member — the enum's own doc says a
+ * module may narrow it, and W4 already grew it once from a boolean — would have
+ * left the skin, the test and each other in perfect agreement while the scorer
+ * was offered one result fewer than the fold accepts. `period-pair.test.ts`
+ * additionally pins the built sheet against `module.padSpec(cfg)`, which is the
+ * per-sport, per-variant referee the fidelity and offence mirrors already use.
+ */
+const SET_PIECE_OUTCOMES: readonly string[] = AttemptOutcome.options;
 
 function setPieceSheet(spec: PeriodSkinSpec, view: PadHostView, t: TFn): GuidedSheetSpec {
   const e = eventTypesOf(spec);
