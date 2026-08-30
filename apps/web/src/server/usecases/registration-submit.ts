@@ -36,10 +36,11 @@ import {
   joinExistingEntrant,
   inviteUnclaimedMembers,
   playerPersonConsentsByEmail,
+  anyOptedOutByRegistration,
   type RegistrationRow,
   type RegistrationSettingsRow,
 } from "./registrations";
-import { anyOptedOut, maskDisplayName } from "@/lib/name-display";
+import { anyOptedOut, maskDisplayName, resolvePersonDisplayName } from "@/lib/name-display";
 import {
   divisionEligibilityIssues,
   requiresDob,
@@ -925,6 +926,12 @@ export async function previewJoinEntry(joinCode: string): Promise<JoinPreviewRes
   }
 
   const divCtx = await loadEntryDivisionCtx(reg.division_id);
+  // RS008 review fix #1: this join-page HEADING's own consent rule — see
+  // `entryDisplayName`'s doc comment (register/status/view-model.ts) for why
+  // a team's own name is exempt but this can be a person's (individual) or
+  // a pair's compound name.
+  const [divPolicy] = await sql<{ youth: boolean; player_name_display: string | null }[]>`
+    select youth, player_name_display from divisions where id = ${reg.division_id}`;
 
   const slots = await sql<{ id: string; full_name: string; email: string | null }[]>`
     select id, full_name, email from registration_players
@@ -971,9 +978,23 @@ export async function previewJoinEntry(joinCode: string): Promise<JoinPreviewRes
   const [{ n: totalPlayers }] = await sql<{ n: number }[]>`
     select count(*)::int as n from registration_players where registration_id = ${reg.id}`;
 
+  // RS008 review fix #6 (Minor) — this heading was reg.display_name raw; for
+  // a `pair` (a `team`'s never takes the consent axis) this is a compound
+  // person name. Masked the same way /r/[ref] (publicRegistrationStatusByRef)
+  // already does for the identical field: anyOptedOutByRegistration reuses
+  // the SAME aggregate this session's other compound-string sites use.
+  const isTeam = reg.entrant_kind === "team";
+  const optedOutRegs = isTeam ? new Set<string>() : await anyOptedOutByRegistration([reg.id]);
+  const displayName = resolvePersonDisplayName(
+    reg.display_name,
+    optedOutRegs.has(reg.id) ? { public_name: false } : null,
+    divPolicy?.player_name_display ?? null,
+    divPolicy?.youth ?? false,
+  );
+
   return {
     registration_id: reg.id,
-    display_name: reg.display_name,
+    display_name: displayName,
     division_name: divCtx.division_name,
     competition_name: divCtx.comp_name,
     competition_slug: divCtx.comp_slug,

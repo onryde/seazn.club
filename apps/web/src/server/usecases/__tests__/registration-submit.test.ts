@@ -2378,6 +2378,41 @@ describe.skipIf(!HAS_DB)("joinTeamEntry", () => {
       const slotPreview = preview.unclaimed_slots.find((s) => s.player_id === slot.id);
       expect(slotPreview?.full_name).toBe("Ada L.");
     });
+
+    // RS008 review fix #1/#6 — the join page's own HEADING (display_name) had
+    // no masking at all. A pair's is a compound of two people's names (design
+    // #17: the roster wins), so a per-partner opt-out must mask the whole
+    // string, same "stricter wins" rule applied to every other compound
+    // display_name site this session has swept.
+    it("masks the join page's own HEADING (display_name) for a pair when either partner opted out", async () => {
+      const pair = await rosterRig("pair", ["Alice Wonder", "Bob Builder"]);
+      const bob = pair.players.find((p) => p.full_name === "Bob Builder")!;
+      const [{ id: personId }] = await sql<{ id: string }[]>`
+        insert into persons (org_id, full_name, consent, lane)
+        values (${pair.orgId}, 'Bob Builder', ${sql.json({ public_name: false })}, 'player')
+        returning id`;
+      await sql`update registration_players set person_id = ${personId} where id = ${bob.id}`;
+
+      const preview = await previewJoinEntry(pair.entry.join_code!);
+      // anyOptedOut's "stricter wins" rule masks the WHOLE compound once
+      // EITHER side opts out (same as publicRegistrationStatusByRef's own
+      // "a pair's compound name masks in full when EITHER partner opted
+      // out") — not just the opted-out half.
+      expect(preview.display_name).toBe("Alice W. & Bob B.");
+    });
+
+    it("never masks a TEAM's own HEADING by a roster member's opt-out", async () => {
+      const { orgId, entry, players } = await rosterRig("team", ["Cap Tain"]);
+      const captain = players[0]!;
+      const [{ id: personId }] = await sql<{ id: string }[]>`
+        insert into persons (org_id, full_name, consent, lane)
+        values (${orgId}, 'Cap Tain', ${sql.json({ public_name: false })}, 'player')
+        returning id`;
+      await sql`update registration_players set person_id = ${personId} where id = ${captain.id}`;
+
+      const preview = await previewJoinEntry(entry.join_code!);
+      expect(preview.display_name).toBe("Rosterful Team");
+    });
   });
 });
 

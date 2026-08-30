@@ -3371,8 +3371,13 @@ async function regByRef(ref: string): Promise<RegistrationWithGroupRow> {
  * display_name" rule to `anyOptedOut` (lib/name-display.ts) — never
  * re-implements it.
  *
+ * Exported (RS008 review fix #6): `registration-submit.ts`'s
+ * `previewJoinEntry` reuses this SAME function for its own join-page
+ * heading mask, rather than a parallel local query — this file already
+ * flows one way into that one (module topology comment, registration-submit.ts),
+ * never the reverse.
  */
-async function anyOptedOutByRegistration(regIds: string[]): Promise<Set<string>> {
+export async function anyOptedOutByRegistration(regIds: string[]): Promise<Set<string>> {
   if (regIds.length === 0) return new Set();
   const rows = await sql<{ registration_id: string; consent: { public_name?: boolean } | null }[]>`
     select rp.registration_id, p.consent
