@@ -2664,7 +2664,14 @@ export async function handleRegistrationCheckoutAsyncPaymentFailed(
 }
 
 type PayOutcome =
-  | { kind: "confirmed"; divisionId: string; competitionId: string; orgId: string; entrantId: string }
+  /** `entrantId` is nullable since RS009: `materialise` seats no entrant for
+   *  a solo sign-up (design §6 — they are fielded through the team they are
+   *  assigned to), so a paid solo sign-up confirms with none. The `as unknown
+   *  as PayOutcome` cast below meant a `string` here compiled anyway and fed
+   *  null straight into inviteUnclaimedMembers, whose own parameter is
+   *  `string`. Runtime was a harmless no-op query; the type was a lie, and
+   *  the next non-null dereference of it would have compiled too. */
+  | { kind: "confirmed"; divisionId: string; competitionId: string; orgId: string; entrantId: string | null }
   // RULING B (RS002 W5 review): a Stripe payment is the MACHINE, not the
   // organiser — on a manual-approval division it leaves the entry at 'paid'
   // and waits for a human (approveRegistration). Distinct from "confirmed"
@@ -2920,7 +2927,9 @@ async function confirmPaidRegistration(
     fireDivisionRevalidate(outcome.divisionId, outcome.competitionId);
     // RS008: fire-and-forget, strictly AFTER the transaction above has
     // committed — see confirmRegistration's identical wiring for why.
-    void inviteUnclaimedMembers(outcome.orgId, outcome.entrantId);
+    // Guarded, not merely typed: a solo sign-up confirms with no entrant of
+    // its own, and there is no roster on it to invite.
+    if (outcome.entrantId) void inviteUnclaimedMembers(outcome.orgId, outcome.entrantId);
     // Growth loop (SPEC-5 §2 C): the organiser's FIRST competition to take a paid
     // registration earns free AI credits. Fires only on a genuine first-time paid
     // CONFIRMATION (not a replay, a double-pay duplicate, or a late payment to a

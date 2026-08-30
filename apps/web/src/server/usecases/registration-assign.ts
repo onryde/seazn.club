@@ -179,17 +179,6 @@ export async function assignSoloSignUp(
     // place for free; and a waitlisted TEAM is not in the division yet, so
     // filling its roster commits a player to an entry that may never be
     // promoted. Promote first, then assign.
-    // Neither terminal nor waitlisted, and still not seatable: a `pending`
-    // entry has not paid (or has not been approved on a manual division), and
-    // nothing downstream ever charges or confirms someone who was seated
-    // early — assign is not a payment path. `paid` is fine: the money is in
-    // and only the organiser's own confirm step is outstanding.
-    if (!["confirmed", "paid"].includes(source.status)) {
-      throw new HttpError(
-        422,
-        `This entry is ${source.status} — confirm it (or mark it paid) before placing them on a team`,
-      );
-    }
     if (source.status === "waitlisted") {
       throw new HttpError(
         422,
@@ -202,6 +191,25 @@ export async function assignSoloSignUp(
         `${target.display_name} is on the waitlist — promote it before adding players`,
       );
     }
+    // Ordered AFTER the waitlist refusals deliberately. This is the generic
+    // "not seatable yet" catch-all, and `waitlisted` is one of the statuses
+    // it would reject — so putting it first made the two specific messages
+    // above unreachable and a waitlisted entry was told to "confirm it (or
+    // mark it paid)" instead of "promote it". The test did not catch that,
+    // because the generic sentence interpolates the status and therefore
+    // still contained the word "waitlisted"; it now asserts on "promote".
+    //
+    // A `pending` entry has not paid (or, on a manual division, has not been
+    // approved), and nothing downstream ever charges someone seated early —
+    // assign is not a payment path. `paid` is fine: the money is in and only
+    // the organiser's own confirm step is outstanding.
+    if (!["confirmed", "paid"].includes(source.status)) {
+      throw new HttpError(
+        422,
+        `This entry is ${source.status} — confirm it (or mark it paid) before placing them on a team`,
+      );
+    }
+    // and only the organiser's own confirm step is outstanding.
 
     // Already placed? Same target = idempotent success; different target =
     // a refusal that names where they are, so the organiser can unassign

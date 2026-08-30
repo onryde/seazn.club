@@ -757,9 +757,15 @@ describe.skipIf(!HAS_DB)("waitlisted entries are not assignable in either direct
       players: [{ name: "Priya Raman" }],
     });
 
+    // Asserts "promote", not merely /waitlist/i. The looser matcher passed
+    // even when this refusal was UNREACHABLE — an ordering bug put the
+    // generic "confirm it (or mark it paid)" guard first, and that sentence
+    // interpolates the status, so it contained the word "waitlisted" too. A
+    // test that matches the noun rather than the instruction cannot tell the
+    // two messages apart.
     await expect(
       assignSoloSignUp(auth, { registration_id: solo.id, target_registration_id: team.id }),
-    ).rejects.toThrow(/waitlist/i);
+    ).rejects.toThrow(/promote it before placing/i);
   });
 
   it("refuses a waitlisted team as the target", async () => {
@@ -774,7 +780,7 @@ describe.skipIf(!HAS_DB)("waitlisted entries are not assignable in either direct
 
     await expect(
       assignSoloSignUp(auth, { registration_id: solo.id, target_registration_id: team.id }),
-    ).rejects.toThrow(/waitlist/i);
+    ).rejects.toThrow(/promote it before adding players/i);
   });
 });
 

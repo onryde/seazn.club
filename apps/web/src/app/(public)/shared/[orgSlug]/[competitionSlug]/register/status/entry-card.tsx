@@ -65,6 +65,14 @@ export interface EntryCardProps {
     status: EntryStatus;
     amount_cents: number;
     free_agent: boolean;
+    /** RS009 — the team an organiser placed this solo sign-up on, null while
+     *  they are still in the pool. REQUIRED here even though
+     *  `awaitingTeamAssignment`/`assignedTeamName` both accept it as
+     *  optional: those signatures are permissive so they can be called on
+     *  narrower shapes, which means nothing would have told a caller that
+     *  omitted it — and a card built without it shows "waiting for a team"
+     *  forever on a player who has been placed. */
+    assigned_team_name: string | null;
     join_code: string | null;
     /** False for a `pair` — its fixed two-person roster leaves no room for
      *  a new joiner, so only its per-slot partner link is real. */
