@@ -382,15 +382,253 @@ export function buildScorebug(view: PadHostView, t: TFn): ScorebugSpec {
 }
 
 // ---------------------------------------------------------------------------
-// tiles() / sheets() / dock() — R7/A1 cycle 2 and 3.
+// tiles() — everything the board itself cannot say, and nothing else
 // ---------------------------------------------------------------------------
 
-export function buildTiles(_view: PadHostView, _t: TFn): TileSpec[] {
-  return [];
+export const SETTLE_TILE_ID = "settle";
+export const SCORE_ENTRY_TILE_ID = "scoreEntry";
+export const CORRECTION_TILE_ID = "correction";
+export const DRAW_TILE_ID = "draw";
+export const MORE_TILE_ID = "more";
+
+/**
+ * The engine's own field bounds, RESTATED here because `generic.ts` keeps them
+ * module-private, and PINNED equal to the real `padSpec(cfg)` output in
+ * `__tests__/generic.test.ts` — the same "restate, then prove equal to the
+ * source of truth" posture table tennis takes for `EXPEDITE_RETURNS`.
+ *
+ * `MAX_PLAUSIBLE_SCORE` bounds a final `p1Score`/`p2Score`; `MAX_TALLY_STEP`
+ * bounds a single `generic.score` press, which is what caps a correction: the
+ * fold refuses `points` outside ±50 whatever the tally says.
+ */
+export const MAX_PLAUSIBLE_SCORE = 500;
+export const MAX_TALLY_STEP = 50;
+
+/** Every wire type `padSpec(cfg)` declares, both modes. The More gate below
+ *  walks this list; a third type appearing in the engine without appearing
+ *  here would make that gate quietly under-report, which is what the
+ *  chassis-agreement sweep in `__tests__/generic.test.ts` exists to catch. */
+const ALL_TYPES: readonly string[] = [RESULT_TYPE, SCORE_TYPE];
+
+/** `applyResult`'s settle branch, mirrored: a result card with no scores
+ *  settles FROM the tally, and a level tally settles only where the division
+ *  allows a draw. Withholding the tile is the whole point — the alternative
+ *  is a tap that ends in "draws are not allowed in this division", a sentence
+ *  a generic scorer has no way to have predicted. */
+function settleable(view: PadHostView, state: GenericStateShape): boolean {
+  if (!hasTally(state)) return false;
+  return tallyOf(state, "home") !== tallyOf(state, "away") || allowsDraws(cfgOf(view));
 }
 
-export function buildSheets(_view: PadHostView, _t: TFn): Record<string, GuidedSheetSpec> {
-  return {};
+/** The biggest correction any side could legally take right now: what the
+ *  leading side actually holds, capped by the engine's own single-press
+ *  bound. Zero means there is nothing to subtract at all, and the tile is
+ *  withheld rather than opening a sheet whose stepper has no legal value. */
+function correctionCeiling(state: GenericStateShape): number {
+  return Math.min(MAX_TALLY_STEP, Math.max(tallyOf(state, "home"), tallyOf(state, "away")));
+}
+
+/**
+ * Whether the generic "More" form has anything in it right now.
+ *
+ * A MIRROR OF THE CHASSIS, and stated as one so nobody mistakes it for
+ * independent knowledge — `moreActions` (pad-host.tsx) is the real answer, and
+ * `__tests__/generic.test.ts` drives that real function across every
+ * mode x band x phase combination and fails the moment the two disagree. The
+ * mirror exists because the skin has to decide whether to DRAW the tile before
+ * the chassis has computed anything, and a More tile opening an empty sheet is
+ * the dead-end tap this programme keeps closing.
+ *
+ * Three terms, each load-bearing:
+ *  - every `padSpec` panel generic declares is `phase: "live"`, and
+ *    `buildPadView` matches panel phase to view phase EXACTLY, so nothing is
+ *    reachable in "pre" or "post";
+ *  - a type this skin already dedicates (its halves, tiles and sheets) is
+ *    excluded from More by `dedicatedEventTypes`;
+ *  - a type above the fixture's own band is dropped by the band filter.
+ */
+function moreHasContent(view: PadHostView): boolean {
+  if (resolvePhase(view) !== "live") return false;
+  const dedicated =
+    resultModeOf(cfgOf(view)) === "score"
+      ? // `scoreEntry` claims generic.result at every band; the halves and the
+        // correction sheet claim generic.score whenever the tally is in band.
+        tallyAvailable(view)
+        ? [RESULT_TYPE, SCORE_TYPE]
+        : [RESULT_TYPE]
+      : // win_loss dedicates only the result: its halves post one, and so does
+        // the Draw tile. The module's own tally actions stay in More.
+        [RESULT_TYPE];
+  return ALL_TYPES.some((type) => !dedicated.includes(type) && withinBand(type, view.band));
+}
+
+/** Both phases the fold accepts. `applyScore`/`applyResult` each allow "pre"
+ *  as well as "live" (generic.ts), so a scorer who never tapped "Start match"
+ *  — the ordinary case for a result typed in after the fact — still has every
+ *  action on screen. */
+const SCOREABLE_PHASES: readonly PadPhase[] = ["pre", "live"];
+
+export function buildTiles(view: PadHostView, t: TFn): TileSpec[] {
+  const state = asState(view.state);
+  const mode = resultModeOf(cfgOf(view));
+  const tiles: TileSpec[] = [];
+
+  if (mode === "score") {
+    // The tally's own finish, first: it records what is already on the board,
+    // and says so on the tile rather than making the scorer trust it.
+    if (tallyAvailable(view) && settleable(view, state)) {
+      tiles.push({
+        id: SETTLE_TILE_ID,
+        label: "pad.generic.tile.settle",
+        sublabelText: `${tallyOf(state, "home")} – ${tallyOf(state, "away")}`,
+        kind: "standard",
+        span: 2,
+        phases: [...SCOREABLE_PHASES],
+        action: { event: { type: RESULT_TYPE, payload: {} } },
+      });
+    }
+    // The typed result. A band-0 fixture records ONE card and nothing else, so
+    // this is the whole pad there; at every other band it is the path for a
+    // scorer who arrives at full time with a number rather than a match to
+    // watch, which is the most ordinary thing a generic scorer does.
+    tiles.push({
+      id: SCORE_ENTRY_TILE_ID,
+      label: "pad.generic.tile.scoreEntry",
+      kind: "standard",
+      span: 2,
+      phases: [...SCOREABLE_PHASES],
+      action: { sheet: SCORE_ENTRY_TILE_ID },
+    });
+    if (tallyAvailable(view) && correctionCeiling(state) > 0) {
+      tiles.push({
+        id: CORRECTION_TILE_ID,
+        label: "pad.generic.tile.correction",
+        kind: "minor",
+        span: 2,
+        phases: [...SCOREABLE_PHASES],
+        action: { sheet: CORRECTION_TILE_ID },
+      });
+    }
+  } else if (allowsDraws(cfgOf(view))) {
+    // ABSENT, never disabled, when draws are refused. A disabled Draw tile
+    // would be a permanent property of the division wearing a transient
+    // affordance's clothes — `TileSpec.disabled`'s own doc draws exactly that
+    // line, and a dead-end tap is worse than no tile.
+    tiles.push({
+      id: DRAW_TILE_ID,
+      label: "pad.generic.tile.draw",
+      kind: "standard",
+      span: 4,
+      phases: [...SCOREABLE_PHASES],
+      action: { event: { type: RESULT_TYPE, payload: { isDraw: true } } },
+    });
+  }
+
+  if (moreHasContent(view)) {
+    tiles.push({
+      id: MORE_TILE_ID,
+      label: "scorepad.skin.more",
+      kind: "minor",
+      span: 4,
+      phases: [...SCOREABLE_PHASES],
+      action: { sheet: MORE_SHEET_KEY },
+    });
+  }
+
+  // `t` is threaded for symmetry with every other skin's `buildTiles` and to
+  // keep the factory's call shape uniform; no tile here needs a pre-resolved
+  // label, because the only non-translatable string this board renders is the
+  // settle tile's own score, which is `sublabelText` by design.
+  void t;
+  return tiles;
+}
+
+// ---------------------------------------------------------------------------
+// sheets() — a METHOD of the view (rebuilt per render), the standing
+// convention every v3 skin's `sheets` takes.
+// ---------------------------------------------------------------------------
+
+/** The explicit final score. PREFILLED from the tally where one exists — an
+ *  unedited confirm then records exactly what the board already shows, rather
+ *  than 0-0, which is the one wrong answer a prefill can give. */
+function scoreEntrySheet(view: PadHostView, t: TFn): GuidedSheetSpec {
+  const state = asState(view.state);
+  return {
+    event: RESULT_TYPE,
+    steps: [
+      {
+        id: "home",
+        kind: "number",
+        title: t("pad.generic.sheet.scoreEntry.home.title"),
+        initial: tallyOf(state, "home"),
+        min: 0,
+        max: MAX_PLAUSIBLE_SCORE,
+      },
+      {
+        id: "away",
+        kind: "number",
+        title: t("pad.generic.sheet.scoreEntry.away.title"),
+        initial: tallyOf(state, "away"),
+        min: 0,
+        max: MAX_PLAUSIBLE_SCORE,
+      },
+    ],
+    buildPayload: (answers) => ({ p1Score: Number(answers.home ?? 0), p2Score: Number(answers.away ?? 0) }),
+  };
+}
+
+/**
+ * The correction — a mis-press taken back off the tally.
+ *
+ * `GenericScore.points` is `.refine(p => p !== 0)`, so a sheet that could
+ * offer 0 would build a payload the schema refuses; `min: 1` on the magnitude
+ * and a negation in `buildPayload` make zero unreachable by construction
+ * rather than by validation. The ceiling is what the leading side actually
+ * holds (capped by the engine's own single-press bound), because the fold
+ * refuses a correction that would take a side below zero.
+ */
+function correctionSheet(view: PadHostView, t: TFn): GuidedSheetSpec {
+  const state = asState(view.state);
+  const home = tallyOf(state, "home");
+  const away = tallyOf(state, "away");
+  return {
+    event: SCORE_TYPE,
+    steps: [
+      {
+        id: "side",
+        kind: "choice",
+        title: t("pad.generic.sheet.correction.side.title"),
+        options: SIDES.map((side) => ({ id: side, label: SIDE_LABEL[side] })),
+      },
+      {
+        id: "points",
+        kind: "number",
+        title: t("pad.generic.sheet.correction.points.title"),
+        initial: 1,
+        min: 1,
+        max: correctionCeiling(state),
+        hintText: t("pad.generic.sheet.correction.points.hint", { home, away }),
+      },
+    ],
+    buildPayload: (answers) => {
+      const side: Side = answers.side === "away" ? "away" : "home";
+      const magnitude = Math.max(1, Math.abs(Number(answers.points ?? 1)));
+      return { by: entrantOf(state, side), points: -magnitude };
+    },
+  };
+}
+
+export function buildSheets(view: PadHostView, t: TFn): Record<string, GuidedSheetSpec> {
+  // Keyed off the SAME predicates `buildTiles` uses, so a sheet is never
+  // declared without an opening tile and never missing for one — pinned both
+  // ways in `__tests__/generic.test.ts`.
+  const sheets: Record<string, GuidedSheetSpec> = {};
+  if (resultModeOf(cfgOf(view)) !== "score") return sheets;
+  sheets[SCORE_ENTRY_TILE_ID] = scoreEntrySheet(view, t);
+  if (tallyAvailable(view) && correctionCeiling(asState(view.state)) > 0) {
+    sheets[CORRECTION_TILE_ID] = correctionSheet(view, t);
+  }
+  return sheets;
 }
 
 export function buildDock(

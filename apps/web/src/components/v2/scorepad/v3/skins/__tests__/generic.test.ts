@@ -18,11 +18,20 @@ import type { FidelityBand, ModuleEvent } from "@seazn/engine/sport";
 import { makeEnvelope } from "@seazn/engine/testkit";
 import { generic, padSpec as genericPadSpec } from "@seazn/engine/sports/generic";
 import { foldClient } from "../../../module-client";
-import { assertScorebugSpec, type PadHostView } from "../../types";
+import { dedicatedEventTypes, moreActions } from "../../pad-host";
+import { MORE_SHEET_KEY, assertScorebugSpec, type PadHostView, type TileSpec } from "../../types";
 import {
+  CORRECTION_TILE_ID,
+  DRAW_TILE_ID,
+  MORE_TILE_ID,
   RESULT_TYPE,
+  SCORE_ENTRY_TILE_ID,
   SCORE_TYPE,
+  SETTLE_TILE_ID,
   buildScorebug,
+  buildSheets,
+  buildTiles,
+  cfgOf,
   resolvePhase,
   type TFn,
 } from "../generic";
@@ -300,5 +309,253 @@ describe("buildScorebug — the strip says only what the two numbers cannot", ()
     expect(buildScorebug(view({ cfg: SCORE_NO_DRAWS_CFG, events: level }), t).strip).toEqual([
       { id: "margin", value: "pad.generic.scorebug.strip.level", accent: true },
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// tiles() — everything the board itself cannot say
+// ---------------------------------------------------------------------------
+
+const tileIds = (v: PadHostView): string[] => buildTiles(v, t).map((tile) => tile.id);
+const tileById = (v: PadHostView, id: string): TileSpec | undefined =>
+  buildTiles(v, t).find((tile) => tile.id === id);
+
+describe("buildTiles — score mode", () => {
+  it("offers the explicit score sheet from the very first render, at every band", () => {
+    for (const band of [0, 1, 2, 3] as FidelityBand[]) {
+      expect(tileIds(view({ band })), `band ${band}`).toContain(SCORE_ENTRY_TILE_ID);
+    }
+  });
+
+  it("withholds both tally-shaped tiles until a tally actually exists", () => {
+    const fresh = tileIds(view());
+    expect(fresh).not.toContain(SETTLE_TILE_ID);
+    expect(fresh).not.toContain(CORRECTION_TILE_ID);
+  });
+
+  it("offers 'finish from tally' once a tally exists, showing exactly what it will record", () => {
+    const v = view({ events: stream(point("H"), point("H", 2), point("A")) });
+    const tile = tileById(v, SETTLE_TILE_ID);
+    expect(tile?.action).toEqual({ event: { type: RESULT_TYPE, payload: {} } });
+    expect(tile?.sublabelText).toBe("3 – 1");
+  });
+
+  it("WITHHOLDS 'finish from tally' at a level tally the division cannot record", () => {
+    const level = stream(point("H"), point("A"));
+    expect(tileIds(view({ events: level }))).toContain(SETTLE_TILE_ID);
+    expect(tileIds(view({ cfg: SCORE_NO_DRAWS_CFG, events: level }))).not.toContain(SETTLE_TILE_ID);
+  });
+
+  it("offers the correction sheet only while there is something to subtract", () => {
+    expect(tileIds(view({ events: stream(point("H")) }))).toContain(CORRECTION_TILE_ID);
+    // Tallied, then corrected back to nothing: `state.running` still exists,
+    // but no side has a point left to remove.
+    expect(tileIds(view({ events: stream(point("H"), point("H", -1)) }))).not.toContain(CORRECTION_TILE_ID);
+  });
+
+  it("drops every tally-shaped tile at band 0 — that fixture records one card", () => {
+    const ids = tileIds(view({ band: 0, events: stream(point("H")) }));
+    expect(ids).toEqual([SCORE_ENTRY_TILE_ID]);
+  });
+
+  it("never offers a Draw tile — a level score IS the draw", () => {
+    for (const cfg of [SCORE_CFG, SCORE_NO_DRAWS_CFG]) {
+      expect(tileIds(view({ cfg, events: stream(point("H"), point("A")) }))).not.toContain(DRAW_TILE_ID);
+    }
+  });
+});
+
+describe("buildTiles — win_loss mode", () => {
+  it("offers a Draw tile ONLY where the fold would accept one", () => {
+    expect(tileIds(view({ cfg: WIN_LOSS_DRAWS_CFG }))).toContain(DRAW_TILE_ID);
+    expect(tileIds(view({ cfg: WIN_LOSS_CFG }))).not.toContain(DRAW_TILE_ID);
+  });
+
+  it("the Draw tile is ABSENT, never disabled — a dead-end tap is worse than no tile", () => {
+    expect(buildTiles(view({ cfg: WIN_LOSS_CFG }), t).some((tile) => tile.disabled === true)).toBe(false);
+  });
+
+  it("the Draw tile commits the draw itself, with no sheet in the way", () => {
+    const tile = tileById(view({ cfg: WIN_LOSS_DRAWS_CFG }), DRAW_TILE_ID);
+    expect(tile?.action).toEqual({ event: { type: RESULT_TYPE, payload: { isDraw: true } } });
+  });
+
+  it("offers no score-entry or correction tile — this pad records no numbers", () => {
+    const ids = tileIds(view({ cfg: WIN_LOSS_DRAWS_CFG, events: stream(point("H")) }));
+    expect(ids).not.toContain(SCORE_ENTRY_TILE_ID);
+    expect(ids).not.toContain(CORRECTION_TILE_ID);
+    expect(ids).not.toContain(SETTLE_TILE_ID);
+  });
+});
+
+describe("buildTiles — every tile declares the phases generic can actually fold in", () => {
+  it("pre AND live, because applyScore/applyResult both accept phase 'pre'", () => {
+    for (const cfg of [SCORE_CFG, WIN_LOSS_DRAWS_CFG]) {
+      const tiles = buildTiles(view({ cfg, events: stream(point("H"), point("H")) }), t);
+      expect(tiles.length, `${cfg.resultMode} has tiles to check`).toBeGreaterThan(0);
+      for (const tile of tiles) expect(tile.phases, tile.id).toEqual(["pre", "live"]);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The More tile — declared ONLY when the chassis has something to put in it
+// ---------------------------------------------------------------------------
+
+/** The REAL chassis answer for this view: what `moreActions` would render. */
+function realMoreActions(v: PadHostView): string[] {
+  const spec = genericPadSpec(cfgOf(v) as never);
+  const tiles = buildTiles(v, t);
+  const sheets = buildSheets(v, t);
+  const scorebug = buildScorebug(v, t);
+  const dedicated = dedicatedEventTypes(tiles, sheets, [], scorebug);
+  return moreActions(
+    spec,
+    { state: v.state, summary: v.summary, phase: resolvePhase(v), band: v.band, entitlements: v.entitlements },
+    dedicated,
+    new Set<string>(),
+  ).map((action) => action.type);
+}
+
+describe("the More tile agrees with the chassis, in every mode/band/phase", () => {
+  it("is declared exactly when moreActions has something to show", () => {
+    const ledgers: EventEnvelope[][] = [stream(), stream(start()), stream(start(), point("H"))];
+    let sawBoth = { withMore: false, withoutMore: false };
+    for (const cfg of [SCORE_CFG, SCORE_NO_DRAWS_CFG, WIN_LOSS_CFG, WIN_LOSS_DRAWS_CFG]) {
+      for (const band of [0, 1, 2, 3] as FidelityBand[]) {
+        for (const events of ledgers) {
+          const v = view({ cfg, band, events });
+          const declared = tileIds(v).includes(MORE_TILE_ID);
+          const real = realMoreActions(v).length > 0;
+          expect(declared, `${cfg.resultMode}@${band} phase=${resolvePhase(v)}`).toBe(real);
+          sawBoth = { withMore: sawBoth.withMore || declared, withoutMore: sawBoth.withoutMore || !declared };
+        }
+      }
+    }
+    // Guard the guard: a sweep that only ever saw one answer would agree
+    // vacuously with anything.
+    expect(sawBoth).toEqual({ withMore: true, withoutMore: true });
+  });
+
+  it("win_loss at band 1+ keeps the module's own tally actions reachable through More", () => {
+    expect(realMoreActions(view({ cfg: WIN_LOSS_CFG, band: 1, events: stream(start()) }))).toEqual([SCORE_TYPE]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// sheets() — a METHOD of the view, rebuilt per render
+// ---------------------------------------------------------------------------
+
+describe("buildSheets", () => {
+  it("every sheet a tile opens exists, and no sheet is declared without an opener", () => {
+    for (const cfg of [SCORE_CFG, SCORE_NO_DRAWS_CFG, WIN_LOSS_CFG, WIN_LOSS_DRAWS_CFG]) {
+      for (const band of [0, 3] as FidelityBand[]) {
+        const v = view({ cfg, band, events: stream(start(), point("H")) });
+        const sheets = buildSheets(v, t);
+        const opened = buildTiles(v, t)
+          .map((tile) => ("sheet" in tile.action ? tile.action.sheet : null))
+          .filter((key): key is string => key !== null && key !== MORE_SHEET_KEY);
+        expect(new Set(Object.keys(sheets)), `${cfg.resultMode}@${band}`).toEqual(new Set(opened));
+      }
+    }
+  });
+
+  it("the score sheet PREFILLS from the tally, so an unedited confirm records the board", () => {
+    const v = view({ events: stream(point("H"), point("H", 2), point("A")) });
+    const sheet = buildSheets(v, t)[SCORE_ENTRY_TILE_ID]!;
+    expect(sheet.event).toBe(RESULT_TYPE);
+    expect(sheet.steps.map((step) => (step.kind === "number" ? step.initial : null))).toEqual([3, 1]);
+    expect(sheet.buildPayload({ home: "12", away: "9" })).toEqual({ p1Score: 12, p2Score: 9 });
+  });
+
+  it("the score sheet's ceiling is the ENGINE's own plausibility bound, not a number invented here", () => {
+    const spec = genericPadSpec(SCORE_CFG as never);
+    const engineMax = spec.panels
+      .flatMap((panel) => panel.actions)
+      .find((action) => action.fields.some((field) => field.path === "p1Score"))
+      ?.fields.find((field) => field.path === "p1Score");
+    const sheet = buildSheets(view(), t)[SCORE_ENTRY_TILE_ID]!;
+    for (const step of sheet.steps) {
+      if (step.kind === "number") expect(step.max).toBe((engineMax as { max?: number }).max);
+    }
+  });
+
+  it("the correction sheet posts a NEGATIVE points, never zero, against the side chosen", () => {
+    const v = view({ events: stream(point("H"), point("H", 2)) });
+    const sheet = buildSheets(v, t)[CORRECTION_TILE_ID]!;
+    expect(sheet.event).toBe(SCORE_TYPE);
+    expect(sheet.buildPayload({ side: "home", points: "2" })).toEqual({ by: "H", points: -2 });
+    expect(sheet.buildPayload({ side: "away", points: "1" })).toEqual({ by: "A", points: -1 });
+  });
+
+  it("the correction sheet cannot offer 0, and cannot offer more than a side actually holds", () => {
+    const v = view({ events: stream(point("H", 4), point("A")) });
+    const step = buildSheets(v, t)[CORRECTION_TILE_ID]!.steps.find((s) => s.kind === "number");
+    expect(step).toBeDefined();
+    if (step?.kind === "number") {
+      expect(step.min).toBe(1);
+      expect(step.max).toBe(4);
+      expect(step.initial).toBeGreaterThanOrEqual(1);
+    }
+  });
+
+  it("the correction sheet's own step is capped by the engine's single-press bound", () => {
+    const v = view({ events: stream(point("H", 50), point("H", 50)) });
+    const step = buildSheets(v, t)[CORRECTION_TILE_ID]!.steps.find((s) => s.kind === "number");
+    if (step?.kind === "number") expect(step.max).toBe(50);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The seam, folded: every payload this skin can build, through the REAL engine
+// ---------------------------------------------------------------------------
+
+describe("every payload this pad can produce folds through the real engine", () => {
+  function foldOne(cfg: typeof SCORE_CFG, events: EventEnvelope[], type: string, payload: unknown): unknown {
+    return foldClient(generic, cfg, SOLO, [...events, ev(events.length, type, payload)]);
+  }
+
+  it("score mode: the half tap, the dock's amended amount, a correction, the settle and the sheet", () => {
+    const base = stream(start());
+    const half = buildScorebug(view({ events: base }), t).halves[0]!.tapEvent!;
+    expect(() => foldOne(SCORE_CFG, base, half.type, half.payload)).not.toThrow();
+    // The dock's own amend: the SAME held payload with a different amount.
+    expect(() => foldOne(SCORE_CFG, base, half.type, { ...half.payload, points: 5 })).not.toThrow();
+    const tallied = stream(start(), point("H", 3), point("A"));
+    const v = view({ events: tallied });
+    const correction = buildSheets(v, t)[CORRECTION_TILE_ID]!;
+    expect(() =>
+      foldOne(SCORE_CFG, tallied, correction.event, correction.buildPayload({ side: "home", points: "1" })),
+    ).not.toThrow();
+    const settle = tileById(v, SETTLE_TILE_ID)!.action;
+    expect("event" in settle).toBe(true);
+    if ("event" in settle) {
+      expect(() => foldOne(SCORE_CFG, tallied, settle.event.type, settle.event.payload)).not.toThrow();
+    }
+    const entry = buildSheets(v, t)[SCORE_ENTRY_TILE_ID]!;
+    expect(() =>
+      foldOne(SCORE_CFG, tallied, entry.event, entry.buildPayload({ home: "21", away: "19" })),
+    ).not.toThrow();
+  });
+
+  it("win_loss mode: both half taps and the Draw tile", () => {
+    const base = stream(start());
+    const spec = buildScorebug(view({ cfg: WIN_LOSS_DRAWS_CFG, events: base }), t);
+    for (const half of spec.halves) {
+      expect(() => foldOne(WIN_LOSS_DRAWS_CFG, base, half.tapEvent!.type, half.tapEvent!.payload)).not.toThrow();
+    }
+    const draw = tileById(view({ cfg: WIN_LOSS_DRAWS_CFG, events: base }), DRAW_TILE_ID)!.action;
+    if ("event" in draw) {
+      expect(() => foldOne(WIN_LOSS_DRAWS_CFG, base, draw.event.type, draw.event.payload)).not.toThrow();
+    }
+  });
+
+  it("the settle tile the pad WITHHOLDS is exactly the one the fold refuses", () => {
+    const level = stream(start(), point("H"), point("A"));
+    // Withheld — and this is why.
+    expect(tileIds(view({ cfg: SCORE_NO_DRAWS_CFG, events: level }))).not.toContain(SETTLE_TILE_ID);
+    expect(() => foldOne(SCORE_NO_DRAWS_CFG, level, RESULT_TYPE, {})).toThrow(/draws are not allowed/);
+    // Offered where draws ARE allowed, and the fold accepts it there.
+    expect(() => foldOne(SCORE_CFG, level, RESULT_TYPE, {})).not.toThrow();
   });
 });
