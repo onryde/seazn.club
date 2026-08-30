@@ -4344,12 +4344,49 @@ are untouched and still assert 402 — this remains the narrow change, not R9.
 
 ### Verified by the orchestrator
 
-[IN PROGRESS AT TIME OF WRITING — this paragraph is being filled in as fix
-pass 4 completes; the clock-correction rule and the entitlement change above
-are both final, this is the verification record for them.] Baseline going
-in: 2204/2202/0/2 pending across `src/components/v2/scorepad`, 59 files. tsc
-clean on two full `apps/web` typecheck runs so far (one after the sheet/dock
-fix, one after the clock rewrite).
+**2233 total / 2231 passed / 0 failed / 2 pending across
+`src/components/v2/scorepad`, 59 files** (baseline going in was
+2204/2202/0/2 pending/59 — +29 tests, 0 regressions), every
+`.testResults[].name` confirmed under the r6-period worktree. Full engine
+suite (`packages/engine`) 0 failed both before and after (its own total
+drifts by ±13 between runs from a PRE-EXISTING, unrelated property test in
+`src/import/plan.property.test.ts` this task never touched — confirmed by
+diffing per-file test counts across two runs, everything else byte-identical).
+`fidelity.test.ts` 37/37; `entitlements-v2.test.ts` (real Postgres, RLS +
+triggers) 32/32. tsc clean on BOTH workspaces (`apps/web` and
+`packages/engine`), final pass after every mutation restore. Lint: 0
+problems on every touched file in both workspaces (`scripts/smoke.ts` has no
+lint config at the repo root — confirmed, not skipped). i18n parity OK,
+5653 keys × 4 locales.
+
+**12 mutants, one at a time, all 12 DIE:** kernel.ts's `tier1Types` reverted
+whole and narrowly (the set-piece leak); clock.ts's floor clamp and its
+finding-1 elapsedOf-not-base fix, independently; `laterAsOf`;
+`classIsPermanent`; `otherSide` (survived the FIRST sweep — the generic
+padSpec-reachability test proved a key was settable but not which roster it
+drew from; closed with a dedicated goalkeeper-side test, see the commit
+below); `appendVerdict`'s `strictFromSeq`; `PadClockBar`'s `fixtureId`-derived
+id; `adjustClockNow`'s floor-sourcing (source-audit only — no jsdom); the
+suspension sheet's `servedBy` field dropped in isolation; and kernel.ts's
+full revert, confirmed dying at BOTH the pure-unit layer and the real-Postgres
+`scoreEvent` layer in the same run.
+
+**A free-plan org's icehockey card, through the real usecase door (not the
+running server — see the entitlement section's own note on why):**
+`entitlements-v2.test.ts`'s new case creates a community-plan org, real
+Postgres row and all, calls `scoreEvent` directly with
+`icehockey.suspension.start` and gets back `seq: 2` (recorded), then calls it
+again with `icehockey.set_piece` on the SAME fixture and gets a 402 with
+`feature_key: "scoring.match_timeline"` — the narrowness of the ruling,
+proved on one continuous stream rather than asserted separately. A literal
+HTTP attempt against the actually-running (pre-built) server at
+`localhost:3356` was also made and correctly still returns 402 for the
+suspension — expected: that server was built before this fix pass and
+rebuilding it was explicitly out of scope.
+
+Six commits: `42674cd93` (finding 4), `0c56feb19` (findings 1+2+6),
+`e5ae81ab3` (this note), `93eeff91a` (finding 5), `331c6ac74` (finding-4
+goalkeeper-side follow-up from the mutation sweep), `62eeab661` (finding E).
 
 ---
 
