@@ -5585,3 +5585,81 @@ its "failures" were R7 believing something false about its own product, and
 both beliefs are now written down as tests. That is the value — the gate does
 not only catch broken code, it catches a wave shipping on a wrong model of what
 it built.
+
+### R7 — SESSION STATE at compaction (2026-08-30)
+
+**Branch** `feat/scorepad-v3-r7-universal-console`, worktree
+`.claude/worktrees/r7-console`, env label `r7` (pg 54559, server
+`localhost:3348`). 28 commits, based on `e23dcf241`.
+
+**Task state:**
+| Task | State |
+|---|---|
+| B (lineup editor), B2 (`resolvePositions` read path) | CLOSED — gate, reviewer, walkthrough |
+| C (console chrome: ledger, authority band, handover, undos) | CLOSED — gate, reviewer SHIP, visual, walkthrough 6/6 |
+| A1 `generic` skin | IN FLIGHT (implementer) |
+| A2 `boardgame`, A3 `carrom` | QUEUED — each owes its own gate/review/visual/walkthrough |
+| D (`v3-headline` conditional), E (cricket empty More sheet), F (P-5 dock amend) | QUEUED |
+| G (legacy-lane demolition + totality flip) | HELD AT TIP — gated on R6 merging |
+
+**Last gate rerun BY THE MAIN THREAD:** vitest `src/components/v2 src/app`
+**4483 / 4481 / 0 / 2 pending**, 1364 suites, 0 failed suites, `grep -vc
+worktrees/r7-console` = **0**; `rtk proxy tsc` 0 errors; `rtk proxy npm run
+lint` ✖ 125 (0 errors) = baseline. Walkthrough 6/6, five differing captures.
+
+**REBASE OWED (owner asked, deferred deliberately).** `origin/main` moved to
+`fb81bd54f` (RS008 #682, consent sweep) — ONE commit, 35 files. Not done yet
+because the A1 implementer is live in this worktree and is editing two of the
+conflicting files. Do it the moment A1 lands.
+Conflict surface is exactly five files:
+`apps/web/src/dictionaries/{en,es,fr,nl}/ui.json` (flat dotted keys — take BOTH
+key sets; RS008 adds consent copy, R7 adds `pad.*`/`console.*`) and
+`apps/web/src/lib/i18n-keys.ts` (**GENERATED** — take either side, rerun
+`npm run i18n:gen-keys`, never hand-merge).
+**`apps/web/e2e/helpers.ts` also changed on main** and the R7 walkthrough imports
+`seedRosteredFixture`/`fixturePath`/`apiJson` from it. vitest does not typecheck
+e2e specs and Playwright specs are not in the unit run, so a moved signature
+would be INVISIBLE to the gate. **Re-run the walkthrough after the rebase, not
+just the gate.** No `git stash` — the stack is shared with the main checkout.
+
+**OWNER RULINGS taken at the status check:**
+1. The 402 phantom-recording issue R6 found (server refuses a penalty, the pad
+   renders it as recorded — ribbon, activity rows, ticking countdown, no
+   rejection banner) has its entitlement half already ruled: **`suspension.start`
+   is FREE / band 1**, ruled in the R6 session. Nothing owed by R7; R6 owns it.
+   R7 deliberately did NOT relay it — a ruling given in another session is that
+   session's to act on.
+2. **APPROVED: put ONE sport's gallery capture under CI on the PR trigger.**
+   R7 owns this. Rationale: `gallery.capture.ts` is its own Playwright project
+   and runs in NO CI job, so R7's own C1 silently broke the harness for BOTH
+   waves' sign-off gate and nothing would have caught it until someone tried to
+   sign off.
+
+**Implementation notes for ruling 2, pinned so they are not re-derived:**
+- The PR-triggered workflow is **`.github/workflows/ci.yml`** (`on:
+  pull_request:`). `e2e.yml` triggers on push to `main` ONLY and is the wrong
+  file.
+- Put it in the existing **`smoke-e2e`** job (`ci.yml:1125`), which already
+  stands up Postgres 16 as a service AND a standalone prod server
+  (`Start server` step, `node apps/web/.next/standalone/apps/web/server.js`,
+  health-polled on `localhost:3000`). Reusing that server avoids paying for a
+  second prod build — a new job would cost minutes for a tool used at sign-off.
+- Insert AFTER `Run per-sport smoke (deciders)` and BEFORE `Dev server log (on
+  failure)`.
+- That job does not currently use Playwright, so it needs
+  `npx playwright install --with-deps chromium` first.
+- Run ONE sport: **football** — converted, richest chrome (dock, cards), ~22s
+  locally vs cricket's ~1.2m, and it is the sport C1's break surfaced on.
+  Filter with `--grep "gallery: Football"`.
+- **It must FAIL the job.** A non-blocking gate is theatre and is exactly the
+  class this programme keeps hitting. `ci.yml` is LIVE and gates every PR, so a
+  broken edit blocks the repo — verify the YAML before committing.
+
+**Premises found false this wave: 14** — six in the brief/register/index, EIGHT
+authored by R7 itself. Two generalisations now in `AGENTS.md`: "a grep is not a
+read" and "a read is not a run".
+
+**Concurrent-wave contract with R6 is holding.** Six shared files; `registry.ts`
+sorted A-Z on BOTH branches so the merge is "union, keep it sorted";
+`sport-theme.ts` stays neighbour-insert because it carries per-sport comment
+blocks a sort would tear apart; R6 gets a notice before each R7 skin lands.
