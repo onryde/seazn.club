@@ -36,6 +36,8 @@
 // strength chip off `summary.detail`, and `boxOf`'s countdown — read off the
 // hook's live output. A fixture on both ends would only prove the fixture.
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { EventEnvelope } from "@seazn/engine/core";
 import { renderIsland } from "@/components/__tests__/_hook-harness";
@@ -417,5 +419,57 @@ describe("after a refusal the pad's fold equals the server's own", () => {
     const honest = summaryOf(icehockey, pad.current.state as PeriodStateLike);
     expect(pad.current.summary).toEqual(honest);
     expect((pad.current.state as PeriodStateLike).suspensions ?? []).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 6. THE BANNER IS A LIVE REGION. Caught by this task's own mutation sweep:
+//    deleting `role="alert"` from the rejection banner left all 130 tests
+//    green, which by this repo's own rule means the attribute was decoration.
+//
+//    It is not. Since the fix, the optimistic ribbon/row/chip/countdown are
+//    all rolled back, so this banner is the ONLY evidence the tap happened —
+//    and it materialises mid-match, on a screen a scorer is not looking at.
+//    A bare <p> appearing in the DOM is announced to nobody.
+//
+//    Pinned at source: `apps/web` vitest is `environment: "node"` and the
+//    banner is one branch deep inside `PadHostV3`'s render, so rendering it
+//    would mean standing up the whole pipeline. The PAIRING is what is
+//    asserted — `role` and `data-role` on the SAME element — never the mere
+//    presence of the string somewhere in an 80KB file, which would pass with
+//    the attribute sitting on any unrelated node.
+// ---------------------------------------------------------------------------
+
+describe("the rejection banner announces itself", () => {
+  /** The opening tag that carries `data-role="v3-rejection"`, with `//` line
+   *  comments stripped first — the surrounding JSDoc contains a literal `<p>`
+   *  that would otherwise derail the scan. */
+  function rejectionOpeningTag(): string {
+    const src = readFileSync(
+      join(process.cwd(), "src/components/v2/scorepad/v3/pad-host.tsx"),
+      "utf8",
+    ).replace(/^\s*\/\/.*$/gm, "");
+    const marker = src.indexOf('data-role="v3-rejection"');
+    expect(marker, "the rejection banner is gone entirely").toBeGreaterThan(-1);
+    const open = src.lastIndexOf("<", marker);
+    const close = src.indexOf(">", marker);
+    expect(open).toBeGreaterThan(-1);
+    expect(close).toBeGreaterThan(open);
+    return src.slice(open, close + 1);
+  }
+
+  it("the element carrying data-role=v3-rejection is itself the live region", () => {
+    const tag = rejectionOpeningTag();
+    expect(tag).toContain('data-role="v3-rejection"');
+    expect(tag, "the refusal banner is not announced — see this block's header").toContain('role="alert"');
+  });
+
+  it("the scan really is scoped to one element, not the whole file", () => {
+    // Guards the guard: if `rejectionOpeningTag` ever returned the file, the
+    // assertion above would pass on any stray `role="alert"` anywhere.
+    const tag = rejectionOpeningTag();
+    expect(tag.length).toBeLessThan(400);
+    expect(tag.startsWith("<")).toBe(true);
+    expect(tag.endsWith(">")).toBe(true);
   });
 });
