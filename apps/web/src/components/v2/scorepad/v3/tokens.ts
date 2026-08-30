@@ -245,11 +245,16 @@ export const NIGHT_TILE_ALPHA_TEXT = {
 // `dismissal` are the only colours in football's visual language that mean
 // something, and before B4 a red card rendered in the chassis's generic
 // `destructive` red — identical to Abandon — while a yellow rendered neutral.
+//
+// R6-3 adds `advisory`, hockey's FIH green card. Forced by `SportTone` rather
+// than optional: `guided-sheet.tsx` indexes this record with a `SportTone`, so
+// a tone with no class here is a tsc error, not a silently untinted option.
 export const SPORT_TONE_CLASSES = {
   /** Sets `--pad-tone` for everything inside. On the BUTTON it selects the
    *  background wash; on a SWATCH it selects that swatch's fill, which is how
    *  one option can carry two colours (a second yellow is a yellow card and a
    *  red one, not a red card with a note). */
+  advisory: "pad-tone-advisory",
   caution: "pad-tone-caution",
   dismissal: "pad-tone-dismissal",
   /** The option button's 12% tint of its own tone. Decorative: the label

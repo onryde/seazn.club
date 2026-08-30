@@ -983,7 +983,7 @@ body {
    Reverses the 2026-08-15 theme lock: a skin gains a bounded visual voice.
    `docs/superpowers/specs/2026-08-15-scoringpad-v3-prompts/_INDEX.md`.
 
-   THE VOCABULARY IS CLOSED — six tokens, mirrored (never re-invented) in
+   THE VOCABULARY IS CLOSED — seven tokens, mirrored (never re-invented) in
    src/components/v2/scorepad/v3/sport-theme.ts, which is the ONLY place a
    per-sport value is written. A skin names a token; it never supplies a hex.
 
@@ -1004,15 +1004,19 @@ body {
    The literal is the belt-and-braces fallback for the case where no lime-400
    utility survives anywhere to make Tailwind emit the theme var at all.
 
-   `--sport-caution`/`--sport-dismissal` are NEW (nothing painted a card
-   colour before) and are stated as literal hex on purpose: the app's daylight
-   signal pair, pinned so they cannot drift with a palette revision the way
-   `lime-400` just did. ─────────────────────────────────────────────────── */
+   `--sport-advisory`/`--sport-caution`/`--sport-dismissal` are NEW (nothing
+   painted a card colour before) and are stated as literal hex on purpose: the
+   app's daylight signal set, pinned so they cannot drift with a palette
+   revision the way `lime-400` just did. `--sport-advisory` is R6-3's seventh
+   token, the FIH GREEN card — hockey shows three cards, not two, and two
+   tokens cannot carry three strengths (sport-theme.ts's `SPORT_TOKENS` note
+   carries the full argument). Only hockey overrides it. ─────────────────────────────────────────────────── */
 :root {
   --sport-board: var(--mk-night);
   --sport-board-2: var(--mk-night-2);
   --sport-ink: var(--mk-cream);
   --sport-led: var(--color-lime-400, #9ae600);
+  --sport-advisory: #16a34a;
   --sport-caution: #d97706;
   --sport-dismissal: #dc2626;
 }
@@ -1139,6 +1143,13 @@ body {
    `--sport-board` HAIRLINE, never by its fill — a yellow fill on a pale wash
    is ~1.15:1 and cannot meet WCAG 1.4.11 on its own. This is precisely the
    pair that passes by eye and fails when computed. */
+/* R6-3 — the third card grade. `advisory` is hockey's FIH green card, and the
+   rule is identical to its two siblings by construction: the tone class only
+   ever SETS `--pad-tone`, so the swatch/wash rules below need no knowledge
+   that a third grade now exists. */
+.pad-tone-advisory {
+  --pad-tone: var(--sport-advisory);
+}
 .pad-tone-caution {
   --pad-tone: var(--sport-caution);
 }

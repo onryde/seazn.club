@@ -798,6 +798,108 @@ describe("the tones are NON-TEXT colours, and this is where that stops being a c
     },
   );
 
+  // R6/the period pair (owner ruling R6-3, 2026-08-30) — hockey and ice hockey,
+  // both pinned HERE and both pinned NOW, one wave before either skin exists.
+  // Same reasoning the R4 and R5 blocks above each record, and it was
+  // established by MUTATION rather than assumed: the licence scan below is
+  // USAGE-driven, so with no `skins/hockey.tsx` in the tree it can say nothing
+  // whatsoever about these hexes, and reverting one to an unreadable value
+  // would red exactly nothing without this block.
+  //
+  // THE TWO SPORTS OWE DIFFERENT FLOORS, which is why this is two tests and
+  // not one `it.each` — the racquet family could share a body because all
+  // three sports word their sanctions; these two do not:
+  //
+  //   hockey     THREE CARDS, and a card is a SWATCH. `sports/hockey/hockey.ts`
+  //              declares `disciplineColors: [green, yellow, red]` — three
+  //              physical cards an umpire holds up, which is the whole
+  //              argument for the seventh token (R6-3): two tones cannot carry
+  //              a three-strength signal. Football's swatch licence (the block
+  //              above) therefore applies verbatim, and `dismissal` sitting
+  //              UNDER the text floor on its own board is correct rather than
+  //              a near-miss to be nudged.
+  //   icehockey  NO cards at all. `sports/icehockey/icehockey.ts`'s ladder is
+  //              minor / double / major / misconduct / game misconduct / match
+  //              — WORDS, exactly like the racquet family's, so both of its
+  //              tones land on TEXT and owe the strict 4.5 on both grounds.
+  it("hockey's cards are SWATCHES, so the sheet's obligations bind and the text floor does not", () => {
+    const hockey = resolveSportPalette("hockey");
+    // ONE SIGNAL AT THREE STRENGTHS. Three distinct values is the minimum
+    // claim the seventh token makes; two equal ones would silently make this
+    // a two-card sport, which is exactly what dropping the `advisory`
+    // override would do via `resolveSportPalette`'s default fallback.
+    expect(new Set([hockey.advisory, hockey.caution, hockey.dismissal]).size).toBe(3);
+    // The FIH green card is GREEN. `advisory` exists to name that card; a hex
+    // whose dominant channel is not green makes the token's name a lie, and
+    // no ratio in this file would notice (contrast is luminance-only).
+    const [r, g, b] = [1, 3, 5].map((i) => parseInt(hockey.advisory.slice(i, i + 2), 16));
+    expect(g, `hockey --sport-advisory ${hockey.advisory} must read as GREEN`).toBeGreaterThan(r!);
+    expect(g).toBeGreaterThan(b!);
+    // Every card paints on the DAYLIGHT sheet: a readable label on its own
+    // wash, and the 1.4.11 boundary carried by the `--sport-board` hairline.
+    for (const tone of ["advisory", "caution", "dismissal"] as const) {
+      for (const alpha of [WASH_ALPHA, WASH_HOVER_ALPHA]) {
+        const wash = compositeOver(hockey[tone], alpha, SHEET_GROUND);
+        expect(contrastRatio(wash, SHEET_LABEL), `hockey ${tone} label on its wash`).toBeGreaterThanOrEqual(4.5);
+        expect(contrastRatio(wash, hockey.board), `hockey ${tone} hairline on its wash`).toBeGreaterThanOrEqual(3.0);
+      }
+    }
+    // The two-sided pin, football's own shape: the red card clears 1.4.11 for
+    // a graphical object and MISSES the text floor. Both halves are live, so
+    // nudging this hex in either direction reds here — and a later wave that
+    // wants a red card as TEXT on the board has to change this line first.
+    expect(contrastRatio(hockey.board, hockey.dismissal)).toBeGreaterThanOrEqual(3.0);
+    expect(contrastRatio(hockey.board, hockey.dismissal)).toBeLessThan(4.5);
+    // Green and yellow are not under that licence — both are comfortably
+    // text-safe on both night grounds, so the ribbon and activity panel may
+    // word them without a second palette decision.
+    for (const tone of ["advisory", "caution"] as const) {
+      expect(contrastRatio(hockey.board, hockey[tone]), `hockey ${tone} on its board`).toBeGreaterThanOrEqual(4.5);
+      expect(contrastRatio(hockey["board-2"], hockey[tone]), `hockey ${tone} on its band`).toBeGreaterThanOrEqual(4.5);
+    }
+    // The signature (`led`, the umpire's own board amber) and the ink.
+    for (const token of ["led", "ink"] as const) {
+      expect(contrastRatio(hockey.board, hockey[token])).toBeGreaterThanOrEqual(4.5);
+      expect(contrastRatio(hockey["board-2"], hockey[token])).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it("ice hockey's tones are WORDS, not cards, so both clear the 4.5 floor on board AND band", () => {
+    const ice = resolveSportPalette("icehockey");
+    for (const tone of ["caution", "dismissal"] as const) {
+      const board = contrastRatio(ice.board, ice[tone]);
+      expect(board, `icehockey --sport-${tone} is ${board.toFixed(2)}:1 on its own board`).toBeGreaterThanOrEqual(4.5);
+      const band = contrastRatio(ice["board-2"], ice[tone]);
+      expect(band, `icehockey --sport-${tone} is ${band.toFixed(2)}:1 on its own band`).toBeGreaterThanOrEqual(4.5);
+    }
+    for (const token of ["led", "ink"] as const) {
+      expect(contrastRatio(ice.board, ice[token])).toBeGreaterThanOrEqual(4.5);
+      expect(contrastRatio(ice["board-2"], ice[token])).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it("ice hockey declares NO advisory of its own — the green card is FIH's, not IIHF's", () => {
+    // `SPORT_PALETTES` is OVERRIDES ONLY (sport-theme.ts's own header), and
+    // this is the assertion that keeps it honest for a token six of the seven
+    // sports never use: ice hockey must INHERIT the default, not restate it.
+    expect(SPORT_PALETTES["icehockey"]).not.toHaveProperty("advisory");
+    expect(resolveSportPalette("icehockey").advisory).toBe(DEFAULT_SPORT_PALETTE.advisory);
+  });
+
+  // The other half of "pinned now, not when the skin lands" — the same guard
+  // the racquet block carries one screen up. Without it, deleting either entry
+  // outright routes every assertion above through `resolveSportPalette`'s
+  // documented full-default fallback, which is a complete and readable
+  // palette: every ratio would keep passing while the sport rendered in
+  // cricket's colours.
+  it.each(["hockey", "icehockey"])(
+    "%s declares its OWN palette entry, so the pins above are measuring it and not the default fallback",
+    (key) => {
+      expect(Object.keys(SPORT_PALETTES)).toContain(key);
+      expect(resolveSportPalette(key).board).not.toBe(DEFAULT_SPORT_PALETTE.board);
+    },
+  );
+
   // R3 review round — THIS LICENCE HAD ALMOST NO TEETH. It grepped globals.css
   // for the literal `color: var(--sport-<tone>)` and therefore missed the
   // unspaced form, any wrapper (`color-mix(...)`), an arbitrary Tailwind value

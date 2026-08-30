@@ -86,15 +86,25 @@ const PRE_R3_RENDERED_HEX = {
   led: "#9ae600",
   caution: "#d97706",
   dismissal: "#dc2626",
+  // R6-3 — `advisory` is the third of these NEW defaults and lands on the same
+  // terms: nothing painted a green card before either, so there is no pre-B4
+  // value to preserve. green-600 is the app's own daylight signal set
+  // completing itself beside amber-600 and red-600 above.
+  advisory: "#16a34a",
 } as const;
 
 describe("the token vocabulary is CLOSED and small (skins pick from it, never supply raw values)", () => {
-  it("is exactly the six tokens this wave's minimum vocabulary names", () => {
-    expect([...SPORT_TOKENS]).toEqual(["board", "board-2", "ink", "led", "caution", "dismissal"]);
+  it("is exactly the seven tokens the vocabulary names", () => {
+    // R6-3 added the seventh, `advisory` — the FIH green card. The vocabulary
+    // is still CLOSED and still small; what changed is that one sport in it
+    // has a three-strength card signal, and two tokens cannot express three
+    // strengths. This list grows only by an owner ruling, never by a skin
+    // wanting a colour.
+    expect([...SPORT_TOKENS]).toEqual(["board", "board-2", "ink", "led", "advisory", "caution", "dismissal"]);
   });
 
   it("the card-code tones are a SUBSET of the tokens, not a second vocabulary", () => {
-    expect([...SPORT_TONES]).toEqual(["caution", "dismissal"]);
+    expect([...SPORT_TONES]).toEqual(["advisory", "caution", "dismissal"]);
     for (const tone of SPORT_TONES) expect(SPORT_TOKENS).toContain(tone);
   });
 
@@ -134,10 +144,11 @@ describe("CRICKET IS UNCHANGED — lock 1: data", () => {
     // `style=""` attribute, which would change cricket's own root markup.
     expect(sportThemeStyle("cricket")).toBeUndefined();
     // R4: `tennis` USED to stand here as the second unthemed example, and it
-    // is themed now. The stand-in has to be a sport that genuinely has no
-    // palette, or this lock quietly stops asserting anything — `hockey` is
-    // still on the legacy lane with no entry in SPORT_PALETTES.
-    expect(sportThemeStyle("hockey")).toBeUndefined();
+    // is themed now. R6 retired `hockey` from the slot for the same reason —
+    // it has a palette as of R6-3. The stand-in has to be a sport that
+    // genuinely has no entry in SPORT_PALETTES, or this lock quietly stops
+    // asserting anything; `carrom` is still on the legacy lane with none.
+    expect(sportThemeStyle("carrom")).toBeUndefined();
   });
 
   it("and NO data-sport-theme either, which is what keeps a sport-scoped CSS rule off it", () => {
@@ -145,7 +156,9 @@ describe("CRICKET IS UNCHANGED — lock 1: data", () => {
     // must agree with it on EVERY key, or a scoped rule fires where the
     // properties were never emitted (or fails to fire where they were).
     expect(sportThemeAttr("cricket")).toBeUndefined();
-    expect(sportThemeAttr("hockey")).toBeUndefined();
+    expect(sportThemeAttr("carrom")).toBeUndefined();
+    expect(sportThemeAttr("hockey")).toBe("hockey");
+    expect(sportThemeAttr("icehockey")).toBe("icehockey");
     expect(sportThemeAttr("football")).toBe("football");
     expect(sportThemeAttr("tennis")).toBe("tennis");
     // `tennis` stays IN this loop: the pair invariant is the point, and it has
@@ -323,19 +336,31 @@ describe("FOOTBALL is the only sport that overrides, and its values are the ones
   });
 
   it("every override actually DIFFERS from the default it replaces — an inert override is a silent no-op", () => {
+    // R6-3: the loop is over the tokens football DECLARES, not over
+    // `SPORT_TOKENS`. Football overrode all six when six were all there were;
+    // `advisory` is the seventh and football has no green card, so requiring
+    // a difference for it would demand an override this sport must not have
+    // (`SPORT_PALETTES` is OVERRIDES ONLY — see the "declares exactly the six
+    // recorded hexes" lock directly above, which is what pins the set).
     const football = resolveSportPalette("football");
-    for (const token of SPORT_TOKENS) {
+    for (const token of Object.keys(SPORT_PALETTES.football!) as (keyof typeof football)[]) {
       expect(football[token], `football's ${token} is a copy of the default`).not.toBe(DEFAULT_SPORT_PALETTE[token]);
     }
   });
 
-  it("emits every token as a real --sport-* custom property on the pad root", () => {
+  it("emits every token IT OVERRIDES as a real --sport-* custom property, and no others", () => {
+    // Both halves matter. Emitting a token football does not override would
+    // freeze the inherited value at today's default and stop it tracking a
+    // later product-theme change — the reason `sportThemeStyle` emits the
+    // overrides rather than the resolved set, stated as an executable claim.
     const style = sportThemeStyle("football");
     expect(style).toBeDefined();
     const entries = style as unknown as Record<string, string>;
-    expect(Object.keys(entries).sort()).toEqual(SPORT_TOKENS.map((tk) => `--sport-${tk}`).sort());
-    for (const token of SPORT_TOKENS) {
-      expect(entries[`--sport-${token}`]).toBe(resolveSportPalette("football")[token]);
+    const overridden = Object.keys(SPORT_PALETTES.football!);
+    expect(Object.keys(entries).sort()).toEqual(overridden.map((tk) => `--sport-${tk}`).sort());
+    expect(entries["--sport-advisory"]).toBeUndefined();
+    for (const token of overridden) {
+      expect(entries[`--sport-${token}`]).toBe(resolveSportPalette("football")[token as keyof typeof DEFAULT_SPORT_PALETTE]);
     }
   });
 

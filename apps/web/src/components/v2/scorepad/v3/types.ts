@@ -544,6 +544,13 @@ export type StepPredicate = (answers: Readonly<Record<string, string>>) => boole
  * colour any more — the three options inside `card-<side>`'s first step are
  * where these belong.
  *
+ * R6-3 widened that vocabulary to THREE (`advisory`, hockey's FIH green card)
+ * — additively, and without touching this field's type: `SportTone` is derived
+ * from `SPORT_TONES`, so the accepted subset here grows with the ruling rather
+ * than being restated. That is the whole reason this reads `readonly
+ * SportTone[]` and not a hand-written union; a second vocabulary for the same
+ * values is the drift this file's own import note forbids.
+ *
  * An ARRAY over a closed vocabulary (`SportTone`, ./sport-theme.ts), not a
  * single value, because one option legitimately carries two: a second yellow
  * IS a yellow card and a red one, not a red card with a note (the engine
