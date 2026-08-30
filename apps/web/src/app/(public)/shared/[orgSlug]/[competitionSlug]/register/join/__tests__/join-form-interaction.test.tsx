@@ -313,7 +313,10 @@ describe("submit — success", () => {
     expect(m.pageText()).toContain("You're in");
     // totalPlayers 4, 2 unclaimed before -> 2 already granted; claiming ONE
     // more (p1) makes 3, total stays 4.
-    expect(m.pageText()).toContain("3 of 4 confirmed");
+    // RS007 #20: roster-side copy renamed off "confirm" (register.status.
+    // roster.meter) — it shares this key with the status page's own meter,
+    // so it can no longer be misread as a payment state.
+    expect(m.pageText()).toContain("3 of 4 checked in");
     expect(m.pageText()).toContain("Team Alpha");
   });
 
@@ -324,7 +327,7 @@ describe("submit — success", () => {
     (propsOf(newRadio).onChange as () => void)();
     fillMinimalValidForm(m);
     await submit(m);
-    expect(m.pageText()).toContain("4 of 4 confirmed");
+    expect(m.pageText()).toContain("4 of 4 checked in");
   });
 
   it("does not send a player_id at all for the insert path", async () => {

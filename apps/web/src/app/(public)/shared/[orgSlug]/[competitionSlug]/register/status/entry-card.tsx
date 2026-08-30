@@ -225,12 +225,14 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
             </div>
             {/* Each row wraps rather than letting the badge win. The badge is
                 shrink-0 and the name truncates, so at 320px a long status
-                label ("Awaiting confirmation") took the whole row and crushed
-                the name to a few characters — a roster that tells you a spot
-                is unclaimed but not WHOSE it is. Wrapping drops the badge to
-                its own line there and gives the name full width. Verified by
-                screenshot at 320/768/1280; the no-horizontal-scroll e2e gate
-                passed both before and after, so it could not see this. */}
+                label (originally "Awaiting confirmation" — renamed to "Not
+                checked in" by RS007 #20, see register.status.roster.pending)
+                took the whole row and crushed the name to a few characters —
+                a roster that tells you a spot is unclaimed but not WHOSE it
+                is. Wrapping drops the badge to its own line there and gives
+                the name full width. Verified by screenshot at 320/768/1280;
+                the no-horizontal-scroll e2e gate passed both before and
+                after, so it could not see this. */}
             <ul className="mt-2 space-y-1.5">
               {entry.players.map((p) => (
                 <li key={p.id} className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-sm">

@@ -788,6 +788,89 @@ describe.skipIf(!HAS_DB)("submitRegistrationGroup", () => {
     expect(unlinkedRow!.user_id).toBeNull();
   });
 
+  // RS007 #20b — every registering_self/self_player_index test above uses
+  // `entrant_kind: "individual"`, where selfIndex always lands on the one
+  // and only row. Nothing here previously proved the SAME grant reaches a
+  // multi-row entry: a pair/team captain who typed a teammate's name in
+  // too. Found via a real Stripe walkthrough (S2, money-matrix.spec.ts):
+  // the captain paid the fee and still read "pending" on their own roster
+  // row, because the entry that reached submitRegistrationGroup never
+  // carried registering_self/self_player_index at all — an upstream (UI)
+  // gap, not this usecase. This pins that the usecase's OWN half is
+  // correct: GIVEN the explicit self-link, the captain's row is granted
+  // (their consent is the cart's privacy_consent, given at submit) and the
+  // untouched teammate's row is not.
+  it("pair: the captain's own roster row is granted at submit via registering_self/self_player_index, even at a non-zero index — the partner they typed in stays pending", async () => {
+    const { orgId, orgSlug, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    await seedSettings(division.id, { entrant_kind: "pair", fee_cents: 0 });
+
+    const res = await submitRegistrationGroup(
+      { orgSlug, compSlug: competition.slug },
+      {
+        contact: baseContact({ name: "Pair Captain", dob: "1990-01-01" }),
+        privacy_consent: true,
+        entries: [
+          {
+            division_id: division.id,
+            entrant_kind: "pair",
+            partner_name: "Pair Partner",
+            registering_self: true,
+            // Row 0 is the partner, row 1 is the captain — proves the grant
+            // follows the EXPLICIT index, not a hidden "row 0 wins" default
+            // (that default only ever applies to a solo `individual` entry).
+            self_player_index: 1,
+            players: [{ full_name: "Pair Partner" }, { full_name: "Pair Captain" }],
+            answers: {},
+          },
+        ],
+      },
+    );
+
+    expect(res.entries).toHaveLength(1);
+    const rows = await sql<{ full_name: string; consent_status: string }[]>`
+      select full_name, consent_status from registration_players
+      where registration_id = ${res.entries[0]!.registration_id}
+      order by full_name`;
+    const captain = rows.find((r) => r.full_name === "Pair Captain");
+    const partner = rows.find((r) => r.full_name === "Pair Partner");
+    expect(captain?.consent_status).toBe("granted");
+    expect(partner?.consent_status).toBe("pending");
+  });
+
+  it("pair: registering_self false (the default) leaves BOTH captain-entered rows pending, even when the contact's own name matches a roster row exactly — no name-similarity auto-claim", async () => {
+    const { orgId, orgSlug, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    await seedSettings(division.id, { entrant_kind: "pair", fee_cents: 0 });
+
+    const res = await submitRegistrationGroup(
+      { orgSlug, compSlug: competition.slug },
+      {
+        // The contact's name is IDENTICAL to one of the roster rows below —
+        // the only signal that may ever grant a row is the explicit
+        // registering_self/self_player_index pair, never a name match.
+        contact: baseContact({ name: "Pair Captain" }),
+        privacy_consent: true,
+        entries: [
+          {
+            division_id: division.id,
+            entrant_kind: "pair",
+            partner_name: "Pair Partner",
+            players: [{ full_name: "Pair Partner" }, { full_name: "Pair Captain" }],
+            answers: {},
+          },
+        ],
+      },
+    );
+
+    expect(res.entries).toHaveLength(1);
+    const rows = await sql<{ consent_status: string }[]>`
+      select consent_status from registration_players where registration_id = ${res.entries[0]!.registration_id}`;
+    expect(rows.every((r) => r.consent_status === "pending")).toBe(true);
+  });
+
   // RS006: the cart-wide "at most one self entry" cap was removed from the
   // schema — this proves the usecase/persons layer the brief's analysis
   // rested on actually behaves as claimed, against a real DB rather than

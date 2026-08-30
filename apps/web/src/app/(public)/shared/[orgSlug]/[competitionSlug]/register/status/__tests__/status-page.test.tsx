@@ -10,6 +10,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { fmtDateTime, fmtZoneAbbrev } from "@/lib/format";
+import uiEn from "@/dictionaries/en/ui.json";
 
 vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: async () => "en" }));
 
@@ -457,7 +458,11 @@ describe("register status page (RS007 rebuild)", () => {
         ],
       });
       const html = await render({ rid: "g1", token: "tok" });
-      expect(html).toContain("1 of 2 confirmed");
+      // Finding #20: this used to read "1 of 2 confirmed" — the same word
+      // the entry's own payment-status pill uses a few lines above (green
+      // CONFIRMED = the fee landed). Roster-side copy now uses a check-in
+      // metaphor instead, so it can no longer be read as a payment state.
+      expect(html).toContain("1 of 2 checked in");
       // The per-slot link names the unclaimed player and carries their id.
       expect(html).toContain("join_code=JOIN123&amp;player_id=p2");
       // The generic link carries no player_id.
@@ -465,6 +470,58 @@ describe("register status page (RS007 rebuild)", () => {
       // join_code itself never appears bare in a way that leaks beyond the
       // href it belongs in — spot-check it isn't duplicated as plain text.
       expect(html.match(/JOIN123/g)?.length).toBe(2); // the two hrefs only
+    });
+
+    // Finding #20: the entry's own lifecycle pill can say CONFIRMED (fee
+    // landed, auto-approved) on the SAME card where a roster row is still
+    // unclaimed. Before this fix both used the word "confirm" — a paying
+    // registrant read their own outstanding roster row as "my payment
+    // didn't go through", three inches under a badge saying the opposite.
+    // Reproduced here with BOTH states live on one card at once, the way
+    // the owner actually spotted it, not just as an isolated dictionary
+    // pin.
+    it("the roster's own copy never says 'confirm', even on a card whose entry pill legitimately does", async () => {
+      usecaseMock.groupById.mockResolvedValueOnce({
+        ...BASE_VIEW,
+        entries: [
+          {
+            ...BASE_ENTRY,
+            status: "confirmed" as const,
+            players: [
+              { id: "p1", full_name: "Pair Captain", consent_status: "granted" as const },
+              { id: "p2", full_name: "Pair Partner", consent_status: "pending" as const },
+            ],
+          },
+        ],
+      });
+      const html = await render({ rid: "g1", token: "tok" });
+      // The entry pill still legitimately says CONFIRMED — this finding is
+      // about the ROSTER's vocabulary, not the entry's own money status.
+      expect(html).toContain(">confirmed<");
+      // The roster's per-row badges and its meter use a check-in metaphor —
+      // who has personally shown up, not whether the entry (or a refund) is
+      // valid — deliberately distinct from both "confirm" (the entry's own
+      // money word) and "claim" (which carries its own money-adjacent
+      // reading: an insurance claim, an expense claim).
+      expect(html).toContain(">Not checked in<");
+      expect(html).toContain(">Checked in<");
+      expect(html).toContain("1 of 2 checked in");
+      // ...and nowhere does the roster block reuse "confirm" or "claim" —
+      // pinned against the dictionary source directly (not string-sliced
+      // out of the render) so this fails the moment any of the three keys
+      // drifts back toward payment vocabulary, whatever the exact wording
+      // becomes.
+      const roster = uiEn as Record<string, string>;
+      for (const key of ["register.status.roster.pending", "register.status.roster.claimed", "register.status.roster.meter"]) {
+        // Strip interpolation placeholders first — `.meter`'s own template
+        // variable is literally named "{claimed}" in the SOURCE string
+        // (view-model.ts's RosterCounts field), which would otherwise trip
+        // the /claim/ check below on a token the reader never sees (only
+        // the substituted number renders).
+        const readerFacing = roster[key]!.replace(/\{[^}]+\}/g, "").toLowerCase();
+        expect(readerFacing, `${key} must not read as a payment state`).not.toMatch(/confirm/);
+        expect(readerFacing, `${key} must not read as a claim/insurance state`).not.toMatch(/claim/);
+      }
     });
 
     // A pair's roster is fixed at exactly two (registration-submit.ts) — its
