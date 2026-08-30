@@ -545,6 +545,171 @@ function enumValuesOf(spec: PadSpec, path: string): readonly string[] | null {
   return null;
 }
 
+/** Every `PadAction` padSpec(cfg) declares for `type`, across every panel —
+ *  the referee for the sweep below. */
+function padActionFor(spec: PadSpec, type: string): PadSpec["panels"][number]["actions"][number] | undefined {
+  return spec.panels.flatMap((panel) => panel.actions).find((action) => action.type === type);
+}
+
+// ---------------------------------------------------------------------------
+// 4b. R6 fix pass 4, finding 4 — a CLAIMED action's sheet + dock must reach
+// EVERY field/attribution path padSpec(cfg) declares for it, or the pad
+// silently ships a control that can never record what the engine's own form
+// would have collected. Regression measured 2026-08-30: the suspension sheet
+// claimed `<sport>.suspension.start` (removing it from More) but collected
+// only `class`/`reason`, so `minutes` and `servedBy` — both on padSpec since
+// S7/#427, both with four-locale copy already shipped — were reachable
+// through NOTHING. The same claiming dropped `void` and `goalkeeper` from the
+// shoot-out attempt and `goalkeeper` from the set piece.
+//
+// Engine-driven rather than a hardcoded field list, per that finding's own
+// instruction: this walks the REAL `padSpec(cfg)` action for each claimed
+// type and asserts every path it declares is settable by SOME combination of
+// the sheet's own `buildPayload` and the dock's own chips — not that a
+// hand-picked set of names appears. A future field padSpec grows on any of
+// these three actions fails here instead of shipping silently unreachable,
+// which is the whole reason this lives beside the fidelity/reason/outcome
+// mirrors above rather than as a one-off regression test.
+//
+// `answers` deliberately ignores every step's `when` — it answers ALL of a
+// sheet's steps regardless of gating, because this test asks "CAN this path
+// ever be set", not "does one particular wizard walk set it". The `minutes`
+// step's own gating (permanent classes don't ask) has its own dedicated
+// behavioural test, in section 4c below.
+// ---------------------------------------------------------------------------
+
+/** A shootout-CAPABLE variant, walked to the SHOOTOUT phase itself — never
+ *  decided. Hockey's own default (`fih-outdoor`) has no shoot-out at all
+ *  (`shippedVariantCfgs`'s `fih-shootout` is where FIH's lives), so the
+ *  attempt claim below cannot share `livePhaseState(sport, cfg)` the way
+ *  suspension/set-piece do. Same walk `"the shoot-out sheet folds"` (above)
+ *  already uses. */
+function reachShootout(sport: Sport): { cfg: unknown; state: PeriodStateLike } {
+  const withShootout = shippedVariantCfgs(sport.module).find(({ cfg: c }) => (c as { shootout: unknown }).shootout !== null);
+  expect(withShootout, `${sport.key} ships no shoot-out-capable variant`).toBeDefined();
+  const cfg = withShootout!.cfg;
+  const specs: Spec[] = [["core.start"]];
+  for (let i = 0; i < 8; i += 1) {
+    const s = foldPeriod(sport.module, cfg, specs);
+    if (s.phase === "SHOOTOUT") break;
+    const next = nextAdvanceOf(sport.module, s);
+    if (next === null) break;
+    specs.push([`${sport.key}.period.advance`, { to: next }]);
+  }
+  const state = foldPeriod(sport.module, cfg, specs);
+  expect(state.phase, `${withShootout!.variant} never reached a shoot-out`).toBe("SHOOTOUT");
+  return { cfg, state };
+}
+
+describe("a claimed action's sheet + dock reach every padSpec-declared field", () => {
+  for (const sport of SPORTS) {
+    const e = eventTypesOf(sport.spec);
+    // Each claim resolves its OWN cfg/state — the shoot-out attempt is only
+    // ever legal IN the SHOOTOUT phase, which needs a different cfg (and a
+    // walk to reach) than the suspension/set-piece claims, which are legal
+    // in any ordinary play phase and share the default cfg.
+    const claims: readonly (readonly [label: string, sheetKey: string, type: string, resolve: () => { cfg: unknown; state: PeriodStateLike }])[] = [
+      ["suspension start", "suspension-home", e.suspStart, () => ({ cfg: periodCfg(sport.module), state: livePhaseState(sport, periodCfg(sport.module)) })],
+      ["shoot-out attempt", "attempt-home", e.attempt, () => reachShootout(sport)],
+      ["set piece", SHEET_SET_PIECE, e.setPiece, () => ({ cfg: periodCfg(sport.module), state: livePhaseState(sport, periodCfg(sport.module)) })],
+    ];
+
+    for (const [label, sheetKey, type, resolve] of claims) {
+      it(`${sport.key}: ${label} (${type})`, () => {
+        const { cfg, state } = resolve();
+        const view = viewFor(sport, cfg, state);
+        const spec = (sport.module.padSpec as (c: unknown) => PadSpec)(cfg);
+        const action = padActionFor(spec, type);
+        expect(action, `padSpec declares no action for "${type}"`).toBeDefined();
+        const declared = [...action!.fields.map((f) => f.path), ...action!.attribution.map((a) => a.path)];
+        expect(declared.length, `${type}: padSpec declares nothing to check`).toBeGreaterThan(0);
+
+        const sheet = sport.factory(T).sheets!(view)[sheetKey] as GuidedSheetSpec;
+        expect(sheet, `no sheet at "${sheetKey}"`).toBeDefined();
+        const answers: Record<string, string> = {};
+        for (const step of sheet.steps) {
+          if (step.kind === "choice") answers[step.id] = step.options[0]!.id;
+          else if (step.kind === "person") answers[step.id] = (step.candidates ?? [])[0] ?? "";
+          else answers[step.id] = String(step.initial);
+        }
+        const payload = sheet.buildPayload(answers);
+        const dock = sport.factory(T).dock(type, view, payload);
+        const reached = new Set(Object.keys(payload));
+        for (const chip of dock?.chips ?? []) {
+          for (const key of Object.keys(chip.mutate(payload))) reached.add(key);
+        }
+        for (const path of declared) {
+          expect(
+            reached.has(path),
+            `${type}: padSpec declares "${path}"; neither the sheet nor the dock can set it`,
+          ).toBe(true);
+        }
+        // …and the fold actually takes the fully-refined payload, so this is
+        // not two mirrors agreeing about a shape the reducer would reject.
+        let refined = payload;
+        for (const chip of dock?.chips ?? []) refined = chip.mutate(refined);
+        expect(phaseVerdict(sport.module, state, type, refined), `${sport.key}/${label}`).toBe("accepted");
+      });
+    }
+  }
+});
+
+// ---------------------------------------------------------------------------
+// 4c. The minutes step's own gating — a class with no numeric duration (the
+// rest-of-the-match classes: hockey's red, ice hockey's game misconduct)
+// does not ask, because `suspensions.ts`'s own derivation never reads
+// `SuspensionDetail.minutes` for one (`minutes: null` on the class table IS
+// the "for the rest of the match" signal — kernel/suspensions.ts's own doc).
+// Every OTHER class asks, unconditionally: nothing in this codebase
+// distinguishes a federation's fixed-by-rule duration (ice hockey's minor is
+// always 2) from a discretionary one (an FIH yellow's own doc: "a MINIMUM of
+// 5 minutes... the umpire may give 10"), so gating on anything narrower than
+// "has this class got a number at all" would be inventing a rules fact this
+// session has no source for — the same posture kernel.ts's own
+// `suspensionReasons` doc takes.
+// ---------------------------------------------------------------------------
+
+describe("the minutes step asks for every class with a numeric duration, and none without one", () => {
+  for (const sport of SPORTS) {
+    it(`${sport.key}: skips the permanent class, asks every other one`, () => {
+      const cfg = periodCfg(sport.module);
+      const state = livePhaseState(sport, cfg);
+      const view = viewFor(sport, cfg, state);
+      const sheet = sport.factory(T).sheets!(view)["suspension-home"] as GuidedSheetSpec;
+      const minutesStep = sheet.steps.find((s) => s.id === "minutes");
+      expect(minutesStep, "no minutes step on the suspension sheet").toBeDefined();
+      expect(minutesStep!.when, "the minutes step must gate on the chosen class").toBeDefined();
+
+      const classes = (cfg as { suspensions: { classes: Record<string, { minutes: number | null }> } }).suspensions
+        .classes;
+      let sawPermanent = false;
+      for (const [classKey, cls] of Object.entries(classes)) {
+        const asks = minutesStep!.when!({ class: classKey });
+        if (cls.minutes === null) {
+          sawPermanent = true;
+          expect(asks, `${classKey}: permanent, must not ask`).toBe(false);
+        } else {
+          expect(asks, `${classKey}: has a numeric duration, must ask`).toBe(true);
+        }
+      }
+      expect(sawPermanent, `${sport.key}'s default cfg declares no permanent class to prove the gate with`).toBe(true);
+    });
+
+    it(`${sport.key}: a non-permanent minutes answer reaches the fold`, () => {
+      const cfg = periodCfg(sport.module);
+      const state = livePhaseState(sport, cfg);
+      const view = viewFor(sport, cfg, state);
+      const sheet = sport.factory(T).sheets!(view)["suspension-home"] as GuidedSheetSpec;
+      const classes = (cfg as { suspensions: { classes: Record<string, { minutes: number | null }> } }).suspensions
+        .classes;
+      const [timedClass] = Object.entries(classes).find(([, cls]) => cls.minutes !== null)!;
+      const payload = sheet.buildPayload({ class: timedClass, minutes: "7" });
+      expect((payload as { minutes?: number }).minutes).toBe(7);
+      expect(phaseVerdict(sport.module, state, sheet.event, payload), sport.key).toBe("accepted");
+    });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // 5. The card ladder — the wave's one real design divergence
 // ---------------------------------------------------------------------------

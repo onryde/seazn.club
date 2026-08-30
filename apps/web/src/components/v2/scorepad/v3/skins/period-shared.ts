@@ -194,6 +194,14 @@ function sideOfEntrant(state: PeriodStateShape, entrantId: unknown): Side | null
   return null;
 }
 
+/** The side FACING `side` — a shoot-out attempt's `goalkeeper` and a set
+ *  piece's `goalkeeper` are both the DEFENDING side's player (kernel.ts's own
+ *  comment on each: "the keeper facing the attempt, i.e. the other side's
+ *  player" / "the keeper defending it"), never the attacking side `by` names. */
+function otherSide(side: Side): Side {
+  return side === "home" ? "away" : "home";
+}
+
 /** Who is on the field/ice right now, from the squad state the HOST always
  *  resolves (`PadHostView.squads`, `state.squads` else `initSquads(lineups)`) —
  *  never from `state.squads` directly, which most folds never populate. */
@@ -411,6 +419,41 @@ export function refusedEventTypesFor(spec: PeriodSkinSpec, view: PadHostView): s
 // The penalty box — the one thing that makes these two sports their own shape
 // ---------------------------------------------------------------------------
 
+/**
+ * R6 fix pass 4, finding 3. The LATER of the host's live clock and the
+ * fold's own stamp, WITHIN THE SAME PERIOD — never the pad clock
+ * unconditionally, which is what `view.clockAt ?? state.asOf` used to do.
+ *
+ * `view.clockAt` is right only while the clock is RUNNING (or was seated
+ * fresh from this exact stamp): mount mid-Q2 paused at 5:00, never start it,
+ * let another device push `state.asOf` to 10:00 — the pad clock still reads
+ * 5:00, five minutes stale, and `clockAt ?? asOf` reported the STALE number
+ * as the truth because a value merely being PRESENT beat one that had moved
+ * on. The fold's own stamp can never be behind reality (every accepted `at`
+ * is monotonic, `core/events.ts`'s NON_MONOTONIC_TIME guard — see
+ * `../clock.ts`'s `adjustClock` doc for the other half of that guarantee),
+ * so taking the LATER elapsed of the two can only ever correct a stale
+ * reading, never invent a wrong one.
+ *
+ * DIFFERENT PERIODS are not "earlier or later", they are INCOMPARABLE — the
+ * pad clock is scoped to the CURRENT phase the moment it exists at all
+ * (`buildClock` always returns `{period: currentPhase}`), so a same-render
+ * mismatch means the fold has no stamp in this period yet. `clockAt` is kept
+ * in that case, exactly as it was before this fix: `boxOf`'s own
+ * `expires.period !== asOf.period` guard already turns a genuine cross-period
+ * comparison into `null` rather than a number, so this only has to pick WHICH
+ * same-period reading a scorer sees, not referee a period boundary.
+ */
+export function laterAsOf(
+  clockAt: GameTimeShape | undefined,
+  asOf: GameTimeShape | undefined,
+): GameTimeShape | undefined {
+  if (clockAt === undefined) return asOf;
+  if (asOf === undefined) return clockAt;
+  if (clockAt.period !== asOf.period) return clockAt;
+  return asOf.elapsed > clockAt.elapsed ? asOf : clockAt;
+}
+
 export interface BoxEntry {
   readonly index: number;
   readonly side: Side;
@@ -465,7 +508,12 @@ export function boxOf(view: PadHostView): BoxEntry[] {
   // THE ENGINE'S LAZINESS STAYS. This is a DISPLAY, and the kernel says itself
   // (kernel.ts:842-843) that its lazily-swept state and a ticking display
   // legitimately disagree between events. Nothing here writes back.
-  const asOf = view.clockAt ?? state.asOf;
+  //
+  // R6 fix pass 4, finding 3 — the LATER of the two, not `clockAt`
+  // unconditionally. See `laterAsOf`'s own doc, immediately above this
+  // function, for why a PAUSED pad clock can be stale and a fold stamp never
+  // can.
+  const asOf = laterAsOf(view.clockAt, state.asOf);
   const out: BoxEntry[] = [];
   (state.suspensions ?? []).forEach((susp, index) => {
     const side = susp.side === "home" || susp.side === "away" ? susp.side : null;
@@ -915,6 +963,52 @@ function classOptions(spec: PeriodSkinSpec, view: PadHostView, t: TFn) {
   });
 }
 
+/** Every FINITE (non-permanent) class nominal this cfg declares — the raw
+ *  material for both bounds below, mirroring `padSpec`'s own
+ *  `finiteClassMinutes` (kernel.ts:1902-1904). */
+function finiteClassMinutes(view: PadHostView): number[] {
+  const classes = asCfg(view.cfg).suspensions?.classes ?? {};
+  return Object.values(classes)
+    .map((cls) => cls.minutes)
+    .filter((m): m is number => typeof m === "number");
+}
+
+/** A reasonable OPENING value for the minutes stepper. Not the class the
+ *  scorer will eventually pick — `SheetNumberStep.initial` is fixed when the
+ *  sheet is built, before any answer in THIS sheet exists (types.ts's own
+ *  note on that field), so this cannot read `answers.class`. The shortest
+ *  class either shipped default cfg declares (both sports' lightest card is
+ *  2), or `1` when nothing about it is knowable yet — a starting point for
+ *  the stepper's own ±/typed-field edit, never a resolved default. */
+function defaultMinutesOf(view: PadHostView): number {
+  const finite = finiteClassMinutes(view);
+  return finite.length > 0 ? Math.min(...finite) : 1;
+}
+
+/** The pad's own mirror of `padSpec`'s `minutes` field bound
+ *  (kernel.ts:1890-1905): double the longest FINITE class nominal this cfg
+ *  declares — an FIH yellow is a MINIMUM of 5 minutes and 10 is common, so
+ *  the umpire must be able to award more than the class nominal — or 20 when
+ *  nothing declares one. `__tests__/period-pair.test.ts` pins this against
+ *  the real `module.padSpec(cfg)` field so the two cannot drift apart. */
+function suspensionMinutesMaxOf(view: PadHostView): number {
+  const finite = finiteClassMinutes(view);
+  return finite.length > 0 ? Math.max(...finite) * 2 : 20;
+}
+
+/** Whether `classKey` has no numeric duration at all — "for the rest of the
+ *  match" (hockey's red, ice hockey's game misconduct), the ONE state
+ *  `suspensions.ts`'s own `expiresAt` derivation never reads an awarded
+ *  `minutes` for (its doc: "Absent... when the class is for the rest of the
+ *  match (`minutes: null`)"). Requires POSITIVE evidence (`minutes === null`)
+ *  to say yes — an unrecognised class or a class cfg forgot to give a
+ *  `minutes` key at all defaults to asking rather than silently swallowing
+ *  the very field this fix exists to make reachable. */
+function classIsPermanent(view: PadHostView, classKey: string | undefined): boolean {
+  const cls = classKey === undefined ? undefined : asCfg(view.cfg).suspensions?.classes?.[classKey];
+  return cls?.minutes === null;
+}
+
 function suspensionSheet(spec: PeriodSkinSpec, view: PadHostView, side: Side, t: TFn): GuidedSheetSpec {
   const e = eventTypesOf(spec);
   const by = entrantOf(asState(view.state), side);
@@ -934,6 +1028,42 @@ function suspensionSheet(spec: PeriodSkinSpec, view: PadHostView, side: Side, t:
       // step never renders (`GuidedSheetStep.when` skips without asking).
       when: () => view.band >= 2,
     },
+    // R6 fix pass 4, finding 4 (REGRESSION vs v2). The engine's own padSpec
+    // declares `minutes` unconditionally on this action (kernel.ts:1957-1965,
+    // S7/#427) — the AWARDED duration, which the kernel prefers over the
+    // class nominal the moment an umpire gives more than the minimum. The
+    // guided sheet claiming this event without asking left every card at the
+    // class default, so `expiresAt` — and the box countdown this whole wave
+    // exists to deliver — derived from the wrong duration. Reuses the SAME
+    // four-locale copy the orphaned padSpec field already shipped
+    // (`pad.<key>.action.suspensionStart.field.minutes`), never a parallel
+    // `sheet.*` key.
+    {
+      id: "minutes",
+      kind: "number",
+      title: `pad.${spec.key}.action.suspensionStart.field.minutes`,
+      initial: defaultMinutesOf(view),
+      min: 1,
+      max: suspensionMinutesMaxOf(view),
+      // A class with no numeric duration ("for the rest of the match") has
+      // nothing here to ask — see `classIsPermanent`'s own doc.
+      when: (answers) => !classIsPermanent(view, answers.class),
+    },
+    // The OTHER person on this action (kernel.ts:1974-1983, S7/#427): the
+    // team-mate who sits the penalty when the assessed player is not the one
+    // who serves it (a bench minor, a coach's card). Band-2 detail, the same
+    // gate `reason` above already uses — `person`, the offender, stays on
+    // the DOCK below (`buildDock`'s `e.suspStart` case), unchanged: this
+    // step is additive, not a replacement for it.
+    {
+      id: "servedBy",
+      kind: "person",
+      title: `pad.${spec.key}.action.suspensionStart.field.servedBy`,
+      pool: "onfield",
+      side,
+      candidates: onFieldOf(view, side),
+      when: () => view.band >= 2,
+    },
   ];
   return {
     event: e.suspStart,
@@ -942,6 +1072,8 @@ function suspensionSheet(spec: PeriodSkinSpec, view: PadHostView, side: Side, t:
       by,
       class: answers.class,
       ...(answers.reason ? { reason: answers.reason } : {}),
+      ...(answers.minutes ? { minutes: Number(answers.minutes) } : {}),
+      ...(answers.servedBy ? { servedBy: answers.servedBy } : {}),
     }),
   };
 }
@@ -1149,6 +1281,26 @@ function personChip(spec: PeriodSkinSpec, id: string, field: string, personId: s
   };
 }
 
+/**
+ * A person chip with its OWN label, not the generic `dock.person` ("Player")
+ * `personChip` always uses — for a role that would otherwise sit unlabelled
+ * next to a chip THIS SAME dock already renders for the primary attribution.
+ * S7/#427's own reasoning for `servedBy` applies exactly as much to a dock
+ * chip as it did to the generic action form it was minted for: "two
+ * unlabelled person pickers in a row cannot be told apart." First use: the
+ * shoot-out attempt's and set piece's `goalkeeper` (R6 fix pass 4, finding
+ * 4), which would otherwise render as a second "Player" pill beside the
+ * taker's.
+ */
+function roleChip(id: string, field: string, personId: string, labelText: string, labelKey: string): DockChip {
+  return {
+    id,
+    label: labelKey,
+    labelText,
+    mutate: (payload) => ({ ...payload, [field]: personId }),
+  };
+}
+
 /** Append to a string array field, capped — `PeriodGoal.assists` is
  *  `z.array(PersonId).max(2)`, so a third chip would take the whole event down
  *  with it rather than being ignored. */
@@ -1249,17 +1401,38 @@ export function buildDock(
 
   if (eventType === e.attempt) {
     if (side === null || view.band < 2) return null;
-    const chips = onFieldOf(view, side).map((id) =>
+    const chips: DockChip[] = onFieldOf(view, side).map((id) =>
       personChip(spec, `person:${id}`, "person", id, personName(view, id, t)),
     );
+    // R6 fix pass 4, finding 4. `void` (the shoot-out retake flag,
+    // kernel.ts:2002-2006 — a defender foul during the one-on-one sends it to
+    // a retake rather than a real attempt) and `goalkeeper` (the OTHER
+    // side's keeper facing the shot, kernel.ts:2011-2018) were both on
+    // padSpec already; claiming this event for the guided sheet removed the
+    // only place either was reachable. `goalkeeper` reads the DEFENDING
+    // side's on-field roster, never the shooter's own.
+    chips.push({
+      id: "void",
+      label: `pad.${spec.key}.dock.retake`,
+      kind: "flag",
+      mutate: (p) => ({ ...p, void: true }),
+    });
+    for (const id of onFieldOf(view, otherSide(side))) {
+      chips.push(roleChip(`goalkeeper:${id}`, "goalkeeper", id, personName(view, id, t), `pad.${spec.key}.dock.goalkeeper`));
+    }
     return { title: t(`pad.${spec.key}.dock.shootout.title`), chips };
   }
 
   if (eventType === e.setPiece) {
     if (side === null || view.band < 2) return null;
-    const chips = onFieldOf(view, side).map((id) =>
+    const chips: DockChip[] = onFieldOf(view, side).map((id) =>
       personChip(spec, `person:${id}`, "person", id, personName(view, id, t)),
     );
+    // R6 fix pass 4, finding 4 — the defending goalkeeper (kernel.ts:2032),
+    // same reasoning as the shoot-out attempt's above.
+    for (const id of onFieldOf(view, otherSide(side))) {
+      chips.push(roleChip(`goalkeeper:${id}`, "goalkeeper", id, personName(view, id, t), `pad.${spec.key}.dock.goalkeeper`));
+    }
     return { title: t(`pad.${spec.key}.dock.setPiece.title`), chips };
   }
 
