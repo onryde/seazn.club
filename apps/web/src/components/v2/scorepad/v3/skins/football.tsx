@@ -1302,8 +1302,23 @@ export function buildSwap(view: PadHostView, t: TFn): SwapSlot[] {
       candidates,
       blocked,
       buildEvent: (off, on) => ({
+        // THE `at` KEY IS ALWAYS PRESENT, and that presence is the whole of the
+        // guard `stampOf` above documents (R6 fix pass 2, gap 6).
+        //
+        // `stampPayload` (../clock.ts) hands a skin-supplied `at` back BY
+        // REFERENCE whatever its value, `undefined` included — "the skin owns
+        // the field; the chassis fills a blank" — so `at: undefined` is the
+        // deliberate-omission channel and a SPREAD of `{}` is not. Spreading
+        // left no key at all, which reads as "expressed no opinion", so the
+        // host's live clock filled the blank this skin had decided to leave
+        // empty. That is exactly the "fix" `stampOf`'s own comment forbids:
+        // `applySub`'s window arithmetic reads this `at`, and a wrong one can
+        // refuse a legal substitution or admit an illegal one.
+        //
+        // `at: undefined` is legal on the wire — `GameTime.optional()` parses
+        // it, and JSON drops it — so the event folds exactly as before.
         type: "football.sub",
-        payload: { by, off, on, ...(stamp === undefined ? {} : { at: stamp }) },
+        payload: { by, off, on, at: stamp },
       }),
     };
   });
