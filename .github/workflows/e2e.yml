@@ -446,6 +446,14 @@ jobs:
             --print-secret > whsec.txt 2>listen.log || { cat listen.log; exit 1; }
           secret=$(tr -d '[:space:]' < whsec.txt)
           if [ -z "$secret" ]; then echo "::error::stripe listen produced no webhook secret"; cat listen.log; exit 1; fi
+          # Register it with the runner so it is redacted from every subsequent
+          # step's log. `$GITHUB_ENV` makes it part of the env block that Actions
+          # prints for each later step, and Actions masks only values it has been
+          # told about -- this one is minted at runtime, so nothing masks it
+          # otherwise. Must come after the empty-check: `::add-mask::` on an empty
+          # string is a no-op that warns. Masking is not retroactive, which is fine
+          # -- the leak was always in the LATER steps, never in this one.
+          echo "::add-mask::$secret"
           echo "STRIPE_WEBHOOK_SECRET=$secret" >> "$GITHUB_ENV"
           echo "CONNECT_WALKTHROUGH=1" >> "$GITHUB_ENV"
           # Now hold the forwarder open for the rest of the job.
