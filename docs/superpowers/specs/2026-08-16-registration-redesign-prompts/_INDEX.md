@@ -2995,3 +2995,81 @@ mutant that removes the seeding — the 2 survivors are the negative cases,
 correctly indifferent); `registration-submit` 55/55 (the key case reds
 under a mutant that restores the old composition); whole register component
 suite 311/311; `tsc --noEmit` exit 0.
+
+### #19 (NEW, 2026-08-30) — CRITICAL, build: a client change can ship a page that references chunks the build never emits
+
+Found while verifying #17. The page renders, returns HTTP 200, and every
+asset check passes — and **nothing on it works**, because the JS never
+loads.
+
+**Symptom.** `/shared/{org}/{comp}/register` served HTML referencing
+`/_next/static/chunks/1e0nyjjz3x5pr.js`. That file exists nowhere in
+`.next`. The server answers it **500, `content-type: text/plain`**, the
+browser refuses it (`MIME type ('text/plain') is not executable`), React
+never hydrates, and every control on the page is dead. Clicking "Next" on
+the register stepper does nothing at all.
+
+**Why every gate missed it.** `/api/health` is 200. The page is 200. The
+seazn-env asset probe passes (it checks the FIRST chunk the HTML names,
+and that one exists — 17 of the 18 referenced chunks were fine). 3,000+
+unit tests pass, because the module is correct TypeScript and the reducer
+logic is right. `tsc --noEmit` is clean. Only a test that CLICKS
+something catches it, which is exactly what the walkthrough does.
+
+**Bisected, deterministically:**
+
+| change to `cart.ts` | result |
+| --- | --- |
+| none | clean |
+| comment-only line appended | clean |
+| new function added but never called (tree-shaken) | clean |
+| same logic inlined in the reducer's `UPDATE_ENTRY` arm | **1 chunk missing** |
+| same logic as a module-level helper the reducer calls | **1 chunk missing** |
+| logic as an exported pure helper called from `entry-cart.tsx` | **2 chunks missing** |
+
+Survives `npx turbo run build --force` (`0 cached, 1 total`, 1m48s), so
+it is not the turbo cache, and survives `rm -rf .next`. The missing chunk
+id is stable across rebuilds. Reverting the client change makes it clean
+again, every time.
+
+So: **any change that materially alters this page's client module graph
+can produce a build whose HTML points at chunks the bundler did not
+write.** It is not about where the code is put or how it is shaped.
+
+**Blast radius.** Every client change to every page, not just this one.
+A PR can be green on units, tsc, lint and a 200-check and still ship a
+completely inert page. Smoke passes. Only the walkthroughs would catch it.
+
+**Owed:** a build-time gate that parses the emitted HTML for every route
+and fails if any referenced `/_next/static/**` asset is absent — cheap,
+and it turns this from an invisible failure into a red build. Then the
+fork's chunking itself needs investigating (`node_modules/next/dist/docs/`,
+per AGENTS.md — this is NOT stock Next).
+
+**Consequence for #17:** its client half is REVERTED and deferred behind
+this. The server half ships (see #17's own entry).
+
+### #20 (NEW, 2026-08-30) — "confirmed" means two different things on one card
+
+Spotted by the owner reading walkthrough frame 08. The paid status page
+shows, on a single entry card:
+
+- top right, green pill: **`CONFIRMED`** — the entry's lifecycle status,
+  i.e. the £20 landed and the spot is held;
+- inside the roster box, on every row: **"Awaiting confirmation"**, above
+  a meter reading **"0 of 2 confirmed"** — each PERSON's own claim state.
+
+Both are correct. The captain typed both names on everyone's behalf, so
+both rows are `captain_entered`, and each player must follow their own
+claim link because that is what records THEIR OWN privacy consent — a
+captain cannot consent on another adult's behalf.
+
+But an entrant who has just paid reads "Awaiting confirmation" as "my
+payment has not gone through", three inches under a badge that says
+CONFIRMED. The word is doing two jobs on one card, and the money reading
+is the one that alarms people.
+
+**Owed:** rename the roster-side vocabulary so it cannot be read as a
+payment state — the roster is asking *who is playing*, not whether the
+entry is valid. `register.status.roster.pending` / `.claimed` / `.meter`
+are the three keys, all four locales. Copy only; no logic change.
