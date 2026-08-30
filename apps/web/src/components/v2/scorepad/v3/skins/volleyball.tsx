@@ -477,6 +477,10 @@ function openSet(state: VolleyballStateShape): OpenSet | null {
 function pointsOf(state: VolleyballStateShape, side: Side): number {
   const open = openSet(state);
   if (open !== null) return open[side];
+  // DECIDED ONLY — between sets the board reads 0, because the scorer is
+  // looking at the set about to start. See the badminton twin for the full
+  // reasoning and the walkthrough failure that established it.
+  if (!POST_PHASES.has(readPhase(state))) return 0;
   const sets = state.sets ?? [];
   const last = sets[sets.length - 1];
   return last?.[side] ?? 0;

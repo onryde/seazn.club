@@ -335,6 +335,17 @@ describe("serving (D-17) — from the engine's ledger reader, never a placeholde
     expect(away.big).toBe("1");
   });
 
+  it("BETWEEN games the board reads 0 — the next game starts at nothing", () => {
+    // The narrowing the walkthrough suite forced ("a new game starts at
+    // nothing, not at the last game's score"). A first cut of the decided-
+    // board fix fell back to the last game's score whenever NO game was open,
+    // which is also true between games — and there the scorer is looking at
+    // the game about to start, not the one just finished.
+    const between = view({ cfg: SHORT_CFG, events: stream(summary(3, 1)) });
+    const [home, away] = buildScorebug(between, t).halves;
+    expect([home.big, away.big], "a game that has not started has no score").toEqual(["0", "0"]);
+  });
+
   it("REVIEW #678/7 — a DECIDED board names only games actually PLAYED, not `bestOf`", () => {
     // The clamp to `bestOf` removed "Game 6" but not the class: a best-of-3
     // won 2-0 has two games in the book and `gameNumber` (closed + 1) says 3.

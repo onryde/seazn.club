@@ -326,6 +326,14 @@ function openGame(state: BadmintonStateShape): OpenGame | null {
 function pointsOf(state: BadmintonStateShape, side: Side): number {
   const open = openGame(state);
   if (open !== null) return open[side];
+  // DECIDED ONLY. Between games the board must read 0 — the scorer is looking
+  // at the game about to start, and it starts at nothing. A first cut of this
+  // fell back whenever no game was open, on the reasoning that a paper
+  // scoresheet leaves the last game showing; the walkthrough suite caught it
+  // ("a new game starts at nothing, not at the last game's score") and the
+  // walkthrough is right. Only once the MATCH is over is there no next game
+  // for the board to be waiting on.
+  if (!POST_PHASES.has(readPhase(state))) return 0;
   const sets = state.sets ?? [];
   const last = sets[sets.length - 1];
   return last?.[side] ?? 0;
