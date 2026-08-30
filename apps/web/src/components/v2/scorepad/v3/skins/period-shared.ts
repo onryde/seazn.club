@@ -854,9 +854,58 @@ export function buildTiles(spec: PeriodSkinSpec, view: PadHostView, t: TFn): Til
 // sheets()
 // ---------------------------------------------------------------------------
 
+/**
+ * The cfg's suspension classes, in the SKIN'S declared severity order.
+ *
+ * R6 FIX PASS 3, GAP 2. `classOptions` used to map `Object.keys(classes)`
+ * straight through, and the order a scorer saw was therefore whatever order
+ * the cfg happened to arrive in. `cfg` reaches the pad through a jsonb column,
+ * and jsonb does not preserve insertion order — it sorts keys by LENGTH, then
+ * bytewise. Measured in the product, 2026-08-30: hockey's umpire sheet read
+ *
+ *     Red card    Green card    Yellow card
+ *
+ * because `red`(3) < `green`(5) < `yellow`(6) by length, and ice hockey read
+ * `Major, Match, Minor, Misconduct, Bench minor, Double minor, Game
+ * misconduct` for the same reason — its three five-letter classes floating to
+ * the top and `game_misconduct`, the second-most severe thing an official can
+ * give, sinking to last for being long. Someone reaching for a green card
+ * under time pressure taps red.
+ *
+ * THE ORDER IS THE SKIN'S DECLARATION ORDER, deliberately, and not a runtime
+ * sort on the cfg's own numbers. `HOCKEY_CLASSES` and `ICEHOCKEY_CLASSES` are
+ * already written as ladders (green->yellow->red; minor->…->match, which is
+ * the PIM ladder 2/2/4/5/10/20/25) and they are literals each skin owns, which
+ * is the level the presentation decision belongs at. Sorting on `minutes`
+ * instead — the obvious runtime rule, and the one this task was briefed with —
+ * is WRONG against the real table (`sports/period/suspensions.ts`): `match` is
+ * a five-minute class carrying 25 PIM, so it would land mid-ladder, and
+ * `game_misconduct` has `minutes: null` and would sort nowhere.
+ * `__tests__/period-class-order.test.ts` pins both facts.
+ *
+ * MEMBERSHIP IS STILL THE CFG'S. A division running a variant with fewer
+ * classes offers fewer (ice hockey's `recreational` keeps only the two-minute
+ * pair); a class an organiser added that this skin has never heard of is kept
+ * — never silently dropped, which would take an option away from an official —
+ * and placed after the ladder it is not part of, in the order the cfg gave it.
+ */
+export function orderedClassKeys(spec: PeriodSkinSpec, classes: Record<string, unknown>): string[] {
+  const ladder = Object.keys(spec.classes);
+  const available = Object.keys(classes);
+  // A declared class ranks by its place in the ladder; an undeclared one ranks
+  // past the whole ladder, keeping its own cfg position relative to other
+  // undeclared ones. Finite on both arms on purpose: `Infinity - Infinity` is
+  // NaN, and a comparator that returns NaN sorts arbitrarily.
+  const rankOf = (key: string): number => {
+    const declared = ladder.indexOf(key);
+    return declared === -1 ? ladder.length + available.indexOf(key) : declared;
+  };
+  return [...available].sort((a, b) => rankOf(a) - rankOf(b));
+}
+
 function classOptions(spec: PeriodSkinSpec, view: PadHostView, t: TFn) {
   const classes = asCfg(view.cfg).suspensions?.classes ?? {};
-  return Object.keys(classes).map((classKey) => {
+  return orderedClassKeys(spec, classes).map((classKey) => {
     const tone = spec.classes[classKey];
     return {
       id: classKey,
