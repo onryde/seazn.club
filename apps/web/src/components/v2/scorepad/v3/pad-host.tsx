@@ -43,7 +43,8 @@ import { CORE_EVENT_SCHEMAS, initSquads, isCoreEventType } from "@seazn/engine/c
 import type { AnySportModule, FidelityBand, PadSpec } from "@seazn/engine/sport";
 import { useMsg } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
-import { scoringErrorText, type MsgFn } from "@/lib/scoring-vocab";
+import { type MsgFn } from "@/lib/scoring-vocab";
+import { refusalText } from "../refusal-copy";
 import type { PadTransport } from "../transport";
 import type { OwnIdentity } from "../types";
 import { usePadPipeline } from "../use-pad-pipeline";
@@ -407,15 +408,24 @@ export function resolveSheet(sheetKey: string, sheets: Record<string, GuidedShee
  * skin renders through this one host), not a per-sport fix.
  *
  * Ports the legacy renderer's own surface verbatim in semantics
- * (pad-renderer.tsx: `pipeline.lastRejection && <p>{scoringErrorText(...)}
- * </p>`) — same source (`pipeline.lastRejection`), same resolver
- * (`scoringErrorText`), same fallback key (`scorepad.rejection.fallback`,
- * already localized in all 4 dictionaries — no new i18n key needed). `null`
- * means "render nothing", matching the legacy renderer's `&&`-gated JSX.
+ * (pad-renderer.tsx: `pipeline.lastRejection && <p>{…}</p>`) — same source
+ * (`pipeline.lastRejection`), same resolver, same fallback key. `null` means
+ * "render nothing", matching the legacy renderer's `&&`-gated JSX.
+ *
+ * R6 FIX PASS 3, GAP 1 — the resolver moved from `scoringErrorText` to
+ * `refusalText` (../refusal-copy.ts), and BOTH lanes moved together. The
+ * difference is the fall-through: `scoringErrorText`'s contract ends "…else
+ * the RAW SERVER MESSAGE", which was unreachable while only a 422 could get
+ * here (every engine code has copy) and became reachable the moment
+ * transport.ts started surfacing the whole permanent 4xx class. A 402 then
+ * resolved to "Plan upgrade required: scoring.match_timeline" — English in
+ * every locale, and an internal feature slug on a rink-side screen.
+ * `refusalText` never falls through to server prose. `scoringErrorText`
+ * itself is untouched: the fixture console and the device pad still want its
+ * raw-message behaviour, and neither is the pad chassis.
  */
 export function rejectionText(rejection: RejectionInfo | null, m: MsgFn): string | null {
-  if (!rejection) return null;
-  return scoringErrorText(rejection.code, rejection.message, m, "scorepad.rejection.fallback");
+  return refusalText(rejection, m);
 }
 
 export type UndoDecision = { kind: "drop"; heldId: string } | { kind: "void"; eventId: string };
@@ -1400,6 +1410,13 @@ export function PadHostV3(props: PadHostV3Props) {
       {(rejectionMsg ?? dispatchRefusal) && (
         <p
           data-role="v3-rejection"
+          // R6 fix pass 3, gap 1: this banner appears AFTER a tap, and it is
+          // now the only evidence the tap happened at all — the optimistic
+          // ribbon/row/chip/countdown are rolled back with it. A bare <p>
+          // that materialises mid-match is announced to nobody; `alert` is a
+          // live region, changes no pixel, and is the difference between
+          // "rendered" and "noticed" for a scorer whose eyes are on the ice.
+          role="alert"
           className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
         >
           {rejectionMsg ?? dispatchRefusal}

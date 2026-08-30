@@ -143,6 +143,53 @@ function messageOf(err: unknown): string {
   return err instanceof Error ? err.message : "network request failed";
 }
 
+/**
+ * The two 4xx statuses that genuinely invite the SAME request again — 408 is
+ * "you took too long, try again" and 429 is "slow down and try again". Both
+ * are transient by the server's own definition, which is exactly what the
+ * offline queue exists to ride out.
+ */
+const RETRYABLE_CLIENT_STATUS: ReadonlySet<number> = new Set([408, 429]);
+
+/**
+ * Is this status the server permanently refusing THIS write?
+ *
+ * R6 FIX PASS 3, GAP 1 — the ship-blocker this predicate exists to kill.
+ * Before it, `appendEvent` recognised exactly two non-2xx statuses (409, 422)
+ * and let every other one fall through to `{ kind: "network-error" }`. That
+ * routing is not cosmetic: `pipeline.ts`'s `sendOne` turns a network error
+ * into `stayed-queued`, and `use-pad-pipeline.ts` answers `stayed-queued` by
+ * setting `offline` and KEEPING the optimistic envelope — by design, because
+ * a scorer on bad courtside wifi must not lose taps.
+ *
+ * So a 402 from the entitlement gate was filed as flaky wifi. Measured on the
+ * running product, 2026-08-30: a band-1 ice-hockey pad POSTed a penalty, got
+ * `402 PAYMENT_REQUIRED`, and went on showing the ribbon "Penalty — Minor",
+ * two rows in Activity, an "ON ICE 3V5" strength chip and a ticking 2:00
+ * countdown, with the ledger holding only `core.start` and no banner
+ * anywhere. In this sport the on-ice strength is match state, so the pad was
+ * not merely optimistic — it was wrong about the game, and silently.
+ *
+ * The fix is a STATUS CLASS, not an entitlement branch. 402 was one instance;
+ * a 403 (device link revoked mid-match), a 401 (session expired) and a 404
+ * (fixture deleted under the pad) had the identical symptom and were equally
+ * invisible. Retrying any of them with a byte-identical body gets a
+ * byte-identical refusal forever, which is the definition of permanent.
+ *
+ * The old comment here argued that guessing "permanent" for an unrecognised
+ * status "risks silently losing a scorer's action". That reasoning survives
+ * intact for everything it was really about — 5xx, a thrown fetch, a
+ * malformed body, and the two retry-after statuses above all stay transient.
+ * What it got wrong was the 4xx client-error class, where retrying forever
+ * does not protect the action; it only hides the refusal behind a pad that
+ * keeps claiming the action landed.
+ */
+export function isPermanentRefusal(status: number): boolean {
+  if (status === 409) return false; // renegotiable — the conflict path owns it
+  if (RETRYABLE_CLIENT_STATUS.has(status)) return false;
+  return status >= 400 && status < 500;
+}
+
 function makeTransport(auth: PadAuthMode, init: TransportInit = {}): PadTransport {
   const doFetch = init.fetchFn ?? fetch;
   const headers = { "Content-Type": "application/json", ...authHeadersFor(auth) };
@@ -164,15 +211,13 @@ function makeTransport(auth: PadAuthMode, init: TransportInit = {}): PadTranspor
         return { kind: "ok", data: envelope.data };
       }
       const message = envelope.error?.message ?? `request failed (${res.status})`;
-      // 409/422 are the two typed, PERMANENT-vs-RENEGOTIABLE outcomes the
-      // pipeline's replay ruling distinguishes; every other status (5xx,
-      // 429, a malformed body) is treated as transient by design — see
-      // AppendCallResult's own JSDoc in pipeline.ts.
+      // 409 is the one RENEGOTIABLE outcome the pipeline's replay ruling
+      // distinguishes: the write is fine, its expected_seq is stale.
       if (res.status === 409) {
         const currentSeq = typeof envelope.error?.current_seq === "number" ? envelope.error.current_seq : null;
         return { kind: "conflict", currentSeq, message };
       }
-      if (res.status === 422) {
+      if (isPermanentRefusal(res.status)) {
         return { kind: "rejected", code: envelope.error?.code ?? "UNKNOWN", message };
       }
       return { kind: "network-error", message };

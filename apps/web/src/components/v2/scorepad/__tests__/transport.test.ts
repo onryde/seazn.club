@@ -5,6 +5,7 @@ import type { AppendEventBody } from "../pipeline";
 import {
   authHeadersFor,
   deviceLinkTransport,
+  isPermanentRefusal,
   sessionTransport,
   type FixtureStateResult,
 } from "../transport";
@@ -97,10 +98,89 @@ describe("appendEvent — outcome mapping", () => {
     expect(outcome).toEqual({ kind: "network-error", message: "fetch failed" });
   });
 
-  it("a non-409/422 failure (e.g. 500) maps to a retryable network failure, not a permanent rejection", async () => {
+  it("a 5xx maps to a retryable network failure, not a permanent rejection", async () => {
     const { fn } = fakeFetch(() => fakeResponse(500, { ok: false, error: { code: "INTERNAL", message: "server error" } }));
     const outcome = await sessionTransport({ fetchFn: fn }).appendEvent("fx-1", BODY);
     expect(outcome).toEqual({ kind: "network-error", message: "server error" });
+  });
+
+  // -------------------------------------------------------------------------
+  // R6 FIX PASS 3, GAP 1 — the ship-blocker's own root cause lived in this
+  // function. Before the fix the branch above read "a non-409/422 failure
+  // (e.g. 500)" and it meant it: 400, 401, 402, 403 and 404 all landed in
+  // `network-error`, which use-pad-pipeline.ts answers by KEEPING the
+  // optimistic fold and setting `offline`. A band-1 402 therefore rendered a
+  // penalty as recorded — ribbon, activity row, "ON ICE 3V5" strength chip
+  // and a ticking countdown — with the ledger holding only `core.start`.
+  //
+  // The end-to-end proof (pad surfaces, real hook, real kernel) is
+  // `v3/__tests__/refused-write.test.ts`; this block pins the classification
+  // itself, status by status, because that is the seam that got it wrong.
+  // -------------------------------------------------------------------------
+  const PERMANENT: readonly { status: number; code: string; why: string }[] = [
+    { status: 400, code: "VALIDATION", why: "the route schema refused the payload" },
+    { status: 401, code: "UNAUTHENTICATED", why: "the session expired mid-match" },
+    { status: 402, code: "PAYMENT_REQUIRED", why: "THE SHIP-BLOCKER: the band-1 entitlement gate" },
+    { status: 403, code: "FORBIDDEN", why: "a device link revoked mid-match" },
+    { status: 404, code: "NOT_FOUND", why: "the fixture was deleted under the pad" },
+    { status: 422, code: "INVALID_EVENT", why: "the engine's own semantic refusal (unchanged)" },
+  ];
+
+  for (const { status, code, why } of PERMANENT) {
+    it(`a ${status} (${why}) is a PERMANENT rejection, never a retryable network failure`, async () => {
+      const { fn } = fakeFetch(() => fakeResponse(status, { ok: false, error: { code, message: "no" } }));
+      const outcome = await sessionTransport({ fetchFn: fn }).appendEvent("fx-1", BODY);
+      expect(outcome).toEqual({ kind: "rejected", code, message: "no" });
+    });
+  }
+
+  // The other direction, and it matters just as much: a fix that made every
+  // non-2xx permanent would throw away a scorer's tap on flaky courtside
+  // wifi, which is worse than the bug it replaced.
+  const TRANSIENT: readonly { status: number; why: string }[] = [
+    { status: 408, why: "request timeout — the server explicitly invites a retry" },
+    { status: 429, why: "rate limited — retry after backoff is the correct response" },
+    { status: 500, why: "server fault" },
+    { status: 502, why: "bad gateway, e.g. a proxy between pad and server" },
+    { status: 503, why: "deploying" },
+    { status: 504, why: "gateway timeout" },
+  ];
+
+  for (const { status, why } of TRANSIENT) {
+    it(`a ${status} (${why}) stays transient, so the queue keeps the action`, async () => {
+      const { fn } = fakeFetch(() => fakeResponse(status, { ok: false, error: { code: "X", message: "later" } }));
+      const outcome = await sessionTransport({ fetchFn: fn }).appendEvent("fx-1", BODY);
+      expect(outcome).toEqual({ kind: "network-error", message: "later" });
+    });
+  }
+
+  it("409 is neither — it renegotiates", async () => {
+    expect(isPermanentRefusal(409)).toBe(false);
+  });
+
+  it("a refusal with no parseable body still carries a code, so the pad can speak", async () => {
+    const { fn } = fakeFetch(
+      () => ({ ok: false, status: 402, json: async () => { throw new Error("not json"); } }) as unknown as Response,
+    );
+    const outcome = await sessionTransport({ fetchFn: fn }).appendEvent("fx-1", BODY);
+    expect(outcome).toEqual({ kind: "rejected", code: "UNKNOWN", message: "request failed (402)" });
+  });
+});
+
+// The predicate on its own, swept rather than sampled — one lucky status is
+// how a classification bug survives a suite (this one did, for four waves).
+describe("isPermanentRefusal — the whole status space", () => {
+  it("every 4xx except 409/408/429 is permanent", () => {
+    for (let s = 400; s < 500; s++) {
+      const expected = s !== 409 && s !== 408 && s !== 429;
+      expect(isPermanentRefusal(s), `status ${s}`).toBe(expected);
+    }
+  });
+
+  it("no 2xx, 3xx or 5xx is ever permanent", () => {
+    for (const s of [200, 201, 204, 301, 302, 304, 500, 502, 503, 504, 599]) {
+      expect(isPermanentRefusal(s), `status ${s}`).toBe(false);
+    }
   });
 });
 
