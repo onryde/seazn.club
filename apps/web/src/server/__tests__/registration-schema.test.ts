@@ -133,12 +133,23 @@ describe.skipIf(!HAS_DB)("V363/V364 registration schema", () => {
       expect(names.has(c), `registrations.${c} should still exist`).toBe(true);
     }
     // Dropped: the roster jsonb, the payment/identity envelope (now the group's),
-    // and the per-person fields (now the player row's). refunded_cents is NOT
-    // in this list: V368 adds it back, but scoped to the entry rather than the
-    // cart — see the dedicated test below.
+    // and the per-person fields (now the player row's).
+    //
+    // TWO columns are NOT in this list, both re-added later and both scoped to
+    // the ENTRY rather than the cart:
+    //   - refunded_cents (V368) — see the dedicated test below.
+    //   - payment_intent_id (V387) — see the dedicated test below. V364's
+    //     stated reason for dropping it was "one payment per cart is the
+    //     design ruling, which makes a per-ENTRY checkout session or payment
+    //     intent meaningless". That ruling has since been overtaken: checkout
+    //     sessions are minted against a `registration_ids` SUBSET, and RS007's
+    //     pay-on-promotion means a promoted entry pays later in its own
+    //     session. A cart holds two live intents, so the entry needs its own
+    //     column back (PR #677 finding H1 — refunding one entry was sending
+    //     ANOTHER entry's charge to Stripe).
     for (const c of [
       "roster", "contact_email", "access_token_hash", "ref_code", "locale", "user_id",
-      "payment_method", "checkout_session_id", "payment_intent_id", "expires_at",
+      "payment_method", "checkout_session_id", "expires_at",
       "reminded_at", "refunded_at", "disputed_at", "dispute_id",
       "offline_marked_paid_at", "offline_marked_paid_by", "fee_percent", "currency",
       "privacy_consent_at", "privacy_consent_version",
@@ -146,6 +157,30 @@ describe.skipIf(!HAS_DB)("V363/V364 registration schema", () => {
     ]) {
       expect(names.has(c), `registrations.${c} should be dropped`).toBe(false);
     }
+  });
+
+  // V387 (PR #677 H1): the entry's own payment intent. The GROUP keeps its
+  // column — that one means "the cart's most recent intent" and still serves
+  // cart-scoped concerns (disputes, the dashboard refund mirror). This one
+  // names the charge that paid THIS entry, which is what every refund path
+  // must read; a null is fail-CLOSED (no automatic refund), never a fallback
+  // to the cart's.
+  it("registrations.payment_intent_id (V387): entry-scoped, nullable, and the group keeps its own", async () => {
+    const cols = await sql<{ column_name: string; is_nullable: string }[]>`
+      select column_name, is_nullable from information_schema.columns
+      where table_schema = current_schema() and table_name = 'registrations'
+        and column_name = 'payment_intent_id'`;
+    expect(cols.length, "registrations.payment_intent_id (V387) is missing").toBe(1);
+    expect(cols[0]!.is_nullable, "an unpaid entry has no intent").toBe("YES");
+
+    const groupCols = await sql<{ column_name: string }[]>`
+      select column_name from information_schema.columns
+      where table_schema = current_schema() and table_name = 'registration_groups'
+        and column_name = 'payment_intent_id'`;
+    expect(
+      groupCols.length,
+      "the CART column must survive V387 — the two mean different things",
+    ).toBe(1);
   });
 
   // V368 (RS002): per-entry refunds get their OWN column rather than being
