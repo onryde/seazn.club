@@ -3004,7 +3004,13 @@ describe.skipIf(!HAS_DB)("RS002: entry-level refunds (multi-entry cart hazards)"
       update registration_groups
       set payment_intent_id = ${intent}, amount_cents = ${feeA + feeB}, updated_at = now()
       where id = ${a.registration.group_id}`;
-    await sql`update registrations set status = 'confirmed', updated_at = now()
+    // V387/H1: both entries were paid by ONE session here, so they share the
+    // cart's intent — the case that was never broken. Stamped on each ENTRY
+    // as well, because that is what `confirmPaidRegistration` does and what
+    // the refund path now reads (fail-closed on a null, so a cart-only
+    // fixture would model an unprovable charge and get no auto-refund).
+    await sql`update registrations
+              set status = 'confirmed', payment_intent_id = ${intent}, updated_at = now()
               where id in (${a.registration.id}, ${b.id})`;
     return {
       owner, division, competition, intent,
@@ -3062,6 +3068,107 @@ describe.skipIf(!HAS_DB)("RS002: entry-level refunds (multi-entry cart hazards)"
     // Accumulated (1000 + 700), NOT overwritten to just B's own 700 — that
     // overwrite would silently erase A's earlier refund from the cart total.
     expect(afterB.group_refunded_cents).toBe(1700);
+  });
+
+  /** A cart paid in TWO sessions — the state V387/H1 exists for. Sessions are
+   *  minted against a `registration_ids` SUBSET (a promoted entry pays in its
+   *  own session), so `registration_groups.payment_intent_id` ends up holding
+   *  whichever paid LAST. `twoEntryCart` above cannot reach this: it pays both
+   *  entries with one intent, which is the case that was never broken. */
+  async function twoSessionCart(feeA: number, feeB: number) {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    await sql`update organizations
+              set stripe_account_id = ${"acct_" + randomUUID().slice(0, 8)}, stripe_charges_enabled = true
+              where id = ${orgId}`;
+    const { competition, division } = await rig(owner);
+    const settings = await putRegistrationSettings(owner, division.id, {
+      ...SETTINGS_BASE,
+      payment_method: "stripe",
+      fee_cents: feeA,
+    });
+    const a = await seedRegistration(competition.id, division.id, settings, {
+      displayName: "Entry A",
+      amountCents: feeA,
+    });
+    const b = await seedSecondEntry(a.registration.group_id, division.id, feeB, "Entry B");
+    // Two REAL webhook deliveries, one per entry, exactly as a submit-then-
+    // promote cart produces. fakeSession derives its intent from the first
+    // registration id, so these are genuinely different intents.
+    await handleRegistrationCheckoutCompleted(fakeSession(a.registration.id, feeA));
+    await handleRegistrationCheckoutCompleted(fakeSession(b.id, feeB));
+    return {
+      owner, division, competition,
+      accessToken: a.access_token,
+      intentA: "pi_test_" + a.registration.id.slice(0, 8),
+      intentB: "pi_test_" + b.id.slice(0, 8),
+      a: await loadWithGroup(a.registration.id),
+      b: await loadWithGroup(b.id),
+    };
+  }
+
+  it("H1 (PR #677): cancelling one entry of a two-SESSION cart refunds ITS OWN charge, not the sibling's", async () => {
+    const { a, b, intentA, intentB, accessToken } = await twoSessionCart(1000, 700);
+    // Precondition, and the whole reason the defect existed: the CART column
+    // now names B's intent, because B paid last.
+    expect(intentA).not.toBe(intentB);
+    expect(a.payment_intent_id).toBe(intentB); // the group column, shared
+    expect(a.entry_payment_intent_id).toBe(intentA);
+    expect(b.entry_payment_intent_id).toBe(intentB);
+
+    stripeMock.refundCreate.mockClear();
+    await withdrawRegistrationPublic(a.id, accessToken);
+
+    // Before V387 this refunded intentB for A's amount: B's charge clawed
+    // back, B still confirmed, A never refunded.
+    expect(stripeMock.refundCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ payment_intent: intentA, amount: 1000 }),
+    );
+    expect(stripeMock.refundCreate).not.toHaveBeenCalledWith(
+      expect.objectContaining({ payment_intent: intentB }),
+    );
+    const bAfter = await loadWithGroup(b.id);
+    expect(bAfter.status).toBe("confirmed");
+    expect(bAfter.refunded_cents).toBe(0);
+  });
+
+  it("H1 (PR #677): a replayed webhook for the EARLIER-paid entry is not mistaken for a duplicate", async () => {
+    const { a, intentA } = await twoSessionCart(1000, 700);
+    stripeMock.refundCreate.mockClear();
+    // Same session delivered twice — Stripe does this. The duplicate check
+    // used to compare against the CART's intent, which by now is B's, so a
+    // legitimate replay of A looked like a second payment and was refunded.
+    await handleRegistrationCheckoutCompleted(fakeSession(a.id, 1000));
+    expect(stripeMock.refundCreate).not.toHaveBeenCalled();
+    const aAfter = await loadWithGroup(a.id);
+    expect(aAfter.status).toBe("confirmed");
+    expect(aAfter.refunded_cents).toBe(0);
+    expect(aAfter.entry_payment_intent_id).toBe(intentA);
+  });
+
+  it("H2 (PR #677): a SECOND, different charge on a withdrawn-after-payment entry is refunded, the first kept", async () => {
+    const { a, intentA } = await twoSessionCart(1000, 700);
+    // Withdrawn past the refund lock: charged_at survives, the original
+    // charge is deliberately KEPT (finding #18's whole point).
+    await sql`update registrations
+              set status = 'withdrawn', withdrawn_at = now(), charged_at = coalesce(charged_at, now())
+              where id = ${a.id}`;
+    stripeMock.refundCreate.mockClear();
+
+    // A second checkout tab completes with a DIFFERENT intent.
+    const second = fakeSession(a.id, 1000);
+    (second as unknown as { payment_intent: string }).payment_intent = "pi_second_" + a.id.slice(0, 8);
+    await handleRegistrationCheckoutCompleted(second);
+
+    // The duplicate goes back; the original stays kept.
+    expect(stripeMock.refundCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ payment_intent: "pi_second_" + a.id.slice(0, 8) }),
+    );
+    expect(stripeMock.refundCreate).not.toHaveBeenCalledWith(
+      expect.objectContaining({ payment_intent: intentA }),
+    );
+    const aAfter = await loadWithGroup(a.id);
+    expect(aAfter.status).toBe("withdrawn"); // never resurrected by the second payment
   });
 
   it("hazard 3 (+ entry-level write): refunding A fully does not block B's own manual refund", async () => {

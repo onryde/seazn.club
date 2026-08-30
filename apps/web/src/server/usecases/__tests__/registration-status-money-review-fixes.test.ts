@@ -311,6 +311,11 @@ describe("#10/#13b — notifyPromoted (pure function, offline branch — no DB)"
       media_consent_at: null,
       media_consent_version: null,
       group_refunded_cents: 0,
+      // V387/H1: this fixture models a PROMOTED, never-itself-charged entry,
+      // so its own intent is null even when the cart's is live from a paid
+      // sibling — which is exactly the state the tests below assert must not
+      // produce an automatic refund.
+      entry_payment_intent_id: null,
       ...over,
     };
   }

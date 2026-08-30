@@ -427,6 +427,17 @@ export type RegistrationWithGroupRow = RegistrationRow &
      *  V363) — aliased so it can never collide with `RegistrationRow`'s own
      *  entry-scoped `refunded_cents` (V368) in the same SELECT. */
     group_refunded_cents: number;
+    /** THIS entry's own payment intent (`registrations.payment_intent_id`,
+     *  V387) — aliased for exactly the same reason `group_refunded_cents` is:
+     *  the group carries a `payment_intent_id` too, and `select r.*, g.*`
+     *  would silently yield whichever the list mentions last, with tsc unable
+     *  to see the collision. PR #677 finding H1: a cart can hold TWO live
+     *  intents (sessions are minted against a `registration_ids` subset, and
+     *  a promoted entry pays in its own session), so the unaliased
+     *  `payment_intent_id` — the cart's most recent — must never be what a
+     *  per-entry refund sends to Stripe. Null on a paid row means "not
+     *  recorded": fail CLOSED, never fall back to the cart's. */
+    entry_payment_intent_id: string | null;
   };
 
 /** r.* ∪ g.* for `RegistrationWithGroupRow` — every SELECT that needs the
@@ -436,11 +447,12 @@ export type RegistrationWithGroupRow = RegistrationRow &
  *  column list can only drift in one place. `g.refunded_cents` is aliased to
  *  `group_refunded_cents` so it never collides with `r.refunded_cents`
  *  (V368) — see the block comment above `RegistrationWithGroupRow`. */
-function regGroupCols(db: AnySql) {
+export function regGroupCols(db: AnySql) {
   return db`
     r.id, r.division_id, r.org_id, r.status, r.display_name, r.answers,
     r.amount_cents, r.refunded_cents, r.entrant_id, r.promoted_at, r.withdrawn_at,
     r.charged_at, r.promotion_expires_at, r.waitlisted_at,
+    r.payment_intent_id as entry_payment_intent_id,
     r.group_id, r.join_code, r.free_agent, r.created_at, r.updated_at,
     g.contact_name, g.contact_email, g.user_id, g.locale, g.ref_code,
     g.access_token_hash, g.currency, g.payment_method, g.checkout_session_id,
@@ -2397,7 +2409,15 @@ async function confirmPaidRegistration(
     // DIFFERENT intent means the registrant paid twice (two open checkout
     // tabs, spec issue #2) — refund the duplicate, keep the original.
     if (reg.status === "confirmed" || reg.status === "paid") {
-      if (paymentIntentId && reg.payment_intent_id && paymentIntentId !== reg.payment_intent_id) {
+      // V387/H1: compare against THIS ENTRY's intent, never the cart's. The
+      // cart column is last-writer-wins, so on a two-session cart (a promoted
+      // sibling paying in its own session) it holds the SIBLING's intent by
+      // the time a webhook for this entry replays — and this comparison would
+      // then read a legitimate replay of PI_A as a duplicate and refund it.
+      // Falls back to the cart column only when the entry has none recorded,
+      // which is a pre-V387 row: same behaviour as before for those.
+      const ownIntent = reg.entry_payment_intent_id ?? reg.payment_intent_id;
+      if (paymentIntentId && ownIntent && paymentIntentId !== ownIntent) {
         return { kind: "duplicate", reg, competitionId: div.competition_id, intent: paymentIntentId };
       }
       return null;
@@ -2488,6 +2508,23 @@ async function confirmPaidRegistration(
     // so a rejected row never reaches this guard at all, whatever
     // charged_at holds.
     if (reg.status === "withdrawn" && reg.charged_at) {
+      // PR #677 finding H2. Returning null unconditionally kept a genuinely
+      // DUPLICATE charge: two open tabs, S1 pays and the entry is confirmed,
+      // the entry is withdrawn past the refund lock (correctly unrefunded),
+      // then S2 completes with a different intent — money neither refunded,
+      // nor recorded, nor audited.
+      //
+      // Symmetric with the paid/confirmed branch above rather than the fix
+      // first proposed in review (`&& paymentIntentId === reg.payment_intent_id`),
+      // which would let a differing intent fall through to the `late` branch
+      // below — and that branch refunds `reg.payment_intent_id ?? paymentIntentId`,
+      // i.e. the FIRST intent. It would have refunded the original charge,
+      // the one this guard exists to let the organiser keep, and still left
+      // the duplicate sitting there.
+      const ownIntent = reg.entry_payment_intent_id ?? reg.payment_intent_id;
+      if (paymentIntentId && ownIntent && paymentIntentId !== ownIntent) {
+        return { kind: "duplicate", reg, competitionId: div.competition_id, intent: paymentIntentId };
+      }
       return null;
     }
     if (
@@ -2518,6 +2555,7 @@ async function confirmPaidRegistration(
       update registrations
       set status = 'paid',
           charged_at = coalesce(charged_at, now()),
+          payment_intent_id = coalesce(payment_intent_id, ${paymentIntentId}),
           updated_at = now()
       where id = ${regId}`;
     // payment_intent_id lives on the cart now (V364).
@@ -3532,10 +3570,16 @@ async function buildGroupStatusView(
     > & {
       refunded_cents: number;
       promotion_expires_at: Date | null;
+      /** V387/H1 — read to resolve THIS entry's refund policy, then
+       *  destructured OUT below so it never reaches the public view: a
+       *  Stripe intent id is not something a status page hands to whoever
+       *  holds the link. */
+      entry_payment_intent_id: string | null;
     })[]
   >`
     select r.id, r.division_id, d.name as division_name, r.display_name, r.status,
-           r.amount_cents, r.refunded_cents, r.free_agent, r.join_code, r.promotion_expires_at
+           r.amount_cents, r.refunded_cents, r.free_agent, r.join_code, r.promotion_expires_at,
+           r.payment_intent_id as entry_payment_intent_id
     from registrations r join divisions d on d.id = r.division_id
     where r.group_id = ${group.id}
     order by r.created_at, r.id`;
@@ -3638,7 +3682,7 @@ async function buildGroupStatusView(
     charges_enabled: comp?.charges_enabled ?? false,
     payment_instructions: paymentInstructions,
     org_timezone: refundTz,
-    entries: entries.map(({ refunded_cents, promotion_expires_at, ...e }) => ({
+    entries: entries.map(({ refunded_cents, promotion_expires_at, entry_payment_intent_id, ...e }) => ({
       ...e,
       promotion_expires_at: promotion_expires_at ? new Date(promotion_expires_at).toISOString() : null,
       allows_new_joiner: entrantKindByDivision.get(e.division_id) !== "pair",
@@ -3658,7 +3702,13 @@ async function buildGroupStatusView(
         // this entry's registrant never paid. 'paid'/'confirmed' are the
         // only statuses a Stripe checkout webhook (confirmPaidRegistration)
         // ever leaves an entry in — see the block comment there.
-        e.status === "paid" || e.status === "confirmed" ? group.payment_intent_id : null,
+        // V387/H1: the ENTRY's own intent (read side twin of withdrawCore's
+        // fix). The cart's is last-writer-wins and, on a cart paid in two
+        // sessions, belongs to a sibling — so using it here would show a
+        // registrant "you will be refunded automatically" for a charge that
+        // is not theirs. Null reads as not-automatically-refundable, which
+        // is the honest answer when we cannot name this entry's charge.
+        e.status === "paid" || e.status === "confirmed" ? entry_payment_intent_id : null,
         e.amount_cents,
         refunded_cents,
       ),
@@ -3677,7 +3727,19 @@ export async function resumeRegistrationCheckout(
   if (reg.status !== "pending") {
     throw new HttpError(422, `Nothing to pay — registration is ${reg.status}`);
   }
-  if (reg.payment_method !== "stripe") {
+  // PR #677 finding M1: #10 fixed the READ side (buildGroupStatusView /
+  // resolveMoneyState resolve payment_method per DIVISION) and left this,
+  // the write side, still reading the CART column. `promoteWaitlistedRow`
+  // only overwrites that column when no other entry in the cart is still
+  // 'pending', so a promoted stripe entry sharing a cart with a pending
+  // sibling kept a live "Pay now" button whose POST 422'd with the message
+  // below — the same dead end #10 was raised for, moved from the button to
+  // the click. Resolve it the way the read side does: the DIVISION's
+  // setting, falling back to the cart's only when a division has no
+  // settings row at all.
+  const divSettings = await loadSettings(sql, reg.division_id);
+  const effectiveMethod = divSettings?.payment_method ?? reg.payment_method;
+  if (effectiveMethod !== "stripe") {
     throw new HttpError(422, "This entry fee is paid directly to the organiser");
   }
   if (reg.amount_cents <= 0) {
@@ -3964,7 +4026,19 @@ async function withdrawCore(reg: RegistrationWithGroupRow, actorId: string | nul
     // sibling's real payment. Passing the group PI unconditionally here used to
     // let cancelling a never-charged promoted sibling run a REAL stripeRefund
     // against the sibling's own money.
-    locked.status === "paid" || locked.status === "confirmed" ? locked.payment_intent_id : null,
+    // V387/H1: THIS ENTRY's own intent, and no fallback to the cart's. The
+    // status gate above closes the never-charged sibling; it does NOT close
+    // the case where both entries were genuinely charged in two different
+    // sessions, because then the gate passes and the cart column holds the
+    // OTHER entry's intent. Fail CLOSED when the entry has none recorded: a
+    // null here makes `refundable` false, the registrant is told the refund
+    // is at the organiser's discretion, and #16's manual refund control
+    // handles it. Falling back to the cart's intent is precisely the
+    // behaviour being removed — an automatic refund against a charge that
+    // may not be this entry's.
+    locked.status === "paid" || locked.status === "confirmed"
+      ? locked.entry_payment_intent_id
+      : null,
     locked.amount_cents,
     locked.refunded_cents,
   );
@@ -3975,7 +4049,8 @@ async function withdrawCore(reg: RegistrationWithGroupRow, actorId: string | nul
     // double-counted here either.
     const remaining = policy.amount_cents;
     try {
-      const refund = await stripeRefund(locked.payment_intent_id as string, remaining);
+      // Same value the policy above was resolved from — never the cart's.
+      const refund = await stripeRefund(locked.entry_payment_intent_id as string, remaining);
       // Additive on BOTH tables (hazard 2 fixed), in ONE transaction (review
       // fixup — matches refundRegistration's withTenant-wrapped pattern
       // below: two separate autocommit statements could leave the entry and
@@ -4380,6 +4455,23 @@ export async function sweepRegistrations(
       ) {
         return null; // an organiser action won the race, or the deadline moved
       }
+      // PR #677 finding L3, REJECTED after testing — `amount_cents` is
+      // deliberately RETAINED here, and clearing it is a money defect.
+      //
+      // The finding reads the retained fee as breaking a "waitlisted rows
+      // are 0 by construction" invariant. Two things are wrong with that.
+      // First, the consumer it cites does not rely on the invariant:
+      // `entryCountsTowardTotal`'s own comment says waitlisted is "excluded
+      // here defensively rather than relied upon to always be zero".
+      // Second, and decisively, this row's fee is still LOAD-BEARING after
+      // the lapse: a checkout session minted before the deadline can still
+      // complete afterwards, and `confirmPaidRegistration`'s `late` branch
+      // refunds that payment using this very column. Zeroing it here makes
+      // that refund £0.00 — the registrant pays, the entry stays
+      // waitlisted, and the money is silently kept. Caught by
+      // `registrations.test.ts`'s "a late payment against a promotion that
+      // already LAPSED to waitlisted" (expected 500, got 0) while trying
+      // the change; left here so the next reader does not retry it.
       await tx`
         update registrations
         set status = 'waitlisted', waitlisted_at = now(),

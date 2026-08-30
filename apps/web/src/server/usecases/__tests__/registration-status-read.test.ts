@@ -237,7 +237,18 @@ describe.skipIf(!HAS_DB)("groupByRef — resolved refund policy (V379/RS007)", (
     // asserting `shouldCollapseEntries(1) === true` before RS007's own
     // entrant-kind ruling. Making the entry genuinely paid restores what
     // the title always claimed to be testing: the starts_on FALLBACK.
-    await sql`update registrations set status = 'paid' where id = ${registration.id}`;
+    // V387/H1: production stamps the intent on the ENTRY as well as the cart
+    // (`confirmPaidRegistration`), and the refund policy now reads the
+    // entry's — fail-closed, so a fixture that sets only the cart's models an
+    // entry we cannot prove was charged, and correctly gets no automatic
+    // refund. Mirror what the real payment path writes.
+    await sql`update registrations
+              set status = 'paid',
+                  payment_intent_id = (
+                    select g.payment_intent_id from registration_groups g
+                    where g.id = registrations.group_id
+                  )
+              where id = ${registration.id}`;
 
     const view = await groupByRef(refCode, access_token);
     const entry = view.entries[0]!;
