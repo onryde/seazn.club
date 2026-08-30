@@ -603,6 +603,30 @@ export function buildScorebug(spec: PeriodSkinSpec, view: PadHostView, t: TFn): 
       value: t(`pad.${spec.key}.strip.permanent`),
       tone: "led",
     });
+  } else if (box[0] !== undefined) {
+    // THE CLASS WORD, WITH NO NUMBER (R6 fix pass 2, gap 3).
+    //
+    // Everything in `box` is somebody currently serving — `state.suspensions`
+    // holds the ACTIVE ones and the kernel sweeps an expired one out. So a box
+    // occupant this pad cannot count down for is still a fact the band owes the
+    // scorer, and dropping the item left `Q2 · 10v11` with nothing to say who
+    // was off. That is not an edge case twice over: a card late in a period
+    // carries its remainder into the next one (`expiryOf`, and `expiresAt.period`
+    // then differs from `state.asOf.period` until something is stamped there),
+    // and a card recorded before anyone started the clock never gets an
+    // `expiresAt` at all.
+    //
+    // A WORD, NEVER A NUMBER. Subtracting across a whistle is arithmetic on two
+    // clocks — `sweepThroughPhase` is the kernel's, not the pad's — and a
+    // suspension with no expiry has no arithmetic to do. The countdown arm above
+    // still wins whenever one honestly exists; this is what the band says when
+    // it does not.
+    strip.push({
+      id: "box",
+      label: t(`pad.${spec.key}.strip.box`),
+      value: classLabel(spec, box[0].classKey, t),
+      tone: "led",
+    });
   }
 
   const tally = detail?.shootout;

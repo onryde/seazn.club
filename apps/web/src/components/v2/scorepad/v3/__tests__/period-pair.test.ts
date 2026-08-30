@@ -246,10 +246,20 @@ describe("R6 headline: both skins declare clock(), which is what makes PadClockB
           [`${sport.key}.suspension.start`, { by: "H", person: "H-p2", class: classKey }],
         ]);
         expect((unstamped.suspensions as { expiresAt?: unknown }[])[0]!.expiresAt).toBeUndefined();
-        expect(
-          sport.factory(T).scorebug(viewFor(sport, cfg, unstamped)).strip.find((item) => item.id === "box"),
-          "an UNSTAMPED card must not invent a countdown",
-        ).toBeUndefined();
+        // CORRECTED, R6 fix pass 2 gap 3. This used to assert the box item was
+        // ABSENT — "an UNSTAMPED card must not invent a countdown" — and read
+        // the absence of the whole row as proof of the absence of a number.
+        // Those are different claims: the player was still off, the strength
+        // chip beside it still said so, and the band said nothing about who.
+        // The invariant this test was written to protect is the one asserted
+        // now: no NUMBER without an expiry. The row itself is owed either way.
+        const unstampedBox = sport
+          .factory(T)
+          .scorebug(viewFor(sport, cfg, unstamped))
+          .strip.find((item) => item.id === "box");
+        expect(unstampedBox, "an unstamped card left the band silent").toBeDefined();
+        expect(unstampedBox!.value, "an UNSTAMPED card must not invent a countdown").not.toMatch(/\d+:\d{2}/);
+        expect(unstampedBox!.value).toBe(`pad.${sport.key}.class.${classKey}`);
       });
     });
   }
@@ -952,9 +962,15 @@ describe("the box's countdown says only what it can honestly say", () => {
     // `state.asOf` still names the CLOSED period. Subtracting across the
     // whistle would print a number that is arithmetic on two different clocks.
     expect(boxOf(viewFor(sport, cfg, afterWhistle))[0]!.remaining).toBeNull();
-    expect(
-      sport.factory(T).scorebug(viewFor(sport, cfg, afterWhistle)).strip.find((i) => i.id === "box"),
-    ).toBeUndefined();
+    // CORRECTED, R6 fix pass 2 gap 3. This line used to assert the box item was
+    // absent altogether, which pinned the defect rather than the rule: carrying
+    // over is the NORMAL case for a card late in a period, and the pad went
+    // quiet about a player who was still serving until something was stamped in
+    // the new period. "No countdown" was right; "no row" was not.
+    const carriedOver = sport.factory(T).scorebug(viewFor(sport, cfg, afterWhistle)).strip.find((i) => i.id === "box");
+    expect(carriedOver, "the carried-over card vanished from the band").toBeDefined();
+    expect(carriedOver!.value).toBe("pad.hockey.class.green");
+    expect(carriedOver!.value).not.toMatch(/\d+:\d{2}/);
 
     // Once a STAMPED event lands in the new period, the two agree again.
     const inNext = foldPeriod(sport.module, cfg, [
@@ -964,6 +980,71 @@ describe("the box's countdown says only what it can honestly say", () => {
     ]);
     expect(boxOf(viewFor(sport, cfg, inNext))[0]!.remaining).toBe(20);
     expect(sport.factory(T).scorebug(viewFor(sport, cfg, inNext)).strip.find((i) => i.id === "box")?.value).toBe("0:20");
+  });
+});
+
+describe("nobody serving a suspension is ever missing from the strip", () => {
+  // R6 fix pass 2, gap 3. A box occupant the pad cannot count down for used to
+  // be dropped from the band ENTIRELY, so a scorer read `Q2 · 5v4` with nothing
+  // to say who was off — while somebody was actually serving. Carrying over is
+  // the NORMAL case for a card late in a period, and an unstamped card never
+  // gets an expiry at all, so both are ordinary rather than exotic.
+  //
+  // The item carries the class WORD, never a number: minutes across a whistle
+  // are arithmetic on two clocks (`sweepThroughPhase` is the kernel's), and a
+  // card with no expiry has no arithmetic to do at all.
+  const sport = SPORTS[0]!; // hockey — the green card carries over cleanly
+  const cfg = periodCfg(sport.module);
+
+  it("a card whose time runs into the NEXT period still names itself, with no number", () => {
+    const first = firstPlayPhase(sport, cfg);
+    const carded: Spec[] = [
+      ["core.start"],
+      ["hockey.suspension.start", { by: "H", person: "H-p2", class: "green", at: { period: first, elapsed: 840 } }],
+    ];
+    const beforeWhistle = foldPeriod(sport.module, cfg, carded);
+    const expiry = (beforeWhistle.suspensions as { expiresAt: { period: string } }[])[0]!.expiresAt;
+    expect(expiry.period, "the fixture no longer straddles a whistle").not.toBe(first);
+
+    const next = nextAdvanceOf(sport.module, beforeWhistle)!;
+    const afterWhistle = foldPeriod(sport.module, cfg, [...carded, ["hockey.period.advance", { to: next }]]);
+    expect(afterWhistle.suspensions, "the whistle swept a card that had not run out").toHaveLength(1);
+
+    const strip = sport.factory(T).scorebug(viewFor(sport, cfg, afterWhistle)).strip;
+    // The strength chip says a side is short…
+    expect(strip.find((i) => i.id === "strength")?.value).toBe("10v11");
+    // …so the box row must say who, and must not invent a countdown.
+    const box = strip.find((i) => i.id === "box");
+    expect(box, "somebody is serving and the band says nothing about it").toBeDefined();
+    expect(box!.value).toBe("pad.hockey.class.green");
+    expect(box!.value).not.toMatch(/\d+:\d{2}/);
+    expect(box!.tone).toBe("led");
+  });
+
+  it("an UNSTAMPED card names itself too — it has no expiry, so it never gets a number at all", () => {
+    const unstamped = foldPeriod(sport.module, cfg, [
+      ["core.start"],
+      ["hockey.suspension.start", { by: "H", person: "H-p2", class: "yellow" }],
+    ]);
+    expect((unstamped.suspensions as { expiresAt?: unknown }[])[0]!.expiresAt).toBeUndefined();
+    const box = sport.factory(T).scorebug(viewFor(sport, cfg, unstamped)).strip.find((i) => i.id === "box");
+    expect(box, "an unstamped card left the band silent").toBeDefined();
+    expect(box!.value).toBe("pad.hockey.class.yellow");
+    expect(box!.value).not.toMatch(/\d+:\d{2}/);
+  });
+
+  it("a countdown, where one exists, still wins over the word", () => {
+    // The three arms in priority order: a real countdown beats the rest-of-match
+    // word, which beats the bare class word.
+    const phase = firstPlayPhase(sport, cfg);
+    const state = foldPeriod(sport.module, cfg, [
+      ["core.start"],
+      ["hockey.suspension.start", { by: "H", person: "H-p2", class: "green", at: { period: phase, elapsed: 30 } }],
+      ["hockey.suspension.start", { by: "A", person: "A-p2", class: "yellow" }],
+    ]);
+    expect(boxOf(viewFor(sport, cfg, state))).toHaveLength(2);
+    const box = sport.factory(T).scorebug(viewFor(sport, cfg, state)).strip.find((i) => i.id === "box");
+    expect(box!.value).toMatch(/^\d+:\d{2}$/);
   });
 });
 
