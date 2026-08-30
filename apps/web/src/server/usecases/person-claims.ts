@@ -6,12 +6,22 @@ import "server-only";
 // org member. Claim rows are never deleted — claimed_at/revoked_at/invited_by
 // are the audit trail for claim and staff unlink.
 import { createHash, randomBytes } from "node:crypto";
-import { sql, withTenant } from "@/lib/db";
+import type postgres from "postgres";
+import { sql, withTenant, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
 
 export const CLAIM_PREFIX = "pc_";
 const CLAIM_DAYS = 14;
+
+// Both the superuser client and a withTenant tx serve createSystemClaimInvite
+// below (registrations.ts's own AnySql precedent) — a caller MAY pass a `tx`
+// to mint atomically inside a larger transaction, but every RS008 call site
+// today calls this with the pooled `sql`, strictly AFTER its own enclosing
+// transaction has committed (never inside one — this mints a row, the
+// caller separately sends an email, and network I/O must never run inside
+// an open tx, same reasoning `getLimit`'s own doc comment gives elsewhere).
+type AnySql = Tx | postgres.Sql;
 
 export function hashClaimToken(secret: string): string {
   return createHash("sha256").update(secret, "utf8").digest("hex");
@@ -78,6 +88,51 @@ export async function createClaimInvite(
     return { ...created, person_name: person.full_name, org_name: org?.name ?? "" };
   });
   return { ...row, secret };
+}
+
+/**
+ * RS008 — system-minted claim invite: no session, called ONLY from
+ * server-side registration flows immediately after a person's OWN consent
+ * was recorded (never speculatively) — the person's roster row just became
+ * `granted`/`guardian`, a real `persons.id` is on hand, and there is no
+ * linked account yet. Mirrors `createClaimInvite`'s body exactly (revoke any
+ * prior OPEN invite, insert, secret returned once) but skips
+ * `requireSessionEditor` entirely, and `invited_by` is null — nobody on
+ * staff triggered this one.
+ *
+ * Returns `null`, never throws, for the two "nothing to do" cases
+ * (`personId` doesn't resolve under this org, or the person is already
+ * claimed) — a caller wiring this into a registration flow must never let a
+ * mail-invite outcome affect the write that triggered it. Callers are
+ * responsible for their OWN "is there already an open invite" guard before
+ * calling this (`registrations.ts`'s `maybeInviteClaim`) — repeated calls
+ * for the same person across unrelated registrations would otherwise
+ * silently revoke-and-replace a still-pending invite (or yank a
+ * partially-completed claim flow) every time.
+ */
+export async function createSystemClaimInvite(
+  db: AnySql,
+  orgId: string,
+  personId: string,
+  email: string,
+): Promise<{ secret: string; person_name: string; org_name: string } | null> {
+  const secret = mintClaimSecret();
+  const [person] = await db<{ id: string; full_name: string; user_id: string | null }[]>`
+    select id, full_name, user_id from persons
+     where id = ${personId} and org_id = ${orgId} and merged_into is null`;
+  if (!person || person.user_id) return null;
+  const [org] = await db<{ name: string }[]>`
+    select name from organizations where id = ${orgId}`;
+  await db`
+    update person_claims set revoked_at = now()
+    where person_id = ${personId} and claimed_at is null and revoked_at is null`;
+  const [created] = await db<{ id: string }[]>`
+    insert into person_claims (org_id, person_id, email, token_hash, invited_by, expires_at)
+    values (${orgId}, ${personId}, ${email}, ${hashClaimToken(secret)},
+            null, now() + ${`${CLAIM_DAYS} days`}::interval)
+    returning id`;
+  if (!created) return null;
+  return { secret, person_name: person.full_name, org_name: org?.name ?? "" };
 }
 
 /** Revoke the person's open invite, if any (idempotent). */

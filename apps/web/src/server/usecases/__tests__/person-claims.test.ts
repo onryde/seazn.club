@@ -11,6 +11,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import {
   acceptResolvedClaim,
   createClaimInvite,
+  createSystemClaimInvite,
   revokeClaimInvite,
   getOpenClaim,
   resolveClaimToken,
@@ -370,5 +371,87 @@ describe.skipIf(!HAS_DB)("duplicate player link (#402)", () => {
        where o.id in (${first.id}, ${second.id})`;
     expect(claimed).toHaveLength(2);
     expect(claimed.every((r) => r.claimed)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RS008 — createSystemClaimInvite: the request-less, session-less sibling of
+// createClaimInvite, minted by server-side registration flows immediately
+// after a person's OWN consent was recorded (never speculatively). Mirrors
+// createClaimInvite's body (revoke-prior-open-invite, insert, invited_by:
+// null) but skips requireSessionEditor entirely, and never throws for the
+// two "nothing to do" cases (already claimed / no such person) — it returns
+// null so a mail-invite failure can never break the registration flow that
+// triggered it.
+// ---------------------------------------------------------------------------
+describe.skipIf(!HAS_DB)("createSystemClaimInvite (RS008 — no session required)", () => {
+  async function seedPlayerPerson(orgId: string, fullName: string): Promise<string> {
+    const [{ id }] = await sql<{ id: string }[]>`
+      insert into persons (org_id, full_name, lane, consent)
+      values (${orgId}, ${fullName}, 'player', ${sql.json({ public_name: true } as never)})
+      returning id`;
+    return id;
+  }
+
+  it("mints an invite with invited_by null, no AuthCtx involved at all", async () => {
+    const { orgId } = await seedOrg();
+    const personId = await seedPlayerPerson(orgId, "Riley Fox");
+
+    const invite = await createSystemClaimInvite(sql, orgId, personId, "riley@test.local");
+    expect(invite).not.toBeNull();
+    expect(invite!.secret.startsWith("pc_")).toBe(true);
+    expect(invite!.person_name).toBe("Riley Fox");
+
+    const [row] = await sql<{ invited_by: string | null; email: string; token_hash: string }[]>`
+      select invited_by, email, token_hash from person_claims where person_id = ${personId}`;
+    expect(row.invited_by).toBeNull();
+    expect(row.email).toBe("riley@test.local");
+    expect(row.token_hash).not.toContain(invite!.secret); // hashed at rest, same as createClaimInvite
+  });
+
+  it("returns null (never throws) for a person who is already claimed", async () => {
+    const { orgId } = await seedOrg();
+    const personId = await seedPlayerPerson(orgId, "Already Claimed");
+    const userId = await makeUser("claimed");
+    await sql`update persons set user_id = ${userId} where id = ${personId}`;
+
+    const invite = await createSystemClaimInvite(sql, orgId, personId, "claimed@test.local");
+    expect(invite).toBeNull();
+    const [{ n }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from person_claims where person_id = ${personId}`;
+    expect(n).toBe(0); // no invite row minted for an already-claimed person
+  });
+
+  it("returns null (never throws) for a person id that does not exist", async () => {
+    const { orgId } = await seedOrg();
+    const invite = await createSystemClaimInvite(sql, orgId, randomUUID(), "ghost@test.local");
+    expect(invite).toBeNull();
+  });
+
+  it("returns null for a person that exists in a DIFFERENT org — never crosses the tenant boundary", async () => {
+    const { orgId: otherOrgId } = await seedOrg();
+    const { orgId } = await seedOrg();
+    const personId = await seedPlayerPerson(otherOrgId, "Cross Org Person");
+
+    const invite = await createSystemClaimInvite(sql, orgId, personId, "cross@test.local");
+    expect(invite).toBeNull();
+  });
+
+  it("revokes a prior OPEN invite when minting a new one — the same one-open-claim rule createClaimInvite enforces", async () => {
+    const { orgId } = await seedOrg();
+    const personId = await seedPlayerPerson(orgId, "Re-invited Person");
+
+    const first = await createSystemClaimInvite(sql, orgId, personId, "first@test.local");
+    const second = await createSystemClaimInvite(sql, orgId, personId, "second@test.local");
+    expect(first).not.toBeNull();
+    expect(second).not.toBeNull();
+
+    const rows = await sql<{ email: string; revoked_at: string | null }[]>`
+      select email, revoked_at from person_claims where person_id = ${personId} order by created_at`;
+    expect(rows).toHaveLength(2);
+    expect(rows[0]!.email).toBe("first@test.local");
+    expect(rows[0]!.revoked_at).not.toBeNull(); // the first invite is now revoked
+    expect(rows[1]!.email).toBe("second@test.local");
+    expect(rows[1]!.revoked_at).toBeNull();
   });
 });
