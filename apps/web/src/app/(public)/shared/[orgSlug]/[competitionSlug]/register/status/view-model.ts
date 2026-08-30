@@ -3,6 +3,7 @@
 // the money/roster/link rules that matter most (never dangle a debt with no
 // route to settle; cancel must call the PUBLIC write path, never the
 // organiser one) are provable without a render.
+import { resolvePersonDisplayName } from "@/lib/name-display";
 
 export type EntryStatus =
   | "pending"
@@ -176,6 +177,28 @@ export function rosterCounts(
     total: players.length,
     claimed: players.filter((p) => p.consent_status !== "pending").length,
   };
+}
+
+/**
+ * RS008 — this roster row's own display name, masked by the entry's OWN
+ * division youth/player_name_display policy OR the linked person's own
+ * consent opt-out, whichever is stricter. A pure pass-through to the single
+ * canonical resolver (`lib/name-display.ts`) so this page never grows a
+ * second masking rule to drift from it — kept here (rather than called
+ * directly from `entry-card.tsx`) only so it sits alongside this file's
+ * other roster-shaped pure logic (`rosterCounts`) and is provable without a
+ * render, matching this file's own stated convention.
+ */
+export function rosterPlayerDisplayName(
+  player: { full_name: string; consent: { public_name?: boolean } | null },
+  division: { youth: boolean; player_name_display: string | null },
+): string {
+  return resolvePersonDisplayName(
+    player.full_name,
+    player.consent,
+    division.player_name_display,
+    division.youth,
+  );
 }
 
 /**

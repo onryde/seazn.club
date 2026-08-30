@@ -14,6 +14,7 @@ import {
   publicWithdrawPath,
   resolveMoneyState,
   rosterCounts,
+  rosterPlayerDisplayName,
 } from "../view-model";
 
 describe("effectivePayDeadline", () => {
@@ -226,6 +227,49 @@ describe("rosterCounts", () => {
 
   it("an empty roster is 0 of 0", () => {
     expect(rosterCounts([])).toEqual({ claimed: 0, total: 0 });
+  });
+});
+
+// RS008: the roster row's own name, masked by division youth policy OR the
+// linked person's own consent opt-out — whichever is stricter. Delegates to
+// the single canonical resolver (lib/name-display.ts); this only pins the
+// composition (the right fields feed the right resolver args), not the
+// resolver's own matrix (name-display.test.ts owns that).
+describe("rosterPlayerDisplayName", () => {
+  const division = (over: { youth?: boolean; player_name_display?: string | null } = {}) => ({
+    youth: false,
+    player_name_display: null,
+    ...over,
+  });
+
+  it("full name when the division is adult and the person has not opted out", () => {
+    expect(
+      rosterPlayerDisplayName({ full_name: "Arun Kumar", consent: { public_name: true } }, division()),
+    ).toBe("Arun Kumar");
+  });
+
+  it("masks when the division is a youth division, regardless of consent", () => {
+    expect(
+      rosterPlayerDisplayName(
+        { full_name: "Arun Kumar", consent: { public_name: true } },
+        division({ youth: true }),
+      ),
+    ).toBe("Arun K.");
+  });
+
+  it("masks when the person explicitly opted out, even on an adult division", () => {
+    expect(
+      rosterPlayerDisplayName({ full_name: "Arun Kumar", consent: { public_name: false } }, division()),
+    ).toBe("Arun K.");
+  });
+
+  it("a row with no linked person yet (consent null) masks by youth alone, never blocked on a person existing", () => {
+    expect(rosterPlayerDisplayName({ full_name: "Arun Kumar", consent: null }, division())).toBe(
+      "Arun Kumar",
+    );
+    expect(
+      rosterPlayerDisplayName({ full_name: "Arun Kumar", consent: null }, division({ youth: true })),
+    ).toBe("Arun K.");
   });
 });
 

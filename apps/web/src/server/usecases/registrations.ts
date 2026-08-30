@@ -3432,6 +3432,14 @@ export interface GroupEntryPlayerView {
   id: string;
   full_name: string;
   consent_status: "pending" | "granted" | "guardian";
+  /** RS008: this roster row's linked person's own consent — `null` when the
+   *  row has no `person_id` yet (a captain-entered row nobody has claimed,
+   *  and this entry has never been materialised — `materialise`/
+   *  `joinExistingEntrant` are the only writers of `person_id`). The status
+   *  page (`entry-card.tsx`) masks by youth alone in that case, via
+   *  `resolvePersonDisplayName`'s own null-is-not-opted-out contract — never
+   *  blocked on a person existing yet. */
+  consent: { public_name?: boolean } | null;
 }
 
 export interface GroupEntryView {
@@ -3465,6 +3473,15 @@ export interface GroupEntryView {
    *  serve both). The status page resolves `promotion_expires_at ??` the
    *  cart's `expires_at`, mirroring the sweep's identical fallback. */
   promotion_expires_at: string | null;
+  /** RS008: this entry's OWN division's youth/player_name_display policy —
+   *  `entry-card.tsx` needs it per entry (never a cart-wide value) because a
+   *  cart can span a youth division and a non-youth one at once, same reason
+   *  `refund_policy`/`payment_method` are already resolved per entry rather
+   *  than inherited from the cart. Threaded down (not pre-masked here)
+   *  because a per-player consent opt-out must combine with it — see
+   *  `GroupEntryPlayerView.consent`. */
+  division_youth: boolean;
+  division_player_name_display: string | null;
   players: GroupEntryPlayerView[];
   /** V379/RS007: this entry's own resolved refund policy — so the status
    *  page can tell a registrant which side of the line they are on BEFORE
@@ -3636,7 +3653,8 @@ async function buildGroupStatusView(
   >`
     select r.id, r.division_id, d.name as division_name, r.display_name, r.status,
            r.amount_cents, r.refunded_cents, r.free_agent, r.join_code, r.promotion_expires_at,
-           r.payment_intent_id as entry_payment_intent_id
+           r.payment_intent_id as entry_payment_intent_id,
+           d.youth as division_youth, d.player_name_display as division_player_name_display
     from registrations r join divisions d on d.id = r.division_id
     where r.group_id = ${group.id}
     order by r.created_at, r.id`;
@@ -3705,18 +3723,37 @@ async function buildGroupStatusView(
     }
   }
 
+  // RS008: LEFT JOIN persons (never inner) — a captain-entered row nobody
+  // has claimed, on an entry that has never been materialised, has no
+  // `person_id` yet at all (materialise()/joinExistingEntrant are the only
+  // writers of it). That row still belongs on the roster list; it just has
+  // nothing to mask by consent — `person_consent` reads null, and
+  // `resolvePersonDisplayName` already treats null as "not opted out",
+  // masking by division youth policy alone.
   const players =
     entries.length > 0
-      ? await sql<(GroupEntryPlayerView & { registration_id: string })[]>`
-          select id, registration_id, full_name, consent_status
-          from registration_players
-          where registration_id in ${sql(entries.map((e) => e.id))}
-          order by created_at`
+      ? await sql<
+          (Omit<GroupEntryPlayerView, "consent"> & {
+            registration_id: string;
+            person_consent: { public_name?: boolean } | null;
+          })[]
+        >`
+          select rp.id, rp.registration_id, rp.full_name, rp.consent_status,
+                 p.consent as person_consent
+          from registration_players rp
+          left join persons p on p.id = rp.person_id
+          where rp.registration_id in ${sql(entries.map((e) => e.id))}
+          order by rp.created_at`
       : [];
   const playersByEntry = new Map<string, GroupEntryPlayerView[]>();
   for (const p of players) {
     const list = playersByEntry.get(p.registration_id) ?? [];
-    list.push({ id: p.id, full_name: p.full_name, consent_status: p.consent_status });
+    list.push({
+      id: p.id,
+      full_name: p.full_name,
+      consent_status: p.consent_status,
+      consent: p.person_consent,
+    });
     playersByEntry.set(p.registration_id, list);
   }
 

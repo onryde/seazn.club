@@ -62,7 +62,7 @@ describe("entry card — a status badge never crushes the name beside it", () =>
     expect(headingBlock).toContain("grow");
     expect(headingBlock).not.toMatch(/\bflex-1\b/);
 
-    const rosterAt = SOURCE.indexOf("{p.full_name}");
+    const rosterAt = SOURCE.indexOf("{displayNameById.get(p.id)}");
     const rosterBlock = SOURCE.slice(Math.max(0, rosterAt - 200), rosterAt);
     expect(rosterBlock).toContain("grow");
     expect(rosterBlock).not.toMatch(/\bflex-1\b/);
@@ -74,7 +74,7 @@ describe("entry card — a status badge never crushes the name beside it", () =>
   });
 
   it("the roster player name keeps a usable minimum width", () => {
-    const at = SOURCE.indexOf("{p.full_name}");
+    const at = SOURCE.indexOf("{displayNameById.get(p.id)}");
     expect(at).toBeGreaterThan(-1);
     const block = SOURCE.slice(Math.max(0, at - 200), at);
     expect(block).toContain("min-w-0");
