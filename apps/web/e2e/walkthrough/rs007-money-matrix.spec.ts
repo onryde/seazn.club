@@ -177,6 +177,12 @@ async function enterAndPay(
   });
   const anon = await ctx.newPage();
   anon.on("pageerror", (e) => pageErrors.push(`[registrant] ${String(e).slice(0, 200)}`));
+  // React swallows a render error inside an error boundary and reports it on
+  // the CONSOLE, not as a pageerror — so a stepper that silently stops
+  // advancing shows up here and nowhere else.
+  anon.on("console", (m) => {
+    if (m.type() === "error") pageErrors.push(`[console] ${m.text().slice(0, 300)}`);
+  });
   anon.on("response", (res) => {
     if (res.url().includes("/api/") && res.status() >= 400) {
       badResponses.push(`${res.status()} ${res.request().method()} ${new URL(res.url()).pathname}`);
@@ -194,6 +200,16 @@ async function enterAndPay(
   await anon.locator("#reg-who-email").fill(opts.captainEmail);
   await shot("01-who");
   await anon.getByRole("button", { name: /^next$/i }).click();
+  // Fail HERE if the stepper did not advance, rather than eighteen seconds
+  // later on whichever locator the next step owns — a swallowed Next reads
+  // as "the consent checkbox is missing", which sends the reader to the
+  // wrong screen entirely.
+  await expect(
+    anon.locator("#reg-who-name"),
+    `the WHO step did not advance when Next was clicked. Page errors so far: ${
+      pageErrors.length ? pageErrors.join(" | ") : "(none)"
+    }`,
+  ).toBeHidden({ timeout: 15_000 });
 
   // ---- ENTRIES -----------------------------------------------------------
   // This step is NOT always rendered. RS006 design §4 collapses it when a
