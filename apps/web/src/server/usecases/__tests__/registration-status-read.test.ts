@@ -515,6 +515,36 @@ describe.skipIf(!HAS_DB)("groupById — widened fields for the status page rebui
     expect(pairView.entries[0]!.allows_new_joiner).toBe(false);
     expect(teamView.entries[0]!.allows_new_joiner).toBe(true);
   });
+
+  // Visual-check fix (RS008.1, post-review): buildGroupStatusView's own
+  // `entrant_kind` field is what view-model.ts's entryDisplayName keys its
+  // unmasked-name bypass on ("team" === show raw display_name). A free
+  // agent carries `entrant_kind: "team"` at the division level (design §5)
+  // but is one real, unassigned person — without this guard, a solo
+  // minor's free-agent entry on a youth division printed its raw name on
+  // the token-holder's own status page, directly contradicting the masked
+  // roster row for the SAME person right below it.
+  it("reports entrant_kind 'individual' (not 'team') for a FREE AGENT, so the client never rides the team-name bypass", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division: created } = await rig(owner);
+    const division = await patchDivision(owner, created.id, { age_max: 15 });
+    expect(division.youth).toBe(true);
+    await sql`
+      insert into registration_settings
+        (division_id, enabled, entrant_kind, fee_cents, payment_method, approval, allow_free_agents)
+      values (${division.id}, true, 'team', 0, 'offline', 'auto', true)`;
+    const { registration, access_token } = await seedRegistration(
+      competition.id,
+      division.id,
+      { fee_cents: 0, currency: "gbp", payment_method: "offline" },
+      { refCode: freshRef(), displayName: "Cap Tain", players: [{ name: "Cap Tain" }] },
+    );
+    await sql`update registrations set free_agent = true where id = ${registration.id}`;
+
+    const view = await groupById(registration.group_id, access_token);
+    expect(view.entries[0]!.entrant_kind).toBe("individual");
+  });
 });
 
 // RS006 (public stepper) — publicCartByRef: the TOKEN-LESS, group-level

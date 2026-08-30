@@ -4082,7 +4082,15 @@ async function buildGroupStatusView(
       // not the "fails toward showing a legitimate link" bias
       // allows_new_joiner uses just above (a UX dead end vs. a privacy leak
       // are not the same risk, and do not share a default).
-      entrant_kind: entrantKindByDivision.get(e.division_id) ?? "individual",
+      //
+      // Post-visual-check fix (free-agent gap, RS008.1): a free agent's
+      // division-level entrant_kind is "team" (allow_free_agents requires
+      // it), but they are one real person, not a team — entryDisplayName
+      // (view-model.ts) treats "team" as the unmasked-name bypass, so
+      // without this guard a free agent on a youth division rides that
+      // bypass and prints their raw name right above their own masked
+      // roster row.
+      entrant_kind: e.free_agent ? "individual" : (entrantKindByDivision.get(e.division_id) ?? "individual"),
       payment_method: paymentMethodByDivision.get(e.division_id) ?? "offline",
       players: playersByEntry.get(e.id) ?? [],
       refund_policy: resolveRefundPolicy(
