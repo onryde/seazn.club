@@ -3441,3 +3441,40 @@ Each half has its own MUTATION TARGET test, verified to red independently.
 **The trap worth keeping:** one green run proved nothing. The first fix passed
 the walkthrough twice before the third run exposed a second, unrelated defect
 underneath it.
+
+### R5 — every `minor` tile in every v3 skin was a 40px touch target (2026-08-30)
+
+Found by the new mobile spec, then MEASURED in a real browser rather than
+argued: `tile-grid.tsx`'s `minor` kind painted 40px and claimed the repo's
+44px floor through a `::before` bleed of 2px top and bottom. It never worked.
+`document.elementFromPoint` 1px above the tile returns the **grid container**,
+and a click dispatched there does not open the tile's sheet. So the quietest
+tile in cricket, tennis, football, badminton, table tennis and volleyball has
+been under the floor since the technique shipped.
+
+Two reasons it survived four waves:
+- **The e2e probe measured paint, not tappability.** `boundingBox()` cannot
+  see a hit area larger *or smaller* than the painted box, so it could not
+  tell a real 44 from a claimed one. The volleyball anchor passed the old
+  assertion only by accident — its second label line grows the box past 44 —
+  while table tennis's identical `minor` anchor, one line shorter, reported 40.
+  The new `assertTapFloor` hit-tests the control's own edges instead.
+- **The technique warned about itself.** Its own comment recorded that any
+  ancestor with `overflow: hidden` clips the bleed back to 40px "with no
+  warning anywhere at runtime" — two ways to be wrong, for 4px.
+
+Fixed by painting the real height: `minor` is 44, the dead `::before` classes
+are gone. Verified at 320 / 768 / 1280 — no horizontal scroll, and every tile
+on the pad measures ≥ 44 with both edges hit-testing to the tile itself.
+
+**The trap:** a floor assertion that measures the wrong property is worse than
+no assertion — it certifies the defect. Ask what a finger does, not what the
+box says.
+
+Two test bugs of my own surfaced in the same run and are fixed with it: the
+volleyball floor spec seeded all six players as starters and then posted a
+libero exchange bringing one of them ON (`LINEUP_INVALID: … is already on the
+field`) — it needed a seventh, on the bench, carrying `roles: ["libero"]`,
+which is also the Swap tile's own gate; and the first version of
+`assertTapFloor` probed `elementFromPoint` without scrolling, which answers
+`null` for anything below the fold and reads exactly like a product defect.

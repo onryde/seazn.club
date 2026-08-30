@@ -2868,6 +2868,42 @@ async function assertTouchFloor(locator: Locator, label: string): Promise<void> 
   expect(box!.height, `${label} touch target is ${box!.height}px`).toBeGreaterThanOrEqual(44);
 }
 
+/**
+ * The floor asserted the way a finger meets it: hit-test the extremes of the
+ * control's own box and require both to land on the control.
+ *
+ * `boundingBox()` alone cannot see whether a control is genuinely tappable
+ * across its painted height — this is how tile-grid.tsx's `minor` kind stayed
+ * wrong for four waves. It painted 40px and claimed 44 via a `::before` bleed
+ * of 2px top and bottom; a click dispatched into that bleed in a real browser
+ * lands on the GRID CONTAINER and never opens the tile's sheet. A box
+ * assertion cannot tell a real 44 from a claimed one, in either direction.
+ *
+ * `scrollIntoViewIfNeeded` first, and deliberately: `elementFromPoint` is
+ * viewport-relative and answers `null` for everything below the fold, so
+ * without it this probe reports "not tappable" for any control that merely
+ * happens to be off-screen — the first version of this helper did exactly
+ * that, and read as a product defect.
+ */
+async function assertTapFloor(locator: Locator, label: string): Promise<void> {
+  await expect(locator, `${label} not visible`).toBeVisible({ timeout: 20_000 });
+  await locator.scrollIntoViewIfNeeded();
+  const probe = await locator.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    const cx = r.left + r.width / 2;
+    const hit = (y: number): boolean => {
+      const at = document.elementFromPoint(cx, y);
+      return at !== null && (at === el || el.contains(at));
+    };
+    // 1px inside each edge — a fractional layout must not put the probe on
+    // the boundary pixel itself and read as a miss.
+    return { height: r.height, top: hit(r.top + 1), bottom: hit(r.bottom - 1) };
+  });
+  expect(probe.height, `${label} touch target is ${probe.height}px`).toBeGreaterThanOrEqual(44);
+  expect(probe.top, `${label} is not tappable at its TOP edge`).toBe(true);
+  expect(probe.bottom, `${label} is not tappable at its BOTTOM edge`).toBe(true);
+}
+
 /** The three checks every racquet pad owes at every width, before any
  *  sport-specific surface: the pad rendered at all (not just a 2xx shell),
  *  both scoring halves clear the 44px floor, and the page does not scroll
@@ -2961,7 +2997,7 @@ test("table tennis v3 pad: the serve-anchor tile and its sheet hold the 44px flo
   // D-17's serve anchor: table tennis's `within: "fixed-turns"` NEVER
   // self-heals, so the tile is on screen from the first paint of a fresh
   // fixture and its two-step sheet is a brand-new surface at every width.
-  await assertTouchFloor(padTile(page, "serveAnchor"), "serve-anchor tile");
+  await assertTapFloor(padTile(page, "serveAnchor"), "serve-anchor tile");
   await padTile(page, "serveAnchor").click();
   const sheet = page.getByTestId("score-pad").locator('[data-role="v3-sheet"]');
   await expect(sheet, "the anchor sheet must open").toBeVisible({ timeout: 20_000 });
@@ -2979,8 +3015,18 @@ test("volleyball v3 pad: the anchor sheet and the libero Swap-sheet hold the 44p
   // Six a side is what makes volleyball the widest of the three scorebugs, so
   // it is the one most likely to overflow a 320px viewport.
   const court = ["S", "OH", "MB", "OPP", "OH", "MB"] as const;
-  const roster = (label: string) =>
-    court.map((positionKey, i) => ({ fullName: `${label} P${i + 1} ${TAG}`, positionKey }));
+  // Six on court plus a BENCH libero. The seventh is not decoration: a libero
+  // exchange brings someone ON, so the player it names has to be off the
+  // court to start with — seeding all seven as starters made the exchange
+  // below 422 with the engine's own words, "P6 … is already on the field".
+  const roster = (label: string) => [
+    ...court.map((positionKey, i) => ({ fullName: `${label} P${i + 1} ${TAG}`, positionKey })),
+    // `roles: ["libero"]` is the tile's own gate, not decoration: the skin
+    // shows the Swap tile only for a side whose squad NAMES a libero
+    // (`sideHasLibero` → `hasLiberoRole`), and a bare position_key of "L"
+    // does not set that role.
+    { fullName: `${label} P7 ${TAG}`, positionKey: "L", slot: "bench" as const, roles: ["libero"] as const },
+  ];
   const fx = await seedRosteredFixture(request, {
     label: `Mobile VB V3 ${TAG}-${projectTag()}`,
     sportKey: "volleyball",
@@ -2993,7 +3039,7 @@ test("volleyball v3 pad: the anchor sheet and the libero Swap-sheet hold the 44p
   await page.goto(await fixturePath(page.request, fx.fixtureId), { waitUntil: "load" });
   await assertRacquetPadFloor(page);
 
-  await assertTouchFloor(padTile(page, "serveAnchor"), "serve-anchor tile");
+  await assertTapFloor(padTile(page, "serveAnchor"), "serve-anchor tile");
   await padTile(page, "serveAnchor").click();
   const sheet = page.getByTestId("score-pad").locator('[data-role="v3-sheet"]');
   await expect(sheet, "the anchor sheet must open").toBeVisible({ timeout: 20_000 });
@@ -3014,7 +3060,7 @@ test("volleyball v3 pad: the anchor sheet and the libero Swap-sheet hold the 44p
   // the first exchange is established directly; the SHEET is what this test
   // is measuring, not the act of bringing the libero on.
   const middleBlocker = `Mobile VB Home ${TAG}-${projectTag()} P3 ${TAG}`;
-  const libero = `Mobile VB Home ${TAG}-${projectTag()} P6 ${TAG}`;
+  const libero = `Mobile VB Home ${TAG}-${projectTag()} P7 ${TAG}`;
   const state = await apiJson<{ last_seq: number }>(
     page.request,
     `/api/v1/fixtures/${fx.fixtureId}/state`,
@@ -3045,7 +3091,7 @@ test("volleyball v3 pad: the anchor sheet and the libero Swap-sheet hold the 44p
 
   await page.reload({ waitUntil: "load" });
   await expect(page.getByTestId("score-pad")).toBeVisible({ timeout: 20_000 });
-  await assertTouchFloor(padTile(page, "libero-home"), "libero tile");
+  await assertTapFloor(padTile(page, "libero-home"), "libero tile");
   await padTile(page, "libero-home").click();
   const swap = page.getByTestId("score-pad").locator('[data-role="v3-swap"]');
   await expect(swap, "the libero Swap-sheet must open").toBeVisible({ timeout: 20_000 });
