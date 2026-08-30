@@ -32,6 +32,7 @@ import {
   sendDisputeAlertEmail,
   sendDisputeLostEmail,
   sendRegistrationRefundFailedAlertEmail,
+  sendClaimInviteEmail,
 } from "@/lib/email";
 import type { RegistrationEmailArgs } from "@/lib/email-templates";
 import { routes } from "@/lib/routes";
@@ -50,6 +51,7 @@ import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
 import { resolveLogoUrl } from "@/server/public-site/data";
 import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
 import { recoverDisputedTransfer as recoverDisputedTransferCore } from "./dispute-recovery";
+import { createSystemClaimInvite } from "./person-claims";
 import {
   FIRST_PAID_EARN,
   recordEarnGrant,
@@ -1217,6 +1219,81 @@ export async function notifyPromoted(
     });
   } catch {
     /* fire-and-forget */
+  }
+}
+
+/**
+ * RS008 — invite ONE person to claim their profile, post-commit,
+ * best-effort. Guards against the double-send `_INDEX.md` calls out: an
+ * unclaimed person with several registrations (across unrelated
+ * competitions, or a materialise() re-run) must never be re-invited (and
+ * have their still-pending invite silently revoked) every time one of them
+ * converges here — so this checks for an OPEN (unclaimed, unrevoked) claim
+ * FIRST and skips silently if one already exists, rather than relying on
+ * `createSystemClaimInvite`'s own revoke-and-replace (correct for the
+ * deliberate, session-authed organiser action it was written for; wrong for
+ * an automatic sweep that can run many times for the same person). Never
+ * throws — a mail-provider hiccup, or any other failure here, must never
+ * break the registration flow that triggered it.
+ */
+async function maybeInviteClaim(orgId: string, personId: string, email: string): Promise<void> {
+  try {
+    const [openClaim] = await sql<{ id: string }[]>`
+      select id from person_claims
+      where person_id = ${personId} and claimed_at is null and revoked_at is null
+      limit 1`;
+    if (openClaim) return;
+    const invite = await createSystemClaimInvite(sql, orgId, personId, email);
+    if (!invite) return;
+    const claimUrl = `${fallbackOrigin()}${routes.claim(invite.secret)}`;
+    await sendClaimInviteEmail(email, {
+      orgName: invite.org_name,
+      personName: invite.person_name,
+      claimUrl,
+    });
+  } catch (err) {
+    log.error({ err, event: "registration.claim_invite_failed", org_id: orgId, person_id: personId }, "RS008 claim invite failed");
+  }
+}
+
+/**
+ * RS008 — fire-and-forget, called AFTER the caller's own transaction has
+ * committed (never from inside one: this reads via the pooled `sql`, so a
+ * call from inside an open tx would see none of that tx's own uncommitted
+ * writes, and the email send below is network I/O that must never run
+ * inside a held connection). Re-derives, fresh, every current member of
+ * `entrantId`'s roster whose row is consented (`granted`/`guardian`, never
+ * `pending` — nobody has agreed to anything for those yet) with an email on
+ * file and no linked account — the exact gap RS008 closes: a captain-
+ * entered player (or an anonymous captain's own row) whose consent is real
+ * but who has no way to ever reach the `/me` opt-out that already exists
+ * for everyone else.
+ *
+ * Safe to call unconditionally, repeatedly, from every convergence point
+ * (`materialise()`'s callers, `joinTeamEntry`) — re-deriving fresh rather
+ * than trusting a caller-supplied candidate list means it never matters
+ * WHICH write caused a row to newly qualify, and `maybeInviteClaim`'s own
+ * open-claim guard makes a repeat sweep of the same entrant a cheap no-op.
+ * `person_id is not null` excludes a row nobody has resolved a person for
+ * yet (an unmaterialised captain-entered slot) — nothing to invite there.
+ */
+export async function inviteUnclaimedMembers(orgId: string, entrantId: string): Promise<void> {
+  try {
+    const rows = await sql<{ person_id: string; email: string | null }[]>`
+      select rp.person_id, coalesce(rp.email, p.email) as email
+      from registration_players rp
+      join registrations r on r.id = rp.registration_id
+      join persons p on p.id = rp.person_id
+      where r.entrant_id = ${entrantId}
+        and rp.consent_status in ('granted', 'guardian')
+        and rp.person_id is not null
+        and p.user_id is null`;
+    for (const row of rows) {
+      if (!row.email) continue;
+      await maybeInviteClaim(orgId, row.person_id, row.email);
+    }
+  } catch (err) {
+    log.error({ err, event: "registration.claim_invite_sweep_failed", org_id: orgId, entrant_id: entrantId }, "RS008 claim invite sweep failed");
   }
 }
 

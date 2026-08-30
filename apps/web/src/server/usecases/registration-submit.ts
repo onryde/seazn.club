@@ -34,6 +34,7 @@ import {
   reconcileClaimedPerson,
   backfillPersonEmail,
   joinExistingEntrant,
+  inviteUnclaimedMembers,
   type RegistrationRow,
   type RegistrationSettingsRow,
 } from "./registrations";
@@ -1111,11 +1112,21 @@ export async function joinTeamEntry(
   // own: lock the row, re-read it LIVE, then write — inside one short
   // transaction holding nothing but this claim/insert (RS007).
   const claimedEmail = input.player.email?.trim() || null;
+  // RS008: captured from `locked` (below) for the post-commit claim-invite
+  // sweep — set on BOTH the claim (player_id given) and insert branches,
+  // since either can land on an entry ALREADY materialised (claimed.person_id
+  // non-null on the claim branch; #23's own gap on the insert branch), which
+  // is exactly the "already materialised" condition RS008's invite convergence
+  // point requires. null when the entry has never been materialised (nothing
+  // to sweep yet — materialise() itself will trigger the sweep whenever it
+  // eventually runs).
+  let materialisedEntrantId: string | null = null;
 
   const playerId = await sql.begin(async (tx) => {
     const [locked] = await tx<{ status: string; free_agent: boolean; entrant_id: string | null }[]>`
       select status, free_agent, entrant_id from registrations where id = ${reg.id} for update`;
     if (!locked) throw new HttpError(404, "This join link is not valid");
+    materialisedEntrantId = locked.entrant_id;
     if (locked.free_agent) throw new HttpError(422, "This entry has no roster to join yet");
     if (["withdrawn", "rejected", "expired"].includes(locked.status)) {
       throw new HttpError(422, "This entry is no longer accepting players");
@@ -1269,6 +1280,16 @@ export async function joinTeamEntry(
     }
     return player!.id;
   });
+
+  // RS008: fire-and-forget, strictly AFTER the transaction above has
+  // committed (never inside it — see inviteUnclaimedMembers's own doc
+  // comment). Covers BOTH branches at once: a claim (player_id given) whose
+  // `claimed.person_id` was non-null landed here with `locked.entrant_id`
+  // set, and an insert (#23) landing on an already-materialised entry sets
+  // the same field via `joinExistingEntrant`'s write above — either way,
+  // this joiner (and any other already-granted, unclaimed member of the
+  // SAME entrant) is swept in one call.
+  if (materialisedEntrantId) void inviteUnclaimedMembers(reg.org_id, materialisedEntrantId);
 
   log.info(
     {

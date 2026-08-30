@@ -34,6 +34,24 @@ vi.mock("@/lib/ref-code", async (importOriginal) => {
   };
 });
 
+// RS008: inviteUnclaimedMembers is a fire-and-forget, post-commit side
+// effect (registrations.ts's own doc comment) — mocked here so joinTeamEntry's
+// WIRING (does it call this, with the right args, at the right times) is
+// deterministic and provable without racing a detached promise. Everything
+// else from "../registrations" (materialise, the auto-confirm path
+// submitRegistrationGroup/teamRig rely on, etc.) stays REAL via
+// importOriginal — same partial-mock convention the sibling ref-code mock
+// above uses.
+const inviteSweepMock = vi.hoisted(() => ({ fn: vi.fn().mockResolvedValue(undefined) }));
+vi.mock("../registrations", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../registrations")>();
+  return {
+    ...actual,
+    inviteUnclaimedMembers: (...args: Parameters<typeof actual.inviteUnclaimedMembers>) =>
+      inviteSweepMock.fn(...args),
+  };
+});
+
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
@@ -202,6 +220,7 @@ beforeEach(() => {
   refCodeMock.failOnCall = null;
   refCodeMock.callCount = 0;
   refCodeMock.fixedNextCalls = [];
+  inviteSweepMock.fn.mockClear();
 });
 
 // ---------------------------------------------------------------------------
@@ -1469,6 +1488,84 @@ describe.skipIf(!HAS_DB)("joinTeamEntry", () => {
       select person_id from entrant_members
        where entrant_id = ${entrant_id as string} and person_id = ${row!.person_id as string}`;
     expect(members).toHaveLength(1);
+  });
+
+  // RS008 — convergence points 1 & 3: joinTeamEntry's claim (UPDATE) branch
+  // and its insert branch both fire the post-commit claim-invite sweep when
+  // the entry they land on is ALREADY materialised (the exact condition
+  // #23's own fix targets). A not-yet-materialised entry has nothing to
+  // sweep yet — materialise() itself will trigger it later.
+  describe("RS008: fires the claim-invite sweep after commit, only when already materialised", () => {
+    it("insert branch: a fresh joiner on an already-materialised entry sweeps that entrant", async () => {
+      const { orgId, entry } = await teamRig();
+      const [{ entrant_id }] = await sql<{ entrant_id: string | null }[]>`
+        select entrant_id from registrations where id = ${entry.registration_id}`;
+      expect(entrant_id).not.toBeNull();
+
+      await joinTeamEntry(
+        {},
+        { join_code: entry.join_code!, player: { full_name: "Sweep Joiner" }, privacy_consent: true },
+      );
+
+      expect(inviteSweepMock.fn).toHaveBeenCalledTimes(1);
+      expect(inviteSweepMock.fn).toHaveBeenCalledWith(orgId, entrant_id);
+    });
+
+    it("claim branch: claiming a captain-entered slot on an already-materialised entry ALSO sweeps it", async () => {
+      const { orgId, entry, players } = await rosterRig("team", ["Pending Slot"]);
+      const [{ entrant_id }] = await sql<{ entrant_id: string | null }[]>`
+        select entrant_id from registrations where id = ${entry.registration_id}`;
+      expect(entrant_id).not.toBeNull();
+
+      await joinTeamEntry(
+        {},
+        {
+          join_code: entry.join_code!,
+          player_id: players[0]!.id,
+          player: { full_name: players[0]!.full_name },
+          privacy_consent: true,
+        },
+      );
+
+      expect(inviteSweepMock.fn).toHaveBeenCalledTimes(1);
+      expect(inviteSweepMock.fn).toHaveBeenCalledWith(orgId, entrant_id);
+    });
+
+    it("a join onto an entry that has NEVER been materialised does not sweep yet", async () => {
+      const { orgId, orgSlug, ownerId } = await seedOrg("pro");
+      const owner = asOwner(orgId, ownerId);
+      const { competition, division } = await rig(owner);
+      // manual approval → submitRegistrationGroup never auto-confirms, even
+      // though the fee is 0 — materialise() has not run for anyone yet.
+      await seedSettings(division.id, { entrant_kind: "team", fee_cents: 0, approval: "manual" });
+      const submitted = await submitRegistrationGroup(
+        { orgSlug, compSlug: competition.slug },
+        {
+          contact: baseContact(),
+          privacy_consent: true,
+          entries: [
+            {
+              division_id: division.id,
+              entrant_kind: "team",
+              team_name: "Unmaterialised Team",
+              players: [],
+              answers: {},
+            },
+          ],
+        },
+      );
+      const entry = submitted.entries[0]!;
+      const [{ entrant_id }] = await sql<{ entrant_id: string | null }[]>`
+        select entrant_id from registrations where id = ${entry.registration_id}`;
+      expect(entrant_id).toBeNull();
+
+      await joinTeamEntry(
+        {},
+        { join_code: entry.join_code!, player: { full_name: "Early Joiner" }, privacy_consent: true },
+      );
+
+      expect(inviteSweepMock.fn).not.toHaveBeenCalled();
+    });
   });
 
   it("a minor joiner needs guardian consent; consent_status records 'guardian'", async () => {
