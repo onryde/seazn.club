@@ -75,6 +75,27 @@
 //     — the reload and second-device path), and it goes false again at a
 //     period change, because a new period genuinely has no observation yet.
 //
+// TWO OBLIGATIONS THIS FILE CANNOT DISCHARGE, recorded because nothing else
+// records them (R6 review, gaps 9 and 10):
+//
+//  a) NOBODY PAUSES IT BUT THE SCORER. A running clock keeps accruing real
+//     seconds across an interval the FOLD has not been told about — half-time
+//     before anyone sends `period.advance`, a long injury stoppage, a pad left
+//     open after the whistle. That is property 1 working as designed (the
+//     engine has no half-time event until a scorer sends one, so nothing here
+//     could know), and the Pause button is the whole answer. It is written
+//     down because "the clock ran through the interval" reads like a bug and
+//     is not one; a skin cannot fix it, and a chassis auto-pause would be the
+//     wall-time clock property 2 rules out.
+//  b) `clock()` MUST NOT TOGGLE OFF AND BACK ON WITHIN ONE PERIOD. A null spec
+//     DISCARDS the held clock (there is no history here), so returning null
+//     and then a spec for the same period re-seeds from the fold and silently
+//     loses whatever the run banked past the last stamped event. No shipped
+//     skin can do it — `skins/period-shared.ts` returns null only for a
+//     non-play phase, and every return to play is a different period, which
+//     re-seeds by design — and `__tests__/clock.test.ts` pins the behaviour so
+//     a later skin meets the rule rather than discovering it.
+//
 // PURE, and deliberately in its own file rather than inside `pad-host.tsx`:
 // apps/web vitest is `environment: "node"` with NO jsdom, so anything needing
 // a DOM cannot be unit-tested at all. Every decision lives here as data-in/
@@ -211,6 +232,13 @@ export function toggleClock(clock: PadClock, nowMs: number): PadClock {
  */
 export function reseatClock(prev: PadClock | null, spec: PadClockSpec | null): PadClock | null {
   if (spec === null) return null;
+  // A blank period is the same statement as `null`, and has to be treated as
+  // one HERE rather than left to the stamp probe. `GameTime.period` is
+  // `z.string().min(1)`, so `{period: ""}` would mount a bar that displays,
+  // ticks and offers Start while every stamp it produced was refused and
+  // silently dropped — a scorer watching a running clock record nothing. Fail
+  // -safe is not enough when the failure is invisible; absent beats lying.
+  if (spec.period.trim() === "") return null;
   // `spec.seed` is forwarded VERBATIM, undefined included — `?? 0` here would
   // erase property 6's whole distinction and make every fresh period claim to
   // know that it is at second zero.

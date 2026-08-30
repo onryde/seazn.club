@@ -905,8 +905,17 @@ export function PadHostV3(props: PadHostV3Props) {
   // advance, and because the SEND path deliberately does NOT read it: `send`
   // takes a fresh `Date.now()` at tap time, so a stamp is never up to a
   // tick-interval stale.
+  //
+  // SEEDED 0, NOT `Date.now()` (R6 review, gap 7). Seven of the nine v3 skins
+  // declare no `clock()` at all, and a lazy initialiser still runs on every one
+  // of their mounts to produce a value nothing will ever read. Zero is not a
+  // placeholder here, it is unreachable: `elapsedOf` ignores `nowMs` entirely
+  // while a clock is PAUSED, `reseatClock` only ever returns a paused clock or
+  // the one already held, and the sole transition into running is
+  // `toggleClockNow` below — which sets a real `Date.now()` in the same update
+  // that starts it. Both facts are pinned in `__tests__/clock.test.ts`.
   const [clock, setClock] = useState<PadClock | null>(null);
-  const [nowMs, setNowMs] = useState(() => Date.now());
+  const [nowMs, setNowMs] = useState(0);
 
   const view: PadHostView = useMemo(
     () => ({
@@ -1071,6 +1080,16 @@ export function PadHostV3(props: PadHostV3Props) {
   // running clock is `toggleClockNow` below, which sets it at the tap, and
   // `reseatClock` never returns a running clock. Setting it here as well would
   // trip react-hooks/set-state-in-effect for a value that is already current.
+  //
+  // WHAT IS STILL UNPROVEN HERE, stated once for both this effect and
+  // `toggleClockNow`. Neither is inert any more — R6/task C landed
+  // `skins/hockey.tsx` and `skins/icehockey.tsx`, both of which declare
+  // `clock()`, so `PadClockBar` mounts and both `setNowMs` sites run in the
+  // product. What no test in this repo can execute is the React shell around
+  // them: apps/web vitest is `environment: "node"` with no jsdom, so an
+  // interval that stopped firing, or an `onToggle` that stopped being wired,
+  // would leave every clock test green. THE BROWSER e2e IS R6/TASK E'S, and it
+  // is the only thing that will ever see this effect run.
   useEffect(() => {
     if (!clock || clock.runningSince === null) return;
     const id = setInterval(() => setNowMs(Date.now()), 500);

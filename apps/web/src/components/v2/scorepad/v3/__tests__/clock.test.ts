@@ -148,6 +148,36 @@ describe("reseatClock — the seed is a bootstrap, not a leash", () => {
     expect(reseatClock(null, null)).toBeNull();
   });
 
+  it("and a spec with a BLANK period is the same as no clock, rather than one that ticks and stamps nothing", () => {
+    // R6 review, gap 11. `PadClockSpec.period` was never checked, and the
+    // engine's `GameTime.period` is `z.string().min(1)` — so a skin returning
+    // `{period: ""}` used to mount a bar that displayed, ticked and offered
+    // Start while EVERY stamp it produced was refused by the schema probe and
+    // silently dropped. Fail-safe, but invisibly so: the scorer watches a
+    // running clock record nothing. Absent is better than lying.
+    expect(reseatClock(null, { period: "", seed: 30 })).toBeNull();
+    expect(reseatClock(startClock(initClock("H1", 0), T0), { period: "" })).toBeNull();
+    // A period made only of whitespace is the same claim, and `min(1)` would
+    // accept it — so the check is on content, not length.
+    expect(reseatClock(null, { period: "  " })).toBeNull();
+  });
+
+  it("DISCARDS the clock on a null spec, banked seconds and all — a skin must not toggle clock() off within one period", () => {
+    // R6 review, gap 9, pinned rather than worked around. There is no history
+    // here: a `clock()` that returned null and then non-null inside ONE period
+    // would come back seeded from the fold, silently losing whatever the run
+    // had banked past the last stamped event. No shipped skin can do it —
+    // `skins/period-shared.ts`'s `buildClock` returns null only for a non-play
+    // phase, and every return to play is a DIFFERENT period, which re-seeds by
+    // design — but nothing recorded the obligation, so this test is the record.
+    // If a later skin needs a within-period gap, it wants `clock()` to keep
+    // returning its spec and the SCORER to pause, not a null.
+    const banked = pauseClock(startClock(reseatClock(null, { period: "P1", seed: 0 })!, T0), T0 + 240_000);
+    expect(elapsedOf(banked, T0)).toBe(240);
+    expect(reseatClock(banked, null)).toBeNull();
+    expect(elapsedOf(reseatClock(reseatClock(banked, null), { period: "P1", seed: 0 })!, T0)).toBe(0);
+  });
+
   it("stamps while PAUSED as well as while running — in a stop-clock sport the whistle time IS the game time", () => {
     const paused = pauseClock(startClock(initClock("P1", 0), T0), T0 + 45_000);
     expect(stampOf(paused, T0 + 900_000)).toEqual({ period: "P1", elapsed: 45 });
@@ -650,5 +680,35 @@ describe("the host's own wiring, audited at the source (a mirror — see the not
     // taken from it could be up to a tick behind the tap it is stamping.
     expect(src).not.toContain("stampFor(props.module, type, payload, clock, nowMs)");
     expect(src).toContain("elapsedOf(clock, nowMs)");
+  });
+
+  it("does NOT read the wall clock on every pad mount — seven of the nine skins have no clock at all", () => {
+    // R6 review, gap 7. The lazy initialiser ran `Date.now()` for every pad in
+    // the product to produce a value only a clocked skin ever reads. The two
+    // properties that make 0 unreachable rather than merely unread are pinned
+    // as BEHAVIOUR in the block below this one, not here.
+    expect(src).not.toContain("useState(() => Date.now())");
+    expect(src).toContain("const [nowMs, setNowMs] = useState(0);");
+  });
+});
+
+describe("the two properties that let the host seed its tick at 0 instead of Date.now()", () => {
+  it("elapsedOf ignores nowMs entirely while the clock is paused, 0 included", () => {
+    const paused = reseatClock(null, { period: "P1", seed: 240 })!;
+    expect(elapsedOf(paused, 0)).toBe(240);
+    expect(elapsedOf(pauseClock(startClock(paused, T0), T0 + 61_000), 0)).toBe(301);
+  });
+
+  it("and reseatClock never HANDS BACK a running clock it did not already hold", () => {
+    // So the only way `nowMs` can become load-bearing is `toggleClockNow`,
+    // which writes a real `Date.now()` in the same update that starts the run.
+    for (const spec of [{ period: "P1" }, { period: "P1", seed: 0 }, { period: "P2", seed: 900 }]) {
+      expect(reseatClock(null, spec)!.runningSince).toBeNull();
+      expect(reseatClock(startClock(initClock("P0", 0), T0), spec)!.runningSince).toBeNull();
+    }
+    // The one clock it returns running is the caller's own, by reference —
+    // which the caller had already given a real `nowMs`.
+    const running = startClock(initClock("P1", 0), T0);
+    expect(reseatClock(running, { period: "P1", seed: 5 })).toBe(running);
   });
 });
