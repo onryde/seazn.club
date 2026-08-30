@@ -26,7 +26,7 @@ one PR per wave, visual sign-off gate on each).
 | R3.5 | `R3.5-deciders.md` | R2, R3, R4 (chassis shape) | **MERGED #667 `177f04976`** (2026-08-26); the tennis match-tie-break walkthrough followed as #670 `74fe088ae` and the walkthrough project + CI leg as #671 `addd126c5`. This row read `IN FLIGHT` until R5 corrected it — the SAME stale-row class R3.5 itself found for R4 two rows up, so the Order table has now gone stale on three consecutive waves; re-read `git log`, never this column. Pre-merge state kept for the record: worktree `.claude/worktrees/r35-deciders`, branch `feat/scorepad-v3-r35-deciders` off `main` `5f2951945`. Remedial: the tie-breakers of the two converted sports. Cricket's super over is **unscoreable on the pad** (15/16 tiles disabled, the More escape hatch suppressed by a chassis bug) and football's shoot-out is recordable but illegible. Five rulings taken before any code (R3.5-1..R3.5-5 below), one of which AMENDS R3-4 for the `SHOOTOUT` phase only. Root cause of the whole class: **the gallery harness has no tie-break state**, so neither R2's nor R3's visual sign-off could ever have caught it — task A closes that first. **Task A DONE `72087a19e`**: four states (`11-superover`, `12-superover-decided`, `11-shootout`, `12-shootout-decided`) plus both live decider consoles in the seven-width matrix. BEFORE-captures published: https://claude.ai/code/artifact/ce2fa1b7-14be-4b06-aad5-b8cf0f878239 — gate re-run in the MAIN THREAD, not taken from the implementer: v3 unit 1028/1028, 0 failed suites; `turbo typecheck --force` EXIT=0, 2/2, **0 cached**; `turbo lint --force` 0 errors / 116 warnings (all pre-existing, none in the touched files). Note for R5+: R4 tennis already captures its own tie-break (`14-serveafterbreaker`/`15-breakerdock`/`16-breakermore`) — the gap was cricket's and football's only. **Task B DONE `ee6e4abe0`** (chassis, after a failed round 1 `82607141f`): a disabled tile no longer claims its event type — AND neither does a sheet whose every opening tile is disabled. Round 1 shipped the tile guard alone and **achieved nothing**, because cricket's `wicket` SHEET declares `cricket.superover.ball` and `dedicatedEventTypes` claimed every sheet's event unconditionally. Caught only by probing a REAL folded super over; the five synthetic-tile unit tests were green. Gate after: v3 1036/1036, `GATE_FILTER= gate` 4/4 **0 cached**, 0 errors. **Task C DONE** `9cbd44dc2` (engine) + `a7804cb6d` (skin) + `ab0cea71e` (e2e) + `2d16cbcbe` (gallery probes): the blocker is gone. `activeInnings<T>()` exported from the cricket module and consumed by BOTH `cricketPosition` and the skin, per ruling R3.5-3 — one definition, no second copy. Verified independently in the main thread against real folds, BOTH lanes: fine lane scorebug `6/0`/`0.2` (was `150/7`/`20.0`), RR 18.0 (was 6.0), bowler H-10 (was H-1), 0 disabled tiles (was 15), 0 closure messages (was 3), no stale target; coarse lane now offers all 18 tiles (was: no delivery tiles at all). Gate: v3 1058/1058, engine 4117/4130 with **no golden re-baseline**, `turbo typecheck lint --force` 4/4 **0 cached** 0 errors, cricket+football gallery green at 0px overflow. Before/after sheet: https://claude.ai/code/artifact/ce2fa1b7-14be-4b06-aad5-b8cf0f878239 **FOOTBALL PASS (D+E+F+H+J) DONE** `f00dedcf9`+`b83145622`+`b63581c4b`+`877fa04b3`, batched because all five touch `skins/football.tsx`, the four dictionaries and one `i18n:gen-keys` regen. Verified visually in the main thread: scorebug reads `HOME 1 (2)` / `AWAY 1 (1)` agreeing with its own headline; two LED panels (`PERIOD SHOOT-OUT`, `NEXT KICKER HOME`); kick tiles present with the wrong-turn side dimmed; activity rows read `Shoot-out kick recorded — Away · Scored`. Gate: v3 1088/1088, engine 4122/4135 **no golden re-baseline**, `turbo typecheck lint --force` 4/4 **0 cached** 0 errors, i18n 4250 x 4 locales. R3-4 is now AMENDED per R3.5-5 — `football.shootout.kick` has dedicated tiles in `SHOOTOUT` only; it rides More in every other phase, unchanged. **Tasks G+I+accessibility DONE** `b7a3d3713`+`524646af7`+`1f65b0f19`: a decided fixture now names the winner and the method on the public fixture page, the organiser console and the WhatsApp share text (one shared `decidedOutcomeText()`, `lib/scoring-vocab.ts` — the v3 pad unmounts on decide, so neither surface could be the pad); group-stage `cfg.points.shootoutWin`/`shootoutLoss` (R3.5-4) reach an organiser via two `match-rules.tsx` fields nested inside `points`, proven against a real decided fixture's standings row, not just the config round-trip; the false-premises "vs" WCAG failure noted below is FIXED (`text-slate-400` → `text-slate-600`, 2.63:1 → 7.58:1) and pinned by a computed-ratio test, owner ruling granted this session. Gate: engine 4123/4136 (+1, F21 regression guard, no golden re-baseline), v3 unit UNCHANGED 1088/1088 (neither task touches `scorepad/v3`), `GATE_FILTER= gate` 4/4 **0 cached** 0 errors 116 warnings (all pre-existing), i18n 5131 x 4 locales, football+cricket v3 e2e 37/37 plus both gallery probes (`gallery: Football`/`gallery: Cricket`) green at 0px overflow, organiser console + public page visually verified desktop/320/768. |
 | R5 | `R5-racquet-split.md` | R1 | **IN FLIGHT** 2026-08-27 — worktree `.claude/worktrees/r5-racquet`, branch `feat/scorepad-v3-r5-racquet-split` off `main` `addd126c5`. Four rulings taken before any code (R5-1..R5-4 below); THREE false premises found in the brief, one of which (FP-1) changes what the wave IS — D-17 is an engine gap, not a render bug. |
 | R6 | `R6-period-pair.md` | R1 | TODO |
-| R7 | `R7-universal-console.md` | R1 (chrome parts benefit from R2–R6 but do not block) | TODO |
+| R7 | `R7-universal-console.md` + plan `docs/superpowers/plans/2026-08-30-scorepad-v3-r7-universal-console.md` | R1 (chrome parts benefit from R2–R6 but do not block); **the totality flip alone is gated on R6 merging** | **SCOPED, rulings taken 2026-08-30** — worktree `.claude/worktrees/r7-console`, branch `feat/scorepad-v3-r7-universal-console` off `e23dcf241`, env label `r7`. Runs CONCURRENTLY with R6 by owner ruling, under the written file contract in the R7 section below. Eight rulings (R7-1…R7-8) and **six false premises** taken before any code — two of which change what the wave IS: there is no universal fallback branch to delete (`pad-renderer.tsx` is sport-agnostic), and `resolvePositions` has zero production callers. Do NOT trust this column on the next wave either — it has now been stale on four consecutive waves (R4, R3.5, R5, and R5 again after merge). |
 | R8 | `R8-sweep.md` | R2–R7 | TODO |
 
 ## Rulings carried in (do not re-litigate — full text in spec §0)
@@ -4706,3 +4706,253 @@ migration belongs to somebody else.** Nothing warns. After any rebase, run
 `db:apply` against the label's DB before believing an e2e red. And read
 `/tmp/seazn-env/<label>/server.log` for a 500 before reading the assertion:
 the assertion says "500", the log says why.
+---
+
+## R7 (2026-08-30) — universal console. Rulings taken BEFORE any code
+
+Worktree `.claude/worktrees/r7-console`, branch `feat/scorepad-v3-r7-universal-console`
+off `e23dcf241` (the R5 merge, #678). Env label `r7` (pg 54559, server :3348).
+Run CONCURRENTLY with R6 by owner ruling — the two waves hold a written
+file contract, recorded below.
+
+Evidence these rulings were taken against: a live football fixture on the R7
+build, captured at 1280/768/375, not the defect register. Scoping sheet with
+before/after specimens:
+<https://claude.ai/code/artifact/84bd58c0-7bd3-4df6-8642-d77fa96e2166>
+
+### R7-1 — the merged ledger lives in the PAD, and that is forced, not chosen
+
+D-4 says the Activity ledger "renders twice". It renders **three** times, and
+two of them are not duplicates — they do different jobs:
+
+- `v3/activity.tsx:301` (`data-role="v3-activity"`), inside the pad: skin-aware
+  plain-words rows that NAME PEOPLE, with `Void`. This is D-5's fix.
+- `fixture-console.tsx:619-683`, page level: a hand-rolled `<ul>` carrying
+  `#seq`, timestamp, WHO RECORDED, `void`, plus `Ledger Verified ✓` and
+  `Download audit`. This is the one printing the raw copy D-5 complained about.
+- `pad-host.tsx:1107` (`data-role="v3-ribbon"`), the last-event strip.
+
+**Ruling:** consolidate by MERGE, not delete. `v3/activity.tsx` is the one
+renderer; the page panel's provenance (seq, time, recorded-by) and its audit
+controls move INTO it; `fixture-console.tsx:619-683` is deleted.
+
+Which panel survives is **forced by the device link**: `/score/[token]` has no
+page chrome, so `v3/activity.tsx` is the only history a courtside scorer ever
+sees. Deleting it to satisfy a literal reading of spec §4 would leave the
+device link with no history at all. Spec §4's wording ("the pad's ribbon
+replaces the old second Activity card") predates `v3/activity.tsx` existing.
+The console mounts the component WITH void authority, provenance and audit; the
+device link mounts the same component without them.
+
+Presentation ruling taken with it: the coloured type chip is DROPPED — the row
+sentence already says "Yellow card", so the chip only repeated it — and the
+event type survives as a 3px left stripe on the row, which encodes type at a
+glance without saying it twice.
+
+Satisfies `_INDEX` L2560: use `view.events`, never build a second history route.
+
+### R7-2 — chess/boardgame commit grammar: tap DECIDES, dock enriches
+
+Owner ruling. A tap on a player half commits the result immediately; the ribbon
+reads the result in words with Undo; a ~6s dock offers Method (checkmate /
+resignation / timeout / agreement) as OPTIONAL enrichment. Identical grammar to
+football's goal, and honest to the engine — the result is the event, the method
+is a field on it.
+
+Rejected: "tap arms, Method commits" (breaks the foundation ruling that nothing
+records slower than one tap, on the one sport where that ruling costs least),
+and press-and-hold (invents a gesture that exists nowhere else in the product
+and is undiscoverable on touch).
+
+The mis-tap exposure is real and is accepted, mitigated by Undo only.
+
+### R7-3 — authority gets a labelled band BELOW the pad (D-12)
+
+Owner ruling. Today Forfeit / Abandon / Undo last render as a BARE BUTTON ROW
+ABOVE the scoring card (`fixture-console.tsx:497-567`) — no container, no
+heading, nothing saying these end the match, and Abandon is the second control
+on the page. `Start match` and `Finalize` are both `btn btn-primary` and are
+pixel-identical.
+
+**Ruling:** scoring stays top. Match lifecycle moves into its own labelled,
+visually quieter band BELOW the pad and BELOW the ledger, captioned
+"Match actions" with a sentence saying what it costs. Outlined buttons, never
+filled, so nothing in the band competes with a scoring tile. Forfeit and
+Abandon carry danger tint; Abandon confirms.
+
+`Finalize result` belongs IN the band (R7-3a, owner ruling): it is the
+most-used authority action and burying it behind an overflow menu costs a tap
+on every completed fixture.
+
+### R7-4 — device handover moves beside the pad header (D-19)
+
+`DeviceLinkPanel` renders at `f/[no]/page.tsx:218`; `FixtureConsole` at `:149`.
+At 375 the page is 2433px tall and handover is the LAST card, below the audit.
+It takes the slot the authority row vacates, beside the pad header — where an
+organiser is looking at the moment they want it.
+
+### R7-5 — the two "Undo" controls are NOT the same control. Do not collapse them
+
+The scoping sheet recommended folding them together. That recommendation is
+**WITHDRAWN on evidence** before any code was written, and the owner's
+"apply your recommendation" was answered with this correction rather than
+executed.
+
+- Pad ribbon Undo (`pad-host.tsx:1113` → `handleUndo` → `decideUndo`): if the
+  event is still HELD inside the soft-commit window it **drops the held
+  submission** — the event never reaches the server and leaves NO trace.
+  Otherwise it submits `core.void`.
+- Console "Undo last" (`fixture-console.tsx:555-565`): ALWAYS
+  `send("core.void", { event_id: lastVoidable.id })`. It can never cancel
+  before send.
+
+Collapsing them deletes the cancel-before-send path. **Ruling:** both stay;
+each is renamed for what it actually does, so two controls never again share
+one word while behaving differently.
+
+Open, to verify, NOT yet asserted: the two also aim at different targets.
+`latestEvent` (`pad-host.tsx:965`) is `events[events.length-1]`, UNFILTERED,
+while `lastVoidable` (`fixture-console.tsx:421`) skips `core.void` rows and
+already-voided events. If `events` at :965 is genuinely unfiltered, the ribbon
+can target a `core.void` and void a void. Verify before claiming.
+
+### R7-6 — D-11 is OPEN, and R1 shipped the third render (NOT in the register)
+
+Found live, in no register row. On a live console the score renders three
+times: the page header, `pad-host.tsx:1075` `data-role="v3-headline"` (a
+`bg-slate-900` bar carrying the engine's `summaryHeadline`), and the scorebug
+beneath it. D-11 / GF-2 is recorded closed by R1 as "§2.1 single scorebug" —
+and R1 introduced `v3-headline` in the same wave that owned the row.
+
+Owner ruling: **taken this wave.**
+
+**Not a delete**, and not a per-sport suppression list either. Design adopted
+from R6 (better than the one first proposed here — record it as R6's):
+**DECLARE, DO NOT LIST.** A chassis-side list of suppressed sports must be kept
+in sync with eleven skins and nothing fails when it drifts. Instead give
+`SkinDefV3` an opt-in in the shape `phase?(view)` already uses: a skin declares
+that it OWNS the headline's information, and the chassis renders the bar only
+when no skin has claimed it.
+
+- cricket KEEPS it — the chase equation is information the scorebug cannot hold.
+- football SUPPRESSES it — `readClock`'s sibling: the headline is literally the
+  scorebug's two numbers with an em dash between them.
+- hockey / ice hockey: R6 reports `period/kernel.ts:2537` builds
+  `${home} — ${away}${soSuffix}${otSuffix}${phaseSuffix}`, e.g. `3 — 2 · P2`,
+  which duplicates BOTH their scorebug and their strip. **But** `(GWS 2–1)` and
+  `(OT)` are today the only statement of the shoot-out tally and the extra-time
+  marker above the fold. **HARD CONSTRAINT: do not suppress hockey/icehockey
+  until R6's skins surface shoot-out tally and OT state themselves.** R7 pings
+  R6 before flipping; a duplicated headline is strictly better than a screen
+  with no shoot-out score.
+
+### R7-7 — extra scope accepted (owner ruling, all four)
+
+Beyond the R7 brief, by the fix-inline rule:
+
+1. **`resolvePositions` read path** — see R7-8.
+2. **D-13's boardgame half** — chess pad e2e, its first ever.
+3. **Cricket's empty More sheet at bands 0-1** (`_INDEX` L1507-1516, routed to
+   R7, "ROUTED NOT FIXED"), with cricket re-captured in this wave.
+4. **P-5, the dock amend path** — the ~6s window silently drops a per-player
+   stat if the scorer does not answer in time, and v3 activity has no edit or
+   amend path. Chassis work; widens the wave; taken deliberately.
+
+### R7-8 — `resolvePositions` is an inert seam, and it has a customer face
+
+`packages/engine/src/sport/catalog.ts:53` has **zero production callers**. Every
+caller is `testkit/**` or `__tests__`. All three page bootstraps read
+`sportModule.positions.groups` directly: `f/[no]/page.tsx:165-167`,
+`d/[divSlug]/page.tsx:432-433`, `score/[token]/page.tsx:166-168`.
+
+The first statement of this finding was too broad and R6 corrected it: the
+STATIC positions do arrive, so this is not "positions never reach the editor".
+What never runs is the **cfg-conditional** half. `period/kernel.ts:2434-2443`
+declares `positionsFor` dropping the keeper group's `min` to 0 when
+`cfg.goalkeeper === "optional"`, and ONLY `resolvePositions` invokes it.
+
+Stated as the customer sees it: **a competition configured to play without a
+goalkeeper still shows the lineup editor demanding one.**
+
+Split with R6: R7 owns the READ PATH (all three bootstraps + `lineup-editor.tsx`)
+because the lineup editor is R7's surface this wave; R6 owns hockey's and ice
+hockey's declarations and does not touch the page files. boardgame, carrom and
+generic declare no `positionsFor` (`boardgame.ts:326`, `carrom.ts:507`,
+`generic.ts:487`), so R7's own three sports have no conditional shape to lose.
+
+### R7 — FALSE PREMISES (verified against the tree `e23dcf241`, before any code)
+
+- **FP-1. There is no universal fallback branch in `pad-renderer.tsx` to
+  delete.** The brief's headline acceptance ("the fallback branch is DELETED")
+  describes something that does not exist. `PadRenderer` (`:111`) is genuinely
+  sport-agnostic — it renders off `props.module.padSpec?.(props.cfg)` (`:139`),
+  and grepping boardgame/carrom/generic inside that file returns one unrelated
+  comment at `:59`. The real deletion target is `registry.ts:133`
+  `LEGACY_SPORTS` plus the v2 lane (`skins/registry.ts:50`, the v2 skin path,
+  `timeline.tsx`). This makes R6's period-skin demolition and R7's legacy-lane
+  demolition **the same demolition**, and it is bigger than either brief says.
+- **FP-2. D-3 is CLOSED.** The brief says "Fix D-3 here if R4 didn't". R4 did —
+  `lineup-editor.tsx:209`, `expectedStarting = pairShaped ? lineupSize * 2 :
+  lineupSize`. Nothing owed.
+- **FP-3. D-13's boardgame half is OPEN**, despite this index recording D-13
+  closed at full depth by R5. No chess/boardgame pad spec exists anywhere;
+  `games.spec.ts` is Seazn Games (`/games/chess-quest`), unrelated. Carrom has
+  `carrom-pad.spec.ts`. Chess has never been browser-driven, exactly as the
+  original register row said.
+- **FP-4. D-4 is understated** — three surfaces, not two, and two of them do
+  different jobs. See R7-1.
+- **FP-5. D-11 is open, not closed.** See R7-6.
+- **FP-6. `resolvePositions` is dead in production.** See R7-8.
+
+Note the direction of the errors: the index marked a CLOSED row open (D-3) and
+an OPEN row closed (D-13). It is wrong in both directions. See the
+programme-level finding R6 recorded.
+
+### R7 ↔ R6 concurrent-wave file contract (agreed in writing, both sessions)
+
+Six shared files. Neither session touches the other's side.
+
+| File | R6 | R7 |
+|---|---|---|
+| `v3/registry.ts` | adds hockey, icehockey | adds boardgame, carrom, generic |
+| `v3/sport-theme.ts` `SPORT_PALETTES` | adds hockey, icehockey | **adds nothing** (see below) |
+| `v3/types.ts` | widens `SheetChoiceStep.tone` with `advisory` | **does not touch tone** |
+| `e2e/gallery.capture.ts` | icehockey `:2215`, hockey `:2245` | carrom `:2295`, generic `:2332`, boardgame `:2372` |
+| `pad-renderer.tsx` | owns `:303` + the period-skin deletion | owns the legacy-lane deletion |
+| dictionaries ×4 + `PAD_LABEL_KEYS` | own-sport blocks only | own-sport blocks + a `console.*` block |
+
+Rules agreed: entries go in ALPHABETICAL order inside `V3_SKINS` and
+`CONVERTED_SPORTS` so the conflict resolution is mechanical; nobody reflows
+`gallery.capture.ts` or reorders its recipes; `i18n-keys.ts` is GENERATED —
+on conflict take either side and rerun `npm run i18n:gen-keys`, never hand-merge.
+
+**`generic` must be ABSENT from `SPORT_PALETTES`, not present-with-defaults.**
+That file holds OVERRIDES ONLY; a present entry stops `sportThemeStyle`
+returning `undefined` and the pad root gains a style attribute it should not
+have (`__tests__/sport-theme.test.ts` locks this). Generic is by definition the
+"no skin" baseline, so it is the one sport that must inherit.
+
+**SEQUENCING — R7's totality flip is gated on R6 merging.** R7's acceptance
+("the LEGACY set is EMPTY and the gate proves totality") needs FIVE sports
+gone: R7's three and R6's two. `resolvePad` (`registry.ts:157-160`) THROWS for
+a key in neither set, so deleting the legacy lane early does not degrade
+hockey/icehockey — it bricks them. The flip is a single commit held at the tip
+and is NOT written on an assumption about R6's timeline.
+
+### R7 — inherited from R6, do not re-derive
+
+- **Referrer sweeps must go by SPORT KEY, not filename.**
+  `__tests__/skin-coverage.test.ts:173-174` maps `hockey`/`icehockey` to
+  `"period"` by sport key; no grep for the string `period-skin` will ever
+  surface it. R7 sweeps `"boardgame"`, `"carrom"`, `"generic"` as bare string
+  literals across `src/` and `e2e/` before touching the legacy lane. This is
+  AGENTS.md failure class 16 in a form a filename grep cannot catch.
+- **No v3 tile sends `at`, so `state.asOf` is never set** — football's
+  `readClock` (`v3/skins/football.tsx:305-312`) has been reading a value
+  nothing produces. R6 is building a pad-local clock that stamps `at`, so
+  football inherits a working clock when R6 merges; any R7 assumption that the
+  clock strip item is never present expires at that merge.
+- R6's D-8 and D-9 are closed as **MISSTATEMENTS**, not fixes — `f5a1628750`
+  (2026-08-13) created `period-skin.tsx` with the collapsed `ActionForm`
+  already in it, two days BEFORE D-8 was filed. Recorded that way so nobody
+  re-fixes them or reads their absence as a regression.
