@@ -3996,3 +3996,40 @@ the score dominating by SIZE AND WEIGHT (the glacier-cyan ruling leaves only
 swatches. No horizontal page scroll at any width; tap targets hit-tested with
 `elementFromPoint`, never `boundingBox` (R5's defect was the measurement, not
 the number).
+
+### THE SIGN-OFF TOOL ITSELF RUNS IN NO CI JOB (found 2026-08-30, R7; R6 concurs)
+
+`apps/web/e2e/gallery.capture.ts` is its own Playwright project and **is not
+run by any CI job**. It is the instrument every wave's visual sign-off gate
+depends on, and nothing tests the instrument.
+
+Demonstrated, not theorised: R7's console-history consolidation moved the
+ledger OUT of the pad root, so `padEventRows` — which counts activity rows
+INSIDE that root — returned zero, and the capture died at football `02-live`
+**for every converted sport**. It would have surfaced on R6's wave, hours
+later, as "your gallery run is broken", with no visible connection to the
+commit that caused it. Fixed at `7dcab192a` (one hunk, page-wide; R6's two
+recipes byte-identical, no reflow).
+
+This is `AGENTS.md` failure class 10 in its purest form — the visual gate has
+its own vacuous mode — with a new edge: the gate can be broken by a change in
+a DIFFERENT wave and stay broken until someone tries to use it.
+
+**R6's product recommendation, for the owner:** put `gallery.capture.ts` under
+CI on at least one sport. Not the full eleven-sport run — that is minutes of
+wall clock for a tool used at sign-off — but ONE sport, on the PR trigger, so a
+change that breaks the capture harness fails in the PR that breaks it rather
+than in the next wave that needs it. Cost is one short job; the thing it
+protects is the only gate that can see what a customer sees.
+
+**Contract note:** R7 edited `gallery.capture.ts` beyond the two recipes our
+cross-session contract allotted them — specifically the shared `padEventRows`
+helper — and told R6 rather than letting it be discovered. R6 ACCEPTS: their
+change broke the shared helper, so fixing it is theirs; leaving it broken for
+the next wave to trip over would be strictly worse than a contract deviation
+that was disclosed. Recorded because the disclosure is the part worth keeping.
+
+**Operational note for R6:** running the gallery BEFORE rebasing onto a `main`
+containing `7dcab192a` will fail at `02-live` with zero rows and it is NOT an
+R6 defect. Do not spend a debugging pass on it. R6's own walkthrough captures
+use a throwaway script rather than `gallery.capture.ts`, so they are unaffected.
