@@ -317,3 +317,83 @@ them one at a time.
 - [ ] Cricket re-captured (Task E owes it)
 - [ ] Throwaway `e2e/zz-r7-before.spec.ts` deleted
 - [ ] Totality flip held at the tip until R6 merges
+---
+
+## 10. Amendments taken after the plan was written (2026-08-30, same day)
+
+These supersede the corresponding text above. Full reasoning in `_INDEX.md`
+sections R7-9a and R7-10.
+
+### 10.1 Palettes ship in the SAME COMMIT as their skins
+
+`__tests__/contrast.test.ts`'s tone licence is **usage-driven**: it holds a tone
+to the text floor only once it finds that tone used as text in a real skin
+source. A palette landing before its skin exists therefore reds NOTHING on a bad
+hex. Both R7 palettes are additionally pinned EXPLICITLY, the way R5's racquet
+block is.
+
+Amended values (dE measured against all seven shipped/planned grounds; contrast
+computed against BOTH the ground and the band, because the band is the harder
+surface and the one that fails silently):
+
+    boardgame: board "#25142e" · board-2 "#33203d" · ink "#efe9d8" · led "#f4767a"
+    carrom:    board "#3a0f14" · board-2 "#4a161c" · ink "#f4ece0" · led "#e0a63c"
+    generic:   NO ENTRY (forced — see §1)
+
+R7-9's original warm-brown pair collided with badminton at dE 5.1 and 4.9.
+
+### 10.2 The gallery cannot see any of the three docks — fix it in Task A
+
+None of boardgame (`:2352`), carrom (`:2274`) or generic (`:2319`) declares a
+`captureExtra`, and the five shared `STATES` never open a dock or a sheet. A
+capture run therefore SUCCEEDS and photographs nothing this wave changes — no
+error, nothing to notice. R7-2 puts boardgame's Method behind exactly such a tap.
+
+Owed, per the standing instruction at `_INDEX` L656: a named `EXTRA_STATES`
+entry per sport for the states this wave introduces, at minimum
+boardgame's Method dock. Confirm the images EXIST and DIFFER.
+
+R6 has the identical gap on hockey and icehockey and has made it a merge-gate
+item on their side.
+
+### 10.3 Boardgame's method enum is 13 values, split into two sets
+
+`boardgame.ts:103-117` — checkmate, resign, time, agreement, stalemate,
+insufficient, forfeit, adjudication, double_forfeit, repetition, fifty_move,
+dead_position, illegal_move — partitioned into `DECISIVE_METHODS` and
+`DRAWN_METHODS` at `:423-433`.
+
+The dock offers the DECISIVE set after a half tap and the DRAWN set after the
+½–½ tile. Never one flat list of 13; that is the "wall of tiles" the guided-sheet
+capabilities exist to prevent.
+
+A draw is NOT a separate event: `boardgame.result` with `winner: null` (or
+omitted) plus a drawn method. The payload is all-optional with a `.refine`
+requiring at least one fact (`:133-148`).
+
+### 10.4 All three modules declare `fidelityEntitlements: {}`
+
+`boardgame.ts:476`, `carrom.ts:709`, `generic.ts:376` — empty, not absent. Per
+the R2 inherited obligation an empty map means the recording chip renders an
+UPSELL for a band nothing gates. Each skin owes either a real map or a recorded
+justification for the empty one.
+
+Reference shape, from the period kernel (R6): `{2: <entitlement>, 3: <same>}`
+where both bands gate on one entitlement key.
+
+### 10.5 Other pinned facts that move the design
+
+- `generic` declares **no `entrantModel` field at all** — absent from the module
+  object, not defaulted. Skin logic branching on it must handle `undefined`.
+- `generic`'s `padSpec` branches on `resultMode` (`win_loss` vs `score`) — the
+  only one of the three whose variant changes the pad. boardgame's
+  classical/rapid/blitz is clock metadata with zero pad effect; carrom's
+  icf/club-29 shifts cfg numbers only.
+- **"Three thin skins" is optimistic.** The smallest existing `tapModel: "S"`
+  skin is `skins/tabletennis.tsx` at 1290 lines. Size accordingly.
+- `V3_SKINS` entries are FACTORIES — `Partial<Record<string, (t: TFn) =>
+  SkinDefV3>>` (`registry.ts:75`), invoked by `resolvePad(key, t)` (`:156-159`).
+- Current `scoreOne` selectors this conversion DELETES, all three to be rewritten
+  in the same change: boardgame `:2372` (`"Draw / no result"` then
+  `getByLabel("Method").selectOption`), carrom `:2295`
+  (`"Board (queen covered)"`), generic `:2332` (`"Add points"`).

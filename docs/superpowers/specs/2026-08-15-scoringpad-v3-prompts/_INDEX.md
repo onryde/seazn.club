@@ -4956,3 +4956,161 @@ and is NOT written on an assumption about R6's timeline.
   (2026-08-13) created `period-skin.tsx` with the collapsed `ActionForm`
   already in it, two days BEFORE D-8 was filed. Recorded that way so nobody
   re-fixes them or reads their absence as a regression.
+
+### R7-9 — sport palettes for boardgame and carrom; generic stays ABSENT
+
+Owner asked what boardgame/chess gets in `SPORT_PALETTES`. Answered from the
+closed token set (`sport-theme.ts:55` — `board`, `board-2`, `ink`, `led`,
+`caution`, `dismissal`; overrides only; painting goes through the `.pad-*`
+classes in `globals.css`, so an entry using existing tokens needs no new CSS).
+
+**boardgame — the chess CLOCK, not the chess board.**
+
+    board    #1c1a17   warm near-black, tournament clock casing
+    board-2  #2a2621   the band the player names sit on
+    ink      #efe9d8   the buff of the light square (#eeeed2 tournament vinyl)
+    led      #e8b53a   amber — the running side's indicator, nothing else
+    caution / dismissal — DELIBERATELY OMITTED
+
+The board is the obvious source and the wrong one: tournament green `#769656`
+lands beside football's `#0b1f16`, and two green LCD tiles is not an identity.
+The clock is the better source because it is the one instrument in chess that
+IS two halves side by side — which is exactly what the v3 scorebug is under
+ruling R7-2 (tap a half, that player wins). Warm near-black also separates it
+from every other skin, all of which are cool.
+
+`caution`/`dismissal` omitted on purpose. `SportPalette` is `Partial`, and chess
+has no card ladder; carrying yellow and red for a sport with no discipline
+events is the "colour as decoration" the token doc's own header argues against.
+Arbiter forfeits are authority chrome, not a card.
+
+**carrom — the queen.**
+
+    board    #2a1810   lacquered board brown
+    board-2  #3a2318
+    ink      #f4ece0
+    led      #c1272d   the queen's red
+    caution / dismissal — OMITTED (no discipline events)
+
+**generic — NO ENTRY, and this one is forced, not chosen.** It is the baseline
+for what "no skin" looks like. A present-with-defaults entry stops
+`sportThemeStyle` returning `undefined`, the pad root gains a style attribute it
+should not have, and `__tests__/sport-theme.test.ts` fails. Absent is the
+correct state.
+
+**Owner ruling on the verdict route (2026-08-30): these get their per-screen
+verdict at the WAVE GALLERY, alongside the skins — not on a separate swatch
+sheet.** So Task A must land the palette entries before the gallery run, or the
+gate is theatre: the capture would show three sports on default styling and the
+owner would be signing off on a palette that is not in the picture.
+
+Sequencing: R6 is editing `sport-theme.ts` for the `advisory` token widening.
+R7 warned R6 before adding these, per the file contract; entries go in
+ALPHABETICAL order, so boardgame and carrom both sort ahead of R6's `hockey`.
+Every value is contrast-computed against the surface it actually paints on in
+`__tests__/contrast.test.ts` — that file's header records that adding a token
+without adding its pairs there is the failure mode that ships an unreadable
+board.
+
+### R7-9a — AMENDED same day. R7-9's two palettes COLLIDED; measured, not argued
+
+R6 measured all nine board grounds in CIELAB (CIE76 dE) rather than arguing hue
+names. R7 reproduced the computation independently and got identical numbers.
+Two outcomes, one of them against R7:
+
+**R7's warning to R6 was WRONG.** R7 warned that field hockey's natural green
+would land beside football's `#0b1f16`. Measured: hockey `#06323c` vs football
+`#0b1f16` is **dE 16.6** (hue 226° vs 161°, L* 18.6 vs 9.9) — it is a teal, blue
+channel dominating green. No risk. Recorded as a false premise of R7's own
+making, to balance the six it found in other people's documents.
+
+**R7-9's own two palettes were the real collision:**
+
+    badminton #241a14 ~ boardgame #1c1a17   dE 5.1   TOO CLOSE
+    badminton #241a14 ~ carrom    #2a1810   dE 4.9   TOO CLOSE
+
+Three warm near-black browns within dE 5.1. R7-9's own argument — "two green LCD
+tiles is not an identity" — applies exactly, and it was three brown ones. The
+carrom case is STRUCTURAL, not a hex accident: a lacquered carrom board and a
+maple badminton hall floor are the same material family, so no amount of nudging
+the brown fixes it. The material had to change, not the shade.
+
+**AMENDED VALUES** (dE measured against all seven shipped/planned grounds;
+contrast computed against both the ground and the band):
+
+    boardgame: board "#25142e"   aubergine
+               board-2 "#33203d"
+               ink  "#efe9d8"    buff of the light square
+               led  "#f4767a"    the analogue clock's FALLING FLAG
+               caution/dismissal OMITTED
+      min dE 15.1 (vs tennis) · ink 14.22:1 / 12.24:1 · led 6.34:1 / 5.46:1
+
+    carrom:    board "#3a0f14"   the red lacquered border
+               board-2 "#4a161c"
+               ink  "#f4ece0"
+               led  "#e0a63c"    french polish / the brass striker
+               caution/dismissal OMITTED
+      min dE 18.0 (vs badminton, was 4.9) · ink 14.24:1 / 12.60:1 · led 7.70:1 / 6.81:1
+
+    boardgame ~ carrom = dE 25.7.
+
+The accents SWAPPED sides as a consequence, and both are still true to source.
+Carrom's queen red moved from the accent to the GROUND — which is the better
+place for it, since the queen is the centre of the board and the ground *is* the
+board — and the accent became the board's french polish. Boardgame lost the
+amber clock-casing story with the warm ground and gained a sharper one: the
+falling flag is the single most iconic signal in chess timekeeping, and it is
+red. It is now the only red-accented skin in the product.
+
+`led` had to be tuned for legibility, not chosen: the true flag red `#e5484d`
+measured 4.40:1 on the ground and **3.79:1 on the band — a FAIL**, and `led`
+paints strip digits, which are small text. `#f4767a` clears AA text on both
+(6.34 / 5.46) and still reads as a flag rather than pink.
+
+Method note for later waves: dE < 8 means "reads as one colour on a sign-off
+sheet"; 8–12 is close; the amended values sit at 15.1 and 18.0. Both R7 palettes
+must be pinned EXPLICITLY in `__tests__/contrast.test.ts` the way R5's racquet
+block is — that file's tone licence is USAGE-DRIVEN and only holds a tone to the
+text floor once it finds it used as text in a real skin source, so a palette
+landing before its skin exists would red NOTHING on a bad hex.
+
+Also still open and NOT R7's to fix: R6 measured `tabletennis #101418 ~
+icehockey #08090c` at dE 4.2 and is taking its ground back to the owner as a
+refinement within the already-approved direction (accent unchanged).
+
+### R7-10 — engine surface of the three sports, pinned before Task A
+
+Facts that change the Task A design, verified against the modules:
+
+- **All three declare `fidelityEntitlements: {}`** — empty, not absent
+  (`boardgame.ts:476`, `carrom.ts:709`, `generic.ts:376`). Per the R2 inherited
+  obligation, an empty map means the recording chip renders an UPSELL for a band
+  nothing gates. All three skins owe a real map or a justified empty one.
+- **boardgame's method enum is 13 values, not 4** (`boardgame.ts:103-117`):
+  checkmate, resign, time, agreement, stalemate, insufficient, forfeit,
+  adjudication, double_forfeit, repetition, fifty_move, dead_position,
+  illegal_move — split into `DECISIVE_METHODS` and `DRAWN_METHODS`
+  (`:423-433`). R7-2's dock must offer the DECISIVE set after a half tap and the
+  DRAWN set after the ½–½ tile, never one flat list of 13.
+- **A draw is not a separate event.** `boardgame.result` with `winner: null`
+  (or omitted) plus a drawn method. The whole payload is optional with a
+  `.refine` requiring at least one fact (`:133-148`).
+- **`generic` declares NO `entrantModel` at all** — the field is absent from the
+  module object, not defaulted. Any skin logic branching on it must handle
+  undefined.
+- **`generic`'s padSpec branches on `resultMode`** (`win_loss` vs `score`), the
+  only one of the three whose variant changes the pad. boardgame's
+  classical/rapid/blitz is clock metadata with ZERO event-surface or pad effect;
+  carrom's icf/club-29 shifts cfg numbers only.
+- **"Three thin skins" is optimistic.** The smallest existing `tapModel: "S"`
+  skin is `skins/tabletennis.tsx` at 1290 lines (tennis 1313, badminton 1313,
+  volleyball 1761). Size the wave accordingly.
+- **The gallery is BLIND to all three docks.** None of boardgame, carrom or
+  generic declares an `EXTRA_STATES` entry, and the five shared `STATES` do not
+  open a dock. Per the standing instruction at `_INDEX` L656, anything behind a
+  tap needs its own `EXTRA_STATES` entry or the gate is theatre — and R7-2 puts
+  boardgame's Method behind exactly such a tap.
+- Current `scoreOne` selectors that this conversion DELETES: boardgame `:2372`
+  clicks `"Draw / no result"` then `getByLabel("Method").selectOption`; carrom
+  `:2295` clicks `"Board (queen covered)"`; generic `:2332` clicks
+  `"Add points"`. All three must be rewritten in the same change.
