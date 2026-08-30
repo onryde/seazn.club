@@ -205,6 +205,30 @@ export function toPutSlot(
 }
 
 /**
+ * Does this sport have a lineup to edit at all?
+ *
+ * R7 Task B (D-1, D-18). The console used to gate the editor on
+ * `{home && away}` alone, so chess, carrom singles and generic each rendered
+ * a one-slot team sheet — position dropdown, Captain checkbox, bench
+ * controls — for a competitor who has no team. The answer is the module's
+ * own declaration and never a sport-key list: a catalog that nominates one
+ * unit and admits no bench (`lineup: { size: 1, benchMax: 0 }` —
+ * `boardgame.ts`, `carrom.ts`, `generic.ts`) is saying there is nothing to
+ * pick.
+ *
+ * BOTH halves are load-bearing. The racquet family declares
+ * `size: 1, benchMax: 1` — one nominated unit, player or pair — so a
+ * predicate reduced to `size <= 1` would take the doubles pair-order editor
+ * away from tennis, badminton and table tennis with it.
+ *
+ * Read the RESOLVED catalog (`lineupCatalogFor`, R7 B2), not the module's
+ * static `positions`: a competition can shrink its own squad.
+ */
+export function lineupEditorApplies(catalog: { lineupSize: number; benchMax: number }): boolean {
+  return !(catalog.lineupSize <= 1 && catalog.benchMax === 0);
+}
+
+/**
  * Which position groups the STARTING slots do not yet satisfy, and by how
  * many. `PositionGroup.min` is the same number `validateLineup` enforces at
  * the scoring door (`kind: "group_min"`), so this is that refusal said in
@@ -351,7 +375,7 @@ export function LineupEditor({
   }
 
   return (
-    <section className="card p-4">
+    <section className="card p-4" data-testid="lineup-editor">
       <header className="mb-2 flex items-center justify-between">
         <h3 className="text-sm font-semibold text-slate-700">{msg("lineup.title", { name: side.name })}</h3>
         <span

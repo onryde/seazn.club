@@ -11,7 +11,11 @@ import { describeEvent, EVENT_TONE_STYLE } from "@/lib/event-copy";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { ClientTime } from "@/components/client-time";
 import { ShareButton } from "@/components/share-button";
-import { LineupEditor, type PositionGroupIn } from "@/components/v2/lineup-editor";
+import {
+  LineupEditor,
+  lineupEditorApplies,
+  type PositionGroupIn,
+} from "@/components/v2/lineup-editor";
 import { ScoringErrorBoundary } from "@/components/v2/scoring-error-boundary";
 import { PadSuspensionBanner } from "@/components/discipline/pad-suspension-banner";
 import { useMsg } from "@/components/i18n/dict-provider";
@@ -601,8 +605,10 @@ export function FixtureConsole({
         </section>
       )}
 
-      {/* Lineups (locked once the fixture starts) */}
-      {home && away && (
+      {/* Lineups (locked once the fixture starts). Gated on the module's own
+          declaration as well as on the two sides: a sport that nominates one
+          unit and admits no bench has no lineup to pick (R7 D-1). */}
+      {home && away && lineupEditorApplies(sport) && (
         <div className="grid gap-4 lg:grid-cols-2">
           {(["home", "away"] as const).map((sideKey) => {
             const s = sides[sideKey]!;
