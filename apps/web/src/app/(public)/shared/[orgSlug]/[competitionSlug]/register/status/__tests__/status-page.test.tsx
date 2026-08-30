@@ -136,6 +136,24 @@ describe("register status page (RS007 rebuild)", () => {
     expect(usecaseMock.groupById).toHaveBeenCalledWith("g1", "tok");
   });
 
+  // RS008 review fix #9 (RS009 handoff) — gated ONLY on free_agent, no other
+  // condition (see awaitingTeamAssignment's own doc comment for why this is
+  // deliberately incomplete and owed to RS009).
+  it("shows 'Waiting for a team' for a free-agent entry, and never for an ordinary one", async () => {
+    usecaseMock.groupById.mockResolvedValueOnce({
+      ...BASE_VIEW,
+      entries: [{ ...BASE_ENTRY, free_agent: true }],
+    });
+    const html = await render({ rid: "g1", token: "tok" });
+    expect(html).toContain("Waiting for a team");
+  });
+
+  it("never shows 'Waiting for a team' for an ordinary (non-free-agent) entry", async () => {
+    usecaseMock.groupById.mockResolvedValueOnce(BASE_VIEW); // both entries free_agent: false
+    const html = await render({ rid: "g1", token: "tok" });
+    expect(html).not.toContain("Waiting for a team");
+  });
+
   it("shows a plain not-found message, and never calls groupById, when rid/token are missing", async () => {
     const html = await render({});
     // "couldn't" renders as the HTML entity &#x27; under renderToStaticMarkup

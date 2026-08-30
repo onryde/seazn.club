@@ -3,6 +3,7 @@
 // directly rather than through a render.
 import { describe, expect, it } from "vitest";
 import {
+  awaitingTeamAssignment,
   canCancelEntry,
   canJoinEntry,
   claimHref,
@@ -271,6 +272,13 @@ describe("rosterPlayerDisplayName", () => {
     expect(
       rosterPlayerDisplayName({ full_name: "Arun Kumar", consent: null }, division({ youth: true })),
     ).toBe("Arun K.");
+  });
+});
+
+describe("awaitingTeamAssignment (RS008 review fix #9, RS009 handoff)", () => {
+  it("true only when free_agent is true", () => {
+    expect(awaitingTeamAssignment({ free_agent: true })).toBe(true);
+    expect(awaitingTeamAssignment({ free_agent: false })).toBe(false);
   });
 });
 

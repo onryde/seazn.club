@@ -18,6 +18,7 @@ import { CompetitionProse } from "@/components/public-site/competition-prose";
 import { PayButton } from "./pay-button";
 import { CancelEntry } from "./cancel-entry";
 import {
+  awaitingTeamAssignment,
   canCancelEntry,
   canJoinEntry,
   claimHref,
@@ -256,6 +257,13 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
         </div>
 
         {moneyNode}
+
+        {/* RS009 handoff — see awaitingTeamAssignment's own doc comment
+            (view-model.ts) for why this check is INCOMPLETE (free_agent
+            records entry MODE, not outcome) and must not be extended here. */}
+        {awaitingTeamAssignment(entry) && (
+          <p className="text-sm text-ink-muted">{t(ui, "register.status.entry.awaitingTeam")}</p>
+        )}
 
         {entry.players.length > 0 && (
           <div className="rounded-lg bg-canvas p-3">

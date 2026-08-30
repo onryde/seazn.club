@@ -3977,6 +3977,7 @@ export type DictionaryKey =
   | "register.status.cancel.error.conflict"
   | "register.status.cancel.error.generic"
   | "register.status.cancel.refund.noDeadline"
+  | "register.status.entry.awaitingTeam"
   | "register.status.heading"
   | "register.status.money.deadline"
   | "register.status.notFound"

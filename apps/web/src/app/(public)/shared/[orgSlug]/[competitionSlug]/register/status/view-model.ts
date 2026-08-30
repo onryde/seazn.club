@@ -161,6 +161,26 @@ export function canJoinEntry(status: EntryStatus): boolean {
   return status !== "withdrawn" && status !== "rejected" && status !== "expired";
 }
 
+/**
+ * RS009 handoff (2026-08-30) — gates the "Waiting for a team" notice.
+ *
+ * INCOMPLETE BY DESIGN: `free_agent` records this entry's ENTRY MODE
+ * (design §5: "an entry with no team of its own yet"), not its current
+ * OUTCOME. RS009 (branch `feat/rs009-free-agents`, adding
+ * `registration_players.source = 'organiser_assigned'` via V388) owns
+ * narrowing this once an organiser can actually assign a free agent onto a
+ * team — at that point an assigned free agent must stop showing this notice
+ * even though `free_agent` itself never flips back to `false`. Until RS009
+ * merges, `free_agent` is the only signal that exists, and every free agent
+ * genuinely IS still waiting (there is no "assigned" state yet) — but a
+ * future reader must NOT read this function's current one-line body as
+ * finished. Do not add a separate `assignedToTeam` check here — that is
+ * explicitly RS009's own follow-up, not this fix's.
+ */
+export function awaitingTeamAssignment(entry: { free_agent: boolean }): boolean {
+  return entry.free_agent === true;
+}
+
 export interface RosterCounts {
   claimed: number;
   total: number;
