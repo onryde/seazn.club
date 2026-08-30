@@ -133,12 +133,37 @@ async function sendHeldNowIfAsked(page: Page): Promise<void> {
 }
 
 let lastSide: "home" | "away" | null = null;
-async function tapRally(page: Page, fx: RosteredFixture, side: "home" | "away"): Promise<void> {
+/**
+ * `opener` is STRICT in both directions, deliberately. Passing it REQUIRES
+ * the set-opener sheet to appear and answers it; omitting it requires that no
+ * sheet appears at all. A defensive "answer it if it happens to be there"
+ * would let the prompt silently stop firing — the exact regression this whole
+ * mechanism exists to prevent — and would also hide it firing where it should
+ * not, which is the cost side of the same feature.
+ */
+async function tapRally(
+  page: Page,
+  fx: RosteredFixture,
+  side: "home" | "away",
+  opener?: "home" | "away",
+): Promise<void> {
   const before = (await ledger(page.request, fx.fixtureId)).length;
   if (side === lastSide) await page.waitForTimeout(750);
   if (PACE > 0) await page.waitForTimeout(PACE);
   await half(page, side).click();
   lastSide = side;
+  const sheet = v3Sheet(page);
+  if (opener !== undefined) {
+    await expect(sheet, "the first tap of an unopened set must ASK who served").toBeVisible({
+      timeout: 20_000,
+    });
+    await choiceOption(sheet, opener).click();
+    await expect(sheet, "one question only — it must close on the first answer").toHaveCount(0, {
+      timeout: 20_000,
+    });
+  } else {
+    await expect(sheet, "an ordinary rally must score on ONE tap — model S").toHaveCount(0);
+  }
   await sendHeldNowIfAsked(page);
   await expect
     .poll(async () => (await ledger(page.request, fx.fixtureId)).length, { timeout: 20_000 })
@@ -233,32 +258,39 @@ test("R5 — volleyball: tap a match through a cascaded set, an anchored set, an
   await expect(half(page, "home"), "a live fixture must render a real, tappable half").toBeVisible();
   await shot(page, "match-open");
 
-  // ---- SET ONE opens on an ORDINARY tap, not the anchor ---------------------
-  // Side-out sets `serving` from the winner of ANY rally unconditionally
-  // (kernel.ts's own comment: "holds whether or not we knew who served THIS
-  // one"), so the side resolves right away. The rotation cannot:
-  // `firstServer` is only ever set by a declaration landing on this set's
-  // OWN first rally or by `startSet` itself, and neither happened here — so
-  // it stays dark for the rest of this set, by design, not by defect.
-  await tapRally(page, fx, "home");
+  // ---- SET ONE opens on an ORDINARY tap, and the pad ASKS -------------------
+  // REWRITTEN (review of PR #678). This block used to open set one on a bare
+  // tap and then assert the rotation stayed dark "by design, not by defect" —
+  // documenting a real loss: `firstServer` is only ever set by a declaration
+  // landing on the set's OWN first rally, and nothing asked for one.
+  //
+  // Owner ruling R5-7 tried to close that by keeping the anchor tile visible
+  // afterwards. That could not work, and the reason is not an engine
+  // shortcoming: under side-out the next server IS the last rally's winner,
+  // so once a point exists, "who is serving" no longer says who OPENED the
+  // set — and the opener is the only thing the rotation is missing. The tile
+  // therefore promised a repair it could never perform.
+  //
+  // So the question moved to the one tap where the answer still exists. The
+  // natural flow — tap a half and start scoring — now asks once, and the
+  // rotation survives it.
+  await tapRally(page, fx, "home", "home");
   await expect(halfScore(page, "home")).toHaveText("1", { timeout: 20_000 });
   await expect(strip(page, "server"), "side-out self-heals from any rally's own winner").toContainText("Home", {
     timeout: 20_000,
   });
   await expect(
     strip(page, "rotation"),
-    "no declaration ever named this set's opener — the rotation stays dark",
-  ).toHaveCount(0);
-  // THE FIX (commit aca58a959): the tile used to gate on `side === null`
-  // alone and withdrew right here, the moment the side resolved, leaving
-  // the rotation dark for the rest of the set with no way back. It must
-  // stay offered — there is still something it can fix — and withdraw
-  // only once the pad can report both.
+    "the answer bought the rotation number the old flow threw away",
+  ).toContainText("1", { timeout: 20_000 });
+  // And the tile withdraws, because there is nothing left for it to fix.
+  // Its former job — offering a repair mid-set — was never possible; this is
+  // the same defect closed from the other end.
   await expect(
     v3Tile(page, "serveAnchor"),
-    "the tile must stay while the rotation is unresolved, not withdraw the moment the side alone resolves",
-  ).toBeVisible({ timeout: 20_000 });
-  await shot(page, "set-one-side-resolved-rotation-dark");
+    "with both fields reported the tile has no question left to ask",
+  ).toHaveCount(0);
+  await shot(page, "set-one-opener-asked-rotation-live");
 
   await tapRally(page, fx, "home");
   await expect(halfScore(page, "home")).toHaveText("2", { timeout: 20_000 });
@@ -275,22 +307,38 @@ test("R5 — volleyball: tap a match through a cascaded set, an anchored set, an
   await expect(strip(page, "games")).toContainText("1–0", { timeout: 20_000 });
   await expect(halfScore(page, "home"), "a new set starts at nothing").toHaveText("0");
   await expect(halfScore(page, "away")).toHaveText("0");
-  // CASCADED, not tossed: set one's own firstServer was never established,
-  // so `alternate`'s own opener — the OPPONENT of the just-closed set's own
-  // first server — has nothing to read either.
+  // CASCADED — and now it cascades something REAL. This block used to assert
+  // the opposite (no server, no rotation, "set one never named a first server
+  // for set two to alternate off"), which was true only because set one was
+  // allowed to open unanswered. It no longer can be: the pad asks, so set
+  // one HAS a first server, and FIVB 12.1.2's alternation gives set two its
+  // opener for free — the OPPONENT of the side that opened set one.
+  //
+  // That is the cascade this file exists to demonstrate, finally carrying
+  // information instead of carrying a gap.
   await expect(
     strip(page, "server"),
-    "set one never named a first server for set two to alternate off",
+    "set two alternates off set one's own opener, which is now known",
+  ).toContainText("Away", { timeout: 20_000 });
+  await expect(strip(page, "rotation")).toContainText("1", { timeout: 20_000 });
+  await expect(
+    v3Tile(page, "serveAnchor"),
+    "nothing to anchor: the opener came free from alternation",
   ).toHaveCount(0);
-  await expect(strip(page, "rotation")).toHaveCount(0);
-  await expect(v3Tile(page, "serveAnchor"), "the anchor tile reoffers itself").toBeVisible({ timeout: 20_000 });
   await expect(half(page, "home"), "the boundary must leave the board live and scoreable").toBeVisible();
   await shot(page, "set-two-opens-unresolved");
 
-  // ---- SET TWO — anchored, resolving both fields together -------------------
-  await tapAnchor(page, fx, "home", "away");
+  // ---- SET TWO — inherited, and scored on ONE tap ---------------------------
+  // This block used to open set two with `tapAnchor`, because set two's own
+  // opener was unknown. It no longer is: set one now names a first server, so
+  // alternation hands set two its opener and there is no anchor tile to press.
+  //
+  // What that buys is the point of the whole mechanism — ONE question at the
+  // start of the match, and every set after it inherits. Tap model S is
+  // untouched here: this is a bare tap that scores.
+  await tapRally(page, fx, "away");
   await expect(halfScore(page, "away")).toHaveText("1", { timeout: 20_000 });
-  await expect(strip(page, "server"), "resolved by the anchor — away is due next").toContainText("Away", {
+  await expect(strip(page, "server"), "away won it, so away serves next").toContainText("Away", {
     timeout: 20_000,
   });
   // The strip item renders its LABEL and value together ("Rotation 2"), so
@@ -300,10 +348,8 @@ test("R5 — volleyball: tap a match through a cascaded set, an anchored set, an
   await expect(strip(page, "rotation"), "FIVB 7.6.2 — away's own court-position number").toHaveText("Rotation 2", {
     timeout: 20_000,
   });
-  await expect(v3Tile(page, "serveAnchor"), "resolved — the anchor tile withdraws").toHaveCount(0, {
-    timeout: 20_000,
-  });
-  await shot(page, "set-two-anchored");
+  await expect(v3Tile(page, "serveAnchor"), "nothing unresolved — no tile").toHaveCount(0);
+  await shot(page, "set-two-inherited");
 
   await tapRally(page, fx, "away");
   await expect(halfScore(page, "away")).toHaveText("2", { timeout: 20_000 });
