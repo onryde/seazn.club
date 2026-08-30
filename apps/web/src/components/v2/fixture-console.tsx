@@ -11,7 +11,7 @@ import { describeEvent, EVENT_TONE_STYLE } from "@/lib/event-copy";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { ClientTime } from "@/components/client-time";
 import { ShareButton } from "@/components/share-button";
-import { LineupEditor } from "@/components/v2/lineup-editor";
+import { LineupEditor, type PositionGroupIn } from "@/components/v2/lineup-editor";
 import { ScoringErrorBoundary } from "@/components/v2/scoring-error-boundary";
 import { PadSuspensionBanner } from "@/components/discipline/pad-suspension-banner";
 import { useMsg } from "@/components/i18n/dict-provider";
@@ -158,9 +158,17 @@ export interface SportInfo {
   key: string;
   config: Record<string, unknown>;
   scorerLabel: string;
-  positionGroups: { key: string; name: string }[];
+  /** Groups of the catalog that governs THIS fixture — `lineupCatalogFor`
+   *  (R7 B2), never `sportModule.positions`. Carries `min`/`max` because a
+   *  competition's config moves them (hockey's optional goalkeeper). */
+  positionGroups: PositionGroupIn[];
   roles: { key: string; name?: string }[];
   lineupSize: number;
+  /** Resolved `lineup.benchMax` (0 when the module declares none). Required,
+   *  not optional: with `lineupSize` it decides whether this sport HAS a
+   *  lineup to edit at all (R7 D-1), and a bootstrap that forgot it would
+   *  silently render the editor for a 1-v-1 sport again. */
+  benchMax: number;
   fidelityTiers: FidelityTierIn[];
 }
 

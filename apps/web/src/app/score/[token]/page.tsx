@@ -9,6 +9,7 @@ import { getFixtureState, getLineup, listEvents } from "@/server/usecases/fixtur
 import { getEntrant } from "@/server/usecases/entrants";
 import { withTenant } from "@/lib/db";
 import { resolveModule } from "@/server/engine-db";
+import { lineupCatalogFor } from "@/server/usecases/lineup-catalog";
 import { HttpError } from "@/lib/errors";
 import { orgBoardChrome } from "@/server/slideshow-data";
 import { publicThemeStyleChain } from "@/lib/public-theme";
@@ -101,6 +102,9 @@ export default async function ScorePadPage({
     : undefined;
 
   const sportModule = resolveModule(fixture.sport_key, fixture.module_version);
+  // R7 B2 — per-config catalog (see the fixture console page); the device
+  // link's fixture carries its own resolved `config` column.
+  const lineupCatalog = lineupCatalogFor(sportModule, fixture.config);
   const [state, events] = await Promise.all([
     getFixtureState(read, fixture.id),
     listEvents(read, fixture.id, 0),
@@ -163,9 +167,10 @@ export default async function ScorePadPage({
           key: fixture.sport_key,
           config: fixture.config as Record<string, unknown>,
           scorerLabel: sportModule.officialLabel.scorer,
-          positionGroups: sportModule.positions.groups,
-          roles: sportModule.positions.roles ?? [],
-          lineupSize: sportModule.positions.lineup.size,
+          positionGroups: lineupCatalog.groups,
+          roles: lineupCatalog.roles ?? [],
+          lineupSize: lineupCatalog.lineup.size,
+          benchMax: lineupCatalog.lineup.benchMax ?? 0,
           fidelityTiers: sportModule.fidelityTiers,
         }}
         home={home}

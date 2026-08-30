@@ -31,6 +31,7 @@ import { resolveVenueTz } from "@/lib/tz";
 import { hasFeature } from "@/lib/entitlements";
 import { listEntrantLogoUrls } from "@/server/usecases/teams";
 import { resolveModule } from "@/server/engine-db";
+import { lineupCatalogFor } from "@/server/usecases/lineup-catalog";
 import { effectiveEntrantModel } from "@seazn/engine/sport";
 import type { ProgressionSpec } from "@seazn/engine/competition";
 import { seedingSourceReady } from "@/lib/seeding-source-ready";
@@ -154,6 +155,9 @@ export default async function DivisionPage({
   // Effective entrant model (sport default ← config.entrants override) — shared
   // by the entrants panel (add form + roster editor) and the Settings tab.
   const entrantModel = effectiveEntrantModel(sportModule.entrantModel ?? null, division.config);
+  // R7 B2 — per-config catalog (see the fixture console page). The roster
+  // editor's default-position picker offers this division's groups.
+  const lineupCatalog = lineupCatalogFor(sportModule, division.config);
   const entrantNames = Object.fromEntries(entrants.map((e) => [e.id, e.display_name]));
   const BRACKET_STAGE_KINDS = new Set(["knockout", "double_elim", "stepladder", "page_playoff"]);
   const hasKnockout = stages.some((s) => BRACKET_STAGE_KINDS.has(s.kind));
@@ -429,8 +433,8 @@ export default async function DivisionPage({
             entrants={entrants}
             logoUrls={entrantLogos}
             canEdit={editable}
-            positionGroups={sportModule.positions.groups}
-            roles={sportModule.positions.roles ?? []}
+            positionGroups={lineupCatalog.groups}
+            roles={lineupCatalog.roles ?? []}
             // RS007/V380 dropped `divisions.eligibility` (jsonb) — the real
             // first-class columns, so EntrantsPanel's badge reflects every
             // division's actual restriction instead of always reading empty.

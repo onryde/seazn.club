@@ -33,6 +33,7 @@ import { sql } from "@/lib/db";
 // (S12/#421's flag has been removed entirely — see resolveScorePadBootstrap's
 // own doc for what a resolution failure does instead of gating on a flag).
 import { resolveScorePadBootstrap } from "@/server/usecases/fidelity";
+import { lineupCatalogFor } from "@/server/usecases/lineup-catalog";
 import { eventOutToEnvelope } from "@/components/v2/scorepad/wire";
 
 export default async function FixturePage({
@@ -60,6 +61,11 @@ export default async function FixturePage({
   ]);
   const competition = await getCompetition(auth, division.competition_id);
   const sportModule = resolveModule(division.sport_key, division.module_version);
+  // R7 B2 — the catalog that governs THIS division, not the module's
+  // static one: a competition's config moves the starting size (football
+  // small-sided, cricket playersPerSide) and the keeper minimum (hockey /
+  // ice hockey `goalkeeper: "optional"`).
+  const lineupCatalog = lineupCatalogFor(sportModule, division.config);
 
   // PROMPT-63 §4: ledger-integrity strip (organiser surface, once events
   // exist). The verifier is the V226 DB function; download is Pro-gated.
@@ -162,9 +168,10 @@ export default async function FixturePage({
             key: division.sport_key,
             config: division.config as Record<string, unknown>,
             scorerLabel: sportModule.officialLabel.scorer,
-            positionGroups: sportModule.positions.groups,
-            roles: sportModule.positions.roles ?? [],
-            lineupSize: sportModule.positions.lineup.size,
+            positionGroups: lineupCatalog.groups,
+            roles: lineupCatalog.roles ?? [],
+            lineupSize: lineupCatalog.lineup.size,
+            benchMax: lineupCatalog.lineup.benchMax ?? 0,
             fidelityTiers: sportModule.fidelityTiers,
           }}
           home={home}

@@ -71,6 +71,7 @@ const sport: SportInfo = {
   positionGroups: [],
   roles: [],
   lineupSize: 2,
+  benchMax: 1,
   fidelityTiers: [],
 };
 
