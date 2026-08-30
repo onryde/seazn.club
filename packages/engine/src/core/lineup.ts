@@ -534,6 +534,18 @@ function bringOn(
     onField: true,
     ...(current.timesOff > 0 ? { timesOn: current.timesOn + 1 } : {}),
     ...(slot.positionKey === undefined ? {} : { positionKey: slot.positionKey }),
+    // ROLES are recorded here for the same reason `positionKey` is, and by
+    // the same rule as `memberFromSlot`: the event states a fact about this
+    // person, and dropping it loses information the fold cannot recover.
+    //
+    // It became load-bearing with `LineupExemption.requiresRole`. A libero
+    // whose role is declared on the replacement that brings them ON — rather
+    // than on the team sheet — never carried it on the member, so the RETURN
+    // leg of that same exchange found no libero on either side and was
+    // refused `exemption-role-absent`. Half of normal play, broken by a
+    // silent omission. Absent `roles` still changes nothing, so a member's
+    // existing roles survive an event that does not mention them.
+    ...(slot.roles === undefined ? {} : { roles: [...slot.roles] }),
   };
   return members.map((m, j) => (j === i ? next : m));
 }

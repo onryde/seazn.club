@@ -429,6 +429,74 @@ describe("reduceLineupEvent — replacement exemptions", () => {
     expect(onFieldPersons(after.home)).toContain("h-sub-mf");
   });
 
+  // REVIEW OF PR #678 — an exemption must be EARNED, not merely claimed.
+  // Without `requiresRole` a pad stamps the key on any pair and the channel
+  // launders an ordinary substitution past the re-entry cap, because the
+  // exemption skips both COUNT refusals. Reproduced before it was fixed: a
+  // player who had already used their one return was accepted for a second.
+  describe("an exemption bound to a ROLE (LineupExemption.requiresRole)", () => {
+    const fivb = policy({ reentry: "once", exemptions: { libero: { requiresRole: "libero" } } });
+
+    it("refuses when NEITHER player carries the role — the pair is not that kind of replacement at all", () => {
+      const r = reduceLineupEvent(
+        initSquads(lineups),
+        replacement("H", "h-fw", { personId: "h-sub-mf", slot: "starting", orderNo: 5 }, "libero"),
+        fivb,
+      );
+      expect(r.ok).toBe(false);
+      expect(r.ok === false && r.reason).toBe("exemption-role-absent");
+    });
+
+    it("accepts when the INCOMING player declares the role — the libero coming on", () => {
+      const r = reduceLineupEvent(
+        initSquads(lineups),
+        replacement(
+          "H",
+          "h-fw",
+          { personId: "h-sub-mf", slot: "starting", orderNo: 5, roles: ["libero"] },
+          "libero",
+        ),
+        fivb,
+      );
+      expect(r.ok).toBe(true);
+    });
+
+    it("accepts when the player coming OFF carries it — the return leg, which brings an ORDINARY player on", () => {
+      // Both directions are the same exchange. A rule reading only the
+      // incoming player would exempt the first leg and refuse the second,
+      // which is half of normal play.
+      const after = accept(
+        reduceLineupEvent(
+          initSquads(lineups),
+          replacement(
+            "H",
+            "h-fw",
+            { personId: "h-sub-mf", slot: "starting", orderNo: 5, roles: ["libero"] },
+            "libero",
+          ),
+          fivb,
+        ),
+      );
+      const back = reduceLineupEvent(
+        after,
+        replacement("H", "h-sub-mf", { personId: "h-fw", slot: "starting", orderNo: 5 }, "libero"),
+        fivb,
+      );
+      expect(back.ok, "the player the libero replaced must be able to return").toBe(true);
+    });
+
+    it("leaves an exemption with NO declared role open to any pair — cricket's concussion", () => {
+      // Neither the concussed player nor their replacement carries a
+      // "concussion" role, so binding this one would break it.
+      const r = reduceLineupEvent(
+        initSquads(lineups),
+        replacement("H", "h-fw", { personId: "h-sub-mf", slot: "starting", orderNo: 5 }, "concussion"),
+        policy({ exemptions: { concussion: {} } }),
+      );
+      expect(r.ok).toBe(true);
+    });
+  });
+
   it("refuses an exemption the variant does not declare", () => {
     const r = reduceLineupEvent(
       initSquads(lineups),
