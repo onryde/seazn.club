@@ -426,10 +426,39 @@ describe("refusedEventTypes agrees with the real reducer in every phase both ker
       }
       expect(mapped.get("pre")).toBe("pre");
       expect(mapped.get("done")).toBe("post");
+      // R6 fix pass 2, gap 5. These two used to be skipped BY NAME in the loop
+      // below and produced by nothing above it, so `POST_PHASES` could lose
+      // either member and the whole suite stayed green. They are terminal
+      // phases the kernel really reaches — `core.finalize` on a decided
+      // fixture (kernel.ts:2408) and a `replay` abandonment (kernel.ts:1416).
+      expect(mapped.get("final"), "the fold table produced no finalized fixture").toBe("post");
+      expect(mapped.get("abandoned"), "the fold table produced no abandoned fixture").toBe("post");
       for (const [phase, padPhase] of mapped) {
         if (phase === "pre" || phase === "done" || phase === "final" || phase === "abandoned") continue;
         expect(padPhase, `${phase} is not live`).toBe("live");
         expect(isPlayPhaseToken(phase) || phase === "SHOOTOUT", `${phase} classified wrongly`).toBe(true);
+      }
+    });
+
+    it(`${sport.key}: a finalized or abandoned fixture declares NO clock — the failure the missing rows hid`, () => {
+      // Not a cosmetic mapping detail. Drop either token from `POST_PHASES` and
+      // `isPlayPhaseToken` starts calling it a play phase, so `buildClock`
+      // returns `{period: "abandoned"}`: `PadClockBar` mounts, ticks, offers
+      // Start — and every `at` it stamps is refused by `isPlayPhase`
+      // (kernel.ts:2490), because "abandoned" is not in `playPhases(cfg)`. A
+      // scorer would watch a running clock record nothing.
+      for (const terminal of ["final", "abandoned"]) {
+        const row = foldedPhases(sport.module).find((r) => r.phase === terminal);
+        expect(row, `no folded recipe reaches "${terminal}"`).toBeDefined();
+        const view = viewFor(sport, row!.cfg, row!.state);
+        expect(isPlayPhaseToken(terminal), `${terminal} reads as a play phase`).toBe(false);
+        expect(buildClock(view), `${terminal} declared a clock`).toBeNull();
+        // …and the fold agrees: every one of the pad's own event types is
+        // refused there, so a stamp would have had nothing to attach to.
+        const refused = new Set(sport.factory(T).refusedEventTypes!(view));
+        for (const type of Object.keys(bandsOf(sport.spec))) {
+          expect(refused.has(type), `${terminal}: ${type} still offered`).toBe(true);
+        }
       }
     });
   }
