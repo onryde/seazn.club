@@ -217,3 +217,73 @@ describe.skipIf(!HAS_DB)("free_agent_fee_cents", () => {
     expect(settings.free_agent_fee_cents).toBe(1000);
   });
 });
+
+
+describe.skipIf(!HAS_DB)("a FREE division's solo sign-up still reaches a placeable state", () => {
+  // Caught by e2e, and only by e2e. `registration-submit.ts` excluded free
+  // agents from the free/auto-approval inline confirm with the reason "there
+  // is no team yet to materialise into" — correct BEFORE RS009, when
+  // materialise would have minted a phantom one-person entrant for them.
+  //
+  // RS009 removed that reason: materialise now seats no entrant for a solo
+  // sign-up and confirms them anyway. The exclusion outlived its
+  // justification, so on a FREE division a solo sign-up sat at `pending`
+  // forever — and RS009's own confirmed-or-paid guard then hid the Assign
+  // control, making the whole feature unreachable on exactly the divisions
+  // most likely to use it. Two individually-correct changes; the defect
+  // lived in the gap between them.
+  it("auto-confirms a solo sign-up on a free auto-approval division", async () => {
+    const { auth } = await seedOrg();
+    const ctx = await seedPaidTeamDivision(auth, { feeCents: 0, freeAgentFeeCents: null });
+
+    const res = await submitRegistrationGroup(
+      { orgSlug: ctx.orgSlug, compSlug: ctx.compSlug },
+      {
+        contact: { name: "Solo", email: `s-${randomUUID().slice(0, 8)}@test.local` },
+        privacy_consent: true,
+        entries: [
+          {
+            division_id: ctx.divisionId,
+            entrant_kind: "team",
+            free_agent: true,
+            players: [{ full_name: "Priya Raman" }],
+            answers: {},
+          },
+        ],
+      } as never,
+    );
+
+    const [row] = await sql<{ status: string; entrant_id: string | null }[]>`
+      select status, entrant_id from registrations where group_id = ${res.group_id}`;
+    expect(row.status, "a free solo sign-up must not be stranded at pending").toBe("confirmed");
+    // ...and still seats nobody: confirming is not the same as fielding.
+    expect(row.entrant_id).toBeNull();
+  });
+
+  it("still auto-confirms an ordinary free team entry", async () => {
+    const { auth } = await seedOrg();
+    const ctx = await seedPaidTeamDivision(auth, { feeCents: 0, freeAgentFeeCents: null });
+
+    const res = await submitRegistrationGroup(
+      { orgSlug: ctx.orgSlug, compSlug: ctx.compSlug },
+      {
+        contact: { name: "Captain", email: `c-${randomUUID().slice(0, 8)}@test.local` },
+        privacy_consent: true,
+        entries: [
+          {
+            division_id: ctx.divisionId,
+            entrant_kind: "team",
+            team_name: "Team A",
+            players: [{ full_name: "Captain One" }],
+            answers: {},
+          },
+        ],
+      } as never,
+    );
+
+    const [row] = await sql<{ status: string; entrant_id: string | null }[]>`
+      select status, entrant_id from registrations where group_id = ${res.group_id}`;
+    expect(row.status).toBe("confirmed");
+    expect(row.entrant_id, "a real team still gets a real entrant").not.toBeNull();
+  });
+});

@@ -659,9 +659,20 @@ test("RS009: the assign sheet holds at this width, and the hub does not scroll b
   // This asserts the SHEET, not just the absence of overflow: a no-horizontal-
   // scroll gate passes on a page where the dialog never opened.
   await page.goto(`/o/${orgSlug}/c/${compSlug}/registration?tab=registrants&division_id=${teamDivisionId}`);
-  await page.getByRole("button", { name: /Mobile Solo/i }).first().click().catch(() => {});
 
-  const opener = page.locator('[data-registration-hub-assign-action="open"]').first();
+  // Open the registrant's detail panel EXPLICITLY, and let a failure here
+  // fail the test. The first version did `.click().catch(() => {})` — a
+  // swallowed click — so when the row never opened, the assertion below
+  // reported "the assign control is not visible" and said nothing about why.
+  // The control is present in every collapsed row's DOM (the panel is a
+  // <details>), so "not visible" is the symptom of an unopened row and of a
+  // genuinely missing control alike. A test that hides which one it hit
+  // costs more than it saves.
+  const row = page.locator("details").filter({ hasText: `Mobile Solo ${TAG}` }).first();
+  await expect(row, "the seeded solo sign-up must be listed").toBeVisible({ timeout: 15_000 });
+  await row.locator("summary").click();
+
+  const opener = row.locator('[data-registration-hub-assign-action="open"]');
   await expect(opener, "a pooled solo sign-up must offer the assign control").toBeVisible({
     timeout: 15_000,
   });

@@ -815,11 +815,27 @@ export async function submitRegistrationGroup(
       // Free entries under auto-approval confirm INLINE — a shortcut RS002's
       // new `approval` column makes possible (old code never auto-confirmed
       // at submit; `approval` did not exist before this redesign). Never for
-      // a free agent: there is no team yet to materialise into (design §5),
-      // and never for a waitlisted entry.
+      // a waitlisted entry.
+      //
+      // RS009 REMOVED the free-agent exclusion that used to sit here. Its
+      // reason — "there is no team yet to materialise into (design §5)" — was
+      // correct while `materialise` would have minted a phantom one-person
+      // entrant for a solo sign-up. It no longer does: it seats no entrant
+      // for a free agent and confirms them anyway. The exclusion outlived its
+      // justification and became harmful, because a solo sign-up on a FREE
+      // division then sat at `pending` forever, and RS009's own
+      // confirmed-or-paid guard hid the Assign control from it — making the
+      // whole assignment feature unreachable on exactly the divisions most
+      // likely to want it. Two individually-correct changes; the defect lived
+      // in the gap. Found by e2e, not by any unit test.
       let finalStatus = regRow.status;
+<<<<<<< HEAD
       if (!waitlisted && !p.input.free_agent && live.approval === "auto" && feeCents === 0) {
         const entrantId = await materialise(tx, regRow, p.input.entrant_kind);
+=======
+      if (!waitlisted && live.approval === "auto" && feeCents === 0) {
+        await materialise(tx, regRow, p.input.entrant_kind);
+>>>>>>> cacc34350 (fix(RS009): a solo sign-up on a FREE division was stranded, and the feature was dead there)
         finalStatus = "confirmed";
         // Forward-compatible with the free-agent materialise() contract
         // RS009 introduces (`string | null` — a free agent seats no
