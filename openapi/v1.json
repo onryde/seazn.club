@@ -56543,7 +56543,7 @@
         "tags": [
           "registration"
         ],
-        "x-required-scope": "none",
+        "x-required-scope": "manage",
         "parameters": [
           {
             "name": "id",
@@ -56902,7 +56902,7 @@
         "tags": [
           "registration"
         ],
-        "x-required-scope": "none",
+        "x-required-scope": "manage",
         "parameters": [
           {
             "name": "id",
@@ -57167,7 +57167,7 @@
         "tags": [
           "registration"
         ],
-        "x-required-scope": "none",
+        "x-required-scope": "manage",
         "parameters": [
           {
             "name": "id",
