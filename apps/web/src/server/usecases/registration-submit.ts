@@ -35,11 +35,11 @@ import {
   backfillPersonEmail,
   joinExistingEntrant,
   inviteUnclaimedMembers,
-  findPlayerPersonByEmail,
+  playerPersonConsentsByEmail,
   type RegistrationRow,
   type RegistrationSettingsRow,
 } from "./registrations";
-import { maskDisplayName } from "@/lib/name-display";
+import { anyOptedOut, maskDisplayName } from "@/lib/name-display";
 import {
   divisionEligibilityIssues,
   requiresDob,
@@ -936,18 +936,20 @@ export async function previewJoinEntry(joinCode: string): Promise<JoinPreviewRes
   // already match an EXISTING person elsewhere in the org's directory who has
   // separately opted out — that person's own choice, already on record, must
   // not be overridden just because THIS particular row hasn't been claimed
-  // yet. Read-only lookup, same email-exact-match rule `findOrCreatePlayerPerson`
-  // uses at materialise time (never a guess): zero or ambiguous matches preview
-  // raw, same as no email at all.
+  // yet. Read-only lookup: unlike materialise time (which needs the
+  // EXACT-ONE identity guarantee findOrCreatePlayerPerson relies on), this is
+  // a masking decision — RS008 review fix #8 — so an AMBIGUOUS match (2+
+  // persons sharing one email; duplicates exist per the merge feature) must
+  // not fail OPEN into "preview raw." playerPersonConsentsByEmail returns
+  // every match's consent; anyOptedOut masks if ANY of them opted out, same
+  // "stricter wins" rule applied everywhere else in this session. Zero
+  // matches (or no email at all) previews raw, unchanged.
   const unclaimedSlots = await Promise.all(
     slots.map(async (s) => {
       const trimmedEmail = s.email?.trim() || null;
       if (!trimmedEmail) return { player_id: s.id, full_name: s.full_name };
-      const matchId = await findPlayerPersonByEmail(sql, divCtx.org_id, trimmedEmail);
-      if (!matchId) return { player_id: s.id, full_name: s.full_name };
-      const [person] = await sql<{ consent: { public_name?: boolean } | null }[]>`
-        select consent from persons where id = ${matchId}`;
-      const optedOut = person?.consent?.public_name === false;
+      const consents = await playerPersonConsentsByEmail(sql, divCtx.org_id, trimmedEmail);
+      const optedOut = anyOptedOut(consents);
       return {
         player_id: s.id,
         full_name: optedOut ? maskDisplayName(s.full_name, "first_initial") : s.full_name,

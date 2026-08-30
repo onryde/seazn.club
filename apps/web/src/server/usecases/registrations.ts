@@ -670,6 +670,37 @@ export async function findPlayerPersonByEmail(
 }
 
 /**
+ * RS008 review fix #8 (Minor) — like `findPlayerPersonByEmail` above, but for
+ * a DISPLAY-NAME MASKING decision rather than identity resolution.
+ * `findPlayerPersonByEmail`'s "zero or ambiguous both return null" rule is
+ * correct for IDENTITY (never guess which of several duplicate people —
+ * merge/#404 — a row belongs to), but wrong for a PRIVACY decision built on
+ * top of it: treating "ambiguous" the same as "no match" makes the decision
+ * fail OPEN (preview raw) exactly when it is least certain it should. This
+ * returns every matching person's consent, org-scoped, tombstones excluded —
+ * `anyOptedOut` (lib/name-display.ts) then applies its own "stricter wins
+ * across several people" rule (ANY match opted out masks) the same way it
+ * already does for a pair/team's several roster members. Zero matches
+ * returns `[]` (`anyOptedOut([])` is `false`, identical to today's
+ * behaviour for that case). Never used for identity/reconciliation — those
+ * callers need `findPlayerPersonByEmail`'s EXACT-ONE guarantee and must keep
+ * failing toward "create/leave as-is," not toward a privacy default.
+ */
+export async function playerPersonConsentsByEmail(
+  db: AnySql,
+  orgId: string,
+  email: string,
+): Promise<({ public_name?: boolean } | null)[]> {
+  const trimmed = email.trim();
+  if (!trimmed) return [];
+  const matches = await db<{ consent: { public_name?: boolean } | null }[]>`
+    select consent from persons
+    where org_id = ${orgId} and lane = 'player' and merged_into is null
+      and lower(email) = lower(${trimmed})`;
+  return matches.map((m) => m.consent);
+}
+
+/**
  * #22 — fills a MISSING email onto an already-resolved person; never
  * overwrites one that differs (the `email is null` guard IS the rule, not
  * just an optimisation — a concurrent backfill from two rows racing the
@@ -3329,15 +3360,17 @@ async function regByRef(ref: string): Promise<RegistrationWithGroupRow> {
 
 /**
  * RS008 — batched "does ANY roster player on this registration have an
- * explicit consent opt-out" check, keyed by registration id, for the two
- * PERSON-shaped public reads below (`publicRegistrationStatusByRef`,
- * `publicCartByRef`) — a multi-entry cart costs ONE query here, not one per
- * entry. INNER JOINs persons on purpose: a row with no `person_id` yet
- * (unclaimed, never materialised) has no consent object to check and can
- * never contribute an opt-out, so it is correctly invisible to this query
- * rather than needing an explicit null-check. Delegates the actual
- * "stricter wins across several people sharing one display_name" rule to
- * `anyOptedOut` (lib/name-display.ts) — never re-implements it.
+ * explicit consent opt-out" check, keyed by registration id, for the
+ * PERSON-shaped public reads below (`publicRegistrationStatus`,
+ * `publicRegistrationStatusByRef`, `publicCartByRef`) — a multi-entry cart
+ * costs ONE query here, not one per entry. INNER JOINs persons on purpose: a
+ * row with no `person_id` yet (unclaimed, never materialised) has no consent
+ * object to check and can never contribute an opt-out, so it is correctly
+ * invisible to this query rather than needing an explicit null-check.
+ * Delegates the actual "stricter wins across several people sharing one
+ * display_name" rule to `anyOptedOut` (lib/name-display.ts) — never
+ * re-implements it.
+ *
  */
 async function anyOptedOutByRegistration(regIds: string[]): Promise<Set<string>> {
   if (regIds.length === 0) return new Set();

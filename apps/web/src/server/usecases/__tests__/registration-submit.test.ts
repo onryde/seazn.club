@@ -2356,6 +2356,28 @@ describe.skipIf(!HAS_DB)("joinTeamEntry", () => {
       const slotPreview = preview.unclaimed_slots.find((s) => s.player_id === slot.id);
       expect(slotPreview?.full_name).toBe("Ada Lovelace");
     });
+
+    // RS008 review fix #8 (Minor) — an AMBIGUOUS email match (2+ persons
+    // sharing one email; duplicates exist per the merge feature) used to
+    // fail OPEN into "no known opt-out, preview raw" because
+    // findPlayerPersonByEmail returns null for both zero AND ambiguous
+    // matches. A privacy control must fail CLOSED: if EITHER of the two
+    // same-email persons opted out, mask.
+    it("masks an unclaimed slot whose email matches TWO persons, when either one opted out", async () => {
+      const { orgId, entry, players } = await rosterRig("team", ["Ada Lovelace"]);
+      const slot = players[0]!;
+      await sql`
+        insert into persons (org_id, full_name, email, consent, lane)
+        values (${orgId}, 'Ada Lovelace', 'ada-dup@example.com', ${sql.json({ public_name: true })}, 'player')`;
+      await sql`
+        insert into persons (org_id, full_name, email, consent, lane)
+        values (${orgId}, 'Ada Someone Else', 'ada-dup@example.com', ${sql.json({ public_name: false })}, 'player')`;
+      await sql`update registration_players set email = 'ada-dup@example.com' where id = ${slot.id}`;
+
+      const preview = await previewJoinEntry(entry.join_code!);
+      const slotPreview = preview.unclaimed_slots.find((s) => s.player_id === slot.id);
+      expect(slotPreview?.full_name).toBe("Ada L.");
+    });
   });
 });
 
