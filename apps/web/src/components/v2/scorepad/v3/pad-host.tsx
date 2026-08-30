@@ -572,6 +572,24 @@ export function tileEventType(
  * A CLOSED PAIR, not a ban on `core.*`. `core.note` and `core.award` stay
  * tile-able — the activity panel's own void allowlist already treats those
  * two as the safe ones for the same reason (no state effect).
+ *
+ * KNOWN, LATENT BYPASS — the MORE SHEET (R7/C review, item 5). This block
+ * lives in `filterTilesByBand` and therefore covers the tile GRID only.
+ * `dedicated` (`dedicatedEventTypes`, below) is built from the FILTERED
+ * tiles, so an event this set removes leaves `dedicated` too, and
+ * `moreActions` then has no reason to exclude it: a `padSpec`-declared
+ * `core.forfeit`/`core.abandon` action would fall through to the More sheet
+ * as an un-narrowed generic form, bypassing this block, the band's sentence
+ * and the Abandon confirmation alike.
+ *
+ * It is latent and NOT a live defect: no engine `padSpec` declares either
+ * type in any panel today, which is what makes the tile grid the only route
+ * that exists. That premise is a tripwire, not an assumption — see "no
+ * engine padSpec declares an authority action" in
+ * `__tests__/authority-only-tiles.test.ts`, which fails the day a module
+ * declares one. Deliberately recorded rather than fixed: the fix belongs
+ * where the exclusion sets are decided (`moreActions`' own two-set contract),
+ * not bolted onto a filter whose whole virtue is having a single call site.
  */
 export const AUTHORITY_ONLY_EVENT_TYPES: ReadonlySet<string> = new Set([
   "core.forfeit",
