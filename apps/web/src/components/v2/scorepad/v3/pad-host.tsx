@@ -776,6 +776,15 @@ function schemaFor(module: AnySportModule, type: string): PayloadSchemaProbe | u
  * `__tests__/clock.test.ts` can render both halves of the disclosure and assert
  * the real markup rather than a mirror of it (apps/web vitest has no jsdom, so
  * a `useState` here would put the open state beyond every test in the tree).
+ *
+ * `fixtureId` — R6 fix pass 4, finding 6 (LOW). The disclosure's `id` used to
+ * be the hardcoded literal `"v3-clock-adjust"`, document-unique by
+ * construction; two clocked pads on one page (this repo's own harnesses
+ * render side-by-side surfaces) produced duplicate ids and cross-wired the
+ * `aria-controls` relationship — expanding one bar's disclosure could name
+ * the WRONG one to assistive tech. `useId()` is unavailable in this repo's
+ * node-only hook harness (`_hook-harness`), so the suffix comes from the one
+ * value already guaranteed unique per pad: the fixture it is scoring.
  */
 export function PadClockBar(props: {
   elapsed: number;
@@ -784,8 +793,10 @@ export function PadClockBar(props: {
   onToggle: () => void;
   onToggleAdjust: () => void;
   onAdjust: (deltaSeconds: number) => void;
+  fixtureId: string;
   t: TFn;
 }) {
+  const adjustId = `v3-clock-adjust-${props.fixtureId}`;
   return (
     <div className="space-y-1.5">
       <div
@@ -806,7 +817,7 @@ export function PadClockBar(props: {
           data-role="v3-clock-value"
           aria-live="off"
           aria-expanded={props.adjusting}
-          aria-controls="v3-clock-adjust"
+          aria-controls={adjustId}
           title={props.t("scorepad.clock.adjust")}
           onClick={props.onToggleAdjust}
           style={{ minHeight: 44 }}
@@ -826,7 +837,7 @@ export function PadClockBar(props: {
       </div>
 
       {props.adjusting && (
-        <div id="v3-clock-adjust" data-role="v3-clock-adjust" className="space-y-1">
+        <div id={adjustId} data-role="v3-clock-adjust" className="space-y-1">
           {/* Right-aligned, and content-sized: the row hangs off the readout it
              *  corrects rather than spanning the board like a tile. */}
           <div className="flex items-stretch justify-end gap-1.5">
@@ -1212,10 +1223,31 @@ export function PadHostV3(props: PadHostV3Props) {
   // R6 fix pass 2, gap 7. `adjustClock` touches `base` only — host state — so
   // nothing already stamped moves and nothing is dispatched. `setNowMs` so a
   // RUNNING clock repaints at the tap instead of up to half a second later.
-  const adjustClockNow = useCallback((deltaSeconds: number) => {
-    setClock((prev) => (prev === null ? prev : adjustClock(prev, deltaSeconds)));
-    setNowMs(Date.now());
-  }, []);
+  //
+  // R6 fix pass 4, findings 1+2 — `floor` is the high-water mark a correction
+  // must not cross: `clockSpec` (just above) is the SKIN's declaration
+  // rebuilt fresh THIS render from the live fold, and its `seed` — when
+  // present — IS `state.asOf.elapsed` for the CURRENT period (`buildClock`'s
+  // own doc, skins/period-shared.ts). Reading it here rather than `clock`'s
+  // own `.base` is deliberate: `clock` is the host's held value, seeded once
+  // per period and then left alone by design (property 3), so it can go
+  // stale the instant another device — or this one's own last dispatch —
+  // moves `state.asOf` forward; `clockSpec` cannot, because it is rebuilt on
+  // every render from the SAME `view` the rest of this render pass uses.
+  // `clockSpec` in the dependency list keeps this callback's closure as
+  // fresh as that value, unlike `toggleClockNow` above, which needs no cfg
+  // read at all.
+  const adjustClockNow = useCallback(
+    (deltaSeconds: number) => {
+      const floor =
+        clockSpec !== null && clockSpec.seed !== undefined
+          ? { period: clockSpec.period, elapsed: clockSpec.seed }
+          : undefined;
+      setClock((prev) => (prev === null ? prev : adjustClock(prev, deltaSeconds, Date.now(), floor)));
+      setNowMs(Date.now());
+    },
+    [clockSpec],
+  );
 
   const handleTileAction = useCallback(
     (action: TileSpec["action"]) => {
@@ -1437,6 +1469,7 @@ export function PadHostV3(props: PadHostV3Props) {
           onToggle={toggleClockNow}
           onToggleAdjust={() => setAdjusting((open) => !open)}
           onAdjust={adjustClockNow}
+          fixtureId={props.fixtureId}
           t={t}
         />
       )}

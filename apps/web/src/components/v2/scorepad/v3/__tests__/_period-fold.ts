@@ -230,6 +230,52 @@ export function decidedShootout(
 
 export type PhaseVerdict = "accepted" | "wrong-phase" | "other";
 
+/**
+ * R6 fix pass 4, finding 2. The REAL server path
+ * (`server/engine-db/append-event.ts`) folds the whole stream — everything
+ * already in the ledger PLUS the one new candidate — with `strictFromSeq` set
+ * to the candidate's own seq, so `foldMatch`'s monotonic-time guard
+ * (`core/events.ts`'s NON_MONOTONIC_TIME) is enforced on exactly the event
+ * being appended and nowhere else. `foldPeriod`/`phaseVerdict` above BOTH
+ * pass no `strictFromSeq` at all — correct for every other sweep in this
+ * tree, which cares whether a payload the FOLD accepts, not whether an
+ * ALREADY-STAMPED stream would refuse the next one — but it means this file
+ * could never see the one class of defect the review found: a pad-local
+ * clock correction producing a stamp earlier than the fold's own high-water
+ * mark. `phaseVerdict`'s own "accepts" probe additionally calls
+ * `module.apply` directly, which does not contain the monotonic guard at
+ * all — that guard lives in `foldMatchWithStoppage`, one layer up, so no
+ * amount of sweeping through `phaseVerdict` could ever have caught this.
+ *
+ * Deliberately a NEW, additive export rather than a change to `phaseVerdict`
+ * itself: `phaseVerdict` is exercised by ~20 call sites across
+ * `period-pair.test.ts` for the WRONG_PHASE sweep, and routing it through a
+ * full `foldMatch` replay would risk a second, unrelated behaviour change
+ * (core-level guarantees `module.apply` alone never enforced) landing on
+ * every one of them for a fix scoped to exactly one guard.
+ */
+export type AppendVerdict = "accepted" | "non-monotonic" | "other";
+
+/** Push ONE more spec onto `prior` and fold the WHOLE stream with
+ *  `strictFromSeq` naming the new candidate — precisely what
+ *  `append-event.ts` does for a real HTTP append. */
+export function appendVerdict(
+  module: AnySportModule,
+  cfg: unknown,
+  prior: readonly Spec[],
+  candidate: Spec,
+): AppendVerdict {
+  const specs = [...prior, candidate];
+  try {
+    foldMatch(module as never, cfg as never, lineupsFor(module, cfg), envelopes(specs), {
+      strictFromSeq: specs.length - 1,
+    });
+    return "accepted";
+  } catch (error) {
+    return EngineError.is(error, "NON_MONOTONIC_TIME") ? "non-monotonic" : "other";
+  }
+}
+
 /** Push a payload at the REAL reducer and report which of the three answers it
  *  gave. `strict: true` because that is the mode a live dispatch runs in. */
 export function phaseVerdict(

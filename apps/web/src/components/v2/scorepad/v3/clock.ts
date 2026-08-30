@@ -235,6 +235,51 @@ export const CLOCK_NUDGE_SECONDS = 60;
  * clock changes what the NEXT event will carry; the ones already recorded keep
  * the time they were recorded at, which is why the bar says so in as many words.
  *
+ * R6 fix pass 4, findings 1+2 (both HIGH, review 2026-08-30) — TWO defects
+ * this rewrite closes together, because they are one problem: a correction
+ * must never be able to produce a stamp the server will refuse.
+ *
+ * FINDING 1 — `-1 min` WAS A DEAD BUTTON ON A RUNNING CLOCK NEVER PAUSED. The
+ * previous version clamped against `clock.base` alone: `Math.max(0, base +
+ * delta)`. Start fresh, play 3:00 (`base` is still 0 — nothing has been
+ * banked, every one of those 180s is the CURRENT run's `runningSince` delta),
+ * tap `-1 min` -> `Math.max(0, 0 - 60) === 0 === base` -> returned the clock
+ * BY REFERENCE, nothing moved, tapping again did nothing. Pause -> -1 ->
+ * Start was the only escape, and nothing on the bar hinted at it. The fix
+ * takes `nowMs` (like every sibling in this file already does —
+ * `startClock`/`pauseClock`/`toggleClock` — this function was the one
+ * exception) and clamps against the LIVE total, `elapsedOf(clock, nowMs)`,
+ * not the banked `base` alone: `base` itself is now free to go NEGATIVE while
+ * the clock runs, so the DISPLAY moves by exactly the nudge regardless of how
+ * much of its current reading came from a live run versus a previous pause.
+ * This is safe because `elapsedOf` is the only reader of `.base` that matters
+ * while running, and it is `base + ran` — never negative once the floor
+ * below has done its job — and `pauseClock` re-banks `elapsedOf(clock,
+ * nowMs)` INTO `base` the moment the clock stops, at which point `ran` is 0
+ * and `base` is whatever `elapsedOf` last read: never negative either.
+ *
+ * FINDING 2 — A SUCCESSFUL CORRECTION COULD BRICK SCORING. `core/events.ts`'s
+ * NON_MONOTONIC_TIME guard refuses any event stamped earlier than the
+ * high-water mark of everything already accepted, and it is STRICT on
+ * exactly the events THIS pad appends (`server/engine-db/append-event.ts`'s
+ * `strictFromSeq: candidate.seq`). Seeded at 6:00, a goal sets the high-water
+ * mark to `{Q1, 360}`; before this fix, `-1 min` moved the display to 5:00
+ * with nothing stopping it, and the NEXT event — stamped `{Q1, 300}` by a
+ * clock that believes it — folded fine locally (the optimistic path is
+ * non-strict) but was refused by the real server, and stayed refused for a
+ * full minute of play until the running clock ticked back past 6:00 on its
+ * own. THE RULE THIS FILE NOW ENFORCES: a correction may move the DISPLAY
+ * down, but never below the high-water mark of what has already been
+ * recorded IN THE SAME PERIOD — `floor`, optional and structurally a
+ * `GameTimeStamp` so the caller can hand it `state.asOf` (or the clock
+ * spec's own freshly-rebuilt `seed`, which IS `state.asOf.elapsed` for the
+ * current period — see `skins/period-shared.ts`'s `buildClock`) without this
+ * file importing anything engine-shaped. A DIFFERENT period's floor is
+ * INCOMPARABLE, not a bound — the caller passes one only when it names the
+ * SAME `clock.period`; a mismatched one is simply ignored (floor 0), which is
+ * the pre-fix behaviour for that case and correct, since a period change
+ * already re-seeds the clock from a fresh floor of its own.
+ *
  * `base` rather than `runningSince`, so a RUNNING clock is corrected without
  * being stopped: `elapsedOf` adds the current run on top, so the displayed time
  * shifts by exactly the nudge and keeps counting.
@@ -242,15 +287,27 @@ export const CLOCK_NUDGE_SECONDS = 60;
  * IT MAKES THE CLOCK KNOWN — but only when it actually MOVES. A scorer nudging
  * the time is asserting what time it is, exactly as `startClock` treats the
  * Start tap (property 6). A nudge that changes nothing asserts nothing: `-1` at
- * 0:00 returns the clock BY REFERENCE, so it cannot quietly turn a pad
- * displaying its placeholder zero into one that claims to know the time — which
- * is the precise failure property 6 exists to prevent.
+ * 0:00 (or at the high-water floor) returns the clock BY REFERENCE, so it
+ * cannot quietly turn a pad displaying its placeholder zero into one that
+ * claims to know the time — which is the precise failure property 6 exists to
+ * prevent.
  */
-export function adjustClock(clock: PadClock, deltaSeconds: number): PadClock {
+export function adjustClock(
+  clock: PadClock,
+  deltaSeconds: number,
+  nowMs: number,
+  floor?: GameTimeStamp,
+): PadClock {
   if (!Number.isFinite(deltaSeconds)) return clock;
-  const base = Math.max(0, clock.base + Math.trunc(deltaSeconds));
-  if (base === clock.base) return clock;
-  return { ...clock, base, known: true };
+  const current = elapsedOf(clock, nowMs);
+  const floorElapsed = floor !== undefined && floor.period === clock.period ? sanitiseSeconds(floor.elapsed) : 0;
+  const nextElapsed = Math.max(floorElapsed, current + Math.trunc(deltaSeconds));
+  if (nextElapsed === current) return clock;
+  // Whatever the CURRENT run has added on top of `base` (0 while paused) —
+  // preserved across the shift so the running total lands exactly on
+  // `nextElapsed` right now, and keeps counting forward from there.
+  const ran = current - clock.base;
+  return { ...clock, base: nextElapsed - ran, known: true };
 }
 
 /**

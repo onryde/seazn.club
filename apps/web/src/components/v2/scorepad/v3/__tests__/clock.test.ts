@@ -580,7 +580,7 @@ describe("END TO END: a tile tapped on a clocked pad reaches the fold WITH its `
 
 describe("PadClockBar renders the time that would be stamped, plus its controls", () => {
   const t = (key: string) => key;
-  const html = (elapsed: number, running: boolean, adjusting = false) =>
+  const html = (elapsed: number, running: boolean, adjusting = false, fixtureId = "fx-1") =>
     renderToStaticMarkup(
       PadClockBar({
         elapsed,
@@ -589,6 +589,7 @@ describe("PadClockBar renders the time that would be stamped, plus its controls"
         onToggle: () => {},
         onToggleAdjust: () => {},
         onAdjust: () => {},
+        fixtureId,
         t,
       }) as never,
     );
@@ -641,16 +642,16 @@ describe("PadClockBar renders the time that would be stamped, plus its controls"
 describe("adjustClock puts time on and takes it off, and touches nothing that was recorded", () => {
   it("moves `base` by whole minutes, in both directions", () => {
     const seated = reseatClock(null, { period: "P1", seed: 0 })!;
-    const up = adjustClock(seated, CLOCK_NUDGE_SECONDS);
+    const up = adjustClock(seated, CLOCK_NUDGE_SECONDS, T0);
     expect(elapsedOf(up, T0)).toBe(60);
-    expect(elapsedOf(adjustClock(up, CLOCK_NUDGE_SECONDS), T0)).toBe(120);
-    expect(elapsedOf(adjustClock(up, -CLOCK_NUDGE_SECONDS), T0)).toBe(0);
+    expect(elapsedOf(adjustClock(up, CLOCK_NUDGE_SECONDS, T0), T0)).toBe(120);
+    expect(elapsedOf(adjustClock(up, -CLOCK_NUDGE_SECONDS, T0), T0)).toBe(0);
   });
 
   it("corrects a RUNNING clock without stopping it — the correction is the shift, not a reset", () => {
     const running = startClock(reseatClock(null, { period: "P1", seed: 0 })!, T0);
     expect(elapsedOf(running, T0 + 30_000)).toBe(30);
-    const corrected = adjustClock(running, 5 * CLOCK_NUDGE_SECONDS);
+    const corrected = adjustClock(running, 5 * CLOCK_NUDGE_SECONDS, T0 + 30_000);
     expect(corrected.runningSince, "the correction stopped the clock").not.toBeNull();
     expect(elapsedOf(corrected, T0 + 30_000)).toBe(330);
     // …and it keeps counting from there.
@@ -661,13 +662,13 @@ describe("adjustClock puts time on and takes it off, and touches nothing that wa
     // The reference identity is the load-bearing half: the host's render-phase
     // `!==` checks and this file's own property-3 discipline both read it.
     const seated = reseatClock(null, { period: "P1", seed: 0 })!;
-    expect(adjustClock(seated, -CLOCK_NUDGE_SECONDS)).toBe(seated);
-    expect(adjustClock(seated, 0)).toBe(seated);
-    expect(adjustClock(seated, Number.NaN)).toBe(seated);
-    expect(adjustClock(seated, Number.POSITIVE_INFINITY)).toBe(seated);
+    expect(adjustClock(seated, -CLOCK_NUDGE_SECONDS, T0)).toBe(seated);
+    expect(adjustClock(seated, 0, T0)).toBe(seated);
+    expect(adjustClock(seated, Number.NaN, T0)).toBe(seated);
+    expect(adjustClock(seated, Number.POSITIVE_INFINITY, T0)).toBe(seated);
     // A partial take-off lands on 0 rather than going negative — `at` is
     // `DurationSeconds`, which refuses a negative outright.
-    const thirty = adjustClock(initClock("P1", 30), -CLOCK_NUDGE_SECONDS);
+    const thirty = adjustClock(initClock("P1", 30), -CLOCK_NUDGE_SECONDS, T0);
     expect(elapsedOf(thirty, T0)).toBe(0);
   });
 
@@ -680,8 +681,8 @@ describe("adjustClock puts time on and takes it off, and touches nothing that wa
     const fresh = initClock("P1"); // no seed — nobody has told it anything
     expect(fresh.known).toBe(false);
     expect(stampOf(fresh, T0)).toBeUndefined();
-    expect(adjustClock(fresh, -CLOCK_NUDGE_SECONDS).known, "a no-op nudge claimed the time").toBe(false);
-    const told = adjustClock(fresh, 5 * CLOCK_NUDGE_SECONDS);
+    expect(adjustClock(fresh, -CLOCK_NUDGE_SECONDS, T0).known, "a no-op nudge claimed the time").toBe(false);
+    const told = adjustClock(fresh, 5 * CLOCK_NUDGE_SECONDS, T0);
     expect(told.known).toBe(true);
     expect(stampOf(told, T0)).toEqual({ period: "P1", elapsed: 300 });
   });
@@ -692,17 +693,114 @@ describe("adjustClock puts time on and takes it off, and touches nothing that wa
     // make is the structural one: nothing but `base` and `known` differs, and
     // the period the stamps will name is untouched.
     const seated = startClock(reseatClock(null, { period: "P2", seed: 240 })!, T0);
-    const corrected = adjustClock(seated, CLOCK_NUDGE_SECONDS);
+    const corrected = adjustClock(seated, CLOCK_NUDGE_SECONDS, T0);
     expect(Object.keys(corrected).sort()).toEqual(Object.keys(seated).sort());
     expect(corrected.period).toBe(seated.period);
     expect(corrected.runningSince).toBe(seated.runningSince);
     expect({ ...corrected, base: seated.base, known: seated.known }).toEqual(seated);
   });
+
+  // -------------------------------------------------------------------------
+  // R6 fix pass 4, finding 1 (HIGH) — `-1 min` was a dead button on a running
+  // clock that had never been paused.
+  // -------------------------------------------------------------------------
+
+  it("moves the DISPLAY on a RUNNING clock that has never been paused — finding 1, verbatim", () => {
+    // The reported scenario exactly: start fresh (`base` stays 0 — nothing has
+    // ever been banked), play 3:00, tap -1 min. The OLD code clamped against
+    // `clock.base` alone (`Math.max(0, base + delta)`): `Math.max(0, 0 - 60)`
+    // is 0, which IS `base`, so the function returned the clock BY REFERENCE —
+    // a dead button. The fix clamps against the LIVE total instead.
+    const running = startClock(reseatClock(null, { period: "Q1", seed: 0 })!, T0);
+    const threeMinutes = T0 + 180_000;
+    expect(elapsedOf(running, threeMinutes)).toBe(180);
+    const corrected = adjustClock(running, -CLOCK_NUDGE_SECONDS, threeMinutes);
+    expect(corrected, "adjustClock returned the clock BY REFERENCE — the dead-button bug").not.toBe(running);
+    expect(elapsedOf(corrected, threeMinutes)).toBe(120);
+    // …and it keeps ticking FORWARD from the corrected time, not from 0 — the
+    // correction shifted the run, it did not stop or reset it.
+    expect(elapsedOf(corrected, threeMinutes + 10_000)).toBe(130);
+    expect(corrected.runningSince, "the correction must not stop the clock").not.toBeNull();
+  });
+
+  it("repeated taps on the same running, never-paused clock compose", () => {
+    // "Repeated taps compose, so a five-minute correction is five taps of one
+    // control that cannot go anywhere unexpected" — this file's own doc on
+    // CLOCK_NUDGE_SECONDS. Two taps here stand in for five.
+    const running = startClock(reseatClock(null, { period: "Q1", seed: 0 })!, T0);
+    const fiveMinutes = T0 + 300_000;
+    const once = adjustClock(running, -CLOCK_NUDGE_SECONDS, fiveMinutes);
+    const twice = adjustClock(once, -CLOCK_NUDGE_SECONDS, fiveMinutes);
+    expect(elapsedOf(twice, fiveMinutes)).toBe(180);
+  });
+
+  it("still refuses to move the display below 0:00, even mid-run", () => {
+    const running = startClock(reseatClock(null, { period: "Q1", seed: 0 })!, T0);
+    const thirtySeconds = T0 + 30_000;
+    const corrected = adjustClock(running, -CLOCK_NUDGE_SECONDS, thirtySeconds);
+    expect(elapsedOf(corrected, thirtySeconds)).toBe(0);
+  });
+
+  // -------------------------------------------------------------------------
+  // R6 fix pass 4, finding 2 (HIGH) — the correction must never produce a
+  // stamp the server will refuse. THE RULE CHOSEN: clamp the CORRECTION
+  // (both the display and the eventual stamp) at the high-water mark;
+  // `pad-host.tsx`'s `adjustClockNow` sources that floor from the freshly
+  // rebuilt clock spec's own `seed`, which IS `state.asOf` for the CURRENT
+  // period on every render (`skins/period-shared.ts`'s `buildClock`). The
+  // alternative the review offered — clamp only the stamp, let the display
+  // lie below it — was rejected: this file's whole design is that the
+  // display IS what will be stamped (`stampOf` reads the same `elapsedOf`
+  // `PadClockBar` renders), and a display that no longer matches its own
+  // stamp is a second, silent disagreement of exactly the kind R6/task A's
+  // own header opens by naming.
+  // -------------------------------------------------------------------------
+
+  describe("the correction cannot produce a stamp the server would refuse", () => {
+    it("clamps at the high-water floor within the SAME period, even on a running clock", () => {
+      // Seeded at 6:00 (`state.asOf` — the fold's own high-water mark after a
+      // goal), the scorer plays on a little and then corrects. A `-1 min`
+      // that would take the display BELOW 6:00 must land exactly ON the
+      // floor instead: `core/events.ts`'s NON_MONOTONIC_TIME guard refuses
+      // anything earlier than the newest ACCEPTED stamp.
+      const running = startClock(reseatClock(null, { period: "Q1", seed: 360 })!, T0);
+      const tenSecondsIn = T0 + 10_000;
+      expect(elapsedOf(running, tenSecondsIn)).toBe(370);
+      const floor = { period: "Q1", elapsed: 360 };
+      const corrected = adjustClock(running, -CLOCK_NUDGE_SECONDS, tenSecondsIn, floor);
+      expect(elapsedOf(corrected, tenSecondsIn), "the correction went below the high-water mark").toBe(360);
+      // …and it is STILL a real correction, not a no-op: the clock moved from
+      // 370 to 360, which the next stamp will carry.
+      expect(corrected).not.toBe(running);
+    });
+
+    it("does not clamp against a DIFFERENT period's floor — the two are incomparable", () => {
+      // A stale floor left over from the period this clock just left must not
+      // leak into the new one: Q1's 900 would otherwise refuse everything in
+      // a freshly-started Q2.
+      const running = startClock(reseatClock(null, { period: "Q2", seed: 30 })!, T0);
+      const nowMs = T0 + 5_000;
+      const floor = { period: "Q1", elapsed: 900 };
+      const corrected = adjustClock(running, -CLOCK_NUDGE_SECONDS, nowMs, floor);
+      expect(elapsedOf(corrected, nowMs)).toBe(0);
+    });
+
+    it("a floored no-op still returns the clock BY REFERENCE — property 6 holds under the floor too", () => {
+      const seated = reseatClock(null, { period: "Q1", seed: 360 })!;
+      const floor = { period: "Q1", elapsed: 360 };
+      expect(adjustClock(seated, -CLOCK_NUDGE_SECONDS, T0, floor)).toBe(seated);
+    });
+
+    it("with no floor at all, behaves exactly as the pre-fix arithmetic did (floor 0)", () => {
+      const seated = reseatClock(null, { period: "Q1", seed: 30 })!;
+      expect(elapsedOf(adjustClock(seated, -CLOCK_NUDGE_SECONDS, T0), T0)).toBe(0);
+    });
+  });
 });
 
 describe("the correction row is a disclosure, and stays out of the way until it is asked for", () => {
   const t = (key: string) => key;
-  const html = (adjusting: boolean) =>
+  const html = (adjusting: boolean, fixtureId = "fx-1") =>
     renderToStaticMarkup(
       PadClockBar({
         elapsed: 761,
@@ -711,6 +809,7 @@ describe("the correction row is a disclosure, and stays out of the way until it 
         onToggle: () => {},
         onToggleAdjust: () => {},
         onAdjust: () => {},
+        fixtureId,
         t,
       }) as never,
     );
@@ -729,7 +828,7 @@ describe("the correction row is a disclosure, and stays out of the way until it 
     expect(closed).toContain('data-role="v3-clock-value"');
     expect(closed).toContain("<button");
     expect(closed).toContain('aria-expanded="false"');
-    expect(closed).toContain('aria-controls="v3-clock-adjust"');
+    expect(closed).toContain('aria-controls="v3-clock-adjust-fx-1"');
     expect(closed).toContain("scorepad.clock.adjust");
     expect(html(true)).toContain('aria-expanded="true"');
     // No text entry anywhere: a typed time on a phone, in the rain, during play.
@@ -739,7 +838,7 @@ describe("the correction row is a disclosure, and stays out of the way until it 
   it("offers exactly two minute nudges, and says what they cannot reach", () => {
     const open = html(true);
     expect(open).toContain('data-adjusting="yes"');
-    expect(open).toContain('id="v3-clock-adjust"');
+    expect(open).toContain('id="v3-clock-adjust-fx-1"');
     expect(open).toContain('data-role="v3-clock-minus"');
     expect(open).toContain('data-role="v3-clock-plus"');
     expect(open).toContain("scorepad.clock.minute.off");
@@ -763,12 +862,12 @@ describe("the correction row is a disclosure, and stays out of the way until it 
     // Content-sized and right-aligned, the group reads as a drawer pulled from
     // the number it corrects, identical at every width.
     const open = html(true);
-    const row = open.slice(open.indexOf('id="v3-clock-adjust"'));
+    const row = open.slice(open.indexOf('id="v3-clock-adjust-fx-1"'));
     expect(row).toContain("justify-end");
     expect(row).toContain("min-w-[88px]");
     expect(row, "a nudge stretched to fill the row").not.toContain("flex-1");
     // The readout's tray hugs its digits; the LABEL takes the row's slack.
-    const bar = open.slice(0, open.indexOf('id="v3-clock-adjust"'));
+    const bar = open.slice(0, open.indexOf('id="v3-clock-adjust-fx-1"'));
     expect(bar).toContain("min-w-0 flex-1 truncate text-xs");
     expect(bar).toContain("shrink-0 rounded-lg bg-slate-50");
   });
@@ -777,11 +876,41 @@ describe("the correction row is a disclosure, and stays out of the way until it 
     // The board's recording controls are large and coloured; this group is
     // slate on slate with mono numerals. A restyle that reaches for an accent
     // here fails deliberately.
-    const open = html(true).slice(html(true).indexOf('id="v3-clock-adjust"'));
+    const open = html(true).slice(html(true).indexOf('id="v3-clock-adjust-fx-1"'));
     for (const accent of ["violet", "lime-400 bg", "emerald", "amber", "rose", "sport-"]) {
       expect(open.includes(`bg-${accent}`), `the correction row painted itself ${accent}`).toBe(false);
     }
     expect(open).toContain("text-slate-700");
+  });
+
+  // ---------------------------------------------------------------------------
+  // R6 fix pass 4, finding 6 (LOW) — the id must be document-unique per pad.
+  // ---------------------------------------------------------------------------
+
+  it("derives its id from fixtureId, so two clocked pads on one page never collide", () => {
+    // The regression: a hardcoded "v3-clock-adjust" `id` paired with an
+    // `aria-controls` of the same literal is unique only as long as ONE pad
+    // is mounted. This repo's own harnesses render side-by-side surfaces —
+    // two hockey pads, or a hockey and an ice-hockey pad, on one screen — and
+    // a duplicate `id` there cross-wires which disclosure a screen reader
+    // reports as controlled by which button.
+    const first = html(true, "fixture-alpha");
+    const second = html(true, "fixture-beta");
+    expect(first).toContain('id="v3-clock-adjust-fixture-alpha"');
+    expect(first).toContain('aria-controls="v3-clock-adjust-fixture-alpha"');
+    expect(second).toContain('id="v3-clock-adjust-fixture-beta"');
+    expect(second).toContain('aria-controls="v3-clock-adjust-fixture-beta"');
+    // Neither pad's markup contains the OTHER pad's id anywhere — not merely
+    // that the two differ, but that nothing here still emits the bare,
+    // document-unique-only literal the bug shipped.
+    expect(first).not.toContain('"v3-clock-adjust-fixture-beta"');
+    expect(second).not.toContain('"v3-clock-adjust-fixture-alpha"');
+    // The bare, pre-fix literal must be gone from the two id-bearing
+    // attributes specifically — `data-role="v3-clock-adjust"` is a SEPARATE,
+    // deliberately unchanged marker other tests in this file query by, not
+    // the collision this finding is about.
+    expect(first, "id must carry the suffix").not.toContain('id="v3-clock-adjust"');
+    expect(first, "aria-controls must carry the suffix").not.toContain('aria-controls="v3-clock-adjust"');
   });
 });
 
@@ -875,6 +1004,31 @@ describe("the host's own wiring, audited at the source (a mirror — see the not
     // as BEHAVIOUR in the block below this one, not here.
     expect(src).not.toContain("useState(() => Date.now())");
     expect(src).toContain("const [nowMs, setNowMs] = useState(0);");
+  });
+
+  it("sources the correction's FLOOR from the freshly-rebuilt clock spec, not from the held clock's own stale seed", () => {
+    // R6 fix pass 4, findings 1+2. `clockSpec` is rebuilt from `view` on
+    // EVERY render (`props.skin.clock?.(view)`, just above `reseatClock` in
+    // this same file) — its `seed`, when present, IS `state.asOf.elapsed`
+    // for the current period. Reading it here rather than `clock.base` is
+    // what keeps the floor from going stale the instant another device (or
+    // this session's own prior dispatch) moves the fold's high-water mark.
+    expect(src).toContain("clockSpec !== null && clockSpec.seed !== undefined");
+    expect(src).toContain("{ period: clockSpec.period, elapsed: clockSpec.seed }");
+    expect(src).toContain("adjustClock(prev, deltaSeconds, Date.now(), floor)");
+    // The callback's own closure stays as fresh as `clockSpec` — a stable
+    // `[]` dependency array (the shape `toggleClockNow` uses, which needs no
+    // cfg read at all) would close over the render this callback was BUILT
+    // in and apply that render's floor forever after.
+    expect(src).toContain("[clockSpec]");
+  });
+
+  it("hands PadClockBar the pad's OWN fixtureId, not a placeholder", () => {
+    // R6 fix pass 4, finding 6. The disclosure's id collides across two
+    // clocked pads on one page unless it is derived from something
+    // per-pad-unique; `props.fixtureId` is that value; PadClockBar.test's own
+    // suite proves what it does with it once handed one.
+    expect(src).toContain("fixtureId={props.fixtureId}");
   });
 });
 

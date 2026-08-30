@@ -19,7 +19,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AnySportModule, PadSpec } from "@seazn/engine/sport";
 import { initSquads } from "@seazn/engine/core";
-import { initClock, startClock, reseatClock, elapsedOf, stampOf } from "../clock";
+import { CLOCK_NUDGE_SECONDS, adjustClock, initClock, startClock, reseatClock, elapsedOf, stampOf } from "../clock";
 import { stampFor } from "../pad-host";
 import type { GuidedSheetSpec, PadHostView, SwapSlot, TileSpec } from "../types";
 import { SPORT_PALETTES, SPORT_TONES } from "../sport-theme";
@@ -37,6 +37,7 @@ import {
 } from "../skins/period-shared";
 import {
   PERIOD_MODULES,
+  appendVerdict,
   decidedShootout,
   foldPeriod,
   foldedPhases,
@@ -270,6 +271,75 @@ describe("R6 headline: both skins declare clock(), which is what makes PadClockB
 function firstPlayPhase(sport: Sport, cfg: unknown): string {
   return String(foldPeriod(sport.module, cfg, [["core.start"]]).phase);
 }
+
+/** The cfg's own first declared suspension class — never hardcoded, since
+ *  hockey (green/yellow/red) and ice hockey (minor/bench_minor/…) share no
+ *  class name at all. */
+function firstClassOf(cfg: unknown): string {
+  return Object.keys((cfg as { suspensions: { classes: Record<string, unknown> } }).suspensions.classes)[0]!;
+}
+
+const APPEND_T0 = 1_700_000_000_000;
+
+// ---------------------------------------------------------------------------
+// 1b. R6 fix pass 4, finding 2 — the SERVER's own monotonic-time guard
+// (`core/events.ts`'s NON_MONOTONIC_TIME, enforced through `strictFromSeq`
+// exactly as `append-event.ts` enforces it), and proof that a floored
+// `adjustClock` correction can never produce a stamp it refuses.
+// ---------------------------------------------------------------------------
+
+describe("the real fold's NON_MONOTONIC_TIME guard is exactly what a clock correction must respect", () => {
+  for (const sport of SPORTS) {
+    it(`${sport.key}: a stamp BELOW the accepted high-water mark is refused; AT or ABOVE it is not`, () => {
+      const cfg = periodCfg(sport.module);
+      const phase = firstPlayPhase(sport, cfg);
+      const classKey = firstClassOf(cfg);
+      const prior: Spec[] = [
+        ["core.start"],
+        [`${sport.key}.goal`, { by: "H", at: { period: phase, elapsed: 360 } }],
+      ];
+      const cardAt = (elapsed: number): Spec => [
+        `${sport.key}.suspension.start`,
+        { by: "H", class: classKey, at: { period: phase, elapsed } },
+      ];
+      // BELOW the mark — finding 2's exact shape: a goal recorded at 6:00,
+      // then a correction that let the display (and so the next stamp) drift
+      // to 5:00.
+      expect(appendVerdict(sport.module, cfg, prior, cardAt(300)), "below the high-water mark").toBe("non-monotonic");
+      // AT the mark — equal stamps are legal (`core/events.ts`'s own doc:
+      // "Equal stamps are legal").
+      expect(appendVerdict(sport.module, cfg, prior, cardAt(360)), "at the high-water mark").toBe("accepted");
+      // ABOVE it — ordinary forward play.
+      expect(appendVerdict(sport.module, cfg, prior, cardAt(420)), "above the high-water mark").toBe("accepted");
+    });
+
+    it(`${sport.key}: adjustClock's own floor produces exactly the boundary the fold accepts, never the one it refuses`, () => {
+      // Ties clock.ts's pure arithmetic to the REAL engine: a correction
+      // floored at the fold's own high-water mark can never itself go on to
+      // produce a refused stamp, because the floor IS the boundary the fold
+      // enforces — proved here rather than assumed from the two files
+      // agreeing about a number in the abstract.
+      const cfg = periodCfg(sport.module);
+      const phase = firstPlayPhase(sport, cfg);
+      const classKey = firstClassOf(cfg);
+      const prior: Spec[] = [
+        ["core.start"],
+        [`${sport.key}.goal`, { by: "H", at: { period: phase, elapsed: 360 } }],
+      ];
+      const running = startClock(reseatClock(null, { period: phase, seed: 360 })!, APPEND_T0);
+      const nowMs = APPEND_T0 + 10_000; // ten seconds of play since the goal
+      const floor = { period: phase, elapsed: 360 };
+      // Without the floor this WOULD go backward — the exact pre-fix defect.
+      expect(elapsedOf(adjustClock(running, -CLOCK_NUDGE_SECONDS, nowMs), nowMs), "sanity: unfloored, it goes below 360").toBeLessThan(360);
+      const corrected = adjustClock(running, -CLOCK_NUDGE_SECONDS, nowMs, floor);
+      const stamp = stampOf(corrected, nowMs)!;
+      expect(
+        appendVerdict(sport.module, cfg, prior, [`${sport.key}.suspension.start`, { by: "H", class: classKey, at: stamp }]),
+        `${sport.key}: the floored correction's own stamp was refused`,
+      ).toBe("accepted");
+    });
+  }
+});
 
 // ---------------------------------------------------------------------------
 // 2. Every builder's own output, folded through the real reducer
@@ -1245,6 +1315,83 @@ describe("the box countdown counts DOWN — against the host's live clock, not t
     const expiry = (state.suspensions as { expiresAt: { elapsed: number } }[])[0]!.expiresAt;
     // `state.asOf` is the card's own stamp, 60s in — the pre-fix reading.
     expect(boxOf(view)[0]!.remaining).toBe(expiry.elapsed - 60);
+  });
+});
+
+describe("R6 fix pass 4, finding 3 — a PAUSED clock must not out-rank a LATER fold stamp", () => {
+  // `view.clockAt ?? state.asOf` used to prefer the pad clock even while
+  // PAUSED, and `reseatClock` only re-seeds on a period change — so a pad
+  // mounted mid-period, paused, never started, could sit on a stale reading
+  // forever while ANOTHER device kept recording. The fix (`laterAsOf`,
+  // ../skins/period-shared.ts) takes whichever of the two is LATER within
+  // the same period, so a stale paused reading can only ever be corrected
+  // UP, never trusted past what the fold already knows happened.
+  const sport = SPORTS[0]!; // hockey
+  const cfg = periodCfg(sport.module);
+  const T0 = 1_700_000_555_000;
+
+  it("takes the LATER fold stamp over a stale PAUSED clock — the reported scenario, verbatim", () => {
+    // Mount mid-period paused, never start it — a yellow card (5-minute
+    // nominal) started at 0:10 expires at 5:10 (310s), so both readings
+    // below stay inside its active window and the lazy sweep does not
+    // release it out from under the assertion.
+    const phase = firstPlayPhase(sport, cfg);
+    const paused = initClock(phase, 100);
+    const staleClockAt = stampOf(paused, T0)!;
+    expect(staleClockAt).toEqual({ period: phase, elapsed: 100 });
+
+    // …let ANOTHER device push `state.asOf` forward, past the stale clock's
+    // own reading, by recording a goal — hockey's yellow class carries no
+    // `releaseOnGoal`, so the goal cannot itself change the suspension's
+    // `expiresAt`; only `asOf` moves.
+    const state = foldPeriod(sport.module, cfg, [
+      ["core.start"],
+      ["hockey.suspension.start", { by: "H", person: "H-p2", class: "yellow", at: { period: phase, elapsed: 10 } }],
+      ["hockey.goal", { by: "A", at: { period: phase, elapsed: 250 } }],
+    ]);
+    expect((state.asOf as { elapsed: number }).elapsed, "the fold's own stamp must be the later one").toBe(250);
+    expect(state.suspensions, "the sweep released it before the assertion could run").toHaveLength(1);
+
+    const view = { ...viewFor(sport, cfg, state), clockAt: staleClockAt };
+    const expiry = (state.suspensions as { expiresAt: { elapsed: number } }[])[0]!.expiresAt;
+    // Measured against the FRESHER stamp (250s), not the stale paused clock
+    // (100s): the pre-fix reading would have been `expiry.elapsed - 100`,
+    // 150s MORE box time than the kernel will actually serve.
+    const wrongPreFixReading = expiry.elapsed - 100;
+    const remaining = boxOf(view)[0]!.remaining;
+    expect(remaining, "reported MORE box time than the kernel will serve").toBe(Math.max(0, expiry.elapsed - 250));
+    expect(remaining, "regressed to the stale pre-fix reading").not.toBe(wrongPreFixReading);
+  });
+
+  it("still prefers the LIVE clock while it is genuinely ahead of the fold — the running case is unchanged", () => {
+    const phase = firstPlayPhase(sport, cfg);
+    const state = foldPeriod(sport.module, cfg, [
+      ["core.start"],
+      ["hockey.suspension.start", { by: "H", person: "H-p2", class: "green", at: { period: phase, elapsed: 60 } }],
+    ]);
+    const running = startClock(initClock(phase, 60), T0);
+    const clockAt = stampOf(running, T0 + 40_000)!; // 100s — ahead of the fold's own 60s stamp
+    expect(clockAt.elapsed).toBe(100);
+    const view = { ...viewFor(sport, cfg, state), clockAt };
+    const expiry = (state.suspensions as { expiresAt: { elapsed: number } }[])[0]!.expiresAt;
+    expect(boxOf(view)[0]!.remaining).toBe(expiry.elapsed - 100);
+  });
+
+  it("a cross-period mismatch still prefers clockAt, unchanged from before this fix", () => {
+    // laterAsOf only compares WITHIN a period; a different period is not
+    // "earlier or later", it is incomparable, and boxOf's own
+    // `expires.period !== asOf.period` guard already turns that into `null`.
+    const phase = firstPlayPhase(sport, cfg);
+    const state = foldPeriod(sport.module, cfg, [
+      ["core.start"],
+      ["hockey.suspension.start", { by: "H", person: "H-p2", class: "green", at: { period: phase, elapsed: 60 } }],
+    ]);
+    const clockAt = { period: "SOME-OTHER-PHASE", elapsed: 5 };
+    const view = { ...viewFor(sport, cfg, state), clockAt };
+    // Neither reading names the suspension's own period, so there is no
+    // countdown either way — the assertion is that this does not throw and
+    // resolves to the same `null` the pre-fix code already gave it.
+    expect(boxOf(view)[0]!.remaining).toBeNull();
   });
 });
 
