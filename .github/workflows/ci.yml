@@ -1419,6 +1419,62 @@ jobs:
       # The Playwright UI e2e suite moved to its own workflow (e2e.yml): it
       # runs on pushes to main, or on demand against a PR by number.
 
+      # R7 — ONE sport's gallery capture, as a PR gate (owner-approved).
+      #
+      # `e2e/gallery.capture.ts` is the tool every wave's VISUAL SIGN-OFF runs
+      # on, and until now it ran in no CI job at all — nothing tested the
+      # instrument the gate depends on. R7/C1 then broke it for every v3 sport
+      # (it counted activity rows scoped INSIDE the pad root; C1 moved the
+      # console ledger out of the pad), and the break was invisible: it would
+      # have surfaced on whichever wave next tried to sign off, hours later, in
+      # a different branch, reading as "your gallery is broken".
+      #
+      # ONE sport, not eleven. The failure class is "the harness no longer
+      # runs", which any single sport catches; the full sweep is minutes of
+      # wall clock for a tool used at sign-off, not per PR. Football rather
+      # than cricket: converted, the richest chrome (dock, cards, shoot-out),
+      # ~20s against cricket's ~70s, and it is the sport C1's break surfaced
+      # on. `-g` takes a REGEX matched against the test title, which is
+      # `gallery: Football (11-a-side)` — a lowercase `football` does not
+      # match, so the prefix is spelled exactly.
+      #
+      # THE SKIP IS THE HAZARD HERE, NOT THE FAILURE. `gallery.capture.ts`
+      # opens with `test.skip(!process.env.GALLERY_DIR)`, so a missing or
+      # renamed env var makes every test SKIP and this step exit 0 — a green
+      # gate that captured nothing, which is exactly the vacuous-gate class it
+      # exists to prevent. The two assertions below are the gate; the
+      # playwright invocation on its own is not. Do not remove them:
+      #   - images must EXIST (a skipped run writes none)
+      #   - images must DIFFER (a harness that opens no state photographs the
+      #     same screen repeatedly and still exits 0 — this has happened here)
+      - name: Gallery capture — one sport (the sign-off harness's own gate)
+        working-directory: apps/web
+        env:
+          GALLERY_DIR: ${{ github.workspace }}/gallery-ci
+          E2E_PROD_TARGET: "1"
+        run: |
+          npx playwright install --with-deps chromium
+          mkdir -p "$GALLERY_DIR"
+          npx playwright test e2e/gallery.capture.ts --project=gallery \
+            -g "gallery: Football" --reporter=line
+          shots=$(find "$GALLERY_DIR" -name '*.png' | wc -l | tr -d ' ')
+          echo "gallery PNGs written: $shots"
+          if [ "$shots" -lt 3 ]; then
+            echo "::error::gallery capture wrote $shots screenshots — the step passed but photographed nothing. GALLERY_DIR unset, or every test skipped."
+            exit 1
+          fi
+          uniq=$(find "$GALLERY_DIR" -name '*.png' -exec md5sum {} + \
+            | awk '{print $1}' | sort -u | wc -l | tr -d ' ')
+          echo "unique images: $uniq of $shots"
+          if [ "$uniq" -lt 2 ]; then
+            echo "::error::every gallery image is byte-identical — the harness ran but never changed state."
+            exit 1
+          fi
+
+      - name: Gallery capture output (on failure)
+        if: failure()
+        run: ls -la "${{ github.workspace }}/gallery-ci" || true
+
       - name: Dev server log (on failure)
         if: failure()
         run: cat dev-server.log || true

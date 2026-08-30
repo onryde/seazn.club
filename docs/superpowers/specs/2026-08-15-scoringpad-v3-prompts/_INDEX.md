@@ -5730,3 +5730,43 @@ names itself a universal-renderer + device-link test while its body now drives
 offline-drain, which is **still live in production for carrom and boardgame**.
 Coverage was deleted silently by a rename that no gate could see. Repoint a copy
 at carrom or boardgame.
+
+### R7-25 — the sign-off harness now has a CI gate (owner-approved, landed)
+
+`.github/workflows/ci.yml`, job `smoke-e2e` (the PR-triggered job — `ci.yml` is
+`on: pull_request`; `e2e.yml` fires on push to `main` only and was the wrong
+file). New step sits after `Run per-sport smoke (deciders)` and before the
+failure-log steps.
+
+**Why it exists:** `e2e/gallery.capture.ts` is the instrument every wave's
+VISUAL SIGN-OFF depends on, and it ran in no CI job at all. R7/C1 broke it for
+every v3 sport — it counted activity rows scoped inside the pad root and C1
+moved the console ledger out — and the break was invisible until someone tried
+to sign off. It would have landed on R6, hours later, in a different branch,
+reading as "your gallery is broken".
+
+**One sport, not eleven.** The failure class is "the harness no longer runs",
+which any single sport catches. Football: converted, richest chrome, ~20s vs
+cricket's ~70s, and the sport the break surfaced on. `-g` is a REGEX against the
+test title `gallery: Football (11-a-side)`, so a lowercase `football` would NOT
+match — the prefix is spelled exactly.
+
+**THE SKIP IS THE HAZARD, NOT THE FAILURE — and this is the part to preserve.**
+`gallery.capture.ts` opens with `test.skip(!process.env.GALLERY_DIR)`. A missing
+or renamed env var makes every test SKIP and the step exit 0: a green gate that
+captured nothing, which is precisely the vacuous-gate class the step exists to
+prevent. So the playwright invocation is NOT the gate. Two shell assertions are:
+
+  1. images must EXIST (`< 3` PNGs fails) — a skipped run writes none;
+  2. images must DIFFER (`< 2` unique md5s fails) — a harness that opens no
+     state photographs the same screen repeatedly and still exits 0, which has
+     happened in this programme.
+
+Anyone editing that step must keep both. Reusing the job's already-built
+standalone server and Postgres service means the marginal cost is the capture
+itself, not a second prod build.
+
+YAML validated by parsing (`yaml.safe_load`) before commit, not by eye:
+`smoke-e2e` has 23 steps, the new one at index 19, `working-directory: apps/web`,
+both guards present, trigger `pull_request`. `ci.yml` gates every PR — a broken
+edit blocks the repo.
