@@ -5813,3 +5813,59 @@ Immediate action (in the in-flight fix pass, not deferred): rename the test at
 `:663` so it stops advertising universal-renderer + device-link + offline-drain
 coverage it no longer provides. A test lying in its name is the actual defect —
 AGENTS.md class 4 — and it silently deleted coverage no gate could see.
+
+### R7-27 — the e2e repair, and a FOURTH "pad offers what the engine refuses"
+
+The C1 sweep is done. Measured baseline was **13 red / 41 green**, not the 14
+R7's own brief claimed (it overcounted a11y-evidence by 3 — the console-pad
+tests already passed — and undercounted the v2/offline group by 2). After the
+fix: **47 green / 7 red**, unit gate unchanged at 4571/4569/0, walkthrough 6/6.
+
+**The sweep found SIX pad-scoped sites**, not the five R7 estimated: cricket
+`:462,:502,:903`, football `:946`, and TWO in `scorepad-v2.spec.ts`. All were
+`pad(page).locator('[data-role="v3-activity-slot"]' | 'v3-activity-row')` —
+wrong since C1 moved the console ledger out of the pad root, and the same bug
+`gallery.capture.ts`'s `padEventRows` had already been fixed for. All six now
+resolve page-wide on `[data-role="v3-activity"]` and their tests pass.
+
+`openAmendDock`'s brittle `.grid > * >> .app-display.font-bold` chain is gone —
+the implementer ADDED a real handle, `data-role="v3-scorebug-half"`
+(`scorebug.tsx`), and repointed three call sites at it. Adding a handle beats
+deepening a structural path that breaks on the next restyle.
+
+**FP-16 — and this one is a PRODUCT DEFECT R7 shipped, not a wrong belief.**
+The remaining 7 reds are one cause, and the implementer REFUSED to paper over
+them, which is the right call and worth recording as the behaviour we want:
+
+    generic's FOLD accepts phase "pre" — applyScore/applyResult both allow it.
+    generic's padSpec declares its panels at "live" ONLY (:318,:324,:337,:348,:359).
+    createSkinDispatch gates on padSpec, NOT on the fold.
+
+So the v3 skin (`SCOREABLE_PHASES = ["pre","live"]`, following the fold) offers a
+tap that the dispatcher refuses CLIENT-SIDE with "Declared here: (none)", before
+any request is sent. **A fourth instance of the exact class R2c closed three of
+— and R7's own A1 reviewer said SHIP over it.** It also looks like a REGRESSION:
+e2e specs older than this wave score `generic` without pressing Start and were
+green on `main`.
+
+**OWNER RULING: declare the panels at `pre` as well as `live`.** padSpec must
+tell the truth about what is dispatchable and match what the fold already
+accepts. Rejected: gating the skin to live-only (removes a capability generic
+users have today) and changing `createSkinDispatch` (a chassis change mid-wave,
+with a concurrent session live in those files, far wider than the defect).
+
+Product reason, recorded because it is not derivable from the code: **`generic`
+is the pad for every sport this product does not model, so entering a finished
+result after the fact — without ever tapping Start — is a normal club workflow,
+not an edge case.**
+
+Constraints on the fix: module stays pinned `1.0.0`, extend in place, never
+bump. If a GOLDEN corpus moves, STOP rather than re-baseline. Two comments in
+`skins/generic.tsx` go stale the moment it lands (`moreHasContent`'s "nothing is
+reachable in pre or post", and `SCOREABLE_PHASES`' note that the two sources
+disagree) and must be corrected in the same commit.
+
+**Lesson, distinct from the earlier ones:** a reviewer traced this skin end to
+end and returned SHIP. What it could not see is that the skin agreed with ONE of
+two disagreeing authorities. Reading a seam proves it is connected; it does not
+prove the two ends were ever asked whether they agree.
