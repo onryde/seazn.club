@@ -3632,6 +3632,12 @@ export interface GroupEntryView {
    *  `GroupEntryPlayerView.consent`. */
   division_youth: boolean;
   division_player_name_display: string | null;
+  /** RS008 review fix #1: the entry-card HEADING's own consent rule — a
+   *  `team`'s declared name never takes the consent axis, but an
+   *  `individual`/`pair`'s `display_name` IS a person's (or a pair's
+   *  compound) name. Sourced from `entrantKindByDivision` below (the SAME
+   *  map `allows_new_joiner` already reads), never a second lookup. */
+  entrant_kind: "team" | "individual" | "pair";
   players: GroupEntryPlayerView[];
   /** V379/RS007: this entry's own resolved refund policy — so the status
    *  page can tell a registrant which side of the line they are on BEFORE
@@ -3930,6 +3936,13 @@ async function buildGroupStatusView(
       ...e,
       promotion_expires_at: promotion_expires_at ? new Date(promotion_expires_at).toISOString() : null,
       allows_new_joiner: entrantKindByDivision.get(e.division_id) !== "pair",
+      // Unknown (a division whose settings row is somehow missing) fails
+      // toward "individual" — the masked side of the bypass — matching this
+      // review's own "a privacy control fails CLOSED, not open" rule (#8),
+      // not the "fails toward showing a legitimate link" bias
+      // allows_new_joiner uses just above (a UX dead end vs. a privacy leak
+      // are not the same risk, and do not share a default).
+      entrant_kind: entrantKindByDivision.get(e.division_id) ?? "individual",
       payment_method: paymentMethodByDivision.get(e.division_id) ?? "offline",
       players: playersByEntry.get(e.id) ?? [],
       refund_policy: resolveRefundPolicy(

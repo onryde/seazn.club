@@ -22,6 +22,7 @@ import {
   canJoinEntry,
   claimHref,
   entryCountsTowardTotal,
+  entryDisplayName,
   resolveMoneyState,
   rosterCounts,
   rosterPlayerDisplayName,
@@ -54,6 +55,11 @@ export interface EntryCardProps {
     division_id: string;
     division_name: string;
     display_name: string;
+    /** RS008 review fix #1: which consent rule the HEADING itself follows —
+     *  a `team`'s own declared name never takes the consent axis, but an
+     *  `individual`/`pair`'s `display_name` IS a person's (or a pair's
+     *  compound) name. See `entryDisplayName` (view-model.ts). */
+    entrant_kind: "team" | "individual" | "pair";
     status: EntryStatus;
     amount_cents: number;
     free_agent: boolean;
@@ -137,6 +143,13 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
       }),
     );
   }
+  // RS008 review fix #1: the card's own HEADING, same stricter-wins rule as
+  // the roster rows above — a team's own name is exempt, an individual/pair
+  // entrant's is not.
+  const headingName = entryDisplayName(entry, {
+    youth: entry.division_youth,
+    player_name_display: entry.division_player_name_display,
+  });
 
   // FIX 1 (RS007 status-page review): formatMinor(entry.amount_cents, …)
   // used to appear ONLY inside the stripe_due "Pay now — {amount}" label,
@@ -233,7 +246,7 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
             <p className="truncate text-xs font-semibold tracking-wide text-ink-muted uppercase">
               {entry.division_name}
             </p>
-            <p className="truncate font-display text-lg font-semibold text-ink">{entry.display_name}</p>
+            <p className="truncate font-display text-lg font-semibold text-ink">{headingName}</p>
           </div>
           <span
             className={`shrink-0 rounded-full border px-2.5 py-1 text-xs font-semibold tracking-wide uppercase ${tone.badge}`}

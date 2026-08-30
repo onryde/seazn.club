@@ -61,6 +61,11 @@ const BASE_ENTRY = {
   division_name: "Mixed Doubles",
   display_name: "Team Alpha",
   status: "pending" as const,
+  // RS008 review fix #1: "Team Alpha" is semantically a team already (this
+  // fixture predates the field) — the heading-masking regression it cannot
+  // see is exercised by its own dedicated test below, with an explicit
+  // "individual" override.
+  entrant_kind: "team" as const,
   amount_cents: 2500,
   free_agent: false,
   join_code: null as string | null,
@@ -519,6 +524,39 @@ describe("register status page (RS007 rebuild)", () => {
       // (consent: null is not an opt-out) — masking is per-person, not
       // blanket once any row on the entry has opted out.
       expect(html).toContain("Dev Patel");
+    });
+
+    // RS008 review fix #1 (Critical): the entry-card HEADING (entry.display_name)
+    // had ZERO masking — only the roster rows above (the previous test) were
+    // routed through the consent resolver. BASE_ENTRY's own "Team Alpha"
+    // fixture can never see this (a team's own name never takes the consent
+    // axis) — this uses an "individual" entrant, whose display_name IS a
+    // person's name, realistically the SAME person as its own sole roster row.
+    it("masks the entry-card HEADING too, not just the roster rows below it, for a non-team entry whose linked person opted out", async () => {
+      usecaseMock.groupById.mockResolvedValueOnce({
+        ...BASE_VIEW,
+        entries: [
+          {
+            ...BASE_ENTRY,
+            entrant_kind: "individual" as const,
+            display_name: "Arun Kumar",
+            players: [
+              {
+                id: "p1",
+                full_name: "Arun Kumar",
+                consent_status: "granted" as const,
+                consent: { public_name: false },
+              },
+            ],
+          },
+        ],
+      });
+      const html = await render({ rid: "g1", token: "tok" });
+      expect(html).not.toContain("Arun Kumar");
+      // Both the heading AND the roster row below it now read "Arun K." —
+      // before this fix, only the roster row did; the heading leaked
+      // "Arun Kumar" raw.
+      expect(html.match(/Arun K\./g)?.length).toBe(2);
     });
 
     // Finding #20: the entry's own lifecycle pill can say CONFIRMED (fee

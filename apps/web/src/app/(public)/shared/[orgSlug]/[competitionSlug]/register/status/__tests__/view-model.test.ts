@@ -9,6 +9,7 @@ import {
   classifyStatusActionFailure,
   effectivePayDeadline,
   entryCountsTowardTotal,
+  entryDisplayName,
   publicCheckoutPath,
   publicResendPath,
   publicWithdrawPath,
@@ -270,6 +271,67 @@ describe("rosterPlayerDisplayName", () => {
     expect(
       rosterPlayerDisplayName({ full_name: "Arun Kumar", consent: null }, division({ youth: true })),
     ).toBe("Arun K.");
+  });
+});
+
+describe("entryDisplayName (RS008 review fix #1)", () => {
+  const division = (over: { youth?: boolean; player_name_display?: string | null } = {}) => ({
+    youth: false,
+    player_name_display: null,
+    ...over,
+  });
+
+  it("never masks a TEAM's own name, even when a roster member explicitly opted out", () => {
+    expect(
+      entryDisplayName(
+        {
+          display_name: "Thunder Strikers",
+          entrant_kind: "team",
+          players: [{ consent: { public_name: false } }],
+        },
+        division(),
+      ),
+    ).toBe("Thunder Strikers");
+  });
+
+  it("masks an INDIVIDUAL entrant's display_name when its linked person opted out", () => {
+    expect(
+      entryDisplayName(
+        { display_name: "Arun Kumar", entrant_kind: "individual", players: [{ consent: { public_name: false } }] },
+        division(),
+      ),
+    ).toBe("Arun K.");
+  });
+
+  it("masks a PAIR's compound display_name when EITHER partner opted out", () => {
+    expect(
+      entryDisplayName(
+        {
+          display_name: "Arun Kumar & Dev Patel",
+          entrant_kind: "pair",
+          players: [{ consent: { public_name: true } }, { consent: { public_name: false } }],
+        },
+        division(),
+      ),
+    ).toBe("Arun K. & Dev P.");
+  });
+
+  it("masks by division youth policy alone, with no explicit opt-out", () => {
+    expect(
+      entryDisplayName(
+        { display_name: "Arun Kumar", entrant_kind: "individual", players: [{ consent: null }] },
+        division({ youth: true }),
+      ),
+    ).toBe("Arun K.");
+  });
+
+  it("full name on a non-youth division when nobody opted out (consent null/absent never masks)", () => {
+    expect(
+      entryDisplayName(
+        { display_name: "Arun Kumar", entrant_kind: "individual", players: [{ consent: null }] },
+        division(),
+      ),
+    ).toBe("Arun Kumar");
   });
 });
 

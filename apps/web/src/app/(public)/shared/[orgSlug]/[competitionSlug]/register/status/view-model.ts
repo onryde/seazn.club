@@ -3,7 +3,7 @@
 // the money/roster/link rules that matter most (never dangle a debt with no
 // route to settle; cancel must call the PUBLIC write path, never the
 // organiser one) are provable without a render.
-import { resolvePersonDisplayName } from "@/lib/name-display";
+import { anyOptedOut, resolvePersonDisplayName } from "@/lib/name-display";
 
 export type EntryStatus =
   | "pending"
@@ -196,6 +196,41 @@ export function rosterPlayerDisplayName(
   return resolvePersonDisplayName(
     player.full_name,
     player.consent,
+    division.player_name_display,
+    division.youth,
+  );
+}
+
+/**
+ * RS008 review fix #1 (Critical) — the entry-card HEADING (this entry's own
+ * `display_name`) had ZERO masking, even though the roster rows right below
+ * it (`rosterPlayerDisplayName` above) already did. For an `individual`/
+ * `pair` entrant `display_name` IS a person's (or a pair's compound) name;
+ * `anyOptedOut` aggregates every CURRENT roster member's consent the same
+ * "stricter wins across several people sharing one display_name string" way
+ * `publicRegistrationStatusByRef`/`buildAdmitTicketsDoc`/`buildDivisionSlides`
+ * already do elsewhere in this session — this page has a per-person
+ * breakdown available (`entry.players`) but the HEADING itself is one
+ * string with no single person it belongs to (a pair's is a compound of
+ * two), so it uses the aggregate helper rather than resolving one row.
+ *
+ * A `team`'s own declared name never takes the consent axis — same bypass
+ * established at every other RS008 site (public.ts/public_entrants_v
+ * precedent) — checked FIRST and unconditionally, regardless of what the
+ * roster's own consents say.
+ */
+export function entryDisplayName(
+  entry: {
+    display_name: string;
+    entrant_kind: "team" | "individual" | "pair";
+    players: { consent: { public_name?: boolean } | null }[];
+  },
+  division: { youth: boolean; player_name_display: string | null },
+): string {
+  if (entry.entrant_kind === "team") return entry.display_name;
+  return resolvePersonDisplayName(
+    entry.display_name,
+    anyOptedOut(entry.players.map((p) => p.consent)) ? { public_name: false } : null,
     division.player_name_display,
     division.youth,
   );
