@@ -4665,5 +4665,8 @@
   "confirm.cancelEntry.title": "Cancel your {division} entry?",
   "confirm.cancelEntry.bodyRefundable": "This frees your spot. {amount} will be refunded automatically.",
   "confirm.cancelEntry.bodyDiscretion": "This frees your spot. The refund window has passed — any refund is at the organiser's discretion.",
-  "confirm.cancelEntry.label": "Cancel entry"
+  "confirm.cancelEntry.label": "Cancel entry",
+  "reg.hub.registrants.table.soloSignUp": "Solo sign-up",
+  "reg.hub.registrants.table.soloWaiting": "Waiting for a team",
+  "reg.hub.registrants.table.soloAssigned": "On {team}"
 }

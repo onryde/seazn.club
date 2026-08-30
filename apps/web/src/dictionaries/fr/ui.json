@@ -4665,5 +4665,8 @@
   "confirm.cancelEntry.title": "Annuler votre inscription en {division} ?",
   "confirm.cancelEntry.bodyRefundable": "Cela libère votre place. {amount} vous sera remboursé automatiquement.",
   "confirm.cancelEntry.bodyDiscretion": "Cela libère votre place. Le délai de remboursement automatique est dépassé — tout remboursement est à la discrétion de l'organisateur.",
-  "confirm.cancelEntry.label": "Annuler l'inscription"
+  "confirm.cancelEntry.label": "Annuler l'inscription",
+  "reg.hub.registrants.table.soloSignUp": "Inscription individuelle",
+  "reg.hub.registrants.table.soloWaiting": "En attente d'une équipe",
+  "reg.hub.registrants.table.soloAssigned": "Dans {team}"
 }

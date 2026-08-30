@@ -34,9 +34,33 @@ import { RegistrationHubRegistrantDetail } from "@/components/registration-hub-r
  * a single named entrant.
  */
 export function renderRegistrantKindCell(
-  row: Pick<RegistrationListRow, "entrant_kind" | "roster_count" | "roster_cap">,
+  row: Pick<
+    RegistrationListRow,
+    "entrant_kind" | "roster_count" | "roster_cap" | "free_agent" | "assigned_team_name"
+  >,
   dict: Dict,
 ): ReactNode {
+  // RS009 — a solo sign-up is stored with the DIVISION's entrant_kind, which
+  // on these divisions is 'team'. Rendered through the branch below it
+  // therefore read "Team · 1/23": it called one person a team, and drew a
+  // roster meter for a roster they do not have (the 1 is their own player
+  // row, and the 22 "empty places" are the receiving team's, not theirs).
+  //
+  // Found by looking at the shipped table, not by a test — every assertion
+  // in this file was about entrant_kind, which was correct.
+  if (row.free_agent) {
+    return (
+      <span className="flex flex-col">
+        <span>{t(dict, "reg.hub.registrants.table.soloSignUp")}</span>
+        <span className="text-xs text-slate-500">
+          {row.assigned_team_name
+            ? t(dict, "reg.hub.registrants.table.soloAssigned", { team: row.assigned_team_name })
+            : t(dict, "reg.hub.registrants.table.soloWaiting")}
+        </span>
+      </span>
+    );
+  }
+
   const label = t(dict, `divset.entrants.kind.${row.entrant_kind}`);
   if (row.entrant_kind !== "team") return <span>{label}</span>;
 

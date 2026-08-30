@@ -192,7 +192,14 @@ export function RegistrationHubAssignPicker({
     setError(null);
     try {
       setData(
-        await apiV1<AssignTargetsResponse>(`/registrations/${registrationId}/assign-targets`),
+        // `/api/v1/...` in full: apiV1 is a thin fetch wrapper around the
+        // envelope and prepends NOTHING (see client-v1.ts). Every sibling
+        // call in registration-hub-registrant-actions.tsx spells the prefix
+        // out for the same reason. Without it this fetched
+        // `/registrations/…` and every open of the sheet 404'd — with a
+        // 5481-test suite green, because no unit test issues a real request
+        // and the route tests call the handler directly.
+        await apiV1<AssignTargetsResponse>(`/api/v1/registrations/${registrationId}/assign-targets`),
       );
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -231,9 +238,11 @@ export function RegistrationHubAssignPicker({
     setBusyId(target.registration_id);
     setActionError(null);
     try {
-      await apiV1(`/registrations/${registrationId}/assign`, {
+      await apiV1(`/api/v1/registrations/${registrationId}/assign`, {
         method: "POST",
-        body: JSON.stringify({ target_registration_id: target.registration_id }),
+        // `json:` rather than a hand-stringified `body:` — the wrapper does
+        // the serialising and sets the content type, same as every sibling.
+        json: { target_registration_id: target.registration_id },
       });
       setFeedback(
         msg("reg.hub.registrants.assign.assigned", { team: target.display_name }),
@@ -257,7 +266,7 @@ export function RegistrationHubAssignPicker({
     setBusyId("unassign");
     setActionError(null);
     try {
-      await apiV1(`/registrations/${registrationId}/unassign`, { method: "POST" });
+      await apiV1(`/api/v1/registrations/${registrationId}/unassign`, { method: "POST" });
       setFeedback(msg("reg.hub.registrants.assign.unassigned"));
       router.refresh();
     } catch (err) {

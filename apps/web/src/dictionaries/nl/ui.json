@@ -4665,5 +4665,8 @@
   "confirm.cancelEntry.title": "{division}-inschrijving annuleren?",
   "confirm.cancelEntry.bodyRefundable": "Dit maakt je plek vrij. {amount} wordt automatisch terugbetaald.",
   "confirm.cancelEntry.bodyDiscretion": "Dit maakt je plek vrij. De termijn voor automatische terugbetaling is verstreken — een terugbetaling is dan ter beoordeling van de organisator.",
-  "confirm.cancelEntry.label": "Inschrijving annuleren"
+  "confirm.cancelEntry.label": "Inschrijving annuleren",
+  "reg.hub.registrants.table.soloSignUp": "Individuele inschrijving",
+  "reg.hub.registrants.table.soloWaiting": "Wacht op een team",
+  "reg.hub.registrants.table.soloAssigned": "In {team}"
 }

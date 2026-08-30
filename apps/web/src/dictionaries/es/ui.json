@@ -4665,5 +4665,8 @@
   "confirm.cancelEntry.title": "¿Cancelar tu inscripción en {division}?",
   "confirm.cancelEntry.bodyRefundable": "Esto libera tu plaza. Se te reembolsarán {amount} automáticamente.",
   "confirm.cancelEntry.bodyDiscretion": "Esto libera tu plaza. El plazo para el reembolso automático ha pasado — cualquier reembolso queda a discreción del organizador.",
-  "confirm.cancelEntry.label": "Cancelar inscripción"
+  "confirm.cancelEntry.label": "Cancelar inscripción",
+  "reg.hub.registrants.table.soloSignUp": "Inscripción individual",
+  "reg.hub.registrants.table.soloWaiting": "Esperando equipo",
+  "reg.hub.registrants.table.soloAssigned": "En {team}"
 }
