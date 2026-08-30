@@ -3152,3 +3152,77 @@ captain is never auto-claimed against their own row.
 
 Nothing here is a code defect against a stated rule — it is a rule that
 was never stated. Recorded rather than fixed for exactly that reason.
+
+### #21 — CLOSED 2026-08-30 by owner ruling: NOT a defect
+
+I recommended defaulting an unclaimed row's person to `public_name:
+false`. **The owner ruled the other way, and the ruling stands:** keep
+`public_name: true` for everyone; people claim and opt out later on.
+That is owner ruling 5 as already written in the code comments
+("registering is consent to a public name; opt-out happens later, on the
+person, never here").
+
+**Why the ruling is well-founded, which my recommendation understated.**
+Minors are protected by a SEPARATE, division-level control, not by this
+flag — `resolveNameDisplay(setting, youth)` (`lib/name-display.ts:8-14`)
+returns `first_initial` for a youth division unless explicitly
+overridden, and `maskDisplayName` renders "Arun Kumar" as "Arun K." So
+the safeguarding case never depended on the per-person consent flag. I
+should have checked that BEFORE recommending, not after.
+
+Residual, accepted with eyes open: an ADULT whose name a captain typed,
+who never claims, is listed in full without having personally agreed.
+The owner's answer is opt-out after the fact, consistent with the rest of
+the product, and the alternative buys privacy by making rosters
+invisible until people chase links they may never click.
+
+**Owed:** a test pinning `public_name: true` on BOTH insert paths
+(`findOrCreatePlayerPerson`, `resolvePlayerPerson`). Nothing asserts it
+today — it is a comment and a default, and a lane nearly reversed it this
+afternoon on my say-so. The ruling has now been made twice; it should
+fail a test, not a review.
+
+### #22 (NEW, 2026-08-30) — the directory fills with duplicate people
+
+Owner's question walking the doubles journey, then "fix it".
+
+`materialise()` creates a `persons` row (lane `player`) per roster row.
+`findOrCreatePlayerPerson` reuses an existing person ONLY when the row
+carries a `dob` AND exactly one non-merged player-lane person matches
+`(lower(trim(full_name)), dob)`. But `dobRequired` is false unless the
+registrant ticks "I'm playing" (`validation.ts:56`), and the details step
+asks roster rows for a full name only — so **captain-entered rows
+essentially never carry a dob and therefore never dedupe**. The same
+8-player squad entered into three competitions becomes 24 directory
+people, and the cost lands on the most active organisers as merge work.
+
+**Two facts that shape the fix, both checked against the live schema:**
+- `full_name` is a SINGLE free-text field everywhere. No first/last
+  split. So "Arun Kumar" / "arun kumar" / "A. Kumar" are three people and
+  there is no structured key to reconcile them.
+- `registration_players` collects an `email`. **`persons` has no email
+  column at all** — the one strong identity signal already collected is
+  discarded at the moment the directory record is created.
+
+**Ruling for the fix:** dedupe on EMAIL, exactly, and never on name.
+The existing "does NOT dedupe on name alone" ruling stands unchanged —
+fusing two same-named juniors is not cleanly reversible, a duplicate is a
+one-click #404 merge. Add `email` to `persons` (V386; high-water is
+V385), match on `(org_id, lane='player', merged_into is null,
+lower(email))` with the same conservatism as the dob path (exactly one
+match reuses; zero or ambiguous creates), fall through to the dob rule,
+and never overwrite a matched person's existing data — a differing email
+is "not a match", never an update. Also reconcile at CLAIM time, the
+strongest identity moment in the flow, which today reconciles nothing.
+
+Explicitly OUT of scope: splitting `full_name` (large, and it does not
+fix collisions — two people really are called the same thing), fuzzy or
+normalised name matching, and auto-merging existing duplicates.
+
+**Known limit, accepted:** this only works where an email exists. The
+captain has one and any claimer gives one, but a teammate who is typed in
+and never claims still has none, so those rows keep minting new people.
+#22 makes the fixable half exact; it does not make the unfixable half
+disappear. The next lever, if directory quality outranks entry friction,
+is collecting teammate emails at the details step — which is also what
+would let those people be invited at all.
