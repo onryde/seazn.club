@@ -373,7 +373,22 @@ export function SwapSheet({
           onClick={() => setOffId(null)}
           aria-label={`${t(spec.offLabel)}: ${offName}`}
           style={{ minHeight: 44 }}
-          className="min-w-0 shrink-0 break-words rounded-full border border-transparent bg-violet-600 px-4 text-sm font-medium text-white transition-colors hover:bg-violet-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400"
+          // `max-w-full`, and NOT `shrink-0` — measured at 390px against a
+          // real fixture: with `shrink-0` and no max-width this chip takes its
+          // full content width (375px) inside a 314px row and spills 77px past
+          // the card, which `overflow-hidden` on the wrapper above then CLIPS.
+          // The player's name is cut mid-string on the one control whose whole
+          // job is confirming WHO leaves the court, and a name is data — this
+          // surface must wrap it, never silently truncate it. The candidate
+          // rows below already carry `max-w-full` and wrap correctly at the
+          // same width; this control now matches them.
+          //
+          // Invisible to the no-horizontal-scroll gate, which is why it
+          // survived: the clip means `document.documentElement.scrollWidth`
+          // never grows, so `expectNoHorizontalScroll` reports a clean page
+          // while the name is unreadable. The e2e that covers this asserts the
+          // chip's right edge against its CONTAINER's, not against the page.
+          className="min-w-0 max-w-full break-words rounded-full border border-transparent bg-violet-600 px-4 text-sm font-medium text-white transition-colors hover:bg-violet-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400"
         >
           {offName}
         </button>

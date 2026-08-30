@@ -3478,3 +3478,152 @@ field`) — it needed a seventh, on the bench, carrying `roles: ["libero"]`,
 which is also the Swap tile's own gate; and the first version of
 `assertTapFloor` probed `elementFromPoint` without scrolling, which answers
 `null` for anything below the fold and reads exactly like a product defect.
+
+### R5 — SESSION STATE #5 (2026-08-30)
+
+**Pushed** — `f0bbc91f9..d71559161` on `feat/scorepad-v3-r5-racquet-split`:
+- `caf43aee2` the foreign-undo fix (three defects, below)
+- `d71559161` the 44px minor-tile fix (below)
+
+**Uncommitted in the worktree at the time of writing** — engine libero ruling
+(5 files, verified green by me, not by the agent's word) + `swap-sheet.tsx`
+clip fix (rebuild in flight, not yet visually confirmed). One subagent still
+running on the apps/web half of the libero ruling.
+
+#### Decisions taken this session (all owner-level, all deliberate)
+
+1. **A libero replacement does not consume the substitution re-entry
+   allowance.** `bringOn` gained `exemptReplacement`; for a
+   `core.lineup.replacement` carrying a declared exemption the two COUNT
+   refusals (`reentry-forbidden`, `reentry-limit`) are skipped. FIVB 19.3.2.1
+   vs 15.6.
+2. **`reentryPositionLock` STAYS applying, exempt or not.** This is the half I
+   nearly got wrong: my first proposal was "bypass the re-entry knobs", and
+   reading the tests showed two of them assert the lock ON the libero path,
+   deliberately. FIVB has the replaced player return to the position they
+   left. `it("REFUSES a return to any other position")` must stay green and
+   UNEDITED — it is now the guard rail that stops the bypass widening.
+3. **The bypass covers ANY declared exemption, not just libero.** Justified by
+   measurement, not principle alone: every exemption in the repo carries its
+   own cap (volleyball `libero: {}` uncapped by intent; football
+   `concussion: {max: cfg.concussionSubs}`; cricket `{max: concussion}`), all
+   enforced separately in `reduceLineupEvent`. So the bypass removes no limit
+   — it routes each exemption to the limit its own variant declared. A
+   concussion replacement is one-way, so the change is inert outside
+   volleyball.
+4. **One engine test REVERSED, on the record.** `"REFUSES a second return —
+   re-entry is `once`"` asserted a refusal FIVB does not have. Rewritten into
+   `"permits an unlimited libero cycle"`, extended to 6 replacements, with the
+   old assertion and the reason it was wrong preserved in the comment. Paired
+   with a new `core/lineup.test.ts` guard proving an ORDINARY substitution
+   under `reentry: "once"` is still refused on its second return.
+5. **`minor` tiles are 44px, painted.** The `::before` bleed that claimed 44
+   never worked (measured: `elementFromPoint` 1px above returns the grid
+   container; a dispatched click does not open the sheet). Dead classes
+   removed. Costs 4px of visual quiet on every v3 skin — owner may prefer the
+   alternative that keeps both (40px paint inside a 44px button); that is a
+   restructure of the tile and was NOT done.
+6. **`mergeEnvelopesIntoLedger`'s rule restated** as what it always meant: on
+   a seq collision the WIRE copy wins where the two genuinely disagree on
+   `.id` or `.voids`, unless adopting it would DROP a void target already
+   held. `incomingIsLocal` marks the one caller whose incoming is local.
+
+#### Defects found and fixed, with the mechanism worth remembering
+
+- **The undo crash was THREE defects** (`caf43aee2`), each sufficient alone,
+  which is why it was ~2-in-3 flaky: client-fabricated ledger id;
+  `voids_event_id` parsed-then-dropped at the transport boundary (so any
+  FOREIGN void arriving by poll named nothing — a second referee's undo, not
+  just the console's); and `runDrain`'s ack append letting the local copy win
+  even for ALREADY-APPLIED, reached when a reload aborts a POST the server
+  already committed.
+- **`minor` tile 40px** (`d71559161`) — see decision 5.
+- **The swap sheet's off-chip is CLIPPED** (uncommitted). `swap-sheet.tsx:376`
+  carried `shrink-0` and no `max-w-full`: measured at 390px the chip is 375px
+  wide inside a 314px row and spills 77px past the card, which the wrapper's
+  `overflow-hidden` then clips — the player's name is cut mid-string on the
+  one control whose job is confirming who leaves the court. **Invisible to
+  `expectNoHorizontalScroll`**, because the clip means the page never scrolls:
+  proven, `pageHScroll: 0` while spilling. Any regression test must assert the
+  chip's right edge against its CONTAINER's, never the page's.
+
+#### Open questions — none blocking, all owner calls
+
+1. **The 44px visual delta** (decision 5) — accept, or restructure the tile to
+   keep 40px of paint inside a 44px hit box?
+2. **The Swap sheet's "WHO COMES OFF?" step is six visually identical rows.**
+   Observed at 390px: two-line wrapping names, nothing encoding position
+   (MB/OH/S/OPP) or which player is the libero — and `liberoCandidatesFor`
+   already computes the libero/returning distinction (`hasLiberoRole(member)
+   || member.timesOff > 0`) and throws it away by flattening to
+   `candidates: string[]`. For a control tapped between rallies the referee
+   scans by POSITION, not by name. Proposal: lead each row with the position,
+   name secondary, and mark the libero. NOT done — it is a real UI change with
+   4-dictionary i18n cost and e2e impact, so it needs a ruling first.
+3. **R5 merge gates still open**: owner visual sign-off (gallery sheet
+   unpublished) and smoke (deferred to R8 by name).
+4. **e2e gives this branch NO signal until it merges** — `e2e.yml` triggers on
+   push to `main` only. Everything verified this session is local.
+
+#### Verification standard that caught the most
+
+Every "engine-only" change was re-run against `apps/web`, and that is what
+caught the libero UI fork: the skin keeps its OWN copy of the re-entry rule
+(`volleyball.tsx`'s `liberoBlockedReason`, whose comment says "Mirrors
+`core/lineup.ts`'s own `bringOn` reentry checks"), so the engine started
+permitting an exchange the pad still greyed out. The test that caught it is
+the skin's own MUTATION PROOF, which folds the pad's verdict through the REAL
+`reduceLineupEvent` precisely so the two cannot drift. Keep that shape.
+
+### SESSION STATE #6 — R5 wave boundary, all gates re-run by the orchestrator
+
+Everything in #5 above stands. What follows is verification, not new decisions,
+plus two corrections found while verifying.
+
+#### The libero ruling landed on both sides
+
+`liberoBlockedReason` (`v3/skins/volleyball.tsx`) now returns `null`
+unconditionally, and the claim underneath it was checked rather than accepted:
+`bringOn` skips ONLY the two count refusals (`reentry-forbidden`,
+`reentry-limit`) for an exempt replacement, and `reentryPositionLock` still
+applies. The lock is nonetheless unreachable from this UI in all three of its
+cases, because `buildLiberoEvent` sends `lastPositionKey` exactly when the lock
+would read it — `timesOff > 0 && lastPositionKey !== undefined` on both sides.
+So the pad cannot offer a candidate the engine will then refuse.
+
+Two tests were deliberately reversed and one retired ("threads it into the swap
+sheet's blocked reason") — the `t()` call site it exercised is now unreachable.
+Each carries a "formerly asserted X, and here is why that was wrong" comment.
+`LIBERO_REFUSAL_KEY` and its four dictionaries were kept, not deleted: the
+wave's brief names both "once" AND the position lock as wording this skin owes.
+
+#### Correction 1 — `assertTapFloor` had a scroll artifact, not a defect
+
+The helper failed at **320px only**: `scrollIntoViewIfNeeded()` scrolls the
+minimum distance, parking the tile FLUSH with the viewport top, beneath the
+sticky nav — so the top-edge `elementFromPoint` landed on the nav and reported
+a healthy control as untappable. It reads exactly like a width-specific product
+defect. Now `scrollIntoView({ block: "center" })`, which leaves the occlusion
+check the probe exists for fully intact.
+
+#### Correction 2 — the chip fix is proven, not asserted
+
+Mutated `max-w-full` back to `shrink-0`, rebuilt, re-ran: `the who-came-off
+chip spills 61px past its container's RIGHT edge (359px inside 314px)`.
+Restored, rebuilt, green. The regression now lives in `mobile.spec.ts` as
+`assertNoContainerSpill`, and the volleyball test drives **step 2 of the swap
+sheet** — the half no earlier gate reached at all.
+
+#### Counts, run by the orchestrator at the boundary
+
+| Gate | Result |
+| --- | --- |
+| `packages/engine` vitest | 4192 total, 4179 passed, **0 failed**, 0 failed suites |
+| `apps/web` scorepad vitest | 1918 total, 1916 passed, **0 failed**, 2 pending, 489 suites |
+| `turbo typecheck lint` (full repo, CI's own command) | 4/4 tasks, **0 errors**, 125 warnings — the pre-existing baseline |
+| Racquet pad e2e, all **seven** widths | 21/21 passed |
+
+The two new lint warnings the UI change introduced (unused `member`/`policy`)
+were cleared with a scoped disable and its reason: removing the parameters
+cascades into `t` and `LIBERO_REFUSAL_KEY` going unused, a strictly larger
+blast radius than the seam is worth.

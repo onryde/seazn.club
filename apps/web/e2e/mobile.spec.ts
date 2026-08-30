@@ -2887,7 +2887,18 @@ async function assertTouchFloor(locator: Locator, label: string): Promise<void> 
  */
 async function assertTapFloor(locator: Locator, label: string): Promise<void> {
   await expect(locator, `${label} not visible`).toBeVisible({ timeout: 20_000 });
-  await locator.scrollIntoViewIfNeeded();
+  // CENTRE it, don't merely bring it on-screen. `scrollIntoViewIfNeeded()`
+  // scrolls the minimum distance, which parks the element FLUSH with the
+  // viewport top — directly beneath the app's sticky nav — and the top-edge
+  // hit test below then lands on the nav and reports a control as untappable
+  // when nothing is wrong with it. That is scroll position, not geometry: it
+  // fired only at 320px, where the taller page happens to produce that exact
+  // resting place. Centring removes the artifact while leaving what this
+  // probe is actually for — occlusion by the element's own neighbours —
+  // fully intact.
+  await locator.evaluate((el) => {
+    el.scrollIntoView({ block: "center", inline: "nearest" });
+  });
   const probe = await locator.evaluate((el) => {
     const r = el.getBoundingClientRect();
     const cx = r.left + r.width / 2;
@@ -2902,6 +2913,46 @@ async function assertTapFloor(locator: Locator, label: string): Promise<void> {
   expect(probe.height, `${label} touch target is ${probe.height}px`).toBeGreaterThanOrEqual(44);
   expect(probe.top, `${label} is not tappable at its TOP edge`).toBe(true);
   expect(probe.bottom, `${label} is not tappable at its BOTTOM edge`).toBe(true);
+}
+
+/** A control must stay INSIDE the box that paints it. Measured against the
+ *  element's own container, never the page: `swap-sheet.tsx`'s "who came off"
+ *  chip once carried `shrink-0` with no max-width and took its full content
+ *  width (375px) inside a 314px row, spilling 77px past a wrapper whose
+ *  `overflow-hidden rounded-2xl` then CLIPPED the player's name mid-string.
+ *
+ *  `expectNoHorizontalScroll` is blind to that by construction, which is why
+ *  it survived: the clip means `documentElement.scrollWidth` never grows, so
+ *  the page gate reports clean while the name is unreadable (verified:
+ *  `pageHScroll: 0` while the element spilled 77px). An `overflowsX` check on
+ *  the element is blind too — its own `scrollWidth` is not greater than its
+ *  own box, because the BOX is what grew past the parent. */
+async function assertNoContainerSpill(locator: Locator, label: string): Promise<void> {
+  await expect(locator, `${label} not visible`).toBeVisible({ timeout: 20_000 });
+  await locator.scrollIntoViewIfNeeded();
+  const probe = await locator.evaluate((el) => {
+    const parent = el.parentElement;
+    if (parent === null) return null;
+    const r = el.getBoundingClientRect();
+    const pr = parent.getBoundingClientRect();
+    return {
+      spillRight: Math.round(r.right - pr.right),
+      spillLeft: Math.round(pr.left - r.left),
+      width: Math.round(r.width),
+      parentWidth: Math.round(pr.width),
+    };
+  });
+  expect(probe, `${label} has no parent element to measure against`).not.toBeNull();
+  expect(
+    probe!.spillRight,
+    `${label} spills ${probe!.spillRight}px past its container's RIGHT edge ` +
+      `(${probe!.width}px inside ${probe!.parentWidth}px) — it is being clipped, ` +
+      `and the page-level scroll gate cannot see it`,
+  ).toBeLessThanOrEqual(0);
+  expect(
+    probe!.spillLeft,
+    `${label} spills ${probe!.spillLeft}px past its container's LEFT edge`,
+  ).toBeLessThanOrEqual(0);
 }
 
 /** The three checks every racquet pad owes at every width, before any
@@ -3099,5 +3150,22 @@ test("volleyball v3 pad: the anchor sheet and the libero Swap-sheet hold the 44p
     swap.locator(`[data-candidate-id="${fx.personIds[libero]!}"]`),
     "swap sheet: the libero's own candidate row",
   );
+  await expectNoHorizontalScroll(page);
+
+  // Step 2 of the sheet — the half NO earlier gate reached. Answering "who
+  // comes off" replaces that step with a chip naming the player chosen, and
+  // the chip is the ONLY place a referee re-reads who is leaving the court
+  // before committing the exchange. Its content is a PERSON NAME, so it is
+  // the one control on this sheet whose width is unbounded by the dictionary
+  // — which is exactly why it is the one that spilled its card and got
+  // clipped. Assert it against its container, not the page: see
+  // `assertNoContainerSpill`.
+  await swap.locator("[data-candidate-id]").first().click();
+  // Strict-unique on purpose: the chip carries the ONLY `aria-label` in
+  // swap-sheet.tsx, so a second labelled button appearing here should fail
+  // this locator loudly rather than be silently skipped by a `.first()`.
+  const offChip = swap.locator("button[aria-label]");
+  await assertNoContainerSpill(offChip, "swap sheet: the who-came-off chip");
+  await assertTapFloor(offChip, "swap sheet: the who-came-off chip");
   await expectNoHorizontalScroll(page);
 });
