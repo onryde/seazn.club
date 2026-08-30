@@ -3226,3 +3226,94 @@ and never claims still has none, so those rows keep minting new people.
 disappear. The next lever, if directory quality outranks entry friction,
 is collecting teammate emails at the details step — which is also what
 would let those people be invited at all.
+
+## DECISION LOG — session of 2026-08-29/30
+
+Every ruling taken in this session, with its reason, so none of it lives
+only in a conversation. Findings #16-#22 have their own sections above;
+this is the decision layer over them.
+
+### Product rulings (owner)
+
+1. **`public_name` stays `true` for everyone** (#21). People claim and
+   opt out later. Reverses my recommendation of `false`-until-claimed.
+   Reason it is safe: minors are masked by a SEPARATE division-level
+   control (`resolveNameDisplay`/`maskDisplayName`), so safeguarding never
+   depended on this flag. Accepted residual: an adult typed in by a
+   captain who never claims is listed in full.
+2. **Fix directory duplication by EMAIL, never by name** (#22). The
+   "never dedupe on name alone" ruling is untouched — a duplicate is a
+   one-click merge, fusing two same-named juniors is not reversible.
+   Out of scope, decided: splitting `full_name`, fuzzy matching,
+   auto-merging existing duplicates.
+3. **The captain is auto-claimed against their own row** (#20b), via
+   `registering_self`/`self_player_index` ONLY — never name matching.
+   Reason: they filled the form and consented at submit; today the person
+   who PAID is the one the card lists as outstanding.
+4. **The refund control is not gated on status or on the refund lock**
+   (#16). A withdrawn-but-paid entry is exactly the case it exists for:
+   past the lock the registrant is told "any refund is at the organiser's
+   discretion", and that promise must be keepable.
+
+### Engineering rulings
+
+5. **#19's GATE ships before its root cause.** Build a check that fails
+   the build when emitted HTML references a `/_next/static/**` asset that
+   does not exist; do NOT open up the fork's chunker first. Reason: the
+   gate is hours and converts an invisible catastrophe into a red build;
+   the chunker is open-ended.
+6. **No client-side changes to the register page until that gate exists**
+   (#17's client half is reverted for this reason, `a7a0919f4`). Shipping
+   a naming convenience through a build path that can serve an inert page
+   is a bad trade.
+7. **`charged_at` (V385) over `entrant_id` or `payment_intent_id`** for
+   the #18b guard. `entrant_id` answers "was ever seated" (null on manual
+   approval); `payment_intent_id` lives on the shared CART, so a sibling's
+   payment makes it non-null for an entry never charged.
+8. **The `partner_name` fallback in `entryDisplayName` is UNREACHABLE**
+   and is documented as defence only, with a test pinning the 422 that
+   makes it so. A pair is fixed at two players and `full_name` is
+   `min(1)`. A false premise in my own first test caught this.
+9. **#20 and #22 are one lane, serialised.** Both live in
+   `registrations.ts`/`registration-submit.ts`. Ownership lists do not
+   make concurrent edits safe on a shared file and a shared git index.
+
+### Process rulings
+
+10. **`frontend-design` skill + visual verification at 1280/768/320 is
+    required for ALL UI/UX work, including inside subagents**, and every
+    dispatch brief that touches UI must restate it. Copy is design
+    material; "it's only three dictionary keys" is not an exemption.
+    Where a subagent cannot reach a token-gated surface, it hands back the
+    exact states and the main thread does the definitive visual pass.
+11. **Never accept "done, tests pass".** Raw counts from the JSON
+    reporter, paths confirmed inside the worktree, and the gate re-run at
+    the wave boundary. This session: a lane reported a tsc error as
+    "pre-existing" when it was 20 minutes old and mine; another reported
+    1 failure where my own run showed 0; a third stalled without
+    committing and a fourth reproduced a commit already on HEAD.
+12. **A fix is not done until a mutant kills its test.** Applied to #16
+    (10 red), #17 (4 of 6, the 2 survivors being negative cases), #18b
+    (F18b alone, F18 surviving — the asymmetry IS the proof).
+13. **The money matrix should become a release gate.** It needs a real
+    Stripe key so it cannot run in normal CI; run it before each release
+    or nightly with the key in a secret. Five scenarios, ~3 minutes. It
+    has already paid for itself: two CRITICAL money defects and one build
+    defect in one afternoon.
+
+### The pattern behind #16-#22
+
+Five findings, none reachable from the ~4,000-test suite, all found by
+using the product:
+- **#16** — copy written in four locales that nothing rendered. Tests
+  cannot see an absence.
+- **#17** — two individually-correct halves; the defect lives in the gap
+  between two screens, visible only on a third.
+- **#18/#18b** — needed a REAL Checkout Session, which still reports
+  `payment_status: paid` after a refund. No mock reproduces that, and the
+  audit trail labelled the loss `late_payment`, so it read as correct.
+- **#19** — needed a CLICK. HTTP 200, assets "verified", tsc clean,
+  4,000 green, page completely inert.
+- **#20/#21/#22** — needed the owner to READ a screenshot and ask three
+  ordinary questions: why does it say awaiting, who paid, what if nobody
+  claims.
