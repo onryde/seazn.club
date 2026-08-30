@@ -28,6 +28,7 @@ import {
   fallbackOrigin,
   promoteOldestWaitlisted,
   promoteWaitlistedRow,
+  releaseSoloSignUpPlacement,
   withdrawRegistrationOrganiser,
   clearExpiresIfNoLongerNeeded,
   stripeRefund,
@@ -214,6 +215,11 @@ export async function rejectRegistration(
     await tx`
       update registrations set status = 'rejected', updated_at = now()
       where id = ${regId}`;
+    // RS009 — a rejected solo sign-up must come off any team they were placed
+    // on. Same shared helper withdrawCore and the expiry sweep use: rejection
+    // is a status change, so V388's delete cascade never fires and the
+    // placement would outlive the entry that created it.
+    await releaseSoloSignUpPlacement(tx, regId);
     await clearExpiresIfNoLongerNeeded(tx, reg.group_id, reg.id);
     const promoted = await promoteOldestWaitlisted(tx, reg.division_id, settings);
     await audit(tx, competitionId, auth.orgId, "registration.rejected", {

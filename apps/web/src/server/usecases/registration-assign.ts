@@ -21,7 +21,13 @@ import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { log } from "@/server/logger";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import { audit, joinExistingEntrant, orgReg, rosterCapExpr } from "./registrations";
+import {
+  audit,
+  joinExistingEntrant,
+  orgReg,
+  releaseSoloSignUpPlacement,
+  rosterCapExpr,
+} from "./registrations";
 
 type Tx = postgres.TransactionSql;
 
@@ -162,6 +168,25 @@ export async function assignSoloSignUp(
     if (["withdrawn", "rejected", "expired"].includes(source.status)) {
       throw new HttpError(422, `This entry is ${source.status} and cannot be placed on a team`);
     }
+    // Waitlisted is NOT terminal, so neither guard above catches it — and it
+    // is exactly the state that must not be placed. A waitlisted entry holds
+    // no capacity spot and was charged nothing (`registration-submit.ts`
+    // quotes `waitlisted ? 0 : fee`), so placing one would hand out a roster
+    // place for free; and a waitlisted TEAM is not in the division yet, so
+    // filling its roster commits a player to an entry that may never be
+    // promoted. Promote first, then assign.
+    if (source.status === "waitlisted") {
+      throw new HttpError(
+        422,
+        "This entry is on the waitlist — promote it before placing them on a team",
+      );
+    }
+    if (target.status === "waitlisted") {
+      throw new HttpError(
+        422,
+        `${target.display_name} is on the waitlist — promote it before adding players`,
+      );
+    }
 
     // Already placed? Same target = idempotent success; different target =
     // a refusal that names where they are, so the organiser can unassign
@@ -218,8 +243,9 @@ export async function assignSoloSignUp(
       select category, competition_id from divisions where id = ${target.division_id}`;
     const existingGenders = await tx<{ gender: string | null }[]>`
       select gender from registration_players where registration_id = ${targetId}`;
+    if (!division) throw new HttpError(404, "That division no longer exists");
     const refusal = compositionRefusal(
-      division?.category ?? null,
+      division.category,
       [...existingGenders.map((g) => g.gender), player.gender],
       capReached,
     );
@@ -337,76 +363,51 @@ export async function unassignSoloSignUp(
   const sourceId = input.registration_id;
 
   const result = await withTenant(auth.orgId, async (tx) => {
+    // Lock order: source, then target — the same order assignSoloSignUp
+    // uses, so the two can never deadlock. `orgReg` ends in `for update`, so
+    // it IS the source-side lock; `releaseSoloSignUpPlacement` takes the
+    // target-side one itself.
     const source = await orgReg(tx, sourceId);
     const found = await placementOf(tx, sourceId);
     if (!found) return { registration_id: sourceId, target_registration_id: null };
 
-    // Lock the roster being written — same source-then-target order assign
-    // uses, so the two can never deadlock against each other.
-    const [target] = await tx<{ id: string; entrant_id: string | null; display_name: string }[]>`
-      select id, entrant_id, display_name from registrations
-      where id = ${found.registration_id} for update`;
-
-    // Re-read the placement AFTER taking the lock, and use only this copy.
-    //
-    // `person_id` is written by `materialise()` at confirm time, which can
-    // land between the unlocked read above and this lock. Trusting the
-    // pre-lock snapshot meant a person_id that was null when we looked and
-    // non-null by the time we deleted: the entrant_members delete below is
-    // guarded on it, so it would have been SKIPPED while the
-    // registration_players row was deleted anyway — an orphaned roster
-    // membership on a live entrant, left behind by an unassign that reported
-    // success, with nothing pointing at it to explain why. Found in review;
-    // no single-threaded test can reach it.
-    const [existing] = await tx<{ id: string; person_id: string | null }[]>`
-      select id, person_id from registration_players where id = ${found.id}`;
-    if (!existing) return { registration_id: sourceId, target_registration_id: null };
-
     // "Has the division started?" has two honest answers and this refuses on
-    // either, because either one means the roster is no longer the
-    // organiser's to shuffle freely:
+    // either, because either means the roster is no longer the organiser's to
+    // shuffle freely:
     //
-    //  - FIXTURES EXIST. This is the real commitment. A fixture names the
-    //    entrant, so pulling a player out from under it leaves a board that
-    //    no longer matches the team that is going to play. Note `divisions`
-    //    has no start date of its own — the first version of this check read
-    //    `divisions.starts_on`, a column that does not exist, and every test
-    //    touching it failed with `column "starts_on" does not exist`.
+    //  - FIXTURES EXIST. The real commitment: a fixture names the entrant, so
+    //    pulling a player out from under it leaves a board that no longer
+    //    matches the team about to play. Note `divisions` has no start date
+    //    of its own — an earlier version read `divisions.starts_on` and every
+    //    test said `column "starts_on" does not exist`.
     //  - The competition's own `starts_on` has passed. A date can arrive
-    //    before anyone generates a schedule, and once the competition is
-    //    under way its rosters should be settled regardless.
-    //
-    // The date alone would be the weaker gate on its own: a competition
-    // starting next month can already have a full schedule built, and that
-    // schedule is exactly what unassigning would break.
-    const [division] = await tx<{ competition_id: string; starts_on: string | null; fixtures: string }[]>`
+    //    before anyone builds a schedule, and once a competition is under way
+    //    its rosters should be settled regardless.
+    const [division] = await tx<
+      { competition_id: string; starts_on: string | null; fixtures: string }[]
+    >`
       select d.competition_id, c.starts_on,
              (select count(*)::text from fixtures f where f.division_id = d.id) as fixtures
       from divisions d join competitions c on c.id = d.competition_id
       where d.id = ${source.division_id}`;
-    if (Number(division?.fixtures ?? 0) > 0) {
-      throw new HttpError(
-        422,
-        "This division has already started — its team sheets are set by the schedule now",
-      );
-    }
-    if (division?.starts_on && new Date(division.starts_on) <= new Date()) {
+    if (!division) throw new HttpError(404, "That division no longer exists");
+    const started =
+      Number(division.fixtures) > 0 ||
+      (!!division.starts_on && new Date(division.starts_on) <= new Date());
+    if (started) {
       throw new HttpError(
         422,
         "This division has already started — its team sheets are set by the schedule now",
       );
     }
 
-    // Order matters: the membership first, then the roster row. The reverse
-    // would leave a person on the entrant with nothing left pointing at why
-    // they are there, which is the orphan the FK cascade cannot help with
-    // (it cascades from the registration, not from this row).
-    if (target?.entrant_id && existing.person_id) {
-      await tx`
-        delete from entrant_members
-        where entrant_id = ${target.entrant_id} and person_id = ${existing.person_id}`;
-    }
-    await tx`delete from registration_players where id = ${existing.id}`;
+    // The delete itself is `releaseSoloSignUpPlacement` — the SAME helper
+    // withdraw, reject and expiry call. Unassign used to carry its own inline
+    // copy of those two deletes; four copies of one rule is four chances for
+    // a fifth terminal path to be wired into only three of them. It re-reads
+    // the placement under its own lock, which is also what closed the
+    // stale-person_id race an earlier version of this function had.
+    await releaseSoloSignUpPlacement(tx, sourceId);
 
     await audit(
       tx,
@@ -519,7 +520,12 @@ export async function listAssignTargets(
       join sports sp on sp.key = d.sport_key
       where r.division_id = ${source.division_id}
         and r.free_agent = false
-        and r.status not in ('withdrawn', 'rejected', 'expired')
+        -- 'waitlisted' joins the terminal three deliberately: a waitlisted
+        -- team is not in the division yet, so filling its roster would commit
+        -- a player to an entry that may never be promoted. assignSoloSignUp
+        -- refuses it server-side; offering it here would only spend a click
+        -- to learn that.
+        and r.status not in ('withdrawn', 'rejected', 'expired', 'waitlisted')
       order by r.display_name`;
 
     const targets: AssignTarget[] = rows.map((row) => ({

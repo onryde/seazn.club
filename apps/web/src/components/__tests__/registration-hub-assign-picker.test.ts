@@ -126,6 +126,25 @@ describe("orderTargets", () => {
     expect(ordered.map((t) => t.display_name)).toEqual(["Unlimited", "Capped"]);
   });
 
+  it("orders TWO unlimited rosters by name rather than arbitrarily", () => {
+    // The case the single-unlimited test above could not see. `roomOf`
+    // returned Infinity for an unlimited cap, so `roomOf(b) - roomOf(a)` was
+    // `Infinity - Infinity` = NaN; NaN !== 0 is true, so the comparator
+    // returned NaN and V8 read that as "no opinion" — the name tiebreak on
+    // the next line never ran, and the order was whatever the input happened
+    // to be. Exactly the reshuffling the file's own comment claims to
+    // prevent, in the very case it documents three times.
+    const ordered = orderTargets(
+      [
+        team({ display_name: "Zulu", roster_count: 4, roster_cap: null }),
+        team({ display_name: "Alpha", roster_count: 0, roster_cap: null }),
+      ],
+      null,
+      null,
+    );
+    expect(ordered.map((t) => t.display_name)).toEqual(["Alpha", "Zulu"]);
+  });
+
   it("breaks ties on name so the list cannot reshuffle under the cursor", () => {
     const ordered = orderTargets(
       [

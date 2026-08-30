@@ -96,12 +96,21 @@ export function orderTargets(
   divisionCategory: string | null,
   registrantGender: string | null,
 ): AssignTarget[] {
-  const roomOf = (t: AssignTarget) =>
-    t.roster_cap === null ? Number.POSITIVE_INFINITY : t.roster_cap - t.roster_count;
+  // Unlimited is compared as a RANK, never as Infinity arithmetic. The
+  // previous version returned `Number.POSITIVE_INFINITY` for an unlimited cap
+  // and subtracted, so two unlimited rosters produced `Infinity - Infinity` =
+  // NaN; `NaN !== 0` is true, the comparator returned NaN, and V8 treats that
+  // as "no opinion" — the name tiebreak below never ran and the order was
+  // whatever the input happened to be. Exactly the reshuffling this function
+  // exists to prevent, in the one case the file documents three times.
+  const rank = (t: AssignTarget) => (t.roster_cap === null ? 1 : 0);
+  const roomOf = (t: AssignTarget) => (t.roster_cap === null ? 0 : t.roster_cap - t.roster_count);
   return [...targets].sort((a, b) => {
     const aBlocked = a.is_full || mixedRuleBlocks(divisionCategory, a, registrantGender);
     const bBlocked = b.is_full || mixedRuleBlocks(divisionCategory, b, registrantGender);
     if (aBlocked !== bBlocked) return aBlocked ? 1 : -1;
+    // Unlimited rosters first — they always have room — then by room left.
+    if (rank(a) !== rank(b)) return rank(b) - rank(a);
     const room = roomOf(b) - roomOf(a);
     if (room !== 0) return room;
     return a.display_name.localeCompare(b.display_name);
@@ -164,7 +173,16 @@ export function RegistrationHubAssignPicker({
   const [data, setData] = useState<AssignTargetsResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
+  /** Why the LIST could not be shown. Separate from `actionError` on
+   *  purpose: sharing one state meant a refused assign (a lost race for the
+   *  last place, a mixed-composition refusal, a 409) blanked every target,
+   *  so the organiser could not pick a different team without closing and
+   *  reopening the sheet — the refusal took away the very thing they needed
+   *  to act on it. */
   const [error, setError] = useState<string | null>(null);
+  /** Why the last assign/unassign was refused. Shown ABOVE the list, which
+   *  stays on screen. */
+  const [actionError, setActionError] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const openerRef = useRef<HTMLButtonElement | null>(null);
@@ -199,13 +217,19 @@ export function RegistrationHubAssignPicker({
     return () => document.removeEventListener("keydown", onKey);
   }, [open]);
 
+  // Restore focus to the opener ONLY when the sheet actually closes. The
+  // first version ran on mount too — `open` is already false then — so simply
+  // expanding a registrant's detail panel threw focus onto "Assign to a team"
+  // and scrolled it into view, away from whatever the organiser was reading.
+  const wasOpen = useRef(false);
   useEffect(() => {
-    if (!open) openerRef.current?.focus();
+    if (wasOpen.current && !open) openerRef.current?.focus();
+    wasOpen.current = open;
   }, [open]);
 
   async function assign(target: AssignTarget) {
     setBusyId(target.registration_id);
-    setError(null);
+    setActionError(null);
     try {
       await apiV1(`/registrations/${registrationId}/assign`, {
         method: "POST",
@@ -219,8 +243,11 @@ export function RegistrationHubAssignPicker({
     } catch (err) {
       // The server's own message, verbatim. It already says which team is
       // full or why a mixed roster refuses — rewording it here would give
-      // the organiser a second, vaguer account of the same refusal.
-      setError(err instanceof Error ? err.message : String(err));
+      // the organiser a second, vaguer account of the same refusal. Also
+      // re-load: a refusal usually means the roster moved under us, so the
+      // fill numbers on screen are already stale.
+      setActionError(err instanceof Error ? err.message : String(err));
+      void load();
     } finally {
       setBusyId(null);
     }
@@ -228,13 +255,13 @@ export function RegistrationHubAssignPicker({
 
   async function unassign() {
     setBusyId("unassign");
-    setError(null);
+    setActionError(null);
     try {
       await apiV1(`/registrations/${registrationId}/unassign`, { method: "POST" });
       setFeedback(msg("reg.hub.registrants.assign.unassigned"));
       router.refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setActionError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusyId(null);
     }
@@ -245,8 +272,11 @@ export function RegistrationHubAssignPicker({
     : [];
 
   return (
-    <div data-registration-hub-assign className="flex flex-col gap-2">
-      <div className="flex flex-wrap items-center gap-2">
+    // `contents` — see the matching comment in
+    // registration-hub-registrant-actions.tsx. These controls belong in the
+    // same wrap row as the other row actions, not on a line below them.
+    <div data-registration-hub-assign className="contents">
+      <div className="contents">
         {currentTeamId ? (
           <>
             <span
@@ -281,13 +311,13 @@ export function RegistrationHubAssignPicker({
       </div>
 
       {feedback && (
-        <p className="text-xs font-medium text-green-700" role="status">
+        <p className="w-full text-xs font-medium text-green-700" role="status">
           {feedback}
         </p>
       )}
-      {error && !open && (
-        <p className="text-xs font-medium text-red-600" role="alert">
-          {error}
+      {actionError && !open && (
+        <p className="w-full text-xs font-medium text-red-600" role="alert">
+          {actionError}
         </p>
       )}
 
@@ -317,6 +347,11 @@ export function RegistrationHubAssignPicker({
               {loading && (
                 <p className="text-sm text-slate-500">
                   {msg("reg.hub.registrants.assign.loading")}
+                </p>
+              )}
+              {actionError && (
+                <p className="mb-3 rounded-lg bg-red-50 px-3 py-2 text-sm font-medium text-red-700" role="alert">
+                  {actionError}
                 </p>
               )}
               {!loading && error && (

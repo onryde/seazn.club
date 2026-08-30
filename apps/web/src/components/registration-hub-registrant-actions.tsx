@@ -392,8 +392,15 @@ export function RegistrationHubRegistrantActions({
   }
 
   return (
-    <div data-registration-hub-registrant-actions className="flex flex-col gap-2">
-      <div className="flex flex-wrap items-center gap-2">
+    // `contents` on both wrappers, so these buttons become direct children of
+    // the ONE flex-wrap row the detail panel provides. Each component used to
+    // bring its own column wrapper, which put the assign control on a line of
+    // its own below the others — visually a stray rather than a deliberate
+    // grouping, and it is the PRIMARY action for a solo sign-up.
+    // The elements stay in the DOM (contents removes the box, not the node),
+    // so the data- attributes the tests and e2e select on are unaffected.
+    <div data-registration-hub-registrant-actions className="contents">
+      <div className="contents">
         {flags.canMarkPaid && (
           <button
             type="button"
@@ -490,7 +497,7 @@ export function RegistrationHubRegistrantActions({
           aria-live="polite"
           data-registration-hub-registrant-actions-feedback
           data-tone={feedback.tone}
-          className={feedback.tone === "success" ? "text-xs font-medium text-green-700" : "text-xs font-medium text-red-600"}
+          className={`w-full ${feedback.tone === "success" ? "text-xs font-medium text-green-700" : "text-xs font-medium text-red-600"}`}
         >
           {feedback.text}
         </p>

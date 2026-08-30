@@ -366,7 +366,12 @@ export function deriveRegistrantActionFlags(
     // row that can be placed on a team. `assigned_team_id` is derived from
     // the roster row pointing back at this entry, so these two flags are
     // mutually exclusive by construction and cannot both be true.
-    canAssign: row.free_agent && row.assigned_team_id === null && nonTerminal,
+    // `waitlisted` is not terminal, so `nonTerminal` alone would offer Assign
+    // on an entry that holds no capacity spot and was charged nothing — the
+    // server refuses it, and a control the server refuses is worse than no
+    // control (the same rule canApprove follows for the division's live fee).
+    canAssign:
+      row.free_agent && row.assigned_team_id === null && nonTerminal && row.status !== "waitlisted",
     canUnassign: row.free_agent && row.assigned_team_id !== null && !row.division_started,
   };
 }

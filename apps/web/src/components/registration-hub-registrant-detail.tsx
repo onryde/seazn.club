@@ -269,6 +269,7 @@ export function RegistrationHubRegistrantDetail({
       {canEdit && hasAnyAction && (
         <section className="sm:col-span-2" aria-label={t(dict, "reg.hub.registrants.detail.section.actions")}>
           <h4 className={SECTION_HEADING}>{t(dict, "reg.hub.registrants.detail.section.actions")}</h4>
+          <div className="flex flex-wrap items-center gap-2">
           <RegistrationHubRegistrantActions
             registrationId={row.id}
             status={row.status}
@@ -299,6 +300,7 @@ export function RegistrationHubRegistrantDetail({
               divisionName={row.division_name}
             />
           )}
+          </div>
         </section>
       )}
     </div>

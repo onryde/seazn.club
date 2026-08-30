@@ -923,8 +923,40 @@ export async function clearExpiresIfNoLongerNeeded(
  *  auto-confirms a free, auto-approval, non-waitlisted entry INLINE in the
  *  same transaction by calling this directly, rather than re-deriving
  *  materialization. */
-export async function materialise(tx: Tx, reg: RegistrationRow, entrantKind: string): Promise<string> {
+export async function materialise(
+  tx: Tx,
+  reg: RegistrationRow,
+  entrantKind: string,
+): Promise<string | null> {
   if (reg.entrant_id) return reg.entrant_id;
+  // RS009 — a SOLO SIGN-UP is not a team of one, and must not become an
+  // entrant of its own. Design §6 of record: "Free agents materialize as
+  // members of the team they were assigned to, or stay unmaterialized until
+  // assigned."
+  //
+  // Without this guard, confirming one — which the card-payment webhook does
+  // automatically, with no organiser involved — minted a one-person `team`
+  // entrant. That entrant is schedulable and shows in standings, and once the
+  // organiser then placed the person on a real team, the SAME person sat on
+  // two entrants with a phantom one-player team left in the fixture list that
+  // nothing ever removed.
+  //
+  // Returning null rather than throwing: confirmation itself is legitimate
+  // (they have paid, and their entry is real), it simply seats nobody yet.
+  // `assignSoloSignUp` is what puts them on a roster, through
+  // `joinExistingEntrant`, onto the TEAM's entrant.
+  if (reg.free_agent) {
+    // Still CONFIRM them — they have paid and their entry is real; they are
+    // simply not seated yet. `materialise` owns the status flip as well as
+    // the entrant insert, so returning before this update left a paid solo
+    // sign-up stuck at `pending` forever, with no organiser action able to
+    // move it. Caught by the very test written for this guard.
+    await tx`
+      update registrations
+      set status = 'confirmed', updated_at = now()
+      where id = ${reg.id}`;
+    return null;
+  }
   const [entrant] = await tx<{ id: string }[]>`
     insert into entrants (division_id, kind, display_name, status)
     values (${reg.division_id}, ${entrantKind}, ${reg.display_name}, 'confirmed')
@@ -4395,6 +4427,50 @@ export function resolveRefundPolicy(
   };
 }
 
+
+/**
+ * Release a solo sign-up's placement on someone else's team, if they have
+ * one. Returns the team registration they were removed from, or null when
+ * they were never placed (the ordinary case, and a cheap no-op).
+ *
+ * RS009. This exists because a placement survives every TERMINAL TRANSITION
+ * unless something removes it: withdraw, reject and expire are all status
+ * changes, and V388's `on delete cascade` only fires on a DELETE. Without
+ * this, a placed solo sign-up who cancels from their status page is refunded
+ * and still fielded — their roster row and their `entrant_members` row both
+ * survive, the team still reads full, and nobody is told.
+ *
+ * ONE helper with three callers rather than three copies of the same two
+ * deletes: `withdrawCore`, `rejectRegistration` and the expiry sweep. A
+ * fourth terminal path added later needs to call this, and the shared name is
+ * the only thing that will make that obvious.
+ *
+ * Order matters: the membership first, then the roster row. The reverse
+ * leaves a person on the entrant with nothing left pointing at why they are
+ * there — an orphan no cascade can reach, because the FK cascades from the
+ * registration, not from this row.
+ */
+export async function releaseSoloSignUpPlacement(
+  tx: Tx,
+  registrationId: string,
+): Promise<string | null> {
+  const [placement] = await tx<
+    { id: string; registration_id: string; person_id: string | null }[]
+  >`
+    select id, registration_id, person_id from registration_players
+    where assigned_from_registration_id = ${registrationId}`;
+  if (!placement) return null;
+  const [target] = await tx<{ entrant_id: string | null }[]>`
+    select entrant_id from registrations where id = ${placement.registration_id} for update`;
+  if (target?.entrant_id && placement.person_id) {
+    await tx`
+      delete from entrant_members
+      where entrant_id = ${target.entrant_id} and person_id = ${placement.person_id}`;
+  }
+  await tx`delete from registration_players where id = ${placement.id}`;
+  return placement.registration_id;
+}
+
 async function withdrawCore(reg: RegistrationWithGroupRow, actorId: string | null): Promise<void> {
   if (reg.status === "withdrawn") return; // idempotent
   // RULING A (RS002 W5 review, MAJOR): rejected is terminal from every
@@ -4432,6 +4508,10 @@ async function withdrawCore(reg: RegistrationWithGroupRow, actorId: string | nul
     if (locked.entrant_id) {
       await tx`update entrants set status = 'withdrawn' where id = ${locked.entrant_id}`;
     }
+    // RS009: if this entry is a solo sign-up placed on someone else's team,
+    // withdrawing must take them OFF that roster. Marking their own entrant
+    // withdrawn (above) does not touch it — that is a different entrant.
+    const releasedFrom = await releaseSoloSignUpPlacement(tx, reg.id);
     // RS002 W5 whole-branch review MAJOR: withdrawing the cart's LAST
     // `pending` entry used to leave `registration_groups.expires_at` stale
     // forever — only `materialise`'s confirm path ever cleared it. Safe to
@@ -4446,6 +4526,7 @@ async function withdrawCore(reg: RegistrationWithGroupRow, actorId: string | nul
       registration_id: reg.id,
       by: actorId ? "organiser" : "registrant",
       promoted_registration_id: promoted?.id ?? null,
+      released_from_registration_id: releasedFrom,
     }, actorId);
     if (promoted) {
       await audit(tx, ctx.competition_id, ctx.org_id, "registration.promoted", {
@@ -4846,6 +4927,10 @@ export async function sweepRegistrations(
       }
       await tx`update registrations set status = 'expired', updated_at = now()
                where id = ${id}`;
+      // RS009 — same reason withdrawCore does it: expiry is a status change,
+      // so V388's cascade never fires and the placement would outlive the
+      // entry that created it.
+      await releaseSoloSignUpPlacement(tx, id);
       // RS002 W5 whole-branch review MAJOR: expiring the cart's LAST
       // `pending` entry used to leave `expires_at` stale forever — same gap
       // as withdrawCore, same fix.

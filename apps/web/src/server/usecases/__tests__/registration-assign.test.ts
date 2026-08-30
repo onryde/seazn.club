@@ -20,7 +20,12 @@ import { sql } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
-import { confirmRegistration, putRegistrationSettings } from "../registrations";
+import {
+  confirmRegistration,
+  putRegistrationSettings,
+  withdrawRegistrationOrganiser,
+} from "../registrations";
+import { rejectRegistration } from "../registration-approval";
 import { assignSoloSignUp, unassignSoloSignUp } from "../registration-assign";
 import { seedFootballCatalog, seedOrg } from "./_seed";
 
@@ -76,7 +81,7 @@ async function seedEntry(
      *  team that needs MATERIALISING must be seeded unconfirmed. Seeding
      *  'confirmed' here is what made the two entrant_members tests assert
      *  `expected null not to be null` — nothing had ever materialised. */
-    status?: "pending" | "paid" | "confirmed";
+    status?: "pending" | "paid" | "confirmed" | "waitlisted";
     players?: {
       name: string;
       gender?: string | null;
@@ -487,6 +492,173 @@ describe.skipIf(!HAS_DB)("assignSoloSignUp onto an already-materialised entrant"
       select count(*)::text as n from persons
       where org_id = ${auth.orgId} and lower(full_name) = 'priya raman' and merged_into is null`;
     expect(Number(n)).toBe(1);
+  });
+});
+
+describe.skipIf(!HAS_DB)("a solo sign-up is never a team of one", () => {
+  // Design §6 of record: "Free agents materialize as members of the team they
+  // were assigned to, or STAY UNMATERIALIZED until assigned." `materialise`
+  // had no free_agent guard at all, so confirming a solo sign-up — which the
+  // card-payment webhook does automatically — minted a one-person `team`
+  // entrant for them in the division.
+  //
+  // That entrant is schedulable and appears in standings. Assign them to a
+  // real team afterwards and the same person is on two entrants: a phantom
+  // one-player team sits in the fixture list forever, and nothing ever
+  // removes it.
+  it("confirming a solo sign-up creates no entrant of its own", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId } = await seedTeamDivision(auth);
+    const solo = await seedEntry(divisionId, {
+      displayName: "Priya Raman",
+      freeAgent: true,
+      status: "pending",
+      players: [{ name: "Priya Raman" }],
+    });
+
+    await confirmRegistration(auth, solo.id);
+
+    const [row] = await sql<{ entrant_id: string | null; status: string }[]>`
+      select entrant_id, status from registrations where id = ${solo.id}`;
+    expect(row.status).toBe("confirmed");
+    expect(row.entrant_id).toBeNull();
+    const [{ n }] = await sql<{ n: string }[]>`
+      select count(*)::text as n from entrants where division_id = ${divisionId}`;
+    expect(Number(n)).toBe(0);
+  });
+
+  it("still materialises an ordinary team entry", async () => {
+    // The guard must be narrow. Without this, a change that skipped every
+    // confirm would look identical to the test above.
+    const { auth } = await seedOrg();
+    const { divisionId } = await seedTeamDivision(auth);
+    const team = await seedEntry(divisionId, {
+      displayName: "Team A",
+      status: "pending",
+      players: [{ name: "Captain One" }],
+    });
+
+    await confirmRegistration(auth, team.id);
+
+    const [row] = await sql<{ entrant_id: string | null }[]>`
+      select entrant_id from registrations where id = ${team.id}`;
+    expect(row.entrant_id).not.toBeNull();
+  });
+});
+
+describe.skipIf(!HAS_DB)("waitlisted entries are not assignable in either direction", () => {
+  // A waitlisted entry holds NO capacity spot and was charged nothing
+  // (`registration-submit.ts` sets feeCents = waitlisted ? 0 : ...). The
+  // terminal-status guards only refuse withdrawn/rejected/expired, so
+  // without these an organiser could place someone who has paid nothing onto
+  // a roster, or fill a team that is not actually in the division yet.
+  it("refuses to place a waitlisted solo sign-up", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId } = await seedTeamDivision(auth);
+    const team = await seedEntry(divisionId, { displayName: "Team A" });
+    const solo = await seedEntry(divisionId, {
+      displayName: "Priya Raman",
+      freeAgent: true,
+      status: "waitlisted",
+      players: [{ name: "Priya Raman" }],
+    });
+
+    await expect(
+      assignSoloSignUp(auth, { registration_id: solo.id, target_registration_id: team.id }),
+    ).rejects.toThrow(/waitlist/i);
+  });
+
+  it("refuses a waitlisted team as the target", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId } = await seedTeamDivision(auth);
+    const team = await seedEntry(divisionId, { displayName: "Team A", status: "waitlisted" });
+    const solo = await seedEntry(divisionId, {
+      displayName: "Priya Raman",
+      freeAgent: true,
+      players: [{ name: "Priya Raman" }],
+    });
+
+    await expect(
+      assignSoloSignUp(auth, { registration_id: solo.id, target_registration_id: team.id }),
+    ).rejects.toThrow(/waitlist/i);
+  });
+});
+
+describe.skipIf(!HAS_DB)("a placed solo sign-up who leaves does not stay on the team", () => {
+  // The V388 comment claims `on delete cascade` covers this. It does not:
+  // withdrawing, rejecting and expiring are all STATUS changes, not deletes.
+  // `withdrawCore` marks the entry's OWN entrant withdrawn and stops — it
+  // knows nothing about `assigned_from_registration_id`, and neither did
+  // reject or the expiry sweep.
+  //
+  // Left unfixed, a placed solo sign-up who cancels from their public status
+  // page is refunded and STILL fielded: their roster row and their
+  // entrant_members row both survive, the team still reads full, and the
+  // organiser is never told. Three separate paths, so the release is one
+  // shared helper rather than three copies that can drift.
+  async function seedPlacedAndMaterialised(auth: AuthCtx) {
+    const { divisionId } = await seedTeamDivision(auth);
+    const team = await seedEntry(divisionId, {
+      displayName: "Team A",
+      status: "pending",
+      players: [{ name: "Captain One" }],
+    });
+    await confirmRegistration(auth, team.id);
+    const [{ entrant_id: entrantId }] = await sql<{ entrant_id: string | null }[]>`
+      select entrant_id from registrations where id = ${team.id}`;
+    const solo = await seedEntry(divisionId, {
+      displayName: "Priya Raman",
+      freeAgent: true,
+      status: "pending",
+      players: [{ name: "Priya Raman" }],
+    });
+    await assignSoloSignUp(auth, { registration_id: solo.id, target_registration_id: team.id });
+    return { divisionId, team, solo, entrantId };
+  }
+
+  async function memberNames(entrantId: string | null) {
+    const rows = await sql<{ full_name: string }[]>`
+      select p.full_name from entrant_members em
+      join persons p on p.id = em.person_id
+      where em.entrant_id = ${entrantId}`;
+    return rows.map((r) => r.full_name);
+  }
+
+  it("withdrawing releases the roster place and the entrant membership", async () => {
+    const { auth } = await seedOrg();
+    const { team, solo, entrantId } = await seedPlacedAndMaterialised(auth);
+
+    await withdrawRegistrationOrganiser(auth, solo.id);
+
+    expect(await rosterOf(team.id)).toHaveLength(1); // the captain, alone again
+    expect(await memberNames(entrantId)).not.toContain("Priya Raman");
+  });
+
+  it("rejecting releases it too", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, team, solo, entrantId } = await seedPlacedAndMaterialised(auth);
+    await sql`
+      update registration_settings set approval = 'manual' where division_id = ${divisionId}`;
+
+    await rejectRegistration(auth, solo.id);
+
+    expect(await rosterOf(team.id)).toHaveLength(1);
+    expect(await memberNames(entrantId)).not.toContain("Priya Raman");
+  });
+
+  it("leaves an UNPLACED solo sign-up's withdrawal alone", async () => {
+    // The release must be a no-op for the ordinary case, or every withdrawal
+    // in the product starts doing extra work on a row that does not exist.
+    const { auth } = await seedOrg();
+    const { divisionId } = await seedTeamDivision(auth);
+    const solo = await seedEntry(divisionId, {
+      displayName: "Sam Blake",
+      freeAgent: true,
+      status: "pending",
+      players: [{ name: "Sam Blake" }],
+    });
+
+    await expect(withdrawRegistrationOrganiser(auth, solo.id)).resolves.toBeDefined();
   });
 });
 
