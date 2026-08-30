@@ -118,3 +118,62 @@ describe("FixtureConsole renders the lineup editor only where the module declare
     });
   }
 });
+
+// Each column is gated on what the module DECLARES, and the sweep runs over
+// every sport that still shows an editor rather than over the wave's three.
+// The partition is real on both axes, which is what stops these assertions
+// being decoration: the racquet family declares an EMPTY position catalog and
+// no roles at all, while volleyball declares five groups and a libero and the
+// keeper sports declare a captain.
+describe("lineup columns render only where the module declares them", () => {
+  const VISIBLE = [
+    "football",
+    "cricket",
+    "hockey",
+    "icehockey",
+    "tennis",
+    "badminton",
+    "tabletennis",
+    "volleyball",
+  ];
+  const POSITION = 'data-testid="lineup-position-select"';
+  const ROLE_FLAG = 'data-testid="lineup-role-flag"';
+
+  for (const key of VISIBLE) {
+    const module = builtinModules.find((m) => m.key === key)!;
+    const catalog = lineupCatalogFor(module, {});
+    const hasGroups = catalog.groups.length > 0;
+    const hasRoles = (catalog.roles ?? []).length > 0;
+
+    it(`${key}: position column ${hasGroups ? "present" : "absent"}`, () => {
+      const html = consoleHtml(key);
+      if (hasGroups) expect(html).toContain(POSITION);
+      else expect(html).not.toContain(POSITION);
+    });
+
+    it(`${key}: role flags ${hasRoles ? "present" : "absent"}`, () => {
+      const html = consoleHtml(key);
+      if (hasRoles) expect(html).toContain(ROLE_FLAG);
+      else expect(html).not.toContain(ROLE_FLAG);
+    });
+  }
+
+  it("the sweep is not vacuous — both columns differ across the shipped sports", () => {
+    // Guards the whole block above: if every visible sport happened to agree,
+    // each assertion would hold under a gate that had been deleted.
+    const groups = VISIBLE.map(
+      (k) => lineupCatalogFor(builtinModules.find((m) => m.key === k)!, {}).groups.length > 0,
+    );
+    const roles = VISIBLE.map(
+      (k) => (lineupCatalogFor(builtinModules.find((m) => m.key === k)!, {}).roles ?? []).length > 0,
+    );
+    expect(new Set(groups).size).toBe(2);
+    expect(new Set(roles).size).toBe(2);
+  });
+
+  it("the pair-order column follows the ENTRANT's declared kind, not the sport", () => {
+    // `isPairShaped` reads `entrants.kind`; a team-shaped side of the same
+    // sport must not get a doubles order control.
+    expect(consoleHtml("tennis")).not.toContain('data-testid="lineup-pairorder-select"');
+  });
+});

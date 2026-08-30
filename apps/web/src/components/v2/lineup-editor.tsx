@@ -436,6 +436,7 @@ export function LineupEditor({
                 }}
                 className="select min-h-11 w-32 px-2 py-1 text-xs"
                 aria-label={msg("lineup.positionAria", { name: s.full_name })}
+                data-testid="lineup-position-select"
               >
                 <option value="">{msg("lineup.positionPlaceholder")}</option>
                 {positionGroups.map((g) => (
@@ -482,7 +483,11 @@ export function LineupEditor({
               </select>
             )}
             {roles.map((r) => (
-              <label key={r.key} className="flex items-center gap-1 text-slate-500">
+              <label
+                key={r.key}
+                className="flex items-center gap-1 text-slate-500"
+                data-testid="lineup-role-flag"
+              >
                 <input
                   type="checkbox"
                   disabled={!canEdit}
