@@ -618,7 +618,7 @@ export function FixtureConsole({
                   data-role="device-handover"
                   aria-expanded={handoverOpen}
                   onClick={() => setHandoverOpen((v) => !v)}
-                  className="btn btn-ghost"
+                  className="btn btn-ghost min-h-11"
                 >
                   {msg("score.handOverDevice")}
                 </button>
@@ -628,7 +628,7 @@ export function FixtureConsole({
                   type="button"
                   disabled={busy || padSyncing}
                   onClick={() => send("core.start", {})}
-                  className="btn btn-primary"
+                  className="btn btn-primary min-h-11"
                 >
                   {msg("score.startMatch")}
                 </button>
@@ -723,7 +723,7 @@ export function FixtureConsole({
                   type="button"
                   disabled={busy || padSyncing}
                   onClick={() => send("core.void", { event_id: lastVoidable.id })}
-                  className="btn btn-ghost px-2.5 py-1 text-xs"
+                  className="btn btn-ghost min-h-11 text-xs"
                   title={msg("score.voidLastTitle", { type: lastVoidable.type, seq: lastVoidable.seq })}
                 >
                   {msg("score.voidLast")}
@@ -791,7 +791,7 @@ export function FixtureConsole({
                   type="button"
                   disabled={busy || padSyncing}
                   onClick={() => send("core.finalize", {})}
-                  className="btn btn-ghost"
+                  className="btn btn-ghost min-h-11"
                 >
                   {msg("score.finalize")}
                 </button>
@@ -801,7 +801,7 @@ export function FixtureConsole({
                     title={`${home.name} ${msg("schedule.vs")} ${away.name}`}
                     text={msg("score.shareText", { home: home.name, away: away.name, headline: summary?.headline ?? msg("score.resultIn") })}
                     url={publicPath}
-                    className="btn btn-ghost"
+                    className="btn btn-ghost min-h-11"
                   />
                 )}
               </>
@@ -813,7 +813,7 @@ export function FixtureConsole({
                   type="button"
                   disabled={busy || padSyncing}
                   onClick={() => setAbandonPrompt(true)}
-                  className="btn btn-danger"
+                  className="btn btn-danger min-h-11"
                 >
                   {msg("score.abandon")}
                 </button>
@@ -881,7 +881,7 @@ function ForfeitButton({
         type="button"
         disabled={busy || padSyncing}
         onClick={() => setOpen(!open)}
-        className="btn btn-danger"
+        className="btn btn-danger min-h-11"
       >
         {msg("score.forfeit")}
       </button>
