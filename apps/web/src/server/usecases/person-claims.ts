@@ -57,6 +57,55 @@ function requireSessionEditor(auth: AuthCtx): void {
 }
 
 /**
+ * Shared core (code-review fix, 2026-08-30): revoke any prior open invite
+ * for `personId`, then insert the new one. `createClaimInvite` and
+ * `createSystemClaimInvite` used to carry this as two byte-for-byte-similar
+ * inline bodies — the exact "two lookup paths drift" defect class this
+ * codebase has hit before — and `createSystemClaimInvite`'s own copy ran the
+ * two statements UNTRANSACTED when called with the pooled `sql` (every real
+ * call site today), each auto-committing on its own. A concurrent sweep for
+ * the SAME person could then interleave: caller A's revoke commits, caller
+ * B's insert lands and commits, then caller A's OWN insert fails against
+ * `person_claims_open_uq` — and because A's revoke had ALREADY committed
+ * with nothing transactional to undo it, that failure (silently swallowed by
+ * `maybeInviteClaim`'s catch, registrations.ts) could leave a still-open
+ * invite from the LOSING side's own revoke with no replacement. One
+ * transaction makes the pair atomic: a losing insert now rolls its own
+ * revoke back too, so a race always leaves whichever invite the WINNING
+ * caller wrote, never a gap. Callers pass whatever `db` they already hold
+ * (a `Tx` already inside a transaction runs this directly, atomic with the
+ * rest of it; the pooled `sql` is wrapped in its own transaction by the
+ * caller — see createSystemClaimInvite below).
+ */
+async function reviveClaimInvite(
+  db: AnySql,
+  orgId: string,
+  personId: string,
+  email: string,
+  invitedBy: string | null,
+  secret: string,
+): Promise<ClaimRow | undefined> {
+  await db`
+    update person_claims set revoked_at = now()
+    where person_id = ${personId} and claimed_at is null and revoked_at is null`;
+  const [created] = await db<ClaimRow[]>`
+    insert into person_claims (org_id, person_id, email, token_hash, invited_by, expires_at)
+    values (${orgId}, ${personId}, ${email}, ${hashClaimToken(secret)},
+            ${invitedBy}, now() + ${`${CLAIM_DAYS} days`}::interval)
+    returning ${db(COLS)}`;
+  return created;
+}
+
+/** True for the plain pooled client (`.begin` — postgres.js's `Sql`), false
+ *  for a `Tx` already inside a transaction (`.savepoint` instead — `Sql` and
+ *  `TransactionSql` are siblings, neither extends the other). Lets
+ *  `createSystemClaimInvite` open its OWN transaction only when it actually
+ *  needs one. */
+function isPooledSql(db: AnySql): db is postgres.Sql {
+  return typeof (db as postgres.Sql).begin === "function";
+}
+
+/**
  * Invite a person to claim their profile. One open claim per person: minting
  * revokes any prior open invite. Secret returned exactly once.
  */
@@ -77,14 +126,12 @@ export async function createClaimInvite(
     }
     const [org] = await tx<{ name: string }[]>`
       select name from organizations where id = ${auth.orgId}`;
-    await tx`
-      update person_claims set revoked_at = now()
-      where person_id = ${personId} and claimed_at is null and revoked_at is null`;
-    const [created] = await tx<ClaimRow[]>`
-      insert into person_claims (org_id, person_id, email, token_hash, invited_by, expires_at)
-      values (${auth.orgId}, ${personId}, ${email}, ${hashClaimToken(secret)},
-              ${auth.userId}, now() + ${`${CLAIM_DAYS} days`}::interval)
-      returning ${tx(COLS)}`;
+    // reviveClaimInvite's insert carries no WHERE/conflict clause of its own,
+    // so a successful call always returns exactly one row — same invariant
+    // createSystemClaimInvite's own `if (!created) return null` guard below
+    // treats as needing a runtime check only because THAT function's
+    // contract is "never throws"; this one's is not.
+    const created = (await reviveClaimInvite(tx, auth.orgId, personId, email, auth.userId, secret))!;
     return { ...created, person_name: person.full_name, org_name: org?.name ?? "" };
   });
   return { ...row, secret };
@@ -123,14 +170,16 @@ export async function createSystemClaimInvite(
   if (!person || person.user_id) return null;
   const [org] = await db<{ name: string }[]>`
     select name from organizations where id = ${orgId}`;
-  await db`
-    update person_claims set revoked_at = now()
-    where person_id = ${personId} and claimed_at is null and revoked_at is null`;
-  const [created] = await db<{ id: string }[]>`
-    insert into person_claims (org_id, person_id, email, token_hash, invited_by, expires_at)
-    values (${orgId}, ${personId}, ${email}, ${hashClaimToken(secret)},
-            null, now() + ${`${CLAIM_DAYS} days`}::interval)
-    returning id`;
+  // Code-review fix (2026-08-30, item 3): revoke-then-insert now shares
+  // reviveClaimInvite's one transactional core with createClaimInvite — see
+  // that function's own doc comment for the race it closes. `db` is the
+  // pooled `sql` at every real call site today (this function's own doc
+  // comment above), so it opens ITS OWN transaction here; a caller that
+  // instead passes an already-open `Tx` runs the pair directly on it,
+  // already atomic with the rest of that transaction.
+  const created = isPooledSql(db)
+    ? await db.begin((tx) => reviveClaimInvite(tx, orgId, personId, email, null, secret))
+    : await reviveClaimInvite(db, orgId, personId, email, null, secret);
   if (!created) return null;
   return { secret, person_name: person.full_name, org_name: org?.name ?? "" };
 }

@@ -515,6 +515,36 @@ describe.skipIf(!HAS_DB)("groupById — widened fields for the status page rebui
     expect(pairView.entries[0]!.allows_new_joiner).toBe(false);
     expect(teamView.entries[0]!.allows_new_joiner).toBe(true);
   });
+
+  // Visual-check fix (RS008.1, post-review): buildGroupStatusView's own
+  // `entrant_kind` field is what view-model.ts's entryDisplayName keys its
+  // unmasked-name bypass on ("team" === show raw display_name). A free
+  // agent carries `entrant_kind: "team"` at the division level (design §5)
+  // but is one real, unassigned person — without this guard, a solo
+  // minor's free-agent entry on a youth division printed its raw name on
+  // the token-holder's own status page, directly contradicting the masked
+  // roster row for the SAME person right below it.
+  it("reports entrant_kind 'individual' (not 'team') for a FREE AGENT, so the client never rides the team-name bypass", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division: created } = await rig(owner);
+    const division = await patchDivision(owner, created.id, { age_max: 15 });
+    expect(division.youth).toBe(true);
+    await sql`
+      insert into registration_settings
+        (division_id, enabled, entrant_kind, fee_cents, payment_method, approval, allow_free_agents)
+      values (${division.id}, true, 'team', 0, 'offline', 'auto', true)`;
+    const { registration, access_token } = await seedRegistration(
+      competition.id,
+      division.id,
+      { fee_cents: 0, currency: "gbp", payment_method: "offline" },
+      { refCode: freshRef(), displayName: "Cap Tain", players: [{ name: "Cap Tain" }] },
+    );
+    await sql`update registrations set free_agent = true where id = ${registration.id}`;
+
+    const view = await groupById(registration.group_id, access_token);
+    expect(view.entries[0]!.entrant_kind).toBe("individual");
+  });
 });
 
 // RS006 (public stepper) — publicCartByRef: the TOKEN-LESS, group-level
@@ -663,6 +693,70 @@ describe.skipIf(!HAS_DB)("publicCartByRef — token-less, masked cart read", () 
 
     const view = await publicCartByRef(refCode);
     expect(view.entries[0]!.display_name).toBe("Thunder Strikers");
+  });
+
+  // Code-review fix (2026-08-30, item 2) — entrantKindByDivision already
+  // excluded a team from nonTeamEntryIds (the consent axis) above, but the
+  // per-entry map still called resolvePersonDisplayName unconditionally —
+  // the YOUTH axis lives inside that function, not in nonTeamEntryIds'
+  // filter, so a team on a youth division was still masked. Isolated from
+  // the consent test above: no opted-out person on this roster at all.
+  it("never masks a TEAM's display_name on a YOUTH division either — the youth axis, not just consent", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division: created } = await rig(owner);
+    const division = await patchDivision(owner, created.id, { age_max: 15 });
+    expect(division.youth).toBe(true);
+    await sql`
+      insert into registration_settings
+        (division_id, enabled, entrant_kind, fee_cents, payment_method, approval, allow_free_agents)
+      values (${division.id}, true, 'team', 0, 'offline', 'auto', false)`;
+    const refCode = freshRef();
+    await seedRegistration(
+      competition.id,
+      division.id,
+      { fee_cents: 0, currency: "gbp", payment_method: "offline" },
+      { refCode, displayName: "Thunder Strikers", players: [{ name: "Cap Tain" }] },
+    );
+
+    const view = await publicCartByRef(refCode);
+    expect(view.entries[0]!.display_name).toBe("Thunder Strikers");
+  });
+
+  // Post-merge review fix (2026-08-30, free-agent gap, Important) — a FREE
+  // AGENT entry carries `entrant_kind: "team"` at the division level (design
+  // §5: "an entry with no team of its own yet") but represents ONE
+  // unassigned person, not a named team — registration-submit.ts's own
+  // entryDisplayName falls through to the solo player's name for exactly
+  // this case. Nothing stops a division from being BOTH youth AND
+  // allow_free_agents (the only rule is "allow_free_agents requires
+  // entrant_kind 'team'"), so a solo minor's free-agent signup used to ride
+  // the team bypass above and print their real name unmasked, reachable by
+  // anyone with the bare ref code. Same fixture as the sibling test above,
+  // inverted: `free_agent` is patched onto the registration row directly
+  // (seedRegistration has no option for it — no flow in this suite submits
+  // one — same "raw fixture" convention linkPersonWithConsent above uses).
+  it("still masks a FREE AGENT's display_name on a YOUTH team division — free_agent is one person, not a team", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division: created } = await rig(owner);
+    const division = await patchDivision(owner, created.id, { age_max: 15 });
+    expect(division.youth).toBe(true);
+    await sql`
+      insert into registration_settings
+        (division_id, enabled, entrant_kind, fee_cents, payment_method, approval, allow_free_agents)
+      values (${division.id}, true, 'team', 0, 'offline', 'auto', true)`;
+    const refCode = freshRef();
+    const { registration } = await seedRegistration(
+      competition.id,
+      division.id,
+      { fee_cents: 0, currency: "gbp", payment_method: "offline" },
+      { refCode, displayName: "Cap Tain", players: [{ name: "Cap Tain" }] },
+    );
+    await sql`update registrations set free_agent = true where id = ${registration.id}`;
+
+    const view = await publicCartByRef(refCode);
+    expect(view.entries[0]!.display_name).toBe("Cap T.");
   });
 
   it("returns every entry in the cart, in creation order — not just the oldest", async () => {

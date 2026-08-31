@@ -675,6 +675,16 @@ export async function submitRegistrationGroup(
     let subtotal = 0;
     const paymentMethodsSeen = new Set<string>();
     const entryResults: SubmitGroupEntryResult[] = [];
+    // RS008 gap (code-review fix, 2026-08-30): this cart-level auto-confirm
+    // is the one materialise() convergence point that never fired the
+    // post-commit claim-invite sweep — every OTHER confirm path
+    // (confirmRegistration/confirmPaidRegistration/markRegistrationPaidOffline/
+    // confirmRegistrationWaived, joinTeamEntry's own two branches) already
+    // does. Collected here (inside the tx, alongside entryResults) rather
+    // than swept per-entry immediately after materialise(), so the sweep
+    // itself only ever runs once the whole transaction has actually
+    // committed — see the `void inviteUnclaimedMembers(...)` call below.
+    const autoConfirmedEntrantIds: string[] = [];
 
     for (const p of prepared) {
       // LIVE settings (fetched under the lock above), never the pre-lock
@@ -795,8 +805,15 @@ export async function submitRegistrationGroup(
       // and never for a waitlisted entry.
       let finalStatus = regRow.status;
       if (!waitlisted && !p.input.free_agent && live.approval === "auto" && feeCents === 0) {
-        await materialise(tx, regRow, p.input.entrant_kind);
+        const entrantId = await materialise(tx, regRow, p.input.entrant_kind);
         finalStatus = "confirmed";
+        // Forward-compatible with the free-agent materialise() contract
+        // RS009 introduces (`string | null` — a free agent seats no
+        // entrant): a null here means no roster to invite, so skip rather
+        // than push. Today `entrantId` is never null (this branch already
+        // excludes free agents above), so this is a no-op filter, not a
+        // behavior change.
+        if (entrantId) autoConfirmedEntrantIds.push(entrantId);
       }
 
       subtotal += waitlisted ? 0 : feeCents;
@@ -835,8 +852,17 @@ export async function submitRegistrationGroup(
           updated_at = now()
       where id = ${groupId}`;
 
-    return { groupId: groupId!, refCode, subtotal, entryResults };
+    return { groupId: groupId!, refCode, subtotal, entryResults, autoConfirmedEntrantIds };
   });
+
+  // RS008 gap (code-review fix, 2026-08-30): fire-and-forget, strictly AFTER
+  // the transaction above has committed — see confirmRegistration's
+  // identical wiring (registrations.ts) for why. One call per auto-confirmed
+  // entry: a cart can hold more than one free/auto-approval division at
+  // once, each materialising its own entrant.
+  for (const entrantId of txResult.autoConfirmedEntrantIds) {
+    void inviteUnclaimedMembers(orgId, entrantId);
+  }
 
   // Logged AFTER `sql.begin` resolves (review MINOR 7) — inside the callback
   // this fired before commit was guaranteed; a rollback after the log line
