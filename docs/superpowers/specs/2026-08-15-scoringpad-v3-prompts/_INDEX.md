@@ -5998,3 +5998,59 @@ does not disagree with the defect, it encodes it. Same shape as R7-28's design
 defects (every automated gate green, screen still wrong) and the same shape as
 this wave's other false premises — the hazard was written down and then not
 believed.
+
+### R7-31 — the phase-fix review: one major, and a second "the gate cannot see it" masking
+
+Reviewer (sonnet, per topology) on `96b5bb451`. Six areas checked, four clean,
+two real.
+
+**Major — the exception was narrower in its comment than in its code.**
+`checkLabelKeysUnique`'s new phase-pairing exception said it admitted a
+repeated label key only as "the byte-identical declaration restated for a
+DIFFERENT phase". It compared `label`/`where`/`type`/`path` — the four fields
+`PadLabelRef` carries. An action's real content (`fields`, `attribution`) and a
+panel's (`layout`, `gate`) are **not on that ref at all**, so two genuinely
+different declarations sharing one key across "pre" and "live" were waved
+through. The blanket `count > 1` rule this replaced caught them.
+
+This matters beyond generic: the invariant is shared by all 11 sport modules,
+so the hole was opened for every future skin, not just this one. Fixed by
+fingerprinting the whole owning declaration (phase stripped at every level,
+keys sorted so a cosmetic reordering is still a pairing). Sorting is
+load-bearing: without it a pairing would be legal only because `everyPhase`'s
+twins share one object reference, and any hand-written pair would flake.
+
+Note the shape — **the existing test for this was a mirror.** "still fails when
+only the ACTION content drifts" varied `type`, which the shallow compare
+already caught, so it passed before and after and proved nothing about the
+hole. Four cases added that do (field bounds, attribution present/absent,
+layout, gate, plus key-order). Mutation-proved: restoring the shallow compare
+reds exactly those three and nothing else.
+
+**Minor — a branch masked by a SECOND gate.** The sweep named "the More tile
+agrees with the chassis, in every mode/band/phase" drove no terminal ledger, so
+`resolvePhase` never returned "post" and the one line R7 changed in
+`moreHasContent` was untested by the sweep named after phases. Extended with a
+per-cfg decided ledger (`generic.result` refuses a bare `winnerId` in score
+mode and refuses scores in win_loss, so one shared payload cannot decide all
+four configs) plus a `sawPost` vacuity guard.
+
+The reviewer predicted this branch was masked by `tile-grid.tsx`'s own
+independent `tile.phases` filter and therefore had no teeth to gain. Measured:
+before the extension, removing the guard did NOT red the suite; after it, it
+does. **A second gate covering the same condition does not make a defect
+absent, only invisible** — and it converts a real test into a mirror without
+anyone editing the test. Same family as R7-28 (every gate green, screen wrong)
+and R7-30 (the suite encodes the defect).
+
+Clean, with the evidence that settles each: `PadLabelRef`'s public shape is
+unchanged (zero external callers; a pre-existing exact 5-key `toEqual` still
+passes, and the new ref asserts `not.toHaveProperty` for both internal
+fields); `moreHasContent` mirrors `moreActions` faithfully (the chassis
+function carries no phase logic of its own and both read the same
+`resolvePhase`); `everyPhase`'s shared nested references are safe (no consumer
+mutates a panel, action or gate in place); the one consumer keyed by
+`labelKey.key` walks already phase-filtered panels, so the twins are never
+co-present; and the module version correctly stays `1.0.0` — the golden and
+schema snapshots carry no `padSpec` field, so the pin governs cfg/state replay
+determinism, a contract padSpec sits outside.
