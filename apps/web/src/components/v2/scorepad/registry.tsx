@@ -6,20 +6,25 @@
 //
 // WHY THIS EXISTS, given S11 already shipped a skin registry
 // (`skins/registry.ts`) that `PadRenderer` already consults BY DEFAULT: that
-// registry names the sports with a hand-crafted v2 layout (5 today — R5
-// retired racquet-skin.tsx's 3-sport entry as dead code, see its own header)
+// registry names the sports with a hand-crafted v2 layout (NONE, as of
+// 2026-08-31 — see its own header: the last four, cricket/tennis/football/
+// period, retired that day, closing out what R5 started for racquet-skin.tsx)
 // and returns `null` for anything else — "null" there means "no skin for
 // this sport", which is a complete answer to PadRenderer's own question. It
 // is NOT a written decision for the sports with no v2 story at all
-// (generic/carrom/boardgame, never skinned; volleyball/badminton/
-// tabletennis, no longer skinned — `NO_V2_SKIN_SPORTS` below), so a
-// brand-new engine sport shipping with no skin AND no row here would
-// silently fall through to "universal" with nobody having asserted that was
-// the intended choice. `resolveScorePad`'s table below names every
-// `builtinModules` key that still has a v2 story, explicitly — "universal"
-// is a DECISION, not a fallthrough — and `__tests__/registry.test.tsx` is
-// the drift guard: a 12th sport with no row AND no `NO_V2_SKIN_SPORTS` entry
-// fails CI, mutation-proved there.
+// (generic/carrom/boardgame, never skinned; the other eight, no longer
+// skinned — `NO_V2_SKIN_SPORTS` below), so a brand-new engine sport shipping
+// with no skin AND no row here would silently fall through to "universal"
+// with nobody having asserted that was the intended choice. `resolveScorePad`'s
+// table below names every `builtinModules` key that still has a v2 story,
+// explicitly — today that is zero keys, but the table stays live rather than
+// collapsing to a constant: `v3/registry.ts`'s `LEGACY_SPORTS` is computed
+// from `builtinModules` automatically, so a 12th engine sport that ships
+// without a v3 conversion lands in the legacy lane and reaches THIS table
+// with no other gate in front of it — "universal" here still needs to be a
+// DECISION, not a fallthrough, for a sport that has not been born yet.
+// `__tests__/registry.test.tsx` is the drift guard: a 12th sport with no row
+// AND no `NO_V2_SKIN_SPORTS` entry fails CI, mutation-proved there.
 import { useCallback, useMemo } from "react";
 import type { EventEnvelope, Lineup, LineupPair, LineupSlot } from "@seazn/engine/core";
 import type { AnySportModule, FidelityBand } from "@seazn/engine/sport";
@@ -43,57 +48,61 @@ import { PadHostV3 } from "./v3/pad-host";
 type ResolutionKind = "skin" | "universal";
 
 /**
- * Sports with no v2 story left AT ALL. Volleyball, badminton and
- * tabletennis used to share ONE row here ("skin", via skins/racquet-
- * skin.tsx — setbased/kernel.ts's common action family) until R5
- * (2026-08-27) converted all three to their own v3 skins
- * (`v3/registry.ts`'s `V3_SKINS`, unconditionally: no flag, no fallback).
- * `ScorePad` below consults `v3/registry.ts`'s `resolvePad` FIRST and
- * returns before `resolveScorePad`/this table is ever reached for those
- * three keys, so racquet-skin.tsx had zero remaining callers and was
- * deleted as dead code in the same wave (skins/registry.ts's own header).
+ * Sports with no v2 story left AT ALL — eight of them now, all for the same
+ * reason: a shared or dedicated v2 skin file existed, converted fully to its
+ * own v3 skin (`v3/registry.ts`'s `V3_SKINS`, unconditionally: no flag, no
+ * fallback), and was then deleted as dead code once `ScorePad` below started
+ * consulting `v3/registry.ts`'s `resolvePad` FIRST and returning before
+ * `resolveScorePad`/this table was ever reached for that key.
  *
- * That deletion is WHY these three cannot simply keep a "skin" row: with
- * racquet-skin.tsx gone, `skinFor(key)` now returns null for all three, so a
+ * Volleyball, badminton and tabletennis went first (R5, 2026-08-27 —
+ * skins/racquet-skin.tsx, setbased/kernel.ts's common action family, one
+ * shared file for all three). Cricket, tennis, football, hockey and
+ * icehockey went last (2026-08-31 — skins/cricket-skin.tsx, tennis-skin.tsx,
+ * football-skin.tsx and period-skin.tsx, one file each/pair): each of those
+ * five kept a real "skin" row for a while after its own v3 conversion landed,
+ * specifically BECAUSE nothing else shared its v2 skin file, so nothing
+ * forced the deletion question until this wave finally asked it for all five
+ * at once (skins/registry.ts's own header has the full per-sport record).
+ *
+ * That deletion is WHY a converted sport cannot simply keep a "skin" row:
+ * with its v2 skin file gone, `skinFor(key)` returns null for it, so a
  * "skin" row would make `resolveScorePad` throw its own "marked skin but
  * skins/registry.ts has no skin for it" guard below if this dead path were
- * ever somehow reached. Marking them "universal" instead would be a
- * different lie — misstating WHY (that label means "not enough match volume
- * to earn hand-crafted ergonomics", skins/registry.ts's own header; these
- * three have plenty, just reached through a different lane entirely). So
+ * ever somehow reached. Marking it "universal" instead would be a different
+ * lie — misstating WHY (that label means "not enough match volume to earn
+ * hand-crafted ergonomics", skins/registry.ts's own header; all eight of
+ * these have plenty, just reached through a different lane entirely). So
  * they get no row at all: a written decision that the legacy v2 table has
  * nothing left to say about them, not a silent gap. `registry.test.tsx`'s
  * own assertion over this set proves both halves of that claim — absent
  * from this table, AND genuinely skin-less — rather than merely asserting
  * it.
- *
- * Contrast cricket/tennis/football below, listed here despite ALSO being
- * fully v3-owned (`v3/registry.ts`'s `CONVERTED_SPORTS`): their v2 skin
- * files were not part of this deletion (nothing else shares them, so
- * nothing forced the question), so `skinFor` still finds them and their row
- * stays real. Unreachable through `ScorePad` today, same as these three, but
- * not dishonest — deleting a v2 skin nobody else needs and retiring its
- * table row are the same decision; NOT deleting one leaves the row standing.
  */
-export const NO_V2_SKIN_SPORTS: ReadonlySet<string> = new Set(["volleyball", "badminton", "tabletennis"]);
+export const NO_V2_SKIN_SPORTS: ReadonlySet<string> = new Set([
+  "volleyball",
+  "badminton",
+  "tabletennis",
+  "cricket",
+  "tennis",
+  "football",
+  "hockey",
+  "icehockey",
+]);
 
 /**
  * Every `builtinModules` key WITH A V2 STORY, explicitly — see
- * `NO_V2_SKIN_SPORTS` just above for the three that no longer have one. Of
- * the remaining 8: 5 skinned sports (S11/#420) name "skin"; generic/carrom/
- * boardgame name "universal" — a sport without the match volume to earn a
- * hand-crafted layout is better served by the renderer proven across every
- * module (skins/registry.ts's own header). Exported for the drift guard
- * (`registry.test.tsx`), which sweeps `builtinModules` against this table
- * (net of `NO_V2_SKIN_SPORTS`) in both directions rather than hardcoding "8"
- * or the key list a second time.
+ * `NO_V2_SKIN_SPORTS` just above for the eight that no longer have one. What
+ * is left: generic/carrom/boardgame, all "universal" — a sport without the
+ * match volume to earn a hand-crafted layout is better served by the
+ * renderer proven across every module (skins/registry.ts's own header). No
+ * row here is ever "skin" today (the type keeps that arm anyway — see this
+ * file's own top-of-file note on why the table is not simplified away).
+ * Exported for the drift guard (`registry.test.tsx`), which sweeps
+ * `builtinModules` against this table (net of `NO_V2_SKIN_SPORTS`) in both
+ * directions rather than hardcoding "3" or the key list a second time.
  */
 export const RESOLUTION_KIND: Readonly<Record<string, ResolutionKind>> = {
-  cricket: "skin",
-  tennis: "skin",
-  football: "skin",
-  hockey: "skin",
-  icehockey: "skin",
   generic: "universal",
   carrom: "universal",
   boardgame: "universal",
