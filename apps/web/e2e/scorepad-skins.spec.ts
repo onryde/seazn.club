@@ -138,11 +138,22 @@ function v3Sheet(page: Page) {
   return pad(page).locator('[data-role="v3-sheet"]');
 }
 
+/** R6 cutover — hockey/icehockey's Detail Dock (goal kind, suspension
+ *  offender chips). Same primitive as `v3Tile`/`v3Sheet` above. */
+function v3Dock(page: Page) {
+  return pad(page).locator('[data-role="v3-dock"]');
+}
+
+/** A scorebug strip item by its skin-declared `StripItem.id` (period, box,
+ *  strength, …) — the v3 equivalent of the v2 period skin's own header
+ *  fields (`header-score`/`header-period`), which no longer render for any
+ *  sport on this chassis. */
+function stripItem(page: Page, id: string) {
+  return pad(page).locator(`[data-role="v3-scorebug"] [data-strip-item-id="${id}"]`);
+}
+
 async function sendHeldNow(page: Page): Promise<void> {
-  await pad(page)
-    .locator('[data-role="v3-dock"]')
-    .getByRole("button", { name: "Send now", exact: true })
-    .click();
+  await v3Dock(page).getByRole("button", { name: "Send now", exact: true }).click();
 }
 
 /** One half of the v3 scorebug, home first — the visible score, which is what
@@ -421,19 +432,34 @@ test("period skin (icehockey): a goal and a period advance", async ({ page, requ
   });
   await openLiveConsole(page, fx);
 
-  const scoreField = pad(page).locator('[data-role="header-score"]');
-  const periodField = pad(page).locator('[data-role="header-period"]');
-  await expect(scoreField).toContainText("0 – 0");
-  await expect(periodField).toContainText("P1");
+  // R6 cutover — hockey/icehockey moved onto the v3 chassis (period-
+  // shared.ts), so the v2 header fields this test used to read
+  // (`header-score`/`header-period`) no longer render for either sport. v3
+  // renders the score as two separate scorebug halves and the period as a
+  // strip item (`buildScorebug`), same idiom this file's own football/
+  // tennis/volleyball v3 ports already established above.
+  await expect(scorebugHalf(page, 0), "the home half must open on zero").toContainText("0");
+  await expect(scorebugHalf(page, 1), "the away half must open on zero").toContainText("0");
+  await expect(stripItem(page, "period"), "ice hockey opens on its first period").toContainText("P1");
 
-  await pad(page).getByRole("button", { name: "Goal", exact: true }).click();
-  // NOT `{ exact: true }` — a <select>'s computed accessible name concatenates
-  // its caption with every option's text, unlike a plain <input>'s label.
-  const kindSelect = pad(page).getByLabel("Kind");
-  await expect(kindSelect).toBeVisible();
-  await kindSelect.selectOption({ label: "Fg" });
-  await pad(page).locator(`[data-value="${fx.homeEntrantId}"]`).click();
-  await pad(page).locator('[data-role="confirm"]').click();
+  // R6 — v3: a goal COMMITS ON THE TAP (period-shared.ts's own
+  // `buildTiles`); there is no Confirm control and no attribution step
+  // before the event dispatches. The v2 "Kind" select this test used to
+  // drive is now a Detail Dock chip offered AFTER the tap — and "Fg" (the
+  // value this test used to pick) is deliberately given NO chip at all: it
+  // is the kind that needs no enrichment (`buildDock`'s own comment,
+  // period-shared.ts: "`fg` is the default and needs no chip"). "Power
+  // play" is the closest live equivalent — an explicit, non-default kind a
+  // scorer actually has to pick — which proves the SAME underlying wiring
+  // ("a chosen kind reaches the submitted payload") the original selection
+  // did, just off a kind the dock can actually offer.
+  await v3Tile(page, "goal-home").click();
+  const dock = v3Dock(page);
+  await expect(dock, "a goal always opens the Detail Dock (buildDock's e.goal case)").toBeVisible({
+    timeout: 10_000,
+  });
+  await dock.getByRole("button", { name: "Power play", exact: true }).click();
+  await sendHeldNow(page);
   await expect
     .poll(
       async () => (await ledger(request, fx.fixtureId)).filter((e) => e.type === "icehockey.goal").length,
@@ -441,9 +467,9 @@ test("period skin (icehockey): a goal and a period advance", async ({ page, requ
     )
     .toBe(1);
 
-  await pad(page).getByRole("button", { name: "Advance period", exact: true }).click();
-  await pad(page).locator("select").selectOption("P2");
-  await pad(page).locator('[data-role="confirm"]').click();
+  // THE WHISTLE — one tap, no picker: `buildTiles` already knows the next
+  // period label, unlike the v2 generic form's own `<select>`.
+  await v3Tile(page, "advance").click();
   await expect
     .poll(
       async () => (await ledger(request, fx.fixtureId)).filter((e) => e.type === "icehockey.period.advance").length,
@@ -451,10 +477,12 @@ test("period skin (icehockey): a goal and a period advance", async ({ page, requ
     )
     .toBe(1);
 
-  await expect(scoreField).toContainText("1 – 0");
-  await expect(periodField).toContainText("P2");
-  // S13/#422 W11 cutover — period's own scan (pad-renderer.tsx's own dark
-  // header, plus this file's own header/attribution/discipline chrome —
+  await expect(scorebugHalf(page, 0), "the goal must reach the visible score").toContainText("1");
+  await expect(stripItem(page, "period"), "the board must repoint onto the period it just advanced to").toContainText(
+    "P2",
+  );
+  // S13/#422 W11 cutover — period's own scan (the v3 chassis's own
+  // Scorebug/TileGrid/DetailDock, not period-skin.tsx's v2 dark header —
   // the icehockey e2e in v6-sports.spec.ts scans a DIFFERENT icehockey
   // fixture reaching the suspension flow, not this goal-scoring one, so
   // this is genuinely additional coverage, not a duplicate scan).
@@ -462,7 +490,7 @@ test("period skin (icehockey): a goal and a period advance", async ({ page, requ
   await expectNoHorizontalScroll(page);
 
   const goal = (await ledger(request, fx.fixtureId)).find((e) => e.type === "icehockey.goal")!;
-  expect(goal.payload).toMatchObject({ by: fx.homeEntrantId, kind: "fg" });
+  expect(goal.payload).toMatchObject({ by: fx.homeEntrantId, kind: "pp" });
 });
 
 // ---------------------------------------------------------------------------
@@ -612,29 +640,49 @@ test("period skin (icehockey): a suspension with a reason selected (PeriodSuspen
 
   const offender = fx.personIds[`Skins IH Offender ${TAG}`]!;
 
-  // The accessible name "Card" is ambiguous inside the pad, and permanently so:
-  // fidelity band 1 IS named "card" (`FIDELITY[1]`), so the band strip renders a
-  // "Card" button beside this action's own. Band buttons carry `data-band`;
-  // action buttons do not, which is the only stable discriminator between them.
-  await pad(page)
-    .getByRole("button", { name: "Card", exact: true })
-    .and(pad(page).locator("button:not([data-band])"))
-    .click();
-  await pad(page).getByLabel("Class").selectOption("minor");
-  await pad(page).getByLabel("Reason").selectOption("tripping");
-  await pad(page).getByLabel("Minutes", { exact: true }).fill("2");
-  await pad(page).locator(`[data-value="${fx.homeEntrantId}"]`).click();
-  // "person" and "servedBy" are both kind:"person" items reading the SAME
-  // full-squad pool (period-skin.tsx applies no side/role narrowing to
-  // either — see renderAttributionItem), so the offender's name renders
-  // TWICE — same disambiguation scorepad-v2.spec.ts's own scorer/assist flow
-  // already established: nth(0) is always the FIRST-declared attribution
-  // item in DOM order (period/kernel.ts's own `suspensionStartAction.
-  // attribution`: by, person, servedBy), i.e. "person", never "servedBy".
-  const offenderBtn = pad(page).getByRole("button", { name: `Skins IH Offender ${TAG}`, exact: true });
-  await expect(offenderBtn).toHaveCount(2);
-  await offenderBtn.nth(0).click();
-  await pad(page).locator('[data-role="confirm"]').click();
+  // R6 cutover — v3 has no interactive band picker at all (pad-host.tsx's
+  // own `PadHostV3Props` doc: `RecordingChip` replaces it with a worded
+  // display/upsell, never an editable control), so the v2 "Card" button's
+  // ambiguity with the fidelity band strip's own same-named button does not
+  // exist here: the suspension is a per-side TILE, addressed by
+  // `data-tile-id`, never by accessible name. class/reason/minutes/servedBy
+  // are all steps of ONE guided sheet (`suspensionSheet`, period-shared.ts).
+  await v3Tile(page, "suspension-home").click();
+  const sheet = v3Sheet(page);
+  await expect(sheet, "the suspension tile must open the guided sheet").toBeVisible({ timeout: 10_000 });
+  await sheet.locator('[data-choice-option-id="minor"]').click();
+  await expect(
+    sheet.locator('[data-choice-option-id="tripping"]'),
+    "the reason step must follow the class step",
+  ).toBeVisible({ timeout: 10_000 });
+  await sheet.locator('[data-choice-option-id="tripping"]').click();
+
+  const minutesField = sheet.getByLabel("Minutes", { exact: true });
+  await expect(minutesField, "the minutes step must follow the reason step").toBeVisible({ timeout: 10_000 });
+  await minutesField.fill("2");
+  await sheet.getByRole("button", { name: "Confirm", exact: true }).click();
+
+  // servedBy — R6/S7 (#427), additive on v3, and distinct from the DOCK's
+  // own "person" chip below (`suspensionSheet`'s own comment: "person, the
+  // offender, stays on the DOCK … this step is additive, not a replacement
+  // for it"). This fixture has only one home player, so servedBy and
+  // person end up naming the same offender — same disambiguation this
+  // file's own prior v2 version already established for the two attribution
+  // fields sharing one full-squad pool.
+  const servedByCandidate = sheet.locator(`[data-candidate-id="${offender}"]`);
+  await expect(servedByCandidate, "the servedBy step must follow minutes").toBeVisible({ timeout: 10_000 });
+  await servedByCandidate.click();
+  await expect(sheet, "the sheet must close once servedBy is answered").toHaveCount(0, { timeout: 20_000 });
+
+  // person — the offender, now a Detail Dock chip (`buildDock`'s
+  // `e.suspStart` case) rather than a second attribution field on the same
+  // form.
+  const dock = v3Dock(page);
+  await expect(dock, "a suspension always opens the Detail Dock (buildDock's e.suspStart case)").toBeVisible({
+    timeout: 10_000,
+  });
+  await dock.getByRole("button", { name: `Skins IH Offender ${TAG}`, exact: true }).click();
+  await sendHeldNow(page);
 
   await expect
     .poll(
@@ -650,6 +698,7 @@ test("period skin (icehockey): a suspension with a reason selected (PeriodSuspen
     class: "minor",
     reason: "tripping",
     person: offender,
+    servedBy: offender,
     minutes: 2,
   });
   await expectNoHorizontalScroll(page);
