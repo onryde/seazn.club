@@ -41,7 +41,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { EventEnvelope, LineupPair, SquadState } from "@seazn/engine/core";
 import { CORE_EVENT_SCHEMAS, initSquads, isCoreEventType } from "@seazn/engine/core";
 import type { AnySportModule, FidelityBand, PadSpec } from "@seazn/engine/sport";
-import { useMsg } from "@/components/i18n/dict-provider";
+import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
 import { type MsgFn } from "@/lib/scoring-vocab";
 import { refusalText } from "../refusal-copy";
@@ -1066,6 +1066,11 @@ export function PadHostV3(props: PadHostV3Props) {
   // is not itself assignable where the wider TFn is expected, so this is a
   // real (and safe) widening, not a formality.
   const t: TFn = useCallback((key: string, vars?: Record<string, string | number>) => msg(key as MessageKey, vars), [msg]);
+  // Plural selection needs a count AND the locale, neither of which `t` or a
+  // skin factory carries — see `ActivityDetailContext.plural`'s own doc.
+  // Resolved HERE, from the same provider `useMsg` reads, so a skin never
+  // reaches for a locale itself.
+  const pluralMsg = useMsgPlural();
 
   const pipeline = usePadPipeline({
     fixtureId: props.fixtureId,
@@ -1493,6 +1498,7 @@ export function PadHostV3(props: PadHostV3Props) {
         ? (eventType, payload, history) =>
             props.skin.activityDetail!({
               t,
+              plural: pluralMsg,
               eventType,
               payload,
               history,
@@ -1506,7 +1512,7 @@ export function PadHostV3(props: PadHostV3Props) {
               personNames,
             })
         : undefined,
-    [props.skin, t, view.cfg, view.state, personNames],
+    [props.skin, t, pluralMsg, view.cfg, view.state, personNames],
   );
 
   const ribbon = buildTopRibbon(activityEvents, (id) => personNames[id] ?? id, t, resolveDetail);

@@ -930,6 +930,17 @@ export interface ActivityDetailContext {
   /** Interpolating message lookup — same shape every other v3 chassis
    *  renderer's own `t` prop takes. */
   t: (key: string, vars?: Record<string, string | number>) => string;
+  /** Plural-aware lookup for the SAME dictionary `t` reads, selecting
+   *  `<key>.one` / `<key>.other` through `Intl.PluralRules` for the viewer's
+   *  own locale (`usePlural`, dict-provider.tsx). OPTIONAL because a skin's
+   *  `activityDetail` is also called from harnesses that build this context
+   *  by hand; a skin that needs a plural falls back to the `.other` form,
+   *  which is the correct English reading for every count but one.
+   *
+   *  A skin cannot do this for itself: `t` takes no count and the skin
+   *  factory receives no locale, so "1 pts" was unfixable inside the skin —
+   *  R7-28, found by reading a real 320 capture rather than a test. */
+  plural?: (key: string, count: number, vars?: Record<string, string | number>) => string;
   /** The event's own type, e.g. `"cricket.ball"`. */
   eventType: string;
   /** The event's own payload. */

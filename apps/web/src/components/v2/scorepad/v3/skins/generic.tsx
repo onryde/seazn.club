@@ -366,7 +366,15 @@ function buildStrip(view: PadHostView, state: GenericStateShape, t: TFn): StripI
   return [
     {
       id: "margin",
-      value: t("pad.generic.scorebug.strip.lead", { name: whoNames(view, leader, t).join(" / "), by }),
+      // R7-28: this interpolated the leader's FULL entrant name, which the
+      // half directly above it already carries — a third rendering of the same
+      // name on one tile (page header, half, strip), and at 320 with a real
+      // club name it wrapped the strip onto two more lines. The SIDE label is
+      // what this sentence actually needs: it names which half leads in one
+      // short word, and the half's own name answers "who is that". Contradicted
+      // this function's own opening line until now: the strip is supposed to
+      // say only what the two numbers cannot, and a name is not that.
+      value: t("pad.generic.scorebug.strip.lead", { name: t(SIDE_LABEL[leader]), by }),
     },
   ];
 }
@@ -763,9 +771,17 @@ export function genericDetail(ctx: ActivityDetailContext): string | undefined {
       // row is never nameless. The signed amount carries a correction's own
       // meaning without a second key: "-2 pts" needs no further explanation.
       const who = named(payload.person) ?? sideLabel(payload.by);
+      // R7-28: this read "1 pts" on every single-point tap — the commonest row
+      // the pad writes, and the first thing a real 320 capture showed. The
+      // count is what selects the form, so it goes through `plural` (which
+      // carries the viewer's locale); `.other` is the fallback for a harness
+      // that builds this context without one, and is correct for every count
+      // but the singular. The ABSOLUTE value selects: a correction of -1 is
+      // still one point, and "-1 pts" is the same defect with a sign on it.
       const amount =
         typeof payload.points === "number"
-          ? t("pad.generic.ribbon.points", { points: payload.points })
+          ? (ctx.plural?.("pad.generic.ribbon.points", Math.abs(payload.points), { points: payload.points }) ??
+            t("pad.generic.ribbon.points.other", { points: payload.points }))
           : undefined;
       return join([who, amount]);
     }

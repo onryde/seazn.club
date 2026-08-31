@@ -306,10 +306,14 @@ describe("buildScorebug — the strip says only what the two numbers cannot", ()
     expect(buildScorebug(v, t).strip).toEqual([]);
   });
 
-  it("words the lead, naming the leader", () => {
+  it("words the lead by SIDE, never by repeating the leader's name", () => {
+    // R7-28: this interpolated the full entrant name, which the half directly
+    // above already carries — a third rendering of one name on a single tile,
+    // and at 320 it wrapped the strip onto two further lines. Pinning the SIDE
+    // key here is what stops the long name coming back.
     const v = view({ events: stream(point("H"), point("H", 2), point("A")) });
     expect(buildScorebug(v, t).strip).toEqual([
-      { id: "margin", value: 'pad.generic.scorebug.strip.lead({"name":"Hana Otieno","by":2})' },
+      { id: "margin", value: 'pad.generic.scorebug.strip.lead({"name":"scorepad.attribution.home","by":2})' },
     ]);
   });
 
@@ -695,20 +699,50 @@ describe("buildDock", () => {
 // activityDetail() — the ribbon's varying half
 // ---------------------------------------------------------------------------
 
+/** Mirrors `Intl.PluralRules` for English — `.one` at exactly 1, `.other`
+ *  everywhere else — so a test can see WHICH form the skin selected rather
+ *  than only that it called a key. */
+const pluralStub = (key: string, count: number, vars?: Record<string, string | number>): string =>
+  `${key}.${count === 1 ? "one" : "other"}(${JSON.stringify(vars)})`;
+
 function detail(v: PadHostView, eventType: string, payload: Record<string, unknown>): string | undefined {
+  return genericDetail({ t, plural: pluralStub, eventType, payload, state: v.state, personNames: NAMES });
+}
+
+/** The same call with NO `plural` — the shape a harness that builds the
+ *  context by hand produces, and the fallback path the skin documents. */
+function detailWithoutPlural(v: PadHostView, eventType: string, payload: Record<string, unknown>): string | undefined {
   return genericDetail({ t, eventType, payload, state: v.state, personNames: NAMES });
 }
 
 describe("genericDetail", () => {
   it("names the person and the amount for a tallied point", () => {
     expect(detail(view(), SCORE_TYPE, { by: "H", points: 3, person: "H1" })).toBe(
-      'Hana Otieno · pad.generic.ribbon.points({"points":3})',
+      'Hana Otieno · pad.generic.ribbon.points.other({"points":3})',
     );
   });
 
   it("falls back to the SIDE when nobody was attributed — never an empty row", () => {
     expect(detail(view(), SCORE_TYPE, { by: "A", points: 1 })).toBe(
-      'scorepad.attribution.away · pad.generic.ribbon.points({"points":1})',
+      'scorepad.attribution.away · pad.generic.ribbon.points.one({"points":1})',
+    );
+  });
+
+  it("selects the SINGULAR at exactly one point — the commonest row the pad writes", () => {
+    // R7-28, found on a real 320 capture: every single-point tap read
+    // "1 pts". The count, not the key, is what has to choose.
+    expect(detail(view(), SCORE_TYPE, { by: "H", points: 1, person: "H1" })).toContain(".one(");
+    expect(detail(view(), SCORE_TYPE, { by: "H", points: 2, person: "H1" })).toContain(".other(");
+  });
+
+  it("selects on the ABSOLUTE amount, so a correction of one point is not '-1 pts'", () => {
+    expect(detail(view(), SCORE_TYPE, { by: "H", points: -1, person: "H1" })).toContain(".one(");
+    expect(detail(view(), SCORE_TYPE, { by: "H", points: -3, person: "H1" })).toContain(".other(");
+  });
+
+  it("falls back to the plural form when the context carries no plural at all", () => {
+    expect(detailWithoutPlural(view(), SCORE_TYPE, { by: "H", points: 1, person: "H1" })).toBe(
+      'Hana Otieno · pad.generic.ribbon.points.other({"points":1})',
     );
   });
 

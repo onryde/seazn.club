@@ -81,6 +81,29 @@ export function useDict(): Dict {
   return ctx?.dict ?? messages;
 }
 
+/** `usePlural`'s non-throwing sibling, and the exact counterpart of `useMsg`
+ *  above: outside a DictProvider it falls back to the English catalog and the
+ *  default locale rather than throwing.
+ *
+ *  R7-28 — added when the v3 pad host needed plural selection for a skin's
+ *  activity detail ("1 pt" vs "1 pts"). `usePlural` throws bare, and this
+ *  repo renders pad islands with no provider in component tests, so reaching
+ *  for it there reddened 16 tests in three unrelated files that had nothing
+ *  to do with plurals. Same reasoning `useLocaleOrDefault`/`useDict`/`useMsg`
+ *  already document: use the throwing `usePlural` where a silent English
+ *  fallback would be a bug, and this where the island must survive a bare
+ *  render. */
+export function useMsgPlural(): (key: string, count: number, vars?: Record<string, string | number>) => string {
+  const ctx = useContext(DictContext);
+  const dict = ctx?.dict ?? messages;
+  const locale = ctx?.locale ?? DEFAULT_LOCALE;
+  return useMemo(
+    () => (key: string, count: number, vars?: Record<string, string | number>) =>
+      pluralRuntime(dict, key, count, locale, vars),
+    [dict, locale],
+  );
+}
+
 /** Typed drop-in for the `ui` copy catalog: a console island replaces
  *  `import { msg } from "@/lib/messages"` + `msg("k")` with
  *  `const msg = useMsg()` + `msg("k")` and gets the active locale (the /o layout
