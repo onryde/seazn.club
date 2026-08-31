@@ -4615,3 +4615,37 @@ already says these rows are unreachable rather than pretending otherwise.
 
 **Do not read this as "period-skin is load-bearing".** It is not. It is kept
 for symmetry with three siblings, and the moment those go, it goes with them.
+
+### R6 seven-width e2e — RUN, and what the first run's 7 reds actually were
+
+`--project=mobile-se|mobile-14|mobile-320|mobile-360|mobile-430|tablet-768|tablet-834`
+against the prod build on :3356, after W-1/W-3/W-4 and the branch-review fixes.
+
+**Result: 201 passed, 4 skipped, 1 failed — and the 1 is a known pre-existing
+race, not this wave.** `dual-role header (#516)` on `mobile-360` died on
+`duplicate key … persons_org_user_lane_uq`; the same test PASSED on the other
+six widths, and passes **alone in 7.1s**. The constraint is from V348/V356,
+long predating R6 and the rebase. This is the shared-org race the matrix has
+hit before: seven projects claim a player profile for the same org+user
+concurrently and one loses.
+
+**THE TRAP THIS RUN PAID FOR — read this before debugging any e2e red after a
+rebase.** The FIRST run came back **7 failed**, one per width, all on the same
+`setup: public competition with an entrant-ready division`, all
+`expect(settings.status).toBeLessThan(300)` receiving **500**. It looks
+exactly like a responsive regression in whatever the wave just touched — and
+this wave had just crowded a two-button row into four at 320px, the single
+most plausible suspect. It was neither.
+
+The server log gave the real cause in one line:
+`column "free_agent_fee_cents" of relation "registration_settings" does not
+exist`. RS009 added that column in **V388**; the rebase brought the CODE that
+reads it, while the label's database sat at **387**. `db:apply` moved it to
+388 and six of the seven reds vanished.
+
+**Rule: a rebase onto a moved `main` can desynchronise code and schema even
+when the rebase is clean and touches none of YOUR migrations — because the
+migration belongs to somebody else.** Nothing warns. After any rebase, run
+`db:apply` against the label's DB before believing an e2e red. And read
+`/tmp/seazn-env/<label>/server.log` for a 500 before reading the assertion:
+the assertion says "500", the log says why.
