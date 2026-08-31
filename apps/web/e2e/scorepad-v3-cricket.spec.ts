@@ -552,7 +552,7 @@ test(
   "cricket v3: the over-by-over tile posts a partial summary, updates the pad and the ribbon with real " +
     "copy, APPENDS a second over's runs/wickets onto the fold, and hides the ball tiles once the innings is coarse",
   async ({ page }) => {
-    // TWO real held dispatches now (queue.ts HOLD_MS = 6000ms each) — the
+    // TWO real held dispatches now (queue.ts's HOLD_MS each) — the
     // second over was added when Q2 was reversed, because an append is
     // unprovable from a single entry against an empty fold. Plus
     // openLiveConsole's own two 20s-ceiling polls, two 20s ledger polls, and

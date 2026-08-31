@@ -78,7 +78,7 @@ async function postEvent(
   }
 }
 
-/** The v3 pad soft-commits: a tap sits in the dock for HOLD_MS (6s) before it
+/** The v3 pad soft-commits: a tap sits in the dock for HOLD_MS before it
  *  reaches the ledger (spec §2.3). Every hand-driven tap here flushes through
  *  the dock's own "Send now" rather than sleeping — waiting out the hold would
  *  add a minute per test and would still be a race. */

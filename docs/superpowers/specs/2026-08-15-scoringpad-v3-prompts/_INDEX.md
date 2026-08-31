@@ -4588,6 +4588,63 @@ side"), so raising the window later needs no re-baseline while dropping back
 below a roster scan goes red. Two tests also carried literal advances tied to
 the old 6000 and are now expressed in the symbol.
 
+### R6-11 — `HOLD_MS` is env-overridable for e2e ONLY, and the floor moved with it (owner-ruled 2026-08-31)
+
+R6-9's chassis-wide 6s -> 12s had a consequence nobody costed at the time: the
+v3 pad soft-commits **every** tap, so a walkthrough spec that polls the ledger
+waits out a full window per tap. Badminton taps sixteen rallies, table tennis
+twenty-one. Doubling the window pushed both past their flat `test.setTimeout(180_000)`,
+and they went red on `main` in run 33421617731 — badminton on its fifteenth tap.
+
+**The failure did not look like a timing failure.** Playwright reported
+`Expected: 15 / Received: 14` from the `expect.poll` that happened to be in
+flight when the test clock expired, with the timeout printed as a separate
+line. Read quickly, that is a scoring defect: the ledger is short a rally. It
+is not — the poll's own 20s budget was never exceeded, and 12s fits inside it.
+One event, two error lines, and the misleading one comes first.
+
+**Owner ruling: make the window configurable — ~3s in e2e, 12s live.**
+Implemented as `NEXT_PUBLIC_SCOREPAD_HOLD_MS`, with three constraints that are
+the whole reason this is safe rather than a mask:
+
+1. **The floor test moved to `HOLD_MS_DEFAULT`, not `HOLD_MS`.** R6-9's
+   `>= 10_000` guard is a statement about what SHIPS. Left on the live
+   constant it would have failed in the one process where the short window is
+   correct, and the obvious repair — delete the floor — would have thrown away
+   the guard R6-9 was written to install.
+2. **Every spec-side wait derives from `HOLD_MS`, never a literal.** Both
+   walkthrough timeouts are now `Math.max(180_000, 60_000 + taps * (HOLD_MS + 2_000))`,
+   so they hold at 3s in CI and at the shipped 12s locally. One live literal
+   was found and fixed in the same pass: `gallery.capture.ts`'s `timeout: 4_000`,
+   commented "under HOLD_MS", was under the window at 6s and at 12s and would
+   have sat ABOVE it at 3s — reporting "the dock closed" as "the button was
+   missing".
+3. **The env read is spelled out literally** (`process.env.NEXT_PUBLIC_SCOREPAD_HOLD_MS`),
+   because Next substitutes that TEXT at build time. A dynamic read
+   (`process.env[HOLD_MS_ENV_VAR]`) compiles to `undefined` in the client
+   bundle, so the pad would hold for 12s while the Node-side specs shortened
+   their waits to 3s — every spec still passing, purely by racing. TypeScript
+   cannot see that, so `soft-commit.test.ts` reads `queue.ts` as text and
+   requires the literal member expression.
+
+Set at **job level** in `e2e.yml` (all three jobs), not on the build step, so
+one value reaches both the production build and the Playwright runner.
+`resolveHoldMs` falls back to the shipped 12s for anything unusable — blank,
+non-numeric, or below 500ms — so a typo'd CI variable makes the leg slower
+rather than turning the hold off everywhere silently.
+
+The standing cost, stated rather than buried: **e2e no longer exercises the
+shipped window.** What still does is the floor test on the default, the
+derived local run, and R6-9's own asymmetry argument. This is a deliberate
+trade, and the mitigation is that nothing in the e2e tree names a hold
+duration in absolute terms any more.
+
+Verified, not assumed: a real standalone prod build with the var baked in,
+served on :3382, ran both walkthroughs green in **2.0m** for the pair. At 12s
+badminton's holds alone are 16 x 13s = 208s, so that wall time is only
+reachable if the substitution took in the CLIENT bundle — the run is the proof
+the knob is wired, not just the unit test.
+
 ### R6-10 — the v2 `period-skin.tsx` demolition is DEFERRED, not forgotten (2026-08-31)
 
 R6 owed a decision on demolishing `components/v2/scorepad/skins/period-skin.tsx`.

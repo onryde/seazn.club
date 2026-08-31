@@ -124,7 +124,7 @@ async function expectPadAxeClean(page: Page): Promise<void> {
  * `sendHeldNow` taps the Detail Dock's own dismiss control (`pad.dock.dismiss`
  * — "Send now": detail-dock.tsx's `dismiss()` is an IMMEDIATE FLUSH, never a
  * cancel), so a test that only needs its event ON THE LEDGER does not wait out
- * the full `HOLD_MS` = 6000ms soft-commit window. Same helper, same reasoning
+ * the full `HOLD_MS` soft-commit window. Same helper, same reasoning
  * as scorepad-v3-cricket.spec.ts's own. It is only available for an event
  * whose skin declares a dock — football's goal and card do, its substitution
  * does not (`buildDock` returns null, so `DetailDock` renders nothing and

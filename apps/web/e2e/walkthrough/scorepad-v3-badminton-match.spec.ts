@@ -30,6 +30,7 @@ import {
   TAG,
   type RosteredFixture,
 } from "../helpers";
+import { HOLD_MS } from "../../src/components/v2/scorepad/queue";
 
 test.describe.configure({ mode: "parallel" });
 
@@ -117,7 +118,18 @@ async function winGame(page: Page, fx: RosteredFixture, side: "home" | "away"): 
 test("R5 — badminton: tap a match through a game boundary to a decided result, and Law 8.1 names the game's winner as the next game's server", async ({
   page,
 }) => {
-  test.setTimeout(180_000);
+  // DERIVED from HOLD_MS, never a flat literal. Every tap here soft-commits:
+  // the event enters the queue at once but is not SENT for a full hold
+  // window, and `tapRally` polls the ledger for it before the next tap — so
+  // this spec's wall time is dominated by HOLD_MS x taps (16 of them).
+  //
+  // A flat 180_000 was the bug: it fit at the old 6s window, and the moment
+  // the shipped window moved to 12s (16 x ~13s) this spec ran out of clock
+  // on its second-to-last tap and reported it as a ledger-count mismatch —
+  // a timing budget failing in the costume of a scoring defect. e2e runs the
+  // pad at a shortened window now, but a LOCAL run uses the shipped one, and
+  // this expression has to hold for both.
+  test.setTimeout(Math.max(180_000, 60_000 + 16 * (HOLD_MS + 2_000)));
   shotNo = 0;
   lastSide = null;
 

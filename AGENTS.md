@@ -200,6 +200,27 @@ shipped at least twice, and the first four shipped **past a green suite**.
     right answer differs from the wrong one's constant, or the test cannot
     witness the regression it exists for.
 
+20. **A blown test budget reports itself as a DATA defect.** When a Playwright
+    test hits `test.setTimeout`, the runner prints the `expect.poll` that
+    happened to be in flight — so a walkthrough that ran out of clock on its
+    fifteenth tap reported `Expected: 15 / Received: 14`, "the ledger is short
+    a rally", above the timeout line. Two error lines, one event, and the
+    misleading one comes first. Before chasing a count mismatch, check whether
+    the poll's OWN timeout was actually exceeded; if it was not, the failure is
+    the wall clock, not the data.
+
+    The cause here was a per-tap wait nobody had costed: the v3 pad
+    soft-commits, so every tap waits out `HOLD_MS` before the ledger can be
+    polled, and doubling that constant multiplied by sixteen taps. **A flat
+    timeout beside a derived cost is a latent red** — express the budget in the
+    constant (`Math.max(FLOOR, base + taps * (HOLD_MS + slack))`), so moving
+    the constant moves the budget with it.
+
+    And when a constant is made environment-tunable so tests can run it short,
+    the guard that pins its VALUE has to move to the default, not follow the
+    live value — otherwise it fails in exactly the process where the short
+    value is correct, and the obvious repair is to delete the guard.
+
 ## Standing project rules
 
 - **Read `docs/superpowers/RULES.md` first.** Owner's full standing

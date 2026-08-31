@@ -15,6 +15,7 @@ import {
   setDivisionConfigSql,
 } from "./helpers";
 import { CONSENT_KEY, CONSENT_VERSION_KEY, COOKIE_POLICY_VERSION } from "../src/lib/consent";
+import { HOLD_MS } from "../src/components/v2/scorepad/queue";
 
 // ScoringPad v3 R1 Task 10 — the productized gallery capture harness.
 //
@@ -529,7 +530,7 @@ interface GallerySport {
    * form: once opened they cannot close on their own, so their `04-dock`
    * capture has nothing to race and the shared fold probe is the honest
    * assertion for them. FOOTBALL is the first sport whose dock is a TIMED
-   * surface — the v3 Detail Dock closes itself `HOLD_MS` (6s) after the tap
+   * surface — the v3 Detail Dock closes itself `HOLD_MS` after the tap
    * that opened it — so a slow capture could otherwise photograph three
    * different things and record none of the difference. A sport declaring this
    * is saying "my dock can vanish; fail the capture rather than keep it".
@@ -2060,7 +2061,7 @@ const SPORTS: GallerySport[] = [
       ).toBeVisible({ timeout: 10_000 });
       return true;
     },
-    // v3's Detail Dock is a TIMED surface (closes itself HOLD_MS=6s after
+    // v3's Detail Dock is a TIMED surface (closes itself HOLD_MS after
     // the tap that opened it) — same risk football's own dock carries, and
     // the same fix: fail the capture rather than silently keep a `04-dock`
     // photograph of a dock that already closed under a slow run.
@@ -2153,7 +2154,14 @@ const SPORTS: GallerySport[] = [
       await expect(
         tbDock.getByRole("button", { name: "Ace", exact: true }),
         "gallery(tennis): away served AND won this tie-break point, so Ace must be offered",
-      ).toBeVisible({ timeout: 4_000 }); // under HOLD_MS, so a miss is diagnosed with the dock still up
+      // Derived from HOLD_MS, never a literal: this wait exists to stay UNDER
+      // the hold window, so a miss is diagnosed with the dock still on screen
+      // rather than after it has auto-flushed. It was a flat `4_000`, which
+      // was under the window at 6s, still under it at the shipped 12s, and
+      // ABOVE it the moment e2e started running the pad at 3s — at which
+      // point the assertion would have been reporting "the dock closed",
+      // dressed up as "the button was missing".
+      ).toBeVisible({ timeout: Math.max(1_000, HOLD_MS - 2_000) });
       await expect(
         tbDock.getByRole("button", { name: "Double fault", exact: true }),
         "gallery(tennis): offering Double fault here is the inverted-serve defect itself",

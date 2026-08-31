@@ -1041,7 +1041,7 @@ test("cricket v3 pad: tiles + over-summary sheet + context strip hold the 44px f
   page,
   request,
 }) => {
-  // core.start poll + a held ball dispatch (queue.ts's HOLD_MS = 6000ms)
+  // core.start poll + a held ball dispatch (queue.ts's HOLD_MS)
   // each budget up to 20s below; generous headroom over their sum.
   test.setTimeout(90_000);
   const fx = await seedRosteredFixture(request, {
