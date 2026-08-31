@@ -42,7 +42,7 @@ prompts dir) also writes — those two are **sequential, never parallel**.
 | RS007 | `RS007-status-page-join-payments.md` | RS006 | **DONE** — merged (PR #677 `a6fca57f2` + PR #680 `2b743185e`, 2026-08-30). Table was stale here; see git log. |
 | RS008 | `RS008-consent-claim-optout.md` (superseded by an inline brief, 2026-08-30 — that file's premises were checked against shipped code and found stale) | RS007 | **PR #682 updated** — branch `feat/rs008-consent-claim-optout`, 25 commits on `origin/main` (`e23dcf241`, unchanged merge-base — branch not rebased): the original 11 (A/B1-4/C1-3/#24), a review-fixes wave closing findings #1–#10, then a second `/code-review --high` pass closing 2 more (youth-axis gap in `previewJoinEntry`'s unclaimed-slot masking; `anyOptedOutByRegistration` dedupe). See closing notes below. |
 | RS009 | `RS009-free-agents.md` | RS005, RS003 | **DONE** — merged `165628cce` (PR #683, 2026-08-30); hotfix `15b76f755` (PR #685, 2026-08-31, solo sign-up expanded-detail label). |
-| RS011 | `RS011-organiser-eligibility-gates.md` | RS002 | **IN FLIGHT** — issue #412, re-homed from `L1`; scope cut (jsonb typing dead, see kickoff section) |
+| RS011 | `RS011-organiser-eligibility-gates.md` | RS002 | **IMPLEMENTED, awaiting review** — branch `feat/rs011-organiser-eligibility-gates`, 2 commits, not yet merged/PR'd (session ended per dispatch: "I'll run the review loop"). Closes #412 (re-homed from `L1`, now `L1` → DONE-VIA-RS011) and #407 WS1. See closing notes below |
 | RS010 | `RS010-closeout-e2e-smoke-help.md` | all | TODO |
 | RS012 | `RS012-solo-signup-pool-promises.md` | RS009 | TODO — scoped 2026-08-30 from what RS009 exposed. **Both owner rulings taken 2026-08-31** and written into the prompt: capacity counts TEAM ENTRIES with a derived pool bound; unplaced solo sign-ups are auto-refunded and withdrawn at the place-by date |
 
@@ -4369,3 +4369,126 @@ brief premises are stale enough to change scope, not just line numbers.
    → over-age add → dialog → blocked with no reason → override succeeds →
    audit row visible; plus one warning-only path (`setTeamSquad` or missing
    dob) proving it never hard-blocks.
+
+## RS011 closing notes — implementation session, 2026-09-01
+
+**IMPLEMENTED, awaiting review.** Branch `feat/rs011-organiser-eligibility-gates`,
+2 commits, not pushed/PR'd (dispatch: "I'll run the review loop"). Not merged.
+
+**The 7 gate points, as actually wired** (one physical `gateRosterEligibility`
+call in `entrants.ts`'s `insertMembers` covers 4 of the brief's list, since
+`createEntrants`/`patchEntrant`/`syncEntrantRosterFromSquad` all route their
+final resolved roster through it — this is a design choice, not a shortfall:
+one shared gate call beats four duplicate ones):
+
+- `insertMembers` (`entrants.ts:155`) — covers `createEntrants` (copy_roster +
+  squad-seed too), `patchEntrant`'s members-replace, and
+  `syncEntrantRosterFromSquad`.
+- `setTeamSquad` (`teams.ts:212`) — calls `rosterIssues` directly (not
+  `gateRosterEligibility`): division-agnostic (a squad has no division of its
+  own), returns `eligibility_warnings: {division_id, issues}[]` per enrolled
+  division, **never throws**, however severe the issue (a real
+  `CATEGORY_MISMATCH` is DB-test-proven to save, not block).
+- `commitImport` (`imports.ts:158`) — resolves every `roster.add` candidate
+  from the plan's own ops (a pre-pass, no query races the writes), aggregates
+  violations across every division the import touches, and audits **once**
+  for the whole import regardless of division/person count.
+- `putLineup` (`fixtures.ts:178`).
+
+**Override audit shape**: `competition_events` row, `type:
+'eligibility.overridden'`, `payload: {context, division_id | division_ids,
+person_id(s), reason, violations, violation_count?}`, `actor_id: auth.userId`
+(nullable — API-key callers still audit, just with a null actor). Exactly one
+row per request, DB-test- and mutation-proven (disabling the dedup makes the
+`toHaveLength(1)` assertions fail).
+
+**Final evaluator signature** (`server/usecases/registration-eligibility.ts`):
+`gateRosterEligibility(tx, {divisionId, personIds, context, override, actorId})
+→ Promise<EligibilityIssue[]>` (the MISSING_DOB/MISSING_GENDER warnings).
+Internally: loads the division + persons, calls `rosterIssues` — the SAME
+function `registration-submit.ts` (registration path) and `teams.ts`/
+`imports.ts` (organiser path, direct) call — splits via the new
+`splitEligibilityIssues` (MISSING_DOB/MISSING_GENDER → warnings, everything
+else → violations), throws `HttpError(422, …, "ELIGIBILITY_VIOLATION",
+{violations, warnings})` with no override, audits-and-proceeds with one.
+
+**Deviations from the brief, with reasons:**
+
+- `audit()` moved to a NEW leaf module `server/usecases/audit.ts` (brief left
+  this "your call"). Reason: `registration-eligibility.ts`'s own header
+  declares it a LEAF specifically so `registrations.ts` (which imports
+  `ageAt`/`isMinor`/`requiresDob`/`requiresGender` from it) never cycles;
+  importing `audit` FROM `registrations.ts` the other way would have made
+  that cycle real. `registrations.ts` re-exports `audit` verbatim so its two
+  existing importers (`registration-approval.ts`, `registration-assign.ts`)
+  compile unchanged.
+- `requiresGender` moved from `registration-eligibility.ts` (server-only) to
+  `@/lib/registration-rules` (client-safe), alongside `ageAt`/`isMinor`/
+  `requiresDob` which made the same move at RS006 W1. Reason: the new amber
+  MISSING_GENDER chip in `entrants-panel.tsx` (a client component) needs the
+  identical predicate the server gate evaluates against; the function's own
+  OLD comment ("nothing client-side calls this directly") was already false
+  the moment this session needed it. Re-exported verbatim from
+  `registration-eligibility.ts` for compat — same "one evaluator, two halves"
+  shape the rest of that module already uses.
+- E2E coverage consolidated into the ONE walkthrough spec
+  (`rs011-eligibility-gates.spec.ts`) rather than also duplicating it into a
+  `parallel`-project spec — it already drives real taps at 1280/768/320 and
+  is dispatched on its own CI leg (`e2e.yml`'s `walkthrough` matrix group,
+  confirmed present). No separate lightweight e2e spec was added.
+- `planImport` (packages/engine) was NOT touched — the scout re-pin correctly
+  ruled this out of scope (`commitImport` is the one gate point with DB
+  access); pre-commit preview therefore shows no eligibility issues, only
+  the commit-time 422. Not a gap against the corrected scope.
+- `commitImport`'s eligibility check does NOT fold in `MIXED_NEEDS_BOTH_GENDERS`
+  (roster-wide composition) — only per-person `divisionEligibilityIssues`
+  (age/category). Folding composition in for an INCREMENTAL import would need
+  merging against the entrant's pre-existing roster to mean anything; left as
+  a documented scope cut in `imports.ts`'s own comment, not attempted.
+- Help page updated: `content/help/getting-started/add-entrants.md` gained an
+  "Eligibility checks" section describing the block/override/warning
+  behaviour (English-only, no i18n owed per the standing `content/help/**`
+  exception).
+
+**Verification, real numbers:**
+
+- Unit: `registration-eligibility.test.ts` + `registration-rules.test.ts` +
+  `entrants-panel-shapes.test.tsx` — 76/76.
+- DB integration: `entrants-eligibility.test.ts` — 15/15 (all 7 gate points,
+  override-audit-count, warning paths, `setTeamSquad` never-blocks, the
+  materialise regression). Two hand-mutations (disabling the gate; making
+  `commitImport` audit per-violation instead of once) both turned the
+  relevant assertions red, then were restored and reverified green.
+- Wide regression sweep (adjacent usecases suites likely to touch
+  `entrants.ts`/`teams.ts`/`imports.ts`/`fixtures.ts`/`audit`): 211/211,
+  plus 364/364 on the registration-path suites (`registrations.test.ts`,
+  `registration-submit.test.ts`, `registration-approval.test.ts`,
+  `registration-assign.test.ts`, `registration-materialise.test.ts`,
+  `registration-webhook-fulfilment.test.ts`) and 107/107 on
+  `openapi-coverage`/`openapi-published`/`schemas`/`http`.
+- E2E: `rs011-eligibility-gates.spec.ts` green against a REBUILT server
+  (first run caught a STALE build from before the code existed — a real
+  instance of this repo's own "up --server will NOT rebuild for you" trap,
+  not a code defect); mutation-proven red/green.
+- Smoke: new `eligibilityGateSuite()` — 6/6 checks (3 per plan × pro and
+  community), run standalone against the live server before being folded
+  into `scripts/smoke.ts`'s `main()` (the full 17k-line script was not run
+  end-to-end — too costly locally; the addition is otherwise unverified by a
+  full `main()` run).
+- `tsc --noEmit -p apps/web`: exit 0. `npm run lint`: 126 problems, 0 errors
+  (unchanged baseline — confirmed none are from RS011's files, checked
+  against `origin/main`).
+- `openapi:gen` + `i18n:gen-keys` run; `git status --porcelain` empty for
+  `openapi/*.json` and the 4 dictionaries. `i18n:check`: parity OK, 5696 keys.
+
+**"Exactly one evaluator" grep** (acceptance criterion): `divisionEligibilityIssues`/
+`rosterIssues` defined exactly once (`registration-eligibility.ts`), composed
+from `categoryEligibilityIssues`/`ageBandEligibilityIssues` defined exactly
+once (`@/lib/registration-rules.ts`). Callers: `registration-submit.ts`
+(registration path, ×2), `teams.ts` + `imports.ts` (organiser, direct), and
+`gateRosterEligibility` (called from `entrants.ts` + `fixtures.ts`).
+
+**Not done / owed forward:** the branch is unmerged, so nothing here is live.
+Whoever reviews should re-run the DB suite and the walkthrough on their own
+clean environment (the stale-build trap above is a standing risk any session
+can hit) before signing off.
