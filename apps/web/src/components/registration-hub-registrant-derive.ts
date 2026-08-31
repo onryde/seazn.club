@@ -11,6 +11,16 @@ import type { RegistrationListRow } from "@/server/usecases/registrations";
 import type { RegistrationFormField } from "@/server/api-v1/schemas";
 import type { RegistrantsFilters, ConsentStatus } from "@/app/o/[orgSlug]/c/[compSlug]/registration/data";
 import { isTerminalRegistrationStatus } from "@/lib/registration-status";
+// registrantKindLabel is reachable from registration-hub-registrant-filters.tsx
+// (a CLIENT component), which is why this pulls `t` from the client-safe
+// i18n-runtime rather than lib/i18n — lib/i18n starts with `import
+// "server-only"`, and the FIRST version of this change broke the production
+// build (Turbopack: "'server-only' cannot be imported from a Client Component
+// module") by importing it here. table.tsx/detail.tsx are server components
+// and import the SAME `t` re-exported from lib/i18n; this is the one export
+// in this file that has to take the client-safe path instead.
+import { t } from "@/lib/i18n-runtime";
+import type { Dict } from "@/lib/i18n-constants";
 
 /** Keyed by `Record<..., string>` against the REAL status union (not a
  *  hand-copied string literal list) so a missing entry is a compile error,
@@ -171,6 +181,27 @@ export function deriveRegistrantPaymentState(
   if (row.amount_cents === 0) return "free";
   if (row.status !== "paid" && row.status !== "confirmed") return "awaitingPayment";
   return row.payment_intent_id === null ? "paidOffline" : "paid";
+}
+
+/** RS009 walkthrough (2026-08-31) — the ONE place a row's "kind" is turned
+ *  into a label, so the table and the detail panel cannot say two different
+ *  things about the same row again. A solo sign-up is stored with the
+ *  DIVISION's entrant_kind (on a team division that's 'team' — RS009
+ *  reuses the division's own kind rather than minting a new one), so
+ *  reading entrant_kind alone is correct for a real team and wrong for a
+ *  solo sign-up in exactly the same way in both places. The table
+ *  (renderRegistrantKindCell) already special-cased free_agent — found by
+ *  looking at the shipped page, not by a test, per that function's own
+ *  comment — and the detail panel's ENTRY block never got the same
+ *  branch, so expanding the very row the table called "Solo sign-up" told
+ *  the organiser its Kind was "Team". */
+export function registrantKindLabel(
+  row: Pick<RegistrationListRow, "entrant_kind" | "free_agent">,
+  dict: Dict,
+): string {
+  return row.free_agent
+    ? t(dict, "reg.hub.registrants.table.soloSignUp")
+    : t(dict, `divset.entrants.kind.${row.entrant_kind}`);
 }
 
 /** Answers label lookup (task 2): the division's declared form-field LABEL

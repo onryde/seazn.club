@@ -33,6 +33,7 @@ import {
   deriveRegistrantPaymentState,
   answerLabel,
   registrantRowAnchor,
+  registrantKindLabel,
 } from "@/components/registration-hub-registrant-derive";
 import { RegistrationHubRegistrantJoinCode } from "@/components/registration-hub-registrant-join-code";
 import { deriveRegistrantActionFlags } from "@/components/registration-hub-registrant-derive";
@@ -145,7 +146,7 @@ export function RegistrationHubRegistrantDetail({
         <dl className="space-y-1 text-sm">
           {detailField(t(dict, "reg.hub.registrants.detail.field.entryName"), row.display_name)}
           {detailField(t(dict, "reg.hub.registrants.table.division"), row.division_name)}
-          {detailField(t(dict, "reg.hub.registrants.table.kind"), t(dict, `divset.entrants.kind.${row.entrant_kind}`))}
+          {detailField(t(dict, "reg.hub.registrants.table.kind"), registrantKindLabel(row, dict))}
           {detailField(t(dict, "reg.hub.registrants.table.status"), t(dict, `reg.hub.registrants.status.${row.status}`))}
           {detailField(t(dict, "reg.hub.registrants.table.submittedAt"), fmtDateTime(orgTz, row.created_at))}
           {detailField(t(dict, "reg.hub.registrants.table.payment"), amountText)}
