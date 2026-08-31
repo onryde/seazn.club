@@ -5910,3 +5910,68 @@ passes `model: "sonnet"`.
 Worth stating because it is the same failure shape as the false premises: the
 correct information was READ and then not acted on. R6 made the identical error
 in the same session, from the same stale line in v2's `_RULES.md`.
+
+### R7-30 — the double-submit guard silently EATS a scorer's second tap (live on main, every tapModel-S sport)
+
+Found while verifying the R7-27 phase fix. Four e2e tests are red
+(`scorepad-offline.spec.ts:194/:250/:288`, `scorepad-v2.spec.ts:676`) — the
+SAME four, with the same line numbers, before and after that fix, so they are
+not a regression it caused. But they are not a test defect either. They are the
+product telling the truth.
+
+`use-pad-pipeline.ts:1471`:
+
+```
+if (last !== null && isSameAction(last) && now - last.at < DOUBLE_SUBMIT_WINDOW_MS) {
+  return; // identical action accepted too recently — likely one physical tap read twice
+}
+```
+
+`isSameAction` is `deepEqual` on the payload **as submitted**, the window is
+600ms (`:310`), and the drop is a bare `return` — no toast, no error, no queue
+row, nothing on screen. The scorer is never told.
+
+**The guard's own comment states the false premise** (`:306-309`): "two
+GENUINELY separate identical actions (e.g. two dot balls in a row) are
+realistically seconds apart in live play, not milliseconds". That was true for
+the v2 "Add points" FORM, where each entry carried its own typed `points` value
+and two submissions therefore differed. It is false for **tapModel S**, whose
+whole design is that the scoreboard half IS the point button: every tap of one
+half emits a byte-identical payload. Generic's is
+`{by:"H", points:1, person:"H1"}` every single time — the amount is chosen
+AFTERWARDS on the held submission, through the dock chip (`mutateHeld`), so the
+guard compares the pre-amend payload and cannot see that the scorer meant 1
+then 3.
+
+Consequence, in the product: **a scorer catching up loses points silently.**
+Look away, miss three, tap three times quickly — one registers. The other two
+are dropped with no feedback of any kind. For a scoring product this is the
+worst-shaped defect there is: the score is simply wrong, and nobody learns it.
+
+Scope is NOT generic and NOT R7. `use-pad-pipeline.ts` is chassis-wide and R7
+never touched it (`git diff fb81bd54f HEAD` — the pipeline and the dock are
+both untouched; only the spec changed). Every shipped tapModel-S skin is
+exposed: **tennis (R4), badminton and table tennis (R5), volleyball (R5),
+generic (R7)**. It is live on `main` today.
+
+Why no one caught it: v2's spec drove the FORM, so its submissions differed and
+the guard never fired. R7 rewrote `scorepad-offline.spec.ts` onto the real v3
+tap path, and the tests went red immediately — the rewrite is what made the
+defect reachable by a test. The R7 author even documented the mechanism
+correctly in that file's own helper comment and treated the inter-press poll as
+sufficient spacing. It is not: the poll returns as soon as the queue row
+appears, which is well inside 600ms.
+
+The fix is NOT to widen or delete the window — a courtside double-tap is a real
+thing and finding 2 added this guard for a real reason. The guard needs to
+separate "one physical press read twice" from "two deliberate presses", which
+payload equality cannot do. Options, cheapest first: dedupe on the pointer/tap
+EVENT identity rather than the payload; or have the tap carry a
+monotonic client-side sequence into the identity; or scope the guard to
+non-tapModel-S dispatch, where the original form-double-submit risk actually
+lives.
+
+**Owner decision owed** — this is a live data-loss defect on four shipped
+sports, discovered inside R7 but belonging to the chassis, so it wants its own
+fix rather than being folded into a skin wave. Filing nothing without the
+owner's word (`feedback_never_file_issues_unprompted.md`).
