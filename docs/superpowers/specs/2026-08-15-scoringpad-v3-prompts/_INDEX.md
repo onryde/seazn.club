@@ -6054,3 +6054,22 @@ mutates a panel, action or gate in place); the one consumer keyed by
 co-present; and the module version correctly stays `1.0.0` — the golden and
 schema snapshots carry no `padSpec` field, so the pin governs cfg/state replay
 determinism, a contract padSpec sits outside.
+
+### R7-32 — OWNER RULING: finish R7, then fix the double-submit guard
+
+Put to the owner with a recommendation to fix it first (R7-30 is live data loss
+on five shipped sports). **Owner ruled: finish R7 first, then fix it.** R7
+continues through A1's design follow-up, A2 boardgame, A3 carrom, D, E, F and
+the G demolition; the chassis guard is the next piece of work after the wave
+closes.
+
+Recorded because a resumed session reading R7-30 alone would reasonably
+conclude the defect should pre-empt the wave — it was recommended, and
+declined, deliberately. Do not re-open it as a new question; carry it as
+scheduled work.
+
+It stays **unfiled** (`feedback_never_file_issues_unprompted.md`). Task F
+touches `use-pad-pipeline.ts`'s dock amend path, so whoever takes the guard
+should land it AFTER F rather than beside it — the two would otherwise share a
+file, which is this repo's standing condition for sequential rather than
+parallel work.
