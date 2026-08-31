@@ -23,8 +23,10 @@ import type {
   CreateEntrantMemberInput,
   PatchEntrant,
   EntrantMemberInput,
+  EligibilityOverride,
 } from "@/server/api-v1/schemas";
 import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
+import { gateRosterEligibility, type EligibilityIssue } from "./registration-eligibility";
 
 type Tx = postgres.TransactionSql;
 type MemberInput = z.infer<typeof EntrantMemberInput>;
@@ -32,7 +34,11 @@ type CreateMemberInput = z.infer<typeof CreateEntrantMemberInput>;
 
 /** PROMPT-60 §2 — resolve inline `new_person` members into persons rows
  *  (created in THIS transaction) so the linker only ever sees person_id
- *  members. Inline persons are never merged with existing org persons. */
+ *  members. Inline persons are never merged with existing org persons.
+ *  RS011: `dob`/`gender` are optional on `new_person` — an organiser typing
+ *  a name alone still creates the person, just with nothing to evaluate an
+ *  age/gender rule against (the MISSING_DOB/MISSING_GENDER warning state at
+ *  the gate below, not a bug). */
 async function resolveInlineMembers(
   tx: Tx,
   orgId: string,
@@ -42,8 +48,9 @@ async function resolveInlineMembers(
   for (const m of members) {
     if ("new_person" in m) {
       const [person] = await tx<{ id: string }[]>`
-        insert into persons (org_id, full_name, consent)
-        values (${orgId}, ${m.new_person.full_name}, ${tx.json({} as never)})
+        insert into persons (org_id, full_name, dob, gender, consent)
+        values (${orgId}, ${m.new_person.full_name}, ${m.new_person.dob ?? null},
+                ${m.new_person.gender ?? null}, ${tx.json({} as never)})
         returning id`;
       out.push({
         person_id: person!.id,
@@ -142,9 +149,14 @@ export interface EntrantWithMembers extends EntrantRow {
 }
 
 /** A created entrant, plus (response-only) how many roster keys were dropped
- *  because the target sport doesn't define them. Not a persisted column. */
+ *  because the target sport doesn't define them. Not a persisted column.
+ *  RS011: `eligibility_warnings` — the MISSING_DOB/MISSING_GENDER warnings
+ *  `gateRosterEligibility` returned for this roster, present only when
+ *  non-empty (same "only present when it happened" convention as
+ *  `roster_keys_dropped`). */
 export interface CreatedEntrant extends EntrantRow {
   roster_keys_dropped?: number;
+  eligibility_warnings?: EligibilityIssue[];
 }
 
 const COLS = [
@@ -152,8 +164,27 @@ const COLS = [
   "badge_url",
 ] as const;
 
-async function insertMembers(tx: Tx, entrantId: string, members: MemberInput[]): Promise<void> {
-  if (members.length === 0) return;
+/** RS011: shared by every organiser roster-write path (`createEntrants`,
+ *  `patchEntrant`, `syncEntrantRosterFromSquad`) — gating HERE, once, covers
+ *  all three call sites (createEntrants/insertMembers/patchEntrant/
+ *  syncEntrantRosterFromSquad are one physical gate call, not four separate
+ *  ones) rather than duplicating the same `gateRosterEligibility` call at
+ *  each. Returns the MISSING_DOB/MISSING_GENDER warnings so a caller can
+ *  surface them even on a clean write. */
+interface InsertMembersOptions {
+  divisionId: string;
+  override?: EligibilityOverride | null;
+  actorId: string | null;
+  context: string;
+}
+
+async function insertMembers(
+  tx: Tx,
+  entrantId: string,
+  members: MemberInput[],
+  opts: InsertMembersOptions,
+): Promise<EligibilityIssue[]> {
+  if (members.length === 0) return [];
   // Every referenced person must be visible under this tenant's RLS, and #404
   // adds: not a merge tombstone. The ids come from the client, so a stale picker
   // would otherwise roster a person who has already been absorbed.
@@ -165,6 +196,13 @@ async function insertMembers(tx: Tx, entrantId: string, members: MemberInput[]):
     const missing = ids.filter((id) => !seen.has(id));
     throw new HttpError(422, `unknown person(s): ${missing.join(", ")}`);
   }
+  const warnings = await gateRosterEligibility(tx, {
+    divisionId: opts.divisionId,
+    personIds: ids,
+    context: opts.context,
+    override: opts.override,
+    actorId: opts.actorId,
+  });
   for (const m of members) {
     await tx`
       insert into entrant_members (entrant_id, person_id, squad_number,
@@ -173,12 +211,17 @@ async function insertMembers(tx: Tx, entrantId: string, members: MemberInput[]):
               ${m.default_position_key ?? null}, ${m.is_captain},
               ${tx.json(m.roles as never)})`;
   }
+  return warnings;
 }
 
 async function withMembers(tx: Tx, entrant: EntrantRow): Promise<EntrantWithMembers> {
+  // RS011: dob/gender ride along so the console (entrants-panel.tsx) can
+  // render an amber MISSING_DOB/MISSING_GENDER chip per row against the
+  // division's own requiresDob/requiresGender — never exposed publicly,
+  // same organiser-only surface every other dob/gender read is.
   const members = await tx<Record<string, unknown>[]>`
-    select em.person_id, p.full_name, em.squad_number, em.default_position_key,
-           em.is_captain, em.roles
+    select em.person_id, p.full_name, p.dob::text as dob, p.gender,
+           em.squad_number, em.default_position_key, em.is_captain, em.roles
     from entrant_members em join persons p on p.id = em.person_id
     where em.entrant_id = ${entrant.id}
     order by em.squad_number nulls last, p.full_name`;
@@ -341,8 +384,23 @@ export async function createEntrants(
         }
         throw err;
       }
-      await insertMembers(tx, row.id, members);
-      rows.push(dropped > 0 ? { ...row, roster_keys_dropped: dropped } : row);
+      // RS011: gates the FINAL resolved roster (explicit members / copied
+      // roster / squad seed alike) against the division's eligibility rules
+      // — one call, inside `insertMembers`, covers copy_roster and squad
+      // seed the same as an explicit member list. `input.eligibility_override`
+      // is per-entrant, matching `CreateEntrant`'s own per-entrant shape (a
+      // bulk create batch can override some rows and not others).
+      const warnings = await insertMembers(tx, row.id, members, {
+        divisionId,
+        override: input.eligibility_override,
+        actorId: auth.userId,
+        context: "roster_add",
+      });
+      rows.push({
+        ...row,
+        ...(dropped > 0 ? { roster_keys_dropped: dropped } : {}),
+        ...(warnings.length > 0 ? { eligibility_warnings: warnings } : {}),
+      });
     }
     return rows;
   });
@@ -383,7 +441,10 @@ export async function patchEntrant(
   patch: PatchEntrant,
 ): Promise<EntrantWithMembers> {
   return withTenant(auth.orgId, async (tx) => {
-    const { members, ...fields } = patch;
+    // RS011: `eligibility_override` is request metadata for the gate below,
+    // never an `entrants` column — destructured out alongside `members` so
+    // it never reaches the `update entrants set ...` below.
+    const { members, eligibility_override, ...fields } = patch;
     let row: EntrantRow | undefined;
     if (Object.keys(fields).length > 0) {
       const cols = Object.keys(fields);
@@ -400,7 +461,12 @@ export async function patchEntrant(
       const eff = await loadEntrantShape(tx, row.division_id);
       assertRosterFits(eff, row.kind, members.length);
       await tx`delete from entrant_members where entrant_id = ${id}`;
-      await insertMembers(tx, id, members);
+      await insertMembers(tx, id, members, {
+        divisionId: row.division_id,
+        override: eligibility_override,
+        actorId: auth.userId,
+        context: "patch_entrant",
+      });
     }
     return withMembers(tx, row);
   });
@@ -414,6 +480,7 @@ export async function patchEntrant(
 export async function syncEntrantRosterFromSquad(
   auth: AuthCtx,
   id: string,
+  override?: EligibilityOverride | null,
 ): Promise<CreatedEntrant & { members: unknown[] }> {
   return withTenant(auth.orgId, async (tx) => {
     const [row] = await tx<EntrantRow[]>`select ${tx(COLS)} from entrants where id = ${id}`;
@@ -433,9 +500,18 @@ export async function syncEntrantRosterFromSquad(
     const eff = await loadEntrantShape(tx, row.division_id);
     assertRosterFits(eff, row.kind, members.length);
     await tx`delete from entrant_members where entrant_id = ${id}`;
-    await insertMembers(tx, id, members);
+    const warnings = await insertMembers(tx, id, members, {
+      divisionId: row.division_id,
+      override,
+      actorId: auth.userId,
+      context: "roster_sync",
+    });
     const out = await withMembers(tx, row);
-    return dropped > 0 ? { ...out, roster_keys_dropped: dropped } : out;
+    return {
+      ...out,
+      ...(dropped > 0 ? { roster_keys_dropped: dropped } : {}),
+      ...(warnings.length > 0 ? { eligibility_warnings: warnings } : {}),
+    };
   });
 }
 

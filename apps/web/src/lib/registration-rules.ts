@@ -116,6 +116,49 @@ export function requiresDob(division: {
 }
 
 /**
+ * Division has a gender rule ⇒ the form must collect gender (RS006 WHO step,
+ * design §4 step 1: "dob/gender collected once, only if any division needs
+ * them"). Sibling of `requiresDob` above, same shape. Moved here from
+ * `server/usecases/registration-eligibility.ts` (RS011): that module's own
+ * comment on this function used to say "nothing client-side calls this
+ * directly" — RS011's `entrants-panel.tsx` (a client component) needs the
+ * SAME predicate the server-side gate evaluates against to decide when a
+ * roster row's missing gender is worth an amber chip, and a client
+ * component importing anything under `@/server/**` is a `next build`
+ * failure `tsc` never catches (repo standing trap) — the exact reason
+ * `ageAt`/`isMinor`/`requiresDob` moved here at RS006 W1 (see this file's
+ * header). Re-exported verbatim by `registration-eligibility.ts` so it
+ * stays the ONE evaluator, split across a server-only half and a
+ * client-safe half, same as every other predicate in this file.
+ *
+ * RULING (RS007 review fix M2, 2026-08-29): a free-text `eligibility_note`
+ * must NEVER make a field mandatory. A 2026-08-27 revision fired this on any
+ * non-empty `eligibility_note` too — on the theory that V380 dropped the
+ * jsonb `eligibility` rules without a first-class replacement for every
+ * gender-rule shape a note might now be the only remaining record of (an
+ * allow-list excluding non-binary, or any rule on a division that already
+ * had a `category`, could not be converted — see V380's migration header,
+ * "Sex" section). In practice that made an UNRELATED organiser note
+ * ("bring your own kit", "club members only") force the public WHO step to
+ * demand gender on a division `divisionEligibilityIssues` never gates on
+ * gender for — the browser blocked a registrant the API would happily
+ * accept. `category` is `mens`/`womens` (individual-level: needs the
+ * specific gender) or `mixed` (roster-level: needs every player's gender to
+ * prove the roster balances) is now the ONLY trigger — agrees EXACTLY with
+ * `divisionEligibilityIssues`'s own gender source
+ * (`categoryEligibilityIssues`/`rosterCompositionIssues`, this file).
+ * `eligibility_note` stays in the parameter type only because existing call
+ * sites already pass the division's full context (`registration-submit.ts`,
+ * `registrations.ts`) — accepted, never read.
+ */
+export function requiresGender(division: {
+  category: string | null;
+  eligibility_note?: string | null;
+}): boolean {
+  return division.category === "mens" || division.category === "womens" || division.category === "mixed";
+}
+
+/**
  * First-class CATEGORY check only (individual level — `mixed` is
  * roster-wide, evaluated by `rosterIssues` server-side, never here): `mens`
  * requires gender `m`, `womens` requires `f`. `open`, a null category, and

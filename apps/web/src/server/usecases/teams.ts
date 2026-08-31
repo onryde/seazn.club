@@ -15,6 +15,13 @@ import { resolveEntrantBadge } from "@/lib/entrant-badge";
 import type { z } from "zod";
 import type { EntrantMemberInput } from "@/server/api-v1/schemas";
 import type { AuthCtx } from "@/server/api-v1/auth";
+import {
+  loadEligibilityDivisions,
+  loadEligibilityPersons,
+  rosterIssues,
+  seasonStartYearFrom,
+  type EligibilityIssue,
+} from "./registration-eligibility";
 
 type Tx = postgres.TransactionSql;
 type MemberInput = z.infer<typeof EntrantMemberInput>;
@@ -208,19 +215,57 @@ export async function getTeamSquad(
   });
 }
 
-/** Full-replace a team's squad (like the entrant roster editor). Pro. */
+/** One enrolled division's advisory eligibility read for RS011's
+ *  `setTeamSquad` — never a violation, only ever a warning, however severe
+ *  the underlying issue: `setTeamSquad` is division-agnostic (a squad has no
+ *  division of its own — only the divisions its entrants happen to be
+ *  enrolled in today) and a squad edit must never be blocked by a division it
+ *  is not even being written FOR. */
+export interface TeamSquadEligibilityWarning {
+  division_id: string;
+  issues: EligibilityIssue[];
+}
+
+/** Every division this team currently has an entrant enrolled in, evaluated
+ *  against the NEW squad — via `rosterIssues`/`loadEligibilityDivisions`/
+ *  `loadEligibilityPersons` directly (`registration-eligibility.ts`), the
+ *  SAME evaluator `gateRosterEligibility` wraps, just without its
+ *  throw/audit shape (this call site never blocks, never audits). */
+async function collectTeamSquadEligibilityWarnings(
+  tx: Tx,
+  teamId: string,
+  members: MemberInput[],
+): Promise<TeamSquadEligibilityWarning[]> {
+  if (members.length === 0) return [];
+  const enrolled = await tx<{ division_id: string }[]>`
+    select distinct division_id from entrants where team_id = ${teamId}`;
+  if (enrolled.length === 0) return [];
+  const divisions = await loadEligibilityDivisions(tx, enrolled.map((r) => r.division_id));
+  const persons = await loadEligibilityPersons(tx, members.map((m) => m.person_id));
+  const out: TeamSquadEligibilityWarning[] = [];
+  for (const division of divisions) {
+    const issues = rosterIssues(division, persons, seasonStartYearFrom(division.starts_on));
+    if (issues.length > 0) out.push({ division_id: division.id, issues });
+  }
+  return out;
+}
+
+/** Full-replace a team's squad (like the entrant roster editor). Pro.
+ *  `eligibility_warnings` (RS011): advisory only, see
+ *  `collectTeamSquadEligibilityWarnings` above — this endpoint never
+ *  blocks and never takes an `eligibility_override`. */
 export async function setTeamSquad(
   auth: AuthCtx,
   teamId: string,
   members: MemberInput[],
-): Promise<TeamRow & { members: SquadMember[] }> {
+): Promise<TeamRow & { members: SquadMember[]; eligibility_warnings: TeamSquadEligibilityWarning[] }> {
   await requireFeature(auth.orgId, "clubs.hierarchy");
   // The plan LOOKUP is resolved out here; the COUNT stays inside the
   // transaction with the insert (doc 10 §2 rule 1). `getLimit` queries the
   // pooled `sql` proxy, and `withTenant` pins a pooled connection for its whole
   // callback — see `assertWithinLimit` in lib/entitlements.ts.
   const squadCap = await getLimit(auth.orgId, "teams.squad_max");
-  await withTenant(auth.orgId, async (tx) => {
+  const warnings = await withTenant(auth.orgId, async (tx) => {
     const [team] = await tx`select 1 from teams where id = ${teamId}`;
     if (!team) throw new HttpError(404, "team not found");
     assertWithinLimit(squadCap, "teams.squad_max", members.length);
@@ -243,6 +288,8 @@ export async function setTeamSquad(
                 ${m.default_position_key ?? null}, ${m.is_captain},
                 ${tx.json(m.roles as never)})`;
     }
+    return collectTeamSquadEligibilityWarnings(tx, teamId, members);
   });
-  return getTeamSquad(auth, teamId);
+  const squad = await getTeamSquad(auth, teamId);
+  return { ...squad, eligibility_warnings: warnings };
 }

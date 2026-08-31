@@ -60,6 +60,7 @@ import {
   walletIdFor,
 } from "@/lib/credits";
 import { ageAt, isMinor, requiresDob, requiresGender } from "./registration-eligibility";
+import { audit } from "./audit";
 
 type Tx = postgres.TransactionSql;
 
@@ -523,21 +524,15 @@ export async function loadSettings(db: AnySql, divisionId: string): Promise<Regi
   return row ?? null;
 }
 
-/** Append to the competition_events audit ledger (016 pattern). Exported for
- *  `registration-approval.ts` (RS002 W5) — every approval transition writes
- *  the same ledger the existing organiser transitions do. */
-export async function audit(
-  db: AnySql,
-  competitionId: string,
-  orgId: string,
-  type: string,
-  payload: Record<string, unknown>,
-  actorId: string | null,
-): Promise<void> {
-  await db`
-    insert into competition_events (competition_id, org_id, type, payload, actor_id)
-    values (${competitionId}, ${orgId}, ${type}, ${sql.json(payload as never)}, ${actorId})`;
-}
+/** Append to the competition_events audit ledger (016 pattern). Moved to
+ *  `./audit` (RS011) so `registration-eligibility.ts` — a deliberate LEAF —
+ *  can call it too without an import cycle; see that module's header.
+ *  `audit` is imported (not just re-exported) at the top of this file — a
+ *  bare `export {x} from mod` gives THIS module no local binding, and every
+ *  call site below uses the local name. Re-exported so every existing
+ *  importer (`registration-approval.ts`, `registration-assign.ts`) keeps
+ *  compiling unchanged. */
+export { audit };
 
 /** Exported for `registration-approval.ts` (RS002 W5) — `promoteFromWaitlist`
  *  needs the same org/comp/name context `notifyPromoted` does. */

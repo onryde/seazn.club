@@ -18,7 +18,17 @@ import { HttpError, PaymentRequiredError } from "@/lib/errors";
 import { assertWithinLimit, getLimit, hasFeature, withinLimit } from "@/lib/entitlements";
 import { cacheGet, cacheSet } from "@/lib/cache";
 import type { AuthCtx } from "@/server/api-v1/auth";
+import type { EligibilityOverride } from "@/server/api-v1/schemas";
 import { parseUpload, toImportRows, type ImportField } from "./import-parse";
+import { audit } from "./audit";
+import {
+  loadEligibilityDivisions,
+  loadEligibilityPersons,
+  divisionEligibilityIssues,
+  splitEligibilityIssues,
+  seasonStartYearFrom,
+  type EligibilityIssue,
+} from "./registration-eligibility";
 
 type Tx = postgres.TransactionSql;
 
@@ -152,13 +162,104 @@ export async function getImport(auth: AuthCtx, id: string): Promise<ImportPrevie
 
 const IDEM_TTL_SECONDS = 24 * 60 * 60; // doc 08 §4
 
+/** One `roster.add` op's (division, person) pair, resolved from the plan
+ *  BEFORE anything executes — RS011's eligibility gate needs every
+ *  candidate up front so it can throw before a single row is written, the
+ *  same "validate the whole batch, then execute" shape the `blocking`
+ *  plan-issues check above already uses. */
+interface RosterEligibilityCandidate {
+  divisionId: string;
+  person: { full_name?: string | null; dob?: string | null; gender?: string | null };
+}
+
+/** Resolves every `roster.add` op's (division, person) pair from the plan's
+ *  OWN ops — a `person.create`/`entrant.create` op earlier in the same plan
+ *  (matched by `ref`), or a query against `persons`/`entrants` for a target
+ *  that names an existing `id`. Read-only (no writes) so it can run before
+ *  `executePlan`.
+ *
+ *  Scope note: this evaluates each NEW `roster.add` row against its
+ *  division's `category`/`age_min`/`age_max` (`divisionEligibilityIssues`)
+ *  only — not the roster-WIDE `MIXED_NEEDS_BOTH_GENDERS` composition check
+ *  (`rosterIssues`'s other half), which would need merging against the
+ *  entrant's PRE-EXISTING roster to mean anything for an incremental import.
+ *  Out of RS011's scope (age/gender/category enforcement); a future import
+ *  wave can fold pre-existing entrant_members in if that check is wanted
+ *  here too. */
+async function collectImportRosterCandidates(
+  tx: Tx,
+  ops: readonly ImportOp[],
+): Promise<RosterEligibilityCandidate[]> {
+  const personDraft = new Map<string, { full_name: string; dob: string | null; gender: string | null }>();
+  const entrantDivisionByRef = new Map<string, string>();
+  const rosterAdds: { entrant: ImportTarget; person: ImportTarget }[] = [];
+
+  for (const op of ops) {
+    if (op.kind === "person.create") {
+      personDraft.set(op.ref, {
+        full_name: op.after.fullName,
+        dob: op.after.dob ?? null,
+        gender: op.after.gender ?? null,
+      });
+    } else if (op.kind === "entrant.create") {
+      entrantDivisionByRef.set(op.ref, op.divisionId);
+    } else if (op.kind === "roster.add") {
+      rosterAdds.push({ entrant: op.entrant, person: op.person });
+    }
+  }
+  if (rosterAdds.length === 0) return [];
+
+  const existingEntrantIds = [
+    ...new Set(
+      rosterAdds
+        .map((r) => r.entrant)
+        .filter((t): t is { id: string } => "id" in t)
+        .map((t) => t.id),
+    ),
+  ];
+  const entrantDivisionById = new Map<string, string>();
+  if (existingEntrantIds.length > 0) {
+    const rows = await tx<{ id: string; division_id: string }[]>`
+      select id, division_id from entrants where id in ${tx(existingEntrantIds)}`;
+    for (const r of rows) entrantDivisionById.set(r.id, r.division_id);
+  }
+
+  const existingPersonIds = [
+    ...new Set(
+      rosterAdds
+        .map((r) => r.person)
+        .filter((t): t is { id: string } => "id" in t)
+        .map((t) => t.id),
+    ),
+  ];
+  const personById = new Map(
+    (await loadEligibilityPersons(tx, existingPersonIds)).map((p) => [p.id, p]),
+  );
+
+  const candidates: RosterEligibilityCandidate[] = [];
+  for (const { entrant, person } of rosterAdds) {
+    const divisionId = "id" in entrant ? entrantDivisionById.get(entrant.id) : entrantDivisionByRef.get(entrant.ref);
+    const p = "id" in person ? personById.get(person.id) : personDraft.get(person.ref);
+    if (!divisionId || !p) continue; // an invalid plan is caught elsewhere (executePlan's own resolve())
+    candidates.push({ divisionId, person: p });
+  }
+  return candidates;
+}
+
 /** POST /api/v1/imports/{id}/commit — execute the plan transactionally.
  *  Re-planned against fresh state inside the tx; any op failure rolls the
- *  whole commit back (Jul3/01 §9 partial failure). */
+ *  whole commit back (Jul3/01 §9 partial failure).
+ *
+ *  `override` (RS011): a violation anywhere in the plan's roster.add ops
+ *  blocks the WHOLE commit (422 `ELIGIBILITY_VIOLATION`, same as every other
+ *  organiser-side gate) unless `override.reason` is present, in which case
+ *  ONE `eligibility.overridden` audit row covers the ENTIRE import — never
+ *  one per row, however many divisions or persons the violations span. */
 export async function commitImport(
   auth: AuthCtx,
   id: string,
   idempotencyKey: string | null,
+  override?: EligibilityOverride | null,
 ): Promise<ImportCommitResult> {
   const idemKey = idempotencyKey
     ? `idem:v1:import-commit:${auth.orgId}:${idempotencyKey}`
@@ -205,6 +306,61 @@ export async function commitImport(
           blocking.slice(0, 5).map((i) => `row ${i.rowNo} ${i.code}`).join(", "),
       );
     }
+
+    // RS011: eligibility gate, BEFORE executePlan writes anything — resolve
+    // every roster.add candidate from the plan's own ops (no query racing
+    // the writes below), evaluate each against its division's first-class
+    // columns, and block (or audit-and-proceed) the WHOLE commit atomically.
+    const rosterCandidates = await collectImportRosterCandidates(tx, plan.ops);
+    if (rosterCandidates.length > 0) {
+      const divisionIds = [...new Set(rosterCandidates.map((c) => c.divisionId))];
+      const divisions = await loadEligibilityDivisions(tx, divisionIds);
+      const divisionById = new Map(divisions.map((d) => [d.id, d]));
+      const allViolations: EligibilityIssue[] = [];
+      const allWarnings: EligibilityIssue[] = [];
+      for (const candidate of rosterCandidates) {
+        const division = divisionById.get(candidate.divisionId);
+        if (!division) continue; // unresolvable division — executePlan's own resolve() catches this
+        const issues = divisionEligibilityIssues(
+          division,
+          candidate.person,
+          seasonStartYearFrom(division.starts_on),
+        );
+        const { violations, warnings } = splitEligibilityIssues(issues);
+        allViolations.push(...violations);
+        allWarnings.push(...warnings);
+      }
+      if (allViolations.length > 0) {
+        if (!override?.reason) {
+          throw new HttpError(
+            422,
+            `import roster has ${allViolations.length} eligibility violation(s)`,
+            "ELIGIBILITY_VIOLATION",
+            { violations: allViolations, warnings: allWarnings },
+          );
+        }
+        // Exactly ONE audit row for the whole import, whatever its span —
+        // pick the first touched division's competition for the FK; the
+        // payload names every division and person the override covers.
+        const first = divisions[0]!;
+        await audit(
+          tx,
+          first.competition_id,
+          auth.orgId,
+          "eligibility.overridden",
+          {
+            context: "import_commit",
+            import_id: id,
+            division_ids: divisionIds,
+            reason: override.reason,
+            violation_count: allViolations.length,
+            violations: allViolations,
+          },
+          auth.userId,
+        );
+      }
+    }
+
     // Jul3/01 §7: the Club hierarchy itself is Pro.
     if (plan.ops.some((op) => op.kind.startsWith("club."))) {
       if (!clubsHierarchy) throw new PaymentRequiredError("clubs.hierarchy");

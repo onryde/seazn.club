@@ -23,6 +23,7 @@ import {
   requiresDob,
   requiresGender,
   rosterIssues,
+  splitEligibilityIssues,
   type EligibilityDivision,
   type EligibilityIssue,
   type EligibilityRosterPlayer,
@@ -501,5 +502,64 @@ describe("rosterIssues — mixed composition (roster-wide, MIXED_NEEDS_BOTH_GEND
     expect(codesOf(rosterIssues(mixed, players, 2026))).toEqual([
       { code: "MIXED_NEEDS_BOTH_GENDERS" },
     ]);
+  });
+});
+
+// RS011 — organiser-side gates classify issues into blocking violations vs
+// advisory warnings by ONE rule (`splitEligibilityIssues`): only
+// MISSING_DOB/MISSING_GENDER are warnings, everything else blocks. Pure —
+// no DB — so it's unit-tested here rather than in the DB-integration suite
+// (entrants-eligibility.test.ts), which asserts the WIRED behaviour (throw/
+// audit) this function's split feeds.
+describe("splitEligibilityIssues (RS011) — MISSING_DOB/MISSING_GENDER are the ONLY warning codes", () => {
+  it("MISSING_DOB and MISSING_GENDER land in warnings, nothing in violations", () => {
+    const issues: EligibilityIssue[] = [
+      { code: "MISSING_DOB", message: "x" },
+      { code: "MISSING_GENDER", message: "y" },
+    ];
+    expect(splitEligibilityIssues(issues)).toEqual({ violations: [], warnings: issues });
+  });
+
+  it("AGE_TOO_OLD/AGE_TOO_YOUNG/GENDER_NOT_ALLOWED/CATEGORY_MISMATCH/MIXED_NEEDS_BOTH_GENDERS all land in violations, none in warnings", () => {
+    const issues: EligibilityIssue[] = [
+      { code: "AGE_TOO_OLD", message: "x" },
+      { code: "AGE_TOO_YOUNG", message: "x" },
+      { code: "CATEGORY_MISMATCH", message: "x" },
+      { code: "MIXED_NEEDS_BOTH_GENDERS", message: "x" },
+    ];
+    expect(splitEligibilityIssues(issues)).toEqual({ violations: issues, warnings: [] });
+  });
+
+  it("a mixed list of both splits correctly and preserves order within each bucket", () => {
+    const dob: EligibilityIssue = { code: "MISSING_DOB", message: "a" };
+    const old: EligibilityIssue = { code: "AGE_TOO_OLD", message: "b" };
+    const gender: EligibilityIssue = { code: "MISSING_GENDER", message: "c" };
+    const mismatch: EligibilityIssue = { code: "CATEGORY_MISMATCH", message: "d" };
+    expect(splitEligibilityIssues([dob, old, gender, mismatch])).toEqual({
+      violations: [old, mismatch],
+      warnings: [dob, gender],
+    });
+  });
+
+  it("an empty list splits into two empty lists", () => {
+    expect(splitEligibilityIssues([])).toEqual({ violations: [], warnings: [] });
+  });
+
+  it("real rosterIssues output for a mens division with a missing-gender AND wrong-gender row splits as expected — the mutation this function exists to prevent (a MISSING_* code accidentally blocking, or a real violation accidentally downgraded to a warning)", () => {
+    const mensDivision: EligibilityDivision = {
+      category: "mens",
+      age_min: null,
+      age_max: null,
+      age_cutoff_month: null,
+      age_cutoff_day: null,
+    };
+    const players: EligibilityRosterPlayer[] = [
+      { full_name: "No Gender", gender: null },
+      { full_name: "Wrong Gender", gender: "f" },
+    ];
+    const issues = rosterIssues(mensDivision, players, 2026);
+    const { violations, warnings } = splitEligibilityIssues(issues);
+    expect(warnings.map((w) => w.code)).toEqual(["MISSING_GENDER"]);
+    expect(violations.map((v) => v.code)).toEqual(["CATEGORY_MISMATCH"]);
   });
 });
