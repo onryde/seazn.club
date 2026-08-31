@@ -4558,3 +4558,32 @@ to `:3000`, and `seazn-env env` exports `E2E_PROD_TARGET` as a URL while
 hang to the 10-minute kill with no output. Also: under load (15-min avg ~10)
 hockey blew its 180s per-test timeout inside a `fullPage` screenshot and read
 as a failure; on a quiet machine the same test passes in **59.1s**.
+
+### R6-9 — `HOLD_MS = 12000` applies to EVERY sport (owner-ruled 2026-08-31)
+
+Raised as W-4 against hockey/ice hockey, but `queue.ts`'s R1 ruling makes the
+soft-commit hold window a **chassis constant, not per-sport config**, so the
+change necessarily reaches cricket, tennis, badminton, table tennis,
+volleyball, football, carrom, generic and boardgame too. Put to the owner
+explicitly with that consequence stated. **Owner: "HOLD_MS=12 in all sport is
+fine."**
+
+The reasoning generalises, which is why chassis-wide is the right shape rather
+than a reluctant side effect: the window is how long a human has to read a
+chip row and find one name, and human reading speed is not a property of the
+sport. The costs stay asymmetric everywhere — a lingering chip row is tidied
+by the next tap; lost attribution is permanent, because nothing later can
+recover who an event belonged to.
+
+**Do NOT reintroduce a per-sport override for this.** R1 ruled against it, and
+this ruling reaffirms the constant rather than replacing it.
+
+A mutation note worth keeping, because it nearly let this ship untested: every
+test in `soft-commit.test.ts` and `use-pad-pipeline.test.tsx` is written
+HOLD_MS-RELATIVE, which is correct for behaviour and leaves all of them blind
+to the window's VALUE. Reverting 12000 to 6000 initially left the whole suite
+green. The guard is now a FLOOR stating the product requirement rather than
+the number (`HOLD_MS >= 10_000`, "long enough to pick one name out of a full
+side"), so raising the window later needs no re-baseline while dropping back
+below a roster scan goes red. Two tests also carried literal advances tied to
+the old 6000 and are now expressed in the symbol.
