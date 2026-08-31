@@ -249,6 +249,28 @@ export const GENERIC_EVENT_SCHEMAS: Readonly<Record<string, z.ZodTypeAny>> = {
 const MAX_PLAUSIBLE_SCORE = 500; // a final score.{p1,p2}Score
 const MAX_TALLY_STEP = 50; // a single generic.score press
 
+// R7 (defect fix): `applyScore`/`applyResult` (above) accept `phase: "pre"`
+// exactly as they accept `"live"` — a scorer who never taps "Start match"
+// (typing in a finished result after the fact is generic's own ordinary
+// club workflow: this module IS the pad for every sport this product does
+// not otherwise model, DOMAIN.md) must reach every action a started fixture
+// reaches. `buildPadView` (apps/web's view-model.ts) matches a panel's
+// `phase` EXACTLY, so a panel declared for "live" alone left "pre"
+// dispatchable at the fold but refused at the pad's own door
+// (`createSkinDispatch`: "Declared here: (none)") — two sources of truth
+// disagreeing, the exact class R2c closed three instances of.
+//
+// Each panel below is written ONCE and expanded to both phases here, rather
+// than hand-duplicated at each call site: a single source object can never
+// drift between its "pre" and "live" declarations the way two independently
+// maintained copies could.
+function everyPhase(panel: Omit<PadPanel, "phase">): PadPanel[] {
+  return [
+    { ...panel, phase: "pre" },
+    { ...panel, phase: "live" },
+  ];
+}
+
 export function padSpec(cfg: GenericCfg): PadSpec {
   // --- Live: the running tally, both modes (DOMAIN.md: "all") --------------
   // `points` is `.refine(p => p !== 0)` — a single field spanning both signs
@@ -313,53 +335,48 @@ export function padSpec(cfg: GenericCfg): PadSpec {
   const resultPanels: PadPanel[] =
     cfg.resultMode === "score"
       ? [
-          {
+          ...everyPhase({
             labelKey: { key: "pad.generic.panel.score", label: "Score" },
-            phase: "live",
             layout: "primary",
             actions: [scoreEntryAction],
-          },
-          {
+          }),
+          ...everyPhase({
             labelKey: { key: "pad.generic.panel.settle", label: "Settle from tally" },
-            phase: "live",
             layout: "grid",
             actions: [settleFromTallyAction],
             // Genuinely state-dependent — DOMAIN.md: "the tally alone never
             // ends a fixture", and `{}` is refused unless `state.running` is
             // already set (`applyResult`: `score = hasP1 ? ... : (state.running
-            // ?? null)`, `if (!score) invalid(...)`).
+            // ?? null)`, `if (!score) invalid(...)`). Applies identically at
+            // both phases: a tally kept before "Start match" settles from
+            // "pre" exactly as one kept mid-play settles from "live".
             gate: { op: "path-truthy", path: "state.running" } satisfies PadGate,
-          },
+          }),
         ]
       : [
-          {
+          ...everyPhase({
             labelKey: { key: "pad.generic.panel.result", label: "Result" },
-            phase: "live",
             layout: "primary",
             actions: [decisiveResultAction],
-          },
+          }),
           // cfg-only inclusion: offering a draw action the fold refuses on
           // every cfg it would render for (`allowDraws: false`) is exactly
           // the anti-pattern cricket's declare/followOn actions avoid.
           ...(cfg.allowDraws
-            ? [
-                {
-                  labelKey: { key: "pad.generic.panel.draw", label: "Draw" },
-                  phase: "live" as const,
-                  layout: "grid" as const,
-                  actions: [drawAction],
-                },
-              ]
+            ? everyPhase({
+                labelKey: { key: "pad.generic.panel.draw", label: "Draw" },
+                layout: "grid",
+                actions: [drawAction],
+              })
             : []),
         ];
 
   const panels: PadPanel[] = [
-    {
+    ...everyPhase({
       labelKey: { key: "pad.generic.panel.tally", label: "Tally" },
-      phase: "live",
       layout: "grid",
       actions: [addPointsAction, correctPointsAction],
-    },
+    }),
     ...resultPanels,
   ];
 

@@ -30,6 +30,7 @@ import {
   type PadAttribution,
   type PadField,
   type PadFieldValue,
+  type PadPhase,
   type PadSpec,
   type SportModule,
 } from "../sport/module.ts";
@@ -302,6 +303,15 @@ export function checkActionPayloadsAccepted(
 // than adding a second, weaker one: a field key that collides with an action
 // key is the identical defect (one dictionary entry, two meanings, and the
 // translator sees one string).
+//
+// R7/generic — ONE narrow exception, added when `generic`'s padSpec started
+// declaring the same panel/action once per phase (`everyPhase`,
+// sports/generic/generic.ts, closing the "pad offers what the engine
+// refuses" defect for "pre"): a key may recur ONLY as the byte-identical
+// declaration restated for a DIFFERENT phase. Two occurrences of one key
+// that disagree on what they label, or that repeat for the SAME phase, are
+// still exactly the collision this check has always caught — see
+// `checkLabelKeysUnique` below for the precise rule.
 // ---------------------------------------------------------------------------
 
 /** Every declared label on a spec, tagged by where it sits. `undefined`
@@ -317,23 +327,38 @@ export interface PadLabelRef {
   path?: string;
 }
 
-export function collectPadLabels(spec: PadSpec): PadLabelRef[] {
-  const out: PadLabelRef[] = [];
+/** `collectPadLabels`'s own refs, plus the phase of the panel each was
+ *  declared under. INTERNAL to this file — `checkLabelKeysUnique` is the
+ *  only reader, so the phase never leaks into the public `PadLabelRef`
+ *  shape `padItemLabelKey` callers already assert on exactly (adding a
+ *  field there would break every existing `toEqual` on its result). */
+interface PhasedPadLabelRef extends PadLabelRef {
+  phase: PadPhase;
+}
+
+function collectPhasedPadLabels(spec: PadSpec): PhasedPadLabelRef[] {
+  const out: PhasedPadLabelRef[] = [];
   for (const panel of spec.panels) {
-    out.push({ ...panel.labelKey, where: "panel" });
+    out.push({ ...panel.labelKey, where: "panel", phase: panel.phase });
     for (const action of panel.actions) {
-      out.push({ ...action.labelKey, where: "action", type: action.type });
+      out.push({ ...action.labelKey, where: "action", type: action.type, phase: panel.phase });
       for (const field of action.fields) {
-        if (field.labelKey) out.push({ ...field.labelKey, where: "field", type: action.type, path: field.path });
+        if (field.labelKey) {
+          out.push({ ...field.labelKey, where: "field", type: action.type, path: field.path, phase: panel.phase });
+        }
       }
       for (const item of action.attribution) {
         if (item.labelKey) {
-          out.push({ ...item.labelKey, where: "attribution", type: action.type, path: item.path });
+          out.push({ ...item.labelKey, where: "attribution", type: action.type, path: item.path, phase: panel.phase });
         }
       }
     }
   }
   return out;
+}
+
+export function collectPadLabels(spec: PadSpec): PadLabelRef[] {
+  return collectPhasedPadLabels(spec).map(({ phase: _phase, ...ref }) => ref);
 }
 
 /** The label a given action declares for one of its fields or attribution
@@ -348,13 +373,35 @@ export function padItemLabelKey(spec: PadSpec, type: string, path: string): PadL
 }
 
 export function checkLabelKeysUnique(spec: PadSpec): string[] {
-  const seen = new Map<string, number>();
-  for (const ref of collectPadLabels(spec)) {
-    seen.set(ref.key, (seen.get(ref.key) ?? 0) + 1);
+  const byKey = new Map<string, PhasedPadLabelRef[]>();
+  for (const ref of collectPhasedPadLabels(spec)) {
+    const bucket = byKey.get(ref.key) ?? [];
+    bucket.push(ref);
+    byKey.set(ref.key, bucket);
   }
   const problems: string[] = [];
-  for (const [key, count] of seen) {
-    if (count > 1) problems.push(`labelKey "${key}" is declared ${count} times — label keys must be unique within a module's padSpec`);
+  for (const [key, refs] of byKey) {
+    if (refs.length <= 1) continue;
+    // R7/generic — a key may now legitimately recur, but ONLY as the exact
+    // same declaration restated once per phase (`everyPhase` in
+    // sports/generic/generic.ts: the same panel/action offered at both
+    // "pre" and "live", so a scorer who never taps "Start match" still
+    // reaches everything a started fixture reaches). Every occurrence must
+    // agree on what it labels (`label`/`where`/`type`/`path`) AND no two
+    // occurrences may share a phase — two panels re-declaring one key for
+    // the SAME phase is still the original copy-paste collision this check
+    // exists to catch, not a phase pairing. Anything else stays exactly as
+    // strict as before.
+    const first = refs[0]!;
+    const phases = new Set(refs.map((ref) => ref.phase));
+    const isPhasePairing =
+      phases.size === refs.length &&
+      refs.every(
+        (ref) => ref.label === first.label && ref.where === first.where && ref.type === first.type && ref.path === first.path,
+      );
+    if (!isPhasePairing) {
+      problems.push(`labelKey "${key}" is declared ${refs.length} times — label keys must be unique within a module's padSpec`);
+    }
   }
   return problems;
 }

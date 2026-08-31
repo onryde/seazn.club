@@ -413,6 +413,52 @@ describe("checkLabelKeysUnique", () => {
   });
 });
 
+// R7/generic — the narrow phase-pairing exception: a key may recur ONLY as
+// the byte-identical declaration restated for a DIFFERENT phase (the shape
+// `everyPhase`, sports/generic/generic.ts, produces). Every other repeat
+// stays exactly as forbidden as `checkLabelKeysUnique`'s block above proves.
+describe("checkLabelKeysUnique — the phase-pairing exception", () => {
+  const live = goodSpec.panels[0] as PadSpec["panels"][number]; // "pad.fake.panel.live" / "pad.fake.action.run"
+  const reset = goodSpec.panels[1] as PadSpec["panels"][number];
+
+  it("passes when the identical panel+action are restated once for \"pre\" and once for \"live\"", () => {
+    const pre: PadSpec["panels"][number] = { ...live, phase: "pre" };
+    const spec: PadSpec = { ...goodSpec, panels: [pre, live, reset] };
+    expect(checkLabelKeysUnique(spec)).toEqual([]);
+  });
+
+  it("still fails when one key is declared twice for the SAME phase, even with identical content", () => {
+    const spec: PadSpec = { ...goodSpec, panels: [live, { ...live }, reset] };
+    expect(checkLabelKeysUnique(spec)).not.toEqual([]);
+  });
+
+  it("still fails when a key repeats across two phases but its content drifts", () => {
+    const driftedPre: PadSpec["panels"][number] = {
+      ...live,
+      phase: "pre",
+      labelKey: { key: live.labelKey.key, label: "Different text" }, // same key, different label
+    };
+    const spec: PadSpec = { ...goodSpec, panels: [driftedPre, live, reset] };
+    expect(checkLabelKeysUnique(spec)).not.toEqual([]);
+  });
+
+  it("still fails when only the ACTION content drifts between the two phase copies", () => {
+    const driftedPre: PadSpec["panels"][number] = {
+      ...live,
+      phase: "pre",
+      actions: [{ ...(live.actions[0] as PadSpec["panels"][number]["actions"][number]), type: "fake.reset" }],
+    };
+    const spec: PadSpec = { ...goodSpec, panels: [driftedPre, live, reset] };
+    expect(checkLabelKeysUnique(spec)).not.toEqual([]);
+  });
+
+  it("collectPadLabels itself never exposes phase — the public ref shape is unchanged", () => {
+    const pre: PadSpec["panels"][number] = { ...live, phase: "pre" };
+    const spec: PadSpec = { ...goodSpec, panels: [pre, live, reset] };
+    for (const ref of collectPadLabels(spec)) expect(ref).not.toHaveProperty("phase");
+  });
+});
+
 // S7/#427 — `collectPadLabels` is what the extended (c) check and every
 // per-sport field-label assertion read. Vacuity guard first: a walker that
 // returned nothing would make all three cases above pass while proving

@@ -440,15 +440,25 @@ function correctionCeiling(state: GenericStateShape): number {
  * the dead-end tap this programme keeps closing.
  *
  * Three terms, each load-bearing:
- *  - every `padSpec` panel generic declares is `phase: "live"`, and
- *    `buildPadView` matches panel phase to view phase EXACTLY, so nothing is
- *    reachable in "pre" or "post";
+ *  - "post" is the only unscoreable phase (the same `POST_PHASES` boundary
+ *    `buildHalf`'s own `tappable` uses below) — NOT "not live", which is
+ *    what this mirror hardcoded before the R7 defect fix. `moreActions`
+ *    (the real chassis function this mirrors, pad-host.tsx) carries no
+ *    phase logic of its own at all: it walks `view.panels`, already
+ *    phase-filtered by `buildPadView`, so the real answer is only ever as
+ *    phase-restrictive as `padSpec` itself. `padSpec` now declares every
+ *    panel at "pre" as well as "live" (`everyPhase`, generic.ts) and never
+ *    at "post", so matching THAT boundary here — rather than the narrower
+ *    "live" this file used to hardcode — is what keeps the mirror a
+ *    mirror: win_loss mode's tally (its only path to `generic.score`, with
+ *    no dedicated half or tile of its own) now reaches More in "pre"
+ *    exactly as it already did in "live";
  *  - a type this skin already dedicates (its halves, tiles and sheets) is
  *    excluded from More by `dedicatedEventTypes`;
  *  - a type above the fixture's own band is dropped by the band filter.
  */
 function moreHasContent(view: PadHostView): boolean {
-  if (resolvePhase(view) !== "live") return false;
+  if (resolvePhase(view) === "post") return false;
   const dedicated =
     resultModeOf(cfgOf(view)) === "score"
       ? // `scoreEntry` claims generic.result at every band; the halves and the
@@ -462,10 +472,18 @@ function moreHasContent(view: PadHostView): boolean {
   return ALL_TYPES.some((type) => !dedicated.includes(type) && withinBand(type, view.band));
 }
 
-/** Both phases the fold accepts. `applyScore`/`applyResult` each allow "pre"
- *  as well as "live" (generic.ts), so a scorer who never tapped "Start match"
- *  — the ordinary case for a result typed in after the fact — still has every
- *  action on screen. */
+/** Both phases the fold accepts, and — since the R7 defect fix — both phases
+ *  `padSpec` declares too; the two sources now AGREE. `applyScore`/
+ *  `applyResult` (generic.ts) each allow "pre" as well as "live", but
+ *  `padSpec`'s own panels used to declare "live" only, so this skin's tiles
+ *  were tappable in "pre" while dispatch refused them at the door
+ *  ("Declared here: (none)", `createSkinDispatch`) — the "pad offers what
+ *  the engine refuses" defect this repo had already closed three other
+ *  instances of (R2c). `everyPhase` (generic.ts) now declares every panel
+ *  at both phases, so this list is no longer this skin getting ahead of
+ *  padSpec: a scorer who never tapped "Start match" — the ordinary case for
+ *  a result typed in after the fact — really does have every action on
+ *  screen, all the way through to dispatch. */
 const SCOREABLE_PHASES: readonly PadPhase[] = ["pre", "live"];
 
 export function buildTiles(view: PadHostView, t: TFn): TileSpec[] {
