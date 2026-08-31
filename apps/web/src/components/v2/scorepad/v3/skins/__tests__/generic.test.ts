@@ -431,9 +431,28 @@ function realMoreActions(v: PadHostView): string[] {
 
 describe("the More tile agrees with the chassis, in every mode/band/phase", () => {
   it("is declared exactly when moreActions has something to show", () => {
-    const ledgers: EventEnvelope[][] = [stream(), stream(start()), stream(start(), point("H"))];
+    // A DECIDED ledger is in this list on purpose (review finding 3): without
+    // one the sweep only ever resolves "pre" and "live", so `moreHasContent`'s
+    // own "post" branch — the single line R7 changed when padSpec stopped
+    // being live-only — had no teeth here at all. `sawPost` below keeps it
+    // that way: if `winner()` ever stops deciding the fixture, this test says
+    // so instead of quietly going back to covering two phases.
     let sawBoth = { withMore: false, withoutMore: false };
+    let sawPost = false;
     for (const cfg of [SCORE_CFG, SCORE_NO_DRAWS_CFG, WIN_LOSS_CFG, WIN_LOSS_DRAWS_CFG]) {
+      // The terminal event has to match the mode: `generic.result` refuses a
+      // bare `winnerId` in score mode ("score mode requires p1Score and
+      // p2Score", applyResult) and refuses scores in win_loss. Building the
+      // decided ledger per cfg is what lets the sweep reach "post" in ALL
+      // FOUR configs rather than silently skipping the two it cannot decide.
+      const decided: readonly [string, unknown] =
+        cfg.resultMode === "score" ? [RESULT_TYPE, { p1Score: 2, p2Score: 1 }] : winner("H");
+      const ledgers: EventEnvelope[][] = [
+        stream(),
+        stream(start()),
+        stream(start(), point("H")),
+        stream(start(), decided),
+      ];
       for (const band of [0, 1, 2, 3] as FidelityBand[]) {
         for (const events of ledgers) {
           const v = view({ cfg, band, events });
@@ -441,12 +460,14 @@ describe("the More tile agrees with the chassis, in every mode/band/phase", () =
           const real = realMoreActions(v).length > 0;
           expect(declared, `${cfg.resultMode}@${band} phase=${resolvePhase(v)}`).toBe(real);
           sawBoth = { withMore: sawBoth.withMore || declared, withoutMore: sawBoth.withoutMore || !declared };
+          sawPost = sawPost || resolvePhase(v) === "post";
         }
       }
     }
     // Guard the guard: a sweep that only ever saw one answer would agree
     // vacuously with anything.
     expect(sawBoth).toEqual({ withMore: true, withoutMore: true });
+    expect(sawPost, "the sweep must actually reach a decided fixture").toBe(true);
   });
 
   it("win_loss at band 1+ keeps the module's own tally actions reachable through More", () => {
