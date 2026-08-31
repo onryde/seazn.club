@@ -54,7 +54,7 @@ the wave re-reads spec §2 primitives before extending them.
 
 ## 4. Agent topology
 
-Scout (sonnet, read-only) → Implementer (xHigh) → Reviewer → loop until
+Scout → Implementer → Reviewer → loop until
 clean AND gate green; main thread reruns the gate itself and pastes JSON
 counts. Dispatch briefs carry: exact paths, acceptance, do-not-touch, verify
 command, ≤15-line output cap. Parallel only on provably disjoint file sets.

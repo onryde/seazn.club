@@ -52,7 +52,29 @@ import type { CSSProperties } from "react";
  * `standard`. They are the one place in this pad where colour is INFORMATION
  * rather than decoration.
  */
-export const SPORT_TOKENS = ["board", "board-2", "ink", "led", "caution", "dismissal"] as const;
+/*
+ * R6-3 (owner ruling, 2026-08-30) adds the SEVENTH, `advisory` — the FIH green
+ * card, and the first widening of this list since B4 opened it.
+ *
+ * The argument is hockey's discipline model, not a preference for more
+ * colours. `sports/hockey/hockey.ts` declares `disciplineColors: [green,
+ * yellow, red]`: three physical cards an umpire holds up, every one of them a
+ * swatch rather than a word. That is ONE SIGNAL AT THREE STRENGTHS, and two
+ * tokens cannot carry three strengths — mapping green onto `caution` would
+ * make a green card and a yellow card the same colour, which is the exact
+ * information loss `caution`/`dismissal` were split out to prevent.
+ *
+ * Tennis's precedent does NOT transfer, and the reason is worth stating
+ * because it is the obvious counter-argument: R4 ruled that tennis's
+ * four-step ladder takes the tones at its ENDS and words its middles. That
+ * works because tennis's ladder genuinely IS words (an enum rendered as
+ * choice-row labels). Hockey's is three coloured pieces of card.
+ *
+ * Six of the seven sports never use `advisory` and never should: it is
+ * absent from every palette but hockey's, which is what
+ * `sport-theme.test.ts`'s "overrides only" locks keep honest.
+ */
+export const SPORT_TOKENS = ["board", "board-2", "ink", "led", "advisory", "caution", "dismissal"] as const;
 export type SportToken = (typeof SPORT_TOKENS)[number];
 export type SportPalette = Readonly<Record<SportToken, string>>;
 
@@ -62,7 +84,7 @@ export type SportPalette = Readonly<Record<SportToken, string>>;
  * values is the drift this programme has already paid for twice (see
  * `_INDEX.md`'s "TWO progression vocabularies" and the v2 fidelity ladder).
  */
-export const SPORT_TONES = ["caution", "dismissal"] as const;
+export const SPORT_TONES = ["advisory", "caution", "dismissal"] as const;
 export type SportTone = (typeof SPORT_TONES)[number];
 
 /**
@@ -89,6 +111,13 @@ export const DEFAULT_SPORT_PALETTE: SportPalette = {
   "board-2": "#1d1145", // --mk-night-2
   ink: "#f5f0e8", // --mk-cream
   led: "#9ae600", // Tailwind v4 lime-400, oklch(84.1% 0.238 128.85) -> sRGB
+  // R6-3: `advisory` joins on the same terms `caution`/`dismissal` did — no
+  // pre-B4 value exists because nothing painted a green card either, so this
+  // is the app's own daylight signal set completing itself (green-600 beside
+  // amber-600 and red-600), stated as literal hex for the same anti-drift
+  // reason. Only hockey overrides it; every other sport inherits a value its
+  // skin never names.
+  advisory: "#16a34a",
   caution: "#d97706",
   dismissal: "#dc2626",
 };
@@ -142,6 +171,111 @@ export const SPORT_PALETTES: Readonly<Record<string, Partial<SportPalette>>> = O
     caution: "#ffd60a",
     dismissal: "#d00000",
   },
+  /*
+   * ------------------------------------------------------------------------
+   * THE PERIOD PAIR (R6-3, owner-ruled 2026-08-30). Hockey and ice hockey,
+   * landing together one wave before either skin does, for the reason the
+   * racquet block below already records: they share ONE engine
+   * (`sports/period/kernel.ts`) and will be judged on one sign-off sheet, so
+   * their identities are a set to be picked together or a set that drifts.
+   * `contrast.test.ts` pins both EXPLICITLY, today, because its own tone
+   * licence is usage-driven and can say nothing about a palette whose skin
+   * does not exist yet.
+   *
+   * Placed HERE, between `football` and `tennis`, because that is their
+   * alphabetical position among their immediate neighbours — R7 is editing
+   * this same literal concurrently and lands its own sports at a different
+   * point, so the two edits merge mechanically instead of colliding on one
+   * trailing region.
+   * ------------------------------------------------------------------------
+   */
+
+  /*
+   * HOCKEY — the water-based pitch's deep teal, under an umpire's board.
+   *
+   *   board       the wet blue-green turf, floodlit
+   *   board-2     the band under the names, one shade up the same surface
+   *   led         the umpire's board amber — the signature
+   *   advisory    the FIH GREEN CARD (Rules 14.1a) — R6-3's seventh token
+   *   caution     the yellow card
+   *   dismissal   the red card
+   *   ink         cool off-white
+   *
+   * Chosen over "pitch green", which is both the generic sports-app answer and
+   * a straight collision with football's floodlit turf on the same sheet. The
+   * modern international game is played on a BLUE water-based surface with a
+   * green surround, and no other sport in this programme owns teal.
+   *
+   * WHY THREE TONES AND NOT TWO: see `SPORT_TOKENS`'s own note above. All
+   * three are SWATCHES — `disciplineColors` is three cards, not three words —
+   * so they carry the swatch obligations (a readable label on the wash, the
+   * `--sport-board` hairline for WCAG 1.4.11) and not the 4.5 text floor.
+   * `dismissal` at 4.46:1 on its own board is therefore CORRECT and
+   * deliberately pinned two-sided in `contrast.test.ts`: a later wave that
+   * wants to word a red card on the night board has to change that assertion
+   * first, exactly as football's own licence requires.
+   */
+  hockey: {
+    board: "#06323c",
+    "board-2": "#0a4657",
+    ink: "#eef6f8",
+    led: "#ffd23f",
+    advisory: "#3ddc84",
+    caution: "#ffd60a",
+    dismissal: "#ff5a4d",
+  },
+
+  /*
+   * ICE HOCKEY — the rink at night: near-black boards, and the ice's own cyan.
+   *
+   *   board       the arena in the dark, past the boards
+   *   board-2     the band, one step up
+   *
+   * THE GROUND CARRIES A BLUE CAST ON PURPOSE (owner-ruled 2026-08-30, R6-1b,
+   * reversing R6-1a's "leave it"). The first value was `#08090c`, a neutral
+   * near-black, and it measured **dE 4.2 from table tennis's `#101418`** —
+   * below the ~8 at which two colours stop being distinguishable side by side.
+   * On screen that is harmless (one sport at a time, and the accents are a full
+   * hue apart), but the sign-off sheet shows all nine grounds at once and two
+   * of them read as one black rectangle.
+   *
+   * `#040a22` takes the worst pair from **4.2 to 11.4** while keeping L* at 3.2
+   * — still a near-black clock face, not a navy. Chroma 16.0 is the deliberate
+   * ceiling: `#020430` scored a better dE 14.6 but at chroma 29.5 it reads as
+   * deep navy, which is a different design than the one signed off. The
+   * separation from table tennis is now carried by HUE rather than by
+   * lightness, which is the robust axis — two near-blacks can drift together
+   * as either is retuned; two different hues cannot.
+   *
+   * Contrast is unchanged in kind and recomputed, not assumed: ink 17.4/16.1,
+   * led 13.5/12.5, caution 12.1, dismissal 7.0. The band moved with the ground
+   * (`#0c1430`) to hold the same dE 6.6 gap the original pair had at 7.1.
+   *   led         cold rink cyan — the power-play clock and the score digits
+   *   caution     the minor/major end of the penalty ladder
+   *   dismissal   misconduct through match penalty
+   *   ink         cool near-white
+   *
+   * NO `advisory` OVERRIDE, deliberately: the green card is FIH's, not IIHF's,
+   * and ice hockey's ladder (minor / double / major / misconduct / game
+   * misconduct / match, `sports/icehockey/icehockey.ts`) has no third card
+   * grade to name. It inherits the default it never paints, which is what
+   * `SPORT_PALETTES` being OVERRIDES ONLY buys — and `contrast.test.ts` asserts
+   * the absence, so a later "complete the palette" tidy-up reds instead of
+   * quietly inventing a card this sport does not have.
+   *
+   * Its tones are WORDS, not swatches, so both owe the strict 4.5 on both
+   * grounds — the same obligation the racquet family carries and the opposite
+   * of hockey's, one entry above.
+   */
+  icehockey: {
+    board: "#040a22",
+    "board-2": "#0c1430",
+    ink: "#eef2f6",
+    led: "#67e8f9",
+    caution: "#ffc233",
+    dismissal: "#ff6b6b",
+  },
+
   /*
    * TENNIS (R4-4, owner-ruled 2026-08-25 off the published comps sheet).
    * Deep hardcourt blue, and the ball's optic yellow spent on exactly ONE

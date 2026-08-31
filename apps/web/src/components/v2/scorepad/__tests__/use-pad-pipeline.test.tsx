@@ -1983,7 +1983,7 @@ describe("usePadPipeline — task 4 fix round 1 (controller review findings 1 & 
       HOLD_MS,
       () => {}, // belongs to the pre-"reload" instance — irrelevant to this test
     );
-    await vi.advanceTimersByTimeAsync(2000); // 2s elapsed pre-"reload"; 4s of the window remain
+    await vi.advanceTimersByTimeAsync(2000); // 2s elapsed pre-"reload"; HOLD_MS-2000 of the window remains
 
     // A genuinely fresh mount — matching a real reload (ownEventIds starts
     // empty, exactly like the pass-J backward-compat test above).
@@ -1993,11 +1993,13 @@ describe("usePadPipeline — task 4 fix round 1 (controller review findings 1 & 
     expect(appendCalls).toHaveLength(0); // still held — must not send early
     expect(pad.current.queueDepth).toBe(1);
 
-    await vi.advanceTimersByTimeAsync(3999); // t=5999 since the ORIGINAL enqueue — just short
+    // Expressed in HOLD_MS, not the literal it used to be: 2000ms of the
+    // window elapsed before the "reload", so this lands 1ms short of it.
+    await vi.advanceTimersByTimeAsync(HOLD_MS - 2000 - 1);
     expect(appendCalls).toHaveLength(0);
 
-    // t=6000 since the ORIGINAL enqueue: the REMAINING ~4000ms (not a fresh
-    // HOLD_MS from mount time, which would land at t=8000) closes. No
+    // t=HOLD_MS since the ORIGINAL enqueue: the REMAINING window (not a fresh
+    // HOLD_MS from mount time, which would land later) closes. No
     // submit()/online event anywhere in this test — only the resume
     // effect's own re-armed tick can be responsible for what happens next.
     await vi.advanceTimersByTimeAsync(1);

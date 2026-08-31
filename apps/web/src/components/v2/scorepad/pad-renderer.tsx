@@ -18,7 +18,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { EventEnvelope, LineupPair } from "@seazn/engine/core";
 import type { AnySportModule, FidelityBand, PadFieldValue, PadPhase, PadSpec } from "@seazn/engine/sport";
 import { useMsg } from "@/components/i18n/dict-provider";
-import { scoringErrorText } from "@/lib/scoring-vocab";
+import { refusalText } from "./refusal-copy";
 import type { MessageKey } from "@/lib/messages";
 import type { PadTransport } from "./transport";
 import type { OwnIdentity } from "./types";
@@ -345,12 +345,12 @@ export function PadRenderer(props: PadRendererProps) {
 
       {pipeline.lastRejection && (
         <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-          {scoringErrorText(
-            pipeline.lastRejection.code,
-            pipeline.lastRejection.message,
-            msg,
-            "scorepad.rejection.fallback",
-          )}
+          {/* R6 fix pass 3, gap 1 — the SAME resolver the v3 lane uses
+           *  (./refusal-copy.ts). Both lanes share one `usePadPipeline`, so
+           *  once transport.ts started surfacing the permanent 4xx class this
+           *  surface began receiving codes `scoringErrorText` had no copy for
+           *  and answered with the server's own English. */}
+          {refusalText(pipeline.lastRejection, msg)}
         </p>
       )}
 

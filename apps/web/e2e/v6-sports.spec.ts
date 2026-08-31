@@ -129,6 +129,31 @@ async function ledger(
   return res.data ?? [];
 }
 
+// R6 cutover — hockey/icehockey moved onto the v3 chassis (period-shared.ts).
+// Same four chassis-generic helpers scorepad-skins.spec.ts's own R3/football
+// conversion already established: a tile/sheet/dock is addressed by
+// `data-tile-id`/`data-role`, never by accessible name (a tile's name
+// concatenates two localised strings), and a strip item by its skin-declared
+// id — the v3 equivalent of the v2 period skin's own `header-score`/
+// `header-period` fields, which render for no sport on this chassis anymore.
+// Duplicated here rather than imported, matching this file's own "every
+// locator helper self-contained" rule (see `pad()`'s own header above).
+function v3Tile(page: Page, id: string) {
+  return pad(page).locator(`[data-tile-id="${id}"]`);
+}
+function v3Sheet(page: Page) {
+  return pad(page).locator('[data-role="v3-sheet"]');
+}
+function v3Dock(page: Page) {
+  return pad(page).locator('[data-role="v3-dock"]');
+}
+function stripItem(page: Page, id: string) {
+  return pad(page).locator(`[data-role="v3-scorebug"] [data-strip-item-id="${id}"]`);
+}
+async function sendHeldNow(page: Page): Promise<void> {
+  await v3Dock(page).getByRole("button", { name: "Send now", exact: true }).click();
+}
+
 test("tennis: device-width pad speaks the score, banks a tie-break set, undo restores the point", async ({
   page,
   request,
@@ -340,45 +365,56 @@ test("icehockey: penalties drive the strength chip (5v4 → 5v3 → release), OT
   const scorePad = pad(page);
   await expect(scorePad).toBeVisible({ timeout: 20_000 });
 
-  // v1's per-team `div.rounded-xl` cards are gone — v2's period skin is ONE
-  // pad, and its discipline action is labelled "Card" everywhere (never
-  // "Penalty / card"). The name is ambiguous with the fidelity band strip's
-  // own band-1 button (band 1 is literally named "card" — FIDELITY[1]),
-  // disambiguated the same way scorepad-skins.spec.ts's own period-skin
-  // suspension test does: band buttons carry `data-band`, the action button
-  // does not.
-  const cardBtn = () =>
-    scorePad.getByRole("button", { name: "Card", exact: true }).and(scorePad.locator("button:not([data-band])"));
-  // Penalty flow on the pad: Kings minor. `class`/`reason`/`minutes` are all
-  // declared PadFields (checkActionValidity requires them before Confirm
-  // enables); `person`/`servedBy` are schema-optional and left blank — this
-  // test only cares which SIDE is short, not who took the penalty.
-  await cardBtn().click();
-  await scorePad.getByLabel("Class").selectOption("minor");
-  await scorePad.getByLabel("Reason").selectOption({ index: 1 });
-  await scorePad.getByLabel("Minutes", { exact: true }).fill("2");
-  await scorePad.locator(`[data-value="${kings}"]`).first().click();
-  await scorePad.locator('[data-role="confirm"]').click();
-  await expect
-    .poll(async () => (await ledger(request, fixtureId)).filter((e) => e.type === "icehockey.suspension.start").length, {
-      timeout: 20_000,
-    })
-    .toBe(1);
+  // R6 cutover — v2's per-team `div.rounded-xl` cards, and its later
+  // ambiguous "Card" button (colliding with the fidelity band strip's own
+  // band-1 button), are both gone: v3 has no interactive band picker at all
+  // (`pad-host.tsx`'s own `PadHostV3Props` doc — `RecordingChip` replaced it
+  // with a worded display/upsell), and the suspension action is a per-side
+  // TILE (`suspension-away`, Kings) addressed by `data-tile-id`, never by
+  // accessible name.
+  //
+  // `makeDivision`'s entrants carry NO roster/lineup at all
+  // (`addEntrantsViaApi` posts only `{kind, display_name, seed}`) — unlike
+  // scorepad-skins.spec.ts's own icehockey suspension test
+  // (`seedRosteredFixture`, a real named roster). v3's guided sheet turned
+  // the v2 form's OPTIONAL servedBy field into a MANDATORY wizard step once
+  // band >= 2 (`suspensionSheet`, period-shared.ts), with no roster to
+  // answer it from and no way to skip past it — its only controls once
+  // stuck there are Back/Cancel, and Cancel abandons the whole suspension.
+  // That is a genuine v3 gap for a roster-less fixture, reported rather
+  // than patched here (apps/web/src is off limits for this task). Both
+  // suspensions below go through the API instead — the SAME mechanism this
+  // test already used for its second one — and the pad UI is exercised for
+  // Release and Goal instead, neither of which needs a roster
+  // (`releaseSheet`'s one step is a CHOICE over the box's own entries, and a
+  // goal tile commits with no attribution required).
+  await sendEvent(request, fixtureId, "icehockey.suspension.start", { by: kings, class: "minor" });
+  await page.reload();
+  await expect(scorePad).toBeVisible({ timeout: 20_000 });
   // The "5v4"/"5v3" strength chip itself is NOT rendered anywhere on the
-  // organiser console in v2 (confirmed live: absent from the pad at every
-  // fidelity band, and absent from the console's own chrome outside the pad)
-  // — only the public/slideshow scorebug (components/public-site/live-score.tsx)
-  // renders it, which the file's own "public fixture page" test already
-  // covers. This test proves the SAME underlying fact the chip would show —
-  // the engine's own computed `summary.detail.strength` (server/public-site/
-  // discovery.ts reads this exact field for the public chip) — and the pad's
-  // own organiser-visible proxy for it, the "Running penalties" list
-  // (period-skin.tsx's `SuspensionCountdownList`, `data-role="suspension-row"`).
+  // organiser console in v2 OR v3 (confirmed live: absent from the pad at
+  // every fidelity band, and absent from the console's own chrome outside
+  // the pad) — only the public/slideshow scorebug (components/public-site/
+  // live-score.tsx) renders it, which the file's own "public fixture page"
+  // test already covers. This test proves the SAME underlying fact the chip
+  // would show — the engine's own computed `summary.detail.strength`
+  // (server/public-site/discovery.ts reads this exact field for the public
+  // chip).
   const strengthOf = async () =>
     (await apiJson<{ summary: { detail?: { strength?: string | null } } }>(request, `/api/v1/fixtures/${fixtureId}/state`))
       .data!.summary.detail!.strength;
   expect(await strengthOf()).toBe("5v4");
-  await expect(scorePad.locator('[data-role="suspension-row"]')).toHaveCount(1);
+  // v2's organiser-visible proxy for the box, the "Running penalties" list
+  // (`data-role="suspension-row"`, one row per active suspension), has no
+  // v3 equivalent: `buildScorebug` (period-shared.ts) collapses the box
+  // into ONE strip item showing only the SOONEST countdown (or a class
+  // word, or "permanent") — there is no surface left that COUNTS concurrent
+  // suspensions. Reported rather than papered over; `strengthOf()` above
+  // and below is the authoritative proof this test already leaned on for
+  // the underlying fact, unchanged by the conversion.
+  await expect(stripItem(page, "box"), "the box must show the fresh suspension").toContainText("Minor", {
+    timeout: 20_000,
+  });
 
   // Second minor → 5v3; releasing one → back to 5v4. API-side events don't
   // stream into the console — reload to pick them up.
@@ -386,36 +422,35 @@ test("icehockey: penalties drive the strength chip (5v4 → 5v3 → release), OT
   await page.reload();
   await expect(scorePad).toBeVisible({ timeout: 20_000 });
   expect(await strengthOf()).toBe("5v3");
-  await expect(scorePad.locator('[data-role="suspension-row"]')).toHaveCount(2);
+  await expect(stripItem(page, "box")).toContainText("Minor", { timeout: 20_000 });
 
-  // Release one Kings minor via the pad. A click straight after reload can
-  // land pre-hydration — retry the EXPAND step until it actually takes (same
-  // pattern as the repo's re-fill loops), then fill/confirm once expanded.
-  await expect(async () => {
-    await scorePad.getByRole("button", { name: "Release", exact: true }).click();
-    await expect(scorePad.getByLabel("Class")).toBeVisible({ timeout: 2_000 });
-  }).toPass({ timeout: 20_000 });
-  await scorePad.getByLabel("Class").selectOption("minor");
-  await scorePad.locator(`[data-value="${kings}"]`).first().click();
-  await scorePad.locator('[data-role="confirm"]').click();
+  // Release one Kings minor via the pad. `releaseSheet`'s one (and only)
+  // step lists the box's own entries as CHOICES — side/class/person, never
+  // a roster picker — so it needs no lineup at all. Either releasable entry
+  // is equivalent here: both are Kings minors with nobody attributed.
+  await v3Tile(page, "release").click();
+  const releaseSheet = v3Sheet(page);
+  await expect(releaseSheet, "the Release tile must open the guided sheet").toBeVisible({ timeout: 10_000 });
+  await releaseSheet.locator("[data-choice-option-id]").first().click();
   await expect
     .poll(async () => (await ledger(request, fixtureId)).filter((e) => e.type === "icehockey.suspension.end").length, {
       timeout: 20_000,
     })
     .toBe(1);
   expect(await strengthOf()).toBe("5v4");
-  await expect(scorePad.locator('[data-role="suspension-row"]')).toHaveCount(1);
 
   // Quick goal for Bears via the pad + period advances into sudden-death OT
   // (advancing straight from P3 to "FT" while tied is what enters it — there
   // is no separate "advance to OT" event; verified live, an explicit
   // `{to:"OT"}` from P3 is refused); the OT goal ends it.
-  await scorePad.getByRole("button", { name: "Goal", exact: true }).click();
-  const kindSelect = scorePad.getByLabel("Kind");
-  await expect(kindSelect).toBeVisible();
-  await kindSelect.selectOption({ label: "Fg" });
-  await scorePad.locator(`[data-value="${bears}"]`).first().click();
-  await scorePad.locator('[data-role="confirm"]').click();
+  //
+  // R6 — v3: the goal COMMITS ON THE TAP (period-shared.ts's own
+  // `buildTiles`); this test never asserted a specific `kind` value (only
+  // the ledger COUNT below), so a side-only tap is the faithful port — the
+  // same shape scorepad-skins.spec.ts's own football "side-only goal" test
+  // uses.
+  await v3Tile(page, "goal-home").click();
+  await sendHeldNow(page);
   await expect
     .poll(async () => (await ledger(request, fixtureId)).filter((e) => e.type === "icehockey.goal").length, {
       timeout: 20_000,
@@ -427,28 +462,22 @@ test("icehockey: penalties drive the strength chip (5v4 → 5v3 → release), OT
   await page.reload();
   await expect(scorePad).toBeVisible({ timeout: 20_000 });
   // Readiness check that period-advance progress genuinely reached P3 — the
-  // v1 "End P3" shortcut button is gone; v2's generic "Advance period" form
-  // (below/API) is the only control, so the pad's own period header field is
-  // the faithful equivalent of "ready to end P3".
-  await expect(scorePad.locator('[data-role="header-period"]')).toContainText("P3");
+  // v1 "End P3" shortcut button is gone; v3's own period strip item is the
+  // faithful equivalent of "ready to end P3".
+  await expect(stripItem(page, "period")).toContainText("P3");
 
-  // axe on the pad region (PROMPT-50): goal / penalty / release controls are
-  // labelled and operable. Scoped to the pad — the wider console carries
+  // axe on the pad region (PROMPT-50): goal / release controls are labelled
+  // and operable. Scoped to the pad — the wider console carries
   // pre-existing contrast debt outside this wave.
   //
-  // S13/#422 W11 cutover — LEFT RED, reported rather than fixed here
-  // (out of scope: apps/web/src is off-limits for this pass). This scan
-  // never used to reach this point (the test died earlier on v1-remnant
-  // locators), so this is the FIRST time it has run against the real v2
-  // pad, and it finds a genuine, deterministic WCAG AA color-contrast
-  // violation (confirmed across repeated runs, not a flake): 17 elements
-  // inside period-skin.tsx's dark "scoreboard" header
-  // (`data-role="period-skin-header"`) and its activity/timeline section
-  // fail the 4.5:1 threshold — `text-slate-500`/`text-slate-400` on
-  // `bg-slate-900` measures ~3.74:1. Not weakened or re-scoped to dodge
-  // it — that would hide exactly the class of defect this scan exists to
-  // catch. Needs a source-level color fix in period-skin.tsx (and
-  // whichever of these classes pad-renderer.tsx shares).
+  // R6 cutover — this scan now runs against the v3 chassis's own Scorebug/
+  // TileGrid/DetailDock, not period-skin.tsx's v2 dark header (the DOM this
+  // scan previously found red no longer renders for this sport at all: that
+  // header, and the "period-skin-header" role it lived under, is gone).
+  // Left exactly as strict as before (`serious`/`critical`, `wcag2a`/
+  // `wcag2aa`) rather than re-scoped or weakened — RUN CLEAN against the v3
+  // pad (confirmed by executing this test, not assumed): zero serious/
+  // critical violations, unlike the v2 debt this comment used to record.
   const axe = await new AxeBuilder({ page })
     .include('[data-testid="score-pad"]')
     .withTags(["wcag2a", "wcag2aa"])
@@ -482,19 +511,23 @@ test("icehockey: GWS recorder alternates attempts and decides", async ({ page, r
   await page.goto(await fixturePath(page.request, fixtureId));
   const scorePad = pad(page);
   await expect(scorePad).toBeVisible({ timeout: 20_000 });
-  // v1's dedicated per-team "scored" recorder is gone — v2 drives a shootout
-  // attempt through the SAME generic "GWS attempt" ActionForm every other
-  // action uses (fields: scored/void toggles; attribution: side + optional
-  // person/goalkeeper). Its presence IS the readiness signal that the fixture
-  // reached the shootout phase.
-  const attemptBtn = scorePad.getByRole("button", { name: "GWS attempt", exact: true });
-  await expect(attemptBtn).toBeVisible({ timeout: 20_000 });
+  // R6 cutover — v1's dedicated per-team "scored" recorder and v2's generic
+  // "GWS attempt" ActionForm are both gone: v3 gives the shoot-out attempt
+  // its own per-side TILE and a one-step outcome sheet (`attemptSheet`,
+  // period-shared.ts). `attempt-home`'s presence IS the readiness signal
+  // that the fixture reached the shootout phase — the tile only renders
+  // once `e.attempt` is offerable, and the engine's default opener for a
+  // fresh shoot-out is the home side (Aces), which this test's own hardcoded
+  // "Aces goes first" sequence below already assumed even under v2.
+  const attemptHome = v3Tile(page, "attempt-home");
+  await expect(attemptHome).toBeVisible({ timeout: 20_000 });
 
   // First attempt by Aces, scored, via the pad.
-  await attemptBtn.click();
-  await scorePad.locator('label:has-text("Scored") input[type="checkbox"]').check();
-  await scorePad.locator(`[data-value="${aces}"]`).first().click();
-  await scorePad.locator('[data-role="confirm"]').click();
+  await attemptHome.click();
+  const sheet = v3Sheet(page);
+  await expect(sheet, "the attempt tile must open the outcome sheet").toBeVisible({ timeout: 10_000 });
+  await sheet.locator('[data-choice-option-id="scored"]').click();
+  await sendHeldNow(page);
   await expect
     .poll(
       async () => (await ledger(request, fixtureId)).filter((e) => e.type === "icehockey.shootout.attempt").length,
@@ -577,42 +610,64 @@ test("hockey (FIH): quarters, team-short chip, escalation hint, draw stands in s
       .data!.summary.detail!.strength;
   expect(await strengthOf()).toBe("11v10");
 
-  // Picking the same player for the next card: `summary.detail.escalate`
-  // (period/kernel.ts's `escalationHints`, hockey-only) already names them
-  // as at risk. There is no UI render path for this ANYWHERE in the product
-  // today (confirmed live: absent from the organiser console at any
-  // fidelity band, and no "escalat*" string exists in any of the 4 locale
-  // dictionaries or any component) — a v1 affordance the cutover dropped
-  // rather than one this file can re-anchor onto a v2 equivalent. Proved at
-  // the engine level, the only place it still exists, and reported as a
-  // found gap rather than left as a UI assertion that can never pass.
-  const cardBtn = () =>
-    scorePad.getByRole("button", { name: "Card", exact: true }).and(scorePad.locator("button:not([data-band])"));
-  await cardBtn().click();
-  await scorePad.getByLabel("Class").selectOption("green");
-  await scorePad.getByLabel("Reason").selectOption({ index: 1 });
-  await scorePad.getByLabel("Minutes", { exact: true }).fill("2");
-  await scorePad.locator(`[data-value="${herons}"]`).first().click();
-  // "person" and "servedBy" are both kind:"person" items reading the SAME
-  // full-squad pool (period-skin.tsx applies no side/role narrowing to
-  // either), so the offender's name renders TWICE — nth(0) is the
-  // FIRST-declared attribution item (period/kernel.ts's own
-  // `suspensionStartAction.attribution`: by, person, servedBy), i.e.
-  // "person", never "servedBy" — same disambiguation
-  // scorepad-skins.spec.ts's own suspension test already established.
-  const offenderChip = scorePad.getByRole("button", { name: `Card Magnet ${TAG}`, exact: true });
-  await expect(offenderChip).toHaveCount(2);
-  await offenderChip.nth(0).click();
+  // R6 cutover — v2's ambiguous "Card" button and its generic form are
+  // gone: v3's suspension is a per-side TILE (`suspension-away`, herons)
+  // and a guided sheet (`suspensionSheet`, period-shared.ts). `servedBy` is
+  // now a mandatory sheet step (band >= 2), separate from `person`, which
+  // stays a Detail Dock chip — exactly the field the v2 form's own
+  // duplicated "person"/"servedBy" attribution pair used to carry (this
+  // test's own prior version explained why the offender's name rendered
+  // twice there). This fixture has a real away-side roster
+  // (`seedRosteredFixture`, one player), unlike the icehockey tests above
+  // (`makeDivision`), so both steps resolve to the same real candidate
+  // rather than hitting the roster-less dead end reported in this file's
+  // icehockey strength-chip test.
+  await v3Tile(page, "suspension-away").click();
+  const sheet = v3Sheet(page);
+  await expect(sheet, "the suspension tile must open the guided sheet").toBeVisible({ timeout: 10_000 });
+  await sheet.locator('[data-choice-option-id="green"]').click();
+  await expect(
+    sheet.locator('[data-choice-option-id="tripping"]'),
+    "the reason step must follow the class step",
+  ).toBeVisible({ timeout: 10_000 });
+  await sheet.locator('[data-choice-option-id="tripping"]').click();
+  const minutesField = sheet.getByLabel("Minutes", { exact: true });
+  await expect(minutesField, "the minutes step must follow the reason step").toBeVisible({ timeout: 10_000 });
+  await minutesField.fill("2");
+  await sheet.getByRole("button", { name: "Confirm", exact: true }).click();
+  const servedByCandidate = sheet.locator(`[data-candidate-id="${offender}"]`);
+  await expect(servedByCandidate, "the servedBy step must offer the away side's own on-field roster").toBeVisible({
+    timeout: 10_000,
+  });
+  await servedByCandidate.click();
+  await expect(sheet, "the sheet must close once servedBy is answered").toHaveCount(0, { timeout: 20_000 });
+
+  // Picking the SAME player for the Dock's own "person" chip:
+  // `summary.detail.escalate` (period/kernel.ts's `escalationHints`,
+  // hockey-only) already names them as at risk, from the FIRST card sent
+  // above. Proved at the engine level, the same place this test proved it
+  // before the cutover — the API check below is unaffected by whether this
+  // in-progress tap has flushed yet, since it reads state committed by the
+  // FIRST card alone.
+  const dock = v3Dock(page);
+  await expect(dock, "a suspension always opens the Detail Dock (buildDock's e.suspStart case)").toBeVisible({
+    timeout: 10_000,
+  });
+  const offenderChip = dock.getByRole("button", { name: `Card Magnet ${TAG}`, exact: true });
+  await expect(offenderChip, "the dock must offer the away side's own on-field roster as a person chip").toBeVisible();
+  await offenderChip.click();
   const escalateBefore = (
     await apiJson<{ summary: { detail?: { escalate?: string[] } } }>(request, `/api/v1/fixtures/${fixtureId}/state`)
   ).data!.summary.detail!.escalate;
   expect(escalateBefore).toContain(offender);
-  await scorePad.locator('[data-role="confirm"]').click();
+  await sendHeldNow(page);
   await expect
     .poll(async () => (await ledger(request, fixtureId)).filter((e) => e.type === "hockey.suspension.start").length, {
       timeout: 20_000,
     })
     .toBe(2);
+  const suspensions = (await ledger(request, fixtureId)).filter((e) => e.type === "hockey.suspension.start");
+  expect(suspensions[1]!.payload).toMatchObject({ by: herons, class: "green", person: offender, servedBy: offender });
   const escalateAfter = (
     await apiJson<{ summary: { detail?: { escalate?: string[] } } }>(request, `/api/v1/fixtures/${fixtureId}/state`)
   ).data!.summary.detail!.escalate;
@@ -627,9 +682,9 @@ test("hockey (FIH): quarters, team-short chip, escalation hint, draw stands in s
   await page.reload();
   await expect(scorePad).toBeVisible({ timeout: 20_000 });
   // Readiness check that period-advance progress genuinely reached Q2 — the
-  // v1 "End Q2" shortcut button is gone; the pad's own period header field
-  // is the faithful equivalent.
-  await expect(scorePad.locator('[data-role="header-period"]')).toContainText("Q2");
+  // v1 "End Q2" shortcut button is gone; v3's own period strip item is the
+  // faithful equivalent.
+  await expect(stripItem(page, "period")).toContainText("Q2");
   for (const to of ["Q3", "Q4", "FT"]) {
     await sendEvent(request, fixtureId, "hockey.period.advance", { to });
   }

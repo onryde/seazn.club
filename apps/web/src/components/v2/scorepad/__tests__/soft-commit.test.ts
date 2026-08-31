@@ -48,16 +48,33 @@ describe("soft-commit", () => {
     expect(sendSpy).toHaveBeenCalledTimes(1);
   });
 
+  // R6 W-4, owner-ruled 2026-08-31. Every other test in this file is
+  // HOLD_MS-RELATIVE, which is right for behaviour and means none of them can
+  // see the window's VALUE change — reverting 12000 to 6000 left this whole
+  // file green. So the window needs a floor of its own, stated as the product
+  // requirement rather than as the number: the dock asks "who was this?" over
+  // a chip row, and the scorer has to read it, find one name among a full
+  // side's worth, and tap it, on a phone, mid-match.
+  //
+  // A FLOOR, not an equality: raising the window later is a product decision
+  // that should not have to re-baseline a test, but dropping back below what
+  // a roster scan costs is the regression this guards. Lost attribution is
+  // permanent — nothing later can recover who was carded — while a chip row
+  // that lingers is tidied by the very next tap.
+  it("the attribution window is long enough to pick one name out of a full side", () => {
+    expect(HOLD_MS).toBeGreaterThanOrEqual(10_000);
+  });
+
   it("a new tap flushes the previous held event first", async () => {
     const store = memoryQueueStore();
     const sendSpyA = vi.fn();
     const sendSpyB = vi.fn();
 
-    await enqueueHeld(store, event("a"), HOLD_MS, sendSpyA); // A's own deadline: t=6000
+    await enqueueHeld(store, event("a"), HOLD_MS, sendSpyA); // A's own deadline: t=HOLD_MS
     await vi.advanceTimersByTimeAsync(1000); // t=1000, well inside A's window
     expect(vi.getTimerCount()).toBe(1); // just A's own release tick pending
 
-    await enqueueHeld(store, event("b"), HOLD_MS, sendSpyB); // flushes A first; B's deadline: t=7000
+    await enqueueHeld(store, event("b"), HOLD_MS, sendSpyB); // flushes A first; B's deadline: HOLD_MS+1000
 
     expect(sendSpyA).toHaveBeenCalledTimes(1); // A released (sent) by B's arrival
     expect(sendSpyB).not.toHaveBeenCalled(); // B still holding its own window
@@ -77,13 +94,15 @@ describe("soft-commit", () => {
     // cancellation somehow failed and A's stale timer fired anyway, a
     // SECOND onDue call is independently guarded by clearHeldFlag's own
     // idempotency (an already-unheld entry's second clear attempt is a
-    // no-op, `cleared === false` — see queue.ts). t=6500 is past A's
-    // original schedule (t=6000) but still short of B's real one (t=7000).
-    await vi.advanceTimersByTimeAsync(5500); // t=6500
+    // no-op, `cleared === false` — see queue.ts). That point is past A's
+    // original schedule (t=HOLD_MS) but still short of B's real one (+1000).
+    // Expressed in HOLD_MS, not the literal it used to be: from t=1000 this
+    // lands at HOLD_MS+500 — past A's original schedule, 500ms short of B's.
+    await vi.advanceTimersByTimeAsync(HOLD_MS - 500);
     expect(sendSpyA).toHaveBeenCalledTimes(1); // still just once
     expect(sendSpyB).not.toHaveBeenCalled(); // B's own window hasn't closed yet
 
-    await vi.advanceTimersByTimeAsync(500); // t=7000 — B's real deadline
+    await vi.advanceTimersByTimeAsync(500); // t=HOLD_MS+1000 — B's real deadline
     expect(sendSpyB).toHaveBeenCalledTimes(1);
     expect(vi.getTimerCount()).toBe(0); // nothing left pending
   });

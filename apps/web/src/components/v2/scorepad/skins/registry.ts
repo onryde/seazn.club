@@ -39,6 +39,16 @@
 // keep a real, honest row despite being equally unreachable through
 // `ScorePad` today.
 //
+// hockey/icehockey joined cricket/tennis/football's category in R6
+// (2026-08-30, `v3/skins/period-shared.ts`'s `makePeriodSkin` — one factory,
+// both sports). `period-skin.tsx` below is still real, tested code — R6's own
+// task D left it working rather than demolishing it, unlike racquet-skin
+// above — but `V3_SKINS` owns both keys now and `ScorePad` resolves the v3
+// lane FIRST, so the `hockey`/`icehockey -> period-skin` row two entries up
+// is exactly as unreachable through `ScorePad` as the three names above it.
+// R6 fix pass 4, finding 5 (branch review): this note was the one R5 left for
+// racquet-skin that R6's own conversion never got.
+//
 // Everything else (generic, carrom, boardgame, …) stays on the universal
 // renderer DELIBERATELY — the universal renderer guarantees coverage, and a
 // sport without the match volume to earn hand-crafted ergonomics is better

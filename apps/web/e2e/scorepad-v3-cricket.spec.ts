@@ -1,4 +1,5 @@
 import { test, expect, type Page, type APIRequestContext } from "@playwright/test";
+import { HOLD_MS } from "../src/components/v2/scorepad/queue";
 import {
   activeOrg,
   apiJson,
@@ -116,7 +117,7 @@ function sheetRoot(page: Page) {
 // — detail-dock.tsx's own doc: `dismiss()` calls `releaseHeld`, an
 // IMMEDIATE FLUSH, never a cancel). Every test below that needs its
 // dispatch CONFIRMED on the ledger uses this instead of waiting out the
-// full HOLD_MS=6000ms window — none of them are testing hold-window TIMING
+// full HOLD_MS window — none of them are testing hold-window TIMING
 // itself (the two Undo tests earlier in this file already own that), so
 // there is nothing to lose by flushing early, and it keeps every budget
 // below well under the 120_000-180_000 the timing-sensitive tests need.
@@ -159,7 +160,7 @@ test(
     "over honours cfg ballsPerOver, and a wicket completes through the guided sheet",
   async ({ page }) => {
     // Six held dispatches (five balls + one wicket), each waiting out
-    // queue.ts's HOLD_MS = 6000ms soft-commit window before the ledger
+    // queue.ts's HOLD_MS soft-commit window before the ledger
     // confirms it (spec §2.3) — comfortably exceeds Playwright's 60s default.
     test.setTimeout(150_000);
 
@@ -322,13 +323,19 @@ test("cricket v3: undo INSIDE the soft-commit hold window drops silently, no cor
     timeout: 5_000,
   });
 
-  // Positive proof, not merely "nothing happened yet": wait PAST
-  // queue.ts's HOLD_MS (6000ms) — the one deadline this mechanism has — then
-  // confirm the ledger never saw the tap at all. A plain `waitForTimeout` is
-  // usually the wrong tool here (AGENTS.md), but proving an ABSENCE past a
-  // KNOWN deadline is the one shape of claim a fixed wait is the right proof
-  // for: there is no earlier real signal to poll for the negative case.
-  await page.waitForTimeout(7_000);
+  // Positive proof, not merely "nothing happened yet": wait PAST queue.ts's
+  // HOLD_MS — the one deadline this mechanism has — then confirm the ledger
+  // never saw the tap at all. A plain `waitForTimeout` is usually the wrong
+  // tool here (AGENTS.md), but proving an ABSENCE past a KNOWN deadline is
+  // the one shape of claim a fixed wait is the right proof for: there is no
+  // earlier real signal to poll for the negative case.
+  //
+  // DERIVED from HOLD_MS, never a literal. This wait was `7_000` against a
+  // 6000ms window; when R6 took the window to 12000 the wait stopped passing
+  // the deadline and the assertion went vacuous — still green, and green for
+  // a reason that had nothing to do with the behaviour. A test that cannot
+  // fail is worse than one that is missing, because it is counted.
+  await page.waitForTimeout(HOLD_MS + 1_000);
   const rows = await ledger(page.request, fx.fixtureId);
   expect(rows.filter((e) => e.type === "cricket.ball")).toHaveLength(0);
   expect(rows.filter((e) => e.type === "core.void")).toHaveLength(0);

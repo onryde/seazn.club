@@ -39,11 +39,12 @@
 // own suite proves every DECISION, not the DOM.
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { EventEnvelope, LineupPair, SquadState } from "@seazn/engine/core";
-import { initSquads } from "@seazn/engine/core";
+import { CORE_EVENT_SCHEMAS, initSquads, isCoreEventType } from "@seazn/engine/core";
 import type { AnySportModule, FidelityBand, PadSpec } from "@seazn/engine/sport";
 import { useMsg } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
-import { scoringErrorText, type MsgFn } from "@/lib/scoring-vocab";
+import { type MsgFn } from "@/lib/scoring-vocab";
+import { refusalText } from "../refusal-copy";
 import type { PadTransport } from "../transport";
 import type { OwnIdentity } from "../types";
 import { usePadPipeline } from "../use-pad-pipeline";
@@ -66,6 +67,19 @@ import { SwapSheet, refusalMessage, type PolicyVerdict, type SwapSheetSpec } fro
 import { GuidedSheet } from "./guided-sheet";
 import { RecordingChip } from "./recording-chip";
 import { buildRibbon, type Ribbon } from "./ribbon";
+import {
+  CLOCK_NUDGE_SECONDS,
+  CLOCK_NUDGE_FINE_SECONDS,
+  adjustClock,
+  elapsedOf,
+  formatClock,
+  reseatClock,
+  stampOf,
+  stampPayload,
+  toggleClock,
+  type PadClock,
+  type PayloadSchemaProbe,
+} from "./clock";
 import { ActivityPanel, latestRowDetail, type ActivityDetailResolver, type ActivityEvent } from "./activity";
 import { MORE_SHEET_KEY, type DockSpec, type GuidedSheetSpec, type PadHostView, type PadPhase, type ScorebugSpec, type SkinDefV3, type SwapSlot, type TapEvent, type TileSpec } from "./types";
 import { sportThemeAttr, sportThemeStyle } from "./sport-theme";
@@ -395,15 +409,24 @@ export function resolveSheet(sheetKey: string, sheets: Record<string, GuidedShee
  * skin renders through this one host), not a per-sport fix.
  *
  * Ports the legacy renderer's own surface verbatim in semantics
- * (pad-renderer.tsx: `pipeline.lastRejection && <p>{scoringErrorText(...)}
- * </p>`) — same source (`pipeline.lastRejection`), same resolver
- * (`scoringErrorText`), same fallback key (`scorepad.rejection.fallback`,
- * already localized in all 4 dictionaries — no new i18n key needed). `null`
- * means "render nothing", matching the legacy renderer's `&&`-gated JSX.
+ * (pad-renderer.tsx: `pipeline.lastRejection && <p>{…}</p>`) — same source
+ * (`pipeline.lastRejection`), same resolver, same fallback key. `null` means
+ * "render nothing", matching the legacy renderer's `&&`-gated JSX.
+ *
+ * R6 FIX PASS 3, GAP 1 — the resolver moved from `scoringErrorText` to
+ * `refusalText` (../refusal-copy.ts), and BOTH lanes moved together. The
+ * difference is the fall-through: `scoringErrorText`'s contract ends "…else
+ * the RAW SERVER MESSAGE", which was unreachable while only a 422 could get
+ * here (every engine code has copy) and became reachable the moment
+ * transport.ts started surfacing the whole permanent 4xx class. A 402 then
+ * resolved to "Plan upgrade required: scoring.match_timeline" — English in
+ * every locale, and an internal feature slug on a rink-side screen.
+ * `refusalText` never falls through to server prose. `scoringErrorText`
+ * itself is untouched: the fixture console and the device pad still want its
+ * raw-message behaviour, and neither is the pad chassis.
  */
 export function rejectionText(rejection: RejectionInfo | null, m: MsgFn): string | null {
-  if (!rejection) return null;
-  return scoringErrorText(rejection.code, rejection.message, m, "scorepad.rejection.fallback");
+  return refusalText(rejection, m);
 }
 
 export type UndoDecision = { kind: "drop"; heldId: string } | { kind: "void"; eventId: string };
@@ -657,6 +680,197 @@ export function adaptSwapSlot(
  * the identical `cricket.ball` event TYPE) is exactly why this widening
  * exists; see `SkinDefV3.dock`'s own doc, types.ts.
  */
+/**
+ * R6/task A — the host's stamping step, as a pure function so it can be driven
+ * from a node test against a REAL engine module (`__tests__/clock.test.ts`
+ * does exactly that: real skin tile -> this -> real `foldMatch`).
+ *
+ * The whole decision is delegated: `stampPayload` (../clock.ts) probes the
+ * owning schema — `schemaFor` below — with the stamp applied, and keeps it
+ * only if that schema parses. Nothing here mirrors which event types accept an
+ * `at`: `at` is `GameTime.optional()` on all nine football payloads, on the
+ * period kernel's seven, and on seven of the fourteen `CORE_EVENT_SCHEMAS`,
+ * while the other seven are `z.strictObject`s that would reject the extra key
+ * outright. See `stampPayload`'s own doc for why asking the engine beats a
+ * skin-side list, and `schemaFor` for why the core table has to be reachable
+ * at all.
+ *
+ * `eventSchemas` is OPTIONAL on `AnySportModule`, and a module without one
+ * stamps nothing but its kernel events — the same fail-safe direction every
+ * branch in this path takes: a pad that would have dispatched still dispatches.
+ */
+export function stampFor(
+  module: AnySportModule,
+  type: string,
+  payload: unknown,
+  clock: PadClock | null,
+  nowMs: number,
+): unknown {
+  return stampPayload(payload, stampOf(clock, nowMs), schemaFor(module, type));
+}
+
+/**
+ * The schema that owns `type` — the module's registry first, the KERNEL's
+ * second.
+ *
+ * R6 review, gap 3. Consulting `module.eventSchemas` alone made the probe's
+ * refusal arm dead code and left a real hole behind it: NO module registers a
+ * `core.*` key (they are kernel-owned — `core/events.ts` validates them and
+ * never forwards them to `module.apply`), so every kernel event a pad can send
+ * fell through `stampPayload`'s `schema === undefined` arm and went out
+ * unstamped however the clock read. `skins/period-shared.ts`'s `SWAP_TYPE` is
+ * `core.lineup.substitution`, so a hockey line change — precisely the event a
+ * window calculation reads `at` from — was the one thing a clocked pad could
+ * never stamp.
+ *
+ * Both arms are now live and both are enumerated in `__tests__/clock.test.ts`
+ * against the engine's own export: seven core types DECLARE `at`
+ * (`core.suspend`, `core.resume`, and all five `core.lineup.*`) and seven are
+ * `z.strictObject`s without it (`core.start`, `core.void`, `core.forfeit`,
+ * `core.abandon`, `core.finalize`, `core.note`, `core.award`), which the probe
+ * drops the stamp for rather than turning a dispatch that would have worked
+ * into one that does not.
+ *
+ * `isCoreEventType` is the engine's own membership test rather than a bare
+ * index, so an arbitrary type string cannot reach `Object.prototype` and hand
+ * the probe something that merely looks callable. The module wins on a tie: a
+ * sport that ever did register a `core.*` key of its own is answering about
+ * its own payload.
+ */
+function schemaFor(module: AnySportModule, type: string): PayloadSchemaProbe | undefined {
+  const own = module.eventSchemas?.[type];
+  if (own !== undefined) return own;
+  return isCoreEventType(type) ? CORE_EVENT_SCHEMAS[type] : undefined;
+}
+
+/**
+ * R6/task A — the clock strip, extracted as a PURE presentational component
+ * for the reason this file's own header gives: `PadHostV3` renders seven
+ * independently-stateful nested primitives, which is exactly the shape the
+ * node-only `_hook-harness` cannot walk. This one holds no state of its own,
+ * so `__tests__/pad-host.test.ts` can render it and assert the real markup
+ * instead of asserting a mirror of it.
+ *
+ * A DISPLAY PLUS TWO CONTROLS: start/stop it, and correct it. `aria-live="off"`
+ * because a value that changes every second would otherwise be read out every
+ * second.
+ *
+ * THE READOUT IS THE CONTROL (R6 fix pass 2, gap 7). The bar used to be
+ * start/pause only, and always seated at 0, paused, per period — so a scorer who
+ * reached the pad five minutes into a period stamped every `at` five minutes
+ * low, and watched a penalty countdown that was wrong by the same amount, with
+ * no way back. Starting late is the normal case, not the edge case.
+ *
+ * The correction is not a gear, a modal or a typed time. It is the time figure
+ * itself: it sits in a shallow slate tray, which is what says "this is a field,
+ * not a label", and pressing it reveals ONE subordinate row of two minute
+ * nudges. At rest the bar is byte-identical to the one that already carries a
+ * width sign-off, so the cost of the affordance is paid only by the scorer who
+ * asks for it.
+ *
+ * AND IT IS NOT A SECOND SCORING SURFACE. Everything in the correction group is
+ * monochrome — slate on slate, mono numerals, no accent — against a board whose
+ * recording controls are large and coloured. Nothing here dispatches, and the
+ * caption says so: a recorded time is a frozen fact and does not move.
+ *
+ * PURE, deliberately: `adjusting` is the HOST's state, not this component's, so
+ * `__tests__/clock.test.ts` can render both halves of the disclosure and assert
+ * the real markup rather than a mirror of it (apps/web vitest has no jsdom, so
+ * a `useState` here would put the open state beyond every test in the tree).
+ *
+ * `fixtureId` — R6 fix pass 4, finding 6 (LOW). The disclosure's `id` used to
+ * be the hardcoded literal `"v3-clock-adjust"`, document-unique by
+ * construction; two clocked pads on one page (this repo's own harnesses
+ * render side-by-side surfaces) produced duplicate ids and cross-wired the
+ * `aria-controls` relationship — expanding one bar's disclosure could name
+ * the WRONG one to assistive tech. `useId()` is unavailable in this repo's
+ * node-only hook harness (`_hook-harness`), so the suffix comes from the one
+ * value already guaranteed unique per pad: the fixture it is scoring.
+ */
+export function PadClockBar(props: {
+  elapsed: number;
+  running: boolean;
+  adjusting: boolean;
+  onToggle: () => void;
+  onToggleAdjust: () => void;
+  onAdjust: (deltaSeconds: number) => void;
+  fixtureId: string;
+  t: TFn;
+}) {
+  const adjustId = `v3-clock-adjust-${props.fixtureId}`;
+  return (
+    <div className="space-y-1.5">
+      <div
+        data-role="v3-clock"
+        data-running={props.running ? "yes" : "no"}
+        data-adjusting={props.adjusting ? "yes" : "no"}
+        className="flex items-center justify-between gap-2 rounded-full border border-slate-200 bg-white px-4 py-2"
+      >
+        <span className="min-w-0 flex-1 truncate text-xs font-semibold uppercase tracking-wider text-slate-500">
+          {props.t("scorepad.clock.label")}
+        </span>
+        {/* The accessible name is the TIME, which is the information; what
+         *  pressing does is carried by `aria-expanded` and the group it opens,
+         *  and by the title. Naming the button "Correct the clock" instead would
+         *  put the one number a scorer needs out of a screen reader's reach. */}
+        <button
+          type="button"
+          data-role="v3-clock-value"
+          aria-live="off"
+          aria-expanded={props.adjusting}
+          aria-controls={adjustId}
+          title={props.t("scorepad.clock.adjust")}
+          onClick={props.onToggleAdjust}
+          style={{ minHeight: 44 }}
+          className="shrink-0 rounded-lg bg-slate-50 px-2 text-right font-mono text-lg font-semibold tabular-nums text-slate-900 transition-colors hover:bg-slate-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400"
+        >
+          {formatClock(props.elapsed)}
+        </button>
+        <button
+          type="button"
+          data-role="v3-clock-toggle"
+          onClick={props.onToggle}
+          style={{ minHeight: 44, minWidth: 44 }}
+          className="shrink-0 rounded-full px-3 text-sm font-semibold text-violet-700 transition-colors hover:bg-violet-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400"
+        >
+          {props.t(props.running ? "scorepad.clock.pause" : "scorepad.clock.start")}
+        </button>
+      </div>
+
+      {props.adjusting && (
+        <div id={adjustId} data-role="v3-clock-adjust" className="space-y-1">
+          {/* Right-aligned, and content-sized: the row hangs off the readout it
+             *  corrects rather than spanning the board like a tile. */}
+          <div className="flex items-stretch justify-end gap-1.5">
+            {/* Coarse OUTWARD, fine INWARD, and read left-to-right as a number
+             *  line: −1 min, −10s, +10s, +1 min. The two a scorer reaches for
+             *  most sit nearest the readout they correct. */}
+            {[
+              { role: "v3-clock-minus", delta: -CLOCK_NUDGE_SECONDS, label: "scorepad.clock.minute.off" },
+              { role: "v3-clock-minus-fine", delta: -CLOCK_NUDGE_FINE_SECONDS, label: "scorepad.clock.second.off" },
+              { role: "v3-clock-plus-fine", delta: CLOCK_NUDGE_FINE_SECONDS, label: "scorepad.clock.second.on" },
+              { role: "v3-clock-plus", delta: CLOCK_NUDGE_SECONDS, label: "scorepad.clock.minute.on" },
+            ].map((nudge) => (
+              <button
+                key={nudge.role}
+                type="button"
+                data-role={nudge.role}
+                onClick={() => props.onAdjust(nudge.delta)}
+                title={props.t(`${nudge.label}.hint`)}
+                style={{ minHeight: 44 }}
+                className="min-w-[44px] shrink-0 rounded-full border border-slate-200 bg-slate-50 px-3 font-mono text-[13px] font-semibold tabular-nums text-slate-700 transition-colors hover:bg-slate-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400"
+              >
+                {props.t(nudge.label)}
+              </button>
+            ))}
+          </div>
+          <p className="px-2 text-right text-[11px] leading-snug text-slate-500">{props.t("scorepad.clock.adjust.scope")}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function resolveDockSpec(
   skin: SkinDefV3,
   held: { eventType: string; payload: unknown } | null,
@@ -773,6 +987,52 @@ export function PadHostV3(props: PadHostV3Props) {
     setContextOverrides({});
   }
 
+  // R6/task A — the pad-local clock (owner ruling R6-4). `clock` is the whole
+  // of this host's clock state; the ticking value is DERIVED from it and
+  // `nowMs`, never stored, so nothing here can persist a running time.
+  //
+  // `nowMs` is what the interval below moves. It exists as its own state
+  // because a re-render is the only way a `Date.now()`-derived display can
+  // advance, and because the SEND path deliberately does NOT read it: `send`
+  // takes a fresh `Date.now()` at tap time, so a stamp is never up to a
+  // tick-interval stale.
+  //
+  // SEEDED 0, NOT `Date.now()` (R6 review, gap 7). Seven of the nine v3 skins
+  // declare no `clock()` at all, and a lazy initialiser still runs on every one
+  // of their mounts to produce a value nothing will ever read. Zero is not a
+  // placeholder here, it is unreachable: `elapsedOf` ignores `nowMs` entirely
+  // while a clock is PAUSED, `reseatClock` only ever returns a paused clock or
+  // the one already held, and the sole transition into running is
+  // `toggleClockNow` below — which sets a real `Date.now()` in the same update
+  // that starts it. Both facts are pinned in `__tests__/clock.test.ts`.
+  const [clock, setClock] = useState<PadClock | null>(null);
+  const [nowMs, setNowMs] = useState(0);
+  // R6 fix pass 2 (gap 7) — whether the clock's correction row is showing. Held
+  // HERE rather than inside `PadClockBar` so that component stays pure and both
+  // halves of the disclosure are renderable by a node test (see its own doc).
+  const [adjusting, setAdjusting] = useState(false);
+
+  // R6 fix pass 2 (gap 2) — the live reading handed to the skins, so a skin can
+  // render a number that moves between events. `stampOf` is THE derivation the
+  // `send` gateway below stamps with, called here as well rather than
+  // re-derived, so what a scorer watches count down and what an event records
+  // cannot disagree. `known` gates it, so a pad nobody has started drives no
+  // countdown from its placeholder zero.
+  //
+  // Split into its two primitives before the memo on purpose: `stampOf` builds
+  // a fresh object every render and `nowMs` moves twice a second, so keying the
+  // memo on the object would rebuild every tile, sheet, dock and swap slot in
+  // the pad at 2 Hz. `elapsedOf` returns WHOLE seconds, so keyed on the values
+  // the view's identity changes once a second while the clock runs and not at
+  // all while it is paused.
+  const liveStamp = stampOf(clock, nowMs);
+  const livePeriod = liveStamp?.period;
+  const liveElapsed = liveStamp?.elapsed;
+  const clockAt = useMemo(
+    () => (livePeriod === undefined || liveElapsed === undefined ? undefined : { period: livePeriod, elapsed: liveElapsed }),
+    [livePeriod, liveElapsed],
+  );
+
   const view: PadHostView = useMemo(
     () => ({
       cfg: props.cfg,
@@ -783,6 +1043,9 @@ export function PadHostV3(props: PadHostV3Props) {
       entitlements,
       personNames,
       squads,
+      // The host clock's live reading — see PadHostView.clockAt (types.ts) for
+      // why the period travels with the number and why this is display-only.
+      clockAt,
       // C-gaps §G1 (docs/superpowers/plans/2026-08-16-scorepad-v3-r2-cricket.md):
       // state/summary alone cannot answer "what happened on ball N" — a skin
       // building an over-dots strip needs the raw stream. The SAME list this
@@ -793,7 +1056,7 @@ export function PadHostV3(props: PadHostV3Props) {
       // contextOverridesStale/render-phase-reset block above.
       contextOverrides,
     }),
-    [props.cfg, pipeline.state, pipeline.summary, phase, props.band, entitlements, personNames, squads, pipeline.events, contextOverrides],
+    [props.cfg, pipeline.state, pipeline.summary, phase, props.band, entitlements, personNames, squads, pipeline.events, contextOverrides, clockAt],
   );
 
   // `sheets` is resolved BEFORE the tiles so the band filter below can read a
@@ -827,6 +1090,26 @@ export function PadHostV3(props: PadHostV3Props) {
 
   const scorebugSpec = useMemo(() => props.skin.scorebug(view), [props.skin, view]);
   const contextSpec = useMemo(() => props.skin.context?.(view) ?? null, [props.skin, view]);
+
+  // The clock the skin declares RIGHT NOW, reconciled with the one this host
+  // is holding. Render-phase adjustment, the same React-sanctioned recipe the
+  // `contextOverrides` reset above uses and for the same reason (this repo's
+  // react-hooks/refs rule forbids touching a ref during render).
+  //
+  // `reseatClock` is where the load-bearing guard lives: it re-seeds ONLY when
+  // the declared period changes, and otherwise returns the held clock by
+  // reference. Following the spec's `seed` instead would drag a running clock
+  // back to the last stamped event's time on every tap, since `seed` is
+  // rebuilt from a fold that advances on every tap. See ../clock.ts.
+  const clockSpec = props.skin.clock?.(view) ?? null;
+  const nextClock = reseatClock(clock, clockSpec);
+  if (nextClock !== clock) {
+    setClock(nextClock);
+    // A whistle re-seats the clock, and a correction row left open across it
+    // would be offering to nudge a period the scorer has already left. Closing
+    // here rather than in an effect keeps it in the same render as the re-seat.
+    if (adjusting) setAdjusting(false);
+  }
 
   const padViewCtx: PadViewCtx = useMemo(
     () => ({ state: pipeline.state, summary: pipeline.summary, phase, band: props.band, entitlements }),
@@ -895,12 +1178,81 @@ export function PadHostV3(props: PadHostV3Props) {
   const send = useCallback(
     (type: string, payload: unknown): void => {
       setDispatchRefusal(null);
-      void dispatch(type, payload).catch((err: unknown) => {
+      // R6/task A — THE one place `at` enters an event, for exactly the reason
+      // this file's header gives for `dispatch` being the one gateway: a
+      // second stamping site is a second answer to "what time is it". A pad
+      // with no clock (`clock === null`, every skin that declares none) gets
+      // the caller's own payload back by reference, unchanged.
+      //
+      // `Date.now()` here rather than the render-throttled `nowMs`: the stamp
+      // must be the time of the TAP, not of the last tick.
+      const stamped = stampFor(props.module, type, payload, clock, Date.now());
+      void dispatch(type, stamped).catch((err: unknown) => {
         console.error("scorepad v3: dispatch failed", type, err);
         setDispatchRefusal(msg("scorepad.rejection.fallback"));
       });
     },
-    [dispatch, msg],
+    [dispatch, msg, clock, props.module],
+  );
+
+  // ONE interval, and only while the clock is actually running: a paused clock
+  // cannot change, so re-rendering the whole pad once a second to redraw the
+  // same digits would be pure waste. 500ms rather than 1000ms so the displayed
+  // second is never a full second behind the second that would be STAMPED —
+  // the two must not visibly disagree at the moment a scorer taps.
+  //
+  // No synchronous `setNowMs` in the effect body: the only transition into a
+  // running clock is `toggleClockNow` below, which sets it at the tap, and
+  // `reseatClock` never returns a running clock. Setting it here as well would
+  // trip react-hooks/set-state-in-effect for a value that is already current.
+  //
+  // WHAT IS STILL UNPROVEN HERE, stated once for both this effect and
+  // `toggleClockNow`. Neither is inert any more — R6/task C landed
+  // `skins/hockey.tsx` and `skins/icehockey.tsx`, both of which declare
+  // `clock()`, so `PadClockBar` mounts and both `setNowMs` sites run in the
+  // product. What no test in this repo can execute is the React shell around
+  // them: apps/web vitest is `environment: "node"` with no jsdom, so an
+  // interval that stopped firing, or an `onToggle` that stopped being wired,
+  // would leave every clock test green. THE BROWSER e2e IS R6/TASK E'S, and it
+  // is the only thing that will ever see this effect run.
+  useEffect(() => {
+    if (!clock || clock.runningSince === null) return;
+    const id = setInterval(() => setNowMs(Date.now()), 500);
+    return () => clearInterval(id);
+  }, [clock]);
+
+  const toggleClockNow = useCallback(() => {
+    setClock((prev) => (prev === null ? prev : toggleClock(prev, Date.now())));
+    setNowMs(Date.now());
+  }, []);
+
+  // R6 fix pass 2, gap 7. `adjustClock` touches `base` only — host state — so
+  // nothing already stamped moves and nothing is dispatched. `setNowMs` so a
+  // RUNNING clock repaints at the tap instead of up to half a second later.
+  //
+  // R6 fix pass 4, findings 1+2 — `floor` is the high-water mark a correction
+  // must not cross: `clockSpec` (just above) is the SKIN's declaration
+  // rebuilt fresh THIS render from the live fold, and its `seed` — when
+  // present — IS `state.asOf.elapsed` for the CURRENT period (`buildClock`'s
+  // own doc, skins/period-shared.ts). Reading it here rather than `clock`'s
+  // own `.base` is deliberate: `clock` is the host's held value, seeded once
+  // per period and then left alone by design (property 3), so it can go
+  // stale the instant another device — or this one's own last dispatch —
+  // moves `state.asOf` forward; `clockSpec` cannot, because it is rebuilt on
+  // every render from the SAME `view` the rest of this render pass uses.
+  // `clockSpec` in the dependency list keeps this callback's closure as
+  // fresh as that value, unlike `toggleClockNow` above, which needs no cfg
+  // read at all.
+  const adjustClockNow = useCallback(
+    (deltaSeconds: number) => {
+      const floor =
+        clockSpec !== null && clockSpec.seed !== undefined
+          ? { period: clockSpec.period, elapsed: clockSpec.seed }
+          : undefined;
+      setClock((prev) => (prev === null ? prev : adjustClock(prev, deltaSeconds, Date.now(), floor)));
+      setNowMs(Date.now());
+    },
+    [clockSpec],
   );
 
   const handleTileAction = useCallback(
@@ -1096,10 +1448,36 @@ export function PadHostV3(props: PadHostV3Props) {
       {(rejectionMsg ?? dispatchRefusal) && (
         <p
           data-role="v3-rejection"
+          // R6 fix pass 3, gap 1: this banner appears AFTER a tap, and it is
+          // now the only evidence the tap happened at all — the optimistic
+          // ribbon/row/chip/countdown are rolled back with it. A bare <p>
+          // that materialises mid-match is announced to nobody; `alert` is a
+          // live region, changes no pixel, and is the difference between
+          // "rendered" and "noticed" for a scorer whose eyes are on the ice.
+          role="alert"
           className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
         >
           {rejectionMsg ?? dispatchRefusal}
         </p>
+      )}
+
+      {/* R6/task A — the clock, between the scorebug and the ribbon: it belongs
+       *  with the score (it is a readout of the match, not of the event log),
+       *  and it must not sit above the scorebug, which is the one thing a
+       *  scorer looks at without reading. Rendered only for a skin that
+       *  declares `clock()`, so every pad written before this wave is
+       *  unchanged down to the DOM. */}
+      {clock && (
+        <PadClockBar
+          elapsed={elapsedOf(clock, nowMs)}
+          running={clock.runningSince !== null}
+          adjusting={adjusting}
+          onToggle={toggleClockNow}
+          onToggleAdjust={() => setAdjusting((open) => !open)}
+          onAdjust={adjustClockNow}
+          fixtureId={props.fixtureId}
+          t={t}
+        />
       )}
 
       {ribbon && (

@@ -686,11 +686,11 @@ async function main() {
   // run from the greedy fallback the server takes when the placement service
   // is unreachable, and no unit test can see that difference.
   // Keyless, own Pro org, so it runs on every smoke invocation.
-  await z3AutoScheduleSuite();
+  await autoScheduleSuite();
 
   // --- P9 pass 5: a full schedule round on an org with TWO VENUES, not one
   // venue with two courts (the shape every other court-seeding suite in this
-  // file, z3AutoScheduleSuite included, already uses). Asserts the build
+  // file, autoScheduleSuite included, already uses). Asserts the build
   // actually resolved courts across both venues, not just placed on two
   // courts that happened to share one. Keyless, own Pro org.
   await twoVenueScheduleSuite();
@@ -5431,12 +5431,19 @@ async function w4aTimeModelSuite(admin: Session): Promise<void> {
       sameStamp(tenSet2[3]!.at, stamp("S2", 60)),
   );
 
-  // === FREE path — the time model is Tier-2 scoring on all four sports. ===
-  // Every W4a event sits in fidelityTiers 2/3 behind scoring.match_timeline
+  // === FREE path — the time model is Tier-2 scoring on three of four sports. ===
+  // Every W4a event sat in fidelityTiers 2/3 behind scoring.match_timeline
   // (period/football) or scoring.rally_by_rally (nested/set-based), so a
-  // community org is paywalled out of it. The Tier-0 stamped advance below is
+  // community org was paywalled out of it. The Tier-0 stamped advance below is
   // the control: a gate that answered 402 to EVERY stamped event would pass the
-  // four checks above and fail this one.
+  // three checks below and fail this one.
+  //
+  // R6 fix pass 4, finding E (owner ruling, 2026-08-30) — icehockey (and
+  // hockey) suspension.start/.end are the ONE exception now: `period/
+  // kernel.ts` moved them to tier 1 (free), period family only. Football's
+  // sin bin and both racquet interruptions below are untouched and stay
+  // Pro-gated — see the icehockey-suspension check further down, which used
+  // to sit in the loop below asserting the opposite.
   const free = newSession();
   await signIn(free, `w4a_free_${tag}@example.com`);
   const freeComp = v1data<{ id: string }>(
@@ -5484,13 +5491,6 @@ async function w4aTimeModelSuite(admin: Session): Promise<void> {
   });
   gated.push(
     [
-      "icehockey suspension",
-      freeIce.fixtureId,
-      "icehockey.suspension.start",
-      "scoring.match_timeline",
-      { by: freeIce.entrantIds[1]!, class: "minor", at: stamp("P1", 100) },
-    ],
-    [
       "football sin bin",
       freeFoot.fixtureId,
       "football.sinbin.start",
@@ -5524,10 +5524,29 @@ async function w4aTimeModelSuite(admin: Session): Promise<void> {
         (res.json.error as { feature_key?: string } | undefined)?.feature_key === featureKey,
     );
   }
-  // The control — a Tier-0 event carrying the SAME `at` shape is free. Reuses
-  // the ice ledger above: the fixture is already started, and its `seq` is
-  // still 1 because the 402 never reached the ledger.
-  const freeIceLedger = freeLedgers.get(freeIce.fixtureId)!;
+  // R6 fix pass 4, finding E (owner ruling, 2026-08-30). This case used to
+  // sit in the `gated` loop above and assert a 402 + `scoring.match_timeline`
+  // feature_key for icehockey.suspension.start, the same as football's sin
+  // bin and the two racquet interruptions still do. `period/kernel.ts`'s
+  // `fidelityTiers` now lists suspStart/suspEnd at tier 1 (free) for the
+  // period family ONLY — every other sport's timeline event above is
+  // untouched and stays Pro. Verified through the REAL HTTP door, not at the
+  // usecase: a free-plan org's own suspension.start now succeeds outright.
+  const freeIceLedger = ledger(free, freeIce.fixtureId);
+  freeLedgers.set(freeIce.fixtureId, freeIceLedger);
+  await freeIceLedger.send("core.start", {});
+  const freeSuspension = await freeIceLedger.send("icehockey.suspension.start", {
+    by: freeIce.entrantIds[1]!,
+    class: "minor",
+    at: stamp("P1", 100),
+  });
+  check(
+    "w4a free: icehockey suspension.start is NO LONGER Pro-gated (owner ruling, R6 fix pass 4)",
+    freeSuspension.status === 201,
+  );
+  // The control — a Tier-0 event carrying the SAME `at` shape is ALSO free.
+  // Reuses the ice ledger above, which now carries `core.start` plus the
+  // free suspension.start check just above it.
   const freeAdvance = await freeIceLedger.send("icehockey.period.advance", {
     to: "P2",
     at: stamp("P1", 1200),
@@ -10187,7 +10206,7 @@ async function schedulingConstraintsSuite(): Promise<void> {
  * endpoint (`AutoScheduleRequest`'s preprocess derives `mode` from
  * `only_unlocked`) and each reports something the other two cannot:
  *
- *   BUILD  — the tier solver over an empty board. The z3 proof.
+ *   BUILD  — the tier solver over an empty board. The placement proof.
  *   REFLOW — C4 (2026-08-15, z3 retirement stage A): routed through the SAME
  *            placement `buildSchedule` call BUILD/POLISH already make, not
  *            z3's repair solver any more — every already-placed card
@@ -10213,10 +10232,10 @@ async function schedulingConstraintsSuite(): Promise<void> {
  * the R18 size gate, so each solve returns far short of the 8 s ceiling. Every
  * assertion is on returned telemetry; none is on elapsed time.
  */
-async function z3AutoScheduleSuite(): Promise<void> {
+async function autoScheduleSuite(): Promise<void> {
   const s = newSession();
   // The board apply path and the constraints family are Pro.
-  const orgId = (await signIn(s, `smoke-z3-solver-${tag}@example.com`)).org_id;
+  const orgId = (await signIn(s, `smoke-autosched-${tag}@example.com`)).org_id;
   await setPlan(orgId, "pro", s);
 
   const comp = v1data<{ id: string }>(
@@ -10253,7 +10272,7 @@ async function z3AutoScheduleSuite(): Promise<void> {
   // 4 entrants -> 6 matches over 3 rounds of 2. On a 2-court grid that has an
   // exact 3-slot optimum, which is what makes the polish improvement below
   // forced rather than merely likely.
-  check("z3 solver: a 4-entrant round robin generated 6 fixtures", generated.length === 6);
+  check("auto-schedule: a 4-entrant round robin generated 6 fixtures", generated.length === 6);
 
   const START = "2026-09-21T09:00:00.000Z";
   const SLOT_MIN = 30;
@@ -10321,7 +10340,7 @@ async function z3AutoScheduleSuite(): Promise<void> {
   };
 
   // ======================================================================
-  // 1. BUILD — the z3 proof
+  // 1. BUILD — the placement proof
   // ======================================================================
   const build = await auto({ only_unlocked: false });
   check(
@@ -10420,14 +10439,14 @@ async function z3AutoScheduleSuite(): Promise<void> {
     // — reflow now shares BUILD's own status vocabulary via `buildSchedule`,
     // so this mirrors BUILD's identical assertion above rather than pinning
     // a tier count a tiny board cannot reliably produce either way.
-    "z3 reflow: the request derived mode=reflow and reported a solved status",
+    "reflow: the request derived mode=reflow and reported a solved status",
     reflow?.solver?.mode === "reflow" &&
       (reflow?.solver?.status === "ok" || reflow?.solver?.status === "already_optimal"),
   );
   check(
     // `seeded` is the field the strip's copy branches on — "N matches scheduled"
     // versus "N matches moved" — and only the reflow path populates it.
-    "z3 reflow: it re-placed the five cleared cards and said so via seeded/moved",
+    "reflow: it re-placed the five cleared cards and said so via seeded/moved",
     (reflow?.assignments ?? []).length === 6 &&
       (reflow?.solver?.seeded ?? 0) >= 5 &&
       (reflow?.solver?.moved ?? 0) >= 5 &&
@@ -10435,7 +10454,7 @@ async function z3AutoScheduleSuite(): Promise<void> {
   );
   const pinnedProposed = (reflow?.assignments ?? []).find((a) => a.fixture_id === pinnedId);
   check(
-    "z3 reflow: the pinned card is handed back on exactly the slot it already held",
+    "reflow: the pinned card is handed back on exactly the slot it already held",
     !!pinnedProposed &&
       `${pinnedProposed.scheduled_at}@${pinnedProposed.court_id}` === pinnedBefore,
   );
@@ -10475,21 +10494,21 @@ async function z3AutoScheduleSuite(): Promise<void> {
     // ladder and reporting a number from a ladder it never walked would make
     // an optimality claim nothing proved. So a non-zero ladder IS the proof
     // this run went to the tier solver.
-    "z3 polish: the explicit mode reached the tier solver, not the repair solver",
+    "polish: the explicit mode reached the tier solver, not the repair solver",
     polish?.solver?.mode === "polish" &&
       polish.solver.status !== "solver_unavailable" &&
       (polish.solver.tiers_completed ?? 0) > 0,
   );
   const lockedProposed = (polish?.assignments ?? []).find((a) => a.fixture_id === lockedId);
   check(
-    "z3 polish: the locked card keeps its exact time AND court",
+    "polish: the locked card keeps its exact time AND court",
     !!lockedProposed &&
       `${lockedProposed.scheduled_at}@${lockedProposed.court_id}` === lockedBefore,
   );
   check(
     // The other half. A polish that froze the whole board would satisfy the
     // check above and improve nothing.
-    "z3 polish: ...and the rest of the board was compacted off the single court",
+    "polish: ...and the rest of the board was compacted off the single court",
     (polish?.assignments ?? []).length === 6 &&
       polish?.metrics?.placed === 6 &&
       (polish.metrics.makespan_minutes ?? POOR_MAKESPAN_MIN) < POOR_MAKESPAN_MIN &&
@@ -10500,7 +10519,7 @@ async function z3AutoScheduleSuite(): Promise<void> {
 /**
  * P9 pass 5 — a full schedule round on an org with TWO VENUES (not one venue
  * with two courts, which is the shape every other court-seeding suite in
- * this file — `z3AutoScheduleSuite` immediately above included — already
+ * this file — `autoScheduleSuite` immediately above included — already
  * uses). `ScheduleConfig.courts` is a plain array of court ids with no venue
  * structure of its own (V374 cutover), so a build that silently only ever
  * resolved courts through ONE venue's row would still pass every existing
@@ -10604,7 +10623,7 @@ async function twoVenueScheduleSuite(): Promise<void> {
   );
   const usedCourtIds = new Set((build?.assignments ?? []).map((a) => a.court_id));
   check(
-    // Not just "2 distinct courts" — z3AutoScheduleSuite already proves that
+    // Not just "2 distinct courts" — autoScheduleSuite already proves that
     // shape for a single-venue board. This is the one place the two courts
     // used are asserted to come from two DIFFERENT venues.
     "two venues: the board used courts from BOTH venues, not one",
@@ -10633,7 +10652,7 @@ async function twoVenueScheduleSuite(): Promise<void> {
 }
 
 /**
- * Task 11 (placement cutover) — the scenario `z3AutoScheduleSuite`'s own
+ * Task 11 (placement cutover) — the scenario `autoScheduleSuite`'s own
  * allow-list check deliberately cannot be: a board where the ONLY honest
  * outcome is `engine === "optimized"`, not merely a legal value drawn from a
  * four-member set. `_INDEX.md`'s "The cutover nearly shipped INERT" is why
@@ -16455,9 +16474,9 @@ async function cleanup(tag: string): Promise<void> {
     // #404 personMergeSuite — its own Pro org (its two persons, their
     // suspension and the person_merges ledger row all cascade with it).
     `dupmerge_${tag}@example.com`,
-    // T14 z3AutoScheduleSuite — its own Pro org (one competition, one division
+    // T14 autoScheduleSuite — its own Pro org (one competition, one division
     // and its six fixtures all cascade with it).
-    `smoke-z3-solver-${tag}@example.com`,
+    `smoke-autosched-${tag}@example.com`,
     // P9 review: twoVenueSuite's own Pro org (its two venues and their
     // courts) — was missing from this list entirely, so every smoke run
     // leaked the org along with its venues/courts (the courts/venues purge

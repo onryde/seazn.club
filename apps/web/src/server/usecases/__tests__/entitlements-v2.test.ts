@@ -9,6 +9,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { football } from "@seazn/engine/sports/football";
 import { cricket } from "@seazn/engine/sports/cricket";
+import { icehockey } from "@seazn/engine/sports/icehockey";
 import { sql } from "@/lib/db";
 import { getLimit, invalidateOrgEntitlements } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -55,15 +56,17 @@ async function seedOrg(plan: Plan): Promise<{ auth: AuthCtx }> {
   }
   await sql`
     insert into sports (key, name, module_version, position_catalog) values
-      ('generic',  'Generic',  '1.0.0', ${sql.json({ groups: [], lineup: { size: 1, benchMax: 0 } })}),
-      ('football', 'Football', ${football.version}, ${sql.json(football.positions as never)}),
-      ('cricket',  'Cricket',  ${cricket.version}, ${sql.json(cricket.positions as never)})
+      ('generic',   'Generic',    '1.0.0', ${sql.json({ groups: [], lineup: { size: 1, benchMax: 0 } })}),
+      ('football',  'Football',   ${football.version}, ${sql.json(football.positions as never)}),
+      ('cricket',   'Cricket',    ${cricket.version}, ${sql.json(cricket.positions as never)}),
+      ('icehockey', 'Ice Hockey', ${icehockey.version}, ${sql.json(icehockey.positions as never)})
     on conflict (key) do nothing`;
   await sql`
     insert into sport_variants (sport_key, key, name, config, is_system) values
-      ('generic',  'score',   'Score',   ${sql.json(GENERIC_CONFIG)}, true),
-      ('football', 'default', 'Default', ${sql.json({})}, true),
-      ('cricket',  't20',     'T20',     ${sql.json(cricket.variants.t20 as never)}, true)
+      ('generic',   'score',   'Score',   ${sql.json(GENERIC_CONFIG)}, true),
+      ('football',  'default', 'Default', ${sql.json({})}, true),
+      ('cricket',   't20',     'T20',     ${sql.json(cricket.variants.t20 as never)}, true),
+      ('icehockey', 'iihf',    'IIHF',    ${sql.json(icehockey.variants.iihf as never)}, true)
     on conflict do nothing`;
   return { auth: { orgId, via: "session", userId: null, role: "owner", keyId: null } };
 }
@@ -92,11 +95,17 @@ async function makeCompetition(
   return createCompetition(auth, { ends_on: "2030-12-31", name, visibility, branding: {} });
 }
 
+// R6 fix pass 4, finding E — icehockey joins this lookup so `makeFixture`
+// below can build an icehockey rig too. Kept a map rather than another
+// ternary arm: unlisted (currently only "cricket") falls back to "t20",
+// byte-identical to the pre-R6-fix-4 default.
+const VARIANT_BY_SPORT: Record<string, string> = { generic: "score", football: "default", icehockey: "iihf" };
+
 async function makeDivision(auth: AuthCtx, competitionId: string, sport: string, config: object) {
   return createDivision(auth, competitionId, {
     name: `Div ${randomUUID().slice(0, 6)}`,
     sport_key: sport,
-    variant_key: sport === "generic" ? "score" : sport === "football" ? "default" : "t20",
+    variant_key: VARIANT_BY_SPORT[sport] ?? "t20",
     config,
   } as never);
 }
@@ -291,6 +300,37 @@ describe.skipIf(!HAS_DB)("entitlements v2 matrix (doc 10 §1/§2)", () => {
       payload: { by: entrants[0].id },
     });
     expect(out.seq).toBe(2);
+  });
+
+  // R6 fix pass 4, finding E (owner ruling, 2026-08-30). At `scoreEvent` — the
+  // EXACT function `POST /api/v1/fixtures/[id]/events` calls — against REAL
+  // Postgres (RLS, triggers), not the pure `requiredFeatureForEvent` unit
+  // above alone. The brief's own "verify through the real HTTP door" could
+  // not be driven over an actual socket without rebuilding the prod server
+  // this worktree runs (explicitly out of scope for this task); this is the
+  // closest real-Postgres, real-usecase substitute available without one —
+  // see the task's own final report for the direct-HTTP attempt against the
+  // (stale-built) running server and why it still shows the pre-fix 402.
+  it("community appends an icehockey suspension.start free (owner ruling); the set piece on the SAME fixture stays Pro-gated", async () => {
+    const { auth } = await seedOrg("community");
+    const comp = await makeCompetition(auth, "IH");
+    const { entrants, fixtureId } = await makeFixture(auth, comp.id, "icehockey", {});
+    await scoreEvent(auth, fixtureId, { expected_seq: 0, type: "core.start", payload: {} });
+    const out = await scoreEvent(auth, fixtureId, {
+      expected_seq: 1,
+      type: "icehockey.suspension.start",
+      payload: { by: entrants[0].id, class: "minor", at: { period: "P1", elapsed: 100 } },
+    });
+    expect(out.seq).toBe(2);
+    // The narrowness of the ruling, on the SAME community org and fixture:
+    // the set piece was never freed.
+    await expect(
+      scoreEvent(auth, fixtureId, {
+        expected_seq: 2,
+        type: "icehockey.set_piece",
+        payload: { by: entrants[0].id, kind: "ps" },
+      }),
+    ).rejects.toMatchObject({ status: 402, featureKey: "scoring.match_timeline" });
   });
 });
 

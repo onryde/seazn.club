@@ -100,6 +100,41 @@ function stepVisible(step: GuidedSheetStep, answers: Readonly<Record<string, str
  *  never merged/intersected with it. Absent `candidates` is "resolve the
  *  pool exactly as before this change" — every pre-G6 spec (none declare
  *  `candidates`) reads identically. */
+/**
+ * A person step, plus the decline control an `optional` one needs.
+ *
+ * The empty answer is `""`, which every skin's `buildPayload` already treats
+ * as absent (`answers.servedBy ? {...} : {}`) — so declining omits the field
+ * rather than writing a blank one. It renders BELOW the candidates rather
+ * than among them: it is not a person, and a chip sitting in the row reads
+ * like one.
+ */
+function renderPersonStep(
+  step: SheetPersonStep,
+  view: PoolView,
+  personNames: Readonly<Record<string, string>>,
+  t: TFn,
+  onAnswer: (value: string) => void,
+  emptyText: string,
+) {
+  const ids = candidatesForStep(step, view);
+  if (step.optional !== true) return renderCandidateRow(ids, personNames, t, onAnswer, emptyText);
+  return (
+    <div className="space-y-2">
+      {renderCandidateRow(ids, personNames, t, onAnswer, emptyText)}
+      <button
+        type="button"
+        data-role="v3-person-none"
+        onClick={() => onAnswer("")}
+        style={{ minHeight: 44 }}
+        className="rounded-full border border-dashed border-slate-300 px-4 text-sm text-slate-600 hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400"
+      >
+        {t("pad.sheet.person.none")}
+      </button>
+    </div>
+  );
+}
+
 function candidatesForStep(step: SheetPersonStep, view: PoolView): readonly string[] {
   return step.candidates ?? resolvePool({ pool: step.pool }, view);
 }
@@ -118,6 +153,29 @@ function candidatesForStep(step: SheetPersonStep, view: PoolView): readonly stri
  *  this a value that finite arithmetic already validated. Non-finite input
  *  normalises to 0 — a safe, in-range-by-default baseline — BEFORE the
  *  min/max clamps below apply on top of it. */
+/**
+ * R6 fix, W-1. `SheetNumberStep.initial` admits a literal or a function of the
+ * answers gathered SO FAR in this sheet. The literal form is fixed when the
+ * sheet is built; the function form is resolved here, at the moment a step is
+ * freshly seeded, which is the first instant the earlier steps' answers exist.
+ *
+ * Pure and total: a function that throws or returns a non-finite number would
+ * otherwise put `NaN` into the stepper and out through the payload, so both
+ * fall back to the same `0` that `clampNumberStep` then lifts to `min`. The
+ * caller clamps whichever form resolves, so neither can escape the step's
+ * declared bounds.
+ */
+export function resolveInitial(step: SheetNumberStep, answers: Record<string, string>): number {
+  if (typeof step.initial !== "function") return step.initial;
+  let value: number;
+  try {
+    value = step.initial(answers);
+  } catch {
+    return 0;
+  }
+  return Number.isFinite(value) ? value : 0;
+}
+
 function clampNumberStep(value: number, step: SheetNumberStep): number {
   let v = Number.isFinite(value) ? value : 0;
   if (step.min !== undefined && v < step.min) v = step.min;
@@ -239,6 +297,15 @@ export function answerStep(spec: GuidedSheetSpec, state: GuidedSheetState, value
   const step = spec.steps[state.stepIndex];
   if (!step) return { done: false, state };
   const raw = { ...state.answers, [step.id]: value };
+  // R6 W-1 (Back path). A step whose `initial` READS this answer must not
+  // keep a number derived from the PREVIOUS one. Only fires on a real change,
+  // so Back-and-forward that re-picks the same class stays lossless.
+  if (state.answers[step.id] !== undefined && state.answers[step.id] !== value) {
+    for (const dependent of spec.steps) {
+      if (dependent.kind !== "number" || dependent.resetOn === undefined) continue;
+      if (dependent.resetOn.includes(step.id)) delete raw[dependent.id];
+    }
+  }
   // Defect 2 (R2 review): prune before scanning forward AND before handing
   // answers to buildPayload — this step's own answer always survives (it was
   // just visible, or the wizard couldn't have been on it), but an earlier
@@ -545,7 +612,7 @@ export function GuidedSheet({ spec, views, personNames, t, onComplete, onCancel 
   const [numberEditValue, setNumberEditValue] = useState(0);
   if (step && step.kind === "number" && step.id !== numberEditStepId) {
     const prior = state.answers[step.id];
-    const seeded = prior !== undefined ? Number(prior) : step.initial;
+    const seeded = prior !== undefined ? Number(prior) : resolveInitial(step, state.answers);
     setNumberEditStepId(step.id);
     setNumberEditValue(clampNumberStep(seeded, step));
   }
@@ -585,7 +652,7 @@ export function GuidedSheet({ spec, views, personNames, t, onComplete, onCancel 
           ? renderChoiceRow(step.options, step.hintKey, t, handleAnswer, step.blocked?.(state.answers))
           : step.kind === "number"
             ? renderNumberStep(step, numberEditValue, t, setNumberEditValue, () => handleAnswer(String(numberEditValue)))
-            : renderCandidateRow(candidatesForStep(step, views[step.side]), personNames, t, handleAnswer, emptyText)}
+            : renderPersonStep(step, views[step.side], personNames, t, handleAnswer, emptyText)}
       </div>
       <div className="flex justify-end px-4 pb-3">
         <button type="button" onClick={handleCancel} style={{ minHeight: 44 }} className={cancelButtonClass}>

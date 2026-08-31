@@ -35,16 +35,16 @@ backwards-compatible one; don't contort a design to dodge a migration.
 
 ## Agent topology
 
-- **Scout — Sonnet, High effort.** All read-only exploration, file
-  discovery, codebase Q&A.
-- **Implementer — Sonnet, MAX effort** (raised from xHigh by the owner
-  2026-08-10; set in `.claude/agents/implementer.md` frontmatter, which is
-  where effort actually lives — the Agent tool cannot set it per-dispatch).
-  Writes code. Full access to all
-  skills and tools.
-- **Reviewer — Sonnet, MAX effort** (raised from xHigh by the owner
-  2026-08-10, same place). Reviews the implementer's diff,
-  reports gaps as a list, not prose.
+- **Scout — Sonnet, xHigh effort** (raised from High by the owner
+  2026-08-30; set in `.claude/agents/scout.md` frontmatter, which is where
+  effort actually lives — the Agent tool cannot set it per-dispatch). All
+  read-only exploration, file discovery, codebase Q&A.
+- **Implementer — Sonnet, xHigh effort** (MAX from 2026-08-10, returned to
+  xHigh by the owner 2026-08-30; set in `.claude/agents/implementer.md`
+  frontmatter, which is where effort actually lives — the Agent tool cannot
+  set it per-dispatch). Writes code. Full access to all skills and tools.
+- **Reviewer — Sonnet, xHigh effort** (same change, same date, same place).
+  Reviews the implementer's diff, reports gaps as a list, not prose.
 
 **Loop**: Implementer → Reviewer → gap list → Implementer → Reviewer → …
 repeat until the review is clean AND all tests are green.

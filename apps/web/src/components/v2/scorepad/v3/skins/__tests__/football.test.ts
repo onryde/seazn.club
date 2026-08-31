@@ -25,7 +25,8 @@ import type { EventEnvelope, LineupPair, SquadState } from "@seazn/engine/core";
 import { initSquads } from "@seazn/engine/core";
 import { football } from "@seazn/engine/sports/football";
 import { foldClient } from "../../../module-client";
-import { dedicatedEventTypes, squadStateOf } from "../../pad-host";
+import { dedicatedEventTypes, squadStateOf, stampFor } from "../../pad-host";
+import { initClock, startClock } from "../../clock";
 import { answerStep, currentStep, initialSheetState } from "../../guided-sheet";
 import type { GuidedSheetSpec, PadHostView, TileSpec } from "../../types";
 import { cricketSkinV3, buildScorebug as buildCricketScorebug } from "../cricket";
@@ -1267,13 +1268,53 @@ describe("buildSwap", () => {
     });
   });
 
-  it("OMITS `at` when the fold carries none", () => {
-    expect(buildSwap(view(), t)[0]!.buildEvent("h1", "h4").payload).not.toHaveProperty("at");
+  // CORRECTED, R6 fix pass 2 gap 6. These two asserted the `at` key was ABSENT,
+  // which is how the refusal was written — a spread of `{}` — and after R6/task
+  // A that spelling no longer expresses it. `stampPayload` (../../clock.ts)
+  // returns a payload that already carries an `at` KEY by reference, whatever
+  // its value; a payload with NO key has expressed no opinion and gets the
+  // host's live clock stamp. So spreading `{}` handed the chassis a blank this
+  // skin had decided to leave empty, and the guard whose own comment ends "Do
+  // not 'fix' this later by stamping unconditionally" was silently un-expressed.
+  // The value is still absent. The key is now the statement.
+  it("DECLARES `at: undefined` when the fold carries none — the key is the refusal", () => {
+    const payload = buildSwap(view(), t)[0]!.buildEvent("h1", "h4").payload as Record<string, unknown>;
+    expect("at" in payload, "no `at` key means the chassis will fill it in").toBe(true);
+    expect(payload.at).toBeUndefined();
   });
 
-  it("OMITS `at` when asOf names a phase the match has already left — never a stamp from the wrong period", () => {
+  it("DECLARES `at: undefined` when asOf names a phase the match has already left", () => {
     const stale = view({ state: state({ phase: "H2", asOf: { period: "H1", elapsed: 754 } }) });
-    expect(buildSwap(stale, t)[0]!.buildEvent("h1", "h4").payload).not.toHaveProperty("at");
+    const payload = buildSwap(stale, t)[0]!.buildEvent("h1", "h4").payload as Record<string, unknown>;
+    expect("at" in payload).toBe(true);
+    expect(payload.at).toBeUndefined();
+  });
+
+  it("and the chassis gateway LEAVES IT ALONE — a running clock cannot overwrite the refusal", () => {
+    // The end-to-end proof, through the real `send` gateway rather than an
+    // assertion about the payload alone: a clock that is running, known, and
+    // reading a plausible time still stamps nothing onto a substitution this
+    // skin refused. Without the key, `stampFor` would attach `{H2, 900}` —
+    // `applySub`'s window arithmetic would then read a stoppage that never
+    // happened.
+    const stale = view({ state: state({ phase: "H2", asOf: { period: "H1", elapsed: 754 } }) });
+    const slot = buildSwap(stale, t)[0]!;
+    const event = slot.buildEvent("h1", "h4");
+    const clock = startClock(initClock("H2", 0), 1_000);
+    const sent = stampFor(football as AnySportModule, event.type, event.payload, clock, 1_000 + 900_000) as Record<
+      string,
+      unknown
+    >;
+    expect(sent.at, "the host's clock overwrote a deliberate omission").toBeUndefined();
+
+    // …and the same gateway DOES stamp a payload that expresses no opinion, so
+    // the assertion above is about the key and not about a dead gateway.
+    const opinionless = { by: "home-1", off: "h1", on: "h4" };
+    const stamped = stampFor(football as AnySportModule, event.type, opinionless, clock, 1_000 + 900_000) as Record<
+      string,
+      unknown
+    >;
+    expect(stamped.at).toEqual({ period: "H2", elapsed: 900 });
   });
 
   it("offers nothing outside a play phase — the fold refuses a substitution in a shoot-out", () => {

@@ -742,12 +742,35 @@ describe("rejectionText", () => {
     expect(text).not.toBe("raw engine text");
   });
 
-  it("falls back to the raw message for a non-engine code", () => {
+  // R6 FIX PASS 3, GAP 1 — this pair used to assert the OPPOSITE of the first
+  // case: "falls back to the raw message for a non-engine code", pinning
+  // `scoringErrorText`'s own documented fall-through. That was a correct
+  // reading of a contract that had no reachable bad branch: only a 422 could
+  // produce a rejection, and every `EngineErrorCode` has localized copy, so
+  // the raw-message arm never fired in production.
+  //
+  // transport.ts now surfaces the whole permanent 4xx class, and the arm fired
+  // immediately: a band-1 402 resolved to the server's own "Plan upgrade
+  // required: scoring.match_timeline" — English in every locale, and an
+  // internal feature slug on a rink-side screen. The contract is now
+  // `refusalText`'s (../refusal-copy.ts): pad copy for a code it knows, the
+  // generic fallback otherwise, and server prose NEVER.
+  it("never shows the server's own message, even when the code is not an engine one", () => {
     const text = rejectionText({ code: "NETWORK_ERROR", message: "Server exploded" }, identityMsg);
-    expect(text).toBe("Server exploded");
+    expect(text).not.toBe("Server exploded");
+    expect(text).toBe("scorepad.rejection.fallback");
   });
 
-  it("falls back to the fallback key when there is neither an engine code nor a usable raw message", () => {
+  it("resolves a known wire refusal to the pad's own key, not to the generic fallback", () => {
+    const text = rejectionText(
+      { code: "PAYMENT_REQUIRED", message: "Plan upgrade required: scoring.match_timeline" },
+      identityMsg,
+    );
+    expect(text).toBe("scorepad.refusal.planLocked");
+    expect(text).not.toContain("scoring.match_timeline");
+  });
+
+  it("falls back to the fallback key when there is neither an engine code nor a known wire code", () => {
     const text = rejectionText({ code: "NETWORK_ERROR", message: "" }, identityMsg);
     expect(text).toBe("scorepad.rejection.fallback");
   });

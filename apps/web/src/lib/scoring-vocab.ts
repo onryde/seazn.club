@@ -987,6 +987,36 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   // on the board — the exact defect a 320px screenshot caught on badminton's
   // own entry above, paid for once already this wave and not repeated here.
   "pad.volleyball.scorebug.rally.hint",
+  // R6 — the period pair's own ribbon copy, hockey and ice hockey. Registered
+  // HERE, not only in the four dictionaries: `ribbon.ts`'s `buildRibbon` gates
+  // its per-sport lookup on PAD_LABEL_KEYS MEMBERSHIP before calling
+  // `padLabel`, so dictionary copy with no entry in this list stays silently on
+  // the generic `pad.ribbon.fallback` ("{event} recorded") forever, with
+  // nothing failing — a scoring desk reading "hockey.suspension.start
+  // recorded".
+  //
+  // ALL SEVEN PER SPORT, with no "this one is unreachable" exemptions. Every
+  // one of the seven is a type `makePeriodModule` registers unconditionally
+  // (kernel.ts:1823-1832), and each sport's own tiles, sheets or the generic
+  // More sheet can dispatch every one of them: the shoot-out attempt is
+  // reachable through hockey's `fih-shootout` variant even though FIH outdoor
+  // declares no shoot-out, and the shot is reachable at band 3 through More.
+  // "Unreachable" is a claim about config, and config is the thing that varies
+  // — the exact reasoning that put badminton's `timeout` on this list in R5.
+  "pad.hockey.ribbon.goal",
+  "pad.hockey.ribbon.period.advance",
+  "pad.hockey.ribbon.set_piece",
+  "pad.hockey.ribbon.shootout.attempt",
+  "pad.hockey.ribbon.shot",
+  "pad.hockey.ribbon.suspension.end",
+  "pad.hockey.ribbon.suspension.start",
+  "pad.icehockey.ribbon.goal",
+  "pad.icehockey.ribbon.period.advance",
+  "pad.icehockey.ribbon.set_piece",
+  "pad.icehockey.ribbon.shootout.attempt",
+  "pad.icehockey.ribbon.shot",
+  "pad.icehockey.ribbon.suspension.end",
+  "pad.icehockey.ribbon.suspension.start",
 ];
 
 const PAD_LABEL_SET: ReadonlySet<string> = new Set<string>(PAD_LABEL_KEYS);

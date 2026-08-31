@@ -123,19 +123,29 @@ describe("FOOTBALL keeps its own ring — the identity ruling, without the colla
     // `--sport-led` inside it is always the overriding sport's own colour.
     // R4 adds tennis; R5 adds the whole racquet family at once (badminton,
     // table tennis and volleyball — the palettes land together even though R5
-    // converts only badminton's skin, see `SPORT_PALETTES`'s own note). The
-    // list is pinned rather than counted so a sport that gains a palette
-    // without gaining an entry here is a red, not a silent pass — the point of
-    // the assertion is that EVERY key in this table has its own `led`, which
-    // is what makes the scoped rule safe.
+    // converts only badminton's skin, see `SPORT_PALETTES`'s own note); R6
+    // adds the period pair (hockey and ice hockey) on the identical footing,
+    // both ahead of their skins. The list is pinned rather than counted so a
+    // sport that gains a palette without gaining an entry here is a red, not a
+    // silent pass — the point of the assertion is that EVERY key in this table
+    // has its own `led`, which is what makes the scoped rule safe.
+    //
+    // The ORDER is the literal's own, which R6 chose alphabetically-by-
+    // neighbour so a concurrent wave editing the same object merges
+    // mechanically; it is asserted here only because `toEqual` on an array
+    // sees it, not because anything depends on it.
     expect(Object.keys(SPORT_PALETTES)).toEqual([
       "football",
+      "hockey",
+      "icehockey",
       "tennis",
       "badminton",
       "tabletennis",
       "volleyball",
     ]);
     expect(SPORT_PALETTES.football!.led).toBe("#ffb703");
+    expect(SPORT_PALETTES.hockey!.led).toBe("#ffd23f");
+    expect(SPORT_PALETTES.icehockey!.led).toBe("#67e8f9");
     expect(SPORT_PALETTES.tennis!.led).toBe("#d9f000");
     expect(SPORT_PALETTES.badminton!.led).toBe("#2fe0bd");
     expect(SPORT_PALETTES.tabletennis!.led).toBe("#ff9440");

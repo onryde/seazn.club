@@ -48,11 +48,13 @@
 import { builtinModules } from "@seazn/engine/sports";
 import type { TFn } from "./context-strip";
 import type { SkinDefV3 } from "./types";
+import { badmintonSkinV3 } from "./skins/badminton";
 import { cricketSkinV3 } from "./skins/cricket";
 import { footballSkinV3 } from "./skins/football";
-import { tennisSkinV3 } from "./skins/tennis";
-import { badmintonSkinV3 } from "./skins/badminton";
+import { hockeySkinV3 } from "./skins/hockey";
+import { icehockeySkinV3 } from "./skins/icehockey";
 import { tabletennisSkinV3 } from "./skins/tabletennis";
+import { tennisSkinV3 } from "./skins/tennis";
 import { volleyballSkinV3 } from "./skins/volleyball";
 
 /**
@@ -73,31 +75,44 @@ import { volleyballSkinV3 } from "./skins/volleyball";
  * unaffected by the prototype).
  */
 export const V3_SKINS: Partial<Record<string, (t: TFn) => SkinDefV3>> = Object.create(null);
-V3_SKINS.cricket = cricketSkinV3;
-// R3/task B2 — football, the second conversion. The FACTORY, never
-// `footballSkinV3(t)`: an already-called skin is a plain object with no call
-// signature, which this map's own value type rejects at compile time (see this
-// file's header, and `__tests__/registry-totality.test.ts`'s
-// `@ts-expect-error` pin).
-V3_SKINS.football = footballSkinV3;
-// R4 — tennis, the third conversion. The FACTORY, never `tennisSkinV3(t)`,
-// same reason as football's own entry above.
-V3_SKINS.tennis = tennisSkinV3;
+// ALPHABETICAL BY KEY, from R6 on — and the ordering is a working agreement,
+// not a tidy-up. R6 (hockey + ice hockey) and R7 (boardgame, carrom, generic)
+// insert into this literal and into `CONVERTED_SPORTS` below CONCURRENTLY, on
+// separate branches; wave order gave two appends to the same last line and a
+// conflict a human had to think about, where a sorted list gives each new key
+// exactly one correct slot. Every entry keeps the provenance note its own wave
+// wrote — the entries moved, nothing else did.
+//
+// EVERY VALUE IS THE FACTORY, never `xSkinV3(t)`: an already-called skin is a
+// plain object with no call signature, which this map's own value type rejects
+// at compile time (see this file's header, and
+// `__tests__/registry-totality.test.ts`'s `@ts-expect-error` pin).
+
 // R5/C1 — badminton, the fourth conversion and the FIRST of the three sports
-// that share `sports/setbased`'s kernel. Volleyball stays on the legacy lane
-// (and on `skins/racquet-skin.tsx`, which still serves it) until its own
-// wave. The FACTORY, never `badmintonSkinV3(t)`, same reason as football's
-// and tennis's own entries above.
+// that share `sports/setbased`'s kernel.
 V3_SKINS.badminton = badmintonSkinV3;
+// R2 — cricket, the first conversion.
+V3_SKINS.cricket = cricketSkinV3;
+// R3/task B2 — football, the second conversion.
+V3_SKINS.football = footballSkinV3;
+// R6 — field hockey, and the FIRST skin in the programme to declare
+// `SkinDefV3.clock()`. Declaring it is the single switch that mounts
+// `PadClockBar` and turns on `at` stamping in `pad-host.tsx`'s `send` gateway,
+// so R6/task A's seam is unreachable in the product until this line and the
+// next one exist. Both period-kernel sports flip in ONE change: they share
+// `skins/period-shared.ts`, and a half-flipped pair would leave the shared
+// module carrying a sport that never reaches it.
+V3_SKINS.hockey = hockeySkinV3;
+// R6 — ice hockey, the second of the period-kernel pair. See hockey above.
+V3_SKINS.icehockey = icehockeySkinV3;
 // R5/C2 — table tennis, the fifth conversion and the SECOND of the three
-// `sports/setbased` sports (badminton, R5/C1, above). The FACTORY, never
-// `tabletennisSkinV3(t)`, same reason as every other entry above.
+// `sports/setbased` sports.
 V3_SKINS.tabletennis = tabletennisSkinV3;
-// R5/C3 — volleyball, the sixth conversion and the THIRD and LAST of the
-// three `sports/setbased` sports. `skins/racquet-skin.tsx` (v2) is now
-// unreferenced by any sport and is deleted in this wave's own follow-up
-// task, not here. The FACTORY, never `volleyballSkinV3(t)`, same reason as
-// every other entry above.
+// R4 — tennis, the third conversion.
+V3_SKINS.tennis = tennisSkinV3;
+// R5/C3 — volleyball, the sixth conversion and the THIRD and LAST of the three
+// `sports/setbased` sports. `skins/racquet-skin.tsx` (v2) is now unreferenced
+// by any sport and is deleted in that wave's own follow-up task, not here.
 V3_SKINS.volleyball = volleyballSkinV3;
 
 /**
@@ -123,11 +138,17 @@ V3_SKINS.volleyball = volleyballSkinV3;
  * merely caught, which is the whole reason the two sets are maintained apart.
  */
 const CONVERTED_SPORTS: ReadonlySet<string> = new Set([
+  // Alphabetical, and kept in step with `V3_SKINS` above by
+  // `__tests__/registry-totality.test.ts` — a key in one set and not the other
+  // fails as loudly as a key in neither. See `V3_SKINS`' own note for why the
+  // order is a concurrency agreement rather than housekeeping.
+  "badminton",
   "cricket",
   "football",
-  "tennis",
-  "badminton",
+  "hockey",
+  "icehockey",
   "tabletennis",
+  "tennis",
   "volleyball",
 ]);
 

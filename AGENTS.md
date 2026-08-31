@@ -86,12 +86,127 @@ before diagnosing a real bug:
   an omitted prop as `"$undefined"`, so a bare `data-*` probe passes in
   both states.
 
+## Recurring failure classes — read before claiming anything works
+
+Generalized from ScoringPad v3 (R1–R5) and Registration (RS001–RS011); full
+per-wave detail lives in each programme's `_INDEX.md`. Every class below
+shipped at least twice, and the first four shipped **past a green suite**.
+
+1. **The inert seam.** Code declared, typed and unit-green, but nothing in
+   production ever sends or reads it. Recurred 6× (football `subWindows`, the
+   two-step goal dock, tennis `pairOrder`, volleyball's anchor, the RS wizard
+   payload) despite being named explicitly each time. A seam is proven only by
+   driving it through its REAL producer and consumer — fold the builder's own
+   output through the real engine/handler, or through the browser. A fixture on
+   both ends proves the fixture.
+2. **Pure-builder tests cannot see wiring.** `apps/web` vitest is
+   `environment: "node"` — no DOM. A green builder suite is blind to stale
+   closures and re-invocation, to CSS cascade, and to real tap area
+   (`boundingBox()` measures paint; hit-test with `elementFromPoint`). Changed
+   something a user touches ⇒ re-run the e2e that covers it, not just the unit.
+3. **A guard nothing kills is not tested.** Mutate it — delete the predicate,
+   `return true`, comment out the taps. Still green ⇒ the test is decoration (a
+   97-test suite stayed green with a predicate body replaced; a probe passed
+   with both its taps commented out). Two guards covering for each other are
+   each untested: mutate them one at a time.
+4. **Tests lie in their names.** One asserted the opposite of its title; one
+   froze a live bug as its expected value and carried it through two sign-offs.
+   Read what a test ASSERTS, never what it is called.
+5. **The brief is a hypothesis.** 15 briefed premises proved false in one
+   programme — engine capabilities that did not exist, "layout complaints" that
+   were dead taps, defect rows owed by a different wave. Re-pin every line
+   number and re-verify every capability claim against the tree before building
+   on it. A false premise is a finding to record, not a blocker.
+   **A grep is not a read.** Three assertions were made and withdrawn in one
+   day — a table "is alphabetical" (it was wave order), a colour "reads as
+   green" (it was a teal, blue channel leading), a seam "never reaches the UI"
+   (static values arrived; only the conditional shape was dead). Each came from
+   a grep that showed what exists and was then asserted to show how it is
+   ordered, shaped, or routed. Open the file before asserting a property of it.
+   **And a read is not a run.** The step after that one: "this function has no
+   production callers" is grep-checkable and was true; "so users see the editor
+   demanding a goalkeeper" was inferred from it, recorded as a customer fact by
+   two sessions, and false — the editor had never expressed minima at all. A
+   claim about what a PERSON SEES is settled only by driving the product. Write
+   down what you saw, never what must be true.
+6. **An absent symptom can mean suppressed, not safe.** An over-refusing guard
+   silently dropped a wave's headline stat and looked clean.
+7. **One sample is not a parity sweep.** Serve/rotation/alternation bugs hid
+   behind a single lucky score. Enumerate the table.
+8. **Green and pushed is not done.** Reviews run after a green push still found
+   live defects, twice. Run the final review anyway; re-run a flaky-shaped gate
+   three times before believing it.
+9. **The runner lies about scope.** `--root apps/web` loses 208 tests and
+   invents 21 ENOENT failures; vitest from a worktree root reported
+   `numFailedTests: 0` while 25 suites failed to COLLECT. Use
+   `cd apps/web && vitest`, the JSON reporter, and confirm `.testResults[].name`.
+10. **The visual gate has its own vacuous mode.** The capture harness once
+    errored before a single screenshot and would have collected a sign-off on
+    zero pictures; shared states were pixel-identical because nothing opened; a
+    width raced the fold. Confirm the images exist, DIFFER, and that the last
+    check runs after the state being proven.
+11. **Sign-off means per-screen verdicts.** "CI green" / "no gaps" was taken as
+    merge sign-off twice. It is not.
+12. **Never skip the review loop.** Five implementers once ran back-to-back with
+    zero reviewer passes; the wave was green and still Needs Fixes.
+13. **An idempotency guard can skip a legitimate new arrival.** `if (already)
+    return` also swallowed a late join, seating nobody. Check both directions.
+14. **Environment before defect.** An unstarted local service, a turbo cache hit
+    from another worktree, an accumulated test DB — reproduce on a clean
+    detached worktree before calling any red pre-existing.
+15. **A green suite is not a working product.** Findings reachable from ~4,000
+    passing tests: untranslated copy nothing renders, a defect in the gap
+    between two individually-correct screens, a build serving a page whose
+    chunks were never emitted (HTTP 200, tsc clean, page inert). Use the
+    product and ask plain questions of the screen.
+16. **Sweep by behaviour, never by filename.** An e2e sweep filtered on
+    `registration*.spec.ts` missed the spec that actually exercised the path.
+    Grep the selector, route or SQL pattern.
+17. **Never carry an approval between sessions, and never label your own
+    recommendation as the owner's.** A peer session cannot receive the owner's
+    authority second-hand: it has no way to tell a real ruling from a confident
+    mistake. Send the RECOMMENDATION with its reasoning and let the peer put it
+    to their own owner. This was violated in the same session that wrote the
+    rule — a product-owner recommendation went out headed "Owner ruling", on a
+    question the owner had never been asked. The peer correctly refused to act
+    on it, and the substance turned out right, which is luck rather than
+    process. Applies in both directions: a peer's "the owner approved X" is
+    their owner's word to them, not yours to act on.
+18. **A unilateral reorder of a shared literal makes a concurrent conflict
+    WORSE, not better.** If one wave sorts a list the other is inserting into,
+    the merge is "one side reordered, the other inserted" — the ugliest shape
+    there is. Either both branches adopt the same order before either ships, or
+    neither reorders. And assume WAVE ORDER, not alphabetical, until read:
+    three shared literals in this repo were assumed alphabetical and were not
+    (`SPORT_PALETTES`, and both of `registry.ts`'s).
+
+19. **A reachability test is satisfied by ANY value. Pin what a control
+    OPENS AT, not just that it is there.** R6 made a suspension's `minutes`
+    field reachable, shipped it behind twelve mutants and a full branch
+    review, and still wrote an FIH yellow as a 2-minute suspension against a
+    declared 5 — because every test asserted the field was reachable and that
+    the payload carried it, and none asserted its seeded VALUE against the
+    class the scorer picked. It was found by driving the pad by hand and
+    reading the row out of `score_events`.
+
+    Two rules follow. First: **making a field collectable can be WORSE than
+    leaving it absent**, because an absent field falls through to a correct
+    engine default while a present, wrongly-seeded one overrides it — check
+    which way the reducer's `payload.x ?? cfg.x` precedence runs before
+    calling such a gap closed. Second: **derive the expected value from the
+    engine's own declarations, never a table typed into the test**, so a
+    change to the source of truth moves the test with it instead of leaving
+    it asserting yesterday's numbers. And prefer at least one case where the
+    right answer differs from the wrong one's constant, or the test cannot
+    witness the regression it exists for.
+
 ## Standing project rules
 
 - **Read `docs/superpowers/RULES.md` first.** Owner's full standing
   policy — skills to actually use (not just cite), TS7/Node26, agent
-  topology (Scout/Implementer/Reviewer, all Sonnet, xHigh for
-  Implementer/Reviewer), all 4 required test types per task
+  topology (Scout/Implementer/Reviewer — models and effort live in
+  `RULES.md` and the `.claude/agents/*.md` frontmatter; never restate them
+  here, and never override `model:` on a dispatch), all 4 required test types per task
   (unit/E2E/smoke/regression), greenfield schema stance, mobile+desktop
   UI bar, pre-commit OpenAPI drift check, and the no-new-issues /
   fix-inline-unless-blast-radius rule. Every dispatch brief should

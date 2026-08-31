@@ -20,8 +20,14 @@
 // exact failure `SPORT_TONES`'s own doc (a SUBSET of `SPORT_TOKENS`, never a
 // parallel list) exists to prevent. Keep any future sibling import to that
 // same bar: leaf module, vocabulary owner, `import type`.
+//
+// R6/task A admits a SECOND sibling, `./clock`, against that same bar and for
+// the same reason: clock.ts imports nothing at all (not even React), it owns
+// the clock vocabulary, and restating `PadClockSpec` here would fork the shape
+// the chassis reads from the shape the skin writes.
 import type { EventEnvelope, SquadState } from "@seazn/engine/core";
 import type { FidelityBand } from "@seazn/engine/sport";
+import type { GameTimeStamp, PadClockSpec } from "./clock";
 import type { SportTone } from "./sport-theme";
 
 export type TapModel = "S" | "T";
@@ -544,6 +550,13 @@ export type StepPredicate = (answers: Readonly<Record<string, string>>) => boole
  * colour any more — the three options inside `card-<side>`'s first step are
  * where these belong.
  *
+ * R6-3 widened that vocabulary to THREE (`advisory`, hockey's FIH green card)
+ * — additively, and without touching this field's type: `SportTone` is derived
+ * from `SPORT_TONES`, so the accepted subset here grows with the ruling rather
+ * than being restated. That is the whole reason this reads `readonly
+ * SportTone[]` and not a hand-written union; a second vocabulary for the same
+ * values is the drift this file's own import note forbids.
+ *
  * An ARRAY over a closed vocabulary (`SportTone`, ./sport-theme.ts), not a
  * single value, because one option legitimately carries two: a second yellow
  * IS a yellow card and a red one, not a red card with a note (the engine
@@ -587,7 +600,30 @@ export interface SheetChoiceStep { id: string; kind: "choice"; title: string; op
  * which is still the common case — a swap's off/on pickers, a fielder pick
  * with no narrower notion than "the whole fielding side").
  */
-export interface SheetPersonStep { id: string; kind: "person"; title: string; pool: "onfield" | "bench" | "all"; side: "home" | "away"; candidates?: readonly string[]; when?: StepPredicate }
+export interface SheetPersonStep {
+  /**
+   * This step can be answered with NOBODY, and the skin's `buildPayload`
+   * must treat the empty answer as "field absent".
+   *
+   * R6 follow-up. Two defects, one cause — a person step with no way to
+   * decline:
+   *
+   *   1. A division with no rosters offers ZERO candidates, so
+   *      `renderCandidateRow` draws only "No roster available yet." and the
+   *      sheet's only exits are Back and Cancel. The event cannot be
+   *      recorded AT ALL. Rosterless divisions are ordinary, not exotic.
+   *   2. Even WITH a roster the step was compulsory, though the field it
+   *      collects is an exception by definition — `servedBy` is the
+   *      team-mate who sits a penalty when the assessed player is not the
+   *      one serving it (a bench minor, a coach's card). The common case is
+   *      that nobody needs naming, and the scorer was being made to name
+   *      somebody anyway.
+   *
+   * The engine has always treated these fields as optional; only the sheet
+   * insisted. Skins whose person step is genuinely required (cricket's
+   * "who's out") simply do not set this.
+   */
+  optional?: boolean; id: string; kind: "person"; title: string; pool: "onfield" | "bench" | "all"; side: "home" | "away"; candidates?: readonly string[]; when?: StepPredicate }
 
 /**
  * R2b/task 1 (`docs/superpowers/plans/2026-08-17-scorepad-v3-r2b-cricket-
@@ -632,18 +668,50 @@ export interface SheetPersonStep { id: string; kind: "person"; title: string; po
  * either. Widening the map itself would be a contract change every R3-R7
  * skin inherits for one sport's convenience, when the cost of NOT widening
  * it is a one-line `Number(answers.x)` parse at cricket's own call site.
+ *
+ * `initial` WIDENED (R6 fix, W-1 — 2026-08-31): admits `(answers) => number`
+ * alongside the plain literal every step used before. A literal is fixed
+ * when the sheet is BUILT, before this sheet has any answers at all — fine
+ * for cricket's over-summary (prefills from the fold's current total, never
+ * from an earlier step in the SAME sheet) but wrong for a step whose right
+ * opening value depends on what an EARLIER step in this sheet just
+ * answered (period-shared.ts's minutes stepper: the suspension class the
+ * scorer picked one step ago). `guided-sheet.tsx` resolves the function
+ * form at the moment a step is freshly seeded, against the answers
+ * accumulated so far (`GuidedSheetState.answers`) — never against the step
+ * being seeded itself, which has no answer yet. Backward compatible: every
+ * step that passes a literal is untouched, and `clampNumberStep` still
+ * clamps whichever form resolves.
  */
 export interface SheetNumberStep {
   id: string;
   kind: "number";
   title: string;
-  initial: number;
+  initial: number | ((answers: Record<string, string>) => number);
   min?: number;
   max?: number;
   /** Pre-localised, skin-supplied (same rule as WhoLine.servingLabel):
    *  the chassis never resolves a sport-namespaced key. */
   hintText?: string;
   when?: StepPredicate;
+  /**
+   * Step ids this step's `initial` READS. Answering any of them to a
+   * different value discards this step's own answer, so the next visit
+   * re-seeds instead of carrying a number derived from the old answer.
+   *
+   * R6 W-1, the Back path. Seeding correctly on the way in is not enough:
+   * a scorer who picks a suspension class, accepts its minutes, taps Back
+   * and picks a DIFFERENT class would otherwise carry the first class's
+   * duration forward — `pruneAnswers` keeps the minutes answer (the step is
+   * still visible for the new class) and a prior answer beats `initial` by
+   * design, because Back must not blank a value somebody typed.
+   *
+   * Only the DERIVED value is dropped, and only when the thing it was
+   * derived from actually changed: re-answering a step with the SAME value
+   * keeps everything, so Back-and-forward with no change is still lossless.
+   * A literal `initial` needs none of this and should not declare it.
+   */
+  resetOn?: readonly string[];
 }
 export type GuidedSheetStep = SheetChoiceStep | SheetPersonStep | SheetNumberStep;
 export interface GuidedSheetSpec { event: string; steps: GuidedSheetStep[]; buildPayload: (answers: Record<string, string>) => Record<string, unknown> }
@@ -1092,6 +1160,37 @@ export interface SkinDefV3<View = unknown> {
    * live in `padSpec` never needs it.
    */
   refusedEventTypes?(view: View): readonly string[];
+  /**
+   * R6/task A (owner ruling R6-4) — THE PAD'S CLOCK, opted into one sport at a
+   * time exactly like `phase`/`context`/`swap` above.
+   *
+   * Returns the engine phase the clock counts within (plus, optionally, the
+   * seconds the FOLD already knows about in that phase), or `null` when this
+   * sport has no clock right now — before kick-off, at full time, or in a
+   * phase where a running clock would be a lie. Omit the method entirely for a
+   * sport with no clock at all, which is every skin written before this wave
+   * and most of the ones after it.
+   *
+   * WHY THIS IS THE SEAM AND NOT A CHASSIS-WIDE FLAG. `../clock.ts` explains
+   * what the clock IS; what only the skin can supply is the two facts in
+   * `PadClockSpec`. The chassis has no sport vocabulary — `PadHostView.phase`
+   * is the three-value UI concept and NEVER an engine phase token — so it
+   * cannot name the period a stamp belongs to. And the seed is
+   * `state.asOf.elapsed` guarded against a stamp left over from a phase the
+   * match has since left, which needs the state's own shape.
+   *
+   * DECLARING THIS TURNS ON THE STAMP. `pad-host.tsx` attaches `at` to every
+   * event it dispatches while a clock exists, and this method is the only
+   * switch. That is deliberate: an unclocked pad's payloads are the tile's own
+   * objects, untouched and byte-identical to the pre-R6 build.
+   *
+   * WHAT IT DOES NOT DO: it never says whether the clock is RUNNING. Starting
+   * and pausing is the scorer's, held in the host's own state and reset only
+   * when this method's `period` changes. A skin returning a different `period`
+   * is therefore declaring a whistle, and the origin resets; returning the
+   * same one every render costs nothing and is the normal case.
+   */
+  clock?(view: View): PadClockSpec | null;
 }
 
 /**
@@ -1153,6 +1252,42 @@ export interface PadHostView {
   readonly squads: SquadState;
   readonly events: readonly EventEnvelope[];
   readonly contextOverrides: Readonly<Record<string, string>>;
+  /**
+   * R6 fix pass 2 (gap 2) — THE HOST CLOCK'S LIVE READING, so a skin can show a
+   * number that changes between events.
+   *
+   * The `at` this host would put on an event dispatched right now: exactly
+   * `stampOf(clock, nowMs)`, the SAME derivation the `send` gateway stamps
+   * with, never a second one. `undefined` when this pad has no clock, or has
+   * one that has never been told the time (`PadClock.known` — a pad displaying
+   * 0:00 because it has nothing better to display must not drive a countdown
+   * from that zero).
+   *
+   * WHY IT EXISTS. `ActiveSuspension.expiresAt` is derived once, at the card,
+   * from the stamped `at` plus the awarded minutes, and the kernel's release is
+   * LAZY — swept at the next stamped event and at each whistle (kernel.ts:
+   * 842-843 says so in as many words). A skin measuring a countdown against
+   * `state.asOf` therefore measures against the last thing anybody RECORDED:
+   * hockey showed "back on 2:00" at the card and still 2:00 two minutes later,
+   * and still 2:00 after the player was back. The most urgent number on the
+   * band never moved. Nothing in this bag could reach live seconds, so no skin
+   * could fix it on its own.
+   *
+   * WHY THE PERIOD COMES WITH IT, and why this is not "a second clock". The
+   * countdown must not subtract across a whistle — `expiresAt.period` routinely
+   * differs from the period being played — so a bare number would force every
+   * reader to ASSUME the host is counting within the phase it happens to be
+   * looking at. The host knows which period it is stamping; it says so. What a
+   * skin must NOT be handed is `PadClock` itself (`base`/`runningSince`/
+   * `known`), which would let it run its own arithmetic and drift from the
+   * stamp `send` actually applies.
+   *
+   * DISPLAY ONLY. This never becomes an `at` on a payload and never corrects
+   * the fold: the ENGINE's laziness is correct and is not to be "fixed" from
+   * here. A ticking display and a lazily-swept state legitimately disagree
+   * between events.
+   */
+  readonly clockAt?: GameTimeStamp;
 }
 
 export function assertScorebugSpec(spec: ScorebugSpec): string[] {
