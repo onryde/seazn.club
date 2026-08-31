@@ -2682,6 +2682,7 @@
   "pad.host.moreEmpty": "Todavía no hay nada más que registrar aquí.",
   "pad.sheet.back": "Atrás",
   "pad.sheet.cancel": "Cancelar",
+  "pad.sheet.person.none": "Nadie — la cumple el infractor",
   "pad.sheet.decrease": "Reducir {title}",
   "pad.sheet.increase": "Aumentar {title}",
   "pad.swap.refused": "Ese cambio no está permitido ahora mismo.",

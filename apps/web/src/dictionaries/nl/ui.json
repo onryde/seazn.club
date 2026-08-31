@@ -2682,6 +2682,7 @@
   "pad.host.moreEmpty": "Hier is nog niets anders om vast te leggen.",
   "pad.sheet.back": "Terug",
   "pad.sheet.cancel": "Annuleren",
+  "pad.sheet.person.none": "Niemand — de overtreder zit hem uit",
   "pad.sheet.decrease": "{title} verminderen",
   "pad.sheet.increase": "{title} verhogen",
   "pad.swap.refused": "Die wissel is nu niet toegestaan.",

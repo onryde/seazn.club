@@ -100,6 +100,41 @@ function stepVisible(step: GuidedSheetStep, answers: Readonly<Record<string, str
  *  never merged/intersected with it. Absent `candidates` is "resolve the
  *  pool exactly as before this change" — every pre-G6 spec (none declare
  *  `candidates`) reads identically. */
+/**
+ * A person step, plus the decline control an `optional` one needs.
+ *
+ * The empty answer is `""`, which every skin's `buildPayload` already treats
+ * as absent (`answers.servedBy ? {...} : {}`) — so declining omits the field
+ * rather than writing a blank one. It renders BELOW the candidates rather
+ * than among them: it is not a person, and a chip sitting in the row reads
+ * like one.
+ */
+function renderPersonStep(
+  step: SheetPersonStep,
+  view: PoolView,
+  personNames: Readonly<Record<string, string>>,
+  t: TFn,
+  onAnswer: (value: string) => void,
+  emptyText: string,
+) {
+  const ids = candidatesForStep(step, view);
+  if (step.optional !== true) return renderCandidateRow(ids, personNames, t, onAnswer, emptyText);
+  return (
+    <div className="space-y-2">
+      {renderCandidateRow(ids, personNames, t, onAnswer, emptyText)}
+      <button
+        type="button"
+        data-role="v3-person-none"
+        onClick={() => onAnswer("")}
+        style={{ minHeight: 44 }}
+        className="rounded-full border border-dashed border-slate-300 px-4 text-sm text-slate-600 hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400"
+      >
+        {t("pad.sheet.person.none")}
+      </button>
+    </div>
+  );
+}
+
 function candidatesForStep(step: SheetPersonStep, view: PoolView): readonly string[] {
   return step.candidates ?? resolvePool({ pool: step.pool }, view);
 }
@@ -617,7 +652,7 @@ export function GuidedSheet({ spec, views, personNames, t, onComplete, onCancel 
           ? renderChoiceRow(step.options, step.hintKey, t, handleAnswer, step.blocked?.(state.answers))
           : step.kind === "number"
             ? renderNumberStep(step, numberEditValue, t, setNumberEditValue, () => handleAnswer(String(numberEditValue)))
-            : renderCandidateRow(candidatesForStep(step, views[step.side]), personNames, t, handleAnswer, emptyText)}
+            : renderPersonStep(step, views[step.side], personNames, t, handleAnswer, emptyText)}
       </div>
       <div className="flex justify-end px-4 pb-3">
         <button type="button" onClick={handleCancel} style={{ minHeight: 44 }} className={cancelButtonClass}>

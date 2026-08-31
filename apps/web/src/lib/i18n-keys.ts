@@ -3096,6 +3096,7 @@ export type DictionaryKey =
   | "pad.sheet.cancel"
   | "pad.sheet.decrease"
   | "pad.sheet.increase"
+  | "pad.sheet.person.none"
   | "pad.swap.refused"
   | "pad.tabletennis.action.expediteStart"
   | "pad.tabletennis.action.rally"

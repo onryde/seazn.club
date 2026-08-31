@@ -600,7 +600,30 @@ export interface SheetChoiceStep { id: string; kind: "choice"; title: string; op
  * which is still the common case — a swap's off/on pickers, a fielder pick
  * with no narrower notion than "the whole fielding side").
  */
-export interface SheetPersonStep { id: string; kind: "person"; title: string; pool: "onfield" | "bench" | "all"; side: "home" | "away"; candidates?: readonly string[]; when?: StepPredicate }
+export interface SheetPersonStep {
+  /**
+   * This step can be answered with NOBODY, and the skin's `buildPayload`
+   * must treat the empty answer as "field absent".
+   *
+   * R6 follow-up. Two defects, one cause — a person step with no way to
+   * decline:
+   *
+   *   1. A division with no rosters offers ZERO candidates, so
+   *      `renderCandidateRow` draws only "No roster available yet." and the
+   *      sheet's only exits are Back and Cancel. The event cannot be
+   *      recorded AT ALL. Rosterless divisions are ordinary, not exotic.
+   *   2. Even WITH a roster the step was compulsory, though the field it
+   *      collects is an exception by definition — `servedBy` is the
+   *      team-mate who sits a penalty when the assessed player is not the
+   *      one serving it (a bench minor, a coach's card). The common case is
+   *      that nobody needs naming, and the scorer was being made to name
+   *      somebody anyway.
+   *
+   * The engine has always treated these fields as optional; only the sheet
+   * insisted. Skins whose person step is genuinely required (cricket's
+   * "who's out") simply do not set this.
+   */
+  optional?: boolean; id: string; kind: "person"; title: string; pool: "onfield" | "bench" | "all"; side: "home" | "away"; candidates?: readonly string[]; when?: StepPredicate }
 
 /**
  * R2b/task 1 (`docs/superpowers/plans/2026-08-17-scorepad-v3-r2b-cricket-

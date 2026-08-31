@@ -973,6 +973,49 @@ describe("Back-and-forward without changing the class keeps what the scorer type
   }
 });
 
+// ---------------------------------------------------------------------------
+// R6 follow-up — the servedBy step must be DECLINABLE. Found while porting the
+// v2 e2e specs: a division with no rosters offers zero candidates, so the
+// sheet drew "No roster available yet." and the only controls left were Back
+// and Cancel — the card could not be recorded AT ALL. And even with a roster
+// the step was compulsory, though `servedBy` means "the team-mate who sits it
+// when the offender does not", which is the exception.
+// ---------------------------------------------------------------------------
+
+describe("a suspension can be recorded without naming who serves it", () => {
+  for (const sport of SPORTS) {
+    it(`${sport.key}: the servedBy step is declinable, and declining omits the field`, () => {
+      const cfg = periodCfg(sport.module);
+      const state = livePhaseState(sport, cfg);
+      const view = viewFor(sport, cfg, state);
+      const sheet = sport.factory(T).sheets!(view)["suspension-home"] as GuidedSheetSpec;
+      const servedBy = sheet.steps.find((s) => s.id === "servedBy");
+      expect(servedBy, "no servedBy step").toBeDefined();
+      expect(
+        (servedBy as { optional?: boolean }).optional,
+        "servedBy is compulsory — a rosterless division cannot record a card at all",
+      ).toBe(true);
+
+      // Declining answers with the empty string, and buildPayload must then
+      // omit the key rather than write a blank one the engine would reject.
+      const classes = (cfg as { suspensions: { classes: Record<string, { minutes: number | null }> } }).suspensions
+        .classes;
+      const [classKey, cls] = Object.entries(classes).find(([, c]) => typeof c.minutes === "number")!;
+      const payload = sheet.buildPayload({
+        class: classKey,
+        reason: "",
+        minutes: String(cls.minutes),
+        servedBy: "",
+      });
+      expect("servedBy" in payload, "declining wrote a blank servedBy instead of omitting it").toBe(false);
+
+      // …and the real reducer takes that payload, so this is not two mirrors
+      // agreeing about a shape the fold would refuse.
+      expect(phaseVerdict(sport.module, state, eventTypesOf(sport.spec).suspStart, payload)).toBe("accepted");
+    });
+  }
+});
+
 describe("the minutes step's upper bound is the engine's, not a drifting copy", () => {
   for (const sport of SPORTS) {
     // EVERY variant each sport ships, not just the default: hockey's `youth`

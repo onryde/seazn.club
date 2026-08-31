@@ -1086,6 +1086,9 @@ function suspensionSheet(spec: PeriodSkinSpec, view: PadHostView, side: Side, t:
       side,
       candidates: onFieldOf(view, side),
       when: () => view.band >= 2,
+      // The offender usually serves their own penalty, and a division with no
+      // roster has nobody to offer at all — see `SheetPersonStep.optional`.
+      optional: true,
     },
   ];
   return {

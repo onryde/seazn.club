@@ -2727,6 +2727,7 @@
   "pad.host.moreEmpty": "Rien d'autre à enregistrer ici pour l'instant.",
   "pad.sheet.back": "Retour",
   "pad.sheet.cancel": "Annuler",
+  "pad.sheet.person.none": "Personne — le fautif la purge",
   "pad.sheet.decrease": "Réduire {title}",
   "pad.sheet.increase": "Augmenter {title}",
   "pad.swap.refused": "Ce changement n'est pas autorisé pour le moment.",

@@ -2727,6 +2727,7 @@
   "pad.host.moreEmpty": "Nothing else to record here yet.",
   "pad.sheet.back": "Back",
   "pad.sheet.cancel": "Cancel",
+  "pad.sheet.person.none": "Nobody — the offender serves it",
   "pad.sheet.decrease": "Decrease {title}",
   "pad.sheet.increase": "Increase {title}",
   "pad.swap.refused": "That change isn't allowed right now.",
