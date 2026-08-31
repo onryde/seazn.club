@@ -807,7 +807,13 @@ export async function submitRegistrationGroup(
       if (!waitlisted && !p.input.free_agent && live.approval === "auto" && feeCents === 0) {
         const entrantId = await materialise(tx, regRow, p.input.entrant_kind);
         finalStatus = "confirmed";
-        autoConfirmedEntrantIds.push(entrantId);
+        // Forward-compatible with the free-agent materialise() contract
+        // RS009 introduces (`string | null` — a free agent seats no
+        // entrant): a null here means no roster to invite, so skip rather
+        // than push. Today `entrantId` is never null (this branch already
+        // excludes free agents above), so this is a no-op filter, not a
+        // behavior change.
+        if (entrantId) autoConfirmedEntrantIds.push(entrantId);
       }
 
       subtotal += waitlisted ? 0 : feeCents;
