@@ -4587,3 +4587,31 @@ the number (`HOLD_MS >= 10_000`, "long enough to pick one name out of a full
 side"), so raising the window later needs no re-baseline while dropping back
 below a roster scan goes red. Two tests also carried literal advances tied to
 the old 6000 and are now expressed in the symbol.
+
+### R6-10 — the v2 `period-skin.tsx` demolition is DEFERRED, not forgotten (2026-08-31)
+
+R6 owed a decision on demolishing `components/v2/scorepad/skins/period-skin.tsx`.
+**Recommendation made to the owner and approved: do NOT demolish it in R6.**
+
+Verified before recommending, not assumed:
+- `period-skin.tsx:854` declares `sports: ["hockey", "icehockey"]` — exactly the
+  two keys R6 moved to the v3 lane, so it has no remaining sport.
+- `registry.tsx:330-351` calls `resolvePad` FIRST and **returns `<PadHostV3>`
+  before `resolveScorePad` is reached**, so the v2 skin is genuinely
+  unreachable through `ScorePad`, not merely deprioritised.
+
+So it IS dead through the product. The reason to leave it anyway is
+consistency: `cricket-skin.tsx`, `tennis-skin.tsx` and `football-skin.tsx` are
+**equally unreachable** and were deliberately kept when their sports converted.
+The one deletion this programme has done — R5's `racquet-skin.tsx` — happened
+because nothing else shared it and the wave was forced to decide. Deleting
+period-skin alone would leave three files in exactly the state the deletion is
+supposed to fix, i.e. it moves the inconsistency rather than removing it.
+
+**The right shape is one cleanup that removes all four v2 skins together**,
+with their tests, after the v3 lane owns every sport that has a hand-crafted
+skin. Until then the registry's own comment block is the honest record, and it
+already says these rows are unreachable rather than pretending otherwise.
+
+**Do not read this as "period-skin is load-bearing".** It is not. It is kept
+for symmetry with three siblings, and the moment those go, it goes with them.
