@@ -6118,3 +6118,60 @@ Verified after the second fix on real captures at 320/768/1280 across generic,
 tennis-doubles and badminton: score dominates its tile, "/" keeps its spacing,
 the serving dot stays aligned, nothing scrolls sideways. The chassis-wide reach
 of `HalfContent` is why three skins were checked and not one.
+
+### R7-34 — A2 landed AGAINST TWO RULINGS. Committed as `7c67720da`, and OWED rework before it can ship
+
+Both found by checking the commit against this index rather than against the
+brief. Neither is visible in any gate: the wave's suites are green (4652/4474/0,
+1407 suites), tsc clean, lint clean, contrast pins mutation-proved.
+
+**1. The palette is wrong, and that one is R7's own fault.** The brief carried
+`ink #f6f2f8`, `led #e0c56b`, plus a `caution` and a `dismissal` — taken from a
+compaction summary instead of from R7-9a, four sections above this one. The
+AMENDED, owner-ruled values are:
+
+    boardgame: board "#25142e" · board-2 "#33203d"
+               ink  "#efe9d8"   the buff of the light square
+               led  "#f4767a"   the analogue clock's FALLING FLAG
+               caution / dismissal — DELIBERATELY OMITTED
+
+Board and board-2 were right by luck. Everything else is wrong: the ink is a
+cool near-white where the ruling asks for the light square's buff; `#f4767a` was
+briefed as `dismissal` when it IS the `led`; and two tokens the ruling omits ON
+PURPOSE were invented. R7-9's own words: chess has no card ladder, and carrying
+yellow and red for a sport with no discipline events is "colour as decoration".
+The implementer re-measured the numbers it was given, exactly as asked, and they
+all checked out — because the numbers were self-consistent. **Re-measuring a
+palette proves the contrast, never the provenance.**
+
+**2. The skin is tapModel T. R7-2 is an OWNER RULING for tapModel S.** R7-2:
+"A tap on a player half commits the result immediately; the ribbon reads the
+result in words with Undo; a ~6s dock offers Method as OPTIONAL enrichment", and
+it explicitly RECORDS the rejected alternative. What shipped is the rejected
+shape: halves are readouts, every action is a tile behind a guided sheet, and
+`dock()` always returns null. The file's own header argues the case for T on its
+merits — competently — which is precisely the problem: the question was already
+decided, and the brief cited "Ruling R7-2" without quoting what it said.
+
+The two are not independent. R7-9's reasoning for the clock/flag identity is
+that the tournament clock "is the one instrument in chess that IS two halves
+side by side — which is exactly what the v3 scorebug is under ruling R7-2 (tap a
+half, that player wins)". Under tapModel T the halves stop being the two sides
+of a clock, so the palette's own story stops being true of the screen. Rework
+has to restore both together, not one.
+
+**Standing lesson, and the third time this wave has paid for it:** a brief must
+QUOTE the ruling, never cite its number. R7-29 (wrong subagent model) and R7-28
+(design defects) were both "the correct information was read and then not acted
+on". This one is worse — the correct information was not read at all, because a
+summary of it was to hand and looked sufficient. **`_INDEX.md` is the authority;
+a compaction summary is a pointer to it, never a substitute.**
+
+NOT reverted: the mechanical work is sound (57 assertions, explicit contrast
+pins, two mutation proofs, the `focus-ring-cascade.test.ts` ripple found by
+full-suite diff rather than by grep). The rework is the palette values and the
+tap grammar, not the file.
+
+Also still owed on this skin, from R7-10 and unaddressed: `boardgame.ts:476`
+declares `fidelityEntitlements: {}`, and an empty map renders an UPSELL for a
+band nothing gates. The skin owes a real map or a justified empty one.
