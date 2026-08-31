@@ -134,6 +134,19 @@ describe("RegistrationHubRegistrantDetail — contact and entry fields", () => {
     expect(text).toContain("RC-ABC123");
   });
 
+  it("renders a solo sign-up's kind as 'Solo sign-up', not the division's team entrant_kind", () => {
+    // RS009 walkthrough (2026-08-31): the table already special-cases
+    // free_agent (renderRegistrantKindCell), but this panel's ENTRY block
+    // read entrant_kind directly and never checked free_agent — so
+    // expanding the exact row the table just labelled "Solo sign-up" told
+    // the organiser its Kind was "Team". entrant_kind on a solo sign-up IS
+    // 'team' (RS009 stores it as the division's kind), which is why this
+    // must branch on free_agent rather than trust entrant_kind alone.
+    const text = textOf(RegistrationHubRegistrantDetail(baseProps({ row: row({ free_agent: true }) })));
+    expect(text).toContain(t(dict, "reg.hub.registrants.table.soloSignUp"));
+    expect(text).not.toContain(t(dict, "divset.entrants.kind.team"));
+  });
+
   it("renders the formatted amount and the card payment method label", () => {
     const text = textOf(RegistrationHubRegistrantDetail(baseProps({ row: row({ amount_cents: 2500, currency: "usd", payment_method: "stripe" }) })));
     expect(text).toContain("$25");

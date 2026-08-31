@@ -5,7 +5,11 @@ import type { Dict } from "@/lib/i18n-constants";
 import { formatMinor, asCurrency } from "@/lib/currency";
 import { fmtDateTime } from "@/lib/format";
 import { deriveCapacityMeter } from "@/components/registration-hub-row-derive";
-import { REGISTRANT_STATUS_STYLE, registrantRowAnchor } from "@/components/registration-hub-registrant-derive";
+import {
+  REGISTRANT_STATUS_STYLE,
+  registrantRowAnchor,
+  registrantKindLabel,
+} from "@/components/registration-hub-registrant-derive";
 import type { RegistrationFormField } from "@/server/api-v1/schemas";
 import type { RegistrationListRow } from "@/server/usecases/registrations";
 import type {
@@ -48,10 +52,17 @@ export function renderRegistrantKindCell(
   //
   // Found by looking at the shipped table, not by a test — every assertion
   // in this file was about entrant_kind, which was correct.
+  //
+  // The label itself now comes from registrantKindLabel (registration-hub-
+  // registrant-derive.ts), the SAME function the detail panel's ENTRY block
+  // calls — a second walkthrough finding (2026-08-31) was that panel doing
+  // this same free_agent check itself, straight from entrant_kind, and
+  // saying "Team" for the exact row this cell calls "Solo sign-up". One
+  // function now, so a third site can't drift the same way again.
   if (row.free_agent) {
     return (
       <span className="flex flex-col">
-        <span>{t(dict, "reg.hub.registrants.table.soloSignUp")}</span>
+        <span>{registrantKindLabel(row, dict)}</span>
         <span className="text-xs text-slate-500">
           {row.assigned_team_name
             ? t(dict, "reg.hub.registrants.table.soloAssigned", { team: row.assigned_team_name })
@@ -61,7 +72,7 @@ export function renderRegistrantKindCell(
     );
   }
 
-  const label = t(dict, `divset.entrants.kind.${row.entrant_kind}`);
+  const label = registrantKindLabel(row, dict);
   if (row.entrant_kind !== "team") return <span>{label}</span>;
 
   const meter = deriveCapacityMeter(row.roster_count, row.roster_cap);
