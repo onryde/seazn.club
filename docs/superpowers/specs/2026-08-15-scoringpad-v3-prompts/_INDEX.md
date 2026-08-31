@@ -6073,3 +6073,48 @@ touches `use-pad-pipeline.ts`'s dock amend path, so whoever takes the guard
 should land it AFTER F rather than beside it — the two would otherwise share a
 file, which is this repo's standing condition for sequential rather than
 parallel work.
+
+### R7-33 — A1's design fixes SHIPPED BROKEN, and only the rebuilt capture said so
+
+R7-28's three defects were fixed, gated green (4578/0, tsc clean, lint clean,
+no h-scroll at any of seven widths), and **two of the three did not work**.
+Found by rebuilding the server and opening the PNG.
+
+**The clamp was inert.** `line-clamp-2` establishes a `-webkit-box`, and each
+name sat in an `inline-flex` span. An inline-flex box is ATOMIC to that box —
+it counts as ONE line however tall it is — so the clamp never fired and a long
+name still wrapped to three lines above a one-digit score. Every test that
+asserted the class was present passed: the class WAS present. Presence is not
+effect, and no unit test in this repo can tell the two apart, because none of
+them lay out a box.
+
+**The plural reached one of two ledgers.** `ActivityDetailContext` has two
+construction sites — `pad-host.tsx` for the pad's ribbon, `fixture-console.tsx`
+for the page ledger. `plural` was added to the first only, so the ribbon read
+"1 pt" while the activity row directly beneath it read "1 pts": one event, two
+sentences, one screen. This is `reference_parallel_vocab_lookup_paths_drift` in
+the flesh, and the second site was found by grepping only AFTER the capture
+showed the wrong string — the fix had been declared done on the strength of a
+green suite.
+
+Three generalisations, all of which this wave has now paid for twice:
+
+1. **A class being present is not the class taking effect.** A CSS fix is
+   verifiable only against a laid-out box. `renderToStaticMarkup` proves the
+   markup, never the rendering.
+2. **Count the construction sites before adding a field to a shared context.**
+   One producer updated out of two is indistinguishable from zero when the two
+   render adjacent to each other.
+3. **Rebuild before believing a capture.** `seazn-env up` reports "server
+   already up" and keeps serving the OLD bundle — it says so, and it is easy to
+   read past. `rebuild --label` is the command; it also guards the cross-
+   worktree turbo cache hit that a hand-rolled `npm run build` does not.
+
+The regression tests now pin the CONDITION rather than the class: the name span
+must not be `inline-flex` (exactly what made the fix inert), and the who-block
+must carry the clamp and still shrink.
+
+Verified after the second fix on real captures at 320/768/1280 across generic,
+tennis-doubles and badminton: score dominates its tile, "/" keeps its spacing,
+the serving dot stays aligned, nothing scrolls sideways. The chassis-wide reach
+of `HalfContent` is why three skins were checked and not one.
