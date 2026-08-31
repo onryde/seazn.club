@@ -142,7 +142,7 @@ async function pace(page: Page): Promise<void> {
 
 /** ONE goal, tapped — the v3 tile commits on the tap itself (no sheet, no
  *  Confirm; period-shared.ts's own `buildTiles`). Leaves whatever Detail
- *  Dock opens alone: `queue.ts`'s `HOLD_MS` (6s) window auto-flushes it, and
+ *  Dock opens alone: `queue.ts`'s `HOLD_MS` window auto-flushes it, and
  *  the dock is an inline panel, not a blocking overlay, so the next tap
  *  reaches its own tile regardless. */
 async function tapGoal(page: Page, request: APIRequestContext, fixtureId: string, side: "home" | "away"): Promise<void> {

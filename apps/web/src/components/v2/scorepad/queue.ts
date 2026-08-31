@@ -122,9 +122,9 @@ export function queueStatus(params: {
 // task's scope — see the header note on why nothing calls enqueueHeld yet.
 // ---------------------------------------------------------------------------
 
-/** The soft-commit hold window — a CHASSIS constant, not per-sport config
- *  (R1 ruling), which is why R6's owner ruling below moves it for EVERY sport
- *  rather than for the two that raised it.
+/** The soft-commit hold window's SHIPPED value — a CHASSIS constant, not
+ *  per-sport config (R1 ruling), which is why R6's owner ruling below moves it
+ *  for EVERY sport rather than for the two that raised it.
  *
  *  6000 -> 12000 (owner-ruled 2026-08-31, R6 W-4). The window is how long the
  *  attribution dock stays up asking who an event belongs to. Six seconds is
@@ -133,9 +133,55 @@ export function queueStatus(params: {
  *  attribution is permanent — nothing later can recover who was carded. The
  *  dock blocks nothing while it is open, so the window is close to free.
  *
- *  Every test here references this symbol rather than the literal, so the
- *  window can move without re-baselining any of them. */
-export const HOLD_MS = 12000;
+ *  This is the DEFAULT, and the floor test in soft-commit.test.ts pins THIS
+ *  symbol rather than `HOLD_MS` — see `resolveHoldMs` immediately below for
+ *  why that distinction is the whole point. */
+export const HOLD_MS_DEFAULT = 12000;
+
+/** The env override's name, exported so a test names the same string the
+ *  build-time substitution below does rather than a copy of it. */
+export const HOLD_MS_ENV_VAR = "NEXT_PUBLIC_SCOREPAD_HOLD_MS";
+
+/** Parse an override, falling back to `HOLD_MS_DEFAULT` for anything that is
+ *  not a usable window.
+ *
+ *  Pure and exported for its own tests: `HOLD_MS` below is fixed at module
+ *  eval, and in a client bundle the env read is substituted at BUILD time, so
+ *  the resolved constant is the only thing a test could otherwise observe —
+ *  and a test that can only see the resolved value cannot tell a rejected
+ *  override from an absent one.
+ *
+ *  Rejects, in order: absent/blank, non-finite, and anything below
+ *  `MIN_HOLD_MS`. The floor is not a style rule — a window shorter than a tap
+ *  round-trip closes before the dock has finished animating in, so the
+ *  attribution UI would flash and vanish rather than be usable. A too-LARGE
+ *  value is deliberately NOT rejected: a long window is a product choice
+ *  (someone scoring a sport with a 30-name squad), never a broken one. */
+const MIN_HOLD_MS = 500;
+export function resolveHoldMs(raw: string | undefined): number {
+  if (raw === undefined || raw.trim() === "") return HOLD_MS_DEFAULT;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < MIN_HOLD_MS) return HOLD_MS_DEFAULT;
+  return parsed;
+}
+
+/** The window this build actually holds for.
+ *
+ *  Equal to `HOLD_MS_DEFAULT` in every shipped build; overridable ONLY through
+ *  the env var above, which exists so e2e can run the same production bundle
+ *  at a shorter window. The walkthrough specs tap a whole match — sixteen taps
+ *  for badminton — and each tap waits out a full window before the ledger can
+ *  be polled, so the shipped 12s puts those specs past their 180s budget.
+ *
+ *  Written as a full `process.env.NEXT_PUBLIC_...` member expression on
+ *  purpose: Next substitutes that TEXT at build time, so a dynamic read
+ *  (`process.env[HOLD_MS_ENV_VAR]`) would compile to `undefined` in the client
+ *  bundle and silently always take the default — the exact "green because it
+ *  never ran" shape this knob exists inside of. On the Node side (the
+ *  Playwright runner, which imports this module directly to derive its own
+ *  waits) the same expression is a real env read, so one variable set at job
+ *  level governs both the bundle and the specs that measure it. */
+export const HOLD_MS = resolveHoldMs(process.env.NEXT_PUBLIC_SCOREPAD_HOLD_MS);
 
 interface HeldTick {
   timer: ReturnType<typeof setTimeout>;

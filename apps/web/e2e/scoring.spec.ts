@@ -383,7 +383,7 @@ test("cricket: undo mid-over keeps the scoring panel usable (v3/09 §2)", async 
   request,
 }) => {
   // Two coarse-summary round trips through the v3 over tile each pay
-  // queue.ts's HOLD_MS = 6000ms soft-commit before the ledger sees them.
+  // queue.ts's HOLD_MS soft-commit before the ledger sees them.
   test.setTimeout(120_000);
   const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31",
     name: `Cricket undo ${TAG}`,
@@ -542,7 +542,7 @@ test("cricket scores over-by-over: add an over grows the total, then close innin
   request,
 }) => {
   // one over then "Close innings", each a held dispatch (queue.ts's
-  // HOLD_MS = 6000ms soft-commit) the ledger polls below wait out.
+  // HOLD_MS soft-commit) the ledger polls below wait out.
   test.setTimeout(120_000);
   // a minimal cricket fixture
   const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31",

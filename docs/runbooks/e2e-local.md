@@ -23,8 +23,28 @@ npm run sync:sports     # sport catalog from the engine registry
 
 ```bash
 rm -rf apps/web/.next                      # see "Stale .next" below
-npm run build --workspace apps/web
+NEXT_PUBLIC_SCOREPAD_HOLD_MS=3000 npm run build --workspace apps/web
 ```
+
+`NEXT_PUBLIC_SCOREPAD_HOLD_MS` is what CI sets, and it belongs on the BUILD
+command specifically: the v3 scoring pad soft-commits every tap — the event is
+queued at once but not SENT for `queue.ts`'s `HOLD_MS` — and a spec that polls
+the ledger waits that window out once per tap. Shipped is 12s, which is a
+product decision about the attribution dock being readable on a phone; the
+walkthrough specs tap whole matches (sixteen rallies for badminton, twenty-one
+for table tennis) and run for minutes at that window.
+
+Two things about it are easy to get wrong:
+
+- It is a `NEXT_PUBLIC_*` var, so it is substituted into the client bundle at
+  BUILD time. Exporting it only in the shell you run Playwright from changes
+  the specs' derived waits and NOT the pad's actual window — the specs would
+  then be racing a window the browser is not using. Set it on the build, and
+  export it for the test run too (CI sets it once at job level, which covers
+  both).
+- Omitting it entirely is safe, just slower: `resolveHoldMs` falls back to the
+  shipped 12s and every affected spec derives its own timeout from `HOLD_MS`,
+  so nothing goes red — the run simply takes several minutes longer.
 
 ## 3. Stage the static tree into the standalone output
 

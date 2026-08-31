@@ -32,7 +32,7 @@ test("cricket: the tenth dismissal is offered as words, not snake_case", async (
   page,
   request,
 }) => {
-  // One held dispatch (queue.ts's HOLD_MS = 6000ms soft-commit) the ledger
+  // One held dispatch (queue.ts's HOLD_MS soft-commit) the ledger
   // poll below waits out.
   test.setTimeout(90_000);
   const org = await activeOrg(page);

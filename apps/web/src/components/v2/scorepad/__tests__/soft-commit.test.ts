@@ -7,10 +7,22 @@
 // would drain now" (use-pad-pipeline.ts's `runDrain` is the real, later
 // caller — see queue.ts's own header for why THIS task leaves that wiring
 // unbuilt: no production skin calls `enqueueHeld` yet this wave).
+import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PendingEvent } from "../types";
 import { memoryQueueStore } from "../queue-store";
-import { HOLD_MS, dropHeld, enqueueHeld, flushHeldBefore, mutateHeld, peekInOrder, releaseHeld } from "../queue";
+import {
+  HOLD_MS,
+  HOLD_MS_DEFAULT,
+  HOLD_MS_ENV_VAR,
+  dropHeld,
+  enqueueHeld,
+  flushHeldBefore,
+  mutateHeld,
+  peekInOrder,
+  releaseHeld,
+  resolveHoldMs,
+} from "../queue";
 
 function event(idempotencyKey: string, overrides: Partial<PendingEvent> = {}): PendingEvent {
   return {
@@ -61,8 +73,68 @@ describe("soft-commit", () => {
   // a roster scan costs is the regression this guards. Lost attribution is
   // permanent — nothing later can recover who was carded — while a chip row
   // that lingers is tidied by the very next tap.
-  it("the attribution window is long enough to pick one name out of a full side", () => {
-    expect(HOLD_MS).toBeGreaterThanOrEqual(10_000);
+  //
+  // Pinned on HOLD_MS_DEFAULT, NOT on HOLD_MS. Since the window became
+  // env-overridable (so e2e can run the shipped bundle at a short window), a
+  // floor on HOLD_MS would pass or fail according to how the RUNNER was
+  // configured — and would fail outright in the e2e-configured process, which
+  // is the one place the low value is correct. The requirement above is a
+  // requirement about what SHIPS, and HOLD_MS_DEFAULT is what ships.
+  it("the shipped attribution window is long enough to pick one name out of a full side", () => {
+    expect(HOLD_MS_DEFAULT).toBeGreaterThanOrEqual(10_000);
+  });
+
+  // The override is a testing affordance, so its failure modes matter more
+  // than its success one: anything unusable must fall back to the SHIPPED
+  // window rather than to zero, or a typo'd CI variable turns the hold off
+  // everywhere and every spec still passes (faster), with nothing red.
+  describe("resolveHoldMs", () => {
+    it("falls back to the shipped default when nothing is set", () => {
+      expect(resolveHoldMs(undefined)).toBe(HOLD_MS_DEFAULT);
+      expect(resolveHoldMs("")).toBe(HOLD_MS_DEFAULT);
+      expect(resolveHoldMs("   ")).toBe(HOLD_MS_DEFAULT);
+    });
+
+    it("falls back to the shipped default for a value that is not a usable window", () => {
+      for (const bad of ["abc", "3s", "NaN", "-1", "0", "499", "Infinity"]) {
+        expect(resolveHoldMs(bad), `"${bad}" must not become the live window`).toBe(HOLD_MS_DEFAULT);
+      }
+    });
+
+    it("honours a usable override, including one far below the shipped floor", () => {
+      // 3000 is the value e2e runs at, and it is deliberately BELOW the 10s
+      // product floor asserted above — that is the whole point of separating
+      // the two symbols. Asserted as a value distinct from HOLD_MS_DEFAULT so
+      // a resolver that ignored its argument entirely could not pass.
+      expect(resolveHoldMs("3000")).toBe(3000);
+      expect(resolveHoldMs("3000")).not.toBe(HOLD_MS_DEFAULT);
+      expect(resolveHoldMs("500")).toBe(500); // exactly at MIN_HOLD_MS, inclusive
+      expect(resolveHoldMs("60000")).toBe(60000); // a LONG window is a choice, not an error
+    });
+
+    it("queue.ts spells the env read out literally, as Next's substitution requires", () => {
+      // The one failure this knob cannot survive: a DYNAMIC read
+      // (`process.env[HOLD_MS_ENV_VAR]`) compiles to `undefined` in the client
+      // bundle, so the pad silently always holds for the default while the
+      // Node-side specs — which read the real env — shorten their waits to
+      // match a window the browser is not using. Every spec would still pass,
+      // just by racing. Nothing in TypeScript can catch that, so read the
+      // SOURCE and require the literal member expression Next substitutes.
+      //
+      // Resolved off this file's own URL rather than cwd: `git grep` and bare
+      // relative paths both resolve against the runner's working directory
+      // here, which is not reliably the workspace root.
+      const source = readFileSync(new URL("../queue.ts", import.meta.url), "utf8");
+      expect(source).toContain(`process.env.${HOLD_MS_ENV_VAR}`);
+      expect(HOLD_MS_ENV_VAR).toBe("NEXT_PUBLIC_SCOREPAD_HOLD_MS");
+    });
+
+    it("the live window is the resolver's own answer for this process", () => {
+      // Ties the exported constant to the resolver rather than to a literal:
+      // green at 12000 in a normal run AND at 3000 under the e2e env, and red
+      // if HOLD_MS were ever wired to something else.
+      expect(HOLD_MS).toBe(resolveHoldMs(process.env.NEXT_PUBLIC_SCOREPAD_HOLD_MS));
+    });
   });
 
   it("a new tap flushes the previous held event first", async () => {

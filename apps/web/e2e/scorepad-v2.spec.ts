@@ -91,7 +91,7 @@ async function openLiveConsole(page: Page, fx: RosteredFixture): Promise<void> {
  *  detail-dock.tsx's `dismiss()` calls `releaseHeld`: an IMMEDIATE FLUSH of
  *  the soft-commit hold, never a cancel. Every football flow below that only
  *  needs its event ON THE LEDGER uses this instead of waiting out
- *  `HOLD_MS` = 6000ms; none of them is testing hold TIMING, which
+ *  `HOLD_MS`; none of them is testing hold TIMING, which
  *  scorepad-v3-cricket.spec.ts's own pair of undo tests owns. */
 async function sendHeldNow(page: Page): Promise<void> {
   await pad(page)

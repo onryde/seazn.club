@@ -2,7 +2,7 @@
 // Detail Dock — R1 chassis (Task 7). The tap-first flow's ONE enrichment
 // surface: a tap on TileGrid (./tile-grid.tsx) commits its event
 // IMMEDIATELY and durably (queue.ts's `enqueueHeld`, Task 4) — this
-// component is what appears for the ~6s HOLD_MS window afterward, offering
+// component is what appears for the HOLD_MS window afterward, offering
 // OPTIONAL chips (scorer, assist, boundary type, card colour…) that mutate
 // the still-unsent payload before it drains. It never asks for anything the
 // payload REQUIRES — only enrichment — and it never blocks: dismissing
@@ -330,7 +330,7 @@ export function DetailDock({ spec, heldId, store, heldUntil, t, now = Date.now }
   // dock depends on the payload. Push it into the controller before render
   // reads `chips`/`title`; assigning to a plain object (not React state) takes
   // effect on THIS frame, where an effect would leave one stale frame on screen
-  // inside a ~6s window.
+  // inside a single hold window.
   if (controller !== null && spec !== null) controller.setSpec(spec);
 
   const [, bump] = useReducer((n: number) => n + 1, 0);
