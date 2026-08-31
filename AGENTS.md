@@ -180,6 +180,26 @@ shipped at least twice, and the first four shipped **past a green suite**.
     three shared literals in this repo were assumed alphabetical and were not
     (`SPORT_PALETTES`, and both of `registry.ts`'s).
 
+19. **A reachability test is satisfied by ANY value. Pin what a control
+    OPENS AT, not just that it is there.** R6 made a suspension's `minutes`
+    field reachable, shipped it behind twelve mutants and a full branch
+    review, and still wrote an FIH yellow as a 2-minute suspension against a
+    declared 5 — because every test asserted the field was reachable and that
+    the payload carried it, and none asserted its seeded VALUE against the
+    class the scorer picked. It was found by driving the pad by hand and
+    reading the row out of `score_events`.
+
+    Two rules follow. First: **making a field collectable can be WORSE than
+    leaving it absent**, because an absent field falls through to a correct
+    engine default while a present, wrongly-seeded one overrides it — check
+    which way the reducer's `payload.x ?? cfg.x` precedence runs before
+    calling such a gap closed. Second: **derive the expected value from the
+    engine's own declarations, never a table typed into the test**, so a
+    change to the source of truth moves the test with it instead of leaving
+    it asserting yesterday's numbers. And prefer at least one case where the
+    right answer differs from the wrong one's constant, or the test cannot
+    witness the regression it exists for.
+
 ## Standing project rules
 
 - **Read `docs/superpowers/RULES.md` first.** Owner's full standing
