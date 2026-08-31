@@ -180,9 +180,26 @@ jobs:
         run: ./packages/engine/node_modules/.bin/vitest run --reporter=default --reporter=json --outputFile=vitest-results-bench.json --testTimeout=30000 scripts/bench
 
   # -------------------------------------------------------------------------
-  # The apps/web unit / property / grid suite, in two shards. It was 216s — 182s
+  # The apps/web unit / property / grid suite, in FOUR shards. It was 216s — 182s
   # of it this one step — and second only to smoke-e2e once #600 landed, so it
   # had to move for the floor to come down at all.
+  #
+  # Two -> four (2026-08-31). Two shards left this job the critical path by a
+  # wide margin and nothing else close: measured on run 33439002472, shard 1 was
+  # 341s and shard 2 302s, against 171s for the next-longest job (smoke DB +
+  # Redis). Of shard 1's 341s only 286s was the suite — 51s is fixed cost
+  # (checkout, pnpm install, the post steps) and is paid once PER SHARD, so the
+  # arithmetic is `537/N + 51`, not `537/N`: ~230s at three shards, ~185s at
+  # four, ~158s at five. Four is where this job stops being the floor and smoke
+  # takes over; a fifth runner would buy ~14s. Runner minutes are $0 on a public
+  # repo (see the Actions cost note in the programme docs), so the only real
+  # cost of a shard is that fixed 51s, and it buys more than it costs up to four.
+  #
+  # `SHARD_TOTAL` below is the ONE place the count lives for the commands. The
+  # matrix list and the two display names still spell it out — GitHub will not
+  # expand an env var in `strategy.matrix` or in a job `name:` — so changing the
+  # count means editing those three spots too. The guard reads SHARD_TOTAL, so
+  # it can never disagree with the flag.
   #
   # `--shard` here, rather than the exclude-globs #600 needed for smoke-db, and
   # the difference is worth knowing: `vitest run --shard` IS honoured (verified
@@ -198,12 +215,17 @@ jobs:
   # which suites skip, only which shard sees them.
   # -------------------------------------------------------------------------
   test:
-    name: Unit tests (apps/web) ${{ matrix.shard }}/2
+    name: Unit tests (apps/web) ${{ matrix.shard }}/4
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false # one shard's failure must not hide the other's
       matrix:
-        shard: [1, 2]
+        shard: [1, 2, 3, 4]
+    env:
+      # Read by the suite command AND by the guard below, so the divisor the
+      # tests ran under and the divisor the guard checks against cannot drift
+      # apart. Keep in step with the matrix list and the two `/4`s in names.
+      SHARD_TOTAL: "4"
     steps:
       - uses: actions/checkout@v5
       - uses: pnpm/action-setup@v4
@@ -215,22 +237,27 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
 
-      - name: Unit suite (shard ${{ matrix.shard }}/2)
-        run: npm test --workspace apps/web -- --shard=${{ matrix.shard }}/2 --reporter=default --reporter=json --outputFile=vitest-results-unit.json
+      - name: Unit suite (shard ${{ matrix.shard }}/4)
+        run: npm test --workspace apps/web -- --shard=${{ matrix.shard }}/"$SHARD_TOTAL" --reporter=default --reporter=json --outputFile=vitest-results-unit.json
 
-      # A silently-ignored `--shard` costs nothing visible: both shards would run
-      # the WHOLE suite, stay green, and just double the runner minutes. The
-      # dangerous direction is the other one — a shard that selects NOTHING is
-      # also green, and half the unit suite would stop running with no signal at
-      # all. So bound the executed count on both sides.
+      # A silently-ignored `--shard` costs nothing visible: every shard would run
+      # the WHOLE suite, stay green, and just burn runner minutes. The dangerous
+      # direction is the other one — a shard that selects NOTHING is also green,
+      # and a quarter of the unit suite would stop running with no signal at all.
+      # So bound the executed count on both sides.
       #
       # The oracle is `vitest list --filesOnly` with NO --shard, which is the
       # full set (that flag being ignored by `list` is exactly why it is usable
-      # here as a total). A healthy half sits well inside 25%–75%; the window is
-      # deliberately wide because vitest shards by file, and file counts say
-      # nothing about balance of RUNTIME. It is a tripwire for "the flag stopped
-      # working", not a balance gate.
-      - name: Assert this shard ran a real half of the suite
+      # here as a total). Bounds are expressed as multiples of the expected
+      # share, `total / SHARD_TOTAL`, NOT as the fixed 25%–75% window they were
+      # while this job ran in halves: a legitimate quarter is ~25% of the files
+      # and would have tripped that old floor the moment the count changed. The
+      # window is half to 1.75x of an even share — deliberately wide, because
+      # vitest shards by FILE and file counts say nothing about balance of
+      # RUNTIME. It is a tripwire for "the flag stopped working", not a balance
+      # gate. A shard running everything is 1.0 of the total, which is 4x the
+      # expected share here, so the ignored-flag case is still caught easily.
+      - name: Assert this shard ran a real share of the suite
         run: |
           set -euo pipefail
           # `|| true` because `grep -c` exits 1 on zero matches, and under
@@ -240,27 +267,33 @@ jobs:
           node -e '
             const fs = require("fs");
             const total = Number(process.argv[1]);
+            const shards = Number(process.argv[2]);
             const r = JSON.parse(fs.readFileSync("apps/web/vitest-results-unit.json", "utf8"));
             const files = new Set((r.testResults || []).map(t => t.name));
             const ran = files.size;
-            console.log(`shard ran ${ran} of ${total} test files (${r.numTotalTests} tests)`);
+            const share = total / shards;
+            console.log(`shard ran ${ran} of ${total} test files (${r.numTotalTests} tests); an even share of ${shards} is ${share.toFixed(1)}`);
             if (!Number.isFinite(total) || total < 2) {
               console.error(`::error::could not establish a file total (got ${total}) — the oracle broke, not the shard`);
               process.exit(1);
             }
+            if (!Number.isFinite(shards) || shards < 1) {
+              console.error(`::error::SHARD_TOTAL is not a usable shard count (got ${process.argv[2]})`);
+              process.exit(1);
+            }
             if (ran === 0) {
-              console.error("::error::this shard executed ZERO test files. Half the unit suite is not running.");
+              console.error(`::error::this shard executed ZERO test files. One of ${shards} slices of the unit suite is not running.`);
               process.exit(1);
             }
-            if (ran > total * 0.75) {
-              console.error(`::error::this shard ran ${ran} of ${total} files — too many for a half. --shard looks ignored, so both shards are running everything.`);
+            if (ran > share * 1.75) {
+              console.error(`::error::this shard ran ${ran} of ${total} files — far more than an even ${share.toFixed(1)}. --shard looks ignored, so every shard is running everything.`);
               process.exit(1);
             }
-            if (ran < total * 0.25) {
-              console.error(`::error::this shard ran only ${ran} of ${total} files — too few for a half.`);
+            if (ran < share * 0.5) {
+              console.error(`::error::this shard ran only ${ran} of ${total} files — far fewer than an even ${share.toFixed(1)}.`);
               process.exit(1);
             }
-          ' "$total"
+          ' "$total" "$SHARD_TOTAL"
 
       # Live-Stripe tier probe (sk_test, test-mode): confirms our plan/tier
       # amounts still round-trip real Stripe. Self-contained (no stripe:sync /
