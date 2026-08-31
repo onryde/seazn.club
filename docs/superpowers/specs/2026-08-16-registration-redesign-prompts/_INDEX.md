@@ -42,7 +42,7 @@ prompts dir) also writes — those two are **sequential, never parallel**.
 | RS007 | `RS007-status-page-join-payments.md` | RS006 | **DONE** — merged (PR #677 `a6fca57f2` + PR #680 `2b743185e`, 2026-08-30). Table was stale here; see git log. |
 | RS008 | `RS008-consent-claim-optout.md` (superseded by an inline brief, 2026-08-30 — that file's premises were checked against shipped code and found stale) | RS007 | **PR #682 updated** — branch `feat/rs008-consent-claim-optout`, 25 commits on `origin/main` (`e23dcf241`, unchanged merge-base — branch not rebased): the original 11 (A/B1-4/C1-3/#24), a review-fixes wave closing findings #1–#10, then a second `/code-review --high` pass closing 2 more (youth-axis gap in `previewJoinEntry`'s unclaimed-slot masking; `anyOptedOutByRegistration` dedupe). See closing notes below. |
 | RS009 | `RS009-free-agents.md` | RS005, RS003 | **DONE** — merged `165628cce` (PR #683, 2026-08-30); hotfix `15b76f755` (PR #685, 2026-08-31, solo sign-up expanded-detail label). |
-| RS011 | `RS011-organiser-eligibility-gates.md` | RS002 | TODO — issue #412, re-homed from `L1` |
+| RS011 | `RS011-organiser-eligibility-gates.md` | RS002 | **IN FLIGHT** — issue #412, re-homed from `L1`; scope cut (jsonb typing dead, see kickoff section) |
 | RS010 | `RS010-closeout-e2e-smoke-help.md` | all | TODO |
 | RS012 | `RS012-solo-signup-pool-promises.md` | RS009 | TODO — scoped 2026-08-30 from what RS009 exposed. **Both owner rulings taken 2026-08-31** and written into the prompt: capacity counts TEAM ENTRIES with a derived pool bound; unplaced solo sign-ups are auto-refunded and withdrawn at the place-by date |
 
@@ -4284,3 +4284,88 @@ free a capacity slot by reading the ASSIGNMENT
 (`registration_players.assigned_from_registration_id`, unique where
 non-null), NEVER by mutating the source registration's status. Withdrawing
 that row to free a slot refunds a person who is happily playing.
+
+## RS011 kickoff — scout re-pin, 2026-08-31 (worktree `.claude/worktrees/rs011`)
+
+Status: **IN FLIGHT**, branch `feat/rs011-organiser-eligibility-gates`. Scout
+re-pinned every line reference in the prompt against current `main`; several
+brief premises are stale enough to change scope, not just line numbers.
+
+**False premises found (brief predates V380, RS002 W5, RS006 W1):**
+
+- **`divisions.eligibility` jsonb no longer exists** —
+  `V380__division_eligibility_consolidation.sql:387` dropped the column.
+  Brief scope item 2 (typed `AgeRuleS`/`GenderRuleS`/`OtherRuleS` Zod union
+  *replacing* the untyped jsonb array) is **dead scope — there is nothing
+  left to type.** `divisions` now carries only `category`/`age_min`/
+  `age_max`/`age_cutoff_month`/`age_cutoff_day`/`eligibility_note` (string).
+  Do not resurrect a jsonb rule shape. **Scope cut: no Zod union work,
+  no "first-class vs jsonb precedence" test — one representation only.**
+- **`eligibilityIssues()` (the `string[]` legacy wrapper) is already
+  deleted** (RS002 W5, zero callers). The evaluator already lives at
+  `server/usecases/registration-eligibility.ts` as
+  `divisionEligibilityIssues`/`rosterIssues`, already returns structured
+  `EligibilityIssue[]` with the exact codes the brief wants
+  (`AGE_TOO_OLD|AGE_TOO_YOUNG|GENDER_NOT_ALLOWED|CATEGORY_MISMATCH`,
+  warnings `MISSING_DOB|MISSING_GENDER`) — RS002/RS006 already did the
+  "codes not sentences" handover this brief describes as open. `rosterIssues`
+  already takes a plain `{full_name?, dob?, gender?}` shape (not a
+  `registration_players` row) — entry-condition question 2 is answered
+  **yes**, no extraction needed. Pure predicates (`ageAt`/`isMinor`/
+  `requiresDob`) now live client-safe in `apps/web/src/lib/
+  registration-rules.ts`, re-exported by both `registration-eligibility.ts`
+  and `registrations.ts`. **Remaining real work in scope item 1 is narrow:
+  the DB-writing `gateRosterEligibility(tx, {...})` wrapper (throw 422 /
+  audit-and-proceed) does not exist yet — that's the actual new code**, plus
+  wiring it at the 7 call sites. No new evaluator module needed; reuse
+  `registration-eligibility.ts` in place rather than creating a same-purpose
+  `eligibility.ts` (would be a second near-duplicate module, the exact class
+  of bug this brief's own provenance section exists to prevent).
+- **`planImport` is not in `imports.ts`** — it's a pure diff function in
+  `packages/engine/src/import/plan.ts:41`, a different package/layer.
+  `commitImport` (`imports.ts:158`, the brief's gate point) is the one with
+  DB access; the gate/override/audit belongs there, not in the engine-layer
+  diff function.
+- **Audit helper is `audit()` at `usecases/registrations.ts:529-540`**, not
+  `:313`, and no `usecases/audit.ts` exists. Reuse `audit()` in place
+  (confirm it's exported/reusable) rather than creating a new module for one
+  call site, unless the implementer finds a concrete reason to split it out.
+- **Corrected gate-point lines** (brief → actual): `createEntrants` 208→211,
+  `insertMembers` 155 (exact), `patchEntrant` 380 (exact),
+  `syncEntrantRosterFromSquad` 410→414, `setTeamSquad` 208→212, `commitImport`
+  297→158 (and it's `commitImport`, not `planImport`), `putLineup` 80→178.
+- **CONCERN (product-owner-relevant, not just stale docs):** the org-panel
+  eligibility hint copy **already ships the RS011 end-state claim** —
+  `dictionaries/en/ui.json:2186` `divset.entrants.eligibility.hint` =
+  "Checked at roster add — organisers can override with a reason." No gate
+  exists yet, so this is a **live false claim in production today**, not
+  merely the generic `entrants-panel.tsx:224` banner the brief cites (banner
+  itself moved to `:247-256`, text unchanged/still false). Raises the value
+  case for this session, doesn't change scope: ship the claim true, don't
+  soften the copy.
+- Schema check: `server/api-v1/schemas.ts` `CreateDivision`/`PatchDivision`
+  (`:225-309`) already first-class-only, no untyped array to replace, has
+  `eligibility_note`. No `EligibilityOverride` shape anywhere yet — confirmed
+  net-new on `CreateEntrant`/`PatchEntrant`/`PutLineup`/roster-sync bodies.
+  `NewPersonMemberInput` (`schemas.ts:358-364`) and `resolveInlineMembers`
+  (`entrants.ts:36-59`, inserts only `org_id, full_name, consent`) confirmed
+  missing `dob`/`gender` — net-new work, matches brief.
+
+**Revised scope for the implementer, net of the above:**
+1. `gateRosterEligibility(tx, {divisionId, personIds, context, override,
+   actorId})` in `registration-eligibility.ts` (not a new module) — throws
+   `HttpError(422, ..., "ELIGIBILITY_VIOLATION", {violations, warnings})`
+   without override; with `override.reason` calls `audit()` once and
+   proceeds.
+2. `EligibilityOverride {reason: 3..500}` optional on the 4 write bodies;
+   `dob`/`gender` optional on `NewPersonMemberInput`, threaded through
+   `resolveInlineMembers`. **No** jsonb-typing Zod work.
+3. Wire the 7 corrected gate points.
+4. `eligibility-override-dialog.tsx` + wire into `entrants-panel.tsx`; make
+   the existing (already-live) hint copy true.
+5. Delete `design/v1/DEFERRED.md:82-84` (confirmed unchanged, still there).
+6. New: `apps/web/e2e/walkthrough/rs011-eligibility-gates.spec.ts` (owner
+   request, mid-session) — real UI taps, not API-seeded: restricted division
+   → over-age add → dialog → blocked with no reason → override succeeds →
+   audit row visible; plus one warning-only path (`setTeamSquad` or missing
+   dob) proving it never hard-blocks.
