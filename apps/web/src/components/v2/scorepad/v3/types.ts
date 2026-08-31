@@ -671,6 +671,24 @@ export interface SheetNumberStep {
    *  the chassis never resolves a sport-namespaced key. */
   hintText?: string;
   when?: StepPredicate;
+  /**
+   * Step ids this step's `initial` READS. Answering any of them to a
+   * different value discards this step's own answer, so the next visit
+   * re-seeds instead of carrying a number derived from the old answer.
+   *
+   * R6 W-1, the Back path. Seeding correctly on the way in is not enough:
+   * a scorer who picks a suspension class, accepts its minutes, taps Back
+   * and picks a DIFFERENT class would otherwise carry the first class's
+   * duration forward — `pruneAnswers` keeps the minutes answer (the step is
+   * still visible for the new class) and a prior answer beats `initial` by
+   * design, because Back must not blank a value somebody typed.
+   *
+   * Only the DERIVED value is dropped, and only when the thing it was
+   * derived from actually changed: re-answering a step with the SAME value
+   * keeps everything, so Back-and-forward with no change is still lossless.
+   * A literal `initial` needs none of this and should not declare it.
+   */
+  resetOn?: readonly string[];
 }
 export type GuidedSheetStep = SheetChoiceStep | SheetPersonStep | SheetNumberStep;
 export interface GuidedSheetSpec { event: string; steps: GuidedSheetStep[]; buildPayload: (answers: Record<string, string>) => Record<string, unknown> }

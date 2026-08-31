@@ -262,6 +262,15 @@ export function answerStep(spec: GuidedSheetSpec, state: GuidedSheetState, value
   const step = spec.steps[state.stepIndex];
   if (!step) return { done: false, state };
   const raw = { ...state.answers, [step.id]: value };
+  // R6 W-1 (Back path). A step whose `initial` READS this answer must not
+  // keep a number derived from the PREVIOUS one. Only fires on a real change,
+  // so Back-and-forward that re-picks the same class stays lossless.
+  if (state.answers[step.id] !== undefined && state.answers[step.id] !== value) {
+    for (const dependent of spec.steps) {
+      if (dependent.kind !== "number" || dependent.resetOn === undefined) continue;
+      if (dependent.resetOn.includes(step.id)) delete raw[dependent.id];
+    }
+  }
   // Defect 2 (R2 review): prune before scanning forward AND before handing
   // answers to buildPayload — this step's own answer always survives (it was
   // just visible, or the wizard couldn't have been on it), but an earlier

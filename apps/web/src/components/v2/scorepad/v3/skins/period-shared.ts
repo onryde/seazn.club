@@ -1063,6 +1063,9 @@ function suspensionSheet(spec: PeriodSkinSpec, view: PadHostView, side: Side, t:
       kind: "number",
       title: `pad.${spec.key}.action.suspensionStart.field.minutes`,
       initial: (answers) => defaultMinutesOf(view, answers.class),
+      // This seed READS `class`, so changing the class must discard it —
+      // otherwise a Back-and-repick carries the old class's duration.
+      resetOn: ["class"],
       min: 1,
       max: suspensionMinutesMaxOf(view),
       // A class with no numeric duration ("for the rest of the match") has

@@ -21,7 +21,8 @@ import type { AnySportModule, PadSpec } from "@seazn/engine/sport";
 import { initSquads } from "@seazn/engine/core";
 import { CLOCK_NUDGE_SECONDS, adjustClock, initClock, startClock, reseatClock, elapsedOf, stampOf } from "../clock";
 import { stampFor } from "../pad-host";
-import { resolveInitial } from "../guided-sheet";
+import { answerStep, backStep, currentStep, initialSheetState, resolveInitial } from "../guided-sheet";
+import type { GuidedSheetState } from "../guided-sheet";
 import type { GuidedSheetSpec, SheetNumberStep, PadHostView, SwapSlot, TileSpec } from "../types";
 import { SPORT_PALETTES, SPORT_TONES } from "../sport-theme";
 import { hockeySkinV3, hockeySpec, HOCKEY_REASONS } from "../skins/hockey";
@@ -830,6 +831,147 @@ describe("the minutes step opens at the CHOSEN class's own declared duration", (
 // only by inspection. Both cfgs, because hockey `youth` exists precisely to
 // make this bound differ from adult while the class NAMES stay identical.
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// 4c-quater. R6 W-1, the BACK path — found by a branch review, and it is
+// failure class 19 recurring against the fix written for failure class 19.
+// Seeding the step correctly on the way IN is not enough: a scorer who picks
+// a class, sees its minutes, goes BACK and picks a different class must not
+// carry the first class's duration forward. `pruneAnswers` keeps the
+// `minutes` answer (the step is still visible for the new class), so the
+// stale value wins over the seed.
+// ---------------------------------------------------------------------------
+
+describe("changing the class after going Back re-seeds the minutes step", () => {
+  for (const sport of SPORTS) {
+    it(`${sport.key}: picking a second class does not carry the first one's minutes`, () => {
+      const cfg = periodCfg(sport.module);
+      const state = livePhaseState(sport, cfg);
+      const view = viewFor(sport, cfg, state);
+      const sheet = sport.factory(T).sheets!(view)["suspension-home"] as GuidedSheetSpec;
+
+      const classes = (cfg as { suspensions: { classes: Record<string, { minutes: number | null }> } }).suspensions
+        .classes;
+      const finite = Object.entries(classes).filter(([, c]) => typeof c.minutes === "number");
+      // Two classes with DIFFERENT nominals, so a carried value is visible.
+      const first = finite[0]!;
+      const second = finite.find(([, c]) => c.minutes !== first[1].minutes);
+      expect(second, `${sport.key}: needs two classes with different durations`).toBeDefined();
+
+      // Driven through the REAL wizard machinery, not a stand-in: answer the
+      // first class, walk forward to the minutes step accepting each step's
+      // own seed, then Back all the way to the class step and pick the other
+      // class. Whatever the component would show next is what we assert.
+      const walkToMinutes = (st: GuidedSheetState): GuidedSheetState => {
+        for (let guard = 0; guard < 12; guard += 1) {
+          const cur = currentStep(sheet, st);
+          if (cur === null || cur.id === "minutes") return st;
+          const answer =
+            cur.kind === "choice"
+              ? cur.options[0]!.id
+              : cur.kind === "person"
+                ? ((cur.candidates ?? [])[0] ?? "")
+                : String(resolveInitial(cur, st.answers));
+          const out = answerStep(sheet, st, answer);
+          if (out.done) return st;
+          st = out.state;
+        }
+        return st;
+      };
+
+      const advance = (from: GuidedSheetState, value: string): GuidedSheetState => {
+        const out = answerStep(sheet, from, value);
+        expect(out.done, "the wizard completed earlier than this test expects").toBe(false);
+        return (out as { done: false; state: GuidedSheetState }).state;
+      };
+
+      let st = advance(initialSheetState(), first[0]);
+      st = walkToMinutes(st);
+      expect(currentStep(sheet, st)?.id, "never reached the minutes step").toBe("minutes");
+      // Accept the seeded default for the FIRST class, exactly as a hurried
+      // scorer would.
+      const firstSeed = resolveInitial(currentStep(sheet, st) as SheetNumberStep, st.answers);
+      expect(firstSeed).toBe(first[1].minutes);
+      const afterFirst = answerStep(sheet, st, String(firstSeed));
+      st = afterFirst.done ? st : afterFirst.state;
+
+      // Back until the class step is current again, then choose the other class.
+      for (let guard = 0; guard < 12 && currentStep(sheet, st)?.id !== "class"; guard += 1) {
+        st = backStep(sheet, st);
+      }
+      expect(currentStep(sheet, st)?.id, "never got back to the class step").toBe("class");
+      st = advance(st, second![0]);
+      st = walkToMinutes(st);
+      expect(currentStep(sheet, st)?.id, "minutes not reachable for the second class").toBe("minutes");
+
+      // What the component seeds: a prior answer wins over `initial`, which is
+      // exactly the hole — the prior answer belongs to the OTHER class.
+      const prior = st.answers.minutes;
+      const shown =
+        prior !== undefined ? Number(prior) : resolveInitial(currentStep(sheet, st) as SheetNumberStep, st.answers);
+      expect(
+        shown,
+        `${sport.key}: ${second![0]} declares ${second![1].minutes} but the step still offers ${shown}`,
+      ).toBe(second![1].minutes);
+    });
+  }
+});
+
+describe("Back-and-forward without changing the class keeps what the scorer typed", () => {
+  for (const sport of SPORTS) {
+    it(`${sport.key}: a hand-entered duration survives re-picking the SAME class`, () => {
+      const cfg = periodCfg(sport.module);
+      const state = livePhaseState(sport, cfg);
+      const view = viewFor(sport, cfg, state);
+      const sheet = sport.factory(T).sheets!(view)["suspension-home"] as GuidedSheetSpec;
+
+      const classes = (cfg as { suspensions: { classes: Record<string, { minutes: number | null }> } }).suspensions
+        .classes;
+      const [classKey, cls] = Object.entries(classes).find(([, c]) => typeof c.minutes === "number")!;
+
+      const advance = (from: GuidedSheetState, value: string): GuidedSheetState => {
+        const out = answerStep(sheet, from, value);
+        expect(out.done, "the wizard completed earlier than this test expects").toBe(false);
+        return (out as { done: false; state: GuidedSheetState }).state;
+      };
+      const walk = (st: GuidedSheetState): GuidedSheetState => {
+        for (let guard = 0; guard < 12; guard += 1) {
+          const cur = currentStep(sheet, st);
+          if (cur === null || cur.id === "minutes") return st;
+          const answer =
+            cur.kind === "choice"
+              ? cur.options[0]!.id
+              : cur.kind === "person"
+                ? ((cur.candidates ?? [])[0] ?? "")
+                : String(resolveInitial(cur, st.answers));
+          const out = answerStep(sheet, st, answer);
+          if (out.done) return st;
+          st = out.state;
+        }
+        return st;
+      };
+
+      // An umpire awarding MORE than the class nominal — the case padSpec's
+      // doubled `max` bound exists for, and the one thing `resetOn` must not
+      // throw away.
+      const typed = (cls.minutes as number) + 1;
+      let st = walk(advance(initialSheetState(), classKey));
+      expect(currentStep(sheet, st)?.id).toBe("minutes");
+      const afterTyped = answerStep(sheet, st, String(typed));
+      st = afterTyped.done ? st : afterTyped.state;
+
+      for (let guard = 0; guard < 12 && currentStep(sheet, st)?.id !== "class"; guard += 1) {
+        st = backStep(sheet, st);
+      }
+      // Re-picking the SAME class changes nothing, so nothing may be dropped.
+      st = walk(advance(st, classKey));
+      expect(
+        st.answers.minutes,
+        `${sport.key}: re-picking ${classKey} blanked a hand-entered ${typed}`,
+      ).toBe(String(typed));
+    });
+  }
+});
 
 describe("the minutes step's upper bound is the engine's, not a drifting copy", () => {
   for (const sport of SPORTS) {
