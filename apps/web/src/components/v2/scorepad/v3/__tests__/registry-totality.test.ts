@@ -140,7 +140,18 @@ describe("registry totality", () => {
     expect(resolvePad("generic", T).lane).toBe("v3");
   });
 
-  it("every other builtinModules sport still resolves to legacy — the flips touch cricket, football, tennis, badminton, table tennis, volleyball, hockey, ice hockey and generic alone", () => {
+  // R7/A2 — boardgame, this wave's own deliverable, pinned independently of
+  // the structural sweep below for the same reason every flip before it is:
+  // that sweep only proves resolvePad AGREES with V3_SKINS/LEGACY_SPORTS'
+  // membership, whatever it happens to say, so a task that shipped without
+  // actually flipping boardgame would keep it green. This leaves
+  // `../../registry.tsx`'s own `RESOLUTION_KIND: "universal"` lane serving
+  // carrom alone.
+  it("boardgame specifically resolves to the v3 lane, not legacy — this wave's own flip", () => {
+    expect(resolvePad("boardgame", T).lane).toBe("v3");
+  });
+
+  it("every other builtinModules sport still resolves to legacy — the flips touch cricket, football, tennis, badminton, table tennis, volleyball, hockey, ice hockey, generic and boardgame alone", () => {
     const converted = new Set([
       "cricket",
       "football",
@@ -151,11 +162,12 @@ describe("registry totality", () => {
       "hockey",
       "icehockey",
       "generic",
+      "boardgame",
     ]);
     const others = builtinModules.map((m) => m.key).filter((key) => !converted.has(key));
     // Pins today's known-good shape, same convention registry.test.tsx's own
     // "the table names exactly the 11 shipped sports" assertion uses.
-    expect(others.length).toBe(2);
+    expect(others.length).toBe(1);
     for (const key of others) {
       expect(resolvePad(key, T).lane, key).toBe("legacy");
     }

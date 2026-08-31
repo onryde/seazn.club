@@ -718,6 +718,16 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   "pad.boardgame.panel.draw",
   "pad.boardgame.panel.pre",
   "pad.boardgame.panel.result",
+  // R7/A2 — the v3 boardgame skin's own ribbon copy. Registered HERE, not
+  // only in the four dictionaries, for the identical reason badminton's own
+  // ribbon keys above are: `ribbon.ts`'s `buildRibbon` gates its per-sport
+  // lookup on PAD_LABEL_KEYS MEMBERSHIP before calling `padLabel`, so
+  // dictionary copy with no entry in this list stays silently on the generic
+  // `pad.ribbon.fallback` ("{event} recorded") forever, with nothing
+  // failing. One key per event type this skin's tiles dispatch — both of
+  // them, since every panel `padSpec` declares is dedicated by a tile.
+  "pad.boardgame.ribbon.pairing",
+  "pad.boardgame.ribbon.result",
 
   "pad.carrom.action.adjustCredit",
   "pad.carrom.action.adjustDeduct",

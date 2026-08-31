@@ -929,6 +929,47 @@ describe("the tones are NON-TEXT colours, and this is where that stops being a c
     },
   );
 
+  // R7/A2 — boardgame, palette and skin landing in the SAME wave. Pinned
+  // EXPLICITLY, for the identical reason tennis's own block above states: the
+  // usage-driven licence a few blocks down can only hold a tone to the text
+  // floor once it finds that tone actually rendered as text, so a palette
+  // still needs its own explicit pin to bite on day one rather than on
+  // whatever later render happens to exercise it first.
+  //
+  // `dismissal` is the one that matters here — the "clock flag falls" method
+  // (`method: "time"`) is a WORD in the result sheet's method list
+  // (`skins/boardgame.tsx`'s `toneFor`), never a card swatch, so it owes the
+  // full 4.5 rather than football's 3:1 graphic licence. `caution` has no
+  // shipped use in this skin today (the six-token vocabulary is declared as a
+  // closed SET, not opted into piecemeal — `SPORT_TOKENS`'s own doc) but is
+  // pinned to the same floor regardless, so a later use starts pre-measured.
+  it("boardgame's tones clear the 4.5 floor on its own board and band, and its led/ink pair clear it too", () => {
+    const boardgame = resolveSportPalette("boardgame");
+    for (const tone of ["caution", "dismissal"] as const) {
+      const onBoard = contrastRatio(boardgame.board, boardgame[tone]);
+      expect(onBoard, `boardgame --sport-${tone} is ${onBoard.toFixed(2)}:1 on its own board`).toBeGreaterThanOrEqual(
+        4.5,
+      );
+      const onBand = contrastRatio(boardgame["board-2"], boardgame[tone]);
+      expect(onBand, `boardgame --sport-${tone} is ${onBand.toFixed(2)}:1 on its own band`).toBeGreaterThanOrEqual(
+        4.5,
+      );
+    }
+    expect(contrastRatio(boardgame.board, boardgame.led)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(boardgame["board-2"], boardgame.led)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(boardgame.board, boardgame.ink)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(boardgame["board-2"], boardgame.ink)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  // Same guard as the racquet family's own, immediately above: without this,
+  // deleting the boardgame entry would silently fall back to a complete,
+  // readable default palette and every assertion above would keep passing
+  // while the sport rendered in cricket's colours.
+  it("boardgame declares its OWN palette entry, so the pin above is measuring it and not the default fallback", () => {
+    expect(Object.keys(SPORT_PALETTES)).toContain("boardgame");
+    expect(resolveSportPalette("boardgame").board).not.toBe(DEFAULT_SPORT_PALETTE.board);
+  });
+
   // R3 review round — THIS LICENCE HAD ALMOST NO TEETH. It grepped globals.css
   // for the literal `color: var(--sport-<tone>)` and therefore missed the
   // unspaced form, any wrapper (`color-mix(...)`), an arbitrary Tailwind value

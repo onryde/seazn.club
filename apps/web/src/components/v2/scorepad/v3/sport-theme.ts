@@ -425,6 +425,49 @@ export const SPORT_PALETTES: Readonly<Record<string, Partial<SportPalette>>> = O
     caution: "#ffd60a",
     dismissal: "#ff6b6b",
   },
+
+  /*
+   * BOARDGAME (R7/A2, owner-approved 2026-08-30). Deep aubergine board, with
+   * the clock-flag red spent on exactly one thing: FIDE's flag fall.
+   *
+   *   board       deep aubergine — a club table under a desk lamp, not a
+   *               chessboard's own black-and-white (which the pieces already
+   *               own; painting the BOARD in it would fight them)
+   *   board-2     the band the halves and the context line sit on
+   *   led         side-to-move / White indicator — `state.colorOfHome`,
+   *               known from the first render (`init()` defaults home to
+   *               White), spent on the WhoLine the way every racquet sport
+   *               spends this token on the serve — one fact, nowhere else
+   *   caution     unused by this skin today (the closed six-token vocabulary
+   *               is declared as a set, per `SPORT_TOKENS`'s own doc, not
+   *               opted into token by token) — still pinned to the full text
+   *               floor below, so a later use starts already measured
+   *   dismissal   the clock FLAG FALLING — FIDE's `method: "time"`
+   *               (`method.time` = "Flag fall"), and ONLY that: a chess
+   *               arbiter's sheet has no card to raise, so this is not
+   *               football's swatch-only red wearing a new hex. It is a
+   *               WORD in the result sheet's method list (`toneFor`,
+   *               `skins/boardgame.tsx`), which is why it has to clear the
+   *               full 4.5 text floor rather than football's 3:1 graphic
+   *               licence.
+   *   ink         warm near-white, legible on both grounds
+   *
+   * CLOSEST SHIPPED BOARD: the default night `#150b36` (ΔE76 12.9 — the
+   * smallest gap of any pair checked, still comfortably clear of the ~8
+   * "reads as one colour" floor; football 31.1, tennis 15.1, badminton 22.8,
+   * table tennis 19.1, volleyball 16.0). Aubergine and the product's own
+   * night share a violet family by construction — both are dark, desaturated
+   * purples — so this is the nearest neighbour this palette was ever going
+   * to have, not a miss.
+   */
+  boardgame: {
+    board: "#25142e",
+    "board-2": "#33203d",
+    ink: "#f6f2f8",
+    led: "#e0c56b",
+    caution: "#f2a900",
+    dismissal: "#f4767a",
+  },
 });
 
 /** The custom-property name a token is emitted under. One place, so the

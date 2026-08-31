@@ -57,6 +57,7 @@ import { tabletennisSkinV3 } from "./skins/tabletennis";
 import { tennisSkinV3 } from "./skins/tennis";
 import { volleyballSkinV3 } from "./skins/volleyball";
 import { genericSkinV3 } from "./skins/generic";
+import { boardgameSkinV3 } from "./skins/boardgame";
 
 /**
  * Sport key -> v3 skin FACTORY. Empty through R1; populated sport-by-sport
@@ -122,6 +123,11 @@ V3_SKINS.volleyball = volleyballSkinV3;
 // `cfg.resultMode` — so `skins/generic.tsx` builds two boards from one skin.
 // The FACTORY, never `genericSkinV3(t)`, same reason as every entry above.
 V3_SKINS.generic = genericSkinV3;
+// R7/A2 — boardgame, the eighth conversion, and the second of the two sports
+// still on `../registry.tsx`'s `RESOLUTION_KIND: "universal"` lane after A1.
+// That lane now serves carrom alone. The FACTORY, never `boardgameSkinV3(t)`,
+// same reason as every entry above.
+V3_SKINS.boardgame = boardgameSkinV3;
 
 /**
  * Every engine sport key NOT already owned by `V3_SKINS`, computed from
@@ -138,9 +144,10 @@ V3_SKINS.generic = genericSkinV3;
  * change — R2/task E did exactly that for cricket, R3/task B2 for football,
  * R4 for tennis, R5/C1 for badminton, R5/C2 for table tennis and R5/C3 for
  * volleyball — the third and last `sports/setbased` sibling, closing out the
- * racquet family, and R7/A1 for generic — the
- * universal renderer's first sport, which leaves `../registry.tsx`'s
- * `RESOLUTION_KIND: "universal"` lane serving carrom and boardgame only.
+ * racquet family, R7/A1 for generic — the universal renderer's first sport —
+ * and R7/A2 for boardgame, the universal renderer's second, which leaves
+ * `../registry.tsx`'s `RESOLUTION_KIND: "universal"` lane serving carrom
+ * alone.
  *
  * `CONVERTED_SPORTS` below is a LITERAL list, deliberately not
  * `Object.keys(V3_SKINS)`: deriving one from the other would make the totality
@@ -161,6 +168,7 @@ const CONVERTED_SPORTS: ReadonlySet<string> = new Set([
   "tennis",
   "volleyball",
   "generic",
+  "boardgame",
 ]);
 
 export const LEGACY_SPORTS: ReadonlySet<string> = new Set(
