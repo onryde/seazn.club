@@ -6,10 +6,13 @@
 // decision, not a fallthrough — a new engine sport shipping with no row and
 // no `NO_V2_SKIN_SPORTS` entry must fail CI, not silently render on the
 // universal path with nobody having decided that was right. `NO_V2_SKIN_
-// SPORTS` (registry.tsx) is the one recognised exception: volleyball,
-// badminton and tabletennis converted fully to v3 and their shared v2 skin
-// (racquet-skin.tsx) was deleted as dead code (R5) — see registry.tsx's own
-// header for the full reasoning on both.
+// SPORTS` (registry.tsx) is the one recognised exception, now covering all
+// eight sports that ever had a v2 skin: volleyball, badminton and
+// tabletennis first (R5, shared racquet-skin.tsx), then cricket, tennis,
+// football, hockey and icehockey (2026-08-31, their own dedicated files) —
+// each converted fully to v3 and had its v2 skin deleted as dead code once
+// nothing else still shared it. See registry.tsx's own header for the full
+// reasoning on both.
 import { describe, expect, it, vi } from "vitest";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
@@ -62,6 +65,11 @@ describe("resolveScorePad — drift guard over every builtinModules key", () => 
   });
 
   it("assertion 4: resolveScorePad(key) returns an actual SkinDef for every 'skin' row", () => {
+    // Zero iterations today (RESOLUTION_KIND has no "skin" row left, 2026-08-
+    // 31) — kept rather than deleted: it is a dormant, still-correct guard
+    // that starts asserting again the moment a "skin" row is ever
+    // reintroduced, and assertion 3 above already proves the same table is
+    // otherwise consistent with skinFor either way.
     for (const m of builtinModules) {
       if (RESOLUTION_KIND[m.key] !== "skin") continue;
       const resolution = resolveScorePad(m.key);
@@ -102,15 +110,19 @@ describe("resolveScorePad — drift guard over every builtinModules key", () => 
     expect(resolveScorePad("totally-unknown-sport")).toEqual({ kind: "universal" });
   });
 
-  it("the table + NO_V2_SKIN_SPORTS together account for exactly the 11 shipped sports — 5 skinned, 3 universal, 3 with no v2 story left (pins the known-good shape)", () => {
+  it("the table + NO_V2_SKIN_SPORTS together account for exactly the 11 shipped sports — 0 skinned, 3 universal, 8 with no v2 story left (pins the known-good shape)", () => {
+    // 0, not 5: this wave (2026-08-31) retired the last five "skin" rows
+    // (cricket, tennis, football, hockey, icehockey) into NO_V2_SKIN_SPORTS,
+    // completing what R5 started for volleyball/badminton/tabletennis. See
+    // registry.tsx's own NO_V2_SKIN_SPORTS docstring for the full record.
     expect(builtinModules.length).toBe(11);
-    expect(Object.keys(RESOLUTION_KIND).length).toBe(8);
-    expect(NO_V2_SKIN_SPORTS.size).toBe(3);
+    expect(Object.keys(RESOLUTION_KIND).length).toBe(3);
+    expect(NO_V2_SKIN_SPORTS.size).toBe(8);
     const byKind = Object.values(RESOLUTION_KIND).reduce<Record<string, number>>((acc, kind) => {
       acc[kind] = (acc[kind] ?? 0) + 1;
       return acc;
     }, {});
-    expect(byKind).toEqual({ skin: 5, universal: 3 });
+    expect(byKind).toEqual({ universal: 3 });
   });
 });
 

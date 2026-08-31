@@ -7,7 +7,7 @@
 // tested directly here (their own `renderIsland` calls) rather than in
 // separate files — this file is their only test coverage, per the S10
 // dispatch's FILES YOU OWN list.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
 import { defaultLineupPair } from "@seazn/engine/testkit";
@@ -25,6 +25,7 @@ import { AttributionPicker } from "@/components/v2/scorepad/attribution-picker";
 import { Timeline, type TimelineEvent } from "../timeline";
 import { PadRenderer } from "../pad-renderer";
 import { skinFor } from "../skins/registry";
+import type { SkinDef } from "../skins/types";
 
 function find(tree: ReactElement[], pred: (el: ReactElement) => boolean): ReactElement {
   const el = tree.find(pred);
@@ -1205,6 +1206,41 @@ describe("PadRenderer — the attribution picker is the DEFAULT, not an opt-in",
   });
 });
 
+// No REAL v2 skin exists any more (2026-08-31 — skins/registry.ts's `SKINS`
+// is permanently empty; every sport that used to have one is now in
+// registry.tsx's `NO_V2_SKIN_SPORTS`), so the reachability test just below
+// can no longer prove "PadRenderer's DEFAULT path consults the registry"
+// with real production data — there is no sport left for which `skinFor`
+// returns non-null. Proved instead with a mocked `skinFor`, the SAME pattern
+// registry.test.tsx already uses to prove ITS OWN v3-routing decision
+// (`FAKE_V3_SKIN`/`vi.mock("../v3/registry", ...)` there) — this is a test of
+// PadRenderer's OWN wiring, not of any specific skin's content, so a
+// synthetic `SkinDef` proves it exactly as well as a real one did.
+//
+// Keyed on "boardgame" deliberately: the only sportKeys this file otherwise
+// touches are "cricket" (phase-nav fixtures above, several WITHOUT an
+// explicit `skin` prop) and "generic" (the second test below, and others
+// elsewhere in this file) — reusing either would make this mock silently
+// change what an unrelated, already-passing test renders. "boardgame" is
+// untouched anywhere else here, so wrapping `skinFor` for it can only affect
+// the one test that asks for it.
+function FakeSkinComponent() {
+  return null;
+}
+const FAKE_SKIN: SkinDef = {
+  key: "fake-skin-for-routing-test",
+  sports: ["boardgame"],
+  layout: () => ({ header: null, groups: [] }),
+  Component: FakeSkinComponent,
+};
+vi.mock("../skins/registry", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../skins/registry")>();
+  return {
+    ...actual,
+    skinFor: (key: string) => (key === "boardgame" ? FAKE_SKIN : actual.skinFor(key)),
+  };
+});
+
 describe("PadRenderer — skin routing (S11/#420 W9)", () => {
   // The reachability proof. S10's attribution picker shipped written, tested
   // and reachable ONLY IF a caller remembered to pass it, and no unit test
@@ -1212,17 +1248,18 @@ describe("PadRenderer — skin routing (S11/#420 W9)", () => {
   // A skin registry that PadRenderer never consults would be the sixth. These
   // two tests fail the moment the consult is removed.
   it("routes a skinned sport to its skin by DEFAULT — no prop passed", () => {
-    const skin = skinFor("cricket");
-    expect(skin).not.toBeNull();
+    const skin = skinFor("boardgame");
+    expect(skin).toBe(FAKE_SKIN);
+    const boardgame = resolveModuleClient("boardgame", "1.0.0");
     const island = renderIsland(PadRenderer, {
-      module: resolveModuleClient("cricket", "1.0.0"),
-      cfg: CRICKET_CFG,
+      module: boardgame,
+      cfg: boardgame.configSchema.parse({}),
       fixtureId: "fx-1",
-      lineups: CRICKET_LINEUPS,
+      lineups: defaultLineupPair(boardgame.positions),
       identity: ME,
       transport: fakeTransport({ appendResults: [] }),
       band: 3 as const,
-      entitlements: { "stats.player": true, "scoring.ball_by_ball": true },
+      entitlements: {},
     });
     const tree = island.tree();
     expect(findAll(tree, isType(skin!.Component)).length).toBe(1);
