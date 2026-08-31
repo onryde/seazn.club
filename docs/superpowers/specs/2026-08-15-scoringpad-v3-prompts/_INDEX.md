@@ -5975,3 +5975,26 @@ lives.
 sports, discovered inside R7 but belonging to the chassis, so it wants its own
 fix rather than being folded into a skin wave. Filing nothing without the
 owner's word (`feedback_never_file_issues_unprompted.md`).
+
+**Addendum — the behaviour is PINNED GREEN by a test that names the very risk
+it fails to cover.** `use-pad-pipeline.test.tsx` has, adjacent:
+
+- `:515` — "a repeat of the identical (type, payload) within the window, AFTER
+  the first fully resolves, **is also suppressed**" — asserts the drop is
+  correct, and passes.
+- `:528` — "two DELIBERATELY identical actions separated by **MORE** than the
+  window both record — **a scorer entering two dot balls in a row must not lose
+  the second**".
+
+The author saw this exact hazard, wrote it into a test name, and then
+discharged it only for taps spaced `DOUBLE_SUBMIT_WINDOW_MS + 100` apart. The
+case that actually loses a scorer's data — two deliberate taps *inside* the
+window — is the one directly above it, asserted as correct behaviour. There is
+no test for a deliberate sub-600ms second tap because the premise says that
+cannot happen. On tapModel S it is the normal case.
+
+That is why every gate is green and the product still drops points: the suite
+does not disagree with the defect, it encodes it. Same shape as R7-28's design
+defects (every automated gate green, screen still wrong) and the same shape as
+this wave's other false premises — the hazard was written down and then not
+believed.
