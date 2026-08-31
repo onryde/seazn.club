@@ -6175,3 +6175,279 @@ tap grammar, not the file.
 Also still owed on this skin, from R7-10 and unaddressed: `boardgame.ts:476`
 declares `fidelityEntitlements: {}`, and an empty map renders an UPSELL for a
 band nothing gates. The skin owes a real map or a justified empty one.
+
+### R7-35 — A2's THIRD defect: it flipped the lane and left BOTH e2e drivers on the old one
+
+Found by re-reading R7-10 against the commit rather than against the brief, the
+same method that found the other two. R7-10 states the obligation in its own
+words — "Current `scoreOne` selectors that this conversion DELETES: boardgame
+`:2372` clicks 'Draw / no result' then `getByLabel('Method').selectOption` ...
+**All three must be rewritten in the same change**" — and A2's commit touches no
+e2e file at all (13 files: 3 test, registry, skin + skin test, sport-theme, 4
+dicts, i18n-keys, scoring-vocab).
+
+Two drivers are now pointed at a renderer boardgame no longer reaches:
+
+- `e2e/gallery.capture.ts:2903` — the boardgame recipe's `scoreOne` and
+  `openDock` drive the v2 universal panel (Method `<select>`, Moves
+  `input[type=number]`, `[data-role="confirm"]`). A v3 guided sheet has none of
+  those controls.
+- `e2e/scorepad-v2.spec.ts:830` — the S12 narrow-form test. **Its own comment
+  predicted this exact miss**: "boardgame is the remaining universal sport with
+  a `layout: 'grid'` panel ... Its own conversion (R7 task A) has to move this
+  test once more". The conversion happened; the move did not.
+
+**Why no gate said so.** Neither file is reachable from `npm test` — they are
+Playwright specs, and e2e triggers on push to `main` only, never on a PR or a
+feature-branch push. So a lane flip can invalidate its own e2e coverage and
+still show green on every signal a feature branch can produce. This is the
+`reference_unrun_e2e_ships_vacuous_waits` family: the wave that breaks the
+driver is not the wave that finds out.
+
+Folded into the A2 rework rather than filed separately, together with the
+`EXTRA_STATES` dock entry R7-10 also asks for and A2 also did not add.
+
+### R7-36 — `fidelityEntitlements: {}` promoted to its OWN task (A4), not A2's
+
+R7-10 recorded that all three of boardgame, carrom and generic declare an EMPTY
+`fidelityEntitlements` map, and that an empty map renders an UPSELL for a band
+nothing gates. R7-34 listed it as still owed "on this skin".
+
+Ruled here as a task of its own for two reasons rather than a line in A2's
+rework. It is ONE ruling across THREE engine modules (`boardgame.ts:476`,
+`carrom.ts:709`, `generic.ts:376`), so fixing it one skin at a time guarantees
+the other two drift; and it is an ENGINE change, while every other item in the
+A2 rework is `apps/web` — mixing them puts an engine diff inside a skin commit,
+where a reviewer reading the subject line will not look for it.
+
+Generic (A1) has ALREADY SHIPPED with the empty map, so this is not a
+pre-emptive fix: the upsell is live on this branch today for a band nothing
+gates. A4 covers all three in one change, and it lands before the wave closes.
+
+### R7-37 — `scorepad-v2.spec.ts` no longer tests the v2 lane. NOT ONE of its cases does
+
+Scouted for task G's re-scope and verified independently against the tree. The
+file seeds four sport keys — cricket (`:110`, `:481`), football (`:307`,
+`:411`, `:573`), generic (`:694`) and boardgame (`:852`) — and **all four are
+in `V3_SKINS` today** (`v3/registry.ts:95-130`: badminton, cricket, football,
+hockey, icehockey, tabletennis, tennis, volleyball, generic, boardgame).
+
+So every test in a file named for the v2 lane drives the v3 lane. It reaches
+`pad-renderer.tsx` — the universal renderer it exists to cover — **zero times**.
+
+The decay was gradual and each step was locally reasonable: R2 took cricket,
+R3 football, R7/A1 generic, R7/A2 boardgame. No single wave broke the file;
+each one removed one more sport from under it, and the last one to leave took
+the file's whole subject with it. Its in-file comments at `:686` and `:839`
+still describe the sports as universal-lane, which is how it reads as
+purposeful.
+
+**The lane's real population is ONE sport: carrom** (`LEGACY_SPORTS` = every
+`builtinModules` key not in `V3_SKINS`). `scorepad-v2.spec.ts` has no carrom
+case at all. The single sport that still needs this renderer has **no e2e
+coverage of it anywhere**, and the file that appears to provide that coverage
+provides none.
+
+Consequences, all of them G's:
+- The S12 narrow-form test (`:821`) cannot be "moved to another universal
+  sport" as R7-35 assumed — carrom is the only candidate, and A3 converts it
+  next, which would break the test a second time within the same wave. It dies
+  with the lane. A2's rework leaves it untouched and says so.
+- G's "fold the cricket and football cases into the v3 specs first" step needs
+  re-reading: those cases already ARE v3 tests, so the question is duplication
+  with `scorepad-v3-cricket.spec.ts` / the football spec, not migration.
+- `pad-context.tsx` is ORPHANED (its only importer is its own test) and
+  `skins/registry.ts` is structurally inert — `skinFor` returns null
+  unconditionally after #687. Both are G's to delete.
+- `registry.tsx`'s `RESOLUTION_KIND` still lists `generic` and `boardgame` as
+  `"universal"`. Unreachable rather than wrong — `v3/registry.ts` is consulted
+  first — but it is exactly the kind of stale row that makes the next reader
+  believe the lane is more populated than it is.
+
+### R7-38 — R7-32's note about #688 was WRONG. Two constants, one word
+
+R7-32 recorded that "#688 has since made the hold window configurable —
+re-read that file before fixing". Re-pinned and false. #688 (`8e053f57d`)
+does not touch `use-pad-pipeline.ts` at all. It changed `HOLD_MS` in
+`queue.ts` — the SOFT-COMMIT hold before an entry sends, 6s to 12s, now
+`resolveHoldMs(process.env.NEXT_PUBLIC_SCOREPAD_HOLD_MS)`.
+`DOUBLE_SUBMIT_WINDOW_MS = 600` (`use-pad-pipeline.ts:310`) is a different
+constant and is still a plain compile-time module const.
+
+Two things both fairly called "a window", one sentence apart in any summary.
+Worth recording as a naming hazard, not just an erratum.
+
+Two corrections to the defect itself, both of which change its cost:
+
+1. **The guard has TWO mirrored copies** — `submit()` at `:1471` (bare
+   `return`) and `submitHeld()` at `:1557` (returns `null`). **`submitHeld` is
+   the one every tapModel-S tap actually calls.** A fix to whichever copy is
+   found first fixes nothing on the affected sports.
+2. **No per-tap identity exists before the guard, so the fix is STRUCTURAL.**
+   `pad-host.tsx:1598` dispatches `send(event.type, event.payload)`; a skin's
+   `tapEvent` is `{type, payload}` and nothing else. `localId` and
+   `idempotencyKey` are minted at `:1484`/`:1566` — AFTER the guard has run —
+   so they can never reach it. An identity must be threaded from the tap site
+   through dispatch into the pipeline. Budget R7-30 accordingly; it is not the
+   one-line change "compare an id instead of the payload" implies.
+
+Also note for A2/A3 and any dock copy: R6-9 moved `HOLD_MS` 6s -> 12s
+chassis-wide. R7-2's own wording says "a ~6s dock". The RULING is unaffected —
+it rules the grammar, not the duration — but the prose is now stale and should
+not be copied into a skin comment as a live number.
+
+### R7-39 — task E RE-SCOPED. "Cricket's More sheet is empty" is a CHASSIS defect on six skins
+
+E was filed as "cricket's More sheet opens EMPTY at fidelity bands 0-1".
+Scouted, then re-verified by hand. The sheet is genuinely empty, but cricket is
+not the subject and the band is not the whole condition.
+
+**The mechanism.** `moreActions` (`pad-host.tsx:376-393`) walks
+`buildPadView(spec, ctx).panels` and drops any type that is `dedicated` (a tile
+claims it), `refused`, or already `seen`. Two filters upstream decide what
+reaches it at all: `view-model.ts:127-133` drops any action whose
+`spec.fidelity[type]` is undefined or `> ctx.band`, and `:180` drops any panel
+whose `phase` is not the current one. Whatever survives all of that is the More
+sheet's contents. It can legitimately be EMPTY.
+
+**The tile that opens it is pushed UNCONDITIONALLY.** `cricket.tsx:1507-1514`
+pushes `{id: "more", phases: ["live","post"], action: {sheet: MORE_SHEET_KEY}}`
+with no guard of any kind.
+
+**Cricket is not alone — measured across the skin directory:**
+
+    badminton  cricket  football  tabletennis  tennis  volleyball   more tile, NO guard
+    period-shared (hockey + icehockey)                              more tile, NO guard
+    generic                                                         GUARDED
+
+**One skin of the set guards it, and it is the one this wave wrote.** A1 gave
+generic `moreHasContent(view)` and gates the push on it (`generic.tsx:553`).
+Every skin that predates this wave offers the tile whatever the sheet will
+contain. So the defect is not "cricket forgot"; it is "the chassis never
+required it, and exactly one author noticed".
+
+**Cricket's own arithmetic, corrected.** At band 0 live, `innings.summary` (the
+only survivor) is claimed by the overSummary tile, leftover 0 — empty, matches.
+At band 1 live, `interruption`/`newball`/`powerplay` survive and NO tile claims
+any of them, so the sheet is NOT empty there: the original defect statement's
+"bands 0-1" is too loose for the live phase. The condition that holds at BOTH
+bands regardless of phase is the POST phase — cricket's only post-phase action
+is `player.line` at band 2 (`cricket.ts:2964-2969`), so at bands 0 and 1 the
+post-phase sheet is empty unconditionally while the tile still renders
+(`phases: ["live","post"]`). Recorded because the filed statement would have
+sent an implementer hunting a band filter in the live phase, where the bug is
+not.
+
+**RULING — fix it in the CHASSIS, not in cricket, and delete the skin-local
+guard rather than copying it five more times.** `pad-host.tsx` already computes
+`moreActionsList` (`:1271-1273`) from exactly the inputs that decide this, and
+the More tile is identifiable STRUCTURALLY by `action.sheet === MORE_SHEET_KEY`
+— no id-string matching, no per-skin opt-in. Suppressing the tile centrally
+when that list is empty fixes all seven skins in one change and makes the
+property unforgettable for the eighth.
+
+Copying `moreHasContent` into five more skins is the wrong shape for the
+reason this programme keeps paying for: it is a SECOND derivation of a fact the
+chassis already holds, and two paths to one fact drift
+(`reference_parallel_vocab_lookup_paths_drift`). Generic's copy should go with
+the fix, not survive beside it.
+
+**Coverage today: none, and not green-pinned either.**
+`skins/__tests__/cricket.test.ts:1136-1140` asserts the More tile is present,
+but its fixture pins `band: 3` (`:117`); `cricket-dispatch-totality.test.ts:208`
+and `pad-host.test.ts:452` call `moreActions` directly and also pin band 3. No
+test exercises band 0 or 1 for the tile grid at all. So this is a genuine gap
+rather than a defect held in place by an assertion — the fix needs new teeth at
+the chassis level, and they must be phase-aware, not band-only.
+
+### R7-40 — the A2 rework DROPS the move count. Owner decision owed, and the engine now declares a field nothing collects
+
+The rework is otherwise clean and independently re-verified (apps/web
+9861/13124 failed 0, tsc clean, lint 126/0 errors byte-identical to baseline,
+i18n 5731 keys; palette exactly R7-9a; halves tappable; dock scoped decisive
+vs drawn off `payload.winner === null`; gallery driving the v3 pad and
+capturing BOTH docks). One deviation, correctly flagged by the implementer
+rather than hidden, and it needs a ruling.
+
+**What was lost.** The v2 universal panel collected `moves` — the game length
+in plies, FIDE Art. 8.1's scoresheet number — through a `number` input beside
+the Method select. tapModel S's dock is CHIPS ONLY (`DockChip` has no slot for
+an arbitrary number), and R7-2 scopes the dock to Method. So the move count is
+now capturable NOWHERE in the pad, and `MOVES_MAX` was removed from the skin as
+an orphaned export.
+
+**Why it is worse than "a field went away".** The ENGINE still declares it, on
+BOTH panels: `boardgame.ts:416` and `:428` carry
+`{ kind: "number", path: "moves", min: 0, max: MOVES_MAX }`, and
+`boardgame.result`'s schema still has `moves` (`:140`, `:196`, `:246`). The
+whole `boardgame.result` type is dedicated by the tappable halves plus the draw
+tile, so it never reaches `moreActions` either — the field is DECLARED and
+UNREACHABLE, the exact shape this programme keeps calling an inert seam
+(`reference_declared_stat_model_can_be_inert`,
+`reference_column_read_everywhere_written_nowhere`).
+
+**And every gate is green on it.** 13124 tests, tsc, lint, i18n parity — none
+of them can see a padSpec field no skin collects. Recorded as another instance
+of the standing hazard, not as a new one.
+
+**There is no amend route either.** boardgame declares NO correction path
+(grep: zero hits for correction/amend in the skin). `skins/generic.tsx` has one
+(`CORRECTION_TILE_ID`, 4 references), so the precedent exists and boardgame
+simply does not use it.
+
+**RECOMMENDATION (product owner view), for the owner to accept or reject:**
+give boardgame the Correction path generic already has, and let `moves` be
+collected there. Reasons, in order:
+- It keeps R7-2 exactly as ruled. Tap decides, the dock enriches with Method,
+  and nothing is added to the hold window — a number entry inside a 12s
+  countdown is precisely the "race against a timer" R7-2 rejected.
+- It matches how the fact actually arrives. An arbiter knows the winner and the
+  method at the instant the game ends; the move count is read off the
+  scoresheet afterwards. An after-the-fact path is the honest home for it.
+- It reuses a shipped shape rather than inventing one, and it costs one tile.
+- The alternative — accepting the loss — is defensible (the move count affects
+  no result, standing or computation; it is provenance). But it should be
+  RULED, not absorbed silently, and if accepted the engine's two padSpec
+  declarations should go with it so nothing is left declared-and-inert.
+
+NOT actioned pending the ruling. The rework is otherwise ready to commit.
+
+Two smaller deviations, both accepted as recorded: the draw tile's span moved
+2 -> 4 (it is the sole live tile now that Result is the scorebug halves), and
+three now-unused dictionary keys (`sheet.result.winner.title`,
+`moves.title`, `moves.hint`) were left in all four locales rather than pruned.
+The three keys should be pruned WITH whichever way `moves` is ruled, not before.
+
+### R7-39a — CORRECTION to R7-39. The More sheet is not BLANK; it is a worded dead end
+
+Found while re-checking R7-39's premise before dispatching the work, prompted
+by the A2 reviewer noticing it. R7-39 (and task E as originally filed) says the
+More sheet "opens EMPTY". That overstates it.
+
+`action-form.tsx:417-418` renders, for `actions.length === 0`:
+
+    <p ...>{t("pad.host.moreEmpty")}</p>
+
+and `pad.host.moreEmpty` is "Nothing else to record here yet." The file's own
+doc calls this deliberate — "never a blank sheet — same 'worded, not blank'
+posture swap-sheet.tsx's own empty state takes".
+
+So the user does NOT see a broken blank panel. They see a tile, tap it, and get
+a sentence telling them there is nothing there.
+
+**The fix stays the same; its JUSTIFICATION changes, and so does its
+priority.** This is not a rendering bug — it is a tile that is guaranteed to be
+a dead end at a known phase/band, which is furniture by the same standard R7-1
+applied to every other surface in this wave. Suppressing it is still right, and
+the chassis is still the one honest place for it. But it is polish, not a
+defect, and it should be scheduled as polish.
+
+Two things this does NOT change:
+- generic's author (A1) independently judged the dead-end tile worth
+  suppressing, which is evidence the call is right.
+- the chassis is still the only place that knows, and copying the predicate
+  into five skins is still the wrong shape.
+
+Recorded because the original wording would have had an implementer hunting a
+blank-render bug that does not exist, and because the owner approved the fix
+against the stronger claim. Re-confirm before dispatch.

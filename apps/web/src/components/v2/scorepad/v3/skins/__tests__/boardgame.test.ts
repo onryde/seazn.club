@@ -2,6 +2,16 @@
 // `environment: "node"`, no jsdom): the skin is a spec BUILDER, so this file
 // asserts the specs it returns and leaves the DOM to the e2e/gallery layer.
 //
+// TAPMODEL S REWORK (owner ruling R7-2, "tap decides, dock enriches") — this
+// file used to prove tapModel T: pure-readout halves, three tiles, `dock()`
+// always null. It now proves the opposite shape: both halves ARE tappable
+// and commit `boardgame.result` immediately; the draw tile posts the same
+// event type directly (`winner: null`) rather than opening a sheet; and
+// `buildDock` offers DECISIVE_METHODS after a half tap and DRAWN_METHODS
+// after the draw tile, never one flat list of 13 (R7-10). See
+// `skins/boardgame.tsx`'s own header for the full ruling and why tapModel T
+// was considered and rejected.
+//
 // EVERY STATE HERE COMES OUT OF THE REAL FOLD — `foldClient(boardgame, ...)`
 // over real `EventEnvelope`s, and `boardgame.summary(state)` for the view's
 // own `summary`, never a hand-typed state literal. The one deliberate
@@ -32,10 +42,9 @@ import {
   DRAWN_METHODS,
   DRAW_TILE_ID,
   EVENT_BAND,
-  MOVES_MAX,
   PAIRING_TILE_ID,
   PAIRING_TYPE,
-  RESULT_TILE_ID,
+  RESULT_HINT_KEY,
   RESULT_TYPE,
   boardgameDetail,
   buildDock,
@@ -176,7 +185,7 @@ describe("resolvePhase", () => {
 });
 
 // ---------------------------------------------------------------------------
-// scorebug() — tapModel T, pure readouts
+// scorebug() — tapModel S. The halves decide.
 // ---------------------------------------------------------------------------
 
 describe("buildScorebug — the halves", () => {
@@ -195,9 +204,38 @@ describe("buildScorebug — the halves", () => {
     expect(assertScorebugSpec(spec)).toEqual([]);
   });
 
-  it("neither half is tappable — tapModel T, every action is a tile", () => {
-    const spec = buildScorebug(view(), t);
-    expect(spec.halves.every((h) => h.tappable === undefined && h.tapEvent === undefined)).toBe(true);
+  it("neither half is tappable before the match starts — nothing to decide yet", () => {
+    const spec = buildScorebug(view({ events: stream() }), t);
+    // `tappable` is always PRESENT (true/false), the same convention
+    // generic's own `buildHalf` takes (generic.test.ts: `tappable !== true`)
+    // — never omitted, unlike A2's tapModel-T halves.
+    expect(spec.halves.every((h) => h.tappable !== true && h.tapEvent === undefined)).toBe(true);
+  });
+
+  it("neither half is tappable once the fixture is already decided — a decided fixture records no more", () => {
+    const v = view({ events: stream(start(), result({ winner: "H", method: "checkmate" })) });
+    const spec = buildScorebug(v, t);
+    expect(spec.halves.every((h) => h.tappable !== true && h.tapEvent === undefined)).toBe(true);
+  });
+
+  it("both halves are tappable once live — tapModel S, a tap DECIDES (R7-2)", () => {
+    const spec = buildScorebug(view({ events: stream(start()) }), t);
+    expect(spec.halves.every((h) => h.tappable === true)).toBe(true);
+    expect(spec.halves[0].hintKey).toBe(RESULT_HINT_KEY);
+    expect(spec.halves[1].hintKey).toBe(RESULT_HINT_KEY);
+  });
+
+  it("a half's tap posts boardgame.result naming THIS side the winner, and nothing else, when no pairing card ever ran", () => {
+    const spec = buildScorebug(view({ events: stream(start()) }), t);
+    expect(spec.halves[0].tapEvent).toEqual({ type: RESULT_TYPE, payload: { winner: "H" } });
+    expect(spec.halves[1].tapEvent).toEqual({ type: RESULT_TYPE, payload: { winner: "A" } });
+  });
+
+  it("auto-attaches winnerPerson from the pairing card's own record — never re-asked, the tap alone decides", () => {
+    const v = view({ events: stream(pairing({ homePerson: "H1", awayPerson: "A1" }), start()) });
+    const spec = buildScorebug(v, t);
+    expect(spec.halves[0].tapEvent).toEqual({ type: RESULT_TYPE, payload: { winner: "H", winnerPerson: "H1" } });
+    expect(spec.halves[1].tapEvent).toEqual({ type: RESULT_TYPE, payload: { winner: "A", winnerPerson: "A1" } });
   });
 
   it("shows an em dash before any result is recorded", () => {
@@ -276,12 +314,22 @@ describe("buildScorebug — the context line", () => {
 });
 
 // ---------------------------------------------------------------------------
-// tiles() — one per padSpec action
+// tiles() — the pairing card, and, live, the draw tile only
 // ---------------------------------------------------------------------------
 
 const tileIds = (v: PadHostView): string[] => buildTiles(v, t).map((tile) => tile.id);
 const tileById = (v: PadHostView, id: string): TileSpec | undefined =>
   buildTiles(v, t).find((tile) => tile.id === id);
+
+/** The draw tile's own posted event, unpacked and type-narrowed once so
+ *  every call site below stays a plain object comparison. Throws loudly if
+ *  the tile is missing or not event-shaped, which is a fixture bug in the
+ *  test, never a value this file wants to compare against `undefined`. */
+function drawTileEvent(v: PadHostView): { type: string; payload: Record<string, unknown> } {
+  const action = tileById(v, DRAW_TILE_ID)?.action;
+  if (!action || !("event" in action)) throw new Error("draw tile is missing or not event-shaped");
+  return action.event as { type: string; payload: Record<string, unknown> };
+}
 
 describe("buildTiles — pre phase", () => {
   it("offers only the pairing card, span 4, at band 1+", () => {
@@ -294,20 +342,22 @@ describe("buildTiles — pre phase", () => {
     expect(tileIds(view({ band: 0 }))).toEqual([]);
   });
 
-  it("never offers the result or draw tile before the match starts", () => {
-    expect(tileIds(view({ band: 3 }))).not.toContain(RESULT_TILE_ID);
+  it("never offers the draw tile before the match starts", () => {
     expect(tileIds(view({ band: 3 }))).not.toContain(DRAW_TILE_ID);
   });
 });
 
 describe("buildTiles — live phase", () => {
-  it("offers Result and Draw side by side, span 2 each, at band 0 — a board game's terminal record ships free", () => {
+  it("offers only the draw tile, span 4, at band 0 — a decisive result now comes from the halves themselves", () => {
     const v = view({ band: 0, events: stream(start()) });
     const tiles = buildTiles(v, t);
-    expect(tiles.map((tile) => tile.id)).toEqual([RESULT_TILE_ID, DRAW_TILE_ID]);
-    for (const tile of tiles) expect(tile).toMatchObject({ span: 2, phases: ["live"] });
-    expect(tileById(v, RESULT_TILE_ID)?.action).toEqual({ sheet: RESULT_TILE_ID });
-    expect(tileById(v, DRAW_TILE_ID)?.action).toEqual({ sheet: DRAW_TILE_ID });
+    expect(tiles.map((tile) => tile.id)).toEqual([DRAW_TILE_ID]);
+    expect(tiles[0]).toMatchObject({ span: 4, phases: ["live"] });
+  });
+
+  it("the draw tile posts boardgame.result directly, winner: null — the one outcome no half tap can express", () => {
+    const v = view({ events: stream(start()) });
+    expect(tileById(v, DRAW_TILE_ID)?.action).toEqual({ event: { type: RESULT_TYPE, payload: { winner: null } } });
   });
 
   it("never re-offers the pairing card once the match has started", () => {
@@ -323,10 +373,14 @@ describe("buildTiles — post phase", () => {
 });
 
 // ---------------------------------------------------------------------------
-// The Result/Draw/Pairing tiles agree with the chassis: nothing is EVER left
-// for a More sheet, across both cfgs and every phase/band this skin can
-// reach — proven against the REAL `moreActions`, not assumed from reading
-// `padSpec`'s three panels and this skin's three tiles side by side.
+// The pairing tile, both tappable halves and the draw tile agree with the
+// chassis: nothing is EVER left for a More sheet, across both cfgs and every
+// phase/band this skin can reach — proven against the REAL `moreActions`,
+// not assumed from reading padSpec's panels and this skin's own tiles/halves
+// side by side. `dedicatedEventTypes` (pad-host.tsx) walks
+// `scorebug.halves[].tapEvent` as well as tile actions, so a tappable half
+// is exactly as load-bearing here as a tile — re-proved under the tapModel S
+// shape, not deleted.
 // ---------------------------------------------------------------------------
 
 function realMoreActions(v: PadHostView): string[] {
@@ -361,7 +415,8 @@ describe("the chassis's own More sheet never has anything left to offer", () => 
 });
 
 // ---------------------------------------------------------------------------
-// sheets()
+// sheets() — the pairing card only. The decisive/drawn result no longer
+// opens a sheet at all under tapModel S (see `boardgame.tsx`'s header).
 // ---------------------------------------------------------------------------
 
 describe("buildSheets — the pairing card", () => {
@@ -402,104 +457,16 @@ describe("buildSheets — the pairing card", () => {
       expect(boardStep.max).toBe(BOARD_MAX);
     }
   });
-});
 
-describe("buildSheets — the decisive result", () => {
-  it("asks who won, how, and the (optional) move count", () => {
-    const sheet = buildSheets(view({ events: stream(start()) }), t)[RESULT_TILE_ID]!;
-    expect(sheet.event).toBe(RESULT_TYPE);
-    expect(sheet.steps.map((s) => s.id)).toEqual(["winner", "method", "moves"]);
-  });
-
-  it("builds a bare winner when moves is left at 0 and no pairing card ever named a player", () => {
-    const sheet = buildSheets(view({ events: stream(start()) }), t)[RESULT_TILE_ID]!;
-    expect(sheet.buildPayload({ winner: "away", method: "resign", moves: "0" })).toEqual({
-      winner: "A",
-      method: "resign",
-    });
-  });
-
-  it("includes moves only when it is actually greater than zero", () => {
-    const sheet = buildSheets(view({ events: stream(start()) }), t)[RESULT_TILE_ID]!;
-    expect(sheet.buildPayload({ winner: "home", method: "checkmate", moves: "41" })).toEqual({
-      winner: "H",
-      method: "checkmate",
-      moves: 41,
-    });
-  });
-
-  it("auto-attaches winnerPerson from the pairing card's own record for the WINNING side — never re-asked", () => {
-    const v = view({ events: stream(pairing({ homePerson: "H1", awayPerson: "A1" }), start()) });
-    const sheet = buildSheets(v, t)[RESULT_TILE_ID]!;
-    expect(sheet.buildPayload({ winner: "home", method: "checkmate", moves: "0" })).toEqual({
-      winner: "H",
-      method: "checkmate",
-      winnerPerson: "H1",
-    });
-    expect(sheet.buildPayload({ winner: "away", method: "resign", moves: "0" })).toEqual({
-      winner: "A",
-      method: "resign",
-      winnerPerson: "A1",
-    });
-  });
-
-  it("the method step carries every DECISIVE method, and ONLY 'time' — the clock flag falling — carries the dismissal tone", () => {
-    const sheet = buildSheets(view(), t)[RESULT_TILE_ID]!;
-    const methodStep = sheet.steps.find((s) => s.id === "method");
-    expect(methodStep?.kind).toBe("choice");
-    if (methodStep?.kind === "choice") {
-      expect(methodStep.options.map((o) => o.id)).toEqual([...DECISIVE_METHODS]);
-      for (const option of methodStep.options) {
-        expect(option.tone, option.id).toEqual(option.id === "time" ? ["dismissal"] : undefined);
-      }
-      const time = methodStep.options.find((o) => o.id === "time");
-      expect(time?.label).toBe("method.time");
-    }
-  });
-
-  it("the moves step is bounded by the engine's own field", () => {
-    const sheet = buildSheets(view(), t)[RESULT_TILE_ID]!;
-    const movesStep = sheet.steps.find((s) => s.id === "moves");
-    expect(movesStep?.kind).toBe("number");
-    if (movesStep?.kind === "number") {
-      expect(movesStep.min).toBe(0);
-      expect(movesStep.max).toBe(MOVES_MAX);
-      expect(movesStep.initial).toBe(0);
-    }
-  });
-});
-
-describe("buildSheets — the drawn / no-result branch", () => {
-  it("asks how, and the move count — never a winner step, matching padSpec's own empty attribution list", () => {
-    const sheet = buildSheets(view(), t)[DRAW_TILE_ID]!;
-    expect(sheet.event).toBe(RESULT_TYPE);
-    expect(sheet.steps.map((s) => s.id)).toEqual(["method", "moves"]);
-    expect(sheet.buildPayload({ method: "agreement", moves: "0" })).toEqual({ winner: null, method: "agreement" });
-  });
-
-  it("carries every DRAWN method, none of them toned — no card, no flag, on this branch", () => {
-    const sheet = buildSheets(view(), t)[DRAW_TILE_ID]!;
-    const methodStep = sheet.steps.find((s) => s.id === "method");
-    expect(methodStep?.kind).toBe("choice");
-    if (methodStep?.kind === "choice") {
-      expect(methodStep.options.map((o) => o.id)).toEqual([...DRAWN_METHODS]);
-      expect(methodStep.options.every((o) => o.tone === undefined)).toBe(true);
-    }
-  });
-
-  it("includes moves only when greater than zero, same rule as the decisive branch", () => {
-    const sheet = buildSheets(view(), t)[DRAW_TILE_ID]!;
-    expect(sheet.buildPayload({ method: "repetition", moves: "88" })).toEqual({
-      winner: null,
-      method: "repetition",
-      moves: 88,
-    });
+  it("is the ONLY sheet this skin declares — the decisive/drawn result is a tap and a dock now, never a sheet", () => {
+    expect(Object.keys(buildSheets(view({ events: stream(start()) }), t))).toEqual([PAIRING_TILE_ID]);
   });
 });
 
 // ---------------------------------------------------------------------------
-// The seam, folded: every payload this pad can produce folds through the
-// REAL engine, both cfgs.
+// The seam, folded: every payload this pad can produce — the pairing sheet,
+// a half tap, the draw tile's own tap, and every method a dock chip can
+// mutate onto either — folds through the REAL engine, both cfgs.
 // ---------------------------------------------------------------------------
 
 describe("every payload this pad can produce folds through the real engine", () => {
@@ -516,21 +483,27 @@ describe("every payload this pad can produce folds through the real engine", () 
     }
   });
 
-  it("the decisive-result sheet's payload, across every method", () => {
+  it("a half tap's own payload, across every DECISIVE method a dock chip can mutate onto it", () => {
     const base = stream(start());
     for (const method of DECISIVE_METHODS) {
-      const sheet = buildSheets(view({ events: base }), t)[RESULT_TILE_ID]!;
-      const payload = sheet.buildPayload({ winner: "home", method, moves: "12" });
+      const v = view({ events: base });
+      const tapped = buildScorebug(v, t).halves[0]!.tapEvent!.payload;
+      const dock = buildDock(RESULT_TYPE, v, t, tapped)!;
+      const chip = dock.chips.find((c) => c.id === `method:${method}`)!;
+      const payload = chip.mutate(tapped);
       const folded = foldOne(DEFAULT_CFG, base, RESULT_TYPE, payload) as { outcome?: { kind?: string } };
       expect(folded.outcome?.kind, method).toBe("win");
     }
   });
 
-  it("the draw sheet's payload, across every drawn/no-result method", () => {
+  it("the draw tile's own payload, across every DRAWN method a dock chip can mutate onto it", () => {
     const base = stream(start());
     for (const method of DRAWN_METHODS) {
-      const sheet = buildSheets(view({ events: base }), t)[DRAW_TILE_ID]!;
-      const payload = sheet.buildPayload({ method, moves: "0" });
+      const v = view({ events: base });
+      const drawn = drawTileEvent(v).payload;
+      const dock = buildDock(RESULT_TYPE, v, t, drawn)!;
+      const chip = dock.chips.find((c) => c.id === `method:${method}`)!;
+      const payload = chip.mutate(drawn);
       const folded = foldOne(DEFAULT_CFG, base, RESULT_TYPE, payload) as { outcome?: { kind?: string } };
       // double_forfeit is the one drawn-branch method that folds to a
       // no_result rather than a draw (chess.md §7) — every other method here
@@ -539,7 +512,7 @@ describe("every payload this pad can produce folds through the real engine", () 
     }
   });
 
-  it("a full realistic sequence — pairing, then a decisive result naming the pairing card's own player", () => {
+  it("a full realistic sequence — pairing, then a half tap naming the pairing card's own player, enriched by a method chip", () => {
     const events = stream(
       // `white` on a REAL event payload is an ENTRANT id ("A"), never the
       // side label ("away") — unlike `sheet.buildPayload`'s own ANSWER map
@@ -548,9 +521,12 @@ describe("every payload this pad can produce folds through the real engine", () 
       start(),
     );
     const v = view({ events });
-    const sheet = buildSheets(v, t)[RESULT_TILE_ID]!;
-    const payload = sheet.buildPayload({ winner: "away", method: "checkmate", moves: "34" });
-    expect(payload).toEqual({ winner: "A", method: "checkmate", moves: 34, winnerPerson: "A1" });
+    const half = buildScorebug(v, t).halves[1]!; // away
+    expect(half.tapEvent).toEqual({ type: RESULT_TYPE, payload: { winner: "A", winnerPerson: "A1" } });
+    const dock = buildDock(RESULT_TYPE, v, t, half.tapEvent!.payload)!;
+    const chip = dock.chips.find((c) => c.id === "method:checkmate")!;
+    const payload = chip.mutate(half.tapEvent!.payload);
+    expect(payload).toEqual({ winner: "A", winnerPerson: "A1", method: "checkmate" });
     const folded = foldOne(DEFAULT_CFG, events, RESULT_TYPE, payload) as {
       outcome?: { kind?: string; winner?: string };
       colorOfHome?: string | null;
@@ -565,16 +541,69 @@ describe("every payload this pad can produce folds through the real engine", () 
 });
 
 // ---------------------------------------------------------------------------
-// dock() — always null; every fact is already a sheet step
+// dock() — RULING R7-2: tap decides, dock enriches. DECISIVE after a half
+// tap, DRAWN after the draw tile, never one flat list of 13 (R7-10).
 // ---------------------------------------------------------------------------
 
 describe("buildDock", () => {
-  it("returns null for both event types, with or without a payload", () => {
+  it("returns null for any event type other than boardgame.result", () => {
     const v = view();
-    expect(buildDock(RESULT_TYPE, v, t)).toBeNull();
-    expect(buildDock(RESULT_TYPE, v, t, { winner: "H", method: "checkmate" })).toBeNull();
     expect(buildDock(PAIRING_TYPE, v, t)).toBeNull();
     expect(buildDock(PAIRING_TYPE, v, t, { board: 1 })).toBeNull();
+    expect(buildDock("core.start", v, t, {})).toBeNull();
+  });
+
+  it("offers the DECISIVE method set for a half tap's payload (a string winner)", () => {
+    const dock = buildDock(RESULT_TYPE, view(), t, { winner: "H" });
+    expect(dock).not.toBeNull();
+    expect(dock!.chips.map((c) => c.id)).toEqual(DECISIVE_METHODS.map((m) => `method:${m}`));
+  });
+
+  it("offers the DRAWN method set for the draw tile's payload (winner: null) — NEVER the same list", () => {
+    const dock = buildDock(RESULT_TYPE, view(), t, { winner: null });
+    expect(dock).not.toBeNull();
+    expect(dock!.chips.map((c) => c.id)).toEqual(DRAWN_METHODS.map((m) => `method:${m}`));
+    // The defect R7-10 names by number: never one flat list of 13.
+    expect(dock!.chips.length).not.toBe(DECISIVE_METHODS.length + DRAWN_METHODS.length);
+    expect(dock!.chips.map((c) => c.id)).not.toEqual(DECISIVE_METHODS.map((m) => `method:${m}`));
+  });
+
+  it("falls back to the DECISIVE set when called with no payload at all — the common case, defensively", () => {
+    const dock = buildDock(RESULT_TYPE, view(), t);
+    expect(dock!.chips.map((c) => c.id)).toEqual(DECISIVE_METHODS.map((m) => `method:${m}`));
+  });
+
+  it("the title asks how the game ended, the same question either branch asks", () => {
+    const decisive = buildDock(RESULT_TYPE, view(), t, { winner: "H" })!;
+    const drawn = buildDock(RESULT_TYPE, view(), t, { winner: null })!;
+    expect(decisive.title).toBe("pad.boardgame.sheet.result.method.title");
+    expect(drawn.title).toBe(decisive.title);
+  });
+
+  it("every chip's label resolves through the real method vocabulary, with no separate labelText", () => {
+    const dock = buildDock(RESULT_TYPE, view(), t, { winner: "H" })!;
+    const time = dock.chips.find((c) => c.id === "method:time")!;
+    expect(time.label).toBe("method.time");
+    expect(time.labelText).toBeUndefined();
+  });
+
+  it("a chip's mutate rewrites ONLY method, preserving the rest of the held payload untouched", () => {
+    const dock = buildDock(RESULT_TYPE, view(), t, { winner: "H", winnerPerson: "H1" })!;
+    const chip = dock.chips.find((c) => c.id === "method:resign")!;
+    expect(chip.mutate({ winner: "H", winnerPerson: "H1" })).toEqual({
+      winner: "H",
+      winnerPerson: "H1",
+      method: "resign",
+    });
+  });
+
+  it("a second chip tap overwrites the first — the same 'a different chip wins' behaviour every dock in this chassis gives", () => {
+    const dock = buildDock(RESULT_TYPE, view(), t, { winner: "H" })!;
+    const first = dock.chips.find((c) => c.id === "method:checkmate")!;
+    const second = dock.chips.find((c) => c.id === "method:resign")!;
+    const afterFirst = first.mutate({ winner: "H" });
+    const afterSecond = second.mutate(afterFirst);
+    expect(afterSecond).toEqual({ winner: "H", method: "resign" });
   });
 });
 
@@ -659,12 +688,12 @@ describe("boardgameDetail", () => {
 // ---------------------------------------------------------------------------
 
 describe("registry", () => {
-  it("resolves boardgame to the v3 lane, and hands back a real, tapModel-T skin", () => {
+  it("resolves boardgame to the v3 lane, and hands back a real, tapModel-S skin", () => {
     const lane = resolvePad("boardgame", t);
     expect(lane.lane).toBe("v3");
     if (lane.lane === "v3") {
       expect(lane.skin.key).toBe("boardgame");
-      expect(lane.skin.tapModel).toBe("T");
+      expect(lane.skin.tapModel).toBe("S");
       expect(typeof lane.skin.phase).toBe("function");
     }
   });
@@ -691,12 +720,13 @@ describe("the engine surface this skin restates", () => {
     expect([...DRAWN_METHODS]).toEqual([...methodValues(drawn)]);
   });
 
-  it("MOVES_MAX and BOARD_MAX are the engine's own field bounds", () => {
+  // MOVES_MAX no longer lives in boardgame.tsx: `moves` was a guided-sheet
+  // step, and tapModel S's dock is chips only (`buildDock`'s own header) —
+  // the move count is not reachable from this grammar any more.
+  it("BOARD_MAX is the engine's own field bound", () => {
     const spec = realPadSpec(DEFAULT_CFG);
     const actions = spec.panels.flatMap((panel) => panel.actions);
-    const moves = actions.flatMap((a) => a.fields).find((f) => f.path === "moves") as { max?: number } | undefined;
     const board = actions.flatMap((a) => a.fields).find((f) => f.path === "board") as { max?: number } | undefined;
-    expect(moves?.max).toBe(MOVES_MAX);
     expect(board?.max).toBe(BOARD_MAX);
   });
 });
@@ -705,6 +735,35 @@ describe("vocabulary and copy", () => {
   it("both ribbon keys are REGISTERED, not merely translated", () => {
     for (const type of [RESULT_TYPE, PAIRING_TYPE]) {
       expect(PAD_LABEL_KEYS).toContain(ribbonKeyFor(type));
+    }
+  });
+
+  // The SAME gate for the scorebug HINT, and it is here because the first cut
+  // of this rework shipped without it. `padLabel()` (scorebug.tsx:228) looks
+  // the key up in PAD_LABEL_KEYS and falls back to printing the key ITSELF, so
+  // a hint present in all four dictionaries and in the generated key union
+  // still rendered `pad.boardgame.scorebug.result.hint` as visible text on
+  // BOTH halves of a live chess board. i18n parity, the union drift gate, tsc,
+  // lint and 13124 unit tests were all green on it; a 1280px screenshot is
+  // what caught it. badminton, table tennis, volleyball and generic each carry
+  // this same assertion — boardgame was the one model-S skin without it, which
+  // is exactly why it was the one that regressed.
+  it("every hintKey the scorebug emits is REGISTERED in PAD_LABEL_KEYS, not merely translated", () => {
+    const registered = new Set<string>(PAD_LABEL_KEYS);
+    const hints = new Set<string>();
+    for (const band of [0, 1, 2, 3] as const) {
+      for (const cfg of [DEFAULT_CFG, NO_COLORS_CFG]) {
+        for (const half of buildScorebug(view({ band, cfg, events: stream(start()) }), t).halves) {
+          if (half.hintKey !== undefined) hints.add(half.hintKey);
+        }
+      }
+    }
+    // Non-vacuous: a sweep that produced no tappable half at all would make
+    // the loop below assert nothing and still pass.
+    expect(hints.size).toBeGreaterThan(0);
+    expect(hints).toContain(RESULT_HINT_KEY);
+    for (const key of hints) {
+      expect(registered.has(key), `${key} is not in PAD_LABEL_KEYS — padLabel() will print the raw key`).toBe(true);
     }
   });
 
@@ -727,6 +786,16 @@ describe("vocabulary and copy", () => {
         seen.add(step.title);
         if (step.kind === "choice") for (const o of step.options) seen.add(o.label);
         if (step.kind === "number" && step.hintText) seen.add(step.hintText);
+      }
+    }
+    // The dock's own keys — its title, and every chip's label — for BOTH
+    // branches, since the chip set differs by branch (R7-10) and a sweep
+    // that only ever probed one would miss the other's method keys entirely.
+    for (const winner of ["H", null] as const) {
+      const dock = buildDock(RESULT_TYPE, v, recording, { winner });
+      if (dock) {
+        seen.add(dock.title);
+        for (const chip of dock.chips) seen.add(chip.label);
       }
     }
     // `boardgameDetail` is not called with `v` as its context — `named()`

@@ -3873,6 +3873,7 @@
   "pad.boardgame.ribbon.pairing": "Emparejamiento registrado",
   "pad.boardgame.ribbon.result": "Resultado registrado",
   "pad.boardgame.ribbon.white": "Blancas: {side}",
+  "pad.boardgame.scorebug.result.hint": "Toca para registrar al ganador",
   "pad.boardgame.scorebug.white": "Juega con blancas",
   "pad.boardgame.sheet.pairing.board.title": "Número de tablero",
   "pad.boardgame.sheet.pairing.white.title": "¿Quién juega con blancas?",

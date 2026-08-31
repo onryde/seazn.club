@@ -1,4 +1,4 @@
-// Boardgame SkinDefV3 — R7/A2, tapModel T. Converts `boardgame` to the v3
+// Boardgame SkinDefV3 — R7/A2, tapModel S. Converts `boardgame` to the v3
 // chassis (design of record `docs/superpowers/specs/2026-08-15-scoringpad-v3-
 // redesign-design.md` §2/§3). Replaces the universal renderer (`../../pad-
 // renderer.tsx` via `RESOLUTION_KIND.boardgame = "universal"`) as BOARDGAME'S
@@ -13,33 +13,44 @@
 // key)` incident this repo already paid for once
 // (`reference_v3_labeltext_and_default_t_threading.md`).
 //
-// TAP MODEL T, deliberately — NOT the S every other single-terminal-event
-// sport in this wave (generic's win_loss mode, badminton, tennis) took.
-// Every OTHER model-S sport's decisive event carries nothing beyond who won,
-// so a bare half tap already IS the whole record. Boardgame's own
-// `boardgame.result` carries three more facts an arbiter routinely knows the
-// instant the game ends — `method` (checkmate/resign/flag-fall/…), `moves`
-// (the scoresheet's own last-written number, FIDE Art. 8.1) and, once a
-// pairing card named one, `winnerPerson` — and this is a RARE, ONCE-PER-MATCH
-// event with no reason to rush a scorer into the ~6s dock hold window the way
-// a rally or a point does. A tap-then-dock design would make "who won" free
-// and "how" a race against a timer; a guided sheet asks all of it with no
-// clock running, which is the more honest reading of an arbiter's own
-// scoresheet. So the halves here are pure READOUTS (no `tappable`/`tapEvent`,
-// matching cricket's and football's own "provably unaffected" shape,
-// `pad-host.tsx`'s own doc) and every action is a TILE opening a SHEET.
+// TAP MODEL S — owner ruling R7-2: "tap DECIDES, dock enriches." A tap on a
+// player half commits `boardgame.result` IMMEDIATELY, naming that side the
+// winner; the ribbon reads the result in words with Undo; a ~6s dock then
+// offers Method (checkmate / resignation / timeout / agreement …) as
+// OPTIONAL enrichment — the result is the event, the method is a field on
+// it. Identical grammar to football's goal.
 //
-// THE THREE TILES MIRROR `padSpec(cfg)`'S OWN THREE ACTIONS, one tile each:
-// the pre-match pairing card, the decisive result, and the drawn/no-result
-// branch — the cricket ballAction/extraAction/wicketAction precedent, and the
-// same one `boardgame.ts`'s own padSpec comment names for why decisive/drawn
-// share one wire type. Nothing is left for a More sheet: every panel padSpec
-// declares is dedicated by a tile at the SAME phase padSpec declares it, so
-// `moreActions` (pad-host.tsx) has nothing to offer at any phase/band this
-// skin can reach — proven, not assumed, in `__tests__/boardgame.test.ts`.
+// THIS SHIPPED ONCE AS TAPMODEL T INSTEAD (every action a tile opening a
+// guided sheet, halves pure readouts, `dock()` always null), on the argument
+// that boardgame's own result carries more than a bare "who won" and is a
+// rare, once-per-match event with no reason to race a scorer against the ~6s
+// hold. THE OWNER CONSIDERED THAT ARGUMENT AND REJECTED IT (R7-2): "tap
+// arms, Method commits" breaks the foundation ruling that nothing records
+// slower than one tap, on the one sport where that ruling costs least, and a
+// slower sheet-gated path is not warranted just because the event happens
+// rarely — press-and-hold was rejected too, for inventing a gesture that
+// exists nowhere else in the product and is undiscoverable on touch. Recorded
+// here so nobody re-derives tapModel T a third time. The mis-tap exposure a
+// bare half tap carries is real and accepted, mitigated by Undo only.
 //
-// `dock()` ALWAYS RETURNS NULL — see `buildDock`'s own doc. Every fact a
-// dock could enrich is already a step in the sheet that opened the hold.
+// So: the halves ARE tappable (`tappable`/`tapEvent`, MODEL-S), each posting
+// `boardgame.result {winner: <this side>}` — plus `winnerPerson` when a
+// pairing card already named one, auto-attached and never re-asked, the same
+// D-15 reasoning `pairingSheet`'s own doc states. `buildDock` then offers the
+// DECISIVE method set as chips that `mutate` the held payload's `method`
+// field. The ½–½ / no-result branch has no "half" of its own to tap, so it
+// keeps ONE tile (`DRAW_TILE_ID`) that posts the same event type with
+// `winner: null` and opens a dock scoped to the DRAWN set instead — R7-10:
+// "R7-2's dock must offer the DECISIVE set after a half tap and the DRAWN
+// set after the ½–½ tile, never one flat list of 13." The pairing card stays
+// a guided SHEET, unchanged: R7-2 is a ruling about the RESULT event, and a
+// pre-match card with no clock running is not the surface it is about.
+//
+// Nothing is left for a More sheet: `PAIRING_TYPE` is dedicated by the
+// pairing tile, `RESULT_TYPE` by BOTH tappable halves and the draw tile
+// (`dedicatedEventTypes`, pad-host.tsx, walks `scorebug.halves[].tapEvent`
+// as well as tile actions) — proven, not assumed, against the real
+// `moreActions` in `__tests__/boardgame.test.ts`.
 //
 // `led` — SIDE-TO-MOVE / WHITE. `state.colorOfHome` defaults to "W" (home is
 // White) the moment `cfg.colors` is true, from `init()` onward, no pairing
@@ -49,7 +60,9 @@
 // (types.ts's own doc: the boolean is generic, the label is skin-supplied
 // prose, and racquet sports keep their own key precisely so one sport's key
 // never serves another). `colorOfHome === null` (colours off) renders it on
-// NEITHER half, ever.
+// NEITHER half, ever. Orthogonal to the tap grammar above: which side is TO
+// MOVE and which side just WON are two different facts, and this skin has
+// always shown the first as ambient context, not an answer to a tap.
 //
 // WHAT THIS SKIN DELIBERATELY DOES NOT DECLARE:
 //   - `swap()`. `positions.lineup = {size: 1, benchMax: 0}` (boardgame.ts) —
@@ -63,9 +76,9 @@
 //     say one sentence would be furniture.
 //   - `refusedEventTypes()`. Every phase rule this fold has is already a
 //     phase gate on `padSpec`'s own panels (`decideResult`'s `state.phase !==
-//     "live"` guard matches the "live"-only decisive/drawn panels exactly;
-//     `applyPairing`'s "pre" OR "live" guard is MORE permissive than the
-//     "pre"-only pairing panel, never less — the safe direction, and this
+//     "live"` guard matches the tappable-halves/draw-tile "live"-only gate
+//     exactly; `applyPairing`'s "pre" OR "live" guard is MORE permissive than
+//     the "pre"-only pairing panel, never less — the safe direction, and this
 //     skin follows padSpec's own narrower phase rather than widening past
 //     it). There is nothing here the chassis cannot already compute from
 //     `padSpec` alone.
@@ -76,6 +89,7 @@ import type { MessageKey } from "@/lib/messages";
 import { ENUM_VOCAB } from "@/lib/scoring-vocab";
 import {
   type ActivityDetailContext,
+  type DockChip,
   type DockSpec,
   type GuidedSheetSpec,
   type GuidedSheetStep,
@@ -87,7 +101,6 @@ import {
   type TileSpec,
   type WhoLine,
 } from "../types";
-import type { SportTone } from "../sport-theme";
 
 export type TFn = (key: string, vars?: Record<string, string | number>) => string;
 export type Side = "home" | "away";
@@ -122,11 +135,14 @@ function withinBand(eventType: string, band: FidelityBand): boolean {
 
 /**
  * `padSpec(cfg)`'s own decisive/drawn method vocabularies, restated because
- * `boardgame.ts` keeps them module-private — the same "restate, then prove
+ * `boardgame.ts` keeps them module-private (`DECISIVE_METHODS`/
+ * `DRAWN_METHODS`, boardgame.ts:378-385) — the same "restate, then prove
  * equal to the source of truth" posture badminton's `SANCTION_LEVELS` takes,
  * pinned equal to the real field's `values` in `__tests__/boardgame.test.ts`.
  * "adjudication" appears in both: an arbiter's discretionary ruling (FIDE
- * Art. 5.2) can go either way.
+ * Art. 5.2) can go either way. Consumed by `buildDock` below: a decisive
+ * half tap's dock offers exactly the first list, the draw tile's dock exactly
+ * the second, never one flat list of 13 (R7-10).
  */
 export const DECISIVE_METHODS: readonly string[] = [
   "checkmate",
@@ -147,10 +163,11 @@ export const DRAWN_METHODS: readonly string[] = [
   "double_forfeit",
 ];
 
-/** `boardgame.ts`'s own field sentinels (`MOVES_MAX`/`BOARD_MAX`), restated
- *  for the identical module-private reason `DECISIVE_METHODS` above states —
- *  pinned equal to `padSpec(cfg)`'s real field bounds in the test file. */
-export const MOVES_MAX = 400;
+/** `boardgame.ts`'s own field sentinel (`BOARD_MAX`), restated for the
+ *  identical module-private reason `DECISIVE_METHODS` above states — pinned
+ *  equal to `padSpec(cfg)`'s real field bound in the test file. (`MOVES_MAX`
+ *  does not live here any more: the move count was a guided-sheet step, and
+ *  tapModel S's dock is chips only — see `buildDock`'s own doc.) */
 export const BOARD_MAX = 200;
 
 // ---------------------------------------------------------------------------
@@ -273,7 +290,8 @@ function whiteSideOf(state: BoardgameStateShape): Side | null {
 }
 
 // ---------------------------------------------------------------------------
-// scorebug() — tapModel T. The halves are readouts; every action is a tile.
+// scorebug() — tapModel S. The halves decide; the White indicator is
+// ambient context, unrelated to the tap.
 // ---------------------------------------------------------------------------
 
 /** THE OFFICIAL SCORE, read off the engine's own `summary(state)` and never
@@ -287,6 +305,8 @@ function bigOf(view: PadHostView, state: BoardgameStateShape, side: Side): strin
   return typeof row?.line === "string" && row.line.length > 0 ? row.line : "—";
 }
 
+export const RESULT_HINT_KEY = "pad.boardgame.scorebug.result.hint";
+
 function buildHalf(view: PadHostView, state: BoardgameStateShape, side: Side, t: TFn): ScorebugHalf {
   const players = onFieldPlayers(view.squads, side);
   const isWhite = whiteSideOf(state) === side;
@@ -295,8 +315,35 @@ function buildHalf(view: PadHostView, state: BoardgameStateShape, side: Side, t:
     players.length > 0
       ? players.map((member) => ({ name: nameOf(view, member.personId, t), ...whiteFlag }))
       : [{ name: t(SIDE_LABEL[side]), ...whiteFlag }];
-  return { who, big: bigOf(view, state, side) };
-  // No `tappable`/`tapEvent` — tapModel T, see this file's header.
+  // "live" only — a decisive result before the match starts, or after one
+  // already decided it, is exactly the tap `decideResult`'s own phase guard
+  // refuses. `withinBand` is always true today (RESULT_TYPE is band 0 in
+  // EVERY fixture), kept for the same defensive-symmetry reason every other
+  // converted skin's own `tappable` gate keeps its band check.
+  const tappable = resolvePhase(view) === "live" && withinBand(RESULT_TYPE, view.band);
+  // SOLE-NAMED-PLAYER AUTO-SET — the same D-15 reasoning `pairingSheet`'s own
+  // doc states: a pairing card can only ever have named ONE person per side,
+  // so a tap stamps it straight onto the payload rather than asking again.
+  // Absent when no pairing card has run at all (`state.players` stays
+  // `undefined` until `applyPairing` sets it).
+  const winnerPerson = state.players?.[side];
+  return {
+    who,
+    big: bigOf(view, state, side),
+    tappable,
+    ...(tappable
+      ? {
+          hintKey: RESULT_HINT_KEY,
+          tapEvent: {
+            type: RESULT_TYPE,
+            payload: {
+              winner: entrantOf(state, side),
+              ...(winnerPerson !== undefined ? { winnerPerson } : {}),
+            },
+          },
+        }
+      : {}),
+  };
 }
 
 /** "Colours tracked / No colours", plus the board number once a pairing card
@@ -317,17 +364,19 @@ export function buildScorebug(view: PadHostView, t: TFn): ScorebugSpec {
     phase: resolvePhase(view),
     halves: [buildHalf(view, state, "home", t), buildHalf(view, state, "away", t)],
     // Nothing the two halves' own numbers/names cannot already say — see the
-    // ribbon (`boardgameDetail`) for where method/moves/board actually live.
+    // ribbon (`boardgameDetail`) for where method/board actually live.
     strip: [],
   };
 }
 
 // ---------------------------------------------------------------------------
-// tiles() — one per padSpec action, each opening its own sheet.
+// tiles() — the pairing card (a sheet, "pre" only) and, live, the ONE
+// outcome a half tap cannot express: a drawn/no-result game, which posts
+// `boardgame.result` directly (`winner: null`) exactly the way a half tap
+// posts its own `winner`, and opens the SAME dock, scoped to the DRAWN set.
 // ---------------------------------------------------------------------------
 
 export const PAIRING_TILE_ID = "pairing";
-export const RESULT_TILE_ID = "result";
 export const DRAW_TILE_ID = "draw";
 
 export function buildTiles(view: PadHostView, t: TFn): TileSpec[] {
@@ -345,20 +394,12 @@ export function buildTiles(view: PadHostView, t: TFn): TileSpec[] {
   }
   if (phase === "live" && withinBand(RESULT_TYPE, view.band)) {
     tiles.push({
-      id: RESULT_TILE_ID,
-      label: "pad.boardgame.action.result",
-      kind: "standard",
-      span: 2,
-      phases: ["live"],
-      action: { sheet: RESULT_TILE_ID },
-    });
-    tiles.push({
       id: DRAW_TILE_ID,
       label: "pad.boardgame.action.draw",
       kind: "standard",
-      span: 2,
+      span: 4,
       phases: ["live"],
-      action: { sheet: DRAW_TILE_ID },
+      action: { event: { type: RESULT_TYPE, payload: { winner: null } } },
     });
   }
   // `t` is threaded for symmetry with every other skin's `buildTiles` and to
@@ -370,20 +411,10 @@ export function buildTiles(view: PadHostView, t: TFn): TileSpec[] {
 
 // ---------------------------------------------------------------------------
 // sheets() — a METHOD of the view (rebuilt per render), the standing
-// convention every v3 skin's `sheets` takes. Unconditional: the TILES decide
-// visibility, these specs simply exist for whichever tile is open.
+// convention every v3 skin's `sheets` takes. The pairing card is the only
+// entry left: the decisive/drawn result no longer opens a sheet at all under
+// tapModel S — see this file's header.
 // ---------------------------------------------------------------------------
-
-/** The card code, as `SheetChoiceStep`'s `tone` — an ARRAY, the closed-
- *  vocabulary convention every toned step in this programme takes. Scoped to
- *  exactly ONE method: "time" is FIDE's flag fall, a literal clock event, and
- *  the one ending this palette's `dismissal` was picked to say
- *  (`../sport-theme.ts`'s own comment). Every other method — including the
- *  other forfeit-shaped one, `forfeit` itself — is a plain word with no card
- *  behind it, so it stays untoned. */
-function toneFor(method: string): readonly SportTone[] | undefined {
-  return method === "time" ? (["dismissal"] as const) : undefined;
-}
 
 /** The pre-match pairing card. `board` is always asked (a light, low-friction
  *  number step — most fixtures just accept "1"); `white` only when this
@@ -428,103 +459,57 @@ function pairingSheet(view: PadHostView, t: TFn): GuidedSheetSpec {
   };
 }
 
-/** The decisive result: who won, how, and (optionally) the move count.
- *  `winnerPerson` is auto-attached from the pairing card's own record for the
- *  winning side (`state.players`) — never re-asked, the identical D-15
- *  reasoning `pairingSheet` states, since a pairing card can only ever have
- *  named ONE person per side. */
-function resultSheet(view: PadHostView, t: TFn): GuidedSheetSpec {
-  const state = asState(view.state);
-  return {
-    event: RESULT_TYPE,
-    steps: [
-      {
-        id: "winner",
-        kind: "choice",
-        title: t("pad.boardgame.sheet.result.winner.title"),
-        options: SIDES.map((side) => ({ id: side, label: SIDE_LABEL[side] })),
-      },
-      {
-        id: "method",
-        kind: "choice",
-        title: t("pad.boardgame.sheet.result.method.title"),
-        options: DECISIVE_METHODS.map((method) => ({
-          id: method,
-          label: vocabKey("method", method) ?? method,
-          tone: toneFor(method),
-        })),
-      },
-      {
-        id: "moves",
-        kind: "number",
-        title: t("pad.boardgame.sheet.result.moves.title"),
-        initial: 0,
-        min: 0,
-        max: MOVES_MAX,
-        hintText: t("pad.boardgame.sheet.result.moves.hint"),
-      },
-    ],
-    buildPayload: (answers) => {
-      const winnerSide: Side = answers.winner === "away" ? "away" : "home";
-      const moves = Number(answers.moves ?? 0);
-      const winnerPerson = state.players?.[winnerSide];
-      return {
-        winner: entrantOf(state, winnerSide),
-        method: answers.method,
-        ...(moves > 0 ? { moves } : {}),
-        ...(winnerPerson !== undefined ? { winnerPerson } : {}),
-      };
-    },
-  };
-}
-
-/** Drawn or no-result. `winner` is always `null` — `decideResult` refuses a
- *  `winnerPerson` whenever it is, so this sheet never offers one, matching
- *  padSpec's own `drawnResultAction.attribution: []`. */
-function drawSheet(t: TFn): GuidedSheetSpec {
-  return {
-    event: RESULT_TYPE,
-    steps: [
-      {
-        id: "method",
-        kind: "choice",
-        title: t("pad.boardgame.sheet.result.method.title"),
-        options: DRAWN_METHODS.map((method) => ({ id: method, label: vocabKey("method", method) ?? method })),
-      },
-      {
-        id: "moves",
-        kind: "number",
-        title: t("pad.boardgame.sheet.result.moves.title"),
-        initial: 0,
-        min: 0,
-        max: MOVES_MAX,
-        hintText: t("pad.boardgame.sheet.result.moves.hint"),
-      },
-    ],
-    buildPayload: (answers) => {
-      const moves = Number(answers.moves ?? 0);
-      return { winner: null, method: answers.method, ...(moves > 0 ? { moves } : {}) };
-    },
-  };
-}
-
 export function buildSheets(view: PadHostView, t: TFn): Record<string, GuidedSheetSpec> {
-  return {
-    [PAIRING_TILE_ID]: pairingSheet(view, t),
-    [RESULT_TILE_ID]: resultSheet(view, t),
-    [DRAW_TILE_ID]: drawSheet(t),
-  };
+  return { [PAIRING_TILE_ID]: pairingSheet(view, t) };
 }
 
 // ---------------------------------------------------------------------------
-// dock() — always null. Every fact this sport's own result carries is
-// already a step in the sheet that opened the hold, and this is a rare,
-// once-per-match, terminal event with nothing time-pressured about it — the
-// same reasoning generic's win_loss mode states for declaring no dock at all.
-// `dock()` still fires after a sheet completes (`resolveDockSpec`,
-// pad-host.tsx, forwards the sheet-built payload the same way it would a tap)
-// so this is a real, exercised branch, not dead code.
+// dock() — RULING R7-2: tap decides, dock enriches.
+//
+// A half tap (or the draw tile) commits `boardgame.result` immediately with
+// nothing beyond `winner` — plus `winnerPerson` when a pairing card already
+// named one (`buildHalf`'s own auto-attach; never re-asked, the same D-15
+// reasoning `pairingSheet` states). The one thing worth enriching afterwards
+// is HOW the game ended, which `boardgame.ts` splits into two closed,
+// DISJOINT-BY-INTENT vocabularies (its own comment: "every decisive method
+// needs a winner; every drawn/no-result method needs none") — so a decisive
+// tap's dock must only ever offer `DECISIVE_METHODS`, and the draw tile's
+// only ever `DRAWN_METHODS`, never one flat list of 13 (R7-10). The held
+// payload's own `winner` is what tells the two apart here: a half tap's
+// payload always names a real entrant id; the draw tile's is the one place
+// this skin ever posts an explicit `winner: null`.
+//
+// A chip only ever REWRITES `method` on the held payload (`DockChip.mutate`
+// — the `mutateHeld` idiom `skins/generic.tsx`'s own `amountChip` documents,
+// and whose own header cites this same R7-2 ruling) and never posts a second
+// event — tapping a different method simply overwrites the last choice, so a
+// mis-tap is correctable for the whole ~6s hold, the same "repeat is
+// refused, a different chip wins" behaviour every other dock in this chassis
+// gives a scorer.
+//
+// No `moves` capture any more — R7-2's own words scope the dock to "Method
+// … as OPTIONAL enrichment" alone, and a dock's `chips: DockChip[]` shape
+// has no field for an arbitrary typed number in the first place (a "how many
+// moves" question would need 400 chips, not one). The move count this pad
+// used to ask for a guided sheet is not reachable from this grammar.
 // ---------------------------------------------------------------------------
+
+/** A method chip only ever rewrites `method` — the same bare-key convention
+ *  the old sheet's own `SheetChoiceStep.options[].label` used (every
+ *  `DECISIVE_METHODS`/`DRAWN_METHODS` member has a real `method.*`
+ *  dictionary entry; the `?? method` fallback is defensive symmetry with
+ *  `vocabText`'s own posture, not a path this skin's vocabulary ever
+ *  actually takes). No `labelText` needed: unlike a person's name or an
+ *  interpolated amount, a method label is a closed, already-registered key
+ *  the chassis resolves on its own (`detail-dock.tsx`: `chip.labelText ??
+ *  t(chip.label)`). */
+function methodChip(method: string): DockChip {
+  return {
+    id: `method:${method}`,
+    label: vocabKey("method", method) ?? method,
+    mutate: (payload) => ({ ...payload, method }),
+  };
+}
 
 export function buildDock(
   eventType: string,
@@ -532,11 +517,13 @@ export function buildDock(
   t: TFn,
   payload?: Record<string, unknown>,
 ): DockSpec | null {
-  void eventType;
   void view;
-  void t;
-  void payload;
-  return null;
+  if (eventType !== RESULT_TYPE) return null;
+  const methods = payload?.winner === null ? DRAWN_METHODS : DECISIVE_METHODS;
+  return {
+    title: t("pad.boardgame.sheet.result.method.title"),
+    chips: methods.map(methodChip),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -574,7 +561,10 @@ function resultDetail(ctx: ActivityDetailContext, state: BoardgameStateShape): s
   if (typeof winner !== "string") {
     // A drawn or no-result card — `method`'s own vocab text ("Draw by
     // agreement", "Double forfeit", …) already says which, so no extra word
-    // is minted here.
+    // is minted here. `moves` stays defensively handled (a payload from
+    // before this change, or any other producer, may still carry it) even
+    // though nothing in this file writes it any more — see `buildDock`'s
+    // own header.
     return join([method, moves]);
   }
   const side = sideOfEntrant(state, winner);
@@ -601,7 +591,7 @@ export function boardgameDetail(ctx: ActivityDetailContext): string | undefined 
 export function boardgameSkinV3(t: TFn): SkinDefV3<PadHostView> {
   return {
     key: SPORT,
-    tapModel: "T",
+    tapModel: "S",
     phase: resolvePhase,
     scorebug: (view) => buildScorebug(view, t),
     tiles: (view) => buildTiles(view, t),

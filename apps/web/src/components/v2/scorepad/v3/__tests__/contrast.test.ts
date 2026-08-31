@@ -929,43 +929,63 @@ describe("the tones are NON-TEXT colours, and this is where that stops being a c
     },
   );
 
-  // R7/A2 — boardgame, palette and skin landing in the SAME wave. Pinned
-  // EXPLICITLY, for the identical reason tennis's own block above states: the
-  // usage-driven licence a few blocks down can only hold a tone to the text
-  // floor once it finds that tone actually rendered as text, so a palette
-  // still needs its own explicit pin to bite on day one rather than on
-  // whatever later render happens to exercise it first.
+  // R7-9a (owner ruling, AMENDED values, 2026-08-31) — boardgame's palette,
+  // revised: `ink`/`led` both change value, and `caution`/`dismissal` are
+  // REMOVED outright ("chess has no card ladder"; carrying a card-code pair
+  // for a sport with no discipline events at all is "colour as decoration").
+  // This replaces the R7/A2 block that used to pin the two tones this ruling
+  // now deletes.
   //
-  // `dismissal` is the one that matters here — the "clock flag falls" method
-  // (`method: "time"`) is a WORD in the result sheet's method list
-  // (`skins/boardgame.tsx`'s `toneFor`), never a card swatch, so it owes the
-  // full 4.5 rather than football's 3:1 graphic licence. `caution` has no
-  // shipped use in this skin today (the six-token vocabulary is declared as a
-  // closed SET, not opted into piecemeal — `SPORT_TOKENS`'s own doc) but is
-  // pinned to the same floor regardless, so a later use starts pre-measured.
-  it("boardgame's tones clear the 4.5 floor on its own board and band, and its led/ink pair clear it too", () => {
+  // AN EXPLICIT HEX PIN, not just a floor — new here, and worth stating why.
+  // Every block in this file so far proves a value CLEARS WCAG; none of them
+  // proves it IS the number the owner actually ruled. `led` in particular was
+  // TUNED, not merely chosen (the ruling's own words: the true flag red
+  // `#e5484d` measured 4.40:1 on the board and 3.79:1 on the band — a FAIL,
+  // since `led` paints small text, not a graphic) — a future edit that
+  // renudges it to some OTHER legible-looking red would sail through every
+  // `toBeGreaterThanOrEqual(4.5)` in this file and still be wrong. Only a
+  // literal pin catches that class of drift.
+  it("boardgame's ink and led are EXACTLY the ruled hexes, and both clear 4.5:1 on board and band", () => {
+    expect(SPORT_PALETTES["boardgame"]).toMatchObject({ ink: "#efe9d8", led: "#f4767a" });
     const boardgame = resolveSportPalette("boardgame");
-    for (const tone of ["caution", "dismissal"] as const) {
-      const onBoard = contrastRatio(boardgame.board, boardgame[tone]);
-      expect(onBoard, `boardgame --sport-${tone} is ${onBoard.toFixed(2)}:1 on its own board`).toBeGreaterThanOrEqual(
-        4.5,
-      );
-      const onBand = contrastRatio(boardgame["board-2"], boardgame[tone]);
-      expect(onBand, `boardgame --sport-${tone} is ${onBand.toFixed(2)}:1 on its own band`).toBeGreaterThanOrEqual(
-        4.5,
-      );
-    }
-    expect(contrastRatio(boardgame.board, boardgame.led)).toBeGreaterThanOrEqual(4.5);
-    expect(contrastRatio(boardgame["board-2"], boardgame.led)).toBeGreaterThanOrEqual(4.5);
-    expect(contrastRatio(boardgame.board, boardgame.ink)).toBeGreaterThanOrEqual(4.5);
-    expect(contrastRatio(boardgame["board-2"], boardgame.ink)).toBeGreaterThanOrEqual(4.5);
+    const inkBoard = contrastRatio(boardgame.board, boardgame.ink);
+    const inkBand = contrastRatio(boardgame["board-2"], boardgame.ink);
+    const ledBoard = contrastRatio(boardgame.board, boardgame.led);
+    const ledBand = contrastRatio(boardgame["board-2"], boardgame.led);
+    // The ruling's own measured numbers (R7-9a): ink 14.22:1 / 12.24:1, led
+    // 6.34:1 / 5.46:1 — pinned to 2dp, not just floored past 4.5, which is
+    // the assertion a DIFFERENT-but-still-legible hex would not survive.
+    expect(inkBoard, "ink on board").toBeCloseTo(14.22, 2);
+    expect(inkBand, "ink on band").toBeCloseTo(12.24, 2);
+    expect(ledBoard, "led on board").toBeCloseTo(6.34, 2);
+    expect(ledBand, "led on band").toBeCloseTo(5.46, 2);
+    expect(inkBoard).toBeGreaterThanOrEqual(4.5);
+    expect(inkBand).toBeGreaterThanOrEqual(4.5);
+    expect(ledBoard).toBeGreaterThanOrEqual(4.5);
+    expect(ledBand).toBeGreaterThanOrEqual(4.5);
   });
 
-  // Same guard as the racquet family's own, immediately above: without this,
-  // deleting the boardgame entry would silently fall back to a complete,
-  // readable default palette and every assertion above would keep passing
-  // while the sport rendered in cricket's colours.
-  it("boardgame declares its OWN palette entry, so the pin above is measuring it and not the default fallback", () => {
+  // The omission is a RULING, not an absence of code, so it owes the same
+  // teeth a later silent re-add would slip past. `SPORT_PALETTES` is
+  // OVERRIDES ONLY (`Partial<SportPalette>`), so a future edit that
+  // reinstates `caution: "..."` here would satisfy every OTHER assertion in
+  // this file (the generic sweep above just measures whatever resolves) and
+  // go completely unnoticed without this.
+  it("boardgame declares NO caution and NO dismissal of its own — the closed vocabulary stays closed here", () => {
+    expect(SPORT_PALETTES["boardgame"]).not.toHaveProperty("caution");
+    expect(SPORT_PALETTES["boardgame"]).not.toHaveProperty("dismissal");
+    // Falls through to the shared default rather than rendering nothing —
+    // `resolveSportPalette`'s own documented fallback, exercised here so a
+    // future reader does not mistake "no override" for "no value at all".
+    expect(resolveSportPalette("boardgame").caution).toBe(DEFAULT_SPORT_PALETTE.caution);
+    expect(resolveSportPalette("boardgame").dismissal).toBe(DEFAULT_SPORT_PALETTE.dismissal);
+  });
+
+  // Same guard as the racquet family's own, above: without this, deleting the
+  // boardgame entry would silently fall back to a complete, readable default
+  // palette and every assertion above would keep passing while the sport
+  // rendered in cricket's colours.
+  it("boardgame declares its OWN palette entry, so the pins above are measuring it and not the default fallback", () => {
     expect(Object.keys(SPORT_PALETTES)).toContain("boardgame");
     expect(resolveSportPalette("boardgame").board).not.toBe(DEFAULT_SPORT_PALETTE.board);
   });

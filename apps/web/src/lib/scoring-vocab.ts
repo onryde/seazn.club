@@ -728,6 +728,16 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   // them, since every panel `padSpec` declares is dedicated by a tile.
   "pad.boardgame.ribbon.pairing",
   "pad.boardgame.ribbon.result",
+  // R7/A2 rework — tapModel S's own scorebug hint, on the identical
+  // `padLabel()`/PAD_LABEL_KEYS gate as every other model-S sport's
+  // (badminton, table tennis, tennis and generic all register theirs).
+  // The FIRST cut of this skin shipped the key in all four dictionaries
+  // and NOT here, so both halves of a live chess board printed the raw
+  // dotted key to the arbiter — parity, the generated union and 13124
+  // unit tests were all green on it, and a 1280 screenshot is what
+  // caught it. That is the third recurrence of the incident the
+  // tabletennis block below already documents.
+  "pad.boardgame.scorebug.result.hint",
 
   "pad.carrom.action.adjustCredit",
   "pad.carrom.action.adjustDeduct",

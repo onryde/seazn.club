@@ -152,7 +152,7 @@ describe("FOOTBALL keeps its own ring — the identity ruling, without the colla
     expect(SPORT_PALETTES.badminton!.led).toBe("#2fe0bd");
     expect(SPORT_PALETTES.tabletennis!.led).toBe("#ff9440");
     expect(SPORT_PALETTES.volleyball!.led).toBe("#4aa8ff");
-    expect(SPORT_PALETTES.boardgame!.led).toBe("#e0c56b");
+    expect(SPORT_PALETTES.boardgame!.led).toBe("#f4767a");
   });
 
   it("and every palette in the table declares a `led` of its own, which is what the scoped rule leans on", () => {

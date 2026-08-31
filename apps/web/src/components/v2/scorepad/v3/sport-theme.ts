@@ -427,46 +427,45 @@ export const SPORT_PALETTES: Readonly<Record<string, Partial<SportPalette>>> = O
   },
 
   /*
-   * BOARDGAME (R7/A2, owner-approved 2026-08-30). Deep aubergine board, with
-   * the clock-flag red spent on exactly one thing: FIDE's flag fall.
+   * BOARDGAME (R7-9a, owner ruling, AMENDED values, 2026-08-31). Board and
+   * board-2 are UNCHANGED from A2's own deep aubergine; `ink` and `led` both
+   * move, and `caution`/`dismissal` are REMOVED outright — this replaces
+   * A2's entry wholesale, not just the two tones it used to spend.
    *
    *   board       deep aubergine — a club table under a desk lamp, not a
    *               chessboard's own black-and-white (which the pieces already
    *               own; painting the BOARD in it would fight them)
    *   board-2     the band the halves and the context line sit on
-   *   led         side-to-move / White indicator — `state.colorOfHome`,
-   *               known from the first render (`init()` defaults home to
-   *               White), spent on the WhoLine the way every racquet sport
-   *               spends this token on the serve — one fact, nowhere else
-   *   caution     unused by this skin today (the closed six-token vocabulary
-   *               is declared as a set, per `SPORT_TOKENS`'s own doc, not
-   *               opted into token by token) — still pinned to the full text
-   *               floor below, so a later use starts already measured
-   *   dismissal   the clock FLAG FALLING — FIDE's `method: "time"`
-   *               (`method.time` = "Flag fall"), and ONLY that: a chess
-   *               arbiter's sheet has no card to raise, so this is not
-   *               football's swatch-only red wearing a new hex. It is a
-   *               WORD in the result sheet's method list (`toneFor`,
-   *               `skins/boardgame.tsx`), which is why it has to clear the
-   *               full 4.5 text floor rather than football's 3:1 graphic
-   *               licence.
-   *   ink         warm near-white, legible on both grounds
+   *   ink         buff of the light square — warm, and legible on both
+   *               grounds (14.22:1 / 12.24:1)
+   *   led         the analogue clock's FALLING FLAG — side-to-move/White,
+   *               `state.colorOfHome`, known from the first render (`init()`
+   *               defaults home to White), spent on the WhoLine the way
+   *               every racquet sport spends this token on the serve, one
+   *               fact, nowhere else. TUNED, not merely chosen: the true
+   *               flag red `#e5484d` measures 4.40:1 on the board and
+   *               3.79:1 on the band — a FAIL, since `led` paints small TEXT
+   *               (`.pad-led`'s own `color:`, globals.css), not a graphic —
+   *               while `#f4767a` clears AA text on both (6.34:1 / 5.46:1)
+   *               and still reads as a flag rather than pink.
    *
-   * CLOSEST SHIPPED BOARD: the default night `#150b36` (ΔE76 12.9 — the
-   * smallest gap of any pair checked, still comfortably clear of the ~8
-   * "reads as one colour" floor; football 31.1, tennis 15.1, badminton 22.8,
-   * table tennis 19.1, volleyball 16.0). Aubergine and the product's own
-   * night share a violet family by construction — both are dark, desaturated
-   * purples — so this is the nearest neighbour this palette was ever going
-   * to have, not a miss.
+   * `caution`/`dismissal` OMITTED, not merely unused: chess has no card
+   * ladder, and carrying a yellow/red pair for a sport with no discipline
+   * events at all is colour as decoration. Both tokens fall through to the
+   * shared default (`resolveSportPalette`'s own documented fallback) rather
+   * than being restated here — `__tests__/contrast.test.ts` pins the
+   * OMISSION itself, not just its consequence, so a later wave cannot
+   * silently reinstate either without a test noticing.
+   *
+   * min ΔE76 15.1, against tennis — the ruling's own note, and comfortably
+   * clear of the ~8 "reads as one colour" floor. Aubergine and the other six
+   * boards share no family by construction, so this was never close.
    */
   boardgame: {
     board: "#25142e",
     "board-2": "#33203d",
-    ink: "#f6f2f8",
-    led: "#e0c56b",
-    caution: "#f2a900",
-    dismissal: "#f4767a",
+    ink: "#efe9d8",
+    led: "#f4767a",
   },
 });
 

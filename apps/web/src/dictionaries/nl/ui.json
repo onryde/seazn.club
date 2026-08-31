@@ -3873,6 +3873,7 @@
   "pad.boardgame.ribbon.pairing": "Koppeling geregistreerd",
   "pad.boardgame.ribbon.result": "Uitslag geregistreerd",
   "pad.boardgame.ribbon.white": "Wit: {side}",
+  "pad.boardgame.scorebug.result.hint": "Tik om de winnaar vast te leggen",
   "pad.boardgame.scorebug.white": "Speelt met wit",
   "pad.boardgame.sheet.pairing.board.title": "Bordnummer",
   "pad.boardgame.sheet.pairing.white.title": "Wie heeft wit?",

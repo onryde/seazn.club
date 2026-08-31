@@ -201,6 +201,15 @@ const EXTRA_STATES = [
   //        only shape that shows both halves of the dock at once.
   "11-genericwinloss",
   "12-genericamenddock",
+  // R7/A2 rework (2026-08-31) — boardgame's tapModel S dock. `04-dock` (the
+  // shared capture) already shows the DECISIVE method set from a half tap;
+  // the draw tile posts the SAME event type with `winner: null` and must
+  // open a dock scoped to the DRAWN set instead (R7-10: "R7-2's dock must
+  // offer the DECISIVE set after a half tap and the DRAWN set after the
+  // ½–½ tile, never one flat list of 13") — a dock behind a tap that no
+  // capture opens is theatre, and none of the five shared states, nor
+  // 04-dock, ever reaches the draw tile at all.
+  "11-boardgamedrawndock",
 ] as const;
 type ExtraGalleryState = (typeof EXTRA_STATES)[number];
 
@@ -2909,38 +2918,96 @@ const SPORTS: GallerySport[] = [
       home: [{ fullName: `Gallery Boardgame Home ${tag}` }],
       away: [{ fullName: `Gallery Boardgame Away ${tag}` }],
     }),
-    // No e2e precedent exists anywhere in this repo for boardgame (confirmed
-    // by search) — this recipe was built entirely from two live capture
-    // attempts. The pad's own "Scoring" card has exactly two real actions,
-    // "Result" and "Draw / no result" (read off the captured "02-live"
-    // screenshot); BOTH open a panel (Method select + Moves text input,
-    // gated by `[data-role="confirm"]`, which stays disabled with "Fill in
-    // the required fields to continue" until both are set) rather than
-    // firing immediately — the first two live attempts (a blind generic
-    // prober, then an un-filled "Draw / no result" tap) both timed out on
-    // `waitForLedgerGrowth` for exactly that reason, confirmed by reading
-    // the failure screenshot each time rather than guessing again blind.
+    // R7/A2 rework (2026-08-31) — tapModel S. The recipe this replaces
+    // predated the v3 conversion entirely (no e2e precedent existed anywhere
+    // in this repo for boardgame; it was built from two live captures
+    // against the universal ActionForm renderer boardgame no longer uses at
+    // all): a "Result"/"Draw / no result" button pair, both opening a panel
+    // gated by `[data-role="confirm"]`. Under tapModel S a scoreboard half
+    // IS the result button (`v3/skins/boardgame.tsx`), exactly like
+    // generic's own win_loss mode and tennis — `scoreOne` mirrors those.
     scoreOne: async (page) => {
-      await pad(page).getByRole("button", { name: "Draw / no result", exact: true }).click();
-      await pad(page).getByLabel("Method").selectOption({ index: 1 });
-      // "Moves" is a plain move-COUNT (`input[type=number] min=0 max=400`),
-      // not a move-list string — verified live after a first attempt filled
-      // "1. e4 e5" into it and Playwright refused ("Cannot type text into
-      // input[type=number]").
-      await pad(page).getByLabel("Moves", { exact: true }).fill("40");
-      await pad(page).locator('[data-role="confirm"]').click();
+      await v3Half(page, "home").click();
     },
-    // Same panel shape, "Result" instead — filled with Method only and left
-    // unconfirmed (mirrors every other sport's dock: some fields set, the
-    // rest visibly incomplete, never submitted).
-    openDock: async (page) => {
-      const result = pad(page).getByRole("button", { name: "Result", exact: true });
-      if (!(await result.isVisible({ timeout: 3_000 }).catch(() => false))) return false;
-      await result.click();
-      const method = pad(page).getByLabel("Method");
-      if (!(await method.isVisible({ timeout: 3_000 }).catch(() => false))) return false;
-      await method.selectOption({ index: 1 });
+    // A decisive tap is TERMINAL — `decideResult` sets phase:"done"
+    // unconditionally (boardgame.ts:243) whether the winner is a side or
+    // `null` — so, unlike generic's/football's/tennis's own `openDock`
+    // (which reaches a FRESH dock with a second tap on the SAME fixture,
+    // because their sport keeps playing), the half `scoreOne` just tapped
+    // can never be retapped: by the time this runs, `away` is no longer a
+    // `button` at all (`v3Half`'s own locator doc — a half renders EITHER a
+    // button, or a plain div once it stops being tappable). A second, fresh,
+    // live fixture is the only way to show a dock still open.
+    openDock: async (page, fx, tag) => {
+      void fx;
+      const dockTag = `${tag}dk`;
+      const dk = await seedRosteredFixture(page.request, {
+        label: `Gallery Boardgame Dock ${dockTag}`,
+        sportKey: "boardgame",
+        variantKey: "classical",
+        entrantKind: "individual",
+        home: [{ fullName: `Gallery Boardgame Dock Home ${dockTag}` }],
+        away: [{ fullName: `Gallery Boardgame Dock Away ${dockTag}` }],
+        emitCoreStart: true,
+      });
+      await page.goto(await fixturePath(page.request, dk.fixtureId));
+      await v3Half(page, "home").click();
+      const dock = pad(page).locator('[data-role="v3-dock"]');
+      await expect(dock, "gallery(boardgame): a result tap must open the method dock").toBeVisible({
+        timeout: 10_000,
+      });
+      await expect(
+        dock.getByRole("button", { name: "Checkmate", exact: true }),
+        "gallery(boardgame): the decisive dock must offer the DECISIVE method set",
+      ).toBeVisible({ timeout: 4_000 });
       return true;
+    },
+    // v3's Detail Dock is a TIMED surface (closes itself HOLD_MS after the
+    // tap that opened it) — same risk generic's/football's/tennis's own
+    // docks carry, and the same fix: fail the capture rather than silently
+    // keep a `04-dock` photograph of a dock that already closed under a slow
+    // run.
+    dockProbe: async (page) => {
+      await expect(
+        pad(page).locator('[data-role="v3-dock"]'),
+        "gallery(boardgame): the dock closed before this width was captured — the 6s hold " +
+          "window elapsed mid-capture, so this PNG would have shown a different state to its siblings",
+      ).toBeVisible({ timeout: 5_000 });
+    },
+    captureExtra: async (page, dir, tag, measurements) => {
+      // 11-boardgamedrawndock — the OTHER method dock this skin builds (see
+      // EXTRA_STATES's own comment above for the full R7-10 citation). Its
+      // own fresh, live fixture: a decisive result is terminal, so neither
+      // the primary fixture (`scoreOne` already decided it) nor `openDock`'s
+      // own dock fixture (also now decided) can reach a "live" draw tile any
+      // more.
+      const drawTag = `${tag}dr`;
+      const dr = await seedRosteredFixture(page.request, {
+        label: `Gallery Boardgame Draw ${drawTag}`,
+        sportKey: "boardgame",
+        variantKey: "classical",
+        entrantKind: "individual",
+        home: [{ fullName: `Gallery Boardgame Draw Home ${drawTag}` }],
+        away: [{ fullName: `Gallery Boardgame Draw Away ${drawTag}` }],
+        emitCoreStart: true,
+      });
+      await page.goto(await fixturePath(page.request, dr.fixtureId));
+      await pad(page).getByRole("button", { name: "Draw / no result", exact: true }).click();
+      const drawDock = pad(page).locator('[data-role="v3-dock"]');
+      await expect(drawDock, "gallery(boardgame): the draw tile must open the method dock").toBeVisible({
+        timeout: 10_000,
+      });
+      await expect(
+        drawDock.getByRole("button", { name: "Draw by agreement", exact: true }),
+        "gallery(boardgame): the drawn dock must offer the DRAWN method set, not the decisive one",
+      ).toBeVisible({ timeout: 4_000 });
+      await captureState(page, dir, "11-boardgamedrawndock", "boardgame", measurements, async () => {
+        await expect(
+          drawDock,
+          "gallery(boardgame): 11-boardgamedrawndock must still show the drawn method dock",
+        ).toBeVisible({ timeout: 5_000 });
+      });
+      return ["11-boardgamedrawndock"];
     },
   },
 ];

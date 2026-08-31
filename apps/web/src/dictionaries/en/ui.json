@@ -3873,6 +3873,7 @@
   "pad.boardgame.ribbon.pairing": "Pairing recorded",
   "pad.boardgame.ribbon.result": "Result recorded",
   "pad.boardgame.ribbon.white": "White: {side}",
+  "pad.boardgame.scorebug.result.hint": "Tap to record the winner",
   "pad.boardgame.scorebug.white": "Playing White",
   "pad.boardgame.sheet.pairing.board.title": "Board number",
   "pad.boardgame.sheet.pairing.white.title": "Who has White?",

@@ -2756,6 +2756,7 @@ export type DictionaryKey =
   | "pad.boardgame.ribbon.pairing"
   | "pad.boardgame.ribbon.result"
   | "pad.boardgame.ribbon.white"
+  | "pad.boardgame.scorebug.result.hint"
   | "pad.boardgame.scorebug.white"
   | "pad.boardgame.sheet.pairing.board.title"
   | "pad.boardgame.sheet.pairing.white.title"

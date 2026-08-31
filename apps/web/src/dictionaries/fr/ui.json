@@ -3873,6 +3873,7 @@
   "pad.boardgame.ribbon.pairing": "Appariement enregistré",
   "pad.boardgame.ribbon.result": "Résultat enregistré",
   "pad.boardgame.ribbon.white": "Blancs : {side}",
+  "pad.boardgame.scorebug.result.hint": "Touchez pour enregistrer le vainqueur",
   "pad.boardgame.scorebug.white": "Joue les blancs",
   "pad.boardgame.sheet.pairing.board.title": "Numéro d'échiquier",
   "pad.boardgame.sheet.pairing.white.title": "Qui a les blancs ?",
