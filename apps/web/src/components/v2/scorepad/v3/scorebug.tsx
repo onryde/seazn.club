@@ -131,7 +131,13 @@ function HalfContent({ half, hintText }: { half: ScorebugHalf; hintText: string 
         className={`line-clamp-2 min-w-0 text-center app-display text-[13px] font-semibold tracking-wide ${NIGHT_TILE_CLASSES.creamText} sm:text-sm`}
       >
         {half.who.map((w, i) => (
-          <span key={i} className="inline-flex min-w-0 items-center gap-1 wrap-anywhere">
+          // NOT `inline-flex`: an inline-flex box is ATOMIC to the
+          // `-webkit-box` above, so `line-clamp-2` counted the whole span as
+          // ONE line and never clamped at all — the fix shipped inert, and
+          // the 320 capture still showed three lines of name. Plain inline
+          // text is what the clamp can actually count. The LED dot carries
+          // its own spacing now that there is no flex `gap`.
+          <span key={i} className="inline wrap-anywhere">
             {/* R5 — a SEPARATOR between names, found only by playing the pad.
              *  A doubles half renders one span per WhoLine with nothing but a
              *  6px `gap-x-1.5` between them, so two real names run together
@@ -155,7 +161,7 @@ function HalfContent({ half, hintText }: { half: ScorebugHalf; hintText: string 
             {w.serving && (
               <span
                 aria-hidden="true"
-                className={`h-1.5 w-1.5 shrink-0 rounded-full ${NIGHT_TILE_CLASSES.ledDot}`}
+                className={`mr-1 inline-block h-1.5 w-1.5 rounded-full align-middle ${NIGHT_TILE_CLASSES.ledDot}`}
               />
             )}
             {w.name}

@@ -273,21 +273,46 @@ describe("the scorebug who-line with a long unbroken name (R3/F)", () => {
     }
   });
 
-  it("gives the NAME itself a break opportunity, and lets its own box shrink — in BOTH halves", () => {
+  it("gives the NAME itself a break opportunity — in BOTH halves", () => {
     const all = enclosingClasses(html(), LONG_NAME);
     // The tappable <button> half and the plain <div> half each render the name.
     // Asserting only the first checked one element and read as covering two.
     expect(all.length, "both halves render the long name as a text node").toBe(2);
     for (const cls of all) {
-    expect(cls, "a flex item at min-width:auto cannot shrink below its longest word").toContain("min-w-0");
-    // `wrap-anywhere` (overflow-wrap: ANYWHERE), never `break-words`
-    // (overflow-wrap: break-word). Only `anywhere` reduces the box's
-    // MIN-CONTENT contribution, and the text inside an `inline-flex` span is
-    // an anonymous flex item whose own automatic minimum size is that
-    // contribution — so `break-words` left the browser rects byte-identical
-    // when this was first "fixed" with it, and only the 320px measurement
-    // caught that.
-    expect(cls, "an unbroken word never wraps without an overflow-wrap opportunity").toContain("wrap-anywhere");
+      // `wrap-anywhere` (overflow-wrap: ANYWHERE), never `break-words`
+      // (overflow-wrap: break-word). Only `anywhere` reduces the box's
+      // MIN-CONTENT contribution — `break-words` left the browser rects
+      // byte-identical when this was first "fixed" with it, and only the
+      // 320px measurement caught that.
+      expect(cls, "an unbroken word never wraps without an overflow-wrap opportunity").toContain("wrap-anywhere");
+    }
+  });
+
+  it("keeps the name span INLINE, or the two-line clamp above it is inert", () => {
+    // R7-28, and the reason that fix shipped dead the first time: an
+    // `inline-flex` span is an ATOMIC inline-level box to the `-webkit-box`
+    // that `line-clamp-2` establishes, so the clamp counted the whole span as
+    // one line and never fired — a 320 capture still showed three lines of
+    // name over a one-digit score while every gate stayed green. Plain inline
+    // text is what the clamp can count.
+    //
+    // `min-w-0` is deliberately NOT asserted here any more: it was load-
+    // bearing only while this span was a flex ITEM (automatic minimum size).
+    // An inline box has no such floor, and the who-block container below
+    // still carries it.
+    for (const cls of enclosingClasses(html(), LONG_NAME)) {
+      expect(cls, "inline-flex makes the clamp atomic, and therefore inert").not.toContain("inline-flex");
+    }
+  });
+
+  it("caps the who-block at two lines, and lets it shrink", () => {
+    // The SCORE is what this surface exists to show. Before the cap a long
+    // entrant name wrapped to three lines above a single digit and outweighed
+    // it. Selected by the clamp itself, which is the behaviour under test.
+    const blocks = [...html().matchAll(/<div[^>]*\sclass="([^"]*line-clamp-2[^"]*)"/g)];
+    expect(blocks.length, "both halves cap their who-block").toBe(2);
+    for (const block of blocks) {
+      expect(block[1], "the who-block must still shrink below its longest word").toContain("min-w-0");
     }
   });
 });

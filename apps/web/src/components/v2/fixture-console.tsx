@@ -19,7 +19,7 @@ import {
 import { ScoringErrorBoundary } from "@/components/v2/scoring-error-boundary";
 import { DeviceLinkPanel } from "@/components/v2/device-link-panel";
 import { PadSuspensionBanner } from "@/components/discipline/pad-suspension-banner";
-import { useMsg } from "@/components/i18n/dict-provider";
+import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { scoringErrorText, decidedOutcomeText, shootoutScoreFromDetail } from "@/lib/scoring-vocab";
 import { resolveSlotLabel } from "@/lib/slot-label";
 import { entrantDisplayName } from "@/lib/entrant-name";
@@ -513,6 +513,7 @@ export function FixtureConsole({
   // `resolvePad` throws for a key in neither registry, which must never take
   // the console down over a caption.
   const padT = (key: string, vars?: Record<string, string | number>) => msg(key as MessageKey, vars);
+  const padPlural = useMsgPlural();
   let activityDetail: ActivityDetailResolver | undefined;
   try {
     const lane = resolvePad(sport.key, padT);
@@ -521,6 +522,14 @@ export function FixtureConsole({
       activityDetail = (eventType, payload, history) =>
         skinDetail({
           t: padT,
+          // R7-28: the SECOND construction site of this context. `pad-host.tsx`
+          // builds one for the pad's own ribbon; this one feeds the page
+          // ledger, and the two drifted the moment `plural` was added to only
+          // one — the console's rows kept reading "1 pts" while the pad's
+          // ribbon read "1 pt". Any field added to `ActivityDetailContext`
+          // has to land in BOTH or the same row says two different things on
+          // one screen.
+          plural: padPlural,
           eventType,
           payload,
           history,
