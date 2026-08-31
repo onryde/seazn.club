@@ -63,6 +63,9 @@ function row(over: Partial<RegistrationListRow>): RegistrationListRow {
     roster_cap: 1,
     status: "confirmed",
     waitlist_position: null,
+    free_agent: false,
+    assigned_team_id: null,
+    assigned_team_name: null,
     amount_cents: 1500,
     refunded_cents: 0,
     currency: "usd",
@@ -89,6 +92,69 @@ describe("renderRegistrantKindCell — roster fill (task 4)", () => {
     const pair = textOf(renderRegistrantKindCell(row({ entrant_kind: "pair", roster_count: 2, roster_cap: 2 }), dict));
     expect(individual).not.toMatch(/\d+\/(\d+|∞)/);
     expect(pair).not.toMatch(/\d+\/(\d+|∞)/);
+  });
+});
+
+describe("renderRegistrantKindCell — a solo sign-up is not a team (RS009)", () => {
+  // A solo sign-up is stored with the DIVISION's entrant_kind, which on these
+  // divisions is 'team'. The team branch therefore rendered "Team · 1/23" for
+  // one person: it called them a team, and drew a roster meter for a roster
+  // they do not have — the 1 was their own player row and the 22 empty places
+  // belonged to whichever team might later take them.
+  //
+  // Found by reading the shipped table, not by a test. Every assertion in
+  // this file was about entrant_kind, and entrant_kind was correct.
+  it("says solo sign-up, not Team", () => {
+    const text = textOf(
+      renderRegistrantKindCell(
+        row({ entrant_kind: "team", free_agent: true, roster_count: 1, roster_cap: 23 }),
+        dict,
+      ),
+    );
+    expect(text).toContain("Solo sign-up");
+    expect(text).not.toContain("Team");
+  });
+
+  it("shows no roster meter — they have no roster", () => {
+    const text = textOf(
+      renderRegistrantKindCell(
+        row({ entrant_kind: "team", free_agent: true, roster_count: 1, roster_cap: 23 }),
+        dict,
+      ),
+    );
+    expect(text).not.toMatch(/\d+\/(\d+|∞)/);
+  });
+
+  it("says who they are waiting for, or which team they are on", () => {
+    const waiting = textOf(
+      renderRegistrantKindCell(
+        row({ entrant_kind: "team", free_agent: true, assigned_team_name: null }),
+        dict,
+      ),
+    );
+    expect(waiting).toContain("Waiting for a team");
+
+    const placed = textOf(
+      renderRegistrantKindCell(
+        row({ entrant_kind: "team", free_agent: true, assigned_team_name: "Riverside Rovers" }),
+        dict,
+      ),
+    );
+    expect(placed).toContain("Riverside Rovers");
+    expect(placed).not.toContain("Waiting for a team");
+  });
+
+  it("leaves an ordinary team entry alone", () => {
+    // The guard must be narrow: free_agent, not entrant_kind. Without this a
+    // change that swallowed every team row would pass the three above.
+    const text = textOf(
+      renderRegistrantKindCell(
+        row({ entrant_kind: "team", free_agent: false, roster_count: 5, roster_cap: 7 }),
+        dict,
+      ),
+    );
+    expect(text).toContain("5/7");
+    expect(text).not.toContain("Solo sign-up");
   });
 });
 

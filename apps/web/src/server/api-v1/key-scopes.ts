@@ -265,6 +265,22 @@ const RULES: RouteRule[] = [
   { method: "POST", path: "/registrations/:id/reject", scope: "manage", pin: "registration" },
   { method: "POST", path: "/registrations/:id/promote", scope: "manage", pin: "registration" },
 
+  // RS009 — placing a pooled solo sign-up onto a team, and taking them off
+  // again. Same family as approve/promote/withdraw above: roster state
+  // transitions, not a discretionary money amount, so `manage` rather than
+  // excluded. Assignment moves no money on its own — the registrant paid at
+  // their own submit — which is what keeps it out of the refund exclusion.
+  { method: "POST", path: "/registrations/:id/assign", scope: "manage", pin: "registration" },
+  { method: "POST", path: "/registrations/:id/unassign", scope: "manage", pin: "registration" },
+  // `manage` DESPITE being a GET, deliberately. This list exists only to feed
+  // the assign write, and the route itself requires "write" resource auth for
+  // the same reason: READ_ROLES here includes `viewer`, and RS005's close note
+  // records that widening this hub to viewers silently promoted every
+  // unconditional control on it into one a read-only role could press. A
+  // read-scoped key must not reach it either, or the key surface reopens
+  // exactly what the route closed.
+  { method: "GET", path: "/registrations/:id/assign-targets", scope: "manage", pin: "registration" },
+
   // cross-division schedule ops (org-wide bodies — unpinnable)
   { method: "POST", path: "/schedule/clear", scope: "manage" },
   { method: "POST", path: "/schedule/shift", scope: "manage" },

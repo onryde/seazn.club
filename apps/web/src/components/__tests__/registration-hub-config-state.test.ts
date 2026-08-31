@@ -26,6 +26,7 @@ const RESPONSE: RegistrationSettingsResponse = {
   closes_at: "2026-02-01T00:00:00Z",
   capacity: 32,
   fee_cents: 1500,
+  free_agent_fee_cents: null,
   currency: "usd",
   refund_lock_at: "2026-01-20T00:00:00Z",
   form_fields: FORM_FIELDS,
@@ -132,7 +133,24 @@ describe("toRegistrationSettingsPutBody — full replace hazard", () => {
     payment_instructions: "Bank transfer to club account.",
     approval: "manual",
     allow_free_agents: true,
+    free_agent_fee_cents: 500,
   };
+
+  // The hazard this file is named for cuts BOTH ways, and only one direction
+  // was covered. `toEqual` below catches a field that should not be sent; it
+  // cannot catch one that SHOULD be and is not, because the expectation is
+  // hand-written beside the code it checks. RS009 added
+  // free_agent_fee_cents to the endpoint and to the panel state and did not
+  // add it here — every save then wrote NULL over whatever price the
+  // organiser had set, silently re-opening the double-charge V388 exists to
+  // close. Derived from the server schema instead, so the next field cannot
+  // be forgotten the same way.
+  it("sends exactly the keys PutRegistrationSettings declares — no more, none missing", async () => {
+    const { PutRegistrationSettings } = await import("@/server/api-v1/schemas");
+    const declared = Object.keys(PutRegistrationSettings.shape).sort();
+    const sent = Object.keys(toRegistrationSettingsPutBody(FULL_STATE)).sort();
+    expect(sent).toEqual(declared);
+  });
 
   it("sends every PutRegistrationSettings field the endpoint accepts", () => {
     const body = toRegistrationSettingsPutBody(FULL_STATE);
@@ -149,6 +167,7 @@ describe("toRegistrationSettingsPutBody — full replace hazard", () => {
       payment_instructions: "Bank transfer to club account.",
       approval: "manual",
       allow_free_agents: true,
+      free_agent_fee_cents: 500,
     });
   });
 
@@ -202,6 +221,7 @@ describe("validateConfigState", () => {
     closes_at: "2026-02-01T00:00:00.000Z",
     capacity: 32,
     fee_cents: 1500,
+    free_agent_fee_cents: null,
     refund_lock_at: null,
     form_fields: [{ key: "shirt_size", label: "Shirt size", kind: "text", required: true }],
     payment_method: "offline",

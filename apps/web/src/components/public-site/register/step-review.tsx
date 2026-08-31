@@ -10,7 +10,7 @@
 import { useT } from "@/components/i18n/dict-provider";
 import { formatMinor, type Currency } from "@/lib/currency";
 import { entryDisplayName, UNNAMED_KEY } from "./entry-cart";
-import { payableDivision, type CartSummary } from "./cart";
+import { payableDivision, type CartSummary, lineFeeCents } from "./cart";
 
 export function StepReview({ summary, locale }: { summary: CartSummary; locale: string }) {
   const t = useT();
@@ -31,12 +31,16 @@ export function StepReview({ summary, locale }: { summary: CartSummary; locale: 
       <ul className="mt-4 space-y-2.5">
         {summary.lines.map(({ entry, division, waitlisted, staleClosed }) => {
           const name = entryDisplayName(entry);
+          // `lineFeeCents`, not `division.fee_cents` — a solo sign-up is
+          // charged the division's solo price, and reading the team fee here
+          // quoted one number on screen while Stripe asked for another.
+          const lineFee = division == null ? null : lineFeeCents(entry, division);
           const feeLabel =
-            division == null
+            division == null || lineFee == null
               ? null
-              : division.fee_cents === 0
+              : lineFee === 0
                 ? t("register.entries.free")
-                : formatMinor(division.fee_cents, division.currency as Currency, locale);
+                : formatMinor(lineFee, division.currency as Currency, locale);
           return (
             <li key={entry.id} className="rounded-lg border border-zinc-200 bg-canvas p-3">
               <div className="flex flex-wrap items-start justify-between gap-2">

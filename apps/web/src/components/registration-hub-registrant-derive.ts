@@ -205,6 +205,13 @@ export interface RegistrantActionFlags {
   canResend: boolean;
   /** RS007 finding #16 — see the block comment below. */
   canRefund: boolean;
+  /** RS009 — a solo sign-up still in the pool can be placed on a team. */
+  canAssign: boolean;
+  /** RS009 — a placed solo sign-up can be returned to the pool, until the
+   *  division starts. Gated on `division_started` rather than shown-and-
+   *  refused, for the same reason `canApprove` reads the division's LIVE fee:
+   *  a control the server will refuse is worse than no control. */
+  canUnassign: boolean;
 }
 
 /**
@@ -324,6 +331,9 @@ export function deriveRegistrantActionFlags(
     | "refunded_cents"
     | "payment_intent_id"
     | "division_fee_cents"
+    | "free_agent"
+    | "assigned_team_id"
+    | "division_started"
   >,
 ): RegistrantActionFlags {
   const awaitingManualDecision =
@@ -352,5 +362,22 @@ export function deriveRegistrantActionFlags(
     canMarkPaid: awaitingOfflineFee,
     canResend: nonTerminal,
     canRefund: row.payment_intent_id !== null && row.amount_cents - row.refunded_cents > 0,
+    // A solo sign-up (an entry with no roster of its own) is the only kind of
+    // row that can be placed on a team. `assigned_team_id` is derived from
+    // the roster row pointing back at this entry, so these two flags are
+    // mutually exclusive by construction and cannot both be true.
+    // `waitlisted` is not terminal, so `nonTerminal` alone would offer Assign
+    // on an entry that holds no capacity spot and was charged nothing — the
+    // server refuses it, and a control the server refuses is worse than no
+    // control (the same rule canApprove follows for the division's live fee).
+    // Only a confirmed or paid entry may be seated — a pending one has not
+    // paid, and assign is not a payment path. Mirrors assignSoloSignUp's own
+    // refusal so the control is never offered where the server refuses.
+    canAssign:
+      row.free_agent &&
+      row.assigned_team_id === null &&
+      nonTerminal &&
+      (row.status === "confirmed" || row.status === "paid"),
+    canUnassign: row.free_agent && row.assigned_team_id !== null && !row.division_started,
   };
 }

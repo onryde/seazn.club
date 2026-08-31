@@ -15,6 +15,15 @@ After RS003 two lanes are file-disjoint and may run in either order or
 interleaved: **org lane** RS004 → RS005 → RS009, **public lane** RS006 → RS007
 → RS008. RS010 is last, after both lanes.
 
+**RS012** was scoped on 2026-08-30, during RS009, and is NOT part of the
+original redesign set. It depends on RS009 and is file-disjoint from
+RS010/RS011 in its usecase layer but NOT in its UI, so it runs after RS009
+merges. It carries one VERIFIED money-adjacent defect (a solo sign-up
+consumes a team's capacity slot and never releases it) and one product gap
+(the pool promises nothing and has no exit). **Two owner rulings are owed
+before any RS012 code**: what `capacity` counts, and what happens to a
+registrant nobody ever placed.
+
 **RS011** (organiser-side eligibility gates, re-homed from the scoringpad-v2
 `L1`/#412 on 2026-08-17) depends only on RS002 and is file-disjoint from
 RS004–RS009, so it runs alongside either lane, before RS010. It writes
@@ -35,6 +44,7 @@ prompts dir) also writes — those two are **sequential, never parallel**.
 | RS009 | `RS009-free-agents.md` | RS005, RS003 | TODO |
 | RS011 | `RS011-organiser-eligibility-gates.md` | RS002 | TODO — issue #412, re-homed from `L1` |
 | RS010 | `RS010-closeout-e2e-smoke-help.md` | all | TODO |
+| RS012 | `RS012-solo-signup-pool-promises.md` | RS009 | TODO — scoped 2026-08-30 from what RS009 exposed. **Both owner rulings taken 2026-08-31** and written into the prompt: capacity counts TEAM ENTRIES with a derived pool bound; unplaced solo sign-ups are auto-refunded and withdrawn at the place-by date |
 
 Public registration was **intentionally down** between the RS001 and RS006
 merges (owner-accepted; prod has zero registration usage). That window
@@ -3968,3 +3978,309 @@ owes at the same closeout point.
 **Not done, and why:** no rebase onto current `origin/main` (matches the
 first review-fixes wave's own note — out of scope for a review-fix pass);
 no new PR (updates the existing PR #682 branch in place, per the dispatch).
+
+### RS009 (2026-08-30) — branch `feat/rs009-free-agents`, session open
+
+Rulings taken at session open, before any code.
+
+**Owner rulings (2026-08-30):**
+
+1. **A solo sign-up must not pay the full per-team fee.** Found before
+   writing anything: `registration-submit.ts:691` is
+   `const feeCents = waitlisted ? 0 : live.fee_cents` with **no
+   free-agent branch**, so a lone player entering a £60-per-team
+   division pays £60 — and once RS009 assigns them onto a team that
+   also paid £60, the organiser has collected twice for one roster of
+   eight. Nobody chose this; it fell out of RS002/RS006. Owner chose a
+   new nullable `registration_settings.free_agent_fee_cents`, **null =
+   fall back to `fee_cents`**, so every existing division keeps
+   today's behaviour and no backfill is owed. This widens RS009 past
+   its brief into the RS004 settings panel, the stepper's line items,
+   `api-v1/schemas.ts` + `openapi:gen`, and 4 dictionaries — asked and
+   approved before starting, per `_RULES.md` §1.
+2. **Assignment notifies, but nobody gets a veto.** The solo sign-up
+   and the receiving captain are both emailed; neither can block it.
+   Reason: entering the pool IS the request to be placed, and
+   declining is already expressible as `withdraw`. Rejected: a
+   pending-acceptance state (adds a new status, an expiry question,
+   and a roster that reads `6/7` with a seventh maybe-coming).
+
+**The user-facing word is "solo sign-up", never "free agent".**
+`reg.hub.row.freeAgents` is already `"Solo sign-ups"` and
+`register.entries.cart.freeAgentBadge` is `"Solo sign-up"` — RS005
+ruled the two vocabularies confusing when they sat three keys apart.
+`free_agent` / `allow_free_agents` remain the column and API names.
+
+**RS009 is delivering on a promise already live in production.**
+`register.details.freeAgent.note` tells the registrant, today, "the
+organiser will assign you to a team once one has space." There has
+never been any way for an organiser to do that. The status page also
+says nothing back, so the promise has had no receipt.
+
+**FALSE PREMISE — a scout sweep reported RS008 does not touch
+`registrations.ts`. It does.** The RS008 session, asked directly,
+confirmed **+217 lines** in `registrations.ts` and **+21** in
+`registration-submit.ts` (read-path name masking + claim-invite
+wiring). The sweep concluded "RS008's claim/consent code lives in
+`person-claims.ts`, so no usecase-file collision" — true of where the
+NEW code lives, false about what the branch edits. Lesson: for a
+collision check against a branch that is still being written, ask the
+session for its `git diff --stat`; a sweep can only see what has been
+committed, and reads a mid-flight branch as smaller than it is.
+
+**Cross-session contract with RS008 (agreed 2026-08-30):**
+
+- RS008 owns `register/status/entry-card.tsx` and `view-model.ts`
+  outright; RS009 does not open either file before RS008 merges.
+- **Flyway: RS008 takes no migration (confirmed zero new files under
+  `db/migration/deltas/` in its diff); RS009 takes V388.** High-water
+  is V387. This programme has already shipped two duplicate V367s
+  through a *clean* rebase, so the number is agreed out loud rather
+  than inferred.
+- RS008 ships `register.status.entry.awaitingTeam` only; RS009 owns
+  `assignedToTeam`, because its derivation needs the
+  `source = 'organiser_assigned'` value V388 introduces and RS008
+  should not duplicate a schema decision it does not own.
+
+**A DEFECT WITH A FUSE — RS009 owns closing it, and its PR does not
+merge with it open.** RS008's `awaitingTeam` is gated on
+`registrations.free_agent` alone. That is correct *today*, because
+nothing can assign a solo sign-up. It becomes a **lie the moment RS009
+merges**: `free_agent` records how an entry was ENTERED, not where it
+ended up, so an assigned player's status page would read "Waiting for
+a team" forever — contradicting the assignment email they just
+received. Same class as #20 (one card, two stories). Narrowing that
+gate ships in RS009's follow-up commit alongside `assignedToTeam`,
+after RS008 merges. Written here so it survives either session
+compacting.
+
+**Entry conditions verified at open (not assumed):**
+
+- `organiser_assigned` exists in **neither** the DB CHECK
+  (`V363__registration_groups_players.sql:185`) nor the TS union
+  (`registrations.ts:352`), and there is **no zod enum for
+  `registration_players.source` anywhere** — so those two sites are
+  the whole truth, and nothing catches updating only one of them.
+- `joinExistingEntrant` (`registrations.ts:973-1000`) carries a
+  docstring naming RS009 as its intended caller. The
+  assign-onto-materialised path is an extraction, not new code.
+- Roster fill has one source: `rosterCapExpr`
+  (`registrations.ts:4611-4616`), repointed by RS005 W1b
+  (`008b3da27`). Hand-copying the expression into the picker is the
+  fork.
+- The join path's lock is
+  `select status, free_agent, entrant_id from registrations where id = ${reg.id} for update`
+  (`registration-submit.ts:1117`). Assign takes the same one, or it
+  races join for the last roster slot.
+- `allow_free_agents` lives on **`registration_settings`**
+  (`V364:121-122`), NOT on `divisions` as design §5's prose implies.
+- **The registration hub has ZERO width coverage.** RS001 deleted the
+  old registrations panel from `mobile.spec.ts` and never replaced it;
+  the 54 `registration` hits in that file are LCP fixtures and setup
+  paths. The hub and the new picker go into the seven-width matrix
+  this session — a surface has no coverage until it is inside that
+  file.
+- `joinTeamEntry` (`registration-submit.ts:1036`) explicitly
+  **refuses** a free agent today rather than assigning one. There is
+  no existing assign/unassign code anywhere.
+
+**Guard promoted from RS005's close note, which addressed it to this
+session by name:** reversing the hub's page-level guard to admit
+viewers silently promoted every unconditional control on the page into
+one a read-only role can press. Assign and unassign are writes and are
+gated server-side on `canEdit`, not merely hidden — and the sweep is
+for the whole class of controls on that page, not just these two.
+
+
+### RS012 scoped 2026-08-30 — the pool's unpaid promises (found while building RS009)
+
+Raised to the owner at the end of the RS009 session and deferred into its
+own prompt (`RS012-solo-signup-pool-promises.md`) rather than widened into
+RS009, per the no-new-issues rule: the assignment loop had to exist before
+the promises around it were worth designing. Neither finding is a defect in
+RS009 — both predate it — but RS009 is what makes them reachable, because
+until it shipped nobody could be placed and therefore nobody was really
+waiting.
+
+**FINDING 1 — VERIFIED, and the reason RS012 is not merely a nice-to-have.
+An unplaced solo sign-up consumes a team's capacity slot, and keeps
+consuming it after being placed.** `registration-submit.ts`'s capacity check
+is:
+
+```sql
+select count(*)::int as n from registrations
+where division_id = ${division_id} and status in ${SPOT_HOLDERS}
+```
+
+`SPOT_HOLDERS` is `pending|paid|confirmed`. There is **no
+`free_agent = false` filter anywhere in that count** — checked, not assumed.
+Two consequences:
+
+- A team division with `capacity: 8`, which an organiser sets meaning EIGHT
+  TEAMS, admits only 2 more teams once 6 people have signed up solo.
+- The slot is never released. RS009 deliberately leaves the solo sign-up's
+  own `registrations` row `confirmed` with `free_agent = true` after
+  assignment — that row holds their money, consent and answers, and its
+  survival is pinned by a test. So it still matches the count. **A division
+  can read 8/8 FULL while holding two actual teams and six people folded
+  into them**, and will waitlist teams it has room for.
+
+The question is a product one and is the owner's: does `capacity` count
+ENTRIES or the things that will actually take the field? The current
+behaviour is neither — it is an unexamined consequence of solo sign-ups
+being stored as `registrations` rows. Recorded here rather than fixed in
+RS009 because either answer changes waitlist behaviour, which is well
+outside that session's stated file set.
+
+**FINDING 2 — the pool promises nothing and has no exit.** A solo sign-up
+pays, reads `register.details.freeAgent.note` ("the organiser will assign
+you to a team once one has space"), and then: no deadline, no status beyond
+"waiting", and no path that refunds or withdraws them if the division starts
+without them. They hold a receipt for a place that may not exist. The
+organiser has the mirror-image blind spot — nothing surfaces "4 waiting, 2
+free slots" until they go looking.
+
+**Do not let an implementer guess the unplaced path.** Auto-refund versus
+organiser-decided is a money decision, and this file's own findings register
+records several money defects that shipped because an unexamined default
+looked correct.
+
+**Warning carried into RS012's prompt, worth repeating here:** if capacity
+is changed to exclude assigned solo sign-ups, do it by reading the
+ASSIGNMENT (`registration_players.assigned_from_registration_id`, unique
+where non-null), NEVER by mutating the source row's status. Withdrawing that
+row to free a slot would refund a person who is happily playing.
+
+### RS009 build log — what shipped, and the four things tests could not see
+
+**Status at 2026-08-30: 10 commits on `feat/rs009-free-agents`, NOT yet a
+PR.** Owner ruled RS009 **HOLDS until RS008 merges** (rs008 owns
+`register/status/entry-card.tsx` + `view-model.ts`); RS009 then rebases,
+adds `register.status.entry.assignedToTeam`, and narrows rs008's
+`awaitingTeam` gate in the same commit, so there is never a window where a
+placed solo sign-up's status page says "Waiting for a team".
+
+**Owner rulings taken this session** (both recorded above in the session-open
+block, restated here for the ones taken later):
+
+3. **Only the PLACED PLAYER is emailed**, not the receiving captain. The
+   captain sees the roster change on their own status page, and this system
+   already carries two unthrottled organiser-triggered mailers without
+   adding a third for the weaker half of the pair.
+
+**A `/code-review high` on the branch returned 12 findings. All 12 were
+real** — including the three I doubted enough to verify before acting, every
+one of which the reviewer had right and I had wrong. Nine were fixed
+directly; the remaining three were work already owed (notifications, the
+list schema, e2e/matrix) and are now done too.
+
+**FOUR defects this session that NO test could have caught.** Recorded
+together because the pattern, not the individual bug, is the lesson.
+
+1. **The picker 404'd in the browser with 5481 tests green.** `apiV1`
+   (`lib/client-v1.ts`) prepends NOTHING — it is named for the envelope it
+   parses, not a route prefix — and the sheet called
+   `/registrations/{id}/assign-targets`. Unit tests issue no real request;
+   the ROUTE tests call the handler function directly, so the URL never
+   reaches Next's router; `tsc` sees a template string; the openapi gate
+   compares spec to registry, never the client. Found by clicking the
+   button. Standing gate added:
+   `components/__tests__/api-v1-call-paths.test.ts`. **Its rule is `/api/`,
+   not `/api/v1/`** — the stricter version flagged
+   `news/composer.tsx → /api/orgs/{id}/content-upload`, which is a real
+   non-v1 route, so the gate was wrong and the code was right.
+2. **`materialise` had no `free_agent` guard**, contradicting design §6
+   ("free agents stay unmaterialized until assigned"). A card-paid solo
+   sign-up got their own schedulable one-person "team" entrant; assigning
+   them then put the person on two entrants with a phantom team left in the
+   fixture list. Fixing it immediately exposed a second bug via its own
+   test: **`materialise` owns the STATUS FLIP as well as the entrant
+   insert**, so returning early left a paid registrant stuck at `pending`
+   forever.
+3. **A placed solo sign-up survived every terminal transition.** Withdraw,
+   reject and expire are all STATUS changes, so V388's `on delete cascade`
+   never fires. A registrant who cancelled was refunded AND still fielded.
+   One shared `releaseSoloSignUpPlacement` now has four callers (the fourth
+   is unassign, which had been carrying its own inline copy).
+4. **The table called a solo sign-up "Team · 1/23".** They carry the
+   DIVISION's `entrant_kind`, so the team branch claimed one person was a
+   team and drew a roster meter for a roster they do not have. Every
+   assertion in that test file was about `entrant_kind`, and `entrant_kind`
+   was correct throughout.
+
+**THREE safety nets in this repo were found vacuous, and all three were
+fixed rather than worked around.** This is the most reusable finding of the
+session:
+
+- `deriveRegistrantActionFlags`' **completeness sweep** reads the status
+  enum from its real zod source but HAND-LISTED the seven flags. Two new
+  flags entered the return value and passed it unasserted — the file stayed
+  52/52 green. It now iterates what the function actually returned and
+  asserts the key set IS the interface.
+- `toRegistrationSettingsPutBody`'s **full-replace hazard test** could only
+  catch a field that should not be sent, never one that should be and was
+  not, because its expectation was hand-written beside the code it checks.
+  RS009 added `free_agent_fee_cents` to the endpoint and not to the body, so
+  **every settings save wrote NULL over the organiser's price**, silently
+  re-opening the double-charge V388 exists to close. The test now derives
+  its key set from `PutRegistrationSettings.shape`.
+- The **openapi drift gate** was green on three undocumented routes and four
+  undocumented response fields. It compares the generated spec to the
+  registry in `api-v1/openapi.ts`; a route or field missing from BOTH is not
+  drift, it is simply absent. All sixteen sibling registration routes were
+  listed; RS009's three were not.
+
+Pattern: **a gate that hand-lists the members of the thing it guards cannot
+see a new member.** All three failed the same way. When adding to a guarded
+set, check whether its guard enumerates or derives.
+
+**Also fixed, found by mutation rather than by a failing test:** the
+double-click guard on the assignment email was untested. The idempotent
+branch returned blank notify data "because the notification is skipped
+anyway", which made `alreadyPlaced` redundant with the null-email check —
+dropping `alreadyPlaced` still sent nothing, so the test passed for the
+wrong reason and the mutant SURVIVED. The branch now carries real data, so
+`alreadyPlaced` is the only thing preventing a second email.
+
+**Environmental, proved not asserted:** the four
+`schedule-build-honours-locks` failures seen in a full sweep are the
+documented missing-CP-SAT signature. With `seazn-env up --label rs009
+--placement` running, that suite and RS009's own are **40/40**.
+
+**Two traps worth carrying out of this session:**
+- **A concurrent session clobbers bare `/tmp` log paths.** `/tmp/rb5.log`
+  read back as a complete successful rebuild — of the **r5** session's
+  worktree, written seconds earlier. The rs009 rebuild had never run,
+  because it was `&&`-chained after a `git commit` that failed. Read the
+  `rebuilt from <path>` line, and write logs under the session scratchpad.
+- **`git commit -m` with double quotes inside the message fails** and takes
+  the whole `&&` chain with it. Use `-F <file>`.
+
+
+### RS012 rulings taken 2026-08-31 — both, before any code
+
+Put to the owner as recommendations with their trade-offs and accepted as
+recommended. Written into `RS012-solo-signup-pool-promises.md` in full; the
+short form, so a compacted session still has them:
+
+1. **`capacity` counts TEAM ENTRIES.** A solo sign-up never consumes a team
+   slot. The pool is bounded instead by `capacity × roster_cap` minus
+   players already on rosters — derived, so no new settings field and no new
+   organiser decision. Reason: `capacity: 8` on a team division means eight
+   TEAMS, and today it can mean two teams plus six individuals with the
+   division reading full. Unbounded pools are how an org ends up owing 200
+   refunds for eight teams' worth of places.
+2. **An unplaced solo sign-up is auto-refunded and withdrawn at the place-by
+   date**, which defaults to the division's registration close; the
+   organiser may place them or extend the date right up to it. Reason: the
+   common failure is an organiser who FORGETS the pool, not one who decides
+   against somebody, so the default must not require diligence that has
+   already lapsed. Accepted cost: Stripe fees on each refund, judged the
+   lesser harm than a registrant silently out of pocket for a place that
+   never existed. Rejected alternative: prompt the organiser instead.
+
+Still binding from RS009, and the trap most likely to be re-derived wrongly:
+free a capacity slot by reading the ASSIGNMENT
+(`registration_players.assigned_from_registration_id`, unique where
+non-null), NEVER by mutating the source registration's status. Withdrawing
+that row to free a slot refunds a person who is happily playing.

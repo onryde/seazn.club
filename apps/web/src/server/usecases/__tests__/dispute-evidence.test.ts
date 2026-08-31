@@ -55,6 +55,69 @@ afterAll(async () => {
 });
 
 describe.skipIf(!HAS_DB)("dispute evidence pack", () => {
+  it("finds a placed solo sign-up's fixtures through the team that fielded them (RS009)", async () => {
+    // A solo sign-up has NO entrant of its own — design section 6 has them
+    // fielded through the team they were assigned to. Keying "service
+    // provided" on reg.entrant_id therefore produced ZERO fixtures for
+    // someone who actually played: the weakest possible answer in the one
+    // document whose entire job is proving they did.
+    const { owner, orgId, divisionId, compId } = await seed();
+    const ref = `SZ-SA${randomUUID().slice(0, 6).toUpperCase()}`;
+
+    // The team that will field them, with a real entrant and a real fixture.
+    const [{ id: entrantId }] = await sql<{ id: string }[]>`
+      insert into entrants (division_id, kind, display_name, status)
+      values (${divisionId}, 'team', 'Riverside Rovers', 'confirmed') returning id`;
+    const [{ id: teamGroupId }] = await sql<{ id: string }[]>`
+      insert into registration_groups
+        (competition_id, contact_name, contact_email, access_token_hash, currency)
+      values (${compId}, 'Captain', ${`cap-${randomUUID().slice(0, 6)}@test.local`},
+              ${randomUUID()}, 'gbp')
+      returning id`;
+    const [{ id: teamRegId }] = await sql<{ id: string }[]>`
+      insert into registrations (division_id, group_id, status, display_name, entrant_id)
+      values (${divisionId}, ${teamGroupId}, 'confirmed', 'Riverside Rovers', ${entrantId})
+      returning id`;
+    const [{ id: stageId }] = await sql<{ id: string }[]>`
+      insert into stages (division_id, org_id, seq, kind, name)
+      values (${divisionId}, ${orgId}, 1, 'league', 'League') returning id`;
+    // A UNIQUE venue name is the assertion target. The first version of this
+    // test asserted `toContain("7")` for the round number, which an HTML
+    // document contains by accident many times over — it passed with the bug
+    // restored, and the mutant survived. A name nothing else can produce is
+    // the difference between a test and a decoration.
+    const venueName = `Evidence Ground ${randomUUID().slice(0, 8)}`;
+    const venue = await createVenue(owner, { name: venueName, sort: 0 });
+    await sql`
+      insert into fixtures
+        (stage_id, division_id, org_id, round_no, seq_in_round, fixture_no,
+         home_entrant_id, venue_id)
+      values (${stageId}, ${divisionId}, ${orgId}, 7, 1, 1, ${entrantId}, ${venue.id})`;
+
+    // The solo sign-up: disputed, paid, and NO entrant of their own.
+    const [{ id: groupId }] = await sql<{ id: string }[]>`
+      insert into registration_groups
+        (competition_id, contact_name, contact_email, access_token_hash, ref_code,
+         currency, payment_method, payment_intent_id, disputed_at, dispute_id)
+      values (${compId}, 'Solo Player', 'solo@example.com', ${randomUUID()}, ${ref},
+              'gbp', 'stripe', 'pi_solo_1', now(), 'dp_solo_1')
+      returning id`;
+    const [{ id: regId }] = await sql<{ id: string }[]>`
+      insert into registrations
+        (division_id, group_id, status, display_name, amount_cents, free_agent)
+      values (${divisionId}, ${groupId}, 'confirmed', 'Solo Player', 1200, true)
+      returning id`;
+    // ...placed onto that team.
+    await sql`
+      insert into registration_players
+        (registration_id, org_id, full_name, source, assigned_from_registration_id)
+      values (${teamRegId}, ${orgId}, 'Solo Player', 'organiser_assigned', ${regId})`;
+
+    const pack = await buildDisputeEvidence(owner, regId, "https://test.local");
+    expect(pack.html, "the fixture they were fielded in must appear").toContain(venueName);
+    expect(pack.html).toContain(ref);
+  });
+
   it("bundles registration, receipt reconstruction and activity log", async () => {
     const { owner, orgId, divisionId, compId } = await seed();
     const ref = `SZ-EV${randomUUID().slice(0, 6).toUpperCase()}`;

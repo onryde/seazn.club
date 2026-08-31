@@ -340,6 +340,11 @@ export function RegistrationHubConfigPanel({
   // falls back to a formatted (state.fee_cents / 100) whenever it's null,
   // so there's no separate "seed on load" step to get out of sync.
   const [feeText, setFeeText] = useState<string | null>(null);
+  // RS009's solo-sign-up price, lifted for the same reason feeText is. Its
+  // fallback differs: an EMPTY string is a meaningful value here ("no
+  // separate price"), so MoneySection falls back to "" rather than a
+  // formatted zero — 0 would read as "free", which is a different setting.
+  const [soloFeeText, setSoloFeeText] = useState<string | null>(null);
   // RS005 R4 task 2 — the three clock fields' in-progress halves, lifted
   // here for the SAME reason feeText is (see its own comment above):
   // OpenCloseSection/MoneySection are invoked directly by this panel's own
@@ -513,6 +518,8 @@ export function RegistrationHubConfigPanel({
                     orgPaymentInstructions={readOnly!.orgPaymentInstructions}
                     feeText={feeText}
                     onFeeText={setFeeText}
+                    soloFeeText={soloFeeText}
+                    onSoloFeeText={setSoloFeeText}
                     dtDrafts={dtDrafts}
                     onDateTimeHalfChange={onDateTimeHalfChange}
                   />
@@ -893,6 +900,8 @@ export function MoneySection({
   orgPaymentInstructions,
   feeText,
   onFeeText,
+  soloFeeText,
+  onSoloFeeText,
   dtDrafts,
   onDateTimeHalfChange,
 }: {
@@ -919,6 +928,11 @@ export function MoneySection({
    *  stays hookless. */
   feeText: string | null;
   onFeeText: (text: string) => void;
+  /** RS009 — the solo-sign-up price's in-progress draft. Same ownership rule
+   *  as feeText; "" is a real value (clear back to the team fee), not a
+   *  missing one. */
+  soloFeeText: string | null;
+  onSoloFeeText: (text: string) => void;
   /** RS005 R4 task 2 — refund_lock_at's in-progress date/time halves, owned
    *  by the panel (OrgTzDateTimePair's own comment explains why). */
   dtDrafts: Partial<Record<DateTimeFieldKey, DateTimeHalves>>;
@@ -950,6 +964,12 @@ export function MoneySection({
   // Falls back to the committed value, formatted, whenever there is no
   // in-progress draft — covers both "never touched yet" and "just blurred".
   const feeDisplay = feeText ?? (state.fee_cents / 100).toFixed(2);
+  // Same independent-draft pattern as feeText above, and for the same reason.
+  // The difference: an EMPTY string is meaningful here (it clears back to
+  // "no separate price"), so the fallback is "" rather than a formatted zero.
+  const soloFeeDisplay =
+    soloFeeText ??
+    (state.free_agent_fee_cents === null ? "" : (state.free_agent_fee_cents / 100).toFixed(2));
 
   return (
     <section className="card space-y-3 p-4" data-feature="registration.paid">
@@ -993,6 +1013,49 @@ export function MoneySection({
         />
         {errors.fee_cents && (<p data-field-error="fee_cents" role="alert" className="mt-1 text-xs text-red-600">{errors.fee_cents}</p>)}
       </label>
+
+      {/* RS009 — the price for ONE person entering a team division alone.
+          Rendered only where solo sign-ups are actually allowed: a price for
+          something the division does not offer reads as a promise, and the
+          usecase refuses it anyway.
+
+          Empty means "no separate price — charge the team fee", which is the
+          default and what every division did before this existed. It is NOT
+          the same as 0, which means free, so the placeholder says what empty
+          does rather than showing a misleading "0.00". The column, the API
+          and the submit path all treat null and 0 as different for exactly
+          this reason. */}
+      {state.allow_free_agents && state.entrant_kind === "team" && (
+        <label className="label">
+          {msg("reg.hub.config.soloFee", { sym: currencyCode })}
+          <input
+            type="text"
+            inputMode="decimal"
+            data-field="free_agent_fee_cents"
+            className="input mt-1"
+            placeholder={msg("reg.hub.config.soloFeePlaceholder", {
+              fee: (state.fee_cents / 100).toFixed(2),
+            })}
+            value={soloFeeDisplay}
+            onChange={(e) => {
+              const next = e.target.value;
+              if (!/^\d*\.?\d{0,2}$/.test(next)) return;
+              onSoloFeeText(next);
+              // Empty string clears back to null ("no separate price"),
+              // which is why this cannot reuse the fee_cents handler above:
+              // that one falls back to 0, and 0 here means FREE.
+              const pounds = Number.parseFloat(next);
+              patch({
+                free_agent_fee_cents:
+                  next.trim() === "" ? null : Number.isFinite(pounds) ? Math.round(pounds * 100) : null,
+              });
+            }}
+          />
+          <span className="mt-1 block text-xs text-slate-500">
+            {msg("reg.hub.config.soloFeeHint")}
+          </span>
+        </label>
+      )}
       {/* RS005 F4: only ever a WARNING about entries already queued, never a
           block on saving — the fee change itself is legitimate, the
           organiser just needs to know who it reaches and when. Absent

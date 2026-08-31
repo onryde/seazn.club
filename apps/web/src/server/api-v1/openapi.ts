@@ -235,6 +235,15 @@ export const ROUTES: RouteSpec[] = [
   // is the organiser-facing resend of the cart-shaped confirmation the
   // public register route now sends at submit.
   { path: "/registrations/{id}/resend-confirmation", method: "post", summary: "Resend the registrant's confirmation email — the whole cart, not just this entry", tag: "registration", response: z.object({ sent: z.boolean() }) },
+  // RS009 — the organiser's solo sign-up assignment loop. The three routes
+  // were written without entries here and the openapi drift gate stayed
+  // GREEN, because that gate compares the generated spec against this
+  // registry: a route absent from BOTH is not drift, it is simply
+  // undocumented. Every one of the sixteen sibling registration routes was
+  // listed; these three were not.
+  { path: "/registrations/{id}/assign", method: "post", summary: "Place a pooled solo sign-up onto a team entry in the same division — idempotent; refuses a full roster, a cross-division target, and a placement that would close a mixed team on one gender", tag: "registration", request: S.AssignSoloSignUp, response: S.AssignSoloSignUpResult, errors: [404, 409, 422] },
+  { path: "/registrations/{id}/unassign", method: "post", summary: "Return a placed solo sign-up to the pool — idempotent; refused once the division has fixtures or its competition has started", tag: "registration", response: S.UnassignSoloSignUpResult, errors: [404, 422] },
+  { path: "/registrations/{id}/assign-targets", method: "get", summary: "Team entries a solo sign-up may be placed on, with roster fill and composition context. Write scope, not read: this list exists only to feed a write action, and READ_ROLES includes viewer", tag: "registration", response: S.AssignTargets, errors: [404] },
   { path: "/registrations/{id}/evidence", method: "get", summary: "Dispute evidence pack as a printable HTML attachment — registration record, receipt reconstruction, activity log, fixtures (session console, not key-accessible)", tag: "registration", errors: [404] },
   { path: "/orgs/{id}/connect", method: "get", summary: "Stripe Connect status (?refresh=1 re-reads from Stripe)", tag: "registration", response: S.ConnectStatus, query: { refresh: { schema: { type: "string", enum: ["1"] } } } },
   { path: "/orgs/{id}/connect", method: "post", summary: "Create the Express account + onboarding link (Pro)", tag: "registration", request: S.CreateConnectOnboarding, response: S.ConnectOnboardingLink, errors: [402] },

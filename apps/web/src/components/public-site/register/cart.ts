@@ -508,6 +508,27 @@ export interface CartSummary {
  * read-only) call this ONE function — a defect in "what counts as payable"
  * can now only exist in one place, not two that could silently drift.
  */
+/**
+ * What ONE cart line is charged — the client-side mirror of
+ * `registration-submit.ts`'s own `entryFeeCents`.
+ *
+ * RS009. Before this existed, `summarizeCart` and `step-review.tsx` both read
+ * `division.fee_cents` directly, while the server charged
+ * `free_agent_fee_cents` for a solo line. A £60-per-team division with a £5
+ * solo price quoted £60 on the review step and took £5 at Stripe; with a solo
+ * price of 0 it rendered a pay button for a cart the server priced at zero.
+ *
+ * `?? fee_cents`, never `||`: null means "no separate price" and 0 means
+ * free, and collapsing them charges the full team fee to someone the page
+ * told was free. Exported so nothing reads a fee off a division by hand
+ * again — a second reader is how the two drifted in the first place.
+ */
+export function lineFeeCents(entry: { free_agent?: boolean }, division: DivisionLike): number {
+  return entry.free_agent && division.free_agent_fee_cents !== null
+    ? division.free_agent_fee_cents
+    : division.fee_cents;
+}
+
 export function summarizeCart(cart: CartState, divisions: readonly DivisionLike[]): CartSummary {
   const byId = new Map(divisions.map((d) => [d.division_id, d]));
   let subtotalCents = 0;
@@ -518,7 +539,7 @@ export function summarizeCart(cart: CartState, divisions: readonly DivisionLike[
     const staleClosed = division != null && division.closed_reason != null && division.closed_reason !== "full";
     const notChargedNow = division == null || division.closed_reason != null;
     if (division && division.closed_reason == null) {
-      subtotalCents += division.fee_cents;
+      subtotalCents += lineFeeCents(entry, division);
       currency = division.currency;
     }
     return { entry, division, notChargedNow, waitlisted, staleClosed };
@@ -535,5 +556,7 @@ export function summarizeCart(cart: CartState, divisions: readonly DivisionLike[
  *  is representative. Undefined for an all-free/all-waitlisted cart — there
  *  is nothing to describe how it's paid. */
 export function payableDivision(summary: CartSummary): DivisionLike | undefined {
-  return summary.lines.find((l) => !l.notChargedNow && l.division && l.division.fee_cents > 0)?.division;
+  return summary.lines.find(
+    (l) => !l.notChargedNow && l.division && lineFeeCents(l.entry, l.division) > 0,
+  )?.division;
 }

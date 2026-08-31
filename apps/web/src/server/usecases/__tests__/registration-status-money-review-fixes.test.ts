@@ -246,6 +246,8 @@ describe("#10/#13b — notifyPromoted (pure function, offline branch — no DB)"
       division_id: "div-1",
       enabled: true,
       entrant_kind: "individual",
+      // RS009: null = no separate solo sign-up price, charge fee_cents.
+      free_agent_fee_cents: null,
       opens_at: null,
       closes_at: null,
       capacity: null,

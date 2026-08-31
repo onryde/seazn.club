@@ -42,6 +42,7 @@ function baseProps(): EntryCardProps {
       status: "pending",
       amount_cents: 0,
       free_agent: false,
+      assigned_team_name: null,
       join_code: "JOIN123",
       allows_new_joiner: true,
       promotion_expires_at: null,

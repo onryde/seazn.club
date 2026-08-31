@@ -332,16 +332,32 @@ describe.skipIf(!HAS_DB)("approveRegistration", () => {
     const { orgId, orgSlug, ownerId } = await seedOrg("pro");
     const owner = asOwner(orgId, ownerId);
     const { competition, division } = await rig(owner);
-    // A free_agent entry never auto-materialises regardless of approval mode
-    // (design §5), so it is the one shape that reaches 'pending' under 'auto'
-    // without needing a live Stripe/Connect fixture.
-    await seedSettings(division.id, { entrant_kind: "team", fee_cents: 0, approval: "auto", allow_free_agents: true });
+    // This test is about APPROVE/REJECT being refused on an auto division; it
+    // just needs some row sitting at 'pending' there. It used a free_agent
+    // entry as the cheapest vehicle, because "a free_agent entry never
+    // auto-materialises regardless of approval mode" meant it reached
+    // 'pending' under 'auto' with no live Stripe/Connect fixture.
+    //
+    // RS009 removed that vehicle: a solo sign-up now auto-confirms like any
+    // other free entry (the old exclusion stranded them at 'pending'
+    // forever and hid the Assign control from them). The vehicle changes,
+    // the test's subject does not — an UNPAID entry on an offline division
+    // reaches 'pending' under 'auto' just as cheaply, since the inline
+    // auto-confirm requires `feeCents === 0`.
+    await seedSettings(division.id, { entrant_kind: "individual", fee_cents: 500, approval: "auto" });
     const submitted = await submitRegistrationGroup(
       { orgSlug, compSlug: competition.slug },
       {
         contact: baseContact(),
         privacy_consent: true,
-        entries: [{ division_id: division.id, entrant_kind: "team", free_agent: true, players: [], answers: {} }],
+        entries: [
+          {
+            division_id: division.id,
+            entrant_kind: "individual",
+            players: [{ full_name: "Owes A Fee" }],
+            answers: {},
+          },
+        ],
       },
     );
     const regId = submitted.entries[0]!.registration_id;

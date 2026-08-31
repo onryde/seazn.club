@@ -552,9 +552,22 @@ describe.skipIf(!HAS_DB)("submitRegistrationGroup", () => {
       },
     );
     expect(res.entries[0]!.free_agent).toBe(true);
-    // Never auto-materialised, even free + auto-approval — no team to attach
-    // an entrant to yet (design §5; RS009 owns assignment).
-    expect(res.entries[0]!.status).toBe("pending");
+    // Never auto-MATERIALISED, even free + auto-approval — no team to attach
+    // an entrant to yet (design §5). That invariant is the `entrant_id`
+    // assertion below and it is UNCHANGED.
+    //
+    // The status expectation next to it moved from 'pending' to 'confirmed'
+    // in RS009, deliberately, and this comment records why so it is not read
+    // as a silent re-baseline. When RS002 wrote this, confirming and
+    // materialising were the same act, so `pending` was simply how "not
+    // materialised" was expressed. RS009 separated them: `materialise` seats
+    // no entrant for a free agent and confirms them anyway. Leaving the old
+    // expectation in place would have pinned a defect — a solo sign-up on a
+    // FREE division stranded at `pending` forever, with RS009's own
+    // confirmed-or-paid guard then hiding the Assign control from it. This
+    // very test's own comment already anticipated the handover ("RS009 owns
+    // assignment"); it is the proxy that changed, not the invariant.
+    expect(res.entries[0]!.status).toBe("confirmed");
     const [row] = await sql<{ entrant_id: string | null }[]>`
       select entrant_id from registrations where id = ${res.entries[0]!.registration_id}`;
     expect(row!.entrant_id).toBeNull();

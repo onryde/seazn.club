@@ -1279,16 +1279,27 @@ test.describe("RS005 registrants tab", () => {
     const squad = await submit(squadDiv.data!.id, `Filter Squad ${suffix}`, { kind: "team" });
     expect(squad.status).toBe("confirmed");
 
-    // Free agent: entrant_kind team + free_agent -> materialise is skipped
-    // ("never for a free agent" — registration-submit.ts), so this stays
-    // 'pending' even under auto+free approval, and (0 players submitted)
-    // mints no registration_players row, so it does NOT match
-    // consent_pending=1 either.
+    // Free agent: entrant_kind team + free_agent. It is CONFIRMED under
+    // auto+free approval, and seats no entrant.
+    //
+    // This expectation changed in RS009 and the reason is recorded rather
+    // than quietly flipped. The old comment here read "materialise is
+    // skipped ('never for a free agent'), so this stays 'pending'" — a
+    // description of the mechanism, not an independent ruling. RS009 removed
+    // that exclusion because it had outlived its reason: materialise no
+    // longer mints a phantom one-person entrant for a free agent, it seats
+    // nobody and confirms them. Left as it was, a solo sign-up on a FREE
+    // division sat at 'pending' forever and the Assign control was hidden
+    // from it, so the assignment feature was dead on those divisions.
+    //
+    // What has NOT changed, and is still the thing this row is here for: 0
+    // players submitted means no registration_players row, so it still does
+    // not match consent_pending=1.
     const freeAgent = await submit(squadDiv.data!.id, `Filter FreeAgent ${suffix}`, {
       kind: "team",
       freeAgent: true,
     });
-    expect(freeAgent.status).toBe("pending");
+    expect(freeAgent.status).toBe("confirmed");
 
     // Bare: direct SQL — the API cannot express "an entry on a division
     // with no registration_settings row at all" (registration-submit.ts's
@@ -1307,8 +1318,18 @@ test.describe("RS005 registrants tab", () => {
       return new Set(ids as string[]);
     }
 
-    expect(await idsAt("status=pending"), "status=pending narrows to the two pending entries").toEqual(
-      new Set([freeAgent.registration_id, bare.registrationId]),
+    // Only the bare row is pending now — the free agent confirms at submit
+    // (see its own comment above). Kept as a real narrowing assertion rather
+    // than deleted: it still proves the filter excludes the three confirmed
+    // rows.
+    expect(await idsAt("status=pending"), "status=pending narrows to the bare entry").toEqual(
+      new Set([bare.registrationId]),
+    );
+    // ...and the complement, which the old shape could not assert because
+    // only two rows were confirmed. Added with the RS009 change so the
+    // status filter is pinned in BOTH directions.
+    expect(await idsAt("status=confirmed"), "status=confirmed finds the three auto-confirmed rows").toEqual(
+      new Set([solo.registration_id, squad.registration_id, freeAgent.registration_id]),
     );
     // The previously-broken case: a division with NO settings row coalesces
     // to entrant_kind 'individual' (fetchRegistrantRows' own LEFT JOIN), and

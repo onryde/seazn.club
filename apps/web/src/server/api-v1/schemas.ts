@@ -2262,6 +2262,13 @@ export const PutRegistrationSettings = z
     /** V364/RS004: meaningful only when entrant_kind is 'team' — the usecase
      *  rejects `true` on a non-team division (putRegistrationSettings). */
     allow_free_agents: z.boolean().default(false),
+    /** V388/RS009: what ONE person pays to enter this team division alone.
+     *  `null` (the default) means "no separate price — charge fee_cents",
+     *  which is what every division did before this existed. 0 is a real
+     *  price meaning free, so this is nullish rather than optional-with-0:
+     *  the two must not collapse. The usecase rejects a value here when
+     *  allow_free_agents is off, and rejects a negative one. */
+    free_agent_fee_cents: z.number().int().min(0).nullish(),
   })
   .superRefine((s, ctx) => {
     const keys = s.form_fields.map((f) => f.key);
@@ -2291,6 +2298,9 @@ export const RegistrationSettings = z.object({
   payment_instructions: z.string().nullable(),
   approval: RegistrationApproval,
   allow_free_agents: z.boolean(),
+  /** V388/RS009. `null` = no separate price; the panel renders the team fee
+   *  as the effective price in that case. */
+  free_agent_fee_cents: z.number().int().nullable(),
   /** Org fallbacks for the settings UI (spec §3). */
   org_payment_instructions: z.string().nullable(),
   org_default_payment_method: z.string(),
@@ -2369,6 +2379,23 @@ export const RegistrationListEntry = Registration.extend({
   /** 1-based rank within the division's waitlist; null for every other
    *  status. */
   waitlist_position: z.number().int().nullable(),
+  /** RS009 — where a SOLO SIGN-UP currently sits, or null while still in the
+   *  pool. Null on every non-solo-sign-up row. Derived from the roster row
+   *  pointing back at this entry, never mirrored onto `registrations`, so the
+   *  pool and the roster cannot disagree. */
+  assigned_team_id: Uuid.nullable(),
+  assigned_team_name: z.string().nullable(),
+  /** RS009 — the solo sign-up's own gender when the division collected one.
+   *  The assign sheet predicts a mixed division's refusal from it BEFORE the
+   *  organiser spends a click; null means unknown, and it then predicts
+   *  nothing rather than guessing. */
+  player_gender: z.string().nullable(),
+  /** RS009 — has this row's division started, in the sense that its rosters
+   *  are no longer the organiser's to shuffle? True once the division has any
+   *  fixture, or once its competition's `starts_on` has passed. Mirrors
+   *  `unassignSoloSignUp`'s own refusal so the hub never renders a Remove
+   *  button the server will refuse. */
+  division_started: z.boolean(),
 });
 
 /** `POST /registrations/{id}/promote` body. `id` in the URL resolves which
@@ -2382,6 +2409,66 @@ export const PromoteRegistration = z.object({
 });
 export type PromoteRegistration = z.infer<typeof PromoteRegistration>;
 
+/** `POST /registrations/{id}/assign` body (RS009) — places the solo sign-up
+ *  `id` onto `target_registration_id`, a team entry in the same division.
+ *  `assignSoloSignUp` (registration-assign.ts) owns every rule this can
+ *  fail: same-division, roster cap, mixed-division composition, idempotent
+ *  re-assign, 409 when the player is already on a different team. */
+export const AssignSoloSignUp = z.object({
+  target_registration_id: Uuid,
+});
+export type AssignSoloSignUp = z.infer<typeof AssignSoloSignUp>;
+
+/** `GET /registrations/{id}/assign-targets` response (RS009) — every
+ *  assignable team entry in `id`'s division: non-free-agent, non-terminal
+ *  registrations, with enough roster state for the UI to explain, BEFORE
+ *  the click, why a mixed division will refuse a placement (the same rule
+ *  `assignSoloSignUp` enforces server-side). */
+export const AssignTargets = z.object({
+  division_id: Uuid,
+  division_category: z.string().nullable(),
+  targets: z.array(
+    z.object({
+      registration_id: Uuid,
+      display_name: z.string(),
+      roster_count: z.number().int(),
+      /** null = unlimited (the sport declares no lineup config) — same
+       *  convention as `RegistrationListEntry.roster_cap`. */
+      roster_cap: z.number().int().nullable(),
+      is_full: z.boolean(),
+      genders: z.array(z.enum(["m", "f", "x"]).nullable()),
+    }),
+  ),
+});
+export type AssignTargets = z.infer<typeof AssignTargets>;
+
+/** `POST /registrations/{id}/assign` response (RS009). Carries the roster
+ *  state AFTER the placement so a caller need not re-fetch to render the new
+ *  fill — the same reason `RegistrationListEntry` carries roster_count and
+ *  roster_cap rather than letting each consumer recompute them. */
+export const AssignSoloSignUpResult = z.object({
+  registration_id: Uuid,
+  target_registration_id: Uuid,
+  /** The roster row created — or the one already there, since assign is
+   *  idempotent and a repeat returns the existing placement. */
+  player_id: Uuid,
+  target_display_name: z.string(),
+  roster_count: z.number().int(),
+  /** null = unlimited, never zero. */
+  roster_cap: z.number().int().nullable(),
+});
+export type AssignSoloSignUpResult = z.infer<typeof AssignSoloSignUpResult>;
+
+/** `POST /registrations/{id}/unassign` response (RS009). */
+export const UnassignSoloSignUpResult = z.object({
+  registration_id: Uuid,
+  /** The team they were removed from, or null when they were already in the
+   *  pool — unassign is idempotent, and "already where you asked for" is a
+   *  success, not an error. */
+  target_registration_id: Uuid.nullable(),
+});
+export type UnassignSoloSignUpResult = z.infer<typeof UnassignSoloSignUpResult>;
+
 // Public register flow -------------------------------------------------------
 
 /** One division on the public register panel. */
@@ -2392,6 +2479,10 @@ export const PublicRegistrationDivision = z.object({
   sport_key: z.string(),
   entrant_kind: EntrantKind,
   fee_cents: z.number().int(),
+  /** RS009 — what ONE person pays to enter this team division alone. null =
+   *  no separate price; the stepper then quotes `fee_cents`. Present so the
+   *  public quote and the server's charge cannot disagree. */
+  free_agent_fee_cents: z.number().int().nullable(),
   currency: z.string(),
   payment_method: RegistrationPaymentMethod,
   opens_at: z.string().nullable(),
@@ -2600,6 +2691,7 @@ export const PublicRegisterGroupEntryResult = z.object({
   join_code: z.string().nullable(),
   free_agent: z.boolean(),
 });
+
 
 /** Cart-level outcome (`SubmitGroupResult` mirror, registration-
  *  submit.ts:121-130). `checkout_url` is required-but-nullable: wave 3 wires

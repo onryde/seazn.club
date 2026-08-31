@@ -262,7 +262,8 @@ async function loadSubmitSettings(divisionId: string): Promise<SubmitSettingsRow
   const [row] = await sql<SubmitSettingsRow[]>`
     select division_id, enabled, entrant_kind, opens_at, closes_at, capacity,
            fee_cents, refund_lock_at, form_fields, payment_method,
-           payment_instructions, updated_at, approval, allow_free_agents
+           payment_instructions, updated_at, approval, allow_free_agents,
+           free_agent_fee_cents
     from registration_settings where division_id = ${divisionId}`;
   return row ?? null;
 }
@@ -631,7 +632,8 @@ export async function submitRegistrationGroup(
       const [live] = await tx<SubmitSettingsRow[]>`
         select division_id, enabled, entrant_kind, opens_at, closes_at, capacity,
                fee_cents, refund_lock_at, form_fields, payment_method,
-               payment_instructions, updated_at, approval, allow_free_agents
+               payment_instructions, updated_at, approval, allow_free_agents,
+               free_agent_fee_cents
         from registration_settings where division_id = ${id} for update`;
       if (!live || !windowOpen(live, now)) {
         throw new HttpError(422, "Registration is not open for this division");
@@ -702,7 +704,19 @@ export async function submitRegistrationGroup(
         planLimit ?? Number.POSITIVE_INFINITY,
       );
       const waitlisted = taken >= hardCap;
-      const feeCents = waitlisted ? 0 : live.fee_cents;
+      // On a TEAM division `fee_cents` is the price of a team. Someone
+      // entering that division alone is buying one place, not a team, so they
+      // pay `free_agent_fee_cents` when the organiser has set one (RS009).
+      //
+      // `?? live.fee_cents`, never `||`: NULL means "no separate price, use
+      // the team price" and is the default on every division, while 0 is a
+      // real price meaning free. `||` would collapse the two and charge the
+      // full team fee to a registrant the public page told was free.
+      const entryFeeCents =
+        p.input.free_agent && live.free_agent_fee_cents !== null
+          ? live.free_agent_fee_cents
+          : live.fee_cents;
+      const feeCents = waitlisted ? 0 : entryFeeCents;
       if (!waitlisted && feeCents > 0) paymentMethodsSeen.add(live.payment_method);
       const status: RegistrationRow["status"] = waitlisted ? "waitlisted" : "pending";
 
@@ -801,18 +815,36 @@ export async function submitRegistrationGroup(
       // Free entries under auto-approval confirm INLINE — a shortcut RS002's
       // new `approval` column makes possible (old code never auto-confirmed
       // at submit; `approval` did not exist before this redesign). Never for
-      // a free agent: there is no team yet to materialise into (design §5),
-      // and never for a waitlisted entry.
+      // a waitlisted entry.
+      //
+      // RS009 REMOVED the free-agent exclusion that used to sit here. Its
+      // reason — "there is no team yet to materialise into (design §5)" — was
+      // correct while `materialise` would have minted a phantom one-person
+      // entrant for a solo sign-up. It no longer does: it seats no entrant
+      // for a free agent and confirms them anyway. The exclusion outlived its
+      // justification and became harmful, because a solo sign-up on a FREE
+      // division then sat at `pending` forever, and RS009's own
+      // confirmed-or-paid guard hid the Assign control from it — making the
+      // whole assignment feature unreachable on exactly the divisions most
+      // likely to want it. Two individually-correct changes; the defect lived
+      // in the gap. Found by e2e, not by any unit test.
       let finalStatus = regRow.status;
-      if (!waitlisted && !p.input.free_agent && live.approval === "auto" && feeCents === 0) {
+      if (!waitlisted && live.approval === "auto" && feeCents === 0) {
         const entrantId = await materialise(tx, regRow, p.input.entrant_kind);
         finalStatus = "confirmed";
-        // Forward-compatible with the free-agent materialise() contract
-        // RS009 introduces (`string | null` — a free agent seats no
-        // entrant): a null here means no roster to invite, so skip rather
-        // than push. Today `entrantId` is never null (this branch already
-        // excludes free agents above), so this is a no-op filter, not a
-        // behavior change.
+        // The filter is LIVE, not forward-compatible spare capacity. RS008.1
+        // added it ahead of RS009 with a note that it was a no-op "because
+        // this branch already excludes free agents above" — true then, and
+        // no longer: RS009 removed that exclusion (see the block comment on
+        // the condition above), so a solo sign-up now reaches here and
+        // `materialise` hands back null for it.
+        //
+        // Skipping is correct, not defensive: a solo sign-up seats no
+        // entrant, so there is no roster to invite anyone onto. A `!` here
+        // would compile and feed null into inviteUnclaimedMembers, whose
+        // parameter is `string` — the same shape RS009 had to fix in
+        // confirmPaidRegistration, where an `as unknown as` cast was
+        // suppressing exactly that.
         if (entrantId) autoConfirmedEntrantIds.push(entrantId);
       }
 

@@ -74,6 +74,9 @@ test("CONTROL (#325): the overflow check itself can fail", async ({ page }) => {
 let compId = "";
 let compSlug = "";
 let divisionId = "";
+/** RS009 — the TEAM division that accepts solo sign-ups, so the assign
+ *  picker has somewhere to place someone. */
+let teamDivisionId = "";
 let orgSlug = "";
 /** RS007's two new public surfaces, with the query strings that make them
  *  render populated rather than their (also valid, but far simpler) empty
@@ -142,9 +145,20 @@ test("setup: public competition with an entrant-ready division", async ({ page, 
     request,
     `/api/v1/divisions/${teamDiv.data!.id}/registration-settings`,
     "PUT",
-    { enabled: true, entrant_kind: "team", capacity: 10, fee_cents: 0, form_fields: [] },
+    {
+      enabled: true,
+      entrant_kind: "team",
+      capacity: 10,
+      fee_cents: 0,
+      form_fields: [],
+      // RS009 — the Registrants tab's assign control only renders for a
+      // pooled solo sign-up, so without this the picker has nothing to open
+      // and its width coverage would pass vacuously.
+      allow_free_agents: true,
+    },
   );
   expect(teamSettings.status).toBeLessThan(300);
+  teamDivisionId = teamDiv.data!.id;
 
   // A captain plus ONE team-mate the captain enters on their behalf: that
   // second row is `captain_entered`/`pending`, which is precisely the slot
@@ -176,6 +190,30 @@ test("setup: public competition with an entrant-ready division", async ({ page, 
     `/shared/${orgSlug}/${compSlug}/register/status` +
     `?rid=${submitted.data!.group_id}&token=${submitted.data!.access_token}`;
   joinPath = `/shared/${orgSlug}/${compSlug}/register/join?join_code=${joinCode}`;
+
+  // RS009 — one person entering the team division ALONE, so the Registrants
+  // tab has a row whose "Assign to a team" control exists. A hub with no
+  // solo sign-up renders no picker, and the width test below would then be
+  // measuring an empty tab.
+  const solo = await apiJson(
+    request,
+    `/api/v1/public/orgs/${orgSlug}/competitions/${compSlug}/register`,
+    "POST",
+    {
+      contact: { name: `Mobile Solo ${TAG}`, email: `mobile-solo-${TAG}@example.com` },
+      privacy_consent: true,
+      entries: [
+        {
+          division_id: teamDiv.data!.id,
+          entrant_kind: "team",
+          free_agent: true,
+          players: [{ full_name: `Mobile Solo ${TAG}` }],
+          answers: {},
+        },
+      ],
+    },
+  );
+  expect(solo.status, "the assign picker needs a pooled solo sign-up to open").toBeLessThan(300);
   // P11 (D6): import.events has no plan_entitlements row on any plan during
   // rollout (design doc §2.4/R6) — without this override the import route
   // added to "console routes" below renders page.tsx's notFound() instead of
@@ -265,9 +303,15 @@ test("console routes: no horizontal scroll", async ({ page, request }) => {
     { path: await divisionPath(request, divisionId) },
     { path: await divisionPath(request, divisionId, "?tab=fixtures") },
     { path: await divisionPath(request, divisionId, "?tab=standings") },
-    // The /registrations console route (its "registrations panel" component)
-    // was removed by RS001 along with the rest of the old registration UI; no
-    // replacement route exists yet (owed by RS006/RS007/RS010).
+    // RS009 — the competition-level Registration hub, BOTH tabs. The old
+    // division-level "registrations panel" was removed by RS001 and this
+    // inventory kept a note saying no replacement route existed yet; RS004
+    // and RS005 shipped one and neither added it back here, so the hub ran
+    // from 2026-08-24 to 2026-08-30 with ZERO width coverage on any of the
+    // seven projects. A surface is unprotected until it appears in this file
+    // by name, no matter how many other specs touch it.
+    { path: `/o/${orgSlug}/c/${compSlug}/registration?tab=settings` },
+    { path: `/o/${orgSlug}/c/${compSlug}/registration?tab=registrants` },
     // The /schedule console was absent from this inventory entirely, so the
     // three tabs that carry the portfolio's new panels (P1 capacity card on
     // Settings, P2 health panel on Health, both on the Board's chrome) shipped
@@ -601,6 +645,51 @@ test("public surfaces: no horizontal scroll (v3/11 gap 12)", async ({ browser })
   } finally {
     await anonCtx.close();
   }
+});
+
+test("RS009: the assign sheet holds at this width, and the hub does not scroll behind it", async ({
+  page,
+}) => {
+  // The picker is a bottom sheet under `sm` and a centred dialog above it, so
+  // the two halves of that design are only ever both exercised by running
+  // this across the seven width projects. The page-level inventory above
+  // cannot see it at all: the sheet is behind a click, and a surface behind
+  // an interaction has no width coverage from a page load.
+  //
+  // This asserts the SHEET, not just the absence of overflow: a no-horizontal-
+  // scroll gate passes on a page where the dialog never opened.
+  await page.goto(`/o/${orgSlug}/c/${compSlug}/registration?tab=registrants&division_id=${teamDivisionId}`);
+
+  // Open the registrant's detail panel EXPLICITLY, and let a failure here
+  // fail the test. The first version did `.click().catch(() => {})` — a
+  // swallowed click — so when the row never opened, the assertion below
+  // reported "the assign control is not visible" and said nothing about why.
+  // The control is present in every collapsed row's DOM (the panel is a
+  // <details>), so "not visible" is the symptom of an unopened row and of a
+  // genuinely missing control alike. A test that hides which one it hit
+  // costs more than it saves.
+  const row = page.locator("details").filter({ hasText: `Mobile Solo ${TAG}` }).first();
+  await expect(row, "the seeded solo sign-up must be listed").toBeVisible({ timeout: 15_000 });
+  await row.locator("summary").click();
+
+  const opener = row.locator('[data-registration-hub-assign-action="open"]');
+  await expect(opener, "a pooled solo sign-up must offer the assign control").toBeVisible({
+    timeout: 15_000,
+  });
+  await opener.click();
+
+  const sheet = page.getByRole("dialog");
+  await expect(sheet).toBeVisible();
+  // The target list must be reachable inside the sheet at every width — this
+  // is the "list-in-a-drawer, not a table at 320px" requirement.
+  await expect(page.locator("[data-registration-hub-assign-target]").first()).toBeVisible();
+  await expectNoHorizontalScroll(page);
+
+  // Esc closes and the page is usable again — the sheet must never trap the
+  // organiser on a narrow screen.
+  await page.keyboard.press("Escape");
+  await expect(sheet).toBeHidden();
+  await expectNoHorizontalScroll(page);
 });
 
 test("news (SPEC-2): feed + post page hold at mobile width", async ({ page, browser }) => {

@@ -3,6 +3,7 @@
 // directly rather than through a render.
 import { describe, expect, it } from "vitest";
 import {
+  assignedTeamName,
   awaitingTeamAssignment,
   canCancelEntry,
   canJoinEntry,
@@ -275,10 +276,54 @@ describe("rosterPlayerDisplayName", () => {
   });
 });
 
-describe("awaitingTeamAssignment (RS008 review fix #9, RS009 handoff)", () => {
+describe("awaitingTeamAssignment (RS008 review fix #9, NARROWED by RS009)", () => {
   it("true only when free_agent is true", () => {
     expect(awaitingTeamAssignment({ free_agent: true })).toBe(true);
     expect(awaitingTeamAssignment({ free_agent: false })).toBe(false);
+  });
+
+  it("stops once an organiser has placed them", () => {
+    // The fuse RS008 documented and handed over. `free_agent` records how the
+    // entry was MADE and never flips back, so on its own this told a placed
+    // player they were still waiting — forever, and in direct contradiction
+    // of the email they had just been sent.
+    expect(
+      awaitingTeamAssignment({ free_agent: true, assigned_team_name: "Riverside Rovers" }),
+    ).toBe(false);
+  });
+});
+
+describe("assignedTeamName (RS009)", () => {
+  it("names the team once they are placed", () => {
+    expect(assignedTeamName({ free_agent: true, assigned_team_name: "Riverside Rovers" })).toBe(
+      "Riverside Rovers",
+    );
+  });
+
+  it("is null while they are still in the pool", () => {
+    expect(assignedTeamName({ free_agent: true, assigned_team_name: null })).toBeNull();
+  });
+
+  it("is null for an entry that was never a solo sign-up", () => {
+    expect(assignedTeamName({ free_agent: false, assigned_team_name: "Riverside Rovers" })).toBeNull();
+  });
+
+  it("is never true at the same time as awaitingTeamAssignment", () => {
+    // The property that matters more than either function alone: a card must
+    // never say "waiting for a team" AND name a team. Both read the same
+    // placement, so this holds by construction — pinned so it keeps holding
+    // if either is edited on its own.
+    for (const entry of [
+      { free_agent: true, assigned_team_name: null },
+      { free_agent: true, assigned_team_name: "Riverside Rovers" },
+      { free_agent: false, assigned_team_name: null },
+      { free_agent: false, assigned_team_name: "Riverside Rovers" },
+    ]) {
+      expect(
+        awaitingTeamAssignment(entry) && assignedTeamName(entry) !== null,
+        JSON.stringify(entry),
+      ).toBe(false);
+    }
   });
 });
 

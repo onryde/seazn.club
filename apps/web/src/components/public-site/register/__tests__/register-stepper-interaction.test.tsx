@@ -169,6 +169,7 @@ const DIV_OPEN: DivisionLike = {
   opens_at: null,
   closes_at: null,
   fee_cents: 0,
+  free_agent_fee_cents: null,
   currency: "gbp",
   payment_method: "offline",
   form_fields: [],
@@ -928,6 +929,7 @@ describe("finding #4 — a non-\"full\" closed division in the cart is excluded 
       opens_at: null,
       closes_at: null,
       fee_cents: 1500,
+      free_agent_fee_cents: null,
       currency: "gbp",
       payment_method: "offline",
       form_fields: [],
@@ -1660,6 +1662,7 @@ const DIV_PAID: DivisionLike = {
   division_id: "div-paid",
   name: "Paid Singles",
   fee_cents: 2500,
+  free_agent_fee_cents: null,
   currency: "gbp",
   payment_method: "stripe",
 };
@@ -1670,6 +1673,7 @@ const DIV_WAITLIST: DivisionLike = {
   name: "Full Division",
   closed_reason: "full",
   fee_cents: 1000,
+  free_agent_fee_cents: null,
   currency: "gbp",
 };
 

@@ -201,6 +201,17 @@ export function RegistrationHubRegistrantActions({
       refunded_cents: refundedCents,
       division_fee_cents: divisionFeeCents,
       payment_intent_id: paymentIntentId,
+      // RS009's two flags are computed by the same shared function so that
+      // `hasAnyAction` counts them, but this component does not render either
+      // control — the assign sheet is its own component, mounted beside this
+      // one, because it opens a dialog and owns a fetch. These three are
+      // therefore fixed at "not a solo sign-up": whatever canAssign/
+      // canUnassign come back as is unread here, and hard-coding them keeps
+      // this component's prop list to what it actually renders rather than
+      // widening it for a value it ignores.
+      free_agent: false,
+      assigned_team_id: null,
+      division_started: false,
     },
   );
 
@@ -381,8 +392,15 @@ export function RegistrationHubRegistrantActions({
   }
 
   return (
-    <div data-registration-hub-registrant-actions className="flex flex-col gap-2">
-      <div className="flex flex-wrap items-center gap-2">
+    // `contents` on both wrappers, so these buttons become direct children of
+    // the ONE flex-wrap row the detail panel provides. Each component used to
+    // bring its own column wrapper, which put the assign control on a line of
+    // its own below the others — visually a stray rather than a deliberate
+    // grouping, and it is the PRIMARY action for a solo sign-up.
+    // The elements stay in the DOM (contents removes the box, not the node),
+    // so the data- attributes the tests and e2e select on are unaffected.
+    <div data-registration-hub-registrant-actions className="contents">
+      <div className="contents">
         {flags.canMarkPaid && (
           <button
             type="button"
@@ -479,7 +497,7 @@ export function RegistrationHubRegistrantActions({
           aria-live="polite"
           data-registration-hub-registrant-actions-feedback
           data-tone={feedback.tone}
-          className={feedback.tone === "success" ? "text-xs font-medium text-green-700" : "text-xs font-medium text-red-600"}
+          className={`w-full ${feedback.tone === "success" ? "text-xs font-medium text-green-700" : "text-xs font-medium text-red-600"}`}
         >
           {feedback.text}
         </p>

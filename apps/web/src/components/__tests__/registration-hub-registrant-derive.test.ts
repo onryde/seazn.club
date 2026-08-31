@@ -13,6 +13,7 @@ import {
   registrantRowAnchor,
   deriveRegistrantActionFlags,
 } from "@/components/registration-hub-registrant-derive";
+import type { RegistrantActionFlags } from "@/components/registration-hub-registrant-derive";
 import type { RegistrantsFilters } from "@/app/o/[orgSlug]/c/[compSlug]/registration/data";
 import type { RegistrationFormField } from "@/server/api-v1/schemas";
 
@@ -25,6 +26,19 @@ const BASE: RegistrantsFilters = {
   text: "",
   sort: "newest",
 };
+
+/** RS009 widened `deriveRegistrantActionFlags`' input with three fields
+ *  every case in this file is indifferent to. Spread in as neutral defaults
+ *  so each existing case keeps asserting exactly the rule it was written
+ *  for: this is an ordinary team/individual entry, never a solo sign-up, so
+ *  canAssign and canUnassign are false throughout and cannot mask a
+ *  regression in the flags these cases are actually about. The solo-sign-up
+ *  cases have their own describe block at the end of the file. */
+const NOT_A_SOLO_SIGNUP = {
+  free_agent: false,
+  assigned_team_id: null,
+  division_started: false,
+} as const;
 
 describe("REGISTRANT_STATUS_STYLE", () => {
   // RS005 W1a's own history: a 'rejected' status was missed from a hand-kept
@@ -239,13 +253,13 @@ describe("deriveRegistrantActionFlags", () => {
   // isolation — the carve-out itself gets its own describe block below.
   it("approve/reject are legal on a manual division's pending or paid entry", () => {
     expect(
-      deriveRegistrantActionFlags({ status: "pending", approval: "manual", amount_cents: 0, refunded_cents: 0, division_fee_cents: 0, payment_intent_id: null }),
+      deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP, status: "pending", approval: "manual", amount_cents: 0, refunded_cents: 0, division_fee_cents: 0, payment_intent_id: null }),
     ).toMatchObject({
       canApprove: true,
       canReject: true,
     });
     expect(
-      deriveRegistrantActionFlags({ status: "paid", approval: "manual", amount_cents: 0, refunded_cents: 0, division_fee_cents: 0, payment_intent_id: null }),
+      deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP, status: "paid", approval: "manual", amount_cents: 0, refunded_cents: 0, division_fee_cents: 0, payment_intent_id: null }),
     ).toMatchObject({
       canApprove: true,
       canReject: true,
@@ -254,13 +268,13 @@ describe("deriveRegistrantActionFlags", () => {
 
   it("approve/reject are ABSENT on an auto-approval division, even pending/paid — offering them would hand an organiser a button approveRegistration 422s on", () => {
     expect(
-      deriveRegistrantActionFlags({ status: "pending", approval: "auto", amount_cents: 0, refunded_cents: 0, division_fee_cents: 0, payment_intent_id: null }),
+      deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP, status: "pending", approval: "auto", amount_cents: 0, refunded_cents: 0, division_fee_cents: 0, payment_intent_id: null }),
     ).toMatchObject({
       canApprove: false,
       canReject: false,
     });
     expect(
-      deriveRegistrantActionFlags({ status: "paid", approval: "auto", amount_cents: 0, refunded_cents: 0, division_fee_cents: 0, payment_intent_id: null }),
+      deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP, status: "paid", approval: "auto", amount_cents: 0, refunded_cents: 0, division_fee_cents: 0, payment_intent_id: null }),
     ).toMatchObject({
       canApprove: false,
       canReject: false,
@@ -270,7 +284,7 @@ describe("deriveRegistrantActionFlags", () => {
   it("approve/reject are ABSENT on a manual division once the entry is no longer awaiting a decision (includes the terminal statuses)", () => {
     for (const status of ["confirmed", "waitlisted", "withdrawn", "expired", "rejected"] as const) {
       expect(
-        deriveRegistrantActionFlags({ status, approval: "manual", amount_cents: 0, refunded_cents: 0, division_fee_cents: 0, payment_intent_id: null }),
+        deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP, status, approval: "manual", amount_cents: 0, refunded_cents: 0, division_fee_cents: 0, payment_intent_id: null }),
       ).toMatchObject({
         canApprove: false,
         canReject: false,
@@ -281,7 +295,7 @@ describe("deriveRegistrantActionFlags", () => {
   it("withdraw is legal on every non-terminal status", () => {
     for (const status of ["pending", "paid", "confirmed", "waitlisted"] as const) {
       expect(
-        deriveRegistrantActionFlags({ status, approval: "auto", amount_cents: 0, refunded_cents: 0, division_fee_cents: 0, payment_intent_id: null }).canWithdraw,
+        deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP, status, approval: "auto", amount_cents: 0, refunded_cents: 0, division_fee_cents: 0, payment_intent_id: null }).canWithdraw,
       ).toBe(true);
     }
   });
@@ -289,7 +303,7 @@ describe("deriveRegistrantActionFlags", () => {
   it("withdraw is ABSENT on every terminal status (withdrawn, rejected, expired)", () => {
     for (const status of ["withdrawn", "rejected", "expired"] as const) {
       expect(
-        deriveRegistrantActionFlags({ status, approval: "auto", amount_cents: 0, refunded_cents: 0, division_fee_cents: 0, payment_intent_id: null }).canWithdraw,
+        deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP, status, approval: "auto", amount_cents: 0, refunded_cents: 0, division_fee_cents: 0, payment_intent_id: null }).canWithdraw,
       ).toBe(false);
     }
   });
@@ -304,7 +318,7 @@ describe("deriveRegistrantActionFlags", () => {
   it("resend is legal on every non-terminal status", () => {
     for (const status of ["pending", "paid", "confirmed", "waitlisted"] as const) {
       expect(
-        deriveRegistrantActionFlags({ status, approval: "auto", amount_cents: 0, refunded_cents: 0, division_fee_cents: 0, payment_intent_id: null }).canResend,
+        deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP, status, approval: "auto", amount_cents: 0, refunded_cents: 0, division_fee_cents: 0, payment_intent_id: null }).canResend,
       ).toBe(true);
     }
   });
@@ -312,19 +326,19 @@ describe("deriveRegistrantActionFlags", () => {
   it("resend is ABSENT on every terminal status (withdrawn, rejected, expired)", () => {
     for (const status of ["withdrawn", "rejected", "expired"] as const) {
       expect(
-        deriveRegistrantActionFlags({ status, approval: "auto", amount_cents: 0, refunded_cents: 0, division_fee_cents: 0, payment_intent_id: null }).canResend,
+        deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP, status, approval: "auto", amount_cents: 0, refunded_cents: 0, division_fee_cents: 0, payment_intent_id: null }).canResend,
       ).toBe(false);
     }
   });
 
   it("promote is legal ONLY for a waitlisted entry", () => {
     expect(
-      deriveRegistrantActionFlags({ status: "waitlisted", approval: "auto", amount_cents: 0, refunded_cents: 0, division_fee_cents: 0, payment_intent_id: null })
+      deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP, status: "waitlisted", approval: "auto", amount_cents: 0, refunded_cents: 0, division_fee_cents: 0, payment_intent_id: null })
         .canPromote,
     ).toBe(true);
     for (const status of ["pending", "paid", "confirmed", "withdrawn", "expired", "rejected"] as const) {
       expect(
-        deriveRegistrantActionFlags({ status, approval: "auto", amount_cents: 0, refunded_cents: 0, division_fee_cents: 0, payment_intent_id: null }).canPromote,
+        deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP, status, approval: "auto", amount_cents: 0, refunded_cents: 0, division_fee_cents: 0, payment_intent_id: null }).canPromote,
       ).toBe(false);
     }
   });
@@ -341,7 +355,7 @@ describe("deriveRegistrantActionFlags", () => {
   describe("approve's awaiting-payment carve-out (RS005 R1 finding 1)", () => {
     it("approve is ABSENT on a manual, fee-bearing, unpaid, pending entry", () => {
       expect(
-        deriveRegistrantActionFlags({
+        deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP,
           status: "pending",
           approval: "manual",
           amount_cents: 1500, refunded_cents: 0,
@@ -353,7 +367,7 @@ describe("deriveRegistrantActionFlags", () => {
 
     it("approve is PRESENT once that same entry is paid (payment_intent_id set)", () => {
       expect(
-        deriveRegistrantActionFlags({
+        deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP,
           status: "pending",
           approval: "manual",
           amount_cents: 1500, refunded_cents: 0,
@@ -365,7 +379,7 @@ describe("deriveRegistrantActionFlags", () => {
 
     it("approve is PRESENT once the entry's OWN status has already moved to paid, even with no payment_intent_id — approveRegistration's own check (registration-approval.ts:128) only bites while status is still pending", () => {
       expect(
-        deriveRegistrantActionFlags({
+        deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP,
           status: "paid",
           approval: "manual",
           amount_cents: 1500, refunded_cents: 0,
@@ -377,7 +391,7 @@ describe("deriveRegistrantActionFlags", () => {
 
     it("approve is still PRESENT on a manual FREE entry (fee 0) that is pending — a free entry never awaits payment, so this must not be over-gated", () => {
       expect(
-        deriveRegistrantActionFlags({
+        deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP,
           status: "pending",
           approval: "manual",
           amount_cents: 0, refunded_cents: 0,
@@ -389,7 +403,7 @@ describe("deriveRegistrantActionFlags", () => {
 
     it("reject stays PRESENT in the exact case approve is hidden — rejectRegistration carries no awaiting-payment check, so an organiser can always decline outright before ever collecting money", () => {
       expect(
-        deriveRegistrantActionFlags({
+        deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP,
           status: "pending",
           approval: "manual",
           amount_cents: 1500, refunded_cents: 0,
@@ -411,7 +425,7 @@ describe("deriveRegistrantActionFlags", () => {
     it("is legal on a pending, fee-bearing, unpaid entry — on EITHER approval mode", () => {
       for (const approval of ["manual", "auto"] as const) {
         expect(
-          deriveRegistrantActionFlags({
+          deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP,
             status: "pending",
             approval,
             amount_cents: 1500, refunded_cents: 0,
@@ -424,7 +438,7 @@ describe("deriveRegistrantActionFlags", () => {
 
     it("is ABSENT once a payment_intent_id already exists — a card payment refunds on the payments trail instead", () => {
       expect(
-        deriveRegistrantActionFlags({
+        deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP,
           status: "pending",
           approval: "manual",
           amount_cents: 1500, refunded_cents: 0,
@@ -436,7 +450,7 @@ describe("deriveRegistrantActionFlags", () => {
 
     it("is ABSENT on a free entry (amount_cents 0) — 'This division has no entry fee'", () => {
       expect(
-        deriveRegistrantActionFlags({
+        deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP,
           status: "pending",
           approval: "manual",
           amount_cents: 0, refunded_cents: 0,
@@ -449,7 +463,7 @@ describe("deriveRegistrantActionFlags", () => {
     it("is ABSENT on any non-pending status — 'Only pending registrations can be marked paid'", () => {
       for (const status of ["paid", "confirmed", "waitlisted", "withdrawn", "expired", "rejected"] as const) {
         expect(
-          deriveRegistrantActionFlags({
+          deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP,
             status,
             approval: "manual",
             amount_cents: 1500, refunded_cents: 0,
@@ -470,7 +484,7 @@ describe("deriveRegistrantActionFlags", () => {
             // edit produces.
             for (const division_fee_cents of [0, 1500]) {
             for (const payment_intent_id of [null, "pi_123"] as const) {
-              const flags = deriveRegistrantActionFlags({
+              const flags = deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP,
                 status,
                 approval,
                 amount_cents,
@@ -486,6 +500,23 @@ describe("deriveRegistrantActionFlags", () => {
       }
     });
   });
+
+  // Every flag `RegistrantActionFlags` declares. `satisfies` ties it to the
+  // interface in BOTH directions: a flag added to the interface but not here
+  // makes the Record below fail to compile, and a name here that is not on
+  // the interface is rejected outright. That is what makes the sweep's key-set
+  // assertion meaningful rather than circular.
+  const ACTION_FLAG_KEYS = Object.keys({
+    canApprove: true,
+    canReject: true,
+    canWithdraw: true,
+    canPromote: true,
+    canMarkPaid: true,
+    canResend: true,
+    canRefund: true,
+    canAssign: true,
+    canUnassign: true,
+  } satisfies Record<keyof RegistrantActionFlags, true>);
 
   // Completeness sweep, RS005 W1a-style: iterates the REAL zod enum rather
   // than a hand-copied list, for both approval modes and (RS005 R1) both
@@ -503,7 +534,7 @@ describe("deriveRegistrantActionFlags", () => {
           // than being pinned at 0: 1500 against a 1500 charge is the
           // fully-refunded boundary the server also refuses on.
           for (const refunded_cents of [0, 1500]) {
-            const flags = deriveRegistrantActionFlags({
+            const flags = deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP,
               status,
               approval,
               amount_cents,
@@ -511,13 +542,22 @@ describe("deriveRegistrantActionFlags", () => {
               division_fee_cents,
               payment_intent_id,
             });
-            expect(typeof flags.canApprove).toBe("boolean");
-            expect(typeof flags.canReject).toBe("boolean");
-            expect(typeof flags.canWithdraw).toBe("boolean");
-            expect(typeof flags.canPromote).toBe("boolean");
-            expect(typeof flags.canMarkPaid).toBe("boolean");
-            expect(typeof flags.canResend).toBe("boolean");
-            expect(typeof flags.canRefund).toBe("boolean");
+            // RS009: iterate the flags the function ACTUALLY returned rather
+            // than a hand-listed seven. The list this replaces was written to
+            // stop this function drifting from its tests, and it did that for
+            // STATUSES (it reads the real zod enum) — but the flag names were
+            // hand-copied, so RS009's two new flags landed in the return
+            // value and passed this sweep without ever being asserted. A
+            // sweep that cannot see a new member of the thing it sweeps is
+            // not a sweep. Verified by adding the flags: the file stayed
+            // 52/52 green until this loop replaced the list.
+            for (const [name, value] of Object.entries(flags)) {
+              expect(typeof value, `${name} must be a boolean`).toBe("boolean");
+            }
+            // ...and the returned key set must BE the declared interface, so
+            // a flag that is dropped from the return value is caught too —
+            // `Object.entries` alone would simply stop iterating it.
+            expect(Object.keys(flags).sort()).toEqual([...ACTION_FLAG_KEYS].sort());
             // canResend and canWithdraw share the identical rule (both key
             // off isTerminalRegistrationStatus alone) — pinned here so a
             // FUTURE divergence between the two is a deliberate code change,
@@ -546,7 +586,7 @@ describe("deriveRegistrantActionFlags", () => {
 
     it("is false with no payment on file — refundRegistration answers 'No payment to refund'", () => {
       expect(
-        deriveRegistrantActionFlags({
+        deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP,
           ...base,
           status: "confirmed",
           amount_cents: 2500,
@@ -558,7 +598,7 @@ describe("deriveRegistrantActionFlags", () => {
 
     it("is true for a paid entry with a balance left", () => {
       expect(
-        deriveRegistrantActionFlags({
+        deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP,
           ...base,
           status: "confirmed",
           amount_cents: 2500,
@@ -570,7 +610,7 @@ describe("deriveRegistrantActionFlags", () => {
 
     it("is true for a PARTIALLY refunded entry — the rest is still refundable", () => {
       expect(
-        deriveRegistrantActionFlags({
+        deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP,
           ...base,
           status: "confirmed",
           amount_cents: 2500,
@@ -582,7 +622,7 @@ describe("deriveRegistrantActionFlags", () => {
 
     it("is false once fully refunded — 'Already fully refunded'", () => {
       expect(
-        deriveRegistrantActionFlags({
+        deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP,
           ...base,
           status: "confirmed",
           amount_cents: 2500,
@@ -602,7 +642,7 @@ describe("deriveRegistrantActionFlags", () => {
     // registrations.refunded_cents, permanently desyncing the hub from Stripe.
     it("is TRUE on a WITHDRAWN entry that was paid — this is the post-lock discretion case", () => {
       expect(
-        deriveRegistrantActionFlags({
+        deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP,
           ...base,
           status: "withdrawn",
           amount_cents: 4000,
@@ -614,7 +654,7 @@ describe("deriveRegistrantActionFlags", () => {
 
     it("is TRUE on a REJECTED entry that was paid, for the same reason", () => {
       expect(
-        deriveRegistrantActionFlags({
+        deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP,
           ...base,
           status: "rejected",
           amount_cents: 4000,
@@ -626,7 +666,7 @@ describe("deriveRegistrantActionFlags", () => {
 
     it("is false for a free entry, which has no charge to reverse", () => {
       expect(
-        deriveRegistrantActionFlags({
+        deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP,
           ...base,
           status: "confirmed",
           amount_cents: 0,
@@ -651,7 +691,7 @@ describe("deriveRegistrantActionFlags", () => {
     // renders on the FIRST render — the earlier attempt inferred the fee from
     // the server's 4xx text and only corrected itself after a failed click.
     it("fee raised 0 -> 20.00 under a pending entry: mark paid, not approve", () => {
-      const flags = deriveRegistrantActionFlags({
+      const flags = deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP,
         status: "pending",
         approval: "manual",
         amount_cents: 0, refunded_cents: 0, // quoted when the division was free
@@ -663,7 +703,7 @@ describe("deriveRegistrantActionFlags", () => {
     });
 
     it("fee dropped 20.00 -> 0 under a pending entry: approve, not mark paid", () => {
-      const flags = deriveRegistrantActionFlags({
+      const flags = deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP,
         status: "pending",
         approval: "manual",
         amount_cents: 2000, refunded_cents: 0, // quoted when the division charged
@@ -675,7 +715,7 @@ describe("deriveRegistrantActionFlags", () => {
     });
 
     it("agrees with the entry's own amount when no edit has happened", () => {
-      const owed = deriveRegistrantActionFlags({
+      const owed = deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP,
         status: "pending",
         approval: "manual",
         amount_cents: 1500, refunded_cents: 0,

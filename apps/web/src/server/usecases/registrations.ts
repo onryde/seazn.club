@@ -226,6 +226,20 @@ export interface RegistrationSettingsRow {
   /** V364/RS004: team divisions only — putRegistrationSettings rejects
    *  `true` on a non-team division. Read by registration-submit.ts. */
   allow_free_agents: boolean;
+  /**
+   * V388/RS009 — what ONE person pays to enter this team division alone.
+   *
+   * NULL is meaningful and is the default: "no separate price, charge
+   * `fee_cents`". On a team division `fee_cents` is a price PER TEAM, so
+   * before this column a lone player entering a £60-per-team division paid
+   * £60, and an organiser who then placed them on a team that also paid £60
+   * had collected twice for one roster.
+   *
+   * 0 is a real price (a free solo sign-up in a paid division), NOT "unset" —
+   * `?? fee_cents` is therefore the only correct fallback, and `|| fee_cents`
+   * would charge the full team fee to someone told it was free.
+   */
+  free_agent_fee_cents: number | null;
   updated_at: Date | null;
 }
 
@@ -351,7 +365,21 @@ export interface RegistrationPlayerRow {
   dob: string | null;
   gender: string | null;
   guardian_name: string | null;
-  source: "captain_entered" | "self_joined";
+  /**
+   * How this roster row came to exist. `organiser_assigned` (RS009) is an
+   * organiser placing a pooled solo sign-up onto this team — nobody typed
+   * the name here and the player did not pick this team, so it is neither of
+   * the other two.
+   *
+   * This union and the `registration_players_source_check` CHECK constraint
+   * (`V363`, widened by `V388`) are the ONLY two definitions of this set —
+   * there is no zod enum for it anywhere. Nothing connects them: `tsc`
+   * cannot read a CHECK, Postgres cannot read a union. Change one and you
+   * must change the other, or you get code that compiles and then violates a
+   * constraint in production. `registration-player-source-contract.test.ts`
+   * asserts they agree, in both directions.
+   */
+  source: "captain_entered" | "self_joined" | "organiser_assigned";
   consent_status: "pending" | "granted" | "guardian";
   consent_at: Date | null;
   /**
@@ -468,7 +496,8 @@ export function regGroupCols(db: AnySql) {
 const SETTINGS_COLS = [
   "division_id", "enabled", "entrant_kind", "opens_at", "closes_at",
   "capacity", "fee_cents", "refund_lock_at", "form_fields",
-  "payment_method", "payment_instructions", "approval", "allow_free_agents", "updated_at",
+  "payment_method", "payment_instructions", "approval", "allow_free_agents",
+  "free_agent_fee_cents", "updated_at",
 ] as const;
 
 /** Statuses that hold a capacity spot. Imported from `@/lib/registration-
@@ -894,8 +923,46 @@ export async function clearExpiresIfNoLongerNeeded(
  *  auto-confirms a free, auto-approval, non-waitlisted entry INLINE in the
  *  same transaction by calling this directly, rather than re-deriving
  *  materialization. */
-export async function materialise(tx: Tx, reg: RegistrationRow, entrantKind: string): Promise<string> {
+export async function materialise(
+  tx: Tx,
+  reg: RegistrationRow,
+  entrantKind: string,
+): Promise<string | null> {
   if (reg.entrant_id) return reg.entrant_id;
+  // RS009 — a SOLO SIGN-UP is not a team of one, and must not become an
+  // entrant of its own. Design §6 of record: "Free agents materialize as
+  // members of the team they were assigned to, or stay unmaterialized until
+  // assigned."
+  //
+  // Without this guard, confirming one — which the card-payment webhook does
+  // automatically, with no organiser involved — minted a one-person `team`
+  // entrant. That entrant is schedulable and shows in standings, and once the
+  // organiser then placed the person on a real team, the SAME person sat on
+  // two entrants with a phantom one-player team left in the fixture list that
+  // nothing ever removed.
+  //
+  // Returning null rather than throwing: confirmation itself is legitimate
+  // (they have paid, and their entry is real), it simply seats nobody yet.
+  // `assignSoloSignUp` is what puts them on a roster, through
+  // `joinExistingEntrant`, onto the TEAM's entrant.
+  if (reg.free_agent) {
+    // Still CONFIRM them — they have paid and their entry is real; they are
+    // simply not seated yet. `materialise` owns the status flip as well as
+    // the entrant insert, so returning before this update left a paid solo
+    // sign-up stuck at `pending` forever, with no organiser action able to
+    // move it. Caught by the very test written for this guard.
+    await tx`
+      update registrations
+      set status = 'confirmed', updated_at = now()
+      where id = ${reg.id}`;
+    // ...and clear the cart's payment clock, exactly as the normal path
+    // below does. `materialise` owns this as well as the status flip, so
+    // returning before it left `registration_groups.expires_at` set forever
+    // when a solo sign-up was the cart's LAST pending entry — the same gap
+    // RS002 W5 closed for every other confirm site.
+    await clearExpiresIfNoLongerNeeded(tx, reg.group_id, reg.id);
+    return null;
+  }
   const [entrant] = await tx<{ id: string }[]>`
     insert into entrants (division_id, kind, display_name, status)
     values (${reg.division_id}, ${entrantKind}, ${reg.display_name}, 'confirmed')
@@ -1635,6 +1702,7 @@ const DEFAULT_SETTINGS: Omit<RegistrationSettingsRow, "division_id"> = {
   payment_instructions: null,
   approval: "auto",
   allow_free_agents: false,
+  free_agent_fee_cents: null,
   updated_at: null,
 };
 
@@ -1695,6 +1763,10 @@ export async function putRegistrationSettings(
   const formFields = input.form_fields ?? [];
   const approval = input.approval ?? "auto";
   const allowFreeAgents = input.allow_free_agents ?? false;
+  // `?? null`, never `|| null`: 0 is a real price ("solo sign-ups are free in
+  // this paid division") and `||` would silently turn it back into "unset",
+  // charging the full team fee to someone the panel told was free.
+  const freeAgentFeeCents = input.free_agent_fee_cents ?? null;
   // Free agents (an entry with no roster yet, RS004/V364) only make sense
   // where there IS a roster to join later — registration-submit.ts's own
   // guard already refuses a free-agent submit outside entrant_kind 'team';
@@ -1702,6 +1774,24 @@ export async function putRegistrationSettings(
   // organiser turn on a toggle that can never take effect.
   if (allowFreeAgents && entrantKind !== "team") {
     throw new HttpError(422, "allow_free_agents requires entrant_kind 'team'");
+  }
+  // A price for something the division does not offer is a setting that reads
+  // as a promise: the panel would show a solo sign-up fee on a division where
+  // nobody can sign up solo. Same rule the toggle itself already follows.
+  if (freeAgentFeeCents !== null && !allowFreeAgents) {
+    throw new HttpError(
+      422,
+      "A solo sign-up price only applies where solo sign-ups are allowed — turn those on first",
+    );
+  }
+  if (freeAgentFeeCents !== null && freeAgentFeeCents < 0) {
+    throw new HttpError(422, "A solo sign-up price cannot be negative");
+  }
+  // The Stripe minimum applies to whatever is actually CHARGED, and a solo
+  // sign-up is charged this instead of fee_cents — so a division can pass the
+  // fee_cents check below and still mint a checkout Stripe rejects.
+  if (method === "stripe" && freeAgentFeeCents !== null && freeAgentFeeCents > 0 && freeAgentFeeCents < 100) {
+    throw new HttpError(422, "Card entry fees must be at least 1.00 (or 0 for free)");
   }
   if (method === "stripe") {
     if (!org.charges_enabled) {
@@ -1739,14 +1829,15 @@ export async function putRegistrationSettings(
       insert into registration_settings
         (division_id, enabled, entrant_kind, opens_at, closes_at, capacity,
          fee_cents, refund_lock_at, form_fields,
-         payment_method, payment_instructions, approval, allow_free_agents, updated_at)
+         payment_method, payment_instructions, approval, allow_free_agents,
+         free_agent_fee_cents, updated_at)
       values
         (${divisionId}, ${input.enabled}, ${entrantKind},
          ${input.opens_at ?? null}, ${input.closes_at ?? null},
          ${input.capacity ?? null}, ${feeCents},
          ${input.refund_lock_at ?? null}, ${tx.json(formFields as never)},
          ${method}, ${input.payment_instructions?.trim() || null},
-         ${approval}, ${allowFreeAgents}, now())
+         ${approval}, ${allowFreeAgents}, ${freeAgentFeeCents}, now())
       on conflict (division_id) do update set
         enabled              = excluded.enabled,
         entrant_kind         = excluded.entrant_kind,
@@ -1760,6 +1851,7 @@ export async function putRegistrationSettings(
         payment_instructions = excluded.payment_instructions,
         approval             = excluded.approval,
         allow_free_agents    = excluded.allow_free_agents,
+        free_agent_fee_cents = excluded.free_agent_fee_cents,
         updated_at           = now()
       returning ${sql(SETTINGS_COLS as unknown as string[])}`;
     return { ...row, ...org };
@@ -1784,6 +1876,11 @@ export interface PublicDivisionInfo {
   // ever be one of these three.
   entrant_kind: "team" | "individual" | "pair";
   fee_cents: number;
+  /** RS009 — what ONE person pays to enter this team division alone. null =
+   *  no separate price, charge `fee_cents`. The public stepper needs it to
+   *  QUOTE what the server will actually charge: without it, a solo line was
+   *  priced at the per-team fee on screen and at the solo fee in Stripe. */
+  free_agent_fee_cents: number | null;
   currency: string;
   /** How the entry fee is collected (spec §3). */
   payment_method: "offline" | "stripe";
@@ -1926,6 +2023,7 @@ export async function publicRegistrationInfo(
       sport_key: r.sport_key,
       entrant_kind: r.entrant_kind,
       fee_cents: r.fee_cents,
+      free_agent_fee_cents: r.free_agent_fee_cents,
       // Org-level (RS001b): every division on this panel quotes the same
       // currency, which is what makes a multi-division cart payable in one
       // Stripe session.
@@ -2566,7 +2664,14 @@ export async function handleRegistrationCheckoutAsyncPaymentFailed(
 }
 
 type PayOutcome =
-  | { kind: "confirmed"; divisionId: string; competitionId: string; orgId: string; entrantId: string }
+  /** `entrantId` is nullable since RS009: `materialise` seats no entrant for
+   *  a solo sign-up (design §6 — they are fielded through the team they are
+   *  assigned to), so a paid solo sign-up confirms with none. The `as unknown
+   *  as PayOutcome` cast below meant a `string` here compiled anyway and fed
+   *  null straight into inviteUnclaimedMembers, whose own parameter is
+   *  `string`. Runtime was a harmless no-op query; the type was a lie, and
+   *  the next non-null dereference of it would have compiled too. */
+  | { kind: "confirmed"; divisionId: string; competitionId: string; orgId: string; entrantId: string | null }
   // RULING B (RS002 W5 review): a Stripe payment is the MACHINE, not the
   // organiser — on a manual-approval division it leaves the entry at 'paid'
   // and waits for a human (approveRegistration). Distinct from "confirmed"
@@ -2822,7 +2927,9 @@ async function confirmPaidRegistration(
     fireDivisionRevalidate(outcome.divisionId, outcome.competitionId);
     // RS008: fire-and-forget, strictly AFTER the transaction above has
     // committed — see confirmRegistration's identical wiring for why.
-    void inviteUnclaimedMembers(outcome.orgId, outcome.entrantId);
+    // Guarded, not merely typed: a solo sign-up confirms with no entrant of
+    // its own, and there is no roster on it to invite.
+    if (outcome.entrantId) void inviteUnclaimedMembers(outcome.orgId, outcome.entrantId);
     // Growth loop (SPEC-5 §2 C): the organiser's FIRST competition to take a paid
     // registration earns free AI credits. Fires only on a genuine first-time paid
     // CONFIRMATION (not a replay, a double-pay duplicate, or a late payment to a
@@ -3740,6 +3847,12 @@ export interface GroupEntryView {
   status: RegistrationRow["status"];
   amount_cents: number;
   free_agent: boolean;
+  /** RS009 — the team an organiser placed this solo sign-up on, or null
+   *  while still in the pool. Null on every non-solo-sign-up entry. This is
+   *  what narrows RS008's `awaitingTeamAssignment`: `free_agent` records how
+   *  the entry was MADE and never flips back, so on its own it would tell a
+   *  placed player they are still waiting, forever. */
+  assigned_team_name: string | null;
   join_code: string | null;
   /** RS007: whether the GENERIC (no player_id) claim link is valid for this
    *  entry — false for a `pair` (its fixed two-person roster leaves no room
@@ -3950,7 +4063,15 @@ async function buildGroupStatusView(
     select r.id, r.division_id, d.name as division_name, r.display_name, r.status,
            r.amount_cents, r.refunded_cents, r.free_agent, r.join_code, r.promotion_expires_at,
            r.payment_intent_id as entry_payment_intent_id,
-           d.youth as division_youth, d.player_name_display as division_player_name_display
+           d.youth as division_youth, d.player_name_display as division_player_name_display,
+           -- RS009: the team an organiser placed this solo sign-up on, or
+           -- null while they are still in the pool. free_agent records how
+           -- the entry was MADE and never flips back, so it cannot answer
+           -- this on its own -- which is exactly what RS008 handed over in
+           -- awaitingTeamAssignment's doc comment.
+           (select tgt.display_name from registration_players rp
+             join registrations tgt on tgt.id = rp.registration_id
+             where rp.assigned_from_registration_id = r.id) as assigned_team_name
     from registrations r join divisions d on d.id = r.division_id
     where r.group_id = ${group.id}
     order by r.created_at, r.id`;
@@ -4341,6 +4462,93 @@ export function resolveRefundPolicy(
   };
 }
 
+
+/**
+ * Release a solo sign-up's placement on someone else's team, if they have
+ * one. Returns the team registration they were removed from, or null when
+ * they were never placed (the ordinary case, and a cheap no-op).
+ *
+ * RS009. This exists because a placement survives every TERMINAL TRANSITION
+ * unless something removes it: withdraw, reject and expire are all status
+ * changes, and V388's `on delete cascade` only fires on a DELETE. Without
+ * this, a placed solo sign-up who cancels from their status page is refunded
+ * and still fielded — their roster row and their `entrant_members` row both
+ * survive, the team still reads full, and nobody is told.
+ *
+ * ONE helper with three callers rather than three copies of the same two
+ * deletes: `withdrawCore`, `rejectRegistration` and the expiry sweep. A
+ * fourth terminal path added later needs to call this, and the shared name is
+ * the only thing that will make that obvious.
+ *
+ * Order matters: the membership first, then the roster row. The reverse
+ * leaves a person on the entrant with nothing left pointing at why they are
+ * there — an orphan no cascade can reach, because the FK cascades from the
+ * registration, not from this row.
+ *
+ * NO FIXTURES GUARD HERE, AND THAT ASYMMETRY WITH `unassignSoloSignUp` IS
+ * DELIBERATE. Raised in review as a gap; it is not one, and the reasoning is
+ * recorded so nobody "fixes" it into a match.
+ *
+ * `unassignSoloSignUp` refuses once the division has fixtures because that is
+ * the ORGANISER reshuffling a roster mid-competition, which RS009's brief
+ * explicitly rules is scheduling's territory. The callers here are something
+ * else: a registrant withdrawing (their own right, exercised from the public
+ * status page and already refunded by the time we get here), an organiser
+ * rejecting, or the entry expiring unpaid. Refusing THOSE to protect a team
+ * sheet would trap a person in a competition they have left — a far worse
+ * outcome than the roster changing.
+ *
+ * It is also safe in the way the review feared it was not: a fixture
+ * references `home_entrant_id`/`away_entrant_id`, i.e. the TEAM, never a
+ * person. Removing one `entrant_members` row orphans no fixture and rewrites
+ * no result; it changes who is on the team sheet from now on, which is the
+ * true statement once somebody has withdrawn.
+ *
+ * The residual worth naming: this happens SILENTLY — the captain loses a
+ * player and nobody is told. That is a notification gap, not a correctness
+ * one, and it belongs with RS012's pool-promises work rather than here.
+ */
+export async function releaseSoloSignUpPlacement(
+  tx: Tx,
+  registrationId: string,
+): Promise<string | null> {
+  // BOTH directions, because a registration can be either end of a
+  // placement:
+  //
+  //  - as the SOURCE, it is the solo sign-up who was placed somewhere;
+  //  - as the TARGET, it is a team other solo sign-ups were placed ONTO.
+  //
+  // The first version handled only the source side, so withdrawing a TEAM
+  // released none of the players borrowed onto it: their roster rows
+  // survived pointing at a withdrawn entrant, and because they still read as
+  // "already placed" the organiser could not re-assign them anywhere either.
+  // A team pulling out has to put its borrowed players back in the pool.
+  const placements = await tx<
+    { id: string; registration_id: string; person_id: string | null }[]
+  >`
+    select id, registration_id, person_id from registration_players
+    where assigned_from_registration_id = ${registrationId}
+       or (registration_id = ${registrationId} and source = 'organiser_assigned')`;
+  if (placements.length === 0) return null;
+
+  let releasedFrom: string | null = null;
+  for (const placement of placements) {
+    const [target] = await tx<{ entrant_id: string | null }[]>`
+      select entrant_id from registrations where id = ${placement.registration_id} for update`;
+    if (target?.entrant_id && placement.person_id) {
+      await tx`
+        delete from entrant_members
+        where entrant_id = ${target.entrant_id} and person_id = ${placement.person_id}`;
+    }
+    await tx`delete from registration_players where id = ${placement.id}`;
+    // The source-side answer is the interesting one for the audit trail —
+    // "this person came off that team". A target-side release removes
+    // several at once and has no single such answer.
+    if (placement.registration_id !== registrationId) releasedFrom = placement.registration_id;
+  }
+  return releasedFrom;
+}
+
 async function withdrawCore(reg: RegistrationWithGroupRow, actorId: string | null): Promise<void> {
   if (reg.status === "withdrawn") return; // idempotent
   // RULING A (RS002 W5 review, MAJOR): rejected is terminal from every
@@ -4378,6 +4586,10 @@ async function withdrawCore(reg: RegistrationWithGroupRow, actorId: string | nul
     if (locked.entrant_id) {
       await tx`update entrants set status = 'withdrawn' where id = ${locked.entrant_id}`;
     }
+    // RS009: if this entry is a solo sign-up placed on someone else's team,
+    // withdrawing must take them OFF that roster. Marking their own entrant
+    // withdrawn (above) does not touch it — that is a different entrant.
+    const releasedFrom = await releaseSoloSignUpPlacement(tx, reg.id);
     // RS002 W5 whole-branch review MAJOR: withdrawing the cart's LAST
     // `pending` entry used to leave `registration_groups.expires_at` stale
     // forever — only `materialise`'s confirm path ever cleared it. Safe to
@@ -4392,6 +4604,7 @@ async function withdrawCore(reg: RegistrationWithGroupRow, actorId: string | nul
       registration_id: reg.id,
       by: actorId ? "organiser" : "registrant",
       promoted_registration_id: promoted?.id ?? null,
+      released_from_registration_id: releasedFrom,
     }, actorId);
     if (promoted) {
       await audit(tx, ctx.competition_id, ctx.org_id, "registration.promoted", {
@@ -4792,6 +5005,10 @@ export async function sweepRegistrations(
       }
       await tx`update registrations set status = 'expired', updated_at = now()
                where id = ${id}`;
+      // RS009 — same reason withdrawCore does it: expiry is a status change,
+      // so V388's cascade never fires and the placement would outlive the
+      // entry that created it.
+      await releaseSoloSignUpPlacement(tx, id);
       // RS002 W5 whole-branch review MAJOR: expiring the cart's LAST
       // `pending` entry used to leave `expires_at` stale forever — same gap
       // as withdrawCore, same fix.
@@ -5008,6 +5225,34 @@ export interface RegistrationListRow extends Omit<RegistrationWithGroupRow, "acc
    *  on, correct on FIRST render. Costs nothing: `registration_settings` is
    *  already LEFT JOINed for `entrant_kind`/`approval`. */
   division_fee_cents: number;
+  /**
+   * RS009 — where a SOLO SIGN-UP currently sits, or null while they are
+   * still in the pool. Null on every non-solo-sign-up row.
+   *
+   * Derived from the roster row pointing back at this entry
+   * (`registration_players.assigned_from_registration_id`, unique where
+   * non-null), never from a mirrored column on `registrations` — the pool
+   * and the roster must not be able to disagree.
+   */
+  assigned_team_id: string | null;
+  assigned_team_name: string | null;
+  /**
+   * RS009 — the solo sign-up's OWN gender, when the division collected one.
+   * The assign sheet needs it to predict a mixed division's refusal BEFORE
+   * the organiser spends a click. Null means unknown, and the sheet must
+   * then predict nothing rather than guess.
+   */
+  player_gender: string | null;
+  /**
+   * RS009 — has this row's division started, in the sense that its rosters
+   * are no longer the organiser's to shuffle? True once the division has any
+   * fixture, or once the competition's own `starts_on` has passed. Mirrors
+   * `unassignSoloSignUp`'s refusal exactly, so the hub never renders a
+   * Remove button the server will refuse — the same rule
+   * `division_fee_cents` was added for (a control that cannot work is worse
+   * than no control).
+   */
+  division_started: boolean;
 }
 
 /** Raw wire shape — `RegistrationListRow` plus the hash the query still
@@ -5118,6 +5363,17 @@ export async function listRegistrations(
         ${rosterCapExpr(tx)} as roster_cap,
         (select count(*)::int from registration_players rp
           where rp.registration_id = r.id and rp.consent_status = 'pending') as consent_pending_count,
+        (select tgt.id from registration_players rp
+          join registrations tgt on tgt.id = rp.registration_id
+          where rp.assigned_from_registration_id = r.id) as assigned_team_id,
+        (select tgt.display_name from registration_players rp
+          join registrations tgt on tgt.id = rp.registration_id
+          where rp.assigned_from_registration_id = r.id) as assigned_team_name,
+        (select rp.gender from registration_players rp
+          where rp.registration_id = r.id
+          order by rp.created_at, rp.id limit 1) as player_gender,
+        (exists (select 1 from fixtures f where f.division_id = r.division_id)
+          or (c.starts_on is not null and c.starts_on <= current_date)) as division_started,
         case when r.status = 'waitlisted' then (
           (select count(*)::int from registrations w
             where w.division_id = r.division_id and w.status = 'waitlisted'
@@ -5126,6 +5382,7 @@ export async function listRegistrations(
       from registrations r
       join registration_groups g on g.id = r.group_id
       join divisions d on d.id = r.division_id
+      join competitions c on c.id = d.competition_id
       join sports sp on sp.key = d.sport_key
       left join registration_settings rs on rs.division_id = r.division_id
       where d.competition_id = ${competitionId}
@@ -5748,14 +6005,30 @@ export async function buildDisputeEvidence(
   // fixtures.venue (frozen since pass 3a) would silently blank the "service
   // provided" venue line on this Stripe dispute evidence document for any
   // fixture played after the cutover.
-  const fixtures = reg.entrant_id
+  // RS009 — a PLACED SOLO SIGN-UP has no entrant of its own (design §6: they
+  // are fielded through the TEAM they were assigned to), so keying the
+  // "service provided" evidence on `reg.entrant_id` alone returned zero
+  // fixtures for someone who actually played — the weakest possible answer
+  // in the one document whose job is to prove they did. Resolve through the
+  // placement for those rows.
+  const evidenceEntrantId =
+    reg.entrant_id ??
+    (
+      await sql<{ entrant_id: string | null }[]>`
+        select tgt.entrant_id from registration_players rp
+        join registrations tgt on tgt.id = rp.registration_id
+        where rp.assigned_from_registration_id = ${regId}`
+    )[0]?.entrant_id ??
+    null;
+
+  const fixtures = evidenceEntrantId
     ? await sql<
         { round_no: number | null; status: string; outcome: unknown; scheduled_at: Date | null; venue: string | null }[]
       >`
       select f.round_no, f.status, f.outcome, f.scheduled_at, ven.name as venue
       from fixtures f
       left join venues ven on ven.id = f.venue_id
-      where f.home_entrant_id = ${reg.entrant_id} or f.away_entrant_id = ${reg.entrant_id}
+      where f.home_entrant_id = ${evidenceEntrantId} or f.away_entrant_id = ${evidenceEntrantId}
       order by f.round_no nulls last, f.scheduled_at nulls last`
     : [];
 
