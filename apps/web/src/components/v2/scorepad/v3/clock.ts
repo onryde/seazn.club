@@ -182,7 +182,15 @@ export function elapsedOf(clock: PadClock, nowMs: number): number {
   // laptop waking up). Without it a stamp could go negative, which the
   // engine's `DurationSeconds` refuses outright.
   const ran = Math.max(0, Math.floor((nowMs - clock.runningSince) / 1000));
-  return clock.base + ran;
+  // Clamp the SUM, not just the run. `adjustClock` deliberately parks a
+  // NEGATIVE `base` on a running clock (`base = nextElapsed - ran`), which
+  // reads correctly for as long as `ran` keeps its real value — but the line
+  // above exists precisely because `ran` may be clamped to 0 by a backwards
+  // system clock, and `base + 0` is then negative. `formatClock` sanitises the
+  // DISPLAY, so it would look fine while `stampOf` emitted a negative
+  // `elapsed` that `DurationSeconds` (`int().nonnegative()`) refuses outright
+  // — the whole event lost to a wall-clock correction.
+  return Math.max(0, clock.base + ran);
 }
 
 /** Resume. A clock already running is returned UNCHANGED (by reference), so a
@@ -358,6 +366,22 @@ export function reseatClock(prev: PadClock | null, spec: PadClockSpec | null): P
   // erase property 6's whole distinction and make every fresh period claim to
   // know that it is at second zero.
   if (prev === null || prev.period !== spec.period) return initClock(spec.period, spec.seed);
+  // An UNKNOWN clock follows a seed that arrives later in the SAME period.
+  // This is not the re-seat the branch below refuses: that one protects a
+  // clock which KNOWS its time from being dragged back to the last stamped
+  // event once per tap. A clock with `known: false` is parked at the
+  // placeholder zero and knows nothing, so a seed is strictly more
+  // information than it has.
+  //
+  // Without this, a pad that mounts (or advances into a period) before any
+  // stamp exists there holds `base: 0` forever, even after `state.asOf` moves
+  // on from another source — a second device, the console's own send path, an
+  // import. The scorer then taps Start, `startClock` sets `known: true` with
+  // `base` still 0, and every dispatch is stamped below the fold's high-water
+  // mark: `NON_MONOTONIC_TIME`, refused, for as long as it takes the local
+  // clock to tick past the real time. `startClock` takes no floor, so
+  // `adjustClock`'s guard cannot cover this.
+  if (!prev.known && spec.seed !== undefined) return initClock(spec.period, spec.seed);
   return prev;
 }
 

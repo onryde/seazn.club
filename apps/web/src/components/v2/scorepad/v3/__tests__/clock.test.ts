@@ -902,6 +902,54 @@ describe("the correction row is a disclosure, and stays out of the way until it 
     expect(order, "the four nudges are not in number-line order").toEqual([...order].sort((a, b) => a - b));
   });
 
+  // -------------------------------------------------------------------------
+  // Branch review, findings 2 and 3. Both are ways the pad can emit a stamp
+  // the server will refuse, and neither is visible on screen — formatClock
+  // sanitises the display, so the pad looks right while every write dies.
+  // -------------------------------------------------------------------------
+
+  it("a backwards system clock cannot make a nudged-down clock emit a negative stamp", () => {
+    // adjustClock parks a NEGATIVE base on a running clock by design:
+    // running 180s, -1 min => base = -60, ran = 180, elapsed = 120.
+    const running = startClock(initClock("Q1", 0), T0);
+    const after180 = T0 + 180_000;
+    expect(elapsedOf(running, after180)).toBe(180);
+    const nudged = adjustClock(running, -CLOCK_NUDGE_SECONDS, after180);
+    expect(nudged.base, "this test is pointless unless base really goes negative").toBeLessThan(0);
+    expect(elapsedOf(nudged, after180)).toBe(120);
+
+    // Now the wall clock jumps BACKWARDS (NTP correction, laptop wake) — the
+    // exact case elapsedOf's Math.max guard exists for. `ran` clamps to 0 and
+    // the sum must not go with it.
+    const jumped = T0 - 5_000;
+    expect(elapsedOf(nudged, jumped)).toBeGreaterThanOrEqual(0);
+    const stamp = stampOf(nudged, jumped);
+    expect(stamp, "a known clock must still produce a stamp").toBeDefined();
+    expect(stamp!.elapsed, "DurationSeconds is int().nonnegative() — a negative elapsed loses the event").
+      toBeGreaterThanOrEqual(0);
+  });
+
+  it("an unknown clock follows a seed that arrives later in the same period", () => {
+    // Mounted into a period with nothing stamped there yet: unknown, parked
+    // at the placeholder zero.
+    const unseeded = reseatClock(null, { period: "Q1", seed: undefined });
+    expect(unseeded!.known).toBe(false);
+    expect(unseeded!.base).toBe(0);
+
+    // Another source stamps the same period forward (a second device, the
+    // console, an import). The pad must take it, or Start will stamp below
+    // the fold's high-water mark and every write is refused NON_MONOTONIC_TIME.
+    const followed = reseatClock(unseeded, { period: "Q1", seed: 640 });
+    expect(followed!.base, "the unknown clock ignored a seed it had no reason to refuse").toBe(640);
+    expect(followed!.known).toBe(true);
+    expect(stampOf(startClock(followed!, T0), T0)!.elapsed).toBe(640);
+
+    // …and the refusal that protects a clock which DOES know its time still
+    // holds: a known clock is never dragged back by a later seed.
+    const known = startClock(reseatClock(null, { period: "Q1", seed: 900 })!, T0);
+    expect(reseatClock(known, { period: "Q1", seed: 300 })).toBe(known);
+  });
+
   it("the fine nudge is ten seconds, and both nudges drive the same adjustClock", () => {
     expect(CLOCK_NUDGE_FINE_SECONDS).toBe(10);
     expect(CLOCK_NUDGE_SECONDS).toBe(60);

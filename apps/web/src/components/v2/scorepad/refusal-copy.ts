@@ -42,8 +42,10 @@ import type { RejectionInfo } from "./use-pad-pipeline";
  * the 5xx never reach a rejection surface at all, so they are deliberately
  * absent rather than mapped to something reassuring.
  *
- * `CONFLICT` is here for completeness only: a 409 goes to the append/replay
- * protocol's renegotiation path, not to this resolver.
+ * `CONFLICT` is deliberately ABSENT: a 409 goes to the append/replay
+ * protocol's renegotiation path and never reaches this resolver, so giving it
+ * copy here would be dead weight that the paired test — which pins this map
+ * against `http.ts`'s own `statusCode()` — would then have to explain away.
  */
 export const REFUSAL_KEY: Readonly<Record<string, MessageKey>> = {
   VALIDATION: "scorepad.refusal.invalid",
