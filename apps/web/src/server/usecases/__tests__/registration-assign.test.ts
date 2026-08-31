@@ -857,6 +857,46 @@ describe.skipIf(!HAS_DB)("a placed solo sign-up who leaves does not stay on the 
     expect(await memberNames(entrantId)).not.toContain("Priya Raman");
   });
 
+  it("still releases when the division HAS fixtures — withdrawal is not unassignment", async () => {
+    // Pins a deliberate asymmetry that a reviewer read as a gap, so nobody
+    // "fixes" it into a match with unassignSoloSignUp.
+    //
+    // unassign refuses once fixtures exist because that is the ORGANISER
+    // reshuffling a roster mid-competition. A withdrawal is the registrant
+    // leaving — already refunded by the time the release runs — and refusing
+    // it to protect a team sheet would trap a person in a competition they
+    // have left. A fixture references the ENTRANT, never a person, so
+    // removing the membership orphans no fixture and rewrites no result.
+    const { auth } = await seedOrg();
+    const { divisionId, team, solo, entrantId } = await seedPlacedAndMaterialised(auth);
+    const [{ org_id: orgId }] = await sql<{ org_id: string }[]>`
+      select org_id from divisions where id = ${divisionId}`;
+    const [stage] = await sql<{ id: string }[]>`
+      insert into stages (division_id, org_id, seq, kind, name)
+      values (${divisionId}, ${orgId}, 1, 'league', 'League') returning id`;
+    await sql`
+      insert into fixtures
+        (stage_id, division_id, org_id, round_no, seq_in_round, fixture_no, home_entrant_id)
+      values (${stage.id}, ${divisionId}, ${orgId}, 1, 1, 1, ${entrantId})`;
+
+    // The organiser path is refused, as designed...
+    await expect(unassignSoloSignUp(auth, { registration_id: solo.id })).rejects.toThrow(
+      /started/i,
+    );
+    // ...and the registrant's own withdrawal is NOT.
+    await withdrawRegistrationOrganiser(auth, solo.id);
+    expect(await rosterOf(team.id)).toHaveLength(1);
+    const members = await sql<{ full_name: string }[]>`
+      select p.full_name from entrant_members em
+      join persons p on p.id = em.person_id
+      where em.entrant_id = ${entrantId}`;
+    expect(members.map((m) => m.full_name)).not.toContain("Priya Raman");
+    // The fixture itself is untouched: it references the ENTRANT, not a person.
+    const [{ n }] = await sql<{ n: string }[]>`
+      select count(*)::text as n from fixtures where division_id = ${divisionId}`;
+    expect(Number(n)).toBe(1);
+  });
+
   it("leaves an UNPLACED solo sign-up's withdrawal alone", async () => {
     // The release must be a no-op for the ordinary case, or every withdrawal
     // in the product starts doing extra work on a row that does not exist.

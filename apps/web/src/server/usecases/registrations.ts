@@ -4484,6 +4484,29 @@ export function resolveRefundPolicy(
  * leaves a person on the entrant with nothing left pointing at why they are
  * there — an orphan no cascade can reach, because the FK cascades from the
  * registration, not from this row.
+ *
+ * NO FIXTURES GUARD HERE, AND THAT ASYMMETRY WITH `unassignSoloSignUp` IS
+ * DELIBERATE. Raised in review as a gap; it is not one, and the reasoning is
+ * recorded so nobody "fixes" it into a match.
+ *
+ * `unassignSoloSignUp` refuses once the division has fixtures because that is
+ * the ORGANISER reshuffling a roster mid-competition, which RS009's brief
+ * explicitly rules is scheduling's territory. The callers here are something
+ * else: a registrant withdrawing (their own right, exercised from the public
+ * status page and already refunded by the time we get here), an organiser
+ * rejecting, or the entry expiring unpaid. Refusing THOSE to protect a team
+ * sheet would trap a person in a competition they have left — a far worse
+ * outcome than the roster changing.
+ *
+ * It is also safe in the way the review feared it was not: a fixture
+ * references `home_entrant_id`/`away_entrant_id`, i.e. the TEAM, never a
+ * person. Removing one `entrant_members` row orphans no fixture and rewrites
+ * no result; it changes who is on the team sheet from now on, which is the
+ * true statement once somebody has withdrawn.
+ *
+ * The residual worth naming: this happens SILENTLY — the captain loses a
+ * player and nobody is told. That is a notification gap, not a correctness
+ * one, and it belongs with RS012's pool-promises work rather than here.
  */
 export async function releaseSoloSignUpPlacement(
   tx: Tx,
