@@ -327,29 +327,69 @@ export interface PadLabelRef {
   path?: string;
 }
 
+/** A stable serialisation of one whole declaration, used ONLY to decide
+ *  whether two occurrences of a label key are the SAME declaration restated
+ *  once per phase. Keys are sorted, so two structurally identical objects
+ *  written with their fields in a different order still compare equal and a
+ *  legitimate pairing is never flagged over cosmetics; `phase` is dropped at
+ *  every level, since differing on it is exactly what a pairing DOES.
+ *
+ *  Review finding 1: `checkLabelKeysUnique` first compared only
+ *  `label`/`where`/`type`/`path` — four shallow fields off `PadLabelRef`,
+ *  which carries no `fields`, `attribution`, `layout` or `gate` at all. Two
+ *  genuinely different actions sharing one key across "pre" and "live" (say,
+ *  different field bounds, or one carrying attribution the other omits) were
+ *  therefore waved through as a "byte-identical restatement" the comment
+ *  claimed to require but never checked. Fingerprinting the whole declaration
+ *  is what makes that claim true. */
+function fingerprint(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "undefined";
+  if (Array.isArray(value)) return `[${value.map(fingerprint).join(",")}]`;
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([k]) => k !== "phase")
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${fingerprint(v)}`).join(",")}}`;
+}
+
 /** `collectPadLabels`'s own refs, plus the phase of the panel each was
- *  declared under. INTERNAL to this file — `checkLabelKeysUnique` is the
- *  only reader, so the phase never leaks into the public `PadLabelRef`
- *  shape `padItemLabelKey` callers already assert on exactly (adding a
- *  field there would break every existing `toEqual` on its result). */
+ *  declared under and a fingerprint of the declaration that owns it.
+ *  INTERNAL to this file — `checkLabelKeysUnique` is the only reader, so
+ *  neither field leaks into the public `PadLabelRef` shape `padItemLabelKey`
+ *  callers already assert on exactly (adding a field there would break every
+ *  existing `toEqual` on its result). */
 interface PhasedPadLabelRef extends PadLabelRef {
   phase: PadPhase;
+  decl: string;
 }
 
 function collectPhasedPadLabels(spec: PadSpec): PhasedPadLabelRef[] {
   const out: PhasedPadLabelRef[] = [];
   for (const panel of spec.panels) {
-    out.push({ ...panel.labelKey, where: "panel", phase: panel.phase });
+    out.push({ ...panel.labelKey, where: "panel", phase: panel.phase, decl: fingerprint(panel) });
     for (const action of panel.actions) {
-      out.push({ ...action.labelKey, where: "action", type: action.type, phase: panel.phase });
+      out.push({ ...action.labelKey, where: "action", type: action.type, phase: panel.phase, decl: fingerprint(action) });
       for (const field of action.fields) {
         if (field.labelKey) {
-          out.push({ ...field.labelKey, where: "field", type: action.type, path: field.path, phase: panel.phase });
+          out.push({
+            ...field.labelKey,
+            where: "field",
+            type: action.type,
+            path: field.path,
+            phase: panel.phase,
+            decl: fingerprint({ type: action.type, field }),
+          });
         }
       }
       for (const item of action.attribution) {
         if (item.labelKey) {
-          out.push({ ...item.labelKey, where: "attribution", type: action.type, path: item.path, phase: panel.phase });
+          out.push({
+            ...item.labelKey,
+            where: "attribution",
+            type: action.type,
+            path: item.path,
+            phase: panel.phase,
+            decl: fingerprint({ type: action.type, item }),
+          });
         }
       }
     }
@@ -358,7 +398,7 @@ function collectPhasedPadLabels(spec: PadSpec): PhasedPadLabelRef[] {
 }
 
 export function collectPadLabels(spec: PadSpec): PadLabelRef[] {
-  return collectPhasedPadLabels(spec).map(({ phase: _phase, ...ref }) => ref);
+  return collectPhasedPadLabels(spec).map(({ phase: _phase, decl: _decl, ...ref }) => ref);
 }
 
 /** The label a given action declares for one of its fields or attribution
@@ -394,11 +434,15 @@ export function checkLabelKeysUnique(spec: PadSpec): string[] {
     // strict as before.
     const first = refs[0]!;
     const phases = new Set(refs.map((ref) => ref.phase));
+    // `decl` is a fingerprint of the WHOLE owning declaration (see
+    // `fingerprint` above), not the four shallow fields `PadLabelRef` happens
+    // to carry — so "the same declaration restated per phase" is actually
+    // checked rather than asserted. `where` is still compared explicitly: it
+    // is the one distinction that lives in the ref rather than the
+    // declaration, and a panel and one of its own fields must never be
+    // treated as a pairing.
     const isPhasePairing =
-      phases.size === refs.length &&
-      refs.every(
-        (ref) => ref.label === first.label && ref.where === first.where && ref.type === first.type && ref.path === first.path,
-      );
+      phases.size === refs.length && refs.every((ref) => ref.decl === first.decl && ref.where === first.where);
     if (!isPhasePairing) {
       problems.push(`labelKey "${key}" is declared ${refs.length} times — label keys must be unique within a module's padSpec`);
     }
