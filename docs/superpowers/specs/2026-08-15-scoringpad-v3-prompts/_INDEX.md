@@ -4528,3 +4528,33 @@ against the wrong directory. Four of the eight failed to COLLECT (0
 assertions), which reads exactly like a broken branch. `cd apps/web &&` in
 the same call, no `--root`: 0 failed. Judge a red on this suite by looking
 for `ENOENT` before believing it.
+
+### R6 visual sign-off — GIVEN by the owner, 2026-08-31
+
+Owner reviewed the recaptured gallery (22 screens, both sports, 1280 + 320,
+from a production build after the W-1 fix) and said: **"all good in gallery"**.
+
+Recorded scope of that approval, deliberately narrow so a later session does
+not over-read it:
+
+- **The screens ship.** Both skins' boards, palettes, chips, docks, sheets and
+  the clock bar are approved as captured. No restyle owed.
+- **W-5 is CLOSED as accepted.** The clock renders as a page-coloured card
+  below the sport-themed board rather than on it. That was raised as a design
+  question, shown, and approved as-is. Do not "fix" it in a later wave without
+  asking again.
+- **W-1 stays fixed** (`a8a9e5c2d`), proven by two rows in `score_events`:
+  `minutes: 2` before, `minutes: 5` after, same class, same door.
+- **W-3 and W-4 are NOT covered by this sign-off.** They are behaviour, not
+  appearance — the minute-only clock correction and the 4-second attribution
+  dock — and were still open when the gallery was approved.
+
+Gallery artifact (owner's, private): the R6 period-pair gallery published from
+this session. Regenerate any time with
+`PLAYWRIGHT_BASE=<base> GALLERY_DIR=<dir> npx playwright test --project=gallery -g "icehockey|hockey"`
+from `apps/web`. **Two traps that cost a run each:** `PLAYWRIGHT_BASE` defaults
+to `:3000`, and `seazn-env env` exports `E2E_PROD_TARGET` as a URL while
+`playwright.config.ts`'s header says `=1` — overriding it to `1` made the run
+hang to the 10-minute kill with no output. Also: under load (15-min avg ~10)
+hockey blew its 180s per-test timeout inside a `fullPage` screenshot and read
+as a failure; on a quiet machine the same test passes in **59.1s**.
