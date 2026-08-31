@@ -371,7 +371,7 @@ describe.skipIf(!HAS_DB)("RS011 — organiser-side eligibility gates", () => {
 
     it("blocks a commit whose roster carries ineligible persons; override succeeds with EXACTLY ONE audit row for the WHOLE import (not one per row)", async () => {
       const auth = await seedOrg();
-      const { comp, division } = await seedDivision(auth, { age_min: 10, age_max: 15 }, "impcup");
+      const { comp } = await seedDivision(auth, { age_min: 10, age_max: 15 }, "impcup");
       const csv = [
         "Club,Team,Player,DOB,Division",
         "Acme SC,Acme U12,Too Old,2000-01-01,impcup",
