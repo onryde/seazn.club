@@ -169,6 +169,25 @@ const EXTRA_STATES = [
   // defects each one photographs and which assertion the conversion FLIPS.
   "11-servingplaceholder",
   "12-bandlimited",
+  // R6 (2026-08-31) — hockey and ice hockey (period-shared.ts). The shared
+  // five STATES never start the clock or open the suspension sheet, so R6's
+  // whole headline feature — `clock()`, declared for the first time by any
+  // v3 skin (task A's own seam) — was invisible to every gallery run
+  // despite being code-complete. `18`/`19` are the clock itself; `20` is R6
+  // fix pass 2 gap 2's own defect made visible (a countdown measured
+  // against the fold's last stamp alone never ticks); `21`/`22` are R6 fix
+  // pass 4 finding 4's fix (the suspension sheet used to claim
+  // `minutes`/`servedBy` on its own padSpec and never ask either). `23`/`24`
+  // are ICE HOCKEY ONLY — see the comment above
+  // `captureIcehockeyShootoutDecided` for why a decided shoot-out needs two
+  // captures, not one, and why the second cannot use `pad()` at all.
+  "18-clock",
+  "19-clockadjust",
+  "20-suspensioncountdown",
+  "21-suspensionminutes",
+  "22-suspensionservedby",
+  "23-shootout",
+  "24-shootoutdecided",
 ] as const;
 type ExtraGalleryState = (typeof EXTRA_STATES)[number];
 
@@ -955,6 +974,390 @@ async function captureRacquetBandLimited(
     // hook returns) are Pro-only.
     await setOrgPlanBySql({ orgId: org.id }, "pro");
   }
+}
+
+// ---------------------------------------------------------------------------
+// R6 (2026-08-31) — hockey / ice hockey (period-shared.ts). One engine
+// kernel, two presets, so ONE shared recipe drives every state both skins
+// have in common; only the class ladder, the vocabulary and (ice hockey
+// alone) the shoot-out differ. See
+// docs/superpowers/specs/2026-08-15-scoringpad-v3-prompts/R6-period-pair.md
+// and its _INDEX.md entries for the wave this closes out.
+// ---------------------------------------------------------------------------
+
+interface PeriodPairApiState {
+  phase?: string;
+  goals?: { home?: number; away?: number };
+}
+interface PeriodPairApiSummary {
+  headline?: string;
+  detail?: {
+    nextAdvance?: string | null;
+    shootoutNext?: string | null;
+    shootout?: { home?: number; away?: number };
+  };
+}
+
+/** `/api/v1/fixtures/:id/state` carries `state`/`summary` verbatim off
+ *  `match_states` (`FixtureStateOut`, server/usecases/fixtures.ts) — the
+ *  SAME two fields `PadHostView` hands the skin (period-shared.ts's own
+ *  `asState`/`asSummary`), read here through the HTTP door instead of a
+ *  direct engine call. */
+async function periodPairState(
+  request: APIRequestContext,
+  fixtureId: string,
+): Promise<{ state: PeriodPairApiState; summary: PeriodPairApiSummary }> {
+  const res = await apiJson<{ state: PeriodPairApiState | null; summary: PeriodPairApiSummary | null }>(
+    request,
+    `/api/v1/fixtures/${fixtureId}/state`,
+  );
+  if (res.status !== 200 || !res.data) {
+    throw new Error(`gallery(period-pair): GET state -> ${res.status} ${JSON.stringify(res.error)}`);
+  }
+  return { state: res.data.state ?? {}, summary: res.data.summary ?? {} };
+}
+
+/**
+ * Walks the period ladder one `period.advance` at a time, asking the kernel
+ * where to go next each time (`summary.detail.nextAdvance`) — the same
+ * technique `v3/__tests__/_period-fold.ts`'s `decidedShootout` proves
+ * against the real fold, driven here through the HTTP door so this capture
+ * never has to hard-code either federation's own period ladder.
+ */
+async function advancePeriodPairTo(
+  request: APIRequestContext,
+  fixtureId: string,
+  sportKey: string,
+  target: string,
+  maxSteps = 12,
+): Promise<void> {
+  for (let i = 0; i < maxSteps; i += 1) {
+    const { state, summary } = await periodPairState(request, fixtureId);
+    if (state.phase === target) return;
+    const next = summary.detail?.nextAdvance;
+    if (!next) {
+      throw new Error(
+        `gallery(period-pair): ${sportKey} ran out of advances before reaching "${target}" (stuck at "${String(state.phase)}")`,
+      );
+    }
+    await postEvent(request, fixtureId, `${sportKey}.period.advance`, { to: next });
+  }
+  throw new Error(`gallery(period-pair): ${sportKey} never reached "${target}" in ${maxSteps} advances`);
+}
+
+/** ONE shoot-out attempt: home scores, away misses — the same deterministic
+ *  pattern `_period-fold.ts`'s `decidedShootout` uses, so a best-of-N
+ *  clinches as early as the cfg allows rather than running every attempt. */
+async function periodPairShootoutAttempt(
+  request: APIRequestContext,
+  fixtureId: string,
+  sportKey: string,
+  homeEntrantId: string,
+  awayEntrantId: string,
+): Promise<void> {
+  const { summary } = await periodPairState(request, fixtureId);
+  const side = summary.detail?.shootoutNext === "away" ? "away" : "home";
+  await postEvent(request, fixtureId, `${sportKey}.shootout.attempt`, {
+    by: side === "home" ? homeEntrantId : awayEntrantId,
+    scored: side === "home",
+  });
+}
+
+/** Attempts until the kernel itself leaves the SHOOTOUT phase. */
+async function decidePeriodPairShootout(
+  request: APIRequestContext,
+  fixtureId: string,
+  sportKey: string,
+  homeEntrantId: string,
+  awayEntrantId: string,
+  maxAttempts = 30,
+): Promise<void> {
+  for (let i = 0; i < maxAttempts; i += 1) {
+    const { state } = await periodPairState(request, fixtureId);
+    if (state.phase !== "SHOOTOUT") return;
+    await periodPairShootoutAttempt(request, fixtureId, sportKey, homeEntrantId, awayEntrantId);
+  }
+  throw new Error(`gallery(period-pair): ${sportKey} shoot-out never decided in ${maxAttempts} attempts`);
+}
+
+interface PeriodPairExtraRecipe {
+  slug: "hockey" | "icehockey";
+  label: string;
+  sportKey: string;
+  variantKey: string;
+  /** The federation's own SHORTEST suspension class — hockey's green card
+   *  (2'), ice hockey's minor (2'). Deliberately the SHORT side (R6
+   *  dispatch): a countdown bug that freezes reads wrong for a full two
+   *  minutes here, where a 10' misconduct would hide the same bug longer. */
+  shortClass: string;
+}
+
+/**
+ * `18`-`22` — the five states no v2-identical shared capture can reach,
+ * because none of the shared `STATES` ever starts the clock or opens the
+ * suspension sheet. One fixture, one page, sequential; hockey and ice
+ * hockey share the recipe because both skins are `makePeriodSkin(spec)`
+ * over the identical chassis (period-shared.ts) — only `recipe` varies.
+ *
+ * ORDER MATTERS. The suspension that seeds `20`'s countdown is stamped
+ * BEFORE the one `page.goto` below, and the clock is started AFTER it —
+ * this file has no live subscription to an externally-posted event
+ * (confirmed by reading both `pad-host.tsx` and `fixture-console.tsx`: the
+ * ONLY interval either owns is the clock's own tick), so a page already
+ * open would never see an API-posted event without a reload, and a reload
+ * would also wipe the running clock's local React state. Posting first and
+ * navigating once sidesteps both.
+ *
+ *   18 — `PadClockBar` actually RUNNING (task A's whole seam: before this
+ *        wave no v3 skin declared `clock()` at all).
+ *   19 — its correction control open (`v3-clock-adjust`, the ∓1:00 pair).
+ *   20 — a penalty/suspension countdown ACTUALLY MOVING. R6 fix pass 2 gap
+ *        2's own defect: measured against the fold's last stamp alone, a
+ *        card read "2:00" for the entire two minutes it ran. Stamping the
+ *        suspension's own `at` is deliberate — with none, `expiresAt` is
+ *        never derived at all (`suspensions.ts`) and the strip falls back
+ *        to the class WORD, which would pass this capture vacuously
+ *        against the exact defect it exists to catch.
+ *   21/22 — the suspension sheet's `minutes`/`servedBy` steps. R6 fix pass
+ *        4 finding 4: before it, the sheet claimed this event type but
+ *        asked only class/reason, silently dropping both fields, so every
+ *        card recorded the class default and the box above counted down to
+ *        the wrong moment.
+ */
+async function capturePeriodPairExtra(
+  page: Page,
+  dir: string,
+  tag: string,
+  measurements: Measurement320[],
+  recipe: PeriodPairExtraRecipe,
+): Promise<ExtraGalleryState[]> {
+  const exTag = `${tag}pp`;
+  const awayName = `Gallery ${recipe.label} Extra Away P1 ${exTag}`;
+  const fx = await seedRosteredFixture(page.request, {
+    label: `Gallery ${recipe.label} Extra ${exTag}`,
+    sportKey: recipe.sportKey,
+    variantKey: recipe.variantKey,
+    home: [
+      { fullName: `Gallery ${recipe.label} Extra Home P1 ${exTag}` },
+      { fullName: `Gallery ${recipe.label} Extra Home P2 ${exTag}` },
+    ],
+    away: [{ fullName: awayName }],
+  });
+
+  await postEvent(page.request, fx.fixtureId, "core.start", {});
+  const { state: started } = await periodPairState(page.request, fx.fixtureId);
+  const phase = started.phase;
+  if (typeof phase !== "string" || phase.length === 0) {
+    throw new Error(`gallery(${recipe.slug}): core.start left no play phase to stamp a suspension against`);
+  }
+  // Stamped BEFORE the one navigation below — see the function doc's own
+  // ORDER MATTERS note.
+  await postEvent(page.request, fx.fixtureId, `${recipe.sportKey}.suspension.start`, {
+    by: fx.homeEntrantId,
+    class: recipe.shortClass,
+    at: { period: phase, elapsed: 0 },
+  });
+
+  await page.goto(await fixturePath(page.request, fx.fixtureId));
+  await expect(pad(page), `gallery(${recipe.slug}): the extra fixture must render a live pad`).toBeVisible({
+    timeout: 20_000,
+  });
+
+  // ---- 18/19 — THE CLOCK ----------------------------------------------------
+  const clockBar = pad(page).locator('[data-role="v3-clock"]');
+  await expect(clockBar, `gallery(${recipe.slug}): clock() is declared — the bar must mount`).toBeVisible({
+    timeout: 20_000,
+  });
+  await pad(page).locator('[data-role="v3-clock-toggle"]').click();
+  const clockValue = pad(page).locator('[data-role="v3-clock-value"]');
+  await captureState(page, dir, "18-clock", recipe.slug, measurements, async () => {
+    await expect(clockBar, `gallery(${recipe.slug}): 18-clock must show the clock RUNNING`).toHaveAttribute(
+      "data-running",
+      "yes",
+    );
+    await expect(clockValue, `gallery(${recipe.slug}): the readout must be a real M:SS clock`).toHaveText(
+      /^\d+:\d{2}$/,
+    );
+  });
+
+  await clockValue.click();
+  const clockAdjust = pad(page).locator('[data-role="v3-clock-adjust"]');
+  await captureState(page, dir, "19-clockadjust", recipe.slug, measurements, async () => {
+    await expect(
+      clockBar,
+      `gallery(${recipe.slug}): 19-clockadjust must still show the clock running underneath the correction panel`,
+    ).toHaveAttribute("data-running", "yes");
+    await expect(clockAdjust, `gallery(${recipe.slug}): the correction panel must be open`).toBeVisible();
+    await expect(pad(page).locator('[data-role="v3-clock-minus"]')).toBeVisible();
+    await expect(pad(page).locator('[data-role="v3-clock-plus"]')).toBeVisible();
+  });
+  await clockValue.click(); // close it again — tidy before the tiles below
+
+  // ---- 20 — A COUNTDOWN THAT ACTUALLY MOVES ---------------------------------
+  const box = pad(page).locator('[data-strip-item-id="box"]');
+  await expect(box, `gallery(${recipe.slug}): the box strip must show the fresh suspension`).toBeVisible({
+    timeout: 20_000,
+  });
+  const openingReading = await box.textContent();
+  await expect
+    .poll(async () => box.textContent(), {
+      timeout: 15_000,
+      message:
+        `gallery(${recipe.slug}): the box countdown never moved off its opening reading "${openingReading}" — ` +
+        "measured against a live clock, not just the fold's last stamp (R6 fix pass 2 gap 2)",
+    })
+    .not.toBe(openingReading);
+  await captureState(page, dir, "20-suspensioncountdown", recipe.slug, measurements, async () => {
+    await expect(box, `gallery(${recipe.slug}): 20-suspensioncountdown must read a real M:SS countdown`).toHaveText(
+      /\d+:\d{2}/,
+    );
+  });
+
+  // ---- 21/22 — THE SUSPENSION SHEET'S OWN minutes/servedBy STEPS -----------
+  // The AWAY side — independent of the HOME suspension already boxed above.
+  await pad(page).locator('[data-tile-id="suspension-away"]').click();
+  const sheet = pad(page).locator('[data-role="v3-sheet"]');
+  await expect(sheet, `gallery(${recipe.slug}): the suspension tile must open the guided sheet`).toBeVisible({
+    timeout: 10_000,
+  });
+  await sheet.locator(`[data-choice-option-id="${recipe.shortClass}"]`).click();
+  // `reason` — band-gated (`when: () => view.band >= 2`), and this harness's
+  // org is Pro (`setOrgPlanBySql`, the shared per-sport setup), band 3.
+  // "tripping" is reason index 0 for BOTH federations (HOCKEY_REASONS,
+  // ICEHOCKEY_REASONS — hockey.tsx/icehockey.tsx).
+  await expect(
+    sheet.locator('[data-choice-option-id="tripping"]'),
+    `gallery(${recipe.slug}): the reason step must follow the class step at band 3`,
+  ).toBeVisible({ timeout: 10_000 });
+  await sheet.locator('[data-choice-option-id="tripping"]').click();
+
+  const minutesField = sheet.getByLabel("Minutes", { exact: true });
+  await expect(minutesField, `gallery(${recipe.slug}): the minutes step must render a numeric field`).toBeVisible({
+    timeout: 10_000,
+  });
+  // Off the class default (2) — proves an EDITABLE field, not a static
+  // number that merely happens to render (R6 fix pass 4 finding 4).
+  await minutesField.fill("4");
+  await expect(minutesField).toHaveValue("4");
+  await captureState(page, dir, "21-suspensionminutes", recipe.slug, measurements, async () => {
+    await expect(
+      minutesField,
+      `gallery(${recipe.slug}): 21-suspensionminutes must still show the edited minutes field`,
+    ).toHaveValue("4");
+  });
+  await sheet.getByRole("button", { name: "Confirm", exact: true }).click();
+
+  await expect(sheet, `gallery(${recipe.slug}): the servedBy step must follow minutes`).toContainText("Served by", {
+    timeout: 10_000,
+  });
+  const servedByCandidate = sheet.locator(`[data-candidate-id="${fx.personIds[awayName]!}"]`);
+  await expect(
+    servedByCandidate,
+    `gallery(${recipe.slug}): servedBy must offer the away side's own on-field roster`,
+  ).toBeVisible();
+  await captureState(page, dir, "22-suspensionservedby", recipe.slug, measurements, async () => {
+    await expect(
+      sheet,
+      `gallery(${recipe.slug}): 22-suspensionservedby must still show the servedBy step`,
+    ).toContainText("Served by");
+    await expect(servedByCandidate).toBeVisible();
+  });
+  const beforeServedBy = await ledgerCount(page.request, fx.fixtureId);
+  await servedByCandidate.click();
+  await waitForLedgerGrowth(page.request, fx.fixtureId, beforeServedBy);
+
+  return ["18-clock", "19-clockadjust", "20-suspensioncountdown", "21-suspensionminutes", "22-suspensionservedby"];
+}
+
+/**
+ * ICE HOCKEY ONLY (R6 dispatch). `23` is mid-shoot-out — the pad still
+ * mounted, the strip's "GWS" label (`pad.icehockey.strip.shootout`) on
+ * screen with a real, non-zero tally. `24` is the DECIDED result, which
+ * needs a SECOND, different capture because `data-testid="score-pad"`
+ * unmounts the instant a fixture decides (`fixture-console.tsx`'s own
+ * `scoring && !decided` gate) — there is no render where the pad is both
+ * mounted AND carrying the shoot-out-credited score. `24` is therefore the
+ * organiser console's own headline paragraph, which is where the exact
+ * defect this closes was witnessed: a decided ice-hockey shoot-out that
+ * read "2 — 2" where the engine's own `summary.headline` held
+ * "3 — 2 (GWS 3–0)" (`kernel.ts`'s own headline grammar, v6/00 §5). Reading
+ * the EXPECTED headline back off the same `/state` endpoint the console
+ * itself renders, rather than hand-computing it, so this capture can never
+ * assert its own miscalculation as ground truth.
+ */
+async function captureIcehockeyShootoutDecided(
+  page: Page,
+  dir: string,
+  tag: string,
+  measurements: Measurement320[],
+): Promise<ExtraGalleryState[]> {
+  const soTag = `${tag}so`;
+  const fx = await seedRosteredFixture(page.request, {
+    label: `Gallery Ice Hockey Shootout ${soTag}`,
+    sportKey: "icehockey",
+    variantKey: "iihf",
+    home: [{ fullName: `Gallery Icehockey SO Home ${soTag}` }],
+    away: [{ fullName: `Gallery Icehockey SO Away ${soTag}` }],
+  });
+  await postEvent(page.request, fx.fixtureId, "core.start", {});
+  // Level in play (1-1) — the shoot-out is then the ONLY thing that can move
+  // the record, so a pad still reading `state.goals` instead of the
+  // engine's official score would show a draw, not a winner.
+  await postEvent(page.request, fx.fixtureId, "icehockey.goal", { by: fx.homeEntrantId });
+  await postEvent(page.request, fx.fixtureId, "icehockey.goal", { by: fx.awayEntrantId });
+  await advancePeriodPairTo(page.request, fx.fixtureId, "icehockey", "SHOOTOUT");
+
+  // ---- 23 — MID SHOOT-OUT: the "GWS" strip label, live, tally 1-0 ----------
+  await periodPairShootoutAttempt(page.request, fx.fixtureId, "icehockey", fx.homeEntrantId, fx.awayEntrantId);
+  await page.goto(await fixturePath(page.request, fx.fixtureId));
+  await expect(pad(page), "gallery(icehockey): mid-shoot-out must still render the live pad").toBeVisible({
+    timeout: 20_000,
+  });
+  const shootoutStrip = pad(page).locator('[data-strip-item-id="shootout"]');
+  await captureState(page, dir, "23-shootout", "icehockey", measurements, async () => {
+    await expect(
+      shootoutStrip,
+      'gallery(icehockey): 23-shootout must carry the "GWS" label (pad.icehockey.strip.shootout)',
+    ).toContainText("GWS", { timeout: 20_000 });
+    await expect(
+      shootoutStrip,
+      "gallery(icehockey): 23-shootout's tally must be the one attempt just taken",
+    ).toContainText("1–0");
+    await expect(
+      v3HalfScore(page, "home"),
+      "gallery(icehockey): mid-shoot-out must NOT credit anything yet — undecided credits nothing",
+    ).toHaveText("1");
+  });
+
+  // ---- 24 — DECIDED: the console's headline, GWS credit and all -----------
+  await decidePeriodPairShootout(page.request, fx.fixtureId, "icehockey", fx.homeEntrantId, fx.awayEntrantId);
+  const { state: decided, summary: decidedSummary } = await periodPairState(page.request, fx.fixtureId);
+  if (decided.phase !== "done") {
+    throw new Error(
+      `gallery(icehockey): the shoot-out fixture never reached "done" (stuck at "${String(decided.phase)}")`,
+    );
+  }
+  const expectedHeadline = decidedSummary.headline;
+  if (typeof expectedHeadline !== "string" || !expectedHeadline.includes("GWS")) {
+    throw new Error(
+      `gallery(icehockey): a decided shoot-out's own headline carries no GWS credit -> "${String(expectedHeadline)}"`,
+    );
+  }
+
+  await page.goto(await fixturePath(page.request, fx.fixtureId));
+  await expect(
+    pad(page),
+    "gallery(icehockey): a decided fixture must unmount the pad (fixture-console.tsx's own scoring && !decided gate)",
+  ).toHaveCount(0, { timeout: 20_000 });
+  const headline = page.locator("header p.font-mono");
+  await captureState(page, dir, "24-shootoutdecided", "icehockey", measurements, async () => {
+    await expect(
+      headline,
+      `gallery(icehockey): 24-shootoutdecided must show the engine's own credited headline, "${expectedHeadline}"`,
+    ).toHaveText(expectedHeadline, { timeout: 20_000 });
+  });
+
+  return ["23-shootout", "24-shootoutdecided"];
 }
 
 const SPORTS: GallerySport[] = [
@@ -2210,21 +2613,51 @@ const SPORTS: GallerySport[] = [
       home: [{ fullName: `Gallery Icehockey Home ${tag}` }],
       away: [{ fullName: `Gallery Icehockey Away ${tag}` }],
     }),
-    // Verified live: scorepad-skins.spec.ts "period skin (icehockey): a
-    // goal and a period advance".
-    scoreOne: async (page, fx) => {
-      await pad(page).getByRole("button", { name: "Goal", exact: true }).click();
-      await pad(page).getByLabel("Kind").selectOption({ label: "Fg" });
-      await pad(page).locator(`[data-value="${fx.homeEntrantId}"]`).click();
-      await pad(page).locator('[data-role="confirm"]').click();
+    // R6 (2026-08-31) — REPLACES the pre-conversion recipe this entry
+    // shipped with. `getByRole("button", {name:"Goal", exact:true})`,
+    // `getByLabel("Kind")` and `[data-value=…]`/`[data-role="confirm"]"`
+    // were the LEGACY period-skin.tsx's own controls; ice hockey converted
+    // to the v3 chassis in this wave (registry.ts) and none of those four
+    // selectors exist there any more — a real gallery run against this
+    // build hung 180s waiting for the exact-match "Goal" button and never
+    // captured 03-scored/04-dock/05-devicelink at all (found running this
+    // harness, not read off the old code — see docs/runbooks/pad-gallery.md
+    // §6's own "scoreOne/openDock times out" row). The v3 goal tile commits
+    // on ONE tap (period-shared.ts's own `buildTiles`; football's own entry
+    // above carries the full reasoning) — no Confirm, no Kind select.
+    scoreOne: async (page) => {
+      await pad(page).locator('[data-tile-id="goal-home"]').click();
     },
-    // Same "Goal" panel, opened a second time and left unconfirmed.
+    // The AWAY goal, tapped second and left open — football's own
+    // convention: the dock is a property of the held tap, so re-opening the
+    // FIRST one is not possible once its hold window has already flushed.
     openDock: async (page) => {
-      await pad(page).getByRole("button", { name: "Goal", exact: true }).click();
-      const kind = pad(page).getByLabel("Kind");
-      if (!(await kind.isVisible({ timeout: 3_000 }).catch(() => false))) return false;
-      await kind.selectOption({ label: "Fg" });
+      await pad(page).locator('[data-tile-id="goal-away"]').click();
+      await expect(
+        pad(page).locator('[data-role="v3-dock"]'),
+        "gallery(icehockey): a goal tap must open the detail dock",
+      ).toBeVisible({ timeout: 10_000 });
       return true;
+    },
+    // Same TIMED-dock race football's own entry documents: the v3 Detail
+    // Dock is a ~HOLD_MS window (queue.ts), shared chassis-wide, not
+    // football-specific.
+    dockProbe: async (page) => {
+      await expect(
+        pad(page).locator('[data-role="v3-dock"]'),
+        "gallery(icehockey): the dock closed before this width was captured — the hold window elapsed mid-capture",
+      ).toBeVisible({ timeout: 5_000 });
+    },
+    captureExtra: async (page, dir, tag, measurements) => {
+      const shared = await capturePeriodPairExtra(page, dir, tag, measurements, {
+        slug: "icehockey",
+        label: "Ice Hockey",
+        sportKey: "icehockey",
+        variantKey: "iihf",
+        shortClass: "minor",
+      });
+      const shootout = await captureIcehockeyShootoutDecided(page, dir, tag, measurements);
+      return [...shared, ...shootout];
     },
   },
   {
@@ -2236,39 +2669,42 @@ const SPORTS: GallerySport[] = [
       home: [{ fullName: `Gallery Hockey Home ${tag}` }],
       away: [{ fullName: `Gallery Hockey Away ${tag}` }],
     }),
-    // Verified live: v6-sports.spec.ts's card/suspension flow — hockey
-    // shares period-skin.tsx with icehockey, but no UI-tapped "Goal"
-    // precedent exists for hockey specifically in this repo, so this uses
-    // the flow that IS proven. "Card" collides with the fidelity band's own
-    // "Card" label (band 1 is literally named "card"); `:not([data-band])`
-    // is the same disambiguator that file uses.
-    scoreOne: async (page, fx, tag) => {
-      await pad(page)
-        .getByRole("button", { name: "Card", exact: true })
-        .and(pad(page).locator("button:not([data-band])"))
-        .click();
-      await pad(page).getByLabel("Class").selectOption("green");
-      await pad(page).getByLabel("Reason").selectOption({ index: 1 });
-      await pad(page).getByLabel("Minutes", { exact: true }).fill("2");
-      await pad(page).locator(`[data-value="${fx.homeEntrantId}"]`).click();
-      await pad(page)
-        .getByRole("button", { name: `Gallery Hockey Home ${tag}`, exact: true })
-        .first()
-        .click();
-      await pad(page).locator('[data-role="confirm"]').click();
+    // R6 (2026-08-31) — REPLACES the pre-conversion recipe (a "Card" flow
+    // through `getByLabel("Class")`/`getByLabel("Reason")`/`[data-value=…]`/
+    // `[data-role="confirm"]"`, all LEGACY period-skin.tsx controls, chosen
+    // originally because no v3 "Goal" precedent existed yet). Hockey has
+    // since converted to the v3 chassis (registry.ts) and none of those
+    // four selectors exist there any more — a real run hung 180s waiting
+    // for the exact-match "Card" button (found running this harness, not
+    // read off the old code). The v3 goal tile is the same one-tap primary
+    // every other converted sport's `scoreOne` uses — see icehockey's own
+    // entry, immediately above, for the full reasoning (both skins share
+    // period-shared.ts's `buildTiles`).
+    scoreOne: async (page) => {
+      await pad(page).locator('[data-tile-id="goal-home"]').click();
     },
     openDock: async (page) => {
-      await pad(page)
-        .getByRole("button", { name: "Card", exact: true })
-        .and(pad(page).locator("button:not([data-band])"))
-        .click();
-      const cls = pad(page).getByLabel("Class");
-      if (!(await cls.isVisible({ timeout: 3_000 }).catch(() => false))) return false;
-      await cls.selectOption("green");
-      await pad(page).getByLabel("Reason").selectOption({ index: 1 });
-      await pad(page).getByLabel("Minutes", { exact: true }).fill("2");
+      await pad(page).locator('[data-tile-id="goal-away"]').click();
+      await expect(
+        pad(page).locator('[data-role="v3-dock"]'),
+        "gallery(hockey): a goal tap must open the detail dock",
+      ).toBeVisible({ timeout: 10_000 });
       return true;
     },
+    dockProbe: async (page) => {
+      await expect(
+        pad(page).locator('[data-role="v3-dock"]'),
+        "gallery(hockey): the dock closed before this width was captured — the hold window elapsed mid-capture",
+      ).toBeVisible({ timeout: 5_000 });
+    },
+    captureExtra: async (page, dir, tag, measurements) =>
+      capturePeriodPairExtra(page, dir, tag, measurements, {
+        slug: "hockey",
+        label: "Hockey",
+        sportKey: "hockey",
+        variantKey: "fih-outdoor",
+        shortClass: "green",
+      }),
   },
   {
     slug: "carrom",
