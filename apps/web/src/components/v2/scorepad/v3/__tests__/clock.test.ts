@@ -24,6 +24,7 @@ import { builtinModules } from "@seazn/engine/sports";
 import { CORE_EVENT_SCHEMAS } from "@seazn/engine/core";
 import {
   CLOCK_NUDGE_SECONDS,
+  CLOCK_NUDGE_FINE_SECONDS,
   adjustClock,
   elapsedOf,
   formatClock,
@@ -864,13 +865,59 @@ describe("the correction row is a disclosure, and stays out of the way until it 
     const open = html(true);
     const row = open.slice(open.indexOf('id="v3-clock-adjust-fx-1"'));
     expect(row).toContain("justify-end");
-    expect(row).toContain("min-w-[88px]");
+    // R6 W-3: four buttons, not two, so the per-button floor came down from
+    // 88px to a 44px tap target — the row still has to be content-sized and
+    // fit 320 without scrolling it sideways, which is the point of the floor
+    // in the first place. 44 is the tap-target minimum, not a design choice.
+    expect(row).toContain("min-w-[44px]");
+    expect(row).toContain("min-height:44px");
     expect(row, "a nudge stretched to fill the row").not.toContain("flex-1");
     // The readout's tray hugs its digits; the LABEL takes the row's slack.
     const bar = open.slice(0, open.indexOf('id="v3-clock-adjust-fx-1"'));
     expect(bar).toContain("min-w-0 flex-1 truncate text-xs");
     expect(bar).toContain("shrink-0 rounded-lg bg-slate-50");
   });
+
+  // -------------------------------------------------------------------------
+  // R6 W-3, owner-ruled 2026-08-31. A minute-only correction cannot express
+  // the error a stop-clock official actually makes (whistle-to-restart lag,
+  // 5-20s), so the row carries a fine pair too. These pin the DELTAS and the
+  // ORDER, because a row of four buttons whose signs or magnitudes are
+  // transposed is worse than the two it replaced.
+  // -------------------------------------------------------------------------
+
+  it("the correction row offers a fine pair as well as a coarse one, read as a number line", () => {
+    const row = (() => {
+      const open = html(true);
+      return open.slice(open.indexOf('id="v3-clock-adjust-fx-1"'));
+    })();
+    for (const role of ["v3-clock-minus", "v3-clock-minus-fine", "v3-clock-plus-fine", "v3-clock-plus"]) {
+      expect(row, `no button with data-role="${role}"`).toContain(`data-role="${role}"`);
+    }
+    // Left-to-right: -1 min, -10s, +10s, +1 min. Asserted by POSITION, so a
+    // transposition that still renders all four buttons cannot pass.
+    const order = ["v3-clock-minus", "v3-clock-minus-fine", "v3-clock-plus-fine", "v3-clock-plus"].map((r) =>
+      row.indexOf(`data-role="${r}"`),
+    );
+    expect(order, "the four nudges are not in number-line order").toEqual([...order].sort((a, b) => a - b));
+  });
+
+  it("the fine nudge is ten seconds, and both nudges drive the same adjustClock", () => {
+    expect(CLOCK_NUDGE_FINE_SECONDS).toBe(10);
+    expect(CLOCK_NUDGE_SECONDS).toBe(60);
+    // Not two mechanisms: the fine delta goes through the SAME function, so
+    // the high-water floor and the known-only-when-it-moves rule apply to it
+    // unchanged. A running clock nudged +10s reads exactly ten seconds later.
+    const started = startClock(initClock("Q1"), 1_000_000);
+    const nudged = adjustClock(started, CLOCK_NUDGE_FINE_SECONDS, 1_000_000);
+    expect(elapsedOf(nudged, 1_000_000)).toBe(elapsedOf(started, 1_000_000) + 10);
+    // …and it obeys the floor exactly as the coarse one does: -10s at the
+    // seed floor moves nothing and returns the clock BY REFERENCE, so it
+    // cannot turn a placeholder zero into a clock claiming to know the time.
+    const atFloor = initClock("Q1");
+    expect(adjustClock(atFloor, -CLOCK_NUDGE_FINE_SECONDS, 1_000_000)).toBe(atFloor);
+  });
+
 
   it("stays monochrome — the correction row must not read as a second scoring surface", () => {
     // The board's recording controls are large and coloured; this group is

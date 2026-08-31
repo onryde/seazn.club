@@ -123,8 +123,19 @@ export function queueStatus(params: {
 // ---------------------------------------------------------------------------
 
 /** The soft-commit hold window — a CHASSIS constant, not per-sport config
- *  (R1 ruling). */
-export const HOLD_MS = 6000;
+ *  (R1 ruling), which is why R6's owner ruling below moves it for EVERY sport
+ *  rather than for the two that raised it.
+ *
+ *  6000 -> 12000 (owner-ruled 2026-08-31, R6 W-4). The window is how long the
+ *  attribution dock stays up asking who an event belongs to. Six seconds is
+ *  not enough to read eleven names on a phone, and the cost of missing it is
+ *  asymmetric: a lingering chip row is tidied by the next tap, while lost
+ *  attribution is permanent — nothing later can recover who was carded. The
+ *  dock blocks nothing while it is open, so the window is close to free.
+ *
+ *  Every test here references this symbol rather than the literal, so the
+ *  window can move without re-baselining any of them. */
+export const HOLD_MS = 12000;
 
 interface HeldTick {
   timer: ReturnType<typeof setTimeout>;

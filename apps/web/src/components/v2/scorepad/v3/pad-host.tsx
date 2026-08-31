@@ -69,6 +69,7 @@ import { RecordingChip } from "./recording-chip";
 import { buildRibbon, type Ribbon } from "./ribbon";
 import {
   CLOCK_NUDGE_SECONDS,
+  CLOCK_NUDGE_FINE_SECONDS,
   adjustClock,
   elapsedOf,
   formatClock,
@@ -841,8 +842,13 @@ export function PadClockBar(props: {
           {/* Right-aligned, and content-sized: the row hangs off the readout it
              *  corrects rather than spanning the board like a tile. */}
           <div className="flex items-stretch justify-end gap-1.5">
+            {/* Coarse OUTWARD, fine INWARD, and read left-to-right as a number
+             *  line: −1 min, −10s, +10s, +1 min. The two a scorer reaches for
+             *  most sit nearest the readout they correct. */}
             {[
               { role: "v3-clock-minus", delta: -CLOCK_NUDGE_SECONDS, label: "scorepad.clock.minute.off" },
+              { role: "v3-clock-minus-fine", delta: -CLOCK_NUDGE_FINE_SECONDS, label: "scorepad.clock.second.off" },
+              { role: "v3-clock-plus-fine", delta: CLOCK_NUDGE_FINE_SECONDS, label: "scorepad.clock.second.on" },
               { role: "v3-clock-plus", delta: CLOCK_NUDGE_SECONDS, label: "scorepad.clock.minute.on" },
             ].map((nudge) => (
               <button
@@ -852,7 +858,7 @@ export function PadClockBar(props: {
                 onClick={() => props.onAdjust(nudge.delta)}
                 title={props.t(`${nudge.label}.hint`)}
                 style={{ minHeight: 44 }}
-                className="min-w-[88px] shrink-0 rounded-full border border-slate-200 bg-slate-50 px-4 font-mono text-sm font-semibold tabular-nums text-slate-700 transition-colors hover:bg-slate-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400"
+                className="min-w-[44px] shrink-0 rounded-full border border-slate-200 bg-slate-50 px-3 font-mono text-[13px] font-semibold tabular-nums text-slate-700 transition-colors hover:bg-slate-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400"
               >
                 {props.t(nudge.label)}
               </button>

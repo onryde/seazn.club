@@ -220,6 +220,18 @@ export function toggleClock(clock: PadClock, nowMs: number): PadClock {
  */
 export const CLOCK_NUDGE_SECONDS = 60;
 
+/** R6 W-3 (owner-ruled 2026-08-31). The COARSE nudge above fixes a clock
+ *  started in the wrong period; this one fixes the error an official actually
+ *  makes. Both codes here are stop-clock, so the drift that accumulates is
+ *  whistle-to-restart lag — 5 to 20 seconds — and a minute-only control
+ *  cannot express it: the umpire either leaves the clock wrong or overshoots
+ *  by 40 seconds. Ten seconds is one tap per typical stoppage.
+ *
+ *  Both feed the SAME `adjustClock`, so the high-water floor, the
+ *  known-only-when-it-moves rule (property 6) and the clamp all apply
+ *  identically — this is a second delta, not a second mechanism. */
+export const CLOCK_NUDGE_FINE_SECONDS = 10;
+
 /**
  * PUT TIME ON, OR TAKE IT OFF — the pad's own clock, and nothing else.
  *
