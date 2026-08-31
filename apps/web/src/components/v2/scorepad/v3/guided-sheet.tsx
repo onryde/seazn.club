@@ -118,6 +118,29 @@ function candidatesForStep(step: SheetPersonStep, view: PoolView): readonly stri
  *  this a value that finite arithmetic already validated. Non-finite input
  *  normalises to 0 — a safe, in-range-by-default baseline — BEFORE the
  *  min/max clamps below apply on top of it. */
+/**
+ * R6 fix, W-1. `SheetNumberStep.initial` admits a literal or a function of the
+ * answers gathered SO FAR in this sheet. The literal form is fixed when the
+ * sheet is built; the function form is resolved here, at the moment a step is
+ * freshly seeded, which is the first instant the earlier steps' answers exist.
+ *
+ * Pure and total: a function that throws or returns a non-finite number would
+ * otherwise put `NaN` into the stepper and out through the payload, so both
+ * fall back to the same `0` that `clampNumberStep` then lifts to `min`. The
+ * caller clamps whichever form resolves, so neither can escape the step's
+ * declared bounds.
+ */
+export function resolveInitial(step: SheetNumberStep, answers: Record<string, string>): number {
+  if (typeof step.initial !== "function") return step.initial;
+  let value: number;
+  try {
+    value = step.initial(answers);
+  } catch {
+    return 0;
+  }
+  return Number.isFinite(value) ? value : 0;
+}
+
 function clampNumberStep(value: number, step: SheetNumberStep): number {
   let v = Number.isFinite(value) ? value : 0;
   if (step.min !== undefined && v < step.min) v = step.min;
@@ -545,7 +568,7 @@ export function GuidedSheet({ spec, views, personNames, t, onComplete, onCancel 
   const [numberEditValue, setNumberEditValue] = useState(0);
   if (step && step.kind === "number" && step.id !== numberEditStepId) {
     const prior = state.answers[step.id];
-    const seeded = prior !== undefined ? Number(prior) : step.initial;
+    const seeded = prior !== undefined ? Number(prior) : resolveInitial(step, state.answers);
     setNumberEditStepId(step.id);
     setNumberEditValue(clampNumberStep(seeded, step));
   }

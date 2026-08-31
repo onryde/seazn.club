@@ -973,14 +973,32 @@ function finiteClassMinutes(view: PadHostView): number[] {
     .filter((m): m is number => typeof m === "number");
 }
 
-/** A reasonable OPENING value for the minutes stepper. Not the class the
- *  scorer will eventually pick — `SheetNumberStep.initial` is fixed when the
- *  sheet is built, before any answer in THIS sheet exists (types.ts's own
- *  note on that field), so this cannot read `answers.class`. The shortest
- *  class either shipped default cfg declares (both sports' lightest card is
- *  2), or `1` when nothing about it is knowable yet — a starting point for
- *  the stepper's own ±/typed-field edit, never a resolved default. */
-function defaultMinutesOf(view: PadHostView): number {
+/** The opening value for the minutes stepper: THE CHOSEN CLASS'S OWN declared
+ *  nominal.
+ *
+ *  R6 fix, W-1. This used to return `Math.min(...finiteClassMinutes(view))` —
+ *  the shortest class in the whole sport — because `SheetNumberStep.initial`
+ *  was a plain `number`, fixed when the sheet was BUILT, and could not read
+ *  `answers.class`. That shipped a real defect: an FIH yellow (declared 5)
+ *  opened at 2, an ice-hockey `misconduct` (declared 10) opened at 2, and
+ *  `kernel.ts`'s `expiryOf(..., payload.minutes ?? cls.minutes, ...)` honours
+ *  the AWARDED value over the class nominal — so accepting the default wrote
+ *  a suspension that ran out early and pointed `BACK ON` at the wrong moment.
+ *  It was strictly WORSE than not collecting the field at all, which is what
+ *  the pad did before the field was made reachable: an absent `minutes` falls
+ *  through to the correct `cls.minutes`.
+ *
+ *  `initial` now admits `(answers) => number` (types.ts), resolved by
+ *  `guided-sheet.tsx` when the step is freshly seeded, so the class picked one
+ *  step earlier is in hand. The fallbacks are unchanged in spirit and only
+ *  reachable when there is genuinely nothing better: no class answered yet
+ *  (the step cannot be reached in that state today, but the seam allows it),
+ *  or a class this cfg does not declare / declares without a numeric duration.
+ *  A permanent class never reaches this step at all — `classIsPermanent`
+ *  gates it out. */
+function defaultMinutesOf(view: PadHostView, classKey?: string): number {
+  const declared = classKey === undefined ? undefined : asCfg(view.cfg).suspensions?.classes?.[classKey]?.minutes;
+  if (typeof declared === "number") return declared;
   const finite = finiteClassMinutes(view);
   return finite.length > 0 ? Math.min(...finite) : 1;
 }
@@ -990,7 +1008,9 @@ function defaultMinutesOf(view: PadHostView): number {
  *  declares — an FIH yellow is a MINIMUM of 5 minutes and 10 is common, so
  *  the umpire must be able to award more than the class nominal — or 20 when
  *  nothing declares one. `__tests__/period-pair.test.ts` pins this against
- *  the real `module.padSpec(cfg)` field so the two cannot drift apart. */
+ *  the real `module.padSpec(cfg)` field — for both sports and both the default
+ *  and `youth` cfgs — so the two cannot drift apart. (That claim was false
+ *  when first written: no such test existed until R6's W-2 fix wrote it.) */
 function suspensionMinutesMaxOf(view: PadHostView): number {
   const finite = finiteClassMinutes(view);
   return finite.length > 0 ? Math.max(...finite) * 2 : 20;
@@ -1042,7 +1062,7 @@ function suspensionSheet(spec: PeriodSkinSpec, view: PadHostView, side: Side, t:
       id: "minutes",
       kind: "number",
       title: `pad.${spec.key}.action.suspensionStart.field.minutes`,
-      initial: defaultMinutesOf(view),
+      initial: (answers) => defaultMinutesOf(view, answers.class),
       min: 1,
       max: suspensionMinutesMaxOf(view),
       // A class with no numeric duration ("for the rest of the match") has

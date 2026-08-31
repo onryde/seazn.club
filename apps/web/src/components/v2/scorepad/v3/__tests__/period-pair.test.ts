@@ -21,7 +21,8 @@ import type { AnySportModule, PadSpec } from "@seazn/engine/sport";
 import { initSquads } from "@seazn/engine/core";
 import { CLOCK_NUDGE_SECONDS, adjustClock, initClock, startClock, reseatClock, elapsedOf, stampOf } from "../clock";
 import { stampFor } from "../pad-host";
-import type { GuidedSheetSpec, PadHostView, SwapSlot, TileSpec } from "../types";
+import { resolveInitial } from "../guided-sheet";
+import type { GuidedSheetSpec, SheetNumberStep, PadHostView, SwapSlot, TileSpec } from "../types";
 import { SPORT_PALETTES, SPORT_TONES } from "../sport-theme";
 import { hockeySkinV3, hockeySpec, HOCKEY_REASONS } from "../skins/hockey";
 import { icehockeySkinV3, icehockeySpec, ICEHOCKEY_REASONS } from "../skins/icehockey";
@@ -700,7 +701,12 @@ describe("a claimed action's sheet + dock reach every padSpec-declared field", (
         for (const step of sheet.steps) {
           if (step.kind === "choice") answers[step.id] = step.options[0]!.id;
           else if (step.kind === "person") answers[step.id] = (step.candidates ?? [])[0] ?? "";
-          else answers[step.id] = String(step.initial);
+          // R6 W-1: `initial` may be a function of the answers gathered so
+          // far, so this must resolve it exactly as `guided-sheet.tsx` does.
+          // `String(step.initial)` stringified the FUNCTION SOURCE into the
+          // payload, and the fold rightly refused it — which is how this
+          // sweep caught the widening.
+          else answers[step.id] = String(resolveInitial(step, answers));
         }
         const payload = sheet.buildPayload(answers);
         const dock = sport.factory(T).dock(type, view, payload);
@@ -764,6 +770,92 @@ describe("the minutes step asks for every class with a numeric duration, and non
       }
       expect(sawPermanent, `${sport.key}'s default cfg declares no permanent class to prove the gate with`).toBe(true);
     });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// 4c-bis. R6 W-1 — the step above pins WHICH classes are asked. This pins WHAT
+// IT OPENS AT, which is the gap that shipped a real defect: every test on this
+// sheet asserted the minutes field was REACHABLE and that the payload CARRIED
+// it, and a reachability sweep is satisfied by ANY value. The stepper seeded
+// `Math.min` across every class in the sport, so an FIH yellow (declared 5)
+// opened at 2 and an ice-hockey `misconduct` (declared 10) opened at 2 —
+// and `kernel.ts`'s `expiryOf(..., payload.minutes ?? cls.minutes, ...)`
+// honours the awarded value OVER the class nominal, so accepting the default
+// wrote a suspension that ran out early.
+//
+// Driven from the engine's own declared class minutes, never a table written
+// out here: a change to `period/suspensions.ts` must move this test with it
+// rather than leave it asserting yesterday's numbers.
+// ---------------------------------------------------------------------------
+
+describe("the minutes step opens at the CHOSEN class's own declared duration", () => {
+  for (const sport of SPORTS) {
+    it(`${sport.key}: every finite class seeds its own nominal, not the sport's shortest`, () => {
+      const cfg = periodCfg(sport.module);
+      const state = livePhaseState(sport, cfg);
+      const view = viewFor(sport, cfg, state);
+      const sheet = sport.factory(T).sheets!(view)["suspension-home"] as GuidedSheetSpec;
+      const minutesStep = sheet.steps.find((s) => s.id === "minutes") as SheetNumberStep | undefined;
+      expect(minutesStep, "no minutes step on the suspension sheet").toBeDefined();
+
+      const classes = (cfg as { suspensions: { classes: Record<string, { minutes: number | null }> } }).suspensions
+        .classes;
+      const finite = Object.entries(classes).filter(([, cls]) => typeof cls.minutes === "number");
+      expect(finite.length, `${sport.key} declares no finite class to seed from`).toBeGreaterThan(0);
+
+      for (const [classKey, cls] of finite) {
+        const seeded = resolveInitial(minutesStep!, { class: classKey });
+        expect(seeded, `${classKey}: stepper opens at ${seeded}, engine declares ${cls.minutes}`).toBe(cls.minutes);
+      }
+
+      // The defect's own signature: at least one class whose nominal is NOT
+      // the sport's shortest, so a regression back to `Math.min` cannot pass
+      // by coincidence on a sport where every class happens to agree.
+      const nominals = finite.map(([, cls]) => cls.minutes as number);
+      const shortest = Math.min(...nominals);
+      expect(
+        nominals.some((m) => m !== shortest),
+        `${sport.key}: every class declares ${shortest}, so this test cannot witness the Math.min regression`,
+      ).toBe(true);
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// 4c-ter. R6 W-2 — `period-shared.ts`'s `suspensionMinutesMaxOf` doc claimed
+// THIS FILE pinned it against the real `module.padSpec(cfg)`. It did not; the
+// claim was false from the day it was written, and the pad's duplicated
+// `Math.max(...finite) * 2 : 20` matched `kernel.ts`'s `suspensionMinutesMax`
+// only by inspection. Both cfgs, because hockey `youth` exists precisely to
+// make this bound differ from adult while the class NAMES stay identical.
+// ---------------------------------------------------------------------------
+
+describe("the minutes step's upper bound is the engine's, not a drifting copy", () => {
+  for (const sport of SPORTS) {
+    // EVERY variant each sport ships, not just the default: hockey's `youth`
+    // exists precisely to make this bound differ from adult while the class
+    // NAMES stay identical, so the default cfg alone cannot witness a drift.
+    for (const { variant, cfg } of shippedVariantCfgs(sport.module)) {
+      it(`${sport.key}/${variant}: step max/min === padSpec's minutes field`, () => {
+        const state = livePhaseState(sport, cfg);
+        const view = viewFor(sport, cfg, state);
+        const sheet = sport.factory(T).sheets!(view)["suspension-home"] as GuidedSheetSpec;
+        const minutesStep = sheet.steps.find((s) => s.id === "minutes") as SheetNumberStep | undefined;
+        expect(minutesStep, "no minutes step on the suspension sheet").toBeDefined();
+
+        const spec = (sport.module.padSpec as (c: unknown) => PadSpec)(cfg);
+        const suspAction = padActionFor(spec, eventTypesOf(sport.spec).suspStart);
+        expect(suspAction, "padSpec declares no suspension.start action").toBeDefined();
+        const minutesField = suspAction!.fields.find((f) => f.path === "minutes") as
+          | { min: number; max: number }
+          | undefined;
+        expect(minutesField, "padSpec's suspension.start declares no minutes field").toBeDefined();
+
+        expect(minutesStep!.max, "the pad's max drifted from padSpec's").toBe(minutesField!.max);
+        expect(minutesStep!.min, "the pad's min drifted from padSpec's").toBe(minutesField!.min);
+      });
+    }
   }
 });
 

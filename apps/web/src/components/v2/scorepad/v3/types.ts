@@ -645,12 +645,26 @@ export interface SheetPersonStep { id: string; kind: "person"; title: string; po
  * either. Widening the map itself would be a contract change every R3-R7
  * skin inherits for one sport's convenience, when the cost of NOT widening
  * it is a one-line `Number(answers.x)` parse at cricket's own call site.
+ *
+ * `initial` WIDENED (R6 fix, W-1 — 2026-08-31): admits `(answers) => number`
+ * alongside the plain literal every step used before. A literal is fixed
+ * when the sheet is BUILT, before this sheet has any answers at all — fine
+ * for cricket's over-summary (prefills from the fold's current total, never
+ * from an earlier step in the SAME sheet) but wrong for a step whose right
+ * opening value depends on what an EARLIER step in this sheet just
+ * answered (period-shared.ts's minutes stepper: the suspension class the
+ * scorer picked one step ago). `guided-sheet.tsx` resolves the function
+ * form at the moment a step is freshly seeded, against the answers
+ * accumulated so far (`GuidedSheetState.answers`) — never against the step
+ * being seeded itself, which has no answer yet. Backward compatible: every
+ * step that passes a literal is untouched, and `clampNumberStep` still
+ * clamps whichever form resolves.
  */
 export interface SheetNumberStep {
   id: string;
   kind: "number";
   title: string;
-  initial: number;
+  initial: number | ((answers: Record<string, string>) => number);
   min?: number;
   max?: number;
   /** Pre-localised, skin-supplied (same rule as WhoLine.servingLabel):
