@@ -829,20 +829,22 @@ export async function submitRegistrationGroup(
       // likely to want it. Two individually-correct changes; the defect lived
       // in the gap. Found by e2e, not by any unit test.
       let finalStatus = regRow.status;
-<<<<<<< HEAD
-      if (!waitlisted && !p.input.free_agent && live.approval === "auto" && feeCents === 0) {
-        const entrantId = await materialise(tx, regRow, p.input.entrant_kind);
-=======
       if (!waitlisted && live.approval === "auto" && feeCents === 0) {
-        await materialise(tx, regRow, p.input.entrant_kind);
->>>>>>> cacc34350 (fix(RS009): a solo sign-up on a FREE division was stranded, and the feature was dead there)
+        const entrantId = await materialise(tx, regRow, p.input.entrant_kind);
         finalStatus = "confirmed";
-        // Forward-compatible with the free-agent materialise() contract
-        // RS009 introduces (`string | null` — a free agent seats no
-        // entrant): a null here means no roster to invite, so skip rather
-        // than push. Today `entrantId` is never null (this branch already
-        // excludes free agents above), so this is a no-op filter, not a
-        // behavior change.
+        // The filter is LIVE, not forward-compatible spare capacity. RS008.1
+        // added it ahead of RS009 with a note that it was a no-op "because
+        // this branch already excludes free agents above" — true then, and
+        // no longer: RS009 removed that exclusion (see the block comment on
+        // the condition above), so a solo sign-up now reaches here and
+        // `materialise` hands back null for it.
+        //
+        // Skipping is correct, not defensive: a solo sign-up seats no
+        // entrant, so there is no roster to invite anyone onto. A `!` here
+        // would compile and feed null into inviteUnclaimedMembers, whose
+        // parameter is `string` — the same shape RS009 had to fix in
+        // confirmPaidRegistration, where an `as unknown as` cast was
+        // suppressing exactly that.
         if (entrantId) autoConfirmedEntrantIds.push(entrantId);
       }
 
