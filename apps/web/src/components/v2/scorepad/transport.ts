@@ -173,8 +173,30 @@ const RETRYABLE_CLIENT_STATUS: ReadonlySet<number> = new Set([408, 429]);
  * The fix is a STATUS CLASS, not an entitlement branch. 402 was one instance;
  * a 403 (device link revoked mid-match), a 401 (session expired) and a 404
  * (fixture deleted under the pad) had the identical symptom and were equally
- * invisible. Retrying any of them with a byte-identical body gets a
- * byte-identical refusal forever, which is the definition of permanent.
+ * invisible.
+ *
+ * "Permanent" here means PERMANENT FOR THIS QUEUED WRITE, not permanent for
+ * all time — a distinction this comment originally got wrong by claiming
+ * every one of them "gets a byte-identical refusal forever". That is plainly
+ * false for 401: the scorer signs in again and the very same request would
+ * succeed. It is the reasoning that was wrong, not the classification, and
+ * the real argument is the one this whole file exists for.
+ *
+ * Leaving 401 retryable would put the tap back in a DURABLE queue behind a
+ * pad reporting "offline" — the network is fine, the session is not — and the
+ * pad would go on showing the action as landed for as long as the scorer
+ * stayed signed out. That is precisely the failure this fix was written to
+ * kill, reintroduced through the door marked "kinder". One tap refused
+ * VISIBLY beats an hour of taps claimed silently.
+ *
+ * What makes that trade honest is the copy, which is load-bearing and must
+ * stay so: `refusal-copy.ts` maps UNAUTHENTICATED to
+ * `scorepad.refusal.signedOut` — "Not recorded — your session has ended. Sign
+ * in again, then retake it." It states the write did NOT happen, why, and the
+ * two things to do about it. If that key is ever softened into something that
+ * does not say "not recorded" and does not say "retake it", this
+ * classification stops being defensible and 401 should move to
+ * RETRYABLE_CLIENT_STATUS instead.
  *
  * The old comment here argued that guessing "permanent" for an unrecognised
  * status "risks silently losing a scorer's action". That reasoning survives
