@@ -439,6 +439,13 @@ const REASON_KEY: Record<string, MessageKey> = {
   target_reached: "reason.target_reached", forfeited: "reason.forfeited",
   hurt: "reason.hurt", out: "reason.out", time: "reason.time",
   weather: "reason.weather", other: "reason.other",
+  // R7/A3 — carrom's own umpire-adjustment reasons (padSpec's ADJUST_REASONS,
+  // carrom.ts:582 — a pad-only enum; `CarromGameAdjust.reason` itself stays
+  // free text, so `declaredEnumMembers()`'s zod-schema walk never reaches
+  // these two and does not force this pair — added anyway for real per-locale
+  // copy rather than the humanized English fallback every locale would
+  // otherwise show).
+  due_coins: "reason.due_coins", foul: "reason.foul",
   // S4 (#428) — PeriodSuspensionReason (period/kernel.ts), shared by hockey
   // (FIH) and icehockey (IIHF); see HOCKEY_SUSPENSION_REASONS /
   // ICEHOCKEY_SUSPENSION_REASONS for which federation offers which member.
@@ -750,6 +757,20 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   "pad.carrom.panel.adjust",
   "pad.carrom.panel.board",
   "pad.carrom.panel.pre",
+  // R7/A3 — the v3 carrom skin's own ribbon copy. Registered HERE, not only
+  // in the four dictionaries, for the identical reason every other skin's
+  // ribbon keys above are: `ribbon.ts`'s `buildRibbon` gates its per-sport
+  // lookup on PAD_LABEL_KEYS MEMBERSHIP before calling `padLabel`, so
+  // dictionary copy with no entry in this list stays silently on the generic
+  // `pad.ribbon.fallback` ("{event} recorded") forever, with nothing
+  // failing — the exact defect boardgame shipped once already (see that
+  // sport's own `scorebug.result.hint` entry above). One key per carrom
+  // event type, all three: every one of them gets a dedicated tile/sheet, so
+  // none is left on the fallback the way cricket leaves its "More"-sheet
+  // remainder.
+  "pad.carrom.ribbon.board.summary",
+  "pad.carrom.ribbon.game.adjust",
+  "pad.carrom.ribbon.toss",
 
   "pad.cricket.action.ball",
   "pad.cricket.action.declare",

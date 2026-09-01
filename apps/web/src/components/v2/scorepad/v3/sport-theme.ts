@@ -467,6 +467,39 @@ export const SPORT_PALETTES: Readonly<Record<string, Partial<SportPalette>>> = O
     ink: "#efe9d8",
     led: "#f4767a",
   },
+
+  /*
+   * CARROM (R7-9a, owner ruling, AMENDED values). Board and board-2 are the
+   * red lacquered border every ICF board carries; `led` is the accent it
+   * gave up, spent on the board's french polish instead. `caution`/
+   * `dismissal` OMITTED, same reasoning as boardgame's own entry above:
+   * carrom has no discipline-card ladder (Laws 51/55 adjustments are
+   * WORDED reasons on the umpire sheet, never a card), so carrying a
+   * yellow/red pair for events that do not exist would be colour as
+   * decoration.
+   *
+   *   board       the red lacquered border — carrom's queen red, moved from
+   *               the accent to the GROUND (the ruling's own words: "the
+   *               better place for it, since the queen is the centre of
+   *               the board and the ground IS the board")
+   *   board-2     one shade up the same border, under the names
+   *   ink         warm cream, legible on both
+   *   led         french polish / the brass striker — the accent the queen
+   *               red gave up when it moved to the ground
+   *
+   * min ΔE76 18.0 (vs badminton, the previous nearest neighbour at 4.9 —
+   * comfortably clear of the ~8 "reads as one colour" floor). ink 14.24:1 /
+   * 12.60:1, led 7.70:1 / 6.81:1 — both computed, not judged; pinned
+   * explicitly in `__tests__/contrast.test.ts` per that file's own
+   * usage-driven tone licence (a palette landing before its skin exists
+   * reds nothing on a bad hex otherwise).
+   */
+  carrom: {
+    board: "#3a0f14",
+    "board-2": "#4a161c",
+    ink: "#f4ece0",
+    led: "#e0a63c",
+  },
 });
 
 /** The custom-property name a token is emitted under. One place, so the

@@ -210,6 +210,14 @@ const EXTRA_STATES = [
   // capture opens is theatre, and none of the five shared states, nor
   // 04-dock, ever reaches the draw tile at all.
   "11-boardgamedrawndock",
+  // R7/A3 (carrom's v3 conversion) — the SECOND question carrom's own board
+  // dock asks. `04-dock` (the shared capture) already shows the "Who broke?"
+  // step, the FIRST question `buildDock` asks after a queen-covered board
+  // commits (`v3/skins/carrom.tsx`); the "Queen covered by?" step only
+  // exists ONE chip-tap deeper, once breaker is answered — the same "a dock
+  // behind a tap no capture opens is theatre" reasoning boardgame's own entry
+  // above states, applied to a SEQUENTIAL dock rather than a branching one.
+  "11-carromqueenbydock",
 ] as const;
 type ExtraGalleryState = (typeof EXTRA_STATES)[number];
 
@@ -2759,34 +2767,102 @@ const SPORTS: GallerySport[] = [
       home: [{ fullName: `Gallery Carrom Home ${tag}` }],
       away: [{ fullName: `Gallery Carrom Away ${tag}` }],
     }),
-    // Verified live: carrom-pad.spec.ts. That file's own route needed a
-    // page.reload() after "Start match" before scoring (a same-tick tap on
-    // a stale pre-phase fold 422s there); this harness drives the console
-    // and polls the ledger for growth after Start match instead — the same
-    // mechanism scorepad-skins.spec.ts's openLiveConsole already proved
-    // avoids that exact staleness for five other sports — so the reload is
-    // omitted here (confirmed live before this harness shipped).
+    // R7/A3 cutover — v3 tapModel T. "Board (queen covered)" is now a
+    // dedicated TILE (`data-tile-id="boardQueen"`, `v3/skins/carrom.tsx`)
+    // that opens a guided SHEET — winner, then queenTo (an INDEPENDENT side:
+    // Law 53(b)/(c) lets the queen be covered by the side that did NOT win
+    // the board), then the coins field — never the universal renderer's
+    // `data-attribution-path` picker + `data-role="confirm"` form this
+    // recipe used to drive. Same side for both answers here (home/home) so
+    // the queen bonus is actually credited, the happy path.
     scoreOne: async (page) => {
-      await pad(page).getByRole("button", { name: "Board (queen covered)", exact: true }).click();
-      await pad(page).getByLabel("Opponent coins left", { exact: true }).fill("4");
-      await pad(page)
-        .locator('[data-attribution-path="winner"]')
-        .getByRole("button", { name: "Home", exact: true })
-        .click();
-      await pad(page)
-        .locator('[data-attribution-path="queenTo"]')
-        .getByRole("button", { name: "Home", exact: true })
-        .click();
-      await pad(page).locator('[data-role="confirm"]').click();
+      await pad(page).locator('[data-tile-id="boardQueen"]').click();
+      const sheet = pad(page).locator('[data-role="v3-sheet"]');
+      await sheet.locator('[data-choice-option-id="home"]').click(); // winner
+      await sheet.locator('[data-choice-option-id="home"]').click(); // queenTo
+      await sheet.getByLabel("Opponent's coins left", { exact: true }).fill("4");
+      await sheet.getByRole("button", { name: "Confirm", exact: true }).click();
     },
+    // The board commits on the sheet's own Confirm — there is no separate
+    // "Start match" staleness to work around here (unlike carrom-pad.spec.ts's
+    // own device-link route): this harness drives the fixture console, whose
+    // openLiveConsole helper already proves the post-Start reload is
+    // unnecessary for every other sport. The DOCK opens automatically off
+    // that SAME commit — carrom's board dock enriches `breaker`
+    // (`v3/skins/carrom.tsx`'s `buildDock`) at band >= 1, and this harness's
+    // org is Pro (`setOrgPlanBySql`, the shared per-sport setup), band 3.
     openDock: async (page) => {
-      const board = pad(page).getByRole("button", { name: "Board (queen covered)", exact: true });
-      if (!(await board.isVisible({ timeout: 3_000 }).catch(() => false))) return false;
-      await board.click();
-      const coins = pad(page).getByLabel("Opponent coins left", { exact: true });
-      if (!(await coins.isVisible({ timeout: 3_000 }).catch(() => false))) return false;
-      await coins.fill("4");
+      await pad(page).locator('[data-tile-id="boardQueen"]').click();
+      const sheet = pad(page).locator('[data-role="v3-sheet"]');
+      await sheet.locator('[data-choice-option-id="home"]').click(); // winner
+      await sheet.locator('[data-choice-option-id="home"]').click(); // queenTo
+      await sheet.getByLabel("Opponent's coins left", { exact: true }).fill("4");
+      await sheet.getByRole("button", { name: "Confirm", exact: true }).click();
+      await expect(
+        pad(page).locator('[data-role="v3-dock"]'),
+        "gallery(carrom): a queen-covered board must open the breaker dock",
+      ).toBeVisible({ timeout: 10_000 });
       return true;
+    },
+    // v3's Detail Dock is a TIMED surface (closes itself HOLD_MS after the
+    // tap that opened it) — the same risk football's/generic's/boardgame's
+    // own docks carry, and the same fix: fail the capture rather than
+    // silently keep a `04-dock` photograph of a dock that already closed
+    // under a slow run.
+    dockProbe: async (page) => {
+      await expect(
+        pad(page).locator('[data-role="v3-dock"]'),
+        `gallery(carrom): the dock closed before this width was captured — the ${HOLD_MS}ms hold ` +
+          "window elapsed mid-capture, so this PNG would have shown a different state to its siblings",
+      ).toBeVisible({ timeout: 5_000 });
+    },
+    // 11-carromqueenbydock — the SECOND question this skin's board dock asks
+    // (see EXTRA_STATES's own comment above). `04-dock` already shows "Who
+    // broke?"; this fresh fixture answers it and captures the "Queen covered
+    // by?" step that follows — reached with winner and queenTo on OPPOSITE
+    // sides this time, so the picker is visibly scoped to AWAY's own roster,
+    // not a repeat of `04-dock`'s home-side breaker picker.
+    captureExtra: async (page, dir, tag, measurements) => {
+      const dockTag = `${tag}qb`;
+      const homeName = `Gallery Carrom QueenBy Home ${dockTag}`;
+      const awayName = `Gallery Carrom QueenBy Away ${dockTag}`;
+      const dk = await seedRosteredFixture(page.request, {
+        label: `Gallery Carrom QueenBy ${dockTag}`,
+        sportKey: "carrom",
+        variantKey: "icf",
+        entrantKind: "individual",
+        home: [{ fullName: homeName }],
+        away: [{ fullName: awayName }],
+        emitCoreStart: true,
+      });
+      await page.goto(await fixturePath(page.request, dk.fixtureId));
+      await pad(page).locator('[data-tile-id="boardQueen"]').click();
+      const sheet = pad(page).locator('[data-role="v3-sheet"]');
+      await sheet.locator('[data-choice-option-id="home"]').click(); // winner
+      await sheet.locator('[data-choice-option-id="away"]').click(); // queenTo — OPPOSITE side
+      await sheet.getByLabel("Opponent's coins left", { exact: true }).fill("3");
+      await sheet.getByRole("button", { name: "Confirm", exact: true }).click();
+      const dock = pad(page).locator('[data-role="v3-dock"]');
+      await expect(dock, "gallery(carrom): a queen-covered board must open the breaker dock first").toBeVisible({
+        timeout: 10_000,
+      });
+      // "Who broke?" — the first question, scoped to HOME (firstBreak
+      // defaults home, `carrom.ts`'s own `init()`). Chips carry no stable
+      // `data-*` hook (`DockChip` has none — types.ts), so this is addressed
+      // by its own resolved NAME, the same convention every other dock's
+      // person chip in this harness uses.
+      await dock.getByRole("button", { name: homeName, exact: true }).click();
+      await expect(
+        dock,
+        "gallery(carrom): answering breaker must move the dock to the queenBy question, scoped to AWAY",
+      ).toContainText(awayName, { timeout: HOLD_MS });
+      await captureState(page, dir, "11-carromqueenbydock", "carrom", measurements, async () => {
+        await expect(
+          dock,
+          "gallery(carrom): 11-carromqueenbydock must still show the queenBy question",
+        ).toBeVisible({ timeout: 5_000 });
+      });
+      return ["11-carromqueenbydock"];
     },
   },
   {

@@ -151,7 +151,18 @@ describe("registry totality", () => {
     expect(resolvePad("boardgame", T).lane).toBe("v3");
   });
 
-  it("every other builtinModules sport still resolves to legacy — the flips touch cricket, football, tennis, badminton, table tennis, volleyball, hockey, ice hockey, generic and boardgame alone", () => {
+  // R7/A3 — carrom, this wave's own deliverable, pinned independently of the
+  // structural sweep below for the same reason every flip before it is: that
+  // sweep only proves resolvePad AGREES with V3_SKINS/LEGACY_SPORTS'
+  // membership, whatever it happens to say, so a task that shipped without
+  // actually flipping carrom would keep it green. Carrom is the ELEVENTH and
+  // LAST engine sport to leave `../../registry.tsx`'s own
+  // `RESOLUTION_KIND: "universal"` lane, which now serves nobody.
+  it("carrom specifically resolves to the v3 lane, not legacy — this wave's own flip, and the LAST sport off the universal lane", () => {
+    expect(resolvePad("carrom", T).lane).toBe("v3");
+  });
+
+  it("every other builtinModules sport still resolves to legacy — CARROM WAS THE LAST ONE: this set now names all eleven shipped sports, and LEGACY_SPORTS is empty", () => {
     const converted = new Set([
       "cricket",
       "football",
@@ -163,14 +174,19 @@ describe("registry totality", () => {
       "icehockey",
       "generic",
       "boardgame",
+      "carrom",
     ]);
     const others = builtinModules.map((m) => m.key).filter((key) => !converted.has(key));
-    // Pins today's known-good shape, same convention registry.test.tsx's own
-    // "the table names exactly the 11 shipped sports" assertion uses.
-    expect(others.length).toBe(1);
-    for (const key of others) {
-      expect(resolvePad(key, T).lane, key).toBe("legacy");
-    }
+    // `others` is EMPTY, not merely small — carrom (R7/A3) was the last sport
+    // left on the legacy lane, per boardgame's own pin above ("...serving
+    // carrom alone"). A `for` loop over an empty array would assert nothing
+    // and stay green even if this whole gate were deleted, so the emptiness
+    // itself is the assertion — not a guard wrapped around a now-vacuous
+    // loop. `LEGACY_SPORTS` (../registry.ts) is asserted directly alongside
+    // it, since `others` and `LEGACY_SPORTS` are two independently-derived
+    // sets that must now agree on the same empty answer.
+    expect(others).toEqual([]);
+    expect(LEGACY_SPORTS.size).toBe(0);
   });
 });
 

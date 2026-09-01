@@ -990,6 +990,58 @@ describe("the tones are NON-TEXT colours, and this is where that stops being a c
     expect(resolveSportPalette("boardgame").board).not.toBe(DEFAULT_SPORT_PALETTE.board);
   });
 
+  // R7-9a (owner ruling, AMENDED values) — carrom's palette. `caution`/
+  // `dismissal` are OMITTED, the identical ruling boardgame's own block above
+  // records: no discipline-card ladder exists for either sport, and carrying
+  // a yellow/red pair for one that has no card events at all is colour as
+  // decoration.
+  //
+  // AN EXPLICIT HEX PIN, not just a floor — same reasoning as boardgame's own
+  // block: every OTHER assertion in this file proves a value CLEARS WCAG, not
+  // that it IS the ruled number, and only a literal pin catches a future
+  // re-nudge to some other legible-looking hex.
+  it("carrom's board/ink/led are EXACTLY the ruled hexes, and ink/led both clear 4.5:1 on board and band", () => {
+    expect(SPORT_PALETTES["carrom"]).toMatchObject({
+      board: "#3a0f14",
+      "board-2": "#4a161c",
+      ink: "#f4ece0",
+      led: "#e0a63c",
+    });
+    const carrom = resolveSportPalette("carrom");
+    const inkBoard = contrastRatio(carrom.board, carrom.ink);
+    const inkBand = contrastRatio(carrom["board-2"], carrom.ink);
+    const ledBoard = contrastRatio(carrom.board, carrom.led);
+    const ledBand = contrastRatio(carrom["board-2"], carrom.led);
+    // The ruling's own measured numbers (R7-9a): ink 14.24:1 / 12.60:1, led
+    // 7.70:1 / 6.81:1 — pinned to 2dp, not just floored past 4.5.
+    expect(inkBoard, "ink on board").toBeCloseTo(14.24, 2);
+    expect(inkBand, "ink on band").toBeCloseTo(12.6, 2);
+    expect(ledBoard, "led on board").toBeCloseTo(7.7, 2);
+    expect(ledBand, "led on band").toBeCloseTo(6.81, 2);
+    expect(inkBoard).toBeGreaterThanOrEqual(4.5);
+    expect(inkBand).toBeGreaterThanOrEqual(4.5);
+    expect(ledBoard).toBeGreaterThanOrEqual(4.5);
+    expect(ledBand).toBeGreaterThanOrEqual(4.5);
+  });
+
+  // The omission is a RULING, not an absence of code — same teeth boardgame's
+  // own block owes a later silent re-add.
+  it("carrom declares NO caution and NO dismissal of its own — the closed vocabulary stays closed here", () => {
+    expect(SPORT_PALETTES["carrom"]).not.toHaveProperty("caution");
+    expect(SPORT_PALETTES["carrom"]).not.toHaveProperty("dismissal");
+    expect(resolveSportPalette("carrom").caution).toBe(DEFAULT_SPORT_PALETTE.caution);
+    expect(resolveSportPalette("carrom").dismissal).toBe(DEFAULT_SPORT_PALETTE.dismissal);
+  });
+
+  // Same guard as boardgame's own, above: without this, deleting the carrom
+  // entry would silently fall back to a complete, readable default palette
+  // and every assertion above would keep passing while the sport rendered in
+  // cricket's colours.
+  it("carrom declares its OWN palette entry, so the pins above are measuring it and not the default fallback", () => {
+    expect(Object.keys(SPORT_PALETTES)).toContain("carrom");
+    expect(resolveSportPalette("carrom").board).not.toBe(DEFAULT_SPORT_PALETTE.board);
+  });
+
   // R3 review round — THIS LICENCE HAD ALMOST NO TEETH. It grepped globals.css
   // for the literal `color: var(--sport-<tone>)` and therefore missed the
   // unspaced form, any wrapper (`color-mix(...)`), an arbitrary Tailwind value

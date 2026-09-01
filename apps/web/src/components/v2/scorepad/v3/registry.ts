@@ -49,15 +49,16 @@ import { builtinModules } from "@seazn/engine/sports";
 import type { TFn } from "./context-strip";
 import type { SkinDefV3 } from "./types";
 import { badmintonSkinV3 } from "./skins/badminton";
+import { boardgameSkinV3 } from "./skins/boardgame";
+import { carromSkinV3 } from "./skins/carrom";
 import { cricketSkinV3 } from "./skins/cricket";
 import { footballSkinV3 } from "./skins/football";
+import { genericSkinV3 } from "./skins/generic";
 import { hockeySkinV3 } from "./skins/hockey";
 import { icehockeySkinV3 } from "./skins/icehockey";
 import { tabletennisSkinV3 } from "./skins/tabletennis";
 import { tennisSkinV3 } from "./skins/tennis";
 import { volleyballSkinV3 } from "./skins/volleyball";
-import { genericSkinV3 } from "./skins/generic";
-import { boardgameSkinV3 } from "./skins/boardgame";
 
 /**
  * Sport key -> v3 skin FACTORY. Empty through R1; populated sport-by-sport
@@ -93,10 +94,27 @@ export const V3_SKINS: Partial<Record<string, (t: TFn) => SkinDefV3>> = Object.c
 // R5/C1 — badminton, the fourth conversion and the FIRST of the three sports
 // that share `sports/setbased`'s kernel.
 V3_SKINS.badminton = badmintonSkinV3;
+// R7/A2 — boardgame, the eighth conversion, and the second of the two sports
+// that had been left on `../registry.tsx`'s `RESOLUTION_KIND: "universal"`
+// lane after A1. The FACTORY, never `boardgameSkinV3(t)`, same reason as
+// every entry here.
+V3_SKINS.boardgame = boardgameSkinV3;
+// R7/A3 — carrom, the eleventh and LAST conversion, and the sport that
+// closes out `../registry.tsx`'s `RESOLUTION_KIND: "universal"` lane
+// entirely: every engine sport now resolves to a v3 skin, and
+// `LEGACY_SPORTS` (below) is empty from this line on.
+V3_SKINS.carrom = carromSkinV3;
 // R2 — cricket, the first conversion.
 V3_SKINS.cricket = cricketSkinV3;
 // R3/task B2 — football, the second conversion.
 V3_SKINS.football = footballSkinV3;
+// R7/A1 — generic, the seventh conversion. NOT a fallback: `generic` is a
+// first-class, user-selectable catalog entry ("Generic"), and therefore the
+// scoring surface for every sport this engine does not model. It is also the
+// first conversion whose VARIANT changes the pad — `padSpec` branches on
+// `cfg.resultMode` — so `skins/generic.tsx` builds two boards from one skin.
+// The FACTORY, never `genericSkinV3(t)`, same reason as every entry above.
+V3_SKINS.generic = genericSkinV3;
 // R6 — field hockey, and the FIRST skin in the programme to declare
 // `SkinDefV3.clock()`. Declaring it is the single switch that mounts
 // `PadClockBar` and turns on `at` stamping in `pad-host.tsx`'s `send` gateway,
@@ -116,18 +134,6 @@ V3_SKINS.tennis = tennisSkinV3;
 // `sports/setbased` sports. `skins/racquet-skin.tsx` (v2) is now unreferenced
 // by any sport and is deleted in that wave's own follow-up task, not here.
 V3_SKINS.volleyball = volleyballSkinV3;
-// R7/A1 — generic, the seventh conversion. NOT a fallback: `generic` is a
-// first-class, user-selectable catalog entry ("Generic"), and therefore the
-// scoring surface for every sport this engine does not model. It is also the
-// first conversion whose VARIANT changes the pad — `padSpec` branches on
-// `cfg.resultMode` — so `skins/generic.tsx` builds two boards from one skin.
-// The FACTORY, never `genericSkinV3(t)`, same reason as every entry above.
-V3_SKINS.generic = genericSkinV3;
-// R7/A2 — boardgame, the eighth conversion, and the second of the two sports
-// still on `../registry.tsx`'s `RESOLUTION_KIND: "universal"` lane after A1.
-// That lane now serves carrom alone. The FACTORY, never `boardgameSkinV3(t)`,
-// same reason as every entry above.
-V3_SKINS.boardgame = boardgameSkinV3;
 
 /**
  * Every engine sport key NOT already owned by `V3_SKINS`, computed from
@@ -145,9 +151,10 @@ V3_SKINS.boardgame = boardgameSkinV3;
  * R4 for tennis, R5/C1 for badminton, R5/C2 for table tennis and R5/C3 for
  * volleyball — the third and last `sports/setbased` sibling, closing out the
  * racquet family, R7/A1 for generic — the universal renderer's first sport —
- * and R7/A2 for boardgame, the universal renderer's second, which leaves
- * `../registry.tsx`'s `RESOLUTION_KIND: "universal"` lane serving carrom
- * alone.
+ * R7/A2 for boardgame, the universal renderer's second, and R7/A3 for
+ * carrom, the universal renderer's THIRD AND LAST: `../registry.tsx`'s
+ * `RESOLUTION_KIND: "universal"` lane now serves no sport at all, and
+ * `LEGACY_SPORTS` below is empty.
  *
  * `CONVERTED_SPORTS` below is a LITERAL list, deliberately not
  * `Object.keys(V3_SKINS)`: deriving one from the other would make the totality
@@ -158,17 +165,20 @@ const CONVERTED_SPORTS: ReadonlySet<string> = new Set([
   // Alphabetical, and kept in step with `V3_SKINS` above by
   // `__tests__/registry-totality.test.ts` — a key in one set and not the other
   // fails as loudly as a key in neither. See `V3_SKINS`' own note for why the
-  // order is a concurrency agreement rather than housekeeping.
+  // order is a concurrency agreement rather than housekeeping. Now that
+  // carrom (R7/A3) is the eleventh and final entry, this set names every
+  // engine sport and never grows again.
   "badminton",
+  "boardgame",
+  "carrom",
   "cricket",
   "football",
+  "generic",
   "hockey",
   "icehockey",
   "tabletennis",
   "tennis",
   "volleyball",
-  "generic",
-  "boardgame",
 ]);
 
 export const LEGACY_SPORTS: ReadonlySet<string> = new Set(
