@@ -209,6 +209,14 @@ jobs:
       DATABASE_SSL: disable
       # Session signing secret (jose HS256) — CI-only dummy.
       AUTH_SECRET: ci-only-insecure-secret-please-change-in-prod-0123456789
+      # x-cron-secret bearer for /api/cron/registrations (RS012's walkthrough
+      # drives the sweep directly, apps/web/e2e/walkthrough/rs012-solo-signup-
+      # pool.spec.ts:405). CI-only dummy, same convention as AUTH_SECRET —
+      # this job's server/DB are ephemeral, so it needs no relation to the
+      # real `secrets.CRON_SECRET` registrations-sweep.yml uses against
+      # staging/prod. Server and Playwright process both read it from this
+      # one job-level var, same as every other CI-only credential here.
+      CRON_SECRET: ci-only-e2e-cron-secret-0123456789
       # Stub, not empty: publicStorageUrl("") hides every badge/crest, making
       # logo assertions untestable. No real Supabase call rides on it in e2e.
       NEXT_PUBLIC_SUPABASE_URL: "https://stub.supabase.co"
