@@ -7,6 +7,14 @@
 // each one (bestDefense); the final move must deliver checkmate outright.
 // depth=2 (the default) is unchanged behaviour — same MATE2 pack, same
 // phase-1-then-phase-2 flow, same progress keys.
+//
+// `range` (depth===2 only) scopes a lesson to a slice of MATE2 so multiple
+// quest lessons that all launch "mateInTwo" don't share one global puzzle
+// progression — mirrors MateInOne's `range` fix. When given, progress is
+// backed by the generic tactic-pack store keyed `mate2_${start}_${end}`,
+// reusing the same isTacticSolved/setTacticSolved/tacticCount/resetTactics
+// mechanism depth===3 already rides under its own gameId. depth===3's
+// mateInThree path is completely untouched by `range`.
 import { useCallback, useEffect, useState } from "react";
 import {
   allLegalMoves,
@@ -39,20 +47,26 @@ function firstUnsolved(total: number, isSolved: (i: number) => boolean) {
   return 0;
 }
 
-export function MateInTwo({ depth = 2 }: { depth?: 2 | 3 }) {
-  const PACK: MatePuzzle[] = depth === 3 ? MATE3 : MATE2;
-  const gameId = depth === 3 ? "mateInThree" : "mateInTwo";
+export function MateInTwo({ depth = 2, range }: { depth?: 2 | 3; range?: [number, number] }) {
+  const scoped = depth === 2 && range;
+  const PACK: MatePuzzle[] = depth === 3 ? MATE3 : scoped ? MATE2.slice(range[0], range[1]) : MATE2;
+  const packKey = scoped ? `mate2_${range[0]}_${range[1]}` : null;
+  const gameId = depth === 3 ? "mateInThree" : (packKey ?? "mateInTwo");
   const progress = useProgress();
   const { later, clearPending } = useLater();
 
   // depth=3's progress rides the generic tactic-pack store under its own
-  // gameId key; depth=2 keeps the original dedicated MATE2 fields untouched.
+  // gameId key; a ranged depth=2 lesson rides the same store under its own
+  // packKey; an unranged depth=2 (arcade/free-play) keeps the original
+  // dedicated MATE2 fields untouched.
   const isSolved = (i: number) =>
-    depth === 3 ? progress.isTacticSolved(gameId, i) : progress.isSolved2(i);
+    depth === 3 || packKey ? progress.isTacticSolved(gameId, i) : progress.isSolved2(i);
   const markSolved = (i: number) =>
-    depth === 3 ? progress.setTacticSolved(gameId, i) : progress.setSolved2(i);
-  const solvedCount = () => (depth === 3 ? progress.tacticCount(gameId) : progress.solved2Count());
-  const resetSolved = () => (depth === 3 ? progress.resetTactics(gameId) : progress.resetPuzzles2());
+    depth === 3 || packKey ? progress.setTacticSolved(gameId, i) : progress.setSolved2(i);
+  const solvedCount = () =>
+    depth === 3 || packKey ? progress.tacticCount(gameId) : progress.solved2Count();
+  const resetSolved = () =>
+    depth === 3 || packKey ? progress.resetTactics(gameId) : progress.resetPuzzles2();
 
   const [cur, setCur] = useState(() => firstUnsolved(PACK.length, isSolved));
   const [position, setPosition] = useState<string[]>(() => parseFEN(PACK[cur].fen).board);
@@ -111,7 +125,7 @@ export function MateInTwo({ depth = 2 }: { depth?: 2 | 3 }) {
       if (n < PACK.length) load(firstUnsolved(PACK.length, isSolved));
       else
         setStatus(
-          `<strong>Pack complete!</strong> ${PACK.length === 9 ? "Nine" : "Twelve"} forced mates — real chess player thinking. ★★★`,
+          `<strong>Pack complete!</strong> ${PACK.length} forced mates — real chess player thinking. ★★★`,
         );
     }, 1600);
   }

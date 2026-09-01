@@ -35,6 +35,7 @@ function renderGame(game: GameId, opts: Opts) {
   const pieces = (opts.pieces as string[] | undefined) ?? undefined;
   const pack = (opts.pack as string | undefined) ?? undefined;
   const opening = (opts.opening as string | undefined) ?? undefined;
+  const range = opts.range as [number, number] | undefined;
   switch (game) {
     case "squareRace":
       return <SquareRace />;
@@ -43,9 +44,9 @@ function renderGame(game: GameId, opts: Opts) {
     case "pawnWars":
       return <PawnWars />;
     case "mateInOne":
-      return <MateInOne />;
+      return <MateInOne range={range} />;
     case "mateInTwo":
-      return <MateInTwo />;
+      return <MateInTwo range={range} />;
     case "mateInThree":
       return <MateInTwo depth={3} />;
     case "hangingHunt":

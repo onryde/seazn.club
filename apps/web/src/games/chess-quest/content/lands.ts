@@ -1,7 +1,7 @@
 // Chess Quest lands — transcribed verbatim from the original app
 // (chess-quest js/curriculum.js LANDS), later extended past the original
 // app's scope. 5 Track 1 lands + 4 Track 2 lands + Track 3 (Opening Range)
-// + Track 4 (Grandmaster Gorge).
+// + Track 4 (Puzzle Gorge).
 
 export type Land = {
   id: number;
@@ -120,7 +120,7 @@ export const LANDS: Land[] = [
   {
     id: 11,
     glyph: "♟",
-    name: "Grandmaster Gorge",
+    name: "Puzzle Gorge",
     weeks: [54, 62],
     track: 4,
     goal: "Deeper forcing chess: mate in three moves, and tactics that need a setup move before the point lands.",

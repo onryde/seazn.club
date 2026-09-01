@@ -3,6 +3,15 @@
 // Mate in 1 — solve the pack, any legal mating move accepted. Port of
 // js/games.js mateInOne (431–538); completion copy uses MATE1.length (the
 // original hardcoded "12" but the pack has 18).
+//
+// `range` scopes a lesson to a slice of MATE1 (e.g. [0,3) for the quest's
+// first "mateInOne" lesson) so multiple quest lessons that all launch this
+// game don't share one global puzzle progression. When given, progress is
+// backed by the generic tactic-pack store (progress.isTacticSolved/
+// setTacticSolved/tacticCount/resetTactics) keyed `mate1_${start}_${end}` —
+// the same mechanism TacticTrainer already uses per pack. When omitted
+// (arcade/free-play), behavior is unchanged: the full MATE1 pool via the
+// dedicated progress.isSolved/setSolved/solvedCount/resetPuzzles fields.
 import { useCallback, useEffect, useState } from "react";
 import { applyMove, isMate, isWhitePiece, legalTargets, parseFEN, sqIdx } from "../../engine";
 import { MATE1 } from "../../content/puzzles";
@@ -17,16 +26,25 @@ import { GameShell } from "../GameShell";
 import { PuzzleDots } from "./PuzzleDots";
 import { Chip, runMateMiss } from "./mate-miss-coach";
 
-function firstUnsolved(isSolved: (i: number) => boolean) {
-  for (let i = 0; i < MATE1.length; i++) if (!isSolved(i)) return i;
+function firstUnsolved(total: number, isSolved: (i: number) => boolean) {
+  for (let i = 0; i < total; i++) if (!isSolved(i)) return i;
   return 0;
 }
 
-export function MateInOne() {
+export function MateInOne({ range }: { range?: [number, number] }) {
   const progress = useProgress();
   const { later, clearPending } = useLater();
-  const [cur, setCur] = useState(() => firstUnsolved(progress.isSolved));
-  const [position, setPosition] = useState<string[]>(() => parseFEN(MATE1[cur].fen).board);
+  const PACK = range ? MATE1.slice(range[0], range[1]) : MATE1;
+  const packKey = range ? `mate1_${range[0]}_${range[1]}` : null;
+  const gameId = packKey ?? "mateInOne";
+  const isSolved = (i: number) => (packKey ? progress.isTacticSolved(packKey, i) : progress.isSolved(i));
+  const markSolved = (i: number) =>
+    packKey ? progress.setTacticSolved(packKey, i) : progress.setSolved(i);
+  const solvedCount = () => (packKey ? progress.tacticCount(packKey) : progress.solvedCount());
+  const resetSolved = () => (packKey ? progress.resetTactics(packKey) : progress.resetPuzzles());
+
+  const [cur, setCur] = useState(() => firstUnsolved(PACK.length, isSolved));
+  const [position, setPosition] = useState<string[]>(() => parseFEN(PACK[cur].fen).board);
   const [selIdx, setSelIdx] = useState(-1);
   const [tries, setTries] = useState(0);
   const [busy, setBusy] = useState(false);
@@ -37,40 +55,40 @@ export function MateInOne() {
   const [chips, setChips] = useState<Chip[]>([]);
   const [coachTap, setCoachTap] = useState<((idx: number) => void) | null>(null);
   const [status, setStatus] = useState(
-    () => `<strong>${MATE1[cur].name}</strong> — white moves and checkmates in one!`,
+    () => `<strong>${PACK[cur].name}</strong> — white moves and checkmates in one!`,
   );
 
   const load = useCallback(
     (i: number) => {
       clearPending();
       setCur(i);
-      setPosition(parseFEN(MATE1[i].fen).board);
+      setPosition(parseFEN(PACK[i].fen).board);
       setHighlights({});
       setSelIdx(-1);
       setTries(0);
       setBusy(false);
       setChips([]);
       setCoachTap(null);
-      setStatus(`<strong>${MATE1[i].name}</strong> — white moves and checkmates in one!`);
+      setStatus(`<strong>${PACK[i].name}</strong> — white moves and checkmates in one!`);
     },
-    [clearPending],
+    [PACK, clearPending],
   );
 
   useEffect(() => () => clearPending(), [clearPending]);
 
   function solved(i: number) {
-    progress.setSolved(i);
-    const n = progress.solvedCount();
-    progress.setGameStars("mateInOne", STAR_RULES.packStars(n));
+    markSolved(i);
+    const n = solvedCount();
+    progress.setGameStars(gameId, STAR_RULES.packStars(n));
     setStatus("<strong>Checkmate!</strong> 🎉 The king has nowhere to run.");
     voice.say("Checkmate! The king has nowhere to run!");
     celebrate();
     setBusy(true);
     later(() => {
-      if (n < MATE1.length) load(firstUnsolved(progress.isSolved));
+      if (n < PACK.length) load(firstUnsolved(PACK.length, isSolved));
       else
         setStatus(
-          `<strong>Pack complete!</strong> All ${MATE1.length} checkmates found. ★★★`,
+          `<strong>Pack complete!</strong> All ${PACK.length} checkmates found. ★★★`,
         );
     }, 1400);
   }
@@ -107,7 +125,7 @@ export function MateInOne() {
         setBusy(true);
         runMateMiss({
           next,
-          resetBoard: parseFEN(MATE1[cur].fen).board,
+          resetBoard: parseFEN(PACK[cur].fen).board,
           extraNudge: t >= 2 ? " (The Hint button is your friend!)" : "",
           setStatus,
           setChips,
@@ -127,22 +145,22 @@ export function MateInOne() {
   }
 
   function hint() {
-    const from = sqIdx(MATE1[cur].solution.slice(0, 2));
+    const from = sqIdx(PACK[cur].solution.slice(0, 2));
     setHighlights({ [from]: "hint" });
-    setStatus(`<strong>${MATE1[cur].name}</strong> — ${MATE1[cur].hint}`);
+    setStatus(`<strong>${PACK[cur].name}</strong> — ${PACK[cur].hint}`);
   }
 
   return (
     <GameShell
       title="Mate in 1"
-      score={`🧩 ${progress.solvedCount()} / ${MATE1.length} solved`}
+      score={`🧩 ${solvedCount()} / ${PACK.length} solved`}
       status={status}
       chips={chips}
       extra={
         <PuzzleDots
-          count={MATE1.length}
+          count={PACK.length}
           current={cur}
-          isSolved={progress.isSolved}
+          isSolved={isSolved}
           onPick={load}
         />
       }
@@ -155,7 +173,7 @@ export function MateInOne() {
             type="button"
             className="btn btn-ghost"
             onClick={() => {
-              progress.resetPuzzles();
+              resetSolved();
               load(0);
             }}
           >
@@ -167,7 +185,7 @@ export function MateInOne() {
       <Board
         position={position}
         labels
-        orientation={parseFEN(MATE1[cur].fen).whiteToMove ? "white" : "black"}
+        orientation={parseFEN(PACK[cur].fen).whiteToMove ? "white" : "black"}
         highlights={highlights}
         popToken={pop}
         shakeToken={shake}

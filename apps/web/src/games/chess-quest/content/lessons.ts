@@ -1,7 +1,7 @@
 // Chess Quest lessons — transcribed verbatim from the original app
 // (chess-quest js/curriculum.js WEEKS, renamed LESSONS), later extended past
 // the original app's scope. 62 lessons: Track 1 = 1–24, Track 2 "Rising
-// Player" = 25–48, Track 3 "Opening Range" = 49–53, Track 4 "Grandmaster
+// Player" = 25–48, Track 3 "Opening Range" = 49–53, Track 4 "Puzzle
 // Gorge" = 54–62. Both copy registers (Story for kids, Classic for adult
 // learners) carried over unchanged.
 
@@ -24,7 +24,7 @@ export type Lesson = {
   land: number; // owning land id (1..9)
   title: string;
   game: GameId | null; // null = play on a real board
-  gameOpts?: { pieces?: string[]; pack?: string; opening?: string };
+  gameOpts?: { pieces?: string[]; pack?: string; opening?: string; range?: [number, number] };
   learn: string;
   play: string;
   spark: string; // Story register
@@ -155,6 +155,7 @@ export const LESSONS: Lesson[] = [
     land: 2,
     title: "Checkmate vs. the Sneaky Tie",
     game: "mateInOne",
+    gameOpts: { range: [0, 3] },
     learn:
       "Checkmate: the king is attacked and has no escape — game over. Stalemate: not in check but no legal moves — a draw that steals wins.",
     play: "Her first mate-in-1 puzzles right here on this page, plus a “mate or stalemate?” quiz on the real board.",
@@ -189,6 +190,7 @@ export const LESSONS: Lesson[] = [
     land: 3,
     title: "The Lawnmower",
     game: "mateInOne",
+    gameOpts: { range: [3, 6] },
     learn:
       "The two-rook ladder mate: rooks take turns pushing the lonely king back, row by row, to the edge.",
     play: "King + two rooks vs. king on the real board until it’s easy, then race a two-minute timer. Ladder puzzles here too.",
@@ -209,6 +211,7 @@ export const LESSONS: Lesson[] = [
     land: 3,
     title: "The Queen’s Box",
     game: "mateInOne",
+    gameOpts: { range: [6, 9] },
     learn:
       "King + queen vs. king: the queen shrinks the box around the enemy king, her king walks over to help finish. Watch out for stalemate!",
     play: "Repetitions from different corners. Bonus point every time she pauses to ask “is this stalemate?” before moving.",
@@ -226,6 +229,7 @@ export const LESSONS: Lesson[] = [
     land: 3,
     title: "Puzzle Storm",
     game: "mateInOne",
+    gameOpts: { range: [9, 12] },
     learn: "Mate-in-1 with every piece — queen, rook, bishop, knight, even a pawn.",
     play: "Five to ten puzzles a day: the pack here, plus ChessKid or Lichess. Start a puzzle sticker chart.",
     spark: "Beat-your-own-record days: how many puzzles solved by Sunday?",
@@ -422,6 +426,7 @@ export const LESSONS: Lesson[] = [
     land: 5,
     title: "Think Like a Champ",
     game: "mateInOne",
+    gameOpts: { range: [12, 14] },
     learn:
       "The champion’s checklist before every move: Checks, Captures, Threats — mine and theirs. Plus simple notation, so she can write “e4!” like the pros.",
     play: "One slow game with the checklist said out loud both ways. She writes her first scoresheet.",
@@ -455,6 +460,7 @@ export const LESSONS: Lesson[] = [
     land: 5,
     title: "Boss Battle & Crown",
     game: "mateInOne",
+    gameOpts: { range: [14, 16] },
     learn: "Review her favorite tricks from the whole quest — she picks the highlights.",
     play: "A best-of-three match against you, playing honestly (spot her a piece if needed). Then celebrate, whatever the score.",
     spark:
@@ -474,6 +480,7 @@ export const LESSONS: Lesson[] = [
     land: 6,
     title: "Forcing Moves: Mate in 2",
     game: "mateInTwo",
+    gameOpts: { range: [0, 3] },
     learn:
       "A forcing move leaves the enemy almost no answers: checks first, captures second, big threats third. Mate-in-2 is forcing moves in a chain: your check, their only reply, your mate.",
     play: "The new Mate in 2 pack. Say the whole plan out loud BEFORE touching a piece: “I check here, the king must go there, then I mate.”",
@@ -492,6 +499,7 @@ export const LESSONS: Lesson[] = [
     land: 6,
     title: "The Back-Rank Story",
     game: "mateInTwo",
+    gameOpts: { range: [3, 6] },
     learn:
       "A castled king behind his own pawns is safe from everything — except a rook or queen crashing through the back door. Cut the row, then slam it.",
     play: "Back-rank mates in the Mate in 2 pack, then real-board setups: when does the king need a “window” (a pawn moved to let him breathe)?",
@@ -678,6 +686,7 @@ export const LESSONS: Lesson[] = [
     land: 7,
     title: "Punish Opening Mistakes",
     game: "mateInOne",
+    gameOpts: { range: [16, 18] },
     learn:
       "When the enemy breaks the golden rules — queen too early, king stuck in the middle, greedy pawn grabs — there’s usually a punishment. Open lines at the uncastled king!",
     play: "Mate in 1 pack for finishing instincts, then real games where a grown-up deliberately breaks one opening rule — find the punishment.",
@@ -794,6 +803,7 @@ export const LESSONS: Lesson[] = [
     land: 8,
     title: "Endgame Habits",
     game: "mateInTwo",
+    gameOpts: { range: [6, 9] },
     learn:
       "The endgame rulebook: activate the king (he’s a fighter now!), rooks BEHIND passed pawns, cut the enemy king off, and never rush.",
     play: "Mate in 2 pack to keep the finishing sharp, then a full endgame from a real game replayed with the habit list next to the board.",
@@ -905,6 +915,7 @@ export const LESSONS: Lesson[] = [
     land: 9,
     title: "Boss Battle: Rising Player",
     game: "mateInTwo",
+    gameOpts: { range: [9, 12] },
     learn:
       "Everything, together: opening plan, candidate moves, tactics from safe squares, a real endgame finish. This is the whole mountain in one game.",
     play: "The final challenge: a best-of-three match, slow, notated, analyzed after. Then the Mate in 2 pack one last time — all twelve, no hints.",
@@ -999,7 +1010,7 @@ export const LESSONS: Lesson[] = [
     },
   },
 
-  /* ---- Track 4: Grandmaster Gorge (lessons 54–62, Days 107–123) ---- */
+  /* ---- Track 4: Puzzle Gorge (lessons 54–62, Days 107–123) ---- */
   {
     n: 54,
     land: 11,

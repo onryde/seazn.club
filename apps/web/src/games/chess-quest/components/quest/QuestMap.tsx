@@ -38,7 +38,7 @@ export function QuestMap({
                       ? "Rising Player"
                       : track === 3
                         ? "Opening Range"
-                        : "Grandmaster Gorge"}
+                        : "Puzzle Gorge"}
                 </span>
               </div>
             ) : null}
