@@ -4263,13 +4263,21 @@ async function buildGroupStatusView(
       // roster row.
       entrant_kind: e.free_agent ? "individual" : (entrantKindByDivision.get(e.division_id) ?? "individual"),
       payment_method: paymentMethodByDivision.get(e.division_id) ?? "offline",
-      // RS012 stage 3b: the same `e.free_agent && !e.assigned_team_name`
-      // predicate as awaitingTeamAssignment (view-model.ts) — inlined here
-      // (never imported) because this is a plain data-assembly function with
-      // no dependency on that view-model file, matching this codebase's
+      // RS012 stage 3b, widened by a later `/code-review high` finding:
+      // awaitingTeamAssignment (view-model.ts) ALSO requires the entry not
+      // be in a terminal status (withdrawn/rejected/expired) — added there
+      // after the walkthrough caught a withdrawn entry still reading as
+      // "waiting". This field originally omitted that third check (masked
+      // only because its one consumer, poolPlaceByDate, re-derives via the
+      // guarded predicate and discards it for terminal entries) — matched
+      // here now so a future direct consumer of this raw field (export,
+      // admin view, a new API surface) can never show a live refund-by date
+      // on an already-withdrawn/rejected/expired solo sign-up. Inlined
+      // rather than imported: this is a plain data-assembly function with no
+      // dependency on the view-model file, matching this codebase's
       // layering direction.
       pool_place_by_at:
-        e.free_agent && !e.assigned_team_name
+        e.free_agent && !e.assigned_team_name && !isTerminalRegistrationStatus(e.status)
           ? (poolPlaceByDivision.get(e.division_id)?.toISOString() ?? null)
           : null,
       players: playersByEntry.get(e.id) ?? [],

@@ -6364,4 +6364,23 @@ describe.skipIf(!HAS_DB)("RS012 stage 3b: buildGroupStatusView — pool_place_by
     const view = await groupById(registration.group_id, access_token);
     expect(view.entries[0]!.pool_place_by_at).toBeNull();
   });
+
+  it("is null once withdrawn (e.g. by the sweep), even though the division's place_by_at is still set — /code-review high finding", async () => {
+    // The sweep's own withdrawal (registrations.ts's duePool pass) never
+    // clears place_by_at off the DIVISION — it only flips this ENTRY's
+    // status. Without the terminal-status guard here, this raw field would
+    // still carry a live-looking refund-by date on an already-withdrawn
+    // entry; the only reason nothing broke on screen is that entry-card.tsx
+    // reads it exclusively through poolPlaceByDate (view-model.ts), which
+    // already has this same guard. Pinned here so a future direct consumer
+    // of this raw field cannot reintroduce that gap silently.
+    const { competition, division, settings } = await soloPoolRig("2026-03-15T00:00:00Z");
+    const { registration, access_token } = await seedRegistration(competition.id, division.id, settings, {
+      players: [{ name: "Solo Signer" }],
+    });
+    await sql`update registrations set free_agent = true, status = 'withdrawn' where id = ${registration.id}`;
+
+    const view = await groupById(registration.group_id, access_token);
+    expect(view.entries[0]!.pool_place_by_at).toBeNull();
+  });
 });
