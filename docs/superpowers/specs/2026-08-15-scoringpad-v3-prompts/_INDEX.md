@@ -6705,3 +6705,86 @@ bullet, R7-39's "opens EMPTY", and R7-41's "eleven-skin blast radius" were all
 plausible, all written in good faith, and all wrong in a way that only reading
 the code could show. A register entry is a POINTER TO A CHECK, never the
 check itself.
+
+---
+
+### R7-45 — the G demolition took THREE guards as collateral. The review caught them; all three are restored in `d2636bd53`
+
+The v2 lane demolition (`b782e429b`) deleted `scorepad-v2.spec.ts` (seven
+tests, all judged superseded), the v2 half of `registry.test.tsx`, and six
+source files. Five of the seven e2e supersession claims held up under review
+— two did not, and a third file was left behind as dead code.
+
+**What survived scrutiny.** Claims 1, 4, 5, 6 and 7 are sound, and three of
+them are STRONGER than what they replaced: cricket's over+wicket coverage now
+varies `cfg.ballsPerOver` (the "hundred" variant) where the deleted test never
+did; the touch-target check runs at seven widths in `mobile.spec.ts` rather
+than two; the football goal+assist replacement adds a penalty toggle and an
+away-player narrowing check. Claim 7 was already marked for retirement in the
+deleted file's own comment, written before this session.
+
+**Collateral 1 — `padSpec` totality.** `registry.test.tsx`'s drift-guard block
+held seven assertions. Six tested the deleted `RESOLUTION_KIND`/`skinFor`
+table. The seventh did not: it derived off `builtinModules` and asserted every
+engine module implements the OPTIONAL `padSpec` hook. `usecases/fidelity.ts`
+resolves `params.sportModule.padSpec?.(cfg) ?? EMPTY_SPEC`, and `EMPTY_SPEC`
+declares `fidelityEntitlements: {}` — so a module without `padSpec` gets NO
+band gate at all, and its pad renders every recording action regardless of
+what the org bought. Dead today only because all eleven modules happen to
+implement it. Restored into `v3/__tests__/registry-totality.test.ts`.
+
+The important part is why nothing else covers it. `testkit/conformance-pad.ts`'s
+`padSpecConformanceSuite` looks like the backstop and is not: it is a manual
+per-module opt-in, called from eight scattered `*.test.ts` files, and it
+imports each module's `padSpec` DIRECTLY. Mutation-proved by commenting out
+carrom's `padSpec` wiring — the conformance suite stayed GREEN, and only the
+restored assertion went red. **A conformance suite that imports the symbol
+cannot see that the symbol was never wired into the module.**
+
+**Collateral 2 — [reload] x [per-row void by the server's event id].** The
+deleted football test scored, RELOADED, then voided a row addressed by its
+real `data-event-id`. It was retired as superseded by cricket's two void
+tests. Neither reloads. And the cricket older-event void deliberately
+addresses its row BY POSITION — its own comment explains why: for an event
+this client submitted, the id the panel renders is the client's idempotency
+key, not the id the ledger reads back.
+
+So the combination was uncovered, on `v3/activity.tsx`, which all eleven
+skins share and which R7 never touched. The combination is not two covered
+things paired redundantly — **the reload is what makes `data-event-id`
+meaningful**, because the panel then rebuilds from the server's
+`initialEvents` and the rendered id IS the ledger id. Restored as a cricket
+test, carrying the deleted test's measured pre-hydration click race (one red
+in six runs) as an explicit wait-for-ENABLED rather than wait-for-visible.
+
+**Collateral 3 — `attribution-picker.tsx` left half-dead.** `AttributionPicker`,
+`AttributionPickerProps` and `renderAttributionItem` had exactly ONE production
+wire, `pad-renderer.tsx`'s `renderAttribution` seam, which G deleted — leaving
+them reachable from nothing but their own unit tests, which kept passing.
+Separately, `resolveSquads` was byte-for-byte `v3/pad-host.tsx`'s
+`squadStateOf`: two copies of one rule, free to drift. The file is now 139
+lines of live selectors.
+
+The repair pattern matters more than the deletion. The surviving rule-tests
+were **repointed at `squadStateOf`, not deleted** — the degrade they prove
+(verify `state.squads` structurally, else `initSquads(lineups)`) is still
+live, it just moved to its one remaining caller. Only component-render tests
+were dropped, and each was confirmed duplicated on the v3 chassis FIRST:
+re-tap-clears at `v3/__tests__/action-form.test.ts:454`, and side-item
+identity by its SIDE-item test — which was checked specifically for the R7-19
+trap and does assert `data-value` EQUALS the real entrant ids, not merely that
+chips exist.
+
+**`registry.tsx`'s legacy THROW was checked and is genuinely unreachable**:
+`resolveModuleClient` throws `MODULE_NOT_FOUND` for any unknown key before
+`resolvePad` is ever called, `LEGACY_SPORTS` is proven empty non-vacuously,
+and both mount sites wrap `<ScorePad/>` in `ScoringErrorBoundary` anyway. Not
+a defect.
+
+**The rule this wave keeps re-teaching.** A deletion brief undercounts by
+design (see `reference_deletion_brief_undercounts_by_design.md`). Every one of
+these three survived a green suite, a typecheck and a lint — because a test
+whose only subject is deleted code doesn't fail, it just stops meaning
+anything, and an assertion nested inside a doomed describe block dies with its
+neighbours regardless of what it actually asserts. **Read what each assertion
+in a deleted block ASSERTS, not what the block is called.**
