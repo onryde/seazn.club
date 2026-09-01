@@ -4,6 +4,7 @@
 // route to settle; cancel must call the PUBLIC write path, never the
 // organiser one) are provable without a render.
 import { anyOptedOut, resolvePersonDisplayName } from "@/lib/name-display";
+import { isTerminalRegistrationStatus } from "@/lib/registration-status";
 
 export type EntryStatus =
   | "pending"
@@ -163,28 +164,29 @@ export function canJoinEntry(status: EntryStatus): boolean {
 
 /**
  * RS009 handoff (2026-08-30) — gates the "Waiting for a team" notice.
+ * RS012 (found by the walkthrough, not a unit test — a sweep-withdrawn
+ * entry's card showed WITHDRAWN next to "Waiting for a team" and an
+ * already-past refund date) narrowed it a second time.
  *
- * INCOMPLETE BY DESIGN: `free_agent` records this entry's ENTRY MODE
- * (design §5: "an entry with no team of its own yet"), not its current
- * OUTCOME. RS009 (branch `feat/rs009-free-agents`, adding
- * `registration_players.source = 'organiser_assigned'` via V388) owns
- * narrowing this once an organiser can actually assign a free agent onto a
- * team — at that point an assigned free agent must stop showing this notice
- * even though `free_agent` itself never flips back to `false`. Until RS009
- * merges, `free_agent` is the only signal that exists, and every free agent
- * genuinely IS still waiting (there is no "assigned" state yet) — but a
- * future reader must NOT read this function's current one-line body as
- * finished. Do not add a separate `assignedToTeam` check here — that is
- * explicitly RS009's own follow-up, not this fix's.
+ * `free_agent` records this entry's ENTRY MODE (design §5: "an entry with
+ * no team of its own yet"), not its current OUTCOME, and neither does
+ * `assigned_team_name` on its own: an entry the Stage 2 sweep withdraws for
+ * missing its place-by date is still `free_agent = true` and still has no
+ * `assigned_team_name` (it was never placed) — `status` is the only column
+ * that changes when that happens. Without this check, a withdrawn/rejected/
+ * expired solo sign-up reads as "still waiting" forever, contradicting its
+ * own status badge right above it.
  */
 export function awaitingTeamAssignment(entry: {
+  status: EntryStatus;
   free_agent: boolean;
   assigned_team_name?: string | null;
 }): boolean {
-  // NARROWED by RS009, as the comment above hands over. `free_agent` alone
-  // would keep telling a PLACED player they are still waiting — forever,
-  // since that column records how the entry was made and never flips back.
-  return entry.free_agent === true && !entry.assigned_team_name;
+  return (
+    entry.free_agent === true &&
+    !entry.assigned_team_name &&
+    !isTerminalRegistrationStatus(entry.status)
+  );
 }
 
 /** RS009 — the other half: the team they were placed on, or null.
@@ -206,6 +208,7 @@ export function assignedTeamName(entry: {
  *  predicate rather than re-deriving it, so the two can never disagree
  *  about whether this entry is still waiting. */
 export function poolPlaceByDate(entry: {
+  status: EntryStatus;
   free_agent: boolean;
   assigned_team_name?: string | null;
   pool_place_by_at?: string | null;

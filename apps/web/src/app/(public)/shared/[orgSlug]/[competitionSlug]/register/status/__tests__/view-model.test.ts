@@ -277,10 +277,10 @@ describe("rosterPlayerDisplayName", () => {
   });
 });
 
-describe("awaitingTeamAssignment (RS008 review fix #9, NARROWED by RS009)", () => {
+describe("awaitingTeamAssignment (RS008 review fix #9, NARROWED by RS009, then RS012)", () => {
   it("true only when free_agent is true", () => {
-    expect(awaitingTeamAssignment({ free_agent: true })).toBe(true);
-    expect(awaitingTeamAssignment({ free_agent: false })).toBe(false);
+    expect(awaitingTeamAssignment({ status: "pending", free_agent: true })).toBe(true);
+    expect(awaitingTeamAssignment({ status: "pending", free_agent: false })).toBe(false);
   });
 
   it("stops once an organiser has placed them", () => {
@@ -289,8 +289,36 @@ describe("awaitingTeamAssignment (RS008 review fix #9, NARROWED by RS009)", () =
     // player they were still waiting — forever, and in direct contradiction
     // of the email they had just been sent.
     expect(
-      awaitingTeamAssignment({ free_agent: true, assigned_team_name: "Riverside Rovers" }),
+      awaitingTeamAssignment({
+        status: "confirmed",
+        free_agent: true,
+        assigned_team_name: "Riverside Rovers",
+      }),
     ).toBe(false);
+  });
+
+  it("stops once the entry is withdrawn, rejected, or expired — RS012, found by the walkthrough", () => {
+    // The Stage 2 sweep withdraws an unplaced solo sign-up past its deadline:
+    // free_agent stays true, assigned_team_name stays null (never placed) —
+    // status is the ONLY column that changes. Without this check the card
+    // read "Withdrawn" right next to "Waiting for a team" and an already-
+    // past refund date, a live defect the unit suite never caught because
+    // every prior test only ever used an active status.
+    for (const status of ["withdrawn", "rejected", "expired"] as const) {
+      expect(
+        awaitingTeamAssignment({ status, free_agent: true, assigned_team_name: null }),
+        status,
+      ).toBe(false);
+    }
+  });
+
+  it("still true for an unplaced, still-active pending/paid/confirmed entry", () => {
+    for (const status of ["pending", "paid", "confirmed"] as const) {
+      expect(
+        awaitingTeamAssignment({ status, free_agent: true, assigned_team_name: null }),
+        status,
+      ).toBe(true);
+    }
   });
 });
 
@@ -315,10 +343,11 @@ describe("assignedTeamName (RS009)", () => {
     // placement, so this holds by construction — pinned so it keeps holding
     // if either is edited on its own.
     for (const entry of [
-      { free_agent: true, assigned_team_name: null },
-      { free_agent: true, assigned_team_name: "Riverside Rovers" },
-      { free_agent: false, assigned_team_name: null },
-      { free_agent: false, assigned_team_name: "Riverside Rovers" },
+      { status: "pending" as const, free_agent: true, assigned_team_name: null },
+      { status: "confirmed" as const, free_agent: true, assigned_team_name: "Riverside Rovers" },
+      { status: "pending" as const, free_agent: false, assigned_team_name: null },
+      { status: "confirmed" as const, free_agent: false, assigned_team_name: "Riverside Rovers" },
+      { status: "withdrawn" as const, free_agent: true, assigned_team_name: null },
     ]) {
       expect(
         awaitingTeamAssignment(entry) && assignedTeamName(entry) !== null,
@@ -332,6 +361,7 @@ describe("poolPlaceByDate (RS012 — the other other half)", () => {
   it("is the division's place-by date while a solo sign-up is still in the pool", () => {
     expect(
       poolPlaceByDate({
+        status: "pending",
         free_agent: true,
         assigned_team_name: null,
         pool_place_by_at: "2026-03-15T00:00:00.000Z",
@@ -344,6 +374,7 @@ describe("poolPlaceByDate (RS012 — the other other half)", () => {
     // "waiting" and carry a live deadline at the same time.
     expect(
       poolPlaceByDate({
+        status: "confirmed",
         free_agent: true,
         assigned_team_name: "Riverside Rovers",
         pool_place_by_at: "2026-03-15T00:00:00.000Z",
@@ -354,6 +385,7 @@ describe("poolPlaceByDate (RS012 — the other other half)", () => {
   it("is null for an entry that was never a solo sign-up, regardless of any carried date", () => {
     expect(
       poolPlaceByDate({
+        status: "pending",
         free_agent: false,
         assigned_team_name: null,
         pool_place_by_at: "2026-03-15T00:00:00.000Z",
@@ -363,19 +395,56 @@ describe("poolPlaceByDate (RS012 — the other other half)", () => {
 
   it("is null when the pool has no deadline to enforce", () => {
     expect(
-      poolPlaceByDate({ free_agent: true, assigned_team_name: null, pool_place_by_at: null }),
+      poolPlaceByDate({
+        status: "pending",
+        free_agent: true,
+        assigned_team_name: null,
+        pool_place_by_at: null,
+      }),
+    ).toBeNull();
+  });
+
+  it("is null once the sweep withdraws an unplaced entry, even though a date was carried — RS012, found by the walkthrough", () => {
+    // The exact defect: the sweep withdraws this entry FOR missing its
+    // place-by date, so pool_place_by_at is still populated on the row. If
+    // this didn't gate on status too, the card would show a refund-by date
+    // that has already passed, right next to a "Withdrawn" badge.
+    expect(
+      poolPlaceByDate({
+        status: "withdrawn",
+        free_agent: true,
+        assigned_team_name: null,
+        pool_place_by_at: "2026-03-15T00:00:00.000Z",
+      }),
     ).toBeNull();
   });
 
   it("is never non-null at the same time assignedTeamName is non-null", () => {
     for (const entry of [
-      { free_agent: true, assigned_team_name: null, pool_place_by_at: "2026-03-15T00:00:00.000Z" },
       {
+        status: "pending" as const,
+        free_agent: true,
+        assigned_team_name: null,
+        pool_place_by_at: "2026-03-15T00:00:00.000Z",
+      },
+      {
+        status: "confirmed" as const,
         free_agent: true,
         assigned_team_name: "Riverside Rovers",
         pool_place_by_at: "2026-03-15T00:00:00.000Z",
       },
-      { free_agent: false, assigned_team_name: null, pool_place_by_at: null },
+      {
+        status: "pending" as const,
+        free_agent: false,
+        assigned_team_name: null,
+        pool_place_by_at: null,
+      },
+      {
+        status: "withdrawn" as const,
+        free_agent: true,
+        assigned_team_name: null,
+        pool_place_by_at: "2026-03-15T00:00:00.000Z",
+      },
     ]) {
       expect(
         poolPlaceByDate(entry) !== null && assignedTeamName(entry) !== null,
