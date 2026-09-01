@@ -6496,3 +6496,43 @@ either way, so it is not the gate protecting replay here — the kept field is.
 
 Verified: engine 4194/4207 failed 0; apps/web 9862/13125 failed 0; tsc clean;
 lint 126 warnings 0 errors; i18n parity 5728 keys.
+
+### R7-41 — the TILE label path has NO backstop at all. Same class as the boardgame hint, different route
+
+Surfaced by the A3/E review and verified by hand. Not a defect in either
+commit — every carrom key was checked present — but a live chassis blind spot
+worth its own entry, because this wave already paid for the sibling case.
+
+There are TWO ways a message key reaches the screen in the v3 chassis, and they
+have completely different safety:
+
+1. **`padLabel(key, t, fallback)`** — `scorebug.tsx:228` passes the KEY as its
+   own fallback (`padLabel(half.hintKey, t, half.hintKey)`), so an unregistered
+   key prints its raw dotted name. That is R7-34's boardgame defect. It is at
+   least gated by `PAD_LABEL_KEYS` membership, which a per-skin test can assert.
+2. **`t(tile.label)` directly** — `tile-grid.tsx:266`, and the same shape in
+   `guided-sheet.tsx` for `step.title` / `opt.label`. This path consults
+   `PAD_LABEL_KEYS` NOT AT ALL.
+
+And the type gives nothing either: `TileSpec.label` is declared
+`label: string;  // i18n key` (`types.ts:147`) — a COMMENT saying "i18n key"
+where the type says `string`. `SheetChoiceStep.title` is the same. So a typo'd
+tile label is not a tsc error, is not a `PAD_LABEL_KEYS` miss, and `t()`
+renders the key name at runtime (`TKey = DictionaryKey | (string & {})`
+accepts any string — CI's own i18n gate comment says so). It reaches the screen
+as raw text with every gate green. Exactly the boardgame failure, one route
+over, across all eleven skins.
+
+**What currently prevents it** is per-skin discipline, not the chassis: the
+newer skin tests collect every key from BUILT specs and assert dictionary
+presence (`carrom.test.ts:780`, guarded by `expect(all.size).toBeGreaterThan(15)`
+against a silently empty sweep). Skins whose tests predate that convention have
+no such assertion.
+
+**RECOMMENDATION for R8 or the demolition wave, not for this one:** type
+`TileSpec.label` and `SheetChoiceStep.title` as `MessageKey` rather than
+`string`. That converts an invisible runtime defect into a compile error for
+all eleven skins at once, and it is the same "one place, unforgettable for the
+next author" argument that R7-39 already accepted for the More tile. Deliberately
+NOT done inside A3 — it is a chassis type change with an eleven-skin blast
+radius and belongs in its own task with its own gate.
