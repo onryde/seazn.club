@@ -1044,10 +1044,16 @@ test("the publish gate's confirm sheet holds at phone width", async ({ page, req
  * Self-contained, like T15 below: its own competition/division/fixture.
  */
 test("lineup editor role/pair-order selects hold at phone width", async ({ page, request }) => {
+  // `generic` declares `lineup: { size: 1, benchMax: 0 }` (lineup-editor.tsx's
+  // own `lineupEditorApplies` doc comment groups it with chess/carrom as "no
+  // lineup to pick") — the editor never mounted here, at ANY width, which is
+  // why this fixture never actually proved the touch floor. The racquet
+  // family (`size: 1, benchMax: 1`) is the one `lineupEditorApplies` singles
+  // out by name as needing the pair-order editor kept.
   const fx = await seedRosteredFixture(request, {
     label: `Mobile Lineup ${TAG}`,
-    sportKey: "generic",
-    variantKey: "score",
+    sportKey: "tennis",
+    variantKey: "tour",
     entrantKind: "pair",
     home: [{ fullName: "Home One" }, { fullName: "Home Two" }],
     away: [{ fullName: "Away One" }, { fullName: "Away Two" }],
