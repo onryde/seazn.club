@@ -6956,3 +6956,67 @@ duplication D exists to remove, and it is exactly what `ownsHeadline` taking
 `view` was designed for: cricket could return true until the equation appears.
 NOT changed unilaterally — it needs a ruling on when cricket's headline starts
 carrying a fact, and that is a cricket question, not a chassis one.
+
+---
+
+### R7-48 — CI caught three defects the whole local gate stack could not, and one class has now recurred
+
+Dispatching e2e against PR #693 found two failures; a post-rebase sweep found a
+third. All three were invisible to ~9,980 passing unit tests, a clean tsc, a
+clean lint, and a cross-wave seam review that had explicitly hunted this class.
+
+**1. A test verified by LISTING, never by running.** R7-45 restored an e2e
+combining [reload] × [per-row void by the server's event id]. It was confirmed
+to COLLECT (`playwright test --list`) and never executed. It called
+`openLiveConsole` a second time after `page.reload()`, and that helper clicks
+"Start match" — gone by then — so it burned the full 120s budget. **A read is
+not a run, and neither is a listing.** The failure also arrived wearing the
+wrong face: `locator.click: Test timeout of 120000ms exceeded` reads as a flaky
+selector, not as "this test asked for a control that cannot be there" — the
+same misdirection R7-20 records for blown budgets.
+
+**2. THE CO-LOCATED FEATURE CLASS, SECOND INSTANCE.** R7/B added
+`lineupEditorApplies` to stop rendering a one-slot team sheet — position
+dropdown, Captain checkbox, bench controls — for a competitor with no team
+(chess, carrom singles, generic). That reasoning was about the CONTROLS and was
+correct about them. But AVAILABILITY lived in the same component, so the gate
+also removed the only surface telling an organiser a player had RSVP'd out, for
+every individual-entrant sport at once.
+
+This is R7-46 again in a different costume. There, a consolidation orphaned
+another wave's prop; here, a new gate hid a feature that merely shared a
+component with the one being gated. **The general rule, now earned twice: when
+you stop rendering a component, enumerate every feature it hosts — not just the
+one you are reasoning about.** The unit tests could not see it in either case,
+for the same structural reason: a gate's own tests assert what the gate DOES,
+never what it takes with it.
+
+**The first repair was wrong, and the shape is worth keeping.** "Show the
+editor when a side has a real roster" reads as obviously right and does nothing
+here — the e2e's entrants are INDIVIDUAL with one member each, which is exactly
+the case the gate intends to hide. Reverted rather than left in as a change
+with no driving requirement. The fix is `AvailabilityRoster`: the members and
+their chips, read-only by construction, no draft/save/validation because there
+is nothing to submit. Controls stay gone, information comes back.
+
+**3. A TIME BOMB, found ten minutes after it went off.** Not R7's — it arrived
+on main with RS012 (`c68463355`) and this branch met it in a rebase.
+`status-page.test.tsx` hardcoded `expires_at: "2026-09-01T19:00:00.000Z"`,
+comfortably future when written and PAST from 19:00Z on the evening it merged;
+found at 19:10Z. The page then renders its expired state and the assertion
+fails with a message about a missing date string that explains nothing. Fixed
+in place rather than filed, because it reds `main` for everyone.
+
+**The reusable rule:** a fixture instant must be chosen for its PROPERTIES, not
+its plausibility. This one needed "in the future" and "Asia/Kolkata lands it on
+a different calendar day from UTC" — the second being what gives the
+never-hardcoded-UTC assertion a way to fail. A far-future date holds both
+forever; a date near today holds them for hours.
+
+**What this says about the gate stack.** The branch had a clean cross-wave seam
+review at HEAD, and that review was RIGHT about everything it checked — it
+hunted orphaned props, orphaned guards, mirrored code and inert declarations,
+and found none. It could not have found any of these three: two were only
+observable by running a browser, and the third by running the clock forward ten
+minutes. **A review reads code; only CI runs it.** Dispatching e2e against the
+PR was the single highest-value action taken on this branch.
