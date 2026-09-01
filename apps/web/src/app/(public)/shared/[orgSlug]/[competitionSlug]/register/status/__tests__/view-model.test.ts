@@ -12,6 +12,7 @@ import {
   effectivePayDeadline,
   entryCountsTowardTotal,
   entryDisplayName,
+  poolPlaceByDate,
   publicCheckoutPath,
   publicResendPath,
   publicWithdrawPath,
@@ -321,6 +322,63 @@ describe("assignedTeamName (RS009)", () => {
     ]) {
       expect(
         awaitingTeamAssignment(entry) && assignedTeamName(entry) !== null,
+        JSON.stringify(entry),
+      ).toBe(false);
+    }
+  });
+});
+
+describe("poolPlaceByDate (RS012 — the other other half)", () => {
+  it("is the division's place-by date while a solo sign-up is still in the pool", () => {
+    expect(
+      poolPlaceByDate({
+        free_agent: true,
+        assigned_team_name: null,
+        pool_place_by_at: "2026-03-15T00:00:00.000Z",
+      }),
+    ).toBe("2026-03-15T00:00:00.000Z");
+  });
+
+  it("is null once the solo sign-up has been assigned to a team, even if a date was carried", () => {
+    // Reuses awaitingTeamAssignment's own predicate — an entry cannot be
+    // "waiting" and carry a live deadline at the same time.
+    expect(
+      poolPlaceByDate({
+        free_agent: true,
+        assigned_team_name: "Riverside Rovers",
+        pool_place_by_at: "2026-03-15T00:00:00.000Z",
+      }),
+    ).toBeNull();
+  });
+
+  it("is null for an entry that was never a solo sign-up, regardless of any carried date", () => {
+    expect(
+      poolPlaceByDate({
+        free_agent: false,
+        assigned_team_name: null,
+        pool_place_by_at: "2026-03-15T00:00:00.000Z",
+      }),
+    ).toBeNull();
+  });
+
+  it("is null when the pool has no deadline to enforce", () => {
+    expect(
+      poolPlaceByDate({ free_agent: true, assigned_team_name: null, pool_place_by_at: null }),
+    ).toBeNull();
+  });
+
+  it("is never non-null at the same time assignedTeamName is non-null", () => {
+    for (const entry of [
+      { free_agent: true, assigned_team_name: null, pool_place_by_at: "2026-03-15T00:00:00.000Z" },
+      {
+        free_agent: true,
+        assigned_team_name: "Riverside Rovers",
+        pool_place_by_at: "2026-03-15T00:00:00.000Z",
+      },
+      { free_agent: false, assigned_team_name: null, pool_place_by_at: null },
+    ]) {
+      expect(
+        poolPlaceByDate(entry) !== null && assignedTeamName(entry) !== null,
         JSON.stringify(entry),
       ).toBe(false);
     }

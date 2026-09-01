@@ -4771,6 +4771,7 @@
   "register.status.roster.claimLink": "Enviar a {name} su enlace de confirmación",
   "register.status.roster.genericClaimLink": "Invitar a alguien nuevo a esta inscripción",
   "register.status.entry.awaitingTeam": "Esperando un equipo",
+  "register.status.entry.awaitingTeamDeadline": "Si nadie te asigna a un equipo antes del {date}, se te reembolsará automáticamente.",
   "register.status.entry.assignedToTeam": "Asignado a {team}",
   "register.status.waitlisted.note": "Estás en lista de espera — no se debe ninguna cuota a menos que te promocionen.",
   "register.status.resend.cta": "Reenviar correo de confirmación",

@@ -4771,6 +4771,7 @@
   "register.status.roster.claimLink": "Send {name} their check-in link",
   "register.status.roster.genericClaimLink": "Invite someone new to this entry",
   "register.status.entry.awaitingTeam": "Waiting for a team",
+  "register.status.entry.awaitingTeamDeadline": "If nobody places you on a team by {date}, you'll be automatically refunded.",
   "register.status.entry.assignedToTeam": "Assigned to {team}",
   "register.status.waitlisted.note": "You're on the waitlist — no fee is due unless you're promoted.",
   "register.status.resend.cta": "Resend confirmation email",

@@ -3861,6 +3861,12 @@ export interface GroupEntryView {
    *  the entry was MADE and never flips back, so on its own it would tell a
    *  placed player they are still waiting, forever. */
   assigned_team_name: string | null;
+  /** RS012 — the effective place-by date for a solo sign-up STILL in the
+   *  pool (division place_by_at, else its closes_at — Stage 2's sweep own
+   *  fallback, not re-derived). Null once assigned (nothing left to warn
+   *  about) and null on every non-solo-sign-up entry, mirroring
+   *  assigned_team_name's own null convention. */
+  pool_place_by_at: string | null;
   join_code: string | null;
   /** RS007: whether the GENERIC (no player_id) claim link is valid for this
    *  entry — false for a `pair` (its fixed two-person roster leaves no room
@@ -4057,7 +4063,12 @@ async function buildGroupStatusView(
   const entries = await sql<
     (Omit<
       GroupEntryView,
-      "players" | "refund_policy" | "promotion_expires_at" | "allows_new_joiner" | "payment_method"
+      | "players"
+      | "refund_policy"
+      | "promotion_expires_at"
+      | "allows_new_joiner"
+      | "payment_method"
+      | "pool_place_by_at"
     > & {
       refunded_cents: number;
       promotion_expires_at: Date | null;
@@ -4103,12 +4114,22 @@ async function buildGroupStatusView(
             refund_lock_at: Date | null;
             entrant_kind: RegistrationSettingsRow["entrant_kind"];
             payment_method: RegistrationSettingsRow["payment_method"];
+            place_by_at: Date | null;
+            closes_at: Date | null;
           }[]
         >`
-          select division_id, refund_lock_at, entrant_kind, payment_method from registration_settings
+          select division_id, refund_lock_at, entrant_kind, payment_method, place_by_at, closes_at
+          from registration_settings
           where division_id in ${sql(divisionIds)}`
       : [];
   const refundLockByDivision = new Map(settingsRows.map((s) => [s.division_id, s.refund_lock_at]));
+  // RS012 stage 3b: the SAME `coalesce(place_by_at, closes_at)` fallback
+  // Stage 2's own sweep pass already uses (this file's pool-deadline pass) —
+  // not re-derived, so the status page's "by when" line can never disagree
+  // with the deadline that actually enforces it.
+  const poolPlaceByDivision = new Map(
+    settingsRows.map((s) => [s.division_id, s.place_by_at ?? s.closes_at]),
+  );
   // A pair's roster is fixed at exactly two (registration-submit.ts's own
   // structural check + rosterIssues at submit) — its join_code only ever
   // lets the PARTNER claim their already-typed-in slot; `joinTeamEntry`
@@ -4221,6 +4242,15 @@ async function buildGroupStatusView(
       // roster row.
       entrant_kind: e.free_agent ? "individual" : (entrantKindByDivision.get(e.division_id) ?? "individual"),
       payment_method: paymentMethodByDivision.get(e.division_id) ?? "offline",
+      // RS012 stage 3b: the same `e.free_agent && !e.assigned_team_name`
+      // predicate as awaitingTeamAssignment (view-model.ts) — inlined here
+      // (never imported) because this is a plain data-assembly function with
+      // no dependency on that view-model file, matching this codebase's
+      // layering direction.
+      pool_place_by_at:
+        e.free_agent && !e.assigned_team_name
+          ? (poolPlaceByDivision.get(e.division_id)?.toISOString() ?? null)
+          : null,
       players: playersByEntry.get(e.id) ?? [],
       refund_policy: resolveRefundPolicy(
         refundLockByDivision.get(e.division_id) ?? null,

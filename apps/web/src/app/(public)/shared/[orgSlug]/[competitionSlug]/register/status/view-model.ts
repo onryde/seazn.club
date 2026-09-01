@@ -200,6 +200,19 @@ export function assignedTeamName(entry: {
   return entry.free_agent ? (entry.assigned_team_name ?? null) : null;
 }
 
+/** RS012 — the other other half: when an unplaced solo sign-up will be
+ *  auto-refunded if nobody places them, or null once they ARE placed (or
+ *  were never a solo sign-up). Reuses awaitingTeamAssignment's own
+ *  predicate rather than re-deriving it, so the two can never disagree
+ *  about whether this entry is still waiting. */
+export function poolPlaceByDate(entry: {
+  free_agent: boolean;
+  assigned_team_name?: string | null;
+  pool_place_by_at?: string | null;
+}): string | null {
+  return awaitingTeamAssignment(entry) ? (entry.pool_place_by_at ?? null) : null;
+}
+
 export interface RosterCounts {
   claimed: number;
   total: number;

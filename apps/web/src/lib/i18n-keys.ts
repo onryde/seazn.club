@@ -4118,6 +4118,7 @@ export type DictionaryKey =
   | "register.status.cancel.refund.noDeadline"
   | "register.status.entry.assignedToTeam"
   | "register.status.entry.awaitingTeam"
+  | "register.status.entry.awaitingTeamDeadline"
   | "register.status.heading"
   | "register.status.money.deadline"
   | "register.status.notFound"

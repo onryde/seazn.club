@@ -25,6 +25,7 @@ import {
   claimHref,
   entryCountsTowardTotal,
   entryDisplayName,
+  poolPlaceByDate,
   resolveMoneyState,
   rosterCounts,
   rosterPlayerDisplayName,
@@ -73,6 +74,14 @@ export interface EntryCardProps {
      *  omitted it — and a card built without it shows "waiting for a team"
      *  forever on a player who has been placed. */
     assigned_team_name: string | null;
+    /** RS012 — the effective place-by date for a solo sign-up STILL in the
+     *  pool (division place_by_at, else its closes_at fallback), or null
+     *  once assigned/never a solo sign-up. REQUIRED here for the same reason
+     *  `assigned_team_name` is: `poolPlaceByDate` accepts it as optional so
+     *  it can be called on narrower shapes, which means nothing would have
+     *  told a caller that omitted it — and a card built without it silently
+     *  shows "waiting for a team" with no deadline, forever. */
+    pool_place_by_at: string | null;
     join_code: string | null;
     /** False for a `pair` — its fixed two-person roster leaves no room for
      *  a new joiner, so only its per-slot partner link is real. */
@@ -272,6 +281,18 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
             records entry MODE, not outcome) and must not be extended here. */}
         {awaitingTeamAssignment(entry) && (
           <p className="text-sm text-ink-muted">{t(ui, "register.status.entry.awaitingTeam")}</p>
+        )}
+        {/* RS012 — the other other half: BY WHEN they'll be auto-refunded if
+            nobody places them. Gated on the same poolPlaceByDate, which
+            reuses awaitingTeamAssignment's own predicate, so this can never
+            render once assigned even though pool_place_by_at is still
+            carried on the entry. */}
+        {poolPlaceByDate(entry) && (
+          <p className="text-xs text-ink-muted">
+            {t(ui, "register.status.entry.awaitingTeamDeadline", {
+              date: deadlineLabel(poolPlaceByDate(entry) as string),
+            })}
+          </p>
         )}
         {/* RS009 — the receipt for the promise the stepper made at sign-up.
             Mutually exclusive with the notice above by construction: both
