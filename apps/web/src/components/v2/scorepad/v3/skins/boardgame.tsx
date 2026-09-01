@@ -593,6 +593,14 @@ export function boardgameSkinV3(t: TFn): SkinDefV3<PadHostView> {
     key: SPORT,
     tapModel: "S",
     phase: resolvePhase,
+    /** R7/D — same identity as generic: `bigOf` renders `summary.perSide[].
+     *  line` and boardgame.ts builds `headline` from the very same
+     *  `pointsText(home/away)` pair. The undecided state makes the case
+     *  stronger rather than weaker — before an outcome the headline is the
+     *  literal string "vs" and both `perSide` lines are empty, so the bar
+     *  reads "vs" above two halves already showing the two names and a dash.
+     *  Nothing is lost in either state. */
+    ownsHeadline: () => true,
     scorebug: (view) => buildScorebug(view, t),
     tiles: (view) => buildTiles(view, t),
     dock: (eventType, view, payload) => buildDock(eventType, view, t, payload),

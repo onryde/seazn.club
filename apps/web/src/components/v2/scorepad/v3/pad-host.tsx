@@ -1062,6 +1062,29 @@ export function resolveDockSpec(
  * "this chip's own answer is already in the payload" — no chip needs to
  * declare an "already selected" flag of its own for this to work.
  */
+/**
+ * R7/task D — does the chassis render its `data-role="v3-headline"` bar?
+ *
+ * Extracted rather than inlined at the JSX so it can be driven directly: the
+ * host is not renderable in this workspace's test environment (node, no DOM),
+ * and the whole point of this wave is that a declaration nobody can exercise
+ * is a declaration nobody has checked.
+ *
+ * Two independent reasons NOT to render, and they must stay independent: the
+ * engine published no usable headline at all (`summaryHeadline` degrades to
+ * null rather than inventing copy), or the skin declares it already says all
+ * of this itself. Omitting `ownsHeadline` means RENDER — see the method's own
+ * doc for why the safe direction is a redundant bar rather than a lost result.
+ */
+export function shouldRenderHeadline(
+  headline: string | null,
+  skin: Pick<SkinDefV3, "ownsHeadline">,
+  view: PadHostView,
+): boolean {
+  if (headline === null) return false;
+  return !(skin.ownsHeadline?.(view) ?? false);
+}
+
 export function isPartialDockAnswer(
   skin: SkinDefV3,
   eventType: string,
@@ -1717,7 +1740,14 @@ export function PadHostV3(props: PadHostV3Props) {
        *  not reimplemented, so the two cannot drift. It degrades to null for
        *  anything that is not a genuine `{headline: string}`, and null means
        *  render nothing rather than invent placeholder copy. */}
-      {headline && (
+      {/* R7/task D — suppressed for a skin that declares it already says all
+       *  of this itself (`SkinDefV3.ownsHeadline`). NOT a per-sport list in
+       *  the chassis: R6's ruling is that the skin declares, so nothing here
+       *  has to be kept in sync with eleven skins. `?? false` — omitting the
+       *  method means KEEP, so a skin that has never considered the question
+       *  shows one redundant bar rather than silently losing the only
+       *  statement of its result. */}
+      {shouldRenderHeadline(headline, props.skin, view) && headline && (
         <p data-role="v3-headline" className="rounded-xl bg-slate-900 px-4 py-2 text-center text-sm font-semibold text-white">
           {headline}
         </p>

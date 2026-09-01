@@ -765,6 +765,15 @@ export function genericSkinV3(t: TFn): SkinDefV3<PadHostView> {
     key: SPORT,
     tapModel: "S",
     phase: resolvePhase,
+    /** R7/D — the engine's headline is `${home} — ${away}` built from the
+     *  SAME `summary.perSide` lines the two halves render (`bigOf` reads
+     *  `perSide[].line` verbatim, generic.ts's own `summary()` returns
+     *  `headline: \`${home} — ${away}\`` beside `perSide: [{line: home},
+     *  {line: away}]`). Not "similar": the identical two strings, with an
+     *  em-dash between them, stacked above the halves that already show them.
+     *  There is no state in which it says anything else — this kernel's
+     *  summary has no suffix, no phase and no detail. */
+    ownsHeadline: () => true,
     scorebug: (view) => buildScorebug(view, t),
     tiles: (view) => buildTiles(view, t),
     dock: (eventType, view, payload) => buildDock(eventType, view, t, payload),

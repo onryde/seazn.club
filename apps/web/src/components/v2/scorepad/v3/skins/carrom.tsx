@@ -706,6 +706,14 @@ export function carromSkinV3(t: TFn): SkinDefV3<PadHostView> {
     key: "carrom",
     tapModel: "T",
     phase: resolvePhase,
+    /** R7/D — carrom's headline is `${gamesWon.home} — ${gamesWon.away}`, and
+     *  the two halves already carry BOTH numbers on the board: `big` is the
+     *  current board's score and `sub` is `(${gamesWon})`. The series tally is
+     *  therefore on screen twice, once beside the number it qualifies and once
+     *  stripped of that context in a bar above. Keeping the halves is the
+     *  right way round — a bare `2 — 1` above a board reading 9 and 4 is the
+     *  more confusable of the two. */
+    ownsHeadline: () => true,
     scorebug: (view) => buildScorebug(view, t),
     tiles: buildTiles,
     dock: (eventType, view, payload) => buildDock(eventType, view, t, payload),
