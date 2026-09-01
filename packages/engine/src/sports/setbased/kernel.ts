@@ -28,6 +28,7 @@ import {
 } from "../../core/types.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
 import type { EntrantModel } from "../../sport/entrant-model.ts";
+import { stampAttributionRequired } from "../../sport/module.ts";
 import {
   personsForEntrant,
   type PlayerStatMetric,
@@ -2284,7 +2285,10 @@ export function makeSetBasedModule(preset: SetBasedPreset): SetBasedModule {
     configSchema,
     eventSchema: SetBasedEv,
     eventSchemas,
-    padSpec: (padCfg) => setBasedPadSpec(preset, padCfg),
+    // R8/WS-B — `required` stamped ONCE here, from the SAME `eventSchemas`
+    // registry already declared above (never hand-typed per action; see
+    // module.ts's own doc comment).
+    padSpec: (padCfg) => stampAttributionRequired(setBasedPadSpec(preset, padCfg), eventSchemas),
     positions: preset.positions,
     variants: preset.variants,
     ...(preset.entrantModel === undefined ? {} : { entrantModel: preset.entrantModel }),

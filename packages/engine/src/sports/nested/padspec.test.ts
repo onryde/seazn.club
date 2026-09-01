@@ -161,7 +161,9 @@ describe("tennis padSpec covers tennis.game.award", () => {
         .flatMap((p) => p.actions)
         .find((a) => a.type === "tennis.game.award");
       expect(action, name).toBeDefined();
-      expect(action?.attribution).toEqual([{ kind: "side", path: "winner" }]);
+      // R8/WS-B — `winner` is `EntrantId` (non-optional) on `NestedGameAward`,
+      // so `stampAttributionRequired` (module.ts) derives `required: true`.
+      expect(action?.attribution).toEqual([{ kind: "side", path: "winner", required: true }]);
     }
   });
 

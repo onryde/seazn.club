@@ -261,9 +261,19 @@ export type PadField = PadFieldEnum | PadFieldNumber | PadFieldToggle;
  * payload. `labelKey` is optional for the same reason a field's is — see
  * `PadFieldEnum` above.
  */
+/**
+ * R8/WS-B — whether the renderer must collect a value here before the
+ * action can fire. `undefined` reads as "not yet stamped" (only a padSpec
+ * that has NOT been run through `stampAttributionRequired` below, which is
+ * a build-time bug — every module's `padSpec(cfg)` runs its whole spec
+ * through the stamp before returning). ALWAYS derived from the action's
+ * own payload schema (`isPathRequired`/`stampAttributionRequired`), never
+ * hand-typed per sport — memory rule #19: a value typed into a table
+ * drifts from the source of truth the moment the schema changes under it.
+ */
 export type PadAttributionItem =
-  | { kind: "side"; path: string; labelKey?: PadLabel }
-  | { kind: "person"; path: string; role?: string; labelKey?: PadLabel };
+  | { kind: "side"; path: string; labelKey?: PadLabel; required?: boolean }
+  | { kind: "person"; path: string; role?: string; labelKey?: PadLabel; required?: boolean };
 
 /**
  * A LIST of attribution requirements, not a single discriminated choice —
@@ -347,6 +357,119 @@ export interface PadSpec {
   /** Which bands need an entitlement beyond the free floor (`fidelity.ts`'s
    *  `tier <= 1`). Bands 0 and 1 are never keyed here. */
   fidelityEntitlements: Readonly<Partial<Record<FidelityBand, string>>>;
+}
+
+// ---------------------------------------------------------------------------
+// R8/WS-B (#… "the live dead-end tap") — `isPathRequired`/
+// `stampAttributionRequired`: the ONE shared derivation of
+// `PadAttributionItem.required` from the action's own payload schema, so no
+// sport ever hand-types the flag (memory rule #19 — a value typed into a
+// table drifts from the source of truth the moment the schema it claims to
+// summarise changes under it). Before this, the pad let a scorer confirm an
+// action with a REQUIRED attribution item still unfilled; the engine's
+// `z.strictObject` then rejected the payload and the tap dead-ended with no
+// explanation (`cricket.toss.wonBy`, `cricket.review.by`, `football.goal.by`
+// confirmed live). `required` makes that state unreachable: the renderer
+// gates Confirm on every item this derivation calls required.
+// ---------------------------------------------------------------------------
+
+/**
+ * Peels `.optional()`/`.nullable()`/`.default()` wrappers (anything with a
+ * zod `.unwrap()`) off `t` until a plain object with a `.shape` is reached,
+ * or returns `undefined` if `t` is not, and does not wrap, an object schema.
+ * Bounded to a handful of hops — a real payload schema never nests more than
+ * one or two modifiers deep, and an unbounded loop would hang on a
+ * pathological/self-referential schema instead of failing loudly.
+ */
+function objectShapeOf(t: z.ZodTypeAny): Record<string, z.ZodTypeAny> | undefined {
+  let cursor: unknown = t;
+  for (let hops = 0; hops < 8; hops++) {
+    const shaped = cursor as { shape?: unknown };
+    if (shaped !== null && typeof shaped === "object" && shaped.shape !== undefined && typeof shaped.shape === "object") {
+      return shaped.shape as Record<string, z.ZodTypeAny>;
+    }
+    const wrapped = cursor as { unwrap?: () => z.ZodTypeAny };
+    if (typeof wrapped.unwrap === "function") {
+      cursor = wrapped.unwrap();
+      continue;
+    }
+    return undefined;
+  }
+  return undefined;
+}
+
+/**
+ * Whether the payload key at dotted `path` is REQUIRED (non-optional) in
+ * `schema` — the single source of truth `PadAttributionItem.required` (and
+ * `stampAttributionRequired` below) derive from, so the flag can never drift
+ * from the real payload schema (memory rule #19).
+ *
+ * Walks the schema segment by segment; only the LEAF segment's own
+ * optionality is checked. An intermediate segment's ancestor object being
+ * itself `.optional()` on the schema (cricket's top-level `wicket`, absent
+ * from a plain ball) is irrelevant to a LEAF item's requiredness: the action
+ * that declares an attribution item under that ancestor always builds the
+ * ancestor too (via its own `fields`), so from that action's own payload the
+ * only real question is whether the leaf itself can be left out.
+ *
+ * Throws — never silently returns `false` — when a path segment does not
+ * resolve against the schema. A `PadAttributionItem.path` is a promise about
+ * a real payload key; a typo that this returned `false` for would silently
+ * un-gate Confirm on a genuinely required field, reopening the exact
+ * dead-end-tap bug this derivation exists to close.
+ */
+export function isPathRequired(schema: z.ZodTypeAny, path: string): boolean {
+  const segments = path.split(".");
+  let cursor: z.ZodTypeAny = schema;
+  for (const segment of segments) {
+    const shape = objectShapeOf(cursor);
+    const field = shape?.[segment];
+    if (field === undefined) {
+      throw new Error(
+        `isPathRequired: cannot resolve payload path "${path}" against its schema — no field "${segment}" found ` +
+          `while walking it (a PadAttributionItem/PadField path must name a real payload key)`,
+      );
+    }
+    cursor = field;
+  }
+  return !cursor.isOptional();
+}
+
+/**
+ * Runs every attribution item in `spec` through `isPathRequired` against its
+ * OWN action's registered payload schema, and returns a new `PadSpec` with
+ * `required` stamped everywhere. Applied ONCE, at the end of a module's own
+ * `padSpec(cfg)`, so a schema change moves every action's Confirm-gating
+ * with it — no per-item literal anywhere to fall out of sync.
+ *
+ * An action whose `type` has no entry in `eventSchemas` is left untouched
+ * (unstamped): that mismatch is `checkActionCoverage`'s job to flag, not
+ * this function's — throwing here would turn one drift into two different
+ * failure shapes for the same root cause.
+ *
+ * Pure: never mutates `spec`.
+ */
+export function stampAttributionRequired(
+  spec: PadSpec,
+  eventSchemas: Readonly<Record<string, z.ZodTypeAny>>,
+): PadSpec {
+  return {
+    ...spec,
+    panels: spec.panels.map((panel) => ({
+      ...panel,
+      actions: panel.actions.map((action) => {
+        const schema = eventSchemas[action.type];
+        if (schema === undefined) return action;
+        return {
+          ...action,
+          attribution: action.attribution.map((item) => ({
+            ...item,
+            required: isPathRequired(schema, item.path),
+          })),
+        };
+      }),
+    })),
+  };
 }
 
 // spec 03 §3. Extends the kernel's FoldableModule (spec 03 §2) so every

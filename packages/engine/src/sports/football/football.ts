@@ -43,6 +43,7 @@ import {
   type StandingsDelta,
 } from "../../core/types.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
+import { stampAttributionRequired } from "../../sport/module.ts";
 import type {
   ModuleEvent,
   PadAction,
@@ -2354,7 +2355,10 @@ export function padSpec(cfg: FootballCfg): PadSpec {
     },
   ];
 
-  return {
+  // R8/WS-B — `required` stamped ONCE, here, from FOOTBALL_EVENT_SCHEMAS
+  // itself (never hand-typed per action; see module.ts's own doc comment).
+  return stampAttributionRequired(
+    {
     panels,
     // S6 owner ruling (_INDEX.md, "redesign the fidelity model, in S6") — one
     // band per event type, no repetition. Football's OLD (untouched)
@@ -2403,7 +2407,9 @@ export function padSpec(cfg: FootballCfg): PadSpec {
     // claim. `fidelityTiers` below carries the SAME two literals; the
     // pair is hand-kept and must move in lockstep.
     fidelityEntitlements: { 2: "scoring.match_timeline", 3: "scoring.ball_by_ball" },
-  };
+    },
+    FOOTBALL_EVENT_SCHEMAS,
+  );
 }
 
 export const football: SportModule<FootballCfg, FootballEv, FootballState> = {

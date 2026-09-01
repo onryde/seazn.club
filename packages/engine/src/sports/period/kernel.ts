@@ -29,6 +29,7 @@ import {
   type StandingsDelta,
 } from "../../core/types.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
+import { stampAttributionRequired } from "../../sport/module.ts";
 import type {
   FidelityTier,
   ModuleEvent,
@@ -2150,7 +2151,10 @@ export function makePeriodModule(
       ...shotPanels,
     ];
 
-    return {
+    // R8/WS-B — `required` stamped ONCE, here, from the SAME `eventSchemas`
+    // registry already declared above (never hand-typed per action; see
+    // module.ts's own doc comment).
+    return stampAttributionRequired({
       panels,
       // S6 owner ruling (`_INDEX.md`, "redesign the fidelity model") — one
       // band per event type, no repetition.
@@ -2212,7 +2216,7 @@ export function makePeriodModule(
         // this file can make for itself.
         ...(shotTracking ? { 3: preset.timelineEntitlement } : {}),
       },
-    };
+    }, eventSchemas);
   };
 
   // SPEC-1 — read-only card projection over the suspension.start events (voids
