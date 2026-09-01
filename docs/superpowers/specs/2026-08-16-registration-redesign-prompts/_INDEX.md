@@ -4545,3 +4545,61 @@ catch them red, then were reverted clean.
 
 Still owed before merge: reviewer round 2 (confirm the 6 fixes are actually
 sound, not just present), then a PR.
+
+### Review round 3 — fixed, 2026-09-01 (`413c9ec36`, `be8a2f984`, `8c19917a3`, `52a0126dd`)
+
+Two independent review passes (`/code-review medium` + a scoped reuse-angle
+sub-check) found 7 more findings on top of rounds 1-2. 6 fixed, 1 (finding 7,
+a CSV bulk-import duplicate-POST-block claim) was already stale against
+current code — round 2's own fix commit (`e5f5d45b7`) had already converged
+the teamMode/non-teamMode branches into one shared `runGated` POST after the
+if/else, so the finding described code that no longer existed; skipped per
+the dispatch's own "say so and skip it" instruction rather than making a
+needless change.
+
+1. `lineup-editor.tsx`'s `save()` had no recovery path for a 422
+   `ELIGIBILITY_VIOLATION` (`putLineup` → `gateRosterEligibility`) — wired
+   the same `EligibilityOverrideDialog` retry pattern `entrants-panel.tsx`'s
+   `runGated` establishes.
+2. `import-wizard.tsx`'s `commit()` had the identical gap for `commitImport`
+   — same fix; confirmed retry-safe (the whole commit lives in one
+   transaction that rolls back entirely on the violation throw, so a retry
+   with the same `Idempotency-Key` never double-executes anything).
+3. `offenderLabel()`'s no-`playerName` fallback was hardcoded English —
+   routed through `msg()`, new key
+   `divset.entrants.eligibilityGate.playerFallback` in all 4 dictionaries.
+4. `REASON_MIN`/`REASON_MAX` (3/500) were hardcoded in both the dialog and
+   `EligibilityOverride`'s Zod schema — promoted to `@/lib/registration-
+   rules`, both import it now (no `openapi:gen` drift — the generated schema
+   is identical, only the source expression changed).
+5. `eligibility-override-dialog.tsx` hand-copied `ConfirmDialog`'s entire
+   shell — now composes it via `children`. `ConfirmDialog` gained one new
+   optional prop (`confirmDisabled`) since its own `typedName`/
+   `isConfirmArmed` exact-match check can't express a reason-LENGTH gate;
+   every existing caller (which never passes it) is unaffected — verified
+   against all 4 ConfirmDialog-caller test suites plus this dialog's own 2
+   other callers, 53/53.
+6. `seasonStartYearFrom` (registration-eligibility.ts, exported) and
+   `seasonStartYear` (registration-submit.ts, private) were byte-for-byte
+   duplicates — promoted to `@/lib/registration-rules`, both re-export/call
+   it now. NOT the same function as `eligibility-presentation.ts`'s own
+   `seasonStartYearFrom` (genuinely different signature/behaviour — left
+   untouched).
+
+Verification: RS011 eligibility set + 4 new test files + every
+ConfirmDialog-caller suite + registration-path suites + api-v1 suites,
+693/693 (all real file paths confirmed present in the JSON reporter's
+`testResults[].name`, not silently skipped); `tsc --noEmit -p apps/web`
+exit 0; lint 0 errors (1 pre-existing warning in `import-wizard.tsx`,
+confirmed present at the same expression on `origin/main` via `git show
+... | eslint --stdin`); `i18n:gen-keys`/`i18n:check` clean (5698 keys,
+parity OK); `openapi:gen` — `git status --porcelain openapi/` empty (no
+drift). Every behavioral fix (1, 2, 3, 5) mutation-verified: the relevant
+guard was hand-broken, the exact test(s) that exist to catch it turned
+red, then restored and reverified green. Fixes 4 and 6 are pure constant-
+promotion/dedup with no new test, per the standing rule for that class of
+fix — verified via the existing suites that already exercise both.
+
+Still owed before merge: this branch remains unmerged and un-PR'd; a
+reviewer round 4 (or the PR's own review) should confirm these 6 fixes
+before requesting sign-off.
