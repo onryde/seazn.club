@@ -4577,6 +4577,8 @@
   "pad.activity.void": "Ongeldig maken",
   "pad.activity.voiding": "Bezig…",
   "pad.activity.voided": "Ongeldig",
+  "pad.activity.partial": "Gedeeltelijk",
+  "pad.activity.partial.hint": "Vastgelegd, maar het wachtvenster sloot voordat alle details waren toegevoegd.",
   "bracket.round.roundOf": "Ronde van {n}",
   "bracket.round.quarter": "Kwartfinales",
   "bracket.round.semi": "Halve finales",

@@ -197,12 +197,10 @@ test("tennis: device-width pad speaks the score, banks a tie-break set, undo res
     .toBe(1);
   await expect(homeHalf).toContainText("15");
   await expect(awayHalf).toContainText("0");
-  // usePadPipeline's double-submit guard swallows an identical payload
-  // within DOUBLE_SUBMIT_WINDOW_MS (600ms) of the last ACCEPTED one, and the
-  // ledger-count poll above can resolve well inside that window on a fast
-  // local server — so the second identical tap needs its own clearance
-  // rather than racing straight in behind the first.
-  await page.waitForTimeout(700);
+  // R7-42/R7-30/R7-43 (owner ruling, `_INDEX.md`): `DOUBLE_SUBMIT_WINDOW_MS`
+  // is now 250ms (was 600ms), and a refused repeat is VISIBLE rather than
+  // silent — no clearance is taken here any more; this is one of the
+  // acceptance-test call sites for that fix.
   await homeHalf.click();
   await expect
     .poll(

@@ -103,16 +103,18 @@ async function shot(page: Page, caption: string): Promise<void> {
 }
 
 /** Tap a rally on one half and wait for it to REACH the ledger.
- *  `DOUBLE_SUBMIT_WINDOW_MS` (600ms) swallows a same-payload repeat, so a
- *  same-side tap pays a clearance the alternating case never needs — same
- *  shape as the tennis walkthrough's own `tapPoint`. */
-let lastSide: "home" | "away" | null = null;
+ *
+ * R7-42/R7-30/R7-43 (owner ruling, `_INDEX.md`) — this used to pay a 750ms
+ * clearance on a same-side repeat (tracked in the now-deleted `lastSide`,
+ * shared with `tapAnchor` below) so it would not collide with
+ * `DOUBLE_SUBMIT_WINDOW_MS`. That window is now 250ms (was 600ms), and a
+ * refused repeat is VISIBLE rather than silent, so the clearance and its
+ * bookkeeping are gone.
+ */
 async function tapRally(page: Page, fx: RosteredFixture, side: "home" | "away"): Promise<void> {
   const before = (await ledger(page.request, fx.fixtureId)).length;
-  if (side === lastSide) await page.waitForTimeout(750);
   if (PACE > 0) await page.waitForTimeout(PACE);
   await half(page, side).click();
-  lastSide = side;
   await expect
     .poll(async () => (await ledger(page.request, fx.fixtureId)).length, { timeout: 20_000 })
     .toBe(before + 1);
@@ -135,7 +137,6 @@ async function tapAnchor(
   await expect(sheet).toContainText("Who won it?", { timeout: 20_000 });
   await choiceOption(sheet, wonBy).click();
   await expect(sheet).toHaveCount(0, { timeout: 20_000 });
-  lastSide = wonBy;
   await expect
     .poll(async () => (await ledger(page.request, fx.fixtureId)).length, { timeout: 20_000 })
     .toBe(before + 1);
@@ -157,7 +158,6 @@ test("R5 — table tennis: tap a match across the turnLength:2 rotation, into de
   // this expression has to hold for both.
   test.setTimeout(Math.max(180_000, 60_000 + 21 * (HOLD_MS + 2_000)));
   shotNo = 0;
-  lastSide = null;
 
   const homeName = `V3 TT Match Home ${TAG}`;
   const awayName = `V3 TT Match Away ${TAG}`;

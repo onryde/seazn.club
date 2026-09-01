@@ -44,6 +44,7 @@ import type { AnySportModule, FidelityBand, PadSpec } from "@seazn/engine/sport"
 import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
 import { type MsgFn } from "@/lib/scoring-vocab";
+import { deepEqual } from "../pipeline";
 import { refusalText } from "../refusal-copy";
 import type { PadTransport } from "../transport";
 import type { OwnIdentity } from "../types";
@@ -1033,6 +1034,47 @@ export function resolveDockSpec(
   return skin.dock(held.eventType, view, held.payload as Record<string, unknown> | undefined);
 }
 
+/**
+ * R7-42/F (owner ruling on P-5, `_INDEX.md`) — "a doubles rally opens the
+ * dock; if nobody answers within HOLD_MS the hold drains and the rally
+ * submits with `wonBy` only... label the stat as partial wherever it
+ * surfaces". This is that label's own predicate: whether a SETTLED event's
+ * payload still lacks an attribution answer its own dock would offer for
+ * it — chassis-level and sport-agnostic, driven entirely by the payload and
+ * the skin's own REQUIRED `dock()` method (types.ts), never a stored flag.
+ *
+ * Deliberately NOT "did the hold's natural timer fire". A dock chip TAP
+ * never releases the hold early — `detail-dock.tsx`'s own header: "dismissing
+ * early sends immediately... exactly the same outcome as letting the window
+ * expire on its own" — so an ANSWERED rally drains through the identical
+ * natural timer an UNANSWERED one does. That signal cannot tell the two
+ * apart; only the payload's own content can, which is why this calls
+ * `skin.dock()` again with the FINAL payload rather than reading anything
+ * recorded at hold time.
+ *
+ * `kind: "flag"` chips (types.ts, `DockChip.kind`) are excluded on purpose.
+ * Football's own `ownGoal`/`penalty` are documented as skippable MODIFIERS
+ * ("the dock closes on its own and the goal is already recorded") — an
+ * ordinary goal that is neither is not "less than the scorer did", it is
+ * the scorer correctly reporting an ordinary goal. Every dock chip shipped
+ * to date sets its own field unconditionally (never a toggle), so
+ * re-applying one to the settled payload and finding NO CHANGE is exactly
+ * "this chip's own answer is already in the payload" — no chip needs to
+ * declare an "already selected" flag of its own for this to work.
+ */
+export function isPartialDockAnswer(
+  skin: SkinDefV3,
+  eventType: string,
+  payload: Record<string, unknown>,
+  view: PadHostView,
+): boolean {
+  const spec = skin.dock(eventType, view, payload);
+  if (spec === null) return false;
+  const attribution = spec.chips.filter((chip) => chip.kind !== "flag");
+  if (attribution.length === 0) return false;
+  return attribution.every((chip) => !deepEqual(chip.mutate(payload), payload));
+}
+
 // ---------------------------------------------------------------------------
 // PadHostV3 — the React shell
 // ---------------------------------------------------------------------------
@@ -1557,6 +1599,17 @@ export function PadHostV3(props: PadHostV3Props) {
     [props.skin, t, pluralMsg, view.cfg, view.state, personNames],
   );
 
+  // R7-42/F — the SAME shape `resolveDetail` above takes, for the SAME
+  // reason: `ActivityPanel` is chassis-level and has no dock vocabulary of
+  // its own, so this is the one place `isPartialDockAnswer` gets called,
+  // built once and handed to the panel below. `view` is captured verbatim
+  // (its own identity already keys every other per-render memo here), so
+  // this recomputes exactly when the dock's own inputs could have changed.
+  const isPartial = useCallback(
+    (eventType: string, payload: Record<string, unknown>) => isPartialDockAnswer(props.skin, eventType, payload, view),
+    [props.skin, view],
+  );
+
   const ribbon = buildTopRibbon(activityEvents, (id) => personNames[id] ?? id, t, resolveDetail);
   // R7/C4 — see `ribbonUndoTarget`. Resolved next to the ribbon it belongs to
   // rather than inside the JSX so the rule is one named, testable function
@@ -1858,6 +1911,11 @@ export function PadHostV3(props: PadHostV3Props) {
           // once above rather than inlined here. It was inlined, this was its
           // only reader, and the ribbon spent four waves with no detail at all.
           resolveDetail={resolveDetail}
+          // R7-42/F — "label the stat as partial wherever it surfaces"
+          // (ruling on P-5). Wired here, not just built above: an
+          // unwired helper is exactly the D2 defect this same comment
+          // already warns about, one line up.
+          isPartial={isPartial}
         />
       </div>
       )}

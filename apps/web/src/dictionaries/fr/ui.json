@@ -4577,6 +4577,8 @@
   "pad.activity.void": "Annuler",
   "pad.activity.voiding": "Annulation…",
   "pad.activity.voided": "Annulé",
+  "pad.activity.partial": "Partiel",
+  "pad.activity.partial.hint": "Enregistré, mais la fenêtre d'attente s'est refermée avant l'ajout de tous les détails.",
   "bracket.round.roundOf": "Ronde des {n}",
   "bracket.round.quarter": "Quarts de finale",
   "bracket.round.semi": "Demi-finales",

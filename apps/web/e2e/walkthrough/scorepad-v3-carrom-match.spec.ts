@@ -156,18 +156,15 @@ async function tapBoard(page: Page, fx: RosteredFixture, winner: "home" | "away"
   // Every board tapped in this file is `{winner, opponentCoinsLeft: 9}` —
   // bit-for-bit the SAME payload every time (carrom declares no `clock()`,
   // so `stampFor` hands it back unchanged, per `send`'s own doc in
-  // pad-host.tsx). `use-pad-pipeline.ts`'s `submit()` silently no-ops a
-  // resubmit of an identical `{type, payload}` within `DOUBLE_SUBMIT_
-  // WINDOW_MS` (600ms) of the last ACCEPTED one — "likely one physical tap
-  // read twice" — and under real load this test's own tile-click through
-  // Confirm-click sequence can complete inside that window, so a repeat tap
-  // is dropped CLIENT-SIDE with no error and no network request at all
-  // (reproduced: the 4th board tap here vanished silently under parallel-
-  // worker load — zero POST logged, no console error, ledger stuck one
-  // short). Same fix badminton's own `tapRally` already pays for a same-
-  // side repeat rally, restated here in its own words: a clearance wait
-  // comfortably over 600ms before every repeat of this identical payload.
-  await page.waitForTimeout(750);
+  // pad-host.tsx). This is R7-43's OWN reproduction (`_INDEX.md`): under
+  // real load this file's own tile-click-through-Confirm sequence could
+  // complete inside the old `DOUBLE_SUBMIT_WINDOW_MS` (600ms), so a repeat
+  // tap was dropped CLIENT-SIDE with no error and no network request at all
+  // — the 4th board tap here vanished silently under parallel-worker load,
+  // zero POST logged, ledger stuck one short. R7-42's fix (owner ruling)
+  // narrowed the window to 250ms and made a refused repeat VISIBLE rather
+  // than silent, so the clearance this used to pay is gone — THIS call
+  // site is the acceptance test for that fix.
   await tile(page, "board").click();
   await expect(sheet(page)).toBeVisible({ timeout: 10_000 });
   await sheet(page).locator(`[data-choice-option-id="${winner}"]`).click();

@@ -2695,6 +2695,8 @@ export type DictionaryKey =
   | "outcome.upheld"
   | "pad.activity.empty"
   | "pad.activity.heading"
+  | "pad.activity.partial"
+  | "pad.activity.partial.hint"
   | "pad.activity.recordedBy"
   | "pad.activity.void"
   | "pad.activity.voided"

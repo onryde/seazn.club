@@ -118,18 +118,17 @@ async function ralliesOf(request: APIRequestContext, fixtureId: string) {
 }
 
 /**
- * A rally tap, spaced past the pipeline's own double-submit guard.
- * `DOUBLE_SUBMIT_WINDOW_MS` is 600ms (use-pad-pipeline.ts) and compares the
- * WHOLE payload, so N consecutive taps on the SAME half build an identical
- * `{wonBy, server, scorer}` and every one after the first is silently
- * swallowed — correct behaviour, and exactly why a test needing several
- * rallies for one side cannot simply loop without spacing.
- * `scorepad-v3-badminton.spec.ts`'s own `tapRally` takes the identical
- * clearance.
+ * A rally tap.
+ *
+ * R7-42/R7-30/R7-43 (owner ruling, `_INDEX.md`) — this used to pay a flat
+ * 750ms clearance after EVERY tap so N consecutive taps on the SAME half
+ * (an identical `{wonBy, server, scorer}` every time) would not collide with
+ * `DOUBLE_SUBMIT_WINDOW_MS`. The window is now 250ms (was 600ms), so the
+ * clearance is gone — `scorepad-v3-badminton.spec.ts`'s own `tapRally` took
+ * the identical fix.
  */
 async function tapRally(page: Page, side: "home" | "away"): Promise<void> {
   await half(page, side).click();
-  await page.waitForTimeout(750);
 }
 
 /** The dock's own dismiss control (`pad.dock.dismiss` — "Send now"):

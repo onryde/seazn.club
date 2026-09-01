@@ -1,5 +1,6 @@
 import { test, expect, type Page, type APIRequestContext } from "@playwright/test";
 import { apiJson, fixturePath, seedRosteredFixture, TAG, type RosteredFixture } from "./helpers";
+import { DOUBLE_SUBMIT_WINDOW_MS } from "../src/components/v2/scorepad/use-pad-pipeline";
 
 // ScoringPad v3, wave R5 — the coverage badminton's conversion OWES beyond
 // re-pointing the pre-existing flows at the v3 DOM (scoring.spec.ts's two
@@ -117,19 +118,31 @@ async function ralliesOf(request: APIRequestContext, fixtureId: string) {
 }
 
 /**
- * A rally tap, spaced past the pipeline's own double-submit guard.
+ * A rally tap.
  *
- * `DOUBLE_SUBMIT_WINDOW_MS` is 600ms (use-pad-pipeline.ts) and it compares the
- * whole payload — so N consecutive taps on the SAME half build an identical
- * `{wonBy, server, scorer}` every time and every one after the first is
- * silently swallowed. That is correct behaviour (it is what stops a
- * double-tapped phone recording two points), and it is exactly why a test that
- * needs eleven rallies for one side cannot simply loop. Same 700ms-shaped
- * clearance scorepad-v3-tennis.spec.ts already takes for its own repeat tap.
+ * R7-42/R7-30/R7-43 (owner ruling, `_INDEX.md`) — this used to pay a flat
+ * 750ms clearance after EVERY tap so N consecutive taps on the SAME half
+ * (an identical `{wonBy, server, scorer}` every time) would not collide with
+ * `DOUBLE_SUBMIT_WINDOW_MS`, which the fix narrowed 600ms -> 250ms and made
+ * a refused repeat VISIBLE rather than silent.
+ *
+ * The clearance itself COULD NOT be deleted outright, and this is the one
+ * call site the dispatch asked to report rather than silently drop: the
+ * eleven-same-side-rally test below asserts the OPTIMISTIC fold
+ * (`submitHeld` folds before the hold releases — no network round trip), so
+ * two consecutive taps here can land under 250ms apart on a fast local
+ * run/CI runner with nothing else in between to force real spacing —
+ * measured directly: at zero wait, rally 3 of 11 was silently swallowed
+ * (`Expected: 3, Received: 2`). The walkthrough suite's OWN `tapRally`
+ * (`walkthrough/scorepad-v3-badminton-match.spec.ts`) does NOT need this —
+ * it polls the real ledger (a network round trip) between taps, which
+ * already exceeds the window on its own. Imports the REAL constant plus a
+ * small margin rather than a second hardcoded number, so this can never go
+ * stale again the way the old flat 750/600 pair already had.
  */
 async function tapRally(page: Page, side: "home" | "away"): Promise<void> {
   await half(page, side).click();
-  await page.waitForTimeout(750);
+  await page.waitForTimeout(DOUBLE_SUBMIT_WINDOW_MS + 60);
 }
 
 /** The dock's own dismiss control (`pad.dock.dismiss` — "Send now"):

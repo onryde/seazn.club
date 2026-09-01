@@ -512,17 +512,39 @@ describe("usePadPipeline — double-submit guard (review finding 2)", () => {
     expect(pad.current.queueDepth).toBe(0);
   });
 
-  it("a repeat of the identical (type, payload) within the window, AFTER the first fully resolves, is also suppressed", async () => {
+  it("a repeat of the identical (type, payload) within the window, AFTER the first fully resolves, is also suppressed — AND the refusal is now VISIBLE, not silent", async () => {
+    const { transport, appendCalls } = fakeTransport({ appendResults: [success(1), success(2)] });
+    const pad = mountPipeline(baseParams({ transport }));
+
+    await pad.current.submit("generic.score", { by: "H", points: 1 });
+    expect(appendCalls).toHaveLength(1);
+    expect(pad.current.lastRejection).toBeNull(); // the first, accepted submit clears any prior rejection
+
+    await vi.advanceTimersByTimeAsync(DOUBLE_SUBMIT_WINDOW_MS - 100); // still inside the window
+    await pad.current.submit("generic.score", { by: "H", points: 1 }); // same action, too soon
+
+    expect(appendCalls).toHaveLength(1); // still just one — the repeat is still refused
+    // R7-42/R7-30: refused is no longer synonymous with silent. The scorer
+    // must be able to tell the tap was not taken, via the SAME
+    // `lastRejection` surface a server-side 422 already uses (rendered
+    // through `rejectionText`/`refusalText`, pad-host.tsx/refusal-copy.ts).
+    expect(pad.current.lastRejection).not.toBeNull();
+    expect(pad.current.lastRejection?.code).toBe("DOUBLE_SUBMIT");
+  });
+
+  it("a repeat at 400ms — inside the OLD 600ms window, outside the new 250ms one — now RECORDS: the customer-facing behaviour change", async () => {
     const { transport, appendCalls } = fakeTransport({ appendResults: [success(1), success(2)] });
     const pad = mountPipeline(baseParams({ transport }));
 
     await pad.current.submit("generic.score", { by: "H", points: 1 });
     expect(appendCalls).toHaveLength(1);
 
-    await vi.advanceTimersByTimeAsync(DOUBLE_SUBMIT_WINDOW_MS - 100); // still inside the window
-    await pad.current.submit("generic.score", { by: "H", points: 1 }); // same action, too soon
+    await vi.advanceTimersByTimeAsync(400); // past the new 250ms window, still inside the old 600ms one
+    await pad.current.submit("generic.score", { by: "H", points: 1 });
 
-    expect(appendCalls).toHaveLength(1); // still just one
+    expect(appendCalls).toHaveLength(2); // BOTH recorded — this would have been swallowed at the old window
+    expect(pad.current.lastRejection).toBeNull(); // a genuinely-accepted second submit, nothing to refuse
+    expect((pad.current.state as { running: { home: number; away: number } }).running).toEqual({ home: 2, away: 0 });
   });
 
   it("two DELIBERATELY identical actions separated by MORE than the window both record — a scorer entering two dot balls in a row must not lose the second", async () => {
@@ -2075,7 +2097,7 @@ describe("usePadPipeline — R2 soft-commit entry point (submitHeld / dropHeldSu
     expect(appendCalls).toHaveLength(1);
   });
 
-  it("shares submit()'s double-submit guard: an identical action within the window holds nothing new", async () => {
+  it("shares submit()'s double-submit guard: an identical action within the window holds nothing new — AND the refusal is VISIBLE (R7-42/R7-30, this is the copy every real v3 tap calls)", async () => {
     const { transport } = fakeTransport({ appendResults: [] });
     const pad = mountPipeline(baseParams({ transport }));
     await vi.advanceTimersByTimeAsync(0);
@@ -2086,6 +2108,7 @@ describe("usePadPipeline — R2 soft-commit entry point (submitHeld / dropHeldSu
     expect(first).not.toBeNull();
     expect(second).toBeNull(); // identical action, accepted too recently — same DOUBLE_SUBMIT_WINDOW_MS submit() uses
     expect(pad.current.queueDepth).toBe(1); // only one entry was ever held
+    expect(pad.current.lastRejection?.code).toBe("DOUBLE_SUBMIT"); // no longer a silent no-op
   });
 
   it("dropHeldSubmission undoes a still-held tap with no network call, no core.void, and reverts the optimistic fold", async () => {

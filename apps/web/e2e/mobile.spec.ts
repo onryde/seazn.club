@@ -3150,10 +3150,11 @@ test("badminton v3 pad: both scoring halves and the Set-score tile hold the 44px
   // A real rally tap, then the context strip it brings on screen — the strip
   // is a new v3 surface and only renders once the reader can name a server,
   // which for badminton takes the SECOND rally (the first has no prior rally
-  // to derive the serve from). Two taps, spaced past the pipeline's 600ms
-  // double-submit guard, which compares the whole payload.
+  // to derive the serve from). R7-42/R7-30/R7-43 (owner ruling, `_INDEX.md`):
+  // the pipeline's double-submit guard (compares the whole payload) is now
+  // 250ms (was 600ms) and a refused repeat is VISIBLE rather than silent, so
+  // the clearance the two same-payload taps used to pay is gone.
   await padHalf(page, "home").click();
-  await page.waitForTimeout(750);
   await padHalf(page, "home").click();
   // The SERVER item specifically, never `.first()`. `buildStrip` pushes an
   // unconditional "games" item ahead of everything else, so a `.first()` probe

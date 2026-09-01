@@ -162,8 +162,9 @@ function homeHalf(page: Page) {
  * exact payload per slot, not merely a count. That is doubly load-bearing on
  * v3: the double-submit guard compares (type, payload) at SUBMIT time, before
  * any chip has run, so three half taps are three IDENTICAL submissions and the
- * guard would legitimately swallow two of them if they landed inside its 600ms
- * window. `expectDepth` is what actually separates them — polling the durable
+ * guard would legitimately swallow two of them if they landed inside its
+ * window (`DOUBLE_SUBMIT_WINDOW_MS`, 250ms as of R7-42 — was 600ms).
+ * `expectDepth` is what actually separates them — polling the durable
  * queue after each press both spaces the taps and proves each one landed,
  * which the old fixed-value version could only assert once at the end.
  */

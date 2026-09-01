@@ -296,6 +296,21 @@ export interface ActivityPanelProps {
    */
   resolveDetail?: ActivityDetailResolver;
   /**
+   * R7-42/F (owner ruling on P-5, `_INDEX.md`): "label the stat as partial
+   * wherever it surfaces" — a held submission whose hold drained before a
+   * dock question ever got answered records LESS than the scorer would
+   * have given it time to. Mirrors `resolveDetail`'s own shape (a per-row
+   * resolver the CALLER supplies) rather than a boolean on `ActivityEvent`:
+   * this panel is chassis-level and sport-agnostic (this file's own
+   * header) and has no dock vocabulary of its own to derive "partial"
+   * from — `pad-host.tsx`'s `isPartialDockAnswer` is the one place that
+   * calls the skin's own `dock()` to answer it.
+   *
+   * Optional and additive: omitted, every row renders exactly as before —
+   * the SAME posture `resolveDetail` above takes.
+   */
+  isPartial?: (eventType: string, payload: Record<string, unknown>) => boolean;
+  /**
    * R7/C1 — this mount speaks for the organisation, not for one handed
    * device: the console. It widens the void rule back to what the DELETED
    * page-level ledger allowed (anything that is not itself a `core.void`),
@@ -395,6 +410,7 @@ export function ActivityPanel({
   voidingId = null,
   voidDisabled = false,
   resolveDetail,
+  isPartial,
   authority = false,
   footer,
 }: ActivityPanelProps): ReactNode {
@@ -432,6 +448,7 @@ export function ActivityPanel({
             const history = priorActivityEvents(rows, index);
             const detail = resolveDetail?.(event.type, payload, history);
             const caption = buildRibbon(event.type, payload, nameOf, t, detail);
+            const partial = isPartial?.(event.type, payload) ?? false;
             const stripe = TONE_STRIPE[describeEvent(event.type, payload, personNames, t).tone];
             const provenance = Boolean(event.recordedAt) || Boolean(event.recordedByLabel);
             return (
@@ -465,6 +482,21 @@ export function ActivityPanel({
                   className={`min-w-0 flex-1 break-words text-sm ${voided ? "text-slate-400 line-through" : "text-slate-700"}`}
                 >
                   {caption.text}
+                  {partial && (
+                    // R7-42/F — "the resulting Activity row must be
+                    // labelled partial — visibly, in words". `title` carries
+                    // the WHY (the same `.hint` convention this pad already
+                    // uses on the clock-nudge controls, pad-host.tsx), so
+                    // the compact badge stays scannable while the reason is
+                    // one hover/inspect away.
+                    <span
+                      data-role="v3-activity-partial"
+                      title={t("pad.activity.partial.hint")}
+                      className="ml-1.5 inline-block rounded-full bg-amber-100 px-1.5 py-0.5 align-middle text-[10px] font-semibold uppercase tracking-wide text-amber-700"
+                    >
+                      {t("pad.activity.partial")}
+                    </span>
+                  )}
                   {provenance && (
                     <span
                       data-role="v3-activity-provenance"

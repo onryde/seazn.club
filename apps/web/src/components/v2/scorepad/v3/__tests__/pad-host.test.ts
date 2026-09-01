@@ -28,6 +28,7 @@ import {
   decideUndo,
   dedicatedEventTypes,
   entitledBandsFrom,
+  isPartialDockAnswer,
   moreActions,
   phasesWithTiles,
   rejectionText,
@@ -921,6 +922,100 @@ describe("resolveDockSpec — mutation proof (the widened payload wiring is load
     const viaMutant = dropsPayload(skin, held, padHostView());
     expect(real).not.toEqual(viaMutant);
     expect(real).toEqual({ title: "has-payload", chips: [] });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isPartialDockAnswer — R7-42/F (owner ruling on P-5, `_INDEX.md`): "a
+// doubles rally opens the dock; if nobody answers within HOLD_MS the hold
+// drains and the rally submits with wonBy only... label the stat as
+// partial wherever it surfaces". Chassis-level and sport-agnostic — it
+// calls the skin's own dock() with the SETTLED payload and asks whether any
+// attribution chip it offers is still unreflected.
+//
+// Deliberately NOT "did the natural hold timer fire": a dock chip TAP never
+// releases the hold early (queue.ts's own header — dismissing early is the
+// ONLY thing that sends before the timer), so an ANSWERED rally drains
+// through the identical natural timer an unanswered one does. That signal
+// cannot tell the two apart; the payload's own content can.
+// ---------------------------------------------------------------------------
+
+describe("isPartialDockAnswer", () => {
+  it("is never partial when the skin's dock() has nothing to say about this event (null)", () => {
+    const skin = stubSkin(() => null);
+    expect(isPartialDockAnswer(skin, "core.start", {}, padHostView())).toBe(false);
+  });
+
+  it("is never partial when the dock offers zero chips", () => {
+    const skin = stubSkin(() => ({ title: "t", chips: [] }));
+    expect(isPartialDockAnswer(skin, "x", {}, padHostView())).toBe(false);
+  });
+
+  it("is partial when the dock's ONE attribution chip is unreflected in the settled payload — the P-5 case", () => {
+    const skin = stubSkin(() => ({
+      title: "Which player won it?",
+      chips: [
+        { id: "scorer:a", label: "l", mutate: (p) => ({ ...p, scorer: "a" }) },
+        { id: "scorer:b", label: "l", mutate: (p) => ({ ...p, scorer: "b" }) },
+      ],
+    }));
+    expect(isPartialDockAnswer(skin, "badminton.rally", { wonBy: "home" }, padHostView())).toBe(true);
+  });
+
+  it("is NOT partial once the payload already reflects one of the dock's own chips — a scorer beat the clock", () => {
+    const skin = stubSkin(() => ({
+      title: "Which player won it?",
+      chips: [
+        { id: "scorer:a", label: "l", mutate: (p) => ({ ...p, scorer: "a" }) },
+        { id: "scorer:b", label: "l", mutate: (p) => ({ ...p, scorer: "b" }) },
+      ],
+    }));
+    // `keys=wonBy,scorer` — the P-5 spec's own wording for the answered row.
+    expect(isPartialDockAnswer(skin, "badminton.rally", { wonBy: "home", scorer: "a" }, padHostView())).toBe(false);
+  });
+
+  it("is NOT partial when the dock offers ONLY kind:'flag' modifier chips — football's ownGoal/penalty are documented-skippable, not the headline stat", () => {
+    const skin = stubSkin(() => ({
+      title: "Goal",
+      chips: [
+        { id: "ownGoal", label: "l", kind: "flag", mutate: (p) => ({ ...p, ownGoal: true }) },
+        { id: "penalty", label: "l", kind: "flag", mutate: (p) => ({ ...p, penalty: true }) },
+      ],
+    }));
+    expect(isPartialDockAnswer(skin, "football.goal", { by: "home" }, padHostView())).toBe(false);
+  });
+
+  it("ignores flag chips and judges ONLY the attribution chips when a dock mixes both", () => {
+    const skin = stubSkin(() => ({
+      title: "Goal",
+      chips: [
+        { id: "ownGoal", label: "l", kind: "flag", mutate: (p) => ({ ...p, ownGoal: true }) },
+        { id: "scorer:a", label: "l", mutate: (p) => ({ ...p, scorer: "a" }) },
+      ],
+    }));
+    // Neither flag nor scorer answered: partial (the attribution chip is unreflected).
+    expect(isPartialDockAnswer(skin, "football.goal", { by: "home" }, padHostView())).toBe(true);
+    // Scorer answered, flag left untouched: NOT partial — the flag is optional.
+    expect(isPartialDockAnswer(skin, "football.goal", { by: "home", scorer: "a" }, padHostView())).toBe(false);
+  });
+});
+
+describe("isPartialDockAnswer — mutation proof (the kind:'flag' exclusion is load-bearing)", () => {
+  it("a version that judges EVERY chip (flags included) disagrees with the real one on a flags-only dock", () => {
+    const skin = stubSkin(() => ({
+      title: "Goal",
+      chips: [{ id: "ownGoal", label: "l", kind: "flag", mutate: (p) => ({ ...p, ownGoal: true }) }],
+    }));
+    const payload = { by: "home" }; // ownGoal never tapped — the ordinary, ungoaled case
+    const judgesEveryChip: typeof isPartialDockAnswer = (s, t, p, v) => {
+      const spec = s.dock(t, v, p);
+      return spec !== null && spec.chips.length > 0 && spec.chips.every((c) => JSON.stringify(c.mutate(p)) !== JSON.stringify(p));
+    };
+    const real = isPartialDockAnswer(skin, "football.goal", payload, padHostView());
+    const viaMutant = judgesEveryChip(skin, "football.goal", payload, padHostView());
+    expect(real).toBe(false);
+    expect(viaMutant).toBe(true);
+    expect(real).not.toBe(viaMutant);
   });
 });
 

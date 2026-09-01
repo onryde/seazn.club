@@ -740,9 +740,10 @@ test("device link: score offline on the universal renderer, reconnect, drain, co
     // `usePadPipeline`'s double-submit guard compares (type, payload)
     // structurally AT SUBMIT TIME — before any chip has run — so four half
     // taps are four IDENTICAL submissions and the guard would legitimately
-    // swallow the ones landing inside its 600ms window. Polling the durable
-    // queue after each press is what actually separates them; the old fixed
-    // 200ms wait was already measured queueing 2 of 3 on the v2 form.
+    // swallow the ones landing inside its window (`DOUBLE_SUBMIT_WINDOW_MS`,
+    // 250ms as of R7-42 — was 600ms). Polling the durable queue after each
+    // press is what actually separates them; the old fixed 200ms wait was
+    // already measured queueing 2 of 3 on the v2 form.
     //
     // `[data-role="v3-scorebug-half"]` (scorebug.tsx, added in review)
     // replaces a `.grid > * >> .app-display.font-bold` structural chain that

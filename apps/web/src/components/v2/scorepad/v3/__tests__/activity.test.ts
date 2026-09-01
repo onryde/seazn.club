@@ -412,3 +412,50 @@ describe("ActivityPanel — rendered captions (D2)", () => {
     expect(texts[0]).toBe(texts[1]);
   });
 });
+
+// R7-42/F (ruling on P-5, `_INDEX.md`): "label the stat as partial wherever
+// it surfaces" — the honest-ledger half of the fix. `isPartial` mirrors
+// `resolveDetail`'s own shape (a per-row resolver the caller supplies,
+// this panel stays sport-agnostic) rather than a boolean on `ActivityEvent`
+// itself, for the identical reason `resolveDetail` is a function and not a
+// precomputed string: the panel never derives sport vocabulary, the caller
+// (pad-host.tsx's `isPartialDockAnswer`) does.
+const T_PARTIAL: MsgFn = ((key: string, vars?: Record<string, string | number>) => {
+  if (key === "pad.ribbon.fallback") return `${vars!.event} recorded`;
+  if (key === "pad.activity.heading") return "Activity";
+  if (key === "pad.activity.empty") return "Nothing recorded yet.";
+  if (key === "pad.activity.partial") return "Partial";
+  return String(key);
+}) as MsgFn;
+
+describe("ActivityPanel — partial rows (R7-42/F)", () => {
+  it("renders the partial badge only for a row isPartial flags true", () => {
+    const answered = ev({ id: "r1", type: "badminton.rally", payload: { wonBy: "home", scorer: "a" } });
+    const unanswered = ev({ id: "r2", type: "badminton.rally", payload: { wonBy: "away" } });
+    const tree = ActivityPanel({
+      events: [answered, unanswered],
+      ownEventIds: NO_IDS,
+      deviceLinkId: null,
+      personNames: {},
+      t: T_PARTIAL,
+      isPartial: (_type, payload) => payload.scorer === undefined,
+    });
+    const rows = rowTexts(tree);
+    // orderedActivity reverses (newest first) — row 0 is r2, the UNANSWERED
+    // rally submitted last; row 1 is r1, the answered one.
+    expect(rows[0]).toContain("Partial");
+    expect(rows[1]).not.toContain("Partial");
+  });
+
+  it("WITHOUT isPartial, no row ever carries the badge — additive, zero change for every existing caller", () => {
+    const events = [ev({ id: "r1", type: "badminton.rally", payload: { wonBy: "home" } })];
+    const tree = ActivityPanel({
+      events,
+      ownEventIds: NO_IDS,
+      deviceLinkId: null,
+      personNames: {},
+      t: T_PARTIAL,
+    });
+    expect(rowTexts(tree)[0]).not.toContain("Partial");
+  });
+});
