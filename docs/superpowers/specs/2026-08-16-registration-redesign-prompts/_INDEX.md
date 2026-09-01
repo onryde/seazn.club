@@ -4492,3 +4492,56 @@ once (`@/lib/registration-rules.ts`). Callers: `registration-submit.ts`
 Whoever reviews should re-run the DB suite and the walkthrough on their own
 clean environment (the stale-build trap above is a standing risk any session
 can hit) before signing off.
+
+### Review round 1 — fixed, 2026-09-01 (`f77f6e420`)
+
+A dedicated xhigh reviewer (not the implementer) found 6 real gaps in the
+above; the fix commit's own message has the per-item detail, short form
+here: (1) CRITICAL — `setTeamSquad`'s `eligibility_warnings` were computed
+DB-side and typed correctly but the only UI caller discarded them, an inert
+seam despite green tests, now rendered and covered by a component test that
+fails if the field is dropped again; (2) `ageBandEligibilityIssues` threw a
+plain `Error` for a legacy-only malformed cutoff, reachable unguarded from
+`setTeamSquad` (breaking its "never blocks" contract) and from every other
+gate point (turning an intended 422 into a raw 500) — now returns no age
+issue instead of throwing; (3) `commitImport`'s one audit row picked an
+arbitrary touched competition's FK, dropping the ledger entry for every
+OTHER competition a multi-competition import touched — now one row per
+touched competition, matching `participants_imported`'s own precedent;
+(4) `commitImport` skipped `MIXED_NEEDS_BOTH_GENDERS` even for a roster
+created FRESH within the same commit (where the "needs the pre-existing
+roster" justification doesn't hold) — freshly-created entrants now get the
+full `rosterIssues` check, the narrower incremental-add gap remains and is
+now documented accurately; (5) bulk CSV roster-add bypassed the override
+dialog (`run` not `runGated`) — wired through like its siblings; (6) added
+a schema-boundary test for `EligibilityOverride.reason` (3/500 accepted,
+2/501 rejected) since every existing test bypassed Zod.
+
+**Also worth recording: this session hit a live environment bug, not a code
+defect.** A `seazn-env rebuild --label rs011` killed by a tool-level 5-minute
+timeout mid-build appears to have torn down not just its own label but an
+UNRELATED concurrent session's environment too (`r7`) — confirmed by
+`lsof -iTCP -sTCP:LISTEN` showing zero listeners in either the app-server or
+scratch-postgres ranges immediately after, not just a stale `status` read.
+Separately, a zombie subagent from this same session kept the machine's load
+elevated (28+) polling its own retry loop, which is the more likely cause of
+the *first* clean-`.next` rebuild's Turbopack `ENOENT` failure — killing that
+agent (`TaskStop`) let the next rebuild succeed cleanly. Neither is a defect
+in the code under review; both are recorded here so a future session
+recognizes the shape rather than re-diagnosing it as a regression. Filed as
+product feedback separately (not a GitHub issue, per standing policy).
+
+**Independently reverified after the fix commit** (main thread, not
+self-reported): full RS011 eligibility test set 179/179; wider regression
+sweep across `entrants`/`teams`/`imports`/`fixtures`/`audit-ledger` plus all
+6 registration-path suites plus `api-v1/__tests__` — 878/878; `tsc` exit 0;
+lint 0 errors (2 pre-existing warnings, confirmed present on `origin/main`
+at the same lines before this branch); `openapi:gen`/`i18n:gen-keys` no
+drift; `i18n:check` parity OK at 5697 keys; walkthrough e2e green against a
+freshly rebuilt server; two independent hand mutations (disabling the
+original `gateRosterEligibility` guard, and reverting the audit-per-competition
+fix to `divisions[0]`) each correctly turned the exact tests that exist to
+catch them red, then were reverted clean.
+
+Still owed before merge: reviewer round 2 (confirm the 6 fixes are actually
+sound, not just present), then a PR.
