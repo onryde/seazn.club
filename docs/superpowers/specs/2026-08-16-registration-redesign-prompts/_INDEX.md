@@ -4603,3 +4603,43 @@ fix — verified via the existing suites that already exercise both.
 Still owed before merge: this branch remains unmerged and un-PR'd; a
 reviewer round 4 (or the PR's own review) should confirm these 6 fixes
 before requesting sign-off.
+
+**One `/code-review medium` finding was deliberately NOT dispatched for a
+fix, and is recorded here rather than silently dropped:** `entrants.ts:393`
+— `createEntrants`'s per-entrant loop re-fetches the same division row on
+every iteration via `gateRosterEligibility` (an N+1 across a bulk create).
+Accepted as debt, not fixed this session. Reasoning: it is a performance
+nit, not a correctness defect (no wrong result, just redundant reads inside
+one transaction); a realistic batch is small enough that the cost is
+sub-millisecond; and hoisting the division load out of the loop means
+either restructuring `insertMembers`'s signature (used standalone as its
+own gate point, not only from this loop) or threading a pre-loaded division
+through it — exactly the kind of refactor that has produced this repo's
+own "inert seam" class of defect when done to a function multiple call
+sites already depend on. Lower risk to leave as documented debt than to
+touch the one function every one of the 7 gate points routes through, this
+late in a branch that has already been through 3 review rounds.
+
+**Independently reverified by the MAIN THREAD (not self-reported) after
+round 3's commits**: RS011 eligibility set + all 4 new round-3 test files
+— 191/191; a targeted sweep of 7 OTHER `ConfirmDialog`-caller test files
+(unrelated features: duplicates-panel, schedule-gate-dialog,
+division-danger-zone, history-panel, stages-panel, launch-actions) —
+50/50, confirming the compose-not-copy change (finding 5) has zero blast
+radius outside this dialog; a full wide sweep of every
+entrants/teams/imports/fixtures/audit-ledger suite plus all 6
+registration-path suites plus `api-v1`/`lib` tests — 2980 total, 2955
+passed, **0 failed**, 25 pending (unrelated skips), 0 failed suites; `tsc`
+exit 0; lint 0 errors, 1 pre-existing warning confirmed unchanged; `i18n`/
+`openapi` no drift. One additional hand mutation beyond what round 3's own
+report claimed: disabled `lineup-editor.tsx`'s `ELIGIBILITY_VIOLATION`
+branch (fix 1) — all 3 of its tests went red, then were restored clean.
+Also read `import-wizard.tsx`'s `commit()` and `imports.ts`'s idempotency-
+key cache-write line directly (not just trusted the commit message): the
+cache is written only after `commitImport` returns successfully, well
+after the eligibility throw, so a 422'd attempt never poisons the
+idempotency key for the retry — fix 2's "retry-safe" claim checks out
+against the actual code, not just its own comment.
+
+**RS011 is now ready for a PR**, pending the owner's go-ahead to push and
+open one (out of scope for this session to do unprompted).
