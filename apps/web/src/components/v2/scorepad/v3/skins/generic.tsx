@@ -412,12 +412,6 @@ export const MORE_TILE_ID = "more";
 export const MAX_PLAUSIBLE_SCORE = 500;
 export const MAX_TALLY_STEP = 50;
 
-/** Every wire type `padSpec(cfg)` declares, both modes. The More gate below
- *  walks this list; a third type appearing in the engine without appearing
- *  here would make that gate quietly under-report, which is what the
- *  chassis-agreement sweep in `__tests__/generic.test.ts` exists to catch. */
-const ALL_TYPES: readonly string[] = [RESULT_TYPE, SCORE_TYPE];
-
 /** `applyResult`'s settle branch, mirrored: a result card with no scores
  *  settles FROM the tally, and a level tally settles only where the division
  *  allows a draw. Withholding the tile is the whole point — the alternative
@@ -434,50 +428,6 @@ function settleable(view: PadHostView, state: GenericStateShape): boolean {
  *  withheld rather than opening a sheet whose stepper has no legal value. */
 function correctionCeiling(state: GenericStateShape): number {
   return Math.min(MAX_TALLY_STEP, Math.max(tallyOf(state, "home"), tallyOf(state, "away")));
-}
-
-/**
- * Whether the generic "More" form has anything in it right now.
- *
- * A MIRROR OF THE CHASSIS, and stated as one so nobody mistakes it for
- * independent knowledge — `moreActions` (pad-host.tsx) is the real answer, and
- * `__tests__/generic.test.ts` drives that real function across every
- * mode x band x phase combination and fails the moment the two disagree. The
- * mirror exists because the skin has to decide whether to DRAW the tile before
- * the chassis has computed anything, and a More tile opening an empty sheet is
- * the dead-end tap this programme keeps closing.
- *
- * Three terms, each load-bearing:
- *  - "post" is the only unscoreable phase (the same `POST_PHASES` boundary
- *    `buildHalf`'s own `tappable` uses below) — NOT "not live", which is
- *    what this mirror hardcoded before the R7 defect fix. `moreActions`
- *    (the real chassis function this mirrors, pad-host.tsx) carries no
- *    phase logic of its own at all: it walks `view.panels`, already
- *    phase-filtered by `buildPadView`, so the real answer is only ever as
- *    phase-restrictive as `padSpec` itself. `padSpec` now declares every
- *    panel at "pre" as well as "live" (`everyPhase`, generic.ts) and never
- *    at "post", so matching THAT boundary here — rather than the narrower
- *    "live" this file used to hardcode — is what keeps the mirror a
- *    mirror: win_loss mode's tally (its only path to `generic.score`, with
- *    no dedicated half or tile of its own) now reaches More in "pre"
- *    exactly as it already did in "live";
- *  - a type this skin already dedicates (its halves, tiles and sheets) is
- *    excluded from More by `dedicatedEventTypes`;
- *  - a type above the fixture's own band is dropped by the band filter.
- */
-function moreHasContent(view: PadHostView): boolean {
-  if (resolvePhase(view) === "post") return false;
-  const dedicated =
-    resultModeOf(cfgOf(view)) === "score"
-      ? // `scoreEntry` claims generic.result at every band; the halves and the
-        // correction sheet claim generic.score whenever the tally is in band.
-        tallyAvailable(view)
-        ? [RESULT_TYPE, SCORE_TYPE]
-        : [RESULT_TYPE]
-      : // win_loss dedicates only the result: its halves post one, and so does
-        // the Draw tile. The module's own tally actions stay in More.
-        [RESULT_TYPE];
-  return ALL_TYPES.some((type) => !dedicated.includes(type) && withinBand(type, view.band));
 }
 
 /** Both phases the fold accepts, and — since the R7 defect fix — both phases
@@ -550,16 +500,22 @@ export function buildTiles(view: PadHostView, t: TFn): TileSpec[] {
     });
   }
 
-  if (moreHasContent(view)) {
-    tiles.push({
-      id: MORE_TILE_ID,
-      label: "scorepad.skin.more",
-      kind: "minor",
-      span: 4,
-      phases: [...SCOREABLE_PHASES],
-      action: { sheet: MORE_SHEET_KEY },
-    });
-  }
+  // R7-39/R7-39a — pushed UNCONDITIONALLY now, the same shape every other v3
+  // skin already takes. This used to be `if (moreHasContent(view))`, a
+  // skin-local mirror of `moreActions` (pad-host.tsx) that decided whether
+  // the sheet had anything in it; `moreHasContent` is DELETED, not left
+  // beside its replacement — the chassis now suppresses an empty More tile
+  // centrally (`suppressEmptyMoreTile`, pad-host.tsx), from the exact same
+  // `moreActionsList` computation this mirror used to duplicate, for every
+  // skin at once. See that function's own doc for the full ruling.
+  tiles.push({
+    id: MORE_TILE_ID,
+    label: "scorepad.skin.more",
+    kind: "minor",
+    span: 4,
+    phases: [...SCOREABLE_PHASES],
+    action: { sheet: MORE_SHEET_KEY },
+  });
 
   // `t` is threaded for symmetry with every other skin's `buildTiles` and to
   // keep the factory's call shape uniform; no tile here needs a pre-resolved

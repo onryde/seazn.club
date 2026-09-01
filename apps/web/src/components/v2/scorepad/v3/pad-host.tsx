@@ -392,6 +392,39 @@ export function moreActions(
   return out;
 }
 
+/**
+ * R7-39 (owner-approved), corrected by R7-39a: the More tile was offered
+ * even when the sheet it opens has nothing in it. R7-39's own filing
+ * overstated the symptom as a BLANK sheet — `action-form.tsx`'s
+ * `actions.length === 0` branch renders `pad.host.moreEmpty` ("Nothing else
+ * to record here yet."), never a blank panel, so this was never a rendering
+ * bug. The real defect: a tile that is a GUARANTEED DEAD END at a knowable
+ * phase/band, discoverable only by tapping it. `pad.host.moreEmpty` stays —
+ * it is the safety net for any case this tile-level suppression cannot see
+ * (a future skin that forgets to push the tile through this function, or a
+ * hole this pure builder's own test suite has not yet enumerated).
+ *
+ * FIXED IN THE CHASSIS, not per-skin (R7-39's own ruling): `moreActionsList`
+ * (this file's own render body) is already computed from exactly the inputs
+ * that decide whether the More sheet has anything in it, so this function
+ * takes that SAME list rather than re-deriving a second opinion. The tile is
+ * found STRUCTURALLY, via `action.sheet === MORE_SHEET_KEY` — never the id
+ * string `"more"`, which skins do not agree on (generic's own tile uses
+ * `MORE_TILE_ID`, every other skin a bare `"more"` literal). One check here
+ * fixes all seven current skins (and the eighth, whenever it lands) without
+ * either one adding its own guard — `skins/generic.tsx` used to carry
+ * exactly that guard (`moreHasContent`, a hand-mirror of `moreActions`
+ * proved equal to it by its own test sweep) and it is DELETED as part of
+ * this fix, not left beside it: two paths to one fact only ever drift.
+ *
+ * A skin's own `tiles(view)` now pushes the More tile UNCONDITIONALLY, the
+ * same shape every non-generic skin already took before this fix — this
+ * function is the one and only place that removes it.
+ */
+export function suppressEmptyMoreTile(tiles: readonly TileSpec[], moreActionsList: readonly PadActionView[]): TileSpec[] {
+  return tiles.filter((tile) => moreActionsList.length > 0 || !("sheet" in tile.action) || tile.action.sheet !== MORE_SHEET_KEY);
+}
+
 export type SheetResolution = { kind: "guided"; spec: GuidedSheetSpec } | { kind: "action" } | { kind: "none" };
 
 /** What a tapped `{sheet: key}` tile actually opens. `MORE_SHEET_KEY` is
@@ -1272,6 +1305,15 @@ export function PadHostV3(props: PadHostV3Props) {
     () => moreActions(spec, padViewCtx, dedicated, refusedTypes),
     [spec, padViewCtx, dedicated, refusedTypes],
   );
+  // R7-39/R7-39a — the More tile is a guaranteed dead end once
+  // `moreActionsList` is empty (this function's own doc, above); suppressed
+  // here, the one render-time consumer of `tiles`, rather than upstream —
+  // `dedicated`/`availablePhases`/`phasesWithTiles` above must keep seeing
+  // the UNSUPPRESSED band-filtered set, since the More tile itself is never
+  // band-filtered (`filterTilesByBand`'s own "NEVER hides the MORE tile"
+  // case) and contributes nothing to `dedicatedEventTypes` either way
+  // (`tileEventType` returns null for it).
+  const visibleTiles = useMemo(() => suppressEmptyMoreTile(tiles, moreActionsList), [tiles, moreActionsList]);
 
   // The ONE dispatch gateway (task brief item 5): every event this host
   // sends — tile taps, guided-sheet completions, action-form confirms,
@@ -1696,7 +1738,7 @@ export function PadHostV3(props: PadHostV3Props) {
       )}
 
       <div data-role="v3-tiles">
-        <TileGrid tiles={tiles} phase={phase} t={t} onAction={handleTileAction} onOpenSheet={handleOpenSheet} />
+        <TileGrid tiles={visibleTiles} phase={phase} t={t} onAction={handleTileAction} onOpenSheet={handleOpenSheet} />
       </div>
 
       {held && (

@@ -39,6 +39,7 @@ import {
   ribbonUndoTarget,
   sidePool,
   squadStateOf,
+  suppressEmptyMoreTile,
 } from "../pad-host";
 import type { ActivityEvent } from "../activity";
 
@@ -454,6 +455,54 @@ describe("moreActions", () => {
     // own copy of the same three types is invisible here regardless — this
     // proves the de-dup guard AND the phase scoping in one assertion.
     expect(actions.map((a) => a.type).sort()).toEqual(["cricket.declare", "cricket.toss"]);
+  });
+});
+
+// --- suppressEmptyMoreTile --------------------------------------------------
+//
+// R7-39 (owner-approved), corrected by R7-39a: the More tile is a guaranteed
+// dead end once `moreActionsList` is empty (a tap that lands on
+// `pad.host.moreEmpty`, "Nothing else to record here yet." — action-form.tsx
+// — never a blank sheet). Fixed CENTRALLY: the tile is found STRUCTURALLY,
+// via `action.sheet === MORE_SHEET_KEY`, never the id string "more" — skins
+// do not share one id constant for it (cricket/football/etc hardcode the
+// bare literal, generic exports its own `MORE_TILE_ID`), so a match on id
+// text would silently miss a future skin's own choice of id.
+
+function moreTile(id = "more"): TileSpec {
+  return tile({ id, kind: "minor", span: 4, action: { sheet: MORE_SHEET_KEY } });
+}
+
+describe("suppressEmptyMoreTile", () => {
+  it("removes the More tile when the list it was built from is empty", () => {
+    const kept = suppressEmptyMoreTile([tile({ id: "ball" }), moreTile()], []);
+    expect(kept.map((t) => t.id)).toEqual(["ball"]);
+  });
+
+  it("keeps the More tile when the list has at least one action", () => {
+    // Non-vacuous: this fixture's own moreActions() call really does return
+    // something, proved directly, so "kept" below is not passing because the
+    // list happened to be empty by accident.
+    const actions = moreActions(spec(), { ...baseCtx, state: {}, summary: {} }, new Set(), new Set());
+    expect(actions.length).toBeGreaterThan(0);
+    const kept = suppressEmptyMoreTile([tile({ id: "ball" }), moreTile()], actions);
+    expect(kept.map((t) => t.id)).toEqual(["ball", "more"]);
+  });
+
+  it("STRUCTURAL match, not id text: a tile whose id is \"more\" but whose action is an ordinary event survives an empty list untouched", () => {
+    const impostor = tile({ id: "more", action: { event: { type: "cricket.toss", payload: {} } } });
+    expect(suppressEmptyMoreTile([impostor], [])).toEqual([impostor]);
+  });
+
+  it("STRUCTURAL match, not id text: the real More tile is removed under an empty list REGARDLESS of what id it carries", () => {
+    const renamed = moreTile("a-future-skin-might-call-this-anything");
+    expect(suppressEmptyMoreTile([renamed], [])).toEqual([]);
+  });
+
+  it("touches no other tile in the array, including one that opens a DIFFERENT sheet", () => {
+    const wicket = tile({ id: "wicket", action: { sheet: "wicket" } });
+    const kept = suppressEmptyMoreTile([wicket, moreTile()], []);
+    expect(kept).toEqual([wicket]);
   });
 });
 

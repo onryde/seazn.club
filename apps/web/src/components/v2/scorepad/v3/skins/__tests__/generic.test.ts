@@ -20,7 +20,7 @@ import { generic, padSpec as genericPadSpec } from "@seazn/engine/sports/generic
 import uiEn from "@/dictionaries/en/ui.json";
 import { PAD_LABEL_KEYS } from "@/lib/scoring-vocab";
 import { foldClient } from "../../../module-client";
-import { dedicatedEventTypes, entitledBandsFrom, moreActions } from "../../pad-host";
+import { dedicatedEventTypes, entitledBandsFrom, moreActions, suppressEmptyMoreTile } from "../../pad-host";
 import { buildRecording } from "../../recording-chip";
 import { LEGACY_SPORTS, resolvePad } from "../../registry";
 import { ribbonKeyFor } from "../../ribbon";
@@ -371,7 +371,13 @@ describe("buildTiles — score mode", () => {
 
   it("drops every tally-shaped tile at band 0 — that fixture records one card", () => {
     const ids = tileIds(view({ band: 0, events: stream(point("H")) }));
-    expect(ids).toEqual([SCORE_ENTRY_TILE_ID]);
+    // MORE_TILE_ID is expected here too (R7-39/R7-39a): buildTiles now pushes
+    // it UNCONDITIONALLY, the same shape every other v3 skin already takes —
+    // it is the chassis (`suppressEmptyMoreTile`, pad-host.tsx), not this
+    // skin, that decides whether it survives to the screen. This test's own
+    // point — that SETTLE/CORRECTION drop out at band 0 — is untouched by
+    // that move.
+    expect(ids).toEqual([SCORE_ENTRY_TILE_ID, MORE_TILE_ID]);
   });
 
   it("never offers a Draw tile — a level score IS the draw", () => {
@@ -415,11 +421,17 @@ describe("buildTiles — every tile declares the phases generic can actually fol
 });
 
 // ---------------------------------------------------------------------------
-// The More tile — declared ONLY when the chassis has something to put in it
+// The More tile — R7-39/R7-39a moved this from a per-skin guard
+// (`moreHasContent`, deleted) to a CHASSIS one (`suppressEmptyMoreTile`,
+// pad-host.tsx): `buildTiles` now declares the tile UNCONDITIONALLY, the
+// same shape every other v3 skin already took, and the chassis is the one
+// and only place that removes it when the sheet has nothing in it.
 // ---------------------------------------------------------------------------
 
-/** The REAL chassis answer for this view: what `moreActions` would render. */
-function realMoreActions(v: PadHostView): string[] {
+/** The REAL chassis answer for this view: the full `moreActions` result,
+ *  never a hand-typed stand-in — `realMoreActions` below just narrows this
+ *  to the type list callers that only need `.length`/membership want. */
+function realMoreActionsFull(v: PadHostView): ReturnType<typeof moreActions> {
   const spec = genericPadSpec(cfgOf(v) as never);
   const tiles = buildTiles(v, t);
   const sheets = buildSheets(v, t);
@@ -430,17 +442,34 @@ function realMoreActions(v: PadHostView): string[] {
     { state: v.state, summary: v.summary, phase: resolvePhase(v), band: v.band, entitlements: v.entitlements },
     dedicated,
     new Set<string>(),
-  ).map((action) => action.type);
+  );
 }
 
-describe("the More tile agrees with the chassis, in every mode/band/phase", () => {
-  it("is declared exactly when moreActions has something to show", () => {
+function realMoreActions(v: PadHostView): string[] {
+  return realMoreActionsFull(v).map((action) => action.type);
+}
+
+describe("buildTiles declares the More tile unconditionally — R7-39/R7-39a moved suppression to the chassis", () => {
+  it("MORE_TILE_ID is always present, even where the sheet would end up empty (band 0, phase 'post')", () => {
+    // Same "decided" ledger the suppression sweep below needs, kept minimal
+    // here: this test only needs ONE fixture that the chassis would suppress
+    // (post-phase, nothing left to show) to prove buildTiles no longer makes
+    // that call itself.
+    const decided: readonly [string, unknown] = winner("H");
+    const v = view({ cfg: WIN_LOSS_CFG, band: 0, events: stream(start(), decided) });
+    expect(resolvePhase(v), "fixture must actually be decided for this case to mean anything").toBe("post");
+    expect(tileIds(v)).toContain(MORE_TILE_ID);
+  });
+});
+
+describe("suppressEmptyMoreTile agrees with the chassis, in every mode/band/phase (R7-39a)", () => {
+  it("keeps the More tile exactly when moreActions has something to show", () => {
     // A DECIDED ledger is in this list on purpose (review finding 3): without
-    // one the sweep only ever resolves "pre" and "live", so `moreHasContent`'s
-    // own "post" branch — the single line R7 changed when padSpec stopped
-    // being live-only — had no teeth here at all. `sawPost` below keeps it
-    // that way: if `winner()` ever stops deciding the fixture, this test says
-    // so instead of quietly going back to covering two phases.
+    // one the sweep only ever resolves "pre" and "live", so the "post" branch
+    // — the single line R7 changed when padSpec stopped being live-only — had
+    // no teeth here at all. `sawPost` below keeps it that way: if `winner()`
+    // ever stops deciding the fixture, this test says so instead of quietly
+    // going back to covering two phases.
     let sawBoth = { withMore: false, withoutMore: false };
     let sawPost = false;
     for (const cfg of [SCORE_CFG, SCORE_NO_DRAWS_CFG, WIN_LOSS_CFG, WIN_LOSS_DRAWS_CFG]) {
@@ -460,9 +489,16 @@ describe("the More tile agrees with the chassis, in every mode/band/phase", () =
       for (const band of [0, 1, 2, 3] as FidelityBand[]) {
         for (const events of ledgers) {
           const v = view({ cfg, band, events });
-          const declared = tileIds(v).includes(MORE_TILE_ID);
-          const real = realMoreActions(v).length > 0;
-          expect(declared, `${cfg.resultMode}@${band} phase=${resolvePhase(v)}`).toBe(real);
+          const rawTiles = buildTiles(v, t);
+          // Non-vacuous precondition: buildTiles always declares the tile now
+          // (the test right above pins this directly), so this sweep is
+          // actually exercising suppressEmptyMoreTile's own filter, not
+          // vacuously agreeing because the input never had the tile at all.
+          expect(rawTiles.map((tile) => tile.id), `${cfg.resultMode}@${band} phase=${resolvePhase(v)}`).toContain(MORE_TILE_ID);
+          const real = realMoreActionsFull(v);
+          const visible = suppressEmptyMoreTile(rawTiles, real);
+          const declared = visible.some((tile) => tile.id === MORE_TILE_ID);
+          expect(declared, `${cfg.resultMode}@${band} phase=${resolvePhase(v)}`).toBe(real.length > 0);
           sawBoth = { withMore: sawBoth.withMore || declared, withoutMore: sawBoth.withoutMore || !declared };
           sawPost = sawPost || resolvePhase(v) === "post";
         }
