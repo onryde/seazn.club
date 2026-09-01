@@ -44,7 +44,7 @@ prompts dir) also writes — those two are **sequential, never parallel**.
 | RS009 | `RS009-free-agents.md` | RS005, RS003 | **DONE** — merged `165628cce` (PR #683, 2026-08-30); hotfix `15b76f755` (PR #685, 2026-08-31, solo sign-up expanded-detail label). |
 | RS011 | `RS011-organiser-eligibility-gates.md` | RS002 | **IMPLEMENTED, awaiting review** — branch `feat/rs011-organiser-eligibility-gates`, 2 commits, not yet merged/PR'd (session ended per dispatch: "I'll run the review loop"). Closes #412 (re-homed from `L1`, now `L1` → DONE-VIA-RS011) and #407 WS1. See closing notes below |
 | RS010 | `RS010-closeout-e2e-smoke-help.md` | all | TODO |
-| RS012 | `RS012-solo-signup-pool-promises.md` | RS009 | TODO — scoped 2026-08-30 from what RS009 exposed. **Both owner rulings taken 2026-08-31** and written into the prompt: capacity counts TEAM ENTRIES with a derived pool bound; unplaced solo sign-ups are auto-refunded and withdrawn at the place-by date |
+| RS012 | `RS012-solo-signup-pool-promises.md` | RS009 | **DONE** — merged `c684633556090c196cf0a069663713e1e81fb8cf` (squash, PR #694, 2026-09-01). Capacity counts TEAM ENTRIES with a derived pool bound; unplaced solo sign-ups auto-refunded and withdrawn at the place-by date, organiser-editable; registrant + organiser-facing UI; 3 `/code-review high` passes, 2 severe capacity bugs found and fixed (see own section below) |
 
 Public registration was **intentionally down** between the RS001 and RS006
 merges (owner-accepted; prod has zero registration usage). That window
@@ -4284,6 +4284,315 @@ free a capacity slot by reading the ASSIGNMENT
 (`registration_players.assigned_from_registration_id`, unique where
 non-null), NEVER by mutating the source registration's status. Withdrawing
 that row to free a slot refunds a person who is happily playing.
+
+### RS012 kickoff — worktree `.claude/worktrees/rs012`, 2026-09-01
+
+Branch `fix/registration-team-capacity-pool`. Status: **IN FLIGHT**, Stage 1
+(capacity fix + pool bound) dispatched to an implementer.
+
+**Scout re-pin (SPOT_HOLDERS + `from registrations` sweep, per the brief's
+own execution instructions) confirmed the count is duplicated in THREE
+production sites with no shared helper**, none of which filter
+`free_agent`: `registration-submit.ts:693-694` (the live gate),
+`registration/data.ts:108-110` (hub display), `registrations.ts:~1985`
+(a second independent display copy). All three fixed together in Stage 1 or
+the hub would show a different number than the gate enforces. `roster_cap`
+is already single-sourced (`registrations.ts:5171` `rosterCapExpr`, RS005
+W1b) — Stage 1 reuses it rather than re-deriving the `lineup.size +
+benchMax` expression a third time.
+
+**Implementation decision (mechanical realisation of ruling 1's own
+wording, not a new product decision — not re-opened with the owner):** a
+solo sign-up that arrives once the pool bound (`capacity × roster_cap −
+seated`) is already reached is REFUSED at submission (422), never
+waitlisted. Ruling 1 says it plainly — "you cannot sign up solo when there
+is no possible place for you" — and a pool waitlist would need its own
+promotion trigger nothing in this session builds; refusal needs none.
+
+**Migration number reserved: V389** (high-water after RS009's V388) — for
+Stage 2's `place_by_at` column. Not yet written.
+
+**Stage plan** (one branch, one PR at the end, per `_RULES.md` §1):
+1. Capacity fix + pool bound + regression test (`8/8-full-with-two-teams-
+   and-six-solos`) — IN FLIGHT.
+2. `place_by_at` column (V389) + auto-refund/withdraw sweep pass, reusing
+   `withdrawCore`'s status/release/audit shape and `resolveRefundPolicy`'s
+   sibling pattern — NOT `withdrawCore` verbatim, because its refund policy
+   is date-conditional (`refund_lock_at`/`starts_on`) and ruling 2 requires
+   an UNCONDITIONAL full refund at the place-by date regardless of any
+   other lock. The existing `notifyRefund` mailer already tells the
+   registrant they were refunded, which satisfies scope item 6's "told if
+   the deadline passes" without a new mailer.
+3. Registrant-facing status page: waiting-until-date message
+   (`view-model.ts:180` `awaitingTeamAssignment`, `entry-card.tsx:273`) +
+   ×4 locales.
+4. Organiser-facing Registrants tab: pool summary (waiting count, free
+   slots, place-by proximity).
+5. e2e (happy path: sign up → see promise → placed → see team; unhappy
+   path: deadline passes unplaced) + smoke demo extension + seven-width
+   matrix coverage for every changed surface.
+
+**Stage 1 DONE** (commit `31ab0ed1b`): capacity fix (all three duplicate
+`SPOT_HOLDERS` counts now filter `free_agent = false`) + `soloPoolIsFull`
+pool-bound gate (422 refusal, never waitlisted) + regression test
+`8/8-full-with-two-teams-and-six-solos`. Independently reverified (not
+just the implementer's self-report): 83/83 own re-run, `tsc EXIT=0`, lint
+0 errors, and a hand mutation (disabling the pool-full check) turned the
+right test red. One TDD-caught fix to my own dispatch brief: the brief's
+`soloPoolIsFull` SQL double-counted a still-pooled solo sign-up (once in
+`seated`, once in `pooled`) — fixed by filtering `free_agent = false` into
+the `seated` subquery.
+
+**Stage 2 DONE** (commit `12dfdd309`): V389 `place_by_at` column (nullable,
+defaults to `closes_at`) + `sweepRegistrations`'s fifth pass (withdraw +
+unconditional refund for an unplaced, past-deadline solo sign-up).
+Independently reverified: 198/198 own re-run, `tsc EXIT=0`, lint 0 errors,
+and a hand mutation (disabling the new `clearExpiresIfNoLongerNeeded` call)
+turned the new expires_at assertion red. One review-fix applied on top of
+the implementer's diff: the dispatched pass never called
+`clearExpiresIfNoLongerNeeded` after withdrawing a `pending` free agent,
+leaving a stale cart `expires_at` forever when it was the cart's last
+pending entry (the exact gap `withdrawCore` and the sweep's other passes
+already close, per that helper's own doc comment) — added the call + a
+regression assertion.
+
+**Stage 3a DONE** (commits `66981d4ba`, `9929c1bb7`): `place_by_at` write
+path — both zod schemas, `putRegistrationSettings`'s insert/on-conflict SQL,
+`RegistrationConfigState` + its FULL-REPLACE state builders, a new date+time
+field in the settings panel (shown when `allow_free_agents` is on, or a
+save error names it — lives beside the solo-sign-up toggle in
+`EligibilitySection`, not beside `refund_lock_at` in `MoneySection`, since
+it gates on a different condition), `ROUTABLE_FIELDS`, one dictionary key
+×4 locales, `openapi:gen`/`i18n:gen-keys` regenerated clean. Independently
+reverified: 315/315 own re-run across 6 test files (one file's real path —
+`app/o/[orgSlug]/c/[compSlug]/registration/__tests__/config-panel-
+roundtrip.test.ts` — differs from what my own dispatch brief guessed;
+found and corrected during verification, not the implementer's error),
+`tsc EXIT=0`, `i18n:check` 3/3 locale parity, and a hand mutation
+(`placeByApplies` forced `false`) turned 4 panel tests red. One own-nit
+fixed inline: the `DATETIME_FIELDS` doc comment still said "three fields"
+after this stage made it four.
+
+An organiser can now see and set the pool's place-by date end to end — the
+seam Stage 2 opened is closed before building the registrant-facing and
+organiser-facing UI stages on top of it.
+
+**Stage 3b DONE** (commit `6a1838027`): the `/r/[ref]` status page's
+existing "Waiting for a team" notice (RS008/RS009) now also names the
+division's effective place-by date (`place_by_at ?? closes_at`, the exact
+fallback the Stage 2 sweep uses — threaded, never re-derived) and what
+happens: auto-refund. `pool_place_by_at` added to `GroupEntryView`;
+`poolPlaceByDate` (view-model.ts) reuses `awaitingTeamAssignment`'s own
+predicate so the two can never disagree about whether an entry is still
+waiting. New key `register.status.entry.awaitingTeamDeadline`, ×4 locales.
+Independently reverified: 257/257 own re-run across the 3 exact files, `tsc
+EXIT=0`, lint 0 errors, `i18n:check` 3/3 parity, and a hand mutation
+(stripping the `awaitingTeamAssignment` gate from `poolPlaceByDate`) turned
+5 tests red.
+
+**Stage 4 DONE** (commit `dadf9a022`): organiser-facing Registrants tab pool
+summary banner (`fetchPoolSummary`, `registration-hub-registrants-panel.tsx`,
+page.tsx wiring) — "free slots" defined as room on ALREADY-REGISTERED teams
+(same population `listAssignTargets` uses), deliberately NOT the abstract
+`capacity × roster_cap` admission bound Stage 1's `soloPoolIsFull` uses —
+an organiser asking "do my existing teams have room" wants the former.
+Independently reverified: 26/26 own re-run across both exact files, `tsc
+EXIT=0`, lint 0 errors, `i18n:check` 3/3 parity. **A hand mutation SURVIVED
+on first try**: the "sums free roster room" test used a 2-team fixture
+(0 free + 2 free) where the correct `sum(greatest(roster_cap -
+roster_count, 0))` and a wrong bare `count(*)` both land on 2 by
+coincidence — rule #19's exact shape ("prefer a case where the right
+answer differs from the wrong one's constant"). Fixed by widening to 3
+teams whose correct sum (5) differs from the team count (3); re-mutated,
+now caught.
+
+**`/code-review high fix/registration-team-capacity-pool` (commit `5069625ac`)
+— ONE CRITICAL finding, fixed, corroborated by 3 independent review passes
+run in parallel.** `soloPoolIsFull`'s `seated` subquery had NO status
+filter — `withdrawCore` never deletes a withdrawn team's own roster rows
+(only flips `status`), so they counted toward `seated` FOREVER, shrinking
+the pool bound permanently and, once negative, refusing every solo
+sign-up in an otherwise-empty, open division. Fixed with the same status
+exclusion `fetchPoolSummary`/`listAssignTargets` already use. Also fixed
+in the same pass: extracted the 3-times-hand-rolled `place_by_at ??
+closes_at` fallback into one `effectivePoolDeadline` helper (beside
+`rosterCapExpr`, same precedent); closed a real inert-seam gap (nothing
+tested `page.tsx`'s `fetchPoolSummary` result actually reached the
+panel's `poolSummary` prop — found ALREADY RED before the fix agent
+touched anything, meaning my own Stage 4 verification had a gap: I only
+reran the two files the Stage 4 implementer named, never `page.test.tsx`
+itself); parallelized 3 needlessly-sequential Registrants-tab fetches;
+moved a capacity-count query out of the free-agent submit path where its
+result was never read; collapsed a redundant double-call + unsafe cast in
+`entry-card.tsx`. Independently reverified: 420/420 own re-run across all
+7 touched files, `tsc EXIT=0`, lint 0 errors, and a hand mutation
+(stripping the `seated` status filter back out) turned 2 tests red.
+**Lesson for future stages in this session: verify the FULL suite that
+covers a changed file, not just the files an implementer names it touched
+— page.tsx's own test file was silently red for a reason unrelated to
+this stage's work and nobody would have caught it without the review.**
+
+Decided-and-left-alone from that review (not bugs, documented reasoning):
+`card-stats.ts`'s "registered" count deliberately still includes solo
+sign-ups (existence ≠ capacity-consumed, a different question from ruling
+1's team-capacity gate); `place_by_at` has no validation against
+`opens_at`/`closes_at`/now, matching `refund_lock_at`'s own unconstrained
+precedent; the duplicated "still-unassigned" SQL predicate (4 raw copies)
+is a real finding but a larger refactor, deferred.
+
+**Withdrawn-status defect, found by the WALKTHROUGH, not a unit test**
+(commit `8b6821b91`): after Stage 2's sweep withdraws an unplaced solo
+sign-up, its status page showed WITHDRAWN next to "Waiting for a team" and
+an already-past refund date — `awaitingTeamAssignment`/`poolPlaceByDate`
+never checked `entry.status`. Fixed by requiring the entry not be in a
+terminal status (`isTerminalRegistrationStatus`).
+
+**Second `/code-review high` pass (post walkthrough/mobile/smoke stage) —
+TWO MORE SEVERE, CONFIRMED bugs, both the same class as the first pass's
+critical finding: RS012's "capacity excludes free agents" rule was applied
+at the COUNTING sites but not at every PROMOTION-TRIGGER site.**
+`withdrawCore` and `rejectRegistration` both computed "did this free a
+team slot" as `SPOT_HOLDERS.includes(status)` with no `free_agent`
+exclusion — so a pooled solo sign-up (which never counted toward `taken`
+in the first place) self-withdrawing or being rejected by the organiser
+spuriously promoted a waitlisted TEAM, pushing the division past its
+configured capacity with no re-check (`promoteOldestWaitlisted` trusts
+the caller that a slot is genuinely free). The sweep's payment-window
+expiry pass had the identical gap for an unpaid pooled solo sign-up.
+Also found: `registration-hub-registrants-panel.tsx`'s manual plural
+ternary renders the WRONG French form at `free_slots: 0` (`Intl.
+PluralRules('fr').select(0)` is `'one'`, not `'other'` — verified by
+direct execution), a state this diff's own test proves is reachable.
+Fix dispatched: one shared `freesTeamSlot({status, free_agent})` predicate
+used at all three sites (confirmed the sweep's OTHER promotion site, the
+"lapse" pass, is safe by construction — a free agent is never waitlisted
+under ruling 1, so nothing it lapses was ever a free agent); the i18n fix
+threads a `locale` prop through to use the existing `plural()`/
+`Intl.PluralRules` helper instead of a hand-rolled `=== 1` check.
+
+**Lesson for this class of bug across the whole session:** a rule change
+("X no longer counts as Y") must be swept for every site that INFERS Y
+from a status transition, not just every site that COUNTS Y directly —
+promotion triggers are inference sites, and both review passes' worst
+findings were exactly this.
+
+**Fixed** (commit `ad329afce`): one shared `freesTeamSlot` predicate at
+all three sites, plus the French plural fix. Independently reverified:
+307/307 own re-run across all 5 touched files, `tsc EXIT=0`, lint 0
+errors, and a hand mutation on the shared helper turned 3 tests red at
+once (proving one fix covers all three sites, not three independent
+copies that could drift again).
+
+**THIRD `/code-review high` pass — no more crashers, severity dropped to
+design-debt.** One genuine (masked) gap fixed (commit `cb3aee4c5`):
+`GroupEntryView.pool_place_by_at`'s raw field lacked the terminal-status
+guard `awaitingTeamAssignment` gained after the walkthrough's withdrawn-
+status finding, despite a comment claiming parity — harmless today only
+because its one consumer (`poolPlaceByDate`) re-derives safely, but a
+trap for any future direct consumer (export, admin view, new API field).
+Independently reverified: 203/203, `tsc EXIT=0`, lint 0 errors, hand
+mutation caught.
+
+**Deferred, documented, NOT fixed** (design debt, no live bug):
+- The "counts toward team capacity" / "still-pooled-unassigned" / "seated
+  exclusion" predicates are hand-copied raw SQL across 5+ sites
+  (`registration-submit.ts`, `registrations.ts` ×3, `data.ts` ×2). Both
+  severe bugs this session came from exactly this shape (a rule applied at
+  some sites, missed at others) — a shared SQL fragment (`rosterCapExpr`'s
+  own precedent) would close this permanently, but is a larger refactor
+  across two files, deferred for a follow-up session per the same call
+  made twice already for this exact finding.
+- The pool-deadline sweep's refund-failure alert copies `withdrawCore`'s
+  pre-existing `payment_intent_id` (cart-level) vs `entry_payment_intent_id`
+  (this entry's own) mismatch — a real bug, but one that PREDATES RS012
+  and would need touching `withdrawCore` itself for a real fix; RS012 only
+  propagated an existing pattern into new code. Flagged for whoever next
+  touches either alert path, not fixed here.
+- `effectivePoolDeadline`'s signature (`Date | string | null`) is looser
+  than any real call site needs, forcing three `as Date | null` casts —
+  cosmetic, deferred.
+- The sweep's pool-deadline pass eagerly calls `divisionCtx` inside the
+  row lock where its sibling passes fetch minimally and call it lazily —
+  efficiency nit, deferred.
+- `place_by_at` still has no validation against being set in the past —
+  reaffirmed as deliberate (matches `refund_lock_at`'s own unconstrained
+  precedent; an organiser setting a past date is a valid way to say "sweep
+  this division now"), not re-opened a second time.
+
+### RS012 — DONE, merged 2026-09-01
+
+PR #694, squash-merged `c684633556090c196cf0a069663713e1e81fb8cf`. 11 commits
+on `fix/registration-team-capacity-pool`, all CI green (11/11 checks — smoke,
+unit ×4 shards, typecheck+lint+drift, docker build, engine coverage, security
+scan). Full local `apps/web` vitest suite: 12,966 total, 12,960 relevant pass,
+2 unrelated pre-existing environmental failures (`credits-monthly-cron.test.ts`
+DB-volume timeout, `schedule-build-honours-locks.test.ts` missing placement
+service — neither file touched by this branch, confirmed via isolated rerun).
+
+**Both owner rulings, verbatim, as shipped:**
+
+1. **`capacity` counts TEAM ENTRIES.** A solo sign-up never consumes a team
+   slot. The pool is bounded instead by `capacity × roster_cap` minus
+   players already on rosters — derived, no new settings field, no new
+   organiser decision. A solo sign-up past the pool's own bound is REFUSED
+   outright (422), never waitlisted: "you cannot sign up solo when there is
+   no possible place for you."
+2. **An unplaced solo sign-up is auto-refunded and withdrawn at the place-by
+   date**, which defaults to the division's registration close; the
+   organiser may place them or extend the date right up to it. Reuses the
+   RS002 `expires_at` sweep machinery rather than a second money path.
+
+Free a capacity slot by reading the ASSIGNMENT
+(`registration_players.assigned_from_registration_id`, unique where
+non-null), NEVER by mutating the source registration's status — carried
+from RS009, still binding, never violated across the whole session.
+
+**What this session adds to the standing lesson list (AGENTS.md-shaped,
+recorded here + in memory):** a rule change ("X no longer counts as Y") has
+to be swept for every site that INFERS Y from a status transition, not
+merely every site that COUNTS Y directly. Both severe bugs found by review
+were promotion triggers (`withdrawCore`, `rejectRegistration`, the sweep's
+expiry pass) inferring "a slot freed" from a bare status change — the
+COUNTING sites (`taken`, `soloPoolIsFull`, `fetchPoolSummary`) were all
+fixed correctly the first time; the INFERENCE sites were missed twice
+before a third review pass and a hands-on walkthrough closed them.
+
+**RESOLVED by the hands-on walkthrough (no fix needed):** `publicRegistrationInfo`
+gives the wizard no ADVANCE signal that the solo pool is full — a visitor
+completes the whole form before finding out — but the actual REFUSAL
+screen, driven through the real public stepper, is clean and on-brand:
+"We couldn't submit your registration — check your details and try again,
+or contact the organiser," plus the real server detail ("This division's
+solo sign-up pool is full"), with the wizard left fully intact for retry.
+No crash, no JSON dump, no dead end. Judged acceptable as shipped — a
+pre-submit warning would be a nice-to-have, not a defect; not pursued
+further this session.
+
+**Stage 5 (final, owed before PR) — driven BY HAND in a real browser, not
+just Playwright specs written and trusted**. Case matrix (product-owner
+pass, requested 2026-09-01):
+- Capacity: cap=8 + 2 teams + 6 solos → division not wrongly full;
+  pool-bound-reached solo sign-up refused — CONFIRM the public stepper
+  shows a friendly error, not a raw 422 (nothing has visually checked this
+  yet, and Stage 1 never touched the stepper's error rendering); assign a
+  solo → capacity count unaffected before/after.
+- Sweep: unplaced-past-deadline shows withdrawn/refunded correctly on the
+  status page; an organiser extension survives; never-paid unplaced
+  withdraws with no refund-UI confusion.
+- Settings panel: place_by_at set/cleared round-trips visually; only
+  visible with `allow_free_agents` on; no overflow at 320/768/1280.
+- Status page: waiting → notice + deadline; assigned → team name only,
+  mutually exclusive; no deadline set → notice only, never "Invalid Date".
+- Registrants tab: banner appears only when someone's waiting; free-slots
+  number matches real team room; row link lands on the pre-filtered table;
+  plural forms correct at 1 vs 2+.
+- Locale switch on every changed surface — no raw i18n keys leak through.
+- Regression check: CSV export still correct; the RS009 assign picker
+  (`listAssignTargets`) unaffected by the capacity change.
+Plus: screenshots 1280/768/320 of every changed surface, seven-width
+matrix coverage, a real Playwright walkthrough spec (`e2e/walkthrough/`)
+covering the happy + unhappy solo-sign-up paths, and the final
+`/code-review` pass.
 
 ## RS011 kickoff — scout re-pin, 2026-08-31 (worktree `.claude/worktrees/rs011`)
 
