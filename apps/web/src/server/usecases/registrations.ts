@@ -4128,7 +4128,15 @@ async function buildGroupStatusView(
   // not re-derived, so the status page's "by when" line can never disagree
   // with the deadline that actually enforces it.
   const poolPlaceByDivision = new Map(
-    settingsRows.map((s) => [s.division_id, s.place_by_at ?? s.closes_at]),
+    settingsRows.map((s) => [
+      s.division_id,
+      // RS012 `/code-review high` finding 2 — the ONE `effectivePoolDeadline`
+      // copy (beside rosterCapExpr, this file). Both inputs here are
+      // Date | null (settingsRows' own column types), so the cast just
+      // narrows the helper's broader Date | string | null return back to
+      // what this Map's downstream `.toISOString()` reader needs.
+      effectivePoolDeadline(s.place_by_at, s.closes_at) as Date | null,
+    ]),
   );
   // A pair's roster is fixed at exactly two (registration-submit.ts's own
   // structural check + rosterIssues at submit) — its join_code only ever
@@ -5225,7 +5233,10 @@ export async function sweepRegistrations(
       if (!locked || !(SPOT_HOLDERS as readonly string[]).includes(locked.status)) return null;
       const [rs] = await tx<{ place_by_at: Date | null; closes_at: Date | null }[]>`
         select place_by_at, closes_at from registration_settings where division_id = ${locked.division_id}`;
-      const deadline = rs?.place_by_at ?? rs?.closes_at ?? null;
+      // RS012 `/code-review high` finding 2 — the ONE `effectivePoolDeadline`
+      // copy; the cast narrows its Date | string | null return back to
+      // Date | null (rs's own column types) for the `>=` comparison below.
+      const deadline = effectivePoolDeadline(rs?.place_by_at ?? null, rs?.closes_at ?? null) as Date | null;
       if (!deadline || deadline >= new Date()) return null; // extended past now, or settings gone
       const [assigned] = await tx<{ id: string }[]>`
         select id from registration_players where assigned_from_registration_id = ${locked.id} limit 1`;
@@ -5362,6 +5373,19 @@ export function rosterCapExpr(db: AnySql) {
   )`;
 }
 
+/** RS012 rulings 1/2 — the pool's effective place-by date: the organiser's
+ *  explicit place_by_at, else the division's own registration close. The
+ *  ONE copy — Stage 2's sweep, buildGroupStatusView, and fetchPoolSummary
+ *  (data.ts) all read this, never re-derive the fallback themselves, so the
+ *  status page, the Registrants banner, and the sweep that actually acts on
+ *  it can never disagree about the deadline. */
+export function effectivePoolDeadline(
+  placeByAt: Date | string | null,
+  closesAt: Date | string | null,
+): Date | string | null {
+  return placeByAt ?? closesAt;
+}
+
 /** RS012 ruling 1 — the solo sign-up pool's own bound: `capacity × roster_cap`
  *  minus players already seated, the number of roster places that could
  *  conceivably exist. `hardCap` is the caller's already-resolved
@@ -5372,19 +5396,27 @@ export function rosterCapExpr(db: AnySql) {
  *  concept at all.
  *
  *  `seated` = every `registration_players` row that sits on a NON-free-agent
- *  (`free_agent = false`) registration in the division — real team members,
- *  AND already-assigned solo sign-ups alike, since `assignSoloSignUp`
- *  inserts their roster row under the TEAM's registration, not their own
- *  (registration-assign.ts's `placementOf`/roster insert). Deliberately
- *  excludes a still-pooled solo sign-up's OWN player row (it lives under
- *  THEIR OWN free_agent=true registration, holding their name/gender for
- *  display — RegistrationListRow's `player_gender` reads it the same way) —
- *  that row is sitting in the pool, not seated on a roster, and counting it
- *  here as well as in `pooled` below double-charged the very first solo
- *  sign-up against the bound (caught by this ticket's own regression test:
- *  a 2nd solo sign-up under a 2-place bound was wrongly refused). `pooled` =
- *  free-agent registrations in `SPOT_HOLDERS` status that are NOT YET
- *  assigned (no `registration_players` row points back at them via
+ *  (`free_agent = false`), non-terminal (`status not in ('withdrawn',
+ *  'rejected', 'expired', 'waitlisted')`) registration in the division —
+ *  real team members, AND already-assigned solo sign-ups alike, since
+ *  `assignSoloSignUp` inserts their roster row under the TEAM's
+ *  registration, not their own (registration-assign.ts's `placementOf`/
+ *  roster insert). The status exclusion (`/code-review high` finding 1,
+ *  CRITICAL) mirrors `fetchPoolSummary`'s roster-room query and
+ *  `listAssignTargets` — without it, a withdrawn team's own roster rows
+ *  (never deleted by `withdrawCore`, which only flips `status`) counted as
+ *  `seated` forever, shrinking the bound permanently and, once it went
+ *  negative, 422-refusing every solo sign-up in an otherwise-empty
+ *  division. Deliberately excludes a still-pooled solo sign-up's OWN player
+ *  row (it lives under THEIR OWN free_agent=true registration, holding
+ *  their name/gender for display — RegistrationListRow's `player_gender`
+ *  reads it the same way) — that row is sitting in the pool, not seated on
+ *  a roster, and counting it here as well as in `pooled` below
+ *  double-charged the very first solo sign-up against the bound (caught by
+ *  this ticket's own regression test: a 2nd solo sign-up under a 2-place
+ *  bound was wrongly refused). `pooled` = free-agent registrations in
+ *  `SPOT_HOLDERS` status that are NOT YET assigned (no
+ *  `registration_players` row points back at them via
  *  `assigned_from_registration_id`) — an assigned one is already counted
  *  inside `seated` and must not be double-counted here. */
 export async function soloPoolIsFull(
@@ -5398,7 +5430,8 @@ export async function soloPoolIsFull(
       ${rosterCapExpr(tx)} as roster_cap,
       (select count(*)::int from registration_players rp
          join registrations r2 on r2.id = rp.registration_id
-         where r2.division_id = d.id and r2.free_agent = false) as seated,
+         where r2.division_id = d.id and r2.free_agent = false
+           and r2.status not in ('withdrawn', 'rejected', 'expired', 'waitlisted')) as seated,
       (select count(*)::int from registrations r3
          where r3.division_id = d.id and r3.free_agent = true
            and r3.status in ${tx([...SPOT_HOLDERS])}

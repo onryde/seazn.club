@@ -158,8 +158,16 @@ export default async function RegistrationHubPage({
       />
     );
   } else {
-    const registrants = await fetchRegistrantRows(auth, id, registrantsRawQuery);
-    const divisions = await fetchDivisionOptions(auth, id);
+    // RS012 `/code-review high` finding 6: fetchDivisionOptions and
+    // fetchPoolSummary depend only on auth/id, not on fetchRegistrantRows'
+    // own result — run all three concurrently rather than making the other
+    // two wait their turn behind it. Only fetchRegistrantDetails genuinely
+    // needs registrants.rows, so it stays a sequential await AFTER this.
+    const [registrants, divisions, poolSummaryRows] = await Promise.all([
+      fetchRegistrantRows(auth, id, registrantsRawQuery),
+      fetchDivisionOptions(auth, id),
+      fetchPoolSummary(auth, id),
+    ]);
     // RS005 W2b: the row-expand detail's roster/siblings/form_fields for
     // EVERY row on the page, batched into 2 queries total (task 3) —
     // fetched here, eagerly, rather than on click: the row is a plain
@@ -173,7 +181,7 @@ export default async function RegistrationHubPage({
     // table (division + free_agent checked) — built here, the same
     // convention every other href on this panel already follows (its own
     // header comment: "this component never imports routes itself").
-    const poolSummary: PoolSummaryPanelRow[] = (await fetchPoolSummary(auth, id)).map((row) => ({
+    const poolSummary: PoolSummaryPanelRow[] = poolSummaryRows.map((row) => ({
       ...row,
       href: `${routes.competitionRegistration(orgSlug, compSlug, "registrants", row.division_id)}&free_agent=1`,
     }));

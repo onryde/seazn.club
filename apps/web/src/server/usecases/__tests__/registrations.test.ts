@@ -157,6 +157,7 @@ import {
   reconcileRegistrationGroupBySession,
   inviteUnclaimedMembers,
   anyOptedOutByRegistration,
+  effectivePoolDeadline,
   type GroupStatusView,
 } from "../registrations";
 // RS012: assignSoloSignUp lives in its own module (RS009's own header —
@@ -215,6 +216,27 @@ describe("fee math (pure)", () => {
   it("never exceeds the fee itself", () => {
     expect(applicationFeeCents(100, 100)).toBe(100);
     expect(applicationFeeCents(1, 100)).toBe(1);
+  });
+});
+
+// RS012 `/code-review high` finding 2 — the pool's effective place-by date
+// fallback, extracted to the ONE copy `buildGroupStatusView`, `data.ts`'s
+// `fetchPoolSummary`, and `sweepRegistrations`' `duePool` lock all now read,
+// same precedent `effectivePayDeadline` (view-model.ts) already set for this
+// exact two-column-fallback shape.
+describe("effectivePoolDeadline (pure)", () => {
+  it("uses the organiser's explicit place_by_at when set", () => {
+    expect(effectivePoolDeadline("2026-09-15T00:00:00Z", "2026-10-01T00:00:00Z")).toBe(
+      "2026-09-15T00:00:00Z",
+    );
+  });
+
+  it("falls back to closes_at when place_by_at is unset", () => {
+    expect(effectivePoolDeadline(null, "2026-10-01T00:00:00Z")).toBe("2026-10-01T00:00:00Z");
+  });
+
+  it("is null when neither is set", () => {
+    expect(effectivePoolDeadline(null, null)).toBeNull();
   });
 });
 

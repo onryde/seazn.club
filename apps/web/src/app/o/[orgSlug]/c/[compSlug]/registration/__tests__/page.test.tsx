@@ -59,6 +59,21 @@ const h = vi.hoisted(() => ({
   siblingsQueries: 0,
   rosterRows: [] as unknown[],
   siblingRows: [] as unknown[],
+  // RS012 `/code-review high` finding 3 — fetchPoolSummary's own three
+  // queries (data.ts), each its own bucket for the same reason
+  // divisionOptionsQueries/rosterQueries/siblingsQueries are split out
+  // below: before these existed, fetchPoolSummary's `waitingRows` query
+  // fell through to the default branch and silently inflated
+  // divisionRowsQueries, breaking the two "no N+1 / never pollutes"
+  // isolation tests further down (found running this suite's own
+  // baseline, not by inspection).
+  poolWaitingRows: [] as unknown[],
+  poolSlotRows: [] as unknown[],
+  poolMetaRows: [] as unknown[],
+  // How many times ANY of fetchPoolSummary's own 3 queries fired — used by
+  // finding 6's concurrency test to prove fetchPoolSummary actually ran,
+  // not just that it avoided the wrong bucket.
+  poolQueries: 0,
 }));
 
 const feePercentForMock = vi.hoisted(() => vi.fn(async () => 8));
@@ -103,6 +118,24 @@ vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: async () => "en" }));
 vi.mock("@/server/usecases/registrations", () => ({
   feePercentFor: feePercentForMock,
   listRegistrations: listRegistrationsMock,
+  // RS012 `/code-review high` finding 3: data.ts's fetchPoolSummary (now
+  // exercised for real by the poolSummary wiring test below) also imports
+  // `rosterCapExpr`/`effectivePoolDeadline` from this SAME module — a bare
+  // {feePercentFor, listRegistrations} mock left them undefined and crashed
+  // the instant fetchPoolSummary's non-empty path ran ("No 'rosterCapExpr'
+  // export is defined on the mock"). Inert stand-ins, not `importOriginal`,
+  // to keep this file's own stated reason for mocking the module at all
+  // (avoid pulling in registrations.ts's heavy Stripe/entitlements/DB load).
+  // `rosterCapExpr`'s return value is only ever embedded as an interpolated
+  // VALUE inside a query the @/lib/db fake below dispatches on the query's
+  // leading TEXT — it never reads interpolated values, so what this returns
+  // does not matter, only that it exists and does not throw.
+  // `effectivePoolDeadline` DOES need real behaviour: fetchPoolSummary's own
+  // JS-side merge calls it directly (not through a SQL template) to compute
+  // the `place_by_at` value the test below asserts on — same `?? ` fallback
+  // as the real implementation (registrations.ts, beside rosterCapExpr).
+  rosterCapExpr: () => "",
+  effectivePoolDeadline: (placeByAt: unknown, closesAt: unknown) => placeByAt ?? closesAt,
 }));
 
 // A tagged-template call (`.raw` on the strings array) resolves to `h.rows`
@@ -148,6 +181,22 @@ vi.mock("@/lib/db", () => ({
         h.siblingsQueries += 1;
         return Promise.resolve(h.siblingRows);
       }
+      // fetchPoolSummary (RS012 scope item 4, data.ts) — its three own
+      // queries, each distinguished by its own leading column list so none
+      // of them can fall through to the divisionRowsQueries default below
+      // (see the h.poolWaitingRows doc comment above for why that matters).
+      if (first.startsWith("select r.division_id, count(*)::int as waiting")) {
+        h.poolQueries += 1;
+        return Promise.resolve(h.poolWaitingRows);
+      }
+      if (first.startsWith("select t.division_id")) {
+        h.poolQueries += 1;
+        return Promise.resolve(h.poolSlotRows);
+      }
+      if (first.startsWith("select d.id as division_id, d.name as division_name")) {
+        h.poolQueries += 1;
+        return Promise.resolve(h.poolMetaRows);
+      }
       h.divisionRowsQueries += 1;
       return Promise.resolve(h.rows);
     };
@@ -188,6 +237,10 @@ beforeEach(() => {
   h.siblingsQueries = 0;
   h.rosterRows = [];
   h.siblingRows = [];
+  h.poolWaitingRows = [];
+  h.poolSlotRows = [];
+  h.poolMetaRows = [];
+  h.poolQueries = 0;
   feePercentForMock.mockClear();
   feePercentForMock.mockResolvedValue(8);
   listRegistrationsMock.mockClear();
@@ -299,6 +352,39 @@ describe("registration hub — ?tab= switching", () => {
   });
 });
 
+// RS012 `/code-review high` finding 6: fetchDivisionOptions/fetchPoolSummary
+// depend only on auth/id, not on fetchRegistrantRows' own result — they
+// should run CONCURRENTLY with it via Promise.all, not wait their turn
+// behind it. Proven by holding fetchRegistrantRows' own promise open and
+// checking the other two have already fired — the pre-fix sequential shape
+// would leave them at zero until fetchRegistrantRows resolves.
+describe("registration hub — Registrants tab: concurrent fetch wiring (RS012 finding 6)", () => {
+  it("fires fetchDivisionOptions and fetchPoolSummary before fetchRegistrantRows' own promise resolves", async () => {
+    let resolveRegistrants!: (v: unknown[]) => void;
+    listRegistrationsMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveRegistrants = resolve;
+        }),
+    );
+    h.poolWaitingRows = [{ division_id: "div-9", waiting: 1 }];
+
+    const pagePromise = Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) });
+    // Drain the microtask queue without ever resolving fetchRegistrantRows —
+    // under the pre-fix sequential `await`s, page.tsx would still be
+    // suspended on that first await and neither of the other two fetches
+    // would have run yet.
+    await new Promise((r) => setTimeout(r, 0));
+    expect(h.divisionOptionsQueries).toBe(1);
+    // fetchPoolSummary's own first query ran too — it did not wait its turn
+    // behind fetchRegistrantRows either.
+    expect(h.poolQueries).toBeGreaterThan(0);
+
+    resolveRegistrants([]);
+    await pagePromise;
+  });
+});
+
 describe("registration hub — row-expand detail query wiring (RS005 W2b, task 3)", () => {
   it("issues exactly ONE roster query and ONE siblings query for a multi-row Registrants page — never one per row", async () => {
     listRegistrationsMock.mockResolvedValueOnce([
@@ -371,6 +457,31 @@ describe("registration hub — Registrants tab data wiring (RS005 W2a)", () => {
     const tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
     const panel = tree.find((e) => e.type === RegistrationHubRegistrantsPanel)!;
     expect(propsOf(panel).divisions).toEqual([{ id: "div-1", name: "Open Singles" }]);
+  });
+
+  // RS012 `/code-review high` finding 3: nothing here previously asserted
+  // that page.tsx even CALLS fetchPoolSummary, let alone that its result
+  // reaches the panel's `poolSummary` prop — a swapped/dropped variable
+  // would have shipped silently. Real (unmocked) fetchPoolSummary
+  // (../data.ts) runs against the @/lib/db fake above, so this also proves
+  // the page's own href-building (division_id + free_agent=1, appended to
+  // EACH row) rather than just that SOME array reached the prop.
+  it("maps fetchPoolSummary's resolved rows onto the panel's poolSummary prop, with each row's own href", async () => {
+    h.poolWaitingRows = [{ division_id: "div-9", waiting: 2 }];
+    h.poolSlotRows = [{ division_id: "div-9", free_slots: 3 }];
+    h.poolMetaRows = [{ division_id: "div-9", division_name: "Div 9", place_by_at: null, closes_at: null }];
+    const tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
+    const panel = tree.find((e) => e.type === RegistrationHubRegistrantsPanel)!;
+    expect(propsOf(panel).poolSummary).toEqual([
+      {
+        division_id: "div-9",
+        division_name: "Div 9",
+        waiting: 2,
+        free_slots: 3,
+        place_by_at: null,
+        href: "/o/riverside/c/summer-league/registration?tab=registrants&division_id=div-9&free_agent=1",
+      },
+    ]);
   });
 
   it("threads canEdit through — true for an editor, false for a viewer", async () => {

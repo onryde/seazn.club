@@ -21,6 +21,7 @@ import type { RegistrationHubRowData } from "@/components/registration-hub-divis
 import {
   listRegistrations,
   rosterCapExpr,
+  effectivePoolDeadline,
   type RegistrationListRow,
   type ListRegistrationsFilters,
 } from "@/server/usecases/registrations";
@@ -514,7 +515,13 @@ export async function fetchPoolSummary(
         division_name: m?.division_name ?? "",
         waiting: w.waiting,
         free_slots: slotsByDivision.get(w.division_id) ?? 0,
-        place_by_at: (m?.place_by_at ?? m?.closes_at)?.toISOString() ?? null,
+        // RS012 `/code-review high` finding 2 — the ONE effectivePoolDeadline
+        // copy (registrations.ts, beside rosterCapExpr); the cast narrows
+        // its Date | string | null return back to Date | null (m's own
+        // column types) for the `.toISOString()` call.
+        place_by_at:
+          (effectivePoolDeadline(m?.place_by_at ?? null, m?.closes_at ?? null) as Date | null)?.toISOString() ??
+          null,
       };
     });
   });

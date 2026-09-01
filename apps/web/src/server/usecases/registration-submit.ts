@@ -686,29 +686,18 @@ export async function submitRegistrationGroup(
       // LIVE settings (fetched under the lock above), never the pre-lock
       // `p.settings` snapshot — review MAJOR 3.
       const live = liveSettingsById.get(p.input.division_id)!;
-      // Counting happens INSIDE the lock, after every earlier entry in THIS
-      // SAME cart is already inserted (same transaction sees its own
-      // uncommitted writes) — two entries in one cart for the same division
-      // correctly contend for the same slots.
-      //
-      // RS012 ruling 1: `capacity` counts TEAM entries — `free_agent = false`
-      // excludes every solo sign-up from this count, regardless of its
-      // status, so one never eats a team slot at submit time and never keeps
-      // eating one after RS009 assigns it onto a team (that assignment
-      // deliberately leaves this row confirmed/free_agent=true forever).
-      const [{ n: taken }] = await tx<{ n: number }[]>`
-        select count(*)::int as n from registrations
-        where division_id = ${p.input.division_id} and status in ${tx([...SPOT_HOLDERS])}
-          and free_agent = false`;
       const hardCap = Math.min(
         live.capacity ?? Number.POSITIVE_INFINITY,
         planLimit ?? Number.POSITIVE_INFINITY,
       );
-      // A free-agent entry never competes for a TEAM slot at all (meaningless
-      // for a solo sign-up once `taken` excludes it above) — it draws against
-      // its own derived pool bound instead, and is REFUSED outright rather
-      // than queued: "you cannot sign up solo when there is no possible place
-      // for you" (ruling 1). Never waitlisted, ever.
+      // A free-agent entry never competes for a TEAM slot at all — it draws
+      // against its own derived pool bound instead, and is REFUSED outright
+      // rather than queued: "you cannot sign up solo when there is no
+      // possible place for you" (ruling 1). Never waitlisted, ever. The
+      // `taken` count (review fix: moved inside this branch, `/code-review
+      // high` finding 5) is only ever read on the non-free-agent side below,
+      // so a free-agent submission no longer pays for a wasted round trip
+      // inside this open, row-locked transaction.
       let waitlisted: boolean;
       if (p.input.free_agent) {
         if (await soloPoolIsFull(tx, p.input.division_id, hardCap)) {
@@ -716,6 +705,21 @@ export async function submitRegistrationGroup(
         }
         waitlisted = false;
       } else {
+        // Counting happens INSIDE the lock, after every earlier entry in
+        // THIS SAME cart is already inserted (same transaction sees its own
+        // uncommitted writes) — two entries in one cart for the same
+        // division correctly contend for the same slots.
+        //
+        // RS012 ruling 1: `capacity` counts TEAM entries — `free_agent =
+        // false` excludes every solo sign-up from this count, regardless of
+        // its status, so one never eats a team slot at submit time and
+        // never keeps eating one after RS009 assigns it onto a team (that
+        // assignment deliberately leaves this row confirmed/free_agent=true
+        // forever).
+        const [{ n: taken }] = await tx<{ n: number }[]>`
+          select count(*)::int as n from registrations
+          where division_id = ${p.input.division_id} and status in ${tx([...SPOT_HOLDERS])}
+            and free_agent = false`;
         waitlisted = taken >= hardCap;
       }
       // On a TEAM division `fee_cents` is the price of a team. Someone

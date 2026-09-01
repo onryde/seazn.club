@@ -197,6 +197,11 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
   const deadlineLabel = (deadline: string) =>
     `${fmtDateTime(cart.timezone, deadline)} ${fmtZoneAbbrev(cart.timezone, deadline)}`;
 
+  // RS012 review cleanup: computed once here rather than calling
+  // `poolPlaceByDate(entry)` a second time inside the JSX below, which used
+  // to force a redundant `as string` cast on the second call.
+  const poolPlaceBy = poolPlaceByDate(entry);
+
   let moneyNode: ReactNode = null;
   if (money.kind === "stripe_due") {
     const label = t(ui, "register.status.pay.cta", { amount: feeLabel });
@@ -287,11 +292,9 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
             reuses awaitingTeamAssignment's own predicate, so this can never
             render once assigned even though pool_place_by_at is still
             carried on the entry. */}
-        {poolPlaceByDate(entry) && (
+        {poolPlaceBy && (
           <p className="text-xs text-ink-muted">
-            {t(ui, "register.status.entry.awaitingTeamDeadline", {
-              date: deadlineLabel(poolPlaceByDate(entry) as string),
-            })}
+            {t(ui, "register.status.entry.awaitingTeamDeadline", { date: deadlineLabel(poolPlaceBy) })}
           </p>
         )}
         {/* RS009 — the receipt for the promise the stepper made at sign-up.
