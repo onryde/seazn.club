@@ -44,9 +44,15 @@ import type { MsgFn } from "@/lib/scoring-vocab";
 import type { LineupPair, SideSquad, SquadState } from "@seazn/engine/core";
 import { initSquads, personsAtPosition, playingSquad } from "@seazn/engine/core";
 import type { PadAttributionItem, PadFieldValue } from "@seazn/engine/sport";
-import type { ActionValues } from "./action-form";
 import { deriveFieldPathLabel } from "./view-model";
 import type { PadActionView } from "./view-model";
+
+/** Was imported from the (now-deleted) universal `action-form.tsx`; that
+ *  file defined the identical alias for its own `ActionForm` state. Kept
+ *  local here rather than re-exported from `v3/action-form.tsx`'s
+ *  `ActionFormValues` so this shared file has no dependency on either pad
+ *  lane's form component — just the engine's own field-value type. */
+type ActionValues = Record<string, PadFieldValue | undefined>;
 
 function isSideSquadLike(x: unknown): x is SideSquad {
   return !!x && typeof x === "object" && Array.isArray((x as { members?: unknown }).members);

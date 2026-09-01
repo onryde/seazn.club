@@ -24,27 +24,28 @@
 // "the wiring was never written", which a source check catches at the exact
 // point the capability is dropped.
 //
-// When a later wave converts football/tennis/etc., this test protects them
-// too — the chassis is shared, so a capability lost here is lost for all.
+// R7 demolished the legacy/universal pad lane (pad-renderer.tsx and friends)
+// once the last sport (carrom) converted to v3, so the three checks that used
+// to diff against `pad-renderer.tsx`'s own source now pin the v3 host's
+// behaviour directly instead of comparing it to a legacy file that no longer
+// exists. The chassis is still shared across every sport, so a capability
+// lost here is still lost for all of them.
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const HERE = new URL(".", import.meta.url).pathname;
 const V3 = join(HERE, "..");
-const LEGACY = join(HERE, "..", "..");
 
 const padHost = readFileSync(join(V3, "pad-host.tsx"), "utf8");
 const activity = readFileSync(join(V3, "activity.tsx"), "utf8");
-const padRenderer = readFileSync(join(LEGACY, "pad-renderer.tsx"), "utf8");
 
 describe("legacy parity — capabilities the v3 chassis must not lose", () => {
-  it("1a. mounts an event-history panel, as the legacy pad mounts <Timeline>", () => {
+  it("1a. mounts an event-history panel", () => {
     // Anchored on a JSX boundary, not a bare substring: `toContain
     // ("<ActivityPanel")` still passes against `<ActivityPanelREMOVED`, which
     // is precisely the vacuous assertion this programme keeps shipping. Found
     // by mutating this file's own subject and watching the test stay green.
-    expect(padRenderer).toMatch(/<Timeline[\s/>]/);
     expect(padHost).toMatch(/<ActivityPanel[\s/>]/);
   });
 
@@ -58,7 +59,6 @@ describe("legacy parity — capabilities the v3 chassis must not lose", () => {
   });
 
   it("1c. honours 'a device link may only void its OWN events'", () => {
-    expect(padRenderer).toContain("device_link_id");
     expect(activity).toContain("ownEventIds");
     expect(activity).toContain("deviceLinkId === null");
   });
@@ -72,7 +72,6 @@ describe("legacy parity — capabilities the v3 chassis must not lose", () => {
   });
 
   it("3. surfaces the fold's own result headline, so a TIE is stated rather than inferred", () => {
-    expect(padRenderer).toContain("summaryHeadline(");
     expect(padHost).toContain("summaryHeadline(");
     // Reused from the legacy view-model rather than reimplemented, so the two
     // readers cannot drift apart.

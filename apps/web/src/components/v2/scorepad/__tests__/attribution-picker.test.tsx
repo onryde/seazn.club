@@ -15,9 +15,7 @@ import { foldClient } from "../module-client";
 import { defaultLineupPair, makeEnvelope, lineupFromCatalog } from "@seazn/engine/testkit";
 import { cricket } from "@seazn/engine/sports/cricket";
 import { hockey } from "@seazn/engine/sports/hockey";
-import { ActionForm, type ActionValues } from "../action-form";
 import type { PadActionView } from "../view-model";
-import type { PadFieldValue } from "@seazn/engine/sport";
 import {
   AttributionPicker,
   attributionItemCaption,
@@ -38,8 +36,6 @@ const isType = (type: unknown) => (el: ReactElement) => el.type === type;
 const byPath = (tree: ReactElement[], path: string) =>
   find(tree, (el) => propsOf(el)["data-attribution-path"] === path);
 const chipsOf = (group: ReactElement) => findAll(walk(propsOf(group).children as never), isType("button"));
-
-const AVAILABLE = { kind: "available" as const };
 
 function noop() {
   /* setValue stub */
@@ -336,61 +332,18 @@ describe("attribution-picker — optional items: re-tapping a selected chip clea
   });
 });
 
-describe("attribution-picker — end to end through the REAL renderAttribution seam: closes action-form.tsx's documented gap", () => {
-  it("cricket's toss (wonBy REQUIRED by the zod schema) builds a payload that PARSES against cricket.eventSchemas['cricket.toss']", () => {
-    const CRICKET_LINEUPS: LineupPair = defaultLineupPair(cricket.positions);
-    const tossAction: PadActionView = {
-      type: "cricket.toss",
-      labelKey: { key: "pad.cricket.action.toss", label: "Toss" },
-      fields: [{ kind: "enum", path: "elected", values: ["bat", "bowl"] }],
-      attribution: [{ kind: "side", path: "wonBy" }],
-      availability: AVAILABLE,
-    };
-    let submitted: Record<string, unknown> | null = null;
-    const island = renderIsland(ActionForm, {
-      action: tossAction,
-      onSubmit: (p: Record<string, unknown>) => (submitted = p),
-      renderAttribution: (
-        action: PadActionView,
-        values: ActionValues,
-        setValue: (path: string, value: PadFieldValue | undefined) => void,
-      ) =>
-        AttributionPicker({
-          action,
-          values,
-          setValue,
-          lineups: CRICKET_LINEUPS,
-          state: undefined,
-        }),
-    });
-
-    // Expand the tile.
-    (propsOf(find(island.tree(), isType("button"))).onClick as () => void)();
-    let tree = island.tree();
-
-    // Pick the required FIELD.
-    const select = find(tree, isType("select"));
-    (propsOf(select).onChange as (e: unknown) => void)({ target: { value: "bat" } });
-
-    // Pick the attribution: Home won the toss.
-    tree = island.tree();
-    const sideGroup = byPath(tree, "wonBy");
-    const homeChip = find(chipsOf(sideGroup), (c) => propsOf(c)["data-value"] === CRICKET_LINEUPS.home.entrantId);
-    (propsOf(homeChip).onClick as () => void)();
-
-    // Confirm.
-    tree = island.tree();
-    const confirmBtn = find(findAll(tree, isType("button")), (b) => propsOf(b)["data-role"] === "confirm");
-    expect(propsOf(confirmBtn).disabled).toBe(false); // elected is set; attribution never blocks confirm
-    (propsOf(confirmBtn).onClick as () => void)();
-
-    expect(submitted).not.toBeNull();
-    const schema = cricket.eventSchemas!["cricket.toss"]!;
-    const result = schema.safeParse(submitted);
-    expect(result.success, result.success ? "" : JSON.stringify((result as { error?: unknown }).error)).toBe(true);
-    expect((submitted as unknown as { wonBy: string }).wonBy).toBe(CRICKET_LINEUPS.home.entrantId);
-  });
-});
+// The "end to end through the REAL renderAttribution seam" describe block
+// that lived here exercised the (now-deleted) universal `action-form.tsx`'s
+// `ActionForm` + this file's `AttributionPicker` combo — the exact wiring
+// pattern `pad-renderer.tsx` used, and the R7 lane demolition removed both.
+// Equivalent coverage of the SAME cricket-toss/wonBy capability survives on
+// the v3 chassis: `v3/__tests__/action-form.test.ts` ("a SIDE item always
+// offers exactly Home/Away...") proves the attribution group renders from
+// lineups, and `v3/skins/__tests__/cricket.test.ts` ("toss: who won ->
+// elected, both required, in that order") proves the guided-sheet path
+// produces the exact `{ type: "cricket.toss", payload: { wonBy, elected } }`
+// event. Removed as a duplicate rather than ported, per R7's lane-demolition
+// brief.
 
 describe("attributionItemCaption — labelled items use padLabel; unlabelled items fall back to a positional caption", () => {
   it("uses the engine's own labelKey when present — routed through padLabel, which calls msg() for a REGISTERED key", () => {

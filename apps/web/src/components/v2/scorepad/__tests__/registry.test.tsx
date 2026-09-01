@@ -1,130 +1,22 @@
-// S12/#421 W10 — the drift guard over registry.tsx's `resolveScorePad` table.
-// S11's skins/registry.ts only names the skinned sports (an unlisted sport
-// resolves to `null` = universal, which is fine for PadRenderer's own
-// question); THIS table must name every `builtinModules` key that still has
-// a v2 story explicitly, because "universal" here is meant to be a WRITTEN
-// decision, not a fallthrough — a new engine sport shipping with no row and
-// no `NO_V2_SKIN_SPORTS` entry must fail CI, not silently render on the
-// universal path with nobody having decided that was right. `NO_V2_SKIN_
-// SPORTS` (registry.tsx) is the one recognised exception, now covering all
-// eight sports that ever had a v2 skin: volleyball, badminton and
-// tabletennis first (R5, shared racquet-skin.tsx), then cricket, tennis,
-// football, hockey and icehockey (2026-08-31, their own dedicated files) —
-// each converted fully to v3 and had its v2 skin deleted as dead code once
-// nothing else still shared it. See registry.tsx's own header for the full
-// reasoning on both.
+// S12/#421 W10 originally, now the post-lane-demolition survivors (R7): the
+// SINGLE registry both real entry points consult, and the wire/lineup/person
+// builders both page loaders share. The drift guard this file used to carry
+// over registry.tsx's `resolveScorePad`/`RESOLUTION_KIND`/`NO_V2_SKIN_SPORTS`
+// table is gone along with the table itself — R7 demolished the legacy v2
+// pad lane once carrom (the last sport) converted to v3, so `RESOLUTION_KIND`
+// had no "skin" rows left and `resolveScorePad` had no callers left to prove
+// consistent. See registry.tsx's own header for the full record.
 import { describe, expect, it, vi } from "vitest";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { makeEnvelope } from "@seazn/engine/testkit";
 import type { SideInfo } from "@/components/v2/fixture-console";
 import { renderIsland } from "@/components/__tests__/_hook-harness";
-import { skinFor } from "../skins/registry";
-import { NO_V2_SKIN_SPORTS, RESOLUTION_KIND, ScorePad, lineupPairFrom, personNamesFrom, resolveScorePad } from "../registry";
+import { ScorePad, lineupPairFrom, personNamesFrom } from "../registry";
 import { eventOutToEnvelope } from "../wire";
 import { foldClient } from "../module-client";
-import { PadRenderer } from "../pad-renderer";
 import { PadHostV3 } from "../v3/pad-host";
 import type { SkinDefV3 } from "../v3/types";
-
-describe("resolveScorePad — drift guard over every builtinModules key", () => {
-  it("assertion 1: every builtinModules key has a table row, unless it's in NO_V2_SKIN_SPORTS", () => {
-    const missing = builtinModules
-      .map((m) => m.key)
-      .filter((key) => !(key in RESOLUTION_KIND) && !NO_V2_SKIN_SPORTS.has(key));
-    expect(missing, "a new engine sport shipped with no registry decision").toEqual([]);
-  });
-
-  it("assertion 1b: NO_V2_SKIN_SPORTS is absent from the table AND genuinely has no v2 skin (the exclusion is honest, not just claimed)", () => {
-    for (const key of NO_V2_SKIN_SPORTS) {
-      expect(key in RESOLUTION_KIND, `"${key}" is in NO_V2_SKIN_SPORTS but still has a RESOLUTION_KIND row`).toBe(
-        false,
-      );
-      expect(skinFor(key), `"${key}" is in NO_V2_SKIN_SPORTS but skinFor("${key}") still returns a skin`).toBeNull();
-    }
-  });
-
-  it("assertion 2: every table row is a real module key (no dead rows)", () => {
-    const real = new Set(builtinModules.map((m) => m.key));
-    const dead = Object.keys(RESOLUTION_KIND).filter((key) => !real.has(key));
-    expect(dead, "a table row names a sport the engine does not ship").toEqual([]);
-  });
-
-  it("assertion 3: the table agrees with skinFor in BOTH directions", () => {
-    for (const m of builtinModules) {
-      const row = RESOLUTION_KIND[m.key];
-      const hasSkin = skinFor(m.key) !== null;
-      if (row === "skin") {
-        expect(hasSkin, `"${m.key}" is marked "skin" in registry.tsx but skinFor("${m.key}") is null`).toBe(true);
-      } else {
-        expect(hasSkin, `"${m.key}" is marked "universal" in registry.tsx but skinFor("${m.key}") returns a skin`).toBe(
-          false,
-        );
-      }
-    }
-  });
-
-  it("assertion 4: resolveScorePad(key) returns an actual SkinDef for every 'skin' row", () => {
-    // Zero iterations today (RESOLUTION_KIND has no "skin" row left, 2026-08-
-    // 31) — kept rather than deleted: it is a dormant, still-correct guard
-    // that starts asserting again the moment a "skin" row is ever
-    // reintroduced, and assertion 3 above already proves the same table is
-    // otherwise consistent with skinFor either way.
-    for (const m of builtinModules) {
-      if (RESOLUTION_KIND[m.key] !== "skin") continue;
-      const resolution = resolveScorePad(m.key);
-      expect(resolution.kind, `resolveScorePad("${m.key}")`).toBe("skin");
-      if (resolution.kind === "skin") {
-        expect(resolution.skin).toBeTruthy();
-        expect(resolution.skin.sports).toContain(m.key);
-      }
-    }
-  });
-
-  // S12/#421 pass B — Fix 3: `padSpec` is an OPTIONAL hook on `SportModule`
-  // (packages/engine/src/sport/module.ts:388). `resolveScorePadBootstrap`
-  // (server/usecases/fidelity.ts:117) falls back to `EMPTY_SPEC` when a
-  // module has none — no declared `fidelityEntitlements`, so no gates, so
-  // band 3 and the full v2 UI regardless of what the org actually bought.
-  // Dead today because all 11 `builtinModules` happen to implement it, and
-  // the real write path still refuses the append at the scoring door
-  // (`scoring.ts`'s `requiredFeatureForEvent`) — so today's worst case is
-  // misleading UI, not a billing bypass. This assertion is what turns "a
-  // 12th sport forgets padSpec" into a CI failure instead of a silent,
-  // ungated pad shipping — the same "written decision, not a fallthrough"
-  // posture assertions 1-4 above already hold this table to.
-  it("assertion 5: every builtinModules entry implements padSpec (no module ships an ungated pad)", () => {
-    const missing = builtinModules.filter((m) => typeof m.padSpec !== "function").map((m) => m.key);
-    expect(missing, "a module with no padSpec has no fidelityEntitlements, so no gate at all — see fidelity.ts's EMPTY_SPEC fallback").toEqual([]);
-  });
-
-  it("every 'universal' row resolves to {kind:'universal'}, with no skin attached", () => {
-    for (const m of builtinModules) {
-      if (RESOLUTION_KIND[m.key] !== "universal") continue;
-      expect(resolveScorePad(m.key)).toEqual({ kind: "universal" });
-    }
-  });
-
-  it("an unknown sport key resolves to universal, without throwing", () => {
-    expect(() => resolveScorePad("totally-unknown-sport")).not.toThrow();
-    expect(resolveScorePad("totally-unknown-sport")).toEqual({ kind: "universal" });
-  });
-
-  it("the table + NO_V2_SKIN_SPORTS together account for exactly the 11 shipped sports — 0 skinned, 3 universal, 8 with no v2 story left (pins the known-good shape)", () => {
-    // 0, not 5: this wave (2026-08-31) retired the last five "skin" rows
-    // (cricket, tennis, football, hockey, icehockey) into NO_V2_SKIN_SPORTS,
-    // completing what R5 started for volleyball/badminton/tabletennis. See
-    // registry.tsx's own NO_V2_SKIN_SPORTS docstring for the full record.
-    expect(builtinModules.length).toBe(11);
-    expect(Object.keys(RESOLUTION_KIND).length).toBe(3);
-    expect(NO_V2_SKIN_SPORTS.size).toBe(8);
-    const byKind = Object.values(RESOLUTION_KIND).reduce<Record<string, number>>((acc, kind) => {
-      acc[kind] = (acc[kind] ?? 0) + 1;
-      return acc;
-    }, {});
-    expect(byKind).toEqual({ universal: 3 });
-  });
-});
 
 describe("eventOutToEnvelope", () => {
   it("maps snake_case wire fields to the engine's camelCase EventEnvelope", () => {
@@ -397,17 +289,25 @@ vi.mock("../v3/registry", async (importOriginal) => {
     // R2/task E: resolvePad now takes a live translator too (v3/registry.ts's
     // own header explains why) — this fake sportKey never reaches a real
     // skin's own string-building, so a no-op stand-in is fine either way.
-    resolvePad: (key: string, t: (k: string) => string) =>
-      key === "generic" ? { lane: "v3" as const, skin: FAKE_V3_SKIN } : actual.resolvePad(key, t),
+    // "cricket" is forced to "legacy" here (real module, so
+    // `resolveModuleClient` still succeeds and the mock actually reaches
+    // registry.tsx's own throw) — there is no real sportKey that resolves to
+    // "legacy" any more (`LEGACY_SPORTS.size` is 0), so this is the only way
+    // to exercise that branch at all.
+    resolvePad: (key: string, t: (k: string) => string) => {
+      if (key === "generic") return { lane: "v3" as const, skin: FAKE_V3_SKIN };
+      if (key === "cricket") return { lane: "legacy" as const };
+      return actual.resolvePad(key, t);
+    },
   };
 });
 
-describe("ScorePad — the v3 lane renders PadHostV3, never PadRenderer (R2/task B)", () => {
+describe("ScorePad — the v3 lane renders PadHostV3 with the resolved skin (R2/task B)", () => {
   const home: SideInfo = { id: "ent-h", name: "Home", lineup: [], members: [] };
   const away: SideInfo = { id: "ent-a", name: "Away", lineup: [], members: [] };
   const genericConfig = { resultMode: "win_loss", allowDraws: false, points: { w: 3, d: 1, l: 0 }, progressScore: false };
 
-  it("a sportKey resolvePad reports as v3 renders PadHostV3 with the resolved skin — the legacy PadRenderer path is never reached", () => {
+  it("a sportKey resolvePad reports as v3 renders PadHostV3 with the resolved skin", () => {
     const island = renderIsland(ScorePad, {
       fixtureId: "fx-1",
       sportKey: "generic",
@@ -423,9 +323,32 @@ describe("ScorePad — the v3 lane renders PadHostV3, never PadRenderer (R2/task
     });
     const [output] = island.tree();
     expect(output?.type).toBe(PadHostV3);
-    expect(output?.type).not.toBe(PadRenderer);
     expect((output?.props as { skin?: unknown }).skin).toBe(FAKE_V3_SKIN);
     expect((output?.props as { fixtureId?: unknown }).fixtureId).toBe("fx-1");
     expect((output?.props as { queueDbName?: unknown }).queueDbName).toBe("scorepad-fx-1");
+  });
+
+  // R7 lane demolition: registry.tsx's own "legacy" branch used to render
+  // `<PadRenderer/>`; with that renderer deleted (no sport resolves to
+  // "legacy" today — `v3/__tests__/registry-totality.test.ts` pins
+  // `LEGACY_SPORTS.size` at 0), the branch is now a loud throw instead of a
+  // silent fallback to a component that no longer exists. Reached here only
+  // by mocking `resolvePad` — there is no real sportKey that takes this path.
+  it("a sportKey resolvePad reports as legacy throws, rather than silently rendering nothing", () => {
+    expect(() =>
+      renderIsland(ScorePad, {
+        fixtureId: "fx-1",
+        sportKey: "cricket", // mocked above to force the "legacy" lane
+        moduleVersion: "1.0.0",
+        resolvedConfig: genericConfig,
+        home,
+        away,
+        initialEvents: [],
+        auth: { kind: "session" as const },
+        identity: { recordedBy: "user-1", deviceLinkId: null },
+        entitlements: {},
+        band: 3 as const,
+      }),
+    ).toThrow(/legacy pad lane/);
   });
 });
