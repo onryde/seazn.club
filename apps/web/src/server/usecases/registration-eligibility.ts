@@ -87,6 +87,7 @@ import {
   requiresDob,
   requiresGender,
   rosterCompositionIssues,
+  seasonStartYearFrom,
   type EligibilityCode,
   type EligibilityIssue,
   type EligibilityPerson,
@@ -95,7 +96,10 @@ import {
 type Tx = postgres.TransactionSql;
 
 // Re-exported verbatim so every existing importer of THIS file keeps
-// compiling unchanged — see the header comment above.
+// compiling unchanged — see the header comment above. `seasonStartYearFrom`
+// (RS011 review round 3, finding 6) moved to `@/lib/registration-rules`
+// alongside its own byte-for-byte duplicate in `registration-submit.ts`,
+// same "one evaluator, two halves" shape.
 export {
   ageAt,
   isMinor,
@@ -105,6 +109,7 @@ export {
   ageBandEligibilityIssues,
   mixedCompositionTally,
   rosterCompositionIssues,
+  seasonStartYearFrom,
 };
 export type { EligibilityCode, EligibilityIssue, EligibilityPerson };
 
@@ -238,17 +243,6 @@ export function splitEligibilityIssues(issues: EligibilityIssue[]): {
   const warnings = issues.filter((i) => WARNING_ONLY_CODES.has(i.code));
   const violations = issues.filter((i) => !WARNING_ONLY_CODES.has(i.code));
   return { violations, warnings };
-}
-
-/** Season anchor for the age band's cutoff — the competition's start date,
- *  or this year if unset. Same derivation `registration-submit.ts`'s
- *  (module-private) `seasonStartYear` uses; duplicated here as one line
- *  rather than exported from a submit-path module an organiser-side gate
- *  has no business importing. Exported so `teams.ts`/`imports.ts` (which
- *  evaluate divisions without going through `gateRosterEligibility`) anchor
- *  the SAME cutoff this file's own gate does. */
-export function seasonStartYearFrom(startsOnIso: string | null): number {
-  return startsOnIso ? new Date(`${startsOnIso}T00:00:00Z`).getUTCFullYear() : new Date().getUTCFullYear();
 }
 
 /** A `divisions` row joined to its competition's `starts_on`, as

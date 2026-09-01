@@ -47,6 +47,7 @@ import {
   requiresGender,
   rosterIssues,
   formatEligibilityIssues,
+  seasonStartYearFrom,
   type EligibilityIssue,
 } from "./registration-eligibility";
 
@@ -320,14 +321,6 @@ async function loadEntryDivisionCtx(divisionId: string): Promise<EntryDivisionCt
   return row;
 }
 
-/** Season anchor for the age band's cutoff (`ageBandEligibilityIssues`,
- *  `@/lib/registration-rules`) — same derivation old `submitRegistration`'s
- *  (deleted) `seasonStartYear` used: the competition's start date, or this
- *  year if unset. */
-function seasonStartYear(ctx: { starts_on: string | null }): number {
-  return ctx.starts_on ? new Date(`${ctx.starts_on}T00:00:00Z`).getUTCFullYear() : new Date().getUTCFullYear();
-}
-
 function eligibilityError(issues: EligibilityIssue[]): HttpError {
   return new HttpError(422, formatEligibilityIssues(issues).join(" "), "ELIGIBILITY", { violations: issues });
 }
@@ -471,7 +464,7 @@ export async function submitRegistrationGroup(
   }
   const orgId = first.org_id;
   const competitionId = first.competition_id;
-  const seasonYear = seasonStartYear(first);
+  const seasonYear = seasonStartYearFrom(first.starts_on);
 
   const settingsById = new Map<string, SubmitSettingsRow>();
   for (const id of distinctDivisionIds) {
@@ -1189,7 +1182,7 @@ export async function joinTeamEntry(
       age_cutoff_day: divCtx.age_cutoff_day,
     },
     { dob: input.player.dob, gender: input.player.gender },
-    seasonStartYear(divCtx),
+    seasonStartYearFrom(divCtx.starts_on),
   );
   if (issues.length > 0) throw eligibilityError(issues);
 

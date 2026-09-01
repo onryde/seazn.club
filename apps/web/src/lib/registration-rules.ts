@@ -326,6 +326,35 @@ export function ageBandEligibilityIssues(
 }
 
 /**
+ * Season anchor for the age band's cutoff — the competition's start date,
+ * or this year if unset (`ageBandEligibilityIssues` above anchors at 1
+ * January of this year when the division sets no cutoff month/day).
+ *
+ * RS011 review round 3, finding 6: promoted here from being byte-for-byte
+ * duplicated in TWO server usecase files — `registration-eligibility.ts`'s
+ * own (exported) `seasonStartYearFrom` and `registration-submit.ts`'s
+ * private `seasonStartYear` computed the literal same expression. Defined
+ * ONCE, client-safe, alongside every other predicate this file already
+ * shares between the server-only eligibility evaluator and the public
+ * stepper. `registration-eligibility.ts` re-exports this verbatim (same "one
+ * evaluator, two halves" shape every other predicate here uses) so
+ * `imports.ts`/`teams.ts`, which import `seasonStartYearFrom` from there,
+ * keep compiling unchanged.
+ *
+ * NOT the same function as `components/public-site/register/eligibility-
+ * presentation.ts`'s OWN `seasonStartYearFrom` — that one additionally
+ * accepts an injectable `now` (for its own tests) and falls back on an
+ * unparsable `starts_on` string rather than only a null one. Two genuinely
+ * different behaviours were never the duplicate this fix closes; only the
+ * server-usecase pair was.
+ */
+export function seasonStartYearFrom(startsOnIso: string | null): number {
+  return startsOnIso
+    ? new Date(`${startsOnIso}T00:00:00Z`).getUTCFullYear()
+    : new Date().getUTCFullYear();
+}
+
+/**
  * Roster-wide gender tally — at least one player recorded as `m`, at least
  * one recorded as `f`. `x` and null/undefined count toward NEITHER side
  * (owner ruling, RS002 — mirrored from `categoryEligibilityIssues`'s "x
