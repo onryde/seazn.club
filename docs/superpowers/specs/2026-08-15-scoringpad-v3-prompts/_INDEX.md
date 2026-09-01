@@ -6451,3 +6451,48 @@ Two things this does NOT change:
 Recorded because the original wording would have had an implementer hunting a
 blank-render bug that does not exist, and because the owner approved the fix
 against the stronger claim. Re-confirm before dispatch.
+
+### R7-40a — OWNER RULING: `moves` is DROPPED. Pad surface removed, schema field kept
+
+Owner ruled 2026-09-01, after asking what `moves` actually was — a fair
+question the entry had not answered plainly. It is ONE INTEGER: the move number
+the scoresheet finished on (FIDE Art. 8.1), 0-400. The game's LENGTH, not the
+moves themselves — per-ply recording is explicitly out of scope in the module's
+own comment. An arbiter typed "41", never "1. e4 e5".
+
+Ruling: **drop it.** It affects no result, standing or computation; it is
+provenance on the game record, and the pad's premise is that recording costs
+one tap. A correction tile for a single optional integer nothing downstream
+reads is not worth its surface.
+
+**IMPLEMENTED WITH A BOUNDARY THE RULING DID NOT NAME, and the boundary is the
+point.** "Drop it" removes the CAPABILITY, and must not break REPLAY:
+
+- REMOVED — the two `padSpec` field declarations
+  (`{kind: "number", path: "moves", min: 0, max: MOVES_MAX}` on both the
+  decisive and drawn result actions) and the now-orphaned `MOVES_MAX`. This is
+  what made it declared-and-unreachable; nothing declares it now.
+- REMOVED — the three orphaned dictionary keys across all four locales
+  (`sheet.result.moves.hint`, `sheet.result.moves.title`,
+  `sheet.result.winner.title`), left over from the tapModel T sheet, plus their
+  three lines in the generated union. Parity 5731 -> 5728.
+- **KEPT — `BoardgameResult.moves` in the Zod schema.** `BoardgameResult` is a
+  `strictObject`. Every `boardgame.result` already recorded with a `moves`
+  value — including streams in the FROZEN GOLDEN CORPUS — must keep validating
+  and replaying, and removing the field would reject them. The field is now
+  accepted on the way IN and never asked for by the pad. That is backward
+  compatibility, NOT an inert declaration, and the module comment says so at
+  the field so nobody "tidies" it away later.
+- **KEPT — the ribbon's `moves` render** (`skins/boardgame.tsx:559`,
+  `pad.boardgame.ribbon.moves`). A historical event carrying the number still
+  DISPLAYS it. Read stays, write goes. The skin already handled this
+  defensively and its own comment names the case.
+
+**The engine schema snapshot did NOT drift** — verified by regenerating it:
+`boardgame.schema.json` derives from the Zod schema, not from `padSpec`, so
+keeping the field kept the snapshot byte-identical and CI's `#429` drift gate
+stays green. Worth recording: the snapshot would NOT have caught this removal
+either way, so it is not the gate protecting replay here — the kept field is.
+
+Verified: engine 4194/4207 failed 0; apps/web 9862/13125 failed 0; tsc clean;
+lint 126 warnings 0 errors; i18n parity 5728 keys.
