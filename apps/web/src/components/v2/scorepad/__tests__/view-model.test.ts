@@ -11,7 +11,7 @@ import { defaultLineupPair, makeEnvelope } from "@seazn/engine/testkit";
 import { cricket } from "@seazn/engine/sports/cricket";
 import { tennis } from "@seazn/engine/sports/tennis";
 import { foldClient, resolveModuleClient } from "../module-client";
-import { createSkinDispatch } from "../skins/types";
+import { createSkinDispatch } from "../v3/skin-dispatch";
 import {
   allActionViews,
   buildActionPayload,
@@ -61,7 +61,8 @@ describe("buildPadView — phase scoping", () => {
 
 // R7 defect fix — the "pad offers what the engine refuses" class R2c closed
 // three instances of. Before `everyPhase` (generic.ts), `createSkinDispatch`
-// (skins/types.ts) refused every generic.score/generic.result tap in "pre"
+// (v3/skin-dispatch.ts, migrated from skins/types.ts in R8) refused every
+// generic.score/generic.result tap in "pre"
 // phase with "skin dispatched an action the spec does not declare at this
 // phase... Declared here: (none)", even though `applyScore`/`applyResult`
 // (generic.ts) both accept "pre" — the FOLD and the PAD disagreed.

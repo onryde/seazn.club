@@ -8,12 +8,11 @@
 // (`pad-renderer.tsx`, `skins/registry.ts`'s `skinFor`, the
 // `resolveScorePad`/`RESOLUTION_KIND`/`NO_V2_SKIN_SPORTS` decision table that
 // used to live here) once carrom — the last of the 11 engine sports — landed
-// its own v3 skin (`v3/registry.ts`'s `V3_SKINS`, R7/A3). `resolvePad`
-// (`v3/registry.ts`) now resolves EVERY `builtinModules` key to the "v3"
-// lane; its "legacy" arm is provably unreachable today
-// (`v3/__tests__/registry-totality.test.ts` pins `LEGACY_SPORTS.size` at 0)
-// and is handled below with a loud throw rather than silently rendering
-// nothing, in case a future engine sport ever ships without a v3 skin.
+// its own v3 skin (`v3/registry.ts`'s `V3_SKINS`, R7/A3). R8 finished the
+// job: `resolvePad` (`v3/registry.ts`) no longer HAS a "legacy" arm to fall
+// through to — it returns a v3 skin for every `builtinModules` key
+// directly, or throws for a key `V3_SKINS` does not own, in case a future
+// engine sport ever ships without a v3 skin.
 import { useCallback, useMemo } from "react";
 import type { EventEnvelope, Lineup, LineupPair, LineupSlot } from "@seazn/engine/core";
 import type { AnySportModule, FidelityBand } from "@seazn/engine/sport";
@@ -233,20 +232,13 @@ export function ScorePad(props: ScorePadProps) {
   //
   // R1 shipped six chassis primitives with zero production import sites;
   // this is that import site — `PadHostV3` (./v3/pad-host.tsx). R2 through
-  // R7/A3 (carrom, 2026-08-31) moved every sport onto it one at a time;
-  // `v3/registry.ts`'s own `LEGACY_SPORTS` is now provably empty
-  // (`__tests__/registry-totality.test.ts` pins its size at 0), so
-  // `padLane.lane` is "v3" for every real call today. The "legacy" arm below
-  // is a defensive throw, not a real branch: it would only fire for a future
-  // engine sport that ships without ever getting a v3 skin, which is exactly
-  // the situation `resolvePad`'s own header says should never be silent.
-  const padLane = resolvePad(props.sportKey, t);
-
-  if (padLane.lane !== "v3") {
-    throw new Error(
-      `ScorePad: "${props.sportKey}" resolved to the legacy pad lane, which no longer exists (R7 demolished it — see this file's own header)`,
-    );
-  }
+  // R7/A3 (carrom, 2026-08-31) moved every sport onto it one at a time, and
+  // R8 deleted the legacy lane `resolvePad` used to fall back to outright —
+  // it returns a v3 skin directly now, or throws, with no wrapper to check
+  // here (a future engine sport that ships without ever getting a v3 skin
+  // still fails loudly, just inside `resolvePad` itself rather than at a
+  // second check on this side).
+  const skin = resolvePad(props.sportKey, t);
 
   return (
     <PadHostV3
@@ -264,7 +256,7 @@ export function ScorePad(props: ScorePadProps) {
       personNames={personNames}
       showActivity={!props.hideActivity}
       onPartialResolver={props.onPartialResolver}
-      skin={padLane.skin}
+      skin={skin}
     />
   );
 }

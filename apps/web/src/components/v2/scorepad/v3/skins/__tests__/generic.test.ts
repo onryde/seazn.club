@@ -22,7 +22,7 @@ import { PAD_LABEL_KEYS } from "@/lib/scoring-vocab";
 import { foldClient } from "../../../module-client";
 import { dedicatedEventTypes, entitledBandsFrom, moreActions, suppressEmptyMoreTile } from "../../pad-host";
 import { buildRecording } from "../../recording-chip";
-import { LEGACY_SPORTS, resolvePad } from "../../registry";
+import { resolvePad } from "../../registry";
 import { ribbonKeyFor } from "../../ribbon";
 import { MORE_SHEET_KEY, assertScorebugSpec, type PadHostView, type TileSpec } from "../../types";
 import {
@@ -834,17 +834,10 @@ describe("genericDetail", () => {
 
 describe("registry", () => {
   it("resolves generic to the v3 lane, and hands back a real skin", () => {
-    const lane = resolvePad("generic", t);
-    expect(lane.lane).toBe("v3");
-    if (lane.lane === "v3") {
-      expect(lane.skin.key).toBe("generic");
-      expect(lane.skin.tapModel).toBe("S");
-      expect(typeof lane.skin.phase).toBe("function");
-    }
-  });
-
-  it("no longer routes generic down the legacy lane", () => {
-    expect(LEGACY_SPORTS.has("generic")).toBe(false);
+    const skin = resolvePad("generic", t);
+    expect(skin.key).toBe("generic");
+    expect(skin.tapModel).toBe("S");
+    expect(typeof skin.phase).toBe("function");
   });
 });
 

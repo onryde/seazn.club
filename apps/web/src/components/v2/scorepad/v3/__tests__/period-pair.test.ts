@@ -2039,13 +2039,11 @@ describe("every dictionary key the two skins can emit exists in all four locales
 
 describe("the registry flip", () => {
   it("both keys resolve to a v3 skin, from a FACTORY the registry never calls itself", async () => {
-    const { V3_SKINS, LEGACY_SPORTS, resolvePad } = await import("../registry");
+    const { V3_SKINS, resolvePad } = await import("../registry");
     for (const sport of SPORTS) {
       expect(typeof V3_SKINS[sport.key], `${sport.key} is not a factory`).toBe("function");
-      expect(LEGACY_SPORTS.has(sport.key), `${sport.key} is double-owned`).toBe(false);
       const resolved = resolvePad(sport.key, T);
-      expect(resolved.lane).toBe("v3");
-      expect(resolved.lane === "v3" && resolved.skin.key).toBe(sport.key);
+      expect(resolved.key).toBe(sport.key);
     }
   });
 

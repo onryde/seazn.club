@@ -259,13 +259,13 @@ describe("lineupPairFrom: pairOrder reaches the client LineupSlot (S12/#421 pass
 // conversion is a later task), so there is no REAL sport this file can
 // exercise the branch through without mutating that registry. Mocking
 // `resolvePad` for a single sportKey proves the ROUTING decision itself
-// (mutation-relevant: a mutant swapping `padLane.lane === "v3"` for
-// `=== "legacy"`, or forgetting to thread `skin`, changes this test's
-// outcome) — `PadHostV3`'s own body never runs here (renderIsland invokes
-// `ScorePad` ONE level deep, per _hook-harness.tsx's own doc; `<PadHostV3
-// .../>` below is only ever a REACT ELEMENT this test inspects, never
-// called), which is exactly the intended split: the shell is e2e's job, the
-// routing decision is this file's.
+// (mutation-relevant: forgetting to thread the resolved `skin` through to
+// `<PadHostV3/>` changes this test's outcome) — `PadHostV3`'s own body
+// never runs here (renderIsland invokes `ScorePad` ONE level deep, per
+// _hook-harness.tsx's own doc; `<PadHostV3 .../>` below is only ever a
+// REACT ELEMENT this test inspects, never called), which is exactly the
+// intended split: the shell is e2e's job, the routing decision is this
+// file's.
 const FAKE_V3_SKIN: SkinDefV3 = {
   key: "generic",
   tapModel: "S",
@@ -289,14 +289,8 @@ vi.mock("../v3/registry", async (importOriginal) => {
     // R2/task E: resolvePad now takes a live translator too (v3/registry.ts's
     // own header explains why) — this fake sportKey never reaches a real
     // skin's own string-building, so a no-op stand-in is fine either way.
-    // "cricket" is forced to "legacy" here (real module, so
-    // `resolveModuleClient` still succeeds and the mock actually reaches
-    // registry.tsx's own throw) — there is no real sportKey that resolves to
-    // "legacy" any more (`LEGACY_SPORTS.size` is 0), so this is the only way
-    // to exercise that branch at all.
     resolvePad: (key: string, t: (k: string) => string) => {
-      if (key === "generic") return { lane: "v3" as const, skin: FAKE_V3_SKIN };
-      if (key === "cricket") return { lane: "legacy" as const };
+      if (key === "generic") return FAKE_V3_SKIN;
       return actual.resolvePad(key, t);
     },
   };
@@ -326,29 +320,5 @@ describe("ScorePad — the v3 lane renders PadHostV3 with the resolved skin (R2/
     expect((output?.props as { skin?: unknown }).skin).toBe(FAKE_V3_SKIN);
     expect((output?.props as { fixtureId?: unknown }).fixtureId).toBe("fx-1");
     expect((output?.props as { queueDbName?: unknown }).queueDbName).toBe("scorepad-fx-1");
-  });
-
-  // R7 lane demolition: registry.tsx's own "legacy" branch used to render
-  // `<PadRenderer/>`; with that renderer deleted (no sport resolves to
-  // "legacy" today — `v3/__tests__/registry-totality.test.ts` pins
-  // `LEGACY_SPORTS.size` at 0), the branch is now a loud throw instead of a
-  // silent fallback to a component that no longer exists. Reached here only
-  // by mocking `resolvePad` — there is no real sportKey that takes this path.
-  it("a sportKey resolvePad reports as legacy throws, rather than silently rendering nothing", () => {
-    expect(() =>
-      renderIsland(ScorePad, {
-        fixtureId: "fx-1",
-        sportKey: "cricket", // mocked above to force the "legacy" lane
-        moduleVersion: "1.0.0",
-        resolvedConfig: genericConfig,
-        home,
-        away,
-        initialEvents: [],
-        auth: { kind: "session" as const },
-        identity: { recordedBy: "user-1", deviceLinkId: null },
-        entitlements: {},
-        band: 3 as const,
-      }),
-    ).toThrow(/legacy pad lane/);
   });
 });

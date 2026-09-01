@@ -28,7 +28,7 @@ import uiEn from "@/dictionaries/en/ui.json";
 import { PAD_LABEL_KEYS } from "@/lib/scoring-vocab";
 import { foldClient } from "../../../module-client";
 import { dedicatedEventTypes, moreActions } from "../../pad-host";
-import { LEGACY_SPORTS, resolvePad } from "../../registry";
+import { resolvePad } from "../../registry";
 import { ribbonKeyFor } from "../../ribbon";
 import { assertScorebugSpec, type DockSpec, type PadHostView, type TileSpec } from "../../types";
 import {
@@ -700,18 +700,10 @@ describe("carromDetail", () => {
 
 describe("registry", () => {
   it("resolves carrom to the v3 lane, and hands back a real, tapModel-T skin", () => {
-    const lane = resolvePad("carrom", t);
-    expect(lane.lane).toBe("v3");
-    if (lane.lane === "v3") {
-      expect(lane.skin.key).toBe("carrom");
-      expect(lane.skin.tapModel).toBe("T");
-      expect(typeof lane.skin.phase).toBe("function");
-    }
-  });
-
-  it("no longer routes carrom down the legacy lane — it was the LAST sport on it", () => {
-    expect(LEGACY_SPORTS.has("carrom")).toBe(false);
-    expect(LEGACY_SPORTS.size).toBe(0);
+    const skin = resolvePad("carrom", t);
+    expect(skin.key).toBe("carrom");
+    expect(skin.tapModel).toBe("T");
+    expect(typeof skin.phase).toBe("function");
   });
 });
 

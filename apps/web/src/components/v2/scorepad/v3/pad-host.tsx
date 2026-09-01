@@ -17,9 +17,9 @@
 // action, a guided sheet's completed wizard, a generic action-form
 // confirm, a swap's built event, a context-strip selection the skin turns
 // into an event — goes through ONE gateway: `dispatch`, built from
-// `createSkinDispatch(padView, heldSubmit)` (skins/types.ts, reused
-// verbatim — "a skin cannot invent an event" holds here exactly as it
-// does for every v2 skin). `heldSubmit` calls `pipeline.submitHeld`
+// `createSkinDispatch(padView, heldSubmit)` (skin-dispatch.ts, migrated
+// here from skins/types.ts in R8 — "a skin cannot invent an event" holds
+// here exactly as it did for every v2 skin). `heldSubmit` calls `pipeline.submitHeld`
 // (use-pad-pipeline.ts) — the optimistic fold advances immediately,
 // durable enqueue happens immediately, the actual network send is
 // deferred `HOLD_MS` (queue.ts's chassis constant) unless the dock is
@@ -58,7 +58,7 @@ import { buildPadView, summaryHeadline, type PadActionView, type PadViewCtx } fr
 // exactly where the legacy and v3 lanes would start to disagree about which
 // squad a football pad is reading.
 import { isSquadState } from "../attribution-picker";
-import { createSkinDispatch } from "../skins/types";
+import { createSkinDispatch } from "./skin-dispatch";
 import { ActionFormList } from "./action-form";
 import { Scorebug } from "./scorebug";
 import { TileGrid } from "./tile-grid";
@@ -351,8 +351,8 @@ export function dedicatedEventTypes(
  *  exactly like the panel walk `buildPadView` already does for the legacy
  *  renderer — reused verbatim, never re-derived. De-duplicated by type: a
  *  module may legitimately declare the same wire type more than once across
- *  panels (skins/types.ts's own `actionByType` doc); the FIRST resolved view
- *  wins, same "first match" convention that file already documents.
+ *  panels; the FIRST resolved view wins, the same "first match" convention
+ *  the v2 skin contract (deleted, R8) used to document.
  *
  *  TWO EXCLUSION SETS, ON PURPOSE (R3 review round). `dedicated` is "already
  *  reachable through a narrowed surface" — see `dedicatedEventTypes` above.
@@ -1467,7 +1467,7 @@ export function PadHostV3(props: PadHostV3Props) {
    * produced no event, no banner, no console line, and no clue. The volleyball
    * libero swap hit exactly that: the sheet closed on a completed off/on pick
    * and NOTHING was written. The type gate is fixed at its own end
-   * (`skins/types.ts`'s `KERNEL_DISPATCHABLE`), but a swallow that turns any
+   * (`skin-dispatch.ts`'s `KERNEL_DISPATCHABLE`), but a swallow that turns any
    * future dispatch fault into a silent no-op is the deeper defect, so it is
    * closed here rather than only at the one type that tripped it.
    *

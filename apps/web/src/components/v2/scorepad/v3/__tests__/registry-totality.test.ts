@@ -1,32 +1,38 @@
 // R1 chassis (Task 2) — the totality gate: every engine sport key must
-// resolve to EXACTLY ONE pad lane (v3 or legacy), never both, never
-// neither. R1 converted no sports: LEGACY_SPORTS named every builtinModules
-// key and V3_SKINS stayed empty, so every key resolved "legacy". R2/task E
-// moves cricket — the gate's job stays the same: turn "a 12th engine sport
-// ships with no lane" (or a double-owned key, or a half-finished flip) into
-// a CI failure instead of a silent fallthrough.
-// Mutation-proved in task-2-report.md (R1, the empty-registry shape) and
-// again for R2/task E's flip — see the task report for the three pasted
-// reds (double-owned / unowned / cricket-still-legacy), each produced by a
-// temporary hand edit to ../registry.ts, reverted immediately after.
+// resolve to a v3 skin (V3_SKINS), never nothing. R1 converted no sports:
+// V3_SKINS was empty and every real call fell through to a `LEGACY_SPORTS`
+// table that routed to the now-demolished v2/universal renderer
+// (../../registry.tsx's own header has the full record). Waves R2 through
+// R7/A3 (carrom, 2026-08-31) moved one sport at a time into V3_SKINS until
+// it named all eleven `builtinModules` keys; R8 (this task) deleted
+// `LEGACY_SPORTS`, its `CONVERTED_SPORTS` companion, and the "legacy"
+// resolution arm outright — with every key already owned by `V3_SKINS`,
+// that branch had been provably unreachable since R7/A3. This gate's job
+// narrows to what's left: turn "a 12th engine sport ships with no skin" (or
+// a synthetic unowned key) into a CI failure instead of a silent
+// fallthrough.
+// Mutation-proved in task-2-report.md (R1, the empty-registry shape), again
+// for R2/task E's flip (cricket), and again here for the R8 discharge — see
+// task-A-report.md for the pasted reds.
 import { describe, it, expect } from "vitest";
 // Scout re-pin (2026-08-16): the engine's canonical sport-key source is
 // `builtinModules`, imported exactly as registry.test.tsx:11 already does —
 // NOT a hand-copied list of the 11 sport names.
 import { builtinModules } from "@seazn/engine/sports";
-import { V3_SKINS, LEGACY_SPORTS, resolvePad, type PadLaneResolution } from "../registry";
+import { V3_SKINS, resolvePad } from "../registry";
+import type { SkinDefV3 } from "../types";
 import { cricketSkinV3 } from "../skins/cricket";
 import { footballSkinV3 } from "../skins/football";
 import { tennisSkinV3 } from "../skins/tennis";
 
 // A dummy, no-op translator. Every test in this file cares only about LANE
-// resolution (v3 vs legacy vs throw) or the TYPE shape of what V3_SKINS/
-// resolvePad accept — never about a resolved skin's own copy — so nothing
-// here needs a real dictionary.
+// resolution (v3 vs throw) or the TYPE shape of what V3_SKINS/resolvePad
+// accept — never about a resolved skin's own copy — so nothing here needs a
+// real dictionary.
 const T = (key: string): string => key;
 
 describe("registry totality", () => {
-  it("every engine sport resolves to exactly one lane", () => {
+  it("every engine sport resolves to a real v3 skin, from V3_SKINS' own factory", () => {
     // Task 11 fix batch (deferred from Task 2's review): this gate has no
     // floor assertion on its own key source — an empty `builtinModules`
     // import would skip the loop below entirely and still report a
@@ -36,11 +42,13 @@ describe("registry totality", () => {
     expect(builtinModules.length).toBeGreaterThan(0);
     for (const m of builtinModules) {
       const key = m.key;
-      const inV3 = key in V3_SKINS;
-      const inLegacy = LEGACY_SPORTS.has(key);
-      expect(inV3 || inLegacy, `${key} unowned`).toBe(true);
-      expect(inV3 && inLegacy, `${key} double-owned`).toBe(false);
-      expect(resolvePad(key, T).lane).toBe(inV3 ? "v3" : "legacy");
+      expect(key in V3_SKINS, `${key} not owned by V3_SKINS`).toBe(true);
+      // Drives the REAL factory, not just membership — a mismatched or
+      // half-wired factory (the wrong sport's skin assigned to this key)
+      // still reds here even though `key in V3_SKINS` alone would not
+      // catch it.
+      const skin = resolvePad(key, T);
+      expect(skin.key, `${key} resolved to a skin for a different sport`).toBe(key);
     }
   });
 
@@ -53,140 +61,9 @@ describe("registry totality", () => {
     // V3_SKINS` and `V3_SKINS["constructor"]` both read the INHERITED
     // Object.prototype.constructor, so this key resolved truthy though it
     // was never inserted — resolvePad("constructor") returned a bogus
-    // { lane: "v3", skin: Object } instead of throwing.
+    // skin instead of throwing.
     expect("constructor" in V3_SKINS).toBe(false);
     expect(() => resolvePad("constructor", T)).toThrow(/no pad lane/);
-  });
-
-  // R2/task E — the wave's actual deliverable, not merely structural
-  // self-consistency. The generic sweep above only proves resolvePad AGREES
-  // with V3_SKINS/LEGACY_SPORTS' own membership, whatever that membership
-  // happens to say — it would stay green even if this task shipped without
-  // actually flipping cricket (cricket would simply read `inV3: false,
-  // inLegacy: true`, and the loop's own `inV3 ? "v3" : "legacy"` check would
-  // agree with itself and never notice). This pin is independent of that
-  // membership check: it hardcodes the wave's own intended answer, so a
-  // regression that leaves cricket in the legacy lane (while V3_SKINS/
-  // LEGACY_SPORTS still structurally agree with each other) still reds.
-  it("cricket specifically resolves to the v3 lane, not legacy — R2's own flip", () => {
-    expect(resolvePad("cricket", T).lane).toBe("v3");
-  });
-
-  // R3/task B2 — the wave's deliverable, pinned independently of the
-  // structural sweep above for the reason cricket's own pin states: that sweep
-  // only proves resolvePad AGREES with V3_SKINS/LEGACY_SPORTS' membership,
-  // whatever it happens to say, so a task that shipped without actually
-  // flipping football would keep it green.
-  it("football specifically resolves to the v3 lane, not legacy — this wave's own flip", () => {
-    expect(resolvePad("football", T).lane).toBe("v3");
-  });
-
-  // R4/tennis — this wave's own deliverable, pinned independently of the
-  // structural sweep above for the same reason cricket's and football's own
-  // pins state: that sweep only proves resolvePad AGREES with V3_SKINS/
-  // LEGACY_SPORTS' membership, whatever it happens to say, so a task that
-  // shipped without actually flipping tennis would keep it green.
-  it("tennis specifically resolves to the v3 lane, not legacy — this wave's own flip", () => {
-    expect(resolvePad("tennis", T).lane).toBe("v3");
-  });
-
-  // R5/badminton — this wave's own deliverable, pinned independently of the
-  // structural sweep above for the same reason every flip before it is: that
-  // sweep only proves resolvePad AGREES with V3_SKINS/LEGACY_SPORTS'
-  // membership, whatever it happens to say, so a task that shipped without
-  // actually flipping badminton would keep it green.
-  it("badminton specifically resolves to the v3 lane, not legacy — this wave's own flip", () => {
-    expect(resolvePad("badminton", T).lane).toBe("v3");
-  });
-
-  // R5/C2 — table tennis, this wave's own deliverable, pinned independently
-  // of the structural sweep above for the same reason every flip before it
-  // is: that sweep only proves resolvePad AGREES with V3_SKINS/
-  // LEGACY_SPORTS' membership, whatever it happens to say, so a task that
-  // shipped without actually flipping table tennis would keep it green.
-  it("table tennis specifically resolves to the v3 lane, not legacy — this wave's own flip", () => {
-    expect(resolvePad("tabletennis", T).lane).toBe("v3");
-  });
-
-  // R5/C3 — volleyball, this wave's own deliverable, pinned independently of
-  // the structural sweep above for the same reason every flip before it is:
-  // that sweep only proves resolvePad AGREES with V3_SKINS/LEGACY_SPORTS'
-  // membership, whatever it happens to say, so a task that shipped without
-  // actually flipping volleyball would keep it green. This closes out the
-  // racquet family: volleyball is the third and last `sports/setbased`
-  // sibling, and `racquet-skin.tsx` (v2) is now unreferenced by any sport.
-  it("volleyball specifically resolves to the v3 lane, not legacy — this wave's own flip", () => {
-    expect(resolvePad("volleyball", T).lane).toBe("v3");
-  });
-
-  it("hockey and ice hockey specifically resolve to the v3 lane — R6 flips the period pair in ONE change", () => {
-    // BOTH, in one assertion, deliberately: the two share
-    // `skins/period-shared.ts`, so a half-flipped pair would leave that module
-    // carrying a sport whose pad never reaches it — the shape this programme
-    // calls an inert seam.
-    expect(resolvePad("hockey", T).lane).toBe("v3");
-    expect(resolvePad("icehockey", T).lane).toBe("v3");
-  });
-
-  // R7/A1 — generic, this wave's own deliverable, pinned independently of the
-  // structural sweep below for the same reason every flip before it is: that
-  // sweep only proves resolvePad AGREES with V3_SKINS/LEGACY_SPORTS'
-  // membership, whatever it happens to say, so a task that shipped without
-  // actually flipping generic would keep it green. Generic is NOT a fallback
-  // — it is a first-class catalog entry, and the first sport to leave
-  // `../../registry.tsx`'s own `RESOLUTION_KIND: "universal"` lane, which now
-  // serves carrom and boardgame alone.
-  it("generic specifically resolves to the v3 lane, not legacy — this wave's own flip", () => {
-    expect(resolvePad("generic", T).lane).toBe("v3");
-  });
-
-  // R7/A2 — boardgame, this wave's own deliverable, pinned independently of
-  // the structural sweep below for the same reason every flip before it is:
-  // that sweep only proves resolvePad AGREES with V3_SKINS/LEGACY_SPORTS'
-  // membership, whatever it happens to say, so a task that shipped without
-  // actually flipping boardgame would keep it green. This leaves
-  // `../../registry.tsx`'s own `RESOLUTION_KIND: "universal"` lane serving
-  // carrom alone.
-  it("boardgame specifically resolves to the v3 lane, not legacy — this wave's own flip", () => {
-    expect(resolvePad("boardgame", T).lane).toBe("v3");
-  });
-
-  // R7/A3 — carrom, this wave's own deliverable, pinned independently of the
-  // structural sweep below for the same reason every flip before it is: that
-  // sweep only proves resolvePad AGREES with V3_SKINS/LEGACY_SPORTS'
-  // membership, whatever it happens to say, so a task that shipped without
-  // actually flipping carrom would keep it green. Carrom is the ELEVENTH and
-  // LAST engine sport to leave `../../registry.tsx`'s own
-  // `RESOLUTION_KIND: "universal"` lane, which now serves nobody.
-  it("carrom specifically resolves to the v3 lane, not legacy — this wave's own flip, and the LAST sport off the universal lane", () => {
-    expect(resolvePad("carrom", T).lane).toBe("v3");
-  });
-
-  it("every other builtinModules sport still resolves to legacy — CARROM WAS THE LAST ONE: this set now names all eleven shipped sports, and LEGACY_SPORTS is empty", () => {
-    const converted = new Set([
-      "cricket",
-      "football",
-      "tennis",
-      "badminton",
-      "tabletennis",
-      "volleyball",
-      "hockey",
-      "icehockey",
-      "generic",
-      "boardgame",
-      "carrom",
-    ]);
-    const others = builtinModules.map((m) => m.key).filter((key) => !converted.has(key));
-    // `others` is EMPTY, not merely small — carrom (R7/A3) was the last sport
-    // left on the legacy lane, per boardgame's own pin above ("...serving
-    // carrom alone"). A `for` loop over an empty array would assert nothing
-    // and stay green even if this whole gate were deleted, so the emptiness
-    // itself is the assertion — not a guard wrapped around a now-vacuous
-    // loop. `LEGACY_SPORTS` (../registry.ts) is asserted directly alongside
-    // it, since `others` and `LEGACY_SPORTS` are two independently-derived
-    // sets that must now agree on the same empty answer.
-    expect(others).toEqual([]);
-    expect(LEGACY_SPORTS.size).toBe(0);
   });
 });
 
@@ -259,14 +136,13 @@ describe("type-level: an un-called v3 skin factory cannot stand in for a resolve
     expect(bad).toBeTruthy();
   });
 
-  it("an un-called factory is not a valid PadLaneResolution.skin either — the boundary that actually reaches PadHostV3", () => {
-    // @ts-expect-error — even if V3_SKINS's own type were loosened,
-    // resolvePad's RETURN must still refuse to hand PadHostV3 a bare
-    // function where it expects an object with a `.scorebug` method: this
+  it("an un-called factory is not a valid resolvePad return either — the boundary that actually reaches PadHostV3", () => {
+    // @ts-expect-error — even after R8's wrapper removal, resolvePad's
+    // RETURN is a resolved `SkinDefV3`, never a bare factory function: this
     // is the line "do NOT assign the bare factory object into V3_SKINS" is
     // actually protecting downstream of the map itself. If this ever stops
     // erroring, `npm run typecheck` reports TS2578 here.
-    const bad: PadLaneResolution = { lane: "v3", skin: cricketSkinV3 };
+    const bad: SkinDefV3 = cricketSkinV3;
     expect(bad).toBeTruthy();
   });
 });

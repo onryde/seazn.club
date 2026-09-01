@@ -1491,8 +1491,8 @@ describe("tennisSkinV3 — factory assembly", () => {
     expect(marker.sheets!(view()).setScore).toBeDefined();
   });
 
-  it("registry flip: resolvePad('tennis', t) resolves to the v3 lane (see registry-totality.test.ts for the mutation proof)", async () => {
+  it("registry flip: resolvePad('tennis', t) resolves to the v3 skin (see registry-totality.test.ts for the mutation proof)", async () => {
     const { resolvePad } = await import("../../registry");
-    expect(resolvePad("tennis", t).lane).toBe("v3");
+    expect(resolvePad("tennis", t).key).toBe("tennis");
   });
 });
