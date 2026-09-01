@@ -350,7 +350,7 @@ export function EntrantsPanel({
           importControls={
             <CsvImport
               busy={busy}
-              onImport={async (rows) =>
+              onImport={async (rows) => {
                 // RS011 review fix 5: this bulk path used to call plain
                 // `run(...)`, not the `runGated(...)` wrapper its 3 sibling
                 // roster-write call sites in this file use — the server gate
@@ -366,77 +366,78 @@ export function EntrantsPanel({
                 // was; applying the confirmed override to the whole retried
                 // batch is the safe interpretation of "the organiser just
                 // confirmed this batch is fine."
-                runGated((override) =>
-                  (async () => {
-                    // Create missing persons first (matched by exact name
-                    // against the directory), then register entrants in one
-                    // bulk call.
-                    const byName = new Map(persons.map((p) => [p.full_name.toLowerCase(), p]));
-                    const ensurePerson = async (row: CsvRow): Promise<string> => {
-                      const existing = byName.get(row.name.toLowerCase());
-                      if (existing) return existing.id;
-                      const created = await apiV1<Person>("/api/v1/persons", {
-                        method: "POST",
-                        json: {
-                          full_name: row.name,
-                          dob: row.dob || null,
-                          gender: row.gender || null,
-                        },
-                      });
-                      byName.set(created.full_name.toLowerCase(), created);
-                      setPersons((prev) => [...prev, created]);
-                      return created.id;
-                    };
+                //
+                // RS011 round-2 review fix: person resolution (which CREATES
+                // rows via POST /persons for any name not already in the
+                // directory) must happen exactly ONCE, before `runGated`, not
+                // inside the retried closure. `runGated` re-invokes the same
+                // closure verbatim on an override-confirm retry; the original
+                // shape ran `ensurePerson` again on retry against `persons`
+                // (a state snapshot captured when this closure was created,
+                // stale by the time of a second call), silently minting a
+                // SECOND, orphaned person row per CSV name on every override
+                // confirm. Resolving persons up front makes the retried
+                // closure a pure resubmit of an already-built payload — no
+                // side effects on retry, matching the other 3 `runGated`
+                // call sites in this file.
+                const byName = new Map(persons.map((p) => [p.full_name.toLowerCase(), p]));
+                const ensurePerson = async (row: CsvRow): Promise<string> => {
+                  const existing = byName.get(row.name.toLowerCase());
+                  if (existing) return existing.id;
+                  const created = await apiV1<Person>("/api/v1/persons", {
+                    method: "POST",
+                    json: {
+                      full_name: row.name,
+                      dob: row.dob || null,
+                      gender: row.gender || null,
+                    },
+                  });
+                  byName.set(created.full_name.toLowerCase(), created);
+                  setPersons((prev) => [...prev, created]);
+                  return created.id;
+                };
 
-                    const teamMode = rows.some((r) => r.team);
-                    if (teamMode) {
-                      const teams = new Map<string, CsvRow[]>();
-                      for (const row of rows) {
-                        const key = row.team || row.name;
-                        if (!teams.has(key)) teams.set(key, []);
-                        teams.get(key)!.push(row);
-                      }
-                      const entrantsPayload = [];
-                      for (const [team, teamRows] of teams) {
-                        const members = [];
-                        for (const row of teamRows) {
-                          members.push({
-                            person_id: await ensurePerson(row),
-                            squad_number: row.squad_number ?? null,
-                            is_captain: false,
-                            roles: [],
-                          });
-                        }
-                        entrantsPayload.push({
-                          kind: "team",
-                          display_name: team,
-                          members,
-                        });
-                      }
-                      await apiV1(`/api/v1/divisions/${divisionId}/entrants`, {
-                        method: "POST",
-                        json: entrantsPayload.map((e) => withOverride(e, override)),
-                      });
-                    } else {
-                      const entrantsPayload = [];
-                      for (const row of rows) {
-                        entrantsPayload.push({
-                          kind: "individual",
-                          display_name: row.name,
-                          seed: row.seed ?? null,
-                          members: [
-                            { person_id: await ensurePerson(row), is_captain: false, roles: [] },
-                          ],
-                        });
-                      }
-                      await apiV1(`/api/v1/divisions/${divisionId}/entrants`, {
-                        method: "POST",
-                        json: entrantsPayload.map((e) => withOverride(e, override)),
+                const teamMode = rows.some((r) => r.team);
+                let entrantsPayload: Record<string, unknown>[];
+                if (teamMode) {
+                  const teams = new Map<string, CsvRow[]>();
+                  for (const row of rows) {
+                    const key = row.team || row.name;
+                    if (!teams.has(key)) teams.set(key, []);
+                    teams.get(key)!.push(row);
+                  }
+                  entrantsPayload = [];
+                  for (const [team, teamRows] of teams) {
+                    const members = [];
+                    for (const row of teamRows) {
+                      members.push({
+                        person_id: await ensurePerson(row),
+                        squad_number: row.squad_number ?? null,
+                        is_captain: false,
+                        roles: [],
                       });
                     }
-                  })(),
-                )
-              }
+                    entrantsPayload.push({ kind: "team", display_name: team, members });
+                  }
+                } else {
+                  entrantsPayload = [];
+                  for (const row of rows) {
+                    entrantsPayload.push({
+                      kind: "individual",
+                      display_name: row.name,
+                      seed: row.seed ?? null,
+                      members: [{ person_id: await ensurePerson(row), is_captain: false, roles: [] }],
+                    });
+                  }
+                }
+
+                await runGated((override) =>
+                  apiV1(`/api/v1/divisions/${divisionId}/entrants`, {
+                    method: "POST",
+                    json: entrantsPayload.map((e) => withOverride(e, override)),
+                  }),
+                );
+              }}
             />
           }
         />

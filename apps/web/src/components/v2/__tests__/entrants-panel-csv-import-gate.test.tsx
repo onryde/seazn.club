@@ -41,6 +41,12 @@ vi.mock("@/lib/client-v1", async (importOriginal) => {
         return { id: `p-${api.calls.length}`, full_name: body.full_name };
       }
       if (url.endsWith("/entrants") && options?.method === "POST") {
+        // Round-2 review regression: only reject when NO override is
+        // present, so a test can drive the confirm-retry to completion and
+        // observe what the retried closure actually does (rather than only
+        // ever seeing the dialog open, which the original fix-5 test did).
+        const body = options.json as Array<{ eligibility_override?: unknown }>;
+        if (body.some((e) => e.eligibility_override)) return {};
         throw new actual.ApiV1Error(
           "eligibility violation",
           422,
@@ -130,5 +136,46 @@ describe("EntrantsPanel — bulk CSV import routes an ELIGIBILITY_VIOLATION thro
     await vi.waitFor(() => {
       expect(propsOf(findDialogElement(island.tree())).open).toBe(false);
     });
+  });
+
+  // Round-2 review regression: `runGated` re-invokes the SAME closure on a
+  // confirmed retry. Person resolution (POST /api/v1/persons) must happen
+  // exactly once, before the gate, never inside the retried closure — the
+  // original fix-5 shape ran it again on retry against a stale `persons`
+  // snapshot, silently minting a second, orphaned person per CSV row on
+  // every override confirm.
+  it("confirming the override does NOT re-create the person a second time", async () => {
+    api.calls.length = 0;
+    const island = renderIsland(EntrantsPanel, panelProps());
+
+    const onImport = findCsvOnImport(island.tree());
+    void onImport([{ name: "Vet Player" }]);
+
+    await vi.waitFor(() => {
+      expect(propsOf(findDialogElement(island.tree())).open).toBe(true);
+    });
+    const personPostsBeforeConfirm = api.calls.filter(
+      (c) => c.url === "/api/v1/persons" && c.options?.method === "POST",
+    ).length;
+    expect(personPostsBeforeConfirm).toBe(1);
+
+    const dialogProps = propsOf(findDialogElement(island.tree()));
+    (dialogProps.onConfirm as (reason: string) => void)("confirmed by organiser");
+
+    await vi.waitFor(() => {
+      expect(propsOf(findDialogElement(island.tree())).open).toBe(false);
+    });
+
+    const personPostsAfterConfirm = api.calls.filter(
+      (c) => c.url === "/api/v1/persons" && c.options?.method === "POST",
+    ).length;
+    expect(personPostsAfterConfirm).toBe(1);
+
+    // And the retried entrants POST actually carried the override, proving
+    // the confirm path ran a real second network call, not a no-op.
+    const entrantsCalls = api.calls.filter((c) => c.url.endsWith("/entrants") && c.options?.method === "POST");
+    expect(entrantsCalls).toHaveLength(2); // first (422) + retry (succeeds)
+    const retryBody = entrantsCalls[1]!.options!.json as Array<{ eligibility_override?: { reason: string } }>;
+    expect(retryBody[0]!.eligibility_override).toEqual({ reason: "confirmed by organiser" });
   });
 });
