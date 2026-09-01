@@ -4,13 +4,19 @@
 // assign positions/order from the module catalog. PUT replaces the lineup
 // (doc 08 §3); the engine validates size/roles at the scoring door.
 import { useState } from "react";
-import { apiV1 } from "@/lib/client-v1";
+import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import type {
   SideInfo,
   LineupSlotIn,
   PersonAvailability,
 } from "@/components/v2/fixture-console";
 import { useMsg } from "@/components/i18n/dict-provider";
+// RS011 review round 3, finding 1: `putLineup` (server/usecases/fixtures.ts)
+// runs `gateRosterEligibility` and can 422 ELIGIBILITY_VIOLATION, but this
+// editor had no recovery path for it — the SAME override dialog
+// `entrants-panel.tsx`'s `runGated` wraps 4 roster-write call sites with.
+import type { EligibilityIssue } from "@/lib/registration-rules";
+import { EligibilityOverrideDialog } from "@/components/v2/eligibility-override-dialog";
 
 interface Props {
   fixtureId: string;
@@ -230,6 +236,12 @@ export function LineupEditor({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  // RS011 review round 3, finding 1: pending override-dialog state, set only
+  // while a save is blocked on ELIGIBILITY_VIOLATION and waiting on the
+  // organiser — same shape as `entrants-panel.tsx`'s `eligibilityGate`.
+  const [eligibilityGate, setEligibilityGate] = useState<{
+    violations: EligibilityIssue[];
+  } | null>(null);
 
   const inLineup = new Set(slots.map((s) => s.person_id));
   const startingCount = slots.filter((s) => s.slot === "starting").length;
@@ -251,18 +263,34 @@ export function LineupEditor({
     setSaved(false);
   }
 
-  async function save() {
+  /** RS011 review round 3, finding 1: `override` is only ever passed on a
+   *  confirmed retry from `EligibilityOverrideDialog` below — a plain Save
+   *  tap calls this with none. Re-sending the SAME `slots` snapshot on retry
+   *  is safe (unlike `entrants-panel.tsx`'s CSV bulk-add, `save()` has no
+   *  one-time side effect ahead of the PUT — it is a pure resubmit of the
+   *  current draft, and the PUT itself replaces the whole lineup either way,
+   *  so a retry is naturally idempotent). */
+  async function save(override?: { reason: string }) {
     setBusy(true);
     setError(null);
     try {
       await apiV1(`/api/v1/fixtures/${fixtureId}/lineups/${side.id}`, {
         method: "PUT",
-        json: { slots: slots.map((s, i) => toPutSlot(s, i, pairShaped)) },
+        json: {
+          slots: slots.map((s, i) => toPutSlot(s, i, pairShaped)),
+          ...(override ? { eligibility_override: override } : {}),
+        },
       });
+      setEligibilityGate(null);
       setSaved(true);
       onSaved();
     } catch (err) {
-      setError(err instanceof Error ? err.message : msg("lineup.failed"));
+      if (err instanceof ApiV1Error && err.code === "ELIGIBILITY_VIOLATION") {
+        const violations = (err.extra.violations as EligibilityIssue[] | undefined) ?? [];
+        setEligibilityGate({ violations });
+      } else {
+        setError(err instanceof Error ? err.message : msg("lineup.failed"));
+      }
     } finally {
       setBusy(false);
     }
@@ -472,13 +500,22 @@ export function LineupEditor({
           <button
             type="button"
             disabled={busy}
-            onClick={save}
+            onClick={() => void save()}
             className="btn btn-primary px-3 py-1.5 text-xs"
           >
             {busy ? msg("lineup.saving") : msg("lineup.save")}
           </button>
         </div>
       )}
+
+      <EligibilityOverrideDialog
+        open={eligibilityGate !== null}
+        violations={eligibilityGate?.violations ?? []}
+        busy={busy}
+        onCancel={() => setEligibilityGate(null)}
+        onConfirm={(reason) => void save({ reason })}
+        testId="lineup-eligibility-override"
+      />
     </section>
   );
 }
