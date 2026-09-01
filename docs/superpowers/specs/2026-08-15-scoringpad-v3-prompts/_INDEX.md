@@ -6529,10 +6529,31 @@ presence (`carrom.test.ts:780`, guarded by `expect(all.size).toBeGreaterThan(15)
 against a silently empty sweep). Skins whose tests predate that convention have
 no such assertion.
 
-**RECOMMENDATION for R8 or the demolition wave, not for this one:** type
-`TileSpec.label` and `SheetChoiceStep.title` as `MessageKey` rather than
-`string`. That converts an invisible runtime defect into a compile error for
-all eleven skins at once, and it is the same "one place, unforgettable for the
-next author" argument that R7-39 already accepted for the More tile. Deliberately
-NOT done inside A3 — it is a chassis type change with an eleven-skin blast
-radius and belongs in its own task with its own gate.
+**MEASURED, not estimated.** The first draft of this entry deferred the fix on
+an ASSUMED "eleven-skin blast radius". That was a guess, and guessing the cost
+of a change you can just try is not a decision. Applied
+`TileSpec.label: MessageKey` and ran tsc: **19 errors, in 6 files**, and the
+shape of them is the actual finding:
+
+- **~12 are TEST FIXTURES** using deliberately fake keys — `"l"`, `"x"`,
+  `"pad.__fixture__.tile"`, `"pad.tile.label"`, and a
+  `` `l.${string}` `` template. Mechanical: use real keys or a narrow cast.
+- **7 are `skins/period-shared.ts`** and they are NOT mechanical. That module
+  builds its keys AT RUNTIME from the sport slug —
+  `` `pad.${string}.action.goal` ``, `.shootoutAttempt`, `.advance`,
+  `.suspensionStart`, `.suspensionEnd`, `.sub`, `.setPiece` — because hockey
+  and ice hockey share one implementation and differ only by prefix. **A
+  template-built key cannot be a `MessageKey` by construction.**
+
+So the blocker is not eleven skins; it is ONE shared module that synthesises
+message keys from a slug. That is the same dynamic-vocabulary shape this
+programme has been bitten by before, and it means the honest fix is: give
+`period-shared` a per-sport table of LITERAL keys and drop the templates, then
+type the field. Real work, real value, and now specified rather than vague.
+
+**RECOMMENDATION, unchanged in direction and now costed:** do it as its own
+task — chassis type + 7 period-shared call sites + ~12 test fixtures. Not
+folded into a skin commit, and not left as "R8 someday". It converts an
+invisible runtime defect into a compile error for all eleven skins, the same
+"one place, unforgettable for the next author" argument R7-39 already accepted.
+The experiment above was reverted byte-identical; nothing of it is in the tree.
