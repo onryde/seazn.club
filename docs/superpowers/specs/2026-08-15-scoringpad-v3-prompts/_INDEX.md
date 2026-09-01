@@ -6601,3 +6601,55 @@ action, not a carrom feature, because every timed sport will want it.
 #688 moved `HOLD_MS` from 6s to 12s chassis-wide. P-5's "4 of 5 rallies lost
 the scorer" was measured at 6s. The race is looser now; the gap is still real,
 but re-measure before quoting that ratio as current.
+
+### R7-43 — R7-30 REPRODUCED IN THE WILD, and its blast radius was recorded WRONG
+
+The carrom walkthrough hit the double-submit guard while being written. Five
+legitimate board taps carrying an identical `{winner, opponentCoinsLeft: 9}`
+payload; a resubmit was **silently swallowed client-side — no network request,
+no error, no row**. Reproduced reliably at 3 Playwright workers, never at one,
+which is why no earlier suite saw it: it needs real load to widen the gap
+between taps into the guard's window.
+
+**Correction 1 — the blast radius is NOT "the five tapModel-S skins".** R7-30
+and its memory both say that. Carrom is tapModel **T** and hits it anyway,
+because the guard compares `(type, deepEqual(payload))` and cares nothing for
+tap model. The real rule: **ANY sport where two legitimate consecutive events
+carry an identical payload.** That is most sports. Carrom's "home won the
+board, 9 coins left" twice running is ordinary, not an edge case.
+
+**Correction 2 — the defect was already known IN EFFECT, and worked around
+rather than filed.** `grep -a DOUBLE_SUBMIT apps/web/e2e` returns **seven spec
+files**, plus the tennis walkthrough which pays the same 750ms toll without
+naming the constant. `walkthrough/scorepad-v3-badminton-match.spec.ts:96-103`
+states it plainly in a comment:
+
+    `DOUBLE_SUBMIT_WINDOW_MS` (600ms) swallows a same-payload repeat, and a
+    side that wins a WHOLE game unanswered is nothing but same-side repeats —
+    so, like the tennis walkthrough's own `tapPoint`, a same-side tap pays a
+    clearance the alternating case never needs.
+
+"A side that wins a whole game unanswered" is **a player on a run** — the most
+ordinary thing in racquet sport. The suite has been engineered around this for
+long enough that the workaround is now copied between files as an idiom. This
+is the shape [[reference_unrun_e2e_ships_vacuous_waits]] warns about, inverted:
+the waits are not vacuous, they are load-bearing, and what they bear is a
+product defect nobody filed.
+
+**Consequence for the R7-30 + F task (R7-42): the workarounds ARE the
+acceptance test.** Fixing the guard must let every one of those `waitForTimeout`
+clearances be DELETED and the specs still pass. If a fix lands and the sleeps
+must stay, the fix did not work. Do not delete them speculatively — remove
+them as the last step and re-run, and report which files lost a sleep.
+
+The carrom walkthrough applied the same 750ms clearance for now, deliberately,
+rather than weakening an assertion to go green. It is a workaround with a
+known expiry, not a fix.
+
+**Second finding from the same work, test-design not product:** a dock chip's
+`mutate` writes to the durable queue store, NOT the `pendingEnvelopes` React
+snapshot the ribbon renders — so a Method chip's enrichment does not show on
+the ribbon before the flush. Not a defect (the server ledger is correct and was
+asserted post-flush), but it means **a ribbon assertion cannot prove dock
+enrichment**, and any future test that tries will be measuring the wrong
+surface.
