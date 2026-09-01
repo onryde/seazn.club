@@ -103,11 +103,16 @@ export default function Game2048() {
 
   // Touch swipe -- swipeTransition (state.ts) is the pure decision; this is
   // just the DOM wiring, same split as chess-quest's Board.tsx pointer
-  // handlers around dragTransition/runDragAction. `swiping` mirrors that
-  // file's own posture: touch-action is disabled on the board ONLY while a
-  // gesture is actually in progress, never globally.
+  // handlers around dragTransition/runDragAction. touch-action below is set
+  // STATICALLY, never toggled off a `swiping` state: the browser decides
+  // whether a real touch gesture is a page-scroll/pan or an app-handled
+  // gesture AT touchstart, using whatever touch-action value is already in
+  // effect at that instant -- a value a React re-render commits a few ms
+  // later is always too late to change that decision. (A reactive
+  // `swiping`-gated flip shipped here once; on a real touchscreen the
+  // browser had already claimed every swipe as a page scroll before the
+  // state update landed, so no swipe ever reached the board.)
   const swipeRef = useRef<SwipeState>(null);
-  const [swiping, setSwiping] = useState(false);
 
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
@@ -118,7 +123,6 @@ export default function Game2048() {
       pointerId: e.pointerId,
     });
     swipeRef.current = next;
-    setSwiping(next !== null);
   };
   const onPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
     const { state: next, direction } = swipeTransition(swipeRef.current, {
@@ -128,13 +132,11 @@ export default function Game2048() {
       pointerId: e.pointerId,
     });
     swipeRef.current = next;
-    setSwiping(next !== null);
     if (direction) move(direction);
   };
   const onPointerCancel = (e: React.PointerEvent<HTMLDivElement>) => {
     const { state: next } = swipeTransition(swipeRef.current, { type: "cancel", pointerId: e.pointerId });
     swipeRef.current = next;
-    setSwiping(next !== null);
   };
 
   const gameOver = !canMove(state.board);
@@ -182,10 +184,11 @@ export default function Game2048() {
       }
     >
       <div
+        data-testid="2048-swipe-area"
         onPointerDown={onPointerDown}
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerCancel}
-        style={{ touchAction: swiping ? "none" : "auto" }}
+        style={{ touchAction: "none" }}
       >
         <Board board={state.board} anims={cellAnims} moveGen={animGen} />
       </div>

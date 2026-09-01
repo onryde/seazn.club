@@ -3258,3 +3258,100 @@ test("volleyball v3 pad: the anchor sheet and the libero Swap-sheet hold the 44p
   await assertTapFloor(offChip, "swap sheet: the who-came-off chip");
   await expectNoHorizontalScroll(page);
 });
+
+// 2048 mobile swipe: on a real touchscreen the browser decides whether a
+// gesture is page-scroll/pan or app-handled AT touchstart, using whatever
+// `touch-action` value is ALREADY in effect at that instant -- not a value a
+// React re-render commits a few ms later. index.tsx used to flip
+// `touchAction` from "auto" to "none" reactively (a `swiping` useState set
+// inside onPointerDown), which is always too late: the browser has already
+// claimed the gesture as a scroll by the time the state update lands, so
+// every swipe on a phone was eaten by the page instead of moving a tile.
+// Self-contained: /games/2048 is a static registry page, no auth/org state,
+// so this needs none of this file's setup-test fixtures.
+test("2048 (mobile swipe bug): touch-action is disabled at rest, and a swipe moves a tile", async ({
+  page,
+}) => {
+  await page.goto("/games/2048", { waitUntil: "load" });
+  const area = page.getByTestId("2048-swipe-area");
+  await expect(area).toBeVisible();
+  // "load" resolves before React hydrates -- a swipe fired before hydration
+  // lands on server-rendered markup with no pointer handler attached yet and
+  // is silently a no-op (same trap this file's own auditRoute/cricket-pad
+  // comments already record). Wait for hydration's own opening-board spawn
+  // effect to land before driving any pointer input.
+  await expect(page.locator('[data-testid="2048-board"] [data-value]:not([data-value="0"])')).toHaveCount(2);
+
+  // The actual regression check: touch-action must already be "none" BEFORE
+  // any pointer/touch interaction happens, since that is the only moment the
+  // browser consults it for a real touch gesture. Under the old code this is
+  // "auto" at rest (swiping starts false) and only becomes "none" once a
+  // gesture is already in progress -- too late for the browser's decision.
+  await expect(area).toHaveCSS("touch-action", "none");
+
+  // Drive an actual swipe, proving the gesture itself now works end-to-end --
+  // not just that the CSS property reads correctly in isolation. onPointerDown/
+  // onPointerUp are React pointer handlers (see index.tsx), which Chromium
+  // fires from plain mouse-style input same as games.spec.ts's chess-quest
+  // drag test already relies on for Board.tsx's pointer handlers.
+  const box = await area.boundingBox();
+  expect(box, "swipe area has no layout box").not.toBeNull();
+  const startX = box!.x + box!.width * 0.5;
+  const startY = box!.y + box!.height * 0.5;
+  // A real touch's subsequent move/up events keep targeting the element the
+  // finger went down on, however far it travels (implicit touch capture --
+  // spec-guaranteed). A Playwright `page.mouse` drag has no such capture: it
+  // is plain hit-testing, so moving the pointer PAST the wrapper's edge
+  // delivers pointerup to whatever element is now underneath instead of this
+  // div, and onPointerUp never fires -- a test-only gap, not the app bug.
+  // 2048.css fixes the board at exactly 288x288; stay inside it with margin.
+  const amp = Math.max(30, Math.min(box!.width, box!.height) / 2 - 20);
+
+  // newGame() spawns exactly two tiles (state.ts), so a fresh board reads 14
+  // empty cells. A move that actually lands either changes the score (a
+  // merge happened) or changes the empty-cell count (no merge -- slide()
+  // just moved tiles, then spawn() adds exactly one back; applyMove's
+  // `moved` guard means a no-op swipe spawns nothing and both signals stay
+  // frozen). Two random tiles are placed by the RNG, so a single fixed
+  // direction is occasionally already a legal no-op (e.g. both tiles happen
+  // to land already flush against that edge) -- rather than accept that
+  // rare flake, try each of the four directions in turn and require one of
+  // them to move something, which is true for any two-tile board.
+  const emptyCellsAt = () => page.locator('[data-testid="2048-board"] [data-value="0"]').count();
+  const scoreTextAt = () => page.getByText(/^Score: \d+/).textContent();
+
+  async function settled(prevScore: string | null, prevEmpty: number): Promise<boolean> {
+    for (let i = 0; i < 20; i++) {
+      const scoreNow = await scoreTextAt();
+      const emptyNow = await emptyCellsAt();
+      if (scoreNow !== prevScore || emptyNow !== prevEmpty) return true;
+      await page.waitForTimeout(50);
+    }
+    return false;
+  }
+
+  const directions: [number, number][] = [
+    [amp, 0], // right
+    [-amp, 0], // left
+    [0, amp], // down
+    [0, -amp], // up
+  ];
+  let moved = false;
+  for (const [dx, dy] of directions) {
+    const scoreBefore = await scoreTextAt();
+    const emptyBefore = await emptyCellsAt();
+
+    await page.mouse.move(startX, startY);
+    await page.mouse.down();
+    // Well past swipeTransition's 24px threshold (state.ts).
+    await page.mouse.move(startX + dx, startY + dy, { steps: 5 });
+    await page.mouse.up();
+
+    moved = await settled(scoreBefore, emptyBefore);
+    if (moved) break;
+  }
+  expect(
+    moved,
+    "no swipe in any of the 4 directions moved a tile -- touch-action regression is back",
+  ).toBe(true);
+});
