@@ -1769,12 +1769,15 @@ export function PadHostV3(props: PadHostV3Props) {
        *  along with the rest of that component. Right-aligned rather than
        *  sharing a row with phase tabs, since v3's chassis has no such row
        *  here — every skin gets it for free from the host, same as the
-       *  rejection banner below. */}
+       *  rejection banner below. `-700`, not `-600` (axe caught it): this
+       *  surface's own established fix for small bold text on white,
+       *  timeline.tsx's `text-amber-600` (~3.19:1, WCAG AA fail) vs
+       *  `text-amber-700` (~5.05:1, pass). */}
       <div className="flex justify-end">
         <span
           data-role="v3-queue-status"
           className={`flex shrink-0 items-center gap-1.5 text-[11px] font-semibold uppercase tracking-widest ${
-            queueAttention ? "text-amber-600" : "text-emerald-600"
+            queueAttention ? "text-amber-700" : "text-emerald-700"
           }`}
         >
           <span

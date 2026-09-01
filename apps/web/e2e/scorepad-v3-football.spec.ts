@@ -916,13 +916,18 @@ test("football v3: kick tiles drive the shoot-out — reachable, tallied, cued, 
   // R3.5/Task J — the ninth type is no longer reachable through the generic
   // More sheet at all now that it is dedicated; this is the corrected claim
   // replacing the false one this test used to make.
-  await v3Tile(page, "more").click();
-  const moreSheet = v3Sheet(page);
-  await expect(moreSheet).toBeVisible({ timeout: 10_000 });
-  await expect(moreSheet.getByRole("button", { name: "Shoot-out kick", exact: true })).toHaveCount(0);
+  //
+  // R7-39 (owner-approved) went further, in the chassis: `suppressEmptyMoreTile`
+  // now hides the More tile itself once its own sheet would be a guaranteed
+  // dead end — and at SHOOTOUT, kick and card are the only two action types
+  // this phase/band offers, both already dedicated tiles. So More isn't just
+  // missing "Shoot-out kick" inside its sheet, the tile is ABSENT entirely —
+  // a stronger proof than opening a sheet and finding one button missing from
+  // it. Confirmed against the real page: at SHOOTOUT the tile row is exactly
+  // Shoot-out kick (home/away) + Card (home/away), no More tile at all.
+  await expect(v3Tile(page, "more"), "no dead-end More tile once its only content is dedicated").toHaveCount(0);
 
-  // Tap the kick tile — a real board interaction, not an API post. Tapping a
-  // new tile replaces whatever sheet the More tap above left open.
+  // Tap the kick tile — a real board interaction, not an API post.
   await v3Tile(page, "kick-home").click();
   const kickSheet = v3Sheet(page);
   await expect(kickSheet).toBeVisible({ timeout: 10_000 });
