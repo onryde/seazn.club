@@ -6884,3 +6884,75 @@ justifies keeping it (at zero wait, rally 3 of 11 was silently swallowed,
 because that test asserts the OPTIMISTIC fold and so has no network round trip
 forcing real spacing). A derived clearance is correct there — it is clearing
 the guard on purpose, not asserting the guard's range.
+
+---
+
+### R7-47 — task D shipped: the skin DECLARES. Plus two corrections the guard made to ITSELF, and one open question for the owner
+
+`ownsHeadline?(view): boolean` is on `SkinDefV3` beside `phase?()`, exactly the
+opt-in shape R6's ruling names, and `pad-host.tsx` gates the
+`data-role="v3-headline"` bar on `shouldRenderHeadline(headline, skin, view)`.
+Omitting the method means KEEP — the safe direction, because a new skin then
+shows one redundant bar rather than silently losing the only statement of its
+result. Verified in the product at 320/768/1280 on all seven affected sports,
+asserted in the DOM rather than judged from a picture.
+
+**THE BRIEF WAS WRONG ABOUT WHO SUPPRESSES, in both directions.** It said
+"cricket keeps it; football suppresses". The real split is six and five, and
+the two surprises are what matter:
+
+- **The four SETBASED sports keep it, and the brief did not say why they
+  would.** Their headline is `1 — 0 · 21–15, 18–21 (14–11)` — the closed-set
+  lines are in it, and NOTHING else on the pad shows them: badminton's halves
+  carry the current game's points and its strip carries the games tally. A
+  blanket "suppress everything that duplicates a score" would have deleted a
+  match's whole set history from the pad.
+- **Carrom, generic and boardgame suppress, and none was named.** Carrom's
+  halves already carry `(gamesWon)` as each side's `sub`; generic's and
+  boardgame's headlines are built from the very `perSide` lines `bigOf`
+  renders — identical strings, not merely equal numbers.
+
+The per-sport verdict was reached by reading each skin's own scorebug builder
+against its kernel's `summary()`, never from the brief. Five of the seven rows
+would have been wrong if taken on trust.
+
+**Correction 1 the test made to itself: a period case that proved NOTHING.**
+The first draft folded only `core.start`, so hockey's headline was
+`0 — 0 · P1` and every token was trivially on the bug. Mutation proved it
+worthless — deleting the `ot` strip chip left the entire section green.
+(`period-pair.test.ts` did catch that chip, so it was never unguarded; the
+point is that the file carrying the DECLARATION could not see the surface the
+declaration depends on, which is one seam short of the R7-46 defect.) It now
+drives a decided shoot-out and a decided-in-extra-time state, and the mutant
+reds it. **Generalised: a test written to justify a declaration must be driven
+in the states the declaration is CONDITIONAL on — the ruling's own words were
+"once their own strip surfaces shootout and OT", and a `core.start` fold
+reaches neither.**
+
+**Correction 2: the guard reported three defects that did not exist.** The
+sweep matched every word of the headline against the scorebug's text, under a
+`t` stub that echoed keys — so ice hockey's chip "said"
+`pad.icehockey.strip.shootout` rather than "GWS", and the test called that a
+missing fact. Two lessons, both reusable:
+
+1. **A test asserting a SCORER-VISIBLE string must resolve copy the way a
+   browser does.** It now reads `en/ui.json`. A key-echoing stub is fine for
+   proving a key is USED and actively misleading for proving what is SHOWN.
+2. **A headline and a chip may state one fact in different words, and that is
+   not a defect.** The OT chip spells out "Won in overtime" where the headline
+   abbreviates `(OT)` — better copy on the chip. So the sweep is narrowed to
+   DATA tokens (anything containing a digit), where there is no such freedom: a
+   score is the same characters wherever it appears. The word-shaped facts get
+   individual assertions against the chips that carry them, including that the
+   shoot-out chip's own label is the one the headline used.
+
+**OPEN QUESTION FOR THE OWNER, found by driving the pad rather than reading
+it.** Cricket KEEPS the bar, correctly — the chase equation earns its place.
+But at the top of the first innings the bar renders `— — —`, because that is
+what `summary.headline` is before there is anything to chase. So on the screen
+a scorer opens at the start of a match, cricket shows a slate bar containing
+three em-dashes and no information at all. That is arguably worse than the
+duplication D exists to remove, and it is exactly what `ownsHeadline` taking
+`view` was designed for: cricket could return true until the equation appears.
+NOT changed unilaterally — it needs a ruling on when cricket's headline starts
+carrying a fact, and that is a cricket question, not a chassis one.
