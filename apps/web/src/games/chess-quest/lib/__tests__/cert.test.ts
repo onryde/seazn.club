@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { certTitle } from "../cert";
 
 describe("certTitle", () => {
-  it("all three tracks → Grandmaster", () => {
-    expect(certTitle(24, 24, 5).title).toBe("Chess Quest Grandmaster");
+  it("all three tracks → Legend", () => {
+    expect(certTitle(24, 24, 5).title).toBe("Chess Quest Legend");
   });
   it("tracks 1+2 done, track 3 partial → Champion", () => {
     expect(certTitle(24, 24, 2).title).toBe("Chess Quest Champion");

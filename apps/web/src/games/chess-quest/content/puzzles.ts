@@ -548,7 +548,7 @@ export const TACTICS3: Record<
   ],
 };
 
-// Tier-4 Trick Shots (appended to Track 4 / Grandmaster Gorge): double
+// Tier-4 Trick Shots (appended to Track 4 / Puzzle Gorge): double
 // check, back-rank mate, trapped piece, pawn fork. Same verification shape
 // as TACTICS3 (tacticGainAfter: material swing, or a dominating sentinel
 // for forced mate; solution must be uniquely best). The engine has no

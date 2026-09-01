@@ -3,7 +3,7 @@
 export function certTitle(t1: number, t2: number, t3: number): { title: string; line: string } {
   if (t1 === 24 && t2 === 24 && t3 === 5) {
     return {
-      title: "Chess Quest Grandmaster",
+      title: "Chess Quest Legend",
       line: "has completed the entire Chess Quest — all 53 lessons, from the first square to a real opening repertoire",
     };
   }
