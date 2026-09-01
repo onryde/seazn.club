@@ -6653,3 +6653,55 @@ the ribbon before the flush. Not a defect (the server ledger is correct and was
 asserted post-flush), but it means **a ribbon assertion cannot prove dock
 enrichment**, and any future test that tries will be measuring the wrong
 surface.
+
+### R7-44 — A4 is a NON-TASK. R7-10's "empty map renders an UPSELL" is FALSE, and `{}` is the CORRECT declaration
+
+A4 was created by R7-36 off R7-10's claim that boardgame, carrom and generic
+each declare `fidelityEntitlements: {}` and that "an empty map means the
+recording chip renders an UPSELL for a band nothing gates. All three skins owe
+a real map or a justified empty one." Checked against the code before writing
+any. The claim is backwards, and the empty map is right.
+
+**1. An empty map produces the OPPOSITE of an upsell.**
+`entitledBandsFrom` (`v3/pad-host.tsx:174-184`):
+
+    for (const band of ALL_BANDS) {
+      const needed = fidelityEntitlements[band];
+      if (needed === undefined || entitlements[needed]) out.add(band);
+    }
+
+With `{}`, `needed` is `undefined` for EVERY band, so all four are added to
+`entitledBands`. `RecordingChip` takes the entitled branch
+(`recording-chip.tsx:126`, `if (entitledBands.has(fidelity))`) and the upsell
+path is unreachable. An empty map makes every band read as HELD, never as
+locked.
+
+**2. `{}` is what the contract REQUIRES for these three.**
+`sport/module.ts:347-349`: "Which bands need an entitlement beyond the free
+floor (`fidelity.ts`'s `tier <= 1`). **Bands 0 and 1 are never keyed here.**"
+And all three sports top out at band 1 —
+
+    boardgame  result 0 · pairing 1
+    carrom     board.summary 0 · toss 1 · game.adjust 1
+    generic    result 0 · score 1
+
+— so there is no band 2 or 3 event to gate. Compare cricket
+(`{2: "stats.player", 3: "scoring.ball_by_ball"}`) and football
+(`{2: "scoring.match_timeline", 3: "scoring.ball_by_ball"}`), both of which DO
+declare band-2/3 events. Adding keys here would gate bands these sports cannot
+emit — inventing a paywall in front of an empty room.
+
+This is R7-10's own "or a justified empty one" branch, and the justification is
+recorded here. **No engine change. A4 is closed, not deferred.**
+
+**Residual, examined and deliberately NOT actioned:** the chip renders
+`pad.recording.band.3` ("Every detail") on a boardgame or carrom fixture whose
+sport defines nothing above band 1 — visible in the R7 gallery captures. That
+is faithful: the band is a FIXTURE setting and the chip reports the fixture,
+not the sport's ceiling. Uninformative, not incorrect. Left alone.
+
+**The lesson this is the third instance of in one wave:** R7-10's entitlement
+bullet, R7-39's "opens EMPTY", and R7-41's "eleven-skin blast radius" were all
+plausible, all written in good faith, and all wrong in a way that only reading
+the code could show. A register entry is a POINTER TO A CHECK, never the
+check itself.
