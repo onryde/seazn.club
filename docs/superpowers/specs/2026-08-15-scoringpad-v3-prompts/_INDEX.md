@@ -6788,3 +6788,99 @@ whose only subject is deleted code doesn't fail, it just stops meaning
 anything, and an assertion nested inside a doomed describe block dies with its
 neighbours regardless of what it actually asserts. **Read what each assertion
 in a deleted block ASSERTS, not what the block is called.**
+
+---
+
+### R7-46 — the Tier-1 walkthroughs found two live defects the whole gate stack had passed, and the FIRST repair for the third was a tautology
+
+Three hand-driven walkthroughs (`e2e/walkthrough/scorepad-v3-honest-recording.
+spec.ts`) exist to prove the R7-30/R7-42 recording fixes from the scorer's
+side, by tapping rather than by posting. Two of the three failed on first run.
+Both failures were real product defects, and both had survived a full unit
+sweep, a clean typecheck, a clean lint and the seven-width e2e matrix.
+
+**Defect 1 — the partial badge was INERT on the organiser console.** R7-42/F
+ruled that a rally which drains without its dock answer is labelled partial
+"wherever the stat surfaces". `isPartialDockAnswer` was implemented correctly
+and wired correctly — to `PadHostV3`'s own `<ActivityPanel>`, at a call site
+whose comment says, in as many words, that wiring it there rather than merely
+building it is what stops the helper being inert.
+
+It was inert anyway. R7/C1 had consolidated the ledger one wave earlier: the
+console passes `hideActivity` and mounts the same component ITSELF, one level
+out, and that mount received no `isPartial`. So the badge shipped working on
+`/score/[token]` and missing on the organiser's own screen — the surface whose
+entire job is telling an organiser what the courtside scorer left incomplete.
+
+**This is the inert-seam class arriving by a new route.** The seam was not left
+for later and it was not forgotten: it was wired, correctly, to a panel that a
+DIFFERENT wave had since stopped rendering on that surface. Nothing in the
+diff that broke it touched the badge. The rule that follows: **when a wave
+consolidates two mounts of one component into one, every prop the retired
+mount was carrying is a candidate casualty** — diff the prop lists, do not
+assume the surviving mount is a superset.
+
+The repair is a handoff (`onPartialResolver`), not a second construction site.
+The console COULD assemble its own `PadHostView` from `live.state` + cfg +
+lineups. It must not: `fixture-console.tsx`'s own R7-28 comment records what
+that costs — the last time this bag was built twice, `plural` reached one site
+only, and the same rally read "1 pt" in the pad's ribbon and "1 pts" in the
+console's ledger, on one screen. One gap is recorded rather than hidden: a
+fresh load of an already-decided fixture never mounts a pad, so those rows
+carry no badge.
+
+**Defect 2 — `submitHeld` has TWO guards and R7-42 made only ONE visible.**
+The window guard refuses through `lastRejection`. The in-flight guard above it
+returned `null` in silence. So the single most literal case of "one physical
+tap read twice" — a same-tick pair, which is what a real double-tap on a
+touchscreen produces — was still swallowed with no row, no toast and no error:
+the exact silence R7-30 was filed about, surviving inside its own fix. The
+window guard was covering for it, in the sense that anyone testing the fix with
+a paced double hit the visible path and saw it work.
+
+Both guards in BOTH `submit()` and `submitHeld()` now refuse visibly. **Two
+guards in sequence are each untested until mutated ONE AT A TIME** — the
+recurring rule, and the reason a "the refusal is visible now" sign-off held for
+a whole wave while half of it was false.
+
+**Defect 3 was not a defect, and the first repair for it was a TAUTOLOGY.** The
+third test tapped six times at Playwright's own `click()` speed — 45-90ms apart
+— and demanded all six land. That is not a product defect: 45ms is not a human
+tapping twice, it is indistinguishable from one press read twice, and any
+window that let it through would let every double-fire through. The test asked
+the pad to abandon double-submit protection, not to fix it.
+
+The first repair paced the run at `DOUBLE_SUBMIT_WINDOW_MS + 100`. That reads
+as exactly what R7-19 asks for — derive the expected value from the source of
+truth rather than typing a table into the test — and it is **a test that passes
+at every possible value of the constant it exists to guard**. Raise the window
+to 600 and the pace follows to 700.
+
+**The general rule, and it sharpens R7-19 rather than contradicting it:** derive
+a value from the source of truth when you are asserting what the source of
+truth PRODUCES. When you are asserting that a constant stays within some
+BOUND, the bound must come from somewhere the constant cannot move — or there
+is no side the test can fail on. Here the bound is a fact about people:
+`HUMAN_FASTEST_REPEAT_MS = 350`, the fastest a scorer can deliberately repeat a
+tap and mean both, asserted as `DOUBLE_SUBMIT_WINDOW_MS < HUMAN_FASTEST_REPEAT_MS`
+in `use-pad-pipeline.test.tsx` — with a second assertion that the floor itself
+is still a real human bound, so it cannot be quietly tuned to make the first
+one pass.
+
+**Mutation proof, all three together in one build:** window restored to 600,
+console `isPartial` removed, in-flight guard silenced. All three walkthroughs
+went red, one per mutant, no overlap. Restored: 5 passed. `legacy-parity.test.ts`
+additionally holds EVERY `<ActivityPanel>` mount in production source to
+passing `isPartial`, with the mounting-file set pinned so a third mount cannot
+appear unguarded — and that guard's own first draft matched a sentence in a
+COMMENT and reported a defect that was not there, which is "a grep is not a
+read" landing inside the tool built to prevent it.
+
+**R7-43's acceptance test is met.** It required that the guard's `waitForTimeout`
+clearances become deletable. They did: seven spec files carried one, and now
+one call site does — `scorepad-v3-badminton.spec.ts`'s `tapRally`, which is
+derived from the real constant, and whose comment records the measurement that
+justifies keeping it (at zero wait, rally 3 of 11 was silently swallowed,
+because that test asserts the OPTIMISTIC fold and so has no network round trip
+forcing real spacing). A derived clearance is correct there — it is clearing
+the guard on purpose, not asserting the guard's range.
