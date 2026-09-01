@@ -27,6 +27,8 @@ import { defaultLineupPair, makeEnvelope } from "@seazn/engine/testkit";
 import type { EventEnvelope } from "@seazn/engine/core";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { foldClient } from "../../module-client";
 import {
   decidedShootout,
@@ -55,6 +57,8 @@ import enUi from "@/dictionaries/en/ui.json";
  *  shows up as an obviously-wrong string rather than an empty one. */
 const DICT = enUi as Record<string, string>;
 const T = ((key: string) => DICT[key] ?? key) as unknown as TFn;
+
+const HERE = new URL(".", import.meta.url).pathname;
 
 const moduleOf = (key: string): AnySportModule => {
   const found = builtinModules.find((m) => m.key === key);
@@ -198,11 +202,19 @@ describe("which skins declare they own the result line", () => {
   // sport made a decision, so a NEW skin appearing in neither list is a red
   // that asks the question, and a sport silently moving between them is a red
   // that asks for a reason. Both are what this test is for.
+  // ALWAYS owns — the answer does not depend on match state.
   const OWNS = ["boardgame", "carrom", "football", "generic", "hockey", "icehockey"];
-  const KEEPS = ["badminton", "cricket", "tabletennis", "tennis", "volleyball"];
+  // ALWAYS keeps — their headline carries the closed-set lines (`21–15, 18–21`)
+  // and nothing else on the pad shows them.
+  const KEEPS = ["badminton", "tabletennis", "tennis", "volleyball"];
+  // STATE-DEPENDENT. Cricket is the first skin to answer per state, which is
+  // what `ownsHeadline` taking `view` was for. Asserted in BOTH states in its
+  // own block below, not here — a single-state row in either list above would
+  // record half the rule and read as if it were the whole one.
+  const STATEFUL = ["cricket"];
 
-  it("covers every shipped v3 skin, with no sport in both lists or neither", () => {
-    expect([...OWNS, ...KEEPS].sort()).toEqual(Object.keys(V3_SKINS).sort());
+  it("covers every shipped v3 skin, with no sport in two lists or none", () => {
+    expect([...OWNS, ...KEEPS, ...STATEFUL].sort()).toEqual(Object.keys(V3_SKINS).sort());
   });
 
   for (const key of OWNS) {
@@ -212,6 +224,56 @@ describe("which skins declare they own the result line", () => {
       expect(shouldRenderHeadline("anything", skinOf(key), view)).toBe(false);
     });
   }
+
+  // R7/D follow-up — cricket's two states, the first state-dependent answer in
+  // the chassis.
+  //
+  // Before a ball is bowled `sideLine` (cricket.ts) returns the literal "—"
+  // for each side, so the bar renders `— — —`: a slate band above the fold on
+  // a phone carrying nothing at all, on the first screen a cricket scorer
+  // opens. After that the bar is the ONLY surface showing both sides' totals —
+  // the halves show the striking side's score and the overs, never the other
+  // innings — so it earns its place and keeps it for the rest of the match.
+  describe("cricket answers per STATE", () => {
+    // A REAL delivery, full `CricketBall` payload (cricket.ts) — person ids are
+    // `defaultLineupPair`'s own H-p*/A-p*. A partial payload is refused by the
+    // engine, which is the right behaviour and would make this fixture a lie.
+    const BALL = [
+      "cricket.ball",
+      { over: 0, ballInOver: 1, striker: "H-p1", nonStriker: "H-p2", bowler: "A-p1", runs: { bat: 1 } },
+    ] as const;
+
+    it("owns it before a ball is bowled — the bar would say `— — —` and nothing else", () => {
+      const view = viewOf("cricket");
+      expect(summaryHeadline(view.summary), "the state this rule exists for").toBe("— — —");
+      expect(skinOf("cricket").ownsHeadline?.(view)).toBe(true);
+      expect(shouldRenderHeadline("— — —", skinOf("cricket"), view)).toBe(false);
+    });
+
+    it("gives it back the moment an innings exists, and the bar then says something the bug does not", () => {
+      const view = viewOf("cricket", [["core.start", {}], BALL]);
+      expect(skinOf("cricket").ownsHeadline?.(view)).toBe(false);
+      const headline = summaryHeadline(view.summary);
+      expect(headline, "an innings exists, so this is no longer all dashes").not.toBe("— — —");
+      expect(shouldRenderHeadline(headline, skinOf("cricket"), view)).toBe(true);
+    });
+
+    it("is NOT gated on `chaseTarget`, which returns null for an entire TEST match", () => {
+      // The obvious predicate — "suppress until there is something to chase" —
+      // is a different question wearing the same words. `chaseTarget` is a
+      // DISPLAY helper whose own doc records the gap: for a two-innings match
+      // it returns non-null only on an explicit DLS/manual revision, because
+      // the natural 4th-innings target needs aggregation the engine keeps
+      // private. Gating on it would blank the bar through a whole Test,
+      // including the fourth innings, where two totals a side is exactly the
+      // fact that matters. Pinned so nobody "simplifies" the predicate into it.
+      const cricket = readFileSync(join(HERE, "..", "skins", "cricket.tsx"), "utf8");
+      const declaration = /ownsHeadline:([^,]*),/.exec(cricket)?.[1] ?? "";
+      expect(declaration, "cricket declares no ownsHeadline any more").not.toBe("");
+      expect(declaration, "ownsHeadline must not be gated on chaseTarget").not.toContain("chaseTarget");
+      expect(declaration).toContain("innings");
+    });
+  });
 
   for (const key of KEEPS) {
     it(`${key} keeps the chassis bar — its headline says something its own surface does not`, () => {

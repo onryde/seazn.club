@@ -2444,6 +2444,34 @@ export function cricketSkinV3(t: TFn): SkinDefV3<PadHostView> {
     key: "cricket",
     tapModel: "T",
     phase: resolvePhase,
+    /** R7/D follow-up — cricket KEEPS the result bar, with one exception: the
+     *  screen a scorer opens before a ball is bowled.
+     *
+     *  Cricket's headline is `${sideLine(home)} — ${sideLine(away)}`, and
+     *  `sideLine` (cricket.ts) returns the literal "—" for a side with no
+     *  innings. So before the first innings exists the bar renders `— — —`:
+     *  a slate band, above the fold, on a phone, carrying nothing. That is
+     *  strictly worse than the duplication task D exists to remove, and it is
+     *  the first thing a cricket scorer sees.
+     *
+     *  Once ANY innings exists the bar earns its place and keeps it for the
+     *  rest of the match — including a Test. It is the only surface showing
+     *  BOTH sides' totals: the halves show the striking side's score and the
+     *  overs, never the other innings.
+     *
+     *  WHY NOT `chaseTarget`. The obvious predicate is "suppress until there
+     *  is something to chase", and it is WRONG. `chaseTarget` (this file) is a
+     *  display helper with a documented gap: for a two-innings match it
+     *  returns non-null ONLY on an explicit DLS/manual revision, because the
+     *  natural 4th-innings target needs cross-innings aggregation the engine
+     *  keeps private. Gating on it would suppress the bar through an entire
+     *  Test match — including the fourth innings, where two totals a side is
+     *  exactly the fact that matters. A plausible predicate answering a
+     *  different question is the recurring defect in this programme.
+     *
+     *  So the rule is the narrowest one that removes the confirmed noise and
+     *  nothing else: no innings, no bar. */
+    ownsHeadline: (view) => (asState(view.state).innings ?? []).length === 0,
     scorebug: (view) => buildScorebug(view, t),
     tiles: (view) => buildTiles(view, t),
     dock: (eventType, _view, payload) => buildDock(eventType, t, payload),
