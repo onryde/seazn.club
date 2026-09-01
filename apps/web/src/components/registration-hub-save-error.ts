@@ -30,6 +30,7 @@ export type ConfigFieldKey =
   | "capacity"
   | "fee_cents"
   | "refund_lock_at"
+  | "place_by_at"
   | "form_fields"
   | "payment_method"
   | "payment_instructions"
@@ -55,6 +56,7 @@ export const ROUTABLE_FIELDS: readonly ConfigFieldKey[] = [
   "capacity",
   "fee_cents",
   "refund_lock_at",
+  "place_by_at",
   "form_fields",
   "payment_method",
   "payment_instructions",

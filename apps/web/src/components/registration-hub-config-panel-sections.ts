@@ -28,6 +28,11 @@ export const SECTION_FIELDS: Record<SectionId, readonly ConfigFieldKey[]> = {
     "eligibility_note",
     "approval",
     "allow_free_agents",
+    // RS012/V389 — placeByApplies gates on allow_free_agents, same as the
+    // toggle above, so this belongs in the same section as that toggle
+    // rather than "money" (refund_lock_at's own section, gated on
+    // payment_method instead).
+    "place_by_at",
   ],
   schedule: ["enabled", "entrant_kind", "opens_at", "closes_at"],
   capacity: ["capacity"],

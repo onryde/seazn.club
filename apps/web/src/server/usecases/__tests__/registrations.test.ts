@@ -5038,6 +5038,73 @@ describe.skipIf(!HAS_DB)("RS007: a promoted entry's reminder does not block a st
 });
 
 // ---------------------------------------------------------------------------
+// RS012 stage 3 — closing the inert seam: putRegistrationSettings/
+// getRegistrationSettings now read/write `place_by_at` (V389, Stage 2). Before
+// this, the pool-deadline sweep test suite below could only ever set the
+// column via raw SQL ("the write-path UI/API is a later RS012 stage, not this
+// one" — its own comment on the "extending place_by_at" test). This proves an
+// organiser-facing write actually lands the value the sweep reads.
+// ---------------------------------------------------------------------------
+
+describe.skipIf(!HAS_DB)("RS012: putRegistrationSettings/getRegistrationSettings — place_by_at", () => {
+  it("an organiser-set place_by_at round-trips through PUT, GET, and a direct read of registration_settings", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { division } = await rig(owner);
+
+    const saved = await putRegistrationSettings(owner, division.id, {
+      ...SETTINGS_BASE,
+      entrant_kind: "team",
+      allow_free_agents: true,
+      place_by_at: "2026-03-15T00:00:00Z",
+    });
+    expect(new Date(saved.place_by_at!).toISOString()).toBe("2026-03-15T00:00:00.000Z");
+
+    const read = await getRegistrationSettings(owner, division.id);
+    expect(new Date(read.place_by_at!).toISOString()).toBe("2026-03-15T00:00:00.000Z");
+
+    // The sweep (Stage 2, registrations.ts ~:5195) reads this column with a
+    // plain `select place_by_at ... from registration_settings` — proving
+    // THAT read sees what this write-path just sent, not just this usecase's
+    // own return values, is the actual seam this stage closes.
+    const [row] = await sql<{ place_by_at: Date | null }[]>`
+      select place_by_at from registration_settings where division_id = ${division.id}`;
+    expect(row!.place_by_at?.toISOString()).toBe("2026-03-15T00:00:00.000Z");
+  });
+
+  it("explicitly setting place_by_at to null clears a previously-set value back to the closes_at default", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { division } = await rig(owner);
+
+    await putRegistrationSettings(owner, division.id, {
+      ...SETTINGS_BASE,
+      entrant_kind: "team",
+      allow_free_agents: true,
+      place_by_at: "2026-03-15T00:00:00Z",
+    });
+    // Sanity check the first save actually took effect, so the "clears back
+    // to null" assertions below cannot pass vacuously against a column that
+    // was already null the whole time.
+    const withValue = await getRegistrationSettings(owner, division.id);
+    expect(withValue.place_by_at).not.toBeNull();
+
+    // A second, FULL-REPLACE save with place_by_at explicitly null — not
+    // omitted — must clear it, not leave the first save's value stranded.
+    const cleared = await putRegistrationSettings(owner, division.id, {
+      ...SETTINGS_BASE,
+      entrant_kind: "team",
+      allow_free_agents: true,
+      place_by_at: null,
+    });
+    expect(cleared.place_by_at).toBeNull();
+
+    const read = await getRegistrationSettings(owner, division.id);
+    expect(read.place_by_at).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // RS012 ruling 2 — sweepRegistrations' pool-deadline pass: an unplaced solo
 // sign-up past its place-by date (default: the division's own closes_at) is
 // auto-withdrawn and, if paid, auto-refunded UNCONDITIONALLY — reusing this

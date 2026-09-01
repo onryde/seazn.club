@@ -100,6 +100,7 @@ const RESPONSE: RegistrationSettingsResponse = {
   free_agent_fee_cents: null,
   currency: "usd",
   refund_lock_at: null,
+  place_by_at: null,
   form_fields: FORM_FIELDS,
   payment_method: "offline",
   payment_instructions: null,
@@ -160,6 +161,7 @@ const FULL_STATE: RegistrationConfigState = {
   fee_cents: 1500,
   free_agent_fee_cents: null,
   refund_lock_at: null,
+  place_by_at: null,
   form_fields: FORM_FIELDS,
   payment_method: "offline",
   payment_instructions: null,
@@ -490,7 +492,7 @@ describe("RegistrationHubConfigPanel — every routable field has a render site 
     // paragraphs are its SIBLINGS, not its children).
     const dtProps = { dtDrafts: {}, onDateTimeHalfChange: vi.fn() };
     const rendered = [
-      ...walk(EligibilitySection(commonProps)),
+      ...walk(EligibilitySection({ ...commonProps, orgTz: "UTC", ...dtProps })),
       ...walk(OpenCloseSection({ ...commonProps, orgTz: "UTC", ...dtProps })),
       ...walk(CapacitySection(commonProps)),
       ...walk(
@@ -748,14 +750,15 @@ describe("RegistrationHubConfigPanel — the solo sign-ups toggle", () => {
 // that from every caller). Same "assert the PROPS the panel hands
 // DateTimeField, not rendered markup" contract as before — DateTimeField's
 // OWN suite covers what it does with them.
-describe("RegistrationHubConfigPanel — the three clock fields", () => {
+describe("RegistrationHubConfigPanel — the four clock fields", () => {
   async function clockFields() {
     // A CARD division: the refund lock is card-only now (the auto-refund it
     // governs gates on payment_intent_id, which an offline entry never has),
-    // so the default offline fixture renders two clock fields, not three.
+    // so the default offline fixture renders three clock fields, not four.
     // Switching the fixture keeps this suite asserting what it was written to
-    // assert — that all three route through the shared field — rather than
-    // quietly dropping the third from its expectations.
+    // assert — that all four route through the shared field — rather than
+    // quietly dropping one from its expectations. RESPONSE already carries
+    // allow_free_agents:true, so place_by_at (RS012/V389) renders here too.
     net.getResponse = { ...RESPONSE, fee_cents: 1500, payment_method: "stripe" };
     const island = renderIsland(RegistrationHubConfigPanel, BASE_PROPS, expandPanel);
     await flush();
@@ -774,7 +777,7 @@ describe("RegistrationHubConfigPanel — the three clock fields", () => {
     return byField;
   }
 
-  it("routes all three through the shared pair, each as a date half and a time half", async () => {
+  it("routes all four through the shared pair, each as a date half and a time half", async () => {
     const fields = await clockFields();
     expect([...fields.keys()].sort()).toEqual(
       [
@@ -784,6 +787,8 @@ describe("RegistrationHubConfigPanel — the three clock fields", () => {
         "closes_at_time",
         "refund_lock_at_date",
         "refund_lock_at_time",
+        "place_by_at_date",
+        "place_by_at_time",
       ].sort(),
     );
     expect(fields.get("opens_at_date")!.kind).toBe("date");
@@ -793,12 +798,14 @@ describe("RegistrationHubConfigPanel — the three clock fields", () => {
     expect([...fields.values()].every((f) => f.kind !== "datetime-local")).toBe(true);
   });
 
-  it("gives the two CUTOFFS' time halves the 23:59 option, and the opening none", async () => {
+  it("gives the three CUTOFFS' time halves the 23:59 option, and the opening none", async () => {
     const fields = await clockFields();
     // The quarter-hour grid stops at 23:45. A deadline there shuts the door
     // fifteen minutes early; an OPENING at 23:45 is just an opening.
     expect(fields.get("closes_at_time")!.extraOptions).toEqual(["23:59"]);
     expect(fields.get("refund_lock_at_time")!.extraOptions).toEqual(["23:59"]);
+    // RS012/V389 — place_by_at is a deadline too, same reasoning.
+    expect(fields.get("place_by_at_time")!.extraOptions).toEqual(["23:59"]);
     expect(fields.get("opens_at_time")!.extraOptions).toBeUndefined();
     // extraOptions is a TIME-half concept only — never on the date input.
     expect(fields.get("closes_at_date")!.extraOptions).toBeUndefined();
@@ -819,6 +826,9 @@ describe("RegistrationHubConfigPanel — the three clock fields", () => {
     // time (which would itself be the half-filled bug this task fixes).
     expect(fields.get("refund_lock_at_date")!.value).toBe("");
     expect(fields.get("refund_lock_at_time")!.value).toBe("");
+    // RESPONSE's place_by_at is also null — same "two empty halves" rule.
+    expect(fields.get("place_by_at_date")!.value).toBe("");
+    expect(fields.get("place_by_at_time")!.value).toBe("");
   });
 
   it("labels each pair with the zone, so a time is never bare wall-clock", async () => {

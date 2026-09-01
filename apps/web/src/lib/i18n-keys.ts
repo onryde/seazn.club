@@ -3948,6 +3948,7 @@ export type DictionaryKey =
   | "reg.settings.payInstructionsPlaceholderOrg"
   | "reg.settings.payOrganiser"
   | "reg.settings.payOrganiserDesc"
+  | "reg.settings.placeByDate"
   | "reg.settings.refundLock"
   | "reg.settings.refundLockNone"
   | "reg.settings.refundLockSet"

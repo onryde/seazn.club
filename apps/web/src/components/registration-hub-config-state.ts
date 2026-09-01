@@ -40,6 +40,8 @@ export interface RegistrationConfigState {
    *  real price meaning free, so the two must never collapse. */
   free_agent_fee_cents: number | null;
   refund_lock_at: string | null;
+  /** V389/RS012 — `null` means "use closes_at" (ruling 2). */
+  place_by_at: string | null;
   form_fields: FormField[];
   payment_method: PaymentMethodValue;
   payment_instructions: string | null;
@@ -102,6 +104,7 @@ export function initialConfigState(
     fee_cents: settings.fee_cents,
     free_agent_fee_cents: settings.free_agent_fee_cents,
     refund_lock_at: settings.refund_lock_at,
+    place_by_at: settings.place_by_at,
     form_fields: settings.form_fields,
     payment_method: settings.payment_method,
     payment_instructions: settings.payment_instructions,
@@ -147,6 +150,7 @@ export function toRegistrationSettingsPutBody(
     fee_cents,
     free_agent_fee_cents,
     refund_lock_at,
+    place_by_at,
     form_fields,
     payment_method,
     payment_instructions,
@@ -162,6 +166,7 @@ export function toRegistrationSettingsPutBody(
     fee_cents,
     free_agent_fee_cents,
     refund_lock_at,
+    place_by_at,
     form_fields,
     payment_method,
     payment_instructions,

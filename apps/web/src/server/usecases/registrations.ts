@@ -1830,14 +1830,14 @@ export async function putRegistrationSettings(
     const [row] = await tx<RegistrationSettingsRow[]>`
       insert into registration_settings
         (division_id, enabled, entrant_kind, opens_at, closes_at, capacity,
-         fee_cents, refund_lock_at, form_fields,
+         fee_cents, refund_lock_at, place_by_at, form_fields,
          payment_method, payment_instructions, approval, allow_free_agents,
          free_agent_fee_cents, updated_at)
       values
         (${divisionId}, ${input.enabled}, ${entrantKind},
          ${input.opens_at ?? null}, ${input.closes_at ?? null},
          ${input.capacity ?? null}, ${feeCents},
-         ${input.refund_lock_at ?? null}, ${tx.json(formFields as never)},
+         ${input.refund_lock_at ?? null}, ${input.place_by_at ?? null}, ${tx.json(formFields as never)},
          ${method}, ${input.payment_instructions?.trim() || null},
          ${approval}, ${allowFreeAgents}, ${freeAgentFeeCents}, now())
       on conflict (division_id) do update set
@@ -1848,6 +1848,7 @@ export async function putRegistrationSettings(
         capacity             = excluded.capacity,
         fee_cents            = excluded.fee_cents,
         refund_lock_at       = excluded.refund_lock_at,
+        place_by_at          = excluded.place_by_at,
         form_fields          = excluded.form_fields,
         payment_method       = excluded.payment_method,
         payment_instructions = excluded.payment_instructions,

@@ -1974,6 +1974,7 @@
   "reg.settings.refundLock": "Verrou de remboursement (les retraits cessent d'être remboursés automatiquement après cela)",
   "reg.settings.refundLockSet": "Après ce moment, les retraits conservent les frais — les remboursements relèvent de votre décision, par inscription.",
   "reg.settings.refundLockNone": "Aucune date définie : tout retrait payé est remboursé automatiquement en totalité, jusqu'au jour du match.",
+  "reg.settings.placeByDate": "Date limite de placement (les inscriptions individuelles non placées sont retirées et remboursées après cela)",
   "reg.settings.signupForm": "Formulaire d'inscription",
   "reg.settings.extraQuestions.one": "{count} question supplémentaire",
   "reg.settings.extraQuestions.other": "{count} questions supplémentaires",

@@ -29,6 +29,7 @@ const RESPONSE: RegistrationSettingsResponse = {
   free_agent_fee_cents: null,
   currency: "usd",
   refund_lock_at: "2026-01-20T00:00:00Z",
+  place_by_at: "2026-01-25T00:00:00Z",
   form_fields: FORM_FIELDS,
   payment_method: "stripe",
   payment_instructions: null,
@@ -59,6 +60,7 @@ describe("initialConfigState", () => {
     expect(state.capacity).toBe(32);
     expect(state.fee_cents).toBe(1500);
     expect(state.refund_lock_at).toBe("2026-01-20T00:00:00Z");
+    expect(state.place_by_at).toBe("2026-01-25T00:00:00Z");
     expect(state.form_fields).toEqual(FORM_FIELDS);
     expect(state.payment_method).toBe("stripe");
     expect(state.approval).toBe("manual");
@@ -128,6 +130,7 @@ describe("toRegistrationSettingsPutBody — full replace hazard", () => {
     capacity: 32,
     fee_cents: 1500,
     refund_lock_at: "2026-01-20T00:00:00Z",
+    place_by_at: "2026-01-25T00:00:00Z",
     form_fields: FORM_FIELDS,
     payment_method: "stripe",
     payment_instructions: "Bank transfer to club account.",
@@ -162,6 +165,7 @@ describe("toRegistrationSettingsPutBody — full replace hazard", () => {
       capacity: 32,
       fee_cents: 1500,
       refund_lock_at: "2026-01-20T00:00:00Z",
+      place_by_at: "2026-01-25T00:00:00Z",
       form_fields: FORM_FIELDS,
       payment_method: "stripe",
       payment_instructions: "Bank transfer to club account.",
@@ -192,6 +196,7 @@ describe("toRegistrationSettingsPutBody — full replace hazard", () => {
     expect(body.form_fields).toEqual(FORM_FIELDS);
     expect(body.payment_instructions).toBe("Bank transfer to club account.");
     expect(body.refund_lock_at).toBe("2026-01-20T00:00:00Z");
+    expect(body.place_by_at).toBe("2026-01-25T00:00:00Z");
     expect(body.opens_at).toBe("2026-01-01T00:00:00Z");
     expect(body.closes_at).toBe("2026-02-01T00:00:00Z");
     expect(body.capacity).toBe(32);
@@ -223,6 +228,7 @@ describe("validateConfigState", () => {
     fee_cents: 1500,
     free_agent_fee_cents: null,
     refund_lock_at: null,
+    place_by_at: null,
     form_fields: [{ key: "shirt_size", label: "Shirt size", kind: "text", required: true }],
     payment_method: "offline",
     payment_instructions: null,

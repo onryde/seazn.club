@@ -1974,6 +1974,7 @@
   "reg.settings.refundLock": "Refund lock (withdrawals stop auto-refunding after this)",
   "reg.settings.refundLockSet": "After this moment withdrawals keep the fee — refunds become your call, per entry.",
   "reg.settings.refundLockNone": "No date set: every paid withdrawal auto-refunds in full, right up to match day.",
+  "reg.settings.placeByDate": "Place-by date (unplaced solo sign-ups are withdrawn and refunded after this)",
   "reg.settings.signupForm": "Sign-up form",
   "reg.settings.extraQuestions.one": "{count} extra question",
   "reg.settings.extraQuestions.other": "{count} extra questions",

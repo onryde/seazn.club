@@ -1974,6 +1974,7 @@
   "reg.settings.refundLock": "Terugbetaalvergrendeling (annuleringen worden hierna niet meer automatisch terugbetaald)",
   "reg.settings.refundLockSet": "Na dit moment behouden annuleringen de kosten — terugbetalingen worden jouw keuze, per inschrijving.",
   "reg.settings.refundLockNone": "Geen datum ingesteld: elke betaalde annulering wordt automatisch volledig terugbetaald, tot en met de wedstrijddag.",
+  "reg.settings.placeByDate": "Uiterste plaatsingsdatum (niet-geplaatste solo-inschrijvingen worden hierna ingetrokken en terugbetaald)",
   "reg.settings.signupForm": "Inschrijfformulier",
   "reg.settings.extraQuestions.one": "{count} extra vraag",
   "reg.settings.extraQuestions.other": "{count} extra vragen",
