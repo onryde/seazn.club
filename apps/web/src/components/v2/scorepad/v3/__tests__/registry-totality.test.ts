@@ -191,6 +191,47 @@ describe("registry totality", () => {
 });
 
 // ---------------------------------------------------------------------------
+// RESTORED FROM THE DEMOLITION (R7/G review, 2026-09-01). This assertion lived
+// in `../../__tests__/registry.test.tsx`'s "resolveScorePad — drift guard"
+// block, six of whose seven assertions tested the v2 `RESOLUTION_KIND` /
+// `skinFor` table that R7/G deleted. This one did not: it derives straight off
+// `builtinModules` and asserts something about the ENGINE, not about any pad
+// lane — so it was removed as collateral damage, and the review caught it.
+//
+// It belongs here because `registry-totality.test.ts` is now the file that
+// holds `builtinModules` to a written decision rather than a fallthrough,
+// which is exactly the posture this assertion enforces.
+//
+// WHAT IT PROTECTS. `padSpec` is an OPTIONAL hook on `SportModule`
+// (`packages/engine/src/sport/module.ts`), and
+// `apps/web/src/server/usecases/fidelity.ts`'s `resolveScorePadBootstrap`
+// falls back to `EMPTY_SPEC` when a module has none — `fidelityEntitlements:
+// {}`, so `resolveFidelityBand` gates NOTHING and the pad renders at full band
+// regardless of what the org bought. Dead today only because all eleven
+// `builtinModules` happen to implement it. A twelfth sport that forgets is a
+// silently ungated pad; this turns that into a CI failure.
+//
+// The real write path still refuses the append at the scoring door
+// (`scoring.ts`'s `requiredFeatureForEvent`), so the worst case is misleading
+// UI rather than a billing bypass — which is why this is a guard and not a
+// blocker.
+//
+// It is NOT covered by `packages/engine/src/testkit/conformance-pad.ts`'s
+// `padSpecConformanceSuite`: that is a manual per-module opt-in, called from
+// eight scattered `*.test.ts` files, so it protects a module only if some test
+// file remembers to name it. This assertion is derived from `builtinModules`
+// itself, which is what makes it total.
+describe("every engine module ships a padSpec (no module ships an UNGATED pad)", () => {
+  it("no builtinModules entry omits the optional padSpec hook", () => {
+    const missing = builtinModules.filter((m) => typeof m.padSpec !== "function").map((m) => m.key);
+    expect(
+      missing,
+      "a module with no padSpec gets fidelity.ts's EMPTY_SPEC — no fidelityEntitlements, so no band gate at all",
+    ).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Type-level (R2/task E acceptance criterion 2): an UN-CALLED factory must
 // never satisfy a slot that expects a resolved skin — neither V3_SKINS
 // itself nor resolvePad's own return. vitest (esbuild) strips types and

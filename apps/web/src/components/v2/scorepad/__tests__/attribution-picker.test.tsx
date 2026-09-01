@@ -1,15 +1,19 @@
-// attribution-picker.tsx (S10/#419 W8, chassis item 3) — plugs into
-// pad-renderer.tsx's `renderAttribution` typed seam. Driven through the
-// repo's node-only `_hook-harness` (no DOM/jsdom in this workspace) — see
-// its header and reference_hook_harness_click_without_dom.md.
+// attribution-picker.tsx (S10/#419 W8, chassis item 3) — the pure attribution
+// SELECTORS. R7/G demolished the v2 pad lane, and with it this file's own
+// `AttributionPicker` component and the `pad-renderer.tsx` `renderAttribution`
+// seam it plugged into; the component's render tests went with it (the v3
+// chassis proves the same capabilities from `v3/__tests__/action-form.test.ts`
+// and `v3/skins/__tests__/cricket.test.ts`). What remains here is the
+// sport-agnostic RULES half, which is still live on both callers.
+//
+// Driven through the repo's node-only `_hook-harness` (no DOM/jsdom in this
+// workspace) — see its header and reference_hook_harness_click_without_dom.md.
 //
 // Real engine fixtures throughout (cricket + hockey), never a hand-rolled
 // SquadState: the keeper test in particular folds a REAL `core.lineup.position`
 // event through the actual kernel (`foldClient`) so a snapshot-based
 // implementation of "who is the keeper" genuinely reds.
 import { describe, expect, it } from "vitest";
-import type { ReactElement } from "react";
-import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
 import type { LineupPair } from "@seazn/engine/core";
 import { foldClient } from "../module-client";
 import { defaultLineupPair, makeEnvelope, lineupFromCatalog } from "@seazn/engine/testkit";
@@ -17,114 +21,17 @@ import { cricket } from "@seazn/engine/sports/cricket";
 import { hockey } from "@seazn/engine/sports/hockey";
 import type { PadActionView } from "../view-model";
 import {
-  AttributionPicker,
   attributionItemCaption,
   candidatesForPerson,
   isSquadState,
-  resolveSquads,
 } from "../attribution-picker";
-
-function find(tree: ReactElement[], pred: (el: ReactElement) => boolean): ReactElement {
-  const el = tree.find(pred);
-  if (!el) throw new Error("element not found in rendered tree");
-  return el;
-}
-function findAll(tree: ReactElement[], pred: (el: ReactElement) => boolean): ReactElement[] {
-  return tree.filter(pred);
-}
-const isType = (type: unknown) => (el: ReactElement) => el.type === type;
-const byPath = (tree: ReactElement[], path: string) =>
-  find(tree, (el) => propsOf(el)["data-attribution-path"] === path);
-const chipsOf = (group: ReactElement) => findAll(walk(propsOf(group).children as never), isType("button"));
-
-function noop() {
-  /* setValue stub */
-}
-
-describe("attribution-picker — shape sweep (table-driven over the real PadAttribution shapes)", () => {
-  const CRICKET_LINEUPS: LineupPair = defaultLineupPair(cricket.positions);
-
-  const cases: { name: string; attribution: PadActionView["attribution"] }[] = [
-    { name: "zero items", attribution: [] },
-    { name: "one side", attribution: [{ kind: "side", path: "wonBy" }] },
-    { name: "one person", attribution: [{ kind: "person", path: "striker" }] },
-    {
-      // "WK" is cricket's own wicketkeeper position group — defaultLineupPair's
-      // round-robin fill (BAT,BOWL,AR,WK,...) always seats exactly one starting
-      // player there, so this case has a real, non-empty candidate list.
-      name: "one person with a role",
-      attribution: [{ kind: "person", path: "wicketkeeperOnField", role: "WK" }],
-    },
-    {
-      name: "several persons at distinct paths",
-      attribution: [
-        { kind: "person", path: "striker" },
-        { kind: "person", path: "nonStriker" },
-        { kind: "person", path: "bowler" },
-        { kind: "person", path: "wicket.fielder" },
-      ],
-    },
-    {
-      name: "side-plus-persons on one action",
-      attribution: [
-        { kind: "side", path: "by" },
-        { kind: "person", path: "person" },
-        { kind: "person", path: "against" },
-      ],
-    },
-  ];
-
-  for (const { name, attribution } of cases) {
-    it(`renders without crashing and wires setValue for: ${name}`, () => {
-      let lastSet: [string, unknown] | null = null;
-      const island = renderIsland(AttributionPicker, {
-        action: { attribution, labelKey: { key: "pad.cricket.action.ball", label: "Ball" } },
-        values: {},
-        setValue: (path: string, value: unknown) => (lastSet = [path, value]),
-        lineups: CRICKET_LINEUPS,
-        state: undefined,
-      });
-      const tree = island.tree();
-      if (attribution.length === 0) {
-        expect(tree.length).toBe(0);
-        return;
-      }
-      // Every declared item gets its own addressable group.
-      for (const item of attribution) {
-        const group = byPath(tree, item.path);
-        expect(group).toBeDefined();
-      }
-      // Tapping the FIRST chip of the FIRST item calls setValue with THAT
-      // item's own path — never a neighbour's (each item is independently
-      // wired, proven by picking on one path and checking no cross-talk).
-      const firstGroup = byPath(tree, attribution[0]!.path);
-      const chips = chipsOf(firstGroup);
-      expect(chips.length, `${name}: expected at least one selectable chip`).toBeGreaterThan(0);
-      (propsOf(chips[0]!).onClick as () => void)();
-      expect(lastSet?.[0]).toBe(attribution[0]!.path);
-    });
-  }
-
-  it("side-plus-persons: selecting one item's value does not touch a sibling item's value", () => {
-    const sets: Record<string, unknown> = {};
-    const attribution: PadActionView["attribution"] = [
-      { kind: "side", path: "by" },
-      { kind: "person", path: "person" },
-    ];
-    const island = renderIsland(AttributionPicker, {
-      action: { attribution, labelKey: { key: "pad.cricket.action.review", label: "Review" } },
-      values: {},
-      setValue: (path: string, value: unknown) => (sets[path] = value),
-      lineups: CRICKET_LINEUPS,
-      state: undefined,
-    });
-    const tree = island.tree();
-    const sideGroup = byPath(tree, "by");
-    (propsOf(chipsOf(sideGroup)[0]!).onClick as () => void)();
-    expect(Object.keys(sets)).toEqual(["by"]);
-    expect(sets["person"]).toBeUndefined();
-  });
-});
+// R7/G review (2026-09-01): the degrade these tests exercise moved to its one
+// remaining caller. `attribution-picker.tsx` used to export `resolveSquads`,
+// which was byte-for-byte `v3/pad-host.tsx`'s `squadStateOf`; the v2 copy died
+// with the lane, so these assertions now drive the LIVE function rather than
+// its retired twin. The rule under test is unchanged: verify `state.squads`
+// structurally, else fall back to `initSquads(lineups)`.
+import { squadStateOf } from "../v3/pad-host";
 
 describe("attribution-picker — the keeper must be read via personsAtPosition from FOLDED state, never the lineup prop", () => {
   const HOCKEY_CFG = hockey.configSchema.parse({});
@@ -160,48 +67,29 @@ describe("attribution-picker — the keeper must be read via personsAtPosition f
     return foldClient(hockey, HOCKEY_CFG, HOCKEY_LINEUPS, events);
   }
 
-  it("resolveSquads(state, lineups) surfaces the LIVE keeper after a position change, not the kickoff one", () => {
+  it("squadStateOf(state, lineups) surfaces the LIVE keeper after a position change, not the kickoff one", () => {
     const state = foldedStateAfterKeeperMove();
-    const squads = resolveSquads(state, HOCKEY_LINEUPS);
+    const squads = squadStateOf(state, HOCKEY_LINEUPS);
     const candidates = candidatesForPerson(GK_ITEM, squads);
     const homeCandidates = candidates.filter((c) => c.side === "home").map((c) => c.personId);
     expect(homeCandidates).toEqual([NEW_KEEPER]);
     expect(homeCandidates).not.toContain(ORIGINAL_KEEPER);
   });
 
-  it("the rendered picker offers the NEW keeper as a chip once folded state carries the move", () => {
-    const state = foldedStateAfterKeeperMove();
-    let lastSet: [string, unknown] | null = null;
-    const island = renderIsland(AttributionPicker, {
-      action: { attribution: [GK_ITEM], labelKey: { key: "pad.hockey.action.shot", label: "Shot" } },
-      values: {},
-      setValue: (path: string, value: unknown) => (lastSet = [path, value]),
-      lineups: HOCKEY_LINEUPS,
-      state,
-    });
-    const group = byPath(island.tree(), "goalkeeper");
-    const chips = chipsOf(group);
-    expect(chips.map((c) => propsOf(c)["data-value"])).toContain(NEW_KEEPER);
-    expect(chips.map((c) => propsOf(c)["data-value"])).not.toContain(ORIGINAL_KEEPER);
-    const newKeeperChip = find(chips, (c) => propsOf(c)["data-value"] === NEW_KEEPER);
-    (propsOf(newKeeperChip).onClick as () => void)();
-    expect(lastSet).toEqual(["goalkeeper", NEW_KEEPER]);
-  });
-
   it("BEFORE any position change, the kickoff keeper alone is offered (proves the test fixture itself is meaningful)", () => {
     const events = [makeEnvelope(0, { type: "core.start", payload: {} })];
     const state = foldClient(hockey, HOCKEY_CFG, HOCKEY_LINEUPS, events);
-    const squads = resolveSquads(state, HOCKEY_LINEUPS);
+    const squads = squadStateOf(state, HOCKEY_LINEUPS);
     const candidates = candidatesForPerson(GK_ITEM, squads).filter((c) => c.side === "home");
     expect(candidates.map((c) => c.personId)).toEqual([ORIGINAL_KEEPER]);
   });
 });
 
-describe("attribution-picker — degrades gracefully: no live squads -> team sheet; no roster at all -> side-only", () => {
+describe("attribution-picker — squadStateOf degrades gracefully: no live squads, or a private non-adopting shape, falls back to the team sheet", () => {
   const CRICKET_LINEUPS: LineupPair = defaultLineupPair(cricket.positions);
 
   it("no `state.squads` at all -> falls back to initSquads(lineups), the kickoff team sheet", () => {
-    const squads = resolveSquads(undefined, CRICKET_LINEUPS);
+    const squads = squadStateOf(undefined, CRICKET_LINEUPS);
     const candidates = candidatesForPerson({ kind: "person", path: "striker" }, squads);
     const homeIds = candidates.filter((c) => c.side === "home").map((c) => c.personId);
     // defaultLineupPair seeds "H-p1".."H-p11" as home's starting XI.
@@ -214,37 +102,13 @@ describe("attribution-picker — degrades gracefully: no live squads -> team she
     // (onPitch/bench/... — no `members` array) — isSquadState must say no.
     const fakeState = { squads: { home: { onPitch: ["x"] }, away: { onPitch: ["y"] } } };
     expect(isSquadState(fakeState.squads)).toBe(false);
-    const squads = resolveSquads(fakeState, CRICKET_LINEUPS);
+    const squads = squadStateOf(fakeState, CRICKET_LINEUPS);
     // Degrades to the team sheet rather than reading the private shape as if
     // it were a SquadState (which would crash/misbehave downstream).
     const homeIds = candidatesForPerson({ kind: "person", path: "striker" }, squads)
       .filter((c) => c.side === "home")
       .map((c) => c.personId);
     expect(homeIds).toContain("H-p1");
-  });
-
-  it("no roster at all (empty lineups) -> side chips still render, person chips render nothing, no crash", () => {
-    const emptyLineups: LineupPair = {
-      home: { entrantId: "H", slots: [] },
-      away: { entrantId: "A", slots: [] },
-    };
-    const attribution: PadActionView["attribution"] = [
-      { kind: "side", path: "wonBy" },
-      { kind: "person", path: "striker" },
-    ];
-    const island = renderIsland(AttributionPicker, {
-      action: { attribution, labelKey: { key: "pad.cricket.action.toss", label: "Toss" } },
-      values: {},
-      setValue: noop,
-      lineups: emptyLineups,
-      state: undefined,
-    });
-    const tree = island.tree();
-    const sideGroup = byPath(tree, "wonBy");
-    expect(chipsOf(sideGroup).length).toBe(2); // Home / Away always available
-    const personGroup = byPath(tree, "striker");
-    expect(chipsOf(personGroup).length).toBe(0);
-    expect(textOf(personGroup).length).toBeGreaterThan(0); // a hint, not silence
   });
 
   it("a coach is never offered as a candidate, even though they are on the team sheet", () => {
@@ -256,79 +120,9 @@ describe("attribution-picker — degrades gracefully: no live squads -> team she
       },
       away: defaultLineupPair(cricket.positions).away,
     };
-    const squads = resolveSquads(undefined, withCoach);
+    const squads = squadStateOf(undefined, withCoach);
     const ids = candidatesForPerson({ kind: "person", path: "striker" }, squads).map((c) => c.personId);
     expect(ids).not.toContain("H-coach");
-  });
-});
-
-describe("attribution-picker — side items resolve to the REAL entrant id, never the literal 'home'/'away' string", () => {
-  it("selecting Home stores lineups.home.entrantId, matching what sideOf()/EntrantId schemas expect", () => {
-    const CRICKET_LINEUPS: LineupPair = defaultLineupPair(cricket.positions);
-    let lastSet: [string, unknown] | null = null;
-    const island = renderIsland(AttributionPicker, {
-      action: {
-        attribution: [{ kind: "side", path: "wonBy" }],
-        labelKey: { key: "pad.cricket.action.toss", label: "Toss" },
-      },
-      values: {},
-      setValue: (path: string, value: unknown) => (lastSet = [path, value]),
-      lineups: CRICKET_LINEUPS,
-      state: undefined,
-    });
-    const group = byPath(island.tree(), "wonBy");
-    const chips = chipsOf(group);
-    const homeChip = find(chips, (c) => propsOf(c)["data-value"] === CRICKET_LINEUPS.home.entrantId);
-    (propsOf(homeChip).onClick as () => void)();
-    expect(lastSet).toEqual(["wonBy", CRICKET_LINEUPS.home.entrantId]);
-    expect(lastSet?.[1]).not.toBe("home"); // the literal string is NOT a valid EntrantId value here
-  });
-});
-
-describe("attribution-picker — optional items: re-tapping a selected chip clears it", () => {
-  it("selecting then re-selecting the same chip calls setValue with undefined", () => {
-    const CRICKET_LINEUPS: LineupPair = defaultLineupPair(cricket.positions);
-    const calls: unknown[] = [];
-    function Wrapper() {
-      // A tiny controlled wrapper so the SECOND click sees the value the
-      // FIRST click produced — AttributionPicker itself is stateless.
-      return null;
-    }
-    void Wrapper;
-    let value: unknown;
-    function setValue(_path: string, v: unknown) {
-      value = v;
-      calls.push(v);
-    }
-    const island = renderIsland(AttributionPicker, {
-      action: {
-        attribution: [{ kind: "person", path: "striker" }],
-        labelKey: { key: "pad.cricket.action.ball", label: "Ball" },
-      },
-      values: {},
-      setValue,
-      lineups: CRICKET_LINEUPS,
-      state: undefined,
-    });
-    const group = byPath(island.tree(), "striker");
-    const chip = chipsOf(group)[0]!;
-    (propsOf(chip).onClick as () => void)();
-    expect(calls[0]).toBe("H-p1");
-    // Re-render with the now-selected value so the SAME chip reads as pressed.
-    island.rerender({
-      action: {
-        attribution: [{ kind: "person", path: "striker" }],
-        labelKey: { key: "pad.cricket.action.ball", label: "Ball" },
-      },
-      values: { striker: value as string },
-      setValue,
-      lineups: CRICKET_LINEUPS,
-      state: undefined,
-    });
-    const chip2 = chipsOf(byPath(island.tree(), "striker"))[0]!;
-    expect(propsOf(chip2)["aria-pressed"]).toBe(true);
-    (propsOf(chip2).onClick as () => void)();
-    expect(calls[1]).toBeUndefined();
   });
 });
 

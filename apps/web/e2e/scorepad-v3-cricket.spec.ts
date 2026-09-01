@@ -547,6 +547,92 @@ test("cricket v3: voiding an OLDER event from the activity panel writes core.voi
   expect(voided.payload).toMatchObject({ event_id: oldest.id });
 });
 
+// RESTORED FROM THE DEMOLITION (R7/G review, 2026-09-01). The deleted
+// `scorepad-v2.spec.ts` held a football test that scored, RELOADED THE PAGE,
+// and then voided a row addressed by its real `data-event-id`. R7/G retired it
+// as superseded by the two cricket void tests above — but neither of those
+// reloads, and the OldVoid test immediately above deliberately addresses its
+// row BY POSITION, for the reason its own comment gives: for an event this
+// client submitted, the id the panel renders is the client's idempotency key,
+// not the id the ledger reads back. So nothing in the suite covered
+// [reload] × [per-row void addressed by the SERVER's event id].
+//
+// That combination is not a redundant pairing of two covered things. A reload
+// is what makes `data-event-id` MEANINGFUL: the panel rebuilds every row from
+// the server's `initialEvents` rather than from its own queue, so the rendered
+// id is the ledger's id, and the void this test clicks is the first one in the
+// suite whose target identity is proven end to end through the DOM rather than
+// through an array index. `v3/activity.tsx` is shared by all eleven skins and
+// was untouched by R7, so this guards a live seam for every sport.
+//
+// It also carries the deleted test's measured regression guard: that test
+// recorded a pre-hydration click race, "one red in six runs of this file, on a
+// warm server as well as a deliberately cold one". Hence the explicit wait for
+// the void control to be ENABLED after reload, rather than clicking the moment
+// the row paints.
+test("cricket v3: after a RELOAD, a per-row void addressed by the panel's own data-event-id targets that exact ledger event", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  const fx = await seedRosteredFixture(page.request, {
+    label: `V3 Cricket ReloadVoid ${TAG}`,
+    sportKey: "cricket",
+    variantKey: "t20",
+    home: [{ fullName: `V3 RV Striker ${TAG}` }, { fullName: `V3 RV NonStriker ${TAG}` }],
+    away: [{ fullName: `V3 RV Bowler ${TAG}` }],
+  });
+  await openLiveConsole(page, fx);
+
+  // Two balls, so the target is unambiguously ONE of them and a void that
+  // silently hit "the last thing" would name the wrong id.
+  for (const runs of ["1", "2"]) {
+    await pad(page).getByRole("button", { name: runs, exact: true }).click();
+  }
+  await expect
+    .poll(
+      async () => (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "cricket.ball").length,
+      { timeout: 30_000 },
+    )
+    .toBe(2);
+  await expect(pad(page).locator('[data-role="v3-dock"]')).not.toBeVisible({ timeout: 20_000 });
+
+  const balls = (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "cricket.ball");
+  const target = balls[0]!;
+
+  // THE RELOAD. Everything after this point is served from `initialEvents`,
+  // which is the whole point: the panel's `data-event-id` is now the ledger's
+  // id, not a client key, so it can be addressed directly.
+  await page.reload();
+  await openLiveConsole(page, fx);
+
+  const panel = page.locator('[data-role="v3-activity"]');
+  const row = panel.locator(`[data-role="v3-activity-row"][data-event-id="${target.id}"]`);
+  // A locator that matches NOTHING would make the click throw rather than pass
+  // silently, but assert the count anyway: a vacuous e2e is this wave's
+  // recurring failure, and "the server's id reached the DOM at all" is itself
+  // the half of this test that the position-addressed version cannot state.
+  await expect.poll(async () => row.count(), { timeout: 30_000 }).toBe(1);
+
+  const voidControl = row.locator('[data-role="v3-activity-void"]');
+  // The hydration race the deleted test measured: the row paints from the
+  // server-rendered payload before React attaches its handler, so a click on a
+  // merely-VISIBLE control is dropped. Wait for enabled, then click.
+  await expect(voidControl).toBeEnabled({ timeout: 30_000 });
+  await voidControl.click();
+
+  await expect
+    .poll(
+      async () => (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "core.void").length,
+      { timeout: 30_000 },
+    )
+    .toBe(1);
+  const voided = (await ledger(page.request, fx.fixtureId)).find((e) => e.type === "core.void")!;
+  // The id the DOM carried, end to end. `target` is the OLDER ball, so this
+  // also fails if the void degraded into the ribbon's undo-the-last-thing.
+  expect(voided.payload).toMatchObject({ event_id: target.id });
+  expect(target.id).not.toBe(balls[1]!.id);
+});
+
 // R2b (2026-08-17) — the over-by-over tile's own e2e coverage, deferred by
 // that wave's plan (`docs/superpowers/plans/2026-08-17-scorepad-v3-r2b-
 // cricket-over.md`, task 5) to this session. Task 3/4 already shipped the
