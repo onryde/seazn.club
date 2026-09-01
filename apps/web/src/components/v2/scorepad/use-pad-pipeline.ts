@@ -320,6 +320,26 @@ import { useFixtureStream, type RealtimeConnector } from "./use-fixture-stream";
 // scorer's fast but deliberate second entry.
 export const DOUBLE_SUBMIT_WINDOW_MS = 250;
 
+/**
+ * The floor this guard must stay under: the fastest a SCORER can deliberately
+ * repeat a tap on the same target and mean both.
+ *
+ * A claim about people, not about code, which is why it is a named constant
+ * rather than a number inside one test. Sustained deliberate tapping tops out
+ * around 5-8 taps/sec (125-200ms); 350ms leaves headroom above even the fast
+ * end, so a window below this cannot be eating a tap anybody meant.
+ *
+ * It exists so `DOUBLE_SUBMIT_WINDOW_MS` can be held to it by a test. R7-46's
+ * first attempt paced its e2e run at `DOUBLE_SUBMIT_WINDOW_MS + 100` — which
+ * reads as careful (R7-19: derive the expected value from the source of truth)
+ * and is in fact a TAUTOLOGY: raise the window to 600 and the pace follows to
+ * 700, so the test passes at every possible value and can never witness the
+ * regression it exists for. The relationship worth pinning is not "the pace
+ * clears the window", it is "the window stays out of human range" — and that
+ * one has a side it can fail on.
+ */
+export const HUMAN_FASTEST_REPEAT_MS = 350;
+
 // A stable module-level fallback, not `params.auth ?? { kind: "session" }`
 // inline at call time — the latter would allocate a NEW object every render
 // whenever a caller omits `auth`, and useFixtureStream's own effect depends
@@ -1471,6 +1491,11 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
       const isSameAction = (o: { type: string; payload: unknown } | null): boolean =>
         o !== null && o.type === type && deepEqual(o.payload, payload);
       if (isSameAction(submitInFlight.current)) {
+        // R7-46 — visible for the same reason the window guard below is; see
+        // `submitHeld`'s copy of this guard for the full note. Both guards in
+        // BOTH functions now refuse through `lastRejection`, so there is no
+        // remaining path by which the pipeline drops a tap in silence.
+        setLastRejection({ code: "DOUBLE_SUBMIT", message: "" });
         return; // identical action already mid-flight this same tick — no-op
       }
       const now = Date.now();
@@ -1569,6 +1594,17 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
       const isSameAction = (o: { type: string; payload: unknown } | null): boolean =>
         o !== null && o.type === type && deepEqual(o.payload, payload);
       if (isSameAction(submitInFlight.current)) {
+        // R7-46 — this drop is VISIBLE too, for the same reason the window
+        // guard below is. There are two guards here, not one, and the R7-42
+        // fix only reached the second: a same-TICK repeat (two handlers bound
+        // to one physical press, a `dblclick`-shaped pair, a re-render that
+        // re-invokes the dispatch) never reaches the window check at all, so
+        // until now the single most literal case of "one tap read twice" was
+        // still swallowed with no row, no toast and no error — the exact
+        // silence R7-30 was filed about. Refusing through the same
+        // `lastRejection` channel means every drop the pipeline performs is
+        // one the scorer can see.
+        setLastRejection({ code: "DOUBLE_SUBMIT", message: "" });
         return null; // identical action already mid-flight this same tick — no-op, same as submit()
       }
       const now = Date.now();

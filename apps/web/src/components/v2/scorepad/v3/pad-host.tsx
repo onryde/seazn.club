@@ -1099,6 +1099,34 @@ export interface PadHostV3Props {
   queueDbName?: string;
   personNames?: Readonly<Record<string, string>>;
   /**
+   * R7-46 — a sink the host publishes its `isPartial` predicate to, for
+   * chrome that mounts the ledger ITSELF (`showActivity: false`).
+   *
+   * WHY THIS EXISTS. `isPartialDockAnswer` needs the skin AND a live
+   * `PadHostView` — cfg, state, summary, phase, band, entitlements, squads,
+   * events, context overrides and the host clock's live reading. The organiser
+   * console has none of that: it passes `hideActivity` and renders its own
+   * `<ActivityPanel>` one level out, which meant the partial badge was wired
+   * on the device pad and INERT on the console — the one screen whose whole
+   * job is telling an organiser what the courtside scorer left incomplete.
+   *
+   * WHY A HANDOFF RATHER THAN A SECOND CONSTRUCTION SITE. The console could
+   * assemble a `PadHostView` of its own from `live.state` + cfg + lineups.
+   * It must not: `fixture-console.tsx`'s R7-28 comment records what happened
+   * the last time this exact bag was built twice — `plural` was added to one
+   * site only, and the same rally read "1 pt" in the pad's ribbon and "1 pts"
+   * in the console's ledger, on one screen. One construction site, published
+   * upward.
+   *
+   * KNOWN GAP, recorded rather than hidden: the pad unmounts when a fixture is
+   * decided, and never mounts at all on a fresh load of an already-decided
+   * fixture — so the box is empty there and the console's rows carry no
+   * partial badge. Rows already on screen keep theirs (the box is not cleared
+   * on unmount, deliberately). Closing that needs the predicate to survive
+   * without a pad, which is a bigger change than this one.
+   */
+  onPartialResolver?: (resolve: (eventType: string, payload: Record<string, unknown>) => boolean) => void;
+  /**
    * R7/C1 (D-4, ruling R7-1) — whether THIS host also mounts the activity
    * ledger. Default true, which is the device link and every other surface
    * with no chrome of its own: `/score/[token]` has no page around the pad,
@@ -1609,6 +1637,15 @@ export function PadHostV3(props: PadHostV3Props) {
     (eventType: string, payload: Record<string, unknown>) => isPartialDockAnswer(props.skin, eventType, payload, view),
     [props.skin, view],
   );
+
+  // R7-46 — publish it for chrome that renders the ledger itself. Deliberately
+  // NOT cleared on unmount: a decided fixture unmounts the pad while its rows
+  // stay on the console's screen, and a badge that vanished at the whistle
+  // would be worse than one that persists. See `partialResolverRef`'s own note.
+  const publishPartial = props.onPartialResolver;
+  useEffect(() => {
+    publishPartial?.(isPartial);
+  }, [publishPartial, isPartial]);
 
   const ribbon = buildTopRibbon(activityEvents, (id) => personNames[id] ?? id, t, resolveDetail);
   // R7/C4 — see `ribbonUndoTarget`. Resolved next to the ribbon it belongs to

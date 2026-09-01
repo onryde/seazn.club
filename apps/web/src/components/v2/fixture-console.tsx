@@ -512,6 +512,23 @@ export function FixtureConsole({
   // sign-off's D2, reintroduced by a consolidation meant to lose nothing.
   // `resolvePad` throws for a key in neither registry, which must never take
   // the console down over a caption.
+  // R7-46 — the pad publishes its own `isPartial` predicate into this box (it
+  // needs a live `PadHostView`, which only the pad builds). Before this, the
+  // console passed `hideActivity` and rendered the ledger itself, so the
+  // partial badge was wired on `/score/[token]` and INERT here — on the one
+  // screen whose job is telling an organiser what the courtside scorer left
+  // incomplete. See `PadHostV3Props.partialResolverRef` for why this is a
+  // handoff and not a second `PadHostView` built here.
+  const partialResolverRef = useRef<((eventType: string, payload: Record<string, unknown>) => boolean) | null>(null);
+  const adoptPartialResolver = useCallback((resolve: (eventType: string, payload: Record<string, unknown>) => boolean) => {
+    partialResolverRef.current = resolve;
+  }, []);
+
+  const partialBadge = useCallback(
+    (eventType: string, payload: Record<string, unknown>) => partialResolverRef.current?.(eventType, payload) ?? false,
+    [],
+  );
+
   const padT = (key: string, vars?: Record<string, string | number>) => msg(key as MessageKey, vars);
   const padPlural = useMsgPlural();
   let activityDetail: ActivityDetailResolver | undefined;
@@ -682,6 +699,10 @@ export function FixtureConsole({
                   onEvents={handlePadEvents}
                   // R7/C1 — this console mounts the one ledger itself, below.
                   hideActivity
+                  // R7-46 — ...which is why the pad has to hand its partial
+                  // predicate up rather than use it on a panel it no longer
+                  // renders.
+                  onPartialResolver={adoptPartialResolver}
                 />
               </ScoringErrorBoundary>
             </div>
@@ -708,6 +729,12 @@ export function FixtureConsole({
         t={msg}
         authority
         resolveDetail={activityDetail}
+        // R7-46. Reads through the ref at call time rather than closing over a
+        // value, so the panel does not need to re-render when the pad's view
+        // changes — it re-renders when `activityRows` does, which is exactly
+        // when a row could newly become settled-and-partial. `?? false` covers
+        // the recorded gap: a decided fixture whose pad never mounted.
+        isPartial={partialBadge}
         onVoid={
           scoring && !decidedLock(live.status)
             ? (eventId) => {

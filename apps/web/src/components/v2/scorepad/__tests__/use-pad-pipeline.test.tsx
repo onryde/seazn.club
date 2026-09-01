@@ -19,6 +19,7 @@ import type { RealtimeConnector } from "../use-fixture-stream";
 import { indexedDbQueueStore, type QueueStore } from "../queue-store";
 import {
   DOUBLE_SUBMIT_WINDOW_MS,
+  HUMAN_FASTEST_REPEAT_MS,
   pendingToEnvelope,
   usePadPipeline,
   type UsePadPipelineParams,
@@ -2432,5 +2433,36 @@ describe("usePadPipeline — a queued event the server already applied, resumed 
     // And "is this mine" must follow the surviving copy, or the undo-own
     // affordance silently disowns an event this device really did record.
     expect(pad2.current.ownEventIds.has(REAL_SERVER_ID)).toBe(true);
+  });
+});
+
+// R7-46 — the constant's own guard, and the cheapest possible statement of the
+// rule the walkthrough proves the expensive way.
+//
+// R7-30/R7-43 was not "the window was 600" in the abstract. It was that 600ms
+// reached into the range where a scorer taps DELIBERATELY — a player on a run
+// produces byte-identical payloads back to back — so the pad silently recorded
+// less than the scorer did. The repair is not a magic number, it is the
+// relationship: the guard must stay clear of human range.
+//
+// This is asserted here rather than only in
+// `e2e/walkthrough/scorepad-v3-honest-recording.spec.ts` because a constant
+// creeping back up should red in milliseconds, not after a browser boots. And
+// it is asserted as an INEQUALITY against a separately-named floor rather than
+// as `toBe(250)`: pinning the literal would make every deliberate retune a
+// test edit, which is how a guard becomes something people delete.
+describe("R7-46: the double-submit window must stay out of human tapping range", () => {
+  it("is strictly below the fastest a scorer can deliberately repeat a tap", () => {
+    expect(
+      DOUBLE_SUBMIT_WINDOW_MS,
+      "a window at or above HUMAN_FASTEST_REPEAT_MS eats deliberate taps — this is R7-30, which shipped at 600ms",
+    ).toBeLessThan(HUMAN_FASTEST_REPEAT_MS);
+  });
+
+  it("and the floor itself is a real human bound, not a value tuned to make the line above pass", () => {
+    // Sustained deliberate tapping tops out around 5-8 taps/sec. A floor that
+    // drifted below ~200ms would no longer describe a person, and the
+    // inequality above would start passing for the wrong reason.
+    expect(HUMAN_FASTEST_REPEAT_MS).toBeGreaterThanOrEqual(200);
   });
 });

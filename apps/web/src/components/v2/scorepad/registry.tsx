@@ -166,6 +166,11 @@ export interface ScorePadProps {
    * there is. Honoured via v3's `showActivity` prop below.
    */
   hideActivity?: boolean;
+  /** R7-46 — paired with `hideActivity`: chrome that mounts the ledger itself
+   *  needs the pad's own partial-answer predicate, which only the pad can
+   *  build. See `PadHostV3Props.onPartialResolver`. Ignored by the legacy
+   *  lane, which has no dock vocabulary at all. */
+  onPartialResolver?: (resolve: (eventType: string, payload: Record<string, unknown>) => boolean) => void;
   identity: OwnIdentity;
   entitlements: Readonly<Record<string, boolean>>;
   band: FidelityBand;
@@ -258,6 +263,7 @@ export function ScorePad(props: ScorePadProps) {
       queueDbName={`scorepad-${props.fixtureId}`}
       personNames={personNames}
       showActivity={!props.hideActivity}
+      onPartialResolver={props.onPartialResolver}
       skin={padLane.skin}
     />
   );
