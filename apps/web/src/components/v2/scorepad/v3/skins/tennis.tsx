@@ -1279,7 +1279,7 @@ export function tennisDetail(ctx: ActivityDetailContext): string | undefined {
       return join([score, tbLine]);
     }
     case SANCTION_TYPE:
-      return join([vocabText("level", payload.level, t), named(payload.person), reasonOf()]);
+      return join([vocabText("level", payload.level, t), named(payload.person ?? payload.by), reasonOf()]);
     case INTERRUPTION_TYPE:
       return join([vocabText("kind", payload.kind, t), named(payload.person)]);
     case GAME_AWARD_TYPE:

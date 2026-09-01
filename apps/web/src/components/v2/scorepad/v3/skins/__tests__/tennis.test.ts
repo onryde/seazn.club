@@ -1420,6 +1420,17 @@ describe("tennisDetail", () => {
     ).toBe(`${t("sanction.warning")} · ${NAMES.H} · racquet abuse`);
   });
 
+  // The engine's `tennis.sanction` event carries the offender as `by`, not
+  // `person` (kernel.ts) — `person` is dressing this function invents. The
+  // test above only ever exercised the invented field, so a real
+  // engine-shaped payload silently dropped the name (scoring-vocab-labels
+  // e2e:191 caught it live: `row` never contained the offender's name).
+  it("sanction: falls back to `by` when `person` is absent — the engine's own field name", () => {
+    expect(
+      tennisDetail(ctx({ eventType: "tennis.sanction", payload: { level: "warning", by: "H", reason: "racquet abuse" } })),
+    ).toBe(`${t("sanction.warning")} · ${NAMES.H} · racquet abuse`);
+  });
+
   it("interruption: kind + person", () => {
     expect(tennisDetail(ctx({ eventType: "tennis.interruption", payload: { kind: "medical", person: "A" } }))).toBe(
       `${t("kind.medical")} · ${NAMES.A}`,
