@@ -4626,6 +4626,8 @@ export type DictionaryKey =
   | "scorepad.field.choose"
   | "scorepad.locked.reason"
   | "scorepad.queue.offline"
+  | "scorepad.queue.pending"
+  | "scorepad.queue.resyncing"
   | "scorepad.queue.synced"
   | "scorepad.refusal.invalid"
   | "scorepad.refusal.missing"

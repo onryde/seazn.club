@@ -49,7 +49,7 @@ import { refusalText } from "../refusal-copy";
 import type { PadTransport } from "../transport";
 import type { OwnIdentity } from "../types";
 import { usePadPipeline } from "../use-pad-pipeline";
-import type { RejectionInfo } from "../use-pad-pipeline";
+import type { RejectionInfo, UsePadPipelineResult } from "../use-pad-pipeline";
 import { HOLD_MS } from "../queue";
 import { buildPadView, summaryHeadline, type PadActionView, type PadViewCtx } from "../view-model";
 // R3/football: the STRUCTURAL `SquadState` check the legacy lane already
@@ -467,6 +467,37 @@ export function resolveSheet(sheetKey: string, sheets: Record<string, GuidedShee
  */
 export function rejectionText(rejection: RejectionInfo | null, m: MsgFn): string | null {
   return refusalText(rejection, m);
+}
+
+/**
+ * The durable queue's own status, the other half of `usePadPipeline` this
+ * host built and held but never rendered — same shape as `rejectionText`
+ * above, and the same discovery method: R7 deleted the legacy renderer
+ * (pad-renderer.tsx, `queueLabel`/`queueAttention`) without ever porting its
+ * offline/resyncing/pending/synced indicator onto the v3 chassis, so a v3
+ * scorer who goes offline gets no on-screen sign of it at all — the durable
+ * queue (queue.ts) keeps working underneath; only the status pill was lost.
+ * `usePadPipeline` is the SAME hook both lanes always shared, so `offline`/
+ * `resyncing`/`queueDepth` were sitting on `pipeline` unused the whole time.
+ * Ports the legacy renderer's own four-way precedence verbatim: offline
+ * beats resyncing beats a non-zero queue beats synced.
+ */
+export function queueStatusText(
+  pipeline: Pick<UsePadPipelineResult, "offline" | "resyncing" | "queueDepth">,
+  m: MsgFn,
+): string {
+  if (pipeline.offline) return m("scorepad.queue.offline");
+  if (pipeline.resyncing) return m("scorepad.queue.resyncing");
+  if (pipeline.queueDepth > 0) return m("scorepad.queue.pending", { count: pipeline.queueDepth });
+  return m("scorepad.queue.synced");
+}
+
+/** Whether the status pill above needs the scorer's attention (amber, with a
+ *  pulsing dot) rather than reading as steady-state clean (emerald). */
+export function queueStatusAttention(
+  pipeline: Pick<UsePadPipelineResult, "offline" | "queueDepth">,
+): boolean {
+  return pipeline.offline || pipeline.queueDepth > 0;
 }
 
 export type UndoDecision = { kind: "drop"; heldId: string } | { kind: "void"; eventId: string };
@@ -1581,6 +1612,10 @@ export function PadHostV3(props: PadHostV3Props) {
 
   // Blocker 1 — see rejectionText's own doc above.
   const rejectionMsg = rejectionText(pipeline.lastRejection, msg);
+  // See queueStatusText's own doc above — the durable queue's status, ported
+  // from the legacy renderer and never rendered on v3 until now.
+  const queueLabel = queueStatusText(pipeline, msg);
+  const queueAttention = queueStatusAttention(pipeline);
   // No memo, matching the legacy reader's own reasoning: a cheap read, and
   // `pipeline.summary` already changes identity on every fold advance.
   const headline = summaryHeadline(pipeline.summary);
@@ -1728,6 +1763,28 @@ export function PadHostV3(props: PadHostV3Props) {
        * with no palette, so its markup is unchanged. */
       data-sport-theme={sportThemeAttr(props.skin.key)}
     >
+      {/* The durable queue's own status — offline/resyncing/pending(count)/
+       *  synced, ported verbatim from the legacy renderer's header pill
+       *  (pad-renderer.tsx: `queueLabel`/`queueAttention`), which v3 dropped
+       *  along with the rest of that component. Right-aligned rather than
+       *  sharing a row with phase tabs, since v3's chassis has no such row
+       *  here — every skin gets it for free from the host, same as the
+       *  rejection banner below. */}
+      <div className="flex justify-end">
+        <span
+          data-role="v3-queue-status"
+          className={`flex shrink-0 items-center gap-1.5 text-[11px] font-semibold uppercase tracking-widest ${
+            queueAttention ? "text-amber-600" : "text-emerald-600"
+          }`}
+        >
+          <span
+            aria-hidden
+            className={`h-1.5 w-1.5 rounded-full ${queueAttention ? "animate-live-pulse bg-amber-500" : "bg-emerald-500"}`}
+          />
+          {queueLabel}
+        </span>
+      </div>
+
       {/* Sign-off review 2026-08-17: the legacy renderer showed the fold's own
        *  headline (pad-renderer.tsx:192,296, added by S10/#419 as a fix) and
        *  v3 dropped it — `ScorebugSpec` carries no result field, so a finished
