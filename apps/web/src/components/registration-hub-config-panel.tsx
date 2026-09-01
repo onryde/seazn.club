@@ -75,7 +75,7 @@ const CUTOFF_TIME_OPTIONS = ["23:59"];
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
 
-/** The three fields this panel edits as a date+time PAIR rather than a
+/** The four fields this panel edits as a date+time PAIR rather than a
  *  single value — see registration-hub-tz-input.ts's header for why (the
  *  half-filled-value bug, RS005 R4 task 2). */
 const DATETIME_FIELDS = ["opens_at", "closes_at", "refund_lock_at", "place_by_at"] as const;
