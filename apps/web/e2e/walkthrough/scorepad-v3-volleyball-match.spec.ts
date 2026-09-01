@@ -132,7 +132,6 @@ async function sendHeldNowIfAsked(page: Page): Promise<void> {
   if (await btn.count()) await btn.click();
 }
 
-let lastSide: "home" | "away" | null = null;
 /**
  * `opener` is STRICT in both directions, deliberately. Passing it REQUIRES
  * the set-opener sheet to appear and answers it; omitting it requires that no
@@ -140,6 +139,13 @@ let lastSide: "home" | "away" | null = null;
  * would let the prompt silently stop firing — the exact regression this whole
  * mechanism exists to prevent — and would also hide it firing where it should
  * not, which is the cost side of the same feature.
+ *
+ * R7-42/R7-30/R7-43 (owner ruling, `_INDEX.md`) — this used to pay a 750ms
+ * clearance on a same-side repeat (tracked in the now-deleted `lastSide`,
+ * shared with `tapAnchor` below) so it would not collide with
+ * `DOUBLE_SUBMIT_WINDOW_MS`. That window is now 250ms (was 600ms), and a
+ * refused repeat is VISIBLE rather than silent, so the clearance and its
+ * bookkeeping are gone.
  */
 async function tapRally(
   page: Page,
@@ -148,10 +154,8 @@ async function tapRally(
   opener?: "home" | "away",
 ): Promise<void> {
   const before = (await ledger(page.request, fx.fixtureId)).length;
-  if (side === lastSide) await page.waitForTimeout(750);
   if (PACE > 0) await page.waitForTimeout(PACE);
   await half(page, side).click();
-  lastSide = side;
   const sheet = v3Sheet(page);
   if (opener !== undefined) {
     await expect(sheet, "the first tap of an unopened set must ASK who served").toBeVisible({
@@ -187,7 +191,6 @@ async function tapAnchor(
   await expect(sheet).toContainText("Who won it?", { timeout: 20_000 });
   await choiceOption(sheet, wonBy).click();
   await expect(sheet).toHaveCount(0, { timeout: 20_000 });
-  lastSide = wonBy;
   await sendHeldNowIfAsked(page);
   await expect
     .poll(async () => (await ledger(page.request, fx.fixtureId)).length, { timeout: 20_000 })
@@ -199,7 +202,6 @@ test("R5 — volleyball: tap a match through a set the pad asks the opener of, a
 }) => {
   test.setTimeout(180_000);
   shotNo = 0;
-  lastSide = null;
 
   const fx = await seedRosteredFixture(page.request, {
     label: `V3 Volleyball Match ${TAG}`,
@@ -453,7 +455,7 @@ test("R5 — volleyball: tap a match through a set the pad asks the opener of, a
   await shot(page, "decided");
 
   // ---- UNDO THE DECIDING RALLY ----------------------------------------------
-  const undoLast = page.getByRole("button", { name: /Undo last/ });
+  const undoLast = page.getByRole("button", { name: /Void last entry/ });
   await expect(undoLast, "a match decided by a tapped rally left no way to undo it").toBeVisible();
   await undoLast.click();
   await expect

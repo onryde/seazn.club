@@ -41,9 +41,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { EventEnvelope, LineupPair, SquadState } from "@seazn/engine/core";
 import { CORE_EVENT_SCHEMAS, initSquads, isCoreEventType } from "@seazn/engine/core";
 import type { AnySportModule, FidelityBand, PadSpec } from "@seazn/engine/sport";
-import { useMsg } from "@/components/i18n/dict-provider";
+import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
 import { type MsgFn } from "@/lib/scoring-vocab";
+import { deepEqual } from "../pipeline";
 import { refusalText } from "../refusal-copy";
 import type { PadTransport } from "../transport";
 import type { OwnIdentity } from "../types";
@@ -80,7 +81,13 @@ import {
   type PadClock,
   type PayloadSchemaProbe,
 } from "./clock";
-import { ActivityPanel, latestRowDetail, type ActivityDetailResolver, type ActivityEvent } from "./activity";
+import {
+  ActivityPanel,
+  activityRowState,
+  latestRowDetail,
+  type ActivityDetailResolver,
+  type ActivityEvent,
+} from "./activity";
 import { MORE_SHEET_KEY, type DockSpec, type GuidedSheetSpec, type PadHostView, type PadPhase, type ScorebugSpec, type SkinDefV3, type SwapSlot, type TapEvent, type TileSpec } from "./types";
 import { sportThemeAttr, sportThemeStyle } from "./sport-theme";
 
@@ -386,6 +393,39 @@ export function moreActions(
   return out;
 }
 
+/**
+ * R7-39 (owner-approved), corrected by R7-39a: the More tile was offered
+ * even when the sheet it opens has nothing in it. R7-39's own filing
+ * overstated the symptom as a BLANK sheet — `action-form.tsx`'s
+ * `actions.length === 0` branch renders `pad.host.moreEmpty` ("Nothing else
+ * to record here yet."), never a blank panel, so this was never a rendering
+ * bug. The real defect: a tile that is a GUARANTEED DEAD END at a knowable
+ * phase/band, discoverable only by tapping it. `pad.host.moreEmpty` stays —
+ * it is the safety net for any case this tile-level suppression cannot see
+ * (a future skin that forgets to push the tile through this function, or a
+ * hole this pure builder's own test suite has not yet enumerated).
+ *
+ * FIXED IN THE CHASSIS, not per-skin (R7-39's own ruling): `moreActionsList`
+ * (this file's own render body) is already computed from exactly the inputs
+ * that decide whether the More sheet has anything in it, so this function
+ * takes that SAME list rather than re-deriving a second opinion. The tile is
+ * found STRUCTURALLY, via `action.sheet === MORE_SHEET_KEY` — never the id
+ * string `"more"`, which skins do not agree on (generic's own tile uses
+ * `MORE_TILE_ID`, every other skin a bare `"more"` literal). One check here
+ * fixes all seven current skins (and the eighth, whenever it lands) without
+ * either one adding its own guard — `skins/generic.tsx` used to carry
+ * exactly that guard (`moreHasContent`, a hand-mirror of `moreActions`
+ * proved equal to it by its own test sweep) and it is DELETED as part of
+ * this fix, not left beside it: two paths to one fact only ever drift.
+ *
+ * A skin's own `tiles(view)` now pushes the More tile UNCONDITIONALLY, the
+ * same shape every non-generic skin already took before this fix — this
+ * function is the one and only place that removes it.
+ */
+export function suppressEmptyMoreTile(tiles: readonly TileSpec[], moreActionsList: readonly PadActionView[]): TileSpec[] {
+  return tiles.filter((tile) => moreActionsList.length > 0 || !("sheet" in tile.action) || tile.action.sheet !== MORE_SHEET_KEY);
+}
+
 export type SheetResolution = { kind: "guided"; spec: GuidedSheetSpec } | { kind: "action" } | { kind: "none" };
 
 /** What a tapped `{sheet: key}` tile actually opens. `MORE_SHEET_KEY` is
@@ -443,6 +483,65 @@ export function decideUndo(eventId: string, heldId: string | null): UndoDecision
 }
 
 /**
+ * WHICH event the ribbon's take-back acts on, or `null` for "offer nothing".
+ *
+ * R7/C4 (ruling R7-5, the open item the design of record left to verify —
+ * and it was a real defect). The ribbon used to hand `handleUndo` the raw
+ * `events[events.length - 1]`, UNFILTERED, where the console's own control
+ * (`lastVoidable`, fixture-console.tsx) had always skipped `core.void` rows.
+ * After ANY void the newest event IS a `core.void`, so the ribbon offered a
+ * control the engine hard-refuses: `resolveVoids`
+ * (packages/engine/src/core/events.ts) throws INVALID_EVENT — "voids are not
+ * themselves voidable" — and an event some other void already cancelled is
+ * refused for the same reason it is struck through in the panel. Offering
+ * either is the pad promising what the engine will reject, which is the
+ * defect class this programme exists to remove.
+ *
+ * A HELD tap short-circuits both rules and is ALWAYS offered. Inside the
+ * soft-commit window take-back does not void at all — `decideUndo` returns
+ * `{kind:"drop"}` and the submission never reaches the server (spec 2.3) —
+ * so no ledger rule can apply to it, and gating it on one would delete the
+ * cancel-before-send path for any skin whose held event happens to be a
+ * `core.*` type.
+ *
+ * Deliberately the SAME rule the panel beside it applies, not a second one:
+ * two controls that both write `core.void` must agree on what is voidable.
+ *
+ * R7/C review fix #2 — and "the same rule" now means the same FUNCTION.
+ * C4 restated the console's half of the rule and applied it on BOTH surfaces,
+ * so a device link whose newest row came from the console was still offered a
+ * take-back — one the activity panel one line below already hid, and one the
+ * server refuses outright (`server/usecases/scoring.ts`: "A device link can
+ * only undo its own events", 403). `activityRowState` (activity.tsx) is the
+ * one place that rule lives; this delegates to it with the same arguments the
+ * sibling `<ActivityPanel>` mount receives, and `authority` follows the
+ * SURFACE exactly as those mounts' own props do — the in-app console
+ * (`deviceLinkId === null`) mounts its ledger with authority and may void
+ * anything that is not itself a void; the device link keeps
+ * `isVoidableEventType`'s allowlist and its own rows. `voidingEnabled` is
+ * `true` here because reaching this function IS the pad offering the control.
+ */
+export function ribbonUndoTarget(
+  events: readonly ActivityEvent[],
+  heldId: string | null,
+  ownEventIds: ReadonlySet<string>,
+  deviceLinkId: string | null,
+): string | null {
+  if (heldId !== null) return heldId;
+  const latest = events.length > 0 ? events[events.length - 1]! : null;
+  if (latest === null) return null;
+  const { canVoid } = activityRowState(
+    latest,
+    events,
+    ownEventIds,
+    deviceLinkId,
+    true,
+    deviceLinkId === null,
+  );
+  return canVoid ? latest.id : null;
+}
+
+/**
  * The event type a tile will dispatch, or `null` when it cannot be known
  * statically.
  *
@@ -483,6 +582,55 @@ export function tileEventType(
 }
 
 /**
+ * R7/C2 — THE OTHER HALF OF D-12. "Forfeit/Abandon are not representable in
+ * the tile grid" has been a CONVENTION stated in prose since R1, with no
+ * type and no runtime block (`_INDEX.md`: "Skin-level validation owes the
+ * enforcement"). Nothing enforced it; the eleven shipped skins simply never
+ * declared such a tile, which is not the same thing as the chassis refusing
+ * one.
+ *
+ * Console chrome is where the enforcement belongs because console chrome is
+ * where these two events LIVE: the labelled "Match actions" band
+ * (fixture-console.tsx), below the pad and below the ledger, with a sentence
+ * saying they end the match record and a confirmation on Abandon. A tile
+ * reaching the same event from inside the scoring grid would put the most
+ * destructive action in the product one thumb-width from a rally tap — the
+ * hierarchy failure D-12 names — and bypass both the sentence and the
+ * confirmation.
+ *
+ * Enforced INSIDE `filterTilesByBand` rather than as a separate pass with
+ * its own call site: every tile the host renders already goes through that
+ * one filter, so there is no second wiring step a later wave can forget, and
+ * a guard nothing is wired to is not a guard.
+ *
+ * A CLOSED PAIR, not a ban on `core.*`. `core.note` and `core.award` stay
+ * tile-able — the activity panel's own void allowlist already treats those
+ * two as the safe ones for the same reason (no state effect).
+ *
+ * KNOWN, LATENT BYPASS — the MORE SHEET (R7/C review, item 5). This block
+ * lives in `filterTilesByBand` and therefore covers the tile GRID only.
+ * `dedicated` (`dedicatedEventTypes`, below) is built from the FILTERED
+ * tiles, so an event this set removes leaves `dedicated` too, and
+ * `moreActions` then has no reason to exclude it: a `padSpec`-declared
+ * `core.forfeit`/`core.abandon` action would fall through to the More sheet
+ * as an un-narrowed generic form, bypassing this block, the band's sentence
+ * and the Abandon confirmation alike.
+ *
+ * It is latent and NOT a live defect: no engine `padSpec` declares either
+ * type in any panel today, which is what makes the tile grid the only route
+ * that exists. That premise is a tripwire, not an assumption — see "no
+ * engine padSpec declares an authority action" in
+ * `__tests__/authority-only-tiles.test.ts`, which fails the day a module
+ * declares one. Deliberately recorded rather than fixed: the fix belongs
+ * where the exclusion sets are decided (`moreActions`' own two-set contract),
+ * not bolted onto a filter whose whole virtue is having a single call site.
+ */
+export const AUTHORITY_ONLY_EVENT_TYPES: ReadonlySet<string> = new Set([
+  "core.forfeit",
+  "core.abandon",
+]);
+
+/**
  * Sign-off review 2026-08-17: tiles were rendered regardless of the org's
  * fidelity band, so an org without `scoring.ball_by_ball` saw every ball tile
  * and each tap earned a server refusal — `assertEntitledToScore` gates at the
@@ -498,6 +646,11 @@ export function tileEventType(
  * type carries no `fidelity` entry, is KEPT. Hiding a control we failed to
  * classify is a worse failure than showing one that refuses: the scorer can
  * see and report a refusal, but cannot report a button that was never drawn.
+ *
+ * ONE clause fails CLOSED — `AUTHORITY_ONLY_EVENT_TYPES`, see its own doc.
+ * The fail-open reasoning above does not transfer to it and the two are not
+ * in tension: a tile we could not classify is a nuisance, and a Forfeit tile
+ * a scorer taps by mistake ends someone's match.
  */
 export function filterTilesByBand(
   tiles: readonly TileSpec[],
@@ -509,6 +662,7 @@ export function filterTilesByBand(
   return tiles.filter((tile) => {
     const type = tileEventType(tile, sheets, swaps);
     if (type === null) return true;
+    if (AUTHORITY_ONLY_EVENT_TYPES.has(type)) return false;
     const band = fidelity[type];
     if (band === undefined) return true;
     return entitledBands.has(band);
@@ -880,6 +1034,70 @@ export function resolveDockSpec(
   return skin.dock(held.eventType, view, held.payload as Record<string, unknown> | undefined);
 }
 
+/**
+ * R7-42/F (owner ruling on P-5, `_INDEX.md`) — "a doubles rally opens the
+ * dock; if nobody answers within HOLD_MS the hold drains and the rally
+ * submits with `wonBy` only... label the stat as partial wherever it
+ * surfaces". This is that label's own predicate: whether a SETTLED event's
+ * payload still lacks an attribution answer its own dock would offer for
+ * it — chassis-level and sport-agnostic, driven entirely by the payload and
+ * the skin's own REQUIRED `dock()` method (types.ts), never a stored flag.
+ *
+ * Deliberately NOT "did the hold's natural timer fire". A dock chip TAP
+ * never releases the hold early — `detail-dock.tsx`'s own header: "dismissing
+ * early sends immediately... exactly the same outcome as letting the window
+ * expire on its own" — so an ANSWERED rally drains through the identical
+ * natural timer an UNANSWERED one does. That signal cannot tell the two
+ * apart; only the payload's own content can, which is why this calls
+ * `skin.dock()` again with the FINAL payload rather than reading anything
+ * recorded at hold time.
+ *
+ * `kind: "flag"` chips (types.ts, `DockChip.kind`) are excluded on purpose.
+ * Football's own `ownGoal`/`penalty` are documented as skippable MODIFIERS
+ * ("the dock closes on its own and the goal is already recorded") — an
+ * ordinary goal that is neither is not "less than the scorer did", it is
+ * the scorer correctly reporting an ordinary goal. Every dock chip shipped
+ * to date sets its own field unconditionally (never a toggle), so
+ * re-applying one to the settled payload and finding NO CHANGE is exactly
+ * "this chip's own answer is already in the payload" — no chip needs to
+ * declare an "already selected" flag of its own for this to work.
+ */
+/**
+ * R7/task D — does the chassis render its `data-role="v3-headline"` bar?
+ *
+ * Extracted rather than inlined at the JSX so it can be driven directly: the
+ * host is not renderable in this workspace's test environment (node, no DOM),
+ * and the whole point of this wave is that a declaration nobody can exercise
+ * is a declaration nobody has checked.
+ *
+ * Two independent reasons NOT to render, and they must stay independent: the
+ * engine published no usable headline at all (`summaryHeadline` degrades to
+ * null rather than inventing copy), or the skin declares it already says all
+ * of this itself. Omitting `ownsHeadline` means RENDER — see the method's own
+ * doc for why the safe direction is a redundant bar rather than a lost result.
+ */
+export function shouldRenderHeadline(
+  headline: string | null,
+  skin: Pick<SkinDefV3, "ownsHeadline">,
+  view: PadHostView,
+): boolean {
+  if (headline === null) return false;
+  return !(skin.ownsHeadline?.(view) ?? false);
+}
+
+export function isPartialDockAnswer(
+  skin: SkinDefV3,
+  eventType: string,
+  payload: Record<string, unknown>,
+  view: PadHostView,
+): boolean {
+  const spec = skin.dock(eventType, view, payload);
+  if (spec === null) return false;
+  const attribution = spec.chips.filter((chip) => chip.kind !== "flag");
+  if (attribution.length === 0) return false;
+  return attribution.every((chip) => !deepEqual(chip.mutate(payload), payload));
+}
+
 // ---------------------------------------------------------------------------
 // PadHostV3 — the React shell
 // ---------------------------------------------------------------------------
@@ -903,6 +1121,46 @@ export interface PadHostV3Props {
   initialEvents?: readonly EventEnvelope[];
   queueDbName?: string;
   personNames?: Readonly<Record<string, string>>;
+  /**
+   * R7-46 — a sink the host publishes its `isPartial` predicate to, for
+   * chrome that mounts the ledger ITSELF (`showActivity: false`).
+   *
+   * WHY THIS EXISTS. `isPartialDockAnswer` needs the skin AND a live
+   * `PadHostView` — cfg, state, summary, phase, band, entitlements, squads,
+   * events, context overrides and the host clock's live reading. The organiser
+   * console has none of that: it passes `hideActivity` and renders its own
+   * `<ActivityPanel>` one level out, which meant the partial badge was wired
+   * on the device pad and INERT on the console — the one screen whose whole
+   * job is telling an organiser what the courtside scorer left incomplete.
+   *
+   * WHY A HANDOFF RATHER THAN A SECOND CONSTRUCTION SITE. The console could
+   * assemble a `PadHostView` of its own from `live.state` + cfg + lineups.
+   * It must not: `fixture-console.tsx`'s R7-28 comment records what happened
+   * the last time this exact bag was built twice — `plural` was added to one
+   * site only, and the same rally read "1 pt" in the pad's ribbon and "1 pts"
+   * in the console's ledger, on one screen. One construction site, published
+   * upward.
+   *
+   * KNOWN GAP, recorded rather than hidden: the pad unmounts when a fixture is
+   * decided, and never mounts at all on a fresh load of an already-decided
+   * fixture — so the box is empty there and the console's rows carry no
+   * partial badge. Rows already on screen keep theirs (the box is not cleared
+   * on unmount, deliberately). Closing that needs the predicate to survive
+   * without a pad, which is a bigger change than this one.
+   */
+  onPartialResolver?: (resolve: (eventType: string, payload: Record<string, unknown>) => boolean) => void;
+  /**
+   * R7/C1 (D-4, ruling R7-1) — whether THIS host also mounts the activity
+   * ledger. Default true, which is the device link and every other surface
+   * with no chrome of its own: `/score/[token]` has no page around the pad,
+   * so the panel here is the only history a courtside scorer ever sees.
+   *
+   * The organiser console passes false and mounts the SAME component itself,
+   * one level out — with void authority, provenance and the audit strip, and
+   * outliving the pad, which unmounts the moment a fixture is decided. Two
+   * mounts of one component, never two panels on one screen.
+   */
+  showActivity?: boolean;
   /** The resolved v3 skin — a REQUIRED prop, unlike the legacy renderer's
    *  registry-consulting default: registry.tsx already resolves this
    *  before choosing the v3 lane at all, so passing it explicitly keeps
@@ -934,6 +1192,11 @@ export function PadHostV3(props: PadHostV3Props) {
   // is not itself assignable where the wider TFn is expected, so this is a
   // real (and safe) widening, not a formality.
   const t: TFn = useCallback((key: string, vars?: Record<string, string | number>) => msg(key as MessageKey, vars), [msg]);
+  // Plural selection needs a count AND the locale, neither of which `t` or a
+  // skin factory carries — see `ActivityDetailContext.plural`'s own doc.
+  // Resolved HERE, from the same provider `useMsg` reads, so a skin never
+  // reaches for a locale itself.
+  const pluralMsg = useMsgPlural();
 
   const pipeline = usePadPipeline({
     fixtureId: props.fixtureId,
@@ -1135,6 +1398,15 @@ export function PadHostV3(props: PadHostV3Props) {
     () => moreActions(spec, padViewCtx, dedicated, refusedTypes),
     [spec, padViewCtx, dedicated, refusedTypes],
   );
+  // R7-39/R7-39a — the More tile is a guaranteed dead end once
+  // `moreActionsList` is empty (this function's own doc, above); suppressed
+  // here, the one render-time consumer of `tiles`, rather than upstream —
+  // `dedicated`/`availablePhases`/`phasesWithTiles` above must keep seeing
+  // the UNSUPPRESSED band-filtered set, since the More tile itself is never
+  // band-filtered (`filterTilesByBand`'s own "NEVER hides the MORE tile"
+  // case) and contributes nothing to `dedicatedEventTypes` either way
+  // (`tileEventType` returns null for it).
+  const visibleTiles = useMemo(() => suppressEmptyMoreTile(tiles, moreActionsList), [tiles, moreActionsList]);
 
   // The ONE dispatch gateway (task brief item 5): every event this host
   // sends — tile taps, guided-sheet completions, action-form confirms,
@@ -1314,7 +1586,6 @@ export function PadHostV3(props: PadHostV3Props) {
   const headline = summaryHeadline(pipeline.summary);
 
   const events = pipeline.events;
-  const latestEvent = events.length > 0 ? events[events.length - 1]! : null;
 
   // The activity panel reads four fields; `voids` is what makes a row show
   // as cancelled (activity.tsx derives it by looking for some OTHER event
@@ -1324,7 +1595,20 @@ export function PadHostV3(props: PadHostV3Props) {
   // panel does, because it now resolves the same per-event detail for the
   // newest of them.
   const activityEvents = useMemo<ActivityEvent[]>(
-    () => events.map((e) => ({ id: e.id, seq: e.seq, type: e.type, payload: e.payload, voids: e.voids ?? null })),
+    () =>
+      events.map((e) => ({
+        id: e.id,
+        seq: e.seq,
+        type: e.type,
+        payload: e.payload,
+        voids: e.voids ?? null,
+        // R7/C1 — the panel gained a provenance line. `recordedAt` is the
+        // half this surface can answer; `recordedByLabel` is not, because
+        // `recordedBy` is a USER id and `score_events.device_link_id` never
+        // reaches an `EventEnvelope` at all — the console resolves that one
+        // at its own mount.
+        recordedAt: e.recordedAt,
+      })),
     [events],
   );
 
@@ -1349,6 +1633,7 @@ export function PadHostV3(props: PadHostV3Props) {
         ? (eventType, payload, history) =>
             props.skin.activityDetail!({
               t,
+              plural: pluralMsg,
               eventType,
               payload,
               history,
@@ -1362,10 +1647,42 @@ export function PadHostV3(props: PadHostV3Props) {
               personNames,
             })
         : undefined,
-    [props.skin, t, view.cfg, view.state, personNames],
+    [props.skin, t, pluralMsg, view.cfg, view.state, personNames],
   );
 
+  // R7-42/F — the SAME shape `resolveDetail` above takes, for the SAME
+  // reason: `ActivityPanel` is chassis-level and has no dock vocabulary of
+  // its own, so this is the one place `isPartialDockAnswer` gets called,
+  // built once and handed to the panel below. `view` is captured verbatim
+  // (its own identity already keys every other per-render memo here), so
+  // this recomputes exactly when the dock's own inputs could have changed.
+  const isPartial = useCallback(
+    (eventType: string, payload: Record<string, unknown>) => isPartialDockAnswer(props.skin, eventType, payload, view),
+    [props.skin, view],
+  );
+
+  // R7-46 — publish it for chrome that renders the ledger itself. Deliberately
+  // NOT cleared on unmount: a decided fixture unmounts the pad while its rows
+  // stay on the console's screen, and a badge that vanished at the whistle
+  // would be worse than one that persists. See `partialResolverRef`'s own note.
+  const publishPartial = props.onPartialResolver;
+  useEffect(() => {
+    publishPartial?.(isPartial);
+  }, [publishPartial, isPartial]);
+
   const ribbon = buildTopRibbon(activityEvents, (id) => personNames[id] ?? id, t, resolveDetail);
+  // R7/C4 — see `ribbonUndoTarget`. Resolved next to the ribbon it belongs to
+  // rather than inside the JSX so the rule is one named, testable function
+  // instead of a condition buried in a `!`-asserted call site.
+  const undoTarget = ribbonUndoTarget(
+    activityEvents,
+    held?.id ?? null,
+    // The SAME two the `<ActivityPanel>` below is handed — pass anything
+    // else and the ribbon and the ledger start answering differently
+    // about the same row, which is the defect this rule was unified for.
+    pipeline.ownEventIds,
+    props.identity.deviceLinkId,
+  );
 
   const [voidingId, setVoidingId] = useState<string | null>(null);
 
@@ -1423,7 +1740,14 @@ export function PadHostV3(props: PadHostV3Props) {
        *  not reimplemented, so the two cannot drift. It degrades to null for
        *  anything that is not a genuine `{headline: string}`, and null means
        *  render nothing rather than invent placeholder copy. */}
-      {headline && (
+      {/* R7/task D — suppressed for a skin that declares it already says all
+       *  of this itself (`SkinDefV3.ownsHeadline`). NOT a per-sport list in
+       *  the chassis: R6's ruling is that the skin declares, so nothing here
+       *  has to be kept in sync with eleven skins. `?? false` — omitting the
+       *  method means KEEP, so a skin that has never considered the question
+       *  shows one redundant bar rather than silently losing the only
+       *  statement of its result. */}
+      {shouldRenderHeadline(headline, props.skin, view) && headline && (
         <p data-role="v3-headline" className="rounded-xl bg-slate-900 px-4 py-2 text-center text-sm font-semibold text-white">
           {headline}
         </p>
@@ -1486,14 +1810,22 @@ export function PadHostV3(props: PadHostV3Props) {
           className="flex items-center justify-between gap-2 rounded-full border border-slate-200 bg-white px-4 py-2"
         >
           <span className="min-w-0 flex-1 truncate text-sm text-slate-700">{ribbon.text}</span>
-          <button
-            type="button"
-            onClick={() => void handleUndo(latestEvent!.id)}
-            style={{ minHeight: 44, minWidth: 44 }}
-            className="shrink-0 rounded-full px-3 text-sm font-semibold text-violet-700 transition-colors hover:bg-violet-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400"
-          >
-            {msg("pad.ribbon.undo")}
-          </button>
+          {/* Withdrawn, not disabled, when nothing on the strip can be taken
+              back (R7/C4) — a disabled control still reads as "there is an
+              action here", and after a void there is not. The strip's TEXT
+              stays either way: losing the last-event line would be a
+              different regression. */}
+          {undoTarget !== null && (
+            <button
+              type="button"
+              data-role="v3-ribbon-undo"
+              onClick={() => void handleUndo(undoTarget)}
+              style={{ minHeight: 44, minWidth: 44 }}
+              className="shrink-0 rounded-full px-3 text-sm font-semibold text-violet-700 transition-colors hover:bg-violet-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400"
+            >
+              {msg("pad.ribbon.takeBack")}
+            </button>
+          )}
         </div>
       )}
 
@@ -1526,7 +1858,7 @@ export function PadHostV3(props: PadHostV3Props) {
       )}
 
       <div data-role="v3-tiles">
-        <TileGrid tiles={tiles} phase={phase} t={t} onAction={handleTileAction} onOpenSheet={handleOpenSheet} />
+        <TileGrid tiles={visibleTiles} phase={phase} t={t} onAction={handleTileAction} onOpenSheet={handleOpenSheet} />
       </div>
 
       {held && (
@@ -1627,6 +1959,7 @@ export function PadHostV3(props: PadHostV3Props) {
        *  had a single call site passing `latestEvent.id`), so on cricket a
        *  scorer could not correct anything but the last ball once the hold
        *  window elapsed. Restored on the CHASSIS so R3-R6 inherit it. */}
+      {(props.showActivity ?? true) && (
       <div data-role="v3-activity-slot">
         <ActivityPanel
           events={activityEvents}
@@ -1645,8 +1978,14 @@ export function PadHostV3(props: PadHostV3Props) {
           // once above rather than inlined here. It was inlined, this was its
           // only reader, and the ribbon spent four waves with no detail at all.
           resolveDetail={resolveDetail}
+          // R7-42/F — "label the stat as partial wherever it surfaces"
+          // (ruling on P-5). Wired here, not just built above: an
+          // unwired helper is exactly the D2 defect this same comment
+          // already warns about, one line up.
+          isPartial={isPartial}
         />
       </div>
+      )}
     </div>
   );
 }

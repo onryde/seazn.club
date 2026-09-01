@@ -86,18 +86,18 @@ async function shot(page: Page, caption: string): Promise<void> {
 
 /** Tap a point on one half and wait for it to REACH the ledger.
  *
- *  `usePadPipeline`'s double-submit guard swallows an identical payload
- *  inside its window, and two points to the SAME side in a row are exactly
- *  that — so a same-side repeat gets its own clearance first. Alternating
- *  taps never need it, which is why the existing tennis spec only pays the
- *  cost once; a tie-break run of consecutive points pays it every time. */
-let lastSide: "home" | "away" | null = null;
+ * R7-42/R7-30/R7-43 (owner ruling, `_INDEX.md`) — this used to pay a 750ms
+ * clearance on a same-side repeat (two points to the same side in a row are
+ * exactly that) so it would not collide with `DOUBLE_SUBMIT_WINDOW_MS`.
+ * That window is now 250ms (was 600ms), and a refused repeat is VISIBLE
+ * rather than silent, so the clearance and its `lastSide` bookkeeping are
+ * gone — a tie-break run of consecutive points is this fix's own
+ * acceptance test.
+ */
 async function tapPoint(page: Page, fx: RosteredFixture, side: "home" | "away"): Promise<void> {
   const before = (await ledger(page.request, fx.fixtureId)).length;
-  if (side === lastSide) await page.waitForTimeout(750);
   if (PACE > 0) await page.waitForTimeout(PACE);
   await tennisHalf(page, side).click();
-  lastSide = side;
   await expect
     .poll(async () => (await ledger(page.request, fx.fixtureId)).length, { timeout: 20_000 })
     .toBe(before + 1);
@@ -113,7 +113,6 @@ test("R4 — tennis: tap a match through the deciding-set MATCH TIE-BREAK to a d
 }) => {
   test.setTimeout(300_000);
   shotNo = 0;
-  lastSide = null;
 
   // `doubles-noad-mtb10` is a SHIPPED variant, not a config invented for this
   // test: no-ad games plus `finalSet: { matchTiebreakTo: 10 }` (ITF App VI —
@@ -224,7 +223,7 @@ test("R4 — tennis: tap a match through the deciding-set MATCH TIE-BREAK to a d
   // A match decided by a tie-break must stay reversible until Finalize, and
   // the pad must come BACK scoreable — otherwise a mis-tap on match point
   // ends the match with no way out.
-  const undoLast = page.getByRole("button", { name: /Undo last/ });
+  const undoLast = page.getByRole("button", { name: /Void last entry/ });
   await expect(undoLast, "a match decided on a tie-break left no way to undo it").toBeVisible();
   await undoLast.click();
   await expect

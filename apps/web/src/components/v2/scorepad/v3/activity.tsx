@@ -43,6 +43,8 @@
 //        `isVoidableEventType` below, replacing the old bare
 //        `!== "core.void"` check.
 import type { ReactNode } from "react";
+import { ClientTime } from "@/components/client-time";
+import { describeEvent, type EventDescription } from "@/lib/event-copy";
 import { buildRibbon, type MsgFn } from "./ribbon";
 
 /** The subset of the pipeline's event envelope this panel reads. Deliberately
@@ -56,6 +58,28 @@ export interface ActivityEvent {
   readonly payload: unknown;
   /** Set only when THIS event IS a void — the id of the event it cancels. */
   readonly voids: string | null;
+  /**
+   * R7/C1 — provenance, merged in from the page-level ledger this wave
+   * DELETES (`fixture-console.tsx`'s hand-rolled `<ul>`). Both optional
+   * because they are facts about the MOUNT, not about the pad: the console
+   * has the full ledger row and can answer them, and it is the surface a
+   * dispute is settled on.
+   *
+   * ISO, rendered through `ClientTime` — never `toLocaleTimeString` in the
+   * render body, which is what made the console SSR a wall-clock string the
+   * viewer's browser then disagreed with (fixture-console-ssr.test.tsx).
+   */
+  readonly recordedAt?: string | null;
+  /**
+   * The provenance line's already-RESOLVED human label — "Dana Okafor", or
+   * the scorer-vocabulary phrase for a handed device. Resolved by the mount
+   * rather than here on purpose: `recordedBy` is a USER id (not a person id,
+   * so `personNames` cannot answer it) and "this row came from a device link"
+   * is carried by `score_events.device_link_id`, which never survives into
+   * the pad pipeline's `EventEnvelope` at all. A panel that tried to derive
+   * either would be inventing a second provenance vocabulary.
+   */
+  readonly recordedByLabel?: string | null;
 }
 
 export interface ActivityRowState {
@@ -122,13 +146,18 @@ export function activityRowState(
   ownEventIds: ReadonlySet<string>,
   deviceLinkId: string | null,
   voidingEnabled: boolean,
+  authority = false,
 ): ActivityRowState {
   const voided = all.some((v) => v.voids === event.id);
   const ownedByMe = deviceLinkId === null || ownEventIds.has(event.id);
   return {
     voided,
     ownedByMe,
-    canVoid: voidingEnabled && !voided && isVoidableEventType(event.type) && ownedByMe,
+    canVoid:
+      voidingEnabled &&
+      !voided &&
+      (authority ? event.type !== "core.void" : isVoidableEventType(event.type)) &&
+      ownedByMe,
   };
 }
 
@@ -212,6 +241,27 @@ export interface ActivityPanelProps {
   onVoid?: (eventId: string) => void;
   voidingId?: string | null;
   /**
+   * R7/C review fix #1 — "a Void that will refuse must LOOK unavailable".
+   *
+   * The console gates its ledger on `busy || padSyncing` (fixture-console.tsx):
+   * acting on a half-refreshed ledger sends a stale `expected_seq` and earns a
+   * 409 where a clean void was expected. C1 carried that rule over as an early
+   * `return` inside `onVoid` and nothing else, which made every row's Void a
+   * DEAD TAP for the width of a resync — `setPadSyncing(true)` fires after
+   * every pad event, so a live console opens that window on every tap, and the
+   * button stayed bright, hover-able and silent.
+   *
+   * Deliberately a whole-panel flag rather than a per-row one: the condition it
+   * carries is about the LEDGER's freshness, not about any one event, so a
+   * per-row shape would invite a caller to disable one row and leave its
+   * neighbours lying. `voidingId` stays the per-row control, for the single row
+   * whose own void is in flight.
+   *
+   * Defaults false, and the device link (pad-host.tsx) passes nothing — its
+   * pipeline has no separate resync to be stale against.
+   */
+  voidDisabled?: boolean;
+  /**
    * D2 fix (sign-off review, 2026-08-17): a per-event distinguishing
    * detail — e.g. runs scored / extra kind / wicket kind for a cricket
    * ball — woven into the ribbon caption via `buildRibbon`'s own `detail`
@@ -245,7 +295,73 @@ export interface ActivityPanelProps {
    * activityDetail`/`ActivityDetailContext`'s own doc (types.ts).
    */
   resolveDetail?: ActivityDetailResolver;
+  /**
+   * R7-42/F (owner ruling on P-5, `_INDEX.md`): "label the stat as partial
+   * wherever it surfaces" — a held submission whose hold drained before a
+   * dock question ever got answered records LESS than the scorer would
+   * have given it time to. Mirrors `resolveDetail`'s own shape (a per-row
+   * resolver the CALLER supplies) rather than a boolean on `ActivityEvent`:
+   * this panel is chassis-level and sport-agnostic (this file's own
+   * header) and has no dock vocabulary of its own to derive "partial"
+   * from — `pad-host.tsx`'s `isPartialDockAnswer` is the one place that
+   * calls the skin's own `dock()` to answer it.
+   *
+   * Optional and additive: omitted, every row renders exactly as before —
+   * the SAME posture `resolveDetail` above takes.
+   */
+  isPartial?: (eventType: string, payload: Record<string, unknown>) => boolean;
+  /**
+   * R7/C1 — this mount speaks for the organisation, not for one handed
+   * device: the console. It widens the void rule back to what the DELETED
+   * page-level ledger allowed (anything that is not itself a `core.void`),
+   * so consolidating the two panels takes no capability away from the
+   * console — undoing a mistaken `core.abandon` from its own row still
+   * works, and `scoring.spec.ts` pins that an abandon stays reversible.
+   *
+   * `false` (the device link) keeps `isVoidableEventType`'s allowlist, and
+   * the reasoning for it is unchanged and still correct: that surface cannot
+   * re-run the engine to answer "would voiding THIS break something later in
+   * the ledger", it has no chrome to repair a mistake with, and a destructive
+   * control there must fail safe. The console has the full ledger, the audit
+   * strip and an organiser looking at it.
+   *
+   * It does NOT widen `ownedByMe` — a device link is still confined to its
+   * own rows, because that flows from `deviceLinkId`, not from this.
+   */
+  authority?: boolean;
+  /**
+   * Rendered inside the panel, under the rows — the audit strip on the
+   * console (`Ledger verified ✓` / `Download audit`), nothing on the device
+   * link. A SLOT rather than audit props: the panel is chassis-level and
+   * sport-agnostic, entitlement and chain-verification are neither, and the
+   * device link simply passes nothing, which is what "only when mounted with
+   * authority" has to mean structurally rather than by a flag it could get
+   * wrong.
+   */
+  footer?: ReactNode;
 }
+
+/**
+ * The 3px left stripe that replaced the coloured type CHIP (R7/C1, design of
+ * record). The chip repeated the row's own sentence — a row reading "Card
+ * shown — Yellow card" carried a "Yellow card" badge beside it — so the type
+ * survives as colour alone, which encodes it at a glance without saying it
+ * twice.
+ *
+ * The tone comes from `describeEvent` (lib/event-copy.ts), the SAME classifier
+ * the deleted page panel tinted its chip with, so the stripe cannot become a
+ * third event vocabulary. Only its `tone` is read; the words stay the pad's
+ * (`buildRibbon`), which is the standing no-second-vocabulary ruling.
+ */
+const TONE_STRIPE: Record<EventDescription["tone"], string> = {
+  start: "border-l-sky-400",
+  score: "border-l-emerald-500",
+  card: "border-l-amber-400",
+  period: "border-l-purple-400",
+  admin: "border-l-red-400",
+  void: "border-l-amber-300",
+  note: "border-l-slate-300",
+};
 
 /**
  * The shape `pad-host.tsx` builds once from `props.skin.activityDetail` and
@@ -292,7 +408,11 @@ export function ActivityPanel({
   t,
   onVoid,
   voidingId = null,
+  voidDisabled = false,
   resolveDetail,
+  isPartial,
+  authority = false,
+  footer,
 }: ActivityPanelProps): ReactNode {
   const rows = orderedActivity(events);
   const nameOf = (id: string) => personNames[id] ?? id;
@@ -316,15 +436,25 @@ export function ActivityPanel({
         // jumping while a scorer is reviewing.
         <ul className="max-h-96 divide-y divide-slate-100 overflow-y-auto overscroll-contain" data-role="v3-activity-list">
           {rows.map((event, index) => {
-            const { voided, canVoid } = activityRowState(event, events, ownEventIds, deviceLinkId, !!onVoid);
+            const { voided, canVoid } = activityRowState(
+              event,
+              events,
+              ownEventIds,
+              deviceLinkId,
+              !!onVoid,
+              authority,
+            );
             const payload = (event.payload ?? {}) as Record<string, unknown>;
             const history = priorActivityEvents(rows, index);
             const detail = resolveDetail?.(event.type, payload, history);
             const caption = buildRibbon(event.type, payload, nameOf, t, detail);
+            const partial = isPartial?.(event.type, payload) ?? false;
+            const stripe = TONE_STRIPE[describeEvent(event.type, payload, personNames, t).tone];
+            const provenance = Boolean(event.recordedAt) || Boolean(event.recordedByLabel);
             return (
               <li
                 key={event.id}
-                className="flex items-center gap-3 px-4 py-2"
+                className={`flex items-start gap-3 border-l-[3px] px-4 py-2 ${stripe}`}
                 data-role="v3-activity-row"
                 data-voided={voided}
                 // The row's own event id. Without it a test can only target
@@ -334,18 +464,59 @@ export function ActivityPanel({
                 // e2e failure to learn.
                 data-event-id={event.id}
               >
+                {/* #seq, merged in from the deleted page panel — the one
+                    handle a dispute or a support call has on "which entry".
+                    Hidden for a seq the pad only GUESSED: a still-held tap
+                    carries `expectedSeq + 1` (use-pad-pipeline.ts), which is
+                    a prediction, not a ledger position. */}
+                {event.seq > 0 && (
+                  <span
+                    data-role="v3-activity-seq"
+                    className="mt-px shrink-0 font-mono text-xs tabular-nums text-slate-500"
+                  >
+                    #{event.seq}
+                  </span>
+                )}
                 <span
+                  data-role="v3-activity-caption"
                   className={`min-w-0 flex-1 break-words text-sm ${voided ? "text-slate-400 line-through" : "text-slate-700"}`}
                 >
                   {caption.text}
+                  {partial && (
+                    // R7-42/F — "the resulting Activity row must be
+                    // labelled partial — visibly, in words". `title` carries
+                    // the WHY (the same `.hint` convention this pad already
+                    // uses on the clock-nudge controls, pad-host.tsx), so
+                    // the compact badge stays scannable while the reason is
+                    // one hover/inspect away.
+                    <span
+                      data-role="v3-activity-partial"
+                      title={t("pad.activity.partial.hint")}
+                      className="ml-1.5 inline-block rounded-full bg-amber-100 px-1.5 py-0.5 align-middle text-[10px] font-semibold uppercase tracking-wide text-amber-700"
+                    >
+                      {t("pad.activity.partial")}
+                    </span>
+                  )}
+                  {provenance && (
+                    <span
+                      data-role="v3-activity-provenance"
+                      className="mt-0.5 block text-xs font-normal text-slate-500 no-underline"
+                    >
+                      {event.recordedAt ? <ClientTime value={event.recordedAt} mode="time" /> : null}
+                      {event.recordedAt && event.recordedByLabel ? " · " : null}
+                      {event.recordedByLabel
+                        ? t("pad.activity.recordedBy", { name: event.recordedByLabel })
+                        : null}
+                    </span>
+                  )}
                 </span>
                 {canVoid ? (
                   <button
                     type="button"
                     onClick={() => onVoid?.(event.id)}
-                    disabled={voidingId === event.id}
+                    disabled={voidDisabled || voidingId === event.id}
                     data-role="v3-activity-void"
-                    className="min-h-11 shrink-0 rounded-lg border border-slate-200 px-3 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400"
+                    className="min-h-11 min-w-11 shrink-0 rounded-lg border border-slate-200 px-3 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400"
                   >
                     {voidingId === event.id ? t("pad.activity.voiding") : t("pad.activity.void")}
                   </button>
@@ -359,6 +530,10 @@ export function ActivityPanel({
           })}
         </ul>
       )}
+
+      {/* Authority-only, by construction: the device link passes no footer.
+          See `ActivityPanelProps.footer`. */}
+      {footer && <div className="border-t border-slate-100 px-4 py-3">{footer}</div>}
     </section>
   );
 }

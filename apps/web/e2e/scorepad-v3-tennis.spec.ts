@@ -166,10 +166,11 @@ test("tennis v3 singles: deuce, advantage alternates both ways, scored by tappin
   await expect(homeHalf, "the away point must cancel home's advantage, not stack past it").toContainText("40");
   await expect(awayHalf).toContainText("40");
 
-  // The 9th tap is AWAY again (8th and 9th are both away) — the double-
-  // submit guard swallows an identical payload within its window, so this
-  // needs its own clearance the alternating taps above never did.
-  await page.waitForTimeout(700);
+  // The 9th tap is AWAY again (8th and 9th are both away). R7-42/R7-30/
+  // R7-43 (owner ruling, `_INDEX.md`): `DOUBLE_SUBMIT_WINDOW_MS` is now
+  // 250ms (was 600ms), so the clearance the alternating taps above never
+  // needed either is gone here too — this is one of the acceptance-test
+  // call sites for that fix.
   await awayHalf.click(); // 9th: away takes advantage the OTHER way
   await expect.poll(pointCount, { timeout: 20_000 }).toBe(9);
   await expect(homeHalf).toContainText("40");
@@ -467,7 +468,7 @@ test("tennis v3: the Set-score tile is withheld while the set is in progress, re
   // The pad's OWN ribbon (not the console's separate "Undo last" chrome) —
   // undoing the just-scored point through the pad's own live state.
   const ribbon = pad(page).locator('[data-role="v3-ribbon"]');
-  const undoBtn = ribbon.getByRole("button", { name: "Undo", exact: true });
+  const undoBtn = ribbon.getByRole("button", { name: "Take back", exact: true });
   await expect(undoBtn).toBeVisible({ timeout: 20_000 });
   await undoBtn.click();
   await expect

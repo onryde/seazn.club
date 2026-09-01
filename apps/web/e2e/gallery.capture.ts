@@ -189,6 +189,35 @@ const EXTRA_STATES = [
   "22-suspensionservedby",
   "23-shootout",
   "24-shootoutdecided",
+  // R7/A1 (2026-08-30) — generic. Two states the five shared STATES are
+  // structurally blind to, for the two reasons this list keeps recording:
+  //   11 — the OTHER pad the one generic skin builds. `resultMode` is the only
+  //        variant knob in this wave that changes the board, and this recipe's
+  //        own fixture is a `score` division, so win_loss — no tally, no dock,
+  //        two names and a winner — cannot be reached from it at all.
+  //   12 — the amend dock WITH its attribution row. The primary fixture seeds
+  //        one player a side, and a one-person side has its scorer stamped at
+  //        tap time, so the person chips never render there. A pair is the
+  //        only shape that shows both halves of the dock at once.
+  "11-genericwinloss",
+  "12-genericamenddock",
+  // R7/A2 rework (2026-08-31) — boardgame's tapModel S dock. `04-dock` (the
+  // shared capture) already shows the DECISIVE method set from a half tap;
+  // the draw tile posts the SAME event type with `winner: null` and must
+  // open a dock scoped to the DRAWN set instead (R7-10: "R7-2's dock must
+  // offer the DECISIVE set after a half tap and the DRAWN set after the
+  // ½–½ tile, never one flat list of 13") — a dock behind a tap that no
+  // capture opens is theatre, and none of the five shared states, nor
+  // 04-dock, ever reaches the draw tile at all.
+  "11-boardgamedrawndock",
+  // R7/A3 (carrom's v3 conversion) — the SECOND question carrom's own board
+  // dock asks. `04-dock` (the shared capture) already shows the "Who broke?"
+  // step, the FIRST question `buildDock` asks after a queen-covered board
+  // commits (`v3/skins/carrom.tsx`); the "Queen covered by?" step only
+  // exists ONE chip-tap deeper, once breaker is answered — the same "a dock
+  // behind a tap no capture opens is theatre" reasoning boardgame's own entry
+  // above states, applied to a SEQUENTIAL dock rather than a branching one.
+  "11-carromqueenbydock",
 ] as const;
 type ExtraGalleryState = (typeof EXTRA_STATES)[number];
 
@@ -390,19 +419,28 @@ type StateProbe = () => Promise<void>;
  * [data-event-id]` (the legacy `Timeline` pad-renderer.tsx mounts for the nine
  * unconverted sports), so ONE probe is honest for all twelve captures.
  *
- * Scoped to the pad root, never the page: the fixture console mounts its OWN
- * `<Timeline>` outside the pad as well, and a page-wide count would double
- * every row. `[data-role="pad-v3"]` is the second anchor because the
- * device-link route carries no `data-testid="score-pad"` (that testid is
- * minted only by fixture-console.tsx — this file's own 05-devicelink note).
- * `.first()` takes the console's outer `score-pad` when both match, since a
- * locator resolves in DOM order and that element wraps the v3 root.
+ * PAGE-WIDE, and it has to be (R7/C1, found by the R7/C review sweep). This
+ * used to scope itself to `[data-testid="score-pad"], [data-role="pad-v3"]`
+ * because the fixture console mounted its OWN history outside the pad as well
+ * and a page-wide count would have doubled every row. R7/C1 merged the two
+ * into one ledger and moved it OUT of the pad on the console — `ScorePad`
+ * gained `hideActivity`, honoured on both lanes (v3 `showActivity`, legacy
+ * `timelineSlot={() => null}`, registry.tsx) — so the pad-scoped count became
+ * ZERO for every console capture of every sport, and the whole harness died at
+ * `02-live` with "must render the STARTED board".
+ *
+ * The double-count hazard that scoping existed for is gone with it: on the
+ * console exactly one ledger renders (outside the pad), on the device link
+ * exactly one (inside it).
+ *
+ * Page-wide is also the only version that survives `12-*-decided`, where the
+ * pad has unmounted entirely and the console's ledger is all that is left —
+ * the pad-scoped locator had nothing to resolve against there at all.
+ *
+ * Still deliberately spanning both lanes, for the same reason as before.
  */
 function padEventRows(page: Page) {
-  return page
-    .locator('[data-testid="score-pad"], [data-role="pad-v3"]')
-    .first()
-    .locator('[data-role="v3-activity-row"], [data-role="timeline"] [data-event-id]');
+  return page.locator('[data-role="v3-activity-row"], [data-role="timeline"] [data-event-id]');
 }
 
 /** The pad has caught up with the server: it renders at least `minEvents`
@@ -1854,10 +1892,10 @@ const SPORTS: GallerySport[] = [
       // on `!decided` (fixture-console.tsx: `scorePadV2 && scoring &&
       // !decided && home && away`) and unmounts entirely once a match is
       // done. The SAME headline text moves to the console's own header
-      // paragraph instead; the "Finalize (lock ledger)" button is gated
+      // paragraph instead; the "Finalize result" button is gated
       // directly on `decided`, which is what this state is actually
       // proving, so it is the more precise anchor of the two.
-      const soFinalize = page.getByRole("button", { name: "Finalize (lock ledger)", exact: true });
+      const soFinalize = page.getByRole("button", { name: "Finalize result", exact: true });
       await captureState(
         page,
         dir,
@@ -2019,9 +2057,9 @@ const SPORTS: GallerySport[] = [
       // `data-testid="score-pad"` section is gated on `!decided`
       // (fixture-console.tsx) and unmounts entirely once a match is done;
       // the headline text moves to the console's own header paragraph
-      // instead. "Finalize (lock ledger)" is gated directly on `decided`,
+      // instead. "Finalize result" is gated directly on `decided`,
       // which is what this state is actually proving.
-      const decidedFinalize = page.getByRole("button", { name: "Finalize (lock ledger)", exact: true });
+      const decidedFinalize = page.getByRole("button", { name: "Finalize result", exact: true });
       await captureState(
         page,
         dir,
@@ -2729,34 +2767,102 @@ const SPORTS: GallerySport[] = [
       home: [{ fullName: `Gallery Carrom Home ${tag}` }],
       away: [{ fullName: `Gallery Carrom Away ${tag}` }],
     }),
-    // Verified live: carrom-pad.spec.ts. That file's own route needed a
-    // page.reload() after "Start match" before scoring (a same-tick tap on
-    // a stale pre-phase fold 422s there); this harness drives the console
-    // and polls the ledger for growth after Start match instead — the same
-    // mechanism scorepad-skins.spec.ts's openLiveConsole already proved
-    // avoids that exact staleness for five other sports — so the reload is
-    // omitted here (confirmed live before this harness shipped).
+    // R7/A3 cutover — v3 tapModel T. "Board (queen covered)" is now a
+    // dedicated TILE (`data-tile-id="boardQueen"`, `v3/skins/carrom.tsx`)
+    // that opens a guided SHEET — winner, then queenTo (an INDEPENDENT side:
+    // Law 53(b)/(c) lets the queen be covered by the side that did NOT win
+    // the board), then the coins field — never the universal renderer's
+    // `data-attribution-path` picker + `data-role="confirm"` form this
+    // recipe used to drive. Same side for both answers here (home/home) so
+    // the queen bonus is actually credited, the happy path.
     scoreOne: async (page) => {
-      await pad(page).getByRole("button", { name: "Board (queen covered)", exact: true }).click();
-      await pad(page).getByLabel("Opponent coins left", { exact: true }).fill("4");
-      await pad(page)
-        .locator('[data-attribution-path="winner"]')
-        .getByRole("button", { name: "Home", exact: true })
-        .click();
-      await pad(page)
-        .locator('[data-attribution-path="queenTo"]')
-        .getByRole("button", { name: "Home", exact: true })
-        .click();
-      await pad(page).locator('[data-role="confirm"]').click();
+      await pad(page).locator('[data-tile-id="boardQueen"]').click();
+      const sheet = pad(page).locator('[data-role="v3-sheet"]');
+      await sheet.locator('[data-choice-option-id="home"]').click(); // winner
+      await sheet.locator('[data-choice-option-id="home"]').click(); // queenTo
+      await sheet.getByLabel("Opponent's coins left", { exact: true }).fill("4");
+      await sheet.getByRole("button", { name: "Confirm", exact: true }).click();
     },
+    // The board commits on the sheet's own Confirm — there is no separate
+    // "Start match" staleness to work around here (unlike carrom-pad.spec.ts's
+    // own device-link route): this harness drives the fixture console, whose
+    // openLiveConsole helper already proves the post-Start reload is
+    // unnecessary for every other sport. The DOCK opens automatically off
+    // that SAME commit — carrom's board dock enriches `breaker`
+    // (`v3/skins/carrom.tsx`'s `buildDock`) at band >= 1, and this harness's
+    // org is Pro (`setOrgPlanBySql`, the shared per-sport setup), band 3.
     openDock: async (page) => {
-      const board = pad(page).getByRole("button", { name: "Board (queen covered)", exact: true });
-      if (!(await board.isVisible({ timeout: 3_000 }).catch(() => false))) return false;
-      await board.click();
-      const coins = pad(page).getByLabel("Opponent coins left", { exact: true });
-      if (!(await coins.isVisible({ timeout: 3_000 }).catch(() => false))) return false;
-      await coins.fill("4");
+      await pad(page).locator('[data-tile-id="boardQueen"]').click();
+      const sheet = pad(page).locator('[data-role="v3-sheet"]');
+      await sheet.locator('[data-choice-option-id="home"]').click(); // winner
+      await sheet.locator('[data-choice-option-id="home"]').click(); // queenTo
+      await sheet.getByLabel("Opponent's coins left", { exact: true }).fill("4");
+      await sheet.getByRole("button", { name: "Confirm", exact: true }).click();
+      await expect(
+        pad(page).locator('[data-role="v3-dock"]'),
+        "gallery(carrom): a queen-covered board must open the breaker dock",
+      ).toBeVisible({ timeout: 10_000 });
       return true;
+    },
+    // v3's Detail Dock is a TIMED surface (closes itself HOLD_MS after the
+    // tap that opened it) — the same risk football's/generic's/boardgame's
+    // own docks carry, and the same fix: fail the capture rather than
+    // silently keep a `04-dock` photograph of a dock that already closed
+    // under a slow run.
+    dockProbe: async (page) => {
+      await expect(
+        pad(page).locator('[data-role="v3-dock"]'),
+        `gallery(carrom): the dock closed before this width was captured — the ${HOLD_MS}ms hold ` +
+          "window elapsed mid-capture, so this PNG would have shown a different state to its siblings",
+      ).toBeVisible({ timeout: 5_000 });
+    },
+    // 11-carromqueenbydock — the SECOND question this skin's board dock asks
+    // (see EXTRA_STATES's own comment above). `04-dock` already shows "Who
+    // broke?"; this fresh fixture answers it and captures the "Queen covered
+    // by?" step that follows — reached with winner and queenTo on OPPOSITE
+    // sides this time, so the picker is visibly scoped to AWAY's own roster,
+    // not a repeat of `04-dock`'s home-side breaker picker.
+    captureExtra: async (page, dir, tag, measurements) => {
+      const dockTag = `${tag}qb`;
+      const homeName = `Gallery Carrom QueenBy Home ${dockTag}`;
+      const awayName = `Gallery Carrom QueenBy Away ${dockTag}`;
+      const dk = await seedRosteredFixture(page.request, {
+        label: `Gallery Carrom QueenBy ${dockTag}`,
+        sportKey: "carrom",
+        variantKey: "icf",
+        entrantKind: "individual",
+        home: [{ fullName: homeName }],
+        away: [{ fullName: awayName }],
+        emitCoreStart: true,
+      });
+      await page.goto(await fixturePath(page.request, dk.fixtureId));
+      await pad(page).locator('[data-tile-id="boardQueen"]').click();
+      const sheet = pad(page).locator('[data-role="v3-sheet"]');
+      await sheet.locator('[data-choice-option-id="home"]').click(); // winner
+      await sheet.locator('[data-choice-option-id="away"]').click(); // queenTo — OPPOSITE side
+      await sheet.getByLabel("Opponent's coins left", { exact: true }).fill("3");
+      await sheet.getByRole("button", { name: "Confirm", exact: true }).click();
+      const dock = pad(page).locator('[data-role="v3-dock"]');
+      await expect(dock, "gallery(carrom): a queen-covered board must open the breaker dock first").toBeVisible({
+        timeout: 10_000,
+      });
+      // "Who broke?" — the first question, scoped to HOME (firstBreak
+      // defaults home, `carrom.ts`'s own `init()`). Chips carry no stable
+      // `data-*` hook (`DockChip` has none — types.ts), so this is addressed
+      // by its own resolved NAME, the same convention every other dock's
+      // person chip in this harness uses.
+      await dock.getByRole("button", { name: homeName, exact: true }).click();
+      await expect(
+        dock,
+        "gallery(carrom): answering breaker must move the dock to the queenBy question, scoped to AWAY",
+      ).toContainText(awayName, { timeout: HOLD_MS });
+      await captureState(page, dir, "11-carromqueenbydock", "carrom", measurements, async () => {
+        await expect(
+          dock,
+          "gallery(carrom): 11-carromqueenbydock must still show the queenBy question",
+        ).toBeVisible({ timeout: 5_000 });
+      });
+      return ["11-carromqueenbydock"];
     },
   },
   {
@@ -2769,27 +2875,113 @@ const SPORTS: GallerySport[] = [
       home: [{ fullName: `Gallery Generic Home ${tag}` }],
       away: [{ fullName: `Gallery Generic Away ${tag}` }],
     }),
-    // Verified live: scorepad-a11y-evidence.spec.ts (open the panel, fill
-    // Points) carried to a submit the way scorepad-v2.spec.ts's device route
-    // does. Confirm/attribution are clicked only if the panel actually gates
-    // them — generic's plain path may not need either.
+    // R7/A1 cutover — v3 tapModel S: the scoreboard half IS the point button
+    // (`v3/skins/generic.tsx`), never an "Add points" form. The universal
+    // renderer's ActionForm this recipe used to drive no longer renders for
+    // this sport at all.
     scoreOne: async (page) => {
-      await pad(page).getByRole("button", { name: "Add points", exact: true }).click();
-      await pad(page).getByLabel("Points", { exact: true }).fill("3");
-      const home = pad(page).getByRole("button", { name: "Home", exact: true });
-      if (await home.isVisible({ timeout: 3_000 }).catch(() => false)) await home.click();
-      const confirm = pad(page).locator('[data-role="confirm"]');
-      if (await confirm.isVisible({ timeout: 3_000 }).catch(() => false)) await confirm.click();
+      await v3Half(page, "home").click();
     },
-    // Verified live precedent, verbatim: open the panel, fill Points, STOP.
+    // Reached by a SECOND, away point rather than by reopening the first —
+    // same reasoning as football's and tennis's own `openDock` above: the
+    // Detail Dock is a property of a held tap, and there is no way to reopen
+    // one that has already flushed.
     openDock: async (page) => {
-      const addPoints = pad(page).getByRole("button", { name: "Add points", exact: true });
-      if (!(await addPoints.isVisible({ timeout: 3_000 }).catch(() => false))) return false;
-      await addPoints.click();
-      const points = pad(page).getByLabel("Points", { exact: true });
-      if (!(await points.isVisible({ timeout: 3_000 }).catch(() => false))) return false;
-      await points.fill("3");
+      await v3Half(page, "away").click();
+      await expect(
+        pad(page).locator('[data-role="v3-dock"]'),
+        "gallery(generic): a tally tap must open the amend dock",
+      ).toBeVisible({ timeout: 10_000 });
       return true;
+    },
+    // v3's Detail Dock is a TIMED surface (closes itself HOLD_MS=6s after the
+    // tap that opened it) — same risk football's and tennis's docks carry, and
+    // the same fix: fail the capture rather than silently keep a `04-dock`
+    // photograph of a dock that already closed under a slow run.
+    dockProbe: async (page) => {
+      await expect(
+        pad(page).locator('[data-role="v3-dock"]'),
+        "gallery(generic): the dock closed before this width was captured — the 6s hold " +
+          "window elapsed mid-capture, so this PNG would have shown a different state to its siblings",
+      ).toBeVisible({ timeout: 5_000 });
+    },
+    captureExtra: async (page, dir, tag, measurements) => {
+      // 11-genericwinloss — the OTHER board this one skin builds. Fresh
+      // fixture: this entry's primary one is a `score` division and no
+      // sequence of taps can turn it into a win_loss one.
+      const wlTag = `${tag}wl`;
+      const wl = await seedRosteredFixture(page.request, {
+        label: `Gallery Generic WinLoss ${wlTag}`,
+        sportKey: "generic",
+        variantKey: "win_loss",
+        entrantKind: "individual",
+        home: [{ fullName: `Gallery Generic WL Home ${wlTag}` }],
+        away: [{ fullName: `Gallery Generic WL Away ${wlTag}` }],
+        emitCoreStart: true,
+      });
+      await page.goto(await fixturePath(page.request, wl.fixtureId));
+      const wlBug = pad(page).locator('[data-role="v3-scorebug"]');
+      await expect(wlBug, "gallery(generic): the win_loss board must render").toBeVisible({ timeout: 20_000 });
+      // Positive anchor, not merely "the board rendered": the whole point of
+      // this capture is that win_loss says RESULT ONLY where score mode says
+      // running score, and a board that failed to build its context line would
+      // satisfy a bare visibility check just as well.
+      await expect(
+        wlBug,
+        "gallery(generic): win_loss must state what it records, and that draws are refused",
+      ).toContainText("Result only");
+      await captureState(
+        page,
+        dir,
+        "11-genericwinloss",
+        "generic",
+        measurements,
+        visibleProbe(wlBug, "gallery(generic): 11-genericwinloss must still show the win_loss board"),
+      );
+
+      // 12-genericamenddock — the dock with BOTH halves on screen: the amount
+      // chips that rewrite the held payload, and the attribution row a
+      // one-person side never renders (its scorer is stamped at tap time).
+      const prTag = `${tag}pr`;
+      const first = `Gallery Generic Pair Home A ${prTag}`;
+      const pr = await seedRosteredFixture(page.request, {
+        label: `Gallery Generic Pair ${prTag}`,
+        sportKey: "generic",
+        variantKey: "score",
+        entrantKind: "pair",
+        home: [{ fullName: first }, { fullName: `Gallery Generic Pair Home B ${prTag}` }],
+        away: [
+          { fullName: `Gallery Generic Pair Away A ${prTag}` },
+          { fullName: `Gallery Generic Pair Away B ${prTag}` },
+        ],
+        emitCoreStart: true,
+      });
+      await page.goto(await fixturePath(page.request, pr.fixtureId));
+      await v3Half(page, "home").click();
+      const prDock = pad(page).locator('[data-role="v3-dock"]');
+      await expect(prDock, "gallery(generic): a tally tap must open the amend dock").toBeVisible({
+        timeout: 20_000,
+      });
+      await expect(
+        prDock.getByRole("button", { name: "3 points", exact: true }),
+        "gallery(generic): the dock must offer the amounts that rewrite this same point",
+      ).toBeVisible({ timeout: 4_000 }); // under HOLD_MS, so a miss is diagnosed with the dock still up
+      await expect(
+        prDock.getByRole("button", { name: first, exact: true }),
+        "gallery(generic): a two-person side must be offered its OWN players to attribute to",
+      ).toBeVisible({ timeout: 4_000 });
+      await captureState(page, dir, "12-genericamenddock", "generic", measurements, async () => {
+        await expect(
+          prDock,
+          "gallery(generic): the dock closed before this width was captured",
+        ).toBeVisible({ timeout: 5_000 });
+        await expect(
+          prDock.getByRole("button", { name: first, exact: true }),
+          "gallery(generic): 12-genericamenddock must still show the attribution row",
+        ).toBeVisible();
+      });
+
+      return ["11-genericwinloss", "12-genericamenddock"];
     },
   },
   {
@@ -2802,38 +2994,96 @@ const SPORTS: GallerySport[] = [
       home: [{ fullName: `Gallery Boardgame Home ${tag}` }],
       away: [{ fullName: `Gallery Boardgame Away ${tag}` }],
     }),
-    // No e2e precedent exists anywhere in this repo for boardgame (confirmed
-    // by search) — this recipe was built entirely from two live capture
-    // attempts. The pad's own "Scoring" card has exactly two real actions,
-    // "Result" and "Draw / no result" (read off the captured "02-live"
-    // screenshot); BOTH open a panel (Method select + Moves text input,
-    // gated by `[data-role="confirm"]`, which stays disabled with "Fill in
-    // the required fields to continue" until both are set) rather than
-    // firing immediately — the first two live attempts (a blind generic
-    // prober, then an un-filled "Draw / no result" tap) both timed out on
-    // `waitForLedgerGrowth` for exactly that reason, confirmed by reading
-    // the failure screenshot each time rather than guessing again blind.
+    // R7/A2 rework (2026-08-31) — tapModel S. The recipe this replaces
+    // predated the v3 conversion entirely (no e2e precedent existed anywhere
+    // in this repo for boardgame; it was built from two live captures
+    // against the universal ActionForm renderer boardgame no longer uses at
+    // all): a "Result"/"Draw / no result" button pair, both opening a panel
+    // gated by `[data-role="confirm"]`. Under tapModel S a scoreboard half
+    // IS the result button (`v3/skins/boardgame.tsx`), exactly like
+    // generic's own win_loss mode and tennis — `scoreOne` mirrors those.
     scoreOne: async (page) => {
-      await pad(page).getByRole("button", { name: "Draw / no result", exact: true }).click();
-      await pad(page).getByLabel("Method").selectOption({ index: 1 });
-      // "Moves" is a plain move-COUNT (`input[type=number] min=0 max=400`),
-      // not a move-list string — verified live after a first attempt filled
-      // "1. e4 e5" into it and Playwright refused ("Cannot type text into
-      // input[type=number]").
-      await pad(page).getByLabel("Moves", { exact: true }).fill("40");
-      await pad(page).locator('[data-role="confirm"]').click();
+      await v3Half(page, "home").click();
     },
-    // Same panel shape, "Result" instead — filled with Method only and left
-    // unconfirmed (mirrors every other sport's dock: some fields set, the
-    // rest visibly incomplete, never submitted).
-    openDock: async (page) => {
-      const result = pad(page).getByRole("button", { name: "Result", exact: true });
-      if (!(await result.isVisible({ timeout: 3_000 }).catch(() => false))) return false;
-      await result.click();
-      const method = pad(page).getByLabel("Method");
-      if (!(await method.isVisible({ timeout: 3_000 }).catch(() => false))) return false;
-      await method.selectOption({ index: 1 });
+    // A decisive tap is TERMINAL — `decideResult` sets phase:"done"
+    // unconditionally (boardgame.ts:243) whether the winner is a side or
+    // `null` — so, unlike generic's/football's/tennis's own `openDock`
+    // (which reaches a FRESH dock with a second tap on the SAME fixture,
+    // because their sport keeps playing), the half `scoreOne` just tapped
+    // can never be retapped: by the time this runs, `away` is no longer a
+    // `button` at all (`v3Half`'s own locator doc — a half renders EITHER a
+    // button, or a plain div once it stops being tappable). A second, fresh,
+    // live fixture is the only way to show a dock still open.
+    openDock: async (page, fx, tag) => {
+      void fx;
+      const dockTag = `${tag}dk`;
+      const dk = await seedRosteredFixture(page.request, {
+        label: `Gallery Boardgame Dock ${dockTag}`,
+        sportKey: "boardgame",
+        variantKey: "classical",
+        entrantKind: "individual",
+        home: [{ fullName: `Gallery Boardgame Dock Home ${dockTag}` }],
+        away: [{ fullName: `Gallery Boardgame Dock Away ${dockTag}` }],
+        emitCoreStart: true,
+      });
+      await page.goto(await fixturePath(page.request, dk.fixtureId));
+      await v3Half(page, "home").click();
+      const dock = pad(page).locator('[data-role="v3-dock"]');
+      await expect(dock, "gallery(boardgame): a result tap must open the method dock").toBeVisible({
+        timeout: 10_000,
+      });
+      await expect(
+        dock.getByRole("button", { name: "Checkmate", exact: true }),
+        "gallery(boardgame): the decisive dock must offer the DECISIVE method set",
+      ).toBeVisible({ timeout: 4_000 });
       return true;
+    },
+    // v3's Detail Dock is a TIMED surface (closes itself HOLD_MS after the
+    // tap that opened it) — same risk generic's/football's/tennis's own
+    // docks carry, and the same fix: fail the capture rather than silently
+    // keep a `04-dock` photograph of a dock that already closed under a slow
+    // run.
+    dockProbe: async (page) => {
+      await expect(
+        pad(page).locator('[data-role="v3-dock"]'),
+        "gallery(boardgame): the dock closed before this width was captured — the 6s hold " +
+          "window elapsed mid-capture, so this PNG would have shown a different state to its siblings",
+      ).toBeVisible({ timeout: 5_000 });
+    },
+    captureExtra: async (page, dir, tag, measurements) => {
+      // 11-boardgamedrawndock — the OTHER method dock this skin builds (see
+      // EXTRA_STATES's own comment above for the full R7-10 citation). Its
+      // own fresh, live fixture: a decisive result is terminal, so neither
+      // the primary fixture (`scoreOne` already decided it) nor `openDock`'s
+      // own dock fixture (also now decided) can reach a "live" draw tile any
+      // more.
+      const drawTag = `${tag}dr`;
+      const dr = await seedRosteredFixture(page.request, {
+        label: `Gallery Boardgame Draw ${drawTag}`,
+        sportKey: "boardgame",
+        variantKey: "classical",
+        entrantKind: "individual",
+        home: [{ fullName: `Gallery Boardgame Draw Home ${drawTag}` }],
+        away: [{ fullName: `Gallery Boardgame Draw Away ${drawTag}` }],
+        emitCoreStart: true,
+      });
+      await page.goto(await fixturePath(page.request, dr.fixtureId));
+      await pad(page).getByRole("button", { name: "Draw / no result", exact: true }).click();
+      const drawDock = pad(page).locator('[data-role="v3-dock"]');
+      await expect(drawDock, "gallery(boardgame): the draw tile must open the method dock").toBeVisible({
+        timeout: 10_000,
+      });
+      await expect(
+        drawDock.getByRole("button", { name: "Draw by agreement", exact: true }),
+        "gallery(boardgame): the drawn dock must offer the DRAWN method set, not the decisive one",
+      ).toBeVisible({ timeout: 4_000 });
+      await captureState(page, dir, "11-boardgamedrawndock", "boardgame", measurements, async () => {
+        await expect(
+          drawDock,
+          "gallery(boardgame): 11-boardgamedrawndock must still show the drawn method dock",
+        ).toBeVisible({ timeout: 5_000 });
+      });
+      return ["11-boardgamedrawndock"];
     },
   },
 ];

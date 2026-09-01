@@ -57,6 +57,16 @@ async function setupOfflineFixture(
   return { fixture, secret: minted.data!.secret };
 }
 
+/** The one starter this fixture seeds on the home side — the person the v3
+ *  skin stamps into every home tap. Derived from the SAME label
+ *  `setupOfflineFixture` seeds with, so a rename cannot leave the two
+ *  disagreeing silently. */
+function homePerson(fixture: RosteredFixture): string {
+  const id = Object.entries(fixture.personIds).find(([name]) => name.startsWith("Offline Home "))?.[1];
+  if (id === undefined) throw new Error("scorepad-offline: no seeded home person to attribute against");
+  return id;
+}
+
 /** Matches registry.tsx's own `queueDbName` literal (`scorepad-${fixtureId}`)
  *  exactly — this reads the browser's real IndexedDB by name. */
 function queueDbName(fixtureId: string): string {
@@ -117,24 +127,69 @@ async function openDeviceLink(page: Page, secret: string): Promise<void> {
   await page.goto(`/score/${secret}`);
   const accept = page.getByRole("button", { name: "Accept", exact: true });
   if ((await accept.count()) > 0) await accept.click();
-  await expect(page.getByRole("button", { name: "Add points", exact: true })).toBeVisible({ timeout: 20_000 });
+  await expect(scorebug(page), "the v3 board must render on the device link").toBeVisible({ timeout: 20_000 });
 }
 
-/** Expand "Add points", fill the Points field, pick the Home chip, Confirm.
- *  Every call site below uses a DISTINCT points value so the final ledger
- *  assertion pins an exact payload per slot, not merely a count —
- *  `usePadPipeline`'s own double-submit guard would otherwise correctly
- *  swallow a repeat of the identical (type, payload) pair. */
-async function pressAddPoints(page: Page, points: number): Promise<void> {
-  await page.getByRole("button", { name: "Add points", exact: true }).click();
-  await page.getByLabel("Points", { exact: true }).fill(String(points));
-  await page.getByRole("button", { name: "Home", exact: true }).click();
-  const confirm = page.locator('[data-role="confirm"]');
-  if ((await confirm.count()) > 0) await confirm.click();
+/** ScoringPad v3, tapModel S (R7/A1): the scoreboard HALF is the button, so
+ *  there is no "Add points" form to expand. Indexed positionally, home first
+ *  (scorebug.tsx's own render order) — a tappable half's accessible name is
+ *  the player's name plus the hint text, which this file has no fixed string
+ *  for. The device surface renders no `data-testid="score-pad"` wrapper to
+ *  scope to, hence the explicit `[data-role="v3-scorebug"]` root here.
+ *
+ *  `[data-role="v3-scorebug-half"]` (scorebug.tsx, added in review) replaces
+ *  a `.grid > * >> .app-display.font-bold` structural chain: it reached
+ *  through the score figure's OWN layout classes to find the half, so it
+ *  broke on any restyle of either — clicking the half is equivalent, since
+ *  the figure's click bubbles to the same `onClick`. scorepad-skins.spec.ts's
+ *  `scorebugHalf` and gallery.capture.ts's `v3Half` still use the old chain;
+ *  out of scope here. */
+function scorebug(page: Page) {
+  return page.locator('[data-role="v3-scorebug"]');
+}
+function homeHalf(page: Page) {
+  return scorebug(page).locator('[data-role="v3-scorebug-half"]').nth(0);
 }
 
-function scoreEvents(entrantId: string, ...points: number[]): { type: string; payload: unknown }[] {
-  return points.map((n) => ({ type: "generic.score", payload: { by: entrantId, points: n } }));
+/**
+ * Tap the home half — which IS the point — and then, for anything worth more
+ * than one, amend the amount on that SAME held submission through the detail
+ * dock's own chip. `generic.score` is one event either way: the dock rewrites
+ * `points` on the queued payload (queue.ts's `mutateHeld`), it never posts a
+ * second event.
+ *
+ * Every call site uses a DISTINCT amount so the final ledger assertion pins an
+ * exact payload per slot, not merely a count. That is doubly load-bearing on
+ * v3: the double-submit guard compares (type, payload) at SUBMIT time, before
+ * any chip has run, so three half taps are three IDENTICAL submissions and the
+ * guard would legitimately swallow two of them if they landed inside its
+ * window (`DOUBLE_SUBMIT_WINDOW_MS`, 250ms as of R7-42 — was 600ms).
+ * `expectDepth` is what actually separates them — polling the durable
+ * queue after each press both spaces the taps and proves each one landed,
+ * which the old fixed-value version could only assert once at the end.
+ */
+async function pressAddPoints(page: Page, points: number, dbName: string, expectDepth: number): Promise<void> {
+  await homeHalf(page).click();
+  const dock = page.locator('[data-role="v3-dock"]');
+  await expect(dock, "a tally tap must open the amend dock").toBeVisible({ timeout: 20_000 });
+  if (points !== 1) {
+    await dock.getByRole("button", { name: `${points} points`, exact: true }).click();
+  }
+  await expect
+    .poll(() => queueRowCount(page, dbName), {
+      timeout: 20_000,
+      message: `press worth ${points} must reach the durable queue`,
+    })
+    .toBe(expectDepth);
+}
+
+/** `person` is not decoration: the v3 skin stamps a one-person side's only
+ *  member INTO the tap (`buildHalf`'s sole-player auto-set), and this fixture
+ *  seeds exactly one starter per side, so every event the pad writes carries
+ *  it. Asserting the payload without it would pass against a pad that had
+ *  quietly stopped attributing anything. */
+function scoreEvents(entrantId: string, personId: string, ...points: number[]): { type: string; payload: unknown }[] {
+  return points.map((n) => ({ type: "generic.score", payload: { by: entrantId, points: n, person: personId } }));
 }
 
 test("tab death mid-queue: the durable queue survives a real reload and drains in order with no duplicates", async ({
@@ -151,12 +206,11 @@ test("tab death mid-queue: the durable queue survives a real reload and drains i
     const eventsUrl = (url: URL): boolean => url.pathname === `/api/v1/fixtures/${fixture.fixtureId}/events`;
     await page.route(eventsUrl, (route) => route.abort());
 
-    await pressAddPoints(page, 1);
-    await pressAddPoints(page, 2);
-    await pressAddPoints(page, 3);
-
     const dbName = queueDbName(fixture.fixtureId);
-    await expect.poll(() => queueRowCount(page, dbName)).toBe(3);
+    await pressAddPoints(page, 1, dbName, 1);
+    await pressAddPoints(page, 2, dbName, 2);
+    await pressAddPoints(page, 3, dbName, 3);
+
     await expect(page.getByText(OFFLINE_TEXT)).toBeVisible();
     expect((await ledgerOf(request, fixture.fixtureId)).length, "nothing reached the server yet").toBe(0);
 
@@ -167,7 +221,7 @@ test("tab death mid-queue: the durable queue survives a real reload and drains i
     await page.reload();
     const acceptAgain = page.getByRole("button", { name: "Accept", exact: true });
     if ((await acceptAgain.count()) > 0) await acceptAgain.click();
-    await expect(page.getByRole("button", { name: "Add points", exact: true })).toBeVisible({ timeout: 20_000 });
+    await expect(scorebug(page), "the v3 board must render again after the reload").toBeVisible({ timeout: 20_000 });
     await expect
       .poll(() => queueRowCount(page, dbName), {
         message: "the queue must survive a real reload — nothing in-memory did",
@@ -186,7 +240,7 @@ test("tab death mid-queue: the durable queue survives a real reload and drains i
 
     const ledger = await ledgerOf(request, fixture.fixtureId);
     expect(ledger.map((e) => ({ type: e.type, payload: e.payload }))).toEqual(
-      scoreEvents(fixture.homeEntrantId, 1, 2, 3),
+      scoreEvents(fixture.homeEntrantId, homePerson(fixture), 1, 2, 3),
     );
     await expectNoHorizontalScroll(page);
   } finally {
@@ -210,12 +264,11 @@ test("airplane mode: scoring continues offline, an explicit offline state and no
     // context-wide block to fight.
     await ctx.setOffline(true);
 
-    await pressAddPoints(page, 10);
-    await pressAddPoints(page, 20);
+    const dbName = queueDbName(fixture.fixtureId);
+    await pressAddPoints(page, 2, dbName, 1);
+    await pressAddPoints(page, 3, dbName, 2);
 
     await expect(page.getByText(OFFLINE_TEXT)).toBeVisible();
-    const dbName = queueDbName(fixture.fixtureId);
-    await expect.poll(() => queueRowCount(page, dbName)).toBe(2);
     expect((await ledgerOf(request, fixture.fixtureId)).length, "nothing reached the server while offline").toBe(0);
 
     await ctx.setOffline(false);
@@ -225,7 +278,7 @@ test("airplane mode: scoring continues offline, an explicit offline state and no
 
     const ledger = await ledgerOf(request, fixture.fixtureId);
     expect(ledger.map((e) => ({ type: e.type, payload: e.payload }))).toEqual(
-      scoreEvents(fixture.homeEntrantId, 10, 20),
+      scoreEvents(fixture.homeEntrantId, homePerson(fixture), 2, 3),
     );
     await expectNoHorizontalScroll(page);
   } finally {
@@ -244,10 +297,9 @@ test("a 409 mid-drain resyncs against the ledger and completes with no duplicate
     const eventsUrl = (url: URL): boolean => url.pathname === `/api/v1/fixtures/${fixture.fixtureId}/events`;
     await page.route(eventsUrl, (route) => route.abort());
 
-    await pressAddPoints(page, 5);
-    await pressAddPoints(page, 15);
     const dbName = queueDbName(fixture.fixtureId);
-    await expect.poll(() => queueRowCount(page, dbName)).toBe(2);
+    await pressAddPoints(page, 3, dbName, 1);
+    await pressAddPoints(page, 5, dbName, 2);
 
     // Out-of-band: the standalone `request` fixture is its own
     // APIRequestContext (never a browser request, so `page.route` above never
@@ -275,8 +327,10 @@ test("a 409 mid-drain resyncs against the ledger and completes with no duplicate
     // exactly once around the foreign slot, per the S10 replay ruling.
     const ledger = await ledgerOf(request, fixture.fixtureId);
     expect(ledger.map((e) => ({ type: e.type, payload: e.payload }))).toEqual([
-      ...scoreEvents(fixture.awayEntrantId, 999),
-      ...scoreEvents(fixture.homeEntrantId, 5, 15),
+      // The out-of-band write is a raw API append with no lineup context, so
+      // it carries no `person` — unlike the two the PAD wrote.
+      { type: "generic.score", payload: { by: fixture.awayEntrantId, points: 999 } },
+      ...scoreEvents(fixture.homeEntrantId, homePerson(fixture), 3, 5),
     ]);
     await expectNoHorizontalScroll(page);
   } finally {

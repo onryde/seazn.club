@@ -30,6 +30,7 @@ import {
   type PadAttribution,
   type PadField,
   type PadFieldValue,
+  type PadPhase,
   type PadSpec,
   type SportModule,
 } from "../sport/module.ts";
@@ -302,6 +303,15 @@ export function checkActionPayloadsAccepted(
 // than adding a second, weaker one: a field key that collides with an action
 // key is the identical defect (one dictionary entry, two meanings, and the
 // translator sees one string).
+//
+// R7/generic — ONE narrow exception, added when `generic`'s padSpec started
+// declaring the same panel/action once per phase (`everyPhase`,
+// sports/generic/generic.ts, closing the "pad offers what the engine
+// refuses" defect for "pre"): a key may recur ONLY as the byte-identical
+// declaration restated for a DIFFERENT phase. Two occurrences of one key
+// that disagree on what they label, or that repeat for the SAME phase, are
+// still exactly the collision this check has always caught — see
+// `checkLabelKeysUnique` below for the precise rule.
 // ---------------------------------------------------------------------------
 
 /** Every declared label on a spec, tagged by where it sits. `undefined`
@@ -317,23 +327,78 @@ export interface PadLabelRef {
   path?: string;
 }
 
-export function collectPadLabels(spec: PadSpec): PadLabelRef[] {
-  const out: PadLabelRef[] = [];
+/** A stable serialisation of one whole declaration, used ONLY to decide
+ *  whether two occurrences of a label key are the SAME declaration restated
+ *  once per phase. Keys are sorted, so two structurally identical objects
+ *  written with their fields in a different order still compare equal and a
+ *  legitimate pairing is never flagged over cosmetics; `phase` is dropped at
+ *  every level, since differing on it is exactly what a pairing DOES.
+ *
+ *  Review finding 1: `checkLabelKeysUnique` first compared only
+ *  `label`/`where`/`type`/`path` — four shallow fields off `PadLabelRef`,
+ *  which carries no `fields`, `attribution`, `layout` or `gate` at all. Two
+ *  genuinely different actions sharing one key across "pre" and "live" (say,
+ *  different field bounds, or one carrying attribution the other omits) were
+ *  therefore waved through as a "byte-identical restatement" the comment
+ *  claimed to require but never checked. Fingerprinting the whole declaration
+ *  is what makes that claim true. */
+function fingerprint(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "undefined";
+  if (Array.isArray(value)) return `[${value.map(fingerprint).join(",")}]`;
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([k]) => k !== "phase")
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${fingerprint(v)}`).join(",")}}`;
+}
+
+/** `collectPadLabels`'s own refs, plus the phase of the panel each was
+ *  declared under and a fingerprint of the declaration that owns it.
+ *  INTERNAL to this file — `checkLabelKeysUnique` is the only reader, so
+ *  neither field leaks into the public `PadLabelRef` shape `padItemLabelKey`
+ *  callers already assert on exactly (adding a field there would break every
+ *  existing `toEqual` on its result). */
+interface PhasedPadLabelRef extends PadLabelRef {
+  phase: PadPhase;
+  decl: string;
+}
+
+function collectPhasedPadLabels(spec: PadSpec): PhasedPadLabelRef[] {
+  const out: PhasedPadLabelRef[] = [];
   for (const panel of spec.panels) {
-    out.push({ ...panel.labelKey, where: "panel" });
+    out.push({ ...panel.labelKey, where: "panel", phase: panel.phase, decl: fingerprint(panel) });
     for (const action of panel.actions) {
-      out.push({ ...action.labelKey, where: "action", type: action.type });
+      out.push({ ...action.labelKey, where: "action", type: action.type, phase: panel.phase, decl: fingerprint(action) });
       for (const field of action.fields) {
-        if (field.labelKey) out.push({ ...field.labelKey, where: "field", type: action.type, path: field.path });
+        if (field.labelKey) {
+          out.push({
+            ...field.labelKey,
+            where: "field",
+            type: action.type,
+            path: field.path,
+            phase: panel.phase,
+            decl: fingerprint({ type: action.type, field }),
+          });
+        }
       }
       for (const item of action.attribution) {
         if (item.labelKey) {
-          out.push({ ...item.labelKey, where: "attribution", type: action.type, path: item.path });
+          out.push({
+            ...item.labelKey,
+            where: "attribution",
+            type: action.type,
+            path: item.path,
+            phase: panel.phase,
+            decl: fingerprint({ type: action.type, item }),
+          });
         }
       }
     }
   }
   return out;
+}
+
+export function collectPadLabels(spec: PadSpec): PadLabelRef[] {
+  return collectPhasedPadLabels(spec).map(({ phase: _phase, decl: _decl, ...ref }) => ref);
 }
 
 /** The label a given action declares for one of its fields or attribution
@@ -348,13 +413,39 @@ export function padItemLabelKey(spec: PadSpec, type: string, path: string): PadL
 }
 
 export function checkLabelKeysUnique(spec: PadSpec): string[] {
-  const seen = new Map<string, number>();
-  for (const ref of collectPadLabels(spec)) {
-    seen.set(ref.key, (seen.get(ref.key) ?? 0) + 1);
+  const byKey = new Map<string, PhasedPadLabelRef[]>();
+  for (const ref of collectPhasedPadLabels(spec)) {
+    const bucket = byKey.get(ref.key) ?? [];
+    bucket.push(ref);
+    byKey.set(ref.key, bucket);
   }
   const problems: string[] = [];
-  for (const [key, count] of seen) {
-    if (count > 1) problems.push(`labelKey "${key}" is declared ${count} times — label keys must be unique within a module's padSpec`);
+  for (const [key, refs] of byKey) {
+    if (refs.length <= 1) continue;
+    // R7/generic — a key may now legitimately recur, but ONLY as the exact
+    // same declaration restated once per phase (`everyPhase` in
+    // sports/generic/generic.ts: the same panel/action offered at both
+    // "pre" and "live", so a scorer who never taps "Start match" still
+    // reaches everything a started fixture reaches). Every occurrence must
+    // agree on what it labels (`label`/`where`/`type`/`path`) AND no two
+    // occurrences may share a phase — two panels re-declaring one key for
+    // the SAME phase is still the original copy-paste collision this check
+    // exists to catch, not a phase pairing. Anything else stays exactly as
+    // strict as before.
+    const first = refs[0]!;
+    const phases = new Set(refs.map((ref) => ref.phase));
+    // `decl` is a fingerprint of the WHOLE owning declaration (see
+    // `fingerprint` above), not the four shallow fields `PadLabelRef` happens
+    // to carry — so "the same declaration restated per phase" is actually
+    // checked rather than asserted. `where` is still compared explicitly: it
+    // is the one distinction that lives in the ref rather than the
+    // declaration, and a panel and one of its own fields must never be
+    // treated as a pairing.
+    const isPhasePairing =
+      phases.size === refs.length && refs.every((ref) => ref.decl === first.decl && ref.where === first.where);
+    if (!isPhasePairing) {
+      problems.push(`labelKey "${key}" is declared ${refs.length} times — label keys must be unique within a module's padSpec`);
+    }
   }
   return problems;
 }

@@ -1,24 +1,21 @@
 import { test, expect } from "@playwright/test";
 import { TAG, apiJson, addEntrantsViaApi, createStageAndGenerate, expectNoHorizontalScroll } from "./helpers";
+import { HOLD_MS } from "../src/components/v2/scorepad/queue";
 
-// S13/#422 W11 cutover — re-anchored off v1's own CarromPad copy ("Board won
-// by", "Opponent coins left" as a component's own label, "Record board", a
-// "Games" table), none of which the universal renderer produces. carrom has
-// no bespoke v2 skin — skins/registry.ts's own comment: it "stays on the
-// universal renderer DELIBERATELY" — so this drives the spec-driven default
-// PadRenderer (carrom.ts's own `padSpec`) rather than a hand-crafted pad.
+// S13/#422 W11 cutover — re-anchored off v1's own CarromPad copy. R7/A3
+// re-anchors AGAIN: carrom left the universal renderer for its own v3 skin
+// (`v3/skins/carrom.tsx`, tapModel T), and this file used to drive that
+// renderer's spec-driven default form — `data-attribution-path` pickers and
+// a `data-role="confirm"` button neither exist on the v3 pad, which is
+// exactly what would have made every assertion below time out unchanged.
 //
-// The regression this protects, restated for what the fix actually is now:
-// on v1, carrom was UNSCOREABLE over a device link at all — device-score-
-// pad.tsx had no carrom branch, so every submit fell through to the generic
-// pad and 422'd with `unknown event type "generic.result"` (organiser
-// report 2026-07-10). S13 deleted that whole v1 dispatcher; its replacement
-// (device-score-pad.tsx's own comment) is explicit that "this dispatcher
-// never had a carrom branch at all, so carrom is scoreable over a device
-// link for the first time as of this cutover" — this test proves exactly
-// that claim against a real device link and a real ledger, not merely that
-// a route renders.
-test("carrom fixture scores a board over a real device link", async ({ page, request }) => {
+// The regression this file protects, restated once more for what the fix
+// actually is now: on v1, carrom was UNSCOREABLE over a device link at all.
+// S13 fixed that; R7/A3 is a UI rewrite of the SAME scoring surface, not a
+// new regression to guard — this test still proves a real device link can
+// score a real carrom board, end to end, against whichever renderer is
+// live today.
+test("carrom fixture scores a queen-covered board over a real device link", async ({ page, request }) => {
   test.setTimeout(120_000);
 
   const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
@@ -90,30 +87,34 @@ test("carrom fixture scores a board over a real device link", async ({ page, req
   // scorepad-skins.spec.ts / scorepad-offline.spec.ts's own reload step).
   await page.reload();
 
-  // carrom's padSpec (carrom.ts) declares no "Start match"/"Board won by"
-  // copy of its own — "Board (no queen)" / "Board (queen covered)" are its
-  // own action labels, and the universal renderer's default phase tab is
-  // already "live" (pad-renderer.tsx), so both are visible with no extra tab
-  // tap once the match is live.
-  const boardQueen = page.getByRole("button", { name: "Board (queen covered)", exact: true });
-  await expect(boardQueen).toBeVisible({ timeout: 20_000 });
+  // v3's own pad root — the ONE test hook present on every route this pad
+  // ever renders on, unlike `[data-testid="score-pad"]` (fixture-console.tsx
+  // only, never the device-link page this spec actually visits).
+  const pad = page.locator('[data-role="pad-v3"]');
+  await expect(pad, "the v3 pad must mount on the device-link route").toBeVisible({ timeout: 20_000 });
+
+  // "Board (queen covered)" is now a dedicated TILE (`v3/skins/carrom.tsx`,
+  // `data-tile-id="boardQueen"`) that opens a guided SHEET — winner, then
+  // queenTo (an INDEPENDENT side: Law 53(b)/(c) lets the queen be covered by
+  // the side that did NOT win the board), then the coins field. Same side
+  // for both answers here so the queen bonus is actually credited.
+  const boardQueen = pad.locator('[data-tile-id="boardQueen"]');
+  await expect(boardQueen, "the boardQueen tile must be reachable live").toBeVisible({ timeout: 20_000 });
   await boardQueen.click();
 
-  // `opponentCoinsLeft` has no declared labelKey, so the renderer captions it
-  // from its own path (view-model.ts's `deriveFieldPathLabel`:
-  // "opponentCoinsLeft" -> "Opponent coins left") — coincidentally close to
-  // v1 CarromPad's own form copy, but produced by a different mechanism this
-  // time, not a moved assertion.
-  await page.getByLabel("Opponent coins left", { exact: true }).fill("4");
-  // Two independent side pickers on this one form share the SAME "Home"/
-  // "Away" button vocabulary (attribution-picker.tsx's fixed copy) — scoped
-  // by each item's own `data-attribution-path` (winner vs queenTo, the
-  // component's existing hook, not a testid added for this test) so each
-  // click lands on its own picker rather than tripping Playwright's
-  // strict-mode ambiguity.
-  await page.locator('[data-attribution-path="winner"]').getByRole("button", { name: "Home", exact: true }).click();
-  await page.locator('[data-attribution-path="queenTo"]').getByRole("button", { name: "Home", exact: true }).click();
-  await page.locator('[data-role="confirm"]').click();
+  const sheet = pad.locator('[data-role="v3-sheet"]');
+  await expect(sheet, "the boardQueen tile must open the guided sheet").toBeVisible({ timeout: 10_000 });
+  await sheet.locator('[data-choice-option-id="home"]').click(); // winner
+  await expect(
+    sheet.locator('[data-choice-option-id="home"]'),
+    "the queenTo step must follow the winner step, offering the same two sides",
+  ).toBeVisible({ timeout: 10_000 });
+  await sheet.locator('[data-choice-option-id="home"]').click(); // queenTo
+
+  const coinsField = sheet.getByLabel("Opponent's coins left", { exact: true });
+  await expect(coinsField, "the coins step must render a numeric field").toBeVisible({ timeout: 10_000 });
+  await coinsField.fill("4");
+  await sheet.getByRole("button", { name: "Confirm", exact: true }).click();
 
   // The board reached the REAL ledger — coins 4 x pointsPerCoin(1) + queen 3
   // (queenCapAt 22, unreached) = 7 banked to Meena's side — the server's own
@@ -136,15 +137,27 @@ test("carrom fixture scores a board over a real device link", async ({ page, req
   expect(board.payload.opponentCoinsLeft).toBe(4);
   expect(board.payload.queenTo, "queen covered by the same side that won the board").toBe(homeId);
 
-  // And it is ON SCREEN, in the pad's own always-rendered activity feed
-  // (pad-renderer.tsx renders <Timeline> unconditionally — there is no
-  // per-sport skin here to draw a bespoke scoreboard instead). "Board
-  // summary" is event-copy.ts's own badge for this event type; no "Board won
-  // by" copy exists anywhere in v2.
-  const timeline = page.locator('[data-role="timeline"]');
-  await expect(timeline).toBeVisible();
-  await expect(timeline).toContainText("Board summary");
-  await expect(timeline).toContainText("opponentCoinsLeft: 4");
+  // And it is ON SCREEN, through the v3 ribbon strip — the pad's own
+  // always-on history element (`[data-role="v3-ribbon"]`, pad-host.tsx).
+  //
+  // THIS is the assertion the wave's own defect class exists for: `padLabel`
+  // (scoring-vocab.ts) prints the RAW dotted key verbatim when a ribbon key
+  // is not registered in `PAD_LABEL_KEYS` — carrying real copy in all four
+  // dictionaries is not enough on its own (boardgame shipped exactly that
+  // gap once, past i18n parity, the generated key union, tsc, lint and
+  // 13000+ unit tests, caught only by a screenshot). A raw key or an
+  // unresolved template brace anywhere on this screen is the same defect,
+  // caught live rather than assumed fixed by the unit suite.
+  const ribbon = pad.locator('[data-role="v3-ribbon"]');
+  await expect(ribbon, "a committed board must leave a ribbon line").toBeVisible({ timeout: HOLD_MS + 5_000 });
+  await expect(ribbon, "the ribbon must show carrom's own sentence, not the generic fallback").toContainText(
+    "Board recorded",
+  );
+  await expect(ribbon, "the ribbon must state the coins fragment in real words").toContainText("coin");
+  const bodyText = await page.locator("body").innerText();
+  expect(bodyText, "no raw pad.carrom.* key ever reaches the screen").not.toMatch(/pad\.carrom\.[a-zA-Z.]+/);
+  expect(bodyText, "no unresolved i18n template brace reaches the screen").not.toMatch(/\{[a-zA-Z]+\}/);
+
   await expect(page.getByText(/unknown event/i)).toHaveCount(0);
   await expectNoHorizontalScroll(page);
 });

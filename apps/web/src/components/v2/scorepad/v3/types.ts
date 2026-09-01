@@ -930,6 +930,17 @@ export interface ActivityDetailContext {
   /** Interpolating message lookup — same shape every other v3 chassis
    *  renderer's own `t` prop takes. */
   t: (key: string, vars?: Record<string, string | number>) => string;
+  /** Plural-aware lookup for the SAME dictionary `t` reads, selecting
+   *  `<key>.one` / `<key>.other` through `Intl.PluralRules` for the viewer's
+   *  own locale (`usePlural`, dict-provider.tsx). OPTIONAL because a skin's
+   *  `activityDetail` is also called from harnesses that build this context
+   *  by hand; a skin that needs a plural falls back to the `.other` form,
+   *  which is the correct English reading for every count but one.
+   *
+   *  A skin cannot do this for itself: `t` takes no count and the skin
+   *  factory receives no locale, so "1 pts" was unfixable inside the skin —
+   *  R7-28, found by reading a real 320 capture rather than a test. */
+  plural?: (key: string, count: number, vars?: Record<string, string | number>) => string;
   /** The event's own type, e.g. `"cricket.ball"`. */
   eventType: string;
   /** The event's own payload. */
@@ -1025,6 +1036,39 @@ export interface SkinDefV3<View = unknown> {
    * `context`/`swap` below already do for their own concerns.
    */
   phase?(view: View): PadPhase;
+
+  /**
+   * R7/task D — does this skin's OWN surface already say everything the
+   * engine's `summary.headline` says? Return true and the chassis stops
+   * rendering the `data-role="v3-headline"` bar above the scorebug.
+   *
+   * THE RULING, verbatim (R6's position, sent to R7 and recorded in
+   * `_INDEX.md`): "do not hardcode a per-sport suppression list in the
+   * chassis. A skin should DECLARE whether it owns the headline's
+   * information, the same opt-in shape `phase?(view)` already uses — then
+   * hockey and ice hockey suppress it once their own strip surfaces shootout
+   * and OT, cricket keeps it (the chase equation earns its place), and no
+   * chassis-side list has to be kept in sync with eleven skins."
+   *
+   * WHY THE BAR EXISTS AT ALL, so nobody deletes it wholesale. The legacy
+   * renderer showed the fold's headline; v3 dropped it and a finished match
+   * showed two scores and nothing saying who won — on a TIE that is the whole
+   * outcome. It is the ONLY statement of the result on the pad. So the
+   * question is never "is the bar ugly", it is "does this skin already carry
+   * every fact this string carries, in every state".
+   *
+   * TAKES `view` DELIBERATELY, like `phase` does. A skin whose own surface
+   * covers the headline in some states and not others answers per state
+   * rather than opting out of the whole thing. (No skin needs that yet —
+   * every current answer is state-independent — but the alternative, a bare
+   * boolean field, would force such a skin to choose between a duplicated bar
+   * and a lost fact.)
+   *
+   * OMITTING IT MEANS "KEEP", which is the safe direction: a new skin renders
+   * one redundant bar until someone looks, rather than silently dropping the
+   * only statement of its result.
+   */
+  ownsHeadline?(view: View): boolean;
   scorebug(view: View): ScorebugSpec;
   tiles(view: View): TileSpec[];
   /**

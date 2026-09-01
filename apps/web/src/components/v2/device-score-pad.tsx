@@ -25,6 +25,7 @@ import type { MessageKey } from "@/lib/messages";
 // bootstrap-resolution failure (fidelity.ts's own doc) means "no pad
 // renders", never a fallback to a v1 chain that no longer exists.
 import { ScorePad, type ScorePadBootstrap } from "@/components/v2/scorepad/registry";
+import { entrantDisplayName } from "@/lib/entrant-name";
 
 export type PadSideInfo = SideInfo;
 
@@ -248,9 +249,16 @@ export function DeviceScorePad({
         </div>
         <div className="px-3 py-4 text-center sm:px-4 sm:py-5">
           <p className="flex items-baseline justify-center gap-3 text-sm font-medium text-slate-200">
-            <span className="max-w-[40%] truncate">{home?.name ?? msg("schedule.tbd")}</span>
+            {/* R7/C5 (D-6) — people for an individual or pair entrant; a
+                team keeps its snapshotted name. Same resolution the console
+                uses, never a second one (lib/entrant-name.ts). */}
+            <span className="max-w-[40%] truncate">
+              {home ? entrantDisplayName(home) : msg("schedule.tbd")}
+            </span>
             <span className="text-[10px] uppercase tracking-widest text-slate-400">{msg("schedule.vs")}</span>
-            <span className="max-w-[40%] truncate">{away?.name ?? msg("schedule.tbd")}</span>
+            <span className="max-w-[40%] truncate">
+              {away ? entrantDisplayName(away) : msg("schedule.tbd")}
+            </span>
           </p>
           {/* Fluid LED numerals: clamp to the phone's width so set-score
               headlines like "1 — 0 · 21-18 (16-12)" never wrap mid-number —
@@ -293,7 +301,7 @@ export function DeviceScorePad({
               disabled={busy || padSyncing}
               onClick={() => send("core.void", { event_id: lastOwnVoidable.id })}
               className="flex h-12 items-center justify-center gap-2 rounded-full border border-amber-500/30 bg-amber-500/10 px-6 text-sm font-semibold text-amber-300 transition hover:border-amber-400/60 hover:bg-amber-500/20 active:scale-[0.98] disabled:opacity-50"
-              title={msg("score.undoTitle", { type: lastOwnVoidable.type, seq: lastOwnVoidable.seq })}
+              title={msg("score.voidLastTitle", { type: lastOwnVoidable.type, seq: lastOwnVoidable.seq })}
             >
               <span aria-hidden className="text-base leading-none">⟲</span>
               {msg("device.undoMine")}

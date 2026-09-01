@@ -19,6 +19,7 @@ import type { RealtimeConnector } from "../use-fixture-stream";
 import { indexedDbQueueStore, type QueueStore } from "../queue-store";
 import {
   DOUBLE_SUBMIT_WINDOW_MS,
+  HUMAN_FASTEST_REPEAT_MS,
   pendingToEnvelope,
   usePadPipeline,
   type UsePadPipelineParams,
@@ -512,17 +513,39 @@ describe("usePadPipeline — double-submit guard (review finding 2)", () => {
     expect(pad.current.queueDepth).toBe(0);
   });
 
-  it("a repeat of the identical (type, payload) within the window, AFTER the first fully resolves, is also suppressed", async () => {
+  it("a repeat of the identical (type, payload) within the window, AFTER the first fully resolves, is also suppressed — AND the refusal is now VISIBLE, not silent", async () => {
+    const { transport, appendCalls } = fakeTransport({ appendResults: [success(1), success(2)] });
+    const pad = mountPipeline(baseParams({ transport }));
+
+    await pad.current.submit("generic.score", { by: "H", points: 1 });
+    expect(appendCalls).toHaveLength(1);
+    expect(pad.current.lastRejection).toBeNull(); // the first, accepted submit clears any prior rejection
+
+    await vi.advanceTimersByTimeAsync(DOUBLE_SUBMIT_WINDOW_MS - 100); // still inside the window
+    await pad.current.submit("generic.score", { by: "H", points: 1 }); // same action, too soon
+
+    expect(appendCalls).toHaveLength(1); // still just one — the repeat is still refused
+    // R7-42/R7-30: refused is no longer synonymous with silent. The scorer
+    // must be able to tell the tap was not taken, via the SAME
+    // `lastRejection` surface a server-side 422 already uses (rendered
+    // through `rejectionText`/`refusalText`, pad-host.tsx/refusal-copy.ts).
+    expect(pad.current.lastRejection).not.toBeNull();
+    expect(pad.current.lastRejection?.code).toBe("DOUBLE_SUBMIT");
+  });
+
+  it("a repeat at 400ms — inside the OLD 600ms window, outside the new 250ms one — now RECORDS: the customer-facing behaviour change", async () => {
     const { transport, appendCalls } = fakeTransport({ appendResults: [success(1), success(2)] });
     const pad = mountPipeline(baseParams({ transport }));
 
     await pad.current.submit("generic.score", { by: "H", points: 1 });
     expect(appendCalls).toHaveLength(1);
 
-    await vi.advanceTimersByTimeAsync(DOUBLE_SUBMIT_WINDOW_MS - 100); // still inside the window
-    await pad.current.submit("generic.score", { by: "H", points: 1 }); // same action, too soon
+    await vi.advanceTimersByTimeAsync(400); // past the new 250ms window, still inside the old 600ms one
+    await pad.current.submit("generic.score", { by: "H", points: 1 });
 
-    expect(appendCalls).toHaveLength(1); // still just one
+    expect(appendCalls).toHaveLength(2); // BOTH recorded — this would have been swallowed at the old window
+    expect(pad.current.lastRejection).toBeNull(); // a genuinely-accepted second submit, nothing to refuse
+    expect((pad.current.state as { running: { home: number; away: number } }).running).toEqual({ home: 2, away: 0 });
   });
 
   it("two DELIBERATELY identical actions separated by MORE than the window both record — a scorer entering two dot balls in a row must not lose the second", async () => {
@@ -2075,7 +2098,7 @@ describe("usePadPipeline — R2 soft-commit entry point (submitHeld / dropHeldSu
     expect(appendCalls).toHaveLength(1);
   });
 
-  it("shares submit()'s double-submit guard: an identical action within the window holds nothing new", async () => {
+  it("shares submit()'s double-submit guard: an identical action within the window holds nothing new — AND the refusal is VISIBLE (R7-42/R7-30, this is the copy every real v3 tap calls)", async () => {
     const { transport } = fakeTransport({ appendResults: [] });
     const pad = mountPipeline(baseParams({ transport }));
     await vi.advanceTimersByTimeAsync(0);
@@ -2086,6 +2109,7 @@ describe("usePadPipeline — R2 soft-commit entry point (submitHeld / dropHeldSu
     expect(first).not.toBeNull();
     expect(second).toBeNull(); // identical action, accepted too recently — same DOUBLE_SUBMIT_WINDOW_MS submit() uses
     expect(pad.current.queueDepth).toBe(1); // only one entry was ever held
+    expect(pad.current.lastRejection?.code).toBe("DOUBLE_SUBMIT"); // no longer a silent no-op
   });
 
   it("dropHeldSubmission undoes a still-held tap with no network call, no core.void, and reverts the optimistic fold", async () => {
@@ -2409,5 +2433,36 @@ describe("usePadPipeline — a queued event the server already applied, resumed 
     // And "is this mine" must follow the surviving copy, or the undo-own
     // affordance silently disowns an event this device really did record.
     expect(pad2.current.ownEventIds.has(REAL_SERVER_ID)).toBe(true);
+  });
+});
+
+// R7-46 — the constant's own guard, and the cheapest possible statement of the
+// rule the walkthrough proves the expensive way.
+//
+// R7-30/R7-43 was not "the window was 600" in the abstract. It was that 600ms
+// reached into the range where a scorer taps DELIBERATELY — a player on a run
+// produces byte-identical payloads back to back — so the pad silently recorded
+// less than the scorer did. The repair is not a magic number, it is the
+// relationship: the guard must stay clear of human range.
+//
+// This is asserted here rather than only in
+// `e2e/walkthrough/scorepad-v3-honest-recording.spec.ts` because a constant
+// creeping back up should red in milliseconds, not after a browser boots. And
+// it is asserted as an INEQUALITY against a separately-named floor rather than
+// as `toBe(250)`: pinning the literal would make every deliberate retune a
+// test edit, which is how a guard becomes something people delete.
+describe("R7-46: the double-submit window must stay out of human tapping range", () => {
+  it("is strictly below the fastest a scorer can deliberately repeat a tap", () => {
+    expect(
+      DOUBLE_SUBMIT_WINDOW_MS,
+      "a window at or above HUMAN_FASTEST_REPEAT_MS eats deliberate taps — this is R7-30, which shipped at 600ms",
+    ).toBeLessThan(HUMAN_FASTEST_REPEAT_MS);
+  });
+
+  it("and the floor itself is a real human bound, not a value tuned to make the line above pass", () => {
+    // Sustained deliberate tapping tops out around 5-8 taps/sec. A floor that
+    // drifted below ~200ms would no longer describe a person, and the
+    // inequality above would start passing for the wrong reason.
+    expect(HUMAN_FASTEST_REPEAT_MS).toBeGreaterThanOrEqual(200);
   });
 });

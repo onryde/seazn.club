@@ -128,7 +128,41 @@ describe("registry totality", () => {
     expect(resolvePad("icehockey", T).lane).toBe("v3");
   });
 
-  it("every other builtinModules sport still resolves to legacy — the flips touch cricket, football, tennis, badminton, table tennis, volleyball, hockey and ice hockey alone", () => {
+  // R7/A1 — generic, this wave's own deliverable, pinned independently of the
+  // structural sweep below for the same reason every flip before it is: that
+  // sweep only proves resolvePad AGREES with V3_SKINS/LEGACY_SPORTS'
+  // membership, whatever it happens to say, so a task that shipped without
+  // actually flipping generic would keep it green. Generic is NOT a fallback
+  // — it is a first-class catalog entry, and the first sport to leave
+  // `../../registry.tsx`'s own `RESOLUTION_KIND: "universal"` lane, which now
+  // serves carrom and boardgame alone.
+  it("generic specifically resolves to the v3 lane, not legacy — this wave's own flip", () => {
+    expect(resolvePad("generic", T).lane).toBe("v3");
+  });
+
+  // R7/A2 — boardgame, this wave's own deliverable, pinned independently of
+  // the structural sweep below for the same reason every flip before it is:
+  // that sweep only proves resolvePad AGREES with V3_SKINS/LEGACY_SPORTS'
+  // membership, whatever it happens to say, so a task that shipped without
+  // actually flipping boardgame would keep it green. This leaves
+  // `../../registry.tsx`'s own `RESOLUTION_KIND: "universal"` lane serving
+  // carrom alone.
+  it("boardgame specifically resolves to the v3 lane, not legacy — this wave's own flip", () => {
+    expect(resolvePad("boardgame", T).lane).toBe("v3");
+  });
+
+  // R7/A3 — carrom, this wave's own deliverable, pinned independently of the
+  // structural sweep below for the same reason every flip before it is: that
+  // sweep only proves resolvePad AGREES with V3_SKINS/LEGACY_SPORTS'
+  // membership, whatever it happens to say, so a task that shipped without
+  // actually flipping carrom would keep it green. Carrom is the ELEVENTH and
+  // LAST engine sport to leave `../../registry.tsx`'s own
+  // `RESOLUTION_KIND: "universal"` lane, which now serves nobody.
+  it("carrom specifically resolves to the v3 lane, not legacy — this wave's own flip, and the LAST sport off the universal lane", () => {
+    expect(resolvePad("carrom", T).lane).toBe("v3");
+  });
+
+  it("every other builtinModules sport still resolves to legacy — CARROM WAS THE LAST ONE: this set now names all eleven shipped sports, and LEGACY_SPORTS is empty", () => {
     const converted = new Set([
       "cricket",
       "football",
@@ -138,14 +172,62 @@ describe("registry totality", () => {
       "volleyball",
       "hockey",
       "icehockey",
+      "generic",
+      "boardgame",
+      "carrom",
     ]);
     const others = builtinModules.map((m) => m.key).filter((key) => !converted.has(key));
-    // Pins today's known-good shape, same convention registry.test.tsx's own
-    // "the table names exactly the 11 shipped sports" assertion uses.
-    expect(others.length).toBe(3);
-    for (const key of others) {
-      expect(resolvePad(key, T).lane, key).toBe("legacy");
-    }
+    // `others` is EMPTY, not merely small — carrom (R7/A3) was the last sport
+    // left on the legacy lane, per boardgame's own pin above ("...serving
+    // carrom alone"). A `for` loop over an empty array would assert nothing
+    // and stay green even if this whole gate were deleted, so the emptiness
+    // itself is the assertion — not a guard wrapped around a now-vacuous
+    // loop. `LEGACY_SPORTS` (../registry.ts) is asserted directly alongside
+    // it, since `others` and `LEGACY_SPORTS` are two independently-derived
+    // sets that must now agree on the same empty answer.
+    expect(others).toEqual([]);
+    expect(LEGACY_SPORTS.size).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RESTORED FROM THE DEMOLITION (R7/G review, 2026-09-01). This assertion lived
+// in `../../__tests__/registry.test.tsx`'s "resolveScorePad — drift guard"
+// block, six of whose seven assertions tested the v2 `RESOLUTION_KIND` /
+// `skinFor` table that R7/G deleted. This one did not: it derives straight off
+// `builtinModules` and asserts something about the ENGINE, not about any pad
+// lane — so it was removed as collateral damage, and the review caught it.
+//
+// It belongs here because `registry-totality.test.ts` is now the file that
+// holds `builtinModules` to a written decision rather than a fallthrough,
+// which is exactly the posture this assertion enforces.
+//
+// WHAT IT PROTECTS. `padSpec` is an OPTIONAL hook on `SportModule`
+// (`packages/engine/src/sport/module.ts`), and
+// `apps/web/src/server/usecases/fidelity.ts`'s `resolveScorePadBootstrap`
+// falls back to `EMPTY_SPEC` when a module has none — `fidelityEntitlements:
+// {}`, so `resolveFidelityBand` gates NOTHING and the pad renders at full band
+// regardless of what the org bought. Dead today only because all eleven
+// `builtinModules` happen to implement it. A twelfth sport that forgets is a
+// silently ungated pad; this turns that into a CI failure.
+//
+// The real write path still refuses the append at the scoring door
+// (`scoring.ts`'s `requiredFeatureForEvent`), so the worst case is misleading
+// UI rather than a billing bypass — which is why this is a guard and not a
+// blocker.
+//
+// It is NOT covered by `packages/engine/src/testkit/conformance-pad.ts`'s
+// `padSpecConformanceSuite`: that is a manual per-module opt-in, called from
+// eight scattered `*.test.ts` files, so it protects a module only if some test
+// file remembers to name it. This assertion is derived from `builtinModules`
+// itself, which is what makes it total.
+describe("every engine module ships a padSpec (no module ships an UNGATED pad)", () => {
+  it("no builtinModules entry omits the optional padSpec hook", () => {
+    const missing = builtinModules.filter((m) => typeof m.padSpec !== "function").map((m) => m.key);
+    expect(
+      missing,
+      "a module with no padSpec gets fidelity.ts's EMPTY_SPEC — no fidelityEntitlements, so no band gate at all",
+    ).toEqual([]);
   });
 });
 

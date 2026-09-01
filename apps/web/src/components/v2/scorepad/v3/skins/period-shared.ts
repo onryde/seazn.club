@@ -1546,6 +1546,31 @@ export function makePeriodSkin(spec: PeriodSkinSpec): (t: TFn) => SkinDefV3<PadH
     // (and, in ice hockey, up to two assists) while the ribbon is still up.
     tapModel: "T",
     phase: resolvePhase,
+    /** R7/D — the ruling names this pair explicitly: hockey and ice hockey
+     *  "suppress it once their own strip surfaces shootout and OT". Both
+     *  preconditions are met HERE, in this file, which is why the declaration
+     *  lives here rather than in the two thin per-sport files:
+     *
+     *  - the OFFICIAL score (including ice hockey's shoot-out `+1`, IIHF 87)
+     *    is the halves' own number — `officialScoreOf` reads the kernel's
+     *    `summary.perSide`, the same single derivation the headline uses;
+     *  - the shoot-out tally is a `shootout` strip chip, from
+     *    `detail.shootout`, the same `shootoutTally` the kernel put in the
+     *    headline's ` (GWS 2–1)`;
+     *  - a win in extra time is an `ot` strip chip, on the identical
+     *    `outcome.kind === "win" && outcome.method === "extra_time"` predicate
+     *    that produces the headline's ` (OT)`;
+     *  - the period is `resolvePhase(view)`, which is what the headline's
+     *    ` · P2` suffix says.
+     *
+     *  Every component of `${home} — ${away}${soSuffix}${otSuffix}${phaseSuffix}`
+     *  is therefore on the bug already. Delete any one of those four surfaces
+     *  and this declaration becomes a lie. `v3/__tests__/headline-ownership.test.ts`
+     *  drives BOTH the decided-shoot-out and the decided-in-extra-time states and
+     *  asserts each surface there, so removing one reds the file that carries
+     *  this declaration rather than only `period-pair.test.ts`. Mutation-proved:
+     *  deleting the `ot` chip reds it. */
+    ownsHeadline: () => true,
     scorebug: (view) => buildScorebug(spec, view, t),
     tiles: (view) => buildTiles(spec, view, t),
     dock: (eventType, view, payload) => buildDock(spec, eventType, view, t, payload),

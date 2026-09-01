@@ -112,11 +112,32 @@ function HalfContent({ half, hintText }: { half: ScorebugHalf; hintText: string 
        *  `justify-center`). Measured at 320 in a real browser before and after
        *  — see __tests__/scorebug.test.ts's own note for the rects. Chassis-
        *  wide: every skin's ScorebugSpec renders through this component. */}
+      {/* R7-28 — capped at TWO lines, found by reading a real 320 capture:
+       *  a long entrant name wrapped to three lines above a single-digit
+       *  score, so the name outweighed the number on a surface whose entire
+       *  job is to show the score. `line-clamp-2` needs `display:-webkit-box`,
+       *  which is why this is no longer `flex` — the children are each
+       *  `inline-flex` already, so the LED dot and the "/" separator keep
+       *  their own alignment, and a half whose name fits on one or two lines
+       *  (cricket's, football's, every singles fixture, most doubles pairs)
+       *  renders exactly what it rendered before.
+       *
+       *  Nothing is lost when it clamps: `whoNames()` builds the half's
+       *  ACCESSIBLE name from the same data and is unaffected, so a screen
+       *  reader still hears every name in full — the clamp is visual only.
+       *  Chassis-wide: every skin's ScorebugSpec renders through here, so
+       *  this was verified against the other skins' captures too. */}
       <div
-        className={`flex min-w-0 flex-wrap items-center justify-center gap-x-1.5 gap-y-0.5 app-display text-[13px] font-semibold tracking-wide ${NIGHT_TILE_CLASSES.creamText} sm:text-sm`}
+        className={`line-clamp-2 min-w-0 text-center app-display text-[13px] font-semibold tracking-wide ${NIGHT_TILE_CLASSES.creamText} sm:text-sm`}
       >
         {half.who.map((w, i) => (
-          <span key={i} className="inline-flex min-w-0 items-center gap-1 wrap-anywhere">
+          // NOT `inline-flex`: an inline-flex box is ATOMIC to the
+          // `-webkit-box` above, so `line-clamp-2` counted the whole span as
+          // ONE line and never clamped at all — the fix shipped inert, and
+          // the 320 capture still showed three lines of name. Plain inline
+          // text is what the clamp can actually count. The LED dot carries
+          // its own spacing now that there is no flex `gap`.
+          <span key={i} className="inline wrap-anywhere">
             {/* R5 — a SEPARATOR between names, found only by playing the pad.
              *  A doubles half renders one span per WhoLine with nothing but a
              *  6px `gap-x-1.5` between them, so two real names run together
@@ -133,14 +154,14 @@ function HalfContent({ half, hintText }: { half: ScorebugHalf; hintText: string 
              *  football's two, and every singles fixture in every sport —
              *  renders byte-for-byte what it rendered before. */}
             {i > 0 && (
-              <span aria-hidden="true" className="opacity-60">
+              <span aria-hidden="true" className="mx-1.5 opacity-60">
                 /
               </span>
             )}
             {w.serving && (
               <span
                 aria-hidden="true"
-                className={`h-1.5 w-1.5 shrink-0 rounded-full ${NIGHT_TILE_CLASSES.ledDot}`}
+                className={`mr-1 inline-block h-1.5 w-1.5 rounded-full align-middle ${NIGHT_TILE_CLASSES.ledDot}`}
               />
             )}
             {w.name}
@@ -211,6 +232,16 @@ export function Scorebug({ spec, t, onTap, onOpenSheet }: ScorebugProps) {
               <button
                 key={i}
                 type="button"
+                // Stable e2e handle (R7 review) — `nth(0)`/`nth(1)` is home/
+                // away by this map's own render order (documented at every
+                // e2e call site). Replaces a `.grid > * >> .app-display.font-
+                // bold` structural chain three call sites reached through
+                // instead: brittle because it depends on the score figure's
+                // OWN layout classes rather than on the half itself, and it
+                // breaks the moment either restyles. Clicking the half
+                // (anywhere in the button) is equivalent to clicking the
+                // score figure inside it — same `onClick`.
+                data-role="v3-scorebug-half"
                 // `tapSheet` WINS where a skin set it. The half still carries
                 // its `tapEvent` — the sheet's job is to build that same
                 // event with one more fact attached — so the order here is
@@ -232,7 +263,11 @@ export function Scorebug({ spec, t, onTap, onOpenSheet }: ScorebugProps) {
             );
           }
           return (
-            <div key={i} className="flex min-w-0 flex-col items-center justify-center gap-1 px-3 py-3 text-center">
+            <div
+              key={i}
+              data-role="v3-scorebug-half"
+              className="flex min-w-0 flex-col items-center justify-center gap-1 px-3 py-3 text-center"
+            >
               {content}
             </div>
           );

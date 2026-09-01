@@ -353,7 +353,20 @@ describe("register status page (RS007 rebuild)", () => {
     // repo's own "pin an actual computed value, don't guess the format
     // string" convention (formatMinor's whole-number rounding trap).
     it("renders the deadline in the ORG's own timezone, with a zone label — never hardcoded UTC", async () => {
-      const deadline = "2026-09-01T19:00:00.000Z"; // 00:30 on 2 Sept LOCAL in Asia/Kolkata (UTC+5:30)
+      // A TIME BOMB, defused (found 2026-09-01T19:10Z, ten minutes after it
+      // went off). This was `2026-09-01T19:00:00.000Z` — an instant that was
+      // comfortably in the future when RS012 wrote it and silently became the
+      // PAST during the evening it merged. The page then renders its expired
+      // state instead of a deadline, so the assertion below fails for everyone,
+      // on main, from that minute onward — with a message about a missing date
+      // string that says nothing about why.
+      //
+      // The properties this fixture actually needs are that the instant is in
+      // the FUTURE and that Asia/Kolkata (UTC+5:30) lands it on a different
+      // CALENDAR DAY from UTC — which is what makes the "never hardcoded UTC"
+      // assertion below able to fail. A far-future date holds both without
+      // depending on when the suite runs.
+      const deadline = "2099-09-01T19:00:00.000Z"; // 00:30 on 2 Sept LOCAL in Asia/Kolkata (UTC+5:30)
       usecaseMock.groupById.mockResolvedValueOnce({
         ...BASE_VIEW,
         org_timezone: "Asia/Kolkata",

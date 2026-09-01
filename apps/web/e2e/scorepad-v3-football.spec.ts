@@ -943,7 +943,13 @@ test("football v3: kick tiles drive the shoot-out — reachable, tallied, cued, 
   // F12 — the SCORER's Activity panel (the one carrying the Void buttons, as
   // opposed to the read-only audit table which already named the side) now
   // names the side too. Rows are newest-first, so the first row is this kick.
-  const activity = pad(page).locator('[data-role="v3-activity-slot"]');
+  //
+  // PAGE-WIDE, not pad-scoped (R7/C1, gallery.capture.ts's own `padEventRows`
+  // fix): C1 moved the ledger OUT of the pad root on the console (`ScorePad`'s
+  // `hideActivity`), so `v3-activity-slot` — the pad-host-internal wrapper —
+  // never renders here at all; `[data-role="v3-activity"]` is the panel's own
+  // root (activity.tsx), rendered exactly once regardless of lane.
+  const activity = page.locator('[data-role="v3-activity"]');
   await expect(activity.locator('[data-role="v3-activity-row"]').first()).toContainText("Home");
   await expect(activity.locator('[data-role="v3-activity-row"]').first()).toContainText("Scored");
 

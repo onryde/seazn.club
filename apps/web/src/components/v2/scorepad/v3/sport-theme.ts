@@ -425,6 +425,81 @@ export const SPORT_PALETTES: Readonly<Record<string, Partial<SportPalette>>> = O
     caution: "#ffd60a",
     dismissal: "#ff6b6b",
   },
+
+  /*
+   * BOARDGAME (R7-9a, owner ruling, AMENDED values, 2026-08-31). Board and
+   * board-2 are UNCHANGED from A2's own deep aubergine; `ink` and `led` both
+   * move, and `caution`/`dismissal` are REMOVED outright — this replaces
+   * A2's entry wholesale, not just the two tones it used to spend.
+   *
+   *   board       deep aubergine — a club table under a desk lamp, not a
+   *               chessboard's own black-and-white (which the pieces already
+   *               own; painting the BOARD in it would fight them)
+   *   board-2     the band the halves and the context line sit on
+   *   ink         buff of the light square — warm, and legible on both
+   *               grounds (14.22:1 / 12.24:1)
+   *   led         the analogue clock's FALLING FLAG — side-to-move/White,
+   *               `state.colorOfHome`, known from the first render (`init()`
+   *               defaults home to White), spent on the WhoLine the way
+   *               every racquet sport spends this token on the serve, one
+   *               fact, nowhere else. TUNED, not merely chosen: the true
+   *               flag red `#e5484d` measures 4.40:1 on the board and
+   *               3.79:1 on the band — a FAIL, since `led` paints small TEXT
+   *               (`.pad-led`'s own `color:`, globals.css), not a graphic —
+   *               while `#f4767a` clears AA text on both (6.34:1 / 5.46:1)
+   *               and still reads as a flag rather than pink.
+   *
+   * `caution`/`dismissal` OMITTED, not merely unused: chess has no card
+   * ladder, and carrying a yellow/red pair for a sport with no discipline
+   * events at all is colour as decoration. Both tokens fall through to the
+   * shared default (`resolveSportPalette`'s own documented fallback) rather
+   * than being restated here — `__tests__/contrast.test.ts` pins the
+   * OMISSION itself, not just its consequence, so a later wave cannot
+   * silently reinstate either without a test noticing.
+   *
+   * min ΔE76 15.1, against tennis — the ruling's own note, and comfortably
+   * clear of the ~8 "reads as one colour" floor. Aubergine and the other six
+   * boards share no family by construction, so this was never close.
+   */
+  boardgame: {
+    board: "#25142e",
+    "board-2": "#33203d",
+    ink: "#efe9d8",
+    led: "#f4767a",
+  },
+
+  /*
+   * CARROM (R7-9a, owner ruling, AMENDED values). Board and board-2 are the
+   * red lacquered border every ICF board carries; `led` is the accent it
+   * gave up, spent on the board's french polish instead. `caution`/
+   * `dismissal` OMITTED, same reasoning as boardgame's own entry above:
+   * carrom has no discipline-card ladder (Laws 51/55 adjustments are
+   * WORDED reasons on the umpire sheet, never a card), so carrying a
+   * yellow/red pair for events that do not exist would be colour as
+   * decoration.
+   *
+   *   board       the red lacquered border — carrom's queen red, moved from
+   *               the accent to the GROUND (the ruling's own words: "the
+   *               better place for it, since the queen is the centre of
+   *               the board and the ground IS the board")
+   *   board-2     one shade up the same border, under the names
+   *   ink         warm cream, legible on both
+   *   led         french polish / the brass striker — the accent the queen
+   *               red gave up when it moved to the ground
+   *
+   * min ΔE76 18.0 (vs badminton, the previous nearest neighbour at 4.9 —
+   * comfortably clear of the ~8 "reads as one colour" floor). ink 14.24:1 /
+   * 12.60:1, led 7.70:1 / 6.81:1 — both computed, not judged; pinned
+   * explicitly in `__tests__/contrast.test.ts` per that file's own
+   * usage-driven tone licence (a palette landing before its skin exists
+   * reds nothing on a bad hex otherwise).
+   */
+  carrom: {
+    board: "#3a0f14",
+    "board-2": "#4a161c",
+    ink: "#f4ece0",
+    led: "#e0a63c",
+  },
 });
 
 /** The custom-property name a token is emitted under. One place, so the

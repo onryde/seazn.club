@@ -1556,6 +1556,13 @@ export function footballSkinV3(t: TFn): SkinDefV3<PadHostView> {
     key: "football",
     tapModel: "T",
     phase: resolvePhase,
+    /** R7/D — football's headline is `${goals} — ${goals}` plus, after a
+     *  shoot-out, ` (${home}–${away} pens)`. Both facts are already on the
+     *  halves: `big` is the goals and `sub` is `(${pens.side})`, built from
+     *  the SAME `shootoutTally` primitive the engine's summary uses (R3.5/H
+     *  made that one tally, precisely so display and decision cannot fork).
+     *  So the bar restates the halves in every state this kernel has. */
+    ownsHeadline: () => true,
     scorebug: (view) => buildScorebug(view, t),
     tiles: buildTiles,
     dock: (eventType, view, payload) => buildDock(eventType, view, t, payload),

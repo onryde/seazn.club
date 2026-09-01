@@ -32,7 +32,10 @@ export function AuditStrip({
           href={`/api/v1/fixtures/${fixtureId}/audit`}
           target="_blank"
           rel="noreferrer"
-          className="btn btn-ghost px-2.5 py-1 text-xs"
+          // R7/C1 moved this strip into the activity panel's footer, beside
+          // the ledger it is a verdict about; 26px was under the 44px touch
+          // floor there as much as it was on the page.
+          className="btn btn-ghost min-h-11 text-xs"
         >
           {msg("audit.download")}
         </a>

@@ -237,6 +237,10 @@ describe("FixtureConsole & MatchRuleFields — contrast sweep completion (R3.5/T
   )
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .replace(/\/\/.*$/gm, "");
+  const activityPanelCode = readFileSync(
+    join(process.cwd(), "src/components/v2/scorepad/v3/activity.tsx"),
+    "utf8",
+  );
   const matchRulesCode = readFileSync(join(process.cwd(), "src/components/v2/match-rules.tsx"), "utf8")
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .replace(/\/\/.*$/gm, "");
@@ -259,25 +263,31 @@ describe("FixtureConsole & MatchRuleFields — contrast sweep completion (R3.5/T
       src: fixtureConsoleCode,
       regex: /<p className="mt-1 text-xs text-slate-(\d+)">\s*\{msg\("schedule\.round"/,
     },
+    // R7/C1 (D-4) — these four used to read `fixture-console.tsx`'s own
+    // hand-rolled ledger, which this wave DELETED and merged into the pad's
+    // panel. The guard moves with the markup rather than dying with it: the
+    // count chip, the empty line, the recorded-by attribution and the
+    // timestamp all still render, one file over, and the merge is exactly
+    // when a sub-AA tier could slip back in unnoticed.
     {
-      label: "event ledger header — activity count",
-      src: fixtureConsoleCode,
-      regex: /<span className="font-normal text-slate-(\d+)">\(\{events\.length\}\)<\/span>/,
+      label: "activity panel header — event count",
+      src: activityPanelCode,
+      regex: /className="text-sm font-medium text-slate-(\d+) tabular-nums"/,
     },
     {
-      label: "event ledger — empty state message",
-      src: fixtureConsoleCode,
-      regex: /<p className="px-4 py-4 text-sm text-slate-(\d+)">\{msg\("score\.noEvents"\)\}<\/p>/,
+      label: "activity panel — empty state message",
+      src: activityPanelCode,
+      regex: /<p className="px-4 py-4 text-sm text-slate-(\d+)">\{t\("pad\.activity\.empty"\)\}<\/p>/,
     },
     {
-      label: "event row — recorder attribution",
-      src: fixtureConsoleCode,
-      regex: /<span className="text-slate-(\d+)"> \(\{recorder\}\)<\/span>/,
+      label: "activity row — provenance line (time + recorded by)",
+      src: activityPanelCode,
+      regex: /className="mt-0\.5 block text-xs font-normal text-slate-(\d+) no-underline"/,
     },
     {
-      label: "event row — timestamp wrapper",
-      src: fixtureConsoleCode,
-      regex: /<span className="shrink-0 text-slate-(\d+)">\s*<ClientTime value=\{e\.recorded_at\}/,
+      label: "activity row — #seq column",
+      src: activityPanelCode,
+      regex: /className="mt-px shrink-0 font-mono text-xs tabular-nums text-slate-(\d+)"/,
     },
     {
       label: "match-rules.tsx — shared field help span",

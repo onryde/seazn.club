@@ -176,10 +176,13 @@ describe("CRICKET IS UNCHANGED — lock 1: data", () => {
     expect(sportThemeStyle("cricket")).toBeUndefined();
     // R4: `tennis` USED to stand here as the second unthemed example, and it
     // is themed now. R6 retired `hockey` from the slot for the same reason —
-    // it has a palette as of R6-3. The stand-in has to be a sport that
-    // genuinely has no entry in SPORT_PALETTES, or this lock quietly stops
-    // asserting anything; `carrom` is still on the legacy lane with none.
-    expect(sportThemeStyle("carrom")).toBeUndefined();
+    // it has a palette as of R6-3. R7/A3 retires `carrom` for the identical
+    // reason — it has a palette as of R7-9a. The stand-in has to be a sport
+    // that genuinely has no entry in SPORT_PALETTES, or this lock quietly
+    // stops asserting anything; `generic` is now the only other sport
+    // (besides cricket) with none — every OTHER converted sport has claimed
+    // its own identity.
+    expect(sportThemeStyle("generic")).toBeUndefined();
   });
 
   it("and NO data-sport-theme either, which is what keeps a sport-scoped CSS rule off it", () => {
@@ -187,7 +190,7 @@ describe("CRICKET IS UNCHANGED — lock 1: data", () => {
     // must agree with it on EVERY key, or a scoped rule fires where the
     // properties were never emitted (or fails to fire where they were).
     expect(sportThemeAttr("cricket")).toBeUndefined();
-    expect(sportThemeAttr("carrom")).toBeUndefined();
+    expect(sportThemeAttr("generic")).toBeUndefined();
     expect(sportThemeAttr("hockey")).toBe("hockey");
     expect(sportThemeAttr("icehockey")).toBe("icehockey");
     expect(sportThemeAttr("football")).toBe("football");

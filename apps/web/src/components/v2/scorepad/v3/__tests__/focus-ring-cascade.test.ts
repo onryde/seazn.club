@@ -125,15 +125,21 @@ describe("FOOTBALL keeps its own ring — the identity ruling, without the colla
     // table tennis and volleyball — the palettes land together even though R5
     // converts only badminton's skin, see `SPORT_PALETTES`'s own note); R6
     // adds the period pair (hockey and ice hockey) on the identical footing,
-    // both ahead of their skins. The list is pinned rather than counted so a
-    // sport that gains a palette without gaining an entry here is a red, not a
-    // silent pass — the point of the assertion is that EVERY key in this table
-    // has its own `led`, which is what makes the scoped rule safe.
+    // both ahead of their skins; R7/A2 adds boardgame, and R7/A3 adds carrom
+    // — appended after boardgame rather than resorted into a global
+    // alphabetical position: `sport-theme.ts`'s own literal groups sports by
+    // wave/family rather than by strict alphabetical order (its head is
+    // `football, hockey, icehockey, tennis, badminton, tabletennis,
+    // volleyball, boardgame` — not alphabetical past the first four), and
+    // `carrom` lands as the newest tail entry, matching how `boardgame`
+    // itself joined after the racquet family block. The list is pinned
+    // rather than counted so a sport that gains a palette without gaining an
+    // entry here is a red, not a silent pass — the point of the assertion is
+    // that EVERY key in this table has its own `led`, which is what makes the
+    // scoped rule safe.
     //
-    // The ORDER is the literal's own, which R6 chose alphabetically-by-
-    // neighbour so a concurrent wave editing the same object merges
-    // mechanically; it is asserted here only because `toEqual` on an array
-    // sees it, not because anything depends on it.
+    // The ORDER is the literal's own; it is asserted here only because
+    // `toEqual` on an array sees it, not because anything depends on it.
     expect(Object.keys(SPORT_PALETTES)).toEqual([
       "football",
       "hockey",
@@ -142,6 +148,8 @@ describe("FOOTBALL keeps its own ring — the identity ruling, without the colla
       "badminton",
       "tabletennis",
       "volleyball",
+      "boardgame",
+      "carrom",
     ]);
     expect(SPORT_PALETTES.football!.led).toBe("#ffb703");
     expect(SPORT_PALETTES.hockey!.led).toBe("#ffd23f");
@@ -150,6 +158,8 @@ describe("FOOTBALL keeps its own ring — the identity ruling, without the colla
     expect(SPORT_PALETTES.badminton!.led).toBe("#2fe0bd");
     expect(SPORT_PALETTES.tabletennis!.led).toBe("#ff9440");
     expect(SPORT_PALETTES.volleyball!.led).toBe("#4aa8ff");
+    expect(SPORT_PALETTES.boardgame!.led).toBe("#f4767a");
+    expect(SPORT_PALETTES.carrom!.led).toBe("#e0a63c");
   });
 
   it("and every palette in the table declares a `led` of its own, which is what the scoped rule leans on", () => {

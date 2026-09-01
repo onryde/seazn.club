@@ -413,6 +413,104 @@ describe("checkLabelKeysUnique", () => {
   });
 });
 
+// R7/generic — the narrow phase-pairing exception: a key may recur ONLY as
+// the byte-identical declaration restated for a DIFFERENT phase (the shape
+// `everyPhase`, sports/generic/generic.ts, produces). Every other repeat
+// stays exactly as forbidden as `checkLabelKeysUnique`'s block above proves.
+describe("checkLabelKeysUnique — the phase-pairing exception", () => {
+  const live = goodSpec.panels[0] as PadSpec["panels"][number]; // "pad.fake.panel.live" / "pad.fake.action.run"
+  const reset = goodSpec.panels[1] as PadSpec["panels"][number];
+
+  it("passes when the identical panel+action are restated once for \"pre\" and once for \"live\"", () => {
+    const pre: PadSpec["panels"][number] = { ...live, phase: "pre" };
+    const spec: PadSpec = { ...goodSpec, panels: [pre, live, reset] };
+    expect(checkLabelKeysUnique(spec)).toEqual([]);
+  });
+
+  it("still fails when one key is declared twice for the SAME phase, even with identical content", () => {
+    const spec: PadSpec = { ...goodSpec, panels: [live, { ...live }, reset] };
+    expect(checkLabelKeysUnique(spec)).not.toEqual([]);
+  });
+
+  it("still fails when a key repeats across two phases but its content drifts", () => {
+    const driftedPre: PadSpec["panels"][number] = {
+      ...live,
+      phase: "pre",
+      labelKey: { key: live.labelKey.key, label: "Different text" }, // same key, different label
+    };
+    const spec: PadSpec = { ...goodSpec, panels: [driftedPre, live, reset] };
+    expect(checkLabelKeysUnique(spec)).not.toEqual([]);
+  });
+
+  it("still fails when only the ACTION content drifts between the two phase copies", () => {
+    const driftedPre: PadSpec["panels"][number] = {
+      ...live,
+      phase: "pre",
+      actions: [{ ...(live.actions[0] as PadSpec["panels"][number]["actions"][number]), type: "fake.reset" }],
+    };
+    const spec: PadSpec = { ...goodSpec, panels: [driftedPre, live, reset] };
+    expect(checkLabelKeysUnique(spec)).not.toEqual([]);
+  });
+
+  // Review finding 1 — the three drifts the FIRST version of this exception
+  // could not see. It compared `label`/`where`/`type`/`path` only, which are
+  // the four fields `PadLabelRef` happens to carry; a `PadAction`'s real
+  // content (`fields`, `attribution`) and a `PadPanel`'s (`layout`, `gate`)
+  // are absent from that ref entirely, so each case below was waved through
+  // as a "byte-identical restatement" while genuinely disagreeing about what
+  // the shared key means. The pre-existing "ACTION content drifts" case above
+  // varies `type`, which the shallow compare DID catch — so it passed both
+  // before and after, and proved nothing about this hole.
+
+  it("still fails when the two phase copies disagree on a FIELD's bounds", () => {
+    const action = live.actions[0] as PadSpec["panels"][number]["actions"][number];
+    const driftedPre: PadSpec["panels"][number] = {
+      ...live,
+      phase: "pre",
+      actions: [{ ...action, fields: [{ kind: "number", path: "runs", min: 0, max: 6 }] }], // max 3 -> 6
+    };
+    const spec: PadSpec = { ...goodSpec, panels: [driftedPre, live, reset] };
+    expect(checkLabelKeysUnique(spec)).not.toEqual([]);
+  });
+
+  it("still fails when one phase copy carries ATTRIBUTION the other omits", () => {
+    const action = live.actions[0] as PadSpec["panels"][number]["actions"][number];
+    const driftedPre: PadSpec["panels"][number] = {
+      ...live,
+      phase: "pre",
+      actions: [{ ...action, attribution: [{ kind: "person", path: "person" }] }], // [] on the live copy
+    };
+    const spec: PadSpec = { ...goodSpec, panels: [driftedPre, live, reset] };
+    expect(checkLabelKeysUnique(spec)).not.toEqual([]);
+  });
+
+  it("still fails when the two phase copies disagree on the PANEL's layout or gate", () => {
+    const driftedLayout: PadSpec["panels"][number] = { ...live, phase: "pre", layout: "grid" }; // "primary" on live
+    expect(checkLabelKeysUnique({ ...goodSpec, panels: [driftedLayout, live, reset] })).not.toEqual([]);
+
+    const driftedGate: PadSpec["panels"][number] = { ...live, phase: "pre", gate: { op: "path-truthy", path: "state.total" } };
+    expect(checkLabelKeysUnique({ ...goodSpec, panels: [driftedGate, live, reset] })).not.toEqual([]);
+  });
+
+  it("passes a pairing whose two copies are identical but written with their keys in a different ORDER", () => {
+    // The fingerprint sorts keys, so a cosmetic reordering is still a pairing.
+    // Without that, `everyPhase`'s twins would be safe only because they share
+    // one object reference, and any hand-written pair would flake.
+    const reordered = { actions: live.actions, layout: live.layout, labelKey: live.labelKey, phase: "pre" as const };
+    const spec: PadSpec = { ...goodSpec, panels: [reordered, live, reset] };
+    expect(checkLabelKeysUnique(spec)).toEqual([]);
+  });
+
+  it("collectPadLabels itself never exposes phase — the public ref shape is unchanged", () => {
+    const pre: PadSpec["panels"][number] = { ...live, phase: "pre" };
+    const spec: PadSpec = { ...goodSpec, panels: [pre, live, reset] };
+    for (const ref of collectPadLabels(spec)) {
+      expect(ref).not.toHaveProperty("phase");
+      expect(ref).not.toHaveProperty("decl"); // the fingerprint is internal too
+    }
+  });
+});
+
 // S7/#427 — `collectPadLabels` is what the extended (c) check and every
 // per-sport field-label assertion read. Vacuity guard first: a walker that
 // returned nothing would make all three cases above pass while proving

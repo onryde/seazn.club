@@ -18,10 +18,27 @@ import { useMsg } from "@/components/i18n/dict-provider";
 import type { EligibilityIssue } from "@/lib/registration-rules";
 import { EligibilityOverrideDialog } from "@/components/v2/eligibility-override-dialog";
 
+/** One row of the resolved `PositionCatalog.groups` (engine `PositionGroup`),
+ *  narrowed to the fields this editor reads. Structural, not an engine import:
+ *  this is a client component and the engine's zod-inferred type would drag
+ *  the whole module graph into the browser bundle. */
+export interface PositionGroupIn {
+  key: string;
+  name: string;
+  min?: number;
+  max?: number;
+}
+
 interface Props {
   fixtureId: string;
   side: SideInfo;
-  positionGroups: { key: string; name: string }[];
+  /** The catalog groups that govern THIS fixture — the module's per-config
+   *  catalog (`resolvePositions`, R7 B2), never its static `positions`.
+   *  `min`/`max` ride along because they are the half the per-config hook
+   *  actually moves: hockey and ice hockey drop the keeper group's `min` to
+   *  0 when the competition declares `goalkeeper: "optional"` (FIH Rule 4).
+   *  Dropping them here would leave that resolution inert on screen. */
+  positionGroups: PositionGroupIn[];
   roles: { key: string; name?: string }[];
   lineupSize: number;
   canEdit: boolean;
@@ -43,7 +60,7 @@ const AVAIL_LABEL_KEY: Record<PersonAvailability["status"], "lineup.avail.in" | 
   maybe: "lineup.avail.maybe",
 };
 
-function AvailabilityChip({
+export function AvailabilityChip({
   personName,
   info,
 }: {
@@ -187,6 +204,66 @@ export function toPutSlot(
   };
 }
 
+/**
+ * Does this sport have a lineup to edit at all?
+ *
+ * R7 Task B (D-1, D-18). The console used to gate the editor on
+ * `{home && away}` alone, so chess, carrom singles and generic each rendered
+ * a one-slot team sheet — position dropdown, Captain checkbox, bench
+ * controls — for a competitor who has no team. The answer is the module's
+ * own declaration and never a sport-key list: a catalog that nominates one
+ * unit and admits no bench (`lineup: { size: 1, benchMax: 0 }` —
+ * `boardgame.ts`, `carrom.ts`, `generic.ts`) is saying there is nothing to
+ * pick.
+ *
+ * BOTH halves are load-bearing. The racquet family declares
+ * `size: 1, benchMax: 1` — one nominated unit, player or pair — so a
+ * predicate reduced to `size <= 1` would take the doubles pair-order editor
+ * away from tennis, badminton and table tennis with it.
+ *
+ * Read the RESOLVED catalog (`lineupCatalogFor`, R7 B2), not the module's
+ * static `positions`: a competition can shrink its own squad.
+ */
+export function lineupEditorApplies(catalog: { lineupSize: number; benchMax: number }): boolean {
+  return !(catalog.lineupSize <= 1 && catalog.benchMax === 0);
+}
+
+/**
+ * Which position groups the STARTING slots do not yet satisfy, and by how
+ * many. `PositionGroup.min` is the same number `validateLineup` enforces at
+ * the scoring door (`kind: "group_min"`), so this is that refusal said in
+ * advance instead of as a 422 after Save.
+ *
+ * R7 B2 — the reason this reads a RESOLVED catalog and not the module's
+ * static one: `min` is precisely what a competition can move. Hockey and ice
+ * hockey declare their keeper group `min: 1`, and `positionsFor(cfg)` drops
+ * it to 0 when the competition declares `goalkeeper: "optional"` (FIH Rule
+ * 4 — a side may play out with no keeper at all). Feed this the static
+ * catalog and such a competition is told to name a goalkeeper it has
+ * explicitly decided not to field.
+ *
+ * Bench slots are excluded on purpose: group minima are a starting-lineup
+ * rule (`validateLineup` counts only `slot === "starting"`, and a benched
+ * keeper is no keeper). Slots with no position chosen count towards no group.
+ */
+export function unmetPositionMinimums(
+  groups: PositionGroupIn[],
+  slots: Pick<SlotDraft, "slot" | "position_key">[],
+): { key: string; name: string; short: number }[] {
+  const startingByKey = new Map<string, number>();
+  for (const s of slots) {
+    if (s.slot !== "starting" || s.position_key === null) continue;
+    startingByKey.set(s.position_key, (startingByKey.get(s.position_key) ?? 0) + 1);
+  }
+  return groups
+    .map((g) => ({
+      key: g.key,
+      name: g.name,
+      short: (g.min ?? 0) - (startingByKey.get(g.key) ?? 0),
+    }))
+    .filter((g) => g.short > 0);
+}
+
 export function LineupEditor({
   fixtureId,
   side,
@@ -245,6 +322,7 @@ export function LineupEditor({
 
   const inLineup = new Set(slots.map((s) => s.person_id));
   const startingCount = slots.filter((s) => s.slot === "starting").length;
+  const unmet = unmetPositionMinimums(positionGroups, slots);
 
   function add(member: SideInfo["members"][number], slot: "starting" | "bench") {
     setSlots((prev) => [
@@ -297,7 +375,7 @@ export function LineupEditor({
   }
 
   return (
-    <section className="card p-4">
+    <section className="card p-4" data-testid="lineup-editor">
       <header className="mb-2 flex items-center justify-between">
         <h3 className="text-sm font-semibold text-slate-700">{msg("lineup.title", { name: side.name })}</h3>
         <span
@@ -310,6 +388,18 @@ export function LineupEditor({
       {slots.length === 0 && (
         <p className="mb-2 text-xs text-slate-400">
           {canEdit ? msg("lineup.emptyEdit") : msg("lineup.empty")}
+        </p>
+      )}
+
+      {/* The engine's group minima, said before Save rather than as a 422
+          after it. Absent entirely when the resolved catalog demands
+          nothing — which is what a competition declaring
+          `goalkeeper: "optional"` produces (R7 B2). */}
+      {unmet.length > 0 && (
+        <p className="mb-2 text-xs text-amber-600" data-testid="lineup-position-minimums">
+          {msg("lineup.needsPositions", {
+            list: unmet.map((g) => `${g.name} × ${g.short}`).join(", "),
+          })}
         </p>
       )}
 
@@ -346,6 +436,7 @@ export function LineupEditor({
                 }}
                 className="select min-h-11 w-32 px-2 py-1 text-xs"
                 aria-label={msg("lineup.positionAria", { name: s.full_name })}
+                data-testid="lineup-position-select"
               >
                 <option value="">{msg("lineup.positionPlaceholder")}</option>
                 {positionGroups.map((g) => (
@@ -392,7 +483,11 @@ export function LineupEditor({
               </select>
             )}
             {roles.map((r) => (
-              <label key={r.key} className="flex items-center gap-1 text-slate-500">
+              <label
+                key={r.key}
+                className="flex items-center gap-1 text-slate-500"
+                data-testid="lineup-role-flag"
+              >
                 <input
                   type="checkbox"
                   disabled={!canEdit}
@@ -516,6 +611,56 @@ export function LineupEditor({
         onConfirm={(reason) => void save({ reason })}
         testId="lineup-eligibility-override"
       />
+    </section>
+  );
+}
+
+/**
+ * The roster and its availability, with NO lineup controls — what a fixture
+ * gets when `lineupEditorApplies` says there is no lineup to pick.
+ *
+ * WHY THIS EXISTS (R7/D follow-up, found by CI). R7/B stopped rendering
+ * `<LineupEditor>` for a module declaring `lineup.size <= 1 && benchMax === 0`
+ * — chess, carrom singles, generic — because a one-slot team sheet with a
+ * position dropdown, a Captain checkbox and bench controls is nonsense for a
+ * competitor with no team. That reasoning was about the CONTROLS and it was
+ * right about them.
+ *
+ * It was not reasoning about AVAILABILITY, which happens to live in the same
+ * component. So hiding the editor also removed the only surface telling an
+ * organiser that a player had RSVP'd out — for every individual-entrant sport
+ * at once. `e2e/player-accounts.spec.ts` caught it; nothing in the unit suite
+ * could, because the gate's own tests assert the gate, not what the gate takes
+ * with it.
+ *
+ * An organiser running a SINGLES competition needs "Ada is unavailable — away
+ * that weekend" exactly as much as one running an eleven-a-side does. Perhaps
+ * more: there is no bench to cover it.
+ *
+ * So the controls stay gone and the information comes back, in the smallest
+ * surface that carries it. Read-only by construction — it holds no draft, no
+ * save and no validation, because there is genuinely nothing to submit.
+ */
+export function AvailabilityRoster({
+  side,
+  availability = {},
+}: {
+  side: Pick<SideInfo, "id" | "members"> & { name: string };
+  availability?: Record<string, PersonAvailability>;
+}) {
+  const msg = useMsg();
+  if (side.members.length === 0) return null;
+  return (
+    <section className="rounded-2xl border border-slate-200 bg-white p-4" data-testid="availability-roster">
+      <h3 className="text-sm font-semibold text-slate-700">{msg("lineup.availabilityTitle", { name: side.name })}</h3>
+      <ul className="mt-3 grid gap-2">
+        {side.members.map((m) => (
+          <li key={m.person_id} className="flex items-center justify-between gap-3 text-sm text-slate-700">
+            <span className="truncate">{m.full_name}</span>
+            <AvailabilityChip personName={m.full_name} info={availability[m.person_id]} />
+          </li>
+        ))}
+      </ul>
     </section>
   );
 }

@@ -302,12 +302,43 @@ import { useFixtureStream, type RealtimeConnector } from "./use-fixture-stream";
 // Review finding 2: submit() minted a fresh idempotency key/expected_seq on
 // EVERY call with no guard at all, so a courtside double-tap (or two bound
 // handlers firing for one physical press) enqueued two genuinely distinct
-// score events. A courtside double-tap lands well under a second; two
-// GENUINELY separate identical actions (e.g. two dot balls in a row) are
-// realistically seconds apart in live play, not milliseconds — 600ms
-// comfortably separates the two without risking dropping a scorer's fast
-// but deliberate second entry.
-export const DOUBLE_SUBMIT_WINDOW_MS = 600;
+// score events.
+//
+// R7-42/R7-30/R7-43 (owner ruling, `_INDEX.md`) — 600ms narrowed to 250ms,
+// and the drop made VISIBLE (see the two call sites below). 600ms was not a
+// debounce, it was a policy, and the wrong one: it silently ate a repeat of
+// an identical (type, payload) up to 600ms apart with NO row, NO toast, NO
+// error — and "identical payload, submitted twice in under 600ms" turned
+// out to be ORDINARY, not an edge case (R7-43: reproduced live on carrom
+// under load; badminton's own e2e comment names "a side that wins a whole
+// game unanswered" — a run of same-side taps — as the everyday case it was
+// paying a 750ms clearance for). A human cannot deliberately tap twice in
+// under ~250ms, but two GENUINELY separate identical actions (e.g. two dot
+// balls in a row) are realistically hundreds of milliseconds to seconds
+// apart in live play — 250ms still catches one physical tap read twice
+// (a double-fired handler, a bouncing courtside tap) without swallowing a
+// scorer's fast but deliberate second entry.
+export const DOUBLE_SUBMIT_WINDOW_MS = 250;
+
+/**
+ * The floor this guard must stay under: the fastest a SCORER can deliberately
+ * repeat a tap on the same target and mean both.
+ *
+ * A claim about people, not about code, which is why it is a named constant
+ * rather than a number inside one test. Sustained deliberate tapping tops out
+ * around 5-8 taps/sec (125-200ms); 350ms leaves headroom above even the fast
+ * end, so a window below this cannot be eating a tap anybody meant.
+ *
+ * It exists so `DOUBLE_SUBMIT_WINDOW_MS` can be held to it by a test. R7-46's
+ * first attempt paced its e2e run at `DOUBLE_SUBMIT_WINDOW_MS + 100` — which
+ * reads as careful (R7-19: derive the expected value from the source of truth)
+ * and is in fact a TAUTOLOGY: raise the window to 600 and the pace follows to
+ * 700, so the test passes at every possible value and can never witness the
+ * regression it exists for. The relationship worth pinning is not "the pace
+ * clears the window", it is "the window stays out of human range" — and that
+ * one has a side it can fail on.
+ */
+export const HUMAN_FASTEST_REPEAT_MS = 350;
 
 // A stable module-level fallback, not `params.auth ?? { kind: "session" }`
 // inline at call time — the latter would allocate a NEW object every render
@@ -1460,6 +1491,11 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
       const isSameAction = (o: { type: string; payload: unknown } | null): boolean =>
         o !== null && o.type === type && deepEqual(o.payload, payload);
       if (isSameAction(submitInFlight.current)) {
+        // R7-46 — visible for the same reason the window guard below is; see
+        // `submitHeld`'s copy of this guard for the full note. Both guards in
+        // BOTH functions now refuse through `lastRejection`, so there is no
+        // remaining path by which the pipeline drops a tap in silence.
+        setLastRejection({ code: "DOUBLE_SUBMIT", message: "" });
         return; // identical action already mid-flight this same tick — no-op
       }
       const now = Date.now();
@@ -1469,6 +1505,14 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
       // check is a plain boolean return, not a type predicate, so it cannot
       // narrow `last` for TypeScript on its own.
       if (last !== null && isSameAction(last) && now - last.at < DOUBLE_SUBMIT_WINDOW_MS) {
+        // R7-42/R7-30 — still refused, but no longer SILENTLY: "the pad
+        // silently records less than the scorer did" was the exact defect
+        // this guard shipped as. Client-only code, no ENGINE_ERROR_KEY/
+        // REFUSAL_KEY entry (same posture as VOID_TARGET_UNKNOWN below) —
+        // `refusalText` (refusal-copy.ts) falls through to the localized
+        // generic fallback rather than showing raw English, and the scorer
+        // sees SOMETHING rather than a tap that silently did nothing.
+        setLastRejection({ code: "DOUBLE_SUBMIT", message: "" });
         return; // identical action accepted too recently — likely one physical tap read twice
       }
       submitInFlight.current = { type, payload };
@@ -1550,11 +1594,27 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
       const isSameAction = (o: { type: string; payload: unknown } | null): boolean =>
         o !== null && o.type === type && deepEqual(o.payload, payload);
       if (isSameAction(submitInFlight.current)) {
+        // R7-46 — this drop is VISIBLE too, for the same reason the window
+        // guard below is. There are two guards here, not one, and the R7-42
+        // fix only reached the second: a same-TICK repeat (two handlers bound
+        // to one physical press, a `dblclick`-shaped pair, a re-render that
+        // re-invokes the dispatch) never reaches the window check at all, so
+        // until now the single most literal case of "one tap read twice" was
+        // still swallowed with no row, no toast and no error — the exact
+        // silence R7-30 was filed about. Refusing through the same
+        // `lastRejection` channel means every drop the pipeline performs is
+        // one the scorer can see.
+        setLastRejection({ code: "DOUBLE_SUBMIT", message: "" });
         return null; // identical action already mid-flight this same tick — no-op, same as submit()
       }
       const now = Date.now();
       const last = lastAccepted.current;
       if (last !== null && isSameAction(last) && now - last.at < DOUBLE_SUBMIT_WINDOW_MS) {
+        // R7-42/R7-30 — the SAME visible-refusal fix as submit() above.
+        // `submitHeld` is the copy every real v3 tap actually calls
+        // (createSkinDispatch's `heldSubmit`, pad-host.tsx), so a fix that
+        // only touched submit() would fix nothing a scorer ever hits.
+        setLastRejection({ code: "DOUBLE_SUBMIT", message: "" });
         return null; // identical action accepted too recently — same guard submit() uses
       }
       submitInFlight.current = { type, payload };

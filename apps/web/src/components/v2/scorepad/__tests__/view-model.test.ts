@@ -11,6 +11,7 @@ import { defaultLineupPair, makeEnvelope } from "@seazn/engine/testkit";
 import { cricket } from "@seazn/engine/sports/cricket";
 import { tennis } from "@seazn/engine/sports/tennis";
 import { foldClient, resolveModuleClient } from "../module-client";
+import { createSkinDispatch } from "../skins/types";
 import {
   allActionViews,
   buildActionPayload,
@@ -44,13 +45,53 @@ describe("buildPadView — phase scoping", () => {
 
   it("reports every phase the spec declares at least one panel for, structurally (not gate/band filtered)", () => {
     const view = buildPadView(spec, baseCtx);
-    // generic's own padSpec only ever declares "live" panels — no pre/post.
-    expect(view.phases).toEqual(["live"]);
+    // R7 defect fix (`everyPhase`, generic.ts): every panel generic declares
+    // is now reachable at "pre" as well as "live" — never "post".
+    expect(view.phases).toEqual(["pre", "live"]);
   });
 
   it("returns an empty panels array for a phase the spec never declares", () => {
-    const view = buildPadView(spec, { ...baseCtx, phase: "pre" });
+    // "post" — not "pre" — is generic's genuinely undeclared phase since the
+    // R7 defect fix: `everyPhase` (generic.ts) expands every panel to both
+    // "pre" and "live", so "pre" no longer proves this property.
+    const view = buildPadView(spec, { ...baseCtx, phase: "post" });
     expect(view.panels).toEqual([]);
+  });
+});
+
+// R7 defect fix — the "pad offers what the engine refuses" class R2c closed
+// three instances of. Before `everyPhase` (generic.ts), `createSkinDispatch`
+// (skins/types.ts) refused every generic.score/generic.result tap in "pre"
+// phase with "skin dispatched an action the spec does not declare at this
+// phase... Declared here: (none)", even though `applyScore`/`applyResult`
+// (generic.ts) both accept "pre" — the FOLD and the PAD disagreed.
+//
+// Drives the REAL dispatch chain (`buildPadView` -> `createSkinDispatch`),
+// not just padSpec's own shape in isolation: that gap is exactly what a
+// padSpec-only assertion cannot see, and IS what let the original defect
+// ship past the shared conformance suite — `padSpecConformanceSuite`'s
+// coverage checks (`checkActionCoverage`) walk every panel regardless of
+// phase, so a type reachable ONLY at "live" still reads as "reachable",
+// with no criterion that ever asks "reachable at every phase the fold
+// itself accepts". This test is the phase-aware check that gap left open.
+describe("generic in \"pre\" phase — the pad must not offer what the engine refuses (R7)", () => {
+  const generic = resolveModuleClient("generic", "1.0.0");
+  const cfg = { resultMode: "score" as const, allowDraws: false, points: { w: 3, d: 1, l: 0 }, progressScore: false };
+  const spec = generic.padSpec!(cfg);
+  const lineups = defaultLineupPair(generic.positions);
+  const state = generic.init(cfg, lineups); // phase: "pre" — no core.start folded yet
+  const preCtx: PadViewCtx = { state, summary: generic.summary(state), phase: "pre", band: 3, entitlements: {} };
+
+  it("generic.score (the running tally) dispatches before Start match, matching what applyScore accepts", async () => {
+    const view = buildPadView(spec, preCtx);
+    const dispatch = createSkinDispatch(view, async () => {});
+    await expect(dispatch("generic.score", { by: lineups.home.entrantId, points: 1 })).resolves.toBeUndefined();
+  });
+
+  it("generic.result (settling a fixture that was never started) dispatches before Start match, matching what applyResult accepts", async () => {
+    const view = buildPadView(spec, preCtx);
+    const dispatch = createSkinDispatch(view, async () => {});
+    await expect(dispatch("generic.result", { p1Score: 3, p2Score: 1 })).resolves.toBeUndefined();
   });
 });
 

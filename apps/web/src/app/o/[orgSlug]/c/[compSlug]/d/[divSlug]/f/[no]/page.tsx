@@ -21,11 +21,9 @@ import {
   type SideInfo,
   type LineupSlotIn,
 } from "@/components/v2/fixture-console";
-import { DeviceLinkPanel } from "@/components/v2/device-link-panel";
 import { listFixtureAvailability } from "@/server/usecases/me";
 import { CheckinQr } from "@/components/v2/checkin-qr";
 import { FixtureOfficialsStrip } from "@/components/v2/fixture-officials-strip";
-import { AuditStrip } from "@/components/v2/audit-strip";
 import { hasFeature } from "@/lib/entitlements";
 import { suspensionsForFixture } from "@/server/usecases/discipline";
 import { sql } from "@/lib/db";
@@ -33,6 +31,7 @@ import { sql } from "@/lib/db";
 // (S12/#421's flag has been removed entirely — see resolveScorePadBootstrap's
 // own doc for what a resolution failure does instead of gating on a flag).
 import { resolveScorePadBootstrap } from "@/server/usecases/fidelity";
+import { lineupCatalogFor } from "@/server/usecases/lineup-catalog";
 import { eventOutToEnvelope } from "@/components/v2/scorepad/wire";
 
 export default async function FixturePage({
@@ -60,6 +59,11 @@ export default async function FixturePage({
   ]);
   const competition = await getCompetition(auth, division.competition_id);
   const sportModule = resolveModule(division.sport_key, division.module_version);
+  // R7 B2 — the catalog that governs THIS division, not the module's
+  // static one: a competition's config moves the starting size (football
+  // small-sided, cricket playersPerSide) and the keeper minimum (hockey /
+  // ice hockey `goalkeeper: "optional"`).
+  const lineupCatalog = lineupCatalogFor(sportModule, division.config);
 
   // PROMPT-63 §4: ledger-integrity strip (organiser surface, once events
   // exist). The verifier is the V226 DB function; download is Pro-gated.
@@ -162,9 +166,10 @@ export default async function FixturePage({
             key: division.sport_key,
             config: division.config as Record<string, unknown>,
             scorerLabel: sportModule.officialLabel.scorer,
-            positionGroups: sportModule.positions.groups,
-            roles: sportModule.positions.roles ?? [],
-            lineupSize: sportModule.positions.lineup.size,
+            positionGroups: lineupCatalog.groups,
+            roles: lineupCatalog.roles ?? [],
+            lineupSize: lineupCatalog.lineup.size,
+            benchMax: lineupCatalog.lineup.benchMax ?? 0,
             fidelityTiers: sportModule.fidelityTiers,
           }}
           home={home}
@@ -198,29 +203,20 @@ export default async function FixturePage({
               : null
           }
           scorePadV2={scorePadV2}
+          // R7/C1 — the audit verdict now renders in the activity panel's
+          // own footer, beside the rows it is a verdict ABOUT. It used to be
+          // a loose strip below the whole console, two cards away from them.
+          audit={audit}
+          // R7/C3 (D-19) — the gate stays here (only this server component
+          // knows about the freeze); the PANEL moved into the console, beside
+          // the pad's heading. It used to render as the last card below.
+          deviceHandover={
+            canEdit &&
+            !(competition.frozen ?? false) &&
+            fixture.status !== "finalized" &&
+            fixture.status !== "cancelled"
+          }
         />
-
-        {audit !== null && (
-          <AuditStrip
-            fixtureId={fixture.id}
-            verified={audit.verified}
-            tamperedSeq={audit.tamperedSeq}
-            entitled={audit.entitled}
-          />
-        )}
-
-        {/* Day-of device link (doc 13 §7): editors only — scorers never mint. */}
-        {canEdit &&
-          !(competition.frozen ?? false) &&
-          fixture.status !== "finalized" &&
-          fixture.status !== "cancelled" && (
-            <div className="mt-6">
-              <DeviceLinkPanel
-                fixtureId={fixture.id}
-                scorerLabel={sportModule.officialLabel.scorer}
-              />
-            </div>
-          )}
       </main>
     </>
   );

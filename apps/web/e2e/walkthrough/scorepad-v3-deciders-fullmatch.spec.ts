@@ -332,7 +332,7 @@ test("R3.5 — cricket: undo a super-over ball, then undo the result the super o
   expect(soBefore!.innings![0]!.runs).toBe(1);
   await shot(page, "undo", "super-over-ball-recorded");
 
-  await pad(page).locator('[data-role="v3-ribbon"]').getByRole("button", { name: "Undo", exact: true }).click();
+  await pad(page).locator('[data-role="v3-ribbon"]').getByRole("button", { name: "Take back", exact: true }).click();
   // Undoing the ONLY delivery empties `superOver.innings` rather than leaving a
   // 0-run innings behind — the innings had not started before that ball.
   await expect
@@ -374,7 +374,7 @@ test("R3.5 — cricket: undo a super-over ball, then undo the result the super o
   // The pad is GONE by design once decided (F15/F16) — the console is the only
   // surface left, and it is the one that must still offer the way back.
   await expect(pad(page)).toHaveCount(0);
-  const undoLast = page.getByRole("button", { name: /Undo last/ });
+  const undoLast = page.getByRole("button", { name: /Void last entry/ });
   await expect(undoLast, "a decided super over left no way to undo the result").toBeVisible();
   await shot(page, "undo", "decided-by-super-over-pad-gone");
 

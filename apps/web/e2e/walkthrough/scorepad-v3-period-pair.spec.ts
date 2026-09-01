@@ -459,7 +459,14 @@ test("R6 — hockey: a suspension with its own minutes/servedBy, the clock start
   // advance event carries no goal payload to roll back). So the undo must
   // roll back the PHASE, not the score, and re-finishing means tapping
   // "Advance period" again, not "Goal" again.
-  const undoLast = page.getByRole("button", { name: /Undo last/ });
+  // R7/C2 (`c0509d5fd`) RENAMED this control: the dictionary key is
+  // `score.voidLast` and it now reads "⟲ Void last entry". "Undo last" no
+  // longer exists anywhere in the four locales. R6 wrote this spec in a
+  // concurrent worktree and could not see the rename, and e2e runs only on
+  // a push to `main` — so this asserted a button that does not exist and
+  // nothing said so until the two waves met. Matched on a substring rather
+  // than the whole string because the label carries a leading ⟲ glyph.
+  const undoLast = page.getByRole("button", { name: /Void last entry/ });
   await expect(undoLast, "a match decided by a tapped period advance left no way to undo it").toBeVisible();
   await undoLast.click();
   await expect
@@ -634,7 +641,14 @@ test("R6 — ice hockey: a suspension with its own minutes/servedBy, the clock r
   await shot(page, "icehockey", "shootout-decided");
 
   // ---- UNDO THE DECIDING ATTEMPT, then prove the board is still usable -----
-  const undoLast = page.getByRole("button", { name: /Undo last/ });
+  // R7/C2 (`c0509d5fd`) RENAMED this control: the dictionary key is
+  // `score.voidLast` and it now reads "⟲ Void last entry". "Undo last" no
+  // longer exists anywhere in the four locales. R6 wrote this spec in a
+  // concurrent worktree and could not see the rename, and e2e runs only on
+  // a push to `main` — so this asserted a button that does not exist and
+  // nothing said so until the two waves met. Matched on a substring rather
+  // than the whole string because the label carries a leading ⟲ glyph.
+  const undoLast = page.getByRole("button", { name: /Void last entry/ });
   await expect(undoLast, "a match decided by a tapped shoot-out attempt left no way to undo it").toBeVisible();
   await undoLast.click();
   await expect

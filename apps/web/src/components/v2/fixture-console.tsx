@@ -7,16 +7,23 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
-import { describeEvent, EVENT_TONE_STYLE } from "@/lib/event-copy";
 import { UpgradeGate } from "@/components/upgrade-gate";
+import { AuditStrip } from "@/components/v2/audit-strip";
 import { ClientTime } from "@/components/client-time";
 import { ShareButton } from "@/components/share-button";
-import { LineupEditor } from "@/components/v2/lineup-editor";
+import {
+  AvailabilityRoster,
+  LineupEditor,
+  lineupEditorApplies,
+  type PositionGroupIn,
+} from "@/components/v2/lineup-editor";
 import { ScoringErrorBoundary } from "@/components/v2/scoring-error-boundary";
+import { DeviceLinkPanel } from "@/components/v2/device-link-panel";
 import { PadSuspensionBanner } from "@/components/discipline/pad-suspension-banner";
-import { useMsg } from "@/components/i18n/dict-provider";
+import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { scoringErrorText, decidedOutcomeText, shootoutScoreFromDetail } from "@/lib/scoring-vocab";
 import { resolveSlotLabel } from "@/lib/slot-label";
+import { entrantDisplayName } from "@/lib/entrant-name";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import type { MessageKey } from "@/lib/messages";
 // S13/#422 W11 — the v2 scoring pad is now the only pad this console renders
@@ -25,6 +32,16 @@ import type { MessageKey } from "@/lib/messages";
 // server-side bootstrap-resolution failure (fidelity.ts's own doc) means
 // "no pad renders", never a fallback to a v1 chain that no longer exists.
 import { ScorePad, type ScorePadBootstrap } from "@/components/v2/scorepad/registry";
+// R7/C1 (D-4, ruling R7-1) — the ONE ledger. This console used to hand-roll
+// its own `<ul>` beside the pad's panel; the two were not duplicates (the
+// pad's named people in sentences, the page's carried #seq, the timestamp,
+// who recorded each row and the audit controls), so the row was a MERGE and
+// this is where the surviving component now mounts. The pad is told to drop
+// its own copy (`hideActivity`), which keeps exactly one on the screen while
+// letting this one OUTLIVE the pad — it unmounts the moment a fixture is
+// decided, and a finalized fixture must still show what happened.
+import { ActivityPanel, type ActivityDetailResolver, type ActivityEvent } from "@/components/v2/scorepad/v3/activity";
+import { resolvePad } from "@/components/v2/scorepad/v3/registry";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
 
@@ -158,9 +175,17 @@ export interface SportInfo {
   key: string;
   config: Record<string, unknown>;
   scorerLabel: string;
-  positionGroups: { key: string; name: string }[];
+  /** Groups of the catalog that governs THIS fixture — `lineupCatalogFor`
+   *  (R7 B2), never `sportModule.positions`. Carries `min`/`max` because a
+   *  competition's config moves them (hockey's optional goalkeeper). */
+  positionGroups: PositionGroupIn[];
   roles: { key: string; name?: string }[];
   lineupSize: number;
+  /** Resolved `lineup.benchMax` (0 when the module declares none). Required,
+   *  not optional: with `lineupSize` it decides whether this sport HAS a
+   *  lineup to edit at all (R7 D-1), and a bootstrap that forgot it would
+   *  silently render the editor for a 1-v-1 sport again. */
+  benchMax: number;
   fidelityTiers: FidelityTierIn[];
 }
 
@@ -223,12 +248,37 @@ interface Props {
    *  than a fallback, since S13/#422 removed the v1 pad it used to fall
    *  back to. */
   scorePadV2?: ScorePadBootstrap | null;
+  /**
+   * Ledger chain-verification + the signed-export entitlement, resolved
+   * server-side (`page.tsx`). R7/C1 moved `AuditStrip` off the page and into
+   * the activity panel's footer, where the ledger it describes actually is —
+   * it used to render as a loose strip below the whole console, two cards
+   * away from the rows it is a verdict about. Null when there is nothing to
+   * audit (no events yet), which renders no strip at all.
+   */
+  audit?: { verified: boolean; tamperedSeq: number | null; entitled: boolean } | null;
+  /**
+   * Whether this fixture may still be handed to a courtside device — the
+   * page's own gate (editor, competition not frozen, fixture not finalized
+   * or cancelled), passed down rather than re-derived here because only the
+   * server component knows about the freeze.
+   *
+   * R7/C3 (D-19): `DeviceLinkPanel` used to render as the LAST card on the
+   * page, below the audit strip — at 375 the console is ~2400px tall, so the
+   * one control an organiser reaches for at the START of a fixture sat below
+   * everything they would only read at the end. It now opens from the pad's
+   * own heading row.
+   */
+  deviceHandover?: boolean;
 }
 
 /** Payload keys that carry a person id across the sport modules (card, goal,
  *  sub, award). The pad warning fires when a recorded event names a suspended
  *  person via any of them. */
 const ATTRIBUTION_KEYS = ["person", "scorer", "assist", "off", "on"] as const;
+
+/** Module-level so the panel's props keep a stable identity across renders. */
+const NO_OWN_EVENTS: ReadonlySet<string> = new Set();
 
 function personIdsInEvents(events: EventIn[]): Set<string> {
   const ids = new Set<string>();
@@ -279,6 +329,8 @@ export function FixtureConsole({
   availability = {},
   activeSuspensions = [],
   scorePadV2 = null,
+  audit = null,
+  deviceHandover = false,
 }: Props) {
   const msg = useMsg();
   const router = useRouter();
@@ -298,6 +350,9 @@ export function FixtureConsole({
    *  clean undo was expected. Found in review (S13 follow-ups). */
   const [padSyncing, setPadSyncing] = useState(false);
   const [abandonPrompt, setAbandonPrompt] = useState(false);
+  /** The row whose Void is in flight — the panel dims exactly that button. */
+  const [voidingId, setVoidingId] = useState<string | null>(null);
+  const [handoverOpen, setHandoverOpen] = useState(false);
 
   const resync = useCallback(async () => {
     const [state, all] = await Promise.all([
@@ -405,11 +460,18 @@ export function FixtureConsole({
   const started = live.status !== "scheduled";
 
   const sides = { home, away };
+  // R7/C5 (D-6) — what to CALL each side, resolved ONCE here and read by the
+  // header, the ledger's sentences, the forfeit picker and the share text.
+  // `display_name` is a team-sports snapshot; for an individual or a pair the
+  // people are on the wire and are what a scorer recognises. See
+  // `lib/entrant-name.ts`.
+  const homeName = home ? entrantDisplayName(home) : null;
+  const awayName = away ? entrantDisplayName(away) : null;
   // Feed name map: entrant ids AND every rostered person, so person-carrying
   // events (core.award MOTM, cards, subs) render names instead of "Unknown".
   const entrantNames: Record<string, string> = {};
-  if (home) entrantNames[home.id] = home.name;
-  if (away) entrantNames[away.id] = away.name;
+  if (home) entrantNames[home.id] = homeName!;
+  if (away) entrantNames[away.id] = awayName!;
   for (const side of [home, away]) {
     for (const m of side?.members ?? []) entrantNames[m.person_id] = m.full_name;
   }
@@ -422,6 +484,82 @@ export function FixtureConsole({
     .reverse()
     .find((e) => e.type !== "core.void" && !events.some((v) => v.voids_event_id === e.id));
 
+  // ---- the one ledger (R7/C1) -------------------------------------------
+  //
+  // Provenance is resolved HERE, not in the panel: `recorded_by` is a USER id
+  // (so `personNames` cannot answer it) and `device_link_id` — the fact that
+  // makes a row "the handed device" rather than a named person — never
+  // survives into the pad pipeline's `EventEnvelope` at all. This component
+  // is the only surface that holds both. The wording is the deleted panel's
+  // own, verbatim.
+  const provenanceOf = (e: EventIn): string | null =>
+    e.device_link_id
+      ? msg("score.courtsidePad", { scorer: sport.scorerLabel.toLowerCase() })
+      : e.recorded_by
+        ? (recorderNames[e.recorded_by] ?? sport.scorerLabel)
+        : null;
+  const activityRows: ActivityEvent[] = events.map((e) => ({
+    id: e.id,
+    seq: e.seq,
+    type: e.type,
+    payload: e.payload,
+    voids: e.voids_event_id,
+    recordedAt: e.recorded_at,
+    recordedByLabel: provenanceOf(e),
+  }));
+  // The SKIN's own per-event detail, resolved the same way `pad-host.tsx`
+  // resolves it. Without this the merge would silently DOWNGRADE cricket's
+  // ledger back to three identical "Ball recorded" rows — the 2026-08-17
+  // sign-off's D2, reintroduced by a consolidation meant to lose nothing.
+  // `resolvePad` throws for a key in neither registry, which must never take
+  // the console down over a caption.
+  // R7-46 — the pad publishes its own `isPartial` predicate into this box (it
+  // needs a live `PadHostView`, which only the pad builds). Before this, the
+  // console passed `hideActivity` and rendered the ledger itself, so the
+  // partial badge was wired on `/score/[token]` and INERT here — on the one
+  // screen whose job is telling an organiser what the courtside scorer left
+  // incomplete. See `PadHostV3Props.partialResolverRef` for why this is a
+  // handoff and not a second `PadHostView` built here.
+  const partialResolverRef = useRef<((eventType: string, payload: Record<string, unknown>) => boolean) | null>(null);
+  const adoptPartialResolver = useCallback((resolve: (eventType: string, payload: Record<string, unknown>) => boolean) => {
+    partialResolverRef.current = resolve;
+  }, []);
+
+  const partialBadge = useCallback(
+    (eventType: string, payload: Record<string, unknown>) => partialResolverRef.current?.(eventType, payload) ?? false,
+    [],
+  );
+
+  const padT = (key: string, vars?: Record<string, string | number>) => msg(key as MessageKey, vars);
+  const padPlural = useMsgPlural();
+  let activityDetail: ActivityDetailResolver | undefined;
+  try {
+    const lane = resolvePad(sport.key, padT);
+    const skinDetail = lane.lane === "v3" ? lane.skin.activityDetail : undefined;
+    if (skinDetail) {
+      activityDetail = (eventType, payload, history) =>
+        skinDetail({
+          t: padT,
+          // R7-28: the SECOND construction site of this context. `pad-host.tsx`
+          // builds one for the pad's own ribbon; this one feeds the page
+          // ledger, and the two drifted the moment `plural` was added to only
+          // one — the console's rows kept reading "1 pts" while the pad's
+          // ribbon read "1 pt". Any field added to `ActivityDetailContext`
+          // has to land in BOTH or the same row says two different things on
+          // one screen.
+          plural: padPlural,
+          eventType,
+          payload,
+          history,
+          cfg: scorePadV2?.resolvedConfig ?? sport.config,
+          state: live.state,
+          personNames: entrantNames,
+        });
+    }
+  } catch {
+    activityDetail = undefined;
+  }
+
   // Soft discipline warning (SPEC-1 / D8): a suspended player has been recorded
   // in this fixture's ledger. Never blocks — it just flags.
   const referencedPersons = personIdsInEvents(events);
@@ -433,7 +571,7 @@ export function FixtureConsole({
       <header className="card p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h1 className="text-lg font-semibold tracking-tight text-slate-900">
-            {home?.name ?? resolveSlotLabel(fixture.home_slot_label ?? null, msg, "schedule.tbd")}{" "}
+            {homeName ?? resolveSlotLabel(fixture.home_slot_label ?? null, msg, "schedule.tbd")}{" "}
             {/* R3.5 accessibility fix — was text-slate-400 (~2.6:1 on white,
                 under the WCAG AA 4.5:1 floor for normal text); text-slate-600
                 is the token this codebase already uses for legible secondary
@@ -442,7 +580,7 @@ export function FixtureConsole({
                 computed and pinned in
                 components/v2/__tests__/history-panel-contrast.test.tsx. */}
             <span className="text-slate-600">{msg("schedule.vs")}</span>{" "}
-            {away?.name ?? resolveSlotLabel(fixture.away_slot_label ?? null, msg, "schedule.tbd")}
+            {awayName ?? resolveSlotLabel(fixture.away_slot_label ?? null, msg, "schedule.tbd")}
           </h1>
           <span className={`badge ${STATUS_STYLE[live.status] ?? ""}`}>
             {scoreStatusLabel(msg, live.status)}
@@ -493,108 +631,172 @@ export function FixtureConsole({
         </div>
       )}
 
-      {/* Match controls */}
-      {scoring && home && away && (
-        <div className="flex flex-wrap items-center gap-2">
-          {!started && (
-            <button
-              type="button"
-              disabled={busy || padSyncing}
-              onClick={() => send("core.start", {})}
-              className="btn btn-primary"
-            >
-              {msg("score.startMatch")}
-            </button>
-          )}
-          {decided && (
-            <>
-              <button
-                type="button"
-                disabled={busy || padSyncing}
-                onClick={() => send("core.finalize", {})}
-                className="btn btn-primary"
-              >
-                {msg("score.finalize")}
-              </button>
-              {publicPath && home && away && (
-                // v3/10 #2: result decided → one tap to the club group chat.
-                <ShareButton
-                  title={`${home.name} ${msg("schedule.vs")} ${away.name}`}
-                  text={msg("score.shareText", { home: home.name, away: away.name, headline: summary?.headline ?? msg("score.resultIn") })}
-                  url={publicPath}
-                  className="btn btn-ghost"
-                />
-              )}
-            </>
-          )}
-          {!decided && (
-            <>
-              <ForfeitButton busy={busy} padSyncing={padSyncing} home={home} away={away} send={send} />
-              <button
-                type="button"
-                disabled={busy || padSyncing}
-                onClick={() => setAbandonPrompt(true)}
-                className="btn btn-danger"
-              >
-                {msg("score.abandon")}
-              </button>
-            </>
-          )}
-          {abandonPrompt && (
-            <TextPromptDialog
-              title={msg("score.abandonPrompt")}
-              initialValue=""
-              msg={msg}
-              onClose={() => setAbandonPrompt(false)}
-              onSubmit={(reason) => {
-                setAbandonPrompt(false);
-                void send("core.abandon", { reason });
-              }}
-            />
-          )}
-          {lastVoidable && (
-            <button
-              type="button"
-              disabled={busy || padSyncing}
-              onClick={() => send("core.void", { event_id: lastVoidable.id })}
-              className="btn btn-ghost"
-              title={msg("score.undoTitle", { type: lastVoidable.type, seq: lastVoidable.seq })}
-            >
-              {msg("score.undoLast")}
-            </button>
-          )}
-        </div>
-      )}
+      {/* SCORING (R7/C2 + C3). The pad, and beside its heading the two
+          controls that belong to scoring rather than to authority: `Start
+          match`, the one thing to press before kick-off and the only filled
+          button on this page, and `Hand over device` — which used to be the
+          LAST card on the page, below the audit strip, ~1900px past the pad
+          at 375. It takes the slot the bare authority row vacates.
 
-      {/* Sport pad — S13/#422: the v2 registry, unconditionally (the flag and
-          the eight v1 pads it used to choose between are gone). `scorePadV2`
-          stays a null-guard, not a flag check: it is null only when
-          server-side bootstrap resolution failed, in which case there is no
-          v1 chain left to fall back to and the section renders nothing. */}
-      {scorePadV2 && scoring && !decided && home && away && (
-        <section className="card p-5" data-testid="score-pad">
-          <h2 className="mb-3 text-sm font-semibold text-slate-700">{msg("score.scoring")}</h2>
-          <ScoringErrorBoundary fixtureId={fixture.id}>
-            <ScorePad
-              fixtureId={fixture.id}
-              sportKey={sport.key}
-              moduleVersion={scorePadV2.moduleVersion}
-              resolvedConfig={scorePadV2.resolvedConfig}
-              home={home}
-              away={away}
-              initialEvents={scorePadV2.initialEvents}
-              auth={{ kind: "session" }}
-              identity={scorePadV2.identity}
-              entitlements={scorePadV2.entitlements}
-              band={scorePadV2.band}
-              onEvents={handlePadEvents}
-            />
-          </ScoringErrorBoundary>
+          `data-testid="score-pad"` stays on the pad's OWN wrapper, never on
+          this section: e2e reads it as "a decided fixture offers no way to
+          record more", and a section that outlived the pad would answer
+          that question wrong. */}
+      {scoring && home && away && (
+        <section className="card p-5" data-role="console-scoring">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-sm font-semibold text-slate-700">{msg("score.scoring")}</h2>
+            <div className="flex flex-wrap items-center gap-2">
+              {deviceHandover && (
+                <button
+                  type="button"
+                  data-role="device-handover"
+                  aria-expanded={handoverOpen}
+                  onClick={() => setHandoverOpen((v) => !v)}
+                  className="btn btn-ghost min-h-11"
+                >
+                  {msg("score.handOverDevice")}
+                </button>
+              )}
+              {!started && (
+                <button
+                  type="button"
+                  disabled={busy || padSyncing}
+                  onClick={() => send("core.start", {})}
+                  className="btn btn-primary min-h-11"
+                >
+                  {msg("score.startMatch")}
+                </button>
+              )}
+            </div>
+          </div>
+
+          {deviceHandover && handoverOpen && (
+            <div className="mb-4">
+              <DeviceLinkPanel fixtureId={fixture.id} scorerLabel={sport.scorerLabel} embedded />
+            </div>
+          )}
+
+          {/* Sport pad — S13/#422: the v2 registry, unconditionally (the flag
+              and the eight v1 pads it used to choose between are gone).
+              `scorePadV2` stays a null-guard, not a flag check: it is null
+              only when server-side bootstrap resolution failed, in which case
+              there is no v1 chain left to fall back to. */}
+          {scorePadV2 && !decided && (
+            <div data-testid="score-pad">
+              <ScoringErrorBoundary fixtureId={fixture.id}>
+                <ScorePad
+                  fixtureId={fixture.id}
+                  sportKey={sport.key}
+                  moduleVersion={scorePadV2.moduleVersion}
+                  resolvedConfig={scorePadV2.resolvedConfig}
+                  home={home}
+                  away={away}
+                  initialEvents={scorePadV2.initialEvents}
+                  auth={{ kind: "session" }}
+                  identity={scorePadV2.identity}
+                  entitlements={scorePadV2.entitlements}
+                  band={scorePadV2.band}
+                  onEvents={handlePadEvents}
+                  // R7/C1 — this console mounts the one ledger itself, below.
+                  hideActivity
+                  // R7-46 — ...which is why the pad has to hand its partial
+                  // predicate up rather than use it on a panel it no longer
+                  // renders.
+                  onPartialResolver={adoptPartialResolver}
+                />
+              </ScoringErrorBoundary>
+            </div>
+          )}
         </section>
       )}
 
-      {/* Lineups (locked once the fixture starts) */}
-      {home && away && (
+      {/* THE ledger (R7/C1, D-4). One panel, one component — the same
+          `ActivityPanel` `/score/[token]` mounts, here with authority:
+          console-wide void rights, the provenance the deleted page panel
+          carried, and the audit strip in its footer. Rendered OUTSIDE the
+          `scoring && !decided` gate above on purpose: the pad unmounts the
+          moment a fixture is decided and a finalized fixture must still say
+          what happened. */}
+      <ActivityPanel
+        events={activityRows}
+        // Irrelevant while `deviceLinkId` is null — `activityRowState`'s own
+        // ownership rule short-circuits for the in-app scorer — and passing
+        // the real thing is impossible anyway: this component never submits
+        // through the pad's queue, so it owns no client-stamped ids.
+        ownEventIds={NO_OWN_EVENTS}
+        deviceLinkId={null}
+        personNames={entrantNames}
+        t={msg}
+        authority
+        resolveDetail={activityDetail}
+        // R7-46. Reads through the ref at call time rather than closing over a
+        // value, so the panel does not need to re-render when the pad's view
+        // changes — it re-renders when `activityRows` does, which is exactly
+        // when a row could newly become settled-and-partial. `?? false` covers
+        // the recorded gap: a decided fixture whose pad never mounted.
+        isPartial={partialBadge}
+        onVoid={
+          scoring && !decidedLock(live.status)
+            ? (eventId) => {
+                // Belt to `voidDisabled`'s braces: the button is disabled for
+                // the whole window, and a click that beats a re-render (or
+                // arrives from a synthetic caller) still cannot send.
+                if (busy || padSyncing) return;
+                setVoidingId(eventId);
+                void send("core.void", { event_id: eventId }).finally(() => setVoidingId(null));
+              }
+            : undefined
+        }
+        voidingId={voidingId}
+        // `busy || padSyncing` gated every row button before the merge, and for
+        // a reason worth keeping: acting on a half-refreshed ledger sends a
+        // stale `expected_seq` and earns a 409 where a clean void was expected
+        // (see `padSyncing`'s own doc above). C1 kept the RULE but dropped the
+        // affordance, leaving a bright, silent, dead button for the width of
+        // every resync — review fix #1 puts the `disabled` back.
+        voidDisabled={busy || padSyncing}
+        footer={
+          (audit || lastVoidable) && (
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              {/* Ruling R7-5 keeps this control and renames it for what it
+                  actually does: unlike the pad's take-back it can NEVER
+                  cancel before send — it always writes a permanent
+                  `core.void` row. It also reaches rows the per-row Void
+                  cannot: `lastVoidable` skips voided rows and voids, which is
+                  how a mistaken `core.abandon` stays reversible
+                  (scoring.spec.ts pins that). It lives in the LEDGER's own
+                  footer, not the authority band: it edits an entry, which is
+                  scoring, not something that ends the match. */}
+              {lastVoidable && scoring && !decidedLock(live.status) ? (
+                <button
+                  type="button"
+                  disabled={busy || padSyncing}
+                  onClick={() => send("core.void", { event_id: lastVoidable.id })}
+                  className="btn btn-ghost min-h-11 text-xs"
+                  title={msg("score.voidLastTitle", { type: lastVoidable.type, seq: lastVoidable.seq })}
+                >
+                  {msg("score.voidLast")}
+                </button>
+              ) : (
+                <span />
+              )}
+              {audit && (
+                <AuditStrip
+                  fixtureId={fixture.id}
+                  verified={audit.verified}
+                  tamperedSeq={audit.tamperedSeq}
+                  entitled={audit.entitled}
+                />
+              )}
+            </div>
+          )
+        }
+      />
+      {/* Lineups (locked once the fixture starts). Gated on the module's own
+          declaration as well as on the two sides: a sport that nominates one
+          unit and admits no bench has no lineup to pick (R7 D-1). */}
+      {home && away && lineupEditorApplies(sport) && (
         <div className="grid gap-4 lg:grid-cols-2">
           {(["home", "away"] as const).map((sideKey) => {
             const s = sides[sideKey]!;
@@ -602,7 +804,12 @@ export function FixtureConsole({
               <LineupEditor
                 key={s.id}
                 fixtureId={fixture.id}
-                side={s}
+                // R7/C5 — the editor titles itself with `side.name`; hand it
+                // the RESOLVED one rather than the entry label. Resolved at
+                // the call site because `lineup-editor.tsx` is another wave's
+                // file this week, and because one resolution serving every
+                // reader is the point of `entrantDisplayName`.
+                side={{ ...s, name: entrantDisplayName(s) }}
                 positionGroups={sport.positionGroups}
                 roles={sport.roles}
                 lineupSize={sport.lineupSize}
@@ -615,72 +822,95 @@ export function FixtureConsole({
         </div>
       )}
 
-      {/* Event ledger */}
-      <section className="card overflow-hidden">
-        <header className="border-b border-slate-100 px-4 py-3">
-          <h2 className="text-sm font-semibold text-slate-700">
-            {msg("score.activity")} <span className="font-normal text-slate-600">({events.length})</span>
+      {/* …and where there is no lineup to pick, the ROSTER and its
+          availability still show. R7/B's gate above was reasoning about the
+          lineup CONTROLS; availability merely lived in the same component and
+          went with them, so an organiser of any individual-entrant sport lost
+          the only surface saying who had RSVP'd out. See
+          `AvailabilityRoster`'s own note. */}
+      {home && away && !lineupEditorApplies(sport) && (
+        <div className="grid gap-4 lg:grid-cols-2">
+          {(["home", "away"] as const).map((sideKey) => {
+            const s = sides[sideKey]!;
+            return (
+              <AvailabilityRoster
+                key={s.id}
+                side={{ ...s, name: entrantDisplayName(s) }}
+                availability={availability}
+              />
+            );
+          })}
+        </div>
+      )}
+
+      {/* THE AUTHORITY BAND (R7/C2, D-12; Finalize in it per R7-3a).
+          These three used to be a bare row of buttons ABOVE the scoring
+          card — no container, no heading, nothing saying they end the match,
+          with Abandon as the second control on the page. Now: a named
+          container with a sentence saying what it costs, below the pad and
+          below the ledger, and OUTLINED throughout — a filled button here
+          would compete with a scoring tile for the eye, which is exactly the
+          hierarchy failure D-12 is. */}
+      {scoring && home && away && (
+        <section
+          data-role="match-actions"
+          className="rounded-2xl border border-purple-100 bg-purple-50/40 p-4"
+        >
+          <h2 className="text-[11px] font-semibold uppercase tracking-[0.09em] text-purple-800">
+            {msg("score.matchActions")}
           </h2>
-        </header>
-        {events.length === 0 ? (
-          <p className="px-4 py-4 text-sm text-slate-600">{msg("score.noEvents")}</p>
-        ) : (
-          <ul className="max-h-96 divide-y divide-slate-50 overflow-y-auto">
-            {[...events].reverse().map((e) => {
-              const voided = events.some((v) => v.voids_event_id === e.id);
-              const desc = describeEvent(e.type, e.payload, entrantNames, msg);
-              // Attribution: device-link events come from the handed device;
-              // signed-in recorders show by name.
-              const recorder = e.device_link_id
-                ? msg("score.courtsidePad", { scorer: sport.scorerLabel.toLowerCase() })
-                : e.recorded_by
-                  ? (recorderNames[e.recorded_by] ?? sport.scorerLabel)
-                  : null;
-              return (
-                <li
-                  key={e.id}
-                  title={`${e.type} ${JSON.stringify(e.payload)}`}
-                  className={`flex items-center gap-3 px-4 py-2 text-xs ${voided ? "line-through opacity-40" : ""}`}
+          <p className="mt-0.5 text-xs text-slate-600">{msg("score.matchActionsNote")}</p>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            {decided && (
+              <>
+                <button
+                  type="button"
+                  disabled={busy || padSyncing}
+                  onClick={() => send("core.finalize", {})}
+                  className="btn btn-ghost min-h-11"
                 >
-                  <span className="w-8 shrink-0 font-mono text-slate-300">#{e.seq}</span>
-                  {/* `normal-case` overrides .badge's `capitalize`: badges are
-                      dictionary copy now, and capitalize would rewrite
-                      "Fin de la prolongation" as "Fin De La Prolongation".
-                      Localized event names are also longer than the English
-                      literals this used to hold, so let them wrap inside the
-                      column instead of overflowing it. */}
-                  <span
-                    className={`badge w-24 shrink-0 break-words text-center leading-tight normal-case sm:w-32 ${EVENT_TONE_STYLE[desc.tone]}`}
-                  >
-                    {desc.label}
-                  </span>
-                  <span className="min-w-0 flex-1 truncate text-slate-700">
-                    {desc.text}
-                    {recorder ? <span className="text-slate-600"> ({recorder})</span> : null}
-                  </span>
-                  {/* ClientTime: locale time renders differently on server vs
-                      browser (17:59 vs 5:59 PM) — the mismatch forced a full
-                      client re-render that ate early clicks. SSR emits an
-                      empty span; the viewer-local time fills in after mount. */}
-                  <span className="shrink-0 text-slate-600">
-                    <ClientTime value={e.recorded_at} mode="time" />
-                  </span>
-                  {scoring && !voided && e.type !== "core.void" && !decidedLock(live.status) && (
-                    <button
-                      type="button"
-                      disabled={busy || padSyncing}
-                      onClick={() => send("core.void", { event_id: e.id })}
-                      className="shrink-0 text-red-500 hover:underline"
-                    >
-                      {msg("score.void")}
-                    </button>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </section>
+                  {msg("score.finalize")}
+                </button>
+                {publicPath && (
+                  // v3/10 #2: result decided → one tap to the club group chat.
+                  <ShareButton
+                    title={`${homeName} ${msg("schedule.vs")} ${awayName}`}
+                    text={msg("score.shareText", { home: homeName!, away: awayName!, headline: summary?.headline ?? msg("score.resultIn") })}
+                    url={publicPath}
+                    className="btn btn-ghost min-h-11"
+                  />
+                )}
+              </>
+            )}
+            {!decided && (
+              <>
+                <ForfeitButton busy={busy} padSyncing={padSyncing} home={home} away={away} send={send} />
+                <button
+                  type="button"
+                  disabled={busy || padSyncing}
+                  onClick={() => setAbandonPrompt(true)}
+                  className="btn btn-danger min-h-11"
+                >
+                  {msg("score.abandon")}
+                </button>
+              </>
+            )}
+          </div>
+          {abandonPrompt && (
+            <TextPromptDialog
+              title={msg("score.abandonPrompt")}
+              initialValue=""
+              msg={msg}
+              onClose={() => setAbandonPrompt(false)}
+              onSubmit={(reason) => {
+                setAbandonPrompt(false);
+                void send("core.abandon", { reason });
+              }}
+            />
+          )}
+        </section>
+      )}
+
     </div>
   );
 }
@@ -727,7 +957,7 @@ function ForfeitButton({
         type="button"
         disabled={busy || padSyncing}
         onClick={() => setOpen(!open)}
-        className="btn btn-ghost"
+        className="btn btn-danger min-h-11"
       >
         {msg("score.forfeit")}
       </button>
@@ -737,20 +967,25 @@ function ForfeitButton({
             <button
               key={s.id}
               type="button"
-              className="block w-full rounded px-2 py-1.5 text-left text-sm hover:bg-purple-50"
+              className="block min-h-11 w-full rounded px-2 py-1.5 text-left text-sm hover:bg-purple-50"
               onClick={() => {
                 setOpen(false);
                 setForfeitPrompt(s);
               }}
             >
-              {msg("score.forfeits", { name: s.name })}
+              {/* R7/C5 — the person, not the entry label. */}
+              {msg("score.forfeits", { name: entrantDisplayName(s) })}
             </button>
           ))}
         </div>
       )}
       {forfeitPrompt && (
         <TextPromptDialog
-          title={msg("score.forfeitPrompt", { name: forfeitPrompt.name })}
+          // R7/C review fix #3 — the picker resolved the person and the
+          // confirmation behind it did not, so a console that named Ada
+          // Okonkwo everywhere else asked the organiser to confirm a forfeit
+          // for "Entry 3". Same resolution, same `SideInfo`.
+          title={msg("score.forfeitPrompt", { name: entrantDisplayName(forfeitPrompt) })}
           initialValue="walkover"
           msg={msg}
           onClose={() => setForfeitPrompt(null)}

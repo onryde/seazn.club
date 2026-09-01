@@ -127,15 +127,16 @@ async function ralliesOf(request: APIRequestContext, fixtureId: string) {
 }
 
 /**
- * A rally tap, spaced past the pipeline's own double-submit guard.
- * `DOUBLE_SUBMIT_WINDOW_MS` is 600ms (use-pad-pipeline.ts) and compares the
- * whole payload — so N consecutive taps on the SAME half build an identical
- * `{wonBy, server}` and every one after the first is silently swallowed.
- * Same 750ms-shaped clearance the siblings' own `tapRally` takes.
+ * A rally tap.
+ *
+ * R7-42/R7-30/R7-43 (owner ruling, `_INDEX.md`) — this used to pay a flat
+ * 750ms clearance after EVERY tap so N consecutive taps on the SAME half
+ * (an identical `{wonBy, server}` every time) would not collide with
+ * `DOUBLE_SUBMIT_WINDOW_MS`. The window is now 250ms (was 600ms), so the
+ * clearance is gone — the siblings' own `tapRally` took the identical fix.
  */
 async function tapRally(page: Page, side: "home" | "away"): Promise<void> {
   await half(page, side).click();
-  await page.waitForTimeout(750);
 }
 
 /** The dock's own dismiss control (`pad.dock.dismiss` — "Send now"):

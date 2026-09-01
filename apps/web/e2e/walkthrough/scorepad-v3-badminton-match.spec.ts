@@ -93,17 +93,20 @@ async function shot(page: Page, caption: string): Promise<void> {
 }
 
 /** Tap a rally on one half and wait for it to REACH the ledger.
- *  `DOUBLE_SUBMIT_WINDOW_MS` (600ms) swallows a same-payload repeat, and a
- *  side that wins a WHOLE game unanswered is nothing but same-side repeats —
- *  so, like the tennis walkthrough's own `tapPoint`, a same-side tap pays a
- *  clearance the alternating case never needs. */
-let lastSide: "home" | "away" | null = null;
+ *
+ * R7-42/R7-30/R7-43 (owner ruling, `_INDEX.md`) — this used to pay a 750ms
+ * clearance on a same-side repeat (a side that wins a WHOLE game unanswered
+ * is nothing but same-side repeats) so it would not collide with
+ * `DOUBLE_SUBMIT_WINDOW_MS`, tracking the prior side in the now-deleted
+ * `lastSide` for exactly that check. That window is now 250ms (was 600ms),
+ * and a refused repeat is VISIBLE rather than silent, so the clearance (and
+ * the bookkeeping that only ever existed to gate it) is gone — THIS is the
+ * acceptance test R7-43 named: reproduced live here under Playwright's own
+ * multi-worker load. */
 async function tapRally(page: Page, fx: RosteredFixture, side: "home" | "away"): Promise<void> {
   const before = (await ledger(page.request, fx.fixtureId)).length;
-  if (side === lastSide) await page.waitForTimeout(750);
   if (PACE > 0) await page.waitForTimeout(PACE);
   await half(page, side).click();
-  lastSide = side;
   await expect
     .poll(async () => (await ledger(page.request, fx.fixtureId)).length, { timeout: 20_000 })
     .toBe(before + 1);
@@ -131,7 +134,6 @@ test("R5 — badminton: tap a match through a game boundary to a decided result,
   // this expression has to hold for both.
   test.setTimeout(Math.max(180_000, 60_000 + 16 * (HOLD_MS + 2_000)));
   shotNo = 0;
-  lastSide = null;
 
   const homeName = `V3 Bad Match Home ${TAG}`;
   const awayName = `V3 Bad Match Away ${TAG}`;
@@ -284,7 +286,7 @@ test("R5 — badminton: tap a match through a game boundary to a decided result,
   await shot(page, "decided");
 
   // ---- UNDO THE DECIDING RALLY ----------------------------------------------
-  const undoLast = page.getByRole("button", { name: /Undo last/ });
+  const undoLast = page.getByRole("button", { name: /Void last entry/ });
   await expect(undoLast, "a match decided by a tapped rally left no way to undo it").toBeVisible();
   await undoLast.click();
   await expect

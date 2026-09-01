@@ -29,6 +29,7 @@ const sport: SportInfo = {
   positionGroups: [],
   roles: [],
   lineupSize: 2,
+  benchMax: 1,
   fidelityTiers: [
     { tier: 3, eventTypes: ["badminton.rally"] },
     { tier: 0, eventTypes: ["badminton.game_summary"] },

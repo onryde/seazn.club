@@ -137,6 +137,20 @@ export const BoardgameResult = z
     // W4: move number the scoresheet finished on (Art. 8.1 — each player records
     // every move). The game length, not the moves themselves; per-ply recording
     // is deliberately out of scope (see DOMAIN.md).
+    //
+    // R7-40 (owner ruling, 2026-09-01): NO LONGER COLLECTABLE. The v3 pad is
+    // tapModel S — a tap commits the result and the dock enriches it with
+    // Method only (ruling R7-2), and a dock chip cannot carry a free number.
+    // The two `padSpec` field declarations that used to ask for it are gone.
+    // It affects no result, standing or computation, so the capability was
+    // dropped rather than given a surface of its own.
+    //
+    // THE SCHEMA FIELD STAYS, deliberately and not by oversight: this is a
+    // `strictObject`, and every `boardgame.result` already recorded with a
+    // `moves` value must keep validating and replaying. Removing it would
+    // reject historical streams — including the frozen golden corpus. So the
+    // field is accepted on the way IN and never asked for by the pad; it is
+    // not an inert declaration, it is backward compatibility.
     moves: z.number().int().nonnegative().optional(),
     // W4: the player who won the board. In an individual event the entrant IS
     // the player; in a team match (board order, chess.md §5) the entrant is the
@@ -368,7 +382,6 @@ export const BOARDGAME_EVENT_SCHEMAS: Readonly<Record<string, z.ZodTypeAny>> = {
 // Sentinels for fields with no cfg knob to derive a bound from (spec 04 §6
 // has no move-count or board-count cap) — generous, not a rules number, only
 // a property-testing upper bound. Mirrors cricket's UNBOUNDED_BALLS_SENTINEL.
-const MOVES_MAX = 400; // FIDE games rarely exceed ~200 full moves (400 plies)
 const BOARD_MAX = 200; // team-match board-number sentinel
 
 // Every decisive method needs a winner; every drawn/no-result method needs
@@ -413,7 +426,6 @@ export function padSpec(cfg: BoardgameCfg): PadSpec {
     labelKey: { key: "pad.boardgame.action.result", label: "Result" },
     fields: [
       { kind: "enum", path: "method", values: DECISIVE_METHODS },
-      { kind: "number", path: "moves", min: 0, max: MOVES_MAX },
     ],
     attribution: [
       { kind: "side", path: "winner" },
@@ -425,7 +437,6 @@ export function padSpec(cfg: BoardgameCfg): PadSpec {
     labelKey: { key: "pad.boardgame.action.draw", label: "Draw / no result" },
     fields: [
       { kind: "enum", path: "method", values: DRAWN_METHODS },
-      { kind: "number", path: "moves", min: 0, max: MOVES_MAX },
     ],
     attribution: [], // `winner` omitted — decideResult treats that like null.
   };

@@ -28,6 +28,7 @@ import {
   decideUndo,
   dedicatedEventTypes,
   entitledBandsFrom,
+  isPartialDockAnswer,
   moreActions,
   phasesWithTiles,
   rejectionText,
@@ -36,9 +37,12 @@ import {
   resolvePadPhase,
   resolveSheet,
   resolveSwapSlot,
+  ribbonUndoTarget,
   sidePool,
   squadStateOf,
+  suppressEmptyMoreTile,
 } from "../pad-host";
+import type { ActivityEvent } from "../activity";
 
 // --- squadStateOf ------------------------------------------------------
 
@@ -452,6 +456,54 @@ describe("moreActions", () => {
     // own copy of the same three types is invisible here regardless — this
     // proves the de-dup guard AND the phase scoping in one assertion.
     expect(actions.map((a) => a.type).sort()).toEqual(["cricket.declare", "cricket.toss"]);
+  });
+});
+
+// --- suppressEmptyMoreTile --------------------------------------------------
+//
+// R7-39 (owner-approved), corrected by R7-39a: the More tile is a guaranteed
+// dead end once `moreActionsList` is empty (a tap that lands on
+// `pad.host.moreEmpty`, "Nothing else to record here yet." — action-form.tsx
+// — never a blank sheet). Fixed CENTRALLY: the tile is found STRUCTURALLY,
+// via `action.sheet === MORE_SHEET_KEY`, never the id string "more" — skins
+// do not share one id constant for it (cricket/football/etc hardcode the
+// bare literal, generic exports its own `MORE_TILE_ID`), so a match on id
+// text would silently miss a future skin's own choice of id.
+
+function moreTile(id = "more"): TileSpec {
+  return tile({ id, kind: "minor", span: 4, action: { sheet: MORE_SHEET_KEY } });
+}
+
+describe("suppressEmptyMoreTile", () => {
+  it("removes the More tile when the list it was built from is empty", () => {
+    const kept = suppressEmptyMoreTile([tile({ id: "ball" }), moreTile()], []);
+    expect(kept.map((t) => t.id)).toEqual(["ball"]);
+  });
+
+  it("keeps the More tile when the list has at least one action", () => {
+    // Non-vacuous: this fixture's own moreActions() call really does return
+    // something, proved directly, so "kept" below is not passing because the
+    // list happened to be empty by accident.
+    const actions = moreActions(spec(), { ...baseCtx, state: {}, summary: {} }, new Set(), new Set());
+    expect(actions.length).toBeGreaterThan(0);
+    const kept = suppressEmptyMoreTile([tile({ id: "ball" }), moreTile()], actions);
+    expect(kept.map((t) => t.id)).toEqual(["ball", "more"]);
+  });
+
+  it("STRUCTURAL match, not id text: a tile whose id is \"more\" but whose action is an ordinary event survives an empty list untouched", () => {
+    const impostor = tile({ id: "more", action: { event: { type: "cricket.toss", payload: {} } } });
+    expect(suppressEmptyMoreTile([impostor], [])).toEqual([impostor]);
+  });
+
+  it("STRUCTURAL match, not id text: the real More tile is removed under an empty list REGARDLESS of what id it carries", () => {
+    const renamed = moreTile("a-future-skin-might-call-this-anything");
+    expect(suppressEmptyMoreTile([renamed], [])).toEqual([]);
+  });
+
+  it("touches no other tile in the array, including one that opens a DIFFERENT sheet", () => {
+    const wicket = tile({ id: "wicket", action: { sheet: "wicket" } });
+    const kept = suppressEmptyMoreTile([wicket, moreTile()], []);
+    expect(kept).toEqual([wicket]);
   });
 });
 
@@ -874,6 +926,100 @@ describe("resolveDockSpec — mutation proof (the widened payload wiring is load
 });
 
 // ---------------------------------------------------------------------------
+// isPartialDockAnswer — R7-42/F (owner ruling on P-5, `_INDEX.md`): "a
+// doubles rally opens the dock; if nobody answers within HOLD_MS the hold
+// drains and the rally submits with wonBy only... label the stat as
+// partial wherever it surfaces". Chassis-level and sport-agnostic — it
+// calls the skin's own dock() with the SETTLED payload and asks whether any
+// attribution chip it offers is still unreflected.
+//
+// Deliberately NOT "did the natural hold timer fire": a dock chip TAP never
+// releases the hold early (queue.ts's own header — dismissing early is the
+// ONLY thing that sends before the timer), so an ANSWERED rally drains
+// through the identical natural timer an unanswered one does. That signal
+// cannot tell the two apart; the payload's own content can.
+// ---------------------------------------------------------------------------
+
+describe("isPartialDockAnswer", () => {
+  it("is never partial when the skin's dock() has nothing to say about this event (null)", () => {
+    const skin = stubSkin(() => null);
+    expect(isPartialDockAnswer(skin, "core.start", {}, padHostView())).toBe(false);
+  });
+
+  it("is never partial when the dock offers zero chips", () => {
+    const skin = stubSkin(() => ({ title: "t", chips: [] }));
+    expect(isPartialDockAnswer(skin, "x", {}, padHostView())).toBe(false);
+  });
+
+  it("is partial when the dock's ONE attribution chip is unreflected in the settled payload — the P-5 case", () => {
+    const skin = stubSkin(() => ({
+      title: "Which player won it?",
+      chips: [
+        { id: "scorer:a", label: "l", mutate: (p) => ({ ...p, scorer: "a" }) },
+        { id: "scorer:b", label: "l", mutate: (p) => ({ ...p, scorer: "b" }) },
+      ],
+    }));
+    expect(isPartialDockAnswer(skin, "badminton.rally", { wonBy: "home" }, padHostView())).toBe(true);
+  });
+
+  it("is NOT partial once the payload already reflects one of the dock's own chips — a scorer beat the clock", () => {
+    const skin = stubSkin(() => ({
+      title: "Which player won it?",
+      chips: [
+        { id: "scorer:a", label: "l", mutate: (p) => ({ ...p, scorer: "a" }) },
+        { id: "scorer:b", label: "l", mutate: (p) => ({ ...p, scorer: "b" }) },
+      ],
+    }));
+    // `keys=wonBy,scorer` — the P-5 spec's own wording for the answered row.
+    expect(isPartialDockAnswer(skin, "badminton.rally", { wonBy: "home", scorer: "a" }, padHostView())).toBe(false);
+  });
+
+  it("is NOT partial when the dock offers ONLY kind:'flag' modifier chips — football's ownGoal/penalty are documented-skippable, not the headline stat", () => {
+    const skin = stubSkin(() => ({
+      title: "Goal",
+      chips: [
+        { id: "ownGoal", label: "l", kind: "flag", mutate: (p) => ({ ...p, ownGoal: true }) },
+        { id: "penalty", label: "l", kind: "flag", mutate: (p) => ({ ...p, penalty: true }) },
+      ],
+    }));
+    expect(isPartialDockAnswer(skin, "football.goal", { by: "home" }, padHostView())).toBe(false);
+  });
+
+  it("ignores flag chips and judges ONLY the attribution chips when a dock mixes both", () => {
+    const skin = stubSkin(() => ({
+      title: "Goal",
+      chips: [
+        { id: "ownGoal", label: "l", kind: "flag", mutate: (p) => ({ ...p, ownGoal: true }) },
+        { id: "scorer:a", label: "l", mutate: (p) => ({ ...p, scorer: "a" }) },
+      ],
+    }));
+    // Neither flag nor scorer answered: partial (the attribution chip is unreflected).
+    expect(isPartialDockAnswer(skin, "football.goal", { by: "home" }, padHostView())).toBe(true);
+    // Scorer answered, flag left untouched: NOT partial — the flag is optional.
+    expect(isPartialDockAnswer(skin, "football.goal", { by: "home", scorer: "a" }, padHostView())).toBe(false);
+  });
+});
+
+describe("isPartialDockAnswer — mutation proof (the kind:'flag' exclusion is load-bearing)", () => {
+  it("a version that judges EVERY chip (flags included) disagrees with the real one on a flags-only dock", () => {
+    const skin = stubSkin(() => ({
+      title: "Goal",
+      chips: [{ id: "ownGoal", label: "l", kind: "flag", mutate: (p) => ({ ...p, ownGoal: true }) }],
+    }));
+    const payload = { by: "home" }; // ownGoal never tapped — the ordinary, ungoaled case
+    const judgesEveryChip: typeof isPartialDockAnswer = (s, t, p, v) => {
+      const spec = s.dock(t, v, p);
+      return spec !== null && spec.chips.length > 0 && spec.chips.every((c) => JSON.stringify(c.mutate(p)) !== JSON.stringify(p));
+    };
+    const real = isPartialDockAnswer(skin, "football.goal", payload, padHostView());
+    const viaMutant = judgesEveryChip(skin, "football.goal", payload, padHostView());
+    expect(real).toBe(false);
+    expect(viaMutant).toBe(true);
+    expect(real).not.toBe(viaMutant);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // R3 chassis sub-wave (owner ruling 2026-08-24, `_INDEX.md` "R3 — owner
 // ruling: FIX SwapSheet in the chassis, then use it"). Defects 1 and 2:
 // `SkinDefV3.swap` returned ONE slot per view and `TileSpec.action` carried a
@@ -919,5 +1065,115 @@ describe("resolveSwapSlot — per-side swap tiles reach DIFFERENT slots", () => 
 
   it("a skin declaring no swap slots at all resolves to null for any id", () => {
     expect(resolveSwapSlot("subHome", [])).toBeNull();
+  });
+});
+
+// --- ribbonUndoTarget --------------------------------------------------
+
+// R7 / Task C review fix #2 — TWO CONTROLS ON ONE SCREEN MUST NOT DISAGREE.
+//
+// C4 fixed the ribbon's ledger rules (a void is not voidable; neither is a row
+// some void already cancelled) and CLAIMED, in its own doc comment, to apply
+// "deliberately the SAME rule the console applies". It applied the console's
+// rule on the DEVICE LINK too — no ownership test and no `isVoidableEventType`
+// — where the activity panel one line below hides Void for exactly those rows
+// and the server answers 403 ("A device link can only undo its own events",
+// server/usecases/scoring.ts). A courtside scorer whose newest row came from
+// the console was offered a Take back that could only fail.
+//
+// The rule is now `activityRowState`'s, delegated rather than restated, with
+// `authority` following the SURFACE the way each `<ActivityPanel>` mount's own
+// props already do: the in-app console (`deviceLinkId === null`) mounts its
+// ledger with authority, the device link does not.
+describe("ribbonUndoTarget", () => {
+  const NOBODY: ReadonlySet<string> = new Set<string>();
+
+  function ev(id: string, seq: number, type: string, voids: string | null = null): ActivityEvent {
+    return { id, seq, type, payload: {}, voids };
+  }
+
+  const START = ev("ev-1", 1, "core.start");
+  const GOAL = ev("ev-2", 2, "football.goal");
+
+  describe("the in-app console (deviceLinkId === null)", () => {
+    it("offers the newest real entry", () => {
+      expect(ribbonUndoTarget([START, GOAL], null, NOBODY, null)).toBe("ev-2");
+    });
+
+    it("offers a row it did not record itself — it owns the whole ledger", () => {
+      // The console has no `ownEventIds` to speak of (its own mount passes an
+      // empty set); gating it on one would take away every capability the
+      // merged ledger exists to keep.
+      expect(ribbonUndoTarget([START, GOAL], null, NOBODY, null)).toBe("ev-2");
+    });
+
+    it("offers a core.* type the device link may not touch", () => {
+      // Ruling R7/C1: the console's ledger widens the rule back to "anything
+      // that is not itself a void". `core.start` is the case that separates
+      // the two surfaces.
+      expect(ribbonUndoTarget([START], null, NOBODY, null)).toBe("ev-1");
+    });
+
+    it("withdraws once the newest event is itself a void (C4, unchanged)", () => {
+      const events = [START, GOAL, ev("ev-3", 3, "core.void", GOAL.id)];
+      expect(ribbonUndoTarget(events, null, NOBODY, null)).toBeNull();
+    });
+
+    it("withdraws when some void already cancelled the newest event (C4, unchanged)", () => {
+      // The void is not LAST here — a later, unrelated row hides it from a
+      // naive "is the tail a void" check.
+      const events = [START, GOAL, ev("ev-3", 3, "core.void", GOAL.id), ev("ev-4", 4, "core.note")];
+      expect(ribbonUndoTarget([...events.slice(0, 3)], null, NOBODY, null)).toBeNull();
+    });
+
+    it("offers nothing on an empty ledger", () => {
+      expect(ribbonUndoTarget([], null, NOBODY, null)).toBeNull();
+    });
+  });
+
+  describe("the device link", () => {
+    it("offers a row THIS device recorded", () => {
+      expect(ribbonUndoTarget([START, GOAL], null, new Set(["ev-2"]), "link-1")).toBe("ev-2");
+    });
+
+    it("withdraws a row the console recorded — the server would answer 403", () => {
+      expect(ribbonUndoTarget([START, GOAL], null, NOBODY, "link-1")).toBeNull();
+    });
+
+    it("withdraws its OWN core.start, exactly as the panel beside it does", () => {
+      // `isVoidableEventType`'s allowlist: ownership is not enough on this
+      // surface, and the panel one line below already hid this row.
+      expect(ribbonUndoTarget([START], null, new Set(["ev-1"]), "link-1")).toBeNull();
+    });
+
+    it("still offers its own core.note — the allowlist is not a blanket refusal", () => {
+      const note = ev("ev-2", 2, "core.note");
+      expect(ribbonUndoTarget([START, note], null, new Set(["ev-2"]), "link-1")).toBe("ev-2");
+    });
+
+    it("withdraws its own row once something voided it", () => {
+      const events = [GOAL, ev("ev-3", 3, "core.void", GOAL.id)];
+      expect(ribbonUndoTarget(events, null, new Set(["ev-2", "ev-3"]), "link-1")).toBeNull();
+    });
+  });
+
+  describe("the held/drop short-circuit", () => {
+    it("offers a held tap even on a device link that owns nothing", () => {
+      // Inside the soft-commit window take-back does not void at all
+      // (`decideUndo` returns {kind:"drop"} and the submission never reaches
+      // the server), so NO ledger rule can apply to it. Gating this on
+      // ownership would delete the only cancel-before-send path there is.
+      expect(ribbonUndoTarget([START, GOAL], "held-1", NOBODY, "link-1")).toBe("held-1");
+    });
+
+    it("offers a held tap whose type the ledger rules would refuse", () => {
+      expect(ribbonUndoTarget([START], "held-start", new Set<string>(), "link-1")).toBe(
+        "held-start",
+      );
+    });
+
+    it("offers a held tap on an empty ledger", () => {
+      expect(ribbonUndoTarget([], "held-1", NOBODY, "link-1")).toBe("held-1");
+    });
   });
 });

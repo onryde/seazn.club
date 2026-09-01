@@ -439,6 +439,13 @@ const REASON_KEY: Record<string, MessageKey> = {
   target_reached: "reason.target_reached", forfeited: "reason.forfeited",
   hurt: "reason.hurt", out: "reason.out", time: "reason.time",
   weather: "reason.weather", other: "reason.other",
+  // R7/A3 — carrom's own umpire-adjustment reasons (padSpec's ADJUST_REASONS,
+  // carrom.ts:582 — a pad-only enum; `CarromGameAdjust.reason` itself stays
+  // free text, so `declaredEnumMembers()`'s zod-schema walk never reaches
+  // these two and does not force this pair — added anyway for real per-locale
+  // copy rather than the humanized English fallback every locale would
+  // otherwise show).
+  due_coins: "reason.due_coins", foul: "reason.foul",
   // S4 (#428) — PeriodSuspensionReason (period/kernel.ts), shared by hockey
   // (FIH) and icehockey (IIHF); see HOCKEY_SUSPENSION_REASONS /
   // ICEHOCKEY_SUSPENSION_REASONS for which federation offers which member.
@@ -718,6 +725,26 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   "pad.boardgame.panel.draw",
   "pad.boardgame.panel.pre",
   "pad.boardgame.panel.result",
+  // R7/A2 — the v3 boardgame skin's own ribbon copy. Registered HERE, not
+  // only in the four dictionaries, for the identical reason badminton's own
+  // ribbon keys above are: `ribbon.ts`'s `buildRibbon` gates its per-sport
+  // lookup on PAD_LABEL_KEYS MEMBERSHIP before calling `padLabel`, so
+  // dictionary copy with no entry in this list stays silently on the generic
+  // `pad.ribbon.fallback` ("{event} recorded") forever, with nothing
+  // failing. One key per event type this skin's tiles dispatch — both of
+  // them, since every panel `padSpec` declares is dedicated by a tile.
+  "pad.boardgame.ribbon.pairing",
+  "pad.boardgame.ribbon.result",
+  // R7/A2 rework — tapModel S's own scorebug hint, on the identical
+  // `padLabel()`/PAD_LABEL_KEYS gate as every other model-S sport's
+  // (badminton, table tennis, tennis and generic all register theirs).
+  // The FIRST cut of this skin shipped the key in all four dictionaries
+  // and NOT here, so both halves of a live chess board printed the raw
+  // dotted key to the arbiter — parity, the generated union and 13124
+  // unit tests were all green on it, and a 1280 screenshot is what
+  // caught it. That is the third recurrence of the incident the
+  // tabletennis block below already documents.
+  "pad.boardgame.scorebug.result.hint",
 
   "pad.carrom.action.adjustCredit",
   "pad.carrom.action.adjustDeduct",
@@ -730,6 +757,20 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   "pad.carrom.panel.adjust",
   "pad.carrom.panel.board",
   "pad.carrom.panel.pre",
+  // R7/A3 — the v3 carrom skin's own ribbon copy. Registered HERE, not only
+  // in the four dictionaries, for the identical reason every other skin's
+  // ribbon keys above are: `ribbon.ts`'s `buildRibbon` gates its per-sport
+  // lookup on PAD_LABEL_KEYS MEMBERSHIP before calling `padLabel`, so
+  // dictionary copy with no entry in this list stays silently on the generic
+  // `pad.ribbon.fallback` ("{event} recorded") forever, with nothing
+  // failing — the exact defect boardgame shipped once already (see that
+  // sport's own `scorebug.result.hint` entry above). One key per carrom
+  // event type, all three: every one of them gets a dedicated tile/sheet, so
+  // none is left on the fallback the way cricket leaves its "More"-sheet
+  // remainder.
+  "pad.carrom.ribbon.board.summary",
+  "pad.carrom.ribbon.game.adjust",
+  "pad.carrom.ribbon.toss",
 
   "pad.cricket.action.ball",
   "pad.cricket.action.declare",
@@ -827,6 +868,18 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   "pad.generic.panel.score",
   "pad.generic.panel.settle",
   "pad.generic.panel.tally",
+  // R7/A1 — the v3 generic skin's own ribbon copy and its two scorebug hints.
+  // Registered HERE, not only in the four dictionaries: `ribbon.ts`'s
+  // `buildRibbon` and `scorebug.tsx`'s hint both gate their per-sport lookup on
+  // PAD_LABEL_KEYS MEMBERSHIP before calling `padLabel`, so dictionary copy
+  // with no entry in this list leaves the ribbon on the generic
+  // `pad.ribbon.fallback` ("{event} recorded") and prints the raw dotted key
+  // as the visible hint on the board — both paid for once already this
+  // programme, on badminton and volleyball respectively.
+  "pad.generic.ribbon.result",
+  "pad.generic.ribbon.score",
+  "pad.generic.scorebug.result.hint",
+  "pad.generic.scorebug.tally.hint",
 
   "pad.hockey.action.advance",
   "pad.hockey.action.goal",
