@@ -79,9 +79,6 @@ Fix the components, then raise the rules back to `error`.
   ⑤ apply `supabase/migrations/013_v1_cutover.sql` (archives `audit_log → audit_log_v1`,
   drops v1 tables); ⑥ deploy; ⑦ smoke (`npm run test:smoke`) against staging, then repeat
   on prod.
-- **Eligibility enforcement at roster add** (doc 06 §2.2) — the division builder stores
-  `EligibilityRule[]` and the entrants panel displays them, but the service layer does not
-  yet block/override on DOB/gender; lands with the compliance panel.
 - **Scheduling console** (auto-scheduler, drag-and-drop board) — PROMPT-17.
 - **Scorer role & scoped console** — PROMPT-18; the fixture console currently requires an
   editor role.

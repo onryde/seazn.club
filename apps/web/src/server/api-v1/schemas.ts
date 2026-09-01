@@ -18,7 +18,7 @@ import { HardConstraint, type ConflictDetailKind } from "@seazn/engine/schedulin
 // `node --experimental-strip-types` with no bundler and no tsconfig `paths`
 // resolution, so a `@/...` import throws ERR_MODULE_NOT_FOUND there even
 // though it resolves fine under tsc/Next.js/vitest.
-import { isValidCutoffDay } from "../../lib/registration-rules.ts";
+import { isValidCutoffDay, REASON_MIN, REASON_MAX } from "../../lib/registration-rules.ts";
 
 // ---------------------------------------------------------------------------
 // Common
@@ -340,6 +340,25 @@ export const Division = z.object({
 });
 
 // ---------------------------------------------------------------------------
+// Eligibility (RS011) — organiser-side gate. Divisions declare eligibility
+// (`CreateDivision`/`PatchDivision`'s `category`/`age_min`/`age_max` above);
+// the organiser-side roster-write bodies below carry this ONE optional field
+// so an organiser can knowingly override a violation with a reason, audited
+// (`usecases/registration-eligibility.ts`'s `gateRosterEligibility`). Absent
+// = no override attempted; present with a violation present = the gate
+// writes one `eligibility.overridden` ledger row and proceeds.
+// ---------------------------------------------------------------------------
+
+// RS011 review round 3, finding 4: the two bounds are defined ONCE in
+// `@/lib/registration-rules` (client-safe — the override dialog's own
+// `armed`/`maxLength` check imports the SAME constants) so this schema and
+// the client-side gate can never silently drift apart.
+export const EligibilityOverride = z.object({
+  reason: z.string().min(REASON_MIN).max(REASON_MAX),
+});
+export type EligibilityOverride = z.infer<typeof EligibilityOverride>;
+
+// ---------------------------------------------------------------------------
 // Entrants
 // ---------------------------------------------------------------------------
 
@@ -354,9 +373,18 @@ export const EntrantMemberInput = z.object({
 /** PROMPT-60 §2 — a member created inline with the entrant (same transaction),
  *  so a whole team + roster is one request. Explicit person_id remains the way
  *  to reuse an existing person; inline members are never merged/deduped
- *  against existing org persons. Create-time only. */
+ *  against existing org persons. Create-time only.
+ *
+ *  `dob`/`gender` (RS011): optional, same shape/validation as `CreatePerson`'s
+ *  — without them, an inline person has neither, which is the MISSING_DOB/
+ *  MISSING_GENDER warning state at the eligibility gate, not a bug (an
+ *  organiser adding someone by name alone is normal). */
 export const NewPersonMemberInput = z.object({
-  new_person: z.object({ full_name: z.string().min(1).max(200) }),
+  new_person: z.object({
+    full_name: z.string().min(1).max(200),
+    dob: z.iso.date().nullish(),
+    gender: z.enum(["m", "f", "x"]).nullish(),
+  }),
   squad_number: z.number().int().min(0).nullish(),
   default_position_key: z.string().nullish(),
   is_captain: z.boolean().default(false),
@@ -381,6 +409,10 @@ export const CreateEntrant = z
     // PROMPT-60: lightweight crest/badge/flag — an external URL or an
     // assets-bucket storage path. Club-independent, so free orgs get it.
     badge_url: z.string().min(1).max(1000).nullish(),
+    // RS011: an organiser knowingly overriding a violation the resolved
+    // roster (explicit members / copy_roster / squad-seed) would otherwise
+    // hard-block on. See `EligibilityOverride`'s own comment above.
+    eligibility_override: EligibilityOverride.optional(),
   })
   .refine((e) => e.display_name != null || e.team_id != null, {
     message: "display_name is required unless team_id is provided",
@@ -398,11 +430,22 @@ export const CreateTeam = z.object({
 });
 export type CreateTeam = z.infer<typeof CreateTeam>;
 
-/** PUT /teams/{id}/squad — full-replace the team's persistent squad. */
+/** PUT /teams/{id}/squad — full-replace the team's persistent squad. No
+ *  `eligibility_override` here (RS011): `setTeamSquad` never hard-blocks —
+ *  it is division-agnostic (a squad has no division of its own, only the
+ *  divisions its entrants happen to be enrolled in today) and returns
+ *  advisory warnings instead, so there is never a violation to override. */
 export const SetTeamSquad = z.object({
   members: z.array(EntrantMemberInput).default([]),
 });
 export type SetTeamSquad = z.infer<typeof SetTeamSquad>;
+
+/** POST /entrants/{id}/roster/sync — no other body field; RS011 adds the
+ *  override as the whole payload (previously this endpoint took none). */
+export const SyncEntrantRoster = z.object({
+  eligibility_override: EligibilityOverride.optional(),
+});
+export type SyncEntrantRoster = z.infer<typeof SyncEntrantRoster>;
 
 export const PatchEntrant = z
   .object({
@@ -411,6 +454,10 @@ export const PatchEntrant = z
     status: EntrantStatus, // withdraw = status: 'withdrawn'
     members: z.array(EntrantMemberInput), // full replacement
     badge_url: z.string().min(1).max(1000).nullable(), // PROMPT-60
+    // RS011: see CreateEntrant's field of the same name above. Only relevant
+    // when `members` is also present — nothing else in a patch touches a
+    // roster.
+    eligibility_override: EligibilityOverride,
   })
   .partial()
   .refine((p) => Object.keys(p).length > 0, "empty patch");
@@ -1019,6 +1066,9 @@ export const LineupSlotInput = z.object({
 
 export const PutLineup = z.object({
   slots: z.array(LineupSlotInput).max(100),
+  // RS011: see CreateEntrant's field of the same name — a lineup can name a
+  // person who was never gated at roster time (a pre-feature roster).
+  eligibility_override: EligibilityOverride.optional(),
 });
 export type PutLineup = z.infer<typeof PutLineup>;
 
@@ -2972,6 +3022,16 @@ export const ImportPreview = z.object({
     ),
   }),
 });
+
+/** POST /imports/{id}/commit — no body field until RS011: `commitImport`
+ *  aggregates eligibility issues across every division the plan's
+ *  `roster.add` ops touch and, on a violation, accepts exactly ONE override
+ *  for the whole import (one audit row, not one per row — see
+ *  `commitImport`'s own comment). */
+export const ImportCommitRequest = z.object({
+  eligibility_override: EligibilityOverride.optional(),
+});
+export type ImportCommitRequest = z.infer<typeof ImportCommitRequest>;
 
 export const ImportCommitResult = z.object({
   importId: z.string(),

@@ -6772,6 +6772,33 @@
                                       "type": "string",
                                       "minLength": 1,
                                       "maxLength": 200
+                                    },
+                                    "dob": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "format": "date",
+                                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "gender": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "enum": [
+                                            "m",
+                                            "f",
+                                            "x"
+                                          ]
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
                                     }
                                   },
                                   "required": [
@@ -6846,6 +6873,20 @@
                             "type": "null"
                           }
                         ]
+                      },
+                      "eligibility_override": {
+                        "type": "object",
+                        "properties": {
+                          "reason": {
+                            "type": "string",
+                            "minLength": 3,
+                            "maxLength": 500
+                          }
+                        },
+                        "required": [
+                          "reason"
+                        ],
+                        "additionalProperties": false
                       }
                     },
                     "required": [
@@ -6963,6 +7004,33 @@
                                         "type": "string",
                                         "minLength": 1,
                                         "maxLength": 200
+                                      },
+                                      "dob": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string",
+                                            "format": "date",
+                                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "gender": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string",
+                                            "enum": [
+                                              "m",
+                                              "f",
+                                              "x"
+                                            ]
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
                                       }
                                     },
                                     "required": [
@@ -7037,6 +7105,20 @@
                               "type": "null"
                             }
                           ]
+                        },
+                        "eligibility_override": {
+                          "type": "object",
+                          "properties": {
+                            "reason": {
+                              "type": "string",
+                              "minLength": 3,
+                              "maxLength": 500
+                            }
+                          },
+                          "required": [
+                            "reason"
+                          ],
+                          "additionalProperties": false
                         }
                       },
                       "required": [
@@ -7832,6 +7914,20 @@
                         "type": "null"
                       }
                     ]
+                  },
+                  "eligibility_override": {
+                    "type": "object",
+                    "properties": {
+                      "reason": {
+                        "type": "string",
+                        "minLength": 3,
+                        "maxLength": 500
+                      }
+                    },
+                    "required": [
+                      "reason"
+                    ],
+                    "additionalProperties": false
                   }
                 },
                 "additionalProperties": false
@@ -8452,6 +8548,38 @@
             }
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "eligibility_override": {
+                    "type": "object",
+                    "properties": {
+                      "reason": {
+                        "type": "string",
+                        "minLength": 3,
+                        "maxLength": 500
+                      }
+                    },
+                    "required": [
+                      "reason"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "additionalProperties": false
+              },
+              "example": {
+                "eligibility_override": {
+                  "reason": "example"
+                }
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Success",
@@ -35048,6 +35176,20 @@
                       ],
                       "additionalProperties": false
                     }
+                  },
+                  "eligibility_override": {
+                    "type": "object",
+                    "properties": {
+                      "reason": {
+                        "type": "string",
+                        "minLength": 3,
+                        "maxLength": 500
+                      }
+                    },
+                    "required": [
+                      "reason"
+                    ],
+                    "additionalProperties": false
                   }
                 },
                 "required": [
@@ -35066,7 +35208,10 @@
                       "example"
                     ]
                   }
-                ]
+                ],
+                "eligibility_override": {
+                  "reason": "example"
+                }
               }
             }
           }
@@ -68168,6 +68313,38 @@
             }
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "eligibility_override": {
+                    "type": "object",
+                    "properties": {
+                      "reason": {
+                        "type": "string",
+                        "minLength": 3,
+                        "maxLength": 500
+                      }
+                    },
+                    "required": [
+                      "reason"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "additionalProperties": false
+              },
+              "example": {
+                "eligibility_override": {
+                  "reason": "example"
+                }
+              }
+            }
+          }
+        },
         "responses": {
           "201": {
             "description": "Success",

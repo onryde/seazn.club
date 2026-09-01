@@ -359,6 +359,26 @@ export async function communityLimit(featureKey: string): Promise<number> {
 }
 
 /**
+ * RS011 — every `eligibility.overridden` row on one competition's
+ * `competition_events` ledger. There is no admin list route for this ledger
+ * (it is written by `gateRosterEligibility`/`commitImport`, never read back
+ * through the API), so the walkthrough's audit-trail assertion reads it the
+ * same way every other `*BySql` helper in this file reads state the UI does
+ * not expose — the tapped ADD/OVERRIDE stays a real UI action; only this
+ * verification step is a direct read.
+ */
+export async function eligibilityOverrideAuditRows(
+  competitionId: string,
+): Promise<{ payload: { reason?: string; context?: string } }[]> {
+  return withDb(async (sql) =>
+    sql<{ payload: { reason?: string; context?: string } }[]>`
+      select payload from competition_events
+      where competition_id = ${competitionId} and type = 'eligibility.overridden'
+      order by created_at`,
+  );
+}
+
+/**
  * Set an org's plan directly in the DB (same trick auth.setup.ts uses for the
  * Pro account). Targets by org id or by owner email.
  *

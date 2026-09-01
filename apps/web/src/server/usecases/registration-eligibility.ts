@@ -58,6 +58,26 @@ import "server-only";
 // supported API. `formatEligibilityIssues`, below, is the only display-string
 // path now; its five hardcoded-English assertions moved from the deleted
 // wrapper's own test to call it directly (registration-eligibility.test.ts).
+//
+// RS011 (the organiser-side gates this module's own comments above kept
+// promising): `gateRosterEligibility`, below, is the ONE thing genuinely new
+// in this file — the DB-writing wrapper (throw 422 `ELIGIBILITY_VIOLATION` /
+// audit-and-proceed) around `rosterIssues`. This is now the LEAF's one
+// deliberate exception: the file's original header called it a leaf because
+// it "imports nothing from registrations.ts or any other usecase" — it now
+// imports `./audit`, ALSO a leaf (imports nothing from any other usecase),
+// specifically so `registrations.ts` importing `ageAt`/`isMinor`/
+// `requiresDob`/`requiresGender` FROM here never becomes a real cycle (a
+// second import the other way, eligibility → registrations, would be).
+// `createEntrants`/`insertMembers`/`patchEntrant`/`syncEntrantRosterFromSquad`
+// (`entrants.ts`) and `putLineup` (`fixtures.ts`) call this directly.
+// `setTeamSquad` (`teams.ts`, division-agnostic, never blocks) and
+// `commitImport` (`imports.ts`, one audit row for a whole multi-division
+// import) call `rosterIssues`/`splitEligibilityIssues` directly instead —
+// same evaluator, different throw/audit shape their callers need.
+import type postgres from "postgres";
+import { HttpError } from "@/lib/errors";
+import { audit } from "./audit";
 import {
   ageAt,
   ageBandEligibilityIssues,
@@ -65,22 +85,31 @@ import {
   isMinor,
   mixedCompositionTally,
   requiresDob,
+  requiresGender,
   rosterCompositionIssues,
+  seasonStartYearFrom,
   type EligibilityCode,
   type EligibilityIssue,
   type EligibilityPerson,
 } from "@/lib/registration-rules";
 
+type Tx = postgres.TransactionSql;
+
 // Re-exported verbatim so every existing importer of THIS file keeps
-// compiling unchanged — see the header comment above.
+// compiling unchanged — see the header comment above. `seasonStartYearFrom`
+// (RS011 review round 3, finding 6) moved to `@/lib/registration-rules`
+// alongside its own byte-for-byte duplicate in `registration-submit.ts`,
+// same "one evaluator, two halves" shape.
 export {
   ageAt,
   isMinor,
   requiresDob,
+  requiresGender,
   categoryEligibilityIssues,
   ageBandEligibilityIssues,
   mixedCompositionTally,
   rosterCompositionIssues,
+  seasonStartYearFrom,
 };
 export type { EligibilityCode, EligibilityIssue, EligibilityPerson };
 
@@ -111,43 +140,6 @@ export interface EligibilityDivision {
  */
 export interface EligibilityRosterPlayer extends EligibilityPerson {
   full_name?: string | null;
-}
-
-/**
- * Division has a gender rule ⇒ the form must collect gender (RS006 WHO step,
- * design §4 step 1: "dob/gender collected once, only if any division needs
- * them"). Sibling of `requiresDob` above, same shape: a boolean the PUBLIC
- * read model can hand a client so the client never has to re-derive WHICH
- * divisions care about gender itself. Stays server-side (unlike
- * `categoryEligibilityIssues`) — nothing client-side calls this directly,
- * the client only ever reads the boolean this produces off the wire.
- *
- * RULING (RS007 review fix M2, 2026-08-29): a free-text `eligibility_note`
- * must NEVER make a field mandatory. A 2026-08-27 revision fired this on any
- * non-empty `eligibility_note` too — on the theory that V380 dropped the
- * jsonb `eligibility` rules without a first-class replacement for every
- * gender-rule shape a note might now be the only remaining record of (an
- * allow-list excluding non-binary, or any rule on a division that already
- * had a `category`, could not be converted — see V380's migration header,
- * "Sex" section). In practice that made an UNRELATED organiser note
- * ("bring your own kit", "club members only") force the public WHO step to
- * demand gender on a division `divisionEligibilityIssues` never gates on
- * gender for — the browser blocked a registrant the API would happily
- * accept. `category` is `mens`/`womens` (individual-level: needs the
- * specific gender) or `mixed` (roster-level: needs every player's gender to
- * prove the roster balances) is now the ONLY trigger — agrees EXACTLY with
- * `divisionEligibilityIssues`'s own gender source
- * (`categoryEligibilityIssues`/`rosterCompositionIssues`,
- * `@/lib/registration-rules`). `eligibility_note` stays in the parameter
- * type only because existing call sites already pass the division's full
- * context (`registration-submit.ts`, `registrations.ts`) — accepted, never
- * read.
- */
-export function requiresGender(division: {
-  category: string | null;
-  eligibility_note?: string | null;
-}): boolean {
-  return division.category === "mens" || division.category === "womens" || division.category === "mixed";
 }
 
 /**
@@ -224,3 +216,163 @@ export function formatEligibilityIssues(issues: EligibilityIssue[]): string[] {
 // The legacy `eligibilityIssues(rules, input, seasonStartYear): string[]`
 // wrapper that used to live here was deleted (RS002 W5 whole-branch review —
 // zero production callers repo-wide; see the module header comment above).
+
+// ---------------------------------------------------------------------------
+// RS011 — organiser-side gate. Everything below is new.
+// ---------------------------------------------------------------------------
+
+/** MISSING_DOB/MISSING_GENDER are the ONLY codes an organiser-side path
+ *  treats as advisory — every other code blocks (unless overridden). The
+ *  public registration submit path (RS002/RS003) keeps treating the exact
+ *  same two codes as BLOCKING; that policy fork is deliberate (see
+ *  `EligibilityIssue`'s own doc comment, `@/lib/registration-rules`, for why
+ *  the issue shape carries no `severity` field to bake one policy in). */
+const WARNING_ONLY_CODES: ReadonlySet<EligibilityCode> = new Set(["MISSING_DOB", "MISSING_GENDER"]);
+
+/** Splits a `rosterIssues`/`divisionEligibilityIssues` result into blocking
+ *  violations vs advisory warnings, by the one rule every organiser-side
+ *  caller shares (`WARNING_ONLY_CODES` above). Exported so `commitImport`
+ *  (`imports.ts`) and `setTeamSquad` (`teams.ts`) — which call `rosterIssues`
+ *  directly rather than through `gateRosterEligibility` below, for their own
+ *  multi-division / never-blocks reasons — classify issues the SAME way
+ *  `gateRosterEligibility` does, instead of re-deriving the split. */
+export function splitEligibilityIssues(issues: EligibilityIssue[]): {
+  violations: EligibilityIssue[];
+  warnings: EligibilityIssue[];
+} {
+  const warnings = issues.filter((i) => WARNING_ONLY_CODES.has(i.code));
+  const violations = issues.filter((i) => !WARNING_ONLY_CODES.has(i.code));
+  return { violations, warnings };
+}
+
+/** A `divisions` row joined to its competition's `starts_on`, as
+ *  `gateRosterEligibility` and its `teams.ts`/`imports.ts` siblings load it —
+ *  `EligibilityDivision` plus the audit ledger's foreign keys and the season
+ *  anchor. */
+export interface EligibilityDivisionRow extends EligibilityDivision {
+  id: string;
+  competition_id: string;
+  org_id: string;
+  starts_on: string | null;
+}
+
+/** Loads one division's eligibility columns + audit-ledger FKs + season
+ *  anchor, in the shape every organiser-side gate needs. Exported so
+ *  `teams.ts`/`imports.ts` (which evaluate MULTIPLE divisions at once, or
+ *  never call `gateRosterEligibility` at all) can load the same row shape
+ *  this file's own gate uses, rather than each hand-rolling the join. */
+export async function loadEligibilityDivisions(
+  tx: Tx,
+  divisionIds: readonly string[],
+): Promise<EligibilityDivisionRow[]> {
+  if (divisionIds.length === 0) return [];
+  return tx<EligibilityDivisionRow[]>`
+    select d.id, d.category, d.age_min, d.age_max, d.age_cutoff_month, d.age_cutoff_day,
+           d.competition_id, d.org_id, c.starts_on
+    from divisions d
+    join competitions c on c.id = d.competition_id
+    where d.id in ${tx([...new Set(divisionIds)])}`;
+}
+
+/** A `persons` row in the `EligibilityRosterPlayer` shape, plus its id —
+ *  what `gateRosterEligibility` and its `teams.ts`/`imports.ts` siblings
+ *  load roster candidates as. */
+export interface EligibilityPersonRow extends EligibilityRosterPlayer {
+  id: string;
+}
+
+/** Loads the named persons' name/dob/gender — the one query every
+ *  organiser-side gate issues against `persons`. Exported for the same
+ *  reason `loadEligibilityDivisions` is. */
+export async function loadEligibilityPersons(
+  tx: Tx,
+  personIds: readonly string[],
+): Promise<EligibilityPersonRow[]> {
+  if (personIds.length === 0) return [];
+  return tx<EligibilityPersonRow[]>`
+    select id, full_name, dob::text as dob, gender from persons
+    where id in ${tx([...new Set(personIds)])}`;
+}
+
+export interface GateRosterEligibilityArgs {
+  /** The one division the roster is being written against. */
+  divisionId: string;
+  /** person ids on the roster being written — organiser paths hold
+   *  `persons` rows, never `registration_players`. Empty is a no-op. */
+  personIds: readonly string[];
+  /** Free-text label for the audit payload (e.g. `"roster_add"`,
+   *  `"patch_entrant"`, `"roster_sync"`, `"put_lineup"`) — never read back
+   *  programmatically, purely for a human reading the ledger. */
+  context: string;
+  /** Present only when the organiser is knowingly overriding a violation. */
+  override?: { reason: string } | null;
+  /** `auth.userId` — null for an API-key caller (the audit row still
+   *  records it, same as every other `audit()` call site). */
+  actorId: string | null;
+}
+
+/**
+ * THE organiser-side gate (RS011). Loads the division's first-class
+ * eligibility columns and the named persons, runs them through
+ * `rosterIssues` — the EXACT function the public registration path
+ * evaluates, never a second copy (see this file's header) — and:
+ *
+ *  - no `override` and at least one BLOCKING issue (anything outside
+ *    `WARNING_ONLY_CODES`) → throws `HttpError(422, …,
+ *    "ELIGIBILITY_VIOLATION", { violations, warnings })`.
+ *  - `override.reason` present and at least one blocking issue → writes
+ *    exactly ONE `eligibility.overridden` `competition_events` row (via
+ *    `audit()`, moved to `./audit` — see this file's header) naming the
+ *    actor and reason, then proceeds. `override` present with NOTHING to
+ *    override (a clean roster) writes no audit row — there is nothing to
+ *    record as overridden.
+ *  - either way, returns the `MISSING_DOB`/`MISSING_GENDER` warnings so the
+ *    caller can surface them even on a pass that needed no override.
+ *
+ * Callers with a SINGLE division in scope
+ * (`createEntrants`/`insertMembers`/`patchEntrant`/
+ * `syncEntrantRosterFromSquad`, `entrants.ts`; `putLineup`, `fixtures.ts`)
+ * call this directly. `setTeamSquad` (multiple enrolled divisions, never
+ * blocks) and `commitImport` (possibly multiple divisions, exactly ONE audit
+ * row for the whole import) call `loadEligibilityDivisions` /
+ * `loadEligibilityPersons` / `rosterIssues` / `splitEligibilityIssues`
+ * directly instead — same evaluator, a throw/audit shape this single-division
+ * wrapper does not fit.
+ */
+export async function gateRosterEligibility(
+  tx: Tx,
+  { divisionId, personIds, context, override, actorId }: GateRosterEligibilityArgs,
+): Promise<EligibilityIssue[]> {
+  const ids = [...new Set(personIds)];
+  if (ids.length === 0) return [];
+  const [division] = await loadEligibilityDivisions(tx, [divisionId]);
+  if (!division) throw new HttpError(404, "division not found");
+  const persons = await loadEligibilityPersons(tx, ids);
+  const issues = rosterIssues(division, persons, seasonStartYearFrom(division.starts_on));
+  const { violations, warnings } = splitEligibilityIssues(issues);
+  if (violations.length > 0) {
+    if (!override?.reason) {
+      throw new HttpError(
+        422,
+        formatEligibilityIssues(violations).join(" "),
+        "ELIGIBILITY_VIOLATION",
+        { violations, warnings },
+      );
+    }
+    await audit(
+      tx,
+      division.competition_id,
+      division.org_id,
+      "eligibility.overridden",
+      {
+        context,
+        division_id: divisionId,
+        person_ids: ids,
+        reason: override.reason,
+        violations,
+      },
+      actorId,
+    );
+  }
+  return warnings;
+}

@@ -22,6 +22,14 @@ import {
   deriveAgeBand,
   type DivisionCategoryValue,
 } from "@/components/registration-hub-row-derive";
+// RS011: `requiresDob`/`requiresGender` are the CLIENT-safe half of the same
+// evaluator the server-side gate enforces (`@/lib/registration-rules`,
+// re-exported verbatim by `server/usecases/registration-eligibility.ts`) —
+// reused here to decide when a member row's missing dob/gender is worth an
+// amber chip, never a second rule. `EligibilityIssue` is the dialog's own
+// violation shape.
+import { requiresDob, requiresGender, type EligibilityIssue } from "@/lib/registration-rules";
+import { EligibilityOverrideDialog } from "@/components/v2/eligibility-override-dialog";
 
 /** RS007/V380 — the division columns this panel badges above the roster.
  *  Replaces the retired jsonb `eligibility` array (a `Record<string,
@@ -82,6 +90,11 @@ interface TeamOption {
 interface Member {
   person_id: string;
   full_name: string;
+  // RS011: rides along from withMembers (entrants.ts) so the roster editor
+  // can show a MISSING_DOB/MISSING_GENDER chip against the division's own
+  // requiresDob/requiresGender — never exposed publicly.
+  dob: string | null;
+  gender: string | null;
   squad_number: number | null;
   default_position_key: string | null;
   is_captain: boolean;
@@ -240,6 +253,69 @@ export function EntrantsPanel({
     }
   }
 
+  // RS011: the override dialog's pending state — set only while a roster
+  // write is blocked on ELIGIBILITY_VIOLATION and waiting on the organiser.
+  const [eligibilityGate, setEligibilityGate] = useState<{
+    violations: EligibilityIssue[];
+    onCancel: () => void;
+    onConfirm: (reason: string) => void;
+  } | null>(null);
+
+  /** Merges an override reason into a roster-write JSON payload — absent
+   *  `override` leaves the payload untouched (the field is optional on
+   *  every body that takes it). */
+  function withOverride(
+    payload: Record<string, unknown>,
+    override?: { reason: string },
+  ): Record<string, unknown> {
+    return override ? { ...payload, eligibility_override: override } : payload;
+  }
+
+  /** Like `run`, but for roster-writing calls (`fn` takes the override the
+   *  dialog collects): on a 422 `ELIGIBILITY_VIOLATION` it opens
+   *  `EligibilityOverrideDialog` instead of the generic error banner, and
+   *  the returned promise resolves once the organiser cancels (→
+   *  `undefined`, matching `run`'s own failure return) or a reason-carrying
+   *  retry itself settles. Callers (`AddEntrantForm`, `RosterEditor`'s save,
+   *  sync-from-squad) already branch on `res === undefined` the same way
+   *  `run`'s callers do, so their existing success handling fires unchanged
+   *  on the eventual result — a dialog round-trip is invisible to them. */
+  function runGated<T>(fn: (override?: { reason: string }) => Promise<T>): Promise<T | undefined> {
+    const attempt = async (override?: { reason: string }): Promise<T | undefined> => {
+      setError(null);
+      setPaywallFeature(null);
+      setBusy(true);
+      try {
+        const result = await fn(override);
+        router.refresh();
+        setRosterBump((n) => n + 1);
+        setBusy(false);
+        return result;
+      } catch (err) {
+        setBusy(false);
+        if (err instanceof ApiV1Error && err.code === "ELIGIBILITY_VIOLATION") {
+          const violations = (err.extra.violations as EligibilityIssue[] | undefined) ?? [];
+          return new Promise<T | undefined>((resolve) => {
+            setEligibilityGate({
+              violations,
+              onCancel: () => {
+                setEligibilityGate(null);
+                resolve(undefined);
+              },
+              onConfirm: (reason: string) => {
+                setEligibilityGate(null);
+                resolve(attempt({ reason }));
+              },
+            });
+          });
+        }
+        fail(err);
+        return undefined;
+      }
+    };
+    return attempt(undefined);
+  }
+
   const eligibilityBadgeList = eligibilityBadges(eligibility, msg);
 
   return (
@@ -264,20 +340,46 @@ export function EntrantsPanel({
           entrantModel={entrantModel}
           busy={busy}
           onSubmit={(payload) =>
-            run(() =>
+            runGated((override) =>
               apiV1<{ roster_keys_dropped?: number }>(
                 `/api/v1/divisions/${divisionId}/entrants`,
-                { method: "POST", json: payload },
+                { method: "POST", json: withOverride(payload, override) },
               ),
             )
           }
           importControls={
             <CsvImport
               busy={busy}
-              onImport={async (rows) =>
-              run(async () => {
-                // Create missing persons first (matched by exact name against
-                // the directory), then register entrants in one bulk call.
+              onImport={async (rows) => {
+                // RS011 review fix 5: this bulk path used to call plain
+                // `run(...)`, not the `runGated(...)` wrapper its 3 sibling
+                // roster-write call sites in this file use — the server gate
+                // still fired, but a violation surfaced only as a generic red
+                // error banner with no path to override except falling back
+                // to one-at-a-time adds. `withOverride` is applied to EVERY
+                // entrant in the batch on a confirmed retry — `eligibility_
+                // override` is per-entrant (CreateEntrant's own shape,
+                // bulk-create can override some rows and not others), but a
+                // 422 from this array body only names the FIRST offending
+                // entrant (createEntrants throws inside its per-input loop),
+                // so there's no way to know from here which of the batch it
+                // was; applying the confirmed override to the whole retried
+                // batch is the safe interpretation of "the organiser just
+                // confirmed this batch is fine."
+                //
+                // RS011 round-2 review fix: person resolution (which CREATES
+                // rows via POST /persons for any name not already in the
+                // directory) must happen exactly ONCE, before `runGated`, not
+                // inside the retried closure. `runGated` re-invokes the same
+                // closure verbatim on an override-confirm retry; the original
+                // shape ran `ensurePerson` again on retry against `persons`
+                // (a state snapshot captured when this closure was created,
+                // stale by the time of a second call), silently minting a
+                // SECOND, orphaned person row per CSV name on every override
+                // confirm. Resolving persons up front makes the retried
+                // closure a pure resubmit of an already-built payload — no
+                // side effects on retry, matching the other 3 `runGated`
+                // call sites in this file.
                 const byName = new Map(persons.map((p) => [p.full_name.toLowerCase(), p]));
                 const ensurePerson = async (row: CsvRow): Promise<string> => {
                   const existing = byName.get(row.name.toLowerCase());
@@ -296,6 +398,7 @@ export function EntrantsPanel({
                 };
 
                 const teamMode = rows.some((r) => r.team);
+                let entrantsPayload: Record<string, unknown>[];
                 if (teamMode) {
                   const teams = new Map<string, CsvRow[]>();
                   for (const row of rows) {
@@ -303,7 +406,7 @@ export function EntrantsPanel({
                     if (!teams.has(key)) teams.set(key, []);
                     teams.get(key)!.push(row);
                   }
-                  const entrantsPayload = [];
+                  entrantsPayload = [];
                   for (const [team, teamRows] of teams) {
                     const members = [];
                     for (const row of teamRows) {
@@ -314,35 +417,27 @@ export function EntrantsPanel({
                         roles: [],
                       });
                     }
-                    entrantsPayload.push({
-                      kind: "team",
-                      display_name: team,
-                      members,
-                    });
+                    entrantsPayload.push({ kind: "team", display_name: team, members });
                   }
-                  await apiV1(`/api/v1/divisions/${divisionId}/entrants`, {
-                    method: "POST",
-                    json: entrantsPayload,
-                  });
                 } else {
-                  const entrantsPayload = [];
+                  entrantsPayload = [];
                   for (const row of rows) {
                     entrantsPayload.push({
                       kind: "individual",
                       display_name: row.name,
                       seed: row.seed ?? null,
-                      members: [
-                        { person_id: await ensurePerson(row), is_captain: false, roles: [] },
-                      ],
+                      members: [{ person_id: await ensurePerson(row), is_captain: false, roles: [] }],
                     });
                   }
-                  await apiV1(`/api/v1/divisions/${divisionId}/entrants`, {
-                    method: "POST",
-                    json: entrantsPayload,
-                  });
                 }
-              })
-            }
+
+                await runGated((override) =>
+                  apiV1(`/api/v1/divisions/${divisionId}/entrants`, {
+                    method: "POST",
+                    json: entrantsPayload.map((e) => withOverride(e, override)),
+                  }),
+                );
+              }}
             />
           }
         />
@@ -403,11 +498,15 @@ export function EntrantsPanel({
                 positionGroups={positionGroups}
                 roles={roles}
                 entrantModel={entrantModel}
+                eligibility={eligibility}
                 suspensions={suspensions[e.id]}
                 otherTeamsFor={otherTeamsFor}
                 onPatch={(patch) =>
-                  run(() =>
-                    apiV1(`/api/v1/entrants/${e.id}`, { method: "PATCH", json: patch }),
+                  runGated((override) =>
+                    apiV1(`/api/v1/entrants/${e.id}`, {
+                      method: "PATCH",
+                      json: withOverride(patch, override),
+                    }),
                   )
                 }
                 onWithdraw={async () => {
@@ -435,10 +534,10 @@ export function EntrantsPanel({
                           confirmLabel: msg("confirm.syncSquad.label"),
                         });
                         if (!ok) return undefined;
-                        return run(() =>
+                        return runGated((override) =>
                           apiV1<{ members: Member[] }>(
                             `/api/v1/entrants/${e.id}/roster/sync`,
-                            { method: "POST", json: {} },
+                            { method: "POST", json: withOverride({}, override) },
                           ),
                         );
                       }
@@ -449,6 +548,15 @@ export function EntrantsPanel({
           </tbody>
         </table>
       </section>
+
+      <EligibilityOverrideDialog
+        open={eligibilityGate !== null}
+        violations={eligibilityGate?.violations ?? []}
+        busy={busy}
+        onCancel={() => eligibilityGate?.onCancel()}
+        onConfirm={(reason) => eligibilityGate?.onConfirm(reason)}
+        testId="eligibility-override"
+      />
     </div>
   );
 }
@@ -1125,6 +1233,7 @@ function EntrantTableRow({
   positionGroups,
   roles,
   entrantModel,
+  eligibility,
   suspensions,
   otherTeamsFor,
   onPatch,
@@ -1140,6 +1249,8 @@ function EntrantTableRow({
   positionGroups: PositionGroup[];
   roles: RoleSpec[];
   entrantModel: EffectiveEntrantModel;
+  /** RS011 — for the roster editor's MISSING_DOB/MISSING_GENDER chips. */
+  eligibility: EntrantsPanelEligibility;
   suspensions?: { personName: string; remaining: number }[];
   otherTeamsFor: (personId: string, exceptEntrantId: string) => DivisionRosterRow[];
   onPatch: (patch: Record<string, unknown>) => void;
@@ -1288,6 +1399,7 @@ function EntrantTableRow({
                 allowCaptain={entrantModel.captain}
                 allowSquadNumbers={entrantModel.squadNumbers}
                 entrantModel={entrantModel}
+                eligibility={eligibility}
                 conflictsFor={(personId) => otherTeamsFor(personId, entrant.id)}
                 onSave={(next) =>
                   onPatch({
@@ -1327,6 +1439,7 @@ export function RosterEditor({
   allowCaptain,
   allowSquadNumbers,
   entrantModel,
+  eligibility,
   conflictsFor,
   onSave,
 }: {
@@ -1344,10 +1457,15 @@ export function RosterEditor({
   allowSquadNumbers: boolean;
   /** Effective model — supplies the team member cap for the picker gate. */
   entrantModel: EffectiveEntrantModel;
+  /** RS011 — division columns for the MISSING_DOB/MISSING_GENDER chips
+   *  below (`requiresDob`/`requiresGender`, `@/lib/registration-rules` — the
+   *  SAME predicates the server-side gate evaluates against). */
+  eligibility: EntrantsPanelEligibility;
   /** Other team entrants IN THIS DIVISION a person is already on. */
   conflictsFor: (personId: string) => DivisionRosterRow[];
   onSave: (members: Member[]) => void;
 }) {
+  const msg = useMsg();
   const [members, setMembers] = useState(initial);
   const [filter, setFilter] = useState("");
   const [dirty, setDirty] = useState(false);
@@ -1355,6 +1473,11 @@ export function RosterEditor({
   // switchable in the division's entrant settings.
   const teamish = kind === "team";
   const atCap = members.length >= entrantKindCap(kind, entrantModel);
+  // RS011: whether THIS division's rules even care about dob/gender at all —
+  // a chip on a division with no age band or category restriction would be
+  // noise nobody can act on (there is nothing to be missing FOR).
+  const needsDob = requiresDob(eligibility);
+  const needsGender = requiresGender(eligibility);
 
   function update(i: number, patch: Partial<Member>) {
     setMembers((prev) => prev.map((m, j) => (j === i ? { ...m, ...patch } : m)));
@@ -1402,6 +1525,21 @@ export function RosterEditor({
               </span>
             )}
           </span>
+          {/* RS011: MISSING_DOB/MISSING_GENDER — amber, advisory, never a
+              block (the organiser-side gate treats these two codes as
+              warnings). Shown only when the division's own rules actually
+              need the field (needsDob/needsGender) AND this member lacks
+              it. */}
+          {needsDob && !m.dob && (
+            <span className="rounded-full bg-amber-50 px-2 py-0.5 text-amber-700">
+              {msg("divset.entrants.warning.missingDob")}
+            </span>
+          )}
+          {needsGender && !m.gender && (
+            <span className="rounded-full bg-amber-50 px-2 py-0.5 text-amber-700">
+              {msg("divset.entrants.warning.missingGender")}
+            </span>
+          )}
           {teamish && allowSquadNumbers && (
             <input
               type="number"
@@ -1511,6 +1649,8 @@ export function RosterEditor({
                     {
                       person_id: p.id,
                       full_name: p.full_name,
+                      dob: p.dob,
+                      gender: p.gender,
                       squad_number: null,
                       default_position_key: null,
                       is_captain: false,

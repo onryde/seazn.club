@@ -9,6 +9,13 @@ import { ApiV1Error } from "@/lib/client-v1";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { useMsg } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
+// RS011 review round 3, finding 2: `commitImport` (server/usecases/
+// imports.ts) runs the SAME eligibility gate `putLineup`/roster-write
+// endpoints do and can 422 ELIGIBILITY_VIOLATION, but `commit()` had no
+// recovery path for it — same gap as `lineup-editor.tsx`'s finding 1, same
+// dialog, same retry-wiring pattern.
+import type { EligibilityIssue } from "@/lib/registration-rules";
+import { EligibilityOverrideDialog } from "@/components/v2/eligibility-override-dialog";
 
 const FIELDS: [string, MessageKey][] = [
   ["", "import.field.ignore"],
@@ -104,6 +111,12 @@ export function ImportWizard() {
   const [error, setError] = useState<string | null>(null);
   const [paywallFeature, setPaywallFeature] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // RS011 review round 3, finding 2: pending override-dialog state, set only
+  // while a commit is blocked on ELIGIBILITY_VIOLATION and waiting on the
+  // organiser — same shape as `entrants-panel.tsx`'s `eligibilityGate`.
+  const [eligibilityGate, setEligibilityGate] = useState<{
+    violations: EligibilityIssue[];
+  } | null>(null);
 
   const errors = preview?.plan.issues.filter((i) => i.severity === "error") ?? [];
   const warns = preview?.plan.issues.filter((i) => i.severity === "warn") ?? [];
@@ -148,27 +161,53 @@ export function ImportWizard() {
     await upload(file, mapping);
   }
 
-  async function commit() {
+  /** RS011 review round 3, finding 2: `override` is only ever passed on a
+   *  confirmed retry from `EligibilityOverrideDialog` below — a plain Commit
+   *  tap calls this with none. Re-POSTing is safe: `commitImport` re-plans
+   *  and evaluates the whole commit inside ONE transaction that rolls back
+   *  entirely on the 422 (nothing is written, and nothing is cached under
+   *  the idempotency key — that only happens after a transaction actually
+   *  commits), so a retry with the SAME `Idempotency-Key` re-runs the full
+   *  plan → gate → execute sequence from scratch rather than replaying or
+   *  double-executing any part of a prior attempt. Unlike `entrants-
+   *  panel.tsx`'s CSV bulk-add, this client has no one-time side effect
+   *  (person creation, etc.) ahead of the gated call to worry about — the
+   *  whole commit lives server-side in one transaction. */
+  async function commit(override?: { reason: string }) {
     if (!preview) return;
     setError(null);
     setBusy(true);
     try {
       const res = await fetch(`/api/v1/imports/${preview.importId}/commit`, {
         method: "POST",
-        headers: { "Idempotency-Key": preview.importId },
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": preview.importId,
+        },
+        body: JSON.stringify(override ? { eligibility_override: override } : {}),
       });
       const payload = (await res.json()) as {
         ok?: boolean;
         data?: CommitResult;
-        error?: { code?: string; message?: string; feature_key?: string };
+        error?: {
+          code?: string;
+          message?: string;
+          feature_key?: string;
+          violations?: EligibilityIssue[];
+        };
       };
       if (!res.ok || payload.ok === false) {
         if (res.status === 402) {
           setPaywallFeature(String(payload.error?.feature_key ?? ""));
           return;
         }
+        if (payload.error?.code === "ELIGIBILITY_VIOLATION") {
+          setEligibilityGate({ violations: payload.error.violations ?? [] });
+          return;
+        }
         throw new Error(payload.error?.message ?? msg("import.commitFailed"));
       }
+      setEligibilityGate(null);
       setResult(payload.data!);
       router.refresh();
     } catch (err) {
@@ -346,7 +385,7 @@ export function ImportWizard() {
                   preview.plan.ops.length === 0 ||
                   (warns.length > 0 && !warnsAcknowledged)
                 }
-                onClick={commit}
+                onClick={() => void commit()}
               >
                 {errors.length > 0 ? msg("import.fixErrors") : msg("import.commit")}
               </button>
@@ -354,6 +393,15 @@ export function ImportWizard() {
           </section>
         </>
       )}
+
+      <EligibilityOverrideDialog
+        open={eligibilityGate !== null}
+        violations={eligibilityGate?.violations ?? []}
+        busy={busy}
+        onCancel={() => setEligibilityGate(null)}
+        onConfirm={(reason) => void commit({ reason })}
+        testId="import-eligibility-override"
+      />
 
       {result && (
         <section className="card space-y-2 p-4">

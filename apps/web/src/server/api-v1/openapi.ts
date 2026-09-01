@@ -77,7 +77,7 @@ export const ROUTES: RouteSpec[] = [
   { path: "/entrants/{id}", method: "get", summary: "Get an entrant with members", tag: "entrants", response: S.Entrant },
   { path: "/entrants/{id}", method: "patch", summary: "Set status, seed or edit members (no fixture surgery — see /withdraw)", tag: "entrants", request: S.PatchEntrant, response: S.Entrant, errors: [422] },
   { path: "/entrants/{id}/withdraw", method: "post", summary: "Withdraw with fixture surgery (spec 05 §5): tables expunge (<50% played) or walk over remaining; brackets walk over; open formats void remaining", tag: "entrants", errors: [409, 422] },
-  { path: "/entrants/{id}/roster/sync", method: "post", summary: "Replace the entrant roster with the linked team's current squad (enrollment snapshots once — this is the explicit re-sync; sport filter + kind cap apply)", tag: "entrants", response: S.Entrant, errors: [404, 422] },
+  { path: "/entrants/{id}/roster/sync", method: "post", summary: "Replace the entrant roster with the linked team's current squad (enrollment snapshots once — this is the explicit re-sync; sport filter + kind cap apply)", tag: "entrants", request: S.SyncEntrantRoster, response: S.Entrant, errors: [404, 422] },
   { path: "/divisions/{id}/roster", method: "get", summary: "Every (person → team entrant) membership in the division (same-division double-roster warning)", tag: "entrants" },
   // Persons
   { path: "/persons", method: "get", summary: "List persons", tag: "persons", response: pageOf(S.Person), query: PAGE_QUERY },
@@ -288,7 +288,7 @@ export const ROUTES: RouteSpec[] = [
   { path: "/clubs/logos", method: "post", summary: "Bulk logo assign: multipart `files` + `mapping` JSON + `assign_remaining` (Jul3/01 §5; Pro `logos.bulk` for >1 file)", tag: "clubs", response: z.array(S.LogoAssignment), errors: [402, 422] },
   { path: "/imports", method: "post", summary: "Upload a participants spreadsheet (multipart `file`) → dry-run { importId, plan }; writes nothing (Jul3/01 §6)", tag: "clubs", response: S.ImportPreview, status: 201, errors: [402, 413, 422] },
   { path: "/imports/{id}", method: "get", summary: "Re-preview a stored import against current state", tag: "clubs", response: S.ImportPreview },
-  { path: "/imports/{id}/commit", method: "post", summary: "Execute the plan in one transaction (Idempotency-Key header)", tag: "clubs", response: S.ImportCommitResult, status: 201, errors: [402, 422] },
+  { path: "/imports/{id}/commit", method: "post", summary: "Execute the plan in one transaction (Idempotency-Key header)", tag: "clubs", request: S.ImportCommitRequest, response: S.ImportCommitResult, status: 201, errors: [402, 422] },
   { path: "/participants/export", method: "get", summary: "Participants CSV/XLSX: club + division columns, empty-spot rows intact; all plans (`exports`)", tag: "clubs", errors: [402], query: { format: { schema: { type: "string", enum: ["csv", "xlsx"] } }, club_id: { schema: { type: "string" } }, division_id: { schema: { type: "string" } } } },
   // Referee & officials assignment (Jul3/02, PROMPT-22)
   { path: "/officials", method: "get", summary: "List officials (people or team-as-referee entrants)", tag: "officials", response: z.array(S.Official) },

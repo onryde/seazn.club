@@ -106,17 +106,36 @@ describe("isValidCutoffDay (RS007 review fix L1)", () => {
   });
 });
 
-describe("ageBandEligibilityIssues — an invalid stored cutoff fails loudly instead of silently rolling (RS007 review fix L1)", () => {
+describe("ageBandEligibilityIssues — an invalid stored cutoff is SKIPPED, never thrown (RS007 review fix L1, superseded by RS011 review fix 2)", () => {
   const division = { age_min: 10, age_max: 15 };
 
-  it("throws for a day that does not exist in its month, rather than rolling into the next month", () => {
+  // RS007 fix L1 originally threw here so `Date.UTC` could never silently
+  // roll an impossible day into the next month. RS011 review found that
+  // throw itself reachable in production (a legacy row bypassing
+  // checkAgeCutoff, the DB CHECK only range-checking 1-31) from call sites
+  // that cannot tolerate an uncaught Error — setTeamSquad's "never
+  // hard-blocks" contract, and 4 organiser gate points expecting a coded 422
+  // rather than an unhandled 500. The fix: skip the age check entirely for
+  // an unenforceable cutoff, never throw, never roll into the wrong month.
+  it("does not throw for a day that does not exist in its month — treated as no enforceable age rule", () => {
     expect(() =>
       ageBandEligibilityIssues(
         { ...division, age_cutoff_month: 9, age_cutoff_day: 31 },
         { dob: "2010-07-10" },
         2026,
       ),
-    ).toThrow(/does not exist/);
+    ).not.toThrow();
+  });
+
+  it("an invalid cutoff returns NO age issues even for a dob that would clearly violate the band under any valid cutoff — proves the check is genuinely skipped, not accidentally passing", () => {
+    const badCutoff = { ...division, age_cutoff_month: 2, age_cutoff_day: 30 }; // Feb 30 never exists
+    // 2000-01-01 is ~26 in 2026 — a hard AGE_TOO_OLD against age_max: 15
+    // under any real cutoff date in that range.
+    expect(ageBandEligibilityIssues(badCutoff, { dob: "2000-01-01" }, 2026)).toEqual([]);
+    // And the symmetric case: nothing is silently rolled into 1 March either
+    // — a dob that WOULD be AGE_TOO_YOUNG evaluated at 1 March also reports
+    // no issue, because no cutoff is evaluated at all.
+    expect(ageBandEligibilityIssues(badCutoff, { dob: "2015-01-01" }, 2026)).toEqual([]);
   });
 
   it("never throws for valid input — the 1-January default, or a real configured cutoff", () => {

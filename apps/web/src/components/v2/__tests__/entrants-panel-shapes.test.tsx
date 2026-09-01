@@ -29,16 +29,25 @@ const PERSONS = [
   { id: "p3", full_name: "Carol", dob: null, gender: null },
 ];
 
-function member(id: string, name: string) {
+function member(id: string, name: string, extra: { dob?: string | null; gender?: string | null } = {}) {
   return {
     person_id: id,
     full_name: name,
+    dob: extra.dob ?? null,
+    gender: extra.gender ?? null,
     squad_number: null,
     default_position_key: null,
     is_captain: false,
     roles: [],
   };
 }
+
+const NO_ELIGIBILITY: EntrantsPanelEligibility = {
+  category: null,
+  age_min: null,
+  age_max: null,
+  eligibility_note: null,
+};
 
 function model(kind: EntrantKind): EffectiveEntrantModel {
   return {
@@ -55,6 +64,7 @@ function renderRoster(opts: {
   members: ReturnType<typeof member>[];
   allowCaptain: boolean;
   allowSquadNumbers: boolean;
+  eligibility?: EntrantsPanelEligibility;
 }) {
   return renderToStaticMarkup(
     <RosterEditor
@@ -68,6 +78,7 @@ function renderRoster(opts: {
       allowCaptain={opts.allowCaptain}
       allowSquadNumbers={opts.allowSquadNumbers}
       entrantModel={model(opts.kind as EntrantKind)}
+      eligibility={opts.eligibility ?? NO_ELIGIBILITY}
       conflictsFor={() => []}
       onSave={() => {}}
     />,
@@ -124,6 +135,71 @@ describe("RosterEditor — kind/model-aware roster", () => {
       allowSquadNumbers: false,
     });
     expect(html).not.toContain("Find player…");
+  });
+});
+
+// RS011 — organiser-side eligibility gates: MISSING_DOB/MISSING_GENDER are
+// advisory (amber), never a block, and only worth showing when the
+// DIVISION's own rules actually need the field — requiresDob/requiresGender
+// (@/lib/registration-rules), the SAME predicates the server-side gate
+// evaluates against, not a second rule invented for display.
+describe("RosterEditor — MISSING_DOB/MISSING_GENDER amber chips (RS011)", () => {
+  const AGE_BAND: EntrantsPanelEligibility = { ...NO_ELIGIBILITY, age_min: 10, age_max: 18 };
+  const MENS: EntrantsPanelEligibility = { ...NO_ELIGIBILITY, category: "mens" };
+
+  it("a division with an age band chips a member with no dob", () => {
+    const html = renderRoster({
+      kind: "individual",
+      members: [member("p1", "Alice")],
+      allowCaptain: false,
+      allowSquadNumbers: false,
+      eligibility: AGE_BAND,
+    });
+    expect(html).toContain(testMsg("divset.entrants.warning.missingDob"));
+  });
+
+  it("the SAME division does not chip a member who already has a dob", () => {
+    const html = renderRoster({
+      kind: "individual",
+      members: [member("p1", "Alice", { dob: "2010-01-01" })],
+      allowCaptain: false,
+      allowSquadNumbers: false,
+      eligibility: AGE_BAND,
+    });
+    expect(html).not.toContain(testMsg("divset.entrants.warning.missingDob"));
+  });
+
+  it("a division with NO age band never chips a missing dob — nothing to be missing FOR", () => {
+    const html = renderRoster({
+      kind: "individual",
+      members: [member("p1", "Alice")],
+      allowCaptain: false,
+      allowSquadNumbers: false,
+      eligibility: NO_ELIGIBILITY,
+    });
+    expect(html).not.toContain(testMsg("divset.entrants.warning.missingDob"));
+  });
+
+  it("a mens/womens/mixed division chips a member with no gender", () => {
+    const html = renderRoster({
+      kind: "individual",
+      members: [member("p1", "Alice")],
+      allowCaptain: false,
+      allowSquadNumbers: false,
+      eligibility: MENS,
+    });
+    expect(html).toContain(testMsg("divset.entrants.warning.missingGender"));
+  });
+
+  it("the SAME division does not chip a member who already has a gender", () => {
+    const html = renderRoster({
+      kind: "individual",
+      members: [member("p1", "Alice", { gender: "m" })],
+      allowCaptain: false,
+      allowSquadNumbers: false,
+      eligibility: MENS,
+    });
+    expect(html).not.toContain(testMsg("divset.entrants.warning.missingGender"));
   });
 });
 

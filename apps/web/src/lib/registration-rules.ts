@@ -40,6 +40,18 @@
 // now calls `rosterCompositionIssues` from here instead of tallying inline
 // — see that file's header for the other half of this split.
 
+/**
+ * RS011 review round 3, finding 4: an organiser's override reason
+ * (`EligibilityOverrideDialog`, `api-v1/schemas.ts`'s `EligibilityOverride`)
+ * must be long enough to be worth auditing but short enough to fit the
+ * ledger — defined ONCE here, client-safe, so the client-side dialog's
+ * `armed`/`maxLength` check and the server-side Zod schema's
+ * `z.string().min(REASON_MIN).max(REASON_MAX)` can never silently drift
+ * apart the way two hardcoded `3`/`500` literals could.
+ */
+export const REASON_MIN = 3;
+export const REASON_MAX = 500;
+
 /** Whole years between dob and `at` (doc 06 §2.1: never approximate). */
 export function ageAt(dobIso: string, at: Date): number {
   const dob = new Date(`${dobIso}T00:00:00Z`);
@@ -113,6 +125,49 @@ export function requiresDob(division: {
   age_max: number | null;
 }): boolean {
   return division.age_min != null || division.age_max != null;
+}
+
+/**
+ * Division has a gender rule ⇒ the form must collect gender (RS006 WHO step,
+ * design §4 step 1: "dob/gender collected once, only if any division needs
+ * them"). Sibling of `requiresDob` above, same shape. Moved here from
+ * `server/usecases/registration-eligibility.ts` (RS011): that module's own
+ * comment on this function used to say "nothing client-side calls this
+ * directly" — RS011's `entrants-panel.tsx` (a client component) needs the
+ * SAME predicate the server-side gate evaluates against to decide when a
+ * roster row's missing gender is worth an amber chip, and a client
+ * component importing anything under `@/server/**` is a `next build`
+ * failure `tsc` never catches (repo standing trap) — the exact reason
+ * `ageAt`/`isMinor`/`requiresDob` moved here at RS006 W1 (see this file's
+ * header). Re-exported verbatim by `registration-eligibility.ts` so it
+ * stays the ONE evaluator, split across a server-only half and a
+ * client-safe half, same as every other predicate in this file.
+ *
+ * RULING (RS007 review fix M2, 2026-08-29): a free-text `eligibility_note`
+ * must NEVER make a field mandatory. A 2026-08-27 revision fired this on any
+ * non-empty `eligibility_note` too — on the theory that V380 dropped the
+ * jsonb `eligibility` rules without a first-class replacement for every
+ * gender-rule shape a note might now be the only remaining record of (an
+ * allow-list excluding non-binary, or any rule on a division that already
+ * had a `category`, could not be converted — see V380's migration header,
+ * "Sex" section). In practice that made an UNRELATED organiser note
+ * ("bring your own kit", "club members only") force the public WHO step to
+ * demand gender on a division `divisionEligibilityIssues` never gates on
+ * gender for — the browser blocked a registrant the API would happily
+ * accept. `category` is `mens`/`womens` (individual-level: needs the
+ * specific gender) or `mixed` (roster-level: needs every player's gender to
+ * prove the roster balances) is now the ONLY trigger — agrees EXACTLY with
+ * `divisionEligibilityIssues`'s own gender source
+ * (`categoryEligibilityIssues`/`rosterCompositionIssues`, this file).
+ * `eligibility_note` stays in the parameter type only because existing call
+ * sites already pass the division's full context (`registration-submit.ts`,
+ * `registrations.ts`) — accepted, never read.
+ */
+export function requiresGender(division: {
+  category: string | null;
+  eligibility_note?: string | null;
+}): boolean {
+  return division.category === "mens" || division.category === "womens" || division.category === "mixed";
 }
 
 /**
@@ -215,17 +270,41 @@ export function ageBandEligibilityIssues(
   }
   const cutoffMonth = division.age_cutoff_month ?? 1;
   const cutoffDay = division.age_cutoff_day ?? 1;
-  // RS007 review fix L1: the write path (checkAgeCutoff, api-v1/schemas.ts)
-  // now rejects a day that does not exist in its month, so this combination
-  // should be unreachable for any row written through the API. Fail loudly
-  // rather than let `Date.UTC` silently roll it into the next month (31
-  // September becoming 1 October, 30 February becoming 1/2 March) — that
-  // silent shift, with no error anywhere, is the defect this fix closes.
-  // Never fires for valid input, including the 1/1 default above.
+  // RS007 review fix L1 ORIGINALLY threw here — the write path
+  // (checkAgeCutoff, api-v1/schemas.ts) rejects a day that does not exist in
+  // its month for every NEW write, so a throw was meant to be unreachable,
+  // catching a stored row that reached the column some other way rather than
+  // let `Date.UTC` silently roll it into the next month (31 September
+  // becoming 1 October, 30 February becoming 1/2 March — the original
+  // silent-shift defect that fix closed).
+  //
+  // RS011 review fix 2: "unreachable" was never actually guaranteed. The DB
+  // CHECK constraint only range-checks 1-31, not day-per-month, and
+  // V380__division_eligibility_consolidation.sql's backfill predates
+  // checkAgeCutoff entirely — a legacy row can still carry an impossible
+  // combination. This function is called from `setTeamSquad`'s
+  // eligibility-warnings pass AFTER the squad write already ran in the same
+  // transaction (a throw there rolls back a save that endpoint's own
+  // contract promises will never hard-block), and from `gateRosterEligibility`
+  // at 4 other organiser-side gate points, none of which catch a bare
+  // `Error` — an uncaught throw there surfaces as an unhandled 500, not the
+  // coded 422 `ELIGIBILITY_VIOLATION` the client dialog recognizes.
+  //
+  // So: never throw. Treat an unenforceable cutoff as "no age rule to
+  // evaluate" and skip straight to returning whatever issues have already
+  // been collected (none, at this point) — NOT the 1-January default (that
+  // would silently invent a cutoff the division never configured), and NOT
+  // rolling into the next month (the original bug). A division stuck with a
+  // bad legacy cutoff simply stops enforcing its age band until an organiser
+  // fixes it, which is strictly safer than either alternative.
   if (!isValidCutoffDay(cutoffMonth, cutoffDay)) {
-    throw new Error(
-      `Invalid age cutoff: day ${cutoffDay} does not exist in month ${cutoffMonth}. This division's stored age_cutoff_month/age_cutoff_day should have been rejected at write time.`,
+    console.error(
+      `Invalid age cutoff: day ${cutoffDay} does not exist in month ${cutoffMonth} — ` +
+        "skipping the age-band check for this division rather than blocking the request " +
+        "or rolling into the wrong month. This division's stored age_cutoff_month/" +
+        "age_cutoff_day predates write-time validation and should be corrected.",
     );
+    return issues;
   }
   const cutoffDate = new Date(Date.UTC(seasonStartYear, cutoffMonth - 1, cutoffDay));
   const age = ageAt(person.dob, cutoffDate);
@@ -244,6 +323,35 @@ export function ageBandEligibilityIssues(
     });
   }
   return issues;
+}
+
+/**
+ * Season anchor for the age band's cutoff — the competition's start date,
+ * or this year if unset (`ageBandEligibilityIssues` above anchors at 1
+ * January of this year when the division sets no cutoff month/day).
+ *
+ * RS011 review round 3, finding 6: promoted here from being byte-for-byte
+ * duplicated in TWO server usecase files — `registration-eligibility.ts`'s
+ * own (exported) `seasonStartYearFrom` and `registration-submit.ts`'s
+ * private `seasonStartYear` computed the literal same expression. Defined
+ * ONCE, client-safe, alongside every other predicate this file already
+ * shares between the server-only eligibility evaluator and the public
+ * stepper. `registration-eligibility.ts` re-exports this verbatim (same "one
+ * evaluator, two halves" shape every other predicate here uses) so
+ * `imports.ts`/`teams.ts`, which import `seasonStartYearFrom` from there,
+ * keep compiling unchanged.
+ *
+ * NOT the same function as `components/public-site/register/eligibility-
+ * presentation.ts`'s OWN `seasonStartYearFrom` — that one additionally
+ * accepts an injectable `now` (for its own tests) and falls back on an
+ * unparsable `starts_on` string rather than only a null one. Two genuinely
+ * different behaviours were never the duplicate this fix closes; only the
+ * server-usecase pair was.
+ */
+export function seasonStartYearFrom(startsOnIso: string | null): number {
+  return startsOnIso
+    ? new Date(`${startsOnIso}T00:00:00Z`).getUTCFullYear()
+    : new Date().getUTCFullYear();
 }
 
 /**

@@ -12,6 +12,7 @@ import { type BoardFixtureRow, type FixtureRow } from "./stages";
 // venues that legally share one court name.
 import { moveFixture, courtNamesById } from "./schedule";
 import { scoresViaAssignment } from "./scorers";
+import { gateRosterEligibility } from "./registration-eligibility";
 
 /** Doc 13 §7: a device link reads fixture state/events ONLY — every other
  *  fixture surface (detail, lineups, schedule) is 403 for dl_ tokens. */
@@ -185,13 +186,14 @@ export async function putLineup(
   return withTenant(auth.orgId, async (tx) => {
     const [fixture] = await tx<
       {
+        division_id: string;
         home_entrant_id: string | null;
         away_entrant_id: string | null;
         status: string;
         scorer_can_enter_lineups: boolean;
       }[]
     >`
-      select f.home_entrant_id, f.away_entrant_id, f.status, d.scorer_can_enter_lineups
+      select f.division_id, f.home_entrant_id, f.away_entrant_id, f.status, d.scorer_can_enter_lineups
       from fixtures f join divisions d on d.id = f.division_id
       where f.id = ${fixtureId}`;
     if (!fixture) throw new HttpError(404, "fixture not found");
@@ -219,6 +221,17 @@ export async function putLineup(
         throw new HttpError(422, "lineup contains a person who is not a member of the entrant");
       }
     }
+    // RS011: catches a pre-feature roster — a person entered before this
+    // gate existed (or added on a still-ungated path) can reach a lineup
+    // without ever having been checked. Same evaluator, same 422 code, as
+    // every other organiser roster-write gate.
+    await gateRosterEligibility(tx, {
+      divisionId: fixture.division_id,
+      personIds: ids,
+      context: "put_lineup",
+      override: input.eligibility_override,
+      actorId: auth.userId,
+    });
     await tx`delete from lineups where fixture_id = ${fixtureId} and entrant_id = ${entrantId}`;
     for (const [i, s] of input.slots.entries()) {
       await tx`
