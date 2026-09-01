@@ -6557,3 +6557,47 @@ folded into a skin commit, and not left as "R8 someday". It converts an
 invisible runtime defect into a compile error for all eleven skins, the same
 "one place, unforgettable for the next author" argument R7-39 already accepted.
 The experiment above was reverted byte-identical; nothing of it is in the tree.
+
+### R7-42 — OWNER RULING: R7-30 is pulled FORWARD and paired with F. SUPERSEDES R7-32
+
+R7-32 ruled "finish R7, then fix the double-submit guard, and land it AFTER
+task F". Owner reopened it 2026-09-01 on a product-value question and ruled the
+opposite: **do R7-30 and F together, NEXT, ahead of A4/D/G.**
+
+The reasoning, recorded because it reorders the rest of the wave: three open
+items are ONE customer problem wearing different clothes — **the pad silently
+records less than the scorer did.**
+
+- **R7-30** — a deliberate repeat tap is dropped ENTIRELY. No row, no toast, no
+  error. Live on tennis, badminton, table tennis, volleyball and generic.
+- **F / P-5** — the tap IS recorded but INCOMPLETE: the hold drains with the
+  dock unanswered and the rally submits with `wonBy` only, no `scorer`.
+  Observed 4-of-5 rallies at the old 6s hold. No recovery path exists — v3 has
+  no edit or amend surface, so the only way back is void and re-tap.
+- (`moves`, R7-40a, was the same shape and is now closed by ruling.)
+
+A scoring product's promise is "what I tapped is what's recorded", and that
+promise has a hole in it on five shipped sports today. R7's remaining tasks are
+polish on top of it. They share `use-pad-pipeline.ts`, and they are the same
+design question — *how does the pad tell a scorer it did not take something?* —
+so solving them separately would mean designing the answer twice.
+
+**Accepted running order for the rest of the wave** (owner, same ruling):
+1. **R7-30 + F together.**
+2. **A4** — `fidelityEntitlements: {}` renders an UPSELL for a band nothing
+   gates. The product asks a customer to pay for something it is not
+   withholding. Trust defect, live on generic today.
+3. **G** — legacy-lane demolition. No direct customer value, but it deletes
+   dead surface, and this wave shipped two defects that hid in exactly that.
+4. **D, E-polish, R7-41** as capacity allows.
+
+**Also ruled: do NOT build timed carrom.** Capping `maxBoards` to the time slot
+works today and is the sanctioned reading of Law 56a. Build a "close at leader"
+authority action only when a real customer runs a timed format and hits the
+`abandoned` / `no_result` wall — and build it then as a GENERAL authority
+action, not a carrom feature, because every timed sport will want it.
+
+**One fact that has changed since P-5 was written and must not be missed:**
+#688 moved `HOLD_MS` from 6s to 12s chassis-wide. P-5's "4 of 5 rallies lost
+the scorer" was measured at 6s. The race is looser now; the gap is still real,
+but re-measure before quoting that ratio as current.
