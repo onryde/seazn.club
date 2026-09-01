@@ -241,6 +241,12 @@ export interface RegistrationSettingsRow {
    * would charge the full team fee to someone told it was free.
    */
   free_agent_fee_cents: number | null;
+  /** V389/RS012 ruling 2 — after this passes, an unplaced solo sign-up is
+   *  auto-refunded and withdrawn by `sweepRegistrations`'s pool-deadline
+   *  pass. NULL defaults to `closes_at` at READ time (never backfilled into
+   *  this column), so an organiser who never sets one still gets the
+   *  ruling's default: the division's own registration close. */
+  place_by_at: Date | null;
   updated_at: Date | null;
 }
 
@@ -498,7 +504,7 @@ const SETTINGS_COLS = [
   "division_id", "enabled", "entrant_kind", "opens_at", "closes_at",
   "capacity", "fee_cents", "refund_lock_at", "form_fields",
   "payment_method", "payment_instructions", "approval", "allow_free_agents",
-  "free_agent_fee_cents", "updated_at",
+  "free_agent_fee_cents", "place_by_at", "updated_at",
 ] as const;
 
 /** Statuses that hold a capacity spot. Imported from `@/lib/registration-
@@ -1698,6 +1704,7 @@ const DEFAULT_SETTINGS: Omit<RegistrationSettingsRow, "division_id"> = {
   approval: "auto",
   allow_free_agents: false,
   free_agent_fee_cents: null,
+  place_by_at: null,
   updated_at: null,
 };
 
@@ -4750,11 +4757,18 @@ const REMINDER_LEASE_MINUTES = 5;
 
 export async function sweepRegistrations(
   origin: string,
-): Promise<{ reminded: number; expired: number; promoted: number; lapsed: number }> {
+): Promise<{
+  reminded: number;
+  expired: number;
+  promoted: number;
+  lapsed: number;
+  poolDeadlinePassed: number;
+}> {
   let reminded = 0;
   let expired = 0;
   let promotedCount = 0;
   let lapsedCount = 0;
+  let poolDeadlinePassedCount = 0;
 
   // payment_method/expires_at live on the cart now (V364).
   // `r.promoted_at is null` (V379/RS007 — found while wiring the promoted-
@@ -5136,7 +5150,144 @@ export async function sweepRegistrations(
     }
   }
 
-  return { reminded, expired, promoted: promotedCount, lapsed: lapsedCount };
+  // (5) RS012 ruling 2 — the pool's own deadline. A solo sign-up is promised
+  // at sign-up that "the organiser will assign you to a team once one has
+  // space" (register.details.freeAgent copy, RS006). If the place-by date
+  // passes with nobody having placed them, that promise is broken and the
+  // owner's ruling is that the registrant's money back is the only honest
+  // outcome — reusing THIS sweep's own expiry machinery rather than a second
+  // money path. `coalesce(rs.place_by_at, rs.closes_at)` is V389's own
+  // default: an organiser who never sets an explicit place-by date still
+  // gets the ruling's default, the division's own registration close.
+  //
+  // `not exists (... assigned_from_registration_id ...)` is the DERIVED pool
+  // test (V388's own doc comment: "the pool is derived ... and cannot
+  // disagree with the roster it is derived from") — an already-placed solo
+  // sign-up is excluded here, before any row lock is even taken.
+  const duePool = await sql<RegistrationWithGroupRow[]>`
+    select ${regGroupCols(sql)}
+    from registrations r
+    join registration_groups g on g.id = r.group_id
+    join registration_settings rs on rs.division_id = r.division_id
+    where r.free_agent = true
+      and r.status in ${sql([...SPOT_HOLDERS])}
+      and coalesce(rs.place_by_at, rs.closes_at) < now()
+      and not exists (
+        select 1 from registration_players rp
+        where rp.assigned_from_registration_id = r.id
+      )
+    order by coalesce(rs.place_by_at, rs.closes_at)
+    limit 200`;
+  for (const reg of duePool) {
+    const outcome = (await sql.begin(async (tx) => {
+      // The outer SELECT above is a stale snapshot the instant it returns:
+      // an organiser could have assigned this person since (a race with
+      // assignSoloSignUp) or extended place_by_at (ruling 2: "the organiser
+      // may place them, or extend the date, right up to it"). Re-verify
+      // everything under this row's OWN lock — `regGroupCols` does not even
+      // select registration_settings columns, so there is no stale
+      // deadline value carried on `reg` to accidentally trust here.
+      const [locked] = await tx<RegistrationWithGroupRow[]>`
+        select ${regGroupCols(tx)}
+        from registrations r join registration_groups g on g.id = r.group_id
+        where r.id = ${reg.id} for update`;
+      if (!locked || !(SPOT_HOLDERS as readonly string[]).includes(locked.status)) return null;
+      const [rs] = await tx<{ place_by_at: Date | null; closes_at: Date | null }[]>`
+        select place_by_at, closes_at from registration_settings where division_id = ${locked.division_id}`;
+      const deadline = rs?.place_by_at ?? rs?.closes_at ?? null;
+      if (!deadline || deadline >= new Date()) return null; // extended past now, or settings gone
+      const [assigned] = await tx<{ id: string }[]>`
+        select id from registration_players where assigned_from_registration_id = ${locked.id} limit 1`;
+      if (assigned) return null; // placed between the outer select and this lock
+      // A free agent never materialises into an entrant (materialise's own
+      // RS009 doc comment: "a SOLO SIGN-UP is not a team of one ... simply
+      // not seated yet") — there is no entrants row to mark withdrawn and,
+      // per the `not exists` guard just above, nothing for
+      // releaseSoloSignUpPlacement to release. Unlike withdrawCore, neither
+      // is called.
+      await tx`
+        update registrations
+        set status = 'withdrawn', withdrawn_at = now(), updated_at = now()
+        where id = ${locked.id}`;
+      // clearExpiresIfNoLongerNeeded's own doc comment: call whenever an
+      // entry leaves `pending` for a reason that is not a fresh promotion —
+      // withdrawCore and the (2)/(3) passes above already do; this pass
+      // withdraws a `pending` free agent too (never charged, or offline/
+      // free) and was missing it, leaving the cart's `expires_at` stale
+      // forever when this was its last pending entry.
+      await clearExpiresIfNoLongerNeeded(tx, locked.group_id, locked.id);
+      const ctx = await divisionCtx(tx, locked.division_id);
+      await audit(tx, ctx.competition_id, ctx.org_id, "registration.withdrawn", {
+        registration_id: locked.id,
+        by: "system",
+        reason: "pool_deadline_unplaced",
+      }, null);
+      return { locked, ctx };
+    })) as unknown as { locked: RegistrationWithGroupRow; ctx: DivisionCtx } | null;
+    if (!outcome) continue;
+    poolDeadlinePassedCount++;
+    const { locked, ctx } = outcome;
+    fireDivisionRevalidate(locked.division_id, ctx.competition_id);
+
+    // Unconditional refund (ruling 2) — never gated on resolveRefundPolicy /
+    // refund_lock_at. The ordinary cancellation policy answers "how
+    // generous is the organiser being"; this is "the organiser broke the
+    // promise made at sign-up", a different question with a different,
+    // unconditional answer — resolveRefundPolicy could refuse (e.g.
+    // refund_lock_at already passed for an unrelated reason) exactly the
+    // case ruling 2 says must always refund. Mirrors withdrawCore's own
+    // OUTSIDE-the-tx Stripe-call ordering; never CALLS withdrawCore itself,
+    // for the same reason.
+    if (
+      (locked.status === "paid" || locked.status === "confirmed") &&
+      locked.entry_payment_intent_id &&
+      locked.amount_cents - locked.refunded_cents > 0
+    ) {
+      const remaining = locked.amount_cents - locked.refunded_cents;
+      try {
+        const refund = await stripeRefund(locked.entry_payment_intent_id, remaining);
+        await sql.begin(async (tx) => {
+          await tx`
+            update registrations
+            set refunded_cents = refunded_cents + ${remaining}, updated_at = now()
+            where id = ${locked.id}`;
+          await tx`
+            update registration_groups
+            set refunded_cents = refunded_cents + ${remaining}, refunded_at = now(), updated_at = now()
+            where id = ${locked.group_id}`;
+        });
+        await audit(sql, ctx.competition_id, ctx.org_id, "registration.refunded", {
+          registration_id: locked.id,
+          amount_cents: remaining,
+          mode: "auto_pool_deadline",
+          stripe_refund_id: refund.id,
+        }, null);
+        notifyRefund(locked, ctx, remaining);
+      } catch (err) {
+        await audit(sql, ctx.competition_id, ctx.org_id, "registration.refund_failed", {
+          registration_id: locked.id,
+          mode: "auto_pool_deadline",
+        }, null);
+        await maybeAlertRegistrationRefundFailed({
+          registrationId: locked.id,
+          orgId: ctx.org_id,
+          competitionId: ctx.competition_id,
+          amountCents: remaining,
+          currency: locked.currency,
+          paymentIntentId: locked.payment_intent_id,
+          reason: errText(err),
+        });
+      }
+    }
+  }
+
+  return {
+    reminded,
+    expired,
+    promoted: promotedCount,
+    lapsed: lapsedCount,
+    poolDeadlinePassed: poolDeadlinePassedCount,
+  };
 }
 
 // ---------------------------------------------------------------------------

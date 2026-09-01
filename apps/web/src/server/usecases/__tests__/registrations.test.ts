@@ -159,6 +159,11 @@ import {
   anyOptedOutByRegistration,
   type GroupStatusView,
 } from "../registrations";
+// RS012: assignSoloSignUp lives in its own module (RS009's own header —
+// "everything here is reached through paths [registrations.ts] already
+// exports"), needed here only to prove an already-placed solo sign-up is
+// excluded from the pool-deadline sweep.
+import { assignSoloSignUp } from "../registration-assign";
 // RS005 F1: rendering the REAL production template off captured
 // `RegistrationEmail` args (see emailMock.registration above) — this file's
 // own convention for "assert the rendered text, not just that it sent",
@@ -5029,6 +5034,232 @@ describe.skipIf(!HAS_DB)("RS007: a promoted entry's reminder does not block a st
     // both this pass's own entry-scoping (V383) and pass (1b)'s
     // (promotion_reminded_at, V379) exist to avoid.
     expect(await submitRemindedAt(sibling.id), "Y's own reminder fires, unblocked by X's").not.toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RS012 ruling 2 — sweepRegistrations' pool-deadline pass: an unplaced solo
+// sign-up past its place-by date (default: the division's own closes_at) is
+// auto-withdrawn and, if paid, auto-refunded UNCONDITIONALLY — reusing this
+// sweep's own machinery rather than a second money path (owner ruling).
+// ---------------------------------------------------------------------------
+
+describe.skipIf(!HAS_DB)("RS012: sweepRegistrations pool-deadline pass", () => {
+  /** A team division that accepts solo sign-ups, paid by card. `closesAt`
+   *  seeds the division's OWN registration close — the ruling's default
+   *  fallback for an organiser who never sets `place_by_at` explicitly. */
+  async function poolRig(opts: { feeCents?: number; closesAt?: string | null } = {}) {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    await sql`update organizations
+              set stripe_charges_enabled = true, stripe_account_id = ${"acct_" + randomUUID().slice(0, 8)}
+              where id = ${orgId}`;
+    const { competition, division } = await rig(owner);
+    const settings = await putRegistrationSettings(owner, division.id, {
+      ...SETTINGS_BASE,
+      entrant_kind: "team",
+      allow_free_agents: true,
+      payment_method: "stripe",
+      fee_cents: opts.feeCents ?? 500,
+      closes_at: opts.closesAt ?? null,
+    });
+    return { orgId, owner, competition, division, settings };
+  }
+
+  /** One solo sign-up (`free_agent = true`) with its own roster row — see
+   *  this suite's own memory note (reference_free_agent_own_player_row_
+   *  exists_before_assignment): a solo sign-up's `registration_players` row
+   *  lives under its OWN registration from submit time, separate from the
+   *  row `assignSoloSignUp` later adds under the team. `seedRegistration`
+   *  has no free-agent option of its own (submitRegistration itself is long
+   *  deleted, RS001 demolition), so this flips the column after the fixture
+   *  insert rather than duplicating its whole body for one column. */
+  async function seedSoloSignUp(
+    competition: { id: string },
+    division: { id: string },
+    settings: { fee_cents: number; currency: string; payment_method: "offline" | "stripe" },
+    over: Parameters<typeof seedRegistration>[3] = {},
+  ) {
+    const displayName = over.displayName ?? "Solo Signer";
+    const res = await seedRegistration(competition.id, division.id, settings, {
+      ...over,
+      displayName,
+      players: over.players ?? [{ name: displayName }],
+    });
+    await sql`update registrations set free_agent = true where id = ${res.registration.id}`;
+    return { ...res, registration: await loadWithGroup(res.registration.id) };
+  }
+
+  /** A team entry with room for exactly one more player — `generic` (this
+   *  suite's `rig()` sport) declares `lineup: { size: 1, benchMax: 0 }`, so
+   *  a target seeded with ZERO players of its own has a roster cap of
+   *  1/1 once the solo sign-up is placed. Seeded directly (registration-
+   *  assign.test.ts's own `seedEntry` convention, same "submitRegistration
+   *  is deleted" reason). */
+  async function seedTargetTeam(competitionId: string, divisionId: string) {
+    const [group] = await sql<{ id: string }[]>`
+      insert into registration_groups (competition_id, contact_name, contact_email, access_token_hash, currency)
+      values (${competitionId}, 'Contact', ${`c-${randomUUID().slice(0, 8)}@test.local`}, ${`tok-${randomUUID()}`}, 'gbp')
+      returning id`;
+    const [reg] = await sql<{ id: string }[]>`
+      insert into registrations (group_id, division_id, display_name, free_agent, status)
+      values (${group.id}, ${divisionId}, 'Target Team', false, 'confirmed')
+      returning id`;
+    return reg;
+  }
+
+  const auditRows = async (registrationId: string, type: string) =>
+    sql<{ payload: Record<string, unknown> }[]>`
+      select payload from competition_events
+      where type = ${type} and payload ->> 'registration_id' = ${registrationId}`;
+
+  it("a paid, unplaced solo sign-up past its place-by deadline is withdrawn and fully refunded", async () => {
+    const { competition, division, settings } = await poolRig({ closesAt: "2020-01-01T00:00:00Z" });
+    const solo = await seedSoloSignUp(competition, division, settings);
+    await handleRegistrationCheckoutCompleted(fakeSession(solo.registration.id, 500));
+    stripeMock.refundCreate.mockClear();
+
+    const res = await sweepRegistrations("https://test.local");
+    expect(res.poolDeadlinePassed).toBe(1);
+
+    const row = await loadWithGroup(solo.registration.id);
+    expect(row.status).toBe("withdrawn");
+    expect(row.withdrawn_at).not.toBeNull();
+    expect(row.refunded_cents).toBe(500);
+
+    expect(stripeMock.refundCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payment_intent: expect.stringContaining("pi_test_"),
+        reverse_transfer: true,
+        refund_application_fee: true,
+      }),
+    );
+
+    const withdrawnAudits = await auditRows(solo.registration.id, "registration.withdrawn");
+    expect(withdrawnAudits).toHaveLength(1);
+    expect(withdrawnAudits[0]!.payload.reason).toBe("pool_deadline_unplaced");
+    expect(withdrawnAudits[0]!.payload.by).toBe("system");
+
+    const refundedAudits = await auditRows(solo.registration.id, "registration.refunded");
+    expect(refundedAudits).toHaveLength(1);
+    expect(refundedAudits[0]!.payload.mode).toBe("auto_pool_deadline");
+    expect(refundedAudits[0]!.payload.amount_cents).toBe(500);
+  });
+
+  it("an already-assigned solo sign-up past the same deadline is untouched", async () => {
+    const { owner, competition, division, settings } = await poolRig({ closesAt: "2020-01-01T00:00:00Z" });
+    const solo = await seedSoloSignUp(competition, division, settings);
+    await handleRegistrationCheckoutCompleted(fakeSession(solo.registration.id, 500));
+    const target = await seedTargetTeam(competition.id, division.id);
+    await assignSoloSignUp(owner, {
+      registration_id: solo.registration.id,
+      target_registration_id: target.id,
+    });
+    stripeMock.refundCreate.mockClear();
+
+    const res = await sweepRegistrations("https://test.local");
+    expect(res.poolDeadlinePassed).toBe(0);
+
+    const row = await loadWithGroup(solo.registration.id);
+    expect(row.status).toBe("confirmed"); // unchanged — still assigned, not withdrawn
+    expect(row.withdrawn_at).toBeNull();
+    expect(stripeMock.refundCreate).not.toHaveBeenCalled();
+    expect(await auditRows(solo.registration.id, "registration.withdrawn")).toHaveLength(0);
+  });
+
+  it("a solo sign-up before its deadline is untouched", async () => {
+    const { competition, division, settings } = await poolRig({ closesAt: "2099-01-01T00:00:00Z" });
+    const solo = await seedSoloSignUp(competition, division, settings);
+    await handleRegistrationCheckoutCompleted(fakeSession(solo.registration.id, 500));
+    stripeMock.refundCreate.mockClear();
+
+    const res = await sweepRegistrations("https://test.local");
+    expect(res.poolDeadlinePassed).toBe(0);
+
+    const row = await loadWithGroup(solo.registration.id);
+    expect(row.status).toBe("confirmed");
+    expect(stripeMock.refundCreate).not.toHaveBeenCalled();
+  });
+
+  // Ruling 2: "the organiser may place them, or extend the date, right up to
+  // it." The row is due by its DEFAULT deadline (closes_at, past) the moment
+  // it is created; extending place_by_at afterwards, before the sweep runs,
+  // must still save it — proving the sweep decides off a LIVE read of
+  // registration_settings, never a value carried on the outer `duePool` row
+  // (regGroupCols does not even select registration_settings columns, so
+  // there is no stale value the per-row pass could fall back to by mistake).
+  it("extending place_by_at to the future stops an otherwise-due row from being swept", async () => {
+    const { competition, division, settings } = await poolRig({ closesAt: "2020-01-01T00:00:00Z" });
+    const solo = await seedSoloSignUp(competition, division, settings);
+    await handleRegistrationCheckoutCompleted(fakeSession(solo.registration.id, 500));
+    stripeMock.refundCreate.mockClear();
+
+    // The organiser's own edit — direct SQL, since the write-path UI/API is
+    // a later RS012 stage, not this one.
+    await sql`update registration_settings set place_by_at = now() + interval '1 day'
+              where division_id = ${division.id}`;
+
+    const res = await sweepRegistrations("https://test.local");
+    expect(res.poolDeadlinePassed).toBe(0);
+
+    const row = await loadWithGroup(solo.registration.id);
+    expect(row.status).toBe("confirmed");
+    expect(stripeMock.refundCreate).not.toHaveBeenCalled();
+  });
+
+  it("a never-paid unplaced solo sign-up past deadline is withdrawn with NO refund attempt, and its cart's stale expires_at is cleared", async () => {
+    const { competition, division, settings } = await poolRig({ closesAt: "2020-01-01T00:00:00Z" });
+    const solo = await seedSoloSignUp(competition, division, settings); // left 'pending' — never paid
+    stripeMock.refundCreate.mockClear();
+
+    // seedRegistration's own stripeWindow branch sets the cart's expires_at
+    // (48h pay window) for a pending stripe entry — this solo sign-up is the
+    // ONLY entry in its cart, so clearExpiresIfNoLongerNeeded should null it
+    // once withdrawn (its own doc comment: called from withdrawCore and the
+    // sweep's other passes; this fifth pass was missing it — RS012 review
+    // fix — leaving a withdrawn cart's deadline stale forever).
+    const [before] = await sql<{ expires_at: Date | null }[]>`
+      select expires_at from registration_groups where id = ${solo.registration.group_id}`;
+    expect(before!.expires_at).not.toBeNull();
+
+    const res = await sweepRegistrations("https://test.local");
+    expect(res.poolDeadlinePassed).toBe(1);
+
+    const row = await loadWithGroup(solo.registration.id);
+    expect(row.status).toBe("withdrawn");
+    expect(row.refunded_cents).toBe(0);
+    expect(stripeMock.refundCreate).not.toHaveBeenCalled();
+    expect(await auditRows(solo.registration.id, "registration.refunded")).toHaveLength(0);
+    expect(await auditRows(solo.registration.id, "registration.withdrawn")).toHaveLength(1);
+
+    const [after] = await sql<{ expires_at: Date | null }[]>`
+      select expires_at from registration_groups where id = ${solo.registration.group_id}`;
+    expect(after!.expires_at).toBeNull();
+  });
+
+  it("place_by_at unset (null) falls back to the division's own closes_at", async () => {
+    const { competition, division, settings } = await poolRig({ closesAt: "2020-01-01T00:00:00Z" });
+    expect(settings.place_by_at).toBeNull(); // the ruling's own default
+    const solo = await seedSoloSignUp(competition, division, settings);
+    await handleRegistrationCheckoutCompleted(fakeSession(solo.registration.id, 500));
+
+    const res = await sweepRegistrations("https://test.local");
+    expect(res.poolDeadlinePassed).toBe(1); // swept off closes_at alone
+
+    const row = await loadWithGroup(solo.registration.id);
+    expect(row.status).toBe("withdrawn");
+  });
+
+  it("with neither place_by_at nor closes_at set, there is no deadline to enforce and nothing is swept", async () => {
+    const { competition, division, settings } = await poolRig({ closesAt: null });
+    const solo = await seedSoloSignUp(competition, division, settings);
+    await handleRegistrationCheckoutCompleted(fakeSession(solo.registration.id, 500));
+
+    const res = await sweepRegistrations("https://test.local");
+    expect(res.poolDeadlinePassed).toBe(0);
+
+    const row = await loadWithGroup(solo.registration.id);
+    expect(row.status).toBe("confirmed");
   });
 });
 
