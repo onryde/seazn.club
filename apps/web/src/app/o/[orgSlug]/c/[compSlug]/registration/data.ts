@@ -105,8 +105,13 @@ export async function fetchDivisionRows(
         coalesce(rs.fee_cents, 0) as fee_cents,
         rs.approval,
         coalesce(rs.allow_free_agents, false) as allow_free_agents,
+        -- RS012 ruling 1: capacity/taken counts TEAM entries only — a
+        -- solo sign-up ("free agent") never occupies a team slot, matching
+        -- the submit-time gate this display must agree with
+        -- (registration-submit.ts).
         (select count(*)::int from registrations r
-           where r.division_id = d.id and r.status in ${tx([...SPOT_HOLDERS])}) as taken,
+           where r.division_id = d.id and r.status in ${tx([...SPOT_HOLDERS])}
+             and r.free_agent = false) as taken,
         (select count(*)::int from registrations r
            where r.division_id = d.id and r.status = 'waitlisted') as waitlisted,
         (select currency from organizations where id = ${auth.orgId}) as org_currency,

@@ -1980,9 +1980,14 @@ export async function publicRegistrationInfo(
     select rs.*, d.name, d.slug, d.sport_key, d.category, d.age_min, d.age_max, d.youth,
            d.age_cutoff_month, d.age_cutoff_day,
            d.eligibility_note,
+           -- RS012 ruling 1: capacity/active counts TEAM entries only — a
+           -- solo sign-up ("free agent") never occupies a team slot, here or
+           -- at the submit-time gate this display must agree with
+           -- (registration-submit.ts).
            (select count(*)::int from registrations r
              where r.division_id = rs.division_id
-               and r.status in ${sql([...SPOT_HOLDERS])}) as active,
+               and r.status in ${sql([...SPOT_HOLDERS])}
+               and r.free_agent = false) as active,
            (select count(*)::int from registrations r
              where r.division_id = rs.division_id
                and r.status = 'waitlisted') as waitlisted
@@ -5173,6 +5178,56 @@ export function rosterCapExpr(db: AnySql) {
     (sp.position_catalog -> 'lineup' ->> 'size')::int +
     coalesce((sp.position_catalog -> 'lineup' ->> 'benchMax')::int, 0)
   )`;
+}
+
+/** RS012 ruling 1 — the solo sign-up pool's own bound: `capacity × roster_cap`
+ *  minus players already seated, the number of roster places that could
+ *  conceivably exist. `hardCap` is the caller's already-resolved
+ *  min(division capacity, plan limit) — Infinity means unbounded. Null
+ *  `roster_cap` (a sport with no `lineup` key, e.g. `rosterCapExpr`'s own
+ *  doc comment) also means unbounded: there is no ceiling to derive a bound
+ *  from, so a solo sign-up is never refused for a sport with no roster
+ *  concept at all.
+ *
+ *  `seated` = every `registration_players` row that sits on a NON-free-agent
+ *  (`free_agent = false`) registration in the division — real team members,
+ *  AND already-assigned solo sign-ups alike, since `assignSoloSignUp`
+ *  inserts their roster row under the TEAM's registration, not their own
+ *  (registration-assign.ts's `placementOf`/roster insert). Deliberately
+ *  excludes a still-pooled solo sign-up's OWN player row (it lives under
+ *  THEIR OWN free_agent=true registration, holding their name/gender for
+ *  display — RegistrationListRow's `player_gender` reads it the same way) —
+ *  that row is sitting in the pool, not seated on a roster, and counting it
+ *  here as well as in `pooled` below double-charged the very first solo
+ *  sign-up against the bound (caught by this ticket's own regression test:
+ *  a 2nd solo sign-up under a 2-place bound was wrongly refused). `pooled` =
+ *  free-agent registrations in `SPOT_HOLDERS` status that are NOT YET
+ *  assigned (no `registration_players` row points back at them via
+ *  `assigned_from_registration_id`) — an assigned one is already counted
+ *  inside `seated` and must not be double-counted here. */
+export async function soloPoolIsFull(
+  tx: Tx,
+  divisionId: string,
+  hardCap: number,
+): Promise<boolean> {
+  if (!Number.isFinite(hardCap)) return false;
+  const [row] = await tx<{ roster_cap: number | null; seated: number; pooled: number }[]>`
+    select
+      ${rosterCapExpr(tx)} as roster_cap,
+      (select count(*)::int from registration_players rp
+         join registrations r2 on r2.id = rp.registration_id
+         where r2.division_id = d.id and r2.free_agent = false) as seated,
+      (select count(*)::int from registrations r3
+         where r3.division_id = d.id and r3.free_agent = true
+           and r3.status in ${tx([...SPOT_HOLDERS])}
+           and not exists (
+             select 1 from registration_players rp2
+             where rp2.assigned_from_registration_id = r3.id
+           )) as pooled
+    from divisions d join sports sp on sp.key = d.sport_key
+    where d.id = ${divisionId}`;
+  if (!row || row.roster_cap === null) return false;
+  return row.pooled >= hardCap * row.roster_cap - row.seated;
 }
 
 /** `listRegistrations`' row (RS005 W1a), widened for the Registrants tab:
