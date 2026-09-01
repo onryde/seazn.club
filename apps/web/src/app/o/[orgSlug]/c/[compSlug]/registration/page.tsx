@@ -26,7 +26,10 @@ import {
   type RegistrationHubTab,
 } from "@/components/registration-hub-tab";
 import { RegistrationHubSettingsPanel } from "@/components/registration-hub-settings-panel";
-import { RegistrationHubRegistrantsPanel } from "@/components/registration-hub-registrants-panel";
+import {
+  RegistrationHubRegistrantsPanel,
+  type PoolSummaryPanelRow,
+} from "@/components/registration-hub-registrants-panel";
 import type {
   RegistrationHubRowData,
   RegistrationHubRowContext,
@@ -38,6 +41,7 @@ import {
   fetchRegistrantRows,
   fetchDivisionOptions,
   fetchRegistrantDetails,
+  fetchPoolSummary,
   registrantsExportHrefFor,
   type RegistrantsRawQuery,
 } from "./data";
@@ -164,6 +168,15 @@ export default async function RegistrationHubPage({
     // short-circuits to empty maps at zero rows, so this is safe to call
     // unconditionally rather than special-casing the empty-panel branch.
     const details = await fetchRegistrantDetails(auth, registrants.rows);
+    // RS012 scope item 4: every division that currently has someone waiting
+    // in the solo sign-up pool, plus its own href into the pre-filtered
+    // table (division + free_agent checked) — built here, the same
+    // convention every other href on this panel already follows (its own
+    // header comment: "this component never imports routes itself").
+    const poolSummary: PoolSummaryPanelRow[] = (await fetchPoolSummary(auth, id)).map((row) => ({
+      ...row,
+      href: `${routes.competitionRegistration(orgSlug, compSlug, "registrants", row.division_id)}&free_agent=1`,
+    }));
 
     panel = (
       <RegistrationHubRegistrantsPanel
@@ -184,6 +197,7 @@ export default async function RegistrationHubPage({
         emptyCtaLabel={t(dict, "reg.hub.registrants.cta")}
         emptyCtaHref={routes.competitionRegistration(orgSlug, compSlug, "settings")}
         details={details}
+        poolSummary={poolSummary}
       />
     );
   }

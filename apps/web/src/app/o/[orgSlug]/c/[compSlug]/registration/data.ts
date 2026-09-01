@@ -20,6 +20,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import type { RegistrationHubRowData } from "@/components/registration-hub-division-row";
 import {
   listRegistrations,
+  rosterCapExpr,
   type RegistrationListRow,
   type ListRegistrationsFilters,
 } from "@/server/usecases/registrations";
@@ -404,6 +405,119 @@ export async function fetchDivisionOptions(
       where competition_id = ${competitionId} and archived_at is null
       order by name, id`,
   );
+}
+
+// ---------------------------------------------------------------------------
+// The Registrants tab's pool summary banner (RS012 scope item 4).
+// ---------------------------------------------------------------------------
+
+export interface PoolSummaryRow {
+  division_id: string;
+  division_name: string;
+  waiting: number;
+  free_slots: number;
+  /** coalesce(place_by_at, closes_at) — the SAME fallback the Stage 2 sweep
+   *  (registrations.ts's duePool query) and the Stage 3b status page
+   *  (poolPlaceByDate) both already use. Null only if the division has
+   *  neither set (nothing enforces a deadline yet). */
+  place_by_at: string | null;
+}
+
+/**
+ * The Registrants tab's proactive pool banner (RS012 scope item 4): every
+ * division in this competition that has someone WAITING in the solo sign-up
+ * pool, alongside the free roster room already sitting on its registered
+ * teams and the effective place-by deadline — everything an organiser needs
+ * to decide whether to act, without first having to know to tick the
+ * `free_agent` filter checkbox.
+ *
+ * Three separately-testable queries, not one complex join:
+ *
+ *  1. Which divisions have anyone actually waiting — the exact same
+ *     "pooled" predicate `soloPoolIsFull` and the Stage 2 sweep's `duePool`
+ *     already use (`free_agent = true`, `status in SPOT_HOLDERS`, and NOT
+ *     already assigned via `registration_players.assigned_from_registration_id`).
+ *     `having count(*) > 0` means a division with an empty (or fully-placed)
+ *     pool never reaches queries 2/3 at all — the whole function returns
+ *     `[]` when nothing needs attention, so the banner renders nothing.
+ *  2. Free roster room on registered (non-terminal, non-waitlisted,
+ *     non-free-agent) teams in those SAME divisions — deliberately the SAME
+ *     population `listAssignTargets` (registration-assign.ts) already
+ *     computes per-solo-sign-up when an organiser opens the assign picker,
+ *     using the SAME `rosterCapExpr` (registrations.ts) every roster-cap
+ *     display in this codebase reads off. This is NOT `soloPoolIsFull`'s
+ *     abstract `capacity × roster_cap` admission bound — an organiser
+ *     asking "do my existing teams have room?" wants the former, and
+ *     conflating the two would tell them slots exist that no real team can
+ *     currently hold.
+ *  3. Division names and the effective deadline (`coalesce(place_by_at,
+ *     closes_at)`) for those same divisions — LEFT JOINed to
+ *     registration_settings for the same "predates configuration" reason
+ *     `listRegistrations` LEFT JOINs it (a division a solo sign-up belongs
+ *     to always has settings in production, but a direct-SQL test fixture
+ *     might not).
+ *
+ * All three keyed by division_id and merged into one row per division in
+ * JS afterwards — never a query inside a loop.
+ */
+export async function fetchPoolSummary(
+  auth: Pick<AuthCtx, "orgId">,
+  competitionId: string,
+): Promise<PoolSummaryRow[]> {
+  return withTenant(auth.orgId, async (tx) => {
+    const waitingRows = await tx<{ division_id: string; waiting: number }[]>`
+      select r.division_id, count(*)::int as waiting
+      from registrations r
+      join divisions d on d.id = r.division_id
+      where d.competition_id = ${competitionId} and d.archived_at is null
+        and r.free_agent = true
+        and r.status in ${tx([...SPOT_HOLDERS])}
+        and not exists (
+          select 1 from registration_players rp
+          where rp.assigned_from_registration_id = r.id
+        )
+      group by r.division_id
+      having count(*) > 0`;
+    if (waitingRows.length === 0) return [];
+    const divisionIds = waitingRows.map((w) => w.division_id);
+
+    const slotRows = await tx<{ division_id: string; free_slots: number }[]>`
+      select t.division_id,
+        coalesce(sum(greatest(${rosterCapExpr(tx)} - t.roster_count, 0)), 0)::int as free_slots
+      from (
+        select r.division_id, r.id,
+          (select count(*)::int from registration_players rp
+             where rp.registration_id = r.id) as roster_count
+        from registrations r
+        where r.division_id in ${tx(divisionIds)}
+          and r.free_agent = false
+          and r.status not in ('withdrawn', 'rejected', 'expired', 'waitlisted')
+      ) t
+      join divisions d on d.id = t.division_id
+      join sports sp on sp.key = d.sport_key
+      group by t.division_id`;
+
+    const meta = await tx<
+      { division_id: string; division_name: string; place_by_at: Date | null; closes_at: Date | null }[]
+    >`
+      select d.id as division_id, d.name as division_name, rs.place_by_at, rs.closes_at
+      from divisions d
+      left join registration_settings rs on rs.division_id = d.id
+      where d.id in ${tx(divisionIds)}`;
+
+    const slotsByDivision = new Map(slotRows.map((s) => [s.division_id, s.free_slots]));
+    const metaByDivision = new Map(meta.map((m) => [m.division_id, m]));
+    return waitingRows.map((w) => {
+      const m = metaByDivision.get(w.division_id);
+      return {
+        division_id: w.division_id,
+        division_name: m?.division_name ?? "",
+        waiting: w.waiting,
+        free_slots: slotsByDivision.get(w.division_id) ?? 0,
+        place_by_at: (m?.place_by_at ?? m?.closes_at)?.toISOString() ?? null,
+      };
+    });
+  });
 }
 
 // ---------------------------------------------------------------------------
