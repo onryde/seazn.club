@@ -322,6 +322,63 @@ describe.skipIf(!HAS_DB)("RS011 — organiser-side eligibility gates", () => {
     });
   });
 
+  // RS011 review fix 2: `ageBandEligibilityIssues` used to THROW for a
+  // division whose stored age_cutoff_month/age_cutoff_day is not a real
+  // calendar day. The DB CHECK (`divisions_age_cutoff_check`) only
+  // range-checks month 1-12 / day 1-31 independently — it does not know
+  // February stops at 28 — so a row like (month: 2, day: 30) passes the
+  // constraint even though `createDivision`'s Zod refine (`checkAgeCutoff`)
+  // would reject it for any NEW write. That throw reached this file's own
+  // gate points UNCAUGHT: it fired AFTER `setTeamSquad`'s squad delete/insert
+  // already ran in the same transaction (rolling back a save that endpoint's
+  // contract promises will never hard-block), and it is not an `HttpError`,
+  // so every other gate point would have surfaced a raw 500 instead of the
+  // coded 422 `ELIGIBILITY_VIOLATION` the client dialog recognizes.
+  describe("an invalid stored age cutoff never bricks a gate (RS011 review fix 2)", () => {
+    /** A division whose age band CANNOT be evaluated — bypasses
+     *  createDivision's Zod validation the same "pre-feature roster" way
+     *  putLineup's own test above bypasses insertMembers via raw SQL: this
+     *  row could only exist as a legacy artifact, never through the API. */
+    async function seedBadCutoffDivision(auth: AuthCtx) {
+      const { comp, division } = await seedDivision(auth, { age_min: 10, age_max: 15 });
+      await sql`update divisions set age_cutoff_month = 2, age_cutoff_day = 30 where id = ${division.id}`;
+      return { comp, division };
+    }
+
+    it("gateRosterEligibility (via createEntrants/insertMembers) returns normally — no age check enforced for the malformed division, never a raw 500", async () => {
+      const auth = await seedOrg();
+      const { division } = await seedBadCutoffDivision(auth);
+      // Same fixture as "blocks an over-age person" above — would 422
+      // ELIGIBILITY_VIOLATION under a VALID cutoff; the malformed one means
+      // no age check runs at all.
+      const tooOld = await seedPerson(auth, "Too Old", { dob: "2000-01-01" });
+      const [entrant] = await createEntrants(auth, division.id, [
+        {
+          kind: "individual",
+          display_name: "Too Old",
+          members: [{ person_id: tooOld.id, is_captain: false, roles: [] }],
+        },
+      ]);
+      expect(entrant!.kind).toBe("individual");
+      expect(entrant!.eligibility_warnings).toBeUndefined();
+    });
+
+    it("setTeamSquad still saves the squad successfully against such a division", async () => {
+      const auth = await seedOrg();
+      const { division } = await seedBadCutoffDivision(auth);
+      const team = await createTeam(auth, { name: "Team " + randomUUID().slice(0, 6) });
+      await createEntrants(auth, division.id, [
+        { kind: "individual", team_id: team.id, members: [] },
+      ]);
+      const tooOld = await seedPerson(auth, "Too Old", { dob: "2000-01-01" });
+      const result = await setTeamSquad(auth, team.id, [
+        { person_id: tooOld.id, is_captain: false, roles: [] },
+      ]);
+      expect(result.members).toHaveLength(1);
+      expect(result.eligibility_warnings).toEqual([]);
+    });
+  });
+
   describe("putLineup", () => {
     it("blocks a lineup naming a pre-feature-roster person who fails eligibility; override succeeds with one audit row", async () => {
       const auth = await seedOrg();
@@ -405,6 +462,70 @@ describe.skipIf(!HAS_DB)("RS011 — organiser-side eligibility gates", () => {
       const preview = await createImport(auth, csvUpload(csv));
       const result = await commitImport(auth, preview.importId, null);
       expect(result.stats.rosters).toBe(1);
+    });
+
+    // Review fix 3: `divisions[0]` picked an ARBITRARY touched competition's
+    // FK for the override audit row — a multi-competition import silently
+    // lost the ledger entry for every OTHER competition it touched. Fixed to
+    // follow `participants_imported`'s own precedent (`select distinct
+    // competition_id`, one row per).
+    it("spans TWO competitions: override succeeds and writes ONE audit row under EACH competition's ledger — never one row total, never a row on only an arbitrary one", async () => {
+      const auth = await seedOrg();
+      const { comp: compA } = await seedDivision(auth, { age_min: 10, age_max: 15 }, "impcup3a");
+      const { comp: compB } = await seedDivision(auth, { age_min: 10, age_max: 15 }, "impcup3b");
+      const csv = [
+        "Club,Team,Player,DOB,Division",
+        "Acme SC,Acme A,Too Old A,2000-01-01,impcup3a",
+        "Acme SC,Acme B,Too Old B,2000-01-01,impcup3b",
+      ].join("\n");
+      const preview = await createImport(auth, csvUpload(csv));
+      expect(preview.plan.issues).toEqual([]);
+
+      await expect(commitImport(auth, preview.importId, null)).rejects.toMatchObject({
+        status: 422,
+        code: "ELIGIBILITY_VIOLATION",
+      });
+
+      const result = await commitImport(auth, preview.importId, "retry-key-multi-comp", {
+        reason: "Bulk wildcard entries across both cups",
+      });
+      expect(result.stats.rosters).toBe(2);
+      const rowsA = await overrideAuditRows(compA.id);
+      const rowsB = await overrideAuditRows(compB.id);
+      expect(rowsA).toHaveLength(1);
+      expect(rowsB).toHaveLength(1);
+    });
+
+    // Review fix 4: the roster-WIDE `MIXED_NEEDS_BOTH_GENDERS` composition
+    // check used to be skipped entirely for imports (the module comment
+    // called merging against a pre-existing roster out of scope) — but a
+    // fresh `entrant.create` + its `roster.add` ops in the SAME commit have
+    // no pre-existing roster to merge against; the plan's own ops ARE the
+    // whole roster. An all-male roster imported fresh into a `mixed`
+    // division must be caught exactly like the entrants-panel path would
+    // catch it.
+    it("a fresh entrant.create + all-same-gender roster.add ops into a MIXED division blocks composition — exactly like the entrants-panel path; override succeeds", async () => {
+      const auth = await seedOrg();
+      const { comp } = await seedDivision(auth, { category: "mixed" }, "mixedcup");
+      const csv = [
+        "Team,Player,Gender,Division",
+        "Mixed FC,Player One,m,mixedcup",
+        "Mixed FC,Player Two,m,mixedcup",
+      ].join("\n");
+      const preview = await createImport(auth, csvUpload(csv));
+      expect(preview.plan.issues).toEqual([]); // no engine-level block — eligibility is RS011's own gate
+
+      await expect(commitImport(auth, preview.importId, null)).rejects.toMatchObject({
+        status: 422,
+        code: "ELIGIBILITY_VIOLATION",
+      });
+
+      const result = await commitImport(auth, preview.importId, "retry-key-mixed", {
+        reason: "Roster still forming, organiser approved",
+      });
+      expect(result.stats.rosters).toBe(2);
+      const rows = await overrideAuditRows(comp.id);
+      expect(rows).toHaveLength(1);
     });
   });
 

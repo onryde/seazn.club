@@ -1473,6 +1473,7 @@
   "clubs.squad.quickAdd": "+ ‘{name}’ als nieuwe speler toevoegen",
   "clubs.squad.adding": "Toevoegen…",
   "clubs.squad.didYouMean": "Bedoelde je {name}?",
+  "clubs.squad.eligibilityWarning.label": "Geschiktheidswaarschuwingen voor de divisies waarin dit team is ingeschreven:",
   "clubs.crest.title": "Clubembleem",
   "clubs.crest.hint": "Wordt overal in de app voor deze club getoond — elk team zonder eigen badge draagt het.",
   "clubs.crest.emptyTile": "Geen embleem",

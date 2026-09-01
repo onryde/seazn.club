@@ -12,6 +12,7 @@ import {
   CreateStage,
   CreateTeam,
   Division,
+  EligibilityOverride,
   EventImportRequest,
   LineupSlotInput,
   PatchCompetition,
@@ -492,6 +493,30 @@ describe("CreateDivision — eligibility columns (RS007 wizard rewire)", () => {
     expect(CreateDivision.safeParse({ ...base, age_cutoff_month: 1, age_cutoff_day: 31 }).success).toBe(true);
     // February's cap (see the leap-year note above).
     expect(CreateDivision.safeParse({ ...base, age_cutoff_month: 2, age_cutoff_day: 28 }).success).toBe(true);
+  });
+});
+
+// RS011 review fix 6: every `entrants-eligibility.test.ts` case calls the
+// usecase functions directly, bypassing Zod entirely — a future
+// `min(3)`→`min(4)` (or `max(500)`→`max(50)`) typo in `EligibilityOverride`
+// (schemas.ts) would go uncaught by any DB test. This pins the boundary
+// through the ACTUAL schema, the way every other write-body test in this
+// file does.
+describe("EligibilityOverride — reason length boundary (RS011 review fix 6)", () => {
+  it("accepts exactly 3 characters (the minimum)", () => {
+    expect(EligibilityOverride.safeParse({ reason: "abc" }).success).toBe(true);
+  });
+
+  it("rejects 2 characters — one under the minimum", () => {
+    expect(EligibilityOverride.safeParse({ reason: "ab" }).success).toBe(false);
+  });
+
+  it("accepts exactly 500 characters (the maximum)", () => {
+    expect(EligibilityOverride.safeParse({ reason: "x".repeat(500) }).success).toBe(true);
+  });
+
+  it("rejects 501 characters — one over the maximum", () => {
+    expect(EligibilityOverride.safeParse({ reason: "x".repeat(501) }).success).toBe(false);
   });
 });
 

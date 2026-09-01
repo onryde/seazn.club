@@ -9,6 +9,15 @@ import { useEffect, useState } from "react";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { useMsg } from "@/components/i18n/dict-provider";
+// RS011 review fix 1: `setTeamSquad` (server/usecases/teams.ts) computes
+// `eligibility_warnings` — one entry per enrolled division whose roster
+// (after this save) fails an eligibility rule, via the SAME `rosterIssues`
+// evaluator every other organiser-side gate uses — but this was the only UI
+// caller of `PUT /teams/{id}/squad`, and it typed the response `{members}`
+// only, silently discarding the field. `EligibilityIssue` is client-safe
+// (`@/lib/registration-rules`, no `server-only`), same import
+// `entrants-panel.tsx`'s MISSING_DOB/MISSING_GENDER chips use.
+import type { EligibilityIssue } from "@/lib/registration-rules";
 
 interface PersonLite {
   id: string;
@@ -21,6 +30,18 @@ export interface SquadMember {
   default_position_key: string | null;
   is_captain: boolean;
   roles: string[];
+}
+
+/** Mirrors `TeamSquadEligibilityWarning` (server/usecases/teams.ts) — a
+ *  squad-agnostic advisory read, never a block (a squad has no division of
+ *  its own; only the divisions its entrants happen to be enrolled in
+ *  today). Redeclared here rather than imported: that module is
+ *  `import "server-only"`, and a client component importing anything under
+ *  `@/server/**` is a `next build` failure `tsc` never catches (repo
+ *  standing trap). */
+export interface SquadEligibilityWarning {
+  division_id: string;
+  issues: EligibilityIssue[];
 }
 
 /** Case- and diacritic-folded exact-name match — powers the "did you mean?"
@@ -116,6 +137,10 @@ export function TeamSquadEditor({
   const [filter, setFilter] = useState("");
   const [busy, setBusy] = useState(false);
   const [dirty, setDirty] = useState(false);
+  // RS011 review fix 1: populated from the PUT response's own
+  // `eligibility_warnings` — empty until the first save (a GET carries no
+  // warnings; `setTeamSquad` only computes them on a write).
+  const [eligibilityWarnings, setEligibilityWarnings] = useState<SquadEligibilityWarning[]>([]);
 
   const memberIds = new Set(members.map((m) => m.person_id));
   const candidates = persons
@@ -128,36 +153,61 @@ export function TeamSquadEditor({
     setDirty(true);
   }
 
-  function save() {
+  async function save() {
     setBusy(true);
     onError("");
-    void apiV1<{ members: SquadMember[] }>(`/api/v1/teams/${teamId}/squad`, {
-      method: "PUT",
-      json: {
-        members: members.map((m) => ({
-          person_id: m.person_id,
-          squad_number: m.squad_number,
-          default_position_key: m.default_position_key,
-          is_captain: m.is_captain,
-          roles: m.roles,
-        })),
-      },
-    })
-      .then((res) => {
-        setMembers(res.members);
-        onSaved(res.members);
-        setDirty(false);
-      })
-      .catch((err) => {
-        if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED")
-          onPaywall(String(err.extra.feature_key ?? ""));
-        else onError(err instanceof Error ? err.message : "Failed");
-      })
-      .finally(() => setBusy(false));
+    try {
+      const res = await apiV1<{ members: SquadMember[]; eligibility_warnings: SquadEligibilityWarning[] }>(
+        `/api/v1/teams/${teamId}/squad`,
+        {
+          method: "PUT",
+          json: {
+            members: members.map((m) => ({
+              person_id: m.person_id,
+              squad_number: m.squad_number,
+              default_position_key: m.default_position_key,
+              is_captain: m.is_captain,
+              roles: m.roles,
+            })),
+          },
+        },
+      );
+      setMembers(res.members);
+      onSaved(res.members);
+      setEligibilityWarnings(res.eligibility_warnings ?? []);
+      setDirty(false);
+    } catch (err) {
+      if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED")
+        onPaywall(String(err.extra.feature_key ?? ""));
+      else onError(err instanceof Error ? err.message : "Failed");
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
     <div className="space-y-2 rounded-md bg-slate-50 p-2 text-xs">
+      {eligibilityWarnings.length > 0 && (
+        <div
+          data-testid="squad-eligibility-warnings"
+          className="space-y-1 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-800"
+        >
+          <p className="font-medium">{msg("clubs.squad.eligibilityWarning.label")}</p>
+          <ul className="space-y-0.5">
+            {eligibilityWarnings.flatMap((warning, wi) =>
+              warning.issues.map((issue, ii) => (
+                <li key={`${wi}-${ii}`}>
+                  {(issue.playerName
+                    ? `${issue.playerName}: `
+                    : issue.playerIndex != null
+                      ? `Player ${issue.playerIndex}: `
+                      : "") + issue.message}
+                </li>
+              )),
+            )}
+          </ul>
+        </div>
+      )}
       {members.length === 0 && <p className="text-slate-400">{msg("clubs.squad.empty")}</p>}
       {members.map((m, i) => (
         <div key={m.person_id} className="flex flex-wrap items-center gap-2">

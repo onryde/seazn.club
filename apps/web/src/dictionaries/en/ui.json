@@ -1473,6 +1473,7 @@
   "clubs.squad.quickAdd": "+ Add ‘{name}’ as a new player",
   "clubs.squad.adding": "Adding…",
   "clubs.squad.didYouMean": "Did you mean {name}?",
+  "clubs.squad.eligibilityWarning.label": "Eligibility warnings for divisions this squad is entered in:",
   "clubs.crest.title": "Club crest",
   "clubs.crest.hint": "Shown across the app for this club — every team without its own badge wears it.",
   "clubs.crest.emptyTile": "No crest",

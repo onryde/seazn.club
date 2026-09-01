@@ -351,74 +351,92 @@ export function EntrantsPanel({
             <CsvImport
               busy={busy}
               onImport={async (rows) =>
-              run(async () => {
-                // Create missing persons first (matched by exact name against
-                // the directory), then register entrants in one bulk call.
-                const byName = new Map(persons.map((p) => [p.full_name.toLowerCase(), p]));
-                const ensurePerson = async (row: CsvRow): Promise<string> => {
-                  const existing = byName.get(row.name.toLowerCase());
-                  if (existing) return existing.id;
-                  const created = await apiV1<Person>("/api/v1/persons", {
-                    method: "POST",
-                    json: {
-                      full_name: row.name,
-                      dob: row.dob || null,
-                      gender: row.gender || null,
-                    },
-                  });
-                  byName.set(created.full_name.toLowerCase(), created);
-                  setPersons((prev) => [...prev, created]);
-                  return created.id;
-                };
+                // RS011 review fix 5: this bulk path used to call plain
+                // `run(...)`, not the `runGated(...)` wrapper its 3 sibling
+                // roster-write call sites in this file use — the server gate
+                // still fired, but a violation surfaced only as a generic red
+                // error banner with no path to override except falling back
+                // to one-at-a-time adds. `withOverride` is applied to EVERY
+                // entrant in the batch on a confirmed retry — `eligibility_
+                // override` is per-entrant (CreateEntrant's own shape,
+                // bulk-create can override some rows and not others), but a
+                // 422 from this array body only names the FIRST offending
+                // entrant (createEntrants throws inside its per-input loop),
+                // so there's no way to know from here which of the batch it
+                // was; applying the confirmed override to the whole retried
+                // batch is the safe interpretation of "the organiser just
+                // confirmed this batch is fine."
+                runGated((override) =>
+                  (async () => {
+                    // Create missing persons first (matched by exact name
+                    // against the directory), then register entrants in one
+                    // bulk call.
+                    const byName = new Map(persons.map((p) => [p.full_name.toLowerCase(), p]));
+                    const ensurePerson = async (row: CsvRow): Promise<string> => {
+                      const existing = byName.get(row.name.toLowerCase());
+                      if (existing) return existing.id;
+                      const created = await apiV1<Person>("/api/v1/persons", {
+                        method: "POST",
+                        json: {
+                          full_name: row.name,
+                          dob: row.dob || null,
+                          gender: row.gender || null,
+                        },
+                      });
+                      byName.set(created.full_name.toLowerCase(), created);
+                      setPersons((prev) => [...prev, created]);
+                      return created.id;
+                    };
 
-                const teamMode = rows.some((r) => r.team);
-                if (teamMode) {
-                  const teams = new Map<string, CsvRow[]>();
-                  for (const row of rows) {
-                    const key = row.team || row.name;
-                    if (!teams.has(key)) teams.set(key, []);
-                    teams.get(key)!.push(row);
-                  }
-                  const entrantsPayload = [];
-                  for (const [team, teamRows] of teams) {
-                    const members = [];
-                    for (const row of teamRows) {
-                      members.push({
-                        person_id: await ensurePerson(row),
-                        squad_number: row.squad_number ?? null,
-                        is_captain: false,
-                        roles: [],
+                    const teamMode = rows.some((r) => r.team);
+                    if (teamMode) {
+                      const teams = new Map<string, CsvRow[]>();
+                      for (const row of rows) {
+                        const key = row.team || row.name;
+                        if (!teams.has(key)) teams.set(key, []);
+                        teams.get(key)!.push(row);
+                      }
+                      const entrantsPayload = [];
+                      for (const [team, teamRows] of teams) {
+                        const members = [];
+                        for (const row of teamRows) {
+                          members.push({
+                            person_id: await ensurePerson(row),
+                            squad_number: row.squad_number ?? null,
+                            is_captain: false,
+                            roles: [],
+                          });
+                        }
+                        entrantsPayload.push({
+                          kind: "team",
+                          display_name: team,
+                          members,
+                        });
+                      }
+                      await apiV1(`/api/v1/divisions/${divisionId}/entrants`, {
+                        method: "POST",
+                        json: entrantsPayload.map((e) => withOverride(e, override)),
+                      });
+                    } else {
+                      const entrantsPayload = [];
+                      for (const row of rows) {
+                        entrantsPayload.push({
+                          kind: "individual",
+                          display_name: row.name,
+                          seed: row.seed ?? null,
+                          members: [
+                            { person_id: await ensurePerson(row), is_captain: false, roles: [] },
+                          ],
+                        });
+                      }
+                      await apiV1(`/api/v1/divisions/${divisionId}/entrants`, {
+                        method: "POST",
+                        json: entrantsPayload.map((e) => withOverride(e, override)),
                       });
                     }
-                    entrantsPayload.push({
-                      kind: "team",
-                      display_name: team,
-                      members,
-                    });
-                  }
-                  await apiV1(`/api/v1/divisions/${divisionId}/entrants`, {
-                    method: "POST",
-                    json: entrantsPayload,
-                  });
-                } else {
-                  const entrantsPayload = [];
-                  for (const row of rows) {
-                    entrantsPayload.push({
-                      kind: "individual",
-                      display_name: row.name,
-                      seed: row.seed ?? null,
-                      members: [
-                        { person_id: await ensurePerson(row), is_captain: false, roles: [] },
-                      ],
-                    });
-                  }
-                  await apiV1(`/api/v1/divisions/${divisionId}/entrants`, {
-                    method: "POST",
-                    json: entrantsPayload,
-                  });
-                }
-              })
-            }
+                  })(),
+                )
+              }
             />
           }
         />

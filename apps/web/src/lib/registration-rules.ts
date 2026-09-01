@@ -258,17 +258,41 @@ export function ageBandEligibilityIssues(
   }
   const cutoffMonth = division.age_cutoff_month ?? 1;
   const cutoffDay = division.age_cutoff_day ?? 1;
-  // RS007 review fix L1: the write path (checkAgeCutoff, api-v1/schemas.ts)
-  // now rejects a day that does not exist in its month, so this combination
-  // should be unreachable for any row written through the API. Fail loudly
-  // rather than let `Date.UTC` silently roll it into the next month (31
-  // September becoming 1 October, 30 February becoming 1/2 March) — that
-  // silent shift, with no error anywhere, is the defect this fix closes.
-  // Never fires for valid input, including the 1/1 default above.
+  // RS007 review fix L1 ORIGINALLY threw here — the write path
+  // (checkAgeCutoff, api-v1/schemas.ts) rejects a day that does not exist in
+  // its month for every NEW write, so a throw was meant to be unreachable,
+  // catching a stored row that reached the column some other way rather than
+  // let `Date.UTC` silently roll it into the next month (31 September
+  // becoming 1 October, 30 February becoming 1/2 March — the original
+  // silent-shift defect that fix closed).
+  //
+  // RS011 review fix 2: "unreachable" was never actually guaranteed. The DB
+  // CHECK constraint only range-checks 1-31, not day-per-month, and
+  // V380__division_eligibility_consolidation.sql's backfill predates
+  // checkAgeCutoff entirely — a legacy row can still carry an impossible
+  // combination. This function is called from `setTeamSquad`'s
+  // eligibility-warnings pass AFTER the squad write already ran in the same
+  // transaction (a throw there rolls back a save that endpoint's own
+  // contract promises will never hard-block), and from `gateRosterEligibility`
+  // at 4 other organiser-side gate points, none of which catch a bare
+  // `Error` — an uncaught throw there surfaces as an unhandled 500, not the
+  // coded 422 `ELIGIBILITY_VIOLATION` the client dialog recognizes.
+  //
+  // So: never throw. Treat an unenforceable cutoff as "no age rule to
+  // evaluate" and skip straight to returning whatever issues have already
+  // been collected (none, at this point) — NOT the 1-January default (that
+  // would silently invent a cutoff the division never configured), and NOT
+  // rolling into the next month (the original bug). A division stuck with a
+  // bad legacy cutoff simply stops enforcing its age band until an organiser
+  // fixes it, which is strictly safer than either alternative.
   if (!isValidCutoffDay(cutoffMonth, cutoffDay)) {
-    throw new Error(
-      `Invalid age cutoff: day ${cutoffDay} does not exist in month ${cutoffMonth}. This division's stored age_cutoff_month/age_cutoff_day should have been rejected at write time.`,
+    console.error(
+      `Invalid age cutoff: day ${cutoffDay} does not exist in month ${cutoffMonth} — ` +
+        "skipping the age-band check for this division rather than blocking the request " +
+        "or rolling into the wrong month. This division's stored age_cutoff_month/" +
+        "age_cutoff_day predates write-time validation and should be corrected.",
     );
+    return issues;
   }
   const cutoffDate = new Date(Date.UTC(seasonStartYear, cutoffMonth - 1, cutoffDay));
   const age = ageAt(person.dob, cutoffDate);

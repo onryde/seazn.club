@@ -1473,6 +1473,7 @@
   "clubs.squad.quickAdd": "+ Añadir «{name}» como nuevo jugador",
   "clubs.squad.adding": "Añadiendo…",
   "clubs.squad.didYouMean": "¿Quisiste decir {name}?",
+  "clubs.squad.eligibilityWarning.label": "Avisos de elegibilidad para las divisiones en las que está inscrito este equipo:",
   "clubs.crest.title": "Escudo del club",
   "clubs.crest.hint": "Se muestra en toda la aplicación para este club — cada equipo sin insignia propia lo lleva.",
   "clubs.crest.emptyTile": "Sin escudo",

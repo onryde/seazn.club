@@ -1473,6 +1473,7 @@
   "clubs.squad.quickAdd": "+ Ajouter « {name} » comme nouveau joueur",
   "clubs.squad.adding": "Ajout…",
   "clubs.squad.didYouMean": "Vouliez-vous dire {name} ?",
+  "clubs.squad.eligibilityWarning.label": "Avertissements d'éligibilité pour les divisions où cette équipe est inscrite :",
   "clubs.crest.title": "Écusson du club",
   "clubs.crest.hint": "Affiché partout dans l'application pour ce club — chaque équipe sans badge propre le porte.",
   "clubs.crest.emptyTile": "Aucun écusson",

@@ -505,6 +505,29 @@ describe("rosterIssues — mixed composition (roster-wide, MIXED_NEEDS_BOTH_GEND
   });
 });
 
+// RS011 review fix 2: `ageBandEligibilityIssues` used to THROW for a stored
+// division whose age_cutoff_month/age_cutoff_day is not a real calendar day
+// (the DB CHECK only range-checks 1-31, not day-per-month — a legacy row can
+// carry an impossible combination even though the write path rejects new
+// ones). `rosterIssues` composes that function per player; this proves the
+// composition never throws either, whatever the roster — the exact call
+// shape `setTeamSquad`/`gateRosterEligibility` use.
+describe("rosterIssues — an invalid stored age cutoff never throws (RS011 review fix 2)", () => {
+  const badCutoffDivision: EligibilityDivision = {
+    category: null,
+    age_min: 10,
+    age_max: 15,
+    age_cutoff_month: 2,
+    age_cutoff_day: 30, // Feb 30 never exists
+  };
+
+  it("returns normally (no age issue) for a roster that would otherwise clearly violate the age band", () => {
+    const players: EligibilityRosterPlayer[] = [{ full_name: "Too Old", dob: "2000-01-01" }];
+    expect(() => rosterIssues(badCutoffDivision, players, 2026)).not.toThrow();
+    expect(codesOf(rosterIssues(badCutoffDivision, players, 2026))).toEqual([]);
+  });
+});
+
 // RS011 — organiser-side gates classify issues into blocking violations vs
 // advisory warnings by ONE rule (`splitEligibilityIssues`): only
 // MISSING_DOB/MISSING_GENDER are warnings, everything else blocks. Pure —

@@ -1169,6 +1169,7 @@ export type DictionaryKey =
   | "clubs.squad.adding"
   | "clubs.squad.captain"
   | "clubs.squad.didYouMean"
+  | "clubs.squad.eligibilityWarning.label"
   | "clubs.squad.empty"
   | "clubs.squad.find"
   | "clubs.squad.noAria"
