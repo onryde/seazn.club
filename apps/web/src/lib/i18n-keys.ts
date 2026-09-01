@@ -2291,6 +2291,7 @@ export type DictionaryKey =
   | "lineup.avail.in"
   | "lineup.avail.maybe"
   | "lineup.avail.out"
+  | "lineup.availabilityTitle"
   | "lineup.checkedInAria"
   | "lineup.checkedInTitle"
   | "lineup.empty"

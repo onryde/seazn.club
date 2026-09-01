@@ -2502,6 +2502,7 @@
   "lineup.avail.in": "beschikbaar",
   "lineup.avail.out": "niet beschikbaar",
   "lineup.avail.maybe": "misschien beschikbaar",
+  "lineup.availabilityTitle": "Beschikbaarheid van {name}",
   "lineup.noAnswer": "{name}: geen antwoord over beschikbaarheid",
   "lineup.statusAria": "{name}: {label}",
   "lineup.checkedInAria": "{name}: ingecheckt op de locatie",

@@ -177,3 +177,39 @@ describe("lineup columns render only where the module declares them", () => {
     expect(consoleHtml("tennis")).not.toContain('data-testid="lineup-pairorder-select"');
   });
 });
+
+// R7/D follow-up — FOUND BY CI (`e2e/player-accounts.spec.ts:156`), not here,
+// and the reason is the point of this block.
+//
+// R7/B's gate stopped rendering `<LineupEditor>` for a module declaring
+// `lineup.size <= 1 && benchMax === 0`. That reasoning was about the lineup
+// CONTROLS — a position dropdown, a Captain checkbox and bench controls for a
+// competitor with no team — and it was right about them.
+//
+// AVAILABILITY merely lived in the same component. So the gate silently took
+// away the only surface telling an organiser that a player had RSVP'd out, for
+// every individual-entrant sport at once. The gate's own tests could not see
+// it: they assert what the gate DOES, never what it takes with it.
+//
+// The controls stay gone; the information comes back as `AvailabilityRoster`.
+describe("a fixture with no lineup to pick still shows the roster's availability", () => {
+  it("renders the availability roster exactly where the editor is gated off", () => {
+    // `generic` is the real case from the e2e: `{lineupSize: 1, benchMax: 0}`,
+    // individual entrants, one member a side.
+    const html = consoleHtml("generic");
+    expect(html, "the editor must still be gated off — that part was correct").not.toContain(
+      'data-testid="lineup-slot-row"',
+    );
+    expect(html, "but the roster's availability has to have a home").toContain(
+      'data-testid="availability-roster"',
+    );
+    expect(html, "and the chip itself must render, which is the thing the e2e asserts").toContain(
+      'data-testid="availability-chip"',
+    );
+  });
+
+  it("a sport that DOES have a lineup keeps the editor and grows no second roster", () => {
+    const html = consoleHtml("football");
+    expect(html).not.toContain('data-testid="availability-roster"');
+  });
+});

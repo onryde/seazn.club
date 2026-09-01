@@ -60,7 +60,7 @@ const AVAIL_LABEL_KEY: Record<PersonAvailability["status"], "lineup.avail.in" | 
   maybe: "lineup.avail.maybe",
 };
 
-function AvailabilityChip({
+export function AvailabilityChip({
   personName,
   info,
 }: {
@@ -611,6 +611,56 @@ export function LineupEditor({
         onConfirm={(reason) => void save({ reason })}
         testId="lineup-eligibility-override"
       />
+    </section>
+  );
+}
+
+/**
+ * The roster and its availability, with NO lineup controls — what a fixture
+ * gets when `lineupEditorApplies` says there is no lineup to pick.
+ *
+ * WHY THIS EXISTS (R7/D follow-up, found by CI). R7/B stopped rendering
+ * `<LineupEditor>` for a module declaring `lineup.size <= 1 && benchMax === 0`
+ * — chess, carrom singles, generic — because a one-slot team sheet with a
+ * position dropdown, a Captain checkbox and bench controls is nonsense for a
+ * competitor with no team. That reasoning was about the CONTROLS and it was
+ * right about them.
+ *
+ * It was not reasoning about AVAILABILITY, which happens to live in the same
+ * component. So hiding the editor also removed the only surface telling an
+ * organiser that a player had RSVP'd out — for every individual-entrant sport
+ * at once. `e2e/player-accounts.spec.ts` caught it; nothing in the unit suite
+ * could, because the gate's own tests assert the gate, not what the gate takes
+ * with it.
+ *
+ * An organiser running a SINGLES competition needs "Ada is unavailable — away
+ * that weekend" exactly as much as one running an eleven-a-side does. Perhaps
+ * more: there is no bench to cover it.
+ *
+ * So the controls stay gone and the information comes back, in the smallest
+ * surface that carries it. Read-only by construction — it holds no draft, no
+ * save and no validation, because there is genuinely nothing to submit.
+ */
+export function AvailabilityRoster({
+  side,
+  availability = {},
+}: {
+  side: Pick<SideInfo, "id" | "members"> & { name: string };
+  availability?: Record<string, PersonAvailability>;
+}) {
+  const msg = useMsg();
+  if (side.members.length === 0) return null;
+  return (
+    <section className="rounded-2xl border border-slate-200 bg-white p-4" data-testid="availability-roster">
+      <h3 className="text-sm font-semibold text-slate-700">{msg("lineup.availabilityTitle", { name: side.name })}</h3>
+      <ul className="mt-3 grid gap-2">
+        {side.members.map((m) => (
+          <li key={m.person_id} className="flex items-center justify-between gap-3 text-sm text-slate-700">
+            <span className="truncate">{m.full_name}</span>
+            <AvailabilityChip personName={m.full_name} info={availability[m.person_id]} />
+          </li>
+        ))}
+      </ul>
     </section>
   );
 }

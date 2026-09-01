@@ -2547,6 +2547,7 @@
   "lineup.avail.in": "disponible",
   "lineup.avail.out": "indisponible",
   "lineup.avail.maybe": "peut-être disponible",
+  "lineup.availabilityTitle": "Disponibilité de {name}",
   "lineup.noAnswer": "{name} : aucune réponse de disponibilité",
   "lineup.statusAria": "{name} : {label}",
   "lineup.checkedInAria": "{name} : enregistré sur le lieu",

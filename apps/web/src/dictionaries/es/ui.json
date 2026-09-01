@@ -2502,6 +2502,7 @@
   "lineup.avail.in": "disponible",
   "lineup.avail.out": "no disponible",
   "lineup.avail.maybe": "quizás disponible",
+  "lineup.availabilityTitle": "Disponibilidad de {name}",
   "lineup.noAnswer": "{name}: sin respuesta de disponibilidad",
   "lineup.statusAria": "{name}: {label}",
   "lineup.checkedInAria": "{name}: registrado en la sede",

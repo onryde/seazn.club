@@ -2547,6 +2547,7 @@
   "lineup.avail.in": "available",
   "lineup.avail.out": "unavailable",
   "lineup.avail.maybe": "maybe available",
+  "lineup.availabilityTitle": "{name} availability",
   "lineup.noAnswer": "{name}: no availability answer",
   "lineup.statusAria": "{name}: {label}",
   "lineup.checkedInAria": "{name}: checked in at the venue",

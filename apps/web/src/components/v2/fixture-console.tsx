@@ -12,6 +12,7 @@ import { AuditStrip } from "@/components/v2/audit-strip";
 import { ClientTime } from "@/components/client-time";
 import { ShareButton } from "@/components/share-button";
 import {
+  AvailabilityRoster,
   LineupEditor,
   lineupEditorApplies,
   type PositionGroupIn,
@@ -814,6 +815,27 @@ export function FixtureConsole({
                 lineupSize={sport.lineupSize}
                 canEdit={canEdit && live.status === "scheduled"}
                 onSaved={() => router.refresh()}
+                availability={availability}
+              />
+            );
+          })}
+        </div>
+      )}
+
+      {/* …and where there is no lineup to pick, the ROSTER and its
+          availability still show. R7/B's gate above was reasoning about the
+          lineup CONTROLS; availability merely lived in the same component and
+          went with them, so an organiser of any individual-entrant sport lost
+          the only surface saying who had RSVP'd out. See
+          `AvailabilityRoster`'s own note. */}
+      {home && away && !lineupEditorApplies(sport) && (
+        <div className="grid gap-4 lg:grid-cols-2">
+          {(["home", "away"] as const).map((sideKey) => {
+            const s = sides[sideKey]!;
+            return (
+              <AvailabilityRoster
+                key={s.id}
+                side={{ ...s, name: entrantDisplayName(s) }}
                 availability={availability}
               />
             );
