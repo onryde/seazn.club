@@ -2303,6 +2303,12 @@ export const PutRegistrationSettings = z
     // Stripe checkout session has exactly one currency. The org settings page
     // owns the select; this panel shows a read-only chip.
     refund_lock_at: z.iso.datetime({ offset: true }).nullish(),
+    /** V389/RS012. `null` (the default) means "use the division's own
+     *  `closes_at`" (ruling 2) — the pool-deadline sweep's own fallback,
+     *  registrations.ts. Nullable, not optional-with-a-sentinel, for the
+     *  same reason `refund_lock_at` above is: clearing it back to the
+     *  default is a real, meaningful edit, not "field omitted". */
+    place_by_at: z.iso.datetime({ offset: true }).nullish(),
     form_fields: z.array(RegistrationFormField).max(12).default([]),
     payment_method: RegistrationPaymentMethod.default("offline"),
     /** Per-division override of the org's offline payment instructions. */
@@ -2343,6 +2349,8 @@ export const RegistrationSettings = z.object({
    *  request schema has no `currency`. */
   currency: z.string(),
   refund_lock_at: z.string().nullable(),
+  /** V389/RS012 — null means "use closes_at" (ruling 2); see PutRegistrationSettings above. */
+  place_by_at: z.string().nullable(),
   form_fields: z.array(RegistrationFormField),
   payment_method: RegistrationPaymentMethod,
   payment_instructions: z.string().nullable(),

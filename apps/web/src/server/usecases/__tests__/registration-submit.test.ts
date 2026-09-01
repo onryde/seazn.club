@@ -59,7 +59,8 @@ import { LEGAL_VERSION } from "@/lib/legal";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
-import { confirmRegistration } from "../registrations";
+import { confirmRegistration, soloPoolIsFull } from "../registrations";
+import { assignSoloSignUp } from "../registration-assign";
 import {
   submitRegistrationGroup,
   joinTeamEntry,
@@ -2595,5 +2596,405 @@ describe.skipIf(!HAS_DB)("a pair's display name follows its ROSTER, not the entr
 
   it("agrees with itself when both were filled from the same name", async () => {
     expect(await submitPair("Bob Vance", ["Alice Byrne", "Bob Vance"])).toBe("Alice Byrne & Bob Vance");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RS012 ruling 1 — `capacity` counts TEAM entries; a solo sign-up ("free
+// agent") never consumes one, before OR after RS009 assigns it onto a team
+// (that assignment deliberately leaves the solo's own `registrations` row
+// confirmed/free_agent=true forever — never mutate that row's status). A
+// solo sign-up instead draws against its OWN derived pool bound (`capacity
+// x roster_cap` minus players already seated) and is REFUSED outright — never
+// waitlisted — once that bound is reached.
+// ---------------------------------------------------------------------------
+describe.skipIf(!HAS_DB)("RS012 — the solo sign-up pool has its own bound, separate from team capacity", () => {
+  // A fresh sport key, deliberately NOT 'generic': that shared fixture's
+  // `lineup: { size: 1, benchMax: 0 }` (roster_cap 1) is relied on by every
+  // other test in this file and cannot hold six solo sign-ups folded into
+  // two teams. `createDivision` resolves `sport_key` against the ENGINE's
+  // module registry (server/engine-db/registry.ts), which only knows the
+  // handful of shipped keys (football/generic/...) — a DB-only sport row
+  // under a fresh key has no matching module, so divisions on it are
+  // inserted directly (registration-materialise.test.ts's own precedent for
+  // this exact gap): submitRegistrationGroup never resolves the sport
+  // module at all, only `rosterCapExpr`'s raw `position_catalog` read.
+  const BIG_ROSTER_SPORT_KEY = "rs012-big-roster";
+
+  async function bigRosterDivision(
+    owner: AuthCtx,
+  ): Promise<{ competition: { id: string; slug: string }; divisionId: string }> {
+    await sql`
+      insert into sports (key, name, module_version, position_catalog)
+      values (${BIG_ROSTER_SPORT_KEY}, 'RS012 Big Roster', '1.0.0',
+              ${sql.json({ groups: [], lineup: { size: 4, benchMax: 2 } })})
+      on conflict (key) do nothing`;
+    const competition = await createCompetition(owner, {
+      name: "RS012 Cup " + randomUUID().slice(0, 6),
+      visibility: "public",
+      branding: {},
+      starts_on: "2026-09-15",
+      ends_on: "2026-09-20",
+    });
+    const [{ id: divisionId }] = await sql<{ id: string }[]>`
+      insert into divisions (competition_id, name, slug, sport_key, variant_key, config, module_version)
+      values (${competition.id}, 'Big Roster', ${"big-" + randomUUID().slice(0, 8)},
+              ${BIG_ROSTER_SPORT_KEY}, 'std', ${sql.json({})}, '1.0.0')
+      returning id`;
+    return { competition, divisionId };
+  }
+
+  // Named for the RS012 index: an 8-capacity TEAM division with two real
+  // teams and six solo sign-ups is, by the ruling, still an 8-capacity
+  // division with room for SIX more teams — not a full one.
+  it("8/8-full-with-two-teams-and-six-solos: team capacity gate excludes solo sign-ups before and after assignment", async () => {
+    const { orgId, orgSlug, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, divisionId } = await bigRosterDivision(owner);
+    await seedSettings(divisionId, {
+      entrant_kind: "team",
+      fee_cents: 0,
+      capacity: 8,
+      allow_free_agents: true,
+    });
+
+    async function submitTeam(name: string) {
+      return submitRegistrationGroup(
+        { orgSlug, compSlug: competition.slug },
+        {
+          contact: baseContact(),
+          privacy_consent: true,
+          entries: [
+            {
+              division_id: divisionId,
+              entrant_kind: "team",
+              team_name: name,
+              players: [{ full_name: `${name} Captain` }],
+              answers: {},
+            },
+          ],
+        },
+      );
+    }
+    async function submitSolo(name: string) {
+      return submitRegistrationGroup(
+        { orgSlug, compSlug: competition.slug },
+        {
+          contact: baseContact(),
+          privacy_consent: true,
+          entries: [
+            {
+              division_id: divisionId,
+              entrant_kind: "team",
+              free_agent: true,
+              players: [{ full_name: name }],
+              answers: {},
+            },
+          ],
+        },
+      );
+    }
+
+    const teamA = await submitTeam("Team A");
+    const teamB = await submitTeam("Team B");
+    expect(teamA.entries[0]!.status).not.toBe("waitlisted");
+    expect(teamB.entries[0]!.status).not.toBe("waitlisted");
+
+    const solos: SubmitGroupEntryResult[] = [];
+    for (let i = 0; i < 6; i++) {
+      const res = await submitSolo(`Solo ${i}`);
+      expect(res.entries[0]!.status, `solo #${i} must never be waitlisted`).not.toBe("waitlisted");
+      expect(res.entries[0]!.free_agent).toBe(true);
+      solos.push(res.entries[0]!);
+    }
+
+    // BEFORE assignment — six confirmed, un-assigned solo sign-ups sit in the
+    // division alongside the two teams. The buggy gate counts all eight
+    // SPOT_HOLDERS rows and reads the division as 8/8 full; the fix must
+    // still see 2 team entries against an 8-team capacity.
+    const teamC = await submitTeam("Team C");
+    expect(teamC.entries[0]!.status, "still room for a 3rd team pre-assignment").not.toBe("waitlisted");
+
+    // AFTER assignment — RS009 places one pooled solo onto Team A. Its own
+    // `registrations` row stays confirmed/free_agent=true forever (RS009's
+    // binding constraint), so a fix that only special-cases the PRE-
+    // assignment pool would regress the instant an organiser assigns anyone.
+    await assignSoloSignUp(owner, {
+      registration_id: solos[0]!.registration_id,
+      target_registration_id: teamA.entries[0]!.registration_id,
+    });
+
+    const teamD = await submitTeam("Team D");
+    expect(teamD.entries[0]!.status, "still room for a 4th team post-assignment").not.toBe("waitlisted");
+  });
+
+  it("refuses a solo sign-up with 422, never a waitlist, once the pool bound is reached", async () => {
+    // `generic` sport's own roster_cap is 1 (lineup { size: 1, benchMax: 0 }),
+    // so a capacity-1 division's pool bound is exactly 1 x 1 - 0 = 1.
+    const { orgId, orgSlug, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    await seedSettings(division.id, {
+      entrant_kind: "team",
+      fee_cents: 0,
+      capacity: 1,
+      allow_free_agents: true,
+    });
+    const submitSolo = (name: string) =>
+      submitRegistrationGroup(
+        { orgSlug, compSlug: competition.slug },
+        {
+          contact: baseContact(),
+          privacy_consent: true,
+          entries: [
+            {
+              division_id: division.id,
+              entrant_kind: "team",
+              free_agent: true,
+              players: [{ full_name: name }],
+              answers: {},
+            },
+          ],
+        },
+      );
+
+    const first = await submitSolo("First Floater");
+    expect(first.entries[0]!.status).not.toBe("waitlisted");
+
+    const [{ n: groupsBefore }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from registration_groups where competition_id = ${competition.id}`;
+    await expect(submitSolo("Second Floater")).rejects.toMatchObject({ status: 422 });
+    // Refused, not waitlisted: the whole transaction rolls back, so no new
+    // registration_groups row exists for the refused attempt (same proof
+    // convention as the other structural 422s in this file).
+    const [{ n: groupsAfter }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from registration_groups where competition_id = ${competition.id}`;
+    expect(groupsAfter).toBe(groupsBefore);
+  });
+
+  it("accepts a solo sign-up strictly under the pool bound", async () => {
+    // capacity 2 x roster_cap 1 (generic) - 0 seated = a bound of 2.
+    const { orgId, orgSlug, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    await seedSettings(division.id, {
+      entrant_kind: "team",
+      fee_cents: 0,
+      capacity: 2,
+      allow_free_agents: true,
+    });
+    const submitSolo = (name: string) =>
+      submitRegistrationGroup(
+        { orgSlug, compSlug: competition.slug },
+        {
+          contact: baseContact(),
+          privacy_consent: true,
+          entries: [
+            {
+              division_id: division.id,
+              entrant_kind: "team",
+              free_agent: true,
+              players: [{ full_name: name }],
+              answers: {},
+            },
+          ],
+        },
+      );
+
+    const first = await submitSolo("First Floater");
+    const second = await submitSolo("Second Floater");
+    expect(first.entries[0]!.status).not.toBe("waitlisted");
+    expect(second.entries[0]!.status).not.toBe("waitlisted");
+  });
+
+  // Direct tests of the exported helper for the two "never refuse" edges the
+  // brief calls out — both are awkward to stage through submitRegistrationGroup
+  // (an org's plan cap is always some finite `entrants.per_division.max`, so
+  // `capacity: null` alone never produces a genuinely INFINITE hardCap in an
+  // integration test) and the helper is the one place the actual decision
+  // lives.
+  describe("soloPoolIsFull", () => {
+    it("never reports full when hardCap is unbounded (Infinity)", async () => {
+      const { orgId, ownerId } = await seedOrg("pro");
+      const owner = asOwner(orgId, ownerId);
+      const { division } = await rig(owner);
+      await seedSettings(division.id, { entrant_kind: "team", allow_free_agents: true, capacity: null });
+
+      await sql.begin(async (tx) => {
+        expect(await soloPoolIsFull(tx, division.id, Number.POSITIVE_INFINITY)).toBe(false);
+      });
+    });
+
+    it("never reports full for a sport with no `lineup` key, even under a tiny finite hardCap", async () => {
+      const { orgId, ownerId } = await seedOrg("pro");
+      const owner = asOwner(orgId, ownerId);
+      const noLineupKey = "rs012-no-lineup-" + randomUUID().slice(0, 8);
+      await sql`
+        insert into sports (key, name, module_version, position_catalog)
+        values (${noLineupKey}, 'RS012 No Lineup', '1.0.0', ${sql.json({ groups: [] })})`;
+      const competition = await createCompetition(owner, {
+        name: "No Lineup Cup " + randomUUID().slice(0, 6),
+        visibility: "public",
+        branding: {},
+        starts_on: "2026-09-15",
+        ends_on: "2026-09-20",
+      });
+      const [{ id: divisionId }] = await sql<{ id: string }[]>`
+        insert into divisions (competition_id, name, slug, sport_key, variant_key, config, module_version)
+        values (${competition.id}, 'No Lineup', ${"nl-" + randomUUID().slice(0, 8)},
+                ${noLineupKey}, 'std', ${sql.json({})}, '1.0.0')
+        returning id`;
+      await seedSettings(divisionId, { entrant_kind: "team", allow_free_agents: true, capacity: 1 });
+
+      await sql.begin(async (tx) => {
+        expect(await soloPoolIsFull(tx, divisionId, 1)).toBe(false);
+      });
+    });
+
+    // CRITICAL — RS012 `/code-review high` finding 1: the `seated` subquery
+    // had no status filter, unlike `pooled` a few lines below (and unlike
+    // `fetchPoolSummary`'s roster-room query / `listAssignTargets`, its own
+    // siblings this was supposed to mirror). `withdrawCore` only ever flips
+    // `registrations.status` to 'withdrawn' — it never deletes the
+    // withdrawn team's OWN `registration_players` rows (only
+    // `releaseSoloSignUpPlacement` deletes rows, and only ones carrying
+    // `assigned_from_registration_id`, i.e. an ASSIGNED solo sign-up, never
+    // a team's own original roster). An unfiltered `seated` count kept
+    // charging a genuinely empty division against a withdrawn team's stale
+    // roster forever, which could push `hardCap * roster_cap - seated`
+    // negative — at which point `pooled >= <negative>` is true with ZERO
+    // people waiting, and a fresh, open, empty division permanently
+    // 422-refuses every solo sign-up.
+    //
+    // A fresh custom sport key (roster_cap = 2, not the shared `generic`
+    // fixture's 1) so the bound below is big enough to tell "still counting
+    // the withdrawn team" apart from "correctly ignoring it" — a 1-cap
+    // division could not distinguish a bound of 0 from a bound of 1.
+    it("does not count a withdrawn team's own roster rows in `seated` — accepts as many solo sign-ups as the ACTUAL empty division allows, not zero or one (CRITICAL)", async () => {
+      const { orgId, ownerId } = await seedOrg("pro");
+      const owner = asOwner(orgId, ownerId);
+      const { competition } = await rig(owner);
+      const suffix = randomUUID().slice(0, 8);
+      const sportKey = `rs012-fix1-${suffix}`;
+      await sql`
+        insert into sports (key, name, module_version, position_catalog)
+        values (${sportKey}, 'RS012 Fix1 Sport', '1.0.0',
+          ${sql.json({ groups: [], lineup: { size: 2, benchMax: 0 } })})`;
+      const [{ id: divisionId }] = await sql<{ id: string }[]>`
+        insert into divisions (competition_id, name, slug, sport_key, variant_key, config, module_version)
+        values (${competition.id}, 'Fix1 Division', ${"fix1-div-" + suffix}, ${sportKey}, 'std',
+                ${sql.json({})}, '1.0.0')
+        returning id`;
+      // hardCap 1 x roster_cap 2 = a bound of 2 once `seated` correctly
+      // reads 0 for this empty division — big enough that "allows 2" and
+      // "allows 1" (the pre-fix off-by-the-withdrawn-team's-headcount shape)
+      // are distinguishable, not just "allows vs refuses everything".
+      await seedSettings(divisionId, { entrant_kind: "team", allow_free_agents: true, capacity: 1 });
+
+      const [group] = await sql<{ id: string }[]>`
+        insert into registration_groups (competition_id, contact_name, contact_email, access_token_hash, currency)
+        values (${competition.id}, 'Old Team Contact', ${`t-${randomUUID().slice(0, 8)}@test.local`},
+                ${`tok-${randomUUID()}`}, 'gbp')
+        returning id`;
+      const [team] = await sql<{ id: string }[]>`
+        insert into registrations (group_id, division_id, display_name, free_agent, status)
+        values (${group.id}, ${divisionId}, 'Old Withdrawn Team', false, 'withdrawn')
+        returning id`;
+      await sql`
+        insert into registration_players (registration_id, full_name, source)
+        values (${team.id}, 'Old Player 1', 'captain_entered')`;
+      await sql`
+        insert into registration_players (registration_id, full_name, source)
+        values (${team.id}, 'Old Player 2', 'captain_entered')`;
+
+      const seedPooledSolo = async () => {
+        const [g] = await sql<{ id: string }[]>`
+          insert into registration_groups (competition_id, contact_name, contact_email, access_token_hash, currency)
+          values (${competition.id}, 'Solo Contact', ${`s-${randomUUID().slice(0, 8)}@test.local`},
+                  ${`tok-${randomUUID()}`}, 'gbp')
+          returning id`;
+        await sql`
+          insert into registrations (group_id, division_id, display_name, free_agent, status)
+          values (${g.id}, ${divisionId}, 'Solo', true, 'pending')`;
+      };
+
+      // Zero pooled: the withdrawn team's 2 stale roster rows must not read
+      // as "seated" — this is the exact case that used to 422 immediately.
+      await sql.begin(async (tx) => {
+        expect(await soloPoolIsFull(tx, divisionId, 1)).toBe(false);
+      });
+      // One pooled: still not full — proves the bound is genuinely 2, not
+      // secretly still 1 (which would also "not count zero" but would still
+      // be quietly shrunk by the withdrawn team).
+      await seedPooledSolo();
+      await sql.begin(async (tx) => {
+        expect(await soloPoolIsFull(tx, divisionId, 1)).toBe(false);
+      });
+      // Two pooled: NOW genuinely full — the real, uninflated bound.
+      await seedPooledSolo();
+      await sql.begin(async (tx) => {
+        expect(await soloPoolIsFull(tx, divisionId, 1)).toBe(true);
+      });
+    });
+
+    // Same bug, end to end through the real public entrypoint rather than
+    // the bare helper: a team fills its roster, withdraws, and the very
+    // next solo sign-up submitted for that division must succeed rather
+    // than 422 ("This division's solo sign-up pool is full").
+    it("submitRegistrationGroup: a solo sign-up succeeds after the division's only team withdraws (CRITICAL, end-to-end)", async () => {
+      const { orgId, orgSlug, ownerId } = await seedOrg("pro");
+      const owner = asOwner(orgId, ownerId);
+      const { competition } = await rig(owner);
+      const suffix = randomUUID().slice(0, 8);
+      const sportKey = `rs012-fix1e2e-${suffix}`;
+      await sql`
+        insert into sports (key, name, module_version, position_catalog)
+        values (${sportKey}, 'RS012 Fix1 E2E Sport', '1.0.0',
+          ${sql.json({ groups: [], lineup: { size: 2, benchMax: 0 } })})`;
+      const [{ id: divisionId }] = await sql<{ id: string }[]>`
+        insert into divisions (competition_id, name, slug, sport_key, variant_key, config, module_version)
+        values (${competition.id}, 'Fix1 E2E Division', ${"fix1e2e-div-" + suffix}, ${sportKey}, 'std',
+                ${sql.json({})}, '1.0.0')
+        returning id`;
+      await seedSettings(divisionId, { entrant_kind: "team", allow_free_agents: true, capacity: 1 });
+
+      const team = await submitRegistrationGroup(
+        { orgSlug, compSlug: competition.slug },
+        {
+          contact: baseContact(),
+          privacy_consent: true,
+          entries: [
+            {
+              division_id: divisionId,
+              entrant_kind: "team",
+              team_name: "Old Withdrawn Team",
+              free_agent: false,
+              players: [{ full_name: "P1" }, { full_name: "P2" }],
+              answers: {},
+            },
+          ],
+        },
+      );
+      await sql`update registrations set status = 'withdrawn' where id = ${team.entries[0]!.registration_id}`;
+
+      const solo = await submitRegistrationGroup(
+        { orgSlug, compSlug: competition.slug },
+        {
+          contact: baseContact(),
+          privacy_consent: true,
+          entries: [
+            {
+              division_id: divisionId,
+              entrant_kind: "team",
+              free_agent: true,
+              players: [{ full_name: "Solo One" }],
+              answers: {},
+            },
+          ],
+        },
+      );
+      expect(solo.entries[0]!.status).not.toBe("waitlisted");
+      expect(solo.entries[0]!.free_agent).toBe(true);
+    });
   });
 });

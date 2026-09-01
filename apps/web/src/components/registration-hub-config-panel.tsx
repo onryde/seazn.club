@@ -75,10 +75,10 @@ const CUTOFF_TIME_OPTIONS = ["23:59"];
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
 
-/** The three fields this panel edits as a date+time PAIR rather than a
+/** The four fields this panel edits as a date+time PAIR rather than a
  *  single value — see registration-hub-tz-input.ts's header for why (the
  *  half-filled-value bug, RS005 R4 task 2). */
-const DATETIME_FIELDS = ["opens_at", "closes_at", "refund_lock_at"] as const;
+const DATETIME_FIELDS = ["opens_at", "closes_at", "refund_lock_at", "place_by_at"] as const;
 type DateTimeFieldKey = (typeof DATETIME_FIELDS)[number];
 
 /** ConfigValidationIssue -> organiser-facing copy. The ONE place that maps
@@ -489,7 +489,16 @@ export function RegistrationHubConfigPanel({
               const hasError = SECTION_FIELDS[id].some((f) => fieldErrors[f]);
               const content =
                 id === "eligibility" ? (
-                  <EligibilitySection state={state} errors={fieldErrors} patch={patch} msg={msg} locale={locale} />
+                  <EligibilitySection
+                    state={state}
+                    errors={fieldErrors}
+                    patch={patch}
+                    msg={msg}
+                    locale={locale}
+                    orgTz={orgTz}
+                    dtDrafts={dtDrafts}
+                    onDateTimeHalfChange={onDateTimeHalfChange}
+                  />
                 ) : id === "schedule" ? (
                   <OpenCloseSection
                     state={state}
@@ -575,6 +584,9 @@ export function EligibilitySection({
   patch,
   msg,
   locale,
+  orgTz,
+  dtDrafts,
+  onDateTimeHalfChange,
 }: {
   state: RegistrationConfigState;
   errors: Partial<Record<ConfigFieldKey, string>>;
@@ -582,8 +594,20 @@ export function EligibilitySection({
   msg: Msg;
   /** RS007/V380 — month names for the cutoff <select> below. */
   locale: string;
+  orgTz: string;
+  /** RS012/V389 — place_by_at's in-progress date/time halves, owned by the
+   *  panel (OrgTzDateTimePair's own comment explains why). */
+  dtDrafts: Partial<Record<DateTimeFieldKey, DateTimeHalves>>;
+  onDateTimeHalfChange: (field: DateTimeFieldKey, half: "date" | "time", value: string) => void;
 }) {
   const isTeam = state.entrant_kind === "team";
+  const zone = fmtZoneAbbrev(orgTz, new Date());
+  // Meaningless outside a division that accepts solo sign-ups at all — same
+  // "shown when it applies, but still shown if the server names an error on
+  // it" rule refundLockApplies (MoneySection, below) uses, for the same
+  // reason (a value can survive a toggle-off and a save error must still
+  // have somewhere to render).
+  const placeByApplies = state.allow_free_agents || Boolean(errors.place_by_at);
   // A cutoff means nothing without an age band to anchor it — disabled
   // rather than hidden, mirroring the division-creation wizard's own
   // `disabled={!maxAge}` on its cutoff fields (division-builder.tsx).
@@ -757,6 +781,19 @@ export function EligibilitySection({
         </label>
       )}
       {errors.allow_free_agents && (<p data-field-error="allow_free_agents" role="alert" className="mt-1 text-xs text-red-600">{errors.allow_free_agents}</p>)}
+      {placeByApplies && (
+        <div>
+          <OrgTzDateTimePair
+            label={`${msg("reg.settings.placeByDate")} (${zone})`}
+            dataField="place_by_at"
+            extraOptions={CUTOFF_TIME_OPTIONS}
+            halves={dtDrafts.place_by_at ?? orgTzDateTimeHalves(state.place_by_at, orgTz)}
+            timeLabel={msg("datetime.timeLabel")}
+            onHalfChange={(half, v) => onDateTimeHalfChange("place_by_at", half, v)}
+          />
+          {errors.place_by_at && (<p data-field-error="place_by_at" role="alert" className="mt-1 text-xs text-red-600">{errors.place_by_at}</p>)}
+        </div>
+      )}
     </section>
   );
 }

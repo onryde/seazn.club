@@ -65,6 +65,11 @@ describe.skipIf(!HAS_DB)("config panel round trip — real Postgres (RS004 W3c)"
       fee_cents: 1250,
       free_agent_fee_cents: null,
       refund_lock_at: "2026-03-20T00:00:00.000Z",
+      // RS012/V389 — non-null on purpose, same reasoning as every other
+      // field in this fixture (see refund_lock_at's own sibling fields
+      // above): a null default would round-trip "correctly" even if the
+      // write path silently dropped the column.
+      place_by_at: "2026-03-25T00:00:00.000Z",
       form_fields: formFields,
       payment_method: "offline",
       payment_instructions: "Pay the club treasurer.",
@@ -118,6 +123,7 @@ describe.skipIf(!HAS_DB)("config panel round trip — real Postgres (RS004 W3c)"
     expect(reopened.capacity).toBe(24);
     expect(reopened.fee_cents).toBe(1250);
     expect(new Date(reopened.refund_lock_at!).toISOString()).toBe("2026-03-20T00:00:00.000Z");
+    expect(new Date(reopened.place_by_at!).toISOString()).toBe("2026-03-25T00:00:00.000Z");
     expect(reopened.payment_method).toBe("offline");
     expect(reopened.payment_instructions).toBe("Pay the club treasurer.");
     expect(reopened.form_fields).toEqual(formFields);
@@ -148,6 +154,7 @@ describe.skipIf(!HAS_DB)("config panel round trip — real Postgres (RS004 W3c)"
       fee_cents: 1000,
       free_agent_fee_cents: null,
       refund_lock_at: null,
+      place_by_at: null,
       form_fields: formFields,
       payment_method: "offline",
       payment_instructions: "Cash on the day.",

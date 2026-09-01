@@ -157,8 +157,14 @@ import {
   reconcileRegistrationGroupBySession,
   inviteUnclaimedMembers,
   anyOptedOutByRegistration,
+  effectivePoolDeadline,
   type GroupStatusView,
 } from "../registrations";
+// RS012: assignSoloSignUp lives in its own module (RS009's own header —
+// "everything here is reached through paths [registrations.ts] already
+// exports"), needed here only to prove an already-placed solo sign-up is
+// excluded from the pool-deadline sweep.
+import { assignSoloSignUp } from "../registration-assign";
 // RS005 F1: rendering the REAL production template off captured
 // `RegistrationEmail` args (see emailMock.registration above) — this file's
 // own convention for "assert the rendered text, not just that it sent",
@@ -210,6 +216,27 @@ describe("fee math (pure)", () => {
   it("never exceeds the fee itself", () => {
     expect(applicationFeeCents(100, 100)).toBe(100);
     expect(applicationFeeCents(1, 100)).toBe(1);
+  });
+});
+
+// RS012 `/code-review high` finding 2 — the pool's effective place-by date
+// fallback, extracted to the ONE copy `buildGroupStatusView`, `data.ts`'s
+// `fetchPoolSummary`, and `sweepRegistrations`' `duePool` lock all now read,
+// same precedent `effectivePayDeadline` (view-model.ts) already set for this
+// exact two-column-fallback shape.
+describe("effectivePoolDeadline (pure)", () => {
+  it("uses the organiser's explicit place_by_at when set", () => {
+    expect(effectivePoolDeadline("2026-09-15T00:00:00Z", "2026-10-01T00:00:00Z")).toBe(
+      "2026-09-15T00:00:00Z",
+    );
+  });
+
+  it("falls back to closes_at when place_by_at is unset", () => {
+    expect(effectivePoolDeadline(null, "2026-10-01T00:00:00Z")).toBe("2026-10-01T00:00:00Z");
+  });
+
+  it("is null when neither is set", () => {
+    expect(effectivePoolDeadline(null, null)).toBeNull();
   });
 });
 
@@ -5033,6 +5060,470 @@ describe.skipIf(!HAS_DB)("RS007: a promoted entry's reminder does not block a st
 });
 
 // ---------------------------------------------------------------------------
+// RS012 stage 3 — closing the inert seam: putRegistrationSettings/
+// getRegistrationSettings now read/write `place_by_at` (V389, Stage 2). Before
+// this, the pool-deadline sweep test suite below could only ever set the
+// column via raw SQL ("the write-path UI/API is a later RS012 stage, not this
+// one" — its own comment on the "extending place_by_at" test). This proves an
+// organiser-facing write actually lands the value the sweep reads.
+// ---------------------------------------------------------------------------
+
+describe.skipIf(!HAS_DB)("RS012: putRegistrationSettings/getRegistrationSettings — place_by_at", () => {
+  it("an organiser-set place_by_at round-trips through PUT, GET, and a direct read of registration_settings", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { division } = await rig(owner);
+
+    const saved = await putRegistrationSettings(owner, division.id, {
+      ...SETTINGS_BASE,
+      entrant_kind: "team",
+      allow_free_agents: true,
+      place_by_at: "2026-03-15T00:00:00Z",
+    });
+    expect(new Date(saved.place_by_at!).toISOString()).toBe("2026-03-15T00:00:00.000Z");
+
+    const read = await getRegistrationSettings(owner, division.id);
+    expect(new Date(read.place_by_at!).toISOString()).toBe("2026-03-15T00:00:00.000Z");
+
+    // The sweep (Stage 2, registrations.ts ~:5195) reads this column with a
+    // plain `select place_by_at ... from registration_settings` — proving
+    // THAT read sees what this write-path just sent, not just this usecase's
+    // own return values, is the actual seam this stage closes.
+    const [row] = await sql<{ place_by_at: Date | null }[]>`
+      select place_by_at from registration_settings where division_id = ${division.id}`;
+    expect(row!.place_by_at?.toISOString()).toBe("2026-03-15T00:00:00.000Z");
+  });
+
+  it("explicitly setting place_by_at to null clears a previously-set value back to the closes_at default", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { division } = await rig(owner);
+
+    await putRegistrationSettings(owner, division.id, {
+      ...SETTINGS_BASE,
+      entrant_kind: "team",
+      allow_free_agents: true,
+      place_by_at: "2026-03-15T00:00:00Z",
+    });
+    // Sanity check the first save actually took effect, so the "clears back
+    // to null" assertions below cannot pass vacuously against a column that
+    // was already null the whole time.
+    const withValue = await getRegistrationSettings(owner, division.id);
+    expect(withValue.place_by_at).not.toBeNull();
+
+    // A second, FULL-REPLACE save with place_by_at explicitly null — not
+    // omitted — must clear it, not leave the first save's value stranded.
+    const cleared = await putRegistrationSettings(owner, division.id, {
+      ...SETTINGS_BASE,
+      entrant_kind: "team",
+      allow_free_agents: true,
+      place_by_at: null,
+    });
+    expect(cleared.place_by_at).toBeNull();
+
+    const read = await getRegistrationSettings(owner, division.id);
+    expect(read.place_by_at).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RS012 ruling 2 — sweepRegistrations' pool-deadline pass: an unplaced solo
+// sign-up past its place-by date (default: the division's own closes_at) is
+// auto-withdrawn and, if paid, auto-refunded UNCONDITIONALLY — reusing this
+// sweep's own machinery rather than a second money path (owner ruling).
+// ---------------------------------------------------------------------------
+
+describe.skipIf(!HAS_DB)("RS012: sweepRegistrations pool-deadline pass", () => {
+  /** A team division that accepts solo sign-ups, paid by card. `closesAt`
+   *  seeds the division's OWN registration close — the ruling's default
+   *  fallback for an organiser who never sets `place_by_at` explicitly. */
+  async function poolRig(opts: { feeCents?: number; closesAt?: string | null } = {}) {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    await sql`update organizations
+              set stripe_charges_enabled = true, stripe_account_id = ${"acct_" + randomUUID().slice(0, 8)}
+              where id = ${orgId}`;
+    const { competition, division } = await rig(owner);
+    const settings = await putRegistrationSettings(owner, division.id, {
+      ...SETTINGS_BASE,
+      entrant_kind: "team",
+      allow_free_agents: true,
+      payment_method: "stripe",
+      fee_cents: opts.feeCents ?? 500,
+      closes_at: opts.closesAt ?? null,
+    });
+    return { orgId, owner, competition, division, settings };
+  }
+
+  /** One solo sign-up (`free_agent = true`) with its own roster row — see
+   *  this suite's own memory note (reference_free_agent_own_player_row_
+   *  exists_before_assignment): a solo sign-up's `registration_players` row
+   *  lives under its OWN registration from submit time, separate from the
+   *  row `assignSoloSignUp` later adds under the team. `seedRegistration`
+   *  has no free-agent option of its own (submitRegistration itself is long
+   *  deleted, RS001 demolition), so this flips the column after the fixture
+   *  insert rather than duplicating its whole body for one column. */
+  async function seedSoloSignUp(
+    competition: { id: string },
+    division: { id: string },
+    settings: { fee_cents: number; currency: string; payment_method: "offline" | "stripe" },
+    over: Parameters<typeof seedRegistration>[3] = {},
+  ) {
+    const displayName = over.displayName ?? "Solo Signer";
+    const res = await seedRegistration(competition.id, division.id, settings, {
+      ...over,
+      displayName,
+      players: over.players ?? [{ name: displayName }],
+    });
+    await sql`update registrations set free_agent = true where id = ${res.registration.id}`;
+    return { ...res, registration: await loadWithGroup(res.registration.id) };
+  }
+
+  /** A team entry with room for exactly one more player — `generic` (this
+   *  suite's `rig()` sport) declares `lineup: { size: 1, benchMax: 0 }`, so
+   *  a target seeded with ZERO players of its own has a roster cap of
+   *  1/1 once the solo sign-up is placed. Seeded directly (registration-
+   *  assign.test.ts's own `seedEntry` convention, same "submitRegistration
+   *  is deleted" reason). */
+  async function seedTargetTeam(competitionId: string, divisionId: string) {
+    const [group] = await sql<{ id: string }[]>`
+      insert into registration_groups (competition_id, contact_name, contact_email, access_token_hash, currency)
+      values (${competitionId}, 'Contact', ${`c-${randomUUID().slice(0, 8)}@test.local`}, ${`tok-${randomUUID()}`}, 'gbp')
+      returning id`;
+    const [reg] = await sql<{ id: string }[]>`
+      insert into registrations (group_id, division_id, display_name, free_agent, status)
+      values (${group.id}, ${divisionId}, 'Target Team', false, 'confirmed')
+      returning id`;
+    return reg;
+  }
+
+  const auditRows = async (registrationId: string, type: string) =>
+    sql<{ payload: Record<string, unknown> }[]>`
+      select payload from competition_events
+      where type = ${type} and payload ->> 'registration_id' = ${registrationId}`;
+
+  it("a paid, unplaced solo sign-up past its place-by deadline is withdrawn and fully refunded", async () => {
+    const { competition, division, settings } = await poolRig({ closesAt: "2020-01-01T00:00:00Z" });
+    const solo = await seedSoloSignUp(competition, division, settings);
+    await handleRegistrationCheckoutCompleted(fakeSession(solo.registration.id, 500));
+    stripeMock.refundCreate.mockClear();
+
+    const res = await sweepRegistrations("https://test.local");
+    expect(res.poolDeadlinePassed).toBe(1);
+
+    const row = await loadWithGroup(solo.registration.id);
+    expect(row.status).toBe("withdrawn");
+    expect(row.withdrawn_at).not.toBeNull();
+    expect(row.refunded_cents).toBe(500);
+
+    expect(stripeMock.refundCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payment_intent: expect.stringContaining("pi_test_"),
+        reverse_transfer: true,
+        refund_application_fee: true,
+      }),
+    );
+
+    const withdrawnAudits = await auditRows(solo.registration.id, "registration.withdrawn");
+    expect(withdrawnAudits).toHaveLength(1);
+    expect(withdrawnAudits[0]!.payload.reason).toBe("pool_deadline_unplaced");
+    expect(withdrawnAudits[0]!.payload.by).toBe("system");
+
+    const refundedAudits = await auditRows(solo.registration.id, "registration.refunded");
+    expect(refundedAudits).toHaveLength(1);
+    expect(refundedAudits[0]!.payload.mode).toBe("auto_pool_deadline");
+    expect(refundedAudits[0]!.payload.amount_cents).toBe(500);
+  });
+
+  it("an already-assigned solo sign-up past the same deadline is untouched", async () => {
+    const { owner, competition, division, settings } = await poolRig({ closesAt: "2020-01-01T00:00:00Z" });
+    const solo = await seedSoloSignUp(competition, division, settings);
+    await handleRegistrationCheckoutCompleted(fakeSession(solo.registration.id, 500));
+    const target = await seedTargetTeam(competition.id, division.id);
+    await assignSoloSignUp(owner, {
+      registration_id: solo.registration.id,
+      target_registration_id: target.id,
+    });
+    stripeMock.refundCreate.mockClear();
+
+    const res = await sweepRegistrations("https://test.local");
+    expect(res.poolDeadlinePassed).toBe(0);
+
+    const row = await loadWithGroup(solo.registration.id);
+    expect(row.status).toBe("confirmed"); // unchanged — still assigned, not withdrawn
+    expect(row.withdrawn_at).toBeNull();
+    expect(stripeMock.refundCreate).not.toHaveBeenCalled();
+    expect(await auditRows(solo.registration.id, "registration.withdrawn")).toHaveLength(0);
+  });
+
+  it("a solo sign-up before its deadline is untouched", async () => {
+    const { competition, division, settings } = await poolRig({ closesAt: "2099-01-01T00:00:00Z" });
+    const solo = await seedSoloSignUp(competition, division, settings);
+    await handleRegistrationCheckoutCompleted(fakeSession(solo.registration.id, 500));
+    stripeMock.refundCreate.mockClear();
+
+    const res = await sweepRegistrations("https://test.local");
+    expect(res.poolDeadlinePassed).toBe(0);
+
+    const row = await loadWithGroup(solo.registration.id);
+    expect(row.status).toBe("confirmed");
+    expect(stripeMock.refundCreate).not.toHaveBeenCalled();
+  });
+
+  // Ruling 2: "the organiser may place them, or extend the date, right up to
+  // it." The row is due by its DEFAULT deadline (closes_at, past) the moment
+  // it is created; extending place_by_at afterwards, before the sweep runs,
+  // must still save it — proving the sweep decides off a LIVE read of
+  // registration_settings, never a value carried on the outer `duePool` row
+  // (regGroupCols does not even select registration_settings columns, so
+  // there is no stale value the per-row pass could fall back to by mistake).
+  it("extending place_by_at to the future stops an otherwise-due row from being swept", async () => {
+    const { competition, division, settings } = await poolRig({ closesAt: "2020-01-01T00:00:00Z" });
+    const solo = await seedSoloSignUp(competition, division, settings);
+    await handleRegistrationCheckoutCompleted(fakeSession(solo.registration.id, 500));
+    stripeMock.refundCreate.mockClear();
+
+    // The organiser's own edit — direct SQL, since the write-path UI/API is
+    // a later RS012 stage, not this one.
+    await sql`update registration_settings set place_by_at = now() + interval '1 day'
+              where division_id = ${division.id}`;
+
+    const res = await sweepRegistrations("https://test.local");
+    expect(res.poolDeadlinePassed).toBe(0);
+
+    const row = await loadWithGroup(solo.registration.id);
+    expect(row.status).toBe("confirmed");
+    expect(stripeMock.refundCreate).not.toHaveBeenCalled();
+  });
+
+  it("a never-paid unplaced solo sign-up past deadline is withdrawn with NO refund attempt, and its cart's stale expires_at is cleared", async () => {
+    const { competition, division, settings } = await poolRig({ closesAt: "2020-01-01T00:00:00Z" });
+    const solo = await seedSoloSignUp(competition, division, settings); // left 'pending' — never paid
+    stripeMock.refundCreate.mockClear();
+
+    // seedRegistration's own stripeWindow branch sets the cart's expires_at
+    // (48h pay window) for a pending stripe entry — this solo sign-up is the
+    // ONLY entry in its cart, so clearExpiresIfNoLongerNeeded should null it
+    // once withdrawn (its own doc comment: called from withdrawCore and the
+    // sweep's other passes; this fifth pass was missing it — RS012 review
+    // fix — leaving a withdrawn cart's deadline stale forever).
+    const [before] = await sql<{ expires_at: Date | null }[]>`
+      select expires_at from registration_groups where id = ${solo.registration.group_id}`;
+    expect(before!.expires_at).not.toBeNull();
+
+    const res = await sweepRegistrations("https://test.local");
+    expect(res.poolDeadlinePassed).toBe(1);
+
+    const row = await loadWithGroup(solo.registration.id);
+    expect(row.status).toBe("withdrawn");
+    expect(row.refunded_cents).toBe(0);
+    expect(stripeMock.refundCreate).not.toHaveBeenCalled();
+    expect(await auditRows(solo.registration.id, "registration.refunded")).toHaveLength(0);
+    expect(await auditRows(solo.registration.id, "registration.withdrawn")).toHaveLength(1);
+
+    const [after] = await sql<{ expires_at: Date | null }[]>`
+      select expires_at from registration_groups where id = ${solo.registration.group_id}`;
+    expect(after!.expires_at).toBeNull();
+  });
+
+  it("place_by_at unset (null) falls back to the division's own closes_at", async () => {
+    const { competition, division, settings } = await poolRig({ closesAt: "2020-01-01T00:00:00Z" });
+    expect(settings.place_by_at).toBeNull(); // the ruling's own default
+    const solo = await seedSoloSignUp(competition, division, settings);
+    await handleRegistrationCheckoutCompleted(fakeSession(solo.registration.id, 500));
+
+    const res = await sweepRegistrations("https://test.local");
+    expect(res.poolDeadlinePassed).toBe(1); // swept off closes_at alone
+
+    const row = await loadWithGroup(solo.registration.id);
+    expect(row.status).toBe("withdrawn");
+  });
+
+  it("with neither place_by_at nor closes_at set, there is no deadline to enforce and nothing is swept", async () => {
+    const { competition, division, settings } = await poolRig({ closesAt: null });
+    const solo = await seedSoloSignUp(competition, division, settings);
+    await handleRegistrationCheckoutCompleted(fakeSession(solo.registration.id, 500));
+
+    const res = await sweepRegistrations("https://test.local");
+    expect(res.poolDeadlinePassed).toBe(0);
+
+    const row = await loadWithGroup(solo.registration.id);
+    expect(row.status).toBe("confirmed");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RS012 `/code-review high` finding 1 — a solo sign-up's own status change
+// leaving SPOT_HOLDERS (withdraw here; expiry below; reject is covered in
+// registration-approval.test.ts, Site B) must never promote a waitlisted
+// TEAM: a pooled solo sign-up (free_agent = true) never counted toward this
+// division's TEAM capacity in the first place (registration-submit.ts's own
+// `taken` gate excludes it — RS012 ruling 1), so treating its own status
+// change as "a team slot freed" pushes the division past its configured
+// capacity with no re-check (promoteOldestWaitlisted/promoteWaitlistedRow
+// trust the caller that a slot is genuinely free). Fixed by `freesTeamSlot`
+// (registrations.ts, beside promoteOldestWaitlisted).
+// ---------------------------------------------------------------------------
+
+describe.skipIf(!HAS_DB)("RS012 `/code-review high` finding 1 — freesTeamSlot (withdrawCore + sweep expiry)", () => {
+  /** Same shape as this file's own `poolRig` (RS012 pool-deadline describe,
+   *  above) plus an explicit `capacity` — a team division that accepts solo
+   *  sign-ups, paid by card. */
+  async function capRig(opts: { feeCents?: number; capacity?: number | null } = {}) {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    await sql`update organizations
+              set stripe_charges_enabled = true, stripe_account_id = ${"acct_" + randomUUID().slice(0, 8)}
+              where id = ${orgId}`;
+    const { competition, division } = await rig(owner);
+    const settings = await putRegistrationSettings(owner, division.id, {
+      ...SETTINGS_BASE,
+      entrant_kind: "team",
+      allow_free_agents: true,
+      payment_method: "stripe",
+      fee_cents: opts.feeCents ?? 500,
+      capacity: opts.capacity ?? 1,
+    });
+    return { orgId, owner, competition, division, settings };
+  }
+
+  /** A team entry (`free_agent = false`) seeded directly at an explicit
+   *  status — `submitRegistration` is long deleted (RS001 demolition), same
+   *  reason this file's own `seedTargetTeam` (RS012 pool-deadline describe,
+   *  above) seeds directly. `amountCents`/`"pending"` together also stamp
+   *  the cart's `expires_at` 1 hour in the PAST, so a pending team entry is
+   *  immediately due for the sweep's overdue pass without a second update. */
+  async function seedTeamEntry(
+    competitionId: string,
+    divisionId: string,
+    status: "confirmed" | "pending" | "waitlisted",
+    amountCents = 0,
+  ) {
+    const pastDue = amountCents > 0 && status === "pending";
+    const [group] = await sql<{ id: string }[]>`
+      insert into registration_groups
+        (competition_id, contact_name, contact_email, access_token_hash, currency,
+         amount_cents, payment_method, expires_at)
+      values (
+        ${competitionId}, 'Team Contact', ${`team-${randomUUID().slice(0, 8)}@test.local`},
+        ${`tok-${randomUUID()}`}, 'gbp', ${amountCents}, ${amountCents > 0 ? "stripe" : null},
+        ${pastDue ? sql`now() - interval '1 hour'` : null}
+      )
+      returning id`;
+    const [reg] = await sql<{ id: string }[]>`
+      insert into registrations (group_id, division_id, display_name, free_agent, status, amount_cents)
+      values (${group.id}, ${divisionId}, 'A Team', false, ${status}, ${amountCents})
+      returning id`;
+    return reg;
+  }
+
+  /** One solo sign-up (`free_agent = true`) — same pattern as this file's own
+   *  `seedSoloSignUp` (RS012 pool-deadline describe, above): `seedRegistration`
+   *  has no free-agent option of its own, so this flips the column after the
+   *  fixture insert. */
+  async function seedSolo(
+    competition: { id: string },
+    division: { id: string },
+    settings: { fee_cents: number; currency: string; payment_method: "offline" | "stripe" },
+    over: Parameters<typeof seedRegistration>[3] = {},
+  ) {
+    const displayName = over.displayName ?? "Solo Signer";
+    const res = await seedRegistration(competition.id, division.id, settings, {
+      ...over,
+      displayName,
+      players: over.players ?? [{ name: displayName }],
+    });
+    await sql`update registrations set free_agent = true where id = ${res.registration.id}`;
+    return { ...res, registration: await loadWithGroup(res.registration.id) };
+  }
+
+  /** THIS division's own confirmed team-slot count — never a global tally
+   *  (this suite's own standing warning: sweepRegistrations' returned
+   *  counters are platform-wide and pick up other orgs' rows too). */
+  const teamCount = async (divisionId: string) => {
+    const [row] = await sql<{ n: number }[]>`
+      select count(*)::int as n from registrations
+      where division_id = ${divisionId} and free_agent = false
+        and status in ('pending', 'paid', 'confirmed')`;
+    return row!.n;
+  };
+
+  it("Site A (negative): a pooled solo sign-up self-withdrawing does not promote a waitlisted team past capacity", async () => {
+    const { competition, division, settings } = await capRig({ capacity: 1 });
+    await seedTeamEntry(competition.id, division.id, "confirmed");
+    const waitingTeam = await seedTeamEntry(competition.id, division.id, "waitlisted");
+    const solo = await seedSolo(competition, division, settings, { status: "confirmed" });
+
+    // Reverting Site A's fix (freesTeamSlot back to a bare SPOT_HOLDERS
+    // check) makes this fail: the waitlisted team gets promoted to 'pending'
+    // and teamCount reads 2 against a configured capacity of 1.
+    await withdrawRegistrationPublic(solo.registration.id, solo.access_token);
+
+    const [afterTeam] = await sql<{ status: string }[]>`
+      select status from registrations where id = ${waitingTeam.id}`;
+    expect(afterTeam!.status).toBe("waitlisted");
+    expect(await teamCount(division.id)).toBe(1);
+  });
+
+  it("Site A (positive): a genuine team withdrawal still promotes the waitlisted team", async () => {
+    const { owner, competition, division } = await capRig({ capacity: 1 });
+    const confirmedTeam = await seedTeamEntry(competition.id, division.id, "confirmed");
+    const waitingTeam = await seedTeamEntry(competition.id, division.id, "waitlisted");
+
+    // A mutation that made freesTeamSlot always return false must turn THIS
+    // test red — proving the fix did not just disable promotion outright.
+    await withdrawRegistrationOrganiser(owner, confirmedTeam.id);
+
+    const [afterTeam] = await sql<{ status: string }[]>`
+      select status from registrations where id = ${waitingTeam.id}`;
+    expect(afterTeam!.status).toBe("pending");
+  });
+
+  it("Site C (negative): an unpaid pooled solo sign-up expiring does not promote a waitlisted team past capacity", async () => {
+    const { competition, division, settings } = await capRig({ capacity: 1, feeCents: 500 });
+    await seedTeamEntry(competition.id, division.id, "confirmed");
+    const waitingTeam = await seedTeamEntry(competition.id, division.id, "waitlisted");
+    const solo = await seedSolo(competition, division, settings); // 'pending', 500, stripe
+    // Push the cart's pay window into the past so the sweep's overdue pass
+    // (registrations.ts's `overdue` query) actually selects it.
+    await sql`
+      update registration_groups set expires_at = now() - interval '1 hour'
+      where id = ${solo.registration.group_id}`;
+
+    await sweepRegistrations("https://test.local");
+
+    const [afterSolo] = await sql<{ status: string }[]>`
+      select status from registrations where id = ${solo.registration.id}`;
+    expect(afterSolo!.status, "sanity: the solo itself really did expire").toBe("expired");
+
+    // Reverting Site C's fix makes this fail: the waitlisted team gets
+    // promoted to 'pending' off the solo's own expiry.
+    const [afterTeam] = await sql<{ status: string }[]>`
+      select status from registrations where id = ${waitingTeam.id}`;
+    expect(afterTeam!.status).toBe("waitlisted");
+    expect(await teamCount(division.id)).toBe(1);
+  });
+
+  it("Site C (positive): a genuine team entry expiring still promotes the waitlisted team", async () => {
+    const { competition, division } = await capRig({ capacity: 1, feeCents: 500 });
+    const pendingTeam = await seedTeamEntry(competition.id, division.id, "pending", 500);
+    const waitingTeam = await seedTeamEntry(competition.id, division.id, "waitlisted");
+
+    // A mutation that made freesTeamSlot always return false must turn THIS
+    // test red — proving the fix did not just disable promotion outright.
+    await sweepRegistrations("https://test.local");
+
+    const [afterPending] = await sql<{ status: string }[]>`
+      select status from registrations where id = ${pendingTeam.id}`;
+    expect(afterPending!.status, "sanity: the team entry really did expire").toBe("expired");
+
+    const [afterTeam] = await sql<{ status: string }[]>`
+      select status from registrations where id = ${waitingTeam.id}`;
+    expect(afterTeam!.status).toBe("pending");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // RS003 W3a — group-scoped checkout minting (owner rulings 1, 2, 3, 5).
 // Currency validation (ruling 4) is covered above, in "card submit path
 // (spec §3)" — the check lives in createRegistrationCheckout, shared by
@@ -5768,5 +6259,128 @@ describe.skipIf(!HAS_DB)("groupById — ref_code is genuinely nullable (FIX 2 re
     // effect to assert against (see the describe block's own comment).
     const pin: GroupStatusView["ref_code"] = null;
     expect(pin).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RS012 stage 3b — the status page tells a waiting solo sign-up not just
+// THAT it is waiting (RS008/RS009's own awaitingTeamAssignment/
+// assignedTeamName) but BY WHEN it will be auto-refunded if nobody places
+// it: buildGroupStatusView threads the division's own effective place-by
+// date (`coalesce(place_by_at, closes_at)` — the SAME fallback the sweep's
+// own pool-deadline pass already uses, see "RS012: sweepRegistrations
+// pool-deadline pass" above) onto GroupEntryView.pool_place_by_at.
+// ---------------------------------------------------------------------------
+describe.skipIf(!HAS_DB)("RS012 stage 3b: buildGroupStatusView — pool_place_by_at", () => {
+  async function soloPoolRig(placeByAt: string | null, closesAt: string | null = null) {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    const settings = await putRegistrationSettings(owner, division.id, {
+      ...SETTINGS_BASE,
+      entrant_kind: "team",
+      allow_free_agents: true,
+      fee_cents: 0,
+      closes_at: closesAt,
+      place_by_at: placeByAt,
+    });
+    return { owner, competition, division, settings };
+  }
+
+  // Same direct-insert convention as the sweep suite's own seedTargetTeam
+  // above (submitRegistration is long deleted — RS001 demolition).
+  async function seedTargetTeam(competitionId: string, divisionId: string) {
+    const [group] = await sql<{ id: string }[]>`
+      insert into registration_groups (competition_id, contact_name, contact_email, access_token_hash, currency)
+      values (${competitionId}, 'Contact', ${`c-${randomUUID().slice(0, 8)}@test.local`}, ${`tok-${randomUUID()}`}, 'gbp')
+      returning id`;
+    const [reg] = await sql<{ id: string }[]>`
+      insert into registrations (group_id, division_id, display_name, free_agent, status)
+      values (${group.id}, ${divisionId}, 'Target Team', false, 'confirmed')
+      returning id`;
+    return reg;
+  }
+
+  it("an unplaced solo sign-up's entry carries the division's own place_by_at", async () => {
+    const { competition, division, settings } = await soloPoolRig("2026-03-15T00:00:00Z");
+    const { registration, access_token } = await seedRegistration(competition.id, division.id, settings, {
+      players: [{ name: "Solo Signer" }],
+    });
+    await sql`update registrations set free_agent = true where id = ${registration.id}`;
+
+    const view = await groupById(registration.group_id, access_token);
+    expect(view.entries).toHaveLength(1);
+    expect(view.entries[0]!.pool_place_by_at).toBe("2026-03-15T00:00:00.000Z");
+  });
+
+  it("falls back to the division's own closes_at when place_by_at is unset — the sweep's own default", async () => {
+    const { competition, division, settings } = await soloPoolRig(null, "2026-04-01T00:00:00Z");
+    const { registration, access_token } = await seedRegistration(competition.id, division.id, settings, {
+      players: [{ name: "Solo Signer" }],
+    });
+    await sql`update registrations set free_agent = true where id = ${registration.id}`;
+
+    const view = await groupById(registration.group_id, access_token);
+    expect(view.entries[0]!.pool_place_by_at).toBe("2026-04-01T00:00:00.000Z");
+  });
+
+  it("is null once the solo sign-up has been assigned to a team, even though place_by_at is still set on the division", async () => {
+    const { owner, competition, division, settings } = await soloPoolRig("2026-03-15T00:00:00Z");
+    const { registration, access_token } = await seedRegistration(competition.id, division.id, settings, {
+      players: [{ name: "Solo Signer" }],
+    });
+    await sql`update registrations set free_agent = true where id = ${registration.id}`;
+    // assignSoloSignUp requires the source to be confirmed/paid (its own
+    // guard, registration-assign.ts) — a free (fee_cents: 0) division seeds
+    // 'pending' by default, same as every paid one before checkout completes.
+    await confirmRegistration(owner, registration.id);
+    const target = await seedTargetTeam(competition.id, division.id);
+    await assignSoloSignUp(owner, { registration_id: registration.id, target_registration_id: target.id });
+
+    const view = await groupById(registration.group_id, access_token);
+    expect(view.entries[0]!.assigned_team_name).toBe("Target Team");
+    expect(view.entries[0]!.pool_place_by_at).toBeNull();
+  });
+
+  it("is null for a non-free-agent entry, regardless of the division's own place_by_at", async () => {
+    const { competition, division, settings } = await soloPoolRig("2026-03-15T00:00:00Z");
+    const { registration, access_token } = await seedRegistration(competition.id, division.id, settings, {
+      players: [{ name: "Team Captain" }],
+    });
+    // free_agent left at its default (false) — an ordinary team entry.
+
+    const view = await groupById(registration.group_id, access_token);
+    expect(view.entries[0]!.free_agent).toBe(false);
+    expect(view.entries[0]!.pool_place_by_at).toBeNull();
+  });
+
+  it("is null when the division has neither place_by_at nor closes_at set — nothing is enforced, so nothing to show", async () => {
+    const { competition, division, settings } = await soloPoolRig(null, null);
+    const { registration, access_token } = await seedRegistration(competition.id, division.id, settings, {
+      players: [{ name: "Solo Signer" }],
+    });
+    await sql`update registrations set free_agent = true where id = ${registration.id}`;
+
+    const view = await groupById(registration.group_id, access_token);
+    expect(view.entries[0]!.pool_place_by_at).toBeNull();
+  });
+
+  it("is null once withdrawn (e.g. by the sweep), even though the division's place_by_at is still set — /code-review high finding", async () => {
+    // The sweep's own withdrawal (registrations.ts's duePool pass) never
+    // clears place_by_at off the DIVISION — it only flips this ENTRY's
+    // status. Without the terminal-status guard here, this raw field would
+    // still carry a live-looking refund-by date on an already-withdrawn
+    // entry; the only reason nothing broke on screen is that entry-card.tsx
+    // reads it exclusively through poolPlaceByDate (view-model.ts), which
+    // already has this same guard. Pinned here so a future direct consumer
+    // of this raw field cannot reintroduce that gap silently.
+    const { competition, division, settings } = await soloPoolRig("2026-03-15T00:00:00Z");
+    const { registration, access_token } = await seedRegistration(competition.id, division.id, settings, {
+      players: [{ name: "Solo Signer" }],
+    });
+    await sql`update registrations set free_agent = true, status = 'withdrawn' where id = ${registration.id}`;
+
+    const view = await groupById(registration.group_id, access_token);
+    expect(view.entries[0]!.pool_place_by_at).toBeNull();
   });
 });

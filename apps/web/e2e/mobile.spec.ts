@@ -83,6 +83,11 @@ let orgSlug = "";
  *  state. Filled by the setup test below. */
 let statusPath = "";
 let joinPath = "";
+/** RS012 — the POOLED SOLO SIGN-UP's own status page (never assigned in
+ *  this fixture), distinct from `statusPath` above which is the fully-
+ *  formed team's own page and can never render the "waiting"/deadline
+ *  copy this exists to give width coverage to. */
+let soloStatusPath = "";
 
 test("setup: public competition with an entrant-ready division", async ({ page, request }) => {
   const comp = await apiJson<{ id: string; slug: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31",
@@ -155,6 +160,13 @@ test("setup: public competition with an entrant-ready division", async ({ page, 
       // pooled solo sign-up, so without this the picker has nothing to open
       // and its width coverage would pass vacuously.
       allow_free_agents: true,
+      // RS012 — a future place_by_at so the status page's NEW deadline line
+      // (register.status.entry.awaitingTeamDeadline) actually renders for
+      // the pooled solo sign-up seeded below. Without this the line stays
+      // untested at every width, same class of gap as the assign picker's
+      // own comment just above — a division with neither place_by_at nor
+      // closes_at set renders nothing here to measure.
+      place_by_at: "2030-06-01T00:00:00.000Z",
     },
   );
   expect(teamSettings.status).toBeLessThan(300);
@@ -195,7 +207,11 @@ test("setup: public competition with an entrant-ready division", async ({ page, 
   // tab has a row whose "Assign to a team" control exists. A hub with no
   // solo sign-up renders no picker, and the width test below would then be
   // measuring an empty tab.
-  const solo = await apiJson(
+  const solo = await apiJson<{
+    group_id: string;
+    access_token: string;
+    entries: { join_code: string | null }[];
+  }>(
     request,
     `/api/v1/public/orgs/${orgSlug}/competitions/${compSlug}/register`,
     "POST",
@@ -214,6 +230,13 @@ test("setup: public competition with an entrant-ready division", async ({ page, 
     },
   );
   expect(solo.status, "the assign picker needs a pooled solo sign-up to open").toBeLessThan(300);
+  // RS012 — this solo sign-up's OWN status page, distinct from `statusPath`
+  // above (the TEAM's own status page — a fully-formed team can never say
+  // "waiting for a team"). Each entry submitted through a SEPARATE cart gets
+  // its own group_id/access_token, so this is a genuinely different page.
+  soloStatusPath =
+    `/shared/${orgSlug}/${compSlug}/register/status` +
+    `?rid=${solo.data!.group_id}&token=${solo.data!.access_token}`;
   // P11 (D6): import.events has no plan_entitlements row on any plan during
   // rollout (design doc §2.4/R6) — without this override the import route
   // added to "console routes" below renders page.tsx's notFound() instead of
@@ -626,6 +649,12 @@ test("public surfaces: no horizontal scroll (v3/11 gap 12)", async ({ browser })
       // the vacuous pass this file's own #349 comment warns about.
       statusPath,
       joinPath,
+      // RS012 — the pooled solo sign-up's own status page, populated with
+      // the NEW "waiting" + deadline copy (register.status.entry.
+      // awaitingTeam / awaitingTeamDeadline) — untested at every width
+      // until it appears here by name, same rule as RS007's two entries
+      // just above.
+      soloStatusPath,
     ];
     for (const path of routes) {
       // Guards the two RS007 entries: an unset module var would make `goto`
@@ -642,9 +671,38 @@ test("public surfaces: no horizontal scroll (v3/11 gap 12)", async ({ browser })
     await expect(anon.getByText(`Mobile Team ${TAG}`).first()).toBeVisible();
     await anon.goto(joinPath, { waitUntil: "load" });
     await expect(anon.getByText(`Mobile Mate ${TAG}`).first()).toBeVisible();
+    // RS012 — the pooled solo sign-up is never assigned in this fixture, so
+    // its own status page must show the "still waiting" copy AND (place_by_at
+    // is set in the setup test above) the new deadline line — proving BOTH
+    // render at this width, not merely that the page loads without overflow.
+    await anon.goto(soloStatusPath, { waitUntil: "load" });
+    await expect(
+      anon.getByText(/waiting for a team/i),
+      "an unassigned solo sign-up must show the waiting notice",
+    ).toBeVisible();
+    await expect(
+      anon.getByText(/automatically refunded/i),
+      "a solo sign-up with a place_by_at set must show the RS012 deadline line",
+    ).toBeVisible();
   } finally {
     await anonCtx.close();
   }
+});
+
+test("RS012: the Registrants tab pool summary banner holds at this width", async ({ page }) => {
+  // The banner is page-level content (unlike the assign sheet just below,
+  // which is behind a click) — but it renders ONLY when some division has a
+  // pooled solo sign-up (registration-hub-registrants-panel.tsx), so the
+  // plain "console routes" sweep visiting this same URL earlier in this file
+  // proves only that the PAGE doesn't overflow, never that the banner itself
+  // is on screen or holds at this width. The seeded solo sign-up (setup test
+  // above) is what makes it render here.
+  await page.goto(`/o/${orgSlug}/c/${compSlug}/registration?tab=registrants`, { waitUntil: "load" });
+  await expect(
+    page.locator("[data-registration-hub-pool-summary]"),
+    "the pool summary banner must render for the seeded pooled solo sign-up",
+  ).toBeVisible({ timeout: 15_000 });
+  await expectNoHorizontalScroll(page);
 });
 
 test("RS009: the assign sheet holds at this width, and the hub does not scroll behind it", async ({

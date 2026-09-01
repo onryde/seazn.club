@@ -402,6 +402,105 @@ describe.skipIf(!HAS_DB)("approveRegistration", () => {
 });
 
 // ---------------------------------------------------------------------------
+// RS012 `/code-review high` finding 1, Site B — rejectRegistration must not
+// promote a waitlisted TEAM off a pooled solo sign-up's own rejection. Same
+// bug/fix as withdrawCore's Site A and the sweep's Site C
+// (registrations.test.ts): a solo sign-up (free_agent = true) never counted
+// toward this division's TEAM capacity in the first place
+// (registration-submit.ts's own `taken` gate excludes it — RS012 ruling 1),
+// so rejectRegistration must gate its promoteOldestWaitlisted call on
+// freesTeamSlot(reg), not call it unconditionally.
+// ---------------------------------------------------------------------------
+
+describe.skipIf(!HAS_DB)("rejectRegistration — RS012 `/code-review high` finding 1 (Site B)", () => {
+  /** A team entry (`free_agent = false`) seeded directly at an explicit
+   *  status — `submitRegistration` is long deleted (RS001 demolition), same
+   *  reason this file's own fixtures (seedRegistration) seed directly. */
+  async function seedTeamEntry(
+    competitionId: string,
+    divisionId: string,
+    status: "confirmed" | "pending" | "waitlisted",
+  ) {
+    const [group] = await sql<{ id: string }[]>`
+      insert into registration_groups (competition_id, contact_name, contact_email, access_token_hash, currency)
+      values (
+        ${competitionId}, 'Team Contact', ${`team-${randomUUID().slice(0, 8)}@test.local`},
+        ${`tok-${randomUUID()}`}, 'gbp'
+      )
+      returning id`;
+    const [reg] = await sql<{ id: string }[]>`
+      insert into registrations (group_id, division_id, display_name, free_agent, status)
+      values (${group.id}, ${divisionId}, 'A Team', false, ${status})
+      returning id`;
+    return reg;
+  }
+
+  /** THIS division's own confirmed team-slot count — never a global tally. */
+  const teamCount = async (divisionId: string) => {
+    const [row] = await sql<{ n: number }[]>`
+      select count(*)::int as n from registrations
+      where division_id = ${divisionId} and free_agent = false
+        and status in ('pending', 'paid', 'confirmed')`;
+    return row!.n;
+  };
+
+  it("negative: rejecting a pooled solo sign-up does not promote a waitlisted team past capacity", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    await seedSettings(division.id, {
+      entrant_kind: "team",
+      allow_free_agents: true,
+      approval: "manual",
+      capacity: 1,
+      fee_cents: 0,
+    });
+    await seedTeamEntry(competition.id, division.id, "confirmed");
+    const waitingTeam = await seedTeamEntry(competition.id, division.id, "waitlisted");
+    const solo = await seedRegistration(
+      competition.id,
+      division.id,
+      { fee_cents: 0, currency: "gbp", payment_method: "offline" },
+      { players: [{ name: "Solo Signer" }] },
+    );
+    await sql`update registrations set free_agent = true where id = ${solo.registration.id}`;
+
+    // Reverting Site B's fix (an unconditional promoteOldestWaitlisted call)
+    // makes this fail: the waitlisted team gets promoted to 'pending' and
+    // teamCount reads 2 against a configured capacity of 1.
+    await rejectRegistration(owner, solo.registration.id);
+
+    const [afterTeam] = await sql<{ status: string }[]>`
+      select status from registrations where id = ${waitingTeam.id}`;
+    expect(afterTeam!.status).toBe("waitlisted");
+    expect(await teamCount(division.id)).toBe(1);
+  });
+
+  it("positive: rejecting a genuine team entry still promotes the waitlisted team", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    await seedSettings(division.id, {
+      entrant_kind: "team",
+      allow_free_agents: true,
+      approval: "manual",
+      capacity: 1,
+      fee_cents: 0,
+    });
+    const pendingTeam = await seedTeamEntry(competition.id, division.id, "pending");
+    const waitingTeam = await seedTeamEntry(competition.id, division.id, "waitlisted");
+
+    // A mutation that made freesTeamSlot always return false must turn THIS
+    // test red — proving the fix did not just disable promotion outright.
+    await rejectRegistration(owner, pendingTeam.id);
+
+    const [afterTeam] = await sql<{ status: string }[]>`
+      select status from registrations where id = ${waitingTeam.id}`;
+    expect(afterTeam!.status).toBe("pending");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // RS002 W5 whole-branch review MAJOR: ruling B (registrations.ts,
 // confirmPaidRegistration) can leave a Stripe-paid manual-approval entry at
 // exactly 'paid' awaiting review. Before this, that state could be approved

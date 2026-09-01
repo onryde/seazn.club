@@ -11,10 +11,11 @@ import {
 
 describe("SECTION_FIELDS — every ConfigFieldKey is covered exactly once", () => {
   // RS007/V380 added age_cutoff_month/age_cutoff_day/eligibility_note (15 -> 18).
-  it("covers all 18 known fields with no duplicates across sections", () => {
+  // RS012/V389 added place_by_at (18 -> 19).
+  it("covers all 19 known fields with no duplicates across sections", () => {
     const all = SECTION_IDS.flatMap((id) => SECTION_FIELDS[id]);
-    expect(all).toHaveLength(18);
-    expect(new Set(all).size).toBe(18);
+    expect(all).toHaveLength(19);
+    expect(new Set(all).size).toBe(19);
   });
 });
 
@@ -31,6 +32,10 @@ describe("sectionForField", () => {
     expect(sectionForField("age_cutoff_month")).toBe("eligibility");
     expect(sectionForField("age_cutoff_day")).toBe("eligibility");
     expect(sectionForField("eligibility_note")).toBe("eligibility");
+  });
+
+  it("maps place_by_at (RS012/V389) to eligibility, alongside allow_free_agents — it gates on that toggle, not on payment_method", () => {
+    expect(sectionForField("place_by_at")).toBe("eligibility");
   });
 });
 

@@ -241,6 +241,12 @@ export interface RegistrationSettingsRow {
    * would charge the full team fee to someone told it was free.
    */
   free_agent_fee_cents: number | null;
+  /** V389/RS012 ruling 2 — after this passes, an unplaced solo sign-up is
+   *  auto-refunded and withdrawn by `sweepRegistrations`'s pool-deadline
+   *  pass. NULL defaults to `closes_at` at READ time (never backfilled into
+   *  this column), so an organiser who never sets one still gets the
+   *  ruling's default: the division's own registration close. */
+  place_by_at: Date | null;
   updated_at: Date | null;
 }
 
@@ -498,7 +504,7 @@ const SETTINGS_COLS = [
   "division_id", "enabled", "entrant_kind", "opens_at", "closes_at",
   "capacity", "fee_cents", "refund_lock_at", "form_fields",
   "payment_method", "payment_instructions", "approval", "allow_free_agents",
-  "free_agent_fee_cents", "updated_at",
+  "free_agent_fee_cents", "place_by_at", "updated_at",
 ] as const;
 
 /** Statuses that hold a capacity spot. Imported from `@/lib/registration-
@@ -1092,6 +1098,19 @@ export async function joinExistingEntrant(
   await tx`
     update registration_players set person_id = ${personId}, updated_at = now()
     where id = ${player.id}`;
+}
+
+/** RS012 ruling 1 — a status leaving SPOT_HOLDERS only frees a TEAM slot
+ *  when the entry itself was ever counted as one; a solo sign-up
+ *  (`free_agent = true`) never was (registration-submit.ts's `taken` gate
+ *  excludes it), so its own withdrawal/rejection/expiry must never trigger
+ *  a waitlist promotion. Found by `/code-review high`: withdrawCore and
+ *  rejectRegistration both promoted a waitlisted team off a pooled solo
+ *  sign-up leaving SPOT_HOLDERS, pushing a division past its configured
+ *  capacity with no re-check (promoteOldestWaitlisted trusts the caller
+ *  that a slot is genuinely free). */
+export function freesTeamSlot(row: { status: string; free_agent: boolean }): boolean {
+  return (SPOT_HOLDERS as readonly string[]).includes(row.status) && !row.free_agent;
 }
 
 /**
@@ -1698,6 +1717,7 @@ const DEFAULT_SETTINGS: Omit<RegistrationSettingsRow, "division_id"> = {
   approval: "auto",
   allow_free_agents: false,
   free_agent_fee_cents: null,
+  place_by_at: null,
   updated_at: null,
 };
 
@@ -1823,14 +1843,14 @@ export async function putRegistrationSettings(
     const [row] = await tx<RegistrationSettingsRow[]>`
       insert into registration_settings
         (division_id, enabled, entrant_kind, opens_at, closes_at, capacity,
-         fee_cents, refund_lock_at, form_fields,
+         fee_cents, refund_lock_at, place_by_at, form_fields,
          payment_method, payment_instructions, approval, allow_free_agents,
          free_agent_fee_cents, updated_at)
       values
         (${divisionId}, ${input.enabled}, ${entrantKind},
          ${input.opens_at ?? null}, ${input.closes_at ?? null},
          ${input.capacity ?? null}, ${feeCents},
-         ${input.refund_lock_at ?? null}, ${tx.json(formFields as never)},
+         ${input.refund_lock_at ?? null}, ${input.place_by_at ?? null}, ${tx.json(formFields as never)},
          ${method}, ${input.payment_instructions?.trim() || null},
          ${approval}, ${allowFreeAgents}, ${freeAgentFeeCents}, now())
       on conflict (division_id) do update set
@@ -1841,6 +1861,7 @@ export async function putRegistrationSettings(
         capacity             = excluded.capacity,
         fee_cents            = excluded.fee_cents,
         refund_lock_at       = excluded.refund_lock_at,
+        place_by_at          = excluded.place_by_at,
         form_fields          = excluded.form_fields,
         payment_method       = excluded.payment_method,
         payment_instructions = excluded.payment_instructions,
@@ -1980,9 +2001,14 @@ export async function publicRegistrationInfo(
     select rs.*, d.name, d.slug, d.sport_key, d.category, d.age_min, d.age_max, d.youth,
            d.age_cutoff_month, d.age_cutoff_day,
            d.eligibility_note,
+           -- RS012 ruling 1: capacity/active counts TEAM entries only — a
+           -- solo sign-up ("free agent") never occupies a team slot, here or
+           -- at the submit-time gate this display must agree with
+           -- (registration-submit.ts).
            (select count(*)::int from registrations r
              where r.division_id = rs.division_id
-               and r.status in ${sql([...SPOT_HOLDERS])}) as active,
+               and r.status in ${sql([...SPOT_HOLDERS])}
+               and r.free_agent = false) as active,
            (select count(*)::int from registrations r
              where r.division_id = rs.division_id
                and r.status = 'waitlisted') as waitlisted
@@ -3848,6 +3874,12 @@ export interface GroupEntryView {
    *  the entry was MADE and never flips back, so on its own it would tell a
    *  placed player they are still waiting, forever. */
   assigned_team_name: string | null;
+  /** RS012 — the effective place-by date for a solo sign-up STILL in the
+   *  pool (division place_by_at, else its closes_at — Stage 2's sweep own
+   *  fallback, not re-derived). Null once assigned (nothing left to warn
+   *  about) and null on every non-solo-sign-up entry, mirroring
+   *  assigned_team_name's own null convention. */
+  pool_place_by_at: string | null;
   join_code: string | null;
   /** RS007: whether the GENERIC (no player_id) claim link is valid for this
    *  entry — false for a `pair` (its fixed two-person roster leaves no room
@@ -4044,7 +4076,12 @@ async function buildGroupStatusView(
   const entries = await sql<
     (Omit<
       GroupEntryView,
-      "players" | "refund_policy" | "promotion_expires_at" | "allows_new_joiner" | "payment_method"
+      | "players"
+      | "refund_policy"
+      | "promotion_expires_at"
+      | "allows_new_joiner"
+      | "payment_method"
+      | "pool_place_by_at"
     > & {
       refunded_cents: number;
       promotion_expires_at: Date | null;
@@ -4090,12 +4127,30 @@ async function buildGroupStatusView(
             refund_lock_at: Date | null;
             entrant_kind: RegistrationSettingsRow["entrant_kind"];
             payment_method: RegistrationSettingsRow["payment_method"];
+            place_by_at: Date | null;
+            closes_at: Date | null;
           }[]
         >`
-          select division_id, refund_lock_at, entrant_kind, payment_method from registration_settings
+          select division_id, refund_lock_at, entrant_kind, payment_method, place_by_at, closes_at
+          from registration_settings
           where division_id in ${sql(divisionIds)}`
       : [];
   const refundLockByDivision = new Map(settingsRows.map((s) => [s.division_id, s.refund_lock_at]));
+  // RS012 stage 3b: the SAME `coalesce(place_by_at, closes_at)` fallback
+  // Stage 2's own sweep pass already uses (this file's pool-deadline pass) —
+  // not re-derived, so the status page's "by when" line can never disagree
+  // with the deadline that actually enforces it.
+  const poolPlaceByDivision = new Map(
+    settingsRows.map((s) => [
+      s.division_id,
+      // RS012 `/code-review high` finding 2 — the ONE `effectivePoolDeadline`
+      // copy (beside rosterCapExpr, this file). Both inputs here are
+      // Date | null (settingsRows' own column types), so the cast just
+      // narrows the helper's broader Date | string | null return back to
+      // what this Map's downstream `.toISOString()` reader needs.
+      effectivePoolDeadline(s.place_by_at, s.closes_at) as Date | null,
+    ]),
+  );
   // A pair's roster is fixed at exactly two (registration-submit.ts's own
   // structural check + rosterIssues at submit) — its join_code only ever
   // lets the PARTNER claim their already-typed-in slot; `joinTeamEntry`
@@ -4208,6 +4263,23 @@ async function buildGroupStatusView(
       // roster row.
       entrant_kind: e.free_agent ? "individual" : (entrantKindByDivision.get(e.division_id) ?? "individual"),
       payment_method: paymentMethodByDivision.get(e.division_id) ?? "offline",
+      // RS012 stage 3b, widened by a later `/code-review high` finding:
+      // awaitingTeamAssignment (view-model.ts) ALSO requires the entry not
+      // be in a terminal status (withdrawn/rejected/expired) — added there
+      // after the walkthrough caught a withdrawn entry still reading as
+      // "waiting". This field originally omitted that third check (masked
+      // only because its one consumer, poolPlaceByDate, re-derives via the
+      // guarded predicate and discards it for terminal entries) — matched
+      // here now so a future direct consumer of this raw field (export,
+      // admin view, a new API surface) can never show a live refund-by date
+      // on an already-withdrawn/rejected/expired solo sign-up. Inlined
+      // rather than imported: this is a plain data-assembly function with no
+      // dependency on the view-model file, matching this codebase's
+      // layering direction.
+      pool_place_by_at:
+        e.free_agent && !e.assigned_team_name && !isTerminalRegistrationStatus(e.status)
+          ? (poolPlaceByDivision.get(e.division_id)?.toISOString() ?? null)
+          : null,
       players: playersByEntry.get(e.id) ?? [],
       refund_policy: resolveRefundPolicy(
         refundLockByDivision.get(e.division_id) ?? null,
@@ -4571,7 +4643,7 @@ async function withdrawCore(reg: RegistrationWithGroupRow, actorId: string | nul
     if (locked.status === "rejected") {
       throw new HttpError(422, "This registration was rejected and cannot be withdrawn");
     }
-    const freedSpot = (SPOT_HOLDERS as readonly string[]).includes(locked.status);
+    const freedSpot = freesTeamSlot(locked);
     await tx`
       update registrations
       set status = 'withdrawn', withdrawn_at = now(), updated_at = now()
@@ -4745,11 +4817,18 @@ const REMINDER_LEASE_MINUTES = 5;
 
 export async function sweepRegistrations(
   origin: string,
-): Promise<{ reminded: number; expired: number; promoted: number; lapsed: number }> {
+): Promise<{
+  reminded: number;
+  expired: number;
+  promoted: number;
+  lapsed: number;
+  poolDeadlinePassed: number;
+}> {
   let reminded = 0;
   let expired = 0;
   let promotedCount = 0;
   let lapsedCount = 0;
+  let poolDeadlinePassedCount = 0;
 
   // payment_method/expires_at live on the cart now (V364).
   // `r.promoted_at is null` (V379/RS007 — found while wiring the promoted-
@@ -5011,7 +5090,14 @@ export async function sweepRegistrations(
       const settings = await loadSettings(tx, division_id);
       const [div] = await tx<{ competition_id: string; org_id: string }[]>`
         select competition_id, org_id from divisions where id = ${division_id}`;
-      const promoted = await promoteOldestWaitlisted(tx, division_id, settings);
+      // RS012 `/code-review high` finding 1 (Site C) — a pooled solo sign-up
+      // (free_agent = true) never counted toward this division's TEAM
+      // capacity in the first place (registration-submit.ts's `taken` gate
+      // excludes it), so its own expiry here must never trigger a waitlist
+      // promotion. See freesTeamSlot's own doc comment.
+      const promoted = freesTeamSlot(locked)
+        ? await promoteOldestWaitlisted(tx, division_id, settings)
+        : null;
       await audit(tx, div.competition_id, div.org_id, "registration.expired", {
         registration_id: id,
         promoted_registration_id: promoted?.id ?? null,
@@ -5131,7 +5217,147 @@ export async function sweepRegistrations(
     }
   }
 
-  return { reminded, expired, promoted: promotedCount, lapsed: lapsedCount };
+  // (5) RS012 ruling 2 — the pool's own deadline. A solo sign-up is promised
+  // at sign-up that "the organiser will assign you to a team once one has
+  // space" (register.details.freeAgent copy, RS006). If the place-by date
+  // passes with nobody having placed them, that promise is broken and the
+  // owner's ruling is that the registrant's money back is the only honest
+  // outcome — reusing THIS sweep's own expiry machinery rather than a second
+  // money path. `coalesce(rs.place_by_at, rs.closes_at)` is V389's own
+  // default: an organiser who never sets an explicit place-by date still
+  // gets the ruling's default, the division's own registration close.
+  //
+  // `not exists (... assigned_from_registration_id ...)` is the DERIVED pool
+  // test (V388's own doc comment: "the pool is derived ... and cannot
+  // disagree with the roster it is derived from") — an already-placed solo
+  // sign-up is excluded here, before any row lock is even taken.
+  const duePool = await sql<RegistrationWithGroupRow[]>`
+    select ${regGroupCols(sql)}
+    from registrations r
+    join registration_groups g on g.id = r.group_id
+    join registration_settings rs on rs.division_id = r.division_id
+    where r.free_agent = true
+      and r.status in ${sql([...SPOT_HOLDERS])}
+      and coalesce(rs.place_by_at, rs.closes_at) < now()
+      and not exists (
+        select 1 from registration_players rp
+        where rp.assigned_from_registration_id = r.id
+      )
+    order by coalesce(rs.place_by_at, rs.closes_at)
+    limit 200`;
+  for (const reg of duePool) {
+    const outcome = (await sql.begin(async (tx) => {
+      // The outer SELECT above is a stale snapshot the instant it returns:
+      // an organiser could have assigned this person since (a race with
+      // assignSoloSignUp) or extended place_by_at (ruling 2: "the organiser
+      // may place them, or extend the date, right up to it"). Re-verify
+      // everything under this row's OWN lock — `regGroupCols` does not even
+      // select registration_settings columns, so there is no stale
+      // deadline value carried on `reg` to accidentally trust here.
+      const [locked] = await tx<RegistrationWithGroupRow[]>`
+        select ${regGroupCols(tx)}
+        from registrations r join registration_groups g on g.id = r.group_id
+        where r.id = ${reg.id} for update`;
+      if (!locked || !(SPOT_HOLDERS as readonly string[]).includes(locked.status)) return null;
+      const [rs] = await tx<{ place_by_at: Date | null; closes_at: Date | null }[]>`
+        select place_by_at, closes_at from registration_settings where division_id = ${locked.division_id}`;
+      // RS012 `/code-review high` finding 2 — the ONE `effectivePoolDeadline`
+      // copy; the cast narrows its Date | string | null return back to
+      // Date | null (rs's own column types) for the `>=` comparison below.
+      const deadline = effectivePoolDeadline(rs?.place_by_at ?? null, rs?.closes_at ?? null) as Date | null;
+      if (!deadline || deadline >= new Date()) return null; // extended past now, or settings gone
+      const [assigned] = await tx<{ id: string }[]>`
+        select id from registration_players where assigned_from_registration_id = ${locked.id} limit 1`;
+      if (assigned) return null; // placed between the outer select and this lock
+      // A free agent never materialises into an entrant (materialise's own
+      // RS009 doc comment: "a SOLO SIGN-UP is not a team of one ... simply
+      // not seated yet") — there is no entrants row to mark withdrawn and,
+      // per the `not exists` guard just above, nothing for
+      // releaseSoloSignUpPlacement to release. Unlike withdrawCore, neither
+      // is called.
+      await tx`
+        update registrations
+        set status = 'withdrawn', withdrawn_at = now(), updated_at = now()
+        where id = ${locked.id}`;
+      // clearExpiresIfNoLongerNeeded's own doc comment: call whenever an
+      // entry leaves `pending` for a reason that is not a fresh promotion —
+      // withdrawCore and the (2)/(3) passes above already do; this pass
+      // withdraws a `pending` free agent too (never charged, or offline/
+      // free) and was missing it, leaving the cart's `expires_at` stale
+      // forever when this was its last pending entry.
+      await clearExpiresIfNoLongerNeeded(tx, locked.group_id, locked.id);
+      const ctx = await divisionCtx(tx, locked.division_id);
+      await audit(tx, ctx.competition_id, ctx.org_id, "registration.withdrawn", {
+        registration_id: locked.id,
+        by: "system",
+        reason: "pool_deadline_unplaced",
+      }, null);
+      return { locked, ctx };
+    })) as unknown as { locked: RegistrationWithGroupRow; ctx: DivisionCtx } | null;
+    if (!outcome) continue;
+    poolDeadlinePassedCount++;
+    const { locked, ctx } = outcome;
+    fireDivisionRevalidate(locked.division_id, ctx.competition_id);
+
+    // Unconditional refund (ruling 2) — never gated on resolveRefundPolicy /
+    // refund_lock_at. The ordinary cancellation policy answers "how
+    // generous is the organiser being"; this is "the organiser broke the
+    // promise made at sign-up", a different question with a different,
+    // unconditional answer — resolveRefundPolicy could refuse (e.g.
+    // refund_lock_at already passed for an unrelated reason) exactly the
+    // case ruling 2 says must always refund. Mirrors withdrawCore's own
+    // OUTSIDE-the-tx Stripe-call ordering; never CALLS withdrawCore itself,
+    // for the same reason.
+    if (
+      (locked.status === "paid" || locked.status === "confirmed") &&
+      locked.entry_payment_intent_id &&
+      locked.amount_cents - locked.refunded_cents > 0
+    ) {
+      const remaining = locked.amount_cents - locked.refunded_cents;
+      try {
+        const refund = await stripeRefund(locked.entry_payment_intent_id, remaining);
+        await sql.begin(async (tx) => {
+          await tx`
+            update registrations
+            set refunded_cents = refunded_cents + ${remaining}, updated_at = now()
+            where id = ${locked.id}`;
+          await tx`
+            update registration_groups
+            set refunded_cents = refunded_cents + ${remaining}, refunded_at = now(), updated_at = now()
+            where id = ${locked.group_id}`;
+        });
+        await audit(sql, ctx.competition_id, ctx.org_id, "registration.refunded", {
+          registration_id: locked.id,
+          amount_cents: remaining,
+          mode: "auto_pool_deadline",
+          stripe_refund_id: refund.id,
+        }, null);
+        notifyRefund(locked, ctx, remaining);
+      } catch (err) {
+        await audit(sql, ctx.competition_id, ctx.org_id, "registration.refund_failed", {
+          registration_id: locked.id,
+          mode: "auto_pool_deadline",
+        }, null);
+        await maybeAlertRegistrationRefundFailed({
+          registrationId: locked.id,
+          orgId: ctx.org_id,
+          competitionId: ctx.competition_id,
+          amountCents: remaining,
+          currency: locked.currency,
+          paymentIntentId: locked.payment_intent_id,
+          reason: errText(err),
+        });
+      }
+    }
+  }
+
+  return {
+    reminded,
+    expired,
+    promoted: promotedCount,
+    lapsed: lapsedCount,
+    poolDeadlinePassed: poolDeadlinePassedCount,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -5173,6 +5399,78 @@ export function rosterCapExpr(db: AnySql) {
     (sp.position_catalog -> 'lineup' ->> 'size')::int +
     coalesce((sp.position_catalog -> 'lineup' ->> 'benchMax')::int, 0)
   )`;
+}
+
+/** RS012 rulings 1/2 — the pool's effective place-by date: the organiser's
+ *  explicit place_by_at, else the division's own registration close. The
+ *  ONE copy — Stage 2's sweep, buildGroupStatusView, and fetchPoolSummary
+ *  (data.ts) all read this, never re-derive the fallback themselves, so the
+ *  status page, the Registrants banner, and the sweep that actually acts on
+ *  it can never disagree about the deadline. */
+export function effectivePoolDeadline(
+  placeByAt: Date | string | null,
+  closesAt: Date | string | null,
+): Date | string | null {
+  return placeByAt ?? closesAt;
+}
+
+/** RS012 ruling 1 — the solo sign-up pool's own bound: `capacity × roster_cap`
+ *  minus players already seated, the number of roster places that could
+ *  conceivably exist. `hardCap` is the caller's already-resolved
+ *  min(division capacity, plan limit) — Infinity means unbounded. Null
+ *  `roster_cap` (a sport with no `lineup` key, e.g. `rosterCapExpr`'s own
+ *  doc comment) also means unbounded: there is no ceiling to derive a bound
+ *  from, so a solo sign-up is never refused for a sport with no roster
+ *  concept at all.
+ *
+ *  `seated` = every `registration_players` row that sits on a NON-free-agent
+ *  (`free_agent = false`), non-terminal (`status not in ('withdrawn',
+ *  'rejected', 'expired', 'waitlisted')`) registration in the division —
+ *  real team members, AND already-assigned solo sign-ups alike, since
+ *  `assignSoloSignUp` inserts their roster row under the TEAM's
+ *  registration, not their own (registration-assign.ts's `placementOf`/
+ *  roster insert). The status exclusion (`/code-review high` finding 1,
+ *  CRITICAL) mirrors `fetchPoolSummary`'s roster-room query and
+ *  `listAssignTargets` — without it, a withdrawn team's own roster rows
+ *  (never deleted by `withdrawCore`, which only flips `status`) counted as
+ *  `seated` forever, shrinking the bound permanently and, once it went
+ *  negative, 422-refusing every solo sign-up in an otherwise-empty
+ *  division. Deliberately excludes a still-pooled solo sign-up's OWN player
+ *  row (it lives under THEIR OWN free_agent=true registration, holding
+ *  their name/gender for display — RegistrationListRow's `player_gender`
+ *  reads it the same way) — that row is sitting in the pool, not seated on
+ *  a roster, and counting it here as well as in `pooled` below
+ *  double-charged the very first solo sign-up against the bound (caught by
+ *  this ticket's own regression test: a 2nd solo sign-up under a 2-place
+ *  bound was wrongly refused). `pooled` = free-agent registrations in
+ *  `SPOT_HOLDERS` status that are NOT YET assigned (no
+ *  `registration_players` row points back at them via
+ *  `assigned_from_registration_id`) — an assigned one is already counted
+ *  inside `seated` and must not be double-counted here. */
+export async function soloPoolIsFull(
+  tx: Tx,
+  divisionId: string,
+  hardCap: number,
+): Promise<boolean> {
+  if (!Number.isFinite(hardCap)) return false;
+  const [row] = await tx<{ roster_cap: number | null; seated: number; pooled: number }[]>`
+    select
+      ${rosterCapExpr(tx)} as roster_cap,
+      (select count(*)::int from registration_players rp
+         join registrations r2 on r2.id = rp.registration_id
+         where r2.division_id = d.id and r2.free_agent = false
+           and r2.status not in ('withdrawn', 'rejected', 'expired', 'waitlisted')) as seated,
+      (select count(*)::int from registrations r3
+         where r3.division_id = d.id and r3.free_agent = true
+           and r3.status in ${tx([...SPOT_HOLDERS])}
+           and not exists (
+             select 1 from registration_players rp2
+             where rp2.assigned_from_registration_id = r3.id
+           )) as pooled
+    from divisions d join sports sp on sp.key = d.sport_key
+    where d.id = ${divisionId}`;
+  if (!row || row.roster_cap === null) return false;
+  return row.pooled >= hardCap * row.roster_cap - row.seated;
 }
 
 /** `listRegistrations`' row (RS005 W1a), widened for the Registrants tab:

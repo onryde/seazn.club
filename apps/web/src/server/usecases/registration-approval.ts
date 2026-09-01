@@ -18,6 +18,7 @@ import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
 import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
 import {
   SPOT_HOLDERS,
+  freesTeamSlot,
   materialise,
   loadSettings,
   orgReg,
@@ -221,7 +222,14 @@ export async function rejectRegistration(
     // placement would outlive the entry that created it.
     await releaseSoloSignUpPlacement(tx, regId);
     await clearExpiresIfNoLongerNeeded(tx, reg.group_id, reg.id);
-    const promoted = await promoteOldestWaitlisted(tx, reg.division_id, settings);
+    // RS012 `/code-review high` finding 1 (Site B) — `reg` is read once
+    // before the lock above and never mutates its own `free_agent` (that
+    // column is set at submit time and never written again), so it is safe
+    // to read here. A pooled solo sign-up never counted toward this
+    // division's TEAM capacity (registration-submit.ts's `taken` gate
+    // excludes it), so rejecting one must never promote a waitlisted team
+    // off its own status change. See freesTeamSlot's own doc comment.
+    const promoted = freesTeamSlot(reg) ? await promoteOldestWaitlisted(tx, reg.division_id, settings) : null;
     await audit(tx, competitionId, auth.orgId, "registration.rejected", {
       registration_id: regId,
       paid: reg.status === "paid",

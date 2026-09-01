@@ -9,11 +9,15 @@
 // re-proving what's inside them.
 import { describe, expect, it } from "vitest";
 import { propsOf, textOf, walk } from "@/components/__tests__/_hook-harness";
-import { RegistrationHubRegistrantsPanel } from "@/components/registration-hub-registrants-panel";
+import {
+  RegistrationHubRegistrantsPanel,
+  type PoolSummaryPanelRow,
+} from "@/components/registration-hub-registrants-panel";
 import { RegistrationHubRegistrantEmpty } from "@/components/registration-hub-registrant-empty";
 import { RegistrationHubRegistrantFilters } from "@/components/registration-hub-registrant-filters";
 import { RegistrationHubRegistrantTable } from "@/components/registration-hub-registrant-table";
 import { getDictionary, t } from "@/lib/i18n";
+import { fmtDateTime, fmtZoneAbbrev } from "@/lib/format";
 import type { RegistrantsFilters, DivisionOption, RegistrantDetails } from "@/app/o/[orgSlug]/c/[compSlug]/registration/data";
 import type { RegistrationListRow } from "@/server/usecases/registrations";
 
@@ -35,6 +39,15 @@ const DIVISIONS: DivisionOption[] = [{ id: "div-1", name: "Open Singles" }];
 
 const ROW = { id: "reg-1", display_name: "Alex Smith" } as unknown as RegistrationListRow;
 
+const POOL_ROW: PoolSummaryPanelRow = {
+  division_id: "div-1",
+  division_name: "Open Singles",
+  waiting: 3,
+  free_slots: 2,
+  place_by_at: "2026-10-01T12:00:00.000Z",
+  href: "/o/riverside/c/summer-league/registration?tab=registrants&division_id=div-1&free_agent=1",
+};
+
 const EMPTY_DETAILS: RegistrantDetails = {
   rosterByRegistration: new Map(),
   siblingsByGroup: new Map(),
@@ -45,6 +58,7 @@ const BASE_PROPS = {
   divisions: DIVISIONS,
   canEdit: false,
   dict,
+  locale: "en" as const,
   orgTz: "UTC",
   filtersAction: "/o/riverside/c/summer-league/registration",
   clearHref: "/o/riverside/c/summer-league/registration?tab=registrants",
@@ -54,6 +68,7 @@ const BASE_PROPS = {
   emptyCtaLabel: t(dict, "reg.hub.registrants.cta"),
   emptyCtaHref: "/o/riverside/c/summer-league/registration?tab=settings",
   details: EMPTY_DETAILS,
+  poolSummary: [] as PoolSummaryPanelRow[],
 };
 
 function render(rows: RegistrationListRow[], filters: RegistrantsFilters) {
@@ -187,5 +202,128 @@ describe("data hook", () => {
       const root = walk(render([...rows], filters))[0]!;
       expect(propsOf(root)).toHaveProperty("data-registration-hub-registrants-panel");
     }
+  });
+});
+
+// RS012 scope item 4 — the proactive pool banner. Silent (no wrapper at all)
+// when nothing needs attention; an amber attention-toned, clickable-row
+// alert otherwise. `poolSummary` rows already carry their own `href` — this
+// panel never imports `routes` (header comment) — so these tests only prove
+// rendering, never URL construction.
+function bannerOf(tree: ReturnType<typeof walk>) {
+  return tree.find((e) => propsOf(e)["data-registration-hub-pool-summary"] !== undefined);
+}
+
+describe("pool summary banner (RS012 scope item 4)", () => {
+  it("renders nothing at all when poolSummary is empty — not even an empty wrapper", () => {
+    const tree = walk(RegistrationHubRegistrantsPanel({ ...BASE_PROPS, rows: [ROW], filters: DEFAULT_FILTERS, poolSummary: [] }));
+    expect(bannerOf(tree)).toBeUndefined();
+    expect(textOf(render([ROW], DEFAULT_FILTERS))).not.toContain(t(dict, "reg.hub.registrants.pool.heading"));
+  });
+
+  it("renders the division name, waiting count, free-slots count and place-by date, as a real link into the filtered table", () => {
+    const tree = walk(
+      RegistrationHubRegistrantsPanel({ ...BASE_PROPS, rows: [ROW], filters: DEFAULT_FILTERS, poolSummary: [POOL_ROW] }),
+    );
+    const banner = bannerOf(tree)!;
+    expect(banner).toBeTruthy();
+    const text = textOf(banner);
+    expect(text).toContain("Open Singles");
+    expect(text).toContain(t(dict, "reg.hub.registrants.pool.waiting.other", { count: 3 }));
+    expect(text).toContain(t(dict, "reg.hub.registrants.pool.freeSlots.other", { count: 2 }));
+    const expectedDate = `${fmtDateTime("UTC", POOL_ROW.place_by_at)} ${fmtZoneAbbrev("UTC", POOL_ROW.place_by_at)}`;
+    expect(text).toContain(t(dict, "reg.hub.registrants.pool.placeBy", { date: expectedDate }));
+
+    // A real <a href>, not a div+onClick — works with no JS, keyboard-navigable.
+    const link = tree.find((e) => e.type === "a" && propsOf(e).href === POOL_ROW.href);
+    expect(link).toBeTruthy();
+  });
+
+  it("pluralizes both the waiting count and the free-slots count at exactly 1", () => {
+    const singular: PoolSummaryPanelRow = { ...POOL_ROW, waiting: 1, free_slots: 1 };
+    const tree = walk(
+      RegistrationHubRegistrantsPanel({ ...BASE_PROPS, rows: [ROW], filters: DEFAULT_FILTERS, poolSummary: [singular] }),
+    );
+    const text = textOf(bannerOf(tree)!);
+    expect(text).toContain(t(dict, "reg.hub.registrants.pool.waiting.one", { count: 1 }));
+    expect(text).toContain(t(dict, "reg.hub.registrants.pool.freeSlots.one", { count: 1 }));
+    // Not the plural forms at count 1.
+    expect(text).not.toContain(t(dict, "reg.hub.registrants.pool.waiting.other", { count: 1 }));
+    expect(text).not.toContain(t(dict, "reg.hub.registrants.pool.freeSlots.other", { count: 1 }));
+  });
+
+  it("omits the place-by line entirely when place_by_at is null — never 'Invalid Date'", () => {
+    const noDeadline: PoolSummaryPanelRow = { ...POOL_ROW, place_by_at: null };
+    const tree = walk(
+      RegistrationHubRegistrantsPanel({ ...BASE_PROPS, rows: [ROW], filters: DEFAULT_FILTERS, poolSummary: [noDeadline] }),
+    );
+    const text = textOf(bannerOf(tree)!);
+    expect(text).not.toContain("Invalid Date");
+    expect(text).not.toContain(t(dict, "reg.hub.registrants.pool.placeBy", { date: "" }).replace("{date}", "").trim());
+  });
+
+  it("renders ABOVE the filter bar, between the export-link row and it", () => {
+    const tree = walk(
+      RegistrationHubRegistrantsPanel({ ...BASE_PROPS, rows: [ROW], filters: DEFAULT_FILTERS, poolSummary: [POOL_ROW] }),
+    );
+    const bannerIndex = tree.findIndex((e) => propsOf(e)["data-registration-hub-pool-summary"] !== undefined);
+    const filtersIndex = tree.findIndex((e) => e.type === RegistrationHubRegistrantFilters);
+    expect(bannerIndex).toBeGreaterThanOrEqual(0);
+    expect(filtersIndex).toBeGreaterThan(bannerIndex);
+  });
+
+  it("is visually distinct — an amber attention-toned container, not the panel's quiet gray text", () => {
+    const tree = walk(
+      RegistrationHubRegistrantsPanel({ ...BASE_PROPS, rows: [ROW], filters: DEFAULT_FILTERS, poolSummary: [POOL_ROW] }),
+    );
+    const className = String(propsOf(bannerOf(tree)!).className ?? "");
+    expect(className).toMatch(/amber/);
+    expect(className).not.toMatch(/text-slate-500|text-ink-muted/);
+  });
+
+  it("still shows the banner in the 'filters matched nothing' empty state — an organiser needs to see the pool even when over-filtered", () => {
+    const tree = walk(
+      RegistrationHubRegistrantsPanel({ ...BASE_PROPS, rows: [], filters: ACTIVE_FILTERS, poolSummary: [POOL_ROW] }),
+    );
+    expect(bannerOf(tree)).toBeTruthy();
+  });
+
+  it("truncates a long division name rather than growing the row unbounded", () => {
+    const longName: PoolSummaryPanelRow = {
+      ...POOL_ROW,
+      division_name: "A Division Name So Long It Would Otherwise Break The Layout At 320px Wide",
+    };
+    const tree = walk(
+      RegistrationHubRegistrantsPanel({ ...BASE_PROPS, rows: [ROW], filters: DEFAULT_FILTERS, poolSummary: [longName] }),
+    );
+    const nameEl = tree.find((e) => e.type !== "a" && textOf(e) === longName.division_name);
+    expect(nameEl).toBeTruthy();
+    expect(String(propsOf(nameEl!).className ?? "")).toMatch(/truncate/);
+  });
+
+  // RS012 `/code-review high` finding 3 — the old manual
+  // `count === 1 ? ".one" : ".other"` ternary picks the wrong grammatical
+  // form for a locale whose plural boundary is not "exactly 1".
+  // `new Intl.PluralRules("fr").select(0) === "one"`, not "other" — and
+  // free_slots: 0 is a real, reachable state (fetch-pool-summary.test.ts's
+  // own "reports free_slots: 0 for a division with waiting solo sign-ups
+  // but zero registered teams"). Reverting the `plural()` call back to that
+  // ternary makes this test render the WRONG ("other") string and go red.
+  it("renders the French SINGULAR free-slots copy at free_slots: 0, not the plural", async () => {
+    const frDict = await getDictionary("fr", "ui");
+    const zeroRow: PoolSummaryPanelRow = { ...POOL_ROW, free_slots: 0 };
+    const tree = walk(
+      RegistrationHubRegistrantsPanel({
+        ...BASE_PROPS,
+        dict: frDict,
+        locale: "fr",
+        rows: [ROW],
+        filters: DEFAULT_FILTERS,
+        poolSummary: [zeroRow],
+      }),
+    );
+    const text = textOf(bannerOf(tree)!);
+    expect(text).toContain(t(frDict, "reg.hub.registrants.pool.freeSlots.one", { count: 0 }));
+    expect(text).not.toContain(t(frDict, "reg.hub.registrants.pool.freeSlots.other", { count: 0 }));
   });
 });

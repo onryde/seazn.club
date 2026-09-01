@@ -258,6 +258,8 @@ describe("#10/#13b — notifyPromoted (pure function, offline branch — no DB)"
       payment_instructions: null,
       approval: "auto",
       allow_free_agents: false,
+      // RS012: null = no explicit place-by date, falls back to closes_at.
+      place_by_at: null,
       updated_at: null,
       ...over,
     };

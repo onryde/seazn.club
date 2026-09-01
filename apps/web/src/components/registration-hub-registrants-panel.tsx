@@ -1,6 +1,7 @@
-import { ClipboardList, SearchX } from "lucide-react";
-import { t } from "@/lib/i18n";
-import type { Dict } from "@/lib/i18n-constants";
+import { ChevronRight, ClipboardList, Clock, SearchX } from "lucide-react";
+import { t, plural } from "@/lib/i18n";
+import type { Dict, Locale } from "@/lib/i18n-constants";
+import { fmtDateTime, fmtZoneAbbrev } from "@/lib/format";
 import { RegistrationHubRegistrantEmpty } from "@/components/registration-hub-registrant-empty";
 import { RegistrationHubRegistrantFilters } from "@/components/registration-hub-registrant-filters";
 import { RegistrationHubRegistrantTable } from "@/components/registration-hub-registrant-table";
@@ -19,8 +20,19 @@ import type {
   RegistrantsFilters,
   DivisionOption,
   RegistrantDetails,
+  PoolSummaryRow,
 } from "@/app/o/[orgSlug]/c/[compSlug]/registration/data";
 import type { RegistrationListRow } from "@/server/usecases/registrations";
+
+/** RS012 scope item 4 — `PoolSummaryRow` (data.ts) widened with the ONE
+ *  thing this panel needs that the raw row doesn't carry: the href into that
+ *  division's pre-filtered Registrants table. Built by page.tsx from
+ *  `division_id` + `routes.competitionRegistration`, exactly like
+ *  `exportHref`/`clearHref`/`emptyCtaHref` below — this panel does not
+ *  import `routes` itself (see the panel doc comment). */
+export interface PoolSummaryPanelRow extends PoolSummaryRow {
+  href: string;
+}
 
 /**
  * Registration hub — Registrants tab (RS005 W2a). RS004 W2 shipped this as
@@ -53,6 +65,7 @@ export function RegistrationHubRegistrantsPanel({
   divisions,
   canEdit,
   dict,
+  locale,
   orgTz,
   filtersAction,
   clearHref,
@@ -62,12 +75,17 @@ export function RegistrationHubRegistrantsPanel({
   emptyCtaLabel,
   emptyCtaHref,
   details,
+  poolSummary,
 }: {
   rows: RegistrationListRow[];
   filters: RegistrantsFilters;
   divisions: DivisionOption[];
   canEdit: boolean;
   dict: Dict;
+  /** RS012 `/code-review high` finding 3 — needed for the pool banner's
+   *  `plural()` calls below (Intl.PluralRules selection); every other
+   *  string on this panel goes through `t()`, which needs no locale. */
+  locale: Locale;
   orgTz: string;
   filtersAction: string;
   clearHref: string;
@@ -80,6 +98,11 @@ export function RegistrationHubRegistrantsPanel({
    *  (fetchRegistrantDetails, task 3). Threaded straight through to the
    *  table; this panel does no lookups of its own. */
   details: RegistrantDetails;
+  /** RS012 scope item 4 — one row per division that has someone WAITING in
+   *  the solo sign-up pool right now (fetchPoolSummary, data.ts) — empty for
+   *  every other competition, which is what keeps the banner below silent
+   *  rather than an "everything's fine" wrapper. */
+  poolSummary: PoolSummaryPanelRow[];
 }) {
   const filtered = hasActiveFilters(filters);
 
@@ -113,6 +136,73 @@ export function RegistrationHubRegistrantsPanel({
           {t(dict, "reg.exportCsv")}
         </a>
       </div>
+
+      {/* RS012 scope item 4 — the proactive pool banner. Rendered ONLY when
+          some division actually has someone waiting (poolSummary.length),
+          so a competition with nothing to act on gets no wrapper at all —
+          never a quiet "0 waiting" line. Amber/attention-toned on purpose
+          (same palette entry-card.tsx's own money/deadline text uses,
+          register/status/entry-card.tsx), with a left rail — the same visual
+          device that file's own status badges use for "pending" — so this
+          reads as something that wants action, not as one more row of the
+          panel's ordinary gray copy. */}
+      {poolSummary.length > 0 && (
+        <div
+          data-registration-hub-pool-summary
+          className="mb-4 rounded-lg border border-amber-200 border-l-4 border-l-amber-400 bg-amber-50 p-4"
+        >
+          <div className="flex items-center gap-2">
+            <Clock className="h-4 w-4 shrink-0 text-amber-700" aria-hidden="true" />
+            <p className="text-sm font-semibold text-amber-900">{t(dict, "reg.hub.registrants.pool.heading")}</p>
+          </div>
+          <ul className="mt-2 space-y-2">
+            {poolSummary.map((row) => (
+              <li key={row.division_id}>
+                {/* A real <a href>, not a div+onClick (task requirement) —
+                    works with no JS and is keyboard-navigable. The whole row
+                    is the click target, not just a small "View" affordance. */}
+                <a
+                  href={row.href}
+                  className="flex items-center gap-2 rounded-md border border-amber-200 bg-white px-3 py-2 text-sm transition hover:border-amber-300 hover:bg-amber-100"
+                >
+                  <span className="min-w-0 grow">
+                    <span className="block truncate font-medium text-amber-900">{row.division_name}</span>
+                    <span className="mt-0.5 block text-xs text-amber-800">
+                      {/* RS012 `/code-review high` finding 3 — a manual
+                          `=== 1` ternary picks the wrong grammatical form for
+                          locales whose plural boundary is not "exactly 1"
+                          (`new Intl.PluralRules('fr').select(0) === 'one'`,
+                          not 'other'), and free_slots: 0 is a real, reachable
+                          state (fetchPoolSummary's own test). `plural()`
+                          (lib/i18n-runtime) runs the real Intl.PluralRules
+                          selection this panel's server-rendered `locale` prop
+                          makes available — no DictProvider/usePlural needed
+                          (registration-hub-config-panel.tsx's own header
+                          comment on that different constraint). */}
+                      {plural(dict, "reg.hub.registrants.pool.waiting", row.waiting, locale)}
+                      {" · "}
+                      {plural(dict, "reg.hub.registrants.pool.freeSlots", row.free_slots, locale)}
+                    </span>
+                    {/* Omitted entirely when null (task requirement) — a
+                        division with neither place_by_at nor closes_at set has
+                        nothing enforcing a deadline yet, same "nothing to show"
+                        rule the Stage 3b status page's own poolPlaceByDate
+                        follows, never "Invalid Date". */}
+                    {row.place_by_at && (
+                      <span className="mt-0.5 block text-xs text-amber-700">
+                        {t(dict, "reg.hub.registrants.pool.placeBy", {
+                          date: `${fmtDateTime(orgTz, row.place_by_at)} ${fmtZoneAbbrev(orgTz, row.place_by_at)}`,
+                        })}
+                      </span>
+                    )}
+                  </span>
+                  <ChevronRight className="h-4 w-4 shrink-0 text-amber-400" aria-hidden="true" />
+                </a>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <RegistrationHubRegistrantFilters
         dict={dict}
