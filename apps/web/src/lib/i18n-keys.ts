@@ -1599,6 +1599,7 @@ export type DictionaryKey =
   | "divset.entrants.eligibilityGate.cancel"
   | "divset.entrants.eligibilityGate.confirm"
   | "divset.entrants.eligibilityGate.intro"
+  | "divset.entrants.eligibilityGate.playerFallback"
   | "divset.entrants.eligibilityGate.reasonHint"
   | "divset.entrants.eligibilityGate.reasonLabel"
   | "divset.entrants.eligibilityGate.reasonPlaceholder"

@@ -18,7 +18,7 @@ import { HardConstraint, type ConflictDetailKind } from "@seazn/engine/schedulin
 // `node --experimental-strip-types` with no bundler and no tsconfig `paths`
 // resolution, so a `@/...` import throws ERR_MODULE_NOT_FOUND there even
 // though it resolves fine under tsc/Next.js/vitest.
-import { isValidCutoffDay } from "../../lib/registration-rules.ts";
+import { isValidCutoffDay, REASON_MIN, REASON_MAX } from "../../lib/registration-rules.ts";
 
 // ---------------------------------------------------------------------------
 // Common
@@ -349,8 +349,12 @@ export const Division = z.object({
 // writes one `eligibility.overridden` ledger row and proceeds.
 // ---------------------------------------------------------------------------
 
+// RS011 review round 3, finding 4: the two bounds are defined ONCE in
+// `@/lib/registration-rules` (client-safe — the override dialog's own
+// `armed`/`maxLength` check imports the SAME constants) so this schema and
+// the client-side gate can never silently drift apart.
 export const EligibilityOverride = z.object({
-  reason: z.string().min(3).max(500),
+  reason: z.string().min(REASON_MIN).max(REASON_MAX),
 });
 export type EligibilityOverride = z.infer<typeof EligibilityOverride>;
 

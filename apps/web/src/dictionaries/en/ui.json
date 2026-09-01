@@ -2186,6 +2186,7 @@
   "divset.entrants.eligibility.label": "Eligibility:",
   "divset.entrants.eligibility.hint": "Checked at roster add — organisers can override with a reason.",
   "divset.entrants.eligibilityGate.title": "Eligibility check failed",
+  "divset.entrants.eligibilityGate.playerFallback": "Player {n}",
   "divset.entrants.eligibilityGate.intro": "This roster doesn't meet the division's eligibility rules:",
   "divset.entrants.eligibilityGate.reasonLabel": "Reason for overriding",
   "divset.entrants.eligibilityGate.reasonPlaceholder": "Why does this person belong on the roster anyway?",

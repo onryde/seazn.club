@@ -40,6 +40,18 @@
 // now calls `rosterCompositionIssues` from here instead of tallying inline
 // — see that file's header for the other half of this split.
 
+/**
+ * RS011 review round 3, finding 4: an organiser's override reason
+ * (`EligibilityOverrideDialog`, `api-v1/schemas.ts`'s `EligibilityOverride`)
+ * must be long enough to be worth auditing but short enough to fit the
+ * ledger — defined ONCE here, client-safe, so the client-side dialog's
+ * `armed`/`maxLength` check and the server-side Zod schema's
+ * `z.string().min(REASON_MIN).max(REASON_MAX)` can never silently drift
+ * apart the way two hardcoded `3`/`500` literals could.
+ */
+export const REASON_MIN = 3;
+export const REASON_MAX = 500;
+
 /** Whole years between dob and `at` (doc 06 §2.1: never approximate). */
 export function ageAt(dobIso: string, at: Date): number {
   const dob = new Date(`${dobIso}T00:00:00Z`);

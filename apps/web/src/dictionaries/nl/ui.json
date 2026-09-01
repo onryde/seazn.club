@@ -2141,6 +2141,7 @@
   "divset.entrants.eligibility.label": "Toelaatbaarheid:",
   "divset.entrants.eligibility.hint": "Gecontroleerd bij het toevoegen van een deelnemer — organisatoren kunnen dit met een reden overschrijven.",
   "divset.entrants.eligibilityGate.title": "Toelaatbaarheidscontrole mislukt",
+  "divset.entrants.eligibilityGate.playerFallback": "Speler {n}",
   "divset.entrants.eligibilityGate.intro": "Deze opstelling voldoet niet aan de toelaatbaarheidsregels van de divisie:",
   "divset.entrants.eligibilityGate.reasonLabel": "Reden voor overschrijven",
   "divset.entrants.eligibilityGate.reasonPlaceholder": "Waarom hoort deze persoon toch op de opstelling?",

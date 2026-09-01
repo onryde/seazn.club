@@ -2186,6 +2186,7 @@
   "divset.entrants.eligibility.label": "Éligibilité :",
   "divset.entrants.eligibility.hint": "Vérifié à l'ajout d'un participant — les organisateurs peuvent passer outre avec un motif.",
   "divset.entrants.eligibilityGate.title": "Le contrôle d'éligibilité a échoué",
+  "divset.entrants.eligibilityGate.playerFallback": "Joueur {n}",
   "divset.entrants.eligibilityGate.intro": "Cette liste ne respecte pas les règles d'éligibilité de la division :",
   "divset.entrants.eligibilityGate.reasonLabel": "Motif de la dérogation",
   "divset.entrants.eligibilityGate.reasonPlaceholder": "Pourquoi cette personne devrait-elle quand même figurer sur la liste ?",

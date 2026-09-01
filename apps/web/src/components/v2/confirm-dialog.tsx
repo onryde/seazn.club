@@ -19,6 +19,14 @@ interface Props {
   confirmLabel?: string;
   /** Require typing this exact string to enable the confirm button. */
   typedName?: string;
+  /** RS011 review round 3, finding 5: an ADDITIONAL confirm-armed override
+   *  for a caller whose own domain rule decides when the confirm button may
+   *  fire — a rule `typedName`'s exact-string-match (`isConfirmArmed`) can't
+   *  express (e.g. `EligibilityOverrideDialog`'s reason-LENGTH gate). `true`
+   *  disables confirm regardless of `typedName`/`typed`; omitted (the
+   *  default) changes nothing — every existing caller keeps its
+   *  `typedName`-only armed check byte-for-byte unchanged. */
+  confirmDisabled?: boolean;
   busy?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
@@ -37,6 +45,7 @@ export function ConfirmDialog({
   children,
   confirmLabel,
   typedName,
+  confirmDisabled = false,
   busy = false,
   onConfirm,
   onCancel,
@@ -117,7 +126,7 @@ export function ConfirmDialog({
               data-testid={testId ? `${testId}-confirm` : undefined}
               className="btn btn-danger min-h-11"
               onClick={onConfirm}
-              disabled={busy || !armed}
+              disabled={busy || !armed || confirmDisabled}
             >
               {confirmLabel}
             </button>

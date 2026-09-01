@@ -2141,6 +2141,7 @@
   "divset.entrants.eligibility.label": "Elegibilidad:",
   "divset.entrants.eligibility.hint": "Se comprueba al añadir un participante — el equipo organizador puede anularlo indicando un motivo.",
   "divset.entrants.eligibilityGate.title": "La comprobación de elegibilidad ha fallado",
+  "divset.entrants.eligibilityGate.playerFallback": "Jugador {n}",
   "divset.entrants.eligibilityGate.intro": "Esta alineación no cumple las normas de elegibilidad de la categoría:",
   "divset.entrants.eligibilityGate.reasonLabel": "Motivo de la anulación",
   "divset.entrants.eligibilityGate.reasonPlaceholder": "¿Por qué debería estar esta persona en la alineación de todos modos?",
