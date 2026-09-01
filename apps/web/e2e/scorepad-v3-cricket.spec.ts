@@ -603,7 +603,13 @@ test("cricket v3: after a RELOAD, a per-row void addressed by the panel's own da
   // which is the whole point: the panel's `data-event-id` is now the ledger's
   // id, not a client key, so it can be addressed directly.
   await page.reload();
-  await openLiveConsole(page, fx);
+  // NOT `openLiveConsole` again — that helper clicks "Start match", and the
+  // match is already running, so the click times out (120s) and the failure
+  // reads as a locator problem rather than "this test asked for a control that
+  // cannot be there". Found by CI, not locally: the first version of this test
+  // was verified only by `--list`, i.e. that it COLLECTS. Collecting is not
+  // running.
+  await expect(pad(page)).toBeVisible({ timeout: 30_000 });
 
   const panel = page.locator('[data-role="v3-activity"]');
   const row = panel.locator(`[data-role="v3-activity-row"][data-event-id="${target.id}"]`);
