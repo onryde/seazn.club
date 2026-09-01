@@ -58,6 +58,7 @@ const BASE_PROPS = {
   divisions: DIVISIONS,
   canEdit: false,
   dict,
+  locale: "en" as const,
   orgTz: "UTC",
   filtersAction: "/o/riverside/c/summer-league/registration",
   clearHref: "/o/riverside/c/summer-league/registration?tab=registrants",
@@ -298,5 +299,31 @@ describe("pool summary banner (RS012 scope item 4)", () => {
     const nameEl = tree.find((e) => e.type !== "a" && textOf(e) === longName.division_name);
     expect(nameEl).toBeTruthy();
     expect(String(propsOf(nameEl!).className ?? "")).toMatch(/truncate/);
+  });
+
+  // RS012 `/code-review high` finding 3 — the old manual
+  // `count === 1 ? ".one" : ".other"` ternary picks the wrong grammatical
+  // form for a locale whose plural boundary is not "exactly 1".
+  // `new Intl.PluralRules("fr").select(0) === "one"`, not "other" — and
+  // free_slots: 0 is a real, reachable state (fetch-pool-summary.test.ts's
+  // own "reports free_slots: 0 for a division with waiting solo sign-ups
+  // but zero registered teams"). Reverting the `plural()` call back to that
+  // ternary makes this test render the WRONG ("other") string and go red.
+  it("renders the French SINGULAR free-slots copy at free_slots: 0, not the plural", async () => {
+    const frDict = await getDictionary("fr", "ui");
+    const zeroRow: PoolSummaryPanelRow = { ...POOL_ROW, free_slots: 0 };
+    const tree = walk(
+      RegistrationHubRegistrantsPanel({
+        ...BASE_PROPS,
+        dict: frDict,
+        locale: "fr",
+        rows: [ROW],
+        filters: DEFAULT_FILTERS,
+        poolSummary: [zeroRow],
+      }),
+    );
+    const text = textOf(bannerOf(tree)!);
+    expect(text).toContain(t(frDict, "reg.hub.registrants.pool.freeSlots.one", { count: 0 }));
+    expect(text).not.toContain(t(frDict, "reg.hub.registrants.pool.freeSlots.other", { count: 0 }));
   });
 });

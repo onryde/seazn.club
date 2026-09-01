@@ -482,29 +482,38 @@ export async function fetchPoolSummary(
     if (waitingRows.length === 0) return [];
     const divisionIds = waitingRows.map((w) => w.division_id);
 
-    const slotRows = await tx<{ division_id: string; free_slots: number }[]>`
-      select t.division_id,
-        coalesce(sum(greatest(${rosterCapExpr(tx)} - t.roster_count, 0)), 0)::int as free_slots
-      from (
-        select r.division_id, r.id,
-          (select count(*)::int from registration_players rp
-             where rp.registration_id = r.id) as roster_count
-        from registrations r
-        where r.division_id in ${tx(divisionIds)}
-          and r.free_agent = false
-          and r.status not in ('withdrawn', 'rejected', 'expired', 'waitlisted')
-      ) t
-      join divisions d on d.id = t.division_id
-      join sports sp on sp.key = d.sport_key
-      group by t.division_id`;
-
-    const meta = await tx<
-      { division_id: string; division_name: string; place_by_at: Date | null; closes_at: Date | null }[]
-    >`
-      select d.id as division_id, d.name as division_name, rs.place_by_at, rs.closes_at
-      from divisions d
-      left join registration_settings rs on rs.division_id = d.id
-      where d.id in ${tx(divisionIds)}`;
+    // Concurrent, not sequential (RS012 `/code-review high` nit): both
+    // queries depend only on `divisionIds` above, never on each other —
+    // same precedent as requiredCourtTagsByFixture (court-candidates.ts) and
+    // the entrant/court-name pair in schedule-health.ts, both of which run
+    // independent SELECTs on one `tx` handle via Promise.all. postgres.js
+    // still serialises them on the one connection either way; this only
+    // removes the round-trip LATENCY of awaiting one before issuing the
+    // other, not true parallel execution.
+    const [slotRows, meta] = await Promise.all([
+      tx<{ division_id: string; free_slots: number }[]>`
+        select t.division_id,
+          coalesce(sum(greatest(${rosterCapExpr(tx)} - t.roster_count, 0)), 0)::int as free_slots
+        from (
+          select r.division_id, r.id,
+            (select count(*)::int from registration_players rp
+               where rp.registration_id = r.id) as roster_count
+          from registrations r
+          where r.division_id in ${tx(divisionIds)}
+            and r.free_agent = false
+            and r.status not in ('withdrawn', 'rejected', 'expired', 'waitlisted')
+        ) t
+        join divisions d on d.id = t.division_id
+        join sports sp on sp.key = d.sport_key
+        group by t.division_id`,
+      tx<
+        { division_id: string; division_name: string; place_by_at: Date | null; closes_at: Date | null }[]
+      >`
+        select d.id as division_id, d.name as division_name, rs.place_by_at, rs.closes_at
+        from divisions d
+        left join registration_settings rs on rs.division_id = d.id
+        where d.id in ${tx(divisionIds)}`,
+    ]);
 
     const slotsByDivision = new Map(slotRows.map((s) => [s.division_id, s.free_slots]));
     const metaByDivision = new Map(meta.map((m) => [m.division_id, m]));

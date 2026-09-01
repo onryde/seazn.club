@@ -5353,6 +5353,177 @@ describe.skipIf(!HAS_DB)("RS012: sweepRegistrations pool-deadline pass", () => {
 });
 
 // ---------------------------------------------------------------------------
+// RS012 `/code-review high` finding 1 — a solo sign-up's own status change
+// leaving SPOT_HOLDERS (withdraw here; expiry below; reject is covered in
+// registration-approval.test.ts, Site B) must never promote a waitlisted
+// TEAM: a pooled solo sign-up (free_agent = true) never counted toward this
+// division's TEAM capacity in the first place (registration-submit.ts's own
+// `taken` gate excludes it — RS012 ruling 1), so treating its own status
+// change as "a team slot freed" pushes the division past its configured
+// capacity with no re-check (promoteOldestWaitlisted/promoteWaitlistedRow
+// trust the caller that a slot is genuinely free). Fixed by `freesTeamSlot`
+// (registrations.ts, beside promoteOldestWaitlisted).
+// ---------------------------------------------------------------------------
+
+describe.skipIf(!HAS_DB)("RS012 `/code-review high` finding 1 — freesTeamSlot (withdrawCore + sweep expiry)", () => {
+  /** Same shape as this file's own `poolRig` (RS012 pool-deadline describe,
+   *  above) plus an explicit `capacity` — a team division that accepts solo
+   *  sign-ups, paid by card. */
+  async function capRig(opts: { feeCents?: number; capacity?: number | null } = {}) {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    await sql`update organizations
+              set stripe_charges_enabled = true, stripe_account_id = ${"acct_" + randomUUID().slice(0, 8)}
+              where id = ${orgId}`;
+    const { competition, division } = await rig(owner);
+    const settings = await putRegistrationSettings(owner, division.id, {
+      ...SETTINGS_BASE,
+      entrant_kind: "team",
+      allow_free_agents: true,
+      payment_method: "stripe",
+      fee_cents: opts.feeCents ?? 500,
+      capacity: opts.capacity ?? 1,
+    });
+    return { orgId, owner, competition, division, settings };
+  }
+
+  /** A team entry (`free_agent = false`) seeded directly at an explicit
+   *  status — `submitRegistration` is long deleted (RS001 demolition), same
+   *  reason this file's own `seedTargetTeam` (RS012 pool-deadline describe,
+   *  above) seeds directly. `amountCents`/`"pending"` together also stamp
+   *  the cart's `expires_at` 1 hour in the PAST, so a pending team entry is
+   *  immediately due for the sweep's overdue pass without a second update. */
+  async function seedTeamEntry(
+    competitionId: string,
+    divisionId: string,
+    status: "confirmed" | "pending" | "waitlisted",
+    amountCents = 0,
+  ) {
+    const pastDue = amountCents > 0 && status === "pending";
+    const [group] = await sql<{ id: string }[]>`
+      insert into registration_groups
+        (competition_id, contact_name, contact_email, access_token_hash, currency,
+         amount_cents, payment_method, expires_at)
+      values (
+        ${competitionId}, 'Team Contact', ${`team-${randomUUID().slice(0, 8)}@test.local`},
+        ${`tok-${randomUUID()}`}, 'gbp', ${amountCents}, ${amountCents > 0 ? "stripe" : null},
+        ${pastDue ? sql`now() - interval '1 hour'` : null}
+      )
+      returning id`;
+    const [reg] = await sql<{ id: string }[]>`
+      insert into registrations (group_id, division_id, display_name, free_agent, status, amount_cents)
+      values (${group.id}, ${divisionId}, 'A Team', false, ${status}, ${amountCents})
+      returning id`;
+    return reg;
+  }
+
+  /** One solo sign-up (`free_agent = true`) — same pattern as this file's own
+   *  `seedSoloSignUp` (RS012 pool-deadline describe, above): `seedRegistration`
+   *  has no free-agent option of its own, so this flips the column after the
+   *  fixture insert. */
+  async function seedSolo(
+    competition: { id: string },
+    division: { id: string },
+    settings: { fee_cents: number; currency: string; payment_method: "offline" | "stripe" },
+    over: Parameters<typeof seedRegistration>[3] = {},
+  ) {
+    const displayName = over.displayName ?? "Solo Signer";
+    const res = await seedRegistration(competition.id, division.id, settings, {
+      ...over,
+      displayName,
+      players: over.players ?? [{ name: displayName }],
+    });
+    await sql`update registrations set free_agent = true where id = ${res.registration.id}`;
+    return { ...res, registration: await loadWithGroup(res.registration.id) };
+  }
+
+  /** THIS division's own confirmed team-slot count — never a global tally
+   *  (this suite's own standing warning: sweepRegistrations' returned
+   *  counters are platform-wide and pick up other orgs' rows too). */
+  const teamCount = async (divisionId: string) => {
+    const [row] = await sql<{ n: number }[]>`
+      select count(*)::int as n from registrations
+      where division_id = ${divisionId} and free_agent = false
+        and status in ('pending', 'paid', 'confirmed')`;
+    return row!.n;
+  };
+
+  it("Site A (negative): a pooled solo sign-up self-withdrawing does not promote a waitlisted team past capacity", async () => {
+    const { competition, division, settings } = await capRig({ capacity: 1 });
+    await seedTeamEntry(competition.id, division.id, "confirmed");
+    const waitingTeam = await seedTeamEntry(competition.id, division.id, "waitlisted");
+    const solo = await seedSolo(competition, division, settings, { status: "confirmed" });
+
+    // Reverting Site A's fix (freesTeamSlot back to a bare SPOT_HOLDERS
+    // check) makes this fail: the waitlisted team gets promoted to 'pending'
+    // and teamCount reads 2 against a configured capacity of 1.
+    await withdrawRegistrationPublic(solo.registration.id, solo.access_token);
+
+    const [afterTeam] = await sql<{ status: string }[]>`
+      select status from registrations where id = ${waitingTeam.id}`;
+    expect(afterTeam!.status).toBe("waitlisted");
+    expect(await teamCount(division.id)).toBe(1);
+  });
+
+  it("Site A (positive): a genuine team withdrawal still promotes the waitlisted team", async () => {
+    const { owner, competition, division } = await capRig({ capacity: 1 });
+    const confirmedTeam = await seedTeamEntry(competition.id, division.id, "confirmed");
+    const waitingTeam = await seedTeamEntry(competition.id, division.id, "waitlisted");
+
+    // A mutation that made freesTeamSlot always return false must turn THIS
+    // test red — proving the fix did not just disable promotion outright.
+    await withdrawRegistrationOrganiser(owner, confirmedTeam.id);
+
+    const [afterTeam] = await sql<{ status: string }[]>`
+      select status from registrations where id = ${waitingTeam.id}`;
+    expect(afterTeam!.status).toBe("pending");
+  });
+
+  it("Site C (negative): an unpaid pooled solo sign-up expiring does not promote a waitlisted team past capacity", async () => {
+    const { competition, division, settings } = await capRig({ capacity: 1, feeCents: 500 });
+    await seedTeamEntry(competition.id, division.id, "confirmed");
+    const waitingTeam = await seedTeamEntry(competition.id, division.id, "waitlisted");
+    const solo = await seedSolo(competition, division, settings); // 'pending', 500, stripe
+    // Push the cart's pay window into the past so the sweep's overdue pass
+    // (registrations.ts's `overdue` query) actually selects it.
+    await sql`
+      update registration_groups set expires_at = now() - interval '1 hour'
+      where id = ${solo.registration.group_id}`;
+
+    await sweepRegistrations("https://test.local");
+
+    const [afterSolo] = await sql<{ status: string }[]>`
+      select status from registrations where id = ${solo.registration.id}`;
+    expect(afterSolo!.status, "sanity: the solo itself really did expire").toBe("expired");
+
+    // Reverting Site C's fix makes this fail: the waitlisted team gets
+    // promoted to 'pending' off the solo's own expiry.
+    const [afterTeam] = await sql<{ status: string }[]>`
+      select status from registrations where id = ${waitingTeam.id}`;
+    expect(afterTeam!.status).toBe("waitlisted");
+    expect(await teamCount(division.id)).toBe(1);
+  });
+
+  it("Site C (positive): a genuine team entry expiring still promotes the waitlisted team", async () => {
+    const { competition, division } = await capRig({ capacity: 1, feeCents: 500 });
+    const pendingTeam = await seedTeamEntry(competition.id, division.id, "pending", 500);
+    const waitingTeam = await seedTeamEntry(competition.id, division.id, "waitlisted");
+
+    // A mutation that made freesTeamSlot always return false must turn THIS
+    // test red — proving the fix did not just disable promotion outright.
+    await sweepRegistrations("https://test.local");
+
+    const [afterPending] = await sql<{ status: string }[]>`
+      select status from registrations where id = ${pendingTeam.id}`;
+    expect(afterPending!.status, "sanity: the team entry really did expire").toBe("expired");
+
+    const [afterTeam] = await sql<{ status: string }[]>`
+      select status from registrations where id = ${waitingTeam.id}`;
+    expect(afterTeam!.status).toBe("pending");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // RS003 W3a — group-scoped checkout minting (owner rulings 1, 2, 3, 5).
 // Currency validation (ruling 4) is covered above, in "card submit path
 // (spec §3)" — the check lives in createRegistrationCheckout, shared by

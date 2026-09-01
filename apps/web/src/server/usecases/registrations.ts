@@ -1100,6 +1100,19 @@ export async function joinExistingEntrant(
     where id = ${player.id}`;
 }
 
+/** RS012 ruling 1 — a status leaving SPOT_HOLDERS only frees a TEAM slot
+ *  when the entry itself was ever counted as one; a solo sign-up
+ *  (`free_agent = true`) never was (registration-submit.ts's `taken` gate
+ *  excludes it), so its own withdrawal/rejection/expiry must never trigger
+ *  a waitlist promotion. Found by `/code-review high`: withdrawCore and
+ *  rejectRegistration both promoted a waitlisted team off a pooled solo
+ *  sign-up leaving SPOT_HOLDERS, pushing a division past its configured
+ *  capacity with no re-check (promoteOldestWaitlisted trusts the caller
+ *  that a slot is genuinely free). */
+export function freesTeamSlot(row: { status: string; free_agent: boolean }): boolean {
+  return (SPOT_HOLDERS as readonly string[]).includes(row.status) && !row.free_agent;
+}
+
 /**
  * Oldest waitlisted → pending (doc 16 §1.1 auto-promotion). Waitlisted rows
  * hold amount 0, so promotion SNAPSHOTS the current fee + method (spec §2);
@@ -4622,7 +4635,7 @@ async function withdrawCore(reg: RegistrationWithGroupRow, actorId: string | nul
     if (locked.status === "rejected") {
       throw new HttpError(422, "This registration was rejected and cannot be withdrawn");
     }
-    const freedSpot = (SPOT_HOLDERS as readonly string[]).includes(locked.status);
+    const freedSpot = freesTeamSlot(locked);
     await tx`
       update registrations
       set status = 'withdrawn', withdrawn_at = now(), updated_at = now()
@@ -5069,7 +5082,14 @@ export async function sweepRegistrations(
       const settings = await loadSettings(tx, division_id);
       const [div] = await tx<{ competition_id: string; org_id: string }[]>`
         select competition_id, org_id from divisions where id = ${division_id}`;
-      const promoted = await promoteOldestWaitlisted(tx, division_id, settings);
+      // RS012 `/code-review high` finding 1 (Site C) — a pooled solo sign-up
+      // (free_agent = true) never counted toward this division's TEAM
+      // capacity in the first place (registration-submit.ts's `taken` gate
+      // excludes it), so its own expiry here must never trigger a waitlist
+      // promotion. See freesTeamSlot's own doc comment.
+      const promoted = freesTeamSlot(locked)
+        ? await promoteOldestWaitlisted(tx, division_id, settings)
+        : null;
       await audit(tx, div.competition_id, div.org_id, "registration.expired", {
         registration_id: id,
         promoted_registration_id: promoted?.id ?? null,

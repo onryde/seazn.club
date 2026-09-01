@@ -494,6 +494,16 @@ describe("registration hub — Registrants tab data wiring (RS005 W2a)", () => {
     expect(propsOf(tree.find((e) => e.type === RegistrationHubRegistrantsPanel)!).canEdit).toBe(false);
   });
 
+  // RS012 `/code-review high` finding 3 — the panel's pool banner needs a
+  // real `locale` (plural() runs Intl.PluralRules against it), threaded
+  // from this page's own `resolveLocale()` call (mocked to "en" above),
+  // never a hardcoded default the panel invents on its own.
+  it("threads the resolved locale through to the panel's locale prop", async () => {
+    const tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
+    const panel = tree.find((e) => e.type === RegistrationHubRegistrantsPanel)!;
+    expect(propsOf(panel).locale).toBe("en");
+  });
+
   it("passes the REAL empty-state strings from the dictionary — never a hardcoded literal or a mis-keyed lookup", async () => {
     const tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
     const panel = tree.find((e) => e.type === RegistrationHubRegistrantsPanel)!;

@@ -1,6 +1,6 @@
 import { ChevronRight, ClipboardList, Clock, SearchX } from "lucide-react";
-import { t } from "@/lib/i18n";
-import type { Dict } from "@/lib/i18n-constants";
+import { t, plural } from "@/lib/i18n";
+import type { Dict, Locale } from "@/lib/i18n-constants";
 import { fmtDateTime, fmtZoneAbbrev } from "@/lib/format";
 import { RegistrationHubRegistrantEmpty } from "@/components/registration-hub-registrant-empty";
 import { RegistrationHubRegistrantFilters } from "@/components/registration-hub-registrant-filters";
@@ -65,6 +65,7 @@ export function RegistrationHubRegistrantsPanel({
   divisions,
   canEdit,
   dict,
+  locale,
   orgTz,
   filtersAction,
   clearHref,
@@ -81,6 +82,10 @@ export function RegistrationHubRegistrantsPanel({
   divisions: DivisionOption[];
   canEdit: boolean;
   dict: Dict;
+  /** RS012 `/code-review high` finding 3 — needed for the pool banner's
+   *  `plural()` calls below (Intl.PluralRules selection); every other
+   *  string on this panel goes through `t()`, which needs no locale. */
+  locale: Locale;
   orgTz: string;
   filtersAction: string;
   clearHref: string;
@@ -163,25 +168,20 @@ export function RegistrationHubRegistrantsPanel({
                   <span className="min-w-0 grow">
                     <span className="block truncate font-medium text-amber-900">{row.division_name}</span>
                     <span className="mt-0.5 block text-xs text-amber-800">
-                      {t(
-                        dict,
-                        // NOT `usePlural` (registration-hub-config-panel.tsx's
-                        // own header comment on this exact pattern): this panel
-                        // has no DictProvider either, and all 4 shipped locales
-                        // put the one/other boundary at exactly 1.
-                        row.waiting === 1
-                          ? "reg.hub.registrants.pool.waiting.one"
-                          : "reg.hub.registrants.pool.waiting.other",
-                        { count: row.waiting },
-                      )}
+                      {/* RS012 `/code-review high` finding 3 — a manual
+                          `=== 1` ternary picks the wrong grammatical form for
+                          locales whose plural boundary is not "exactly 1"
+                          (`new Intl.PluralRules('fr').select(0) === 'one'`,
+                          not 'other'), and free_slots: 0 is a real, reachable
+                          state (fetchPoolSummary's own test). `plural()`
+                          (lib/i18n-runtime) runs the real Intl.PluralRules
+                          selection this panel's server-rendered `locale` prop
+                          makes available — no DictProvider/usePlural needed
+                          (registration-hub-config-panel.tsx's own header
+                          comment on that different constraint). */}
+                      {plural(dict, "reg.hub.registrants.pool.waiting", row.waiting, locale)}
                       {" · "}
-                      {t(
-                        dict,
-                        row.free_slots === 1
-                          ? "reg.hub.registrants.pool.freeSlots.one"
-                          : "reg.hub.registrants.pool.freeSlots.other",
-                        { count: row.free_slots },
-                      )}
+                      {plural(dict, "reg.hub.registrants.pool.freeSlots", row.free_slots, locale)}
                     </span>
                     {/* Omitted entirely when null (task requirement) — a
                         division with neither place_by_at nor closes_at set has

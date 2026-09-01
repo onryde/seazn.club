@@ -193,6 +193,7 @@ export default async function RegistrationHubPage({
         divisions={divisions}
         canEdit={canEdit}
         dict={dict}
+        locale={locale}
         orgTz={orgTz}
         filtersAction={routes.competitionRegistration(orgSlug, compSlug)}
         clearHref={routes.competitionRegistration(orgSlug, compSlug, "registrants")}
