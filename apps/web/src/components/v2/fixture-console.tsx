@@ -453,6 +453,17 @@ export function FixtureConsole({
   // as loose JSON off the wire, not an engine import.
   const outcome = live.outcome as { kind?: string; winner?: string; method?: string } | null;
   const scoring = canEdit && live.status !== "finalized" && live.status !== "cancelled";
+  // Fix round 1 (Task 4) — CRITICAL: the phone hand-over icon used to be
+  // gated on `deviceHandover` alone while the `DeviceLinkPanel` it opens
+  // sits behind `scoring && home && away` (the Scoring section's own gate,
+  // below). On a TBD fixture (home/away null, header falls back to
+  // schedule.tbd) with `canEdit`, the icon rendered and opened nothing —
+  // pre-match, exactly when a handover happens. `deviceHandover` also reads
+  // the SERVER's `fixture.status` while `scoring` reads the CLIENT's
+  // `live.status`, so the two disagreed after an in-session finalize too.
+  // One predicate now drives both the phone icon, the desktop button, and
+  // the panel — they cannot diverge again.
+  const canHandOver = deviceHandover && scoring && !!home && !!away;
   // An ABANDONED fixture is over, and the server records that in `status` while
   // leaving `outcome` NULL — the engine's own outcome for it is
   // `{kind:"no_result"}` (core/events.test.ts), which has no winner to persist
@@ -605,7 +616,7 @@ export function FixtureConsole({
           <span className={`badge ${STATUS_STYLE[live.status] ?? ""}`}>
             {scoreStatusLabel(msg, live.status)}
           </span>
-          {deviceHandover && (
+          {canHandOver && (
             <button
               type="button"
               data-role="device-handover-phone"
@@ -631,7 +642,7 @@ export function FixtureConsole({
         </div>
         <div className="max-md:mt-1 max-md:flex max-md:items-center max-md:justify-between max-md:gap-2">
           {!suppressHeadline && (
-            <p className="mt-2 font-mono text-2xl text-slate-800 max-md:mt-0 max-md:text-lg">
+            <p className="mt-2 font-mono text-2xl text-slate-800 max-md:mt-0 max-md:min-w-0 max-md:text-lg">
               {summary?.headline ?? "—"}
             </p>
           )}
@@ -709,10 +720,10 @@ export function FixtureConsole({
           that question wrong. */}
       {scoring && home && away && (
         <section className="card p-5 max-md:p-3" data-role="console-scoring">
-          <div className={`mb-3 flex flex-wrap items-center justify-between gap-2 ${started ? "max-md:hidden" : ""}`}>
+          <div className={`mb-3 flex flex-wrap items-center justify-between gap-2${started ? " max-md:hidden" : ""}`}>
             <h2 className="text-sm font-semibold text-slate-700 max-md:hidden">{msg("score.scoring")}</h2>
             <div className="flex flex-wrap items-center gap-2">
-              {deviceHandover && (
+              {canHandOver && (
                 <button
                   type="button"
                   data-role="device-handover"
@@ -736,7 +747,7 @@ export function FixtureConsole({
             </div>
           </div>
 
-          {deviceHandover && handoverOpen && (
+          {canHandOver && handoverOpen && (
             <div className="mb-4">
               <DeviceLinkPanel fixtureId={fixture.id} scorerLabel={sport.scorerLabel} embedded />
             </div>

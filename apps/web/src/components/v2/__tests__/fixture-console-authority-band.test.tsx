@@ -71,7 +71,18 @@ const EVENTS: EventIn[] = [
   },
 ];
 
-function consoleHtml(over: { status?: string; outcome?: unknown; deviceHandover?: boolean } = {}): string {
+function consoleHtml(
+  over: {
+    status?: string;
+    outcome?: unknown;
+    deviceHandover?: boolean;
+    // Fix round 1 (Task 4, CRITICAL) — lets a test render a TBD fixture
+    // (home/away null) to prove the phone hand-over icon shares its gate
+    // with the panel it opens, rather than always defaulting both sides in.
+    home?: SideInfo | null;
+    away?: SideInfo | null;
+  } = {},
+): string {
   const status = over.status ?? "in_play";
   const live: LiveState = {
     status,
@@ -91,8 +102,8 @@ function consoleHtml(over: { status?: string; outcome?: unknown; deviceHandover?
         round_no: 1,
       }}
       sport={sport}
-      home={side("e-home", "Riverside FC")}
-      away={side("e-away", "Summit Athletic")}
+      home={over.home !== undefined ? over.home : side("e-home", "Riverside FC")}
+      away={over.away !== undefined ? over.away : side("e-away", "Summit Athletic")}
       initialState={live}
       initialEvents={status === "scheduled" ? [] : EVENTS}
       canEdit
@@ -233,12 +244,22 @@ describe("the console's own undo says what it does (ruling R7-5)", () => {
 // exactly that bug: an un-grouped `|` splits the whole regex, so its
 // right-hand side matched the bare literal "recorded by" unconditionally).
 describe("phone composition — the match strip (spec §3.1)", () => {
-  it("offers Hand over device twice: the desktop button hides on phones, the phone icon hides on desktop", () => {
+  // Fix round 1 (Important 1) — `\bmd:hidden\b` also matches inside
+  // `max-md:hidden`: the char before "md" is "-", and "-" -> "m" is a JS
+  // regex word boundary just like " " -> "m" is. So a build where a phone
+  // control's OWN class had regressed to "max-md:hidden" (hidden on phones,
+  // shown on desktop — backwards) would still satisfy `\bmd:hidden\b`,
+  // because that substring is still sitting right there inside
+  // "max-md:hidden". Every assertion below that has to tell the two classes
+  // apart now requires a real class-boundary (a space, not a hyphen) before
+  // "md:hidden", which "max-md:hidden" can never supply.
+  it("offers Hand over device twice: the desktop button hides on phones, the phone icon hides on desktop, and both share one accessible name", () => {
     const html = consoleHtml({ deviceHandover: true });
-    expect(html).toMatch(/data-role="device-handover"[^>]*class="[^"]*\bmax-md:hidden\b/);
+    expect(html).toMatch(/data-role="device-handover"[^>]*class="[^"]*\smax-md:hidden"/);
+    expect(html).toMatch(/data-role="device-handover"[^>]*>Hand over device</);
     expect(html).toMatch(/<button[^>]*data-role="device-handover-phone"[^>]*>/);
-    expect(html).toMatch(/data-role="device-handover-phone"[^>]*class="[^"]*\bmd:hidden\b/);
-    expect(html).toMatch(/data-role="device-handover-phone"[^>]*aria-label="[^"]+"/);
+    expect(html).toMatch(/data-role="device-handover-phone"[^>]*class="[^"]*\smd:hidden"/);
+    expect(html).toMatch(/data-role="device-handover-phone"[^>]*aria-label="Hand over device"/);
   });
 
   it("renders neither hand-over control when the page says this fixture may not be handed over", () => {
@@ -247,24 +268,64 @@ describe("phone composition — the match strip (spec §3.1)", () => {
     expect(html).not.toContain('data-role="device-handover-phone"');
   });
 
+  // Fix round 1 (CRITICAL) — the phone icon used to be gated on
+  // `deviceHandover` alone while the `DeviceLinkPanel` it discloses sits
+  // behind `scoring && home && away`. A TBD fixture (home/away null) with
+  // `canEdit`/`deviceHandover` both true rendered a control that opened
+  // nothing. `canHandOver` now folds in `!!home && !!away` too, so neither
+  // copy renders here.
+  it("renders NEITHER hand-over control on a TBD fixture — the panel it opens needs home AND away", () => {
+    const html = consoleHtml({ home: null, away: null });
+    expect(html).not.toContain('data-role="device-handover"');
+    expect(html).not.toContain('data-role="device-handover-phone"');
+  });
+
   it("ships a phone-only match-details toggle, closed, and hides the meta line behind it on phones", () => {
     const html = consoleHtml();
     expect(html).toMatch(/data-role="match-details-toggle"[^>]*aria-expanded="false"/);
-    expect(html).toMatch(/data-role="match-details-toggle"[^>]*class="[^"]*\bmd:hidden\b/);
+    expect(html).toMatch(/data-role="match-details-toggle"[^>]*class="[^"]*\smd:hidden"/);
     // The round/venue/recorded-by line — real English catalog, so this reads
     // "… recorded by the referee", never the "score.recordedBy" key.
     const metaIdx = html.indexOf("recorded by the referee");
     expect(metaIdx, "the round/venue/recorded-by line must still render").toBeGreaterThan(-1);
-    const wrapperIdx = html.lastIndexOf('class="max-md:hidden"', metaIdx);
+    // Fix round 1 (Minor) — a bare `lastIndexOf` of the class string only had
+    // teeth because no earlier element happened to carry this exact full
+    // class attribute; assert the wrapper element itself: its opening tag
+    // sits before the meta text, and its OWN closing tag sits after it (so
+    // the text is still inside the wrapper, not past it).
+    const wrapperOpen = html.lastIndexOf('<div class="max-md:hidden">', metaIdx);
     expect(
-      wrapperIdx,
-      "closed by default, the meta line must sit inside a max-md:hidden wrapper",
+      wrapperOpen,
+      "closed by default, the meta line must sit inside its OWN max-md:hidden wrapper div",
     ).toBeGreaterThan(-1);
+    const wrapperClose = html.indexOf("</div>", wrapperOpen);
+    expect(
+      wrapperClose,
+      "the meta text must still be inside the wrapper when it closes, not after",
+    ).toBeGreaterThan(metaIdx);
   });
 
   it("hides the Scoring heading on phones — the strip is the heading there", () => {
     const html = consoleHtml();
     // Real English catalog again: "score.scoring" renders as "Scoring".
-    expect(html).toMatch(/<h2[^>]*class="[^"]*\bmax-md:hidden\b[^"]*"[^>]*>[^<]*Scoring</);
+    expect(html).toMatch(/<h2[^>]*class="[^"]*\smax-md:hidden"[^>]*>[^<]*Scoring</);
+  });
+
+  // Fix round 1 (Important 2) — every test above defaults to `status:
+  // "in_play"`, so `started` is always true and the Scoring header row's
+  // `!started` branch (Start match) never rendered in any assertion. Pin the
+  // one condition that could strand it: before kickoff, the row itself must
+  // stay reachable at phone widths even though the Scoring <h2> inside it
+  // keeps hiding there (the strip is the heading once started).
+  it("keeps the Scoring header row (and Start match) reachable on phones before kickoff", () => {
+    const html = consoleHtml({ status: "scheduled" });
+    const row = /<div class="(mb-3 flex flex-wrap items-center justify-between gap-2[^"]*)">/.exec(html);
+    expect(row, "the Scoring header row must render").not.toBeNull();
+    expect(
+      row![1],
+      "before kickoff the row itself carries no phone-hide class — Start match must stay reachable",
+    ).toBe("mb-3 flex flex-wrap items-center justify-between gap-2");
+    expect(html).toMatch(/<h2[^>]*class="[^"]*\smax-md:hidden"[^>]*>[^<]*Scoring</);
+    expect(html).toContain("Start match");
   });
 });
