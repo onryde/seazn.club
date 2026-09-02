@@ -3831,6 +3831,19 @@ async function playerAccountsSuite(admin: Session, orgId: string): Promise<void>
   );
   check("pa unclaimed teammate shows no-answer chip", html.includes("no availability answer"));
 
+  // Competition desk (W1): the ledger row's data-phase attribute is a
+  // derived fact, never stored — this competition has a started division
+  // with a generated fixture, so its row must carry one of the five phases.
+  const compHtml = await (
+    await fetch(`${BASE}/o/${orgSlug}/c/${compData.slug}`, {
+      headers: { cookie: Object.entries(admin.cookies).map(([k, v]) => `${k}=${v}`).join("; ") },
+    })
+  ).text();
+  check(
+    "competition page carries a derived phase per division",
+    /data-phase="(setting_up|scheduled|match_day|finished|in_play)"/.test(compHtml),
+  );
+
   // QR check-in: organiser mints, player taps; presence keeps the RSVP.
   const link = await v1(admin, `/api/v1/fixtures/${fixture.id}/checkin-link`, "POST");
   const url = v1data<{ url: string }>(link).url ?? "";

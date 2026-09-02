@@ -6,6 +6,8 @@ order: 3
 
 A **division** is a single draw inside your competition: "Men's A", "U14 Mixed", "Office Ping-Pong". Each division has one sport, one entrant kind (teams, individuals or pairs) and one format.
 
+**Needs you** lists what is blocking the competition — a stage waiting on its draw, fixtures without a time, a match in play with no scorer, results overdue, registrations to approve — with one button each. The pill beside the title is derived from your divisions: Setting up, Scheduled, Match day, N in play, or Finished. A division row shows its sport, one status line, and a red pill when something on it needs you.
+
 ## The division wizard
 
 1. Open your competition and press **Add division**.

@@ -623,6 +623,15 @@ export async function setFixtureStatusSql(fixtureId: string, status: string): Pr
   });
 }
 
+/** Force a stage's status directly (competition-desk e2e: rule 1 — "finished"
+ *  requires every stage complete, or no open stage AND no live fixture — so
+ *  the "all decided" case needs the stage flipped as well as its fixtures). */
+export async function setStageStatusSql(stageId: string, status: string): Promise<void> {
+  await withDb(async (sql) => {
+    await sql`update stages set status = ${status} where id = ${stageId}`;
+  });
+}
+
 /**
  * Archive a court directly, bypassing `archiveCourt`'s own guard (P10
  * stranded-fixture e2e).
@@ -1510,17 +1519,27 @@ export async function createCompetitionViaUi(
 
 /**
  * Create a division through the tabbed builder UI (basics → scheduling →
- * Create). Uses the builder's defaults for sport/format; returns the division
- * id parsed from the post-create URL.
+ * Create). Uses the builder's defaults for sport/format unless `sportKey` is
+ * given; returns the division id parsed from the post-create URL.
+ *
+ * The builder has no separate entrant-kind picker (competition-desk e2e:
+ * confirmed by reading division-builder.tsx — no entrantKind/team/pairs
+ * control anywhere in it) — allowed entrant kinds are DERIVED from the
+ * sport+variant module, so a walkthrough that needs team entrants must pick
+ * a team sport here rather than pass a kind. Sports load `order by name`
+ * (d/new/page.tsx), so the unset default is alphabetically first
+ * ("badminton" — individual/pair only), not whatever the caller assumed.
  */
 export async function createDivisionViaUi(
   page: Page,
   competitionId: string,
   name: string,
+  sportKey?: string,
 ): Promise<string> {
   await page.goto(await competitionPath(page.request, competitionId, "/d/new"));
   // The name field is the first textbox on the Basics tab (see formats.spec.ts).
   await page.getByRole("textbox").first().fill(name);
+  if (sportKey) await page.getByRole("combobox", { name: "Sport", exact: true }).selectOption(sportKey);
   // Creation is guarded to the last tab.
   await page.getByRole("button", { name: "Scheduling", exact: true }).click();
   await page.getByRole("button", { name: /create division/i }).click();
