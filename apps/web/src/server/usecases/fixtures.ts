@@ -13,6 +13,11 @@ import { type BoardFixtureRow, type FixtureRow } from "./stages";
 import { moveFixture, courtNamesById } from "./schedule";
 import { scoresViaAssignment } from "./scorers";
 import { gateRosterEligibility } from "./registration-eligibility";
+import { resolveModule } from "@/server/engine-db";
+import { lineupCatalogFor } from "./lineup-catalog";
+import { validateLineup, type LineupIssue } from "@seazn/engine/sport";
+import type { Lineup } from "@seazn/engine/core";
+import { log } from "@/server/logger";
 
 /** Doc 13 §7: a device link reads fixture state/events ONLY — every other
  *  fixture surface (detail, lineups, schedule) is 403 for dl_ tokens. */
@@ -175,13 +180,89 @@ export interface LineupOut {
   slots: unknown[];
 }
 
+/** R7-15/R8 WS-F: the PUT response, `LineupOut` plus the (possibly empty)
+ *  `validateLineup` warnings for the lineup just saved. A separate type from
+ *  `LineupOut` rather than widening it — same reasoning as `PatchedFixtureOut`
+ *  above: GET never validates, so `warnings` would be a lie on every read. */
+export type PutLineupOut = LineupOut & { warnings: string[] };
+
+/** Human-readable rendering of one `validateLineup` issue (catalog.ts) for the
+ *  PUT response + logs. Server-side only, English (no server i18n — AGENTS.md)
+ *  — these are machine strings riding a warning list, not rendered copy; a
+ *  future component that surfaces them to a user owes its own i18n work. */
+function formatLineupIssue(issue: LineupIssue): string {
+  switch (issue.kind) {
+    case "starting_size":
+      return `Starting lineup has ${issue.actual} player(s), expected ${issue.expected}`;
+    case "bench_size":
+      return `Bench has ${issue.actual} player(s), maximum is ${issue.max}`;
+    case "duplicate_person":
+      return `Person ${issue.personId} appears more than once in the lineup`;
+    case "unknown_position":
+      return `Person ${issue.personId} is assigned an unknown position "${issue.positionKey}"`;
+    case "role_unknown":
+      return `Person ${issue.personId} is assigned an unknown role "${issue.roleKey}"`;
+    case "role_duplicate":
+      return `Role "${issue.roleKey}" is held by more than one person (${issue.personIds.join(", ")})`;
+    case "role_missing":
+      return `Required role "${issue.roleKey}" is not filled by a starting player`;
+    case "group_min":
+      return `Position group "${issue.groupKey}" has ${issue.actual} starting player(s), minimum is ${issue.min}`;
+    case "group_max":
+      return `Position group "${issue.groupKey}" has ${issue.actual} starting player(s), maximum is ${issue.max}`;
+  }
+}
+
+/** R7-15/R8 WS-F — `validateLineup`'s first production caller. WARNING ONLY:
+ *  a lineup that fails validation still saves; the issues ride the PUT
+ *  response as strings and are logged. Never throws: a registry/config
+ *  problem resolving the catalog must not turn a working lineup save into a
+ *  500 — the same "best effort, never blocks the write" posture
+ *  `lineupCatalogFor` already documents for its own config-parse fallback. */
+function lineupValidationWarnings(
+  fixtureId: string,
+  entrantId: string,
+  sport: { sport_key: string; module_version: string; config: unknown },
+  slots: PutLineup["slots"],
+): string[] {
+  try {
+    const sportModule = resolveModule(sport.sport_key, sport.module_version);
+    const catalog = lineupCatalogFor(sportModule, sport.config);
+    const lineup: Lineup = {
+      entrantId,
+      slots: slots.map((s, i) => ({
+        personId: s.person_id,
+        slot: s.slot,
+        orderNo: s.order_no ?? i + 1,
+        ...(s.position_key ? { positionKey: s.position_key } : {}),
+        ...(s.roles.length > 0 ? { roles: s.roles } : {}),
+      })),
+    };
+    const issues = validateLineup(catalog, lineup);
+    if (issues.length === 0) return [];
+    // IDs, kinds and keys only — never a payload/free-text value (case K5,
+    // engine-db/append-event.ts's own logging convention).
+    log.warn(
+      { fixtureId, entrantId, sportKey: sport.sport_key, issues },
+      "lineup saved with validateLineup warnings",
+    );
+    return issues.map(formatLineupIssue);
+  } catch (err) {
+    log.error(
+      { fixtureId, entrantId, sportKey: sport.sport_key, err },
+      "lineup validation crashed — save proceeded without warnings",
+    );
+    return [];
+  }
+}
+
 /** Replace an entrant's lineup for a fixture (idempotent PUT, doc 08 §3). */
 export async function putLineup(
   auth: AuthCtx,
   fixtureId: string,
   entrantId: string,
   input: PutLineup,
-): Promise<LineupOut> {
+): Promise<PutLineupOut> {
   rejectDeviceLink(auth); // doc 13 §7: no lineups via device link
   return withTenant(auth.orgId, async (tx) => {
     const [fixture] = await tx<
@@ -191,9 +272,13 @@ export async function putLineup(
         away_entrant_id: string | null;
         status: string;
         scorer_can_enter_lineups: boolean;
+        sport_key: string;
+        module_version: string;
+        config: unknown;
       }[]
     >`
-      select f.division_id, f.home_entrant_id, f.away_entrant_id, f.status, d.scorer_can_enter_lineups
+      select f.division_id, f.home_entrant_id, f.away_entrant_id, f.status, d.scorer_can_enter_lineups,
+             d.sport_key, d.module_version, d.config
       from fixtures f join divisions d on d.id = f.division_id
       where f.id = ${fixtureId}`;
     if (!fixture) throw new HttpError(404, "fixture not found");
@@ -240,7 +325,14 @@ export async function putLineup(
                 ${s.position_key ?? null}, ${s.order_no ?? i + 1}, ${tx.json(s.roles as never)},
                 ${s.role ?? "player"}, ${s.pair_order ?? null})`;
     }
-    return readLineup(tx, fixtureId, entrantId);
+    const warnings = lineupValidationWarnings(
+      fixtureId,
+      entrantId,
+      { sport_key: fixture.sport_key, module_version: fixture.module_version, config: fixture.config },
+      input.slots,
+    );
+    const lineup = await readLineup(tx, fixtureId, entrantId);
+    return { ...lineup, warnings };
   });
 }
 
