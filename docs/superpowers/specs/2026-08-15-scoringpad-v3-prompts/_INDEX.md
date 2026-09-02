@@ -7088,3 +7088,465 @@ Register acceptance MET. Two structural findings:
 - Extend the event-copy gate to all 11 sports; delete `timeline.tsx`; amend design §8; give the deferred items real owner names; two one-line help follow-ups (`basics.md` label, `icehockey.md` back-reference); the wider stale-"6s" comment sweep.
 - **e2e run debt** — several specs are written but unrun, and `e2e.yml` triggers on push to `main` ONLY, so this branch gets no automatic signal. The gate must run them locally against a prod build.
 - WS-P: 12-capture gallery, the owner walkthrough (incl. the five never-verdicted cricket screens `06-overtile`, `07-oversheet`, `08-bowlerpicker`, `09-retiresheet`, `10-reviewblocked`, and GF-1/GF-7 which are only settleable by reading the running product), then PROGRAMME CLOSED.
+
+---
+
+## R8 sweep — session 2 record (2026-09-02)
+
+Appended by the controller at the close of the integration session. The
+SDD ledger lives under `.superpowers/`, which is gitignored — this is the
+durable copy.
+
+# R8 — additions owed to _INDEX.md (append when the wave worktree is free)
+
+## FP-R8-6 — "cricket leaves the remainder on the GRACEFUL fallback" was false
+
+`scoring-vocab.test.ts`'s ribbon gate is football-only, justified in its own
+comment by: "cricket (R2/R2b) deliberately registers ribbon copy for 8 of its
+16 declared types and leaves the 'More'-sheet remainder on the graceful
+fallback, so a sport-agnostic version of this assertion would red on that
+shipped decision."
+
+The fallback is not graceful. `buildRibbon` (`v3/ribbon.ts`, final `else`)
+ends `t("pad.ribbon.fallback", { event: eventType })`, and
+`pad.ribbon.fallback` is `"{event} recorded"` (`en/ui.json:2725`). So the
+scorer reads the RAW INTERNAL TYPE — "cricket.newball recorded".
+
+This is the same defect already fixed twice in that file: `core.start` →
+"core.start recorded" (D1, caught in a 320px screenshot, fixed via
+`CORE_RIBBON_KEY`) and football (D-5). The R2 decision rested on a premise
+about the fallback's behaviour that was never checked against the fallback.
+
+**CORRECTED 2026-09-02, and the correction is the important half.** The first
+measurement enumerated `builtinModules[].fidelityTiers[].eventTypes` = 63
+types and reported "10 of 11 sports at 100%, cricket the only gap". That was
+measured against the WRONG SET. `fidelityTiers` is a fidelity BANDING OF A
+SUBSET, not the module's declaration of what it accepts. The modules'
+registered payload schemas (`module.eventSchemas`) total **68**:
+
+    volleyball    tiers=5  eventSchemas=6   misses volleyball.expedite.start
+    badminton     tiers=3  eventSchemas=6   misses badminton.expedite.start,
+                                                    badminton.sub, badminton.timeout
+    tabletennis   tiers=5  eventSchemas=6   misses tabletennis.sub
+    other 8 sports: tiers == eventSchemas exactly
+    TOTALS  fidelityTiers=63   eventSchemas=68
+
+Cause: `packages/engine/src/sports/setbased/kernel.ts:1816` builds a FIXED
+six-key fidelity map (summary, timeout, sanction, sub, expedite, rally) for
+every preset and registers a schema for each, while each sport's own
+`fidelityTiers` lists only the ones it bands.
+
+So the real leak count is **ELEVEN, not seven**:
+
+    cricket.followon, cricket.interruption, cricket.match.close,
+    cricket.newball, cricket.player.line, cricket.powerplay, cricket.revise
+    volleyball.expedite.start, badminton.expedite.start,
+    badminton.sub, tabletennis.sub
+
+(`badminton.timeout` already has four-locale copy despite not being in
+`fidelityTiers` -- itself evidence the tiers list is not the declaration set.)
+
+**How it was caught, because this is the reusable part.** A concurrent session
+(`r9`, entitlements W1) counted the same thing from a different source
+(`padSpec(cfg).fidelity`, also 68) and put its NUMBERS in the message rather
+than only its conclusion. The 5-type difference was treated as a question
+rather than a rounding error. No amount of re-reading the original probe would
+have found it: the probe was correct about the set it enumerated.
+
+**The guard that did not catch it.** WS-R's first vacuity guard asserted the
+set of sport PREFIXES equals `declaredSportKeys()`. That passes at 63 types
+and at 68 -- it proves every sport is present, never that every TYPE is. The
+partial case under-reports rather than zeroing, which is the shape that
+survives a wave. Round 2 adds a subset guard: the derived set must EQUAL the
+union of every module's `eventSchemas` keys.
+
+**Open root cause, owned by nobody yet.** The shared setbased kernel registers
+schemas a preset cannot use (a badminton expedite system, a table-tennis
+substitution). The added copy is a floor under the leak, not a fix for why
+those types exist. Engine change, out of R8 scope; flagged to the W1 session
+so it does not evaporate between two waves each considering it the other's.
+
+## Incidental — `event.cricket.player.line` names the wrong concept, live
+
+`event.cricket.player.line` reads "Batting order" / "Orden de bateo" /
+"Ordre de batte" / "Slagvolgorde". The engine declares `CricketPlayerLine` as
+`z.strictObject({ innings, person, batting {runs, balls, out}, bowling {...} })`
+-- a per-player innings SCORECARD LINE. Nothing in the payload is an order.
+
+It is live, not legacy: `eventLabel` (`lib/scoring-vocab.ts:1114`) ->
+`describeEvent` (`lib/event-copy.ts:89`, the single source for the badge on
+every branch) -> `v3/activity.tsx:47`. It is the badge on that Activity row.
+Folded into WS-R rather than deferred, because WS-R adds the ribbon SENTENCE
+for the same event type and the two would have contradicted each other on
+the same screen.
+
+## Incidental — `ribbon.ts:126` comment is stale
+
+States `resolveDetail` "is not yet threaded from `pad-host.tsx`". It IS
+threaded: `pad-host.tsx:1665`, `:1708`, `:2054`, consumed at
+`activity.tsx:449`. A later wave wired it and left the comment. Corrected in
+WS-R. (Checked because a "not yet threaded" note is the exact shape of an
+inert seam -- this one was a false alarm, which is worth recording too.)
+
+## #676 — the three facts WS-K established, verified independently
+
+(a) **#676's stated cause was untrue when filed.** The entry reads
+"`PadHostView.state` is the OPTIMISTIC fold while `PadHostView.events` is the
+CONFIRMED ledger, so they disagree by one event for the whole hold". But
+`view.events` is `pipeline.events` (`v3/pad-host.tsx:1347`), and
+`use-pad-pipeline.ts:1673` defines that as
+`[...ledgerEvents, ...pendingEnvelopes.values()]` -- the SAME list
+`foldedState` folds at `:1038`. Two `useMemo`s over the same two state
+variables in one render cannot disagree. Controller re-verified both line
+numbers against the tree.
+
+(b) **There IS a real open behaviour and it is a DIFFERENT defect.** `state`
+and `events` diverge by exactly two routes: `serverOverride`
+(`use-pad-pipeline.ts:1036`, `if (serverOverride !== undefined) return
+serverOverride`) and the optimistic fold throwing and degrading to
+`lastGoodStateRef` (`:1069`). The comment at `:1668` says the separate memo
+exists precisely so "a `serverOverride` never hides ledger events a caller's
+timeline still needs to display" -- i.e. the divergence is BY DESIGN there.
+The strip is full DURING the hold and collapses AFTER a divergent reconcile,
+then never self-heals: unbounded, not transient. That inverts both halves of
+#676's premise. **Carry as a separate named item; untouched by WS-K.**
+
+(c) **The existing walkthrough could never have witnessed a transient blank.**
+`walkthrough/scorepad-v3-badminton-match.spec.ts`'s serve assertions poll at
+`timeout: 20_000` while CI runs `NEXT_PUBLIC_SCOREPAD_HOLD_MS: "3000"`
+(`e2e.yml:265/645/934`). Not evidence in either direction -- part of why the
+mis-diagnosis survived a wave.
+
+## Correction to the controller's own WS-M brief
+
+I briefed WS-M that an always-present mode message "disarms six live
+assertions across cricket, badminton, volleyball and tabletennis". Overstated:
+`git grep -a 'kind: "mode"'` returns only `skins/cricket.tsx:1952`, so the
+other three skins were never at risk. The `tile-grid.tsx` fix is still correct
+and forward-looking, and the mutation proved the disarming was real and
+silent -- the COUNT was the only wrong part.
+
+## Cross-session coordination — entitlements W1 (`r9`)
+
+`feat/entitlements-w1-scoring-free` removes the scoring entitlement gate from
+`scoreEvent` and the batch importer, deletes engine `fidelityTiers` /
+`FidelityTier` / `PadSpec.fidelityEntitlements`, and reworks the recording
+chip into a band picker with no entitlement meaning.
+
+Overlap with R8: `packages/engine/src/sport/module.ts` (R8/WS-B added
+`PadAttributionItem.required` there, +127), all eleven sport module files,
+`testkit/conformance-pad.ts`, `sport/module.test.ts`,
+`v2/scorepad/view-model.ts`. R8 does NOT touch `server/usecases/scoring.ts`
+or `v3/recording-chip.tsx`.
+
+Hazard flagged to them: `git grep -aln fidelityTiers` returns 21 files, and
+several are DERIVED gates (`scoring-vocab.test.ts`, `event-copy.test.ts`,
+`usecases/fidelity.ts`). Deleting the tiers empties those derivations, and an
+empty derivation satisfies a `for` loop silently. R8's new sport-agnostic gate
+has a derived vacuity guard so it reds instead, but W1 still needs a
+replacement enumeration of "every event type every module declares".
+
+Sequencing RECOMMENDATION sent (explicitly not a ruling, per rule 17): R8
+merges first, W1 rebases. R8 is closing, thin-and-wide across 18 files; W1's
+deletions are wide but mechanical and replay more cleanly. Their owner rules.
+
+Also asked: neither side reorders a shared literal.
+
+## WS-O run list — e2e specs the R8 branch added or changed
+
+From `git diff --name-only 11343aa3f...feat/scorepad-v3-r8-sweep -- apps/web/e2e`:
+
+    apps/web/e2e/helpers.ts                              (support)
+    apps/web/e2e/scorepad-a11y-kit.ts                    (support)
+    apps/web/e2e/v3-skin-catalog.ts                      (support, WS-H)
+    apps/web/e2e/mobile.spec.ts                          -- 7 widths
+    apps/web/e2e/scorepad-a11y-evidence.spec.ts
+    apps/web/e2e/scorepad-skins.spec.ts
+    apps/web/e2e/scorepad-v3-a11y-sweep.spec.ts
+    apps/web/e2e/scorepad-v3-cricket.spec.ts             -- RUN by WS-M
+    apps/web/e2e/scorepad-v3-football.spec.ts
+    apps/web/e2e/scorepad-v3-swap-candidate-badges.spec.ts
+
+Plus, not yet cherry-picked at the time of writing:
+    apps/web/e2e/scorepad-v3-strip-geometry.spec.ts      (WS-K, isolated)
+    whatever WS-C lands for the amendable Partial badge
+
+Only `scorepad-v3-cricket.spec.ts` and `mobile.spec.ts`'s cricket leg have
+been RUN against a prod build so far. Everything else is written-but-unrun
+and is owed to the WS-O gate. Reminder that `e2e.yml` triggers on push to
+`main` ONLY -- a feature branch gets zero automatic e2e signal, ever, until
+it merges. So WS-O's local prod-build run is the only pre-merge signal there
+is; do not treat "the PR is open" as coverage.
+
+## Reachability correction — 7 LIVE, 4 LATENT (not 11 live)
+
+The eleven leaks are NOT all reaching a scorer. The four setbased extras
+(`badminton.sub`, `badminton.expedite.start`, `tabletennis.sub`,
+`volleyball.expedite.start`) are REFUSED by the reducer under every shipped
+preset. Verified against the tree, not taken on a peer's word:
+
+- `sports/setbased/kernel.ts:2346` — `if (strict && !records.timeouts) invalid(...)`,
+  same shape for sanctions/sub/expedite. The `strict &&` gate is documented at
+  `:2325-2333` as protecting an already-recorded event against a live config
+  flip, NOT as a way in.
+- `core/events.ts:273` — `isStrictFold` returns `ctx?.strict !== false`, i.e.
+  defaults TRUE, so the write path refuses.
+- Preset flags: badminton `{timeouts:false, sanctions:true, substitutions:false,
+  expedite:false}` (`badminton.ts:37`); tabletennis `{...substitutions:false,
+  expedite:true}` (`tabletennis.ts:37`); volleyball default `{...substitutions:true,
+  expedite:false}` (`volleyball.ts:42`), beach flips only substitutions (`:62`).
+- Corroborated independently in our own tree at `v3/skins/volleyball.tsx:136`.
+
+**So: cricket's seven are LIVE. The other four are LATENT** — they become live
+the moment an organiser flips a `records` flag, which the kernel's own comment
+explicitly contemplates. Copy is still being added for all eleven: copy for a
+contingent path is cheap; a raw type reaching a scorer because a config edit
+outran the dictionary is not.
+
+**THE IDENTITY, which is the actual finding.** 68 registered − 63 banded = 5,
+and those 5 are exactly the non-recordable ones. `fidelityTiers` was the
+RECORDABLE set; `eventSchemas` is the REGISTERED set. Neither was labelled,
+which is why two sessions counting the same thing got different right answers.
+
+**Recorded prior:** `lib/scoring-vocab.ts:703` already documents this exact
+leak historically — the ribbon falling through to `pad.ribbon.fallback` and
+printing "badminton.timeout recorded". Second time this shape has been caught,
+which makes it a class, not a bug.
+
+**Controller error to record.** I reported "11 live leaks" to the owner as a
+customer fact, derived from a data structure, without checking reachability.
+That is the same mistake as the earlier wrong enumeration wearing different
+clothes: a claim about WHAT A SCORER SEES settled from a derivation instead of
+from the write path. Twice in one session.
+
+## Band chip vs mode chip — resolved with the W1 session
+
+There is NO dropdown and none was ever proposed; verified at `e14080298`.
+W1's Task 4 has not started and `recording-chip.tsx` is byte-identical to main.
+Their owner approved a **44px pill** — four-rung meter, the word "Recording",
+the active band, chevron — raising a bottom SHEET of four full-width rows
+(`docs/superpowers/specs/mockups/2026-09-02-entitlements-v18/chip-option-b.html`,
+notes beside it). The rejected option was a one-row four-segment gauge.
+
+**Option A (pair band + mode on one row under one label) is DEAD.** Against the
+real design it puts a shared label above one thing you tap and one thing you
+cannot. Not a bigger change — a wrong one.
+
+**Agreed copy, both sides.** The distinguishing axis is AGENCY, not topic:
+both values are granularity, but the band is a choice the scorer can change now
+and the mode is a fact locked when the innings began.
+- W1's chip keeps "Recording" exactly as approved — no new copy, no re-approval.
+- R8's mode line becomes **"This innings: Ball-by-ball"**, PLAIN TEXT (not a
+  pill) with the lock glyph. Three independent non-control signals: noun, shape,
+  glyph — a scorer under time pressure reads shape before words.
+- This SUPERSEDES the "Scoring: " prefix agreed earlier and already sent to
+  WS-M. WS-M's fix round must be updated.
+
+## JOINT open item — mirrored in W1's ledger
+
+Band and mode can legitimately disagree on screen ("Every detail" + "Over-by-over")
+and nothing tells a scorer which one GOVERNS what is actually recorded. The nouns
+say who owns each value, not which wins. Belongs on the cricket walkthrough.
+NOTE: may well be answerable from the reducer rather than from a scorer — check
+before deferring it to a walkthrough question.
+
+## JOINT open item — kernel registers schemas no preset can use
+
+The shared setbased kernel registers a badminton expedite system and a
+table-tennis substitution. The added copy is a floor under the leak, not a fix
+for why those types exist. Engine-schema narrowing, moves golden corpora, and
+must not be smuggled into a closing wave or a rebase. Named and unowned in BOTH
+ledgers deliberately — a finding in one wave's closed ledger is a finding
+nobody reads.
+
+## WS-C — CRITICAL found in review: an amend could delete a scored event
+
+`v3/pad-host.tsx:1846-1847` enqueued the `core.void` as a SIBLING of the held
+replacement. The drain fix is correct (`use-pad-pipeline.ts:1205` breaks at the
+held entry so the void cannot ack first), but the replacement stays droppable
+for `HOLD_MS` and the pad DELIBERATELY offers a control that drops it —
+`ribbonUndoTarget` always offers undo on a held tap (`pad-host.tsx:2025`), and
+the panel's Void on that row routes the same way (`:2173`). `decideUndo`
+(`:513`) → `dropHeldSubmission` removes the replacement; the void drains alone.
+Original event struck through, nothing in its place, score falls.
+
+Not a race — one deliberate tap on the pad's own documented cancel path, which
+is exactly what a scorer does after tapping Partial by mistake. Second entrance:
+`heldSubmit` (`:1505-1514`) swallows `submitHeld`'s `null` refusal and the void
+fires anyway. Fix ruling: the void must be a CONSEQUENCE of the replacement
+surviving, never a sibling enqueued beside it.
+
+Also found: the submit ORDER (the earlier score-dip fix) is pinned ONLY by an
+e2e, and `e2e.yml` triggers on push to `main` — so a PR gets zero signal and the
+mutant SURVIVED the full unit suite at 2404/2402/0. Being fixed by asserting
+`store.list()` order at the pipeline seam.
+
+## WS-R review — the sweep cannot see `core.*`, one namespace over
+
+Approved with follow-ups. The important one: `v3/ribbon.ts`'s header now claims
+the fallback "is UNREACHABLE for any event the engine accepts". FALSE for the
+14 `core.*` types. The engine accepts them, `buildRibbon` resolves them through
+the **hand-maintained** `CORE_RIBBON_KEY` map, and the new sport-agnostic sweep
+cannot reach them BY CONSTRUCTION — `declaredEventTypes()` is sport-prefixed and
+`assertEverySportIsSwept` pins prefixes to the 11 module keys, so a `core.`
+prefix would FAIL that guard rather than join it.
+
+No live leak (all 14 are mapped). But the map is hand-maintained, so a future
+`core.x` reproduces **the exact D1 defect** — "core.start recorded", caught in a
+320px screenshot — behind a green gate. Round 3 adds a second derived sweep over
+`core/events.ts`'s own `CORE_EVENT_SCHEMAS`.
+
+Worth naming: this wave closed a leak class for 11 sports and left the same
+class open in the one namespace the sweep's own shape excluded. The guard's
+scoping decision (prefix must be a module key) is what made it invisible.
+
+**Subset-guard caveat to keep:** `missing` is structurally always `[]` while the
+derivation keeps its `eventSchemas` line (derived ⊇ accepted), so the guard is
+NOT an independent cross-check of the enumeration. Its real job is catching a
+REPOINT, which M5 proves it does.
+
+**Stale ENGINE comment found, unowned:** `sports/setbased/kernel.ts:1576-1600`
+asserts those branches are "unreachable from ALL of a sport's cfgs". Stale —
+`records` became cfg-driven at `:603`. No engine edit made (out of R8 scope).
+
+**Mechanism correction for the record.** The 63-vs-68 split is NOT simply
+"kernel.ts:1816 registers six keys". Sharper: tiers derive from
+`extensionTypesFor(declaredRecords)` = the STATIC DEFAULT cfg
+(`kernel.ts:2185`), while `records` is cfg-overridable (`makeConfigSchema`
+`:113-122`) and padSpec gates on `cfg.records.*` (`:1765`). `eventSchemas` is
+built at `:2166`, tiers at `:2252-2255`.
+
+## WS-K round 2 — closed, one browser measurement owed
+
+All three items plus both Minors closed; **14 mutants, all killed**, including
+M10/M11 (the round-2 survivors). Gate 2416 passed / 0 failed (2418 total),
+tsc EXIT 0.
+
+The self-caught item is the one to remember: **WS-K's own C1 fix disarmed the
+guard behind the 320px claim.** Moving `data-strip-item-id` onto the inner
+visible span meant `slotTag`'s walk-back inspected the wrong element, so the
+MOBILE FLOOR test silently stopped seeing either `min-w-0`. Round 1's M4 kill
+had been carried entirely by its `truncate` half. Guard now anchors on the
+wrapper AND asserts every `invisible` sizer's class separately — the two floors
+are independent (wrapper = flex item of the band; sizer = grid item whose
+min-content sets the track's automatic minimum).
+
+**Still owed to WS-O:** the 320px rect with a long single-word surname, and the
+added question — does dropping `min-w-0` from the wrapper, or from the sizers,
+have a VISIBLE consequence at 320? That measures how much the disarmed guard
+mattered in practice, not just as a guard.
+
+## WS-M — my closed-innings ruling defended an unreachable state
+
+I ruled "suppress the mode chip when the innings closes", based on a reviewer's
+description of a 4-line strip. WS-M implemented the guard, then DROVE it:
+posting `cricket.innings.close` leaves innings 2 due, and the pre-existing
+between-innings window removes the **whole strip** —
+`{stripPresent:false, chips:[], msgLines:[]}`. Zero lines, not four. **The
+4-line state is fixture-only and not reachable in the product.**
+
+Guard kept (it is correct if that window ever changes), but the RATIONALE I gave
+was wrong, and it was wrong in the same way as everything else today: derived
+from a description rather than from driving the product.
+
+Also corrected me: 5764 vs 5760 i18n keys was a TREE difference, not its error.
+It proved that by accidentally running the gate against the main checkout (a
+relative `cd apps/web` chained after an absolute `cd` to the repo root) and
+noticing the run was **39 tests short**. A cwd reset producing a green run of
+the WRONG TREE, caught only by a count delta.
+
+## CHERRY-PICK PLAN (verified against each worktree, 2026-09-02)
+
+Two workstreams are FINISHED and waiting only on the wave worktree being free
+(WS-M commits directly to `feat/scorepad-v3-r8-sweep`, so nothing can be picked
+while it runs).
+
+**WS-R** — worktree `.claude/worktrees/agent-af430caf9e5ee0e5f`, 3 rounds + 1 full
+review (Approved with follow-ups, all closed in round 3):
+
+    bd6be5a26   cricket's seven + sport-agnostic gate
+    6ed6e9600   repoint gate at eventSchemas, close the four
+    5848f2e54   sweep core.* too, correct four citations
+
+    DO NOT PICK  dec842c5a  docs(entitlements): mobile is designed, not shrunk
+
+`dec842c5a` is a FOREIGN commit from the entitlements session that landed under
+this branch — the known "isolated-worktree branch carries foreign commits" trap,
+confirmed live here. Docs-only, unrelated, and it belongs to their wave.
+
+**WS-K** — worktree `.claude/worktrees/agent-a7f41c15ca1641ea6`, 2 rounds + 2 full
+reviews, 14 mutants killed, rebased onto `2c85c66ce`:
+
+    f8aa30c65   a strip slot that holds its width
+    328887e4d   stop the serve strip re-flowing on refusal
+    ce3c7d979   review round 1 fixes
+    403f7630d   review round 2 — rearm the mobile guard, narrow the reserve
+
+All four are WS-K's own; no foreign commit in this range.
+
+**Still owed before either can be called done:** WS-K's 320px browser
+measurement (WS-O). WS-R has no browser debt — it is copy plus a gate.
+
+**Order:** WS-M lands first (it owns the wave worktree), then WS-R, then WS-K
+(WS-K is already based on WS-M's tip so it replays cleanly), then WS-C once its
+Critical is fixed and re-reviewed.
+
+## OWNER RULING 2026-09-02 — swap badge keeps leading with the shirt number
+
+**Question put:** the swap-candidate badge now leads with `squadNumber`, falling
+back to `positionKey`. A division can switch squad numbers OFF
+(`entrants.squadNumbers`, `division-settings.tsx:372`). Turning it off writes
+`entrants.squadNumbers = false` into division config (`:584`) and **nothing
+clears the stored values** — they stay in `entrant_members`. So a division that
+switched numbers off can still surface them on the pad.
+
+**Owner ruling: leave it as is.** No gate on the division toggle.
+
+**Supporting fact found while investigating:** the public site ALREADY orders
+squad lists by `squad_number nulls last` (`server/public-site/data.ts:569`)
+without consulting the toggle. So the toggle governs whether an organiser can
+MANAGE numbers, not whether known numbers may be DISPLAYED. The pad is now
+consistent with existing behaviour rather than introducing a new posture.
+
+**Residual, accepted knowingly:** a stale number from a previous season can show
+on a division that has since turned the feature off. That risk already exists on
+the public site, so the pad does not introduce it.
+
+**Blast radius, corrected from the original comment** (`registry.tsx:105` said
+`positionKey ?? squadNumber`; both builders read the reverse —
+`skins/football.tsx:1318`, `skins/period-shared.ts:1393`): every NUMBERED
+STARTER's swap lead flips from position code to shirt number, not merely the
+previously-unbadgeable bench.
+
+## PRE-EXISTING RED ON MAIN — not R8's, but live (found by the WS-O sweep)
+
+`apps/web/e2e/mobile.spec.ts` "portfolio panels (P1/P2/P4) hold at this width"
+fails on **all seven width projects**:
+
+    Error: expect(locator).toBeVisible() failed
+    Locator: getByTestId('template-gallery')
+    Error: element(s) not found     (30s timeout)
+
+**Proven pre-existing, not assumed.** Reproduced at R8's base commit
+`11343aa3f` in a detached worktree (`.claude/worktrees/r8base`) with its own
+`pnpm install --frozen-lockfile`, its own DB, its own placement service and its
+own prod build: **7 failed / 2 passed**, identical to the R8 branch. The test is
+at `:1628` on base and `:1651` on R8 — same test, shifted by R8's additive
+insertions above it.
+
+Ruled out along the way, each by evidence rather than argument:
+- **Not contention/flake.** Fails deterministically in isolation on all 7
+  widths, so it is not the documented "7 widths race ONE org" shape.
+- **Not a missing seed.** The test seeds its own data via the API.
+- **Not R8's `mobile.spec.ts` change.** That diff is 329 insertions, 0
+  deletions, and does not touch this test.
+- **Not R8's `helpers.ts` change.** The only other R8-touched file mentioning
+  `template-gallery`; its change is spread-guarded
+  (`...(s.squadNumber === undefined ? {} : { squad_number: s.squadNumber })`),
+  so every existing caller is byte-identical.
+
+`TemplateGallery` is mounted at `apps/web/src/app/o/[orgSlug]/c/new/page.tsx:5`.
+The panel never renders for the fixture this test builds. **Owner should decide
+whether this blocks anything** — it is a 320px mobile-matrix red on main and
+therefore fails CI on every push to main, but it predates this wave and fixing
+it is not R8 scope.
