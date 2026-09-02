@@ -64,23 +64,24 @@ const MISSING_ATTRIBUTION_REASON: ChassisLabel = {
   label: "Choose who's required before you can continue.",
 };
 
-const LOCKED_REASON: ChassisLabel = {
-  key: "scorepad.locked.reason",
-  label: "Upgrade your plan to unlock this action.",
-};
+// W1 / Task 4 (entitlements v18): `ActionAvailability` and its
+// `LOCKED_REASON` are DELETED, not defaulted. They had exactly one producer —
+// `spec.fidelityEntitlements[band]`, a field Task 2 removed from the engine —
+// so a surviving `{kind:"available"}` union of one would be a signal nothing
+// can ever raise, sitting in a shape three renderers branch on. An action is
+// either within the scorer's chosen band and rendered, or above it and absent
+// (`resolveActionView` below returns `null`); there is no third state and no
+// paid one.
 
-export type ActionAvailability = { kind: "available" } | { kind: "locked"; reason: ChassisLabel };
-
-/** An action, resolved for THIS context: band/entitlement decided, fields
- *  and attribution requirements passed through untouched (the attribution
- *  picker is a later pass — see the module header) for a future picker to
- *  consume from the exact same shape the engine declared. */
+/** An action, resolved for THIS context: band decided, fields and attribution
+ *  requirements passed through untouched (the attribution picker is a later
+ *  pass — see the module header) for a future picker to consume from the
+ *  exact same shape the engine declared. */
 export interface PadActionView {
   type: string;
   labelKey: PadLabel;
   fields: readonly PadField[];
   attribution: PadAttribution;
-  availability: ActionAvailability;
 }
 
 export interface PadPanelView {
@@ -113,25 +114,23 @@ export interface PadViewCtx {
   state: unknown;
   summary: unknown;
   phase: PadPhase;
-  /** The fixture's own configured/currently-viewed fidelity band. */
+  /** The recording band the SCORER has picked on the Recording chip — a UX
+   *  filter, never an entitlement (W1, entitlements v18). `pad-host.tsx`
+   *  owns it; see its `defaultBandFor`/`resolveInitialBand`. */
   band: FidelityBand;
-  /** FeatureKey -> whether the org holds it, e.g. `{"stats.player": true}`.
-   *  Only entries `spec.fidelityEntitlements` actually references matter. */
-  entitlements: Readonly<Record<string, boolean>>;
 }
 
 /**
  * One action's resolved view, independent of any panel gate — the building
  * block both `buildPadView` (phase + gate filtered, for the renderer) and
  * `allActionViews` (unfiltered by phase/gate, for coverage/search) share, so
- * the two can never compute band/entitlement availability two different
- * ways. Returns `null` when the action sits above `ctx.band` — "absent",
+ * the two can never compute band availability two different ways. Returns `null` when the action sits above `ctx.band` — "absent",
  * per the S10 acceptance criteria, not merely disabled.
  */
 function resolveActionView(
   spec: PadSpec,
   action: PadAction,
-  ctx: Pick<PadViewCtx, "band" | "entitlements">,
+  ctx: Pick<PadViewCtx, "band">,
 ): PadActionView | null {
   const band = spec.fidelity[action.type];
   // Every registered type has exactly one band, by the engine's own
@@ -140,17 +139,11 @@ function resolveActionView(
   // a future module still mid-wiring) reads as "hide it", the safe default,
   // never "show unconditionally".
   if (band === undefined || band > ctx.band) return null;
-  const neededEntitlement = spec.fidelityEntitlements[band];
-  const availability: ActionAvailability =
-    neededEntitlement && !ctx.entitlements[neededEntitlement]
-      ? { kind: "locked", reason: LOCKED_REASON }
-      : { kind: "available" };
   return {
     type: action.type,
     labelKey: action.labelKey,
     fields: action.fields,
     attribution: action.attribution,
-    availability,
   };
 }
 
@@ -166,7 +159,7 @@ function resolveActionView(
  */
 export function allActionViews(
   spec: PadSpec,
-  ctx: Pick<PadViewCtx, "band" | "entitlements">,
+  ctx: Pick<PadViewCtx, "band">,
 ): readonly PadActionView[] {
   const out: PadActionView[] = [];
   for (const panel of spec.panels) {

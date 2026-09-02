@@ -15,6 +15,9 @@ import { describe, expect, it, vi } from "vitest";
 import type { LineupPair, SquadState } from "@seazn/engine/core";
 import { initSquads } from "@seazn/engine/core";
 import type { PadField, PadPanel, PadSpec } from "@seazn/engine/sport";
+import { builtinModules } from "@seazn/engine/sports";
+import { carrom } from "@seazn/engine/sports/carrom";
+import { football } from "@seazn/engine/sports/football";
 import type { MsgFn } from "@/lib/scoring-vocab";
 import { createSkinDispatch } from "../skin-dispatch";
 import { buildPadView, type PadViewCtx } from "../../view-model";
@@ -24,11 +27,12 @@ import { MORE_SHEET_KEY } from "../types";
 import type { MessageKey } from "@/lib/messages";
 import {
   adaptSwapSlot,
+  bandStorageKey,
   combinedPool,
   contextOverridesStale,
   decideUndo,
   dedicatedEventTypes,
-  entitledBandsFrom,
+  defaultBandFor,
   isPartialDockAnswer,
   moreActions,
   phasesWithTiles,
@@ -36,6 +40,7 @@ import {
   queueStatusText,
   rejectionText,
   resolveDockSpec,
+  resolveInitialBand,
   resolveNextPhase,
   resolvePadPhase,
   resolveSheet,
@@ -173,20 +178,80 @@ function combinedPoolOnField(s: SquadState) {
   return { onFieldPersons: pool.squad.members.filter((m) => m.onField).map((m) => m.personId) };
 }
 
-// --- entitledBandsFrom ---------------------------------------------------
+// --- the band the pad OPENS AT -------------------------------------------
+//
+// W1 / Task 4 (entitlements v18). This block used to cover
+// `entitledBandsFrom`, which resolved the bands an ORG had paid for. Bands
+// are no longer sold, so what replaces it is the question that actually
+// remains: which band does the chip open at when the scorer has never picked
+// one?
+//
+// RULE 19, and the reason these assertions are shaped the way they are: this
+// programme has already shipped a defect behind a full review because every
+// test asserted a control was REACHABLE and none asserted the VALUE it was
+// seeded with. So the default is NOT a constant here — it is the highest band
+// the sport's own `padSpec(cfg).fidelity` declares, and the expectation below
+// is derived from that same declaration rather than typed into the test.
+// `carrom` is the discriminator: it declares nothing above band 1, so a
+// `return 3` reads "Every detail" over a pad that has no such thing, and this
+// suite reds.
 
-describe("entitledBandsFrom", () => {
-  it("a band with no declared gate is always entitled", () => {
-    const bands = entitledBandsFrom({}, {});
-    expect(bands.has(0)).toBe(true);
-    expect(bands.has(3)).toBe(true);
+describe("defaultBandFor — the pad opens at the top band its SPORT declares", () => {
+  it("is the sport's own maximum: football 3, carrom 1 — never a constant", () => {
+    const footballSpec = football.padSpec!(football.configSchema.parse({}) as never);
+    const carromSpec = carrom.padSpec!(carrom.configSchema.parse({}) as never);
+    // Premise re-derived from the modules rather than asserted from memory:
+    // these two must genuinely differ, or the case below cannot witness a
+    // hardcoded default at all.
+    expect(Math.max(...Object.values(carromSpec.fidelity))).toBe(1);
+    expect(Math.max(...Object.values(footballSpec.fidelity))).toBe(3);
+
+    expect(defaultBandFor(footballSpec.fidelity)).toBe(3);
+    expect(defaultBandFor(carromSpec.fidelity)).toBe(1);
   });
 
-  it("a gated band is entitled only when the org holds the required feature key", () => {
-    const bands = entitledBandsFrom({ 2: "stats.player", 3: "scoring.ball_by_ball" }, { "stats.player": true });
-    expect(bands.has(0)).toBe(true);
-    expect(bands.has(2)).toBe(true); // held
-    expect(bands.has(3)).toBe(false); // not held
+  it("hides no action of ANY builtin sport — an unpicked pad is a complete pad", () => {
+    for (const mod of builtinModules) {
+      let spec;
+      try {
+        spec = mod.padSpec?.(mod.configSchema.parse({}) as never);
+      } catch {
+        continue; // a module with no zero-arg-parseable cfg (generic) — nothing to say here
+      }
+      if (!spec) continue;
+      const opensAt = defaultBandFor(spec.fidelity);
+      const above = Object.entries(spec.fidelity).filter(([, band]) => band > opensAt);
+      expect(above, `${mod.key} opens at ${opensAt} and would hide ${above.map(([type]) => type).join(", ")}`).toEqual([]);
+    }
+  });
+
+  it("fails OPEN for a spec that declares no bands at all", () => {
+    // Nothing is classified, so nothing can be filtered out either way — the
+    // honest reading is the top of the scale, never the bottom.
+    expect(defaultBandFor({})).toBe(3);
+  });
+});
+
+describe("resolveInitialBand — a scorer's own pick outranks the sport's default", () => {
+  const carromFidelity = carrom.padSpec!(carrom.configSchema.parse({}) as never).fidelity;
+
+  it("honours a stored pick, including one BELOW the sport's default", () => {
+    expect(resolveInitialBand("0", carromFidelity)).toBe(0);
+  });
+
+  it("falls back to the sport's default when nothing is stored", () => {
+    expect(resolveInitialBand(null, carromFidelity)).toBe(1);
+  });
+
+  it("ignores a stored value that is not a band — never trusts what came out of storage", () => {
+    for (const junk of ["", "4", "-1", "3.5", "three", "null", "[3]"]) {
+      expect(resolveInitialBand(junk, carromFidelity), `stored ${JSON.stringify(junk)}`).toBe(1);
+    }
+  });
+
+  it("keys storage per fixture, so two fixtures open at their own picks", () => {
+    expect(bandStorageKey("fx-1")).toBe("seazn.pad.band.fx-1");
+    expect(bandStorageKey("fx-2")).not.toBe(bandStorageKey("fx-1"));
   });
 });
 
@@ -425,10 +490,10 @@ function panel(over: Partial<PadPanel> = {}): PadPanel {
 }
 
 function spec(): PadSpec {
-  return { panels: [panel()], fidelity: { "cricket.toss": 0, "cricket.declare": 0, "cricket.ball": 0 }, fidelityEntitlements: {} };
+  return { panels: [panel()], fidelity: { "cricket.toss": 0, "cricket.declare": 0, "cricket.ball": 0 } };
 }
 
-const baseCtx: Omit<PadViewCtx, "state" | "summary"> = { phase: "live", band: 3, entitlements: {} };
+const baseCtx: Omit<PadViewCtx, "state" | "summary"> = { phase: "live", band: 3 };
 
 describe("moreActions", () => {
   it("returns every padSpec(cfg) action NOT in the dedicated set — a future engine action needs no skin edit to appear here", () => {
@@ -437,22 +502,26 @@ describe("moreActions", () => {
     expect(actions.map((a) => a.type).sort()).toEqual(["cricket.declare", "cricket.toss"]);
   });
 
-  it("respects phase/band/entitlement filtering exactly like the panel it reads from — a locked/hidden action never leaks into More", () => {
+  it("respects phase/band filtering exactly like the panel it reads from — an above-band action never leaks into More", () => {
+    // W1 / Task 4: this case used to prove a LOCKED action still appeared in
+    // More carrying its upsell reason. Bands are not sold any more, so the
+    // only question left is presence — asserted in BOTH directions, because a
+    // one-directional "it is there at band 3" would pass over a filter that
+    // never filters anything.
     const gated: PadSpec = {
       panels: [panel({ actions: [{ type: "cricket.superover", labelKey: { key: "a4", label: "Super over" }, fields: [], attribution: [] }] })],
       fidelity: { "cricket.superover": 3 },
-      fidelityEntitlements: { 3: "scoring.ball_by_ball" },
     };
-    const actions = moreActions(gated, { ...baseCtx, band: 3, entitlements: {}, state: {}, summary: {} }, new Set(), new Set());
-    expect(actions).toHaveLength(1);
-    expect(actions[0]!.availability).toEqual({ kind: "locked", reason: expect.objectContaining({ key: "scorepad.locked.reason" }) });
+    expect(
+      moreActions(gated, { ...baseCtx, band: 3, state: {}, summary: {} }, new Set(), new Set()).map((a) => a.type),
+    ).toEqual(["cricket.superover"]);
+    expect(moreActions(gated, { ...baseCtx, band: 2, state: {}, summary: {} }, new Set(), new Set())).toEqual([]);
   });
 
   it("never lists the same type twice even if it appears in two panels", () => {
     const twoPanel: PadSpec = {
       panels: [panel({ phase: "live" }), panel({ phase: "post" })],
       fidelity: { "cricket.toss": 0, "cricket.declare": 0, "cricket.ball": 0 },
-      fidelityEntitlements: {},
     };
     const actions = moreActions(twoPanel, { ...baseCtx, state: {}, summary: {} }, new Set(["cricket.ball"]), new Set());
     // buildPadView is phase-scoped (ctx.phase: "live"), so the "post" panel's
@@ -761,7 +830,6 @@ describe("pad-host's dispatch composition — a skin cannot invent an event (tas
     const postOnlySpec: PadSpec = {
       panels: [panel({ phase: "post", actions: [{ type: "cricket.matchClose", labelKey: { key: "a5", label: "Close" }, fields: [], attribution: [] }] })],
       fidelity: { "cricket.matchClose": 0 },
-      fidelityEntitlements: {},
     };
     const liveView = buildPadView(postOnlySpec, { ...baseCtx, phase: "live", state: {}, summary: {} });
     const submit = vi.fn(async () => {});

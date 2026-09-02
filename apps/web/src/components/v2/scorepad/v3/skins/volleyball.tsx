@@ -215,13 +215,10 @@ import {
 } from "@seazn/engine/sports/setbased";
 import type { MessageKey } from "@/lib/messages";
 import { ENUM_VOCAB } from "@/lib/scoring-vocab";
-import { featurePlan } from "@/lib/feature-copy";
-import { planLabel } from "@/lib/plan-label";
 import {
   MORE_SHEET_KEY,
   type ActivityDetailContext,
   type Blocked,
-  type ContextStripSpec,
   type DockChip,
   type DockSpec,
   type GuidedSheetSpec,
@@ -274,14 +271,6 @@ const SIDE_LABEL: Record<Side, MessageKey> = {
   away: "scorepad.attribution.away",
 };
 
-/** The feature key volleyball's band 3 is gated behind —
- *  `setbased/volleyball.ts`'s own `rallyEntitlement`, published as
- *  `padSpec(cfg).fidelityEntitlements[3]`. RESTATED here rather than read off
- *  a live `padSpec` call, and `__tests__/volleyball.test.ts` pins this
- *  constant EQUAL to the module's own value — the identical badminton/table
- *  tennis pattern, and by design the identical STRING (all three dossiers
- *  cite "doc 10" for tier-2/3 rally scoring). */
-export const RALLY_ENTITLEMENT = "scoring.rally_by_rally";
 
 /**
  * S7/#427 — the FIVB card ladder verbatim, in the order the sheet climbs it.
@@ -896,35 +885,23 @@ export function buildScorebug(view: PadHostView, t: TFn): ScorebugSpec {
 }
 
 // ---------------------------------------------------------------------------
-// context() — D-7's explanation, the siblings' exact mechanism. See
-// badminton.tsx's own header for the full reasoning this file does not
-// repeat: the chassis has no locked-tile path for a band GAP, so the
-// explanation has to be authored.
+// W1 / Task 4 (entitlements v18) — D-7's explainer is GONE, and that is the
+// fix, not a loss.
+//
+// This skin used to declare a context strip and a big disabled "Rally by
+// rally is locked" tile for exactly one reason: below band 3 the rally
+// affordance vanished, the scorer had no way to change that, and nothing on
+// screen said why. Both halves named a PLAN ("Rally-by-rally scoring needs
+// {plan}"), because a band was something an org bought.
+//
+// A band is now the scorer's own pick, stated on the Recording chip two
+// controls up and changed from it in two taps. So there is no lock to word,
+// no plan to name, and a slab reading "Rally by rally is locked" over a
+// setting the reader chose would be the pad lying to them. The chip is both
+// the statement and the control; `pad.{sport}.context.recording[.locked]` and
+// `pad.{sport}.tile.rallyLocked[.sublabel]` are deleted from all four
+// dictionaries with it.
 // ---------------------------------------------------------------------------
-
-function rallyOutOfBand(view: PadHostView): boolean {
-  return view.band < 3;
-}
-
-export function buildContextStrip(view: PadHostView, t: TFn): ContextStripSpec | null {
-  if (resolvePhase(view) !== "live" || !rallyOutOfBand(view)) return null;
-  return {
-    slots: [
-      {
-        id: "recording",
-        label: "pad.volleyball.context.recording",
-        pool: "onfield",
-        required: false,
-        readOnly: true,
-        message: t("pad.volleyball.context.recording.locked", {
-          plan: planLabel(featurePlan(RALLY_ENTITLEMENT)),
-        }),
-        messageTone: "info",
-        candidates: [],
-      },
-    ],
-  };
-}
 
 // ---------------------------------------------------------------------------
 // tiles()
@@ -940,7 +917,6 @@ export function liberoSwapSlotId(side: Side): string {
   return `libero-${side}`;
 }
 
-export const RALLY_LOCKED_TILE_ID = "rallyLocked";
 export const SET_SCORE_TILE_ID = "setScore";
 export const SERVE_ANCHOR_TILE_ID = "serveAnchor";
 
@@ -1079,7 +1055,7 @@ function liberoNamed(squads: SquadState, side: Side): boolean {
   return squads[side].members.some(hasLiberoRole);
 }
 
-export function buildTiles(view: PadHostView, t: TFn): TileSpec[] {
+export function buildTiles(view: PadHostView): TileSpec[] {
   const state = asState(view.state);
   const live = resolvePhase(view) === "live";
   const band = view.band;
@@ -1187,22 +1163,6 @@ export function buildTiles(view: PadHostView, t: TFn): TileSpec[] {
     });
   }
 
-  // D-7 — THE SILENCE, GIVEN A FACE. The siblings' exact mechanism: VISIBLE,
-  // disabled, span-4, paired with the context slot above which carries the
-  // sentence (`assertDisabledTilesExplained`, tile-grid.tsx).
-  if (live && rallyOutOfBand(view)) {
-    tiles.push({
-      id: RALLY_LOCKED_TILE_ID,
-      label: "pad.volleyball.action.rally",
-      labelText: t("pad.volleyball.tile.rallyLocked"),
-      sublabelText: t("pad.volleyball.tile.rallyLocked.sublabel"),
-      kind: "minor",
-      span: 4,
-      phases: ["live"],
-      disabled: true,
-      action: { sheet: MORE_SHEET_KEY },
-    });
-  }
 
   tiles.push({
     id: "more",
@@ -1456,7 +1416,7 @@ export function buildSheets(view: PadHostView, t: TFn): Record<string, GuidedShe
  * `exemptReplacement` kernel change (`bringOn`, `core/lineup.ts`, this file's
  * header note), NEITHER is reachable from this file's own `blocked`
  * computation any more. Both stay dedicated anyway, defensively, the same
- * reason `RALLY_ENTITLEMENT`/`SANCTION_LEVELS` are restated rather than
+ * reason `SANCTION_LEVELS` is restated rather than
  * assumed — the wave's own brief names both "once" AND "position lock" as
  * facts this skin owes wording for:
  *  - `reentry-limit` — FIVB 15.6's "once, and only once" cap. Before the
@@ -1871,17 +1831,15 @@ export function volleyballSkinV3(t: TFn): SkinDefV3<PadHostView> {
     tapModel: "S",
     phase: resolvePhase,
     scorebug: (view) => buildScorebug(view, t),
-    tiles: (view) => buildTiles(view, t),
+    tiles: buildTiles,
     dock: (eventType, view, payload) => buildDock(eventType, view, t, payload),
     sheets: (view) => buildSheets(view, t),
-    context: (view) => buildContextStrip(view, t),
     swap: (view) => buildSwap(view, t),
     refusedEventTypes,
     activityDetail: volleyballDetail,
-    // No contextSelect() — the one context slot this skin ever declares is
-    // `readOnly` (D-7's recording notice), and a readOnly slot's picker can
-    // never open (context-strip.tsx), so there is no selection for this
-    // method to turn into an event. Same stance every sibling in this family
-    // takes.
+    // No contextSelect() — this skin declares no context strip at all (W1 /
+    // Task 4 deleted its one slot, D-7's recording notice, which named a
+    // plan), so there is no selection for this method to turn into an event.
+    // Same stance every sibling in this family takes.
   };
 }

@@ -20,8 +20,7 @@ import { generic, padSpec as genericPadSpec } from "@seazn/engine/sports/generic
 import uiEn from "@/dictionaries/en/ui.json";
 import { PAD_LABEL_KEYS } from "@/lib/scoring-vocab";
 import { foldClient } from "../../../module-client";
-import { dedicatedEventTypes, entitledBandsFrom, moreActions, suppressEmptyMoreTile } from "../../pad-host";
-import { buildRecording } from "../../recording-chip";
+import { dedicatedEventTypes, defaultBandFor, moreActions, suppressEmptyMoreTile } from "../../pad-host";
 import { resolvePad } from "../../registry";
 import { ribbonKeyFor } from "../../ribbon";
 import { MORE_SHEET_KEY, assertScorebugSpec, type PadHostView, type TileSpec } from "../../types";
@@ -439,7 +438,7 @@ function realMoreActionsFull(v: PadHostView): ReturnType<typeof moreActions> {
   const dedicated = dedicatedEventTypes(tiles, sheets, [], scorebug);
   return moreActions(
     spec,
-    { state: v.state, summary: v.summary, phase: resolvePhase(v), band: v.band, entitlements: v.entitlements },
+    { state: v.state, summary: v.summary, phase: resolvePhase(v), band: v.band },
     dedicated,
     new Set<string>(),
   );
@@ -858,19 +857,16 @@ describe("the engine surface this skin restates", () => {
     expect((p1 as { max: number }).max).toBe(MAX_PLAUSIBLE_SCORE);
   });
 
-  it("the recording chip renders NO upsell for generic: an empty entitlement map entitles every band", () => {
-    const entitlements = genericPadSpec(SCORE_CFG as never).fidelityEntitlements;
-    expect(entitlements).toEqual({});
-    const bands = entitledBandsFrom(entitlements, {});
-    expect([...bands].sort()).toEqual([0, 1, 2, 3]);
-    // `RecordingChip` shows its upsell only when the NEXT band is locked, and
-    // no band is: generic ships free at every level it declares.
-    for (const band of [0, 1, 2] as FidelityBand[]) {
-      const nextBand = (band + 1) as FidelityBand;
-      const next = buildRecording(nextBand, band, bands, entitlements[nextBand] ?? "", (k) => k);
-      expect(next.locked, `band ${nextBand}`).toBe(false);
-      expect(next.upsell).toBeUndefined();
-    }
+  it("the pad opens generic at the top band it declares, and the chip offers all four", () => {
+    // W1 / Task 4: this case used to prove `RecordingChip` showed NO upsell
+    // for generic, because generic's `fidelityEntitlements` was empty. No
+    // band is sold any more, so the question that replaces it is the one
+    // rule 19 cares about: what does the picker OPEN AT for this sport?
+    const fidelity = genericPadSpec(SCORE_CFG as never).fidelity;
+    expect(defaultBandFor(fidelity)).toBe(Math.max(...Object.values(fidelity)));
+    // ...and every band it opens at or below leaves nothing declared behind.
+    const above = Object.values(fidelity).filter((band) => band > defaultBandFor(fidelity));
+    expect(above).toEqual([]);
   });
 });
 

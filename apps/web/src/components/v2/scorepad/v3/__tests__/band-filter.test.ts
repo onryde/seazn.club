@@ -1,9 +1,14 @@
 // Sign-off review 2026-08-17: the v3 host rendered every tile a skin declared
-// regardless of the org's fidelity band, so an org without
-// `scoring.ball_by_ball` saw the ball tiles and each tap earned a server
-// refusal (`assertEntitledToScore`, server/usecases/scoring.ts gates at the
-// scoring door). No data was lost — but a control that always fails is not a
-// control.
+// regardless of the fidelity band, so a scorer saw ball tiles their band did
+// not cover and each tap earned a refusal. No data was lost — but a control
+// that always fails is not a control.
+//
+// W1 / Task 4 (entitlements v18): the filter's fifth argument was a SET of
+// the bands an org was entitled to; it is now the ONE band the scorer picked
+// on the Recording chip, and a tile survives when its own band is at or below
+// it. The two agree on every set an entitlement resolution could actually
+// produce (they were always contiguous prefixes), so the cases below carry
+// over unchanged apart from the argument.
 //
 // The filter is FAIL-OPEN on purpose, and the two fail-open cases below are
 // the ones that matter: hiding a control we could not classify is worse than
@@ -52,7 +57,9 @@ const SWAPS: readonly SwapSlot[] = [
   },
 ];
 
-const bands = (...b: FidelityBand[]): ReadonlySet<FidelityBand> => new Set(b);
+/** The band the scorer picked. Named rather than inlined so each case below
+ *  still reads as "at band N" and not as a bare number in argument five. */
+const at = (b: FidelityBand): FidelityBand => b;
 
 describe("tileEventType", () => {
   it("reads a direct event tile's type", () => {
@@ -86,49 +93,49 @@ describe("filterTilesByBand", () => {
       tile("ball", { event: { type: "cricket.ball", payload: {} } }),
       tile("toss", { event: { type: "cricket.toss", payload: {} } }),
     ];
-    const kept = filterTilesByBand(tiles, SHEETS, SWAPS, FIDELITY, bands(0, 1)).map((t) => t.id);
+    const kept = filterTilesByBand(tiles, SHEETS, SWAPS, FIDELITY, at(1)).map((t) => t.id);
     expect(kept).toEqual(["toss"]);
   });
 
   it("keeps the ball tile for an org that holds band 3", () => {
     const tiles = [tile("ball", { event: { type: "cricket.ball", payload: {} } })];
-    expect(filterTilesByBand(tiles, SHEETS, SWAPS, FIDELITY, bands(0, 1, 2, 3))).toHaveLength(1);
+    expect(filterTilesByBand(tiles, SHEETS, SWAPS, FIDELITY, at(3))).toHaveLength(1);
   });
 
   it("hides a SHEET tile whose underlying event is above the band — a wicket sheet dispatches cricket.ball", () => {
     const tiles = [tile("wicket", { sheet: "wicket" })];
-    expect(filterTilesByBand(tiles, SHEETS, SWAPS, FIDELITY, bands(0, 1))).toHaveLength(0);
+    expect(filterTilesByBand(tiles, SHEETS, SWAPS, FIDELITY, at(1))).toHaveLength(0);
   });
 
   it("NEVER hides the MORE tile — it is exactly where a low-band org reaches innings.summary", () => {
     const tiles = [tile("more", { sheet: MORE_SHEET_KEY })];
-    expect(filterTilesByBand(tiles, SHEETS, SWAPS, FIDELITY, bands(0))).toHaveLength(1);
+    expect(filterTilesByBand(tiles, SHEETS, SWAPS, FIDELITY, at(0))).toHaveLength(1);
   });
 
   it("fail-open: keeps a tile whose event type carries no fidelity entry at all", () => {
     const tiles = [tile("unknown", { event: { type: "cricket.brand.new", payload: {} } })];
-    expect(filterTilesByBand(tiles, SHEETS, SWAPS, FIDELITY, bands(0))).toHaveLength(1);
+    expect(filterTilesByBand(tiles, SHEETS, SWAPS, FIDELITY, at(0))).toHaveLength(1);
   });
 
   it("HIDES a swap tile whose declared event is above the band — defect 3: a band-0 scorer could tap Sub, pick two people, and only THEN be refused", () => {
     const tiles = [tile("swap", { swap: "subHome" })];
-    expect(filterTilesByBand(tiles, SHEETS, SWAPS, FIDELITY, bands(0, 1))).toHaveLength(0);
+    expect(filterTilesByBand(tiles, SHEETS, SWAPS, FIDELITY, at(1))).toHaveLength(0);
   });
 
   it("keeps that same swap tile for an org that holds the band", () => {
     const tiles = [tile("swap", { swap: "subHome" })];
-    expect(filterTilesByBand(tiles, SHEETS, SWAPS, FIDELITY, bands(0, 1, 2))).toHaveLength(1);
+    expect(filterTilesByBand(tiles, SHEETS, SWAPS, FIDELITY, at(2))).toHaveLength(1);
   });
 
   it("fail-open: keeps a swap tile naming a slot the skin does not declare — an unclassifiable control is shown, never hidden", () => {
     const tiles = [tile("swap", { swap: "subNobody" })];
-    expect(filterTilesByBand(tiles, SHEETS, SWAPS, FIDELITY, bands(0))).toHaveLength(1);
+    expect(filterTilesByBand(tiles, SHEETS, SWAPS, FIDELITY, at(0))).toHaveLength(1);
   });
 
   it("NEVER band-filters the MORE tile even now that swap tiles ARE filtered — the two nulls are different and must stay different", () => {
     const tiles = [tile("more", { sheet: MORE_SHEET_KEY })];
     expect(tileEventType(tiles[0]!, SHEETS, SWAPS)).toBeNull();
-    expect(filterTilesByBand(tiles, SHEETS, SWAPS, FIDELITY, bands(0))).toHaveLength(1);
+    expect(filterTilesByBand(tiles, SHEETS, SWAPS, FIDELITY, at(0))).toHaveLength(1);
   });
 
   it("a band-0 org still keeps its summary tile — hiding must not leave an empty pad", () => {
@@ -136,6 +143,6 @@ describe("filterTilesByBand", () => {
       tile("ball", { event: { type: "cricket.ball", payload: {} } }),
       tile("summary", { sheet: "summary" }),
     ];
-    expect(filterTilesByBand(tiles, SHEETS, SWAPS, FIDELITY, bands(0)).map((t) => t.id)).toEqual(["summary"]);
+    expect(filterTilesByBand(tiles, SHEETS, SWAPS, FIDELITY, at(0)).map((t) => t.id)).toEqual(["summary"]);
   });
 });

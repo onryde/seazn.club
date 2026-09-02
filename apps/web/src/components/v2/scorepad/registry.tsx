@@ -15,7 +15,7 @@
 // engine sport ever ships without a v3 skin.
 import { useCallback, useMemo } from "react";
 import type { EventEnvelope, Lineup, LineupPair, LineupSlot } from "@seazn/engine/core";
-import type { AnySportModule, FidelityBand } from "@seazn/engine/sport";
+import type { AnySportModule } from "@seazn/engine/sport";
 import type { MemberIn, SideInfo, LineupSlotIn } from "@/components/v2/fixture-console";
 import { useMsg } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
@@ -183,10 +183,9 @@ export interface ScorePadBootstrap {
   initialEvents: readonly EventEnvelope[];
   // W1 (entitlements v18): `band` is deleted — fidelity bands are a UX
   // choice, never an entitlement, and this bootstrap no longer carries one.
-  // `ScorePadProps.band` below is UNCHANGED, out of this task's scope (Task 4
-  // owns the pad UI); its two production callers (fixture-console.tsx,
-  // device-score-pad.tsx) read `scorePadV2.band` and are left non-typechecking
-  // for Task 4, same as `pad-host.tsx`.
+  // Task 4 finished the job: `ScorePadProps` has no `band` either, and the
+  // pad host owns the scorer's own pick (`pad-host.tsx`'s `defaultBandFor` /
+  // `resolveInitialBand`). Nothing server-side resolves a band any more.
   entitlements: Readonly<Record<string, boolean>>;
   identity: OwnIdentity;
 }
@@ -219,7 +218,6 @@ export interface ScorePadProps {
   onPartialResolver?: (resolve: (eventType: string, payload: Record<string, unknown>) => boolean) => void;
   identity: OwnIdentity;
   entitlements: Readonly<Record<string, boolean>>;
-  band: FidelityBand;
 }
 
 type ModuleResolution = { ok: true; module: AnySportModule } | { ok: false; message: string };
@@ -295,7 +293,6 @@ export function ScorePad(props: ScorePadProps) {
       lineups={lineups}
       identity={props.identity}
       transport={transport}
-      band={props.band}
       entitlements={props.entitlements}
       initialEvents={props.initialEvents}
       onEvents={props.onEvents}

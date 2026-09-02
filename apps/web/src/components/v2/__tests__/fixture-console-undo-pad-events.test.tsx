@@ -87,7 +87,6 @@ const sport: SportInfo = {
   roles: [],
   lineupSize: 0,
   benchMax: 0,
-  fidelityTiers: [],
 };
 
 const side = (id: string, name: string): SideInfo => ({ id, name, members: [], lineup: [] });

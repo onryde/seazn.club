@@ -38,7 +38,6 @@ function action(over: Partial<PadActionView> = {}): PadActionView {
     labelKey: label("Toss"),
     fields: [],
     attribution: [],
-    availability: { kind: "available" },
     ...over,
   };
 }
@@ -254,26 +253,12 @@ describe("ActionFormList — each action's expand state is independent", () => {
   });
 });
 
-describe("ActionFormList — locked availability", () => {
-  it("renders the worded lock reason, never a bare tile, and offers no submit control", () => {
-    const calls: unknown[] = [];
-    const locked = action({
-      availability: { kind: "locked", reason: { key: "scorepad.locked.reason", label: "Upgrade your plan to unlock this action." } },
-    });
-    const island = renderIsland(ActionFormList, {
-      actions: [locked],
-      t,
-      submittingType: null,
-      onSubmit: (...args) => calls.push(args),
-      squads: NO_SQUADS,
-      lineups: NO_LINEUPS,
-      personNames: NO_NAMES,
-    });
-    expect(island.text()).toContain("scorepad.locked.reason");
-    expect(buttonsOf(island.tree())).toHaveLength(0); // no tappable control at all
-    expect(calls).toEqual([]);
-  });
-});
+// W1 / Task 4 (entitlements v18): a "locked availability" describe stood
+// here, proving an action whose band the org had not bought rendered its
+// worded reason and no tappable control. `ActionAvailability` is deleted —
+// there is no locked state for this list to render, and no producer that
+// could raise one — so the block is removed rather than kept as a test of a
+// branch that no longer exists.
 
 describe("ActionFormList — generic walk over any padSpec(cfg) action", () => {
   it("renders one row per action, in the order given, dispatching each tap with its OWN action's type", () => {

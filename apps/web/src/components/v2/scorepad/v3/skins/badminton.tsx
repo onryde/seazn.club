@@ -33,18 +33,16 @@
 //    beats an authoritative-looking wrong one, and a placeholder glyph IS the
 //    defect, not a mitigation of it.
 //
-//  * D-7 — BELOW BAND 3 THE PAD SAID NOTHING. `badminton.rally` is band 3 and
-//    the kernel keys that band alone (`fidelityEntitlements: {3:
-//    "scoring.rally_by_rally"}`), so an org without the entitlement got a live
-//    pad whose rally control had simply VANISHED — the chassis drops an
-//    above-band tile rather than locking it (`filterTilesByBand`,
-//    pad-host.tsx), and there is no locked-tile path for a band gap at all.
-//    A COMMUNITY ORG RESOLVES TO BAND 2, NOT 0 (`resolveFidelityBand` breaks
-//    only on a band that NAMES a missing entitlement, and bands 0-2 name
-//    none), so the register's "a lone Set score button" overstates it by one
-//    drawer: the real screen is Set score PLUS sanctions. This skin makes the
-//    silence speak — a visible, disabled rally tile plus a context-strip
-//    message worded in badminton's own vocabulary.
+//  * D-7 — BELOW BAND 3 THE PAD SAID NOTHING. `badminton.rally` is band 3, so
+//    at a lower band the chassis dropped the rally tile (`filterTilesByBand`,
+//    pad-host.tsx) and the scorer was left with a board whose halves did
+//    nothing and no reason anywhere on screen. This skin used to answer that
+//    with a disabled "Rally by rally is locked" tile plus a context-strip
+//    sentence naming the plan it needed.
+//    CLOSED DIFFERENTLY BY W1 / TASK 4 (entitlements v18): the band is no
+//    longer bought, it is PICKED, on the Recording chip directly above the
+//    tiles — which states the level and changes it in two taps. Both halves
+//    of the old explainer are deleted; see the W1 block further down.
 //
 //  * D-11 — THE SCORE STATED THREE TIMES. The v2 lane put the score in the
 //    fixture header, an LCD panel and a SETS/POINTS board, all above the
@@ -59,10 +57,10 @@
 //     retires and the match is over — which `setbased/badminton.ts`'s own
 //     `lineupPolicy` states as `reentry: "none"`, and `records.substitutions`
 //     is false. There is no in-play swap for this sport to declare.
-//   - `contextSelect()`. The one context slot this skin ever declares is
-//     `readOnly` (a recording-level notice, not a person picker), and a
-//     readOnly slot's picker can never open (context-strip.tsx), so there is
-//     no selection for this method to turn into an event.
+//   - `contextSelect()`. This skin declares no context strip at all (W1 /
+//     Task 4 deleted its one slot — a recording-level notice that named a
+//     plan), so there is no selection for this method to turn into an
+//     event.
 //   - a Timeout tile, a Sub tile, an Expedite tile. BWF play has no timeouts
 //     (only the interval at 11 and the between-game break) and no
 //     substitutions; expedite is an ITTF system. All three types are still
@@ -82,12 +80,9 @@ import {
 } from "@seazn/engine/sports/setbased";
 import type { MessageKey } from "@/lib/messages";
 import { ENUM_VOCAB } from "@/lib/scoring-vocab";
-import { featurePlan } from "@/lib/feature-copy";
-import { planLabel } from "@/lib/plan-label";
 import {
   MORE_SHEET_KEY,
   type ActivityDetailContext,
-  type ContextStripSpec,
   type DockChip,
   type DockSpec,
   type GuidedSheetSpec,
@@ -123,15 +118,6 @@ const SIDE_LABEL: Record<Side, MessageKey> = {
   away: "scorepad.attribution.away",
 };
 
-/** The feature key badminton's band 3 is gated behind — `setbased/badminton
- *  .ts`'s own `rallyEntitlement`, which the kernel publishes as
- *  `padSpec(cfg).fidelityEntitlements[3]`. RESTATED here rather than read off
- *  a live `padSpec` call (which would need a cfg on every render just to word
- *  one sentence), and `__tests__/badminton.test.ts` pins this constant EQUAL
- *  to the module's own value — so a preset that ever re-keys it reds rather
- *  than leaving this file naming a stale entitlement and upselling the wrong
- *  plan. */
-export const RALLY_ENTITLEMENT = "scoring.rally_by_rally";
 
 /**
  * BWF's misconduct ladder, in the order the umpire's sheet climbs it:
@@ -893,63 +879,23 @@ export function buildScorebug(view: PadHostView, t: TFn): ScorebugSpec {
 }
 
 // ---------------------------------------------------------------------------
-// context() — D-7's explanation, and the ONLY reason this skin declares a
-// context strip at all.
+// W1 / Task 4 (entitlements v18) — D-7's explainer is GONE, and that is the
+// fix, not a loss.
 //
-// The chassis has no locked-tile path for a band GAP (`filterTilesByBand`
-// drops an above-band tile outright, and `renderLockedTile` in the legacy lane
-// only ever fired for an action AT OR BELOW the band whose entitlement was
-// missing — unreachable for a kernel that keys one band). So the explanation
-// has to be authored. It lives HERE rather than repeated on the tile because
-// `TileSpec.disabled`'s own doc says so: one cause, one sentence, next to
-// nothing that pretends to be a control.
+// This skin used to declare a context strip and a big disabled "Rally by
+// rally is locked" tile for exactly one reason: below band 3 the rally
+// affordance vanished, the scorer had no way to change that, and nothing on
+// screen said why. Both halves named a PLAN ("Rally-by-rally scoring needs
+// {plan}"), because a band was something an org bought.
 //
-// `readOnly: true` — there is no person to pick and nothing a tap could fix,
-// so the chip renders as plain text and its picker can never open
-// (context-strip.tsx). `contextSelect` is therefore not declared.
+// A band is now the scorer's own pick, stated on the Recording chip two
+// controls up and changed from it in two taps. So there is no lock to word,
+// no plan to name, and a slab reading "Rally by rally is locked" over a
+// setting the reader chose would be the pad lying to them. The chip is both
+// the statement and the control; `pad.{sport}.context.recording[.locked]` and
+// `pad.{sport}.tile.rallyLocked[.sublabel]` are deleted from all four
+// dictionaries with it.
 // ---------------------------------------------------------------------------
-
-/** Whether rally-by-rally is out of reach for this fixture right now. Read off
- *  the ACTIVE band, which is what actually governs whether the halves are
- *  tappable — not off `view.entitlements`, which answers a related but
- *  different question (what the ORG holds, which a scorer may also have
- *  stepped down from deliberately). */
-function rallyOutOfBand(view: PadHostView): boolean {
-  return view.band < 3;
-}
-
-export function buildContextStrip(view: PadHostView, t: TFn): ContextStripSpec | null {
-  if (resolvePhase(view) !== "live" || !rallyOutOfBand(view)) return null;
-  return {
-    slots: [
-      {
-        id: "recording",
-        label: "pad.badminton.context.recording",
-        pool: "onfield",
-        required: false,
-        readOnly: true,
-        // Pre-localised (the chassis renders `message` verbatim), and it names
-        // the plan through `featurePlan()` — the SAME cheapest-plan-per-key
-        // table `<UpgradeGate>` and the recording chip already use, never a
-        // second mapping invented here. Worded in BADMINTON's vocabulary:
-        // "rally by rally" and "each game's final score" are what a scorer is
-        // choosing between, where "band 3" and "Every detail" are not.
-        message: t("pad.badminton.context.recording.locked", {
-          plan: planLabel(featurePlan(RALLY_ENTITLEMENT)),
-        }),
-        // A TIER, not a fault. The chassis's default message register is the
-        // red it was built for (cricket's ineligible bowler, which genuinely
-        // blocks every scoring tile); this pad is working exactly as
-        // configured, and reusing rejection red for a plan boundary would
-        // teach a scorer that red here means nothing in particular. `info`
-        // puts it in the same amber the recording chip words its own plan lock
-        // in, two controls away.
-        messageTone: "info",
-        candidates: [],
-      },
-    ],
-  };
-}
 
 // ---------------------------------------------------------------------------
 // tiles()
@@ -959,10 +905,9 @@ export function sanctionSheetKey(side: Side): string {
   return `sanction-${side}`;
 }
 
-export const RALLY_LOCKED_TILE_ID = "rallyLocked";
 export const SET_SCORE_TILE_ID = "setScore";
 
-export function buildTiles(view: PadHostView, t: TFn): TileSpec[] {
+export function buildTiles(view: PadHostView): TileSpec[] {
   const state = asState(view.state);
   const live = resolvePhase(view) === "live";
   const band = view.band;
@@ -1012,36 +957,6 @@ export function buildTiles(view: PadHostView, t: TFn): TileSpec[] {
     });
   }
 
-  // D-7 — THE SILENCE, GIVEN A FACE. Below band 3 the chassis drops the rally
-  // affordance entirely and the scorer is left with a board whose halves do
-  // nothing and no reason anywhere on screen. This tile is that reason's
-  // affordance: VISIBLE, disabled, span-4 so it reads as a statement about the
-  // board rather than a button someone missed, and paired with the context
-  // slot above which carries the sentence (`assertDisabledTilesExplained`,
-  // tile-grid.tsx, is the rule that pairing satisfies — this skin's own test
-  // asserts it returns no violations).
-  //
-  // THE ACTION IS `MORE_SHEET_KEY` FOR A STRUCTURAL REASON, not a shrug.
-  // `filterTilesByBand` resolves a tile's event type and drops the tile when
-  // that type's band exceeds the org's — so a tile pointing at `badminton
-  // .rally` in ANY form would be filtered out by the very gate it exists to
-  // explain. `MORE_SHEET_KEY` is the one action value `tileEventType` resolves
-  // to `null` BY NAME (pad-host.tsx), which is the "unclassifiable, therefore
-  // kept" branch. `disabled: true` is what makes the tap inert regardless: the
-  // chassis renders a native `<button disabled>`, so nothing opens.
-  if (live && rallyOutOfBand(view)) {
-    tiles.push({
-      id: RALLY_LOCKED_TILE_ID,
-      label: "pad.badminton.action.rally",
-      labelText: t("pad.badminton.tile.rallyLocked"),
-      sublabelText: t("pad.badminton.tile.rallyLocked.sublabel"),
-      kind: "minor",
-      span: 4,
-      phases: ["live"],
-      disabled: true,
-      action: { sheet: MORE_SHEET_KEY },
-    });
-  }
 
   tiles.push({
     id: "more",
@@ -1394,10 +1309,9 @@ export function badmintonSkinV3(t: TFn): SkinDefV3<PadHostView> {
     tapModel: "S",
     phase: resolvePhase,
     scorebug: (view) => buildScorebug(view, t),
-    tiles: (view) => buildTiles(view, t),
+    tiles: buildTiles,
     dock: (eventType, view, payload) => buildDock(eventType, view, t, payload),
     sheets: (view) => buildSheets(view, t),
-    context: (view) => buildContextStrip(view, t),
     refusedEventTypes,
     activityDetail: badmintonDetail,
     // No swap()/contextSelect() — see this file's header.

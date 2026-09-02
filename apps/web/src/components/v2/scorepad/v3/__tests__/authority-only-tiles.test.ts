@@ -40,7 +40,9 @@ function tile(id: string, action: TileSpec["action"]): TileSpec {
  *  the band rule (it fails open), so anything that disappears disappeared
  *  because of the authority block and nothing else. */
 const NO_FIDELITY: PadSpec["fidelity"] = {};
-const ALL_BANDS: ReadonlySet<FidelityBand> = new Set<FidelityBand>([0, 1, 2, 3]);
+/** The top of the closed 0-3 scale — the most permissive band a scorer can
+ *  pick, so nothing below can be blamed on the band ladder either. */
+const TOP_BAND: FidelityBand = 3;
 
 const SHEETS: Record<string, GuidedSheetSpec> = {
   forfeitSheet: { event: "core.forfeit", steps: [], buildPayload: () => ({}) },
@@ -53,7 +55,7 @@ const SWAPS: readonly SwapSlot[] = [
 ] as unknown as readonly SwapSlot[];
 
 function kept(tiles: readonly TileSpec[]): string[] {
-  return filterTilesByBand(tiles, SHEETS, SWAPS, NO_FIDELITY, ALL_BANDS).map((t) => t.id);
+  return filterTilesByBand(tiles, SHEETS, SWAPS, NO_FIDELITY, TOP_BAND).map((t) => t.id);
 }
 
 describe("the tile grid cannot represent an authority action (D-12)", () => {

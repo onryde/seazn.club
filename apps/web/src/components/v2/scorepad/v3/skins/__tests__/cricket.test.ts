@@ -41,6 +41,7 @@ import {
   variantCode,
 } from "../cricket";
 import type { InningsFidelity, TFn } from "../cricket";
+import { filterTilesByBand, tileEventType } from "../../pad-host";
 import type { Dict } from "@/lib/i18n-constants";
 import { t as realT } from "@/lib/i18n-runtime";
 
@@ -3921,5 +3922,54 @@ describe("refusedEventTypes (F2) — the five types a super over disables, and n
     const st = foldCricket(cfg, events);
     const v = view({ cfg, state: st });
     expect(refusedEventTypes(v)).toEqual(expect.arrayContaining(["cricket.review", "cricket.retire", "cricket.innings.close", "cricket.innings.summary"]));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// W1 / Task 4 — the band picker must not reopen the dead-end tap
+// ---------------------------------------------------------------------------
+//
+// The Recording chip lets a scorer raise the band mid-match. Cricket's INNINGS
+// MODE is a different axis and it governs absolutely: the reducer refuses ball
+// events on a coarse innings whatever band is selected
+// (`packages/engine/src/sports/cricket/cricket.ts`, the coarse-lane refusal),
+// and the lane is locked by the innings' first event. So the one thing a band
+// picker could newly break is offering a tile the reducer would refuse.
+//
+// Proved through BOTH gates the pad actually applies, in the order it applies
+// them: the skin's own `inningsFidelity` gate builds the tiles, then the
+// chassis band filter runs over them with cricket's REAL `padSpec(cfg)
+// .fidelity`. Band 3 is the maximum a scorer can pick, so if no ball tile
+// survives here, none survives at any band.
+describe("W1: raising the band on a COARSE innings surfaces no ball tile", () => {
+  const coarse = () => view({ state: state({ innings: [innings({ fine: null })] }) });
+
+  it("no tile the pad renders resolves to cricket.ball, even at the top band", () => {
+    const v = coarse();
+    const spec = cricket.padSpec!(v.cfg as never);
+    const tiles = buildTiles(v);
+    const sheets = buildSheets(v, t);
+    const kept = filterTilesByBand(tiles, sheets, [], spec.fidelity, 3);
+    const ballTiles = kept.filter((tl) => tileEventType(tl, sheets, []) === "cricket.ball");
+    expect(ballTiles.map((tl) => tl.id)).toEqual([]);
+  });
+
+  it("and the same pad at the top band still offers the coarse lane's own recording tile", () => {
+    // The other direction: "no ball tiles" must not be satisfied by a pad that
+    // offers nothing at all. `cricket.innings.summary` is band 0, so it
+    // survives every band, and it is the coarse innings' ONE way to record.
+    const v = coarse();
+    const spec = cricket.padSpec!(v.cfg as never);
+    const sheets = buildSheets(v, t);
+    const kept = filterTilesByBand(buildTiles(v), sheets, [], spec.fidelity, 3);
+    expect(kept.some((tl) => tl.id === "overSummary")).toBe(true);
+  });
+
+  it("a FINE innings at the same top band DOES offer ball tiles — or the case above proves nothing", () => {
+    const v = view();
+    const spec = cricket.padSpec!(v.cfg as never);
+    const sheets = buildSheets(v, t);
+    const kept = filterTilesByBand(buildTiles(v), sheets, [], spec.fidelity, 3);
+    expect(kept.some((tl) => tileEventType(tl, sheets, []) === "cricket.ball")).toBe(true);
   });
 });

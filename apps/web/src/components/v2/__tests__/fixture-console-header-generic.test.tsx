@@ -28,7 +28,6 @@ const sport: SportInfo = {
   roles: [],
   lineupSize: 1,
   benchMax: 0,
-  fidelityTiers: generic.fidelityTiers as SportInfo["fidelityTiers"],
 };
 
 const side = (id: string, name: string): SideInfo => ({ id, name, members: [], lineup: [] });

@@ -29,15 +29,12 @@ import type { FidelityBand, ModuleEvent } from "@seazn/engine/sport";
 import { makeEnvelope } from "@seazn/engine/testkit";
 import { volleyball } from "@seazn/engine/sports/setbased";
 import { foldClient } from "../../../module-client";
-import { assertDisabledTilesExplained } from "../../tile-grid";
 import { assertScorebugSpec, type PadHostView, type TileSpec } from "../../types";
-import { dedicatedEventTypes, filterTilesByBand, moreActions, squadStateOf } from "../../pad-host";
+import { dedicatedEventTypes, moreActions, squadStateOf } from "../../pad-host";
 import {
   EVENT_BAND,
   EXPEDITE_TYPE,
   LIBERO_TYPE,
-  RALLY_ENTITLEMENT,
-  RALLY_LOCKED_TILE_ID,
   RALLY_TYPE,
   SANCTION_LEVELS,
   SANCTION_TYPE,
@@ -46,7 +43,6 @@ import {
   SUB_TYPE,
   SUMMARY_TYPE,
   TIMEOUT_TYPE,
-  buildContextStrip,
   buildDock,
   buildScorebug,
   buildSheets,
@@ -225,7 +221,7 @@ function view(opts: ViewOpts = {}): PadHostView {
     summary: {},
     phase: "live",
     band: opts.band ?? 3,
-    entitlements: opts.entitlements ?? { [RALLY_ENTITLEMENT]: true },
+    entitlements: opts.entitlements ?? {},
     personNames: NAMES,
     squads: squadStateOf(state, lineups),
     events,
@@ -277,9 +273,6 @@ describe("the constants this skin restates cannot drift from the engine's own", 
     expect(spec.fidelity[LIBERO_TYPE]).toBeUndefined();
   });
 
-  it("RALLY_ENTITLEMENT is the feature key padSpec gates band 3 behind", () => {
-    expect(spec.fidelityEntitlements[3]).toBe(RALLY_ENTITLEMENT);
-  });
 
   it("SANCTION_LEVELS is the ladder padSpec itself offers, in padSpec's own order", () => {
     const action = spec.panels.flatMap((panel) => panel.actions).find((entry) => entry.type === SANCTION_TYPE)!;
@@ -520,7 +513,7 @@ describe("serving via serveContextOf() — D-17, consumed never re-derived", () 
 
 describe("the serve anchor — offered while a declaration could still resolve EITHER the side or the rotation", () => {
   it("is offered at 0-0 of a fresh match", () => {
-    expect(tileById(buildTiles(view(), t), SERVE_ANCHOR_TILE_ID)).toBeDefined();
+    expect(tileById(buildTiles(view()), SERVE_ANCHOR_TILE_ID)).toBeDefined();
   });
 
   // REVERSED in review of PR #678, finding 3, and the reversal is a
@@ -548,7 +541,7 @@ describe("the serve anchor — offered while a declaration could still resolve E
     expect(ctxOf(v).side, "`side` self-heals from any rally").toBe("home");
     expect(ctxOf(v).rotation, "but the rotation does not, and now cannot").toBeUndefined();
     expect(
-      tileById(buildTiles(v, t), SERVE_ANCHOR_TILE_ID),
+      tileById(buildTiles(v), SERVE_ANCHOR_TILE_ID),
       "offering it here promises a fix the engine cannot perform",
     ).toBeUndefined();
   });
@@ -616,14 +609,14 @@ describe("the serve anchor — offered while a declaration could still resolve E
 
   it("is still offered at 0-0, where a declaration DOES anchor the set", () => {
     const fresh = view({ events: stream() });
-    expect(tileById(buildTiles(fresh, t), SERVE_ANCHOR_TILE_ID)).toBeDefined();
+    expect(tileById(buildTiles(fresh), SERVE_ANCHOR_TILE_ID)).toBeDefined();
   });
 
   it("withdraws once the pad can report the rotation too — the tile answers a question, it is not permanent furniture", () => {
     const v = view({ events: stream(rally("H", { serving: "H" })) });
     expect(ctxOf(v).side).toBe("home");
     expect(ctxOf(v).rotation, "a declared rally resolves the rotation").not.toBeUndefined();
-    expect(tileById(buildTiles(v, t), SERVE_ANCHOR_TILE_ID)).toBeUndefined();
+    expect(tileById(buildTiles(v), SERVE_ANCHOR_TILE_ID)).toBeUndefined();
   });
 
   // Review of PR #678. The kernel's `sideFieldsTheRotation` asks "was a squad
@@ -667,7 +660,7 @@ describe("the serve anchor — offered while a declaration could still resolve E
     } as typeof v;
 
     expect(
-      tileById(buildTiles(emptied, t), SERVE_ANCHOR_TILE_ID),
+      tileById(buildTiles(emptied), SERVE_ANCHOR_TILE_ID),
       "nobody on court means no rotation to number, so a declaration cannot settle anything",
     ).toBeUndefined();
     // And the engine agrees on the very same input, which is the whole point:
@@ -683,14 +676,14 @@ describe("the serve anchor — offered while a declaration could still resolve E
     const v = view({ lineups: PAIR, cfg: BEACH_CFG, events: stream(rally("H")) });
     expect(ctxOf(v).side, "the side is known").toBe("home");
     expect(ctxOf(v).rotation, "a pair has no rotation number, ever").toBeUndefined();
-    expect(tileById(buildTiles(v, t), SERVE_ANCHOR_TILE_ID)).toBeUndefined();
+    expect(tileById(buildTiles(v), SERVE_ANCHOR_TILE_ID)).toBeUndefined();
   });
 
   it("is offered again at 0-0 of the DECIDING set — the set boundary IS the second chance", () => {
     const toDecider = [summary(3, 0), summary(0, 3), summary(3, 0), summary(0, 3)] as const;
     const before = view({ cfg: SHORT_CFG, events: stream(...toDecider) });
     expect(
-      tileById(buildTiles(before, t), SERVE_ANCHOR_TILE_ID),
+      tileById(buildTiles(before), SERVE_ANCHOR_TILE_ID),
       "the deciding set is tossed, so its opener is genuinely undeclared again",
     ).toBeDefined();
 
@@ -703,17 +696,17 @@ describe("the serve anchor — offered while a declaration could still resolve E
     // what the first assertion above pins.
     const ordinary = view({ cfg: SHORT_CFG, events: stream(...toDecider, rally("H")) });
     expect(ctxOf(ordinary).rotation).toBeUndefined();
-    expect(tileById(buildTiles(ordinary, t), SERVE_ANCHOR_TILE_ID)).toBeUndefined();
+    expect(tileById(buildTiles(ordinary), SERVE_ANCHOR_TILE_ID)).toBeUndefined();
 
     // A DECLARED first rally resolves both, and the tile withdraws.
     const declared = view({ cfg: SHORT_CFG, events: stream(...toDecider, rally("H", { serving: "H" })) });
     expect(ctxOf(declared).rotation).not.toBeUndefined();
-    expect(tileById(buildTiles(declared, t), SERVE_ANCHOR_TILE_ID)).toBeUndefined();
+    expect(tileById(buildTiles(declared), SERVE_ANCHOR_TILE_ID)).toBeUndefined();
   });
 
   it("is never offered once the match is over", () => {
     const done = view({ cfg: SHORT_CFG, events: stream(...DECIDED) });
-    expect(tileById(buildTiles(done, t), SERVE_ANCHOR_TILE_ID)).toBeUndefined();
+    expect(tileById(buildTiles(done), SERVE_ANCHOR_TILE_ID)).toBeUndefined();
   });
 
   // Mutation audit — `needsServeAnchor`'s two `unknownBecause` exclusions
@@ -736,7 +729,7 @@ describe("the serve anchor — offered while a declaration could still resolve E
     expect(ctxOf(disputed).unknownBecause).toBe("recorded-disagrees");
     expect(ctxOf(disputed).side, "the reader must not name a server mid-dispute").toBeNull();
     expect(
-      tileById(buildTiles(disputed, t), SERVE_ANCHOR_TILE_ID),
+      tileById(buildTiles(disputed), SERVE_ANCHOR_TILE_ID),
       "a disputed chain is not an undeclared one — the anchor must stay withheld",
     ).toBeUndefined();
   });
@@ -749,7 +742,7 @@ describe("the serve anchor — offered while a declaration could still resolve E
     const events = stream(rally("H", { serving: "H" }), rally("A"), rally("H"));
     const mismatched = { ...view({ events }), events: events.slice(0, 2) };
     expect(ctxOf(mismatched).unknownBecause).toBe("ledger-mismatch");
-    expect(tileById(buildTiles(mismatched, t), SERVE_ANCHOR_TILE_ID)).toBeUndefined();
+    expect(tileById(buildTiles(mismatched), SERVE_ANCHOR_TILE_ID)).toBeUndefined();
   });
 
   it("the sheet posts a real RALLY_TYPE event with `serving` — TWO independent choice steps, both sides offered", () => {
@@ -774,48 +767,19 @@ describe("the serve anchor — offered while a declaration could still resolve E
 });
 
 // ---------------------------------------------------------------------------
-// D-7 — the band-limited screen
+// W1 / Task 4 (entitlements v18) — the D-7 block that stood here is DELETED.
+//
+// It covered a disabled "Rally by rally is locked" tile and a context slot
+// naming the plan that would unlock it. Neither exists: a band is the
+// scorer's own pick on the Recording chip now, so there is no lock to word
+// and nothing for a skin to explain. The keys those two fed
+// (`pad.{sport}.context.recording[.locked]`, `pad.{sport}.tile.rallyLocked
+// [.sublabel]`) are gone from all four dictionaries with them.
+//
+// What replaced the coverage: `v3/__tests__/recording-chip.test.tsx` (the
+// picker, and that it never renders a lock, an upsell or a plan name) and
+// `e2e/scoring-free.spec.ts` (a free org picking a band on a real pad).
 // ---------------------------------------------------------------------------
-
-describe("D-7 — below band 3 the pad SAYS SO, in volleyball's own words", () => {
-  const limited = () => view({ band: 2, entitlements: {} });
-
-  it("renders a visible, disabled rally tile instead of nothing at all", () => {
-    const tile = tileById(buildTiles(limited(), t), RALLY_LOCKED_TILE_ID)!;
-    expect(tile.disabled).toBe(true);
-    expect(tile.span).toBe(4);
-    expect(tile.labelText).toBe("pad.volleyball.tile.rallyLocked");
-    expect(tile.sublabelText).toBe("pad.volleyball.tile.rallyLocked.sublabel");
-  });
-
-  it("survives the chassis's own band filter — the gate it exists to explain must not eat it", () => {
-    const v = limited();
-    const tiles = buildTiles(v, t);
-    const sheets = buildSheets(v, t);
-    const kept = filterTilesByBand(tiles, sheets, [], volleyball.padSpec!(VB_CFG).fidelity, new Set([0, 1, 2]));
-    expect(kept.map((tile) => tile.id)).toContain(RALLY_LOCKED_TILE_ID);
-  });
-
-  it("carries the REASON on a context slot, naming the plan through the shared table", () => {
-    const spec = buildContextStrip(limited(), t)!;
-    expect(spec.slots).toHaveLength(1);
-    expect(spec.slots[0]!.readOnly).toBe(true);
-    expect(spec.slots[0]!.message).toContain("pad.volleyball.context.recording.locked");
-    expect(spec.slots[0]!.message).toContain('"plan":"Pro"');
-  });
-
-  it("pairs the disabled tile with that message — the chassis's own rule for a disabled tile", () => {
-    const v = limited();
-    expect(assertDisabledTilesExplained(buildTiles(v, t), buildContextStrip(v, t))).toEqual([]);
-  });
-
-  it("says nothing at all at band 3, or once the match is over", () => {
-    expect(tileById(buildTiles(view(), t), RALLY_LOCKED_TILE_ID)).toBeUndefined();
-    expect(buildContextStrip(view(), t)).toBeNull();
-    const done = view({ cfg: SHORT_CFG, band: 2, events: stream(...DECIDED) });
-    expect(buildContextStrip(done, t)).toBeNull();
-  });
-});
 
 // ---------------------------------------------------------------------------
 // tiles()
@@ -823,7 +787,7 @@ describe("D-7 — below band 3 the pad SAYS SO, in volleyball's own words", () =
 
 describe("buildTiles()", () => {
   it("sanctions and timeouts are a HOME/AWAY pair, home first — column alignment", () => {
-    const tiles = buildTiles(view(), t);
+    const tiles = buildTiles(view());
     const sanctionHome = tiles.findIndex((tl) => tl.id === sanctionSheetKey("home"));
     const sanctionAway = tiles.findIndex((tl) => tl.id === sanctionSheetKey("away"));
     expect(sanctionHome).toBeGreaterThanOrEqual(0);
@@ -837,32 +801,32 @@ describe("buildTiles()", () => {
     const noneRecorded = volleyball.configSchema.parse({
       records: { timeouts: false, sanctions: false, substitutions: false, expedite: false },
     });
-    const tiles = buildTiles(view({ cfg: noneRecorded }), t);
+    const tiles = buildTiles(view({ cfg: noneRecorded }));
     expect(tileById(tiles, sanctionSheetKey("home"))).toBeUndefined();
     expect(tileById(tiles, timeoutTileId("home"))).toBeUndefined();
   });
 
   it("the timeout tile dispatches DIRECTLY, no sheet, `by` the tapped side's own entrant id", () => {
-    const tile = tileById(buildTiles(view(), t), timeoutTileId("away"))!;
+    const tile = tileById(buildTiles(view()), timeoutTileId("away"))!;
     // `entrantOf` resolves the ENTRANT id ("A", `teamSide("A")`'s own
     // `entrantId`), never the bare side tag "away".
     expect(tile.action).toMatchObject({ event: { type: TIMEOUT_TYPE, payload: { by: "A" } } });
   });
 
   it("Set score is withheld once the CURRENT set is in progress", () => {
-    expect(tileById(buildTiles(view(), t), SET_SCORE_TILE_ID)).toBeDefined();
+    expect(tileById(buildTiles(view()), SET_SCORE_TILE_ID)).toBeDefined();
     const inProgress = view({ events: stream(rally("H")) });
-    expect(tileById(buildTiles(inProgress, t), SET_SCORE_TILE_ID)).toBeUndefined();
+    expect(tileById(buildTiles(inProgress), SET_SCORE_TILE_ID)).toBeUndefined();
   });
 
   it("no libero named on EITHER side — no libero tile for either", () => {
-    const tiles = buildTiles(view({ lineups: { home: teamSideNoLibero("H"), away: teamSideNoLibero("A") } }), t);
+    const tiles = buildTiles(view({ lineups: { home: teamSideNoLibero("H"), away: teamSideNoLibero("A") } }));
     expect(tileById(tiles, liberoSwapSlotId("home"))).toBeUndefined();
     expect(tileById(tiles, liberoSwapSlotId("away"))).toBeUndefined();
   });
 
   it("a libero named on ONLY ONE side still offers BOTH tiles — the atomic 0-or-2 pair invariant", () => {
-    const tiles = buildTiles(view({ lineups: TEAM_HOME_LIBERO_ONLY }), t);
+    const tiles = buildTiles(view({ lineups: TEAM_HOME_LIBERO_ONLY }));
     const home = tileById(tiles, liberoSwapSlotId("home"));
     const away = tileById(tiles, liberoSwapSlotId("away"));
     expect(home, "home named a libero").toBeDefined();
@@ -873,13 +837,13 @@ describe("buildTiles()", () => {
 
   it("the libero tile is gated live + band >= 1, independent of the rally band", () => {
     const belowAdmin = view({ band: 0, entitlements: {} });
-    expect(tileById(buildTiles(belowAdmin, t), liberoSwapSlotId("home"))).toBeUndefined();
+    expect(tileById(buildTiles(belowAdmin), liberoSwapSlotId("home"))).toBeUndefined();
     const admin = view({ band: 1, entitlements: {} });
-    expect(tileById(buildTiles(admin, t), liberoSwapSlotId("home"))).toBeDefined();
+    expect(tileById(buildTiles(admin), liberoSwapSlotId("home"))).toBeDefined();
   });
 
   it("the More tile is always last", () => {
-    const tiles = buildTiles(view(), t);
+    const tiles = buildTiles(view());
     expect(tiles.at(-1)!.id).toBe("more");
   });
 });
@@ -916,7 +880,7 @@ describe("refusedEventTypes()", () => {
     // the generic form is its only surface. Every OTHER type must still be
     // either dedicated or refused.
     const v = view({ events: stream(rally("H")) });
-    const tiles = buildTiles(v, t);
+    const tiles = buildTiles(v);
     const sheets = buildSheets(v, t);
     const swaps = buildSwap(v, t);
     const scorebug = buildScorebug(v, t);
@@ -924,7 +888,7 @@ describe("refusedEventTypes()", () => {
     expect(dedicated).toContain(RALLY_TYPE);
     const actions = moreActions(
       volleyball.padSpec!(VB_CFG),
-      { state: v.state, summary: v.summary, phase: "live", band: 3, entitlements: v.entitlements },
+      { state: v.state, summary: v.summary, phase: "live", band: 3 },
       dedicated,
       new Set(refusedEventTypes(v)),
     );
@@ -933,14 +897,14 @@ describe("refusedEventTypes()", () => {
 
   it("...and once this fixture does NOT record substitutions (beach), even that one dead end closes", () => {
     const v = view({ cfg: BEACH_CFG, lineups: PAIR, events: stream(rally("H")) });
-    const tiles = buildTiles(v, t);
+    const tiles = buildTiles(v);
     const sheets = buildSheets(v, t);
     const swaps = buildSwap(v, t);
     const scorebug = buildScorebug(v, t);
     const dedicated = dedicatedEventTypes(tiles, sheets, swaps, scorebug);
     const actions = moreActions(
       volleyball.padSpec!(BEACH_CFG),
-      { state: v.state, summary: v.summary, phase: "live", band: 3, entitlements: v.entitlements },
+      { state: v.state, summary: v.summary, phase: "live", band: 3 },
       dedicated,
       new Set(refusedEventTypes(v)),
     );
@@ -1387,11 +1351,6 @@ describe("factory wiring — every builder is threaded the REAL translator", () 
     for (const item of spec.strip) if (item.label !== undefined) expect(item.label.startsWith("XLATED:")).toBe(true);
   });
 
-  it("threads it into the tiles' pre-localised text", () => {
-    const tile = skin.tiles(view({ band: 2 })).find((entry) => entry.id === RALLY_LOCKED_TILE_ID)!;
-    expect(tile.labelText!.startsWith("XLATED:")).toBe(true);
-    expect(tile.sublabelText!.startsWith("XLATED:")).toBe(true);
-  });
 
   // R7 follow-ups item 3 (`TileSpec.label`/`SheetChoiceStep.title` typed
   // `MessageKey`) found the OPPOSITE bug to the one this block's header
@@ -1419,10 +1378,6 @@ describe("factory wiring — every builder is threaded the REAL translator", () 
     expect(dock.title.startsWith("XLATED:")).toBe(true);
   });
 
-  it("threads it into the context strip's message", () => {
-    const spec = skin.context!(view({ band: 2 }))!;
-    expect(spec.slots[0]!.message!.startsWith("XLATED:")).toBe(true);
-  });
 
   // "threads it into the swap sheet's blocked reason" RETIRED 2026-08-30: it
   // exercised the same FIVB 15.6 cycle as above to produce a blocked
@@ -1474,13 +1429,9 @@ describe("copy truth", () => {
       "pad.volleyball.context.line",
       "pad.volleyball.context.deuce",
       "pad.volleyball.context.goldenPoint",
-      "pad.volleyball.context.recording",
-      "pad.volleyball.context.recording.locked",
       "pad.volleyball.scorebug.strip.sets",
       "pad.volleyball.scorebug.strip.server",
       "pad.volleyball.scorebug.strip.rotation",
-      "pad.volleyball.tile.rallyLocked",
-      "pad.volleyball.tile.rallyLocked.sublabel",
       "pad.volleyball.dock.rally.scorer.title",
       "pad.volleyball.dock.person",
       "pad.volleyball.ribbon.partial",
@@ -1511,7 +1462,7 @@ describe("copy truth", () => {
     ];
     for (const { band, events, lineups } of sweep) {
       const v = view({ band, events, lineups, cfg: lineups === PAIR ? BEACH_CFG : VB_CFG });
-      for (const tile of buildTiles(v, t)) {
+      for (const tile of buildTiles(v)) {
         keys.add(tile.label);
         if (tile.sublabel !== undefined) keys.add(tile.sublabel);
       }
@@ -1524,8 +1475,6 @@ describe("copy truth", () => {
       const scorebug = buildScorebug(v, t);
       for (const item of scorebug.strip) if (item.label !== undefined) keys.add(item.label);
       for (const half of scorebug.halves) if (half.hintKey !== undefined) keys.add(half.hintKey);
-      const strip = buildContextStrip(v, t);
-      for (const slot of strip?.slots ?? []) keys.add(slot.label);
       const dock = buildDock(RALLY_TYPE, v, t, { wonBy: "H" });
       for (const chip of dock?.chips ?? []) keys.add(chip.label);
       for (const slot of buildSwap(v, t)) {

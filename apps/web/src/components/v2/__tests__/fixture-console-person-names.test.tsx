@@ -20,7 +20,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement, ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { builtinModules } from "@seazn/engine/sports";
 import { entrantDisplayName } from "@/lib/entrant-name";
 import { FixtureConsole } from "@/components/v2/fixture-console";
 import type { EventIn, LiveState, MemberIn, SideInfo, SportInfo } from "@/components/v2/fixture-console";
@@ -30,8 +29,6 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
 }));
 
-const football = builtinModules.find((m) => m.key === "football")!;
-
 const sport: SportInfo = {
   key: "football",
   config: {},
@@ -40,7 +37,6 @@ const sport: SportInfo = {
   roles: [],
   lineupSize: 11,
   benchMax: 5,
-  fidelityTiers: football.fidelityTiers as SportInfo["fidelityTiers"],
 };
 
 function member(id: string, name: string): MemberIn {

@@ -167,12 +167,6 @@ export interface SideInfo {
   lineup: LineupSlotIn[];
 }
 
-export interface FidelityTierIn {
-  tier: number;
-  eventTypes: string[];
-  entitlement?: string;
-}
-
 export interface SportInfo {
   key: string;
   config: Record<string, unknown>;
@@ -188,7 +182,6 @@ export interface SportInfo {
    *  lineup to edit at all (R7 D-1), and a bootstrap that forgot it would
    *  silently render the editor for a 1-v-1 sport again. */
   benchMax: number;
-  fidelityTiers: FidelityTierIn[];
 }
 
 export interface LiveState {
@@ -717,7 +710,6 @@ export function FixtureConsole({
                   auth={{ kind: "session" }}
                   identity={scorePadV2.identity}
                   entitlements={scorePadV2.entitlements}
-                  band={scorePadV2.band}
                   onEvents={handlePadEvents}
                   // R7/C1 — this console mounts the one ledger itself, below.
                   hideActivity

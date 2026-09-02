@@ -13,7 +13,7 @@
 // panels exist only behind a cfg leaf no shipped variant sets — cricket's
 // superOver/dls.enabled, football's non-null shootout, generic's allowDraws,
 // badminton's records.timeouts. Hence the leaf-override pass.
-import type { AnySportModule, PadSpec } from "@seazn/engine/sport";
+import type { AnySportModule } from "@seazn/engine/sport";
 
 type Json = Record<string, unknown>;
 
@@ -96,9 +96,9 @@ export function cfgSpace(module: Pick<AnySportModule, "configSchema" | "variants
   return cfgs;
 }
 
-/** Every entitlement a spec's fidelity map references, all granted — so a
- *  coverage sweep measures what the spec DECLARES, never what a particular
- *  org happens to have bought. */
-export function grantAllEntitlements(spec: PadSpec): Record<string, boolean> {
-  return Object.fromEntries(Object.values(spec.fidelityEntitlements).map((key) => [key, true]));
-}
+// W1 / Task 4 (entitlements v18): `grantAllEntitlements` lived here — every
+// entitlement a spec's fidelity map referenced, all granted, so a coverage
+// sweep measured what a spec DECLARED rather than what an org had bought.
+// `PadSpec.fidelityEntitlements` is gone from the engine and there is nothing
+// left to grant: a coverage sweep at band 3 now sees the whole declaration by
+// construction.

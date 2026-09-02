@@ -171,7 +171,6 @@ export default async function ScorePadPage({
           roles: lineupCatalog.roles ?? [],
           lineupSize: lineupCatalog.lineup.size,
           benchMax: lineupCatalog.lineup.benchMax ?? 0,
-          fidelityTiers: sportModule.fidelityTiers,
         }}
         home={home}
         away={away}

@@ -28,7 +28,6 @@ const sport: SportInfo = {
   roles: [],
   lineupSize: 11,
   benchMax: 0,
-  fidelityTiers: cricket.fidelityTiers as SportInfo["fidelityTiers"],
 };
 
 const side = (id: string, name: string): SideInfo => ({ id, name, members: [], lineup: [] });
@@ -98,7 +97,6 @@ describe("fixture-console header — cricket pre-innings noise (R7 follow-ups it
           roles: [],
           lineupSize: 11,
           benchMax: 5,
-          fidelityTiers: football.fidelityTiers as SportInfo["fidelityTiers"],
         }}
         home={side("e-home", "Riverside FC")}
         away={side("e-away", "Summit Athletic")}

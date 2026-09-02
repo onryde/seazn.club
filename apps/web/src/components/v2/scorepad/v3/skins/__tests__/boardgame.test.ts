@@ -391,7 +391,7 @@ function realMoreActions(v: PadHostView): string[] {
   const dedicated = dedicatedEventTypes(tiles, sheets, [], scorebug);
   return moreActions(
     spec,
-    { state: v.state, summary: v.summary, phase: resolvePhase(v), band: v.band, entitlements: v.entitlements },
+    { state: v.state, summary: v.summary, phase: resolvePhase(v), band: v.band },
     dedicated,
     new Set<string>(),
   ).map((action) => action.type);

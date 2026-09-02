@@ -23,7 +23,7 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { resolvePositions } from "@seazn/engine/sport";
-import type { AnySportModule, PadAction, PadField, PadFieldValue, PadSpec } from "@seazn/engine/sport";
+import type { AnySportModule, PadAction, PadField, PadFieldValue } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { defaultLineupPair } from "@seazn/engine/testkit";
 import { allActionViews, buildActionPayload } from "../view-model";
@@ -112,10 +112,6 @@ function cfgSpace(module: Pick<AnySportModule, "configSchema" | "variants">): un
     }
   }
   return cfgs;
-}
-
-function grantAllEntitlements(spec: PadSpec): Record<string, boolean> {
-  return Object.fromEntries(Object.values(spec.fidelityEntitlements).map((key) => [key, true]));
 }
 
 function fieldArb(field: PadField): fc.Arbitrary<PadFieldValue> {
@@ -230,8 +226,7 @@ function runSweep(): SweepResult {
     for (const cfg of cfgs) {
       const spec = sportModule.padSpec(cfg);
       const rawActions = spec.panels.flatMap((panel) => panel.actions);
-      const entitlements = grantAllEntitlements(spec);
-      const views = allActionViews(spec, { band: 3, entitlements });
+      const views = allActionViews(spec, { band: 3 });
 
       // Reachability: at band 3 (max), EVERY declared action must come back
       // — same length, same order (allActionViews walks panels/actions in
@@ -253,12 +248,12 @@ function runSweep(): SweepResult {
           );
           return;
         }
-        if (view.availability.kind !== "available") {
-          reachabilityProblems.push(
-            `${sportModule.key}: "${raw.labelKey.key}" is not "available" (got "${view.availability.kind}") ` +
-              `even with every fidelityEntitlements key granted`,
-          );
-        }
+        // W1 / Task 4: an `availability` check used to sit here, proving no
+        // action came back LOCKED once every `fidelityEntitlements` key was
+        // granted. Bands are not sold any more and `PadActionView` has no
+        // availability at all — an action is resolved or it is `null`, which
+        // the `views.length !== rawActions.length` guard above already
+        // catches. Removed rather than rewritten into an always-true check.
         reachableKeys.add(raw.labelKey.key);
         totalReachable += 1;
       });

@@ -41,7 +41,6 @@ import type { SquadState } from "@seazn/engine/core";
 import { buildScorebug, buildSheets, buildTiles, refusedEventTypes } from "../skins/cricket";
 import { dedicatedEventTypes, moreActions } from "../pad-host";
 import type { GuidedSheetSpec, PadHostView, TileSpec } from "../types";
-import { grantAllEntitlements } from "../../__tests__/_cfg-space";
 
 const cricketModule = (builtinModules as readonly AnySportModule[]).find((m) => m.key === "cricket");
 if (!cricketModule || !cricketModule.padSpec || !cricketModule.eventSchemas) {
@@ -195,7 +194,6 @@ interface SweepResult {
  */
 function moreTypesFor(cfg: unknown, hostView: PadHostView, dedicated: ReadonlySet<string>): Set<string> {
   const spec = padSpecFor(cfg);
-  const entitlements = grantAllEntitlements(spec);
   // R3.5 F2 (review finding, BLOCKER) — the SKIN's own refusal set, exactly
   // as `PadHostV3` passes it (`pad-host.tsx`'s `refusedTypes`), never a set
   // this test invents or leaves empty — cricket declared none at all before
@@ -205,7 +203,7 @@ function moreTypesFor(cfg: unknown, hostView: PadHostView, dedicated: ReadonlySe
   const refused = new Set(refusedEventTypes(hostView));
   const out = new Set<string>();
   for (const phase of ["live", "post"] as const) {
-    const actions = moreActions(spec, { state: hostView.state, summary: {}, phase, band: 3, entitlements }, dedicated, refused);
+    const actions = moreActions(spec, { state: hostView.state, summary: {}, phase, band: 3 }, dedicated, refused);
     for (const a of actions) out.add(a.type);
   }
   return out;

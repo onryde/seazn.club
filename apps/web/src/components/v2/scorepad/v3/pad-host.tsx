@@ -66,7 +66,7 @@ import { DetailDock, makeDockStore, type DockStore } from "./detail-dock";
 import { ContextStrip, type PoolView, type TFn } from "./context-strip";
 import { SwapSheet, refusalMessage, type PolicyVerdict, type SwapSheetSpec } from "./swap-sheet";
 import { GuidedSheet } from "./guided-sheet";
-import { RecordingChip } from "./recording-chip";
+import { BANDS, RecordingChip } from "./recording-chip";
 import { buildRibbon, type Ribbon } from "./ribbon";
 import {
   CLOCK_NUDGE_SECONDS,
@@ -165,23 +165,62 @@ export function sidePool(side: "home" | "away", squads: SquadState): PoolView {
   return { squad: side === "home" ? squads.home : squads.away };
 }
 
-const ALL_BANDS: readonly FidelityBand[] = [0, 1, 2, 3];
+// ---------------------------------------------------------------------------
+// The recording band — W1 / Task 4 (entitlements v18)
+//
+// This block used to be `entitledBandsFrom`, which resolved the set of bands
+// an ORG had paid for. Bands are not sold any more: `PadSpec.fidelity` is a UX
+// filter and the band is the SCORER'S own pick, held by this host, remembered
+// per fixture, changeable mid-match from the Recording chip.
+// ---------------------------------------------------------------------------
 
-/** Bands the org currently holds — `recording-chip.tsx`'s own header names
- *  this exact computation as "the same way fidelity-switcher.tsx's own
- *  isLocked does" (that function isn't exported; this mirrors its logic,
- *  not its code). A band with no declared gate (`fidelityEntitlements[b]
- *  === undefined`) is always entitled — bands 0/1 are never keyed there. */
-export function entitledBandsFrom(
-  fidelityEntitlements: PadSpec["fidelityEntitlements"],
-  entitlements: Readonly<Record<string, boolean>>,
-): Set<FidelityBand> {
-  const out = new Set<FidelityBand>();
-  for (const band of ALL_BANDS) {
-    const needed = fidelityEntitlements[band];
-    if (needed === undefined || entitlements[needed]) out.add(band);
+/** Per-fixture, because the choice is about THIS match's scoring effort —
+ *  a volunteer on a Sunday fixture is not making a decision about the club's
+ *  next one. Namespaced so it cannot collide with anything else this origin
+ *  stores. */
+export function bandStorageKey(fixtureId: string): string {
+  return `seazn.pad.band.${fixtureId}`;
+}
+
+/**
+ * The band the pad opens at when the scorer has never picked one: the HIGHEST
+ * band this sport's own `padSpec(cfg).fidelity` actually declares.
+ *
+ * NOT a constant 3, deliberately. Carrom and boardgame declare nothing above
+ * band 1, so opening them at 3 would put "Every detail" on a pill above a pad
+ * that has no such thing — a control asserting a level the sport does not
+ * have. Taking the sport's own maximum means an unpicked pad hides none of
+ * its own actions (proved for every builtin module in `__tests__/
+ * pad-host.test.ts`) AND the pill never over-claims.
+ *
+ * Fails OPEN on an empty map: nothing is classified, so nothing would be
+ * filtered either way, and the honest reading of "no declarations" is the top
+ * of the scale rather than the bottom — the same posture `filterTilesByBand`
+ * takes for an unclassifiable tile.
+ */
+export function defaultBandFor(fidelity: PadSpec["fidelity"]): FidelityBand {
+  let top: FidelityBand | null = null;
+  for (const band of Object.values(fidelity)) {
+    if (top === null || band > top) top = band;
   }
-  return out;
+  return top ?? 3;
+}
+
+/**
+ * What the chip opens at, given whatever came out of storage.
+ *
+ * `stored` is untrusted: it is a string another version of this app wrote, a
+ * user could have edited, or a shared device could have left behind. Anything
+ * that is not one of the four band literals is discarded in favour of the
+ * sport's own default — never coerced, because `Number("")` is 0 and would
+ * silently open a full pad at "Result only".
+ */
+export function resolveInitialBand(stored: string | null, fidelity: PadSpec["fidelity"]): FidelityBand {
+  if (stored === "0") return 0;
+  if (stored === "1") return 1;
+  if (stored === "2") return 2;
+  if (stored === "3") return 3;
+  return defaultBandFor(fidelity);
 }
 
 /**
@@ -689,7 +728,7 @@ export function filterTilesByBand(
   sheets: Record<string, GuidedSheetSpec>,
   swaps: readonly SwapSlot[],
   fidelity: PadSpec["fidelity"],
-  entitledBands: ReadonlySet<FidelityBand>,
+  chosenBand: FidelityBand,
 ): TileSpec[] {
   return tiles.filter((tile) => {
     const type = tileEventType(tile, sheets, swaps);
@@ -697,7 +736,12 @@ export function filterTilesByBand(
     if (AUTHORITY_ONLY_EVENT_TYPES.has(type)) return false;
     const band = fidelity[type];
     if (band === undefined) return true;
-    return entitledBands.has(band);
+    // A LADDER, not a set (W1 / Task 4). The fifth argument used to be the
+    // bands an org held; it is now the one band the scorer picked, and every
+    // band at or below it is included by construction. The two agree on every
+    // set the old entitlement resolution could actually produce — it only
+    // ever built contiguous prefixes — so no case changed meaning here.
+    return band <= chosenBand;
   });
 }
 
@@ -1265,7 +1309,7 @@ export async function runAmend(plan: AmendPlan, io: AmendSubmitters): Promise<st
 // PadHostV3 — the React shell
 // ---------------------------------------------------------------------------
 
-const EMPTY_SPEC: PadSpec = { panels: [], fidelity: {}, fidelityEntitlements: {} };
+const EMPTY_SPEC: PadSpec = { panels: [], fidelity: {} };
 
 export interface PadHostV3Props {
   module: AnySportModule;
@@ -1274,12 +1318,11 @@ export interface PadHostV3Props {
   lineups: LineupPair;
   identity: OwnIdentity;
   transport: PadTransport;
-  /** The fixture's own configured/entitled recording band. Unlike the
-   *  legacy renderer's `FidelitySwitcher`, v3 has no interactive band
-   *  picker (`RecordingChip` replaces it — spec §2.6 — as a worded
-   *  display + upsell, never an editable control), so this value is used
-   *  as-is, never locally overridden. */
-  band: FidelityBand;
+  /** W1 / Task 4: there is no `band` prop any more. The recording band is
+   *  the SCORER'S pick, owned by this host (see `defaultBandFor` /
+   *  `resolveInitialBand` above), remembered per fixture, and changed from
+   *  the Recording chip mid-match. Nothing upstream resolves one, because
+   *  nothing upstream has the standing to. */
   entitlements: Readonly<Record<string, boolean>>;
   initialEvents?: readonly EventEnvelope[];
   queueDbName?: string;
@@ -1386,6 +1429,39 @@ export function PadHostV3(props: PadHostV3Props) {
   const spec = useMemo(() => props.module.padSpec?.(props.cfg) ?? EMPTY_SPEC, [props.module, props.cfg]);
   const squads = useMemo(() => squadStateOf(pipeline.state, props.lineups), [pipeline.state, props.lineups]);
 
+  // THE RECORDING BAND (W1 / Task 4). Held here rather than passed in: it is
+  // the scorer's own choice about how much to record, it changes mid-match
+  // from the Recording chip, and this is the component that filters the tiles
+  // with it — one owner, so a picked band and a rendered grid cannot drift.
+  //
+  // Seeded lazily from `localStorage`, inside a try: Safari private mode
+  // throws on access, and a scoring pad must not fail to mount because a
+  // preference could not be read. A first-ever load falls through to
+  // `defaultBandFor(spec.fidelity)` — the top band the SPORT declares, not a
+  // constant (see that function's own doc for why carrom must not open at 3).
+  const bandKey = bandStorageKey(props.fixtureId);
+  const [band, setBand] = useState<FidelityBand>(() => {
+    let stored: string | null = null;
+    try {
+      stored = typeof window === "undefined" ? null : window.localStorage.getItem(bandKey);
+    } catch {
+      stored = null;
+    }
+    return resolveInitialBand(stored, spec.fidelity);
+  });
+  const onBandChange = useCallback(
+    (next: FidelityBand) => {
+      setBand(next);
+      try {
+        if (typeof window !== "undefined") window.localStorage.setItem(bandKey, String(next));
+      } catch {
+        // A pad whose band cannot be REMEMBERED still has to be a pad whose
+        // band can be CHANGED — the state above is already set.
+      }
+    },
+    [bandKey],
+  );
+
   const [phase, setPhase] = useState<PadPhase>("live");
   const [held, setHeld] = useState<HeldTap | null>(null);
   // R3 chassis sub-wave (defect 2): the id of the OPEN swap slot, or null.
@@ -1465,7 +1541,7 @@ export function PadHostV3(props: PadHostV3Props) {
       state: pipeline.state,
       summary: pipeline.summary,
       phase,
-      band: props.band,
+      band,
       entitlements,
       personNames,
       squads,
@@ -1482,7 +1558,7 @@ export function PadHostV3(props: PadHostV3Props) {
       // contextOverridesStale/render-phase-reset block above.
       contextOverrides,
     }),
-    [props.cfg, pipeline.state, pipeline.summary, phase, props.band, entitlements, personNames, squads, pipeline.events, contextOverrides, clockAt],
+    [props.cfg, pipeline.state, pipeline.summary, phase, band, entitlements, personNames, squads, pipeline.events, contextOverrides, clockAt],
   );
 
   // `sheets` is resolved BEFORE the tiles so the band filter below can read a
@@ -1496,17 +1572,29 @@ export function PadHostV3(props: PadHostV3Props) {
   // and it can only do that against the slot table. Moving this line back
   // below the tile build silently reinstates the unfiltered swap tile.
   const swapSlots = useMemo(() => props.skin.swap?.(view) ?? [], [props.skin, view]);
-  const entitledBands = useMemo(() => entitledBandsFrom(spec.fidelityEntitlements, entitlements), [spec, entitlements]);
-
   // Band filter applied BEFORE `phasesWithTiles`, not at render: the phase
   // machinery must reason about the tiles a scorer can actually see, or the
   // pad can snap to a phase whose only tiles were filtered away and show an
   // empty grid.
   const allTiles = useMemo(() => props.skin.tiles(view), [props.skin, view]);
   const tiles = useMemo(
-    () => filterTilesByBand(allTiles, sheets ?? {}, swapSlots, spec.fidelity, entitledBands),
-    [allTiles, sheets, swapSlots, spec.fidelity, entitledBands],
+    () => filterTilesByBand(allTiles, sheets ?? {}, swapSlots, spec.fidelity, band),
+    [allTiles, sheets, swapSlots, spec.fidelity, band],
   );
+  // What the Recording sheet promises under each row: the REAL number of
+  // tiles that band would put on this pad, run through the same filter the
+  // grid above uses. Derived rather than estimated, so two bands a sport does
+  // not distinguish read the same number and the scorer can see it before
+  // tapping rather than after. `sheets` is deliberately not memoized (see its
+  // declaration), so this recomputes with the fold — which is correct: the
+  // count is about the pad as it stands right now.
+  const bandActionCounts = useMemo(() => {
+    const counts = {} as Record<FidelityBand, number>;
+    for (const candidate of BANDS) {
+      counts[candidate] = filterTilesByBand(allTiles, sheets ?? {}, swapSlots, spec.fidelity, candidate).length;
+    }
+    return counts;
+  }, [allTiles, sheets, swapSlots, spec.fidelity]);
   const availablePhases = useMemo(() => phasesWithTiles(tiles), [tiles]);
   // G3: a skin's own phase(view), when declared, overrides the self-correcting
   // default below rather than being cross-checked against it — see
@@ -1538,8 +1626,8 @@ export function PadHostV3(props: PadHostV3Props) {
   }
 
   const padViewCtx: PadViewCtx = useMemo(
-    () => ({ state: pipeline.state, summary: pipeline.summary, phase, band: props.band, entitlements }),
-    [pipeline.state, pipeline.summary, phase, props.band, entitlements],
+    () => ({ state: pipeline.state, summary: pipeline.summary, phase, band, entitlements }),
+    [pipeline.state, pipeline.summary, phase, band, entitlements],
   );
   const padView = useMemo(() => buildPadView(spec, padViewCtx), [spec, padViewCtx]);
   // `sheets` is declared once, further up — it had to move above the tile
@@ -2143,7 +2231,13 @@ export function PadHostV3(props: PadHostV3Props) {
       )}
 
       <div data-role="v3-recording">
-        <RecordingChip activeBand={props.band} entitledBands={entitledBands} fidelityEntitlements={spec.fidelityEntitlements} t={msg} />
+        <RecordingChip
+          activeBand={band}
+          onBandChange={onBandChange}
+          actionCounts={bandActionCounts}
+          t={msg}
+          plural={pluralMsg}
+        />
       </div>
 
       {contextSpec && (
