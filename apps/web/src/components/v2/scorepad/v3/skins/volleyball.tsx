@@ -786,11 +786,18 @@ function buildStrip(
   // steady across every value it can take, and `reserved` holds it open while
   // the reader refuses over DRIFT, so the centred row does not re-centre.
   const serverReserve = serverCandidates(view, t);
-  // FIVB 7.6.2's numbers are 1..6, and the chassis renders every strip item
-  // with `fontVariantNumeric: tabular-nums` — so all six are the SAME width
-  // and one digit reserves the slot exactly. Not a guess: tabular figures are
-  // defined to share an advance width.
-  const rotationReserve = ["6"];
+  // FIVB 7.6.2's rotation numbers, ALL of them — the slot's whole value space,
+  // exactly like every other reserve in this family.
+  //
+  // Reserving only `["6"]` would in fact hold the right WIDTH (the chassis
+  // renders strip items with `fontVariantNumeric: tabular-nums`, and tabular
+  // figures share an advance width by definition), and that reasoning is why
+  // the first version shipped one digit. But `StripItem.reserve`'s contract is
+  // "every value this slot can take", and `assertScorebugSpec` enforces
+  // `value ∈ reserve` — the check that catches a reserve which has silently
+  // drifted from its own value space. Special-casing this one slot on a
+  // typographic argument would have bought nothing and cost the guard.
+  const rotationReserve = ["1", "2", "3", "4", "5", "6"];
   if (phase === "live" && serving) {
     const value = serving.personId ? nameOf(view, serving.personId, t) : t(SIDE_LABEL[serving.side]);
     items.push({
@@ -826,12 +833,27 @@ function buildStrip(
       reserved: true,
       reserve: serverReserve,
     });
-    items.push({
-      label: t("pad.volleyball.scorebug.strip.rotation"),
-      value: "",
-      reserved: true,
-      reserve: rotationReserve,
-    });
+    // GATED ON THE SAME FACT AS ITS ANSWERED TWIN. The answered branch pushes
+    // `rotation` only when `serveCtx.rotation !== undefined`, and the kernel's
+    // `sideFieldsTheRotation` leaves it undefined FOREVER for a side that
+    // fields no six — a beach pair. Reserving it unconditionally therefore made
+    // a beach strip GAIN a slot on drift, which is the fix inverted: the row
+    // moved in the one direction this change exists to prevent.
+    //
+    // Either side, not both: the answered slot belongs to whichever side is
+    // serving, and on a refusal there is no serving side to ask. So this
+    // reserves where the slot COULD appear and stays silent where it never can.
+    // It does not (and cannot) cover the narrower case of an indoor chain break
+    // with a known side, where the answered strip also drops rotation — that
+    // asymmetry predates this change and is not made worse by it.
+    if (fieldsTheRotation(view, state, "home") || fieldsTheRotation(view, state, "away")) {
+      items.push({
+        label: t("pad.volleyball.scorebug.strip.rotation"),
+        value: "",
+        reserved: true,
+        reserve: rotationReserve,
+      });
+    }
   }
   return items;
 }

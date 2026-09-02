@@ -1568,3 +1568,94 @@ describe("copy truth", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// R8/#676 — the strip's WIDTH across a serve-reader refusal (badminton's own
+// block, ported: fix round 1 shipped this contract for badminton ONLY, and a
+// mutant reserving ["999999"] survived here for want of it).
+// ---------------------------------------------------------------------------
+
+/** The `serverOverride` shape — `state` folded from one ledger, `events` from
+ *  another. What a genuinely diverged pad actually looks like. */
+function divergedView(opts: ViewOpts = {}): PadHostView {
+  const lineups = opts.lineups ?? TEAM;
+  const cfg = opts.cfg ?? VB_CFG;
+  const localEvents = opts.events ?? stream(rally("H", { serving: "H" }), rally("A"), rally("H"));
+  const serverEvents = [...localEvents, ev(localEvents.length, RALLY_TYPE, { wonBy: "A" })];
+  return { ...view({ ...opts, events: localEvents }), state: foldClient(volleyball, cfg, lineups, serverEvents) };
+}
+
+describe("R8/#676 — volleyball holds its strip's shape across a refusal", () => {
+  it("the diverged view really is a DRIFT refusal", () => {
+    const v = divergedView();
+    expect(serveContextOf(v, v.state as never)?.unknownBecause).toBe("ledger-mismatch");
+  });
+
+  it("holds the serve-derived slots open, valueless and unlocatable", () => {
+    const spec = buildScorebug(divergedView(), t);
+    expect(spec.strip.map((i) => i.id)).not.toContain("server");
+    expect(spec.strip.map((i) => i.id)).not.toContain("rotation");
+    const reserved = spec.strip.filter((i) => i.reserved === true);
+    expect(reserved.length).toBeGreaterThan(0);
+    for (const slot of reserved) {
+      expect(slot.value).toBe("");
+      expect(slot.id).toBeUndefined();
+      expect(slot.reserve?.length).toBeGreaterThan(0);
+    }
+    expect(assertScorebugSpec(spec)).toEqual([]);
+  });
+
+  it("reserves the SAME width answered as refused, and the reserve COVERS the value", () => {
+    const answered = buildScorebug(view({ events: stream(rally("H", { serving: "H" }), rally("A"), rally("H")) }), t);
+    const refused = buildScorebug(divergedView(), t);
+    const aServer = answered.strip.find((i) => i.id === "server");
+    const aRot = answered.strip.find((i) => i.id === "rotation");
+    expect(aServer?.value).toBeTruthy();
+    const held = refused.strip.filter((i) => i.reserved === true);
+    expect(held[0]?.reserve).toEqual(aServer?.reserve);
+    expect(aServer?.reserve).toContain(aServer?.value);
+    // The kill for the round-1 survivor: a rotation reserve of ["999999"] is
+    // still "a reserve", but it does not contain the value that lands, so the
+    // slot is wider reserved than answered and the row moves anyway.
+    // REQUIRED, never `if (aRot)` — the guarded form was itself vacuous on a
+    // fixture with no rotation slot, and let the mutant survive round 2.
+    expect(aRot, "precondition: this fixture MUST produce a rotation slot").toBeDefined();
+    expect(held[1]?.reserve).toEqual(aRot!.reserve);
+    expect(aRot!.reserve).toContain(aRot!.value);
+    // The general form of the same kill, and the one that scales to every
+    // skin: an ANSWERED slot must reserve the value it shows.
+    expect(assertScorebugSpec(answered)).toEqual([]);
+  });
+
+  it("the reservation is the value SPACE, not the current value", () => {
+    const h = buildScorebug(view({ events: stream(rally("H", { serving: "H" })) }), t).strip.find((i) => i.id === "server");
+    const a = buildScorebug(view({ events: stream(rally("A", { serving: "A" })) }), t).strip.find((i) => i.id === "server");
+    expect(h?.reserve).toEqual(a?.reserve);
+    expect(h?.reserve).toContain(h?.value);
+    expect(h?.reserve).toContain(a?.value);
+  });
+
+  it("a BEACH pair GAINS NO SLOT on drift — it fields no six to number", () => {
+    // Round-1 defect, caught in review: the reserved rotation slot was pushed
+    // unconditionally while the answered one is gated on `serveCtx.rotation`,
+    // which `sideFieldsTheRotation` leaves undefined forever for a beach pair.
+    // The strip therefore GAINED an item on drift — the fix inverted.
+    const answered = buildScorebug(
+      view({ lineups: PAIR, cfg: BEACH_CFG, events: stream(rally("H", { serving: "H" }), rally("A"), rally("H")) }),
+      t,
+    );
+    expect(answered.strip.map((i) => i.id), "precondition: a beach strip has no rotation").not.toContain(
+      "rotation",
+    );
+    const refused = buildScorebug(divergedView({ lineups: PAIR, cfg: BEACH_CFG }), t);
+    expect(refused.strip.filter((i) => i.reserved === true)).toHaveLength(1);
+    expect(refused.strip.length, "the beach row must not grow on a refusal").toBeLessThanOrEqual(
+      answered.strip.length,
+    );
+  });
+
+  it("reserves nothing before the first rally — absence is not drift", () => {
+    const spec = buildScorebug(view({ events: stream() }), t);
+    expect(spec.strip.some((i) => i.reserved === true)).toBe(false);
+  });
+});

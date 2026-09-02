@@ -391,6 +391,31 @@ function renderStripToString(strip: StripItem[]): string {
   return renderToStaticMarkup(Scorebug({ spec, t }) as never);
 }
 
+/** The full, BALANCED `<span>` subtree of the element carrying `marker` —
+ *  everything a DOM `textContent` read on that element would see, including
+ *  `visibility:hidden` descendants (which is exactly the point). */
+function subtreeOf(html: string, marker: string): string {
+  const at = html.indexOf(marker);
+  expect(at, `marker ${marker} not found in rendered strip`).toBeGreaterThan(-1);
+  const start = html.indexOf(">", at) + 1;
+  let depth = 1;
+  let i = start;
+  while (depth > 0 && i < html.length) {
+    const open = html.indexOf("<span", i);
+    const close = html.indexOf("</span>", i);
+    if (close === -1) break;
+    if (open !== -1 && open < close) {
+      depth += 1;
+      i = html.indexOf(">", open) + 1;
+    } else {
+      depth -= 1;
+      if (depth === 0) return html.slice(start, close);
+      i = close + "</span>".length;
+    }
+  }
+  return html.slice(start);
+}
+
 /** The rendered opening tag of the strip slot carrying `marker`. */
 function slotTag(html: string, marker: string): string {
   const at = html.indexOf(marker);
@@ -439,6 +464,29 @@ describe("R8/#676 — a width-reserving strip slot", () => {
     expect(tag).not.toContain("truncate");
     expect(tag).not.toContain("nowrap");
     expect(html, "and no sizer inside it may reintroduce the floor either").not.toContain("truncate");
+  });
+
+  it("the LOCATED element holds the visible text only — never the reserve sizers", () => {
+    // THE ROUND-1 REGRESSION, and the reason this is pinned in a node test
+    // rather than left to the e2e. `data-strip-item-id` first went on the
+    // reserving grid WRAPPER, which made the sizers children of the located
+    // element. Playwright's toHaveText/toContainText read `textContent`, not
+    // `innerText` (`useInnerText` is the opt-OUT), and `textContent` includes
+    // `visibility:hidden` subtrees — so table tennis's `toHaveText("2nd
+    // serve")` saw "1st serve2nd serve2nd serve", volleyball's saw "Rotation
+    // 6Rotation 2", and every `not.toContainText(<the other player>)` went
+    // vacuously green because a reserve holds both names by construction.
+    // Eight live assertions across four specs, all silently meaningless.
+    const html = renderStripToString([
+      { id: "server", label: "Server", value: "Al", reserve: ["Al", "Bartholomew"] },
+    ]);
+    // BALANCED subtree, not "up to the next </span>": under the regression the
+    // id sits on the wrapper, whose first closing tag belongs to its first
+    // SIZER — so a naive slice reads that sizer's text, finds the value in it
+    // and passes. That is how this very test survived its own mutant once.
+    const located = subtreeOf(html, 'data-strip-item-id="server"');
+    expect(located, "the located element's subtree is the visible layer").toContain("Al");
+    expect(located, "and must NOT include any reserve candidate").not.toContain("Bartholomew");
   });
 
   it("an item with NO reserve renders exactly as it did before this field existed", () => {

@@ -366,18 +366,45 @@ export function Scorebug({ spec, t, onTap, onOpenSheet }: ScorebugProps) {
               return (
                 <span
                   key={i}
-                  {...(item.id && !item.reserved ? { "data-strip-item-id": item.id } : {})}
                   {...(item.reserved ? { "aria-hidden": true, "data-strip-reserved": "true" } : {})}
                   className="grid min-w-0 justify-items-center"
                   style={{ fontVariantNumeric: "tabular-nums" }}
                 >
+                  {/* THE SIZERS ARE SIBLINGS OF THE VISIBLE LAYER, NEVER ITS
+                      ANCESTORS' ONLY CONTENT — and `data-strip-item-id` goes on
+                      the VISIBLE span below, not on this wrapper.
+
+                      Playwright's toHaveText/toContainText read `textContent`,
+                      not `innerText` (`useInnerText` is the opt-OUT), and
+                      `textContent` includes visibility:hidden subtrees. Putting
+                      the id on this wrapper therefore folded every reserve
+                      candidate into the located element's text: table tennis's
+                      `toHaveText("2nd serve")` saw "1st serve2nd serve2nd
+                      serve", volleyball's saw "Rotation 6Rotation 2", and every
+                      `not.toContainText(<the other player>)` assertion went
+                      vacuously green because the reserve holds both names by
+                      construction. Eight live assertions across four specs.
+
+                      `min-w-0` on each sizer as well as the track: a grid
+                      track's automatic minimum is its items' min-content, so
+                      without it the widest candidate is still a floor and the
+                      box yields while the ink overflows. */}
                   {item.reserve.map((candidate, c) => (
-                    <span key={c} aria-hidden className={`invisible col-start-1 row-start-1 ${weight}`}>
+                    <span
+                      key={c}
+                      aria-hidden
+                      className={`invisible col-start-1 row-start-1 min-w-0 ${weight}`}
+                    >
                       {item.label ? `${item.label} ` : ""}
                       {candidate}
                     </span>
                   ))}
-                  <span className={`col-start-1 row-start-1 ${weight}`}>{item.reserved ? "" : text}</span>
+                  <span
+                    {...(item.id && !item.reserved ? { "data-strip-item-id": item.id } : {})}
+                    className={`col-start-1 row-start-1 min-w-0 ${weight}`}
+                  >
+                    {item.reserved ? "" : text}
+                  </span>
                 </span>
               );
             }

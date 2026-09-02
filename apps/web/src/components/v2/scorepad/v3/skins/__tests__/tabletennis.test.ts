@@ -1244,3 +1244,79 @@ describe("copy truth", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// R8/#676 — the strip's WIDTH across a serve-reader refusal (badminton's own
+// block, ported: fix round 1 shipped this contract for badminton ONLY, and two
+// mutants survived here for want of it).
+// ---------------------------------------------------------------------------
+
+/** The `serverOverride` shape — `state` folded from one ledger, `events` from
+ *  another. What a genuinely diverged pad actually looks like, rather than a
+ *  fixture hand-edited into disagreeing with itself. */
+function divergedView(opts: ViewOpts = {}): PadHostView {
+  const lineups = opts.lineups ?? SINGLES;
+  const cfg = opts.cfg ?? ITTF_CFG;
+  const localEvents = opts.events ?? stream(anchor("A", "H"), rally("H"));
+  const serverEvents = [...localEvents, ev(localEvents.length, RALLY_TYPE, { wonBy: "A" })];
+  return { ...view({ ...opts, events: localEvents }), state: foldClient(tabletennis, cfg, lineups, serverEvents) };
+}
+
+describe("R8/#676 — table tennis holds its strip's shape across a refusal", () => {
+  it("the diverged view really is a DRIFT refusal", () => {
+    const v = divergedView();
+    expect(serveContextOf(v, v.state as never)?.unknownBecause).toBe("ledger-mismatch");
+  });
+
+  it("an ANSWERED strip really does carry `serve` — so reserving it is not a phantom slot", () => {
+    // Pins the premise the unconditional reserved `serve` slot rests on:
+    // tabletennis.ts declares `within: "fixed-turns"` unconditionally, so the
+    // kernel populates serveNumber for every complete chain. If that preset
+    // ever changes, this reds instead of the slot silently becoming a phantom.
+    const spec = buildScorebug(view({ events: stream(anchor("A", "H"), rally("H")) }), t);
+    expect(spec.strip.map((i) => i.id)).toContain("serve");
+  });
+
+  it("holds BOTH serve-derived slots open, valueless and unlocatable", () => {
+    const spec = buildScorebug(divergedView(), t);
+    expect(spec.strip.map((i) => i.id)).not.toContain("server");
+    expect(spec.strip.map((i) => i.id)).not.toContain("serve");
+    const reserved = spec.strip.filter((i) => i.reserved === true);
+    expect(reserved).toHaveLength(2);
+    for (const slot of reserved) {
+      expect(slot.value).toBe("");
+      expect(slot.id).toBeUndefined();
+      expect(slot.reserve?.length).toBeGreaterThan(0);
+    }
+    expect(assertScorebugSpec(spec)).toEqual([]);
+  });
+
+  it("reserves the SAME width answered as refused", () => {
+    const answered = buildScorebug(view({ events: stream(anchor("A", "H"), rally("H")) }), t);
+    const refused = buildScorebug(divergedView(), t);
+    const aServer = answered.strip.find((i) => i.id === "server");
+    const aServe = answered.strip.find((i) => i.id === "serve");
+    expect(aServer?.value).toBeTruthy();
+    const held = refused.strip.filter((i) => i.reserved === true);
+    expect(held[0]?.reserve).toEqual(aServer?.reserve);
+    expect(held[1]?.reserve).toEqual(aServe?.reserve);
+    // The kill for the mutant that survived round 1: an answered slot that
+    // stops reserving renders narrower than its own reserved twin.
+    expect(aServer?.reserve, "the answered server slot must reserve").toBeDefined();
+    expect(aServer?.reserve).toContain(aServer?.value);
+    expect(aServe?.reserve).toContain(aServe?.value);
+  });
+
+  it("the reservation is the value SPACE, not the current value", () => {
+    const h = buildScorebug(view({ events: stream(anchor("A", "H")) }), t).strip.find((i) => i.id === "server");
+    const a = buildScorebug(view({ events: stream(anchor("H", "A")) }), t).strip.find((i) => i.id === "server");
+    expect(h?.reserve).toEqual(a?.reserve);
+    expect(h?.reserve).toContain(h?.value);
+    expect(h?.reserve).toContain(a?.value);
+  });
+
+  it("reserves nothing before the first rally — absence is not drift", () => {
+    const spec = buildScorebug(view({ events: stream() }), t);
+    expect(spec.strip.some((i) => i.reserved === true)).toBe(false);
+  });
+});

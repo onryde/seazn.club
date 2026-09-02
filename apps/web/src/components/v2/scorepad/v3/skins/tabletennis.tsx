@@ -698,6 +698,18 @@ function buildStrip(
       reserved: true,
       reserve: serverReserve,
     });
+    // UNCONDITIONAL, and unlike volleyball's rotation that is the SAME
+    // predicate as the answered twin rather than a looser one. The answered
+    // branch gates on `serveCtx.serveNumber !== undefined`, which the kernel
+    // populates for every `within: "fixed-turns"` preset with a complete chain
+    // — and table tennis declares `within: "fixed-turns"` unconditionally
+    // (`packages/engine/src/sports/setbased/tabletennis.ts:84`). So there is no
+    // table tennis fixture whose answered strip structurally lacks this slot,
+    // the way a beach pair's structurally lacks a rotation number; its only
+    // absence is a transient broken chain, which a set boundary re-anchors.
+    // Pinned by "an answered table tennis strip really does carry `serve`" in
+    // this skin's suite, so a preset change reds here instead of silently
+    // making this slot a phantom.
     items.push({ value: "", reserved: true, reserve: serveReserve });
   }
   // Live only. ITTF 2.15.1 — the umpire's own introduction of expedite, in

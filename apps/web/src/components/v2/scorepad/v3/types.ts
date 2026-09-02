@@ -1439,10 +1439,22 @@ export function assertScorebugSpec(spec: ScorebugSpec): string[] {
   // The other half (the SAME slot reserves the SAME width in both states) needs
   // two specs and is asserted in the skins' own suites.
   spec.strip.forEach((item, i) => {
-    if (!item.reserved) return;
-    if (!item.reserve?.length) out.push(`strip[${i}]: reserved requires reserve (a slot holding no width holds nothing)`);
-    if (item.value) out.push(`strip[${i}]: reserved must not carry a value`);
-    if (item.id) out.push(`strip[${i}]: reserved must not carry an id — it reports nothing and must stay invisible to locators`);
+    if (item.reserved) {
+      if (!item.reserve?.length) out.push(`strip[${i}]: reserved requires reserve (a slot holding no width holds nothing)`);
+      if (item.value) out.push(`strip[${i}]: reserved must not carry a value`);
+      if (item.id) out.push(`strip[${i}]: reserved must not carry an id — it reports nothing and must stay invisible to locators`);
+      return;
+    }
+    // An ANSWERED slot that reserves must reserve the value it actually shows.
+    // This is the half that catches the real regression: a skin whose reserve
+    // drifts away from its own value space renders NARROWER when answered than
+    // when refused, and the row moves anyway — the fix silently doing nothing.
+    // Two mutants survived the first round for want of exactly this check.
+    if (item.reserve?.length && !item.reserve.includes(item.value)) {
+      out.push(
+        `strip[${i}]: value ${JSON.stringify(item.value)} is not among its own reserve candidates — the slot is narrower answered than reserved`,
+      );
+    }
   });
   return out;
 }

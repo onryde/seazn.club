@@ -533,10 +533,20 @@ function nameOf(view: PadHostView, personId: string, t: TFn): string {
  * Used only to hold the slot's width (`StripItem.reserve`), never displayed.
  */
 function serverCandidates(view: PadHostView, t: TFn): string[] {
-  return (["home", "away"] as const).map((side) => {
-    const sole = soleMemberOf(view.squads, side);
-    return sole === null ? t(SIDE_LABEL[side]) : nameOf(view, sole, t);
-  });
+  const sides = ["home", "away"] as const;
+  // A SUPERSET, matching table tennis's and volleyball's own. The landed value
+  // is `ctx.serverPersonId ?? soleMemberOf(...)` (`servingInfo`), and mirroring
+  // only the `soleMemberOf` half was fragile in a way that would fail silently:
+  // BWF declares no `serverFromPairOrder` today, so `serverPersonId` is always
+  // null here — but a preset that ever declared one would name a PAIR MEMBER,
+  // which a sole-member-only reserve does not contain, and the slot would
+  // render wider answered than reserved with nothing to catch it. Every
+  // on-field player covers `serverPersonId` whatever the preset decides;
+  // `assertScorebugSpec`'s `value ∈ reserve` check is the backstop.
+  return [
+    ...sides.flatMap((side) => onFieldPlayers(view.squads, side).map((m) => nameOf(view, m.personId, t))),
+    ...sides.map((side) => t(SIDE_LABEL[side])),
+  ];
 }
 
 /** Both BWF service courts — the `court` slot's whole value space. */
