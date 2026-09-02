@@ -1772,19 +1772,33 @@ export function PadHostV3(props: PadHostV3Props) {
        *  rejection banner below. `-700`, not `-600` (axe caught it): this
        *  surface's own established fix for small bold text on white,
        *  timeline.tsx's `text-amber-600` (~3.19:1, WCAG AA fail) vs
-       *  `text-amber-700` (~5.05:1, pass). */}
+       *  `text-amber-700` (~5.05:1, pass).
+       *
+       *  Review finding: the legacy pill lived in a wide DESKTOP header row
+       *  beside phase tabs; `scorepad.queue.offline` is a full sentence
+       *  (66 chars), and `shrink-0` on a `justify-end` flex child forces it
+       *  to its natural single-line width, which overflows a phone-width
+       *  pad LEFTWARD off screen, taking the status dot with it —
+       *  `expectNoHorizontalScroll` only ever measures rightward overflow
+       *  (`html.scrollWidth`), so the seven-width matrix never caught it.
+       *  `min-w-0` on the label (same fix this chassis already uses for
+       *  scorebug names, lineup rows, everywhere else text meets a flex
+       *  item) lets it wrap onto a second line instead of refusing to
+       *  shrink; the dot keeps its own `shrink-0` so it's never the thing
+       *  that gets squeezed away. `resyncing`/`pending`/`synced` are all
+       *  short and were never at risk — this only ever bit `offline`. */}
       <div className="flex justify-end">
         <span
           data-role="v3-queue-status"
-          className={`flex shrink-0 items-center gap-1.5 text-[11px] font-semibold uppercase tracking-widest ${
+          className={`flex min-w-0 max-w-full items-center gap-1.5 text-right text-[11px] font-semibold uppercase tracking-widest ${
             queueAttention ? "text-amber-700" : "text-emerald-700"
           }`}
         >
           <span
             aria-hidden
-            className={`h-1.5 w-1.5 rounded-full ${queueAttention ? "animate-live-pulse bg-amber-500" : "bg-emerald-500"}`}
+            className={`mt-0.5 h-1.5 w-1.5 shrink-0 self-start rounded-full ${queueAttention ? "animate-live-pulse bg-amber-500" : "bg-emerald-500"}`}
           />
-          {queueLabel}
+          <span className="min-w-0">{queueLabel}</span>
         </span>
       </div>
 
