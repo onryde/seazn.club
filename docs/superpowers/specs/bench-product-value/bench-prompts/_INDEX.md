@@ -30,7 +30,7 @@ B03/B04/B05 are sequential (shared `scripts/bench/lib/`). B17 needs B15
 |---|---|---|---|---|
 | B00 | `B00-repin-and-refresh.md` | global re-pin, risk answers, env addendum | gate open | **DONE 2026-08-26** |
 | B01 | `B01-runner-core.md` | CLI, pre-flight, HTTP client, report writer | B00 | **MERGED #658 2026-08-26** |
-| B02 | `B02-pack-lib.md` | PackSchema, stage-0 validator, reconstruction | B01 | **in review** |
+| B02 | `B02-pack-lib.md` | PackSchema, stage-0 validator, reconstruction | B01 | **in review (#701)** |
 | B03 | `B03-seeding-layer.md` | org/comp/divisions/persons/officials/plans/claims | B02 | TODO |
 | B03r | `B03r-registration-layer.md` | registration entry path: `--entry` flag, http+browser drivers, PackSchema `registration` block, Stripe test-mode payer, funnel oracle | B03 + **RS007–RS011, RS010 merged** | TODO (gated) |
 | B04 | `B04-scheduling-layer.md` | config apply, auto/validate, checker, certificate, metrics | B03 | TODO |
@@ -131,6 +131,29 @@ fall back from, is live — no B-prompt needs its fallback path.
   index's B09 row are corrected. No other B-prompt cites a stale
   file:line (only the design spec does; the B0*-B18 prompts cite none
   directly, confirmed by grep).
+- 2026-09-02 — **B02 in review, PR #701.** Pack library: `pack-schema.ts`
+  (the committed `PackSchema`), `pack-template.ts`, `validate-pack.ts`
+  (stage 0 — pure offline fold gate, DB/HTTP/env-free), `reconstruct.ts`
+  (seeded generators), `pack-io.ts`, and `packs/_tiny.json`. `_tiny` now
+  READS its pack from disk, so runner and validator share one fixture.
+  366/366 unit+regression green (JSON reporter, 9 files, all in-worktree);
+  tsc clean; 82 mutants / 76 killed / 6 equivalent, each equivalent
+  declared with evidence at the code. Live `_tiny` run x3 by the
+  orchestrating session — with placement, with the env merely unset (a
+  FALSE no-placement test, recorded as a trap), and with placement
+  genuinely stopped (`solver_unavailable`, greedy fallback); all green,
+  `conflictCount: 0`, satisfying `_RULES.md` §2 via runs 1 and 3.
+  **Three fields added pre-freeze**, each cited to a named later session:
+  `streams[].stageRef` (an unbindable cfg overlay is stage 0's only
+  FALSE-RED path), `expected.finalRanks` (B05 §3; B06 is a 96-player
+  knockout), `expected.careers` (B12's cross-division oracle).
+  **Two owner decisions open:** `provenance` gained a third value
+  `"synthetic"` on the session's own ruling, spec §4 declares two; and
+  nothing lints `scripts/**` (no repo-root eslint config — confirmed from
+  four directions, escalated not fixed). Carried to B03: `reconstruct.ts`
+  has no production caller yet, so **B03 must drive a pack through it, not
+  merely import it**. Eight briefed premises proved false; thirteen
+  location-not-property defects fixed, four of them fixture-level.
 - 2026-08-26 — **B01 MERGED, PR #658** (merged 2026-08-26 17:19Z; this line said "in review" until B02 corrected it). Runner core: bench.ts CLI,
   lib/env.ts pre-flight (pure `runPreflight(base, probes)` over an
   injected `PreflightProbes`), lib/http.ts (hand-copied smoke.ts session
