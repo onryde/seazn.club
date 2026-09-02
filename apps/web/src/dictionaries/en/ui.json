@@ -4586,6 +4586,7 @@
   "pad.activity.voiding": "Voiding…",
   "pad.activity.voided": "Voided",
   "pad.activity.partial": "Partial",
+  "pad.activity.partial.amend": "Partial — the hold window closed before every detail was added. Tap to add it now.",
   "pad.activity.partial.hint": "Recorded, but the hold window closed before every detail was added.",
   "bracket.round.roundOf": "Round of {n}",
   "bracket.round.quarter": "Quarter-finals",

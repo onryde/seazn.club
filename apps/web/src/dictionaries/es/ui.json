@@ -4586,6 +4586,7 @@
   "pad.activity.voiding": "Anulando…",
   "pad.activity.voided": "Anulado",
   "pad.activity.partial": "Parcial",
+  "pad.activity.partial.amend": "Parcial: la ventana de espera se cerró antes de añadir todos los detalles. Toca para añadirlos ahora.",
   "pad.activity.partial.hint": "Registrado, pero la ventana de espera se cerró antes de añadir todos los detalles.",
   "bracket.round.roundOf": "Ronda de {n}",
   "bracket.round.quarter": "Cuartos de final",

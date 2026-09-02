@@ -2702,6 +2702,7 @@ export type DictionaryKey =
   | "pad.activity.empty"
   | "pad.activity.heading"
   | "pad.activity.partial"
+  | "pad.activity.partial.amend"
   | "pad.activity.partial.hint"
   | "pad.activity.recordedBy"
   | "pad.activity.void"

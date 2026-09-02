@@ -161,6 +161,134 @@ export function activityRowState(
   };
 }
 
+/**
+ * R8/#675 — is `event` the newest thing in this ledger that the FOLD still
+ * applies? `all` is oldest-first (`ActivityPanelProps.events`; the panel's own
+ * `orderedActivity` reverses a COPY for display and never mutates this).
+ *
+ * WHY A CHASSIS-LEVEL RULE AND NOT A NICETY. An amendment (see `canAmendRow`
+ * below) is a `core.void` of the original plus a re-append of the same event
+ * carrying the completed payload — the engine's OWN correction model, in its
+ * own words: "Void back to the mistake, then re-append"
+ * (packages/engine/src/core/events.ts, §4.1). Append-only means the
+ * replacement lands at the TAIL. That is order-PRESERVING only while nothing
+ * the fold still applies sits after the target; amend an older row and the
+ * replacement replays out of sequence. In badminton that silently rewrites who
+ * served every rally since — same points, different match. The engine says as
+ * much for a STAMPED event, where it refuses the re-append outright
+ * (`NON_MONOTONIC_TIME`); for an unstamped one nothing refuses, which is worse,
+ * so the refusal has to live here.
+ *
+ * Two kinds of row are skipped, and both matter. A `core.void` is not a folding
+ * event at all (`resolveVoids` strips every one before a module sees anything),
+ * and a row some later `core.void` names is not folded either — so a mistake
+ * that was voided leaves the row BEFORE it amendable again.
+ */
+export function isNewestFoldingEvent(event: ActivityEvent, all: readonly ActivityEvent[]): boolean {
+  for (let i = all.length - 1; i >= 0; i--) {
+    const candidate = all[i] as ActivityEvent;
+    if (candidate.type === "core.void") continue;
+    if (all.some((v) => v.voids === candidate.id)) continue;
+    return candidate.id === event.id;
+  }
+  return false;
+}
+
+/**
+ * R8/#675 (owner ruling) — may this row's "Partial" badge be TAPPED to reopen
+ * its detail dock and supply what the hold window cut short?
+ *
+ * `partial` is passed in rather than recomputed: this file is chassis-level and
+ * sport-agnostic (this file's own header) and has no dock vocabulary to derive
+ * it from — `pad-host.tsx`'s `isPartialDockAnswer` is the one place that can,
+ * and the panel already receives its answer as the `isPartial` prop.
+ *
+ * `amendEnabled` is the caller wiring an `onAmend` handler at all. The organiser
+ * console does not: it renders this panel one level out from any pad, so it has
+ * no skin, no `PadHostView` and no queue to hold a replacement in. There the
+ * badge stays exactly the label R7 shipped.
+ *
+ * `isVoidableEventType` is re-applied deliberately even though a `core.*` event
+ * has no dock and so can never be partial: an amendment VOIDS the original, and
+ * a control that voids must obey the same allowlist the Void button does — a
+ * second, quietly weaker path to the same destructive primitive is exactly the
+ * shape that let `core.start` ship voidable in the first place.
+ */
+export function canAmendRow(
+  event: ActivityEvent,
+  all: readonly ActivityEvent[],
+  ownEventIds: ReadonlySet<string>,
+  deviceLinkId: string | null,
+  heldEventId: string | null,
+  amendEnabled: boolean,
+  partial: boolean,
+): boolean {
+  if (!amendEnabled || !partial) return false;
+  // NEVER the row whose hold window is STILL OPEN, and this is not a nicety.
+  // `submitHeld` puts its entry into `pendingEnvelopes` immediately, so a
+  // just-tapped event is already a row in this panel — unvoided, owned, newest,
+  // and (until a chip is tapped) partial, which is every other condition here.
+  // Its detail dock is on screen directly below it, so a second affordance for
+  // the same question is at best redundant; and taking it would submit a
+  // `core.void` naming a CLIENT-fabricated id the server has never seen, then
+  // re-hold a duplicate behind it. `decideUndo` draws the same line for the
+  // Void button — a held row is DROPPED, never voided — and this is that rule
+  // for the badge. `held?.id` is the host's, passed down exactly as
+  // `ribbonUndoTarget` already takes it (pad-host.tsx).
+  if (heldEventId !== null && event.id === heldEventId) return false;
+  // `voidingEnabled: false` — this reads `ownedByMe` only, which that flag does
+  // not touch; passing true would imply this is asking about the Void button,
+  // which it is not.
+  const { ownedByMe } = activityRowState(event, all, ownEventIds, deviceLinkId, false);
+  // NO `!voided` term, deliberately, and it is not an omission: a voided row can
+  // never be the newest FOLDING event, because `isNewestFoldingEvent` skips
+  // every voided candidate before it compares ids. A `!voided` here read as a
+  // guard and behaved as decoration — the mutation sweep for this task removed
+  // it and not one assertion moved. The implication is pinned by its own test
+  // ("a voided row is never the newest folding event") rather than restated as
+  // a second condition nothing can kill.
+  return ownedByMe && isVoidableEventType(event.type) && isNewestFoldingEvent(event, all);
+}
+
+/** What the amber badge is for one row: absent, the R7 label, or the R8
+ *  control. Three states rather than two booleans, so the render cannot show a
+ *  tappable badge on a row that should carry none. */
+export type PartialBadgeKind = "none" | "label" | "amend";
+
+/**
+ * R8/#675 — the badge decision, lifted OUT of the JSX.
+ *
+ * It lives here for the reason detail-dock.tsx's own header gives for
+ * `dockController`: apps/web vitest is `environment: "node"` with no jsdom, so
+ * a rule left inside the render is a rule nothing in this workspace can
+ * execute. Both halves of the ruling below shipped as one-line conditions in
+ * markup once already, which is how the badge went a whole wave being a label
+ * nobody could tap.
+ *
+ * `"none"` on a VOIDED row is the honesty half of the ruling ("a row that has
+ * been completed should no longer read Partial"). `isPartial` reads the payload
+ * and nothing else, so the row an amendment SUPERSEDED — struck through, no
+ * longer folded, its payload still exactly as incomplete as it was — went on
+ * reading "Partial" forever beside the completed row that replaced it. A
+ * retracted record is not an incomplete one, and a badge that says otherwise
+ * tells a scorer there is still work to do on a row they have already fixed.
+ */
+export function partialBadge(
+  event: ActivityEvent,
+  all: readonly ActivityEvent[],
+  ownEventIds: ReadonlySet<string>,
+  deviceLinkId: string | null,
+  heldEventId: string | null,
+  amendEnabled: boolean,
+  isPartial: ((eventType: string, payload: Record<string, unknown>) => boolean) | undefined,
+): PartialBadgeKind {
+  const { voided } = activityRowState(event, all, ownEventIds, deviceLinkId, false);
+  if (voided) return "none";
+  const partial = isPartial?.(event.type, (event.payload ?? {}) as Record<string, unknown>) ?? false;
+  if (!partial) return "none";
+  return canAmendRow(event, all, ownEventIds, deviceLinkId, heldEventId, amendEnabled, true) ? "amend" : "label";
+}
+
 /** Newest first — `pipeline.events` arrives oldest-first (types.ts says so),
  *  and a scorer correcting a mistake wants the most recent ball at the top,
  *  not after scrolling past the whole innings. Copies before reversing:
@@ -311,6 +439,31 @@ export interface ActivityPanelProps {
    */
   isPartial?: (eventType: string, payload: Record<string, unknown>) => boolean;
   /**
+   * R8/#675 (owner ruling) — the badge R7-42/F shipped is a LABEL ONLY: the
+   * row's one action was Void, so a rally whose hold drained before anyone
+   * named the scorer had the attribution gone with no way back. Wiring this
+   * turns the badge itself into the affordance ("make the badge the affordance
+   * rather than adding a second row action" — a 320px row already carries
+   * Void), and the host answers it by reopening THAT event's detail dock.
+   *
+   * Optional, exactly as `isPartial` above and for the same reason: the
+   * organiser console mounts this panel with no pad behind it, so it passes
+   * nothing and every badge there renders as the plain label it already was.
+   * `canAmendRow` reads the mere presence of this handler as `amendEnabled`.
+   */
+  onAmend?: (eventId: string) => void;
+  /** The row whose HOLD window is still open, if any — `pad-host.tsx`'s
+   *  `held?.id`. Its dock is already on screen, so its badge stays a label; see
+   *  `canAmendRow` for why offering the amend there would be actively wrong.
+   *  Omitted by a surface with no pad behind it (the console), where nothing is
+   *  ever held. */
+  heldEventId?: string | null;
+  /** The row whose amendment is in flight — its badge is inert until the void
+   *  and the re-append are both enqueued. `voidingId`'s twin, and separate
+   *  from it on purpose: the two controls can never be busy for the same
+   *  reason, and one shared flag would let either disable the other. */
+  amendingId?: string | null;
+  /**
    * R7/C1 — this mount speaks for the organisation, not for one handed
    * device: the console. It widens the void rule back to what the DELETED
    * page-level ledger allowed (anything that is not itself a `core.void`),
@@ -411,6 +564,9 @@ export function ActivityPanel({
   voidDisabled = false,
   resolveDetail,
   isPartial,
+  onAmend,
+  amendingId = null,
+  heldEventId = null,
   authority = false,
   footer,
 }: ActivityPanelProps): ReactNode {
@@ -448,7 +604,8 @@ export function ActivityPanel({
             const history = priorActivityEvents(rows, index);
             const detail = resolveDetail?.(event.type, payload, history);
             const caption = buildRibbon(event.type, payload, nameOf, t, detail);
-            const partial = isPartial?.(event.type, payload) ?? false;
+            // R8/#675 — one pure decision, three states; see `partialBadge`.
+            const badge = partialBadge(event, events, ownEventIds, deviceLinkId, heldEventId, !!onAmend, isPartial);
             const stripe = TONE_STRIPE[describeEvent(event.type, payload, personNames, t).tone];
             const provenance = Boolean(event.recordedAt) || Boolean(event.recordedByLabel);
             return (
@@ -482,21 +639,101 @@ export function ActivityPanel({
                   className={`min-w-0 flex-1 break-words text-sm ${voided ? "text-slate-400 line-through" : "text-slate-700"}`}
                 >
                   {caption.text}
-                  {partial && (
+                  {badge !== "none" &&
                     // R7-42/F — "the resulting Activity row must be
                     // labelled partial — visibly, in words". `title` carries
                     // the WHY (the same `.hint` convention this pad already
                     // uses on the clock-nudge controls, pad-host.tsx), so
                     // the compact badge stays scannable while the reason is
                     // one hover/inspect away.
-                    <span
-                      data-role="v3-activity-partial"
-                      title={t("pad.activity.partial.hint")}
-                      className="ml-1.5 inline-block rounded-full bg-amber-100 px-1.5 py-0.5 align-middle text-[10px] font-semibold uppercase tracking-wide text-amber-700"
-                    >
-                      {t("pad.activity.partial")}
-                    </span>
-                  )}
+                    //
+                    // R8/#675 (owner ruling) — where the amendment is actually
+                    // available the SAME mark becomes the control: same amber,
+                    // same word, same `data-role` (so every existing reader
+                    // still finds it), and NO second row action, because a
+                    // 320px row already carries #seq, a caption, a provenance
+                    // line and Void and cannot afford another control beside
+                    // them.
+                    //
+                    // COMPOSED AT 320 FIRST, and the two constraints that
+                    // shaped it pull in opposite directions. It must PAINT at
+                    // 44px: `scorepad-a11y-kit.ts` gates every operable target
+                    // inside `[data-testid="score-pad"]` on `boundingBox`, and
+                    // says in its own words that paint "is still the right
+                    // primitive for the 44px floor… the rendered target a thumb
+                    // aims at". An invisible overlay would satisfy a hit-test
+                    // and leave that gate a latent red the first sweep to catch
+                    // a partial row on screen. But it must ALSO not inflate the
+                    // caption's own reading line to 44px, which is what an
+                    // inline 44px pill does to every partial row.
+                    //
+                    // Both are satisfied by taking it OUT of the text flow onto
+                    // its own line — a `block` wrapper, the exact shape the
+                    // provenance line below already uses inside this same
+                    // caption. The caption reads at its natural height, the
+                    // control is a real thumb target directly under the row it
+                    // repairs, and `w-fit` inside the caption's `min-w-0
+                    // flex-1` column means it can never widen the row: at 320
+                    // the pill is ~100px against a ~230px column.
+                    (badge === "amend" ? (
+                      <span className="mt-1 block">
+                        <button
+                          type="button"
+                          onClick={() => onAmend?.(event.id)}
+                          disabled={amendingId === event.id}
+                          data-role="v3-activity-partial"
+                          data-amendable="true"
+                          // The accessible name says what the TAP does —
+                          // "Partial" alone names a state, and a button named
+                          // for a state tells a screen-reader user nothing
+                          // about the repair. One string carries both halves
+                          // (the R7 hint's WHY plus the invitation) so `title`
+                          // and `aria-label` cannot drift into two different
+                          // explanations.
+                          aria-label={t("pad.activity.partial.amend")}
+                          title={t("pad.activity.partial.amend")}
+                          style={{ minHeight: 44 }}
+                          // `minHeight` as an explicit style, not `min-h-11`:
+                          // the chassis controls this gate already measures
+                          // (detail-dock.tsx's chips, tile-grid.tsx) set it the
+                          // same way, so the floor cannot be lost to a purge of
+                          // an unused Tailwind class. `max-w-full` + `w-fit`
+                          // keeps a long localisation shrinking rather than
+                          // pushing the row wide; no `truncate` anywhere in
+                          // this row, so no nowrap width floor to pair
+                          // `min-w-0` against.
+                          className="inline-flex w-fit max-w-full items-center gap-1.5 rounded-full bg-amber-100 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-amber-700 transition-colors hover:bg-amber-200 disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400"
+                        >
+                          {/* A plain chevron, the same "there is more here"
+                              signal the web already reads without colour — and
+                              a SHAPE rather than a tone, for the reason
+                              `DockChip.kind` gives (detail-dock.tsx): shape is
+                              legible in peripheral vision before colour is,
+                              which is what a timed courtside scan needs. */}
+                          <svg
+                            aria-hidden="true"
+                            viewBox="0 0 16 16"
+                            className="h-3 w-3 shrink-0"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth={2.25}
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          >
+                            <path d="M6 3.5l5 4.5-5 4.5" />
+                          </svg>
+                          <span className="min-w-0 break-words">{t("pad.activity.partial")}</span>
+                        </button>
+                      </span>
+                    ) : (
+                      <span
+                        data-role="v3-activity-partial"
+                        title={t("pad.activity.partial.hint")}
+                        className="ml-1.5 inline-block rounded-full bg-amber-100 px-1.5 py-0.5 align-middle text-[10px] font-semibold uppercase tracking-wide text-amber-700"
+                      >
+                        {t("pad.activity.partial")}
+                      </span>
+                    ))}
                   {provenance && (
                     <span
                       data-role="v3-activity-provenance"

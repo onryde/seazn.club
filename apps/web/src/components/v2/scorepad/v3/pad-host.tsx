@@ -84,6 +84,7 @@ import {
 import {
   ActivityPanel,
   activityRowState,
+  canAmendRow,
   latestRowDetail,
   type ActivityDetailResolver,
   type ActivityEvent,
@@ -1129,6 +1130,62 @@ export function isPartialDockAnswer(
   return attribution.every((chip) => !deepEqual(chip.mutate(payload), payload));
 }
 
+/** R8/#675 — the two events an amendment IS. See `amendPlan` below. */
+export interface AmendPlan {
+  /** The original event, to be named by a `core.void`. */
+  readonly voidId: string;
+  /** Re-appended VERBATIM — the original's own type… */
+  readonly type: string;
+  /** …and its own payload, `at` stamp and all. */
+  readonly payload: Record<string, unknown>;
+}
+
+/**
+ * R8/#675 (owner ruling) — "tapping the Partial badge reopens that event's
+ * detail dock so the scorer can supply the detail that was missed… appended,
+ * the original never rewritten in place".
+ *
+ * WHAT AN AMENDMENT IS, AND WHY IT INVENTS NO EVENT TYPE. The engine has no
+ * `core.amend`, and this pad may not mint one. It does not need to: the engine
+ * already names its correction model, in its own words, beside the monotonic
+ * time guard (packages/engine/src/core/events.ts §4.1) — "Void back to the
+ * mistake, then re-append." So an amendment is `core.void` naming the original,
+ * plus a re-append of the SAME event type carrying the payload the dock has
+ * since completed. Both types already exist, no payload schema is loosened, and
+ * the ledger only ever grows: the original stays in it, voided and visible,
+ * byte for byte as it was recorded.
+ *
+ * WHY THE PAYLOAD IS COPIED VERBATIM AND NOT RE-STAMPED. `send` puts a fresh
+ * `at` on everything it dispatches (`stampFor`, below) because it is stamping
+ * the moment of a TAP. This is not a tap; it is the same event being recorded
+ * again, and moving its game time to "now" would make a correction lie about
+ * when the goal was scored. Carrying the original stamp is also what keeps the
+ * re-append legal: the void removes the only stamp the replacement could have
+ * been beaten by, which is exactly the case §4.1 describes as landing "forward
+ * of whatever survives".
+ *
+ * The re-append therefore also bypasses `dispatch`/`createSkinDispatch`. That
+ * gate exists so a SKIN cannot emit a type the current phase does not declare;
+ * this type is not a skin's proposal at all — it is already in the ledger, and
+ * a set boundary crossed since would otherwise refuse a correction to the very
+ * rally that caused it.
+ *
+ * Pure and total: `null` for an id this ledger does not carry, and for a
+ * `core.void` row, which the engine refuses to void a second time
+ * (`resolveVoids`: "voids are not themselves voidable"). Whether the row is
+ * amendable AT ALL — partial, unvoided, owned, and the newest thing the fold
+ * still applies — is `activity.tsx`'s `canAmendRow`, next to the badge that
+ * asks the question.
+ */
+export function amendPlan(
+  eventId: string,
+  events: readonly { id: string; type: string; payload: unknown }[],
+): AmendPlan | null {
+  const target = events.find((event) => event.id === eventId);
+  if (target === undefined || target.type === "core.void") return null;
+  return { voidId: target.id, type: target.type, payload: (target.payload ?? {}) as Record<string, unknown> };
+}
+
 // ---------------------------------------------------------------------------
 // PadHostV3 — the React shell
 // ---------------------------------------------------------------------------
@@ -1720,6 +1777,58 @@ export function PadHostV3(props: PadHostV3Props) {
   );
 
   const [voidingId, setVoidingId] = useState<string | null>(null);
+  const [amendingId, setAmendingId] = useState<string | null>(null);
+
+  /**
+   * R8/#675 — the Partial badge's own handler. `amendPlan` (above) carries the
+   * whole ruling and the reason this is a void + re-append rather than a new
+   * event type; this is only the wiring.
+   *
+   * ORDER IS LOAD-BEARING, and the `await` is what enforces it: `submit`
+   * resolves once the event is durably enqueued (use-pad-pipeline.ts), and the
+   * queue drains IN ORDER, so voiding first guarantees the server never sees a
+   * replacement standing beside a live original. The replacement then goes out
+   * HELD, through the identical `submitHeld` path an ordinary tap takes — which
+   * is the entire point: the dock reopens for a full `HOLD_MS` window with the
+   * skin's own chips over the queue's own entry, so the scorer answers it
+   * exactly as they would have the first time, and every mechanism in between
+   * (`dockStore.mutateHeld`, the depletion bar, dismiss-sends-now) is the one
+   * already in production rather than a second copy written for amendments.
+   *
+   * A dock that is dismissed or left to drain without a chip tap re-records the
+   * same payload and the badge comes straight back — honest, and no worse than
+   * the state it was in. `submitHeld`'s own double-submit guard cannot swallow
+   * this: it fires only inside DOUBLE_SUBMIT_WINDOW_MS (250ms) and a partial row
+   * is by definition at least a whole hold window old.
+   */
+  async function handleAmend(eventId: string) {
+    // RE-DERIVED at the moment of action, never trusted from the render that
+    // drew the badge — `decideUndo`'s own posture one function down. A tap can
+    // land after the ledger moved under it (the scorer hits a tile, then the
+    // badge that was amendable a frame ago), and the whole safety of this
+    // feature is the tail-only rule `canAmendRow` enforces.
+    const row = activityEvents.find((e) => e.id === eventId);
+    if (row === undefined) return;
+    const stillAmendable = canAmendRow(
+      row,
+      activityEvents,
+      pipeline.ownEventIds,
+      props.identity.deviceLinkId,
+      held?.id ?? null,
+      true,
+      isPartial(row.type, (row.payload ?? {}) as Record<string, unknown>),
+    );
+    if (!stillAmendable) return;
+    const plan = amendPlan(eventId, events);
+    if (plan === null) return;
+    setAmendingId(eventId);
+    try {
+      await pipeline.submit("core.void", { event_id: plan.voidId });
+      await heldSubmit(plan.type, plan.payload);
+    } finally {
+      setAmendingId(null);
+    }
+  }
 
   async function handleUndo(eventId: string) {
     const decision = decideUndo(eventId, held?.id ?? null);
@@ -2057,6 +2166,16 @@ export function PadHostV3(props: PadHostV3Props) {
           // unwired helper is exactly the D2 defect this same comment
           // already warns about, one line up.
           isPartial={isPartial}
+          // R8/#675 (owner ruling) — the badge above becomes the repair, not
+          // just the diagnosis. Same "wire it, do not merely build it" warning
+          // as the two lines above: `handleAmend` with no call site would be a
+          // fourth inert seam in this same file.
+          onAmend={(eventId) => void handleAmend(eventId)}
+          amendingId={amendingId}
+          // The SAME `held?.id` `ribbonUndoTarget` above is handed: a row whose
+          // hold window is still open already has its dock on screen, and its
+          // id is client-fabricated. See `canAmendRow`'s own note.
+          heldEventId={held?.id ?? null}
         />
       </div>
       )}

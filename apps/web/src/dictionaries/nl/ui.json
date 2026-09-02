@@ -4586,6 +4586,7 @@
   "pad.activity.voiding": "Bezig…",
   "pad.activity.voided": "Ongeldig",
   "pad.activity.partial": "Gedeeltelijk",
+  "pad.activity.partial.amend": "Gedeeltelijk — het wachtvenster sloot voordat alle details waren toegevoegd. Tik om ze nu toe te voegen.",
   "pad.activity.partial.hint": "Vastgelegd, maar het wachtvenster sloot voordat alle details waren toegevoegd.",
   "bracket.round.roundOf": "Ronde van {n}",
   "bracket.round.quarter": "Kwartfinales",
