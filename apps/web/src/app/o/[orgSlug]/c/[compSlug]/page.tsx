@@ -6,12 +6,8 @@ import { CalendarRange, Globe, MonitorPlay, Printer, Settings } from "lucide-rea
 import { requireCompetitionPage } from "@/server/page-auth";
 import { getCompetition } from "@/server/usecases/competitions";
 import { listDivisions } from "@/server/usecases/divisions";
-import { listDivisionCardStats, nextLine, formatLabel } from "@/server/usecases/card-stats";
-import { EntityCard } from "@/components/ui/entity-card";
+import { listDivisionCardStats } from "@/server/usecases/card-stats";
 import { CardMenu } from "@/components/ui/card-menu";
-import { ViewToggleContainer } from "@/components/ui/view-toggle";
-import { StatusChip, divisionChipState, CHIP_SORT } from "@/components/ui/status-chip";
-import { divisionAccent, monogram } from "@/lib/division-hue";
 import { resolveLogoUrl } from "@/server/public-site/data";
 import { RegistrationHubNavEntry } from "@/components/registration-hub-nav-entry";
 import { CompetitionPassEntry } from "@/components/competition-pass-entry";
@@ -26,6 +22,12 @@ import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t, plural } from "@/lib/i18n";
 import { sql } from "@/lib/db";
 import { checkoutTrialDays } from "@/lib/billing";
+import { getCompetitionDesk, competitionPhase } from "@/server/usecases/competition-desk";
+import { statusLine } from "@/lib/division-status-line";
+import { PhasePill } from "@/components/v2/desk/phase-pill";
+import { NeedsYou, needsYouItems } from "@/components/v2/desk/needs-you";
+import { DivisionLedger, type LedgerRow } from "@/components/v2/desk/division-ledger";
+import { log } from "@/server/logger";
 
 export default async function CompetitionPage({
   params,
@@ -38,10 +40,15 @@ export default async function CompetitionPage({
   const id = page.competition.id;
   const locale = await resolveLocale();
   const dict = await getDictionary(locale, "ui");
-  const [competition, divisions, stats, currency, [subRow]] = await Promise.all([
+  const [competition, divisions, stats, desk, currency, [subRow]] = await Promise.all([
     getCompetition(auth, id),
     listDivisions(auth, id),
     listDivisionCardStats(auth, id),
+    // Spec §Error handling: a summary failure never blanks the page.
+    getCompetitionDesk(auth, id).catch((err: unknown) => {
+      log.error({ event: "competition_desk_failed", competitionId: id, err }, "competition_desk_failed");
+      return null;
+    }),
     // The pass price is currency-switcher-dependent, and the entry point is a
     // client island — so it is formatted here and crosses as a finished string.
     preferredCurrency(page.org.id),
@@ -54,6 +61,47 @@ export default async function CompetitionPage({
       where o.id = ${page.org.id}`,
   ]);
   const trialAvailable = checkoutTrialDays(subRow) > 0;
+  const compPhase = desk ? competitionPhase(desk) : null;
+  const divisionNames = divisions.map((d) => ({ id: d.id, name: d.name, slug: d.slug }));
+  const needs = desk && canEdit ? needsYouItems(dict, desk, divisionNames, orgSlug, compSlug) : [];
+  const ledgerRows: LedgerRow[] = divisions.map((d) => {
+    const dd = desk?.divisions.get(d.id) ?? null;
+    const s = stats.get(d.id);
+    if (!dd) {
+      return {
+        id: d.id, name: d.name, slug: d.slug, sportKey: d.sport_key,
+        logoUrl: resolveLogoUrl(d.logo_storage_path, d.logo_url), desk: null,
+        statusLine: t(dict, "card.progress.played", { played: s?.played ?? 0, total: s?.total ?? 0 }),
+      };
+    }
+    return {
+      id: d.id,
+      name: d.name,
+      slug: d.slug,
+      sportKey: d.sport_key,
+      logoUrl: resolveLogoUrl(d.logo_storage_path, d.logo_url),
+      desk: dd,
+      statusLine: statusLine(dict, {
+        phase: dd.phase, played: dd.played, total: dd.total, unscheduled: dd.unscheduled, inPlay: dd.in_play,
+        entrants: dd.entrants,
+        next: dd.next ? { scheduledAt: dd.next.scheduled_at, home: dd.next.home, away: dd.next.away } : null,
+        needsDrawStageName: dd.needs_draw_stage?.name ?? null, locale, displayTz: dd.display_tz,
+      }),
+      menu: (
+        <CardMenu
+          name={d.name}
+          items={[
+            { label: t(dict, "action.schedule"), href: routes.divisionSchedule(orgSlug, compSlug, d.slug) },
+            { label: t(dict, "action.slideshow"), href: routes.slideshowDivision(d.id), external: true },
+          ]}
+        />
+      ),
+    };
+  });
+  const PHASE_RANK = { match_day: 0, scheduled: 1, setting_up: 2, finished: 3 } as const;
+  const rank = (r: LedgerRow) =>
+    !r.desk ? 9 : r.desk.attention.some((x) => x.kind === "needs_draw" || x.kind === "no_scorer") ? -1 : PHASE_RANK[r.desk.phase];
+  ledgerRows.sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
   const publicPath =
     competition.visibility !== "private" ? routes.shared(orgSlug, competition.slug) : null;
   // RS004 W2 scope item 2: the Registration hub's nav entry carries live
@@ -109,6 +157,19 @@ export default async function CompetitionPage({
       <main className="mx-auto max-w-6xl px-4 py-8">
         <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
           <div className="min-w-0">
+            <h1 className="page-title truncate">
+              {competition.name}
+            </h1>
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-600">
+              {compPhase && <PhasePill dict={dict} phase={compPhase} inPlay={desk?.in_play ?? 0} />}
+              <span>{[...new Set(divisions.map((d) => d.sport_key))].join(" · ")}</span>
+              <span>·</span>
+              <span>{t(dict, "desk.masthead.divisions", { n: divisions.length })}</span>
+            </div>
+          </div>
+          {/* Header actions: icon + label on desktop, icon-only under `sm`
+              (v3/02 pattern 5 — labels move into aria-label, 44px targets). */}
+          <div className="flex flex-wrap items-center gap-2">
             {/* Entry point 1 of 4 (task 19): the pass, offered in the
                 competition's own header instead of only at a paywall. Renders
                 itself away for a paid org — Pro already exceeds it, and shows
@@ -141,13 +202,6 @@ export default async function CompetitionPage({
               goProLabel={t(dict, trialAvailable ? "upgrade.proCard.cta" : "upgrade.proCard.ctaNoTrial")}
               canBuy={canEdit}
             />
-            <h1 className="page-title mt-1 truncate">
-              {competition.name}
-            </h1>
-          </div>
-          {/* Header actions: icon + label on desktop, icon-only under `sm`
-              (v3/02 pattern 5 — labels move into aria-label, 44px targets). */}
-          <div className="flex flex-wrap items-center gap-2">
             <Link
               href={routes.slideshowCompetition(competition.id)}
               target="_blank"
@@ -232,6 +286,8 @@ export default async function CompetitionPage({
           </div>
         </div>
 
+          <NeedsYou dict={dict} items={needs} />
+
           {/* v17 gap #362 — nothing retires a competition past its end date, so
               the product asks instead of sweeping. Editors only: the two
               answers are both writes, and a scorer has neither the permission
@@ -279,56 +335,7 @@ export default async function CompetitionPage({
                 )}
               </div>
             ) : (
-              <ViewToggleContainer storageKey="seazn.view.divisions" toggle={divisions.length > 20}>
-                {divisions
-                  .map((d) => ({
-                    d,
-                    chip: divisionChipState(d.status, {
-                      registrationOpen: stats.get(d.id)?.registration_open,
-                    }),
-                  }))
-                  .sort((a, b) => CHIP_SORT[a.chip] - CHIP_SORT[b.chip])
-                  .map(({ d, chip }) => {
-                    const s = stats.get(d.id);
-                    // Plural picks the noun; the count string keeps the "used/cap"
-                    // form, so force the plural noun whenever a capacity is shown.
-                    const entrantsLabel = s
-                      ? `${s.entrants}${s.capacity ? `/${s.capacity}` : ""} ${plural(dict, "card.meta.entrants", s.capacity ? 2 : s.entrants, locale)}`
-                      : null;
-                    return (
-                      <EntityCard
-                        key={d.id}
-                        href={routes.division(orgSlug, compSlug, d.slug)}
-                        media={{
-                          kind: "tile",
-                          logoUrl: resolveLogoUrl(d.logo_storage_path, d.logo_url),
-                          monogram: monogram(d.name),
-                          hue: divisionAccent(d.id),
-                        }}
-                        name={d.name}
-                        accent={divisionAccent(d.id)}
-                        locale={locale}
-                        chip={<StatusChip state={chip} locale={locale} />}
-                        meta={[formatLabel(s?.stage_kinds ?? []), entrantsLabel]
-                          .filter(Boolean)
-                          .join(" · ")}
-                        next={s ? nextLine(s.next, locale) : null}
-                        progress={s ? { played: s.played, total: s.total } : null}
-                        menu={
-                          <CardMenu
-                            name={d.name}
-                            items={[
-                              { label: t(dict, "action.schedule"), href: routes.divisionSchedule(orgSlug, compSlug, d.slug) },
-                              // action.registrations item removed (RS001
-                              // demolition) — RS004's hub replaces it.
-                              { label: t(dict, "action.slideshow"), href: routes.slideshowDivision(d.id), external: true },
-                            ]}
-                          />
-                        }
-                      />
-                    );
-                  })}
-              </ViewToggleContainer>
+              <DivisionLedger dict={dict} rows={ledgerRows} org={orgSlug} comp={compSlug} locale={locale} />
             )}
           </section>
       </main>
