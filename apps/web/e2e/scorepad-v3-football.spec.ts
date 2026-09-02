@@ -5,11 +5,8 @@ import {
   apiJson,
   expectNoHorizontalScroll,
   fixturePath,
-  invalidateOrgEntitlements,
-  loginUi,
   seedRosteredFixture,
   setDivisionConfigSql,
-  setOrgPlanBySql,
   TAG,
   type RosteredFixture,
 } from "./helpers";
@@ -45,8 +42,8 @@ import {
 //  - REACHABILITY of all nine `football.*` event types (ruling R3-4): five on
 //    dedicated tiles/sheets, four through the generic More sheet.
 //
-// Deliberately NOT serial: every test seeds its own fixture (and the one
-// band-gated test its own org), so there is no shared state to serialise for.
+// Deliberately NOT serial: every test seeds its own fixture, so there is no
+// shared state to serialise for.
 test.describe.configure({ mode: "parallel" });
 
 function pad(page: Page) {
@@ -253,11 +250,12 @@ test("football v3: all three card colours are reachable, second_yellow included,
   }
   await sheet.locator('[data-choice-option-id="yellow"]').click();
 
-  // The `Offence?` step, band >= 2. This org scores at band 3, so the step is
-  // present; the "and NOT below it" half is a DIFFERENT shape and is proved by
-  // the community-band test below — at band 0/1 the card tile is withheld
-  // entirely (`football.card` is a band-2 event and a tile the ACTIVE band
-  // refuses would throw on tap), so the sheet cannot be reached at all.
+  // The `Offence?` step, band >= 2. This pad opens at band 3 (football's own
+  // top declared band), so the step is present; the "and NOT below it" half is
+  // a DIFFERENT shape and is proved in `e2e/scoring-free.spec.ts` — picking
+  // band 1 withholds the card tile entirely (`football.card` is band 2, and a
+  // tile the ACTIVE band refuses would throw on tap), so the sheet cannot be
+  // reached at all.
   await expect(sheet, "band >= 2 must be asked for the Law 12 offence").toContainText("What was the offence?");
   await sheet.locator('[data-choice-option-id="dissent"]').click();
 
@@ -316,56 +314,18 @@ test("football v3: all three card colours are reachable, second_yellow included,
   });
 });
 
-test("football v3: below band 2 there is no card, sub or penalty tile at all — so no Offence step either", async ({
-  page,
-}) => {
-  test.setTimeout(120_000);
-  // The "NOT below band 2" half of ruling R3-1, and it is a TILE-level fact
-  // rather than a step-level one. `EVENT_BAND` puts `football.card`,
-  // `football.sub` and `football.penalty` at band 2, and `buildTiles`
-  // withholds any action whose band exceeds the ACTIVE band — because
-  // `filterTilesByBand` (chassis) filters on ENTITLED bands while
-  // `createSkinDispatch` refuses anything the resulting view does not declare,
-  // so an entitled org scoring at band 0 would otherwise see the tiles and
-  // every tap would throw.
-  //
-  // A FRESH org on the community plan, never the shared Pro account this
-  // project's storageState carries: the band comes from ORG ENTITLEMENTS
-  // (`resolveFidelityBand`), and every scoring-depth key is
-  // `community:false / pro:true`.
-  const email = `e2e-fbband-${TAG}-${Math.random().toString(36).slice(2, 7)}@example.com`;
-  await loginUi(page, email);
-  // requirePageAuth on any server page is what auto-provisions "My
-  // organization" for a member of none — `activeOrg` needs that to have
-  // already happened.
-  await page.goto("/dashboard", { waitUntil: "load" });
-  const org = await activeOrg(page);
-  await setOrgPlanBySql({ email }, "community");
-  await invalidateOrgEntitlements(page.request, org.id);
-
-  const fx = await seedRosteredFixture(page.request, {
-    label: `V3 FB Band ${TAG}`,
-    sportKey: "football",
-    variantKey: "11-a-side",
-    home: [
-      { fullName: `V3 FBB Home ${TAG}`, positionKey: "FW" },
-      { fullName: `V3 FBB Bench ${TAG}`, slot: "bench" },
-    ],
-    away: [{ fullName: `V3 FBB Away ${TAG}`, positionKey: "GK" }],
-  });
-  await openLiveConsole(page, fx);
-
-  // Band 0/1 still SCORES — the point is that the pad offers only what the
-  // fold will accept, never that it goes blank.
-  await expect(v3Tile(page, "goal-home"), "a goal is a band-0 event and must stay").toBeVisible();
-  await expect(v3Tile(page, "period"), "a period marker is a band-0 event and must stay").toBeVisible();
-  for (const tile of ["card-home", "card-away", "sub-home", "sub-away", "penalty"]) {
-    await expect(
-      v3Tile(page, tile),
-      `${tile} is a band-2 action — below band 2 it must not be on the board at all`,
-    ).toHaveCount(0);
-  }
-});
+// W1 / Task 4 (entitlements v18) — the band-gated test that stood here MOVED,
+// and got stronger on the way. It provisioned a fresh COMMUNITY org so that
+// `resolveFidelityBand` would resolve a low band from the org's entitlements,
+// then asserted the card/sub/penalty tiles were absent. Bands are not resolved
+// from entitlements any more: a community org opens football at band 3 like
+// everyone else, and the low band is something the SCORER picks on the
+// Recording chip.
+//
+// `e2e/scoring-free.spec.ts` now carries the whole claim, at 320/768/1280: the
+// picker takes those same three tiles off the board at band 1 and puts them
+// back at band 3, and the community org records the band-2 card through the
+// pad — which the old test could not do at all, because its org was refused.
 
 // ---------------------------------------------------------------------------
 // Substitutions — the swap sheet, and TWO independent caps

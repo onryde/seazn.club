@@ -164,10 +164,15 @@ export function RecordingChip({ activeBand, onBandChange, actionCounts, t, plura
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
         style={{ minHeight: 44 }}
-        className="flex w-full min-w-0 items-center gap-2.5 rounded-full border border-slate-200 bg-white px-3.5 text-left transition-colors hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-600"
+        // FULL-BLEED ON A PHONE, CONTENT-WIDTH ABOVE IT. At 320 the pill is the
+        // whole column and its value truncates rather than wrapping the row; at
+        // 1280 a full-width pill would be ~880px of dead space with three words
+        // in the corner, which is the "desktop is the mobile design stretched"
+        // failure the other way round.
+        className="flex w-full min-w-0 items-center gap-2 rounded-full border border-slate-200 bg-white px-3 text-left transition-colors hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-600 sm:gap-2.5 sm:w-auto sm:max-w-md sm:px-3.5"
       >
         {meter(activeBand)}
-        <span className="shrink-0 text-xs text-slate-500">{t("pad.recording.lead")}</span>
+        <span className="shrink-0 text-[11px] text-slate-500 sm:text-xs">{t("pad.recording.lead")}</span>
         <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-slate-900">
           {t(BAND_LABEL_KEY[activeBand])}
         </span>
@@ -184,10 +189,13 @@ export function RecordingChip({ activeBand, onBandChange, actionCounts, t, plura
           <path d="M4 6l4 4 4-4" />
         </svg>
       </button>
-      <p className="mt-1.5 min-w-0 truncate pl-3.5 text-xs text-slate-500">{countText(activeBand)}</p>
+      <p className="mt-1.5 min-w-0 truncate pl-3 text-xs text-slate-500 sm:pl-3.5">{countText(activeBand)}</p>
 
+      {/* Bottom sheet on a phone — thumb-reachable, edge to edge. From `sm` up
+          it becomes a centred dialog, because a card pinned to the bottom edge
+          of a 1280 screen is a phone pattern wearing a desktop's dimensions. */}
       {open && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center">
+        <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
           {/* A real button, not a bare div: dismissing by tapping outside has
               to be reachable by something other than a mouse. It is removed
               from the tab order because the sheet's own rows are where a
@@ -204,7 +212,7 @@ export function RecordingChip({ activeBand, onBandChange, actionCounts, t, plura
             role="dialog"
             aria-modal="true"
             aria-label={pickLabel}
-            className="relative w-full max-w-md rounded-t-[20px] bg-white px-3 pb-4 pt-2 shadow-[0_-8px_30px_rgba(21,11,54,0.22)] sm:mb-8 sm:rounded-[20px]"
+            className="relative w-full max-w-md rounded-t-[20px] bg-white px-3 pb-4 pt-2 shadow-[0_-8px_30px_rgba(21,11,54,0.22)] sm:rounded-[20px] sm:shadow-[0_10px_40px_rgba(21,11,54,0.28)]"
           >
             {/* The phone affordance only: a grab handle on a card that floats
                 in the middle of a 1280 screen would be a lie about how it

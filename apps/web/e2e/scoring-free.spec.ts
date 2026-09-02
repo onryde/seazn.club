@@ -1,0 +1,184 @@
+import { test, expect, type Page, type APIRequestContext } from "@playwright/test";
+import { football } from "@seazn/engine/sports/football";
+import {
+  activeOrg,
+  apiJson,
+  expectNoHorizontalScroll,
+  fixturePath,
+  invalidateOrgEntitlements,
+  loginUi,
+  seedRosteredFixture,
+  setOrgPlanBySql,
+  TAG,
+  type RosteredFixture,
+} from "./helpers";
+
+// W1 / Task 4 (entitlements v18, owner ruling 2026-08-30) — SCORING DETAIL IS
+// FREE, AND THE BAND IS THE SCORER'S OWN CONTROL.
+//
+// Two claims, and neither is provable anywhere but a browser:
+//
+//  1. A COMMUNITY-PLAN org records a deep event. `football.card` is band 2 —
+//     the tier that used to sit behind `scoring.match_timeline`, so a
+//     community org's card tile was withheld and the event 402'd at the
+//     scoring door. The band is READ OFF THE ENGINE below rather than typed
+//     here, so a module that re-bands the card moves this test with it.
+//  2. The Recording chip is a PICKER. Its unit suite
+//     (`v3/__tests__/recording-chip.test.tsx`) runs in a node environment with
+//     no DOM at all: it cannot see real tap area, the CSS cascade, or whether
+//     a pick actually re-filters the grid the scorer is looking at. That is
+//     this file's whole job.
+//
+// THREE WIDTHS, in one test each, because "mobile is designed, not shrunk" is
+// a binding rule on this programme and 320 is where scorers actually are. The
+// sheet must be reachable and hit-testable at every one of them, with no
+// horizontal page scroll.
+test.describe.configure({ mode: "parallel" });
+
+const CARD_BAND = football.padSpec!(football.configSchema.parse({})).fidelity["football.card"]!;
+
+function pad(page: Page) {
+  return page.locator('[data-testid="score-pad"]');
+}
+function v3Tile(page: Page, id: string) {
+  return pad(page).locator(`[data-tile-id="${id}"]`);
+}
+function chip(page: Page) {
+  return pad(page).locator('[data-role="v3-recording-chip"]');
+}
+function bandRow(page: Page, band: number) {
+  return page.locator(`[data-band="${band}"]`);
+}
+
+async function ledgerTypes(request: APIRequestContext, fixtureId: string): Promise<string[]> {
+  const res = await apiJson<{ type: string }[]>(request, `/api/v1/fixtures/${fixtureId}/events?since_seq=0`);
+  expect(res.status, `ledger read failed: ${JSON.stringify(res.error)}`).toBe(200);
+  return (res.data ?? []).map((e) => e.type);
+}
+
+async function openLiveConsole(page: Page, fx: RosteredFixture): Promise<void> {
+  await page.goto(await fixturePath(page.request, fx.fixtureId));
+  await expect(pad(page)).toBeVisible({ timeout: 20_000 });
+  await page.getByRole("button", { name: "Start match", exact: true }).click();
+  await expect
+    .poll(async () => ledgerTypes(page.request, fx.fixtureId), { timeout: 20_000 })
+    .toContain("core.start");
+}
+
+/** What a thumb at the centre of a control actually lands on. `boundingBox()`
+ *  measures PAINT and would call a control 44px tall that another element
+ *  covers entirely — the trap this programme has hit before. */
+async function hitAt(page: Page, box: { x: number; y: number; width: number; height: number }) {
+  return page.evaluate(
+    ([x, y]) => {
+      const el = document.elementFromPoint(x as number, y as number);
+      const owner = el?.closest("[data-band],[data-role]");
+      return owner?.getAttribute("data-band") ?? owner?.getAttribute("data-role") ?? el?.tagName ?? null;
+    },
+    [box.x + box.width / 2, box.y + box.height / 2],
+  );
+}
+
+for (const width of [320, 768, 1280]) {
+  test(`a community org picks its recording band and records a band-${CARD_BAND} event through the pad @ ${width}`, async ({
+    page,
+  }) => {
+    // A card is sheet -> choice -> choice -> dock -> flush, plus a band change
+    // and a re-render, on a cold prod server.
+    test.setTimeout(180_000);
+    await page.setViewportSize({ width, height: 900 });
+
+    // A FRESH org on the community plan — never the shared Pro account this
+    // project's storageState carries. The whole point is that the plan no
+    // longer decides anything here.
+    const email = `e2e-free-${TAG}-${width}-${Math.random().toString(36).slice(2, 7)}@example.com`;
+    await loginUi(page, email);
+    // requirePageAuth on any server page auto-provisions "My organization" for
+    // a member of none; `activeOrg` needs that to have already happened.
+    await page.goto("/dashboard", { waitUntil: "load" });
+    const org = await activeOrg(page);
+    await setOrgPlanBySql({ email }, "community");
+    await invalidateOrgEntitlements(page.request, org.id);
+
+    const fx = await seedRosteredFixture(page.request, {
+      label: `Free Scoring ${TAG} ${width}`,
+      sportKey: "football",
+      variantKey: "11-a-side",
+      home: [
+        { fullName: `FS Booked ${TAG}${width}`, positionKey: "MF" },
+        { fullName: `FS Other ${TAG}${width}`, positionKey: "DF" },
+      ],
+      away: [{ fullName: `FS Away ${TAG}${width}`, positionKey: "GK" }],
+    });
+    await openLiveConsole(page, fx);
+
+    // --- the chip: a disclosure, opening at the sport's own top band --------
+    await expect(chip(page)).toBeVisible({ timeout: 10_000 });
+    await expect(chip(page)).toHaveAttribute("aria-haspopup", "dialog");
+    await expect(chip(page)).toHaveAttribute("aria-expanded", "false");
+    // Football declares band-3 events (`football.shot`), so it opens at 3 —
+    // "Every detail", the top of the ladder, not a plan name.
+    await expect(chip(page)).toContainText("Recording");
+    await expect(chip(page)).toContainText("Every detail");
+
+    // NOTHING IS FOR SALE ON THIS PAD.
+    await expect(
+      pad(page).getByText(/available on|upgrade|locked|is locked/i),
+      "the pad must carry no lock, upsell or plan name anywhere",
+    ).toHaveCount(0);
+
+    // --- the tap actually lands on the chip, at this width ------------------
+    const chipBox = (await chip(page).boundingBox())!;
+    expect(chipBox.height, `the chip must be a 44px target at ${width}`).toBeGreaterThanOrEqual(44);
+    expect(await hitAt(page, chipBox)).toBe("v3-recording-chip");
+
+    // --- the sheet: four bands, the active one checked ----------------------
+    await chip(page).click();
+    await expect(chip(page)).toHaveAttribute("aria-expanded", "true");
+    for (const band of [0, 1, 2, 3]) {
+      await expect(bandRow(page, band), `band ${band} must be offered`).toBeVisible();
+    }
+    await expect(bandRow(page, 3)).toHaveAttribute("aria-checked", "true");
+    const rowBox = (await bandRow(page, 1).boundingBox())!;
+    expect(rowBox.height, `a sheet row must be a real target at ${width}`).toBeGreaterThanOrEqual(44);
+    expect(await hitAt(page, rowBox)).toBe("1");
+    await expectNoHorizontalScroll(page);
+
+    // --- picking a LOWER band takes the deep tiles off the board ------------
+    await bandRow(page, 1).click();
+    await expect(chip(page)).toHaveAttribute("aria-expanded", "false");
+    await expect(chip(page)).toContainText("Cards & key moments");
+    for (const tile of ["card-home", "card-away", "sub-home", "sub-away", "penalty"]) {
+      await expect(
+        v3Tile(page, tile),
+        `${tile} is a band-${CARD_BAND} action — at band 1 it must not be on the board at all`,
+      ).toHaveCount(0);
+    }
+    // ...but the pad never goes blank: band-0 actions stay.
+    await expect(v3Tile(page, "goal-home"), "a goal is band 0 and must survive every pick").toBeVisible();
+
+    // --- and picking it back restores them ---------------------------------
+    await chip(page).click();
+    await bandRow(page, 3).click();
+    await expect(v3Tile(page, "card-home")).toBeVisible({ timeout: 10_000 });
+
+    // --- a COMMUNITY org records the band-2 card, end to end ----------------
+    await v3Tile(page, "card-home").click();
+    const sheet = pad(page).locator('[data-role="v3-sheet"]');
+    await expect(sheet).toBeVisible({ timeout: 10_000 });
+    await sheet.locator('[data-choice-option-id="yellow"]').click();
+    // The Law 12 offence step is itself band >= 2 — reaching it at all is half
+    // the proof that the depth is free.
+    await expect(sheet).toContainText("What was the offence?");
+    await sheet.locator('[data-choice-option-id="dissent"]').click();
+    const dock = pad(page).locator('[data-role="v3-dock"]');
+    await expect(dock).toBeVisible({ timeout: 10_000 });
+    await dock.getByRole("button", { name: `FS Booked ${TAG}${width}`, exact: true }).click();
+    await dock.getByRole("button", { name: "Send now", exact: true }).click();
+    await expect
+      .poll(async () => ledgerTypes(page.request, fx.fixtureId), { timeout: 20_000 })
+      .toContain("football.card");
+
+    await expectNoHorizontalScroll(page);
+  });
+}
