@@ -120,7 +120,6 @@ vi.mock("@/server/usecases/divisions", () => ({
 vi.mock("@/server/usecases/card-stats", () => ({
   listDivisionCardStats: async () => h.stats,
   nextLine: () => null,
-  formatLabel: () => null,
 }));
 
 vi.mock("@/server/public-site/data", () => ({ resolveLogoUrl: () => null }));

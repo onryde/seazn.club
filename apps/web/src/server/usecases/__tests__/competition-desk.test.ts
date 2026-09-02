@@ -14,6 +14,7 @@ import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";
 import { getCompetitionDesk, competitionPhase } from "../competition-desk";
+import { createAssignment } from "../scorers";
 
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -43,6 +44,16 @@ async function seedOrg(): Promise<{ auth: AuthCtx }> {
   return {
     auth: { orgId, via: "session", userId: null, role: "owner", keyId: null },
   };
+}
+
+// F4 fix tests: `createAssignment` needs a real users row (FK), same
+// pattern as scorers.test.ts's own `makeUser`.
+async function makeUser(name: string): Promise<string> {
+  const [{ id }] = await sql<{ id: string }[]>`
+    insert into users (email, display_name)
+    values (${`${name}-${randomUUID().slice(0, 8)}@test.local`}, ${name})
+    returning id`;
+  return id;
 }
 
 // Same seeding as add-fixture.test.ts's seedDivision, return narrowed to
@@ -192,10 +203,112 @@ describe.skipIf(!HAS_DB)("getCompetitionDesk", () => {
     const d = desk.divisions.get(divisionId)!;
     expect(d.phase).toBe("match_day");
     expect(d.in_play).toBe(1);
-    expect(d.attention[0]).toMatchObject({ kind: "no_scorer", fixtureId: f!.id });
+    expect(d.attention[0]).toMatchObject({ kind: "no_scorer", fixtureIds: [f!.id], count: 1 });
     expect(d.fixture_names[f!.id]?.fixture_no).toBe(1);
     expect(desk.in_play).toBe(1);
     expect(competitionPhase(desk)).toEqual({ kind: "in_play", n: 1 });
+  });
+
+  // F2 fix (final review, Important): the event-count subquery used to have
+  // no fixture filter at all — a full Seq Scan + HashAggregate over the
+  // WHOLE score_events table on every render. This proves the FUNCTIONAL
+  // side of the fix stayed correct after filtering it down to this
+  // competition's in_play fixture ids (the plan-shape side is proven by
+  // EXPLAIN ANALYZE in fix-round-b-report.md, not reachable from vitest): an
+  // in_play fixture that DOES have a recorded event must not raise no_scorer.
+  it("F2 regression: an in_play fixture WITH a recorded event does not raise no_scorer (event-count query still correct after the filter)", async () => {
+    const { auth } = await seedOrg();
+    const { competitionId, divisionId } = await seedDivision(auth, 4);
+    const [stage] = await createStages(auth, divisionId, {
+      seq: 1, kind: "league", name: "League", config: {}, progression: null,
+    });
+    await generateStageFixtures(auth, stage!.id);
+    await sql`update divisions set status = 'active' where id = ${divisionId}`;
+    const [f] = await sql<{ id: string }[]>`select id from fixtures where division_id = ${divisionId} order by fixture_no limit 1`;
+    await sql`update fixtures set status = 'in_play', scheduled_at = now() - interval '12 minutes' where id = ${f!.id}`;
+    await sql`
+      insert into score_events (fixture_id, org_id, seq, type, payload)
+      values (${f!.id}, ${auth.orgId}, 0, 'core.start', '{}')`;
+    const desk = await getCompetitionDesk(auth, competitionId);
+    const d = desk.divisions.get(divisionId)!;
+    expect(d.attention.some((a) => a.kind === "no_scorer")).toBe(false);
+  });
+
+  // F3 fix (final review, Important): used to be one row PER FIXTURE.
+  it("F3: several in_play fixtures with no scorer aggregate into ONE no_scorer row for the division", async () => {
+    const { auth } = await seedOrg();
+    const { competitionId, divisionId } = await seedDivision(auth, 4);
+    const [stage] = await createStages(auth, divisionId, {
+      seq: 1, kind: "league", name: "League", config: {}, progression: null,
+    });
+    await generateStageFixtures(auth, stage!.id);
+    await sql`update divisions set status = 'active' where id = ${divisionId}`;
+    const rows = await sql<{ id: string }[]>`select id from fixtures where division_id = ${divisionId} order by fixture_no limit 2`;
+    for (const r of rows) {
+      await sql`update fixtures set status = 'in_play', scheduled_at = now() - interval '12 minutes' where id = ${r.id}`;
+    }
+    const desk = await getCompetitionDesk(auth, competitionId);
+    const d = desk.divisions.get(divisionId)!;
+    const noScorerRows = d.attention.filter((a) => a.kind === "no_scorer");
+    expect(noScorerRows).toHaveLength(1);
+    expect(noScorerRows[0]).toMatchObject({ count: 2 });
+  });
+
+  // F4 fix (final review, Important): a scorer_assignment covering the
+  // fixture or its division clears the row — and both scopes count.
+  it("F4: a fixture-scoped scorer assignment suppresses no_scorer for that fixture, even at zero events", async () => {
+    const { auth } = await seedOrg();
+    const { competitionId, divisionId } = await seedDivision(auth, 4);
+    const [stage] = await createStages(auth, divisionId, {
+      seq: 1, kind: "league", name: "League", config: {}, progression: null,
+    });
+    await generateStageFixtures(auth, stage!.id);
+    await sql`update divisions set status = 'active' where id = ${divisionId}`;
+    const [f] = await sql<{ id: string }[]>`select id from fixtures where division_id = ${divisionId} order by fixture_no limit 1`;
+    await sql`update fixtures set status = 'in_play', scheduled_at = now() - interval '12 minutes' where id = ${f!.id}`;
+    const userId = await makeUser("scorer");
+    await createAssignment(auth.orgId, userId, { type: "fixture", id: f!.id }, null);
+    const desk = await getCompetitionDesk(auth, competitionId);
+    const d = desk.divisions.get(divisionId)!;
+    expect(d.attention.some((a) => a.kind === "no_scorer")).toBe(false);
+  });
+
+  it("F4: a division-scoped scorer assignment ALSO suppresses no_scorer — assigning clears the row, not just the first score event", async () => {
+    const { auth } = await seedOrg();
+    const { competitionId, divisionId } = await seedDivision(auth, 4);
+    const [stage] = await createStages(auth, divisionId, {
+      seq: 1, kind: "league", name: "League", config: {}, progression: null,
+    });
+    await generateStageFixtures(auth, stage!.id);
+    await sql`update divisions set status = 'active' where id = ${divisionId}`;
+    const [f] = await sql<{ id: string }[]>`select id from fixtures where division_id = ${divisionId} order by fixture_no limit 1`;
+    await sql`update fixtures set status = 'in_play', scheduled_at = now() - interval '12 minutes' where id = ${f!.id}`;
+    // Before the assignment: the row is up, same as the plain no_scorer test above.
+    const before = await getCompetitionDesk(auth, competitionId);
+    expect(before.divisions.get(divisionId)!.attention.some((a) => a.kind === "no_scorer")).toBe(true);
+    const userId = await makeUser("scorer");
+    await createAssignment(auth.orgId, userId, { type: "division", id: divisionId }, null);
+    // After: cleared by the assignment alone — no score event was ever recorded.
+    const after = await getCompetitionDesk(auth, competitionId);
+    expect(after.divisions.get(divisionId)!.attention.some((a) => a.kind === "no_scorer")).toBe(false);
+  });
+
+  it("F4: an assignment on a DIFFERENT fixture/division does not suppress this one's no_scorer", async () => {
+    const { auth } = await seedOrg();
+    const { competitionId, divisionId } = await seedDivision(auth, 4);
+    const [stage] = await createStages(auth, divisionId, {
+      seq: 1, kind: "league", name: "League", config: {}, progression: null,
+    });
+    await generateStageFixtures(auth, stage!.id);
+    await sql`update divisions set status = 'active' where id = ${divisionId}`;
+    const rows = await sql<{ id: string }[]>`select id from fixtures where division_id = ${divisionId} order by fixture_no limit 2`;
+    await sql`update fixtures set status = 'in_play', scheduled_at = now() - interval '12 minutes' where id = ${rows[0]!.id}`;
+    const userId = await makeUser("scorer");
+    // Assigned to the OTHER fixture in the same division, not the in_play one.
+    await createAssignment(auth.orgId, userId, { type: "fixture", id: rows[1]!.id }, null);
+    const desk = await getCompetitionDesk(auth, competitionId);
+    const d = desk.divisions.get(divisionId)!;
+    expect(d.attention.some((a) => a.kind === "no_scorer")).toBe(true);
   });
 
   // Fix round 1, finding 1: DEFAULT_MATCH_MINUTES must come from
@@ -223,6 +336,28 @@ describe.skipIf(!HAS_DB)("getCompetitionDesk", () => {
     expect(settingsRow).toBeUndefined();
     const desk = await getCompetitionDesk(auth, competitionId);
     const d = desk.divisions.get(divisionId)!;
-    expect(d.attention).toContainEqual({ kind: "result_missing", fixtureId: f!.id });
+    expect(d.attention).toContainEqual({ kind: "result_missing", count: 1, fixtureIds: [f!.id] });
+  });
+
+  // Final review, "the open question" (4th vacuous "Finished"): deleteStage
+  // lets an organiser remove the sole, last, UNPLAYED stage of an already-
+  // active division — proving the fix end to end through the real usecase,
+  // not just the pure resolver (division-phase.test.ts's own unit coverage).
+  it("stages.ts deleteStage: removing the last unplayed stage of an active division reads setting_up through getCompetitionDesk, never finished", async () => {
+    const { auth } = await seedOrg();
+    const { competitionId, divisionId } = await seedDivision(auth, 4);
+    const [stage] = await createStages(auth, divisionId, {
+      seq: 1, kind: "league", name: "League", config: {}, progression: null,
+    });
+    await generateStageFixtures(auth, stage!.id);
+    await sql`update divisions set status = 'active' where id = ${divisionId}`;
+    const before = await getCompetitionDesk(auth, competitionId);
+    expect(before.divisions.get(divisionId)!.phase).not.toBe("finished"); // sanity: started, unplayed
+    const { deleteStage } = await import("../stages");
+    await deleteStage(auth, stage!.id);
+    const after = await getCompetitionDesk(auth, competitionId);
+    const d = after.divisions.get(divisionId)!;
+    expect(d.phase).toBe("setting_up");
+    expect(d.total).toBe(0);
   });
 });

@@ -243,17 +243,3 @@ export function nextLine(next: NextFixture | null, locale: string): NextLine | n
   }
   return { text: parts.join(" · "), live: next.in_play };
 }
-
-/** "Knockout", "Group + Knockout", "League" — format from real structure. */
-export function formatLabel(kinds: string[]): string | null {
-  if (kinds.length === 0) return null;
-  const label: Record<string, string> = {
-    league: "League",
-    group: "Groups",
-    knockout: "Knockout",
-    swiss: "Swiss",
-    ladder: "Ladder",
-    americano: "Americano",
-  };
-  return kinds.map((k) => label[k] ?? k).join(" + ");
-}

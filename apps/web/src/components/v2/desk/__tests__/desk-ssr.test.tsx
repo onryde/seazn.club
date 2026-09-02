@@ -11,7 +11,7 @@ import { competitionPhase, type CompetitionDesk, type DeskDivision } from "@/ser
 
 const div = (o: Partial<DeskDivision> = {}): DeskDivision => ({
   division_id: "d1", phase: "scheduled", attention: [], played: 10, total: 15, unscheduled: 0, in_play: 0,
-  entrants: 6, awaiting_confirmation: 0, stage_kinds: ["league"], next: null, needs_draw_stage: null,
+  entrants: 6, next: null, needs_draw_stage: null,
   fixture_names: {}, display_tz: "Europe/London", ...o,
 });
 const desk = (d: DeskDivision, inPlay = 0, now = "2026-09-05T09:00:00Z"): CompetitionDesk => ({
@@ -124,7 +124,7 @@ describe("NeedsYou", () => {
       phase: "match_day", in_play: 1,
       attention: [
         { kind: "unscheduled", count: 3 },
-        { kind: "no_scorer", fixtureId: "f9", minutesSinceKickoff: 12 },
+        { kind: "no_scorer", count: 1, fixtureIds: ["f9"], minutesSinceKickoff: 12 },
       ],
       fixture_names: { f9: { home: "Riverside FC", away: "Summit CC", fixture_no: 9 } },
     });
@@ -137,6 +137,50 @@ describe("NeedsYou", () => {
     expect(html).toContain('data-attention="no_scorer"');
     expect(html).toContain('data-severity="red"');
     expect(html).toContain("Assign scorer");
+  });
+  // F3 fix (final review, Important): used to be one row PER FIXTURE — a
+  // division with 6 overdue fixtures produced 6 identical rows. Now ONE row,
+  // stating the count, deep-linking to the fixtures tab (which shows all of
+  // them) rather than any single fixture.
+  it("F3: no_scorer on several fixtures collapses to ONE row naming the count, linking to the fixtures tab", () => {
+    const d = div({
+      phase: "match_day", in_play: 2,
+      attention: [{ kind: "no_scorer", count: 2, fixtureIds: ["f9", "f10"], minutesSinceKickoff: 42 }],
+      fixture_names: {
+        f9: { home: "Riverside FC", away: "Summit CC", fixture_no: 9 },
+        f10: { home: "Valley CC", away: "Lakeside FC", fixture_no: 10 },
+      },
+    });
+    const items = needsYouItems(en, desk(d, 2), names, "org", "comp", "en");
+    expect(items).toHaveLength(1);
+    expect(items[0].title).toBe("Premier Division · 2 fixtures have no scorer");
+    expect(items[0].action.href).toBe("/o/org/c/comp/d/premier-division?tab=fixtures");
+    expect(items[0].sub).toBe("Kicked off 42 min ago. Nothing is being recorded.");
+  });
+  // division-phase.ts:134 minor fix: no scheduledAt anywhere in the group ⇒
+  // the sub-line drops the elapsed-time clause instead of lying "0 min ago".
+  it("no_scorer sub-line omits the elapsed-time clause when minutesSinceKickoff is null", () => {
+    const d = div({
+      attention: [{ kind: "no_scorer", count: 1, fixtureIds: ["f9"], minutesSinceKickoff: null }],
+      fixture_names: { f9: { home: "Riverside FC", away: "Summit CC", fixture_no: 9 } },
+    });
+    const items = needsYouItems(en, desk(d), names, "org", "comp", "en");
+    expect(items[0].sub).toBe("Nothing is being recorded.");
+    expect(items[0].sub).not.toMatch(/min ago/);
+  });
+  // F3 fix, result_missing side: same aggregation as no_scorer above.
+  it("F3: result_missing on several fixtures collapses to ONE row, linking to the fixtures tab", () => {
+    const d = div({
+      attention: [{ kind: "result_missing", count: 2, fixtureIds: ["f9", "f10"] }],
+      fixture_names: {
+        f9: { home: "Riverside FC", away: "Summit CC", fixture_no: 9 },
+        f10: { home: "Valley CC", away: "Lakeside FC", fixture_no: 10 },
+      },
+    });
+    const items = needsYouItems(en, desk(d), names, "org", "comp", "en");
+    expect(items).toHaveLength(1);
+    expect(items[0].title).toBe("Premier Division · 2 fixtures missing a result");
+    expect(items[0].action.href).toBe("/o/org/c/comp/d/premier-division?tab=fixtures");
   });
 });
 
@@ -211,7 +255,7 @@ describe("DivisionLedger", () => {
       divisionStatus: "active",
       stages: [{ id: "s1", name: "League", seq: 1, status: "active", hasFixtures: true, needsProposal: false }],
       fixtures: Array.from({ length: 6 }, (_, i) => ({
-        id: `f${i}`, status: "scheduled", scheduledAt: null, eventCount: 0, matchMinutes: 90,
+        id: `f${i}`, status: "scheduled", scheduledAt: null, eventCount: 0, matchMinutes: 90, hasScorer: false,
       })),
       now: "2026-09-05T09:00:00Z",
       tz: "Europe/London",
@@ -293,6 +337,33 @@ describe("DivisionLedger", () => {
     );
     expect(htmlAction).toContain("Compute proposal");
     expect(htmlAction).toContain('href="/o/org/c/comp/d/u16-cup?tab=fixtures"');
+  });
+  // F3 fix (final review, Important): the mobile card's own red action
+  // button reads `no_scorer.fixtureIds` now, not a single `fixtureId` —
+  // exercised here separately from needs-you.tsx's copy of the same rule.
+  it("mobile action button: no_scorer with ONE fixture deep-links to it; with several, to the fixtures tab", () => {
+    const oneScorerless = div({
+      phase: "match_day",
+      attention: [{ kind: "no_scorer", count: 1, fixtureIds: ["f9"], minutesSinceKickoff: 5 }],
+      fixture_names: { f9: { home: "Riverside FC", away: "Summit CC", fixture_no: 9 } },
+    });
+    const htmlOne = renderToStaticMarkup(
+      <DivisionLedger dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z"
+        rows={[{ id: "d1", name: "Premier Division", slug: "premier-division", sportKey: "football", logoUrl: null, desk: oneScorerless, statusLine: "s" }]} />,
+    );
+    expect(htmlOne).toContain("Assign scorer");
+    expect(htmlOne).toContain('href="/o/org/c/comp/d/premier-division/f/9"');
+
+    const manyScorerless = div({
+      phase: "match_day",
+      attention: [{ kind: "no_scorer", count: 2, fixtureIds: ["f9", "f10"], minutesSinceKickoff: 5 }],
+    });
+    const htmlMany = renderToStaticMarkup(
+      <DivisionLedger dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z"
+        rows={[{ id: "d1", name: "Premier Division", slug: "premier-division", sportKey: "football", logoUrl: null, desk: manyScorerless, statusLine: "s" }]} />,
+    );
+    expect(htmlMany).toContain("Assign scorer");
+    expect(htmlMany).toContain('href="/o/org/c/comp/d/premier-division?tab=fixtures"');
   });
   it("fix round 2: the desktop next column is dropped ledger-wide when no row has a next fixture — no reserved track, no empty cell", () => {
     const rowA = div({ phase: "finished", played: 15, total: 15, next: null });

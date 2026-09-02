@@ -11,7 +11,7 @@ import { initials } from "@/components/ui/entity-logo";
 import { isConfirmArmed } from "@/lib/typed-confirm";
 import { msg, messages } from "@/lib/messages";
 import { divisionHue, divisionAccent } from "@/lib/division-hue";
-import { formatLabel, nextLine } from "@/server/usecases/card-stats";
+import { nextLine } from "@/server/usecases/card-stats";
 
 describe("status chip vocabulary (v3/03 §1)", () => {
   it("maps competition statuses to the five chip states", () => {
@@ -85,11 +85,6 @@ describe("division hue (v3/03 §1)", () => {
 });
 
 describe("card meta lines (v3/03 §1)", () => {
-  it("formatLabel names real structures", () => {
-    expect(formatLabel([])).toBeNull();
-    expect(formatLabel(["knockout"])).toBe("Knockout");
-    expect(formatLabel(["group", "knockout"])).toBe("Groups + Knockout");
-  });
   it("nextLine is null-safe on TBD entrants and unscheduled fixtures", () => {
     expect(nextLine(null, "en")).toBeNull();
     expect(

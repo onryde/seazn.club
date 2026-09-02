@@ -71,8 +71,15 @@ function redAction(dict: Dict, d: DeskDivision, org: string, comp: string, slug:
   if (a.kind === "needs_draw") {
     return { label: t(dict, "desk.needsYou.needs_draw.action"), href: routes.division(org, comp, slug, "fixtures") };
   }
-  const f = d.fixture_names[a.fixtureId];
-  return { label: t(dict, "desk.needsYou.no_scorer.action"), href: routes.fixture(org, comp, slug, f?.fixture_no ?? 0) };
+  // F3 fix (final review, Important): `no_scorer` is now aggregated per
+  // division (`fixtureIds`, not a single `fixtureId`) — one fixture still
+  // deep-links straight to it, several go to the fixtures tab that shows
+  // them all, same as needs-you.tsx's own copy of this rule.
+  if (a.fixtureIds.length === 1) {
+    const f = d.fixture_names[a.fixtureIds[0]!];
+    return { label: t(dict, "desk.needsYou.no_scorer.action"), href: routes.fixture(org, comp, slug, f?.fixture_no ?? 0) };
+  }
+  return { label: t(dict, "desk.needsYou.no_scorer.action"), href: routes.division(org, comp, slug, "fixtures") };
 }
 
 export function DivisionLedger({

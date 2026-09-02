@@ -20,6 +20,12 @@ export interface PhaseFixture {
   scheduledAt: string | null;
   eventCount: number;
   matchMinutes: number;
+  /** F4 fix (final review, Important): does ANY scorer_assignment cover this
+   *  fixture — fixture-scoped OR division-scoped (competition-desk.ts reads
+   *  both; competition-scoped assignments are deliberately not checked here,
+   *  per the finding's own wording). Resolved by the caller so this module
+   *  stays pure and DB-free. */
+  hasScorer: boolean;
 }
 
 export interface PhaseInput {
@@ -36,8 +42,16 @@ export interface PhaseInput {
 export type Attention =
   | { kind: "needs_draw"; stageId: string; stageName: string }
   | { kind: "unscheduled"; count: number }
-  | { kind: "no_scorer"; fixtureId: string; minutesSinceKickoff: number }
-  | { kind: "result_missing"; fixtureId: string }
+  // F3 fix (final review, Important): used to be one row PER FIXTURE — a
+  // division with 6 overdue fixtures produced 6 identical "Needs you" rows.
+  // Aggregated per division now, the same way `unscheduled` already was;
+  // `fixtureIds` rides along so the caller can still deep-link straight to
+  // the one fixture when there's only one. `minutesSinceKickoff` is the
+  // WORST (longest-overdue) fixture in the group — the most urgent fact —
+  // and is `null` when every one of them has no `scheduledAt` at all (never
+  // a permanent, misleading "0 min ago").
+  | { kind: "no_scorer"; count: number; fixtureIds: string[]; minutesSinceKickoff: number | null }
+  | { kind: "result_missing"; count: number; fixtureIds: string[] }
   | { kind: "registrations_waiting"; count: number };
 
 export type Severity = "red" | "amber" | "slate";
@@ -88,6 +102,22 @@ export function resolvePhase(input: PhaseInput): DivisionPhase {
   // division with no stage is setting_up") — divisionStatus wins so it never
   // reads as finished before it has even begun.
   if (input.divisionStatus === "setup") return "setting_up";
+  // 1b. setting_up: no stage graph at all — reachable even when
+  // divisionStatus is NOT "setup". Final review's "open question": deleteStage
+  // (stages.ts) lets an organiser remove the sole, last, UNPLAYED stage of an
+  // already-`active` division — fixtures.stage_id FK-cascades, so the fixture
+  // list empties with it, but divisionStatus is untouched. Confirmed reachable
+  // against a live "active" division with 6 unplayed "scheduled" fixtures and
+  // one stage (fix-round-b-report.md): deleting that stage leaves stages=[],
+  // fixtures=[], status='active', which rule 2 below reads as `finished`
+  // vacuously — the exact same "empty set answers no to every question" shape
+  // rule 1 above guards against, one level down, mirroring amendment 3's
+  // competition-level ruling ("zero divisions ⇒ setting_up, not finished").
+  // Nothing has actually been played (deleteStage refuses a stage with any
+  // in_play/decided/finalized fixture), so "setting_up" is correct regardless
+  // of whatever divisionStatus says. Checked before rule 2 for the same
+  // reason rule 1 is.
+  if (stages.length === 0) return "setting_up";
   // 2. finished
   const everyStageComplete = stages.length > 0 && stages.every((s) => s.status === "complete");
   const noOpenStage = !stages.some((s) => s.status === "pending" || s.status === "active");
@@ -137,17 +167,48 @@ export function resolveAttention(input: PhaseInput): Attention[] {
   }
   const unscheduled = input.fixtures.filter((f) => f.status === "scheduled" && f.scheduledAt === null).length;
   if (unscheduled > 0) out.push({ kind: "unscheduled", count: unscheduled });
+  // F3+F4 fix (final review, Important): both aggregated per division below,
+  // the same way `unscheduled` already is above — collected here, pushed once.
+  const noScorer: { id: string; since: number | null }[] = [];
+  const resultMissing: string[] = [];
   for (const f of input.fixtures) {
-    if (f.status === "in_play" && f.eventCount === 0) {
-      const since = f.scheduledAt ? Math.max(0, Math.round((nowMs - Date.parse(f.scheduledAt)) / 60_000)) : 0;
-      out.push({ kind: "no_scorer", fixtureId: f.id, minutesSinceKickoff: since });
+    // F4 fix: the old test was bare `eventCount === 0` — a division- or
+    // fixture-scoped scorer sitting on a 0-0 read as "missing", and
+    // assigning one never cleared the row (only the first score event did).
+    // `hasScorer` is resolved by the caller from scorer_assignments at both
+    // scopes; once someone is assigned, the organiser's own job here is
+    // done, so the row clears immediately — matching design doc line 101
+    // ("a scorerless fixture reads 'No scorer' until it is assigned"), not
+    // left waiting on whether that scorer has actually typed anything yet.
+    // (Deliberate scope decision, recorded in fix-round-b-report.md: an
+    // assigned-but-silent scorer well past kick-off gets NO attention at
+    // all in this round, not a weaker one — a genuinely separate product
+    // question this fix does not take on.)
+    if (f.status === "in_play" && f.eventCount === 0 && !f.hasScorer) {
+      // division-phase.ts:134 minor fix: a fixture with no `scheduledAt` at
+      // all can never answer "minutes since kickoff" — `null`, not a
+      // permanent, misleading "0 min ago".
+      const since = f.scheduledAt ? Math.max(0, Math.round((nowMs - Date.parse(f.scheduledAt)) / 60_000)) : null;
+      noScorer.push({ id: f.id, since });
     } else if (
       f.status === "scheduled" &&
       f.scheduledAt !== null &&
       Date.parse(f.scheduledAt) + f.matchMinutes * 60_000 < nowMs
     ) {
-      out.push({ kind: "result_missing", fixtureId: f.id });
+      resultMissing.push(f.id);
     }
+  }
+  if (noScorer.length > 0) {
+    const known = noScorer.map((n) => n.since).filter((s): s is number => s !== null);
+    out.push({
+      kind: "no_scorer",
+      count: noScorer.length,
+      fixtureIds: noScorer.map((n) => n.id),
+      minutesSinceKickoff: known.length > 0 ? Math.max(...known) : null,
+    });
+  }
+  if (resultMissing.length > 0) {
+    out.push({ kind: "result_missing", count: resultMissing.length, fixtureIds: resultMissing });
   }
   if (input.awaitingRegistrations > 0) {
     out.push({ kind: "registrations_waiting", count: input.awaitingRegistrations });

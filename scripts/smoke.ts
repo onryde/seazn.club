@@ -3839,9 +3839,16 @@ async function playerAccountsSuite(admin: Session, orgId: string): Promise<void>
       headers: { cookie: Object.entries(admin.cookies).map(([k, v]) => `${k}=${v}`).join("; ") },
     })
   ).text();
+  // Fix round B minor: the old regex matched ANY single `data-phase`
+  // anywhere on the page — including the MASTHEAD's own competition-level
+  // pill (which can legitimately carry `data-phase="in_play"`/"next", never
+  // a division word) — so a zero-division competition would still pass a
+  // check titled "per division". Anchored on the ledger row's own two
+  // adjacent attributes (`division-ledger.tsx`'s literal JSX output order)
+  // and the real `DivisionPhase` union, which never includes "in_play".
   check(
     "competition page carries a derived phase per division",
-    /data-phase="(setting_up|scheduled|match_day|finished|in_play)"/.test(compHtml),
+    /data-testid="desk-ledger-row" data-phase="(setting_up|scheduled|match_day|finished)"/.test(compHtml),
   );
 
   // QR check-in: organiser mints, player taps; presence keeps the RSVP.

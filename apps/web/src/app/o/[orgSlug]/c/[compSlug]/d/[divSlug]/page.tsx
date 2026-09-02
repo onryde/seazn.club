@@ -29,6 +29,7 @@ import { getScheduleSettings } from "@/server/usecases/schedule";
 import { listVenues } from "@/server/usecases/venues";
 import { resolveVenueTz } from "@/lib/tz";
 import { resolvePhase, type DivisionStatus } from "@/lib/division-phase";
+import { defaultMatchMinutes } from "@/server/usecases/competition-desk";
 import { hasFeature } from "@/lib/entitlements";
 import { listEntrantLogoUrls } from "@/server/usecases/teams";
 import { resolveModule } from "@/server/engine-db";
@@ -159,7 +160,19 @@ export default async function DivisionPage({
       status: f.status,
       scheduledAt: f.scheduled_at,
       eventCount: 0,
-      matchMinutes: scheduleSettings.config.matchMinutes ?? 60,
+      // Final review minor fix: was a bare `?? 60`, retyping a number that
+      // had already drifted from the desk's own schema-derived default (30).
+      // `resolvePhase` never reads `matchMinutes` (only `resolveAttention`
+      // does, and this page only calls the former — see the comment above),
+      // so this is inert today either way; sharing the one derivation keeps
+      // it from silently disagreeing with competition-desk.ts the day this
+      // page ever computes attention too.
+      matchMinutes: scheduleSettings.config.matchMinutes ?? defaultMatchMinutes(),
+      // Same reason as `eventCount` above: unread by `resolvePhase`, stubbed
+      // rather than fetched (a scorer_assignments lookup belongs to the
+      // competition desk's ATTENTION computation, not this page's phase-only
+      // one).
+      hasScorer: false,
     })),
     now: new Date().toISOString(),
     // Exactly what StagesPanel's own `orgTz` prop already resolves below.

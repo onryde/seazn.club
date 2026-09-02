@@ -31,8 +31,6 @@ export interface DeskDivision {
   unscheduled: number;
   in_play: number;
   entrants: number;
-  awaiting_confirmation: number;
-  stage_kinds: string[];
   next: NextFixture | null;
   needs_draw_stage: { id: string; name: string } | null;
   /** For attention rows that name a fixture. */
@@ -60,8 +58,12 @@ let cachedMatchMinutes: number | undefined;
  *  field on ScheduleConfig must not throw at import time and take down
  *  every importer of this module (Task 5 wires it into the competition page
  *  route), so a parse failure here logs and falls back to the literal
- *  instead of propagating. */
-function defaultMatchMinutes(): number {
+ *  instead of propagating.
+ *
+ *  Exported (final review, minor): `d/[divSlug]/page.tsx` used to retype the
+ *  fallback as a bare `matchMinutes ?? 60`, diverging from this desk's own
+ *  30 the day that page ever needs it live. One derivation, shared. */
+export function defaultMatchMinutes(): number {
   if (cachedMatchMinutes === undefined) {
     try {
       cachedMatchMinutes = ScheduleConfig.parse({}).matchMinutes;
@@ -93,6 +95,9 @@ type FixtureRaw = {
   event_count: number;
 };
 type SettingsRaw = { division_id: string; tz: string | null; match_minutes: number | null };
+/** F4 (final review, Important) — resolved once per competition, not N+1:
+ *  who is on record to score, at either scope the finding names. */
+type ScorerAssignmentRaw = { scope_type: "fixture" | "division"; scope_id: string };
 
 export async function getCompetitionDesk(
   auth: AuthCtx,
@@ -104,7 +109,7 @@ export async function getCompetitionDesk(
     listDivisionCardStats(auth, competitionId),
   ]);
   const ids = divisions.map((d) => d.id);
-  const { orgTz, stages, fixtures, settings } = await withTenant(auth.orgId, async (tx) => {
+  const { orgTz, stages, fixtures, settings, scorerAssignments } = await withTenant(auth.orgId, async (tx) => {
     const [org] = await tx<{ timezone: string | null }[]>`select timezone from organizations where id = ${auth.orgId}`;
     const stages = ids.length
       ? await tx<StageRaw[]>`
@@ -113,6 +118,18 @@ export async function getCompetitionDesk(
                  exists (select 1 from fixtures f where f.stage_id = s.id) as has_fixtures
             from stages s where s.division_id = any(${ids})`
       : [];
+    // F2 fix (final review, Important): the old score-event subquery had NO
+    // fixture filter at all — `group by fixture_id` over the WHOLE
+    // score_events table, forcing a Seq Scan + full HashAggregate on every
+    // render of every public competition page, editor or spectator, to
+    // count events for the handful of fixtures this competition actually
+    // has. Spec §"getCompetitionDesk" line 139 says it plainly: "one grouped
+    // query over score_events for the in_play fixture ids — not N+1" — and
+    // `event_count` is read nowhere except `resolveAttention`'s `no_scorer`
+    // check, which only ever looks at `in_play` fixtures. Filtering the
+    // subquery to exactly those ids lets the planner use
+    // `score_events_fixture_idx` (fixture_id, seq) instead of scanning the
+    // table; EXPLAIN ANALYZE before/after in fix-round-b-report.md.
     const fixtures = ids.length
       ? await tx<FixtureRaw[]>`
           select f.id, f.division_id, f.status, f.scheduled_at, f.fixture_no,
@@ -121,7 +138,14 @@ export async function getCompetitionDesk(
             from fixtures f
             left join entrants h on h.id = f.home_entrant_id
             left join entrants a on a.id = f.away_entrant_id
-            left join (select fixture_id, count(*) as n from score_events group by fixture_id) e on e.fixture_id = f.id
+            left join (
+              select fixture_id, count(*) as n
+                from score_events
+               where fixture_id = any(
+                 select id from fixtures where division_id = any(${ids}) and status = 'in_play'
+               )
+               group by fixture_id
+            ) e on e.fixture_id = f.id
            where f.division_id = any(${ids})`
       : [];
     const settings = ids.length
@@ -129,8 +153,28 @@ export async function getCompetitionDesk(
           select division_id, tz, (config ->> 'matchMinutes')::int as match_minutes
             from schedule_settings where division_id = any(${ids})`
       : [];
-    return { orgTz: resolveVenueTz(null, org?.timezone), stages, fixtures, settings };
+    // F4 fix (final review, Important): who is on record to score, read
+    // once per competition (no N+1) — both scopes the finding names, a
+    // fixture-scoped assignment or a division-scoped one; a competition-
+    // scoped assignment is deliberately not checked here (scorers.ts's own
+    // `scorerCovers` checks all three for AUTHZ, a stricter question than
+    // this attention row asks).
+    const scorerAssignments = ids.length
+      ? await tx<ScorerAssignmentRaw[]>`
+          select scope_type, scope_id from scorer_assignments
+           where (scope_type = 'division' and scope_id = any(${ids}))
+              or (scope_type = 'fixture' and scope_id = any(
+                    select id from fixtures where division_id = any(${ids})
+                  ))`
+      : [];
+    return { orgTz: resolveVenueTz(null, org?.timezone), stages, fixtures, settings, scorerAssignments };
   });
+  const divisionsWithScorer = new Set(
+    scorerAssignments.filter((a) => a.scope_type === "division").map((a) => a.scope_id),
+  );
+  const fixturesWithScorer = new Set(
+    scorerAssignments.filter((a) => a.scope_type === "fixture").map((a) => a.scope_id),
+  );
 
   const nowIso = now.toISOString();
   const out = new Map<string, DeskDivision>();
@@ -157,6 +201,7 @@ export async function getCompetitionDesk(
       scheduledAt: x.scheduled_at,
       eventCount: x.event_count,
       matchMinutes,
+      hasScorer: fixturesWithScorer.has(x.id) || divisionsWithScorer.has(d.id),
     }));
     const input = {
       divisionStatus: d.status as DivisionStatus,
@@ -181,8 +226,6 @@ export async function getCompetitionDesk(
       unscheduled: rows.filter((x) => x.status === "scheduled" && x.scheduled_at === null).length,
       in_play: inPlay,
       entrants: s?.entrants ?? 0,
-      awaiting_confirmation: s?.awaiting_confirmation ?? 0,
-      stage_kinds: s?.stage_kinds ?? [],
       next: s?.next ?? null,
       needs_draw_stage:
         needsDraw && needsDraw.kind === "needs_draw" ? { id: needsDraw.stageId, name: needsDraw.stageName } : null,

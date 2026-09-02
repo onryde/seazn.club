@@ -52,23 +52,52 @@ export function needsYouItems(
             action: { label: t(dict, "desk.needsYou.unscheduled.action"), href: routes.divisionSchedule(org, comp, d.slug) },
           });
           break;
+        // F3 fix (final review, Important): both cases below used to emit
+        // ONE ROW PER FIXTURE — a division with 6 overdue fixtures produced
+        // 6 identical rows (~900px at 320, ledger below the fold). The
+        // resolver now hands one aggregated Attention per division; when it
+        // names exactly one fixture the row still names the two teams and
+        // deep-links straight to it (unchanged from before); with several,
+        // the row states the count and the action goes to the fixtures tab,
+        // which shows all of them — the same "several ⇒ somewhere that
+        // shows all of them" pattern `unscheduled`/`needs_draw` already use.
         case "no_scorer": {
-          const f = dd.fixture_names[a.fixtureId];
+          const single = a.fixtureIds.length === 1 ? dd.fixture_names[a.fixtureIds[0]!] : null;
           items.push({
-            key: `${d.id}:no_scorer:${a.fixtureId}`, severity: sev, kind: a.kind,
-            title: t(dict, "desk.needsYou.no_scorer", { division: d.name, home: f?.home ?? "—", away: f?.away ?? "—" }),
-            sub: t(dict, "desk.needsYou.no_scorer.sub", { minutes: a.minutesSinceKickoff }),
-            action: { label: t(dict, "desk.needsYou.no_scorer.action"), href: routes.fixture(org, comp, d.slug, f?.fixture_no ?? 0) },
+            key: `${d.id}:no_scorer`, severity: sev, kind: a.kind,
+            title: single
+              ? t(dict, "desk.needsYou.no_scorer", { division: d.name, home: single.home ?? "—", away: single.away ?? "—" })
+              : plural(dict, "desk.needsYou.no_scorer.count", a.count, locale, { division: d.name }),
+            // division-phase.ts:134 minor fix: `minutesSinceKickoff` is null
+            // when none of the aggregated fixtures ever carried a
+            // scheduledAt — a distinct sub-line, not a permanent "0 min ago".
+            sub:
+              a.minutesSinceKickoff !== null
+                ? t(dict, "desk.needsYou.no_scorer.sub", { minutes: a.minutesSinceKickoff })
+                : t(dict, "desk.needsYou.no_scorer.sub_unknown"),
+            action: {
+              label: t(dict, "desk.needsYou.no_scorer.action"),
+              href: single
+                ? routes.fixture(org, comp, d.slug, single.fixture_no)
+                : routes.division(org, comp, d.slug, "fixtures"),
+            },
           });
           break;
         }
         case "result_missing": {
-          const f = dd.fixture_names[a.fixtureId];
+          const single = a.fixtureIds.length === 1 ? dd.fixture_names[a.fixtureIds[0]!] : null;
           items.push({
-            key: `${d.id}:result_missing:${a.fixtureId}`, severity: sev, kind: a.kind,
-            title: t(dict, "desk.needsYou.result_missing", { division: d.name, home: f?.home ?? "—", away: f?.away ?? "—" }),
+            key: `${d.id}:result_missing`, severity: sev, kind: a.kind,
+            title: single
+              ? t(dict, "desk.needsYou.result_missing", { division: d.name, home: single.home ?? "—", away: single.away ?? "—" })
+              : plural(dict, "desk.needsYou.result_missing.count", a.count, locale, { division: d.name }),
             sub: t(dict, "desk.needsYou.result_missing.sub"),
-            action: { label: t(dict, "desk.needsYou.result_missing.action"), href: routes.fixture(org, comp, d.slug, f?.fixture_no ?? 0) },
+            action: {
+              label: t(dict, "desk.needsYou.result_missing.action"),
+              href: single
+                ? routes.fixture(org, comp, d.slug, single.fixture_no)
+                : routes.division(org, comp, d.slug, "fixtures"),
+            },
           });
           break;
         }

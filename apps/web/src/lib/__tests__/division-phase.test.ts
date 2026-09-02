@@ -15,7 +15,8 @@ const stage = (o: Partial<PhaseStage> = {}): PhaseStage => ({
   id: "st1", name: "League", seq: 1, status: "active", hasFixtures: true, needsProposal: false, ...o,
 });
 const fx = (o: Partial<PhaseFixture> = {}): PhaseFixture => ({
-  id: "f1", status: "scheduled", scheduledAt: "2026-09-12T09:00:00Z", eventCount: 0, matchMinutes: 90, ...o,
+  id: "f1", status: "scheduled", scheduledAt: "2026-09-12T09:00:00Z", eventCount: 0, matchMinutes: 90,
+  hasScorer: false, ...o,
 });
 const input = (o: Partial<PhaseInput> = {}): PhaseInput => ({
   divisionStatus: "active", stages: [stage()], fixtures: [fx()], now: NOW, tz: TZ, awaitingRegistrations: 0, ...o,
@@ -43,8 +44,26 @@ describe("resolvePhase — rule order", () => {
   it("1 finished: every stage complete", () => {
     expect(resolvePhase(input({ stages: [stage({ status: "complete" })], fixtures: [fx({ status: "decided" })] }))).toBe("finished");
   });
-  it("1 finished: no pending/active stage and no live fixture", () => {
-    expect(resolvePhase(input({ stages: [], fixtures: [fx({ status: "decided" })] }))).toBe("finished");
+  // 1b (final review, "the open question" — a 4th vacuous "Finished"): with
+  // ONLY `stages: []` and no divisionStatus === "setup" guard to save it,
+  // rule 2's "no pending/active stage AND no live fixture" is vacuously true
+  // of an empty stage array exactly the way rule 1's own comment describes —
+  // this used to read "finished" here. Reachable in production: deleteStage
+  // (stages.ts) lets an organiser remove the sole, last, UNPLAYED stage of
+  // an already-`active` division; fixtures.stage_id cascades, so the fixture
+  // list empties with it, but divisionStatus stays whatever it was.
+  // Confirmed reachable against a live "active" division with 6 unplayed
+  // fixtures and one stage (fix-round-b-report.md). Replaces the old test
+  // of this exact name, which pinned the bug as intended — the fixture list
+  // it fed in (a synthetic "decided" fixture with NO stage at all) is
+  // impossible in production anyway, since fixtures cannot outlive the stage
+  // that cascades their deletion; the stage graph, not any fixture, is what
+  // this rule must key off.
+  it("1b setting_up: an empty stage graph never reads finished, whatever divisionStatus or the fixture list say", () => {
+    expect(resolvePhase(input({ divisionStatus: "active", stages: [], fixtures: [] }))).toBe("setting_up");
+    expect(
+      resolvePhase(input({ divisionStatus: "active", stages: [], fixtures: [fx({ status: "decided" })] })),
+    ).toBe("setting_up");
   });
   it("1 finished: every stage complete wins even with a fixture still scheduled", () => {
     // isolates the everyStageComplete arm: noLiveFixture is false here
@@ -144,19 +163,70 @@ describe("resolveAttention", () => {
   });
   it("no_scorer: in play with zero events, minutes since kickoff from scheduledAt", () => {
     const fixtures = [fx({ id: "p", status: "in_play", scheduledAt: "2026-09-05T09:30:00Z", eventCount: 0 })];
-    expect(resolveAttention(input({ fixtures }))).toContainEqual({ kind: "no_scorer", fixtureId: "p", minutesSinceKickoff: 12 });
+    expect(resolveAttention(input({ fixtures }))).toContainEqual({
+      kind: "no_scorer", count: 1, fixtureIds: ["p"], minutesSinceKickoff: 12,
+    });
   });
   it("no_scorer is not raised once an event exists", () => {
     const fixtures = [fx({ id: "p", status: "in_play", eventCount: 3 })];
     expect(resolveAttention(input({ fixtures })).some((a) => a.kind === "no_scorer")).toBe(false);
   });
+  // F4 fix (final review, Important): the old test was bare `eventCount ===
+  // 0` — a division- or fixture-scoped scorer sitting on a 0-0 read as
+  // "missing", and assigning one never cleared the row.
+  it("F4: no_scorer is not raised when a scorer is assigned to the fixture, even at zero events", () => {
+    const fixtures = [fx({ id: "p", status: "in_play", eventCount: 0, hasScorer: true })];
+    expect(resolveAttention(input({ fixtures })).some((a) => a.kind === "no_scorer")).toBe(false);
+  });
+  it("F4: no_scorer still fires when nobody is assigned AND nothing has been scored", () => {
+    const fixtures = [fx({ id: "p", status: "in_play", eventCount: 0, hasScorer: false })];
+    expect(resolveAttention(input({ fixtures })).some((a) => a.kind === "no_scorer")).toBe(true);
+  });
+  // F3 fix (final review, Important): used to be one row PER FIXTURE.
+  it("F3: no_scorer aggregates per division — one row, not one per fixture, worst minutesSinceKickoff wins", () => {
+    const fixtures = [
+      fx({ id: "p1", status: "in_play", scheduledAt: "2026-09-05T09:30:00Z", eventCount: 0 }), // 12 min
+      fx({ id: "p2", status: "in_play", scheduledAt: "2026-09-05T09:00:00Z", eventCount: 0 }), // 42 min
+    ];
+    const out = resolveAttention(input({ fixtures }));
+    expect(out.filter((a) => a.kind === "no_scorer")).toHaveLength(1);
+    expect(out).toContainEqual({
+      kind: "no_scorer", count: 2, fixtureIds: ["p1", "p2"], minutesSinceKickoff: 42,
+    });
+  });
+  // division-phase.ts:134 minor fix: a null scheduledAt must never render a
+  // permanent "0 min ago" — `minutesSinceKickoff` is `null` instead.
+  it("no_scorer: minutesSinceKickoff is null, not 0, when the fixture never carried a scheduledAt", () => {
+    const fixtures = [fx({ id: "p", status: "in_play", scheduledAt: null, eventCount: 0 })];
+    expect(resolveAttention(input({ fixtures }))).toContainEqual({
+      kind: "no_scorer", count: 1, fixtureIds: ["p"], minutesSinceKickoff: null,
+    });
+  });
+  it("no_scorer: minutesSinceKickoff picks the worst KNOWN value when only some fixtures carry a scheduledAt", () => {
+    const fixtures = [
+      fx({ id: "p1", status: "in_play", scheduledAt: null, eventCount: 0 }),
+      fx({ id: "p2", status: "in_play", scheduledAt: "2026-09-05T09:00:00Z", eventCount: 0 }), // 42 min
+    ];
+    expect(resolveAttention(input({ fixtures }))).toContainEqual(
+      expect.objectContaining({ kind: "no_scorer", minutesSinceKickoff: 42 }),
+    );
+  });
   it("result_missing: scheduled, kickoff + matchMinutes already passed", () => {
     const fixtures = [fx({ id: "r", scheduledAt: "2026-09-05T07:00:00Z", matchMinutes: 90 })];
-    expect(resolveAttention(input({ fixtures }))).toContainEqual({ kind: "result_missing", fixtureId: "r" });
+    expect(resolveAttention(input({ fixtures }))).toContainEqual({ kind: "result_missing", count: 1, fixtureIds: ["r"] });
   });
   it("result_missing is not raised while the match window is still open", () => {
     const fixtures = [fx({ id: "r", scheduledAt: "2026-09-05T09:00:00Z", matchMinutes: 90 })];
     expect(resolveAttention(input({ fixtures })).some((a) => a.kind === "result_missing")).toBe(false);
+  });
+  it("F3: result_missing aggregates per division — one row naming both fixtures, not two rows", () => {
+    const fixtures = [
+      fx({ id: "r1", scheduledAt: "2026-09-05T07:00:00Z", matchMinutes: 90 }),
+      fx({ id: "r2", scheduledAt: "2026-09-05T06:00:00Z", matchMinutes: 90 }),
+    ];
+    const out = resolveAttention(input({ fixtures }));
+    expect(out.filter((a) => a.kind === "result_missing")).toHaveLength(1);
+    expect(out).toContainEqual({ kind: "result_missing", count: 2, fixtureIds: ["r1", "r2"] });
   });
   it("registrations_waiting from the count", () => {
     expect(resolveAttention(input({ awaitingRegistrations: 2 }))).toContainEqual({ kind: "registrations_waiting", count: 2 });
