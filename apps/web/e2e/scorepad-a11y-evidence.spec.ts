@@ -5,7 +5,9 @@ import { test, expect, type APIRequestContext, type Locator, type Page } from "@
 import { apiJson, fixturePath, seedRosteredFixture, expectNoHorizontalScroll, TAG } from "./helpers";
 import {
   HIT_TARGET_FLOOR_PX,
+  consentedAnonymousState,
   dismissCookieBanner,
+  expectNoCookieBanner,
   floorViolationLines,
   hitTargetFloorReport,
   measureHitTargets,
@@ -38,8 +40,9 @@ import {
  * `seedRosteredFixture` (helpers.ts), `openLiveConsole` (byte-for-byte
  * scorepad-skins.spec.ts's own helper of the same name — poll the real
  * ledger for core.start rather than a fixed sleep), and the anonymous
- * device-link context (`browser.newContext({ storageState: undefined })` +
- * a minted secret, scorepad-offline.spec.ts's own pattern). `generic`/
+ * device-link context (an anonymous `browser.newContext` + a minted secret,
+ * scorepad-offline.spec.ts's own pattern — here with the cookie banner
+ * answered in the seeded state, see `consentedAnonymousState`). `generic`/
  * `score`, individual entrants, is the sport both of those files
  * independently chose for the same reason: it is the one action cheap
  * enough to drive with no real roster, and it tolerates
@@ -133,7 +136,14 @@ async function openDeviceLink(page: Page, secret: string): Promise<void> {
   // for the banner to actually go away. An Accept click that has not settled
   // leaves a fixed overlay over the pad for the next few frames, and every
   // geometry measurement below it is then taken against an obscured page.
+  //
+  // W1/Task 7 — and it is still not enough on its own, which is why this file
+  // has now flaked on this banner twice. The context is seeded with a consent
+  // choice (`consentedAnonymousState`) so the banner never mounts; this call
+  // stays as the fallback for a banner raised some other way, and the
+  // assertion below is what stops a recurrence being measured in silence.
   await dismissCookieBanner(page);
+  await expectNoCookieBanner(page, "device-link pad");
   await expect(page.locator('[data-role="v3-scorebug"]'), "the v3 board must render").toBeVisible({
     timeout: 20_000,
   });
@@ -445,7 +455,14 @@ for (const width of WIDTHS) {
     );
     expect(minted.status, `mint device link: ${JSON.stringify(minted.error)}`).toBe(201);
 
-    const ctx = await browser.newContext({ storageState: undefined, viewport: { width, height: HEIGHT[width] } });
+    // Anonymous — the token is the only credential on this surface — but with
+    // the cookie banner already answered. `storageState: undefined` said the
+    // first half only, and the banner it let through has flaked this file
+    // twice; see `consentedAnonymousState` for the measurement.
+    const ctx = await browser.newContext({
+      storageState: await consentedAnonymousState(),
+      viewport: { width, height: HEIGHT[width] },
+    });
     try {
       const dpage = await ctx.newPage();
       await openDeviceLink(dpage, minted.data!.secret);

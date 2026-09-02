@@ -305,12 +305,93 @@ export async function scanPadContrast(
   };
 }
 
+/** Locates the cookie-consent banner. See `dismissCookieBanner` for why this
+ *  shape, and `consentedAnonymousState` for why the preferred defence is to
+ *  stop the banner mounting rather than to find it. */
+function cookieBanner(page: Page): Locator {
+  return page
+    .locator("div")
+    .filter({ has: page.locator('a[href="/legal/cookie-policy"]') })
+    .last();
+}
+
+/** An anonymous `storageState` that has ALREADY answered the cookie banner —
+ *  the same two localStorage keys `auth.setup.ts` bakes into the authed state,
+ *  for a context that carries no session at all.
+ *
+ *  WHY PREVENTION AND NOT DISMISSAL. `dismissCookieBanner` can only react to a
+ *  banner that has already mounted, and the banner mounts from a `useEffect`
+ *  (`cookie-consent.tsx` — `visible` starts false, so it is not in the SSR
+ *  HTML), which means it appears at HYDRATION. `page.goto` resolves before
+ *  that. Measured 2026-09-03 against this branch's own prod bundle, on
+ *  `/score/…`: at 1x and 6x CPU the banner was already up when `goto`
+ *  returned, but under a 20x CPU throttle — a stand-in for four Playwright
+ *  workers on a loaded machine — `goto` returned with the banner NOT yet
+ *  mounted and it appeared 575ms later. So `dismissCookieBanner`'s
+ *  `count() === 0` early return is a silent no-op in exactly the conditions
+ *  that produce the failure, and the banner then lands on top of the pad,
+ *  where axe scans it and `boundingBox()` measures it. That is the recorded
+ *  flake in `scorepad-a11y-evidence.spec.ts` — twice — reported as
+ *  "Cookie policy 173x38, Accept 67x34, Reject 66x34" instead of pad targets.
+ *
+ *  Seeding the choice removes the race rather than widening a wait: the
+ *  effect's own `needsConsentPrompt()` reads these two keys and never sets
+ *  `visible`. Values come from `src/lib/consent` rather than being typed here,
+ *  so a key rename or a `COOKIE_POLICY_VERSION` bump moves this with it — the
+ *  version stamp is load-bearing, since a mismatch re-prompts.
+ *
+ *  Cookies stay explicitly empty. `browser.newContext()` inherits
+ *  `use.storageState` from `playwright.config.ts`, so an anonymous surface has
+ *  to say so rather than rely on an option being absent. */
+export async function consentedAnonymousState(): Promise<{
+  cookies: [];
+  origins: { origin: string; localStorage: { name: string; value: string }[] }[];
+}> {
+  const { CONSENT_KEY, CONSENT_VERSION_KEY, COOKIE_POLICY_VERSION } = await import(
+    "../src/lib/consent"
+  );
+  return {
+    cookies: [],
+    origins: [
+      {
+        origin: new URL(process.env.PLAYWRIGHT_BASE ?? "http://localhost:3000").origin,
+        localStorage: [
+          { name: CONSENT_KEY, value: "rejected" },
+          { name: CONSENT_VERSION_KEY, value: COOKIE_POLICY_VERSION },
+        ],
+      },
+    ],
+  };
+}
+
+/** Assert no cookie banner is over the surface about to be measured. The
+ *  failure this closes was SILENT-BY-DISTORTION: the banner was measured and
+ *  the numbers were reported as the pad's. This turns a recurrence into a
+ *  named failure at the point of arrival instead of a puzzling geometry
+ *  result three assertions later. Auto-retrying by design — a banner that is
+ *  still hydrating in has to have somewhere to appear before we accept 0. */
+export async function expectNoCookieBanner(page: Page, where: string): Promise<void> {
+  await expect(
+    cookieBanner(page),
+    `${where}: the cookie-consent banner is on screen, so every measurement below ` +
+      `it is taken against an obscured page (seed consent into the context's ` +
+      `storageState — see consentedAnonymousState)`,
+  ).toHaveCount(0, { timeout: 10_000 });
+}
+
 /** The cookie-consent banner renders app-wide from the root layout and its
  *  fixed overlay intercepts pointer events. `auth.setup.ts` pre-dismisses it
  *  into the shared storageState, so an authed spec never sees one — but an
  *  anonymous context (the device-link pad) does, and a banner sitting over the
  *  pad both blocks taps and distorts every geometry measurement below it.
  *  Idempotent: a no-op when no banner is on screen.
+ *
+ *  REACTIVE, AND THEREFORE SECOND-BEST. It cannot dismiss a banner that has
+ *  not mounted yet, and under load it runs before the banner arrives — see
+ *  `consentedAnonymousState`, which is the defence to reach for when you own
+ *  the context. Keep this for callers that only hold a `Page` (the authed
+ *  `page` fixture, where consent is already in the storage state and this is a
+ *  cheap no-op).
  *
  *  R8 review, Minor 4 — SCOPED TO THE BANNER, not page-wide. A bare
  *  `page.getByRole("button", {name: "Accept"})` is a page-wide match, so the
@@ -326,10 +407,7 @@ export async function scanPadContrast(
  *  rather than class-based on purpose: the container's classes are pure
  *  layout (`fixed bottom-4 left-4 …`) and would break on any restyle. */
 export async function dismissCookieBanner(page: Page): Promise<void> {
-  const banner = page
-    .locator("div")
-    .filter({ has: page.locator('a[href="/legal/cookie-policy"]') })
-    .last();
+  const banner = cookieBanner(page);
   if ((await banner.count()) === 0) return;
   const accept = banner.getByRole("button", { name: "Accept", exact: true });
   if ((await accept.count()) > 0) {
