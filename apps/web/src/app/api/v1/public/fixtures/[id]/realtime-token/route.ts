@@ -30,17 +30,15 @@ export async function GET(req: Request, { params }: Ctx) {
 }
 
 /** Doc 13 §7: a valid device link for THIS fixture gets the realtime token —
- *  same officials bypass as scorers; the holder is producing the data. */
+ *  same officials bypass as scorers; the holder is producing the data. The
+ *  ownership comparison is NOT re-spelled here: it is the same predicate the
+ *  scoring door refuses on (device-links.ts), so a change to one is a change
+ *  to both. This wrapper exists only to keep that import lazy — the usecase
+ *  module (and the entitlement lane behind it) must not load on every public
+ *  spectator's token request. */
 async function isFixtureDeviceLink(req: Request, fixtureId: string): Promise<boolean> {
-  const header = req.headers.get("authorization");
-  if (!header?.startsWith("Bearer dl_")) return false;
-  try {
-    const { resolveDeviceLinkToken } = await import("@/server/usecases/device-links");
-    const link = await resolveDeviceLinkToken(header.slice("Bearer ".length).trim());
-    return link.fixture_id === fixtureId;
-  } catch {
-    return false;
-  }
+  const { requestDeviceLinkCoversFixture } = await import("@/server/usecases/device-links");
+  return requestDeviceLinkCoversFixture(req, fixtureId);
 }
 
 async function isFixtureOfficial(fixtureId: string): Promise<boolean> {

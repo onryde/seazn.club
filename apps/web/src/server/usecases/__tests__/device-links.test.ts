@@ -17,6 +17,8 @@ import { startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
 import {
   createDeviceLink,
+  deviceLinkCoversFixture,
+  requestDeviceLinkCoversFixture,
   revokeDeviceLink,
   getActiveDeviceLink,
   resolveDeviceLinkToken,
@@ -151,9 +153,15 @@ describe.skipIf(!HAS_DB)("device links (doc 13 §7, PROMPT-21)", () => {
     expect(deviceAuth.via).toBe("device_link");
     expect(deviceAuth.userId).toBe(ownerId); // recorded_by = issued_by
     expect(deviceAuth.deviceLinkId).toBe(link.id);
+    // Pinned, not merely "an HttpError": a regression to 401/404/500, or a
+    // refusal thrown for some unrelated reason, has to fail here. 403 + this
+    // message are what api-v1/http.ts puts on the wire verbatim.
     await expect(
       requireFixtureActor(dlRequest(link.secret), otherFixture.id, "score"),
-    ).rejects.toThrowError(HttpError);
+    ).rejects.toMatchObject({ status: 403 });
+    await expect(
+      requireFixtureActor(dlRequest(link.secret), otherFixture.id, "score"),
+    ).rejects.toThrowError("This device link is for a different fixture");
 
     // Every other auth surface: 403.
     await expect(requireOrgAuth(dlRequest(link.secret), orgId, "read")).rejects.toThrowError(
@@ -235,6 +243,55 @@ describe.skipIf(!HAS_DB)("device links (doc 13 §7, PROMPT-21)", () => {
       status: 401,
       code: "LINK_REVOKED",
     });
+  });
+
+  // The ownership guard is what separates "scoring detail is free" from
+  // "any device link can score any fixture". Drive the SAME two steps the
+  // route drives (requireFixtureActor → scoreEvent on the same id) and prove
+  // the door is shut, not merely that a helper threw: scoreEvent carries no
+  // fixture-ownership check of its own (AuthCtx has no fixtureId), so if the
+  // door ever stopped refusing, the write WOULD land.
+  it("cross-fixture: the door refuses 403 and NO event reaches the other fixture", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { fixtures } = await rig(owner);
+    const [fixture, otherFixture] = fixtures;
+    const link = await createDeviceLink(owner, fixture.id, "Court 3 phone");
+
+    // Verbatim the body of POST /api/v1/fixtures/[id]/events.
+    const post = (fixtureId: string) =>
+      requireFixtureActor(dlRequest(link.secret), fixtureId, "score").then((auth) =>
+        scoreEvent(auth, fixtureId, { expected_seq: 0, type: "core.start", payload: {} }),
+      );
+
+    await expect(post(otherFixture.id)).rejects.toMatchObject({ status: 403 });
+    await expect(post(otherFixture.id)).rejects.toThrowError(
+      "This device link is for a different fixture",
+    );
+    const [{ n: leaked }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from score_events where fixture_id = ${otherFixture.id}`;
+    expect(leaked).toBe(0);
+
+    // Control: the same token writes to its OWN fixture, so the 403 above is
+    // about ownership — not an invalid token, an unstarted division, or a
+    // rejection scoreEvent would have raised for any caller.
+    const ok = await post(fixture.id);
+    expect(ok.seq).toBe(1);
+    const [{ n: own }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from score_events where fixture_id = ${fixture.id}`;
+    expect(own).toBe(1);
+
+    // Same question, second asker: the public realtime-token route decides
+    // fixture ownership for a dl_ token too. It must decide it with the SAME
+    // predicate — pinned here so a change to one is a change to both.
+    await expect(requestDeviceLinkCoversFixture(dlRequest(link.secret), fixture.id)).resolves.toBe(
+      true,
+    );
+    await expect(
+      requestDeviceLinkCoversFixture(dlRequest(link.secret), otherFixture.id),
+    ).resolves.toBe(false);
+    expect(deviceLinkCoversFixture({ fixture_id: fixture.id }, fixture.id)).toBe(true);
+    expect(deviceLinkCoversFixture({ fixture_id: fixture.id }, otherFixture.id)).toBe(false);
   });
 
   it("expiry (clock injected) → 401 LINK_EXPIRED; re-mint revokes the old link", async () => {
