@@ -34,6 +34,12 @@ describe("localDateKey", () => {
 });
 
 describe("resolvePhase — rule order", () => {
+  it("1 setting_up: an empty division is setting up, not vacuously finished", () => {
+    // The ONE shape that distinguishes the rule order: with no stages and no
+    // fixtures, `noOpenStage && noLiveFixture` is vacuously true, so a
+    // finished-first order would call a brand-new division "finished".
+    expect(resolvePhase(input({ divisionStatus: "setup", stages: [], fixtures: [] }))).toBe("setting_up");
+  });
   it("1 finished: every stage complete", () => {
     expect(resolvePhase(input({ stages: [stage({ status: "complete" })], fixtures: [fx({ status: "decided" })] }))).toBe("finished");
   });

@@ -152,4 +152,32 @@ describe.skipIf(!HAS_DB)("getCompetitionDesk", () => {
     expect(desk.in_play).toBe(1);
     expect(competitionPhase(desk)).toBe("in_play");
   });
+
+  // Fix round 1, finding 1: DEFAULT_MATCH_MINUTES must come from
+  // ScheduleConfig's own zod default (schemas.ts, 30), not a retyped
+  // constant. This division has NO schedule_settings row at all, so
+  // getCompetitionDesk falls all the way back to DEFAULT_MATCH_MINUTES — a
+  // fixture scheduled 45 minutes ago clears a 30-minute match (result
+  // overdue) but not a 60-minute one, so this witnesses the regression: it
+  // passes with 30 and fails with 60.
+  it("no schedule_settings row: a fixture 45 minutes past kickoff is result_missing under the schema's 30-minute default, not a 60-minute one", async () => {
+    const { auth } = await seedOrg();
+    const { competitionId, divisionId } = await seedDivision(auth, 4);
+    const [stage] = await createStages(auth, divisionId, {
+      seq: 1,
+      kind: "league",
+      name: "League",
+      config: {},
+      progression: null,
+    });
+    await generateStageFixtures(auth, stage!.id);
+    await sql`update divisions set status = 'active' where id = ${divisionId}`;
+    const [f] = await sql<{ id: string }[]>`select id from fixtures where division_id = ${divisionId} order by fixture_no limit 1`;
+    await sql`update fixtures set status = 'scheduled', scheduled_at = now() - interval '45 minutes' where id = ${f!.id}`;
+    const [settingsRow] = await sql<{ division_id: string }[]>`select division_id from schedule_settings where division_id = ${divisionId}`;
+    expect(settingsRow).toBeUndefined();
+    const desk = await getCompetitionDesk(auth, competitionId);
+    const d = desk.divisions.get(divisionId)!;
+    expect(d.attention).toContainEqual({ kind: "result_missing", fixtureId: f!.id });
+  });
 });

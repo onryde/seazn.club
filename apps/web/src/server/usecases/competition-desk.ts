@@ -7,6 +7,7 @@
 import "server-only";
 import { withTenant } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
+import { ScheduleConfig } from "@/server/api-v1/schemas";
 import { log } from "@/server/logger";
 import { resolveVenueTz } from "@/lib/tz";
 import {
@@ -45,7 +46,11 @@ export interface CompetitionDesk {
   divisions: Map<string, DeskDivision>;
 }
 
-const DEFAULT_MATCH_MINUTES = 60;
+/** Derived from the schema's own default so the two can never drift
+ *  (schemas.ts's `ScheduleConfig.matchMinutes` `.default(30)`) — a division
+ *  with no schedule_settings row at all parses an empty config the same way
+ *  the read path does (schedule.ts:296's `ScheduleConfig.parse`). */
+const DEFAULT_MATCH_MINUTES = ScheduleConfig.parse({}).matchMinutes;
 
 type StageRaw = {
   id: string;
