@@ -1,5 +1,5 @@
-import { t } from "@/lib/i18n";
-import type { Dict } from "@/lib/i18n-constants";
+import { plural, t } from "@/lib/i18n";
+import type { Dict, Locale } from "@/lib/i18n-constants";
 import type { DivisionPhase } from "@/lib/division-phase";
 
 export interface StatusLineInput {
@@ -11,7 +11,7 @@ export interface StatusLineInput {
   entrants: number;
   next: { scheduledAt: string | null; home: string | null; away: string | null } | null;
   needsDrawStageName: string | null;
-  locale: string;
+  locale: Locale;
   /** Display zone (schedule_settings.tz resolved) — formatting only. */
   displayTz: string;
 }
@@ -40,7 +40,10 @@ export function statusLine(dict: Dict, i: StatusLineInput): string {
     case "setting_up":
       line = i.needsDrawStageName
         ? t(dict, "desk.status.needsDraw", { ...base, stage: i.needsDrawStageName })
-        : t(dict, "desk.status.settingUp", { entrants: i.entrants });
+        // `{count} entrants` read "1 entrants" for the first entrant an
+        // organiser adds — the count strings go through `plural()` so the
+        // noun agrees (see the sibling keys in needs-you.tsx).
+        : plural(dict, "desk.status.settingUp", i.entrants, i.locale);
       break;
     case "match_day":
       line = t(dict, "desk.status.matchDay", { ...base, inPlay: i.inPlay });

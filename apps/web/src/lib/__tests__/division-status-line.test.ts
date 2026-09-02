@@ -21,6 +21,17 @@ describe("statusLine", () => {
   it("setting up without a draw counts entrants", () => {
     expect(statusLine(en, { ...base, phase: "setting_up", played: 0, total: 0, next: null })).toBe("Setting up · 6 entrants");
   });
+
+  // The first entrant an organiser adds read "1 entrants" until the key was
+  // split — the singular is the state this line is MOST often seen in.
+  it("setting up says one entrant, not one entrants", () => {
+    expect(statusLine(en, { ...base, phase: "setting_up", played: 0, total: 0, entrants: 1, next: null })).toBe("Setting up · 1 entrant");
+  });
+
+  it("setting up keeps the plural for every other count", () => {
+    expect(statusLine(en, { ...base, phase: "setting_up", played: 0, total: 0, entrants: 0, next: null })).toBe("Setting up · 0 entrants");
+    expect(statusLine(en, { ...base, phase: "setting_up", played: 0, total: 0, entrants: 2, next: null })).toBe("Setting up · 2 entrants");
+  });
   it("match day counts in play and appends unscheduled", () => {
     expect(statusLine(en, { ...base, phase: "match_day", inPlay: 2, unscheduled: 3 })).toBe("10 of 15 played · 2 in play · 3 unscheduled");
   });
