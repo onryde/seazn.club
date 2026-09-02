@@ -1174,6 +1174,13 @@ function divergedView(opts: ViewOpts = {}): PadHostView {
   };
 }
 
+/** The two side labels as the oracle `t` renders them — resolved through the
+ *  SAME `t` the skin uses, never a second copy of the key's text. */
+const SIDE_LABEL_VALUES = {
+  home: t("scorepad.attribution.home"),
+  away: t("scorepad.attribution.away"),
+};
+
 describe("R8/#676 — the strip holds its shape across a serve-reader refusal", () => {
   it("the diverged view really does make the reader refuse, and for the drift reason", () => {
     const v = divergedView();
@@ -1231,6 +1238,32 @@ describe("R8/#676 — the strip holds its shape across a serve-reader refusal", 
     expect(h?.reserve, "the reservation is the value SPACE, not the current value").toEqual(a?.reserve);
     expect(h?.reserve).toContain(h?.value);
     expect(h?.reserve).toContain(a?.value);
+  });
+
+  it("DOUBLES reserves only the two side labels — no player name it can never show", () => {
+    // Round-2 review: the reserve was briefly widened to every on-field name,
+    // which for doubles reserves the width of the longest of FOUR names for a
+    // slot that can only ever display "Home"/"Away" — BWF declares no
+    // `serverFromPairOrder`, so `ctx.serverPersonId` is always null here. Real
+    // width lost at 320px for a value that cannot land, against the owner's
+    // standing mobile ruling.
+    const spec = buildScorebug(view({ lineups: DOUBLES, events: stream(rally("H"), rally("H")) }), t);
+    const server = spec.strip.find((i) => i.id === "server");
+    expect(server?.value, "a doubles side is named by its SIDE, never a player").toBe(
+      SIDE_LABEL_VALUES.home,
+    );
+    expect(server?.reserve).toEqual([SIDE_LABEL_VALUES.home, SIDE_LABEL_VALUES.away]);
+    for (const name of Object.values(NAMES)) {
+      expect(server?.reserve, `no player name belongs in a doubles reserve: ${name}`).not.toContain(name);
+    }
+    expect(assertScorebugSpec(spec)).toEqual([]);
+  });
+
+  it("SINGLES reserves the two players, which is exactly what it can show", () => {
+    const spec = buildScorebug(view({ events: stream(rally("H"), rally("H")) }), t);
+    const server = spec.strip.find((i) => i.id === "server");
+    expect(server?.reserve).toEqual([NAMES.H1, NAMES.A1]);
+    expect(server?.reserve).toContain(server?.value);
   });
 
   it("does NOT reserve before the first rally — an absent server is not a drifting one", () => {

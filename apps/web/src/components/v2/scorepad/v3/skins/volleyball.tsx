@@ -797,7 +797,7 @@ function buildStrip(
   // `value ∈ reserve` — the check that catches a reserve which has silently
   // drifted from its own value space. Special-casing this one slot on a
   // typographic argument would have bought nothing and cost the guard.
-  const rotationReserve = ["1", "2", "3", "4", "5", "6"];
+  const rotationReserve = ROTATION_VALUES;
   if (phase === "live" && serving) {
     const value = serving.personId ? nameOf(view, serving.personId, t) : t(SIDE_LABEL[serving.side]);
     items.push({
@@ -819,6 +819,26 @@ function buildStrip(
         id: "rotation",
         label: t("pad.volleyball.scorebug.strip.rotation"),
         value: String(serveCtx.rotation),
+        reserve: rotationReserve,
+      });
+    } else if (fieldsTheRotation(view, state, serving.side)) {
+      // THE ANSWERED BRANCH RE-FLOWS TOO, and this is the case the workstream
+      // is named after. `rotation` is undefined whenever the chain is broken,
+      // and under `rally-winner` that is reachable WITH THE SIDE STILL KNOWN: a
+      // partial summary sets `chainBroken = "score-jumped"` and `serving = null`
+      // (kernel.ts), then the very next rally re-populates `serving` from the
+      // winner while `chainBroken` stays set. An indoor strip then names the
+      // server with no rotation beside it, and the row loses a slot exactly as
+      // it does on a full refusal.
+      //
+      // Unlike the drift branch below, this one KNOWS the serving side, so it
+      // can ask `fieldsTheRotation` about that side specifically rather than
+      // about either — a beach pair still gets nothing, an indoor six holds its
+      // slot open until the chain re-anchors at the next set boundary.
+      items.push({
+        label: t("pad.volleyball.scorebug.strip.rotation"),
+        value: "",
+        reserved: true,
         reserve: rotationReserve,
       });
     }
@@ -843,9 +863,12 @@ function buildStrip(
     // Either side, not both: the answered slot belongs to whichever side is
     // serving, and on a refusal there is no serving side to ask. So this
     // reserves where the slot COULD appear and stays silent where it never can.
-    // It does not (and cannot) cover the narrower case of an indoor chain break
-    // with a known side, where the answered strip also drops rotation — that
-    // asymmetry predates this change and is not made worse by it.
+    // The narrower case — an indoor chain break with the SIDE STILL KNOWN — is
+    // not this branch's to cover and is handled in the answered branch above,
+    // which knows the side and so can ask about that side specifically. (An
+    // earlier revision of this comment asserted that case "cannot" be covered.
+    // That was true of THIS branch and false of the one above it, which is the
+    // worst place for a comment to be wrong.)
     if (fieldsTheRotation(view, state, "home") || fieldsTheRotation(view, state, "away")) {
       items.push({
         label: t("pad.volleyball.scorebug.strip.rotation"),
@@ -921,9 +944,19 @@ export const RALLY_LOCKED_TILE_ID = "rallyLocked";
 export const SET_SCORE_TILE_ID = "setScore";
 export const SERVE_ANCHOR_TILE_ID = "serveAnchor";
 
-/** FIVB 7.6.2 — six court positions, rotated one place each time the side
- *  takes the serve back. */
-const ROTATION_CYCLE = 6;
+/** FIVB 7.6.2 — six court positions, rotated one place each time the side takes
+ *  the serve back. DERIVED from the preset that actually drives the kernel
+ *  (`setbased/volleyball.ts`'s `serveRotation.rotationCycle`), never a second
+ *  copy of the number: a hand-typed 6 sitting beside its own source of truth is
+ *  how a cycle change ships half-applied. `?? 6` only for the type's optionality
+ *  — volleyball declares it. */
+const ROTATION_CYCLE = volleyballModule.serveRotation.rotationCycle ?? 6;
+
+/** Every rotation number this sport can display, 1..cycle — the `rotation`
+ *  slot's whole value space, for `StripItem.reserve`. Derived from the same
+ *  constant for the same reason, and matching the kernel's own
+ *  `rotationNumber = (gains % cycle) + 1`. */
+const ROTATION_VALUES: string[] = Array.from({ length: ROTATION_CYCLE }, (_, i) => String(i + 1));
 
 /**
  * Does this side field the six positions FIVB 7.6.2 numbers?

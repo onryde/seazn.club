@@ -447,23 +447,44 @@ describe("R8/#676 — a width-reserving strip slot", () => {
     expect(slotTag(html, "data-strip-reserved")).toContain("aria-hidden");
   });
 
-  it("MOBILE FLOOR: the reserving slot is min-w-0 and never nowrap/truncate", () => {
+  it("MOBILE FLOOR: the reserving WRAPPER and every sizer are min-w-0, never nowrap/truncate", () => {
     // The 320px guard, and the reason this is a test rather than a comment.
-    // A grid/flex child's min-content width is a HARD floor its parent cannot
-    // shrink past, so a slot reserving the wider of two names would push the
-    // band into horizontal scroll on a phone — an overflow traded for a
-    // re-flow, which is the worse defect. `min-w-0` makes the reservation a
-    // PREFERRED width that yields under pressure; `truncate`/`nowrap` would put
-    // the floor straight back (both set white-space: nowrap, which makes
-    // min-content the whole un-wrapped string).
+    // There are TWO independent floors and each needs its own assertion:
+    //
+    //   1. the WRAPPER is a flex item of the band — without `min-w-0` its
+    //      min-content width is a hard floor the band cannot shrink past;
+    //   2. each SIZER is a grid item of the wrapper — a grid track's automatic
+    //      minimum is its items' min-content, so without `min-w-0` on the
+    //      sizers the widest candidate is still a floor and the box yields
+    //      while the ink overflows.
+    //
+    // `truncate`/`nowrap` would put both floors straight back (they set
+    // white-space: nowrap, making min-content the whole un-wrapped string).
+    //
+    // ANCHORED ON THE WRAPPER, NOT ON `data-strip-item-id`. That marker moved
+    // onto the inner visible span in the C1 fix, so a `lastIndexOf("<span")`
+    // from it silently began inspecting the wrong element — and mutants M10 and
+    // M11 (drop `min-w-0` from wrapper / from sizers) both survived in
+    // consequence. The round-1 M4 kill had been carried entirely by its
+    // `truncate` half; the `min-w-0` half was guarding nothing.
     const html = renderStripToString([
       { id: "server", label: "Server", value: "Al", reserve: ["Al", "Bartholomew"] },
     ]);
-    const tag = slotTag(html, 'data-strip-item-id="server"');
-    expect(tag, "a reserving slot must be able to shrink below its content").toContain("min-w-0");
-    expect(tag).not.toContain("truncate");
-    expect(tag).not.toContain("nowrap");
-    expect(html, "and no sizer inside it may reintroduce the floor either").not.toContain("truncate");
+
+    const wrapper = slotTag(html, "justify-items-center");
+    expect(wrapper, "the reserving wrapper must shrink below its content").toContain("min-w-0");
+    expect(wrapper).not.toContain("truncate");
+    expect(wrapper).not.toContain("nowrap");
+
+    const sizers = [...html.matchAll(/class="([^"]*\binvisible\b[^"]*)"/g)].map((m) => m[1]!);
+    expect(sizers.length, "the sizers must actually be in the markup to be checked").toBe(2);
+    for (const cls of sizers) {
+      expect(cls, `a sizer without min-w-0 is a grid-track floor: ${cls}`).toContain("min-w-0");
+      expect(cls).not.toContain("truncate");
+      expect(cls).not.toContain("nowrap");
+    }
+
+    expect(html, "nothing anywhere in the slot may reintroduce the floor").not.toContain("truncate");
   });
 
   it("the LOCATED element holds the visible text only — never the reserve sizers", () => {

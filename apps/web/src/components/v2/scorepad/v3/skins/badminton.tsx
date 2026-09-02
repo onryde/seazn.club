@@ -534,19 +534,28 @@ function nameOf(view: PadHostView, personId: string, t: TFn): string {
  */
 function serverCandidates(view: PadHostView, t: TFn): string[] {
   const sides = ["home", "away"] as const;
-  // A SUPERSET, matching table tennis's and volleyball's own. The landed value
-  // is `ctx.serverPersonId ?? soleMemberOf(...)` (`servingInfo`), and mirroring
-  // only the `soleMemberOf` half was fragile in a way that would fail silently:
-  // BWF declares no `serverFromPairOrder` today, so `serverPersonId` is always
-  // null here — but a preset that ever declared one would name a PAIR MEMBER,
-  // which a sole-member-only reserve does not contain, and the slot would
-  // render wider answered than reserved with nothing to catch it. Every
-  // on-field player covers `serverPersonId` whatever the preset decides;
-  // `assertScorebugSpec`'s `value ∈ reserve` check is the backstop.
-  return [
-    ...sides.flatMap((side) => onFieldPlayers(view.squads, side).map((m) => nameOf(view, m.personId, t))),
-    ...sides.map((side) => t(SIDE_LABEL[side])),
-  ];
+  // THE EXACT VALUE SPACE, mirroring `servingInfo`'s own
+  // `ctx.serverPersonId ?? soleMemberOf(...)` in the same order.
+  //
+  // Deliberately NOT "every on-field player", which is what table tennis and
+  // volleyball reserve. BWF declares no `serverFromPairOrder`, so
+  // `ctx.serverPersonId` is always null here and a DOUBLES side can only ever
+  // display its side label — reserving four player names for a slot that can
+  // never show one costs real width at 320px and buys nothing the contract
+  // needs. The `value ∈ reserve` check in `assertScorebugSpec` was already
+  // satisfied by this exact form.
+  const exact = sides.map((side) => {
+    const sole = soleMemberOf(view.squads, side);
+    return sole === null ? t(SIDE_LABEL[side]) : nameOf(view, sole, t);
+  });
+  // ...and the pair-order branch ONLY where a preset actually turns it on, read
+  // off the SAME source object the reader is handed rather than assumed. This
+  // is the honest form of round 1's "Minor": if BWF ever declared
+  // `serverFromPairOrder`, `serverPersonId` would name a pair member and the
+  // landed value would otherwise fall outside its own reserve — caught by the
+  // contract check, but only after it shipped.
+  if (badmintonModule.serveRotation.serverFromPairOrder !== true) return exact;
+  return [...exact, ...sides.flatMap((side) => onFieldPlayers(view.squads, side).map((m) => nameOf(view, m.personId, t)))];
 }
 
 /** Both BWF service courts — the `court` slot's whole value space. */

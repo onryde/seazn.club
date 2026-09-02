@@ -1585,6 +1585,22 @@ function divergedView(opts: ViewOpts = {}): PadHostView {
   return { ...view({ ...opts, events: localEvents }), state: foldClient(volleyball, cfg, lineups, serverEvents) };
 }
 
+/** 1..cycle, derived from the SAME preset field the skin derives it from — so
+ *  a rotationCycle change moves the test with the code instead of leaving it
+ *  asserting yesterday's numbers. */
+/** A PARTIAL summary — jumps the score without banking the set, which is what
+ *  makes the kernel record `chainBroken = "score-jumped"` and clear `serving`
+ *  while leaving the set open. A full summary banks and re-anchors instead. */
+const partialSummary = (home: number, away: number): readonly [string, unknown] => [
+  SUMMARY_TYPE,
+  { home, away, partial: true },
+];
+
+const ROTATION_VALUES_EXPECTED = Array.from(
+  { length: volleyball.serveRotation.rotationCycle ?? 6 },
+  (_, i) => String(i + 1),
+);
+
 describe("R8/#676 — volleyball holds its strip's shape across a refusal", () => {
   it("the diverged view really is a DRIFT refusal", () => {
     const v = divergedView();
@@ -1657,5 +1673,45 @@ describe("R8/#676 — volleyball holds its strip's shape across a refusal", () =
   it("reserves nothing before the first rally — absence is not drift", () => {
     const spec = buildScorebug(view({ events: stream() }), t);
     expect(spec.strip.some((i) => i.reserved === true)).toBe(false);
+  });
+
+  it("holds the ROTATION slot open when the chain broke but the SIDE is still known", () => {
+    // The answered branch re-flows too, and this is the case the workstream is
+    // named after. Under `rally-winner` a PARTIAL summary jumps the score,
+    // which sets `chainBroken = "score-jumped"` and clears `serving`; the very
+    // next rally re-populates `serving` from the winner while `chainBroken`
+    // stays set. So the reader names a SIDE with no rotation number beside it —
+    // an indoor strip that shows the server and drops the rotation, losing a
+    // slot exactly as it does on a full refusal.
+    const v = view({
+      events: stream(rally("H", { serving: "H" }), partialSummary(10, 8), rally("H")),
+    });
+    const ctx = serveContextOf(v, v.state as never);
+    expect(ctx?.side, "precondition: the SIDE is still known").toBe("home");
+    expect(ctx?.rotation, "precondition: but the rotation number is not").toBeUndefined();
+
+    const spec = buildScorebug(v, t);
+    expect(spec.strip.map((i) => i.id), "the server is still named").toContain("server");
+    expect(spec.strip.map((i) => i.id), "the rotation NUMBER is still refused").not.toContain("rotation");
+    const held = spec.strip.filter((i) => i.reserved === true);
+    expect(held, "but its slot is held open so the row does not lose one").toHaveLength(1);
+    expect(held[0]?.reserve).toEqual(ROTATION_VALUES_EXPECTED);
+    expect(assertScorebugSpec(spec)).toEqual([]);
+  });
+
+  it("a BEACH pair holds NO rotation slot open on a broken chain either", () => {
+    // The same path, on a side that fields no six: `fieldsTheRotation` is false
+    // for the serving side, so nothing is reserved and the beach row does not
+    // grow. Without the per-side gate this would add a permanent phantom slot.
+    const v = view({
+      lineups: PAIR,
+      cfg: BEACH_CFG,
+      events: stream(rally("H", { serving: "H" }), partialSummary(10, 8), rally("H")),
+    });
+    const spec = buildScorebug(v, t);
+    expect(spec.strip.map((i) => i.id)).toContain("server");
+    expect(spec.strip.some((i) => i.reserved === true), "a beach pair has no rotation to hold").toBe(
+      false,
+    );
   });
 });

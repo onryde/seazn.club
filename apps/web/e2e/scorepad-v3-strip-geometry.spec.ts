@@ -45,6 +45,9 @@ const SHORT = "Al";
 // token would be a width floor for the UNRESERVED render too, so the test
 // would pass without the fix and prove nothing.
 const LONG = "Bartholomew Quartermaine Fitzwilliam";
+/** Derived, never a second copy: hardcoding a substring of LONG lets a rename
+ *  quietly vacate the negative assertions that use it. */
+const LONG_FIRST_WORD = LONG.split(" ")[0]!;
 // The 320px hard case: a long SINGLE WORD cannot wrap, so it is the value most
 // likely to make a reserved slot overflow its band.
 const LONG_UNBREAKABLE = "Featherstonehaughsmythe";
@@ -128,7 +131,7 @@ for (const width of [320, 768, 1280] as const) {
     await expect(
       strip(page, "server"),
       "the located element must not expose the reserve sizers' text",
-    ).not.toContainText("Bartholomew");
+    ).not.toContainText(LONG_FIRST_WORD);
 
     const gamesShort = await boxOf(page, "games");
     const bandShort = await bandBox(page);
