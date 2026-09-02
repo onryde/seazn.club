@@ -926,7 +926,7 @@ export function refusedEventTypes(view: PadHostView): string[] {
  *  hierarchy badminton's own coarse event carries (unlike tennis's
  *  three-level points -> games -> sets, whose own sheet is titled "Games"
  *  for exactly that reason). */
-function setScoreSheet(view: PadHostView, t: TFn): GuidedSheetSpec {
+function setScoreSheet(view: PadHostView): GuidedSheetSpec {
   const state = asState(view.state);
   const cfg = cfgOf(view);
   const bound = scoreBound(cfg);
@@ -937,7 +937,7 @@ function setScoreSheet(view: PadHostView, t: TFn): GuidedSheetSpec {
       {
         id: "home",
         kind: "number",
-        title: t("pad.tabletennis.sheet.setScore.home.title"),
+        title: "pad.tabletennis.sheet.setScore.home.title",
         initial: open?.home ?? 0,
         min: 0,
         max: bound,
@@ -945,7 +945,7 @@ function setScoreSheet(view: PadHostView, t: TFn): GuidedSheetSpec {
       {
         id: "away",
         kind: "number",
-        title: t("pad.tabletennis.sheet.setScore.away.title"),
+        title: "pad.tabletennis.sheet.setScore.away.title",
         initial: open?.away ?? 0,
         min: 0,
         max: bound,
@@ -959,7 +959,7 @@ function setScoreSheet(view: PadHostView, t: TFn): GuidedSheetSpec {
  *  two-step ladder. `reason` is free text with no text step in this
  *  chassis, so it is not collected, same ruling badminton and tennis both
  *  record for their own sanction sheets. */
-function sanctionSheet(view: PadHostView, side: Side, t: TFn): GuidedSheetSpec {
+function sanctionSheet(view: PadHostView, side: Side): GuidedSheetSpec {
   const state = asState(view.state);
   const players = onFieldPlayers(view.squads, side);
   const sole = players.length === 1 ? players[0]!.personId : null;
@@ -967,7 +967,7 @@ function sanctionSheet(view: PadHostView, side: Side, t: TFn): GuidedSheetSpec {
     {
       id: "level",
       kind: "choice",
-      title: t("pad.tabletennis.sheet.sanction.level.title"),
+      title: "pad.tabletennis.sheet.sanction.level.title",
       options: SANCTION_LEVELS.map((level) => ({
         id: level,
         label: vocabKey("level", level) ?? level,
@@ -979,7 +979,7 @@ function sanctionSheet(view: PadHostView, side: Side, t: TFn): GuidedSheetSpec {
     steps.push({
       id: "person",
       kind: "person",
-      title: t("pad.tabletennis.sheet.sanction.person.title"),
+      title: "pad.tabletennis.sheet.sanction.person.title",
       pool: "onfield",
       side,
       candidates: players.map((member) => member.personId),
@@ -1009,14 +1009,14 @@ function sanctionSheet(view: PadHostView, side: Side, t: TFn): GuidedSheetSpec {
  * for a singles side, never asked for a pair (nothing changes about R5-2's
  * own rule just because this rally arrived through a sheet).
  */
-function serveAnchorSheet(view: PadHostView, t: TFn): GuidedSheetSpec {
+function serveAnchorSheet(view: PadHostView): GuidedSheetSpec {
   const state = asState(view.state);
   const options = SIDES.map((side) => ({ id: side, label: SIDE_LABEL[side] }));
   return {
     event: RALLY_TYPE,
     steps: [
-      { id: "serving", kind: "choice", title: t("pad.tabletennis.sheet.serveAnchor.serving.title"), options },
-      { id: "wonBy", kind: "choice", title: t("pad.tabletennis.sheet.serveAnchor.wonBy.title"), options },
+      { id: "serving", kind: "choice", title: "pad.tabletennis.sheet.serveAnchor.serving.title", options },
+      { id: "wonBy", kind: "choice", title: "pad.tabletennis.sheet.serveAnchor.wonBy.title", options },
     ],
     buildPayload: (answers) => {
       const servingSide: Side = answers.serving === "away" ? "away" : "home";
@@ -1035,10 +1035,10 @@ function serveAnchorSheet(view: PadHostView, t: TFn): GuidedSheetSpec {
 
 export function buildSheets(view: PadHostView, t: TFn): Record<string, GuidedSheetSpec> {
   const sheets: Record<string, GuidedSheetSpec> = {
-    [SET_SCORE_TILE_ID]: setScoreSheet(view, t),
-    [SERVE_ANCHOR_TILE_ID]: serveAnchorSheet(view, t),
+    [SET_SCORE_TILE_ID]: setScoreSheet(view),
+    [SERVE_ANCHOR_TILE_ID]: serveAnchorSheet(view),
   };
-  for (const side of SIDES) sheets[sanctionSheetKey(side)] = sanctionSheet(view, side, t);
+  for (const side of SIDES) sheets[sanctionSheetKey(side)] = sanctionSheet(view, side);
   return sheets;
 }
 

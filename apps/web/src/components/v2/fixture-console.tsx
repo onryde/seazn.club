@@ -42,6 +42,8 @@ import { ScorePad, type ScorePadBootstrap } from "@/components/v2/scorepad/regis
 // decided, and a finalized fixture must still show what happened.
 import { ActivityPanel, type ActivityDetailResolver, type ActivityEvent } from "@/components/v2/scorepad/v3/activity";
 import { resolvePad } from "@/components/v2/scorepad/v3/registry";
+import { cricketHasNoInnings } from "@/components/v2/scorepad/v3/skins/cricket";
+import { genericHasNoResult } from "@/components/v2/scorepad/v3/skins/generic";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
 
@@ -432,6 +434,23 @@ export function FixtureConsole({
   // `shootoutScoreFromDetail` reads it to put a number in the decided
   // sentence below when the method is a shoot-out.
   const summary = live.summary as { headline?: string; detail?: unknown } | null;
+  // R7 follow-ups item 2 — this header has no `ownsHeadline`-style guard of
+  // its own (that lives on the v3 pad skin, `ScorePad` below), so a fresh
+  // cricket OR generic fixture rendered `summary.headline` verbatim: both
+  // modules' `sideLine` produce the literal `— — —` for a side with nothing
+  // recorded yet (cricket: no innings; generic: `score`/`outcome`/`running`
+  // all still at their `init()` shape) — a code-review pass on this fix
+  // found the same defect reachable for "generic", the universal
+  // scoring surface for every sport this engine does not model (R7/A1), not
+  // a placeholder skin. The other 9 built-in sports were swept and do NOT
+  // degenerate: their headlines are numeric ("0 — 0") from the first render.
+  // Scoped to exactly the pre-match question — never string-matches the
+  // rendered headline — by reusing each pad's own predicate off the same raw
+  // `live.state` this component already threads down to `<ScorePad>`, so the
+  // two surfaces cannot drift on what "before a match has produced one" means.
+  const suppressHeadline =
+    (sport.key === "cricket" && cricketHasNoInnings(live.state)) ||
+    (sport.key === "generic" && genericHasNoResult(live.state));
   // Same widening as apps/web/src/server/public-site/data.ts's PublicFixture
   // — `live.outcome` was read only as `!== null` before this task (the
   // `decided` boolean below); `method` reached nobody. Structural, not the
@@ -586,9 +605,11 @@ export function FixtureConsole({
             {scoreStatusLabel(msg, live.status)}
           </span>
         </div>
-        <p className="mt-2 font-mono text-2xl text-slate-800">
-          {summary?.headline ?? "—"}
-        </p>
+        {!suppressHeadline && (
+          <p className="mt-2 font-mono text-2xl text-slate-800">
+            {summary?.headline ?? "—"}
+          </p>
+        )}
         {/* R3.5/Task G — the v3 pad unmounts once decided; this is the
             organiser console's surviving surface for "who won, and how". */}
         {decidedLine && <p className="mt-1 text-sm font-medium text-slate-700">{decidedLine}</p>}

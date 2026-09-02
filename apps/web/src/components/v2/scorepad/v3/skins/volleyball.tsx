@@ -1127,7 +1127,7 @@ export function refusedEventTypes(view: PadHostView): string[] {
  *  from the CURRENT open set. Titled "Points", not "Sets": volleyball's
  *  `set.summary` scores POINTS within one set, the same two-level hierarchy
  *  badminton's/table tennis's own coarse event carries. */
-function setScoreSheet(view: PadHostView, t: TFn): GuidedSheetSpec {
+function setScoreSheet(view: PadHostView): GuidedSheetSpec {
   const state = asState(view.state);
   const cfg = cfgOf(view);
   const bound = scoreBound(cfg);
@@ -1138,7 +1138,7 @@ function setScoreSheet(view: PadHostView, t: TFn): GuidedSheetSpec {
       {
         id: "home",
         kind: "number",
-        title: t("pad.volleyball.sheet.setScore.home.title"),
+        title: "pad.volleyball.sheet.setScore.home.title",
         initial: open?.home ?? 0,
         min: 0,
         max: bound,
@@ -1146,7 +1146,7 @@ function setScoreSheet(view: PadHostView, t: TFn): GuidedSheetSpec {
       {
         id: "away",
         kind: "number",
-        title: t("pad.volleyball.sheet.setScore.away.title"),
+        title: "pad.volleyball.sheet.setScore.away.title",
         initial: open?.away ?? 0,
         min: 0,
         max: bound,
@@ -1160,7 +1160,7 @@ function setScoreSheet(view: PadHostView, t: TFn): GuidedSheetSpec {
  *  four-step ladder. `reason` is free text with no text step in this
  *  chassis, so it is not collected, same ruling badminton/table tennis both
  *  record for their own sanction sheets. */
-function sanctionSheet(view: PadHostView, side: Side, t: TFn): GuidedSheetSpec {
+function sanctionSheet(view: PadHostView, side: Side): GuidedSheetSpec {
   const state = asState(view.state);
   const players = onFieldPlayers(view.squads, side);
   const sole = players.length === 1 ? players[0]!.personId : null;
@@ -1168,7 +1168,7 @@ function sanctionSheet(view: PadHostView, side: Side, t: TFn): GuidedSheetSpec {
     {
       id: "level",
       kind: "choice",
-      title: t("pad.volleyball.sheet.sanction.level.title"),
+      title: "pad.volleyball.sheet.sanction.level.title",
       options: SANCTION_LEVELS.map((level) => ({
         id: level,
         label: vocabKey("level", level) ?? level,
@@ -1180,7 +1180,7 @@ function sanctionSheet(view: PadHostView, side: Side, t: TFn): GuidedSheetSpec {
     steps.push({
       id: "person",
       kind: "person",
-      title: t("pad.volleyball.sheet.sanction.person.title"),
+      title: "pad.volleyball.sheet.sanction.person.title",
       pool: "onfield",
       side,
       candidates: players.map((member) => member.personId),
@@ -1254,7 +1254,7 @@ function needsSetOpener(view: PadHostView, state: VolleyballStateShape): boolean
  * `serving` attached, which is exactly what `setBasedServeWalk` anchors on at
  * `before === 0`.
  */
-function serveOpenerSheet(view: PadHostView, winner: Side, t: TFn): GuidedSheetSpec {
+function serveOpenerSheet(view: PadHostView, winner: Side): GuidedSheetSpec {
   const state = asState(view.state);
   return {
     event: RALLY_TYPE,
@@ -1262,7 +1262,7 @@ function serveOpenerSheet(view: PadHostView, winner: Side, t: TFn): GuidedSheetS
       {
         id: "serving",
         kind: "choice",
-        title: t("pad.volleyball.sheet.serveAnchor.serving.title"),
+        title: "pad.volleyball.sheet.serveAnchor.serving.title",
         options: SIDES.map((side) => ({ id: side, label: SIDE_LABEL[side] })),
       },
     ],
@@ -1276,14 +1276,14 @@ function serveOpenerSheet(view: PadHostView, winner: Side, t: TFn): GuidedSheetS
   };
 }
 
-function serveAnchorSheet(view: PadHostView, t: TFn): GuidedSheetSpec {
+function serveAnchorSheet(view: PadHostView): GuidedSheetSpec {
   const state = asState(view.state);
   const options = SIDES.map((side) => ({ id: side, label: SIDE_LABEL[side] }));
   return {
     event: RALLY_TYPE,
     steps: [
-      { id: "serving", kind: "choice", title: t("pad.volleyball.sheet.serveAnchor.serving.title"), options },
-      { id: "wonBy", kind: "choice", title: t("pad.volleyball.sheet.serveAnchor.wonBy.title"), options },
+      { id: "serving", kind: "choice", title: "pad.volleyball.sheet.serveAnchor.serving.title", options },
+      { id: "wonBy", kind: "choice", title: "pad.volleyball.sheet.serveAnchor.wonBy.title", options },
     ],
     buildPayload: (answers) => {
       const servingSide: Side = answers.serving === "away" ? "away" : "home";
@@ -1298,15 +1298,15 @@ function serveAnchorSheet(view: PadHostView, t: TFn): GuidedSheetSpec {
 
 export function buildSheets(view: PadHostView, t: TFn): Record<string, GuidedSheetSpec> {
   const sheets: Record<string, GuidedSheetSpec> = {
-    [SET_SCORE_TILE_ID]: setScoreSheet(view, t),
-    [SERVE_ANCHOR_TILE_ID]: serveAnchorSheet(view, t),
+    [SET_SCORE_TILE_ID]: setScoreSheet(view),
+    [SERVE_ANCHOR_TILE_ID]: serveAnchorSheet(view),
   };
   // Registered unconditionally, like every other sheet here: `buildSheets`
   // carries no phase gate, and the HALF is what decides whether either is
   // reachable (`needsSetOpener`). A sheet nobody opens is inert — the same
   // posture `sanctionSheetKey`'s pair already takes.
-  for (const side of SIDES) sheets[openerSheetKey(side)] = serveOpenerSheet(view, side, t);
-  for (const side of SIDES) sheets[sanctionSheetKey(side)] = sanctionSheet(view, side, t);
+  for (const side of SIDES) sheets[openerSheetKey(side)] = serveOpenerSheet(view, side);
+  for (const side of SIDES) sheets[sanctionSheetKey(side)] = sanctionSheet(view, side);
   return sheets;
 }
 

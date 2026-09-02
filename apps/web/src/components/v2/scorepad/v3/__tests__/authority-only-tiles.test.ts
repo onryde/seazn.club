@@ -27,9 +27,13 @@ import { AUTHORITY_ONLY_EVENT_TYPES, filterTilesByBand } from "../pad-host";
 import type { GuidedSheetSpec, SwapSlot, TileSpec } from "../types";
 import type { FidelityBand, PadSpec } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
+import type { MessageKey } from "@/lib/messages";
 
+// `label` is never read by any assertion in this file — only `id`/`action`
+// matter to the authority-band block under test — so a fixture-only, never
+// resolved key is cast rather than spelled as a real dictionary entry.
 function tile(id: string, action: TileSpec["action"]): TileSpec {
-  return { id, label: `l.${id}`, kind: "standard", phases: ["live"], action };
+  return { id, label: `l.${id}` as MessageKey, kind: "standard", phases: ["live"], action };
 }
 
 /** Empty on purpose: with no `fidelity` entry every tile below is KEPT by

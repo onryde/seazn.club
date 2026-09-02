@@ -577,6 +577,28 @@ describe("buildSheets", () => {
     const step = buildSheets(v, t)[CORRECTION_TILE_ID]!.steps.find((s) => s.kind === "number");
     if (step?.kind === "number") expect(step.max).toBe(50);
   });
+
+  // R7 follow-ups item 3 — `scoreEntrySheet`/`correctionSheet` used to
+  // pre-resolve their steps' `title` through `t()` themselves, and
+  // `guided-sheet.tsx` calls `t(step.title)` AGAIN at render time; with a
+  // real translator that double-resolution logs `[i18n] missing key` on every
+  // render (proved directly against this same pattern in badminton.tsx).
+  // This file's own `t` stub above is an identity function for a no-vars
+  // call, so it cannot tell "resolved" from "raw" — a distinct stub is
+  // needed to make the regression visible. `correctionSheet`'s `points` step
+  // still legitimately calls `t()` for `hintText` (pre-localised prose, a
+  // different field), so only `title` is asserted here.
+  it("does NOT pre-resolve either sheet's titles — they stay raw MessageKeys for guided-sheet.tsx's own t() to resolve", () => {
+    const XLATE: TFn = (key, vars) => `XLATED:${key}${vars ? JSON.stringify(vars) : ""}`;
+    const v = view({ events: stream(point("H"), point("H", 2)) });
+    const sheets = buildSheets(v, XLATE);
+    for (const tileId of [SCORE_ENTRY_TILE_ID, CORRECTION_TILE_ID]) {
+      for (const step of sheets[tileId]!.steps) {
+        expect(step.title.startsWith("XLATED:"), `${tileId}/${step.id}'s title must not be pre-resolved`).toBe(false);
+        expect(step.title.startsWith("pad.generic.")).toBe(true);
+      }
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

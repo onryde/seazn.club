@@ -21,6 +21,7 @@ import { buildPadView, type PadViewCtx } from "../../view-model";
 import type { RejectionInfo } from "../../use-pad-pipeline";
 import type { GuidedSheetSpec, PadHostView, ScorebugSpec, SkinDefV3, SwapSlot, TileSpec } from "../types";
 import { MORE_SHEET_KEY } from "../types";
+import type { MessageKey } from "@/lib/messages";
 import {
   adaptSwapSlot,
   combinedPool,
@@ -190,7 +191,7 @@ describe("entitledBandsFrom", () => {
 // --- dedicatedEventTypes / moreActions -----------------------------------
 
 function tile(over: Partial<TileSpec> = {}): TileSpec {
-  return { id: "t1", label: "pad.__fixture__.tile", kind: "standard", phases: ["live"], action: { event: { type: "cricket.toss", payload: {} } }, ...over };
+  return { id: "t1", label: "pad.__fixture__.tile" as MessageKey, kind: "standard", phases: ["live"], action: { event: { type: "cricket.toss", payload: {} } }, ...over };
 }
 
 /** A tapModel-T scorebug: both halves are pure READOUTS, which is every skin
@@ -316,7 +317,7 @@ function bugStub(): ScorebugSpec {
 
 function evTile(id: string, type: string, disabled?: boolean): TileSpec {
   return {
-    id, label: "l", kind: "standard", phases: ["live"],
+    id, label: "l" as MessageKey, kind: "standard", phases: ["live"],
     action: { event: { type, payload: {} } },
     ...(disabled === undefined ? {} : { disabled }),
   };
@@ -326,7 +327,7 @@ function evTile(id: string, type: string, disabled?: boolean): TileSpec {
  *  `{sheet: key}`, cricket's real `wicket` tile's own action shape. */
 function sheetTile(id: string, sheetKey: string, disabled?: boolean): TileSpec {
   return {
-    id, label: "l", kind: "standard", phases: ["live"],
+    id, label: "l" as MessageKey, kind: "standard", phases: ["live"],
     action: { sheet: sheetKey },
     ...(disabled === undefined ? {} : { disabled }),
   };

@@ -88,9 +88,13 @@ function cfgFor(sportModule: AnySportModule): unknown {
   }
 }
 
-function viewOf(key: string, stream: readonly (readonly [string, unknown])[] = [["core.start", {}]]): PadHostView {
+function viewOf(
+  key: string,
+  stream: readonly (readonly [string, unknown])[] = [["core.start", {}]],
+  cfgOverride?: unknown,
+): PadHostView {
   const sportModule = moduleOf(key);
-  const cfg: unknown = cfgFor(sportModule);
+  const cfg: unknown = cfgOverride ?? cfgFor(sportModule);
   const lineups: LineupPair = defaultLineupPair(sportModule.positions);
   const events: EventEnvelope[] = stream.map(([type, payload], i) =>
     makeEnvelope(i, { type, payload } as never),
@@ -250,12 +254,82 @@ describe("which skins declare they own the result line", () => {
       expect(shouldRenderHeadline("— — —", skinOf("cricket"), view)).toBe(false);
     });
 
-    it("gives it back the moment an innings exists, and the bar then says something the bug does not", () => {
+    it("still owns it mid-innings-1 — one side batting is the SAME duplication as pre-ball, not a new fact", () => {
+      // R7 follow-up item 1: the bar used to give the headline back the moment
+      // ANY innings existed, so it read `1/0 (0.1) — —` for the whole first
+      // innings — the batting side's own line duplicated, plus a dash for the
+      // side that has not batted. Not empty, so not the pre-ball bug, but the
+      // same class of noise, so the skin keeps owning it.
       const view = viewOf("cricket", [["core.start", {}], BALL]);
-      expect(skinOf("cricket").ownsHeadline?.(view)).toBe(false);
+      expect(skinOf("cricket").ownsHeadline?.(view)).toBe(true);
       const headline = summaryHeadline(view.summary);
       expect(headline, "an innings exists, so this is no longer all dashes").not.toBe("— — —");
-      expect(shouldRenderHeadline(headline, skinOf("cricket"), view)).toBe(true);
+      expect(shouldRenderHeadline(headline, skinOf("cricket"), view)).toBe(false);
+    });
+
+    it("gives it back once the SECOND side has an innings too — that is a new fact neither half shows", () => {
+      const INNINGS1_CLOSE = [
+        "cricket.innings.summary",
+        { runs: 150, wickets: 5, legalBalls: 120, boundaries: 10 },
+      ] as const;
+      const AWAY_BALL = [
+        "cricket.ball",
+        { over: 0, ballInOver: 1, striker: "A-p1", nonStriker: "A-p2", bowler: "H-p1", runs: { bat: 1 } },
+      ] as const;
+      // Home's innings is closed by a `cricket.innings.summary` fast-forward
+      // (the same event `cricket.test.ts`'s golden fixtures use), not by
+      // ending the BALL-recorded innings above — the engine refuses a summary
+      // close on an innings already recorded ball-by-ball.
+      const view = viewOf("cricket", [["core.start", {}], INNINGS1_CLOSE, AWAY_BALL]);
+      expect(skinOf("cricket").ownsHeadline?.(view)).toBe(false);
+      expect(shouldRenderHeadline(summaryHeadline(view.summary), skinOf("cricket"), view)).toBe(true);
+    });
+
+    it("gives it back once a tied match reaches a super over — the ` · SO n–n` suffix is a new fact", () => {
+      const cricketModule = moduleOf("cricket");
+      const superOverCfg = cricketModule.configSchema.parse({ superOver: true });
+      const TIED_INNINGS_1 = [
+        "cricket.innings.summary",
+        { runs: 150, wickets: 5, legalBalls: 120, boundaries: 10 },
+      ] as const;
+      const TIED_INNINGS_2 = [
+        "cricket.innings.summary",
+        { runs: 150, wickets: 7, legalBalls: 120, boundaries: 12 },
+      ] as const;
+      const view = viewOf("cricket", [["core.start", {}], TIED_INNINGS_1, TIED_INNINGS_2], superOverCfg);
+      expect(summaryHeadline(view.summary), "the SO suffix is why this must not stay suppressed").toContain("SO");
+      expect(skinOf("cricket").ownsHeadline?.(view)).toBe(false);
+      expect(shouldRenderHeadline(summaryHeadline(view.summary), skinOf("cricket"), view)).toBe(true);
+    });
+
+    describe("a Test-shaped config (inningsPerSide: 2)", () => {
+      const cricketModule = moduleOf("cricket");
+      const testVariant = (cricketModule as { variants?: Record<string, unknown> }).variants?.test;
+      const testCfg = cricketModule.configSchema.parse(testVariant);
+
+      it("still owns it once the first side DECLARES — the other side has not had an innings yet", () => {
+        const DECLARE = [
+          "cricket.innings.summary",
+          { runs: 500, wickets: 3, legalBalls: 540, declared: true },
+        ] as const;
+        const view = viewOf("cricket", [["core.start", {}], DECLARE], testCfg);
+        expect(skinOf("cricket").ownsHeadline?.(view)).toBe(true);
+        expect(shouldRenderHeadline(summaryHeadline(view.summary), skinOf("cricket"), view)).toBe(false);
+      });
+
+      it("gives it back once the second side has its own innings, joined with ` & ` if it bats twice later", () => {
+        const DECLARE = [
+          "cricket.innings.summary",
+          { runs: 500, wickets: 3, legalBalls: 540, declared: true },
+        ] as const;
+        const AWAY_BALL = [
+          "cricket.ball",
+          { over: 0, ballInOver: 1, striker: "A-p1", nonStriker: "A-p2", bowler: "H-p1", runs: { bat: 1 } },
+        ] as const;
+        const view = viewOf("cricket", [["core.start", {}], DECLARE, AWAY_BALL], testCfg);
+        expect(skinOf("cricket").ownsHeadline?.(view)).toBe(false);
+        expect(shouldRenderHeadline(summaryHeadline(view.summary), skinOf("cricket"), view)).toBe(true);
+      });
     });
 
     it("is NOT gated on `chaseTarget`, which returns null for an entire TEST match", () => {

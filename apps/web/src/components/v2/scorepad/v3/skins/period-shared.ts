@@ -68,13 +68,92 @@ const SIDE_LABEL: Record<Side, MessageKey> = {
 };
 
 /**
+ * R7 follow-ups item 3 — every `TileSpec.label`/`SheetChoiceStep.title` (plus
+ * the two sibling step titles that share the `title` field name,
+ * `SheetPersonStep`/`SheetNumberStep`) this file used to build at RUNTIME via
+ * `` `pad.${spec.key}.<suffix>` ``. A template string cannot be a
+ * `MessageKey` — that escape hatch is exactly what typing the field was for
+ * — so this table spells out both sports' literal keys instead. Deliberately
+ * NOT generated with `` `pad.${key}.${name}` as MessageKey `` even though
+ * that would compile: an `as` cast bypasses the dictionary check entirely, so
+ * a renamed/removed `ui.json` entry would keep compiling and only fail at
+ * runtime — precisely the class of bug `TileSpec.label: MessageKey` exists to
+ * catch at build time.
+ */
+type PeriodMessageKeyName =
+  | "action.goal"
+  | "action.shootoutAttempt"
+  | "action.advance"
+  | "action.suspensionStart"
+  | "action.suspensionEnd"
+  | "action.sub"
+  | "action.setPiece"
+  | "action.suspensionStart.field.minutes"
+  | "action.suspensionStart.field.servedBy"
+  | "sheet.suspension.class.title"
+  | "sheet.suspension.reason.title"
+  | "sheet.release.target.title"
+  | "sheet.shootout.outcome.title"
+  | "sheet.setPiece.by.title"
+  | "sheet.setPiece.kind.title"
+  | "sheet.setPiece.outcome.title";
+
+const PERIOD_MESSAGE_KEYS: Record<PeriodSkinSpec["key"], Record<PeriodMessageKeyName, MessageKey>> = {
+  hockey: {
+    "action.goal": "pad.hockey.action.goal",
+    "action.shootoutAttempt": "pad.hockey.action.shootoutAttempt",
+    "action.advance": "pad.hockey.action.advance",
+    "action.suspensionStart": "pad.hockey.action.suspensionStart",
+    "action.suspensionEnd": "pad.hockey.action.suspensionEnd",
+    "action.sub": "pad.hockey.action.sub",
+    "action.setPiece": "pad.hockey.action.setPiece",
+    "action.suspensionStart.field.minutes": "pad.hockey.action.suspensionStart.field.minutes",
+    "action.suspensionStart.field.servedBy": "pad.hockey.action.suspensionStart.field.servedBy",
+    "sheet.suspension.class.title": "pad.hockey.sheet.suspension.class.title",
+    "sheet.suspension.reason.title": "pad.hockey.sheet.suspension.reason.title",
+    "sheet.release.target.title": "pad.hockey.sheet.release.target.title",
+    "sheet.shootout.outcome.title": "pad.hockey.sheet.shootout.outcome.title",
+    "sheet.setPiece.by.title": "pad.hockey.sheet.setPiece.by.title",
+    "sheet.setPiece.kind.title": "pad.hockey.sheet.setPiece.kind.title",
+    "sheet.setPiece.outcome.title": "pad.hockey.sheet.setPiece.outcome.title",
+  },
+  icehockey: {
+    "action.goal": "pad.icehockey.action.goal",
+    "action.shootoutAttempt": "pad.icehockey.action.shootoutAttempt",
+    "action.advance": "pad.icehockey.action.advance",
+    "action.suspensionStart": "pad.icehockey.action.suspensionStart",
+    "action.suspensionEnd": "pad.icehockey.action.suspensionEnd",
+    "action.sub": "pad.icehockey.action.sub",
+    "action.setPiece": "pad.icehockey.action.setPiece",
+    "action.suspensionStart.field.minutes": "pad.icehockey.action.suspensionStart.field.minutes",
+    "action.suspensionStart.field.servedBy": "pad.icehockey.action.suspensionStart.field.servedBy",
+    "sheet.suspension.class.title": "pad.icehockey.sheet.suspension.class.title",
+    "sheet.suspension.reason.title": "pad.icehockey.sheet.suspension.reason.title",
+    "sheet.release.target.title": "pad.icehockey.sheet.release.target.title",
+    "sheet.shootout.outcome.title": "pad.icehockey.sheet.shootout.outcome.title",
+    "sheet.setPiece.by.title": "pad.icehockey.sheet.setPiece.by.title",
+    "sheet.setPiece.kind.title": "pad.icehockey.sheet.setPiece.kind.title",
+    "sheet.setPiece.outcome.title": "pad.icehockey.sheet.setPiece.outcome.title",
+  },
+};
+
+function periodKey(spec: PeriodSkinSpec, name: PeriodMessageKeyName): MessageKey {
+  return PERIOD_MESSAGE_KEYS[spec.key][name];
+}
+
+/**
  * The three genuine divergences between the two skins. Deliberately small: a
  * field here is a claim that the two federations differ, and every field that
  * could be read off `cfg` or `summary` instead was.
  */
 export interface PeriodSkinSpec {
-  /** The engine module key, and the `pad.<key>.*` dictionary namespace. */
-  readonly key: string;
+  /** The engine module key, and the `pad.<key>.*` dictionary namespace. Only
+   *  two instantiations exist (`hockey.tsx`, `icehockey.tsx`) — narrowed from
+   *  `string` (R7 follow-ups item 3) so `PERIOD_MESSAGE_KEYS` below can be a
+   *  literal `MessageKey` table indexed by `key`, rather than a template
+   *  string cast that would defeat the point of typing `TileSpec.label`/
+   *  `SheetChoiceStep.title` at all. */
+  readonly key: "hockey" | "icehockey";
   /**
    * Every suspension class this federation words, mapped to the sport tones
    * that colour it. An EMPTY array means DECLARED BUT UNCOLOURED — the class
@@ -780,7 +859,7 @@ export function buildTiles(spec: PeriodSkinSpec, view: PadHostView, t: TFn): Til
     for (const side of SIDES) {
       tiles.push({
         id: `goal-${side}`,
-        label: `pad.${spec.key}.action.goal`,
+        label: periodKey(spec, "action.goal"),
         sublabel: SIDE_LABEL[side],
         kind: "primary",
         span: 2,
@@ -800,7 +879,7 @@ export function buildTiles(spec: PeriodSkinSpec, view: PadHostView, t: TFn): Til
     for (const side of SIDES) {
       tiles.push({
         id: attemptSheetKey(side),
-        label: `pad.${spec.key}.action.shootoutAttempt`,
+        label: periodKey(spec, "action.shootoutAttempt"),
         sublabel: SIDE_LABEL[side],
         kind: "primary",
         span: 2,
@@ -818,7 +897,7 @@ export function buildTiles(spec: PeriodSkinSpec, view: PadHostView, t: TFn): Til
   if (next !== null && offerable(e.advance)) {
     tiles.push({
       id: "advance",
-      label: `pad.${spec.key}.action.advance`,
+      label: periodKey(spec, "action.advance"),
       sublabelText: phaseLabel(spec, next, t),
       kind: "standard",
       span: 2,
@@ -831,7 +910,7 @@ export function buildTiles(spec: PeriodSkinSpec, view: PadHostView, t: TFn): Til
     for (const side of SIDES) {
       tiles.push({
         id: suspensionSheetKey(side),
-        label: `pad.${spec.key}.action.suspensionStart`,
+        label: periodKey(spec, "action.suspensionStart"),
         sublabel: SIDE_LABEL[side],
         kind: "standard",
         span: 2,
@@ -847,7 +926,7 @@ export function buildTiles(spec: PeriodSkinSpec, view: PadHostView, t: TFn): Til
   if (offerable(e.suspEnd) && releasableBox(view).length > 0) {
     tiles.push({
       id: RELEASE_SHEET,
-      label: `pad.${spec.key}.action.suspensionEnd`,
+      label: periodKey(spec, "action.suspensionEnd"),
       kind: "standard",
       span: 2,
       phases: ["live"],
@@ -859,7 +938,7 @@ export function buildTiles(spec: PeriodSkinSpec, view: PadHostView, t: TFn): Til
     for (const side of SIDES) {
       tiles.push({
         id: swapSlotId(side),
-        label: `pad.${spec.key}.action.sub`,
+        label: periodKey(spec, "action.sub"),
         sublabel: SIDE_LABEL[side],
         kind: "standard",
         span: 2,
@@ -875,7 +954,7 @@ export function buildTiles(spec: PeriodSkinSpec, view: PadHostView, t: TFn): Til
     // time. A full-width minor row pairs with More below it instead.
     tiles.push({
       id: SET_PIECE_SHEET,
-      label: `pad.${spec.key}.action.setPiece`,
+      label: periodKey(spec, "action.setPiece"),
       kind: "minor",
       span: 4,
       phases: ["live"],
@@ -1036,13 +1115,13 @@ function suspensionSheet(spec: PeriodSkinSpec, view: PadHostView, side: Side, t:
     {
       id: "class",
       kind: "choice",
-      title: `pad.${spec.key}.sheet.suspension.class.title`,
+      title: periodKey(spec, "sheet.suspension.class.title"),
       options: classOptions(spec, view, t),
     },
     {
       id: "reason",
       kind: "choice",
-      title: `pad.${spec.key}.sheet.suspension.reason.title`,
+      title: periodKey(spec, "sheet.suspension.reason.title"),
       options: spec.reasons.map((reason) => ({ id: reason, label: vocabKey("reason", reason) ?? reason })),
       // The offence is band-2 detail; below that the sheet is one tap and the
       // step never renders (`GuidedSheetStep.when` skips without asking).
@@ -1061,7 +1140,7 @@ function suspensionSheet(spec: PeriodSkinSpec, view: PadHostView, side: Side, t:
     {
       id: "minutes",
       kind: "number",
-      title: `pad.${spec.key}.action.suspensionStart.field.minutes`,
+      title: periodKey(spec, "action.suspensionStart.field.minutes"),
       initial: (answers) => defaultMinutesOf(view, answers.class),
       // This seed READS `class`, so changing the class must discard it —
       // otherwise a Back-and-repick carries the old class's duration.
@@ -1081,7 +1160,7 @@ function suspensionSheet(spec: PeriodSkinSpec, view: PadHostView, side: Side, t:
     {
       id: "servedBy",
       kind: "person",
-      title: `pad.${spec.key}.action.suspensionStart.field.servedBy`,
+      title: periodKey(spec, "action.suspensionStart.field.servedBy"),
       pool: "onfield",
       side,
       candidates: onFieldOf(view, side),
@@ -1124,7 +1203,7 @@ function releaseSheet(spec: PeriodSkinSpec, view: PadHostView, t: TFn): GuidedSh
       {
         id: "target",
         kind: "choice",
-        title: `pad.${spec.key}.sheet.release.target.title`,
+        title: periodKey(spec, "sheet.release.target.title"),
         options: entries.map((entry) => ({
           id: String(entry.index),
           label: [
@@ -1158,7 +1237,7 @@ function attemptSheet(spec: PeriodSkinSpec, view: PadHostView, side: Side): Guid
       {
         id: "outcome",
         kind: "choice",
-        title: `pad.${spec.key}.sheet.shootout.outcome.title`,
+        title: periodKey(spec, "sheet.shootout.outcome.title"),
         options: [
           { id: "scored", label: vocabKey("outcome", "scored") ?? "scored" },
           { id: "missed", label: vocabKey("outcome", "missed") ?? "missed" },
@@ -1196,13 +1275,13 @@ function setPieceSheet(spec: PeriodSkinSpec, view: PadHostView, t: TFn): GuidedS
       {
         id: "by",
         kind: "choice",
-        title: `pad.${spec.key}.sheet.setPiece.by.title`,
+        title: periodKey(spec, "sheet.setPiece.by.title"),
         options: SIDES.map((side) => ({ id: entrantOf(state, side), label: SIDE_LABEL[side] })),
       },
       {
         id: "kind",
         kind: "choice",
-        title: `pad.${spec.key}.sheet.setPiece.kind.title`,
+        title: periodKey(spec, "sheet.setPiece.kind.title"),
         options: kinds.map((kind) => ({ id: kind, label: t(`pad.${spec.key}.setPiece.${kind}`) })),
         // Ice hockey declares exactly one (`ps`), so asking would be asking
         // nothing — `when` skips the step and `buildPayload` fills it in.
@@ -1211,7 +1290,7 @@ function setPieceSheet(spec: PeriodSkinSpec, view: PadHostView, t: TFn): GuidedS
       {
         id: "outcome",
         kind: "choice",
-        title: `pad.${spec.key}.sheet.setPiece.outcome.title`,
+        title: periodKey(spec, "sheet.setPiece.outcome.title"),
         options: SET_PIECE_OUTCOMES.map((outcome) => ({ id: outcome, label: vocabKey("outcome", outcome) ?? outcome })),
       },
     ],
