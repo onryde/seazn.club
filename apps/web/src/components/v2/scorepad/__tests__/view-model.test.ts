@@ -231,12 +231,12 @@ describe("buildPadView — fidelity band filtering (cricket: band0/1 free, band2
 
 describe("checkActionValidity — required fields", () => {
   it("ok when every declared field has a value", () => {
-    const action = { fields: [{ kind: "number" as const, path: "over", min: 0, max: 10 }] };
+    const action = { fields: [{ kind: "number" as const, path: "over", min: 0, max: 10 }], attribution: [] };
     expect(checkActionValidity(action, { over: 3 })).toEqual({ ok: true });
   });
 
   it("not ok, with a renderable reason, when a declared field is unset", () => {
-    const action = { fields: [{ kind: "number" as const, path: "over", min: 0, max: 10 }] };
+    const action = { fields: [{ kind: "number" as const, path: "over", min: 0, max: 10 }], attribution: [] };
     const result = checkActionValidity(action, {});
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -247,12 +247,33 @@ describe("checkActionValidity — required fields", () => {
   });
 
   it("an action with zero declared fields is always valid", () => {
-    expect(checkActionValidity({ fields: [] }, {})).toEqual({ ok: true });
+    expect(checkActionValidity({ fields: [], attribution: [] }, {})).toEqual({ ok: true });
   });
 
   it("a toggle field counts as set even when its value is `false` (must check `undefined`, not falsy)", () => {
-    const action = { fields: [{ kind: "toggle" as const, path: "freeHit" }] };
+    const action = { fields: [{ kind: "toggle" as const, path: "freeHit" }], attribution: [] };
     expect(checkActionValidity(action, { freeHit: false })).toEqual({ ok: true });
+  });
+
+  // R8 branch review, finding 5 — `attribution` was OPTIONAL on this
+  // parameter (`Partial<Pick<PadAction, "attribution">>`), so a caller
+  // passing `{ fields }` alone silently disabled the whole attribution gate
+  // with no type error: the exact inert-seam shape this wave exists to
+  // close, sitting on the guard that closes it. Now required.
+  //
+  // A COMPILE-TIME guard, deliberately: vitest never typechecks (the runtime
+  // call below still works fine), so nothing at runtime can witness this.
+  // `@ts-expect-error` is what makes it enforceable — if the parameter is
+  // ever loosened back, this directive stops matching an error and tsc fails
+  // the file with TS2578 "Unused '@ts-expect-error' directive". Same
+  // mechanic, and same reasoning, as v3/__tests__/types.test.ts's own proofs.
+  it("a fields-only caller no longer type-checks — the gate cannot be dropped by omission", () => {
+    // @ts-expect-error — `attribution` is required; omitting it must not compile.
+    const disabled = checkActionValidity({ fields: [] }, {});
+    // Runtime is deliberately unchanged (view-model.ts keeps a `?? []` so a
+    // cast cannot crash the live Confirm path). The TYPE is the fix: the seam
+    // was that this call compiled, not that it returned something odd.
+    expect(disabled).toEqual({ ok: true });
   });
 });
 

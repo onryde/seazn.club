@@ -216,15 +216,27 @@ export type ActionValidity =
  * absent, for a hand-built test fixture never run through the stamp) stays
  * skippable, exactly as before — several attribution items are legitimately
  * optional in the engine's own schema (a wicket with no named fielder).
- * `attribution` is optional on the parameter itself so a caller checking a
- * fields-only shape need not pass it.
+ *
+ * R8 branch review, finding 5 — `attribution` is REQUIRED on the parameter.
+ * It used to be `Partial<…>`, which meant a caller passing `{ fields }` alone
+ * disabled this entire gate with no type error: an inert seam sitting on the
+ * very guard that exists to close inert seams. An action genuinely without
+ * attribution passes `attribution: []`, which SAYS so; an omission cannot say
+ * anything. Enforced by an `@ts-expect-error` proof in view-model.test.ts,
+ * since vitest never typechecks and nothing at runtime can witness a
+ * parameter that was merely widened.
  */
 export function checkActionValidity(
-  action: Pick<PadAction, "fields"> & Partial<Pick<PadAction, "attribution">>,
+  action: Pick<PadAction, "fields" | "attribution">,
   values: Readonly<Record<string, PadFieldValue | undefined>>,
 ): ActionValidity {
   const missingFields = action.fields.filter((field) => values[field.path] === undefined);
   if (missingFields.length > 0) return { ok: false, missing: missingFields, reason: MISSING_FIELDS_REASON };
+  // The `?? []` stays deliberately, even though the type now forbids the
+  // case: this is the Confirm path of a live scoring pad, and an untyped
+  // caller (a cast, a hand-built fixture) should not crash it. The TYPE is
+  // the fix — the seam was "disables the gate with NO TYPE ERROR" — and the
+  // fallback is belt to its braces, not the guard itself.
   const missingAttribution = (action.attribution ?? []).filter(
     (item) => item.required === true && values[item.path] === undefined,
   );
