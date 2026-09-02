@@ -1585,8 +1585,13 @@ describe("validatePack — the oracles it does NOT derive say so", () => {
 
     const result = validatePack(pack, TINY);
     expect(onlyError(result.findings).code).toBe("fold.rejected");
-    const codes = warnings(result.findings).map((f) => f.code);
-    expect(codes).toContain("special.upstream_fold_failed");
+    const skipped = warnings(result.findings).find((f) => f.code === "special.upstream_fold_failed");
+    // The MESSAGE, not just the code: a skip that says "not checked" without
+    // naming WHICH fixture is the decoration this warning exists to replace.
+    expect(skipped?.where).toBe("expected.specials[0] (retirement d-tiny/rr-r3-c1)");
+    expect(skipped?.message).toBe(
+      'not checked: fixture "rr-r3-c1" did not fold to a verified outcome',
+    );
     // And no special ERROR: an unfolded stream must not also be reported as a
     // failed claim, which would bury the fold failure under a derived one.
     expect(errors(result.findings).filter((f) => f.code.startsWith("special."))).toEqual([]);
