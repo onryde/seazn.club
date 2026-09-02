@@ -265,7 +265,7 @@ describe("checkActionValidity — required fields", () => {
 describe("checkActionValidity — required attribution (R8/WS-B2)", () => {
   const cricketCfg = cricket.configSchema.parse({});
   const cricketSpec = cricket.padSpec!(cricketCfg);
-  const tossAction = allActionViews(cricketSpec, { band: 3, entitlements: {} }).find(
+  const tossAction = allActionViews(cricketSpec, { band: 3 }).find(
     (a) => a.type === "cricket.toss",
   )!;
   const wonByItem = tossAction.attribution.find((item) => item.path === "wonBy")!;
@@ -287,7 +287,7 @@ describe("checkActionValidity — required attribution (R8/WS-B2)", () => {
   });
 
   it("an OPTIONAL attribution item left unfilled does not block validity", () => {
-    const reviewAction = allActionViews(cricketSpec, { band: 3, entitlements: {} }).find(
+    const reviewAction = allActionViews(cricketSpec, { band: 3 }).find(
       (a) => a.type === "cricket.review",
     )!;
     // cricket.review's two fields (kind/outcome) plus its required `by` item

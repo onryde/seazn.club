@@ -108,6 +108,17 @@ export function extractSignals(text: string): { literals: Set<string>; patterns:
     const content = m[1]!;
     if (content.includes("${")) patterns.push(templateToPattern(content));
   }
+  // A pluralised key is NEVER written out in full: `plural("pad.x.y", n)`
+  // resolves to `pad.x.y.one` / `pad.x.y.other` at runtime (see `plural` in
+  // lib/messages), so a literal scan sees the BASE and the dictionary holds
+  // the CATEGORIES, and every pluralised pad key would read as dead. The
+  // whole CLDR category set is admitted rather than just the two English
+  // uses, because a locale added later (Polish `few`/`many`, Arabic `zero`/
+  // `two`) is a dictionary change with no matching source change — and a
+  // false NEGATIVE is the costly direction here, per this file's own header.
+  for (const m of code.matchAll(/\bplural\s*\(\s*(['"`])(pad\.[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*)\1/g)) {
+    patterns.push(new RegExp(`^${escapeRegex(m[2]!)}\\.(?:zero|one|two|few|many|other)$`));
+  }
   return { literals, patterns };
 }
 

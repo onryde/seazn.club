@@ -44,7 +44,7 @@ import { enqueue, enqueueHeld, dropHeld, releaseHeld } from "../../queue";
 import { memoryQueueStore, type QueueStore } from "../../queue-store";
 import type { PendingEvent } from "../../types";
 import { canAmendRow, isNewestFoldingEvent, partialBadge, type ActivityEvent } from "../activity";
-import { RALLY_ENTITLEMENT, RALLY_TYPE, badmintonSkinV3, buildDock } from "../skins/badminton";
+import { RALLY_TYPE, badmintonSkinV3, buildDock } from "../skins/badminton";
 import type { TFn } from "../skins/badminton";
 
 // ---------------------------------------------------------------------------
@@ -98,7 +98,9 @@ function view(events: readonly EventEnvelope[]): PadHostView {
     summary: {},
     phase: "live",
     band: 3,
-    entitlements: { [RALLY_ENTITLEMENT]: true },
+    // W1 retired the FIDELITY entitlements; this map still gates other keys
+    // (e.g. scoring.swap_off_step_enforcement), so it stays — just empty here.
+    entitlements: {},
     personNames: NAMES,
     squads: initSquads(DOUBLES),
     events,
