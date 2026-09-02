@@ -580,7 +580,7 @@
   "desk.needsYou.result_missing.sub": "The match window has passed with no result.",
   "desk.needsYou.result_missing.action": "Enter result",
   "desk.needsYou.registrations_waiting": "{n} registrations waiting for approval",
-  "desk.needsYou.registrations_waiting.sub": "Review them before entrants are locked.",
+  "desk.needsYou.registrations_waiting.sub": "Received but not yet approved.",
   "desk.needsYou.registrations_waiting.action": "Review",
   "desk.ledger.title": "Divisions",
   "desk.ledger.next": "Next: {when} {home} v {away}",

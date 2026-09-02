@@ -580,7 +580,7 @@
   "desk.needsYou.result_missing.sub": "Het wedstrijdvenster is verstreken zonder uitslag.",
   "desk.needsYou.result_missing.action": "Uitslag invoeren",
   "desk.needsYou.registrations_waiting": "{n} inschrijvingen wachten op goedkeuring",
-  "desk.needsYou.registrations_waiting.sub": "Beoordeel ze voordat deelnemers worden vergrendeld.",
+  "desk.needsYou.registrations_waiting.sub": "Ontvangen maar nog niet goedgekeurd.",
   "desk.needsYou.registrations_waiting.action": "Beoordelen",
   "desk.ledger.title": "Divisies",
   "desk.ledger.next": "Volgende: {when} {home} v {away}",

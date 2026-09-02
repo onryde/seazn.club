@@ -580,7 +580,7 @@
   "desk.needsYou.result_missing.sub": "Le créneau du match est passé sans résultat.",
   "desk.needsYou.result_missing.action": "Saisir le résultat",
   "desk.needsYou.registrations_waiting": "{n} inscriptions en attente d'approbation",
-  "desk.needsYou.registrations_waiting.sub": "Vérifiez-les avant le verrouillage des participants.",
+  "desk.needsYou.registrations_waiting.sub": "Reçues mais pas encore approuvées.",
   "desk.needsYou.registrations_waiting.action": "Vérifier",
   "desk.ledger.title": "Divisions",
   "desk.ledger.next": "Prochain : {when} {home} v {away}",

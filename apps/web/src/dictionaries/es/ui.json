@@ -580,7 +580,7 @@
   "desk.needsYou.result_missing.sub": "La ventana del partido pasó sin resultado.",
   "desk.needsYou.result_missing.action": "Introducir resultado",
   "desk.needsYou.registrations_waiting": "{n} inscripciones esperan aprobación",
-  "desk.needsYou.registrations_waiting.sub": "Revísalas antes de bloquear los participantes.",
+  "desk.needsYou.registrations_waiting.sub": "Recibidas pero aún sin aprobar.",
   "desk.needsYou.registrations_waiting.action": "Revisar",
   "desk.ledger.title": "Divisiones",
   "desk.ledger.next": "Próximo: {when} {home} v {away}",

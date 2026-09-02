@@ -45,11 +45,13 @@ export function statusLine(dict: Dict, i: StatusLineInput): string {
     case "match_day":
       line = t(dict, "desk.status.matchDay", { ...base, inPlay: i.inPlay });
       break;
-    case "scheduled":
-      line = i.next?.scheduledAt
-        ? t(dict, "desk.status.scheduled", { ...base, when: whenLabel(i.next.scheduledAt, i.locale, i.displayTz) })
+    case "scheduled": {
+      const at = i.next?.scheduledAt ?? null;
+      line = at && !Number.isNaN(Date.parse(at))
+        ? t(dict, "desk.status.scheduled", { ...base, when: whenLabel(at, i.locale, i.displayTz) })
         : t(dict, "desk.status.noNext", base);
       break;
+    }
   }
   if (i.unscheduled > 0 && i.phase !== "finished") {
     line += t(dict, "desk.status.unscheduledSuffix", { n: i.unscheduled });

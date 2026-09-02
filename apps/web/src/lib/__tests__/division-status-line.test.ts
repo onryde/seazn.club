@@ -30,4 +30,15 @@ describe("statusLine", () => {
   it("scheduled with no next fixture says so once, plainly", () => {
     expect(statusLine(en, { ...base, next: null })).toBe("10 of 15 played · nothing scheduled");
   });
+  it("scheduled with a malformed next time falls back to the no-next line, never throws", () => {
+    expect(
+      statusLine(en, { ...base, next: { scheduledAt: "not-a-date", home: "A", away: "B" } }),
+    ).toBe("10 of 15 played · nothing scheduled");
+  });
+  it("finished never appends the unscheduled suffix", () => {
+    expect(statusLine(en, { ...base, phase: "finished", played: 15, total: 15, next: null, unscheduled: 3 })).toBe("15 of 15 played · complete");
+  });
+  it("scheduled appends the unscheduled suffix", () => {
+    expect(statusLine(en, { ...base, unscheduled: 2 })).toBe("Next Sat 12 Sep 10:00 · 10 of 15 played · 2 unscheduled");
+  });
 });
