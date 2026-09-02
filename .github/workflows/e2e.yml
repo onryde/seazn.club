@@ -178,11 +178,32 @@ jobs:
           # `slice` is irrelevant to this project and left empty deliberately:
           # E2E_PARALLEL_SLICE only selects between the parallel project's own
           # halves, and setting it here would imply otherwise.
+          #
+          # `--workers=3` overrides playwright.config.ts's global `CI ? 2 : 4`
+          # for THIS leg only (workers is not a per-project option, so the
+          # override has to come from the command line). Measured on the run
+          # that prompted it: the step took 483s against the ~174s the config
+          # comment budgets, and 153s of that — 32% — was a TAIL running 3 -> 2
+          # -> 1 test wide. Playwright dispatches files in discovery order and
+          # the three most expensive specs (tabletennis-match, tennis-mtb,
+          # volleyball-match, each a single unsplittable test) sort LAST
+          # alphabetically, so they start last and drain one after another.
+          # Ten of the eighteen files hold exactly one test, so the scheduling
+          # unit is effectively the file and two workers cannot pack around
+          # them.
+          #
+          # Three workers is chosen against the three long files specifically:
+          # it lets them run CONCURRENTLY instead of serially, which collapses
+          # that tail to roughly the longest of them. It is also the honest
+          # ceiling here — the runner is `blacksmith-4vcpu` and shares those 4
+          # vCPUs with Postgres and the standalone Next server, so 4 workers
+          # would contend with the server under test and buy flake rather than
+          # speed.
           - group: walkthrough
             slug: walkthrough
             project: walkthrough
             slice: ""
-            args: ""
+            args: --workers=3
 
     services:
       postgres:
