@@ -292,6 +292,17 @@ changes each; smoke demo script updated in W2.
   "Needs you" and band omitted; error logged with competition id. Never a blank
   page for a summary failure.
 - Division with no stages → ledger row phase `setting_up`, action "Add stage".
+- **Competition with no divisions → masthead phase `setting_up`, never
+  `finished`** (amendment 3, 2026-09-02). `competitionPhase` derives from the
+  division phases, and an EMPTY set satisfies none of the `includes` tests, so
+  it fell through to the `finished` default: a competition created seconds
+  earlier rendered "Finished · 0 divisions" above its own "No divisions yet"
+  empty state. Confirmed on a live prod build before the fix. Same vacuous
+  truth as amendment 2 one level up — a derived phase whose rules are all
+  "does the set contain X" needs an explicit empty case, because the empty set
+  answers no to every question and lands on whatever the default is. Binding
+  for W2/W3: any further aggregate phase (org, season) states its empty case
+  first.
 - Fixtures tab with no fixtures → the stage rail alone, steps showing what is
   missing; no run sheet header.
 - Unknown `filter` param → treated as All.
