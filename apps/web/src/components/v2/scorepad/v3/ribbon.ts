@@ -121,11 +121,15 @@ const CORE_RIBBON_KEY: Readonly<Record<string, MessageKey>> = {
  * assumption. Whoever computes `detail` owns the sport vocabulary — this
  * function never inspects `payload` for that purpose itself; see
  * `skins/cricket.tsx`'s `cricketBallDetail` for the first real one, wired
- * through `ActivityPanel`'s `resolveDetail` prop (activity.tsx). Omitted —
- * the only path any production caller exercises today, since
- * `resolveDetail` is not yet threaded from `pad-host.tsx` (out of this
- * fix's file grant, flagged in the task report) — reproduces exactly the
- * pre-fix text, byte for byte.
+ * through `ActivityPanel`'s `resolveDetail` prop (activity.tsx).
+ *
+ * `resolveDetail` IS threaded from production today (corrected R8/WS-R — the
+ * note here still said "not yet threaded", left over from the D2 fix that
+ * could not reach `pad-host.tsx` under its own file grant): `pad-host.tsx`
+ * builds the resolver at :1665, hands it to the top ribbon at :1708 and to
+ * `ActivityPanel` at :2054, and `activity.tsx:449` calls it per row. Omitting
+ * `detail` — still every caller that has no sport-specific fragment to add —
+ * reproduces exactly the pre-fix text, byte for byte.
  */
 export function buildRibbon(
   eventType: string,

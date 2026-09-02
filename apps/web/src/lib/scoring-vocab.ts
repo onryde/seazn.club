@@ -805,19 +805,36 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   // PAD_LABEL_KEYS membership BEFORE calling padLabel() — dictionary copy
   // with no entry here silently stays on the generic `pad.ribbon.fallback`
   // forever, with nothing failing (R1's own owed item, restated in the R2
-  // plan so this session doesn't repeat it). One key per event type this
-  // skin's tiles/sheets dispatch directly — the remaining 8 cricket.* types
-  // (reachable only via the "More" sheet) stay on the fallback, same
-  // graceful-degradation posture ribbon.ts's header already documents.
+  // plan so this session doesn't repeat it).
+  //
+  // R8/WS-R closed this list out: it is now one key per event type the engine
+  // DECLARES for cricket (15, read off the module's own fidelity tiers), not
+  // only the ones the skin's tiles/sheets dispatch directly. R2's note here
+  // used to say the remaining `cricket.*` types "stay on the fallback, same
+  // graceful-degradation posture" — that was the false premise. The fallback
+  // is `pad.ribbon.fallback` = "{event} recorded", which prints the RAW
+  // INTERNAL TYPE: a scorer taking the new ball read "cricket.newball
+  // recorded". Seven types were live on it (followon, interruption,
+  // match.close, newball, player.line, powerplay, revise); the seven marked
+  // below are that fix. `scoring-vocab.test.ts`'s ribbon gate is now derived
+  // from the engine's declarations for every sport, so this list can no
+  // longer fall behind a new event type in silence.
   "pad.cricket.ribbon.ball",
+  "pad.cricket.ribbon.followon", // R8/WS-R
   "pad.cricket.ribbon.innings.close",
   "pad.cricket.ribbon.innings.declare",
   // R2b: `cricket.innings.summary` is the over-by-over event this wave gives
   // a dedicated tile — without this entry the ribbon silently stays on the
   // generic "{event} recorded" fallback (ribbon.ts's own header comment).
   "pad.cricket.ribbon.innings.summary",
+  "pad.cricket.ribbon.interruption", // R8/WS-R
+  "pad.cricket.ribbon.match.close", // R8/WS-R
+  "pad.cricket.ribbon.newball", // R8/WS-R
+  "pad.cricket.ribbon.player.line", // R8/WS-R
+  "pad.cricket.ribbon.powerplay", // R8/WS-R
   "pad.cricket.ribbon.retire",
   "pad.cricket.ribbon.review",
+  "pad.cricket.ribbon.revise", // R8/WS-R
   "pad.cricket.ribbon.superover.ball",
   "pad.cricket.ribbon.toss",
 
