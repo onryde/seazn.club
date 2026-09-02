@@ -1343,8 +1343,20 @@ test("tennis v3 pad (singles): the scoreboard half holds the 44px floor, live an
   request,
 }) => {
   test.setTimeout(90_000);
-  const homeName = `Mobile V3 Tennis Home ${TAG}-${projectTag()}`;
-  const awayName = `Mobile V3 Tennis Away ${TAG}-${projectTag()}`;
+  // R8 close-out — the `-${projectTag()}` suffix is DROPPED here, the same
+  // trim the DOUBLES test below already carries and for the same measured
+  // reason (its comment has the full account). WS-I root-caused this file's
+  // intermittent 320px scorebug clip to the FIXTURE NAME, not the scorebug:
+  // an entrant name has no uniqueness requirement — it is scoped to one
+  // fixture, which `label` already isolates — and the decoration pushed the
+  // who-block past its clamp only once the webfont swapped, because
+  // `globals.css`'s `.app-display` resolves `--font-barlow` (condensed) over
+  // `--font-geist-sans` (not), so the identical string measures wider until
+  // Barlow lands. That is what made it INTERMITTENT rather than reproducible.
+  // The box is already correct (scorebug.tsx: `line-clamp-6`, `min-w-0`,
+  // wrap-anywhere) — do NOT restyle it to chase this.
+  const homeName = `Mobile V3 Tennis Home ${TAG}`;
+  const awayName = `Mobile V3 Tennis Away ${TAG}`;
   const fx = await seedRosteredFixture(request, {
     label: `Mobile Tennis V3 ${TAG}-${projectTag()}`,
     sportKey: "tennis",

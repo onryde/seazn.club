@@ -16,6 +16,7 @@ import {
 } from "./helpers";
 import { CONSENT_KEY, CONSENT_VERSION_KEY, COOKIE_POLICY_VERSION } from "../src/lib/consent";
 import { HOLD_MS } from "../src/components/v2/scorepad/queue";
+import { gallerySportBudgetMs } from "./gallery-budget";
 
 // ScoringPad v3 R1 Task 10 — the productized gallery capture harness.
 //
@@ -3175,7 +3176,11 @@ test.afterAll(() => {
 
 for (const sport of SPORTS) {
   test(`gallery: ${sport.label}`, async ({ page, browser }) => {
-    test.setTimeout(180_000);
+    // R8 close-out — the budget is DERIVED from the pad's own hold, never a
+    // literal (AGENTS.md class 20). The arithmetic and the full reasoning live
+    // in `./gallery-budget`, where a node-environment unit test can reach it;
+    // a `test.setTimeout` call inside a Playwright spec cannot be asserted.
+    test.setTimeout(gallerySportBudgetMs(HOLD_MS));
     const tag = `${TAG}${Math.random().toString(36).slice(2, 6)}`;
     const dir = join(GALLERY_DIR, sport.slug);
     mkdirSync(dir, { recursive: true });
