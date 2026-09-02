@@ -79,11 +79,16 @@ type DivisionPhase = "setting_up" | "scheduled" | "match_day" | "finished";
 
 Rules, first match wins:
 
-1. `finished` — every stage is `complete`, or no stage is `pending`/`active` and
+1. `setting_up` — `divisionStatus` is `setup` (a division that has not been started
+   cannot be scored, even with fixtures dated today). **Amended 2026-09-02 during
+   W1 Task 3:** this rule was originally second, behind `finished`, and a brand-new
+   division with zero stages and zero fixtures satisfied `finished` VACUOUSLY —
+   "no stage is pending/active" and "no fixture is live" are both trivially true of
+   an empty division, so the first division an organiser ever creates read
+   "Finished" before it had begun. `divisionStatus` is checked first.
+   `scheduled`/`active`/`completed` fall through to the rules below.
+2. `finished` — every stage is `complete`, or no stage is `pending`/`active` and
    no fixture is `scheduled`/`in_play`.
-2. `setting_up` — `divisionStatus` is `setup` (a division that has not been started
-   cannot be scored, even with fixtures dated today). `scheduled`/`active`/`completed`
-   fall through to the rules below; `completed` normally exits at rule 1.
 3. `match_day` — any fixture `in_play`, OR any `scheduled` fixture whose
    `scheduledAt` falls on today's date in `tz`.
 4. `setting_up` — the lowest-seq non-complete stage has `hasFixtures === false`
