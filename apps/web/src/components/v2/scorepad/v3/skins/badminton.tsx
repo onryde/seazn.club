@@ -1026,7 +1026,7 @@ export function refusedEventTypes(view: PadHostView): string[] {
  * chassis renderer, not left to `buildPayload`: the stepper and the editable
  * field are two paths to the same control.
  */
-function setScoreSheet(view: PadHostView, t: TFn): GuidedSheetSpec {
+function setScoreSheet(view: PadHostView): GuidedSheetSpec {
   const state = asState(view.state);
   const cfg = cfgOf(view);
   const bound = scoreBound(cfg);
@@ -1037,7 +1037,7 @@ function setScoreSheet(view: PadHostView, t: TFn): GuidedSheetSpec {
       {
         id: "home",
         kind: "number",
-        title: t("pad.badminton.sheet.setScore.home.title"),
+        title: "pad.badminton.sheet.setScore.home.title",
         initial: open?.home ?? 0,
         min: 0,
         max: bound,
@@ -1045,7 +1045,7 @@ function setScoreSheet(view: PadHostView, t: TFn): GuidedSheetSpec {
       {
         id: "away",
         kind: "number",
-        title: t("pad.badminton.sheet.setScore.away.title"),
+        title: "pad.badminton.sheet.setScore.away.title",
         initial: open?.away ?? 0,
         min: 0,
         max: bound,
@@ -1071,7 +1071,7 @@ function setScoreSheet(view: PadHostView, t: TFn): GuidedSheetSpec {
  * chassis change, not a skin change. Same ruling tennis's own sanction sheet
  * records.
  */
-function sanctionSheet(view: PadHostView, side: Side, t: TFn): GuidedSheetSpec {
+function sanctionSheet(view: PadHostView, side: Side): GuidedSheetSpec {
   const state = asState(view.state);
   const players = onFieldPlayers(view.squads, side);
   const sole = players.length === 1 ? players[0]!.personId : null;
@@ -1079,7 +1079,7 @@ function sanctionSheet(view: PadHostView, side: Side, t: TFn): GuidedSheetSpec {
     {
       id: "level",
       kind: "choice",
-      title: t("pad.badminton.sheet.sanction.level.title"),
+      title: "pad.badminton.sheet.sanction.level.title",
       options: SANCTION_LEVELS.map((level) => ({
         id: level,
         label: vocabKey("level", level) ?? level,
@@ -1091,7 +1091,7 @@ function sanctionSheet(view: PadHostView, side: Side, t: TFn): GuidedSheetSpec {
     steps.push({
       id: "person",
       kind: "person",
-      title: t("pad.badminton.sheet.sanction.person.title"),
+      title: "pad.badminton.sheet.sanction.person.title",
       pool: "onfield",
       side,
       candidates: players.map((member) => member.personId),
@@ -1113,9 +1113,9 @@ function sanctionSheet(view: PadHostView, side: Side, t: TFn): GuidedSheetSpec {
 
 export function buildSheets(view: PadHostView, t: TFn): Record<string, GuidedSheetSpec> {
   const sheets: Record<string, GuidedSheetSpec> = {
-    [SET_SCORE_TILE_ID]: setScoreSheet(view, t),
+    [SET_SCORE_TILE_ID]: setScoreSheet(view),
   };
-  for (const side of SIDES) sheets[sanctionSheetKey(side)] = sanctionSheet(view, side, t);
+  for (const side of SIDES) sheets[sanctionSheetKey(side)] = sanctionSheet(view, side);
   return sheets;
 }
 

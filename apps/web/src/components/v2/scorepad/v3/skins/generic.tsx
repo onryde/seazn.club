@@ -129,6 +129,7 @@ interface GenericStateShape {
   phase?: string;
   score?: { home?: number; away?: number } | null;
   running?: { home?: number; away?: number };
+  outcome?: unknown;
 }
 interface SummaryShape {
   perSide?: { entrantId?: string; line?: string }[];
@@ -216,6 +217,22 @@ function tallyOf(state: GenericStateShape, side: Side): number {
 
 function hasTally(state: GenericStateShape): boolean {
   return state.running !== undefined;
+}
+
+/** R7 follow-ups item 2 (code-review finding) — the fixture-console header
+ *  card renders `summary.headline` verbatim with no guard, so a fresh
+ *  generic fixture shows the same `— — —` noise cricket's did:
+ *  `sideLine` (generic.ts) returns the literal "—" per side only while
+ *  `score` is null/absent, `outcome` is null AND `running` is absent —
+ *  exactly `init()`'s own shape, and the one state that reaches this. Once
+ *  ANY of the three is set, both sides flip to a real value together (they
+ *  read the same match-wide fields), so there is no partial-degenerate
+ *  state to miss. Exported so `fixture-console.tsx` can reuse this exact
+ *  check, mirroring `cricketHasNoInnings` (skins/cricket.tsx) rather than
+ *  re-deriving "nothing yet" a second time. */
+export function genericHasNoResult(rawState: unknown): boolean {
+  const state = asState(rawState);
+  return !state.score && !state.outcome && state.running === undefined;
 }
 
 /** The starting roster for one side, first-named first (pairOrder, falling
@@ -533,7 +550,7 @@ export function buildTiles(view: PadHostView, t: TFn): TileSpec[] {
 /** The explicit final score. PREFILLED from the tally where one exists — an
  *  unedited confirm then records exactly what the board already shows, rather
  *  than 0-0, which is the one wrong answer a prefill can give. */
-function scoreEntrySheet(view: PadHostView, t: TFn): GuidedSheetSpec {
+function scoreEntrySheet(view: PadHostView): GuidedSheetSpec {
   const state = asState(view.state);
   return {
     event: RESULT_TYPE,
@@ -541,7 +558,7 @@ function scoreEntrySheet(view: PadHostView, t: TFn): GuidedSheetSpec {
       {
         id: "home",
         kind: "number",
-        title: t("pad.generic.sheet.scoreEntry.home.title"),
+        title: "pad.generic.sheet.scoreEntry.home.title",
         initial: tallyOf(state, "home"),
         min: 0,
         max: MAX_PLAUSIBLE_SCORE,
@@ -549,7 +566,7 @@ function scoreEntrySheet(view: PadHostView, t: TFn): GuidedSheetSpec {
       {
         id: "away",
         kind: "number",
-        title: t("pad.generic.sheet.scoreEntry.away.title"),
+        title: "pad.generic.sheet.scoreEntry.away.title",
         initial: tallyOf(state, "away"),
         min: 0,
         max: MAX_PLAUSIBLE_SCORE,
@@ -579,13 +596,13 @@ function correctionSheet(view: PadHostView, t: TFn): GuidedSheetSpec {
       {
         id: "side",
         kind: "choice",
-        title: t("pad.generic.sheet.correction.side.title"),
+        title: "pad.generic.sheet.correction.side.title",
         options: SIDES.map((side) => ({ id: side, label: SIDE_LABEL[side] })),
       },
       {
         id: "points",
         kind: "number",
-        title: t("pad.generic.sheet.correction.points.title"),
+        title: "pad.generic.sheet.correction.points.title",
         initial: 1,
         min: 1,
         max: correctionCeiling(state),
@@ -606,7 +623,7 @@ export function buildSheets(view: PadHostView, t: TFn): Record<string, GuidedShe
   // ways in `__tests__/generic.test.ts`.
   const sheets: Record<string, GuidedSheetSpec> = {};
   if (resultModeOf(cfgOf(view)) !== "score") return sheets;
-  sheets[SCORE_ENTRY_TILE_ID] = scoreEntrySheet(view, t);
+  sheets[SCORE_ENTRY_TILE_ID] = scoreEntrySheet(view);
   if (tallyAvailable(view) && correctionCeiling(asState(view.state)) > 0) {
     sheets[CORRECTION_TILE_ID] = correctionSheet(view, t);
   }

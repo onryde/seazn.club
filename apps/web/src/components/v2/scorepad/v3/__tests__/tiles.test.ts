@@ -19,10 +19,17 @@ import { tilesForPhase, assertTileHierarchy, assertDisabledTilesExplained, TileG
 import type { ContextStripSpec, TileSpec } from "../types";
 import type { Dict } from "@/lib/i18n-constants";
 import { t as realT } from "@/lib/i18n-runtime";
+import type { MessageKey } from "@/lib/messages";
+
+// `pad.tile.label`/`pad.tile.label.missing` are this file's own fixture
+// namespace, resolved only against the local `dict` fixtures below via
+// `realTStub` — never the real dictionary — so they are cast rather than
+// spelled as genuine `ui.json` entries.
+const K = (key: string): MessageKey => key as MessageKey;
 
 const tile = (over: Partial<TileSpec> = {}): TileSpec => ({
   id: "t",
-  label: "pad.tile.label",
+  label: K("pad.tile.label"),
   kind: "standard",
   phases: ["live"],
   action: { event: { type: "x", payload: {} } },
@@ -368,7 +375,7 @@ describe("Tile rendering — labelText: pre-localised raw text, never routed thr
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     // "pad.tile.label.missing" has NO entry in `dict` — if the chassis ever
     // fell back to resolving `label` through t(), this would warn.
-    const span = renderLabel(tile({ label: "pad.tile.label.missing", labelText: "End of over 2" }));
+    const span = renderLabel(tile({ label: K("pad.tile.label.missing"), labelText: "End of over 2" }));
     expect(span.props.children).toBe("End of over 2");
     expect(warn).not.toHaveBeenCalled();
     warn.mockRestore();
@@ -376,14 +383,14 @@ describe("Tile rendering — labelText: pre-localised raw text, never routed thr
 
   it("mutation proof the spy is real: label alone (no labelText) DOES fire the missing-key warning for an unresolved key", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    renderLabel(tile({ label: "pad.tile.label.missing" }));
+    renderLabel(tile({ label: K("pad.tile.label.missing") }));
     expect(warn).toHaveBeenCalledWith("[i18n] missing key: pad.tile.label.missing");
     warn.mockRestore();
   });
 
   it("label alone still resolves through t() exactly as before — no regression to the existing path", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const span = renderLabel(tile({ label: "pad.tile.label" })); // a KEY that DOES exist in `dict`
+    const span = renderLabel(tile({ label: K("pad.tile.label") })); // a KEY that DOES exist in `dict`
     expect(span.props.children).toBe("Label");
     expect(warn).not.toHaveBeenCalled();
     warn.mockRestore();

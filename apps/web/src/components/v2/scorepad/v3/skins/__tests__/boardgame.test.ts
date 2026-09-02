@@ -461,6 +461,22 @@ describe("buildSheets — the pairing card", () => {
   it("is the ONLY sheet this skin declares — the decisive/drawn result is a tap and a dock now, never a sheet", () => {
     expect(Object.keys(buildSheets(view({ events: stream(start()) }), t))).toEqual([PAIRING_TILE_ID]);
   });
+
+  // R7 follow-ups item 3 — `pairingSheet` used to pre-resolve its steps'
+  // `title` through `t()` itself, and `guided-sheet.tsx` calls `t(step.title)`
+  // AGAIN at render time; with a real translator that double-resolution logs
+  // `[i18n] missing key` on every render (proved directly against this same
+  // pattern in badminton.tsx). This file's own `t` stub above is an identity
+  // function for a no-vars call, so it cannot tell "resolved" from "raw" —
+  // a distinct stub is needed to make the regression visible.
+  it("does NOT pre-resolve the sheet's titles — they stay raw MessageKeys for guided-sheet.tsx's own t() to resolve", () => {
+    const XLATE: TFn = (key) => `XLATED:${key}`;
+    const sheet = buildSheets(view({ cfg: DEFAULT_CFG }), XLATE)[PAIRING_TILE_ID]!;
+    for (const step of sheet.steps) {
+      expect(step.title.startsWith("XLATED:"), `${step.id}'s title must not be pre-resolved`).toBe(false);
+      expect(step.title.startsWith("pad.boardgame.")).toBe(true);
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

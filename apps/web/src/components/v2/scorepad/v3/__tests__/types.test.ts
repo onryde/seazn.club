@@ -1,6 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { assertScorebugSpec } from "../types";
 import type { GuidedSheetSpec, PadHostView, SheetPersonStep, SkinDefV3 } from "../types";
+import type { MessageKey } from "@/lib/messages";
+
+// Fixture-only title, never resolved through i18n in this file's checks.
+const T_KEY = "t" as MessageKey;
 
 const half = (over: Partial<import("../types").ScorebugHalf> = {}) => ({
   who: [{ name: "A" }], big: "0", ...over,
@@ -104,12 +108,12 @@ describe("PadHostView.contextOverrides — G5 (required, not optional)", () => {
 // must stay assignable with zero change.
 describe("SheetPersonStep.candidates — G6 (additive, optional)", () => {
   it("a step with no candidates at all is still assignable — pre-G6 shape unchanged", () => {
-    const step: SheetPersonStep = { id: "who", kind: "person", title: "t", pool: "onfield", side: "home" };
+    const step: SheetPersonStep = { id: "who", kind: "person", title: T_KEY, pool: "onfield", side: "home" };
     expect(step.candidates).toBeUndefined();
   });
 
   it("a step declaring an explicit candidates list is assignable", () => {
-    const step: SheetPersonStep = { id: "out", kind: "person", title: "t", pool: "onfield", side: "home", candidates: ["h1", "h2"] };
+    const step: SheetPersonStep = { id: "out", kind: "person", title: T_KEY, pool: "onfield", side: "home", candidates: ["h1", "h2"] };
     expect(step.candidates).toEqual(["h1", "h2"]);
   });
 });

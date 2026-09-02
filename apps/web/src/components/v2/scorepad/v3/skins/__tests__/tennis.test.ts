@@ -25,6 +25,7 @@ import { serveContext } from "@seazn/engine/sports/nested";
 import { foldClient } from "../../../module-client";
 import { answerStep, currentStep, initialSheetState } from "../../guided-sheet";
 import type { GuidedSheetSpec, PadHostView, TileSpec } from "../../types";
+import type { MessageKey } from "@/lib/messages";
 import {
   EVENT_BAND,
   INTERRUPTION_KINDS,
@@ -869,9 +870,9 @@ describe("buildTiles — the two-lane board: side pairs never cross lanes (R3/B2
     // Reproduces football's own R3/B2 shape directly against THIS skin's
     // tiles, independent of buildTiles' current (correct) ordering: one
     // single span-2 tile, then a side pair, is exactly the misalignment.
-    const decoy: TileSpec = { id: "decoy", label: "x", kind: "minor", span: 2, phases: ["live"], action: { sheet: "x" } };
-    const home: TileSpec = { id: "h", label: "x", sublabel: "scorepad.attribution.home", kind: "standard", span: 2, phases: ["live"], action: { sheet: "h" } };
-    const away: TileSpec = { id: "a", label: "x", sublabel: "scorepad.attribution.away", kind: "standard", span: 2, phases: ["live"], action: { sheet: "a" } };
+    const decoy: TileSpec = { id: "decoy", label: "x" as MessageKey, kind: "minor", span: 2, phases: ["live"], action: { sheet: "x" } };
+    const home: TileSpec = { id: "h", label: "x" as MessageKey, sublabel: "scorepad.attribution.home", kind: "standard", span: 2, phases: ["live"], action: { sheet: "h" } };
+    const away: TileSpec = { id: "a", label: "x" as MessageKey, sublabel: "scorepad.attribution.away", kind: "standard", span: 2, phases: ["live"], action: { sheet: "a" } };
     expect(columnOf([decoy, home, away], "a")).toBe(0); // away lands in the HOME lane
     expect(columnOf([home, away], "a")).toBe(2); // without the decoy, it is correct
   });

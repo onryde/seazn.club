@@ -32,6 +32,7 @@ import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hoo
 import { SPORT_TONE_CLASSES } from "../tokens";
 import type { Dict } from "@/lib/i18n-constants";
 import { t as realT } from "@/lib/i18n-runtime";
+import type { MessageKey } from "@/lib/messages";
 import { resolvePool } from "../context-strip";
 import {
   GuidedSheet,
@@ -42,6 +43,13 @@ import {
   type GuidedSheetProps,
 } from "../guided-sheet";
 import type { Blocked, GuidedSheetSpec, TapEvent } from "../types";
+
+// This suite proves the CHASSIS renderer, sport-agnostic on purpose (see
+// numberSpec's own comment below) — every `title`/`options[].label` here is a
+// synthetic fixture key, echoed verbatim by the identity `t` stub (line ~300)
+// and never resolved against the real dictionary, so it is cast rather than
+// spelled as a genuine `pad.<sport>.*` entry.
+const K = (key: string): MessageKey => key as MessageKey;
 
 function member(over: Partial<SquadMember> = {}): SquadMember {
   return {
@@ -72,14 +80,14 @@ const wicketSpec: GuidedSheetSpec = {
     {
       id: "kind",
       kind: "choice",
-      title: "pad.sheet.wicket.kind.title",
+      title: K("pad.sheet.wicket.kind.title"),
       options: [
         { id: "bowled", label: "pad.sheet.wicket.kind.bowled" },
         { id: "caught", label: "pad.sheet.wicket.kind.caught" },
       ],
     },
-    { id: "who", kind: "person", title: "pad.sheet.wicket.who.title", pool: "onfield", side: "home" },
-    { id: "fielder", kind: "person", title: "pad.sheet.wicket.fielder.title", pool: "bench", side: "away" },
+    { id: "who", kind: "person", title: K("pad.sheet.wicket.who.title"), pool: "onfield", side: "home" },
+    { id: "fielder", kind: "person", title: K("pad.sheet.wicket.fielder.title"), pool: "bench", side: "away" },
   ],
   buildPayload: (answers) => ({ kind: answers.kind, out: answers.who, fielder: answers.fielder }),
 };
@@ -156,7 +164,7 @@ const conditionalSpec: GuidedSheetSpec = {
     {
       id: "kind",
       kind: "choice",
-      title: "pad.sheet.wicket.kind.title",
+      title: K("pad.sheet.wicket.kind.title"),
       options: [
         { id: "bowled", label: "pad.sheet.wicket.kind.bowled" },
         { id: "runout", label: "pad.sheet.wicket.kind.runout" },
@@ -165,12 +173,12 @@ const conditionalSpec: GuidedSheetSpec = {
     {
       id: "who",
       kind: "person",
-      title: "pad.sheet.wicket.who.title",
+      title: K("pad.sheet.wicket.who.title"),
       pool: "onfield",
       side: "home",
       when: (answers) => answers.kind === "runout",
     },
-    { id: "fielder", kind: "person", title: "pad.sheet.wicket.fielder.title", pool: "bench", side: "away" },
+    { id: "fielder", kind: "person", title: K("pad.sheet.wicket.fielder.title"), pool: "bench", side: "away" },
   ],
   buildPayload: (answers) => ({ kind: answers.kind, out: answers.who, fielder: answers.fielder }),
 };
@@ -364,7 +372,7 @@ describe("GuidedSheet rendering", () => {
       {
         id: "color",
         kind: "choice",
-        title: "card.title",
+        title: K("card.title"),
         options: [
           { id: "yellow", label: "cardColor.yellow", tone: ["caution"] },
           { id: "red", label: "cardColor.red", tone: ["dismissal"] },
@@ -639,7 +647,7 @@ const candidatesSpec: GuidedSheetSpec = {
     {
       id: "who",
       kind: "person",
-      title: "pad.sheet.wicket.who.title",
+      title: K("pad.sheet.wicket.who.title"),
       pool: "onfield", // would resolve to kannan/arjun ONLY if consulted
       side: "home",
       candidates: ["bench1"],
@@ -705,12 +713,12 @@ const numberSpec: GuidedSheetSpec = {
     {
       id: "runs",
       kind: "number",
-      title: "pad.sheet.overSummary.runs.title",
+      title: K("pad.sheet.overSummary.runs.title"),
       initial: 24,
       min: 0,
       hintText: "24/1 pre-localised hint",
     },
-    { id: "wickets", kind: "number", title: "pad.sheet.overSummary.wickets.title", initial: 1, min: 0, max: 10 },
+    { id: "wickets", kind: "number", title: K("pad.sheet.overSummary.wickets.title"), initial: 1, min: 0, max: 10 },
   ],
   buildPayload: (answers) => ({ runs: answers.runs, wickets: answers.wickets }),
 };
@@ -917,7 +925,7 @@ describe("GuidedSheet rendering — SheetNumberStep", () => {
   it("a number step declaring no hint renders exactly ONE paragraph (the title) — no hint paragraph at all, not merely an empty one", () => {
     const noHintSpec: GuidedSheetSpec = {
       event: "cricket.summary",
-      steps: [{ id: "runs", kind: "number", title: "pad.sheet.overSummary.runs.title", initial: 0 }],
+      steps: [{ id: "runs", kind: "number", title: K("pad.sheet.overSummary.runs.title"), initial: 0 }],
       buildPayload: (answers) => ({ runs: answers.runs }),
     };
     const island = renderIsland(GuidedSheet, {
@@ -1029,7 +1037,7 @@ describe("GuidedSheet rendering — SheetNumberStep", () => {
   it("review fix: a non-finite `initial` (NaN) normalises to a finite, in-bounds value rather than surviving unclamped", () => {
     const nanSpec: GuidedSheetSpec = {
       event: "cricket.summary",
-      steps: [{ id: "runs", kind: "number", title: "t", initial: NaN, min: 0, max: 10 }],
+      steps: [{ id: "runs", kind: "number", title: K("t"), initial: NaN, min: 0, max: 10 }],
       buildPayload: (answers) => ({ runs: answers.runs }),
     };
     const island = renderIsland(GuidedSheet, {
@@ -1067,7 +1075,7 @@ const choiceNoHintSpec: GuidedSheetSpec = {
     {
       id: "kind",
       kind: "choice",
-      title: "pad.sheet.wicket.kind.title",
+      title: K("pad.sheet.wicket.kind.title"),
       options: [{ id: "runout", label: "pad.sheet.wicket.kind.runout" }],
     },
   ],
@@ -1080,7 +1088,7 @@ const choiceWithHintSpec: GuidedSheetSpec = {
     {
       id: "kind",
       kind: "choice",
-      title: "pad.sheet.wicket.kind.title",
+      title: K("pad.sheet.wicket.kind.title"),
       options: [{ id: "runout", label: "pad.sheet.wicket.kind.runout" }],
       hintKey: "pad.sheet.wicket.kind.freeHitHint",
     },
@@ -1124,7 +1132,7 @@ const numberConditionalSpec: GuidedSheetSpec = {
     {
       id: "kind",
       kind: "choice",
-      title: "t",
+      title: K("t"),
       options: [
         { id: "partial", label: "partial" },
         { id: "final", label: "final" },
@@ -1133,11 +1141,11 @@ const numberConditionalSpec: GuidedSheetSpec = {
     {
       id: "runs",
       kind: "number",
-      title: "runs",
+      title: K("runs"),
       initial: 0,
       when: (answers) => answers.kind === "partial",
     },
-    { id: "note", kind: "choice", title: "note", options: [{ id: "ok", label: "ok" }] },
+    { id: "note", kind: "choice", title: K("note"), options: [{ id: "ok", label: "ok" }] },
   ],
   buildPayload: (answers) => ({ ...answers }),
 };
@@ -1181,7 +1189,7 @@ describe("GuidedSheet rendering — R2c SheetChoiceStep.blocked", () => {
         {
           id: "kind",
           kind: "choice",
-          title: "sheet.review.kind",
+          title: K("sheet.review.kind"),
           options: [
             { id: "player", label: "opt.player" },
             { id: "umpire", label: "opt.umpire" },
@@ -1190,7 +1198,7 @@ describe("GuidedSheet rendering — R2c SheetChoiceStep.blocked", () => {
         {
           id: "by",
           kind: "choice",
-          title: "sheet.review.by",
+          title: K("sheet.review.by"),
           options: [
             { id: "HOME", label: "opt.home" },
             { id: "AWAY", label: "opt.away" },

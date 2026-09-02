@@ -13,9 +13,13 @@ import { describe, it, expect } from "vitest";
 import { filterTilesByBand, tileEventType } from "../pad-host";
 import { MORE_SHEET_KEY, type GuidedSheetSpec, type SwapSlot, type TileSpec } from "../types";
 import type { FidelityBand, PadSpec } from "@seazn/engine/sport";
+import type { MessageKey } from "@/lib/messages";
 
+// `label` is never read by any assertion in this file — only `id`/`action`
+// matter to the band filter under test — so a fixture-only, never resolved
+// key is cast rather than spelled as a real dictionary entry.
 function tile(id: string, action: TileSpec["action"]): TileSpec {
-  return { id, label: `l.${id}`, kind: "standard", phases: ["live"], action };
+  return { id, label: `l.${id}` as MessageKey, kind: "standard", phases: ["live"], action };
 }
 
 const FIDELITY: PadSpec["fidelity"] = {

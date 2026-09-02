@@ -263,6 +263,19 @@ function asState(state: unknown): CricketStateShape {
   return asRecord(state) as CricketStateShape;
 }
 
+/** R7 follow-ups item 2 — the fixture-console header card renders
+ *  `summary.headline` verbatim with no `ownsHeadline`-style guard, so a fresh
+ *  fixture (no innings yet) shows the same `— — —` noise the pad's bar used
+ *  to. Exported so another caller can reuse this exact check on the raw
+ *  engine state, rather than re-deriving "no innings yet" a second time and
+ *  risking the two definitions drifting apart. Deliberately narrower than
+ *  `ownsHeadline` above: the header's open question is only "before a match
+ *  has produced ANYTHING", not the fuller mid-innings-1 duplication `ownsHeadline`
+ *  also suppresses on the pad. */
+export function cricketHasNoInnings(rawState: unknown): boolean {
+  return (asState(rawState).innings ?? []).length === 0;
+}
+
 /** `cfg.ballsPerOver`, falling back to 6 — the `hundred` variant sets 5
  *  (cricket.ts:2811); this must never be assumed. */
 export function ballsPerOverOf(cfg: unknown): number {
@@ -2444,20 +2457,37 @@ export function cricketSkinV3(t: TFn): SkinDefV3<PadHostView> {
     key: "cricket",
     tapModel: "T",
     phase: resolvePhase,
-    /** R7/D follow-up — cricket KEEPS the result bar, with one exception: the
-     *  screen a scorer opens before a ball is bowled.
+    /** R7/D follow-up, extended by the R7 follow-ups doc item 1 — cricket
+     *  KEEPS the result bar, with one exception: the whole FIRST innings,
+     *  including the screen a scorer opens before a ball is bowled.
      *
      *  Cricket's headline is `${sideLine(home)} — ${sideLine(away)}`, and
      *  `sideLine` (cricket.ts) returns the literal "—" for a side with no
-     *  innings. So before the first innings exists the bar renders `— — —`:
-     *  a slate band, above the fold, on a phone, carrying nothing. That is
-     *  strictly worse than the duplication task D exists to remove, and it is
-     *  the first thing a cricket scorer sees.
+     *  innings. So while only one side has any innings, the bar renders
+     *  either `— — —` (no ball yet) or `${sideLine(that side)} — —` (mid
+     *  innings 1) — in both cases the dash side adds nothing, and the batting
+     *  side's own line already duplicates a half. That is strictly worse
+     *  than the duplication task D exists to remove, and it is what a
+     *  cricket scorer sees for the whole first innings, not just before the
+     *  first ball.
      *
-     *  Once ANY innings exists the bar earns its place and keeps it for the
-     *  rest of the match — including a Test. It is the only surface showing
-     *  BOTH sides' totals: the halves show the striking side's score and the
-     *  overs, never the other innings.
+     *  Once the SECOND side has any innings the bar earns its place and
+     *  keeps it for the rest of the match — including a Test, where one side
+     *  can bat twice (follow-on) before the other bats at all: `sideLine`
+     *  joins two innings with " & ", a fact neither half shows. It is the
+     *  only surface showing BOTH sides' totals: the halves show the striking
+     *  side's score and the overs, never the other innings.
+     *
+     *  `state.innings.length <= 1` is EXACTLY "at most one side has batted",
+     *  not an approximation of it: the engine always creates innings index 0
+     *  for the side batting first and index 1 for its opponent, regardless of
+     *  format or follow-on (`battingSideAt`, cricket.ts) — so two innings
+     *  entries never share a `battingSide` while the second one still has
+     *  zero. That also covers a super over for free: `decideTie` (cricket.ts)
+     *  requires both normal innings complete (`state.innings.length === 2`)
+     *  before it ever runs, so `state.superOver` is never non-null while this
+     *  predicate could still be true — no separate super-over branch needed,
+     *  and none is tested here, because none would be reachable.
      *
      *  WHY NOT `chaseTarget`. The obvious predicate is "suppress until there
      *  is something to chase", and it is WRONG. `chaseTarget` (this file) is a
@@ -2467,11 +2497,8 @@ export function cricketSkinV3(t: TFn): SkinDefV3<PadHostView> {
      *  keeps private. Gating on it would suppress the bar through an entire
      *  Test match — including the fourth innings, where two totals a side is
      *  exactly the fact that matters. A plausible predicate answering a
-     *  different question is the recurring defect in this programme.
-     *
-     *  So the rule is the narrowest one that removes the confirmed noise and
-     *  nothing else: no innings, no bar. */
-    ownsHeadline: (view) => (asState(view.state).innings ?? []).length === 0,
+     *  different question is the recurring defect in this programme. */
+    ownsHeadline: (view) => (asState(view.state).innings ?? []).length <= 1,
     scorebug: (view) => buildScorebug(view, t),
     tiles: (view) => buildTiles(view, t),
     dock: (eventType, _view, payload) => buildDock(eventType, t, payload),

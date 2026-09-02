@@ -969,10 +969,24 @@ describe("factory wiring — every builder is threaded the REAL translator", () 
     expect(tile.sublabelText!.startsWith("XLATED:")).toBe(true);
   });
 
-  it("threads it into the sheets' titles", () => {
+  // R7 follow-ups item 3 (`TileSpec.label`/`SheetChoiceStep.title` typed
+  // `MessageKey`) found the OPPOSITE bug to the one this block's header
+  // warns about: this sheet used to pre-resolve `title` through `t()`
+  // ITSELF, and `guided-sheet.tsx`'s own `renderNumberStep`/`renderChoiceStep`
+  // then call `t(step.title)` again unconditionally — a real translator
+  // looks up the now-English STRING as a key, misses, and (proved by driving
+  // both the real fold and the real renderer together) logs
+  // `[i18n] missing key: Sanction` on every render. The fallback happens to
+  // echo the string back unchanged, so the screen was never wrong — only the
+  // console. Titles now stay raw, like every other v3 skin's, so the
+  // downstream `t()` call is the ONLY resolution.
+  it("does NOT pre-resolve the sheets' titles — they stay raw MessageKeys for guided-sheet.tsx's own t() to resolve", () => {
     const sheets = skin.sheets!(view());
     for (const sheet of Object.values(sheets)) {
-      for (const step of sheet.steps) expect(step.title.startsWith("XLATED:")).toBe(true);
+      for (const step of sheet.steps) {
+        expect(step.title.startsWith("XLATED:"), `${step.id}'s title must not be pre-resolved`).toBe(false);
+        expect(step.title.startsWith("pad.badminton.")).toBe(true);
+      }
     }
   });
 

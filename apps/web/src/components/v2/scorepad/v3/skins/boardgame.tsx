@@ -424,7 +424,7 @@ export function buildTiles(view: PadHostView, t: TFn): TileSpec[] {
  *  at most one on-field member, so asking would be a one-option picker (the
  *  D-15 defect); this sheet auto-attaches whichever member the lineup already
  *  names. */
-function pairingSheet(view: PadHostView, t: TFn): GuidedSheetSpec {
+function pairingSheet(view: PadHostView): GuidedSheetSpec {
   const state = asState(view.state);
   const cfg = cfgOf(view);
   const homeSole = soleMemberOf(view.squads, "home");
@@ -433,7 +433,7 @@ function pairingSheet(view: PadHostView, t: TFn): GuidedSheetSpec {
     {
       id: "board",
       kind: "number",
-      title: t("pad.boardgame.sheet.pairing.board.title"),
+      title: "pad.boardgame.sheet.pairing.board.title",
       initial: state.board ?? 1,
       min: 1,
       max: BOARD_MAX,
@@ -443,7 +443,7 @@ function pairingSheet(view: PadHostView, t: TFn): GuidedSheetSpec {
     steps.push({
       id: "white",
       kind: "choice",
-      title: t("pad.boardgame.sheet.pairing.white.title"),
+      title: "pad.boardgame.sheet.pairing.white.title",
       options: SIDES.map((side) => ({ id: side, label: SIDE_LABEL[side] })),
     });
   }
@@ -460,7 +460,7 @@ function pairingSheet(view: PadHostView, t: TFn): GuidedSheetSpec {
 }
 
 export function buildSheets(view: PadHostView, t: TFn): Record<string, GuidedSheetSpec> {
-  return { [PAIRING_TILE_ID]: pairingSheet(view, t) };
+  return { [PAIRING_TILE_ID]: pairingSheet(view) };
 }
 
 // ---------------------------------------------------------------------------

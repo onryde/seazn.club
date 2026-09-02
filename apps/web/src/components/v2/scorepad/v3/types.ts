@@ -27,6 +27,7 @@
 // the chassis reads from the shape the skin writes.
 import type { EventEnvelope, SquadState } from "@seazn/engine/core";
 import type { FidelityBand } from "@seazn/engine/sport";
+import type { MessageKey } from "@/lib/messages";
 import type { GameTimeStamp, PadClockSpec } from "./clock";
 import type { SportTone } from "./sport-theme";
 
@@ -144,7 +145,7 @@ export interface ScorebugSpec {
 export type TileKind = "primary" | "standard" | "destructive" | "minor";
 export interface TileSpec {
   id: string;
-  label: string;                  // i18n key
+  label: MessageKey;
   /**
    * R2b (owner sign-off finding, single-line label fix): a PRE-LOCALISED
    * raw string, rendered VERBATIM by the chassis (tile-grid.tsx) — never
@@ -570,7 +571,7 @@ export type StepPredicate = (answers: Readonly<Record<string, string>>) => boole
  * with no override renders the app's daylight signal pair. Absent means the
  * plain option button every pre-B4 step already rendered.
  */
-export interface SheetChoiceStep { id: string; kind: "choice"; title: string; options: { id: string; label: string; tone?: readonly SportTone[] }[]; when?: StepPredicate; hintKey?: string; blocked?(answers: Readonly<Record<string, string>>): Blocked }
+export interface SheetChoiceStep { id: string; kind: "choice"; title: MessageKey; options: { id: string; label: string; tone?: readonly SportTone[] }[]; when?: StepPredicate; hintKey?: string; blocked?(answers: Readonly<Record<string, string>>): Blocked }
 /**
  * R2/task A5 (`_INDEX.md` R1 "owed by later waves", closed here): `side` is
  * REQUIRED, not optional-with-a-default. Cricket's wicket flow needs the
@@ -623,7 +624,7 @@ export interface SheetPersonStep {
    * insisted. Skins whose person step is genuinely required (cricket's
    * "who's out") simply do not set this.
    */
-  optional?: boolean; id: string; kind: "person"; title: string; pool: "onfield" | "bench" | "all"; side: "home" | "away"; candidates?: readonly string[]; when?: StepPredicate }
+  optional?: boolean; id: string; kind: "person"; title: MessageKey; pool: "onfield" | "bench" | "all"; side: "home" | "away"; candidates?: readonly string[]; when?: StepPredicate }
 
 /**
  * R2b/task 1 (`docs/superpowers/plans/2026-08-17-scorepad-v3-r2b-cricket-
@@ -686,7 +687,7 @@ export interface SheetPersonStep {
 export interface SheetNumberStep {
   id: string;
   kind: "number";
-  title: string;
+  title: MessageKey;
   initial: number | ((answers: Record<string, string>) => number);
   min?: number;
   max?: number;
