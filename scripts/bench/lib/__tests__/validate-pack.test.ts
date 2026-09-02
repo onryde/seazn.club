@@ -11,6 +11,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { foldMatchWithStoppage } from "@seazn/engine/core";
+import { builtinModules } from "@seazn/engine/sports";
 import { boardgame } from "@seazn/engine/sports/boardgame";
 import { PackSchema, fixtureKey } from "../pack-schema.ts";
 import {
@@ -312,6 +313,46 @@ describe("validatePack — corrupted streams die naming the stream and the diver
     expect(warnings(result.findings).map((f) => f.code)).toEqual(["standings.upstream_fold_failed"]);
   });
 
+  it("a SWAPPED WINNER reds the fold even though the outcome kind is right", () => {
+    const pack = tiny();
+    const match = pack.expected.matches[0]!;
+    match.outcome = { kind: "win", winner: "e-bravo", loser: "e-alpha", method: "regulation" };
+    const finding = onlyError(validatePack(pack).findings);
+    expect(finding.code).toBe("match.outcome_winner");
+    expect(finding.message).toBe('winner: pack expects "e-bravo", the fold produced "@e-alpha"');
+  });
+
+  it("a SWAPPED LOSER reds the fold", () => {
+    const pack = tiny();
+    // A three-entrant division makes the mistake realistic: the loser named is
+    // a real entrant of the division who did not play this fixture.
+    pack.entrants.push({
+      ref: "e-charlie",
+      divisionRef: "d-tiny",
+      kind: "individual",
+      displayName: "Charlie",
+    } as TinyShape["entrants"][number]);
+    const match = pack.expected.matches[0]!;
+    match.outcome = { kind: "win", winner: "e-alpha", loser: "e-charlie", method: "regulation" };
+    const finding = onlyError(validatePack(pack).findings);
+    expect(finding.code).toBe("match.outcome_loser");
+    expect(finding.message).toBe('loser: pack expects "e-charlie", the fold produced "@e-bravo"');
+  });
+
+  it("a WRONG METHOD reds the fold, and an unstated method asserts nothing", () => {
+    const pack = tiny();
+    (pack.expected.matches[0]!.outcome as Record<string, unknown>)["method"] = "extra_time";
+    const finding = onlyError(validatePack(pack).findings);
+    expect(finding.code).toBe("match.outcome_method");
+    expect(finding.message).toBe('method: pack expects "extra_time", the fold produced "regulation"');
+
+    // A pack that does not care which method decided a fixture must not be
+    // forced to guess one.
+    const silent = tiny();
+    delete (silent.expected.matches[0]!.outcome as Record<string, unknown>)["method"];
+    expect(validatePack(silent).findings).toEqual([]);
+  });
+
   it("a SWAPPED TIE ORDER in the expected table reds the standings", () => {
     const pack = tiny();
     const table = pack.expected.tables[0]!;
@@ -415,6 +456,45 @@ describe("validatePack — provenance", () => {
 // ===========================================================================
 // Parity with the product's batch import
 // ===========================================================================
+
+describe("validatePack — resolving the module and its cfg", () => {
+  const withDivision = (patch: Record<string, unknown>): Record<string, unknown> => {
+    const pack = genericPack() as unknown as { divisions: Record<string, unknown>[] };
+    Object.assign(pack.divisions[0]!, patch);
+    return pack as unknown as Record<string, unknown>;
+  };
+
+  it("reds a division pinned to a module version the registry does not hold", () => {
+    const finding = onlyError(validatePack(withDivision({ moduleVersion: "9.9.9" })).findings);
+    expect(finding.code).toBe("fold.module_not_found");
+    expect(finding.where).toBe("streams[0] (d1/f1)");
+    expect(finding.message).toContain('no engine module "generic@9.9.9"');
+    expect(finding.message).toContain("MODULE_NOT_FOUND");
+  });
+
+  it("reds an unknown variant key, and names the ones the module declares", () => {
+    // `variantKey` is a named cfg PRESET, not a module selector — the product
+    // 422s on exactly this (`usecases/divisions.ts:242`), reading the preset
+    // from the `sport_variants` rows `scripts/sync-sports.ts` generates from
+    // `module.variants`. Offline that map IS the source.
+    const finding = onlyError(validatePack(withDivision({ variantKey: "banana" })).findings);
+    expect(finding.code).toBe("fold.unknown_variant");
+    expect(finding.message).toContain('unknown variant "banana" for sport "generic"');
+    // Derived from the module, so a new variant moves the message with it.
+    for (const key of Object.keys(builtinModules.find((m) => m.key === "generic")!.variants)) {
+      expect(finding.message).toContain(key);
+    }
+  });
+
+  it("reds a cfg the module's own configSchema refuses", () => {
+    const finding = onlyError(
+      validatePack(withDivision({ cfgOverrides: { resultMode: "banana" } })).findings,
+    );
+    expect(finding.code).toBe("fold.cfg_invalid");
+    expect(finding.message).toContain("configSchema");
+    expect(finding.message).toContain("resultMode");
+  });
+});
 
 describe("validatePack — parity P1: envelope synthesis", () => {
   it("mints id = String(i) and seq = i + 1, 1-based and gapless", () => {
@@ -554,11 +634,28 @@ describe("validatePack — an EngineError is a finding, never a crash", () => {
     (pack.streams[0] as TinyStream).events.splice(1, 0, { type: "core.start" });
     (pack.expected.matches[1] as { outcome: Record<string, unknown> }).outcome = { kind: "tie" };
 
-    const codes = errors(validatePack(pack).findings).map((f) => `${f.code} @ ${f.where}`);
+    const result = validatePack(pack);
+    const codes = errors(result.findings).map((f) => `${f.code} @ ${f.where}`);
     expect(codes).toEqual([
       "fold.rejected @ streams[0] (d-tiny/rr-r1-c1)",
       "match.outcome_kind @ streams[1] (d-tiny/rr-r2-c1)",
     ]);
+    expect(warnings(result.findings).map((f) => f.code)).toEqual(["standings.upstream_fold_failed"]);
+  });
+
+  it("a fold failure suppresses its table as a WARNING, not a second error", () => {
+    // The suppression has TWO sites — a stream that never folded, and a stream
+    // that folded to the wrong answer — and two guards covering for each other
+    // are each untested. This pack's ONLY failure is the fold, so nothing else
+    // can populate the suppression set: without it the table derivation runs
+    // on an incomplete division and reports `standings.underivable`, a SECOND
+    // error that buries the first.
+    const pack = tiny();
+    (pack.streams[0] as TinyStream).events.splice(1, 0, { type: "core.start" });
+
+    const result = validatePack(pack);
+    expect(onlyError(result.findings).code).toBe("fold.rejected");
+    expect(warnings(result.findings).map((f) => f.code)).toEqual(["standings.upstream_fold_failed"]);
   });
 });
 
@@ -587,6 +684,25 @@ describe("validatePack — specials", () => {
     const finding = onlyError(validatePack(pack).findings);
     expect(finding.code).toBe("special.state");
     expect(finding.message).toBe('state "phase": claim expects "live", the fold produced "done"');
+  });
+
+  it("reds an outcome claim on each of kind, winner and loser", () => {
+    const claimed = (claim: Record<string, unknown>): PackFinding => {
+      const pack = tiny();
+      pack.expected.specials[0]!.claims = [claim];
+      return onlyError(validatePack(pack).findings);
+    };
+    expect(claimed({ on: "outcome", kind: "draw" }).message).toBe(
+      'outcome kind: claim expects "draw", the fold produced "award"',
+    );
+    expect(claimed({ on: "outcome", winner: "e-bravo" }).message).toBe(
+      'outcome winner: claim expects "e-bravo", the fold produced "@e-alpha"',
+    );
+    // An `award` outcome carries no `loser` at all — the claim must red on the
+    // absence, not quietly pass because there is nothing to compare.
+    expect(claimed({ on: "outcome", loser: "e-bravo" }).message).toBe(
+      'outcome loser: claim expects "e-bravo", the fold produced undefined',
+    );
   });
 
   it("reds an outcome claim whose method the fold did not produce", () => {
@@ -798,6 +914,97 @@ describe("validatePack — the standings derivation mirrors the product's own", 
     expect(validatePack(pack).findings).toEqual([]);
   });
 
+  it("carries the entrants' declared seeds into the ranking", () => {
+    // Two entrants level on every cascade criterion. The engine's last resort
+    // is `bySeedThenId` (competition/tiebreakers.ts:608), so the DECLARED
+    // seeds — and only they — decide the order; without them the fallback is
+    // entrant id, which would put "@e1" first.
+    const pack = genericPack({
+      events: [
+        { type: "core.start" },
+        { type: "generic.result", payload: { p1Score: 1, p2Score: 1 } },
+      ],
+      outcome: { kind: "draw" },
+    }) as unknown as {
+      divisions: { tiebreakers?: string[] }[];
+      entrants: { ref: string; seed?: number }[];
+      expected: { tables?: unknown[] };
+    };
+    // A cascade WITHOUT `lots`: generic's own default ends with it, and a
+    // cascade that lists `lots` breaks the tie by drawing lots instead of
+    // falling through to seed→id.
+    pack.divisions[0]!.tiebreakers = ["points", "diff"];
+    pack.entrants[0]!.seed = 2; // e1
+    pack.entrants[1]!.seed = 1; // e2
+    pack.expected.tables = [
+      {
+        divisionRef: "d1",
+        stageRef: "s1",
+        rows: [
+          { entrant: "e2", rank: 1, played: 1, won: 0, drawn: 1, lost: 0, points: 1 },
+          { entrant: "e1", rank: 2, played: 1, won: 0, drawn: 1, lost: 0, points: 1 },
+        ],
+      },
+    ];
+    expect(validatePack(pack as unknown as Record<string, unknown>).findings).toEqual([]);
+  });
+
+  // Every scalar, one at a time. One sample is not a parity sweep: with only
+  // the order and one value asserted, dropping a field from the comparison
+  // list survives (it did — `points` was uncovered on the first sweep).
+  const scalars = ["played", "won", "drawn", "lost", "points"] as const;
+  it.each(scalars)("reds when the fold and the pack disagree on %s alone", (field) => {
+    const pack = tiny();
+    const row = pack.expected.tables[0]!.rows[0]!;
+    const before = row[field];
+    row[field] = before + 1;
+    const finding = onlyError(validatePack(pack).findings);
+    expect(finding.code).toBe("standings.value");
+    expect(finding.message).toBe(
+      `rank 1 "e-alpha" ${field}: pack expects ${before + 1}, the fold produced ${before}`,
+    );
+  });
+
+  it("falls back to the SPORT's own cascade when the division declares none", () => {
+    // Two entrants, one win each, level on points — separated only by `diff`,
+    // which is the second key of generic's own `defaultTiebreakers`. With no
+    // cascade at all the engine falls through to seed-then-id and puts e1
+    // first, so this order is evidence that the module's default was used.
+    const stream = (key: string, home: string, away: string, p1: number, p2: number) => ({
+      divisionRef: "d1",
+      fixtureExtKey: key,
+      home,
+      away,
+      provenance: "real",
+      events: [
+        { type: "core.start" },
+        { type: "generic.result", payload: { p1Score: p1, p2Score: p2 } },
+      ],
+    });
+    const pack = genericPack() as unknown as {
+      divisions: Record<string, unknown>[];
+      streams: unknown[];
+      expected: Record<string, unknown>;
+    };
+    expect(pack.divisions[0]!["tiebreakers"]).toBeUndefined();
+    pack.streams = [stream("f1", "e1", "e2", 1, 0), stream("f2", "e2", "e1", 5, 0)];
+    pack.expected["matches"] = [
+      { divisionRef: "d1", fixtureExtKey: "f1", outcome: { kind: "win", winner: "e1", loser: "e2" } },
+      { divisionRef: "d1", fixtureExtKey: "f2", outcome: { kind: "win", winner: "e2", loser: "e1" } },
+    ];
+    pack.expected["tables"] = [
+      {
+        divisionRef: "d1",
+        stageRef: "s1",
+        rows: [
+          { entrant: "e2", rank: 1, played: 2, won: 1, drawn: 0, lost: 1, points: 3 },
+          { entrant: "e1", rank: 2, played: 2, won: 1, drawn: 0, lost: 1, points: 3 },
+        ],
+      },
+    ];
+    expect(validatePack(pack as unknown as Record<string, unknown>).findings).toEqual([]);
+  });
+
   it("reds when the fold produces a different number of rows", () => {
     const pack = tiny();
     pack.expected.tables[0]!.rows = [pack.expected.tables[0]!.rows[0]!];
@@ -810,15 +1017,162 @@ describe("validatePack — the standings derivation mirrors the product's own", 
     const green = tiny();
     expect(validatePack(green).findings).toEqual([]); // `_tiny` declares no metrics
 
+    const exact = tiny();
+    // The real derived ledger for alpha, so the comparison has a green case
+    // and is not merely "any metrics block reds".
+    exact.expected.tables[0]!.rows[0]!.metrics = { for: 5, against: 3, diff: 2 };
+    expect(validatePack(exact).findings).toEqual([]);
+
     const red = tiny();
     red.expected.tables[0]!.rows[0]!.metrics = { nonsense: 1 };
     const finding = onlyError(validatePack(red).findings);
     expect(finding.code).toBe("standings.metrics");
     expect(finding.message).toContain('rank 1 "e-alpha" metrics');
   });
+
+  // A metrics block that is a strict SUBSET of the derived ledger, and one
+  // that is a strict SUPERSET. They fail through different halves of the
+  // comparison — the subset trips the per-key walk, the superset only the key
+  // COUNT — so a single case leaves one half of the check untested.
+  const metricsCases: [string, Record<string, number>][] = [
+    ["a SUBSET of", { for: 5 }],
+    ["a SUPERSET of", { for: 5, against: 3, diff: 2, invented: 0 }],
+  ];
+  it.each(metricsCases)("reds a metrics block that is %s the derived ledger", (_l, metrics) => {
+    const pack = tiny();
+    pack.expected.tables[0]!.rows[0]!.metrics = metrics;
+    const finding = onlyError(validatePack(pack).findings);
+    expect(finding.code).toBe("standings.metrics");
+    expect(finding.message).toContain('the fold produced {"for":5,"against":3,"diff":2}');
+  });
 });
 
 describe("stageScopedFoldCfg — the product's two-key stage overlay", () => {
+  // A goalless football match, ended by its two period markers. With
+  // `shootout` off it is a decided draw; with `shootout` on the same events
+  // leave the match in its SHOOTOUT phase, undecided. The division declares
+  // it OFF and the STAGE turns it on — so this is green only if the overlay
+  // actually reaches the fold, not merely if the overlay function is correct.
+  const goalless = (stageConfig: Record<string, unknown>): Record<string, unknown> => ({
+    schemaVersion: 1,
+    suite: "_unit",
+    org: { name: "Unit Org", slug: "unit-org", timezone: "UTC" },
+    competition: { name: "Unit Cup", slug: "unit-cup", endsOn: "2099-01-02" },
+    divisions: [
+      {
+        ref: "d1",
+        name: "D1",
+        sportKey: "football",
+        variantKey: "11-a-side",
+        moduleVersion: "1.0.0",
+        cfgOverrides: { shootout: false },
+        stages: [{ ref: "s1", seq: 1, kind: "knockout", name: "KO", config: stageConfig }],
+      },
+    ],
+    persons: [],
+    entrants: [
+      { ref: "e1", divisionRef: "d1", kind: "team", displayName: "One" },
+      { ref: "e2", divisionRef: "d1", kind: "team", displayName: "Two" },
+    ],
+    streams: [
+      {
+        divisionRef: "d1",
+        fixtureExtKey: "f1",
+        home: "e1",
+        away: "e2",
+        provenance: "real",
+        events: [
+          { type: "core.start" },
+          { type: "football.period", payload: { phase: "HT" } },
+          { type: "football.period", payload: { phase: "FT" } },
+        ],
+      },
+    ],
+    expected: {
+      matches: [{ divisionRef: "d1", fixtureExtKey: "f1", outcome: { kind: "draw" } }],
+    },
+    meta: { synthetic: true, sources: [] },
+  });
+
+  it("is APPLIED at the fold, not merely correct in isolation", () => {
+    expect(validatePack(goalless({})).findings).toEqual([]);
+
+    const applied = validatePack(goalless({ shootout: true }));
+    expect(onlyError(applied.findings).code).toBe("fold.not_decided");
+    // And NO warning: a single-stage division binds its overlay, so there is
+    // nothing unbindable to report. Without this the unbindable warning could
+    // fire on every pack that declares a decider key at all.
+    expect(warnings(applied.findings)).toEqual([]);
+  });
+
+  it("is NOT applied in a multi-stage division, and the risk is named", () => {
+    // The division cannot bind a stream to a stage, so no overlay is applied
+    // — even though a stage declares one. The fold therefore runs on the
+    // division's own cfg (shootout OFF) and the match is a decided draw.
+    const pack = goalless({ shootout: true }) as unknown as {
+      divisions: { stages: Record<string, unknown>[] }[];
+    };
+    pack.divisions[0]!.stages.push({ ref: "s2", seq: 2, kind: "knockout", name: "KO2", config: {} });
+
+    const result = validatePack(pack as unknown as Record<string, unknown>);
+    expect(errors(result.findings)).toEqual([]);
+    const warning = warnings(result.findings)[0];
+    expect(warning?.code).toBe("fold.stage_overlay_unbindable");
+    expect(warning?.where).toBe("divisions[ref=d1]");
+    expect(warning?.message).toContain("[shootout]");
+
+    // And a multi-stage division that declares NO decider key says nothing —
+    // the warning must not fire on every multi-stage pack.
+    const quiet = goalless({}) as unknown as { divisions: { stages: Record<string, unknown>[] }[] };
+    quiet.divisions[0]!.stages.push({ ref: "s2", seq: 2, kind: "knockout", name: "KO2", config: {} });
+    expect(validatePack(quiet as unknown as Record<string, unknown>).findings).toEqual([]);
+  });
+
+  // The same football fold is the only place in this suite whose state carries
+  // a nested ARRAY, so it is where a state claim's deep equality is really
+  // exercised — a claim's `equals` is any JSON value, and `periods` is the
+  // realistic shape a pack would assert against.
+  const withClaim = (equals: unknown, path: string): Record<string, unknown> => {
+    const pack = goalless({}) as unknown as { expected: Record<string, unknown> };
+    pack.expected["specials"] = [
+      {
+        kind: "ot_gws",
+        divisionRef: "d1",
+        fixtureExtKey: "f1",
+        claims: [{ on: "state", path, equals }],
+      },
+    ];
+    return pack as unknown as Record<string, unknown>;
+  };
+  const periods = [
+    { phase: "H1", home: 0, away: 0 },
+    { phase: "H2", home: 0, away: 0 },
+  ];
+
+  it("holds when a state claim deep-equals the folded value", () => {
+    expect(validatePack(withClaim(periods, "periods")).findings).toEqual([]);
+    expect(validatePack(withClaim({ home: 0, away: 0 }, "goals")).findings).toEqual([]);
+  });
+
+  // Each of these is caught by a DIFFERENT line of the comparison, and each
+  // one is the case its line exists for. Picked by driving the mutants: an
+  // array claim that is SHORT reds through the element walk and leaves the
+  // length check untested, and an object claim with FEWER keys reds through
+  // the key count and leaves the array-vs-object check untested. Only the
+  // long array and the fully-indexed object separate them.
+  const claimShapes: [string, unknown][] = [
+    ["an array one element SHORT", [periods[0]]],
+    ["an array one element LONG", [...periods, periods[0]]],
+    ["an object standing in for the array, same keys", { 0: periods[0], 1: periods[1] }],
+    ["an element whose value differs", [periods[0], { phase: "H2", home: 1, away: 0 }]],
+  ];
+  it.each(claimShapes)("reds a state claim that is %s", (_label, equals) => {
+    expect(onlyError(validatePack(withClaim(equals, "periods")).findings).code).toBe(
+      "special.state",
+    );
+  });
+
+
   it("overlays ONLY shootout and extraTime", () => {
     const base = { setTo: 21, shootout: false };
     expect(
@@ -886,15 +1240,80 @@ describe("resolveStatePath", () => {
     expect(resolveStatePath({ a: 1 }, "b")).toEqual({ found: false, value: undefined });
   });
 
-  it("indexes into arrays and refuses an out-of-range index", () => {
+  it("indexes into arrays and refuses an out-of-range or non-numeric index", () => {
     const state = { sets: [{ mtb: false }, { mtb: true }] };
     expect(resolveStatePath(state, "sets.1.mtb")).toEqual({ found: true, value: true });
     expect(resolveStatePath(state, "sets.2.mtb").found).toBe(false);
+    // The index must be checked where the path ENDS on it, not only where a
+    // later segment happens to fall off a non-object: walking past the end of
+    // an array otherwise reports `found: true, value: undefined`, and a claim
+    // of `equals: undefined` would silently hold.
+    expect(resolveStatePath(state, "sets.5").found).toBe(false);
+    expect(resolveStatePath(state, "sets.length").found).toBe(false);
   });
 
   it("refuses to walk through a non-object", () => {
     expect(resolveStatePath({ a: 5 }, "a.b").found).toBe(false);
     expect(resolveStatePath({ a: null }, "a.b").found).toBe(false);
+  });
+});
+
+describe("engine facts that make two of this file's mirrors unfalsifiable today", () => {
+  it("no shipped module's standingsDelta reads its StageCtx", () => {
+    // Stage 3 passes the stage's OWN kind as `ctxBase`, mirroring
+    // `competition.ts:236`. Today that mirror cannot be witnessed: all eight
+    // `standingsDelta` implementations in the engine name the argument `_ctx`
+    // and never read it, so passing the wrong kind changes nothing (recorded
+    // as an equivalent mutant in the task report).
+    //
+    // Driven rather than grepped, on the module this suite actually folds. If
+    // a module starts varying its delta by stage kind — knockout football
+    // forbidding draws is the obvious one — this reds and the mirror becomes
+    // load-bearing.
+    const sportModule = builtinModules.find((m) => m.key === "generic");
+    expect(sportModule).toBeDefined();
+    const cfg = sportModule!.configSchema.parse({
+      ...sportModule!.variants["score"],
+      allowDraws: true,
+      points: { w: 3, d: 1, l: 0 },
+    });
+    const lineups = {
+      home: { entrantId: "HOME", slots: [] },
+      away: { entrantId: "AWAY", slots: [] },
+    };
+    const state = sportModule!.init(cfg, lineups);
+    const outcome = { kind: "draw" as const };
+    expect(sportModule!.standingsDelta(outcome, cfg, { kind: "league" }, state)).toEqual(
+      sportModule!.standingsDelta(outcome, cfg, { kind: "knockout" }, state),
+    );
+  });
+
+
+  it("every shipped module renders perSide as [home, away]", () => {
+    // stage 2 matches a pack's score lines to the module's summary BY ENTRANT,
+    // never by index, because `ScoreSummary.perSide`'s order is not
+    // contractual. Measured here: all eleven shipped modules order it
+    // [home, away] at init, and PackSchema already forces the pack's own
+    // `perSide` to [home, away] — so for every pack that can be built today,
+    // by-entrant and by-index give the same answer, and no test can tell them
+    // apart (recorded as an equivalent mutant in the task report).
+    //
+    // The day a module reorders, this test reds FIRST and tells the next
+    // session that the by-entrant rule has become load-bearing — which is the
+    // whole point of pinning the fact rather than assuming it.
+    const lineups = {
+      home: { entrantId: "HOME", slots: [{ personId: "ph", slot: "starting" as const, orderNo: 1 }] },
+      away: { entrantId: "AWAY", slots: [{ personId: "pa", slot: "starting" as const, orderNo: 1 }] },
+    };
+    expect(builtinModules.length).toBeGreaterThan(0);
+    for (const sportModule of builtinModules) {
+      const raws = [{}, ...Object.values(sportModule.variants)];
+      const raw = raws.find((candidate) => sportModule.configSchema.safeParse(candidate).success);
+      expect(raw, `${sportModule.key} has no parseable config`).toBeDefined();
+      const cfg = sportModule.configSchema.parse(raw);
+      const summary = sportModule.summary(sportModule.init(cfg, lineups));
+      expect(summary.perSide.map((s) => s.entrantId), sportModule.key).toEqual(["HOME", "AWAY"]);
+    }
   });
 });
 

@@ -81,9 +81,20 @@
 //    `fixtureExtKey`, never a stage or a pool — in the product the FIXTURE row
 //    carries that, and a pack declares no fixtures. So stage 0 can bind
 //    streams to a stage only when the division has exactly ONE stage, and can
-//    never bind them to a pool. Both cases emit a `warning`, never a false
-//    green and never a false red. A pre-freeze `streams[].stageRef` would
-//    close it (recorded in the task report; PackSchema freezes at end of B06).
+//    never bind them to a pool. A table it cannot bind is skipped with a
+//    `warning` naming the reason, never silently. A pre-freeze
+//    `streams[].stageRef` would close it (recorded in the task report;
+//    PackSchema freezes at end of B06).
+//
+//    It costs more than a skipped table. The stage-scoped cfg overlay (see
+//    `stageScopedFoldCfg`) also cannot be bound, so a groups+knockout division
+//    whose knockout stage declares `shootout` or `extraTime` folds EVERY one
+//    of its fixtures under the division cfg — and stage 0 will then report a
+//    divergence the pack did not commit. That is the one place stage 0 can
+//    produce a FALSE RED, so it is named on its own
+//    (`fold.stage_overlay_unbindable`) rather than left to look like a data
+//    defect: a false red a reader can explain is recoverable, one they cannot
+//    is where a correct pack gets edited to match a broken gate.
 //  * ROUND NUMBER. `StageCtx.roundNo` is a fixture fact and is likewise
 //    undeclared, so `standingsDelta` is called without one. No shipped module
 //    reads it, but a future one could.
@@ -460,6 +471,28 @@ function soleStage(division: PackDivision): PackStage | undefined {
   return division.stages.length === 1 ? division.stages[0] : undefined;
 }
 
+/**
+ * A multi-stage division cannot bind its streams to a stage (see LIMITS), so
+ * its folds run on the DIVISION cfg with no stage overlay. That is the honest
+ * default — but it is not free: a groups+knockout division whose knockout
+ * stage declares `shootout` or `extraTime` will fold its knockout fixtures
+ * under the wrong cfg and report a divergence the pack did not commit.
+ *
+ * So the risk is NAMED rather than left to look like a data defect. A false
+ * red a reader can explain is recoverable; one they cannot is where a correct
+ * pack gets edited to match a broken gate.
+ */
+function unbindableOverlayKeys(division: PackDivision): readonly string[] {
+  if (division.stages.length <= 1) return [];
+  const keys = new Set<string>();
+  for (const stage of division.stages) {
+    for (const key of STAGE_DECIDER_KEYS) {
+      if (stage.config[key] !== undefined) keys.add(key);
+    }
+  }
+  return [...keys];
+}
+
 // ---------------------------------------------------------------------------
 // The validator
 // ---------------------------------------------------------------------------
@@ -527,6 +560,20 @@ export function validatePack(raw: unknown, opts: ValidatePackOptions = {}): Pack
     if (e.seed !== undefined) seedByEntrant.set(sigil(e.ref), e.seed);
   }
   const registryHandle = bootRegistry();
+
+  for (const division of pack.divisions) {
+    const keys = unbindableOverlayKeys(division);
+    if (keys.length === 0) continue;
+    add(
+      "warning",
+      "fold.stage_overlay_unbindable",
+      `divisions[ref=${division.ref}]`,
+      `division "${division.ref}" has ${division.stages.length} stages and one of them declares ` +
+        `[${keys.join(", ")}] — a stage-scoped decider key. A stream names no stage, so stage 0 folds ` +
+        `every one of this division's fixtures under the DIVISION cfg with no overlay, and any ` +
+        `divergence it reports for that division may be this gap rather than the pack`,
+    );
+  }
 
   // -- Stage 2: per-stream fold ------------------------------------------
   // Every stream is attempted, and a failure on one never stops the next: a
