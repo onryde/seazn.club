@@ -44,7 +44,7 @@ import {
   TAG,
   type RosteredFixture,
 } from "../helpers";
-import { DOUBLE_SUBMIT_WINDOW_MS } from "../../src/components/v2/scorepad/use-pad-pipeline";
+import { HUMAN_FASTEST_REPEAT_MS } from "../../src/components/v2/scorepad/use-pad-pipeline";
 
 test.describe.configure({ mode: "parallel" });
 
@@ -158,24 +158,29 @@ async function sendHeldNowIfAsked(page: Page): Promise<void> {
  * ledger poll below usually taking longer than 250ms — i.e. luck, load-
  * dependent, which is exactly the shape of a flake.
  *
- * What is restored is NOT the old flat sleep. `clearGuard` waits only the
- * REMAINDER of the window, and only when the previous tap was the same side
- * (a different side changes the payload, so the guard cannot fire). In the
- * common case the ledger round trip has already outlived the window and the
- * wait is zero, so this costs nothing on a normal run and only pays when the
- * run is fast enough to be in danger. Derived from the constant, never a
- * typed-in number, so moving the window moves this with it (R7-19).
+ * What is restored is NOT the old flat 750ms sleep, and it is deliberately
+ * NOT pinned to `DOUBLE_SUBMIT_WINDOW_MS` either. It is pinned to
+ * `HUMAN_FASTEST_REPEAT_MS` — R7-46's own resolution of this exact tension,
+ * already used by `scorepad-v3-honest-recording.spec.ts`'s `RUN_TAP_PACE_MS`:
+ * the fastest a real scorer can deliberately repeat a tap and mean both.
  *
- * `scorepad-v3-honest-recording.spec.ts` deliberately keeps NO clearance —
- * it exists to prove the guard's own behaviour, and an artificial wait there
- * would be the workaround-as-acceptance-test R7-43 warns about. This helper
- * is the opposite case: it is trying to score a match, not to characterise
- * the guard.
+ * That distinction is the whole point. A wait derived from the GUARD's window
+ * is a workaround — it dodges the guard, and it is what R7-43 ruled must be
+ * deletable. A wait derived from the HUMAN floor is the test stating what it
+ * actually claims: a scorer tapping at a human cadence never loses a rally.
+ * The unit suite asserts `DOUBLE_SUBMIT_WINDOW_MS < HUMAN_FASTEST_REPEAT_MS`,
+ * so pacing at the human floor clears the guard BY CONSTRUCTION and keeps
+ * doing so if the window moves — no `+60` fudge factor to go stale.
+ *
+ * It waits only the REMAINDER, and only when the previous tap was the same
+ * side (a different side changes the payload, so the guard cannot fire). In
+ * the common case the ledger round trip has already outlived it and the wait
+ * is zero.
  */
 let lastTap: { side: "home" | "away"; at: number } | null = null;
 async function clearGuard(page: Page, side: "home" | "away"): Promise<void> {
   if (lastTap !== null && lastTap.side === side) {
-    const remaining = DOUBLE_SUBMIT_WINDOW_MS + 60 - (Date.now() - lastTap.at);
+    const remaining = HUMAN_FASTEST_REPEAT_MS - (Date.now() - lastTap.at);
     if (remaining > 0) await page.waitForTimeout(remaining);
   }
   lastTap = { side, at: Date.now() };

@@ -40,6 +40,7 @@ import {
   type RosteredFixture,
 } from "../helpers";
 import { HOLD_MS } from "../../src/components/v2/scorepad/queue";
+import { HUMAN_FASTEST_REPEAT_MS } from "../../src/components/v2/scorepad/use-pad-pipeline";
 
 test.describe.configure({ mode: "parallel" });
 
@@ -150,9 +151,27 @@ async function shot(page: Page, caption: string): Promise<void> {
  * carry the board before returning — the same "poll the real ledger, never
  * trust the optimistic fold alone" posture every sibling walkthrough takes.
  */
+let lastTap: { winner: "home" | "away"; at: number } | null = null;
+/** Keyed on `winner`, not on a scoreboard side: carrom is tapModel T, and it
+ *  is the PAYLOAD that repeats — `{winner, opponentCoinsLeft: 9}`, identical
+ *  every time the same side takes a board. Pinned to
+ *  `HUMAN_FASTEST_REPEAT_MS` rather than to the guard's own window; see the
+ *  fuller note in `scorepad-v3-badminton-match.spec.ts` for why that
+ *  distinction preserves R7-43's acceptance test instead of undoing it.
+ *  Waits only the remainder, and only when the same side won the last board.
+ */
+async function pace(page: Page, winner: "home" | "away"): Promise<void> {
+  if (lastTap !== null && lastTap.winner === winner) {
+    const remaining = HUMAN_FASTEST_REPEAT_MS - (Date.now() - lastTap.at);
+    if (remaining > 0) await page.waitForTimeout(remaining);
+  }
+  lastTap = { winner, at: Date.now() };
+}
+
 async function tapBoard(page: Page, fx: RosteredFixture, winner: "home" | "away"): Promise<void> {
   const before = await ledger(page.request, fx.fixtureId);
   if (PACE > 0) await page.waitForTimeout(PACE);
+  await pace(page, winner);
   // Every board tapped in this file is `{winner, opponentCoinsLeft: 9}` —
   // bit-for-bit the SAME payload every time (carrom declares no `clock()`,
   // so `stampFor` hands it back unchanged, per `send`'s own doc in
@@ -163,8 +182,15 @@ async function tapBoard(page: Page, fx: RosteredFixture, winner: "home" | "away"
   // — the 4th board tap here vanished silently under parallel-worker load,
   // zero POST logged, ledger stuck one short. R7-42's fix (owner ruling)
   // narrowed the window to 250ms and made a refused repeat VISIBLE rather
-  // than silent, so the clearance this used to pay is gone — THIS call
-  // site is the acceptance test for that fix.
+  // than silent, so the flat clearance this used to pay was deleted and THIS
+  // call site was named the acceptance test for that fix.
+  //
+  // The deletion went too far — the identical omission in the volleyball
+  // walkthrough flaked in CI (a different board short each run), and this
+  // file's payload is the MOST repeatable in the suite. `pace` above restores
+  // spacing pinned to the HUMAN floor rather than to the guard's window, so
+  // the acceptance test still asserts something the guard could fail: that a
+  // real player's consecutive boards all record.
   await tile(page, "board").click();
   await expect(sheet(page)).toBeVisible({ timeout: 10_000 });
   await sheet(page).locator(`[data-choice-option-id="${winner}"]`).click();

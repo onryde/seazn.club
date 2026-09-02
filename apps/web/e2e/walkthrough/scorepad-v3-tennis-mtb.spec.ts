@@ -26,6 +26,7 @@ import {
   TAG,
   type RosteredFixture,
 } from "../helpers";
+import { HUMAN_FASTEST_REPEAT_MS } from "../../src/components/v2/scorepad/use-pad-pipeline";
 
 test.describe.configure({ mode: "parallel" });
 
@@ -86,17 +87,44 @@ async function shot(page: Page, caption: string): Promise<void> {
 
 /** Tap a point on one half and wait for it to REACH the ledger.
  *
- * R7-42/R7-30/R7-43 (owner ruling, `_INDEX.md`) — this used to pay a 750ms
- * clearance on a same-side repeat (two points to the same side in a row are
- * exactly that) so it would not collide with `DOUBLE_SUBMIT_WINDOW_MS`.
- * That window is now 250ms (was 600ms), and a refused repeat is VISIBLE
- * rather than silent, so the clearance and its `lastSide` bookkeeping are
- * gone — a tie-break run of consecutive points is this fix's own
- * acceptance test.
+ * R7-42/R7-30/R7-43 (owner ruling, `_INDEX.md`) — this used to pay a flat
+ * 750ms clearance on a same-side repeat (two points to the same side in a row
+ * are exactly that) so it would not collide with `DOUBLE_SUBMIT_WINDOW_MS`.
+ * The window narrowed 600ms -> 250ms and a refused repeat became VISIBLE
+ * rather than silent, so the flat clearance and its `lastSide` bookkeeping
+ * were deleted, and a tie-break run of consecutive points was named as this
+ * fix's own acceptance test.
+ *
+ * IT WAS DELETED TOO COMPLETELY. The identical omission in
+ * `scorepad-v3-volleyball-match.spec.ts` flaked in CI for it — and a
+ * tie-break run is the WORST case in the suite for it, being nothing but
+ * consecutive same-side points. Visible is not recorded: the guard still
+ * refuses a byte-identical repeat inside 250ms and the refused tap writes no
+ * ledger row, so the poll below waits 20s for a row that never comes.
+ *
+ * THE ACCEPTANCE TEST IS PRESERVED, NOT WEAKENED — `pace` is pinned to
+ * `HUMAN_FASTEST_REPEAT_MS`, not to the guard's window. See the fuller note
+ * in `scorepad-v3-badminton-match.spec.ts`: R7-43 required that a wait
+ * derived from the GUARD be deletable (it only dodges the guard and would
+ * pass at any window value); a wait derived from the HUMAN floor is this
+ * test's actual claim — a scorer tapping as fast as a person deliberately can
+ * never loses a point — and clears the guard by construction.
+ *
+ * Waits only the remainder, and only on a same-side repeat.
  */
+let lastTap: { side: "home" | "away"; at: number } | null = null;
+async function pace(page: Page, side: "home" | "away"): Promise<void> {
+  if (lastTap !== null && lastTap.side === side) {
+    const remaining = HUMAN_FASTEST_REPEAT_MS - (Date.now() - lastTap.at);
+    if (remaining > 0) await page.waitForTimeout(remaining);
+  }
+  lastTap = { side, at: Date.now() };
+}
+
 async function tapPoint(page: Page, fx: RosteredFixture, side: "home" | "away"): Promise<void> {
   const before = (await ledger(page.request, fx.fixtureId)).length;
   if (PACE > 0) await page.waitForTimeout(PACE);
+  await pace(page, side);
   await tennisHalf(page, side).click();
   await expect
     .poll(async () => (await ledger(page.request, fx.fixtureId)).length, { timeout: 20_000 })
