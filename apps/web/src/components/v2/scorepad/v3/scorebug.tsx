@@ -217,6 +217,37 @@ function HalfContent({ half, hintText }: { half: ScorebugHalf; hintText: string 
 }
 
 /**
+ * R8/#676, review round 3 — THE SIZERS' OWN CLASS, and deliberately NOT the
+ * `weight` the visible layer uses.
+ *
+ * THE DEFECT THIS REPLACES. `weight` is built from `item.accent`, and the
+ * answered server slot in badminton/tabletennis/volleyball is `accent: true`
+ * while its reserved twin is not. Applying `weight` to the sizers therefore
+ * measured the SAME `reserve` candidates in `font-semibold` when the slot was
+ * answered and `font-medium` when it was held — two different widths for the
+ * one slot, so the centred row still moved. That is the exact defect the whole
+ * feature exists to close, shrunk rather than removed, and every guard in the
+ * wave was blind to it because they all compared the `reserve` ARRAYS (identical
+ * by construction) and never what those strings were MEASURED IN.
+ *
+ * FIXED HERE RATHER THAN IN THE THREE SKINS. Setting `accent: true` on each
+ * reserved twin would also equalise the two states, but it asks three skins —
+ * and every skin added later — to remember, and it makes `accent` mean two
+ * things: types.ts defines it as the VISIBLE strip's own emphasis, and a slot
+ * that renders no ink has no emphasis to declare. The sizers are `invisible`
+ * by construction, so their weight is a measuring instrument, not a style, and
+ * that belongs to the chassis. A skin can now get `accent` wrong in either
+ * direction without the reservation moving.
+ *
+ * `font-semibold` specifically: the WIDER of the plain branch's two weights, so
+ * a sizer always reserves at least what the visible layer needs, never less.
+ * No colour token — the layer is `visibility:hidden` and paints nothing.
+ * `break-words` for the same reason the who-line has it (see HalfContent).
+ */
+const STRIP_SIZER_CLASS =
+  "invisible col-start-1 row-start-1 min-w-0 break-words text-xs font-semibold";
+
+/**
  * Renders a ScorebugSpec: two halves (a tappable one is a real <button>
  * with a 44px min-height floor, visible hint text, and an aria-label
  * combining the who-line with the hint; a non-tappable one is a plain,
@@ -362,12 +393,35 @@ export function Scorebug({ spec, t, onTap, onOpenSheet }: ScorebugProps) {
             // So where there is room the slot holds its width and the row stops
             // moving; where there is not, it yields and the band wraps (the row
             // is already `flex-wrap` with a `gap-y-1` for precisely that).
-            if (item.reserve?.length) {
+            // `item.reserved ||`, not `item.reserve?.length` alone. A held slot
+            // whose reserve came back empty fell through to the PLAIN branch
+            // below and printed `${label} ` with no value after it — "Serving "
+            // where a fact belongs, which is precisely the D-17 placeholder
+            // this field exists to avoid. `assertScorebugSpec` flags that shape
+            // but has NO production caller (test-only), so this branch is the
+            // only thing standing there.
+            if (item.reserved || item.reserve?.length) {
               return (
                 <span
                   key={i}
                   {...(item.reserved ? { "aria-hidden": true, "data-strip-reserved": "true" } : {})}
-                  className="grid min-w-0 justify-items-center"
+                  // THE ELEMENT WHOSE WIDTH IS ACTUALLY BEING RESERVED, marked
+                  // in BOTH states so a browser can read a rect off it. Before
+                  // this, nothing could: `data-strip-item-id` sits on the
+                  // `justify-self:center` inner span, whose box is its own text
+                  // and NOT the reserved cell, and `data-strip-reserved` is
+                  // emitted only while the slot is held — so an ANSWERED
+                  // reserving slot carried no attribute at all, and the
+                  // feature's central claim (the same width in both states) was
+                  // unmeasurable by any e2e in either state.
+                  data-strip-reserve="true"
+                  // `place-items-center`, not `justify-items-center`: a grid
+                  // item defaults to `align-self: stretch`, so an `invisible`
+                  // sizer that wraps to two lines made the CELL two lines tall
+                  // and top-aligned the visible value inside it, while every
+                  // sibling strip item sits on the band's own `items-center`.
+                  // The reservation is a WIDTH; it must not buy height.
+                  className="grid min-w-0 place-items-center"
                   style={{ fontVariantNumeric: "tabular-nums" }}
                 >
                   {/* THE SIZERS ARE SIBLINGS OF THE VISIBLE LAYER, NEVER ITS
@@ -389,19 +443,22 @@ export function Scorebug({ spec, t, onTap, onOpenSheet }: ScorebugProps) {
                       track's automatic minimum is its items' min-content, so
                       without it the widest candidate is still a floor and the
                       box yields while the ink overflows. */}
-                  {item.reserve.map((candidate, c) => (
-                    <span
-                      key={c}
-                      aria-hidden
-                      className={`invisible col-start-1 row-start-1 min-w-0 ${weight}`}
-                    >
+                  {item.reserve?.map((candidate, c) => (
+                    <span key={c} aria-hidden className={STRIP_SIZER_CLASS}>
                       {item.label ? `${item.label} ` : ""}
                       {candidate}
                     </span>
                   ))}
                   <span
                     {...(item.id && !item.reserved ? { "data-strip-item-id": item.id } : {})}
-                    className={`col-start-1 row-start-1 min-w-0 ${weight}`}
+                    // `break-words` beside `min-w-0`, the same pair HalfContent
+                    // uses on the who-line and for the same reason: `min-w-0`
+                    // lets the box shrink, but an unbroken surname has no break
+                    // opportunity without `overflow-wrap`, so the ink overflows
+                    // a box that yielded and is CLIPPED at both ends by the
+                    // centring, under the tile root's `overflow-hidden`. The
+                    // page never scrolls, so the h-scroll gate cannot see it.
+                    className={`col-start-1 row-start-1 min-w-0 break-words ${weight}`}
                   >
                     {item.reserved ? "" : text}
                   </span>
