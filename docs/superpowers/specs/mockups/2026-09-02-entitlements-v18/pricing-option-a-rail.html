@@ -1,0 +1,352 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pricing — Option A · Box office, with the board</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: { extend: {
+      colors: { night:'#150b36', night2:'#1d1145', cream:'#f5f0e8', lime:'#a3e635', brand:'#7c3aed' },
+      fontFamily: {
+        display:['"Barlow Condensed"','"Arial Narrow"','system-ui','sans-serif'],
+        body:['Inter','system-ui','-apple-system','sans-serif'],
+        mono:['"IBM Plex Mono"','ui-monospace','monospace']
+      }
+    } }
+  };
+</script>
+<style>
+  :root{ --night:#150b36; --night2:#1d1145; --cream:#f5f0e8; --lime:#a3e635; --brand:#7c3aed; }
+  html,body{ max-width:100%; }
+  body{ background:var(--night); font-family:Inter,system-ui,-apple-system,sans-serif; -webkit-font-smoothing:antialiased; }
+
+  /* Floodlights: confined to the marquee band, so the ticket row below sits on
+     FLAT night and the punched bites can be drawn in a solid colour. */
+  .marquee{
+    background:
+      radial-gradient(620px 340px at 6% -30%, rgba(163,230,53,.11), transparent 60%),
+      radial-gradient(720px 400px at 94% -30%, rgba(124,58,237,.34), transparent 62%);
+  }
+
+  .cond{ font-family:"Barlow Condensed","Arial Narrow",system-ui,sans-serif; text-transform:uppercase; }
+  .mono{ font-family:"IBM Plex Mono",ui-monospace,monospace; }
+
+  /* ── The board ──────────────────────────────────────────────────────────
+     A box office does not describe what it sells; it prints the running order
+     on a board behind the counter. So the sports are set in hairline-ruled
+     slots, not pills, and they are quiet by CASE and VALUE — sentence-case
+     condensed instead of the marquee's shouting caps — so the board answers
+     "which sports?" without ever out-arguing the ticket below it.
+
+     PHONE (base) is a different device, not this one narrowed: ten ruled slots
+     stacked two-up would run five rows deep and shove the ticket off the first
+     screen, so at 320 the board collapses to a printed RIBBON — names flowing
+     inline with hairline dividers, wrapping over three lines in about a third
+     of the height. Grid slots only appear once there is width to rule them. */
+  .board{
+    display:flex; flex-wrap:wrap; padding:5px 2px;
+    background:#100827;
+    border-top:1px solid rgba(124,58,237,.34);
+    border-bottom:1px solid rgba(124,58,237,.34);
+  }
+  .board > li{ padding:4px 9px; }
+  .fixture{
+    font-family:"Barlow Condensed","Arial Narrow",system-ui,sans-serif;
+    font-size:16px; line-height:1.3; letter-spacing:.025em; color:#ded7f5;
+    border-right:1px solid rgba(124,58,237,.45);
+  }
+  .fixture:nth-last-of-type(2){ border-right:0; }
+  /* The catch-all is deliberately NOT a fixture: other face, lower case, lower
+     value, full width. It is the board's foot line, not an eleventh sport. */
+  .fixture-tail{ width:100%; font-size:13.5px; line-height:1.4; color:#a99ad4; padding-top:2px; }
+  @media (min-width:640px){
+    .board{
+      display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:1px; padding:0;
+      background:rgba(124,58,237,.34); border:1px solid rgba(124,58,237,.34);
+    }
+    .board > li{ background:#100827; padding:9px 12px; }
+    .fixture{ font-size:15px; border-right:0; }
+    .fixture-tail{ width:auto; grid-column:1 / -1; padding-top:9px; }
+  }
+  @media (min-width:1280px){ .board{ grid-template-columns:repeat(10,minmax(0,1fr)); } }
+
+  /* ── The pass ───────────────────────────────────────────────────────────
+     PHONE: a ticket held in the hand is PORTRAIT. Promise first, then the stub
+     across the top carrying the serial and ADMIT ONE along the short edge, the
+     two rungs and the buy action; the tear runs horizontally beneath it; the
+     counterfoil detail follows. DESKTOP: the same ticket turned landscape —
+     stub down the right, tear vertical, ADMIT ONE up the edge. Two
+     compositions, one anatomy; the grid below is what switches them. */
+  .pass{ display:flex; flex-direction:column; min-width:0; }
+  @media (min-width:768px){
+    /* min-content on the head row keeps ALL the slack the tall stub creates in
+       the body row, where mt-auto spends it on the foot rule — otherwise the
+       promise floats away from the bullets it introduces. */
+    .pass{ display:grid; grid-template-columns:minmax(0,1fr) 0 17.5rem;
+           grid-template-rows:min-content 1fr; }
+    .pass-head{ grid-area:1 / 1 / 2 / 2; }
+    .pass-body{ grid-area:2 / 1 / 3 / 2; }
+    .pass-seam{ grid-area:1 / 2 / 3 / 3; }
+    .pass-stub{ grid-area:1 / 3 / 3 / 4; }
+  }
+
+  /* A ticket torn out of the book: scalloped perforation along the top edge. */
+  .tear-top{
+    -webkit-mask-image: radial-gradient(circle 7px at 7px 0, #0000 97%, #000 100%);
+    -webkit-mask-size: 14px 100%; -webkit-mask-repeat: repeat-x;
+    mask-image: radial-gradient(circle 7px at 7px 0, #0000 97%, #000 100%);
+    mask-size: 14px 100%; mask-repeat: repeat-x;
+  }
+
+  /* The perforation between the pass body and its tear-off stub. The bites are
+     drawn in the page's own night and the ticket clips their outer half, so the
+     hole reads as punched rather than printed. Vertical on wide screens,
+     horizontal once the ticket stacks — the same flip globals.css makes at 640. */
+  .seam{ position:relative; flex:none; height:0; border-top:3px dashed rgba(124,58,237,.7); }
+  .seam::before, .seam::after{
+    content:""; position:absolute; top:-15px; width:30px; height:30px;
+    border-radius:9999px; background:var(--night);
+  }
+  .seam::before{ left:-15px; }
+  .seam::after{ right:-15px; }
+  @media (min-width:768px){
+    .seam{ height:auto; width:0; align-self:stretch; border-top:0; border-left:3px dashed rgba(124,58,237,.7); }
+    .seam::before{ left:-15px; top:-15px; right:auto; }
+    .seam::after{ left:-15px; right:auto; top:auto; bottom:-15px; }
+  }
+
+  /* "ADMIT ONE", printed up the tear-off edge the way a real stub carries it. */
+  .admit{ writing-mode:vertical-rl; text-orientation:mixed; letter-spacing:.42em; }
+
+  .stub-plate{ background:linear-gradient(158deg,var(--night2),var(--night)); }
+  .glow{ box-shadow:0 0 0 1px rgba(163,230,53,.35), 0 26px 70px -28px rgba(163,230,53,.55), 0 10px 40px -20px rgba(124,58,237,.7); }
+
+
+  a:focus-visible, button:focus-visible{ outline:3px solid var(--lime); outline-offset:3px; border-radius:6px; }
+  @media (prefers-reduced-motion:no-preference){ .lamp{ animation:lamp 3.6s ease-in-out infinite; } }
+  @keyframes lamp{ 50%{ opacity:.45; } }
+</style>
+</head>
+<body class="text-cream">
+
+<main class="overflow-x-hidden">
+
+  <!-- ── Marquee ──────────────────────────────────────────────────────── -->
+  <section class="marquee border-b-2 border-lime/70 px-4 pb-12 pt-12 sm:pb-16 sm:pt-20">
+    <div class="mx-auto max-w-6xl">
+      <p class="mono mb-5 flex items-center gap-2.5 text-[11px] font-medium tracking-[.22em] text-lime">
+        <span class="lamp inline-block h-2 w-2 shrink-0 rounded-full bg-lime"></span>
+        BOX OFFICE OPEN
+      </p>
+      <h1 class="cond max-w-[13ch] text-[2.75rem] font-bold leading-[.92] tracking-[.01em] text-cream sm:text-6xl lg:text-7xl">
+        Buy a ticket,<br>or take the season.
+      </h1>
+      <p class="mt-5 max-w-[52ch] text-[1rem] leading-relaxed text-[#bdb4e2] sm:text-lg">
+        Every sport and every scoring detail is in all three. What changes is how much
+        you run at once, what the platform takes, and how long the lights stay on.
+      </p>
+
+      <ul class="board mt-7">
+        <li class="fixture">Football</li>
+        <li class="fixture">Cricket</li>
+        <li class="fixture">Tennis</li>
+        <li class="fixture">Badminton</li>
+        <li class="fixture">Table tennis</li>
+        <li class="fixture">Volleyball</li>
+        <li class="fixture">Hockey</li>
+        <li class="fixture">Ice hockey</li>
+        <li class="fixture">Carrom</li>
+        <li class="fixture">Board games</li>
+        <li class="fixture-tail">and any sport you can score</li>
+      </ul>
+
+      <p class="mono mt-6 text-[11px] tracking-[.14em] text-[#9a8cc9]">PRICES IN USD</p>
+    </div>
+  </section>
+
+  <!-- ── The counter ─────────────────────────────────────────────────── -->
+  <section class="px-4 pb-16 pt-12 sm:pt-14">
+    <div class="mx-auto max-w-6xl">
+
+      <!-- ══ EVENT PASS — the hero: a real ticket with a tear-off stub ══
+           It leads, and it is the only offer drawn at full width: this is the
+           one purchase that IS a ticket, and the direction spends its whole
+           budget here. ══ -->
+      <article class="glow relative mb-8 min-w-0 overflow-hidden rounded-2xl bg-cream text-night sm:mb-10">
+        <div class="pass">
+
+          <!-- head — on a phone the promise takes the top of the screen, above
+               the price. On desktop it is simply the top of the left column. -->
+          <div class="pass-head min-w-0 px-6 pb-5 pt-7 sm:px-8 md:pb-0 md:pt-9">
+            <p class="cond mb-2 text-[13px] font-semibold tracking-[.26em] text-[#4d7c0f]">Event Pass</p>
+            <h2 class="text-[1.625rem] font-bold leading-tight tracking-[-0.015em] text-night sm:text-[1.75rem]">One tournament, fully powered.</h2>
+            <p class="mt-2 max-w-[62ch] text-[0.9375rem] leading-snug text-[#5a4b78]">One payment for one competition. No subscription, nothing to cancel.</p>
+          </div>
+
+          <!-- lit tear-off stub: it carries the price and the way in -->
+          <div class="pass-stub stub-plate relative min-w-0 px-6 pb-7 pt-5 text-cream sm:px-7 md:pr-12 md:pt-8">
+            <p class="mono mb-4 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 border-b border-[#3b2a6e] pb-3 text-[10.5px] tracking-[.16em] text-[#9a8cc9] md:mb-5 md:block md:border-0 md:pb-0 md:leading-relaxed md:tracking-[.2em]">
+              <span>Nº 0001</span><span class="md:block">ADMIT ONE COMPETITION</span>
+            </p>
+
+            <div class="grid grid-cols-2 gap-3 md:grid-cols-1 md:gap-4">
+              <div class="rounded-xl border border-[#3b2a6e] bg-black/25 px-3.5 py-3">
+                <p class="cond text-[12.5px] font-semibold tracking-[.22em] text-lime">Size M</p>
+                <p class="cond mt-0.5 text-[2.625rem] font-bold leading-[.92] text-cream md:text-[2.5rem]">$15</p>
+                <p class="mt-1.5 text-[0.8rem] leading-snug text-[#bdb4e2] md:text-[0.75rem]">10 divisions × 128 entrants<br>+25 AI credits</p>
+              </div>
+              <div class="rounded-xl border border-[#3b2a6e] bg-black/25 px-3.5 py-3">
+                <p class="cond text-[12.5px] font-semibold tracking-[.22em] text-lime">Size L</p>
+                <p class="cond mt-0.5 text-[2.625rem] font-bold leading-[.92] text-cream md:text-[2.5rem]">$29</p>
+                <p class="mt-1.5 text-[0.8rem] leading-snug text-[#bdb4e2] md:text-[0.75rem]">20 divisions × 512 entrants<br>+50 AI credits</p>
+              </div>
+            </div>
+
+            <a href="#" class="cond mt-5 block w-full rounded-lg bg-lime px-4 py-4 text-center text-[16px] font-bold tracking-[.1em] text-night transition hover:bg-[#b7ef4f] md:py-3.5 md:text-[15px]">
+              Buy a pass
+            </a>
+            <p class="mt-3 text-center text-[0.8rem] text-[#bdb4e2] md:text-[0.75rem]">Per competition, one time.</p>
+
+            <span class="admit mono pointer-events-none absolute right-2 top-1/2 hidden -translate-y-1/2 text-[10px] text-[#9a8cc9] md:block" aria-hidden>ADMIT ONE</span>
+          </div>
+
+          <div class="pass-seam seam" aria-hidden></div>
+
+          <!-- body -->
+          <div class="pass-body flex min-w-0 flex-col px-6 pb-8 pt-7 sm:px-8 md:pb-9 md:pt-6">
+            <ul class="grid gap-x-7 gap-y-3 text-[0.95rem] leading-snug text-[#463a60] sm:grid-cols-2 sm:gap-y-2.5 sm:text-[0.9rem] md:mb-7 lg:grid-cols-3">
+              <li class="flex gap-2.5"><span class="mt-[3px] shrink-0 text-[#4d7c0f]" aria-hidden>✓</span>Live scoreboard</li>
+              <li class="flex gap-2.5"><span class="mt-[3px] shrink-0 text-[#4d7c0f]" aria-hidden>✓</span>Hand scoring devices to volunteers</li>
+              <li class="flex gap-2.5"><span class="mt-[3px] shrink-0 text-[#4d7c0f]" aria-hidden>✓</span>Officials assigned automatically</li>
+              <li class="flex gap-2.5"><span class="mt-[3px] shrink-0 text-[#4d7c0f]" aria-hidden>✓</span>Suspension tracking</li>
+              <li class="flex gap-2.5"><span class="mt-[3px] shrink-0 text-[#4d7c0f]" aria-hidden>✓</span>Advanced formats</li>
+              <li class="flex gap-2.5"><span class="mt-[3px] shrink-0 text-[#4d7c0f]" aria-hidden>✓</span>Top-scorer stats</li>
+              <li class="flex gap-2.5"><span class="mt-[3px] shrink-0 text-[#4d7c0f]" aria-hidden>✓</span>Branded exports</li>
+              <li class="flex gap-2.5"><span class="mt-[3px] shrink-0 text-[#4d7c0f]" aria-hidden>✓</span>Sponsors</li>
+              <li class="flex gap-2.5"><span class="mt-[3px] shrink-0 text-[#4d7c0f]" aria-hidden>✓</span>5 restore points</li>
+            </ul>
+
+            <div class="mt-7 flex flex-wrap items-center gap-x-5 gap-y-3 border-t border-dashed border-[#c9bda8] pt-5 md:mt-auto md:pt-6">
+              <p class="mono inline-flex w-fit shrink-0 items-baseline gap-2 whitespace-nowrap border border-[#b5d977] bg-[#eaf6cf] px-2.5 py-1.5 text-[11px] tracking-[.12em] text-[#3f6212]">
+                PLATFORM FEE <strong class="text-[13px] font-medium">5%</strong>
+              </p>
+              <p class="min-w-0 text-[0.85rem] leading-relaxed text-[#5a4b78] md:text-[0.8125rem]">
+                Buy Pro within 30 days and the pass counts toward it.
+              </p>
+            </div>
+
+            <!-- Phone only: the ticket is a screen and a half tall, so the buy
+                 action is repeated at the foot where the thumb already is.
+                 Pointless once the ticket turns landscape and the stub button
+                 is always on screen — hence md:hidden. -->
+            <a href="#" class="cond mt-6 block w-full rounded-lg bg-lime px-4 py-4 text-center text-[16px] font-bold tracking-[.1em] text-night transition hover:bg-[#b7ef4f] md:hidden">
+              Buy a pass
+            </a>
+          </div>
+        </div>
+      </article>
+
+      <!-- ══ The two subscriptions-or-nothing offers, quieter ═══════════ -->
+      <div class="grid gap-y-11 gap-x-6 md:grid-cols-2">
+
+        <!-- FREE — the counterfoil left in the book -->
+        <article class="tear-top relative flex min-w-0 flex-col bg-cream px-6 pb-7 pt-9 text-night sm:px-7">
+          <header class="mb-6 border-b border-dashed border-[#c9bda8] pb-5">
+            <p class="cond mb-2 text-[13px] font-semibold tracking-[.26em] text-[#6b5b8a]">Free</p>
+            <p class="cond text-[3.25rem] font-bold leading-[.9] tracking-tight">$0</p>
+            <p class="mt-2.5 text-[1.0625rem] font-semibold leading-snug text-[#3d2f5c]">Run a club night.</p>
+          </header>
+
+          <ul class="mb-6 flex-1 grid gap-x-7 gap-y-3 text-[0.95rem] leading-snug text-[#463a60] sm:gap-y-2.5 sm:text-[0.9rem] lg:grid-cols-2 lg:content-start">
+            <li class="flex gap-2.5"><span class="mt-[3px] shrink-0 text-[#6b8e23]" aria-hidden>✓</span>1 organisation</li>
+            <li class="flex gap-2.5"><span class="mt-[3px] shrink-0 text-[#6b8e23]" aria-hidden>✓</span>3 staff + 2 scorer seats</li>
+            <li class="flex gap-2.5"><span class="mt-[3px] shrink-0 text-[#6b8e23]" aria-hidden>✓</span>3 live competitions</li>
+            <li class="flex gap-2.5"><span class="mt-[3px] shrink-0 text-[#6b8e23]" aria-hidden>✓</span>4 divisions, 64 entrants each</li>
+            <li class="flex gap-2.5"><span class="mt-[3px] shrink-0 text-[#6b8e23]" aria-hidden>✓</span>Every sport, every scoring detail</li>
+            <li class="flex gap-2.5"><span class="mt-[3px] shrink-0 text-[#6b8e23]" aria-hidden>✓</span>Player profiles, embeds and auto-drafted posts</li>
+            <li class="flex gap-2.5"><span class="mt-[3px] shrink-0 text-[#6b8e23]" aria-hidden>✓</span>Online registration</li>
+            <li class="flex gap-2.5"><span class="mt-[3px] shrink-0 text-[#6b8e23]" aria-hidden>✓</span>5 AI credits a month</li>
+            <li class="flex gap-2.5 lg:col-span-2"><span class="mt-[3px] shrink-0 text-[#6b8e23]" aria-hidden>✓</span>Tables that come out right: tiebreakers, bonus points, rain-rule targets</li>
+          </ul>
+
+          <p class="mono mb-5 inline-flex w-fit items-baseline gap-2 whitespace-nowrap border border-[#c9bda8] px-2.5 py-1.5 text-[11px] tracking-[.12em] text-[#4a3d63]">
+            PLATFORM FEE <strong class="text-[13px] font-medium text-night">8%</strong>
+          </p>
+
+          <a href="#" class="cond block w-full rounded-lg border-2 border-night px-4 py-3.5 text-center text-[15px] font-semibold tracking-[.1em] text-night transition hover:bg-night hover:text-cream md:py-3">
+            Start free
+          </a>
+          <p class="mono mt-4 text-[11px] leading-relaxed tracking-[.05em] text-[#6b5b8a] md:text-[10.5px]">
+            CARRIES A SMALL “POWERED BY SEAZN.CLUB” BADGE
+          </p>
+        </article>
+
+        <!-- PRO — a book of tickets: the whole season on one bill -->
+        <article class="tear-top relative flex min-w-0 flex-col bg-[#f2ecfc] px-6 pb-7 pt-9 text-night sm:px-7">
+          <header class="mb-6 border-b border-dashed border-[#d6c9ee] pb-5">
+            <p class="cond mb-2 text-[13px] font-semibold tracking-[.26em] text-[#6d28d9]">Pro</p>
+          <p class="cond text-[3.25rem] font-bold leading-[.9] tracking-tight text-[#4c1d95]">
+              $9<span class="text-[1.375rem] font-medium tracking-[.02em] text-[#6b5b8a]"> / month</span>
+          </p>
+          <p class="mono mt-2 text-[12px] tracking-[.1em] text-[#5a4b78]">OR $79 / YEAR</p>
+          <p class="mt-2.5 text-[1.0625rem] font-semibold leading-snug text-[#3d2f5c]">Your whole season.</p>
+          </header>
+
+          <ul class="mb-6 flex-1 grid gap-x-7 gap-y-3 text-[0.95rem] leading-snug text-[#463a60] sm:gap-y-2.5 sm:text-[0.9rem] lg:grid-cols-2 lg:content-start">
+          <li class="flex gap-2.5"><span class="mt-[3px] shrink-0 text-[#6d28d9]" aria-hidden>✓</span>Unlimited competitions</li>
+          <li class="flex gap-2.5"><span class="mt-[3px] shrink-0 text-[#6d28d9]" aria-hidden>✓</span>100 teams, squads of 40</li>
+          <li class="flex gap-2.5"><span class="mt-[3px] shrink-0 text-[#6d28d9]" aria-hidden>✓</span>25 clubs</li>
+          <li class="flex gap-2.5"><span class="mt-[3px] shrink-0 text-[#6d28d9]" aria-hidden>✓</span>10 staff + 10 scorer seats</li>
+          <li class="flex gap-2.5"><span class="mt-[3px] shrink-0 text-[#6d28d9]" aria-hidden>✓</span>5 organisations on one bill</li>
+          <li class="flex gap-2.5"><span class="mt-[3px] shrink-0 text-[#6d28d9]" aria-hidden>✓</span>Read API</li>
+          <li class="flex gap-2.5"><span class="mt-[3px] shrink-0 text-[#6d28d9]" aria-hidden>✓</span>35 AI credits a month</li>
+          <li class="flex gap-2.5"><span class="mt-[3px] shrink-0 text-[#6d28d9]" aria-hidden>✓</span>Badge removed</li>
+          <li class="flex gap-2.5 lg:col-span-2"><span class="mt-[3px] shrink-0 text-[#6d28d9]" aria-hidden>✓</span>Everything the pass has, all season</li>
+          </ul>
+
+          <p class="mono mb-5 inline-flex w-fit items-baseline gap-2 whitespace-nowrap border border-[#cbb8f2] bg-[#f3ecfd] px-2.5 py-1.5 text-[11px] tracking-[.12em] text-[#5b21b6]">
+            PLATFORM FEE <strong class="text-[13px] font-medium">2%</strong>
+          </p>
+
+          <a href="#" class="cond block w-full rounded-lg bg-[#6d28d9] px-4 py-3.5 text-center text-[15px] font-bold tracking-[.1em] text-white transition hover:bg-[#5b21b6] md:py-3">
+            Go Pro
+          </a>
+          <p class="mono mt-4 text-[11px] leading-relaxed tracking-[.05em] text-[#6b5b8a] md:text-[10.5px]">ONE BILL, EVERY COMPETITION IN THE BOOK</p>
+        </article>
+      </div>
+    </div>
+
+    <!-- ══ Contact us — the counterfoil at the back of the book ═════════ -->
+    <div class="mx-auto mt-14 max-w-6xl">
+      <div class="tear-top bg-[#1d1145] px-6 pb-7 pt-9 sm:px-8">
+        <div class="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
+          <div class="min-w-0">
+            <h2 class="cond text-[1.5rem] font-bold leading-tight tracking-[.02em] text-cream sm:text-[1.75rem]">Bigger than a season?</h2>
+            <ul class="mt-3.5 grid gap-x-7 gap-y-2 text-[0.95rem] leading-snug text-[#bdb4e2] sm:grid-cols-2 sm:gap-y-1.5 sm:text-[0.9rem] lg:grid-cols-3">
+              <li class="flex gap-2.5"><span class="mt-[3px] shrink-0 text-lime" aria-hidden>✓</span>Unlimited seats, teams and organisations</li>
+              <li class="flex gap-2.5"><span class="mt-[3px] shrink-0 text-lime" aria-hidden>✓</span>Write API</li>
+              <li class="flex gap-2.5"><span class="mt-[3px] shrink-0 text-lime" aria-hidden>✓</span>1% platform fee</li>
+              <li class="flex gap-2.5"><span class="mt-[3px] shrink-0 text-lime" aria-hidden>✓</span>Pooled AI credits</li>
+              <li class="flex gap-2.5"><span class="mt-[3px] shrink-0 text-lime" aria-hidden>✓</span>Priority support</li>
+            </ul>
+          </div>
+          <a href="mailto:hello@seazn.club" class="cond block shrink-0 rounded-lg border-2 border-lime px-6 py-3.5 text-center text-[15px] font-semibold tracking-[.1em] text-lime transition hover:bg-lime hover:text-night lg:w-auto lg:py-3">
+            Talk to us
+          </a>
+        </div>
+      </div>
+    </div>
+
+    <p class="mono mx-auto mt-16 max-w-6xl border-t border-[#2a1a5c] pt-6 text-[11px] tracking-[.14em] text-[#8071b8]">
+      COMPARISON TABLE · FAQ · FINAL CTA CONTINUE BELOW
+    </p>
+  </section>
+</main>
+
+</body>
+</html>
