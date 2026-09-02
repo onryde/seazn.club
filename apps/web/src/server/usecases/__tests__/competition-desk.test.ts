@@ -118,6 +118,34 @@ describe.skipIf(!HAS_DB)("getCompetitionDesk", () => {
     expect(competitionPhase(desk)).toEqual({ kind: "setting_up" });
   });
 
+  // Found by DRIVING round C's fix, not by a suite: the rows were corrected to
+  // read "Scheduled" while the masthead above them still read "Setting up" —
+  // on a knockout whose only dated fixture was a TBD-entrant final (excluded
+  // from `next` by card-stats) and on a mid-season league with one match
+  // played. The masthead must never contradict the rows beneath it.
+  it("the masthead agrees with its rows when no date is available", async () => {
+    const { auth } = await seedOrg();
+    const { competitionId, divisionId } = await seedDivision(auth, 4);
+    const [stage] = await createStages(auth, divisionId, {
+      seq: 1,
+      kind: "league",
+      name: "League",
+      config: {},
+      progression: null,
+    });
+    await generateStageFixtures(auth, stage!.id);
+    await sql`update divisions set status = 'active' where id = ${divisionId}`;
+    await sql`update fixtures set status = 'decided', scheduled_at = now() - interval '2 days'
+              where division_id = ${divisionId} and fixture_no = 1`;
+    await sql`update fixtures set scheduled_at = null
+              where division_id = ${divisionId} and fixture_no <> 1`;
+    const desk = await getCompetitionDesk(auth, competitionId);
+    const d = desk.divisions.get(divisionId)!;
+    expect(d.phase).toBe("scheduled");
+    // The whole point: the pill over the ledger says what the ledger says.
+    expect(competitionPhase(desk)).toEqual({ kind: "scheduled" });
+  });
+
   it("F1 fix: unscheduled fixtures on an active division are 'setting_up', never 'scheduled', with an unscheduled attention", async () => {
     // Final review, Critical: the OLD rule 5 was a bare "otherwise", so this
     // exact shape — a started division, fixtures generated, none carrying a

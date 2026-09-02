@@ -101,7 +101,15 @@ describe("competitionPhase", () => {
       division_id: "d2", phase: "setting_up",
       next: { home: "C", away: "D", court_label: null, scheduled_at: null, in_play: false },
     });
-    expect(competitionPhase(deskOf([past, undated], 0, "2026-09-05T09:00:00Z"))).toEqual({ kind: "setting_up" });
+    const phase = competitionPhase(deskOf([past, undated], 0, "2026-09-05T09:00:00Z"));
+    // What this test is FOR: neither a past kick-off nor a null time may be
+    // picked as the ladder's date answer.
+    expect(phase.kind).not.toBe("next");
+    // And the fallback still has to agree with the rows underneath it: d1 is
+    // a `scheduled` division, so the masthead cannot claim the competition is
+    // being set up. (Found by driving round C: the masthead read "Setting up"
+    // directly above a row reading "Scheduled".)
+    expect(phase).toEqual({ kind: "scheduled" });
   });
   it("all finished, with no live division left to date, reads finished", () => {
     const a = div({ division_id: "d1", phase: "finished", next: null });

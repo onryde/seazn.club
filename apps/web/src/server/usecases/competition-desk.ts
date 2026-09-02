@@ -254,6 +254,7 @@ export type CompetitionPillPhase =
   | { kind: "match_day" }
   | { kind: "next"; at: string }
   | { kind: "finished" }
+  | { kind: "scheduled" }
   | { kind: "setting_up" };
 
 /** A division's own `next` fixture, filtered to the same "actually still
@@ -313,5 +314,13 @@ export function competitionPhase(desk: CompetitionDesk): CompetitionPillPhase {
     .sort();
   if (dates.length > 0) return { kind: "next", at: dates[0]! };
   if (divisions.every((d) => d.phase === "finished")) return { kind: "finished" };
+  // No usable date anywhere — the ladder's undefined case. It must still agree
+  // with the rows beneath it: a competition whose divisions are in progress is
+  // not "setting up". Reproduced live before this guard existed — the masthead
+  // read "Setting up" directly above a row reading "Scheduled", on a knockout
+  // whose only dated fixture was a TBD-entrant final (excluded from `next` by
+  // card-stats) and again on a mid-season league with one match played. Same
+  // masthead-contradicts-row shape the wave exists to remove.
+  if (divisions.some((d) => d.phase === "scheduled" || d.phase === "match_day")) return { kind: "scheduled" };
   return { kind: "setting_up" };
 }
