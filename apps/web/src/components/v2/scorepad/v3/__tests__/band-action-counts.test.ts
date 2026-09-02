@@ -21,10 +21,15 @@
 // current band it passed at is 3, which is the band every test fixture in this
 // suite happened to use.
 //
-// Also pinned here (the owner's ruling on the metric): the count is
-// DISPATCHABLE ACTIONS, not grid tiles. A tile count cannot express football's
-// band-2-vs-3 difference at all, because `football.shot` is band 3 and has no
-// tile of its own — it rides the never-band-filtered More sheet.
+// THE METRIC, and it has been ruled twice. Grid tiles alone were rejected
+// because More is never band-filtered — as one tile it reads the same at every
+// band and football's 2 and 3 collapse, hiding `football.shot`, the only thing
+// band 3 buys. Distinct dispatchable TYPES were then ruled, and revised: they
+// put "2 actions on the pad" above three visible buttons, because Goal Home
+// and Goal Away are two presses of one type. The metric is now what the scorer
+// can PRESS — enabled grid buttons after suppression, tapModel-S scorebug
+// halves, and the More sheet's entries counted one by one, with the More
+// drawer itself not counted on top of its own contents.
 import { describe, expect, it } from "vitest";
 import type { AnySportModule, FidelityBand, PadSpec } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
@@ -32,10 +37,16 @@ import type { EventEnvelope, LineupPair, SquadState } from "@seazn/engine/core";
 import { initSquads } from "@seazn/engine/core";
 import { makeEnvelope } from "@seazn/engine/testkit";
 import { foldClient } from "../../module-client";
-import { reachableActionTypes } from "../pad-host";
+import {
+  dedicatedEventTypes,
+  filterTilesByBand,
+  moreActions,
+  reachableControls,
+  suppressEmptyMoreTile,
+} from "../pad-host";
 import { footballSkinV3, resolvePhase } from "../skins/football";
 import { badmintonSkinV3 } from "../skins/badminton";
-import type { PadHostView } from "../types";
+import { MORE_SHEET_KEY, type PadHostView } from "../types";
 import { foldedPhases } from "./_football-fold";
 
 const BANDS: readonly FidelityBand[] = [0, 1, 2, 3];
@@ -105,23 +116,23 @@ function badmintonView(
 /** The four numbers the sheet would print, computed from a pad sitting at
  *  `currentBand` — exactly what `pad-host.tsx`'s `bandActionCounts` does. */
 function sheetSaysFrom(
-  skin: Parameters<typeof reachableActionTypes>[0],
+  skin: Parameters<typeof reachableControls>[0],
   spec: PadSpec,
   folded: { cfg: unknown; state: unknown },
   currentBand: FidelityBand,
 ): number[] {
   const view = viewAt(folded, currentBand);
-  return BANDS.map((candidate) => reachableActionTypes(skin, spec, view, candidate).size);
+  return BANDS.map((candidate) => reachableControls(skin, spec, view, candidate).total);
 }
 
 /** What the pad ACTUALLY offers once each band is picked — the ground truth,
  *  computed one band at a time on a view already sitting at that band. */
 function truthFor(
-  skin: Parameters<typeof reachableActionTypes>[0],
+  skin: Parameters<typeof reachableControls>[0],
   spec: PadSpec,
   folded: { cfg: unknown; state: unknown },
 ): number[] {
-  return BANDS.map((band) => reachableActionTypes(skin, spec, viewAt(folded, band), band).size);
+  return BANDS.map((band) => reachableControls(skin, spec, viewAt(folded, band), band).total);
 }
 
 describe("the Recording sheet's counts do not depend on the band the scorer is currently on", () => {
@@ -147,40 +158,56 @@ describe("the Recording sheet's counts do not depend on the band the scorer is c
     }
   });
 
-  it("band 3 beats band 2 on football, which a GRID-TILE count cannot see at all", () => {
+  it("band 3 beats band 2 on football, and the gain lands in MORE — which a grid-tile count cannot see", () => {
     // `football.shot` is the sport's only band-3 type and it has no dedicated
-    // tile — it rides the More sheet, which `filterTilesByBand` never filters,
-    // so a tile count is identical at bands 2 and 3. The premise is re-derived
+    // tile: it rides the More sheet, which `filterTilesByBand` never filters,
+    // so the GRID is identical at bands 2 and 3. The premise is re-derived
     // from the engine here rather than asserted from memory.
     const folded = footballH1();
     const spec = football.padSpec(folded.cfg);
     const bandThreeOnly = Object.entries(spec.fidelity).filter(([, band]) => band === 3);
     expect(bandThreeOnly.length, "football no longer declares a band-3 type — this case needs rewriting").toBeGreaterThan(0);
 
-    const truth = truthFor(footballSkin, spec, folded);
-    expect(truth[3]).toBeGreaterThan(truth[2]!);
-    // ...and the extra action is exactly the band-3 type the engine declares.
-    const atTwo = reachableActionTypes(footballSkin, spec, viewAt(folded, 2), 2);
-    const atThree = reachableActionTypes(footballSkin, spec, viewAt(folded, 3), 3);
-    const gained = [...atThree].filter((type) => !atTwo.has(type)).sort();
-    expect(gained).toEqual(bandThreeOnly.map(([type]) => type).sort());
+    const two = reachableControls(footballSkin, spec, viewAt(folded, 2), 2);
+    const three = reachableControls(footballSkin, spec, viewAt(folded, 3), 3);
+    expect(three.total).toBeGreaterThan(two.total);
+    // ...and it is the DRAWER that grew, not the grid. If this ever inverts,
+    // the metric can go back to counting tiles; until then it cannot.
+    expect(three.tiles, "the grid is identical at bands 2 and 3 — that is the whole problem").toBe(two.tiles);
+    expect(three.more).toBe(two.more + bandThreeOnly.length);
   });
 
-  it("counts only what a thumb can land on — a sheet no tile opens is NOT an action on the pad", () => {
-    // `dedicatedEventTypes` deliberately keeps a sheet's event claimed when no
-    // tile opens it at all (its own doc: "left claimed, deliberately"), which
-    // is right for its real job — removing a duplicate from More — and wrong
-    // as a count. Football still BUILDS its card and penalty sheets at band 0;
-    // no tile opens either. A count that trusted `dedicated` advertised them.
+  it("agrees with the grid a scorer is looking at, and never counts the More drawer twice", () => {
+    // I-1's property, restated for the control metric: the caption is read
+    // against the screen, so it has to equal the screen. The host's own
+    // visible set is rebuilt here independently — band filter, then
+    // `suppressEmptyMoreTile` — rather than trusting the function under test
+    // to describe itself.
     const folded = footballH1();
     const spec = football.padSpec(folded.cfg);
-    const atZero = reachableActionTypes(footballSkin, spec, viewAt(folded, 0), 0);
-    const aboveZero = Object.entries(spec.fidelity)
-      .filter(([, band]) => band > 0)
-      .map(([type]) => type);
-    expect(aboveZero.length, "football declares no type above band 0 — this case needs rewriting").toBeGreaterThan(0);
-    const leaked = aboveZero.filter((type) => atZero.has(type));
-    expect(leaked, `band 0 advertised actions it cannot reach: ${leaked.join(", ")}`).toEqual([]);
+    for (const band of BANDS) {
+      const view = viewAt(folded, band);
+      const sheets = footballSkin.sheets?.(view);
+      const swaps = footballSkin.swap?.(view) ?? [];
+      const bandTiles = filterTilesByBand(footballSkin.tiles(view), sheets ?? {}, swaps, spec.fidelity, band);
+      const dedicated = dedicatedEventTypes(bandTiles, sheets, swaps, footballSkin.scorebug(view));
+      const refused = new Set(footballSkin.refusedEventTypes?.(view) ?? []);
+      const more = moreActions(spec, { state: view.state, summary: view.summary, phase: view.phase, band }, dedicated, refused);
+      const onScreen = suppressEmptyMoreTile(bandTiles, more).filter((tile) => tile.disabled !== true);
+      const drawer = onScreen.filter((tile) => "sheet" in tile.action && tile.action.sheet === MORE_SHEET_KEY);
+
+      const counted = reachableControls(footballSkin, spec, view, band);
+      expect(
+        counted.tiles,
+        `band ${band}: the grid renders ${onScreen.length} pressable tiles (${drawer.length} of them the More drawer)`,
+      ).toBe(onScreen.length - drawer.length);
+      // The drawer is on screen exactly when it holds something, and when it
+      // is, its contents are what got counted — never the drawer as well.
+      expect(drawer.length, `band ${band}: the More drawer's presence must track its contents`).toBe(
+        more.length > 0 ? 1 : 0,
+      );
+      expect(counted.total).toBe(counted.tiles + counted.halves + counted.more);
+    }
   });
 
   it("a tapModel-S skin counts its scorebug half: badminton gains the rally at band 3", () => {
@@ -199,7 +226,7 @@ describe("the Recording sheet's counts do not depend on the band the scorer is c
     };
     const events = [makeEnvelope(0, { type: "core.start", payload: {} } as never)];
     const folded = { cfg, state: foldClient(badmintonModule as never, cfg, lineups, events), lineups, events };
-    const counts = BANDS.map((band) => reachableActionTypes(skin, spec, badmintonView(folded, band), band).size);
+    const counts = BANDS.map((band) => reachableControls(skin, spec, badmintonView(folded, band), band).total);
     const rallyType = Object.entries(spec.fidelity).find(([type]) => type.endsWith(".rally"));
     expect(rallyType?.[1], "badminton's rally is no longer band 3 — this case needs rewriting").toBe(3);
     expect(counts[3], `badminton counts were ${counts.join("/")}`).toBeGreaterThan(counts[2]!);

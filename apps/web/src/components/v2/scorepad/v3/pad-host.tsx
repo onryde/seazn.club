@@ -745,10 +745,28 @@ export function filterTilesByBand(
   });
 }
 
+/** What the Recording sheet counts under one of its rows. Broken out rather
+ *  than summed inline so a test can say WHICH part moved, and so the report
+ *  that justifies the number can quote its parts. */
+export interface ReachableControls {
+  /** Grid buttons a thumb can press at this band: enabled, band-filtered, and
+   *  EXCLUDING the More drawer itself — its contents are counted one by one
+   *  below, and counting the drawer as well would count it twice. */
+  tiles: number;
+  /** tapModel-S scorebug halves. Not grid buttons, but the racquet sports
+   *  record their rally by pressing one, and it is the only thing band 3 buys
+   *  on those sports — drop it and their picker is a no-op again. */
+  halves: number;
+  /** Entries inside the More sheet, INDIVIDUALLY. The whole reason the metric
+   *  is not "grid tiles": More is never band-filtered, so as one tile it reads
+   *  the same at every band and football's band 2 and band 3 collapse. */
+  more: number;
+  total: number;
+}
+
 /**
- * The distinct event types a scorer can actually DISPATCH at `band`, on this
- * fixture, right now — the number the Recording sheet promises under each of
- * its four rows.
+ * What a scorer can actually PRESS at `band`, on this fixture, right now — the
+ * number the Recording sheet promises under each of its four rows.
  *
  * REBUILT PER CANDIDATE BAND, WHICH IS THE WHOLE POINT (W1/Task 4 review, C-1).
  * The first version of this counted the host's own `allTiles` re-run through
@@ -765,69 +783,49 @@ export function filterTilesByBand(
  * candidate band is what makes the four rows independent of where the scorer
  * currently is.
  *
- * COUNTS ACTIONS, NOT GRID TILES (owner ruling, same review). A tile count
- * cannot express the difference between football's band 2 and band 3 at all:
- * `football.shot` is band 3 and has NO tile of its own — it rides the More
- * sheet, and the More tile is deliberately never band-filtered
- * (`filterTilesByBand`'s own MORE case), so it is counted once at every band.
- * The copy says "{count} actions on the pad"; this is that promise kept —
- * every type reachable through a dedicated surface (tile, sheet, swap, or a
- * tapModel-S scorebug half) UNION every type left in the More sheet.
+ * COUNTS CONTROLS, NOT EVENT TYPES (owner ruling, fix round 2 — which REVISED
+ * an earlier ruling of the opposite). An intermediate version counted distinct
+ * dispatchable event types, which put "2 actions on the pad" above three
+ * visible buttons: football's Goal Home and Goal Away are two presses of one
+ * type. The caption is read against the screen, so it counts what is on the
+ * screen. Two Goal buttons are two.
  *
- * Which also settles the suppression question the review raises (I-1): a band
- * whose More sheet is empty contributes nothing here, so the count can no
- * longer advertise a More tile the grid then suppresses. No second suppression
- * rule to keep in step with `suppressEmptyMoreTile` — an empty set has nothing
- * to subtract.
- *
- * TYPES, NOT CONTROLS: football's Goal Home and Goal Away are two buttons for
- * ONE dispatchable action (`football.goal`), and they count once. That is the
- * ruling's own wording ("the dispatchable event types reachable at band N")
- * and it is what makes the number comparable across bands rather than a
- * restatement of the grid's shape.
+ * ...but NOT grid tiles alone either, which is the trap the type metric was
+ * reaching for. `football.shot` is band 3 and has no tile of its own — it
+ * rides the More sheet, and the More tile is deliberately never band-filtered
+ * (`filterTilesByBand`'s own MORE case), so as one tile it counts once at
+ * every band and bands 2 and 3 read identically. More is therefore expanded
+ * into its entries, and the drawer itself is not counted on top of them.
  */
-export function reachableActionTypes(
+export function reachableControls(
   skin: SkinDefV3,
   spec: PadSpec,
   view: PadHostView,
   band: FidelityBand,
-): Set<string> {
+): ReachableControls {
   // The view the skin would see if the scorer picked this band. Reused by
   // reference when it IS the current band, so the common row costs nothing
   // extra and cannot disagree with the grid the host actually rendered.
   const at: PadHostView = view.band === band ? view : { ...view, band };
   const sheets = skin.sheets?.(at);
   const swaps = skin.swap?.(at) ?? [];
-  const tiles = filterTilesByBand(skin.tiles(at), sheets ?? {}, swaps, spec.fidelity, band);
+  const bandTiles = filterTilesByBand(skin.tiles(at), sheets ?? {}, swaps, spec.fidelity, band);
   const scorebug = skin.scorebug(at);
   const refused = new Set(skin.refusedEventTypes?.(at) ?? []);
 
-  // `dedicated` is built exactly as the host builds it, and is used for
-  // exactly what the host uses it for: deciding what the More sheet holds.
-  const dedicated = dedicatedEventTypes(tiles, sheets, swaps, scorebug);
+  // `dedicated` is built exactly as the host builds it, and used for exactly
+  // what the host uses it for: deciding what the More sheet holds.
+  const dedicated = dedicatedEventTypes(bandTiles, sheets, swaps, scorebug);
   const more = moreActions(spec, { state: at.state, summary: at.summary, phase: at.phase, band }, dedicated, refused);
 
-  // ...but it is NOT the reachable set, and the difference is load-bearing.
-  // `dedicatedEventTypes` deliberately keeps a sheet's event CLAIMED when no
-  // tile opens it at all ("left claimed, deliberately" — its own doc), because
-  // for its real job an over-claim only removes a duplicate from More. Counted
-  // as reachable it lies in the other direction: at band 0 football still
-  // BUILDS its card and penalty sheets, no tile opens either, and the caption
-  // would advertise two actions the scorer cannot reach. So the reachable set
-  // is rebuilt from surfaces a thumb can actually land on — an ENABLED tile
-  // (resolved through its own sheet or swap slot) or a tapModel-S scorebug
-  // half — plus whatever survives into More.
-  const types = new Set<string>();
-  for (const tile of tiles) {
-    if (tile.disabled === true) continue;
-    const type = tileEventType(tile, sheets ?? {}, swaps);
-    if (type !== null) types.add(type);
-  }
-  for (const half of scorebug.halves) {
-    if (half.tappable === true && half.tapEvent) types.add(half.tapEvent.type);
-  }
-  for (const action of more) types.add(action.type);
-  return types;
+  // A DISABLED tile is drawn but cannot be pressed, so it is not a control —
+  // the same reading `dedicatedEventTypes` already takes of one. The More
+  // drawer is skipped here and expanded below.
+  const tiles = bandTiles.filter(
+    (tile) => tile.disabled !== true && !("sheet" in tile.action && tile.action.sheet === MORE_SHEET_KEY),
+  ).length;
+  const halves = scorebug.halves.filter((half) => half.tappable === true && half.tapEvent).length;
+  return { tiles, halves, more: more.length, total: tiles + halves + more.length };
 }
 
 const PHASE_ORDER: readonly PadPhase[] = ["pre", "live", "post"];
@@ -1534,6 +1532,17 @@ export function PadHostV3(props: PadHostV3Props) {
   // The house pattern instead (`schedule-board.tsx`'s density modes): default
   // in `useState`, storage in a mount `useEffect`. Both renders agree, and the
   // stored band lands one frame later.
+  //
+  // PER DEVICE, AND THAT IS THE OWNER'S DECISION — NOT A DEFECT TO FIX
+  // (ruling, fix round 2). `bandStorageKey` is `localStorage`, so a handed-over
+  // device and a `/score/[token]` kiosk each start at `defaultBandFor` with no
+  // memory of what the previous scorer picked. That was raised as a gap: a
+  // match deliberately recorded at "Result only" continues at the sport
+  // default on the second device. The owner ruled it INTENDED — the band is
+  // how much detail THIS scorer wants to record, and one volunteer's choice
+  // must not silently constrain the next one. Do not "fix" this by moving the
+  // band to per-fixture server state; that is a different product, and it
+  // would need its own ruling.
   const bandKey = bandStorageKey(props.fixtureId);
   const [band, setBand] = useState<FidelityBand>(() => defaultBandFor(spec.fidelity));
   useEffect(() => {
@@ -1689,9 +1698,9 @@ export function PadHostV3(props: PadHostV3Props) {
     [allTiles, sheets, swapSlots, spec.fidelity, band],
   );
   // What the Recording sheet promises under each row — see
-  // `reachableActionTypes` above for why each candidate band rebuilds the
+  // `reachableControls` above for why each candidate band rebuilds the
   // SKIN's own tiles rather than re-filtering the current band's list, and why
-  // the metric is dispatchable actions rather than grid tiles. Derived from
+  // the metric is pressable controls rather than grid tiles or event types. Derived from
   // the skin and the engine, never estimated, so two bands a sport genuinely
   // does not distinguish read the same number and the scorer can see that
   // before tapping rather than after.
@@ -1704,7 +1713,7 @@ export function PadHostV3(props: PadHostV3Props) {
   const bandActionCounts = useMemo(() => {
     const counts = {} as Record<FidelityBand, number>;
     for (const candidate of BANDS) {
-      counts[candidate] = reachableActionTypes(props.skin, spec, view, candidate).size;
+      counts[candidate] = reachableControls(props.skin, spec, view, candidate).total;
     }
     return counts;
   }, [props.skin, spec, view]);

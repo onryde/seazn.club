@@ -111,6 +111,16 @@ for (const width of [320, 768, 1280]) {
       away: [{ fullName: `FS Away ${TAG}${width}`, positionKey: "GK" }],
     });
     await openLiveConsole(page, fx);
+    // THE MATCH IS LIVE IN THE LEDGER; THE PAD MAY NOT HAVE CAUGHT UP YET.
+    // `openLiveConsole` polls the API for `core.start`, which says the SERVER
+    // accepted it — the client still has to fold and re-render into the live
+    // phase, and the counts read below are phase-dependent. Read too early they
+    // came back `0/0/2/2` (the pre-match grid) instead of `3/3/10/11`, on two
+    // widths out of three: a real race, not a flaky assertion. `card-home` is
+    // band 2 AND live-only, so waiting for it proves both halves at once.
+    await expect(v3Tile(page, "card-home"), "the pad must have re-rendered into the live phase").toBeVisible({
+      timeout: 20_000,
+    });
 
     // --- the chip: a disclosure, opening at the sport's own top band --------
     await expect(chip(page)).toBeVisible({ timeout: 10_000 });
@@ -145,18 +155,17 @@ for (const width of [320, 768, 1280]) {
     // told all four options were identical. Read the four captions here rather
     // than trusting a unit fixture: this is the only place they are rendered
     // by the real skin at a real band.
-    const rowCaptions = await page.locator("[data-band]").evaluateAll((rows) =>
-      rows.map((row) => (row.textContent ?? "").match(/(\d+)\s+action/)?.[1] ?? null),
-    );
-    expect(rowCaptions.every((n) => n !== null), `every row must caption a count: ${rowCaptions.join("/")}`).toBe(true);
+    const rowTexts = await page.locator("[data-band]").evaluateAll((rows) => rows.map((row) => row.textContent ?? ""));
+    const rowCaptions = rowTexts.map((text) => text.match(/(\d+)\s+action/)?.[1] ?? null);
+    expect(rowCaptions.every((n) => n !== null), `every row must caption a count: ${JSON.stringify(rowTexts)}`).toBe(true);
     expect(
       new Set(rowCaptions).size,
-      `the four rows all read alike (${rowCaptions.join("/")}) — the picker is advertising itself as a no-op`,
+      `the four rows all read alike — the picker is advertising itself as a no-op: ${JSON.stringify(rowTexts)}`,
     ).toBeGreaterThan(1);
     // ...and specifically the top two differ, which a GRID-TILE count cannot
     // express on football: `football.shot` is band 3 and has no tile of its
     // own, so it rides the never-band-filtered More sheet.
-    expect(Number(rowCaptions[3]), `band 3 must offer more than band 2 (${rowCaptions.join("/")})`).toBeGreaterThan(
+    expect(Number(rowCaptions[3]), `band 3 must offer more than band 2: ${JSON.stringify(rowTexts)}`).toBeGreaterThan(
       Number(rowCaptions[2]),
     );
     const rowBox = (await bandRow(page, 1).boundingBox())!;
@@ -269,4 +278,81 @@ test("a stored band does not cost a hydration pass on the next page load", async
   await expect(chip(page)).toContainText("Key moments", { timeout: 10_000 });
   await expect(v3Tile(page, "card-home")).toHaveCount(0);
   expect(hydrationErrors, `React reported a hydration problem: ${hydrationErrors.join(" | ")}`).toEqual([]);
+});
+
+// ---------------------------------------------------------------------------
+// The band labels have to FIT, in every locale, at the narrowest width
+// ---------------------------------------------------------------------------
+//
+// The chip states the level on ONE line at 44px, so the band label competes
+// with a localised lead word for a ~90-125px box at 320. English "Cards & key
+// moments" lost that competition (135px of text in a 116px box) and was cut to
+// "Key moments" by owner ruling; Dutch "Kaarten en belangrijke momenten" then
+// "Belangrijke momenten" lost it too. Guessing which translation fits is how a
+// third one gets discovered in production, so this MEASURES all four —
+// `scrollWidth > clientWidth` is the browser's own answer, and it is the only
+// one that survives a font change, a copy change or a new locale.
+//
+// Band 1 is the longest label on every locale's ladder, and the French lead
+// ("Enregistrement", 14 characters against English's 9) makes French the
+// tightest box even though its label is short — which is exactly the kind of
+// interaction an eyeball on an English screenshot cannot see.
+test("the band-1 label fits the chip at 320 in every locale", async ({ page }) => {
+  test.setTimeout(240_000);
+  const email = `w1loc-${TAG}-${Math.random().toString(36).slice(2, 7)}@example.com`;
+  await loginUi(page, email);
+  await page.goto("/dashboard", { waitUntil: "load" });
+  const org = await activeOrg(page);
+  await setOrgPlanBySql({ email }, "community");
+  await invalidateOrgEntitlements(page.request, org.id);
+  const fx = await seedRosteredFixture(page.request, {
+    label: `W1 Locale ${TAG}`,
+    sportKey: "football",
+    variantKey: "11-a-side",
+    home: [{ fullName: `W1 L Home ${TAG}`, positionKey: "MF" }],
+    away: [{ fullName: `W1 L Away ${TAG}`, positionKey: "GK" }],
+  });
+  const path = await fixturePath(page.request, fx.fixtureId);
+  await page.setViewportSize({ width: 320, height: 900 });
+  await page.goto(path);
+  await expect(pad(page)).toBeVisible({ timeout: 20_000 });
+  await page.getByRole("button", { name: "Start match", exact: true }).click();
+  await expect
+    .poll(async () => {
+      const r = await apiJson<{ type: string }[]>(page.request, `/api/v1/fixtures/${fx.fixtureId}/events?since_seq=0`);
+      return (r.data ?? []).map((e) => e.type);
+    }, { timeout: 20_000 })
+    .toContain("core.start");
+
+  // Band 1 is the longest label on every locale's ladder; pick it once, and it
+  // persists per fixture so each locale reload lands back on it.
+  await chip(page).click();
+  await page.locator('[data-band="1"]').click();
+  await expect(chip(page)).toHaveAttribute("aria-expanded", "false", { timeout: 10_000 });
+
+  const results: string[] = [];
+  for (const locale of ["en", "es", "fr", "nl"] as const) {
+    // `resolveLocale` reads the `seazn_locale` cookie FIRST — above the
+    // signed-in user's own locale and above the org default — so this is the
+    // lever, not `setOrgLocaleSql` (which sits at priority 3 and is used only
+    // for public league pages).
+    await page.context().clearCookies({ name: "seazn_locale" });
+    await page.context().addCookies([
+      { name: "seazn_locale", value: locale, url: new URL(page.url()).origin },
+    ]);
+    await page.goto(path, { waitUntil: "load" });
+    await expect(chip(page)).toBeVisible({ timeout: 20_000 });
+    // The value span is the third child: meter, lead, value, chevron.
+    const fit = await chip(page)
+      .locator("span")
+      .nth(2)
+      .evaluate((el) => ({ scroll: el.scrollWidth, client: el.clientWidth, text: el.textContent }));
+    const lead = await chip(page).locator("span").nth(1).evaluate((el) => el.textContent);
+    results.push(
+      `LOCALE_FIT_320 ${locale}: lead=${JSON.stringify(lead)} value=${JSON.stringify(fit.text)} scroll=${fit.scroll} client=${fit.client} truncated=${fit.scroll > fit.client}`,
+    );
+  }
+  for (const line of results) console.log(line);
+  const truncated = results.filter((line) => line.endsWith("truncated=true"));
+  expect(truncated, `the band-1 label overflows the chip at 320:\n${truncated.join("\n")}`).toEqual([]);
 });
