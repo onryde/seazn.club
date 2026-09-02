@@ -22,7 +22,7 @@
 - No new issues/PRs filed. Fix inline unless the fix widens the blast radius past the task's files — then stop and report.
 - Attribution on every commit:
   ```
-  Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+  Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_01GDAMSXU8sAGKpzoQGdfB5e
   ```
 - Scratch dir: set `PM="$SCRATCHPAD/pad-mobile"` where `$SCRATCHPAD` is the executing session's scratchpad directory; `mkdir -p "$PM"`. Never use bare `/tmp`.
@@ -176,7 +176,7 @@ Seven keys for the phone-only controls the spec adds: the ledger's show-all
 / show-latest toggle, the match-details toggle, and the lineup disclosures.
 No existing string changes.
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01GDAMSXU8sAGKpzoQGdfB5e"
 ```
 
@@ -334,7 +334,7 @@ visible and a phone-only toggle reveals the rest; at md and up nothing is
 rendered differently. The console passes it; the device-link page can opt in
 later with the same prop. Spec §3.9.
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01GDAMSXU8sAGKpzoQGdfB5e"
 ```
 
@@ -471,7 +471,7 @@ chips take a row each, and context + recording chip move below the dock via
 flex order. Root goes space-y-3 -> flex flex-col gap-3 (same 12px geometry) so
 order can apply; every other desktop class string is untouched. Spec §3.2–3.8.
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01GDAMSXU8sAGKpzoQGdfB5e"
 ```
 
@@ -648,7 +648,7 @@ reveals the round/venue/time line; the Scoring heading and the desktop
 hand-over button hide there. Hand over device is the one control that now
 exists twice, one hidden per width, same accessible name. Spec §3.1, §2.
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01GDAMSXU8sAGKpzoQGdfB5e"
 ```
 
@@ -781,7 +781,7 @@ PhoneDisclosure: a phone-only summary row (md:hidden) over a body that is
 max-md:hidden while closed; on desktop it is a bare wrapper. Both lineup
 editors and both availability rosters are wrapped. Spec §3.10.
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01GDAMSXU8sAGKpzoQGdfB5e"
 ```
 
@@ -913,7 +913,7 @@ hand-over is the phone icon and the Scoring heading is gone; on tablets and
 desktop the inverse. Called from the badminton (rally) and cricket (keypad)
 v3 pad tests.
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01GDAMSXU8sAGKpzoQGdfB5e"
 ```
 
@@ -953,7 +953,7 @@ Expected: both new lines print `PASS`; no `FAIL` lines; exit 0. Temporarily chan
 cd /Users/ashokhein/github/seazn.club/.claude/worktrees/pad-mobile && git add scripts/smoke.ts && \
 git commit -m "test(smoke): the phone strip's controls are in the fixture console markup
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01GDAMSXU8sAGKpzoQGdfB5e"
 ```
 
@@ -1049,7 +1049,7 @@ Expected: every sport `changed`. (Names differ per run too, so this is a weak ch
 cd /Users/ashokhein/github/seazn.club/.claude/worktrees/pad-mobile && git add docs/superpowers/specs/2026-09-02-scorepad-v3-phone-composition-design.md && \
 git commit -m "docs(scorepad): phone-composition spec — three premises corrected by reading the tree
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01GDAMSXU8sAGKpzoQGdfB5e"
 ```
 
