@@ -410,6 +410,14 @@ credits, inert-key removal). Nothing here changes the resolver's semantics.
   more? Contact us"; usage rows gain scorer seats. `components/billing-manage.tsx`,
   `billing-actions.tsx`, `create-org-form.tsx`, `board/ai-out-of-credits.tsx`,
   `upgrade-gate.tsx`, `plan-badge.tsx`. `lib/email.ts` copy numbers.
+- **Mobile is designed, not shrunk** (owner ruling 2026-09-02). The 320 view of
+  every surface this programme touches is its own composition, not the desktop
+  layout narrowed: information order may change, decorative structure that only
+  earns its place at desktop may be dropped, primary actions sit in thumb
+  reach, and type is sized for a phone read at arm's length outdoors. A 320
+  capture that is the 1280 composition with smaller type is a rejection, not a
+  pass. Each design says, in writing, what it decided differently at 320 and
+  why — and where a decision is the same at both widths, why that is right.
 - **UI bar:** the pricing page and billing settings page are re-verified by
   screenshot at 1280 / 768 / 320 with no horizontal scroll; the seven-width
   `mobile.spec.ts` matrix covers the pricing route. Two layout options for
