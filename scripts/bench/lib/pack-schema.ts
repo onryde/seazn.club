@@ -141,7 +141,7 @@
 // emit-dependent syntax — this file is read by `node
 // --experimental-strip-types`. Every relative import carries `.ts`.
 import { z } from "zod";
-import { StageKind, type MatchOutcome } from "@seazn/engine/core";
+import { StageKind, type MatchOutcome, type StandingsDelta } from "@seazn/engine/core";
 import type { TiebreakerKey } from "@seazn/engine/sport";
 
 // ---------------------------------------------------------------------------
@@ -274,6 +274,38 @@ export const TIEBREAKER_KEYS_ARE_ENGINE_KEYS: _TiebreakerKeysAreEngineKeys = tru
 export const TIEBREAKER_KEYS_ARE_EXHAUSTIVE: _TiebreakerKeysAreExhaustive = true;
 
 export const PackTiebreakerKey = z.enum(TIEBREAKER_KEYS);
+
+/** The scalar fields of the engine's `StandingsDelta`
+ *  (`packages/engine/src/core/types.ts` — `entrantId` is a string and
+ *  `metrics` is a `Record`, so the numeric fields are exactly these five).
+ *
+ *  Pinned to the engine type the same way `TIEBREAKER_KEYS` is, and for the
+ *  same reason: the list is hand-written because `StandingsDelta` ships as a
+ *  zod object with no runtime array of its scalar keys, so without the two
+ *  declarations below a field added engine-side would leave this enum quietly
+ *  asserting yesterday's shape. It did exactly that until review round 2. */
+export const STANDINGS_SCALAR_FIELDS = ["played", "won", "drawn", "lost", "points"] as const;
+
+/** Keys of `StandingsDelta` whose value is a number — i.e. everything a
+ *  `{on:"standings"}` claim can compare with `equals`. Derived from the engine
+ *  type rather than restated, so the filter moves when the engine does. */
+type StandingsScalarKey = {
+  [K in keyof StandingsDelta]-?: StandingsDelta[K] extends number ? K : never;
+}[keyof StandingsDelta];
+
+// Compile-time, BIDIRECTIONAL, in a non-test file (tsconfig.scripts.json:35
+// excludes `*.test.ts`). Two consts, never `A & B` — see the tiebreaker pair.
+type _StandingsFieldsAreEngineScalars = (typeof STANDINGS_SCALAR_FIELDS)[number] extends StandingsScalarKey
+  ? true
+  : never;
+type _StandingsFieldsAreExhaustive = Exclude<
+  StandingsScalarKey,
+  (typeof STANDINGS_SCALAR_FIELDS)[number]
+> extends never
+  ? true
+  : never;
+export const STANDINGS_FIELDS_ARE_ENGINE_SCALARS: _StandingsFieldsAreEngineScalars = true;
+export const STANDINGS_FIELDS_ARE_EXHAUSTIVE: _StandingsFieldsAreExhaustive = true;
 
 /** The nine special mechanics the bench must each prove on a real instance
  *  (design §8). A closed set so the report can tally coverage and Task 2's
@@ -486,11 +518,23 @@ export const PackEvent = z.strictObject({
 });
 export type PackEvent = z.infer<typeof PackEvent>;
 
-/** Present only on a GENERATED reconstructed stream. Task 3's generators are
- *  deterministic from a seed, and the seed lives in the pack so the same
- *  bytes come out on every machine and every run. A hand-authored
- *  reconstructed stream carries no seed — hence optional — but a `"real"`
- *  stream carrying one is a contradiction and is refused. */
+/** Present only on a GENERATED stream. Task 3's generators are deterministic
+ *  from a seed, and the seed lives in the pack so the same bytes come out on
+ *  every machine and every run.
+ *
+ *  Legal on `"reconstructed"` AND on `"synthetic"`. Both are generated, and
+ *  both therefore need to record what generated them: a reconstructed stream
+ *  was built to fold to a real score, a synthetic one models no real event at
+ *  all (B03r's registration-driven fixtures), and reproducibility is exactly
+ *  as load-bearing for the second as for the first. Refusing the seed on
+ *  `"synthetic"` — which this schema did between the round-1 additive pass and
+ *  round 2 — leaves the customer-journey suite unable to record the seed that
+ *  produced its own streams, defeating the reason the field exists.
+ *
+ *  Optional, because a HAND-authored stream of either provenance has no seed
+ *  (`_tiny`'s reconstructed stream is hand-written). A `"real"` stream carrying
+ *  one is still refused: a real stream is the historical record, and nothing
+ *  generated it. */
 export const PackReconstruction = z.strictObject({
   seed: z.number().int().nonnegative(),
   /** Free-form note on what the generator was asked to hit (the real set
@@ -875,7 +919,7 @@ export const PackClaim = z.discriminatedUnion("on", [
   z.strictObject({
     on: z.literal("standings"),
     entrant: PackRef,
-    field: z.enum(["played", "won", "drawn", "lost", "points"]),
+    field: z.enum(STANDINGS_SCALAR_FIELDS),
     equals: z.number(),
   }),
   /**
@@ -1122,9 +1166,32 @@ export function fixtureKey(divisionRef: string, extKey: string): string {
   return JSON.stringify([divisionRef, extKey]);
 }
 
-/** Every `ref` namespace is flat and unique — a duplicate would make the
- *  ref→UUID map the seeding layer returns ambiguous. */
+/** ONE namespace for every ref the `@` sigil can resolve, plus the two
+ *  ref kinds it cannot.
+ *
+ *  THE SIGIL HAS NO KIND. Header note 6 promises the seeding layer rewrites
+ *  every `@`-prefixed string in one pass, and it has no way to know whether
+ *  `"@c1"` was meant as an entrant or a court — a payload `@`-ref resolves
+ *  against entrants ∪ persons (`checkStreams`), while a `scheduleConfig`
+ *  `@`-ref resolves against courts ∪ venues (`checkReservations`). Two
+ *  resolution tables over one syntax is exactly the per-location table note 6
+ *  exists to avoid: with per-kind uniqueness only, an entrant `ref: "c1"` and
+ *  a court `ref: "c1"` both parse clean, and the rewriter turns
+ *  `scheduleConfig.courts: ["@c1"]` into an entrant UUID and hands it to the
+ *  scheduler as a court. Nothing reds, at any layer.
+ *
+ *  So persons, entrants, venues, courts and officials share ONE flat
+ *  namespace. A duplicate inside one kind and a collision across two kinds are
+ *  reported differently, because they are different authoring mistakes.
+ *
+ *  Divisions and stages are deliberately NOT in it: they are addressed only
+ *  through typed fields (`divisionRef`, `stageRef`, `registration.byDivision`'s
+ *  keys), never through the sigil, so they cannot take part in a sigil
+ *  collision. **If a future field ever `@`-references a division or a stage,
+ *  it must join this namespace** — that is the whole rule, and it is cheaper
+ *  to honour than to rediscover. */
 function checkRefsUnique(p: PackShapeOut, ctx: Ctx): void {
+  // Division and stage refs: their own namespace, unique per scope.
   const seenDivision = new Set<string>();
   p.divisions.forEach((d, i) => {
     if (seenDivision.has(d.ref)) issue(ctx, ["divisions", i, "ref"], `duplicate division ref "${d.ref}"`);
@@ -1138,16 +1205,35 @@ function checkRefsUnique(p: PackShapeOut, ctx: Ctx): void {
       seenSeq.add(s.seq);
     });
   });
-  const seenPerson = new Set<string>();
-  p.persons.forEach((person, i) => {
-    if (seenPerson.has(person.ref)) issue(ctx, ["persons", i, "ref"], `duplicate person ref "${person.ref}"`);
-    seenPerson.add(person.ref);
+
+  // The sigil-resolvable namespace, walked in one pass so a collision is
+  // reported wherever the SECOND use appears.
+  const claimed = new Map<string, string>(); // ref -> the kind that took it
+  const take = (ref: string, kind: string, at: (string | number)[]): void => {
+    const owner = claimed.get(ref);
+    if (owner === kind) {
+      issue(ctx, at, `duplicate ${kind} ref "${ref}"`);
+      return;
+    }
+    if (owner !== undefined) {
+      issue(
+        ctx,
+        at,
+        `ref "${ref}" is already used by a ${owner} — persons, entrants, venues, courts and officials share ONE ` +
+          `namespace, because an @-prefixed reference carries no kind and the seeding layer resolves it in a single pass`,
+      );
+      return;
+    }
+    claimed.set(ref, kind);
+  };
+
+  p.persons.forEach((person, i) => take(person.ref, "person", ["persons", i, "ref"]));
+  p.entrants.forEach((e, i) => take(e.ref, "entrant", ["entrants", i, "ref"]));
+  p.venues?.forEach((v, i) => {
+    take(v.ref, "venue", ["venues", i, "ref"]);
+    v.courts.forEach((c, j) => take(c.ref, "court", ["venues", i, "courts", j, "ref"]));
   });
-  const seenEntrant = new Set<string>();
-  p.entrants.forEach((e, i) => {
-    if (seenEntrant.has(e.ref)) issue(ctx, ["entrants", i, "ref"], `duplicate entrant ref "${e.ref}"`);
-    seenEntrant.add(e.ref);
-  });
+  p.officials?.forEach((o, i) => take(o.ref, "official", ["officials", i, "ref"]));
 }
 
 /** Rosters: known people, one captain, no repeated person or squad number,
@@ -1292,8 +1378,13 @@ function checkStreams(p: PackShapeOut, ctx: Ctx): void {
       );
     }
     seen.add(composite);
-    if (s.reconstruction !== undefined && s.provenance !== "reconstructed") {
-      issue(ctx, ["streams", i, "reconstruction"], `only a stream with provenance "reconstructed" may carry a reconstruction seed`);
+    if (s.reconstruction !== undefined && s.provenance === "real") {
+      issue(
+        ctx,
+        ["streams", i, "reconstruction"],
+        `a stream with provenance "real" may not carry a reconstruction seed — a real stream is the historical ` +
+          `record and nothing generated it; a "reconstructed" or "synthetic" stream may carry one`,
+      );
     }
     const entrantRefs = entrantsByDivision.get(s.divisionRef) ?? new Set<string>();
 
@@ -1561,20 +1652,16 @@ function checkReservations(p: PackShapeOut, ctx: Ctx): void {
   const streamKeys = new Set(p.streams.map((st) => fixtureKey(st.divisionRef, st.fixtureExtKey)));
 
   // ---- venues and courts ----
-  // Court refs are unique across ALL venues, not per venue: a division's
-  // `scheduleConfig.courts` names them with no venue qualifier, so two venues
-  // holding a "court-1" would make that reference ambiguous.
+  // Uniqueness itself is `checkRefsUnique`'s job: court and venue refs live in
+  // the ONE sigil-resolvable namespace alongside persons, entrants and
+  // officials, so a court sharing a ref with another court — or with an
+  // entrant — is reported there, once. This pass only needs the sets, to
+  // resolve the @-refs below.
   const venueRefs = new Set<string>();
   const courtRefs = new Set<string>();
-  p.venues?.forEach((v, i) => {
-    if (venueRefs.has(v.ref)) issue(ctx, ["venues", i, "ref"], `duplicate venue ref "${v.ref}"`);
+  p.venues?.forEach((v) => {
     venueRefs.add(v.ref);
-    v.courts.forEach((c, j) => {
-      if (courtRefs.has(c.ref)) {
-        issue(ctx, ["venues", i, "courts", j, "ref"], `duplicate court ref "${c.ref}" — court refs are unique across ALL venues, because a division's scheduleConfig names them unqualified`);
-      }
-      courtRefs.add(c.ref);
-    });
+    v.courts.forEach((c) => courtRefs.add(c.ref));
   });
 
   // ---- @-sigilled court/venue refs inside the opaque scheduleConfig ----

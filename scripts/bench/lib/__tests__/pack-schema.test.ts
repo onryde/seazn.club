@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { PackRef, PackSchema, fixtureKey, type Pack } from "../pack-schema.ts";
+import { PackRef, PackSchema, STANDINGS_SCALAR_FIELDS, fixtureKey, type Pack } from "../pack-schema.ts";
 import { packToTemplateSkeleton } from "../pack-template.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -495,6 +495,174 @@ describe("PackSchema — streams and events", () => {
       ["expected", "matches"],
       /no expected match/i,
     );
+  });
+});
+
+describe("PackSchema — one ref namespace for everything the @ sigil resolves", () => {
+  // Review round 2, critical. The sigil carries no kind: a payload @-ref
+  // resolves against entrants union persons, a scheduleConfig @-ref against
+  // courts union venues, and the seeding layer rewrites every @-prefixed
+  // string in ONE pass. With per-kind uniqueness only, an entrant "c1" and a
+  // court "c1" both parsed clean and the rewriter would hand the scheduler an
+  // entrant UUID as a court, with nothing red at any layer.
+
+  function withPlaces(mutate: (p: Record<string, unknown>) => void): Record<string, unknown> {
+    return pack((p) => {
+      (p.persons as unknown[]).push({ ref: "p-ref", fullName: "Ref Eree", lane: "official" });
+      p.venues = [{ ref: "v-main", name: "Arena", courts: [{ ref: "c-1", name: "Court 1" }] }];
+      p.officials = [{ ref: "o-ref", person: "p-ref", displayName: "Ref Eree" }];
+      mutate(p);
+    });
+  }
+
+  it("a court may not take a ref an entrant already uses", () => {
+    // THE collision the round-2 review found. Both sides parsed before.
+    expectIssue(
+      withPlaces((p) => {
+        const venues = p.venues as Record<string, unknown>[];
+        ((venues[0] as Record<string, unknown>).courts as Record<string, unknown>[])[0]!.ref = "e-alpha";
+      }),
+      ["venues", 0, "courts", 0, "ref"],
+      /already used by a entrant.*share ONE/is,
+    );
+  });
+
+  it("a venue, an official and a person may not collide with each other either", () => {
+    expectIssue(
+      withPlaces((p) => {
+        (p.venues as Record<string, unknown>[])[0]!.ref = "p-ana";
+      }),
+      ["venues", 0, "ref"],
+      /already used by a person/i,
+    );
+    expectIssue(
+      withPlaces((p) => {
+        (p.officials as Record<string, unknown>[])[0]!.ref = "c-1";
+      }),
+      ["officials", 0, "ref"],
+      /already used by a court/i,
+    );
+    // Reported at the SECOND use, which follows the walk order (persons,
+    // entrants, venues+courts, officials) — so a person claiming an entrant's
+    // ref reds on the ENTRANT, not the person. Asserting the real path rather
+    // than the intuitive one is the point: a test that guessed would have been
+    // green against a rule that reported nothing at all.
+    expectIssue(
+      withPlaces((p) => {
+        (p.persons as Record<string, unknown>[]).push({
+          ref: "e-bravo",
+          fullName: "Collides With An Entrant",
+          lane: "player",
+        });
+      }),
+      ["entrants", 1, "ref"],
+      /already used by a person/i,
+    );
+  });
+
+  it("a duplicate WITHIN one kind still reads as a duplicate, not a collision", () => {
+    // Two different authoring mistakes, two different messages.
+    expectIssue(
+      withPlaces((p) => {
+        (p.persons as Record<string, unknown>[]).push({
+          ref: "p-ana",
+          fullName: "Ana Again",
+          lane: "player",
+        });
+      }),
+      ["persons", 3, "ref"],
+      /duplicate person ref/i,
+    );
+    expectIssue(
+      withPlaces((p) => {
+        const venues = p.venues as Record<string, unknown>[];
+        ((venues[0] as Record<string, unknown>).courts as Record<string, unknown>[]).push({
+          ref: "c-1",
+          name: "Court 1 again",
+        });
+      }),
+      ["venues", 0, "courts", 1, "ref"],
+      /duplicate court ref/i,
+    );
+  });
+
+  it("divisions and stages keep their own namespace — they are never @-referenced", () => {
+    // Deliberately outside the shared namespace: they are addressed only
+    // through typed fields (divisionRef, stageRef, registration.byDivision
+    // keys). If a future field ever @-references one, it must join.
+    const shared = withPlaces((p) => {
+      const divisions = p.divisions as Record<string, unknown>[];
+      (divisions[0] as Record<string, unknown>).ref = "p-ana";
+      (p.entrants as Record<string, unknown>[]).forEach((e) => {
+        (e as Record<string, unknown>).divisionRef = "p-ana";
+      });
+      (p.streams as Record<string, unknown>[])[0]!.divisionRef = "p-ana";
+      const expected = p.expected as Record<string, unknown>;
+      (expected.matches as Record<string, unknown>[])[0]!.divisionRef = "p-ana";
+    });
+    expect(PackSchema.safeParse(shared).success).toBe(true);
+  });
+
+  it("_tiny.json's own refs do not collide", () => {
+    // The fixture two later tasks build on, checked against the rule rather
+    // than assumed to predate it.
+    const p = parsed(JSON.parse(readFileSync(TINY_PACK_PATH, "utf8")));
+    const refs = [
+      ...p.persons.map((x) => x.ref),
+      ...p.entrants.map((x) => x.ref),
+      ...(p.venues ?? []).flatMap((v) => [v.ref, ...v.courts.map((c) => c.ref)]),
+      ...(p.officials ?? []).map((o) => o.ref),
+    ];
+    expect(new Set(refs).size).toBe(refs.length);
+  });
+});
+
+describe("PackSchema — a generated stream records its seed", () => {
+  // Review round 2: the round-1 additive pass added `synthetic` but left the
+  // seed rule pinned to `reconstructed` alone, so a synthetic stream — which
+  // the customer-journey suite GENERATES — could not record what produced it.
+  const withSeed = (provenance: string): Record<string, unknown> =>
+    pack((p) => {
+      const stream = (p.streams as Record<string, unknown>[])[0] as Record<string, unknown>;
+      stream.provenance = provenance;
+      stream.reconstruction = { seed: 20260902, note: "folds to the real 21-19, 21-17" };
+    });
+
+  it("a reconstructed stream may carry one", () => {
+    expect(PackSchema.safeParse(withSeed("reconstructed")).success).toBe(true);
+  });
+
+  it("a synthetic stream may carry one — it is generated too, and reproducibility is the point", () => {
+    const result = PackSchema.safeParse(withSeed("synthetic"));
+    expect(
+      result.success,
+      result.success ? "" : JSON.stringify(result.error.issues),
+    ).toBe(true);
+    expect(parsed(withSeed("synthetic")).streams[0]?.reconstruction?.seed).toBe(20260902);
+  });
+
+  it("a reconstruction block without a seed is refused — the seed IS the block's purpose", () => {
+    // Making `seed` optional survived a sweep: nothing asserted that a
+    // reconstruction block must actually carry one, so the field could have
+    // become decoration and the reproducibility claim with it.
+    const result = PackSchema.safeParse(
+      pack((p) => {
+        const stream = (p.streams as Record<string, unknown>[])[0] as Record<string, unknown>;
+        stream.provenance = "reconstructed";
+        stream.reconstruction = { note: "generated, but from what?" };
+      }),
+    );
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    const at = result.error.issues.filter(
+      (i) => JSON.stringify(i.path) === JSON.stringify(["streams", 0, "reconstruction", "seed"]),
+    );
+    expect(at.length, `issues were ${JSON.stringify(result.error.issues)}`).toBeGreaterThan(0);
+    expect(at.some((i) => i.code === "invalid_type")).toBe(true);
+  });
+
+  it("a real stream may NOT — nothing generated the historical record", () => {
+    expectIssue(withSeed("real"), ["streams", 0, "reconstruction"], /nothing generated it/i);
   });
 });
 
@@ -1104,6 +1272,41 @@ describe("PackSchema — the expected block", () => {
     expect(PackSchema.safeParse(ok).success).toBe(true);
   });
 
+  it("a standings claim's field vocabulary IS the engine's StandingsDelta scalars", () => {
+    // Runtime half of the compile-time pin (STANDINGS_FIELDS_ARE_* in
+    // pack-schema.ts). tsc catches a drift in the LIST; this catches a claim
+    // reaching for a field that is not a scalar at all — `metrics` is a
+    // Record and `entrantId` a string, so neither is comparable with `equals`.
+    for (const field of STANDINGS_SCALAR_FIELDS) {
+      const ok = pack((p) => {
+        const expected = p.expected as Record<string, unknown>;
+        expected.specials = [
+          {
+            kind: "draw_half_points",
+            divisionRef: "d-main",
+            fixtureExtKey: "rr-r1-c1",
+            claims: [{ on: "standings", entrant: "e-alpha", field, equals: 1 }],
+          },
+        ];
+      });
+      expect(PackSchema.safeParse(ok).success, `field "${field}" was refused`).toBe(true);
+    }
+    for (const field of ["metrics", "entrantId", "goalDifference"]) {
+      const bad = pack((p) => {
+        const expected = p.expected as Record<string, unknown>;
+        expected.specials = [
+          {
+            kind: "draw_half_points",
+            divisionRef: "d-main",
+            fixtureExtKey: "rr-r1-c1",
+            claims: [{ on: "standings", entrant: "e-alpha", field, equals: 1 }],
+          },
+        ];
+      });
+      expect(PackSchema.safeParse(bad).success, `field "${field}" was accepted`).toBe(false);
+    }
+  });
+
   it("a special with an empty claims array is refused — it asserts nothing", () => {
     expectIssue(
       pack((p) => {
@@ -1254,13 +1457,42 @@ describe("PackSchema — the expected block", () => {
     // The gap I2 exposed, pinned. `foldMatchWithStoppage` returns
     // `{ state, stoppage, squads }` (core/events.ts:464): `squads` is a
     // SIBLING of the module state, so a `{on:"state"}` path rooted at the
-    // module state cannot address it however it is spelled. This test asserts
-    // the branch exists and carries the exemption key; it is the branch's
-    // reason to exist.
+    // module state cannot address it however it is spelled.
+    //
+    // This test PARSES the claim. Its first version only read the test file's
+    // own NINE_SPECIALS constant and asserted its fields — so deleting the
+    // `squads` branch from PackClaim left it green, and the one test named for
+    // I1's fix proved nothing about it (review round 2, minor 1).
     const claim = NINE_SPECIALS.find((r) => r.kind === "concussion_sub")?.claim;
     expect(claim).toBeDefined();
-    expect(claim?.on).toBe("squads");
-    expect(claim?.exemption).toBe("concussion");
+
+    const result = PackSchema.safeParse(
+      pack((p) => {
+        const expected = p.expected as Record<string, unknown>;
+        expected.specials = [
+          {
+            kind: "concussion_sub",
+            divisionRef: "d-main",
+            fixtureExtKey: "rr-r1-c1",
+            claims: [claim],
+          },
+        ];
+      }),
+    );
+    expect(
+      result.success,
+      `the concussion claim did not parse: ${result.success ? "" : JSON.stringify(result.error.issues)}`,
+    ).toBe(true);
+    if (!result.success) return;
+
+    // And it survives the parse as a squads claim naming the exemption — a
+    // union that silently matched some OTHER branch would fail here.
+    const parsedClaim = result.data.expected.specials[0]?.claims[0];
+    expect(parsedClaim?.on).toBe("squads");
+    if (parsedClaim?.on !== "squads") return;
+    expect(parsedClaim.field).toBe("exemptUsed");
+    expect(parsedClaim.exemption).toBe("concussion");
+    expect(parsedClaim.equals).toBe(1);
   });
 
   it("a squads claim on exemptUsed MUST name the exemption key", () => {
