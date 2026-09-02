@@ -23,8 +23,9 @@
 - Vitest is judged only from `--reporter=json --outputFile=<path>` (`numPassedTests`, `numFailedTests`, `numTotalTests`) and `.testResults[].name` paths under the worktree. `rtk` summaries are not evidence.
 - Four test types per task where a task has user-facing behaviour: unit, e2e, smoke, regression. Backend-only tasks trace forward to Task 7's e2e.
 - Before each commit: `npm run openapi:gen && git status --porcelain` must show no OpenAPI drift (W1 adds no endpoint; the check still runs).
-- Commit trailers on every commit:
-  `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>` and
+- Commit trailers on every commit (changed 2026-09-02 mid-run; commits before
+  `106437b83` carry the earlier `Claude Fable 5.1` line and stay as they are):
+  `Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>` and
   `Claude-Session: https://claude.ai/code/session_013UrscuUPj2x28AZFkQ9uNR`.
 
 ---
@@ -363,7 +364,7 @@ cd /Users/ashokhein/github/seazn.club-fxc && git add apps/web/src/lib/division-p
 Pure resolver per spec 2026-09-02 §shared model: five ordered rules, org-clock
 day bucketing, severity fixed per attention kind.
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_013UrscuUPj2x28AZFkQ9uNR"
 ```
 
@@ -570,7 +571,7 @@ Same command as Step 4. Expected `6 0 6`. If the `whenLabel` string differs by a
 ```bash
 cd /Users/ashokhein/github/seazn.club-fxc && git add apps/web/src/dictionaries apps/web/src/lib/i18n-keys.ts apps/web/src/lib/division-status-line.ts apps/web/src/lib/__tests__/division-status-line.test.ts && git commit -m "feat(desk): desk.* strings in four locales and the one-line division status
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_013UrscuUPj2x28AZFkQ9uNR"
 ```
 
@@ -859,7 +860,7 @@ cd /Users/ashokhein/github/seazn.club-fxc && git add apps/web/src/server/usecase
 Four tenant queries per competition page, composed with listDivisionCardStats.
 Regression: an all-decided league is finished, never 'nothing scheduled'.
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_013UrscuUPj2x28AZFkQ9uNR"
 ```
 
@@ -1255,7 +1256,7 @@ cd /Users/ashokhein/github/seazn.club-fxc && git add apps/web/src/components/v2/
 Sport glyph or uploaded logo on every row, never a monogram; red attention
 outranks the phase on the pill; Needs you renders nothing when empty.
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_013UrscuUPj2x28AZFkQ9uNR"
 ```
 
@@ -1390,7 +1391,7 @@ cd /Users/ashokhein/github/seazn.club-fxc && npm run openapi:gen >/dev/null 2>&1
 Event pass moves out of the hero slot into the tools row; sport named as text
 on the masthead, glyph on each row.
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_013UrscuUPj2x28AZFkQ9uNR"
 ```
 
@@ -1509,7 +1510,7 @@ Run the scoped gate as in Task 5 Step 5. Then:
 ```bash
 cd /Users/ashokhein/github/seazn.club-fxc && git add apps/web/src/components/v2/stages-panel.tsx "apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx" apps/web/src/components/v2/__tests__/stages-panel-phase.test.tsx && git commit -m "fix(desk): start-locks tip only while setting up; stages always in seq order
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_013UrscuUPj2x28AZFkQ9uNR"
 ```
 
@@ -1613,7 +1614,7 @@ In the competition-page article (found by the grep above), add one paragraph und
 ```bash
 cd /Users/ashokhein/github/seazn.club-fxc && git add apps/web/e2e/competition-desk.spec.ts apps/web/e2e/helpers.ts scripts/smoke.ts content/help && git commit -m "test(desk): competition desk e2e, smoke phase check, help copy
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_013UrscuUPj2x28AZFkQ9uNR"
 ```
 
@@ -1728,7 +1729,7 @@ Expected: `1 passed`. Open the six numbered screenshots in the test's output dir
 ```bash
 cd /Users/ashokhein/github/seazn.club-fxc && git add apps/web/e2e/walkthrough/competition-desk-organiser.spec.ts && git commit -m "test(desk): organiser walkthrough — blank to finished through the competition desk
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_013UrscuUPj2x28AZFkQ9uNR"
 ```
 
