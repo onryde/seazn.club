@@ -1,9 +1,16 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import AxeBuilder from "@axe-core/playwright";
 import { test, expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import { apiJson, fixturePath, seedRosteredFixture, expectNoHorizontalScroll, TAG } from "./helpers";
+import {
+  HIT_TARGET_FLOOR_PX,
+  dismissCookieBanner,
+  measureHitTargets,
+  scanPadContrast,
+  smallestOperable,
+  type HitTarget,
+} from "./scorepad-a11y-kit";
 
 /*
  * S13/#422 W11 cutover — recorded accessibility evidence for the two REAL v2
@@ -77,11 +84,14 @@ const OUT_DIR = fileURLToPath(new URL("../test-results/s13-a11y/", import.meta.u
 const WIDTHS = [1280, 375, 320] as const;
 const HEIGHT: Record<(typeof WIDTHS)[number], number> = { 1280: 900, 375: 800, 320: 700 };
 
-// Every element the report treats as an "interactive element inside the
-// pad" — native form controls plus the ARIA roles/tabindex a hand-rolled
-// control would use if the pad ever draws one that is not a native tag.
-const INTERACTIVE_SELECTOR =
-  'button, select, input, textarea, a[href], [role="button"], [role="switch"], [role="checkbox"], [role="radio"], [role="combobox"], [role="tab"], [tabindex]:not([tabindex="-1"])';
+// R8/WS-H — `INTERACTIVE_SELECTOR`, `HitTarget` and `measureHitTargets` MOVED
+// to `./scorepad-a11y-kit.ts` and are imported above, unchanged. R8 extends
+// the 44px sweep from this file's one sport (`generic`) to all eleven v3
+// skins, and Playwright refuses to let one spec import another — so the
+// measurement had to live in a non-spec module or be written a second time,
+// and two hand-written copies of one measurement is how two gates drift into
+// disagreeing about the same pixel. Nothing about the geometry changed; see
+// the kit's own header for the traps it now also guards.
 
 function pad(page: Page): Locator {
   return page.locator('[data-testid="score-pad"]');
@@ -116,8 +126,12 @@ async function openLiveConsole(page: Page, fx: { fixtureId: string }): Promise<v
  *  inherit an authed storageState (callers pass a fresh anonymous context). */
 async function openDeviceLink(page: Page, secret: string): Promise<void> {
   await page.goto(`/score/${secret}`);
-  const accept = page.getByRole("button", { name: "Accept", exact: true });
-  if ((await accept.count()) > 0) await accept.click();
+  // R8/WS-H — was an inline `if (count) click()`. `dismissCookieBanner` (the
+  // kit) is the same two lines plus the half this one was missing: it WAITS
+  // for the banner to actually go away. An Accept click that has not settled
+  // leaves a fixed overlay over the pad for the next few frames, and every
+  // geometry measurement below it is then taken against an obscured page.
+  await dismissCookieBanner(page);
   await expect(page.locator('[data-role="v3-scorebug"]'), "the v3 board must render").toBeVisible({
     timeout: 20_000,
   });
@@ -145,81 +159,6 @@ async function openAmendDock(scope: Locator): Promise<void> {
   await expect(scope.locator('[data-role="v3-dock"]'), "a tally tap must open the amend dock").toBeVisible({
     timeout: 20_000,
   });
-}
-
-interface HitTarget {
-  name: string;
-  role: string;
-  disabled: boolean;
-  width: number;
-  height: number;
-}
-
-/** Real getBoundingClientRect() geometry (Playwright's own boundingBox() is
- *  exactly that) for every interactive element currently rendered inside
- *  `scope`, paired with a best-effort accessible name. Elements with a
- *  zero-size box (display:none, not currently mounted) are skipped — they
- *  are not a tappable target in this state, not a false pass. */
-async function measureHitTargets(scope: Locator): Promise<HitTarget[]> {
-  const els = scope.locator(INTERACTIVE_SELECTOR);
-  const count = await els.count();
-  const out: HitTarget[] = [];
-  for (let i = 0; i < count; i++) {
-    const el = els.nth(i);
-    const box = await el.boundingBox();
-    if (!box || box.width <= 0 || box.height <= 0) continue;
-    const meta = await el.evaluate((node) => {
-      const e = node as HTMLElement & {
-        labels?: NodeListOf<HTMLLabelElement>;
-        placeholder?: string;
-        value?: string;
-        disabled?: boolean;
-      };
-      let name = "";
-      const aria = e.getAttribute("aria-label");
-      if (aria && aria.trim()) name = aria.trim();
-      if (!name) {
-        const labelledby = e.getAttribute("aria-labelledby");
-        if (labelledby) {
-          name = labelledby
-            .split(/\s+/)
-            .map((id) => document.getElementById(id)?.textContent?.trim() ?? "")
-            .filter(Boolean)
-            .join(" ");
-        }
-      }
-      if (!name && e.labels && e.labels.length) {
-        name = Array.from(e.labels)
-          .map((l) => l.textContent?.trim() ?? "")
-          .filter(Boolean)
-          .join(" ");
-      }
-      if (!name) {
-        const title = e.getAttribute("title");
-        if (title && title.trim()) name = title.trim();
-      }
-      if (!name) {
-        const text = (e.innerText ?? e.textContent ?? "").trim();
-        if (text) name = text.replace(/\s+/g, " ").slice(0, 60);
-      }
-      if (!name && e.placeholder) name = `[placeholder] ${e.placeholder}`;
-      if (!name && e.value) name = `[value] ${e.value}`;
-      if (!name) name = `<${e.tagName.toLowerCase()}>`;
-      return {
-        name,
-        role: e.getAttribute("role") ?? e.tagName.toLowerCase(),
-        disabled: e.disabled === true || e.getAttribute("aria-disabled") === "true",
-      };
-    });
-    out.push({
-      name: meta.name,
-      role: meta.role,
-      disabled: meta.disabled,
-      width: Math.round(box.width * 100) / 100,
-      height: Math.round(box.height * 100) / 100,
-    });
-  }
-  return out;
 }
 
 interface FocusStep {
@@ -360,12 +299,9 @@ async function recordEvidence(page: Page, comboName: string, scopeSelector: stri
 
   await page.screenshot({ path: join(OUT_DIR, `${comboName}.png`), fullPage: true });
 
-  const hitTargets = await measureHitTargets(scope);
+  const hitTargets: HitTarget[] = await measureHitTargets(scope);
   const operable = hitTargets.filter((t) => !t.disabled);
-  const smallest = operable.reduce<HitTarget | null>(
-    (min, t) => (!min || t.width * t.height < min.width * min.height ? t : min),
-    null,
-  );
+  const smallest = smallestOperable(hitTargets);
   expect.soft(smallest, "no operable hit target found inside the pad to measure").not.toBeNull();
   if (smallest) {
     expect
@@ -373,13 +309,13 @@ async function recordEvidence(page: Page, comboName: string, scopeSelector: stri
         smallest.width,
         `smallest hit target "${smallest.name}" (${smallest.role}) is ${smallest.width}x${smallest.height}px`,
       )
-      .toBeGreaterThanOrEqual(44);
+      .toBeGreaterThanOrEqual(HIT_TARGET_FLOOR_PX);
     expect
       .soft(
         smallest.height,
         `smallest hit target "${smallest.name}" (${smallest.role}) is ${smallest.width}x${smallest.height}px`,
       )
-      .toBeGreaterThanOrEqual(44);
+      .toBeGreaterThanOrEqual(HIT_TARGET_FLOOR_PX);
   }
 
   // S13/#422 W11 cutover — the `device-*` combinations are LEFT RED here,
@@ -400,13 +336,18 @@ async function recordEvidence(page: Page, comboName: string, scopeSelector: stri
   // and period-skin.tsx this session, just not here yet. Not weakened or
   // re-scoped to dodge it — that would hide exactly the class of defect this
   // scan exists to catch.
-  const axe = await new AxeBuilder({ page })
-    .include(scopeSelector)
-    .withTags(["wcag2a", "wcag2aa"])
-    .analyze();
-  const axeViolations = axe.violations.map((v) => ({ id: v.id, impact: v.impact ?? null, nodes: v.nodes.length }));
-  const serious = axe.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
-  expect.soft(serious, JSON.stringify(serious, null, 2)).toEqual([]);
+  //
+  // R8/WS-H — the invocation itself moved to `scanPadContrast` (the kit),
+  // shared with the eleven-skin sweep. Same tags, same serious/critical gate,
+  // same scope; what it ADDS is the anti-vacuity proof this call never had —
+  // that the scope resolved, is visible, contains the v3 scorebug, and had at
+  // least one `color-contrast` node actually evaluated inside it. That is
+  // exactly the check whose absence let the `main`-scoped version of this very
+  // call report zero for a whole session, four real violations sitting one
+  // element outside its scope.
+  const scan = await scanPadContrast(page, scopeSelector);
+  const axeViolations = scan.violations;
+  expect.soft(scan.serious, JSON.stringify(scan.serious, null, 2)).toEqual([]);
 
   const focus = await tabThroughPad(page, scopeSelector);
   const jumps = backwardJumps(focus.order);
