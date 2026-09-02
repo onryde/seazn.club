@@ -11,7 +11,7 @@ import { rateLimit } from "@/lib/rate-limit";
 import { hasFeature, requireFeature } from "@/lib/entitlements";
 import { deferred } from "@/lib/deferred";
 import { EngineError } from "@seazn/engine/core";
-import { appendEvent, resolveModule } from "@/server/engine-db";
+import { appendEvent } from "@/server/engine-db";
 import { recomputeStandings } from "@/server/engine-db";
 import { log } from "@/server/logger";
 import { publishDivisionUpdate, publishFixtureUpdate } from "@/lib/realtime";
@@ -23,7 +23,6 @@ import {
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { AppendEventRequest } from "@/server/api-v1/schemas";
 import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
-import { requiredFeatureForEvent } from "./fidelity";
 import { scoresViaAssignment } from "./scorers";
 import { fillSlot, markDependentSeedProposalsStale } from "./stages";
 import { detectSuspensions } from "./discipline";
@@ -174,14 +173,16 @@ async function assertUndoTarget(
   }
 }
 
-// Entitlement gates at THE scoring door (doc 10 §2 rules 2 & 4):
-//  - fidelity: the event-type → feature map derives from the pinned module's
-//    own fidelityTiers declaration (doc 14 §4) — Tier 0/1 always passes, so a
-//    downgraded org keeps coarse scoring;
+// Entitlement gates at THE scoring door:
 //  - cricket.dls: a `cricket.revise` WITHOUT a manual target under a
 //    dls-enabled config makes the fold compute a DLS target — Pro only. A
 //    manual umpire target is always allowed;
 //  - freeze: fixtures of an over-quota (frozen) competition are read-only.
+// W1 (entitlements v18, owner ruling 2026-08-30): the fidelity-band gate that
+// used to live here (event-type → feature, derived from the pinned module's
+// `fidelityTiers`) is deleted — scoring detail is free on every plan, for
+// every module, at every band. `cricket.dls` is untouched: it is a SEPARATE
+// gate keyed on the event's payload + the division's config, not on fidelity.
 // Unknown fixtures fall through — appendEvent owns that error.
 async function assertEntitledToScore(
   auth: AuthCtx,
@@ -263,10 +264,8 @@ async function assertEntitledToScore(
     }
   }
 
-  const sportModule = resolveModule(ctx.sport_key, ctx.module_version);
-  const feature = requiredFeatureForEvent(sportModule, input.type);
-  if (feature) await requireFeature(auth.orgId, feature);
-
+  // W1: scoring detail is free on every plan; only the DLS rain-rule gate
+  // remains here until W2.
   if (requiresDlsEntitlement(input.type, ctx.config, input.payload)) {
     await requireFeature(auth.orgId, "cricket.dls");
   }
@@ -279,10 +278,12 @@ async function assertEntitledToScore(
  * target — Pro only. A manual target is an umpire's own number and is always
  * allowed.
  *
- * `requiredFeatureForEvent` cannot express this: `cricket.revise` is fidelity
- * TIER 1 (packages/engine/src/sports/cricket/cricket.ts), so the fidelity map
- * returns null for it and always will — the rule is about the event's PAYLOAD
- * and the DIVISION's config, neither of which a tier table knows about.
+ * W1 (entitlements v18): this is now the ONLY entitlement gate left at the
+ * scoring door — `requiredFeatureForEvent` and the whole fidelity-band gate
+ * it drove are deleted (scoring detail is free on every plan, owner ruling
+ * 2026-08-30). It never overlapped with that gate anyway: the rule is about
+ * the event's PAYLOAD and the DIVISION's config, neither of which a fidelity
+ * band knows about.
  *
  * Exported (P11) for the batch importer, the same reason `onDecided` /
  * `refreshDiscipline` / `refreshNews` are exported just below: the importer

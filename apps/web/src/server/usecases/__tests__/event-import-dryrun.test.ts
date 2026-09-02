@@ -165,32 +165,33 @@ describe.skipIf(!HAS_DB)("importEvents — guards and dry run", () => {
     expect(report.results[0]!.error?.code).toBe("import.slots_unfilled");
   });
 
-  // Task 5 addition (review finding #5(d), carried over from Tasks 3+4's
-  // report): `generic` tops out at fidelity tier 1 and can never require an
-  // entitlement, so this needs the cricket rig — see
-  // startedCricketDivisionWithFixture's own doc comment in _rig.ts for why
-  // `cricket.ball` / `scoring.ball_by_ball` is the pairing that reaches it.
-  it("rejects a tier-3 event when the org lacks the entitlement (import.entitlement)", async () => {
+  // W1 (entitlements v18, 2026-09-02): formerly "rejects a tier-3 event when
+  // the org lacks the entitlement (import.entitlement)" — asserted
+  // `{code: "import.entitlement", feature: "scoring.ball_by_ball"}` for a
+  // bare `cricket.ball` import. Scoring detail is free on every plan now, so
+  // `requiredFeatures` never gains that key at all; rewritten to prove the
+  // NEGATIVE directly — the same import still fails (this fixture has no
+  // lineup declared, `startedCricketDivisionWithFixture`'s own doc), but
+  // never for `import.entitlement` any more.
+  it("no longer requires an entitlement for a tier-3 event — cricket.ball fails for a different reason", async () => {
     const { auth } = await seedOrg();
     const { divisionId, fixtureId } = await startedCricketDivisionWithFixture(auth);
 
     const report = await importEvents(auth, divisionId, {
-      import_id: "imp-entitlement",
+      import_id: "imp-entitlement-gone",
       streams: [{ fixture: { id: fixtureId }, events: [{ type: "cricket.ball", payload: {} }] }],
     });
-    expect(report.results[0]!.error).toMatchObject({
-      code: "import.entitlement",
-      feature: "scoring.ball_by_ball",
-    });
+    expect(report.results[0]!.error?.code).not.toBe("import.entitlement");
   });
 
   // Final review C-2: a SECOND entitlement gate the fidelity map cannot
-  // express. `cricket.revise` is fidelity TIER 1, so `requiredFeatureForEvent`
-  // returns null for it and step 5's loop asks for nothing — but a revise with
-  // no manual umpire target, under a division whose config enables DLS, is
-  // exactly what makes the fold compute a Duckworth-Lewis-Stern target, which
-  // is Pro-only at the live scoring door (scoring.ts's `requiresDlsEntitlement`).
-  // Without the import-side counterpart a non-entitled org buys a DLS target by
+  // express. W1 deletes `requiredFeatureForEvent` and the fidelity gate it
+  // drove entirely (scoring detail is free on every plan) — this gate is
+  // untouched: a `cricket.revise` with no manual umpire target, under a
+  // division whose config enables DLS, is exactly what makes the fold
+  // compute a Duckworth-Lewis-Stern target, which is Pro-only at the live
+  // scoring door (scoring.ts's `requiresDlsEntitlement`). Without the
+  // import-side counterpart a non-entitled org buys a DLS target by
   // importing instead of scoring.
   it("rejects a DLS-computed cricket.revise when the org lacks cricket.dls (import.entitlement)", async () => {
     const { auth } = await seedOrg();

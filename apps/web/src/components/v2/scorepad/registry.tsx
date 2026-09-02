@@ -181,8 +181,13 @@ export interface ScorePadBootstrap {
    *  already the resolved, schema-parsed cfg (S12/#421 decision log). */
   resolvedConfig: unknown;
   initialEvents: readonly EventEnvelope[];
+  // W1 (entitlements v18): `band` is deleted — fidelity bands are a UX
+  // choice, never an entitlement, and this bootstrap no longer carries one.
+  // `ScorePadProps.band` below is UNCHANGED, out of this task's scope (Task 4
+  // owns the pad UI); its two production callers (fixture-console.tsx,
+  // device-score-pad.tsx) read `scorePadV2.band` and are left non-typechecking
+  // for Task 4, same as `pad-host.tsx`.
   entitlements: Readonly<Record<string, boolean>>;
-  band: FidelityBand;
   identity: OwnIdentity;
 }
 
