@@ -44,6 +44,11 @@ export interface CompetitionDesk {
   org_tz: string;
   in_play: number;
   divisions: Map<string, DeskDivision>;
+  /** Same instant every division's phase was resolved against (SSR-stable).
+   *  `competitionPhase` filters on it too, so the masthead's "earliest next
+   *  fixture" ladder step never disagrees with the per-division rows it's
+   *  summarising. */
+  now: string;
 }
 
 let cachedMatchMinutes: number | undefined;
@@ -195,22 +200,75 @@ export async function getCompetitionDesk(
     },
     "competition_desk_built",
   );
-  return { org_tz: orgTz, in_play: inPlayTotal, divisions: out };
+  return { org_tz: orgTz, in_play: inPlayTotal, divisions: out, now: nowIso };
 }
 
-/** The competition's own pill: in play beats match day beats everything else. */
-export function competitionPhase(desk: CompetitionDesk): DivisionPhase | "in_play" {
+/** The competition-level pill's phase: either a ranked/counted state, or a
+ *  dated "next fixture" fact — never a phase WORD ranked against the others
+ *  (see `competitionPhase` below, "competitionPhase minor" fix). */
+export type CompetitionPillPhase =
+  | { kind: "in_play"; n: number }
+  | { kind: "match_day" }
+  | { kind: "next"; at: string }
+  | { kind: "finished" }
+  | { kind: "setting_up" };
+
+/** A division's own `next` fixture, filtered to the same "actually still
+ *  ahead of us" shape the ledger's F5 fix applies at its call site (division-
+ *  ledger.tsx's `nextLine`): non-null, parseable, not already kicked off.
+ *  Duplicated rather than imported — the ledger's guard lives beside the
+ *  React it renders into; this one feeds a plain date, not JSX. */
+function nextFutureAt(next: NextFixture | null, nowIso: string): string | null {
+  if (!next || next.in_play || !next.scheduled_at) return null;
+  const ms = Date.parse(next.scheduled_at);
+  return Number.isNaN(ms) || ms < Date.parse(nowIso) ? null : next.scheduled_at;
+}
+
+/** The competition's own pill. Spec §W1 line 152's ladder: any `in_play` →
+ *  "N in play"; any `match_day` → "Match day"; else the EARLIEST next
+ *  fixture date across divisions ("Next Sat 12 Sep"); all `finished` →
+ *  "Finished".
+ *
+ *  competitionPhase minor fix (final review): the old implementation ranked
+ *  the four DivisionPhase words and printed whichever ranked lowest ("in
+ *  play" > "match_day" > "scheduled" > "setting_up" > "finished" default) —
+ *  so the spec's third rung, "the earliest next fixture date", could never
+ *  render at all (nothing ever produces a phase literally called "next"),
+ *  and "setting_up" was reachable as a ranked word even once real fixtures
+ *  existed with dates — confirmed live: a competition 43 matches deep read
+ *  "Setting up" one row above a correctly-drawn "Needs draw" division.
+ *
+ *  Ladder step order matters: "any match_day" is checked BEFORE the dated
+ *  fixture search (a live match day outranks a same-day dated fixture
+ *  elsewhere), and "all finished" is checked AFTER it (a fully-finished
+ *  competition has no live non-terminal fixture left to date, so the search
+ *  always comes back empty for one — checking finished first would only
+ *  ever short-circuit the search, never change the answer).
+ *
+ *  Where the ladder has no answer — no division carries a dated,
+ *  not-yet-kicked-off fixture, AND not every division is finished (e.g.
+ *  every division is still setting up with nothing dated yet) — this reads
+ *  `setting_up`, the same "nothing informative has happened yet" state
+ *  amendment 3 already gives an empty competition. Chosen over reusing
+ *  "scheduled" (a DIVISION-level word this function no longer ranks at all)
+ *  because the state genuinely means "no organiser action has produced a
+ *  dated fixture yet", which is exactly what `setting_up` already means one
+ *  level down. */
+export function competitionPhase(desk: CompetitionDesk): CompetitionPillPhase {
   // A competition with no divisions has not begun, so it cannot be finished.
-  // The empty `phases` array below satisfies none of the `includes` tests and
-  // used to fall through to "finished" — the first thing an organiser saw
-  // after creating a competition was "Finished · 0 divisions" sitting above
-  // "No divisions yet". Same vacuous-truth shape as the division rule this
-  // wave already amended (spec amendment 2), one level up.
-  if (desk.divisions.size === 0) return "setting_up";
-  if (desk.in_play > 0) return "in_play";
-  const phases = [...desk.divisions.values()].map((d) => d.phase);
-  if (phases.includes("match_day")) return "match_day";
-  if (phases.includes("scheduled")) return "scheduled";
-  if (phases.includes("setting_up")) return "setting_up";
-  return "finished";
+  // Amendment 3 (2026-09-02): a fresh competition rendered "Finished · 0
+  // divisions" above its own "No divisions yet" empty state before this —
+  // same vacuous-truth shape as the division rule the wave already amended,
+  // one level up. Binding: this stays the FIRST check.
+  if (desk.divisions.size === 0) return { kind: "setting_up" };
+  if (desk.in_play > 0) return { kind: "in_play", n: desk.in_play };
+  const divisions = [...desk.divisions.values()];
+  if (divisions.some((d) => d.phase === "match_day")) return { kind: "match_day" };
+  const dates = divisions
+    .map((d) => nextFutureAt(d.next, desk.now))
+    .filter((x): x is string => x !== null)
+    .sort();
+  if (dates.length > 0) return { kind: "next", at: dates[0]! };
+  if (divisions.every((d) => d.phase === "finished")) return { kind: "finished" };
+  return { kind: "setting_up" };
 }

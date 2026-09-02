@@ -59,12 +59,37 @@ test("an organiser watches the desk go Setting up → Scheduled → Match day �
   const fixtures = gen.data!.fixtures;
   const ids = fixtures.map((f) => f.id);
   await page.goto(compPath);
-  await expect(row).toHaveAttribute("data-phase", "scheduled");
+  // F1 fix (final review, Critical): generated fixtures with no time on
+  // them read setting_up (with the unscheduled attention), never
+  // "scheduled" — the old rule 5 read "scheduled" here while the row's own
+  // status line said "nothing scheduled" next to it, the exact
+  // contradiction the reviewer found live at this step and this spec
+  // PHOTOGRAPHED without reading.
+  await expect(row).toHaveAttribute("data-phase", "setting_up");
   const needs = page.getByTestId("desk-needs-you");
   await expect(needs.locator('[data-attention="unscheduled"]')).toContainText(`${ids.length} fixtures unscheduled`);
+  // Toothless-guard fix: the row is actually READ here now, not just
+  // photographed. It must state its played progress AND the unscheduled
+  // count, and never the live defect copy ("nothing scheduled") beside
+  // either.
+  await expect(row).toContainText(`0 of ${ids.length} played`);
+  await expect(row).toContainText(`${ids.length} unscheduled`);
+  await expect(row).not.toContainText(/nothing scheduled/i);
   await shot("03-unscheduled");
   await needs.getByRole("link", { name: "Open schedule board" }).click();
   await expect(page).toHaveURL(/\/schedule$/);
+
+  // 3b. Reach: one fixture given a real time next week (API PATCH). Read:
+  // Scheduled. F1's fix means the walkthrough no longer passes through
+  // "Scheduled" by accident (that was the bug — step 3 above used to read
+  // "scheduled" with nothing actually scheduled); this step is what
+  // legitimately puts a fixture in the future so the phase is genuinely
+  // earned, keeping this test's own title ("Setting up → Scheduled → Match
+  // day → …") true of the journey it drives.
+  const nextWeek = new Date(); nextWeek.setUTCDate(nextWeek.getUTCDate() + 7); nextWeek.setUTCHours(10, 0, 0, 0);
+  await apiJson(request, `/api/v1/fixtures/${ids[0]}`, "PATCH", { scheduled_at: nextWeek.toISOString() });
+  await page.goto(compPath);
+  await expect(row).toHaveAttribute("data-phase", "scheduled");
 
   // 4. Reach: kick-off today (API PATCH). Read: Match day.
   const today = new Date(); today.setUTCHours(18, 0, 0, 0);

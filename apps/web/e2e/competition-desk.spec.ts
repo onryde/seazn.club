@@ -31,8 +31,19 @@ test.describe("competition desk", () => {
     await expect(needs.locator('[data-attention="unscheduled"]')).toHaveCount(1);
     await expect(needs).toContainText(`Premier · ${rig.fixtureIds.length} fixtures unscheduled`);
     const row = page.getByTestId("desk-ledger-row").first();
-    await expect(row).toHaveAttribute("data-phase", "scheduled");
-    await expect(row).not.toContainText("Nothing scheduled yet");
+    // F1 fix (final review, Critical): fixtures exist but none carry a
+    // time yet, so this reads setting_up (with the unscheduled attention
+    // above), never "scheduled" — the old rule 5 read "scheduled" here
+    // while the row's OWN status line said "nothing scheduled" next to it.
+    await expect(row).toHaveAttribute("data-phase", "setting_up");
+    // Toothless-guard fix: the old assertion checked for
+    // "Nothing scheduled yet" — a string that lives only at
+    // entity-card.tsx's `card.next.none`, which this page never renders.
+    // The live defect copy is lowercase and has no "yet"; re-anchored on
+    // that, and on the row actually stating a played count that must never
+    // sit beside it.
+    await expect(row).toContainText(`0 of ${rig.fixtureIds.length} played`);
+    await expect(row).not.toContainText(/nothing scheduled/i);
     await expect(page.getByText("Live", { exact: true })).toHaveCount(0);
     await needs.getByRole("link", { name: "Open schedule board" }).click();
     await expect(page).toHaveURL(new RegExp(`/d/${rig.divSlug}/schedule$`));

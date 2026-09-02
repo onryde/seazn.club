@@ -23,7 +23,7 @@ import { getDictionary, t, plural } from "@/lib/i18n";
 import { sql } from "@/lib/db";
 import { checkoutTrialDays } from "@/lib/billing";
 import { getCompetitionDesk, competitionPhase } from "@/server/usecases/competition-desk";
-import { statusLine } from "@/lib/division-status-line";
+import { statusLine, nextDateLabel } from "@/lib/division-status-line";
 import { PhasePill } from "@/components/v2/desk/phase-pill";
 import { NeedsYou, needsYouItems } from "@/components/v2/desk/needs-you";
 import { DivisionLedger, type LedgerRow } from "@/components/v2/desk/division-ledger";
@@ -62,6 +62,14 @@ export default async function CompetitionPage({
   ]);
   const trialAvailable = checkoutTrialDays(subRow) > 0;
   const compPhase = desk ? competitionPhase(desk) : null;
+  // F5 fix: DivisionLedger's own "is this kick-off past?" check (its
+  // nextLine) needs a fixed instant, never `Date.now()` read inside its own
+  // render (react-hooks/purity). `desk.now` already IS that instant — every
+  // division's phase in this render was resolved against it — so this reads
+  // it straight through rather than sampling a second, slightly different
+  // clock; the desk-summary-failed path (`desk` null) has no ledger `next`
+  // data to judge either way, so any well-formed instant is harmless there.
+  const now = desk?.now ?? new Date().toISOString();
   const divisionNames = divisions.map((d) => ({ id: d.id, name: d.name, slug: d.slug }));
   const needs = desk && canEdit ? needsYouItems(dict, desk, divisionNames, orgSlug, compSlug, locale) : [];
   const ledgerRows: LedgerRow[] = divisions.map((d) => {
@@ -161,7 +169,14 @@ export default async function CompetitionPage({
               {competition.name}
             </h1>
             <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-600">
-              {compPhase && <PhasePill dict={dict} phase={compPhase} inPlay={desk?.in_play ?? 0} />}
+              {compPhase && (
+                <PhasePill
+                  dict={dict}
+                  phase={compPhase.kind}
+                  inPlay={compPhase.kind === "in_play" ? compPhase.n : 0}
+                  when={compPhase.kind === "next" ? nextDateLabel(compPhase.at, locale, desk!.org_tz) : undefined}
+                />
+              )}
               {/* Minor fix (review round 1): was the raw lowercase sport_key
                   ("football") — the `sport.<key>` dictionary already carries
                   a proper display name ("Ice hockey", "Table tennis") for
@@ -347,7 +362,7 @@ export default async function CompetitionPage({
                 )}
               </div>
             ) : (
-              <DivisionLedger dict={dict} rows={ledgerRows} org={orgSlug} comp={compSlug} locale={locale} />
+              <DivisionLedger dict={dict} rows={ledgerRows} org={orgSlug} comp={compSlug} locale={locale} now={now} />
             )}
           </section>
       </main>

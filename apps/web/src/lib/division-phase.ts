@@ -116,8 +116,16 @@ export function resolvePhase(input: PhaseInput): DivisionPhase {
   if (matchDay) return "match_day";
   // 4. setting_up: the next stage has nothing to play yet
   if (openStageOwesWork) return "setting_up";
-  // 5.
-  return "scheduled";
+  // 5. scheduled — ONLY when a live (non-terminal, i.e. status "scheduled";
+  // "in_play" always won rule 3 above) fixture actually carries a time.
+  // F1 fix (final review, Critical): the old rule 5 was a bare "otherwise",
+  // so a started division whose fixtures were all generated with no time
+  // read "Scheduled" while its own status line said "nothing scheduled" —
+  // three contradicting facts in one row. With no dated fixture the
+  // division is still setting_up, which already carries the `unscheduled`
+  // attention that says so in words.
+  const hasScheduledFixture = fixtures.some((f) => f.status === "scheduled" && f.scheduledAt !== null);
+  return hasScheduledFixture ? "scheduled" : "setting_up";
 }
 
 export function resolveAttention(input: PhaseInput): Attention[] {

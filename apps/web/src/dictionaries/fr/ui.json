@@ -557,6 +557,7 @@
   "desk.phase.match_day": "Jour de match",
   "desk.phase.finished": "Terminée",
   "desk.phase.in_play": "{n} en cours",
+  "desk.phase.next": "Prochain {when}",
   "desk.pill.needs_draw": "Tirage requis",
   "desk.pill.no_scorer": "Sans marqueur",
   "desk.status.finished": "{played} sur {total} joués · terminée",

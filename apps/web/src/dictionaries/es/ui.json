@@ -557,6 +557,7 @@
   "desk.phase.match_day": "Día de partido",
   "desk.phase.finished": "Finalizada",
   "desk.phase.in_play": "{n} en juego",
+  "desk.phase.next": "Próximo {when}",
   "desk.pill.needs_draw": "Falta el sorteo",
   "desk.pill.no_scorer": "Sin anotador",
   "desk.status.finished": "{played} de {total} jugados · completa",

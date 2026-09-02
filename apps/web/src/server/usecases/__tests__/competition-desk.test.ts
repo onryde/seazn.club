@@ -94,7 +94,7 @@ describe.skipIf(!HAS_DB)("getCompetitionDesk", () => {
     });
     const desk = await getCompetitionDesk(auth, comp.id);
     expect(desk.divisions.size).toBe(0);
-    expect(competitionPhase(desk)).toBe("setting_up");
+    expect(competitionPhase(desk)).toEqual({ kind: "setting_up" });
   });
 
   it("a fresh division with no stage is setting_up with no attention", async () => {
@@ -104,10 +104,15 @@ describe.skipIf(!HAS_DB)("getCompetitionDesk", () => {
     const d = desk.divisions.get(divisionId)!;
     expect(d.phase).toBe("setting_up");
     expect(d.attention).toEqual([]);
-    expect(competitionPhase(desk)).toBe("setting_up");
+    expect(competitionPhase(desk)).toEqual({ kind: "setting_up" });
   });
 
-  it("generated, unscheduled league: scheduled? no — unscheduled fixtures on an active division are 'scheduled' phase with an unscheduled attention", async () => {
+  it("F1 fix: unscheduled fixtures on an active division are 'setting_up', never 'scheduled', with an unscheduled attention", async () => {
+    // Final review, Critical: the OLD rule 5 was a bare "otherwise", so this
+    // exact shape — a started division, fixtures generated, none carrying a
+    // time — read "Scheduled" while its own status line said "nothing
+    // scheduled". Rule 5 now requires a live fixture to actually carry a
+    // scheduledAt; with none, the division is still setting_up.
     const { auth } = await seedOrg();
     const { competitionId, divisionId } = await seedDivision(auth, 4);
     const [stage] = await createStages(auth, divisionId, {
@@ -121,9 +126,31 @@ describe.skipIf(!HAS_DB)("getCompetitionDesk", () => {
     await sql`update divisions set status = 'active' where id = ${divisionId}`;
     const desk = await getCompetitionDesk(auth, competitionId, new Date("2026-09-08T10:00:00Z"));
     const d = desk.divisions.get(divisionId)!;
-    expect(d.phase).toBe("scheduled");
+    expect(d.phase).toBe("setting_up");
     expect(d.attention).toContainEqual({ kind: "unscheduled", count: 6 });
     expect(d.total).toBe(6);
+  });
+  it("F1 fix, contrast: the same league with ONE fixture given a real (future) time reads 'scheduled'", async () => {
+    // Isolates the fix: it is not "generated fixtures never read scheduled",
+    // it is specifically "no fixture carries a time yet" — one dated,
+    // still-unplayed fixture is enough.
+    const { auth } = await seedOrg();
+    const { competitionId, divisionId } = await seedDivision(auth, 4);
+    const [stage] = await createStages(auth, divisionId, {
+      seq: 1,
+      kind: "league",
+      name: "League",
+      config: {},
+      progression: null,
+    });
+    await generateStageFixtures(auth, stage!.id);
+    await sql`update divisions set status = 'active' where id = ${divisionId}`;
+    const [f] = await sql<{ id: string }[]>`select id from fixtures where division_id = ${divisionId} order by fixture_no limit 1`;
+    await sql`update fixtures set scheduled_at = ${new Date("2026-09-20T09:00:00Z").toISOString()} where id = ${f!.id}`;
+    const desk = await getCompetitionDesk(auth, competitionId, new Date("2026-09-08T10:00:00Z"));
+    const d = desk.divisions.get(divisionId)!;
+    expect(d.phase).toBe("scheduled");
+    expect(d.attention).toContainEqual({ kind: "unscheduled", count: 5 });
   });
 
   it("regression #1: an all-decided league is finished, never 'nothing scheduled'", async () => {
@@ -168,7 +195,7 @@ describe.skipIf(!HAS_DB)("getCompetitionDesk", () => {
     expect(d.attention[0]).toMatchObject({ kind: "no_scorer", fixtureId: f!.id });
     expect(d.fixture_names[f!.id]?.fixture_no).toBe(1);
     expect(desk.in_play).toBe(1);
-    expect(competitionPhase(desk)).toBe("in_play");
+    expect(competitionPhase(desk)).toEqual({ kind: "in_play", n: 1 });
   });
 
   // Fix round 1, finding 1: DEFAULT_MATCH_MINUTES must come from

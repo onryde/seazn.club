@@ -101,6 +101,27 @@ describe("resolvePhase — rule order", () => {
   it("5 scheduled: fixtures exist, none today, none in play", () => {
     expect(resolvePhase(input())).toBe("scheduled");
   });
+  it("5 NOT scheduled: fixtures exist but none carry a time — setting_up, never scheduled (F1 fix)", () => {
+    // The exact live defect: a started division whose fixtures were all
+    // generated with no time read "Scheduled" next to a status line that
+    // said "nothing scheduled" — three contradicting facts in one row. No
+    // non-terminal fixture carries a scheduledAt, so this reads setting_up,
+    // which already carries the `unscheduled` attention that says so.
+    const fixtures = [fx({ id: "a", scheduledAt: null }), fx({ id: "b", scheduledAt: null })];
+    expect(resolvePhase(input({ fixtures }))).toBe("setting_up");
+  });
+  it("5 scheduled: one dated non-terminal fixture among several undated ones is enough", () => {
+    const fixtures = [fx({ id: "a", scheduledAt: null }), fx({ id: "b", scheduledAt: "2026-09-12T09:00:00Z" })];
+    expect(resolvePhase(input({ fixtures }))).toBe("scheduled");
+  });
+  it("5 NOT scheduled: a decided fixture's own past time does not count — it is terminal, not live", () => {
+    // Isolates the `status === "scheduled"` half of the F1 guard from the
+    // `scheduledAt !== null` half: without the status check, a division
+    // with only played fixtures (each of which once had a real kickoff
+    // time) would wrongly read "scheduled" here.
+    const fixtures = [fx({ id: "a", status: "decided", scheduledAt: "2026-09-01T09:00:00Z" }), fx({ id: "b", scheduledAt: null })];
+    expect(resolvePhase(input({ fixtures }))).toBe("setting_up");
+  });
   it("a decided fixture today does not make a match day", () => {
     // A second, still-unplayed fixture keeps this case out of the V1
     // all-played "finished" arm added above, so it still isolates rule 3.

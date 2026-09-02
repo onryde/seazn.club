@@ -5,14 +5,24 @@ import { plural } from "@/lib/i18n";
 import { PhasePill } from "@/components/v2/desk/phase-pill";
 import { NeedsYou, needsYouItems } from "@/components/v2/desk/needs-you";
 import { DivisionLedger } from "@/components/v2/desk/division-ledger";
-import type { CompetitionDesk, DeskDivision } from "@/server/usecases/competition-desk";
+import { resolvePhase, resolveAttention, type PhaseInput } from "@/lib/division-phase";
+import { statusLine } from "@/lib/division-status-line";
+import { competitionPhase, type CompetitionDesk, type DeskDivision } from "@/server/usecases/competition-desk";
 
 const div = (o: Partial<DeskDivision> = {}): DeskDivision => ({
   division_id: "d1", phase: "scheduled", attention: [], played: 10, total: 15, unscheduled: 0, in_play: 0,
   entrants: 6, awaiting_confirmation: 0, stage_kinds: ["league"], next: null, needs_draw_stage: null,
   fixture_names: {}, display_tz: "Europe/London", ...o,
 });
-const desk = (d: DeskDivision, inPlay = 0): CompetitionDesk => ({ org_tz: "Europe/London", in_play: inPlay, divisions: new Map([[d.division_id, d]]) });
+const desk = (d: DeskDivision, inPlay = 0, now = "2026-09-05T09:00:00Z"): CompetitionDesk => ({
+  org_tz: "Europe/London", in_play: inPlay, divisions: new Map([[d.division_id, d]]), now,
+});
+/** competitionPhase's own ladder needs more than one division to prove the
+ *  "earliest across divisions" and "match_day beats a dated fixture
+ *  elsewhere" steps — `desk()` above only ever seeds one. */
+const deskOf = (divisions: DeskDivision[], inPlay = 0, now = "2026-09-05T09:00:00Z"): CompetitionDesk => ({
+  org_tz: "Europe/London", in_play: inPlay, divisions: new Map(divisions.map((d) => [d.division_id, d])), now,
+});
 const names = [{ id: "d1", name: "Premier Division", slug: "premier-division" }];
 
 describe("PhasePill", () => {
@@ -37,6 +47,71 @@ describe("PhasePill", () => {
   });
   it("in_play carries the count", () => {
     expect(renderToStaticMarkup(<PhasePill dict={en} phase="in_play" inPlay={2} />)).toContain("2 in play");
+  });
+  it("competitionPhase minor fix: 'next' carries the pre-formatted date, not a phase word", () => {
+    const html = renderToStaticMarkup(<PhasePill dict={en} phase="next" when="Sat 12 Sep" />);
+    expect(html).toContain('data-phase="next"');
+    expect(html).toContain("Next Sat 12 Sep");
+  });
+});
+
+// competitionPhase minor fix (final review): the old implementation ranked
+// the four DivisionPhase words and printed whichever ranked lowest, so the
+// spec's own third ladder step — "the earliest next fixture date" — could
+// never render at all, and "Setting up" was reachable even with real dated
+// fixtures elsewhere (live repro: a competition 43 matches deep read
+// "Setting up" above a correctly-drawn "Needs draw" division). These pin
+// the ladder's actual step order, not just that SOME string comes out.
+describe("competitionPhase", () => {
+  it("amendment 3 (binding): an empty competition is setting_up, never finished", () => {
+    expect(competitionPhase(deskOf([]))).toEqual({ kind: "setting_up" });
+  });
+  it("in_play outranks everything, even a match-day division elsewhere", () => {
+    const live = div({ phase: "match_day" });
+    expect(competitionPhase(deskOf([live], 1))).toEqual({ kind: "in_play", n: 1 });
+  });
+  it("match_day outranks a dated next fixture in a different division", () => {
+    const onMatchDay = div({ division_id: "d1", phase: "match_day" });
+    const dated = div({
+      division_id: "d2", phase: "scheduled",
+      next: { home: "A", away: "B", court_label: null, scheduled_at: "2026-09-06T09:00:00Z", in_play: false },
+    });
+    expect(competitionPhase(deskOf([onMatchDay, dated]))).toEqual({ kind: "match_day" });
+  });
+  it("else: the EARLIEST next fixture date across divisions, not a ranked phase word", () => {
+    const later = div({
+      division_id: "d1", phase: "scheduled",
+      next: { home: "A", away: "B", court_label: null, scheduled_at: "2026-09-20T09:00:00Z", in_play: false },
+    });
+    const earlier = div({
+      division_id: "d2", phase: "scheduled",
+      next: { home: "C", away: "D", court_label: null, scheduled_at: "2026-09-12T09:00:00Z", in_play: false },
+    });
+    // Division map insertion order deliberately does NOT match date order —
+    // a naive "first division's next" implementation would return the wrong
+    // date here.
+    expect(competitionPhase(deskOf([later, earlier]))).toEqual({ kind: "next", at: "2026-09-12T09:00:00Z" });
+  });
+  it("a past-kicked-off or TBD-time next fixture is not a ladder answer (mirrors the F5 guard)", () => {
+    const past = div({
+      division_id: "d1", phase: "scheduled",
+      next: { home: "A", away: "B", court_label: null, scheduled_at: "2026-09-01T09:00:00Z", in_play: false },
+    });
+    const undated = div({
+      division_id: "d2", phase: "setting_up",
+      next: { home: "C", away: "D", court_label: null, scheduled_at: null, in_play: false },
+    });
+    expect(competitionPhase(deskOf([past, undated], 0, "2026-09-05T09:00:00Z"))).toEqual({ kind: "setting_up" });
+  });
+  it("all finished, with no live division left to date, reads finished", () => {
+    const a = div({ division_id: "d1", phase: "finished", next: null });
+    const b = div({ division_id: "d2", phase: "finished", next: null });
+    expect(competitionPhase(deskOf([a, b]))).toEqual({ kind: "finished" });
+  });
+  it("ladder has no answer — nothing live, nothing dated, not all finished — falls to setting_up (chosen: same 'nothing informative yet' state as the empty-competition case)", () => {
+    const settingUp = div({ division_id: "d1", phase: "setting_up", next: null });
+    const finished = div({ division_id: "d2", phase: "finished", next: null });
+    expect(competitionPhase(deskOf([settingUp, finished]))).toEqual({ kind: "setting_up" });
   });
 });
 
@@ -101,14 +176,13 @@ describe("DivisionLedger", () => {
   it("row carries the sport glyph, the status line, the phase and no monogram letter", () => {
     const d = div({ phase: "finished", played: 15, total: 15 });
     const html = renderToStaticMarkup(
-      <DivisionLedger dict={en} org="org" comp="comp" locale="en"
+      <DivisionLedger dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z"
         rows={[{ id: "d1", name: "Premier Division", slug: "premier-division", sportKey: "football", logoUrl: null, desk: d, statusLine: "15 of 15 played · complete" }]} />,
     );
     expect(html).toContain('data-testid="desk-ledger-row"');
     expect(html).toContain('data-phase="finished"');
     expect(html).toContain("⚽");
     expect(html).toContain("15 of 15 played · complete");
-    expect(html).not.toMatch(/Nothing scheduled yet/);
     expect(html).toContain('href="/o/org/c/comp/d/premier-division"');
     // V2 fix (review round 1): the pill is the one thing that must survive
     // every width, so it's rendered TWICE — inline under the name (visible
@@ -122,9 +196,47 @@ describe("DivisionLedger", () => {
     // — the page's existing "Divisions" heading owns the count now.
     expect(html).not.toContain("Divisions · 1");
   });
+  // F1 regression (final review, Critical), toothless-guard fix: the OLD
+  // assertion here was `not.toMatch(/Nothing scheduled yet/)` against a
+  // hand-typed, already-correct "15 of 15 played · complete" statusLine —
+  // that string lives only at entity-card.tsx's `card.next.none`, which
+  // this component never renders, on a FINISHED row that could never have
+  // produced it anyway. Vacuous twice over. This test drives the REAL
+  // `resolvePhase` + `statusLine` functions over the exact live repro (a
+  // started division, one active stage with 6 generated fixtures, none
+  // carrying a time) and checks the LIVE copy — lowercase, no "yet",
+  // "nothing scheduled" — never appears next to a played-progress count.
+  it("F1: a started division with generated-but-unscheduled fixtures never renders 'nothing scheduled' beside a played count", () => {
+    const phaseInput: PhaseInput = {
+      divisionStatus: "active",
+      stages: [{ id: "s1", name: "League", seq: 1, status: "active", hasFixtures: true, needsProposal: false }],
+      fixtures: Array.from({ length: 6 }, (_, i) => ({
+        id: `f${i}`, status: "scheduled", scheduledAt: null, eventCount: 0, matchMinutes: 90,
+      })),
+      now: "2026-09-05T09:00:00Z",
+      tz: "Europe/London",
+      awaitingRegistrations: 0,
+    };
+    const phase = resolvePhase(phaseInput);
+    const attention = resolveAttention(phaseInput);
+    const line = statusLine(en, {
+      phase, played: 0, total: 6, unscheduled: 6, inPlay: 0, entrants: 4,
+      next: null, needsDrawStageName: null, locale: "en", displayTz: "Europe/London",
+    });
+    const d = div({ phase, played: 0, total: 6, unscheduled: 6, next: null, attention });
+    const html = renderToStaticMarkup(
+      <DivisionLedger dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z"
+        rows={[{ id: "d1", name: "Premier", slug: "premier", sportKey: "football", logoUrl: null, desk: d, statusLine: line }]} />,
+    );
+    expect(phase).toBe("setting_up");
+    expect(html).toContain('data-phase="setting_up"');
+    expect(html).not.toMatch(/nothing scheduled/i);
+    expect(html).toContain("0 of 6 played");
+    expect(html).toContain("6 unscheduled");
+  });
   it("renders a row without pill or next line when the desk summary is unavailable", () => {
     const html = renderToStaticMarkup(
-      <DivisionLedger dict={en} org="org" comp="comp" locale="en"
+      <DivisionLedger dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z"
         rows={[{ id: "d1", name: "X", slug: "x", sportKey: "football", logoUrl: null, desk: null, statusLine: "10 of 15 played" }]} />,
     );
     expect(html).toContain('data-testid="desk-ledger-row"');
@@ -134,7 +246,7 @@ describe("DivisionLedger", () => {
   });
   it("uses the uploaded logo instead of the glyph when present", () => {
     const html = renderToStaticMarkup(
-      <DivisionLedger dict={en} org="org" comp="comp" locale="en"
+      <DivisionLedger dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z"
         rows={[{ id: "d1", name: "X", slug: "x", sportKey: "football", logoUrl: "https://cdn/x.png", desk: div(), statusLine: "s" }]} />,
     );
     expect(html).toContain('src="https://cdn/x.png"');
@@ -146,7 +258,7 @@ describe("DivisionLedger", () => {
       attention: [{ kind: "needs_draw", stageId: "fin", stageName: "Finals" }],
     });
     const html = renderToStaticMarkup(
-      <DivisionLedger dict={en} org="org" comp="comp" locale="en"
+      <DivisionLedger dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z"
         rows={[{
           id: "d1", name: "U16 Cup", slug: "u16-cup", sportKey: "football", logoUrl: null, desk: d,
           statusLine: "28 of 28 played · Finals not drawn",
@@ -168,7 +280,7 @@ describe("DivisionLedger", () => {
   it("mobile action button: absent without a red attention, 'Compute proposal' with needs_draw", () => {
     const noAttention = div({ phase: "scheduled", attention: [] });
     const htmlNone = renderToStaticMarkup(
-      <DivisionLedger dict={en} org="org" comp="comp" locale="en"
+      <DivisionLedger dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z"
         rows={[{ id: "d1", name: "Premier Division", slug: "premier-division", sportKey: "football", logoUrl: null, desk: noAttention, statusLine: "s" }]} />,
     );
     expect(htmlNone).not.toContain("Compute proposal");
@@ -176,7 +288,7 @@ describe("DivisionLedger", () => {
 
     const needsDraw = div({ phase: "setting_up", attention: [{ kind: "needs_draw", stageId: "fin", stageName: "Finals" }] });
     const htmlAction = renderToStaticMarkup(
-      <DivisionLedger dict={en} org="org" comp="comp" locale="en"
+      <DivisionLedger dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z"
         rows={[{ id: "d1", name: "U16 Cup", slug: "u16-cup", sportKey: "football", logoUrl: null, desk: needsDraw, statusLine: "s" }]} />,
     );
     expect(htmlAction).toContain("Compute proposal");
@@ -186,7 +298,7 @@ describe("DivisionLedger", () => {
     const rowA = div({ phase: "finished", played: 15, total: 15, next: null });
     const rowB = div({ division_id: "d2", phase: "finished", played: 28, total: 28, next: null });
     const html = renderToStaticMarkup(
-      <DivisionLedger dict={en} org="org" comp="comp" locale="en"
+      <DivisionLedger dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z"
         rows={[
           { id: "d1", name: "Premier Division", slug: "premier-division", sportKey: "football", logoUrl: null, desk: rowA, statusLine: "s1" },
           { id: "d2", name: "U16 Cup", slug: "u16-cup", sportKey: "football", logoUrl: null, desk: rowB, statusLine: "s2" },
@@ -204,7 +316,10 @@ describe("DivisionLedger", () => {
     });
     const withoutNext = div({ division_id: "d2", phase: "finished", next: null });
     const html = renderToStaticMarkup(
-      <DivisionLedger dict={en} org="org" comp="comp" locale="en"
+      // `now` pinned before the fixture's 2026-09-12 kick-off — F5's fix
+      // hides a past-kickoff "next", so this test's own passage of time
+      // must not silently start relying on the real wall clock.
+      <DivisionLedger dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z"
         rows={[
           { id: "d1", name: "Premier Division", slug: "premier-division", sportKey: "football", logoUrl: null, desk: withNext, statusLine: "s1" },
           { id: "d2", name: "U16 Cup", slug: "u16-cup", sportKey: "football", logoUrl: null, desk: withoutNext, statusLine: "s2" },
@@ -217,5 +332,55 @@ describe("DivisionLedger", () => {
     // The row WITHOUT a next fixture still emits the (empty) cell.
     expect(row2).not.toContain("Riverside FC");
     expect(row2).toMatch(/<p class="text-xs text-slate-900"><\/p>/);
+  });
+  // F5 fix (final review, Important): card-stats.ts's shared "next fixture"
+  // query has no `>= now()` floor and can hand back a fixture whose
+  // kick-off already passed, or one with no time at all — division-ledger's
+  // OWN use of that data is what's fixed here (card-stats.ts stays
+  // untouched, other surfaces depend on its current shape).
+  it("F5: a past kick-off never renders as Next", () => {
+    const past = div({
+      phase: "scheduled",
+      next: { home: "Riverside FC", away: "Harbour CC", court_label: null, scheduled_at: "2026-09-02T11:27:00Z", in_play: false },
+    });
+    const html = renderToStaticMarkup(
+      <DivisionLedger dict={en} org="org" comp="comp" locale="en" now="2026-09-02T12:00:00Z"
+        rows={[{ id: "d1", name: "Premier", slug: "premier", sportKey: "football", logoUrl: null, desk: past, statusLine: "s" }]} />,
+    );
+    expect(html).not.toContain("Riverside FC");
+    expect(html).not.toContain("minmax(0,1.4fr)");
+  });
+  it("F5: a next fixture with no scheduled_at (TBD time) never renders as Next", () => {
+    const undated = div({
+      phase: "scheduled",
+      next: { home: "Riverside FC", away: "Harbour CC", court_label: null, scheduled_at: null, in_play: false },
+    });
+    const html = renderToStaticMarkup(
+      <DivisionLedger dict={en} org="org" comp="comp" locale="en" now="2026-09-02T12:00:00Z"
+        rows={[{ id: "d1", name: "Premier", slug: "premier", sportKey: "football", logoUrl: null, desk: undated, statusLine: "s" }]} />,
+    );
+    expect(html).not.toContain("Riverside FC");
+  });
+  it("F5: a future, correctly-timed kick-off still renders as Next", () => {
+    const future = div({
+      phase: "scheduled",
+      next: { home: "Riverside FC", away: "Harbour CC", court_label: null, scheduled_at: "2026-09-02T12:30:00Z", in_play: false },
+    });
+    const html = renderToStaticMarkup(
+      <DivisionLedger dict={en} org="org" comp="comp" locale="en" now="2026-09-02T12:00:00Z"
+        rows={[{ id: "d1", name: "Premier", slug: "premier", sportKey: "football", logoUrl: null, desk: future, statusLine: "s" }]} />,
+    );
+    expect(html).toContain("Riverside FC");
+  });
+  it("F5: an in-play fixture always renders as Now, even with no scheduled_at", () => {
+    const live = div({
+      phase: "match_day",
+      next: { home: "Riverside FC", away: "Harbour CC", court_label: null, scheduled_at: null, in_play: true },
+    });
+    const html = renderToStaticMarkup(
+      <DivisionLedger dict={en} org="org" comp="comp" locale="en" now="2026-09-02T12:00:00Z"
+        rows={[{ id: "d1", name: "Premier", slug: "premier", sportKey: "football", logoUrl: null, desk: live, statusLine: "s" }]} />,
+    );
+    expect(html).toContain("Now: Riverside FC v Harbour CC");
   });
 });

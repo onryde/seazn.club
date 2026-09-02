@@ -557,6 +557,7 @@
   "desk.phase.match_day": "Wedstrijddag",
   "desk.phase.finished": "Afgerond",
   "desk.phase.in_play": "{n} bezig",
+  "desk.phase.next": "Volgende {when}",
   "desk.pill.needs_draw": "Loting nodig",
   "desk.pill.no_scorer": "Geen scorer",
   "desk.status.finished": "{played} van {total} gespeeld · afgerond",

@@ -1432,6 +1432,7 @@ export type DictionaryKey =
   | "desk.phase.finished"
   | "desk.phase.in_play"
   | "desk.phase.match_day"
+  | "desk.phase.next"
   | "desk.phase.scheduled"
   | "desk.phase.setting_up"
   | "desk.pill.needs_draw"

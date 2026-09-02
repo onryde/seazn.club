@@ -30,7 +30,7 @@ const BAR: Record<DeskDivision["phase"], string> = {
   setting_up: "bg-purple-600", scheduled: "bg-purple-600", match_day: "bg-amber-600", finished: "bg-green-700",
 };
 
-function nextLine(dict: Dict, d: DeskDivision, locale: string): string {
+function nextLine(dict: Dict, d: DeskDivision, locale: string, nowMs: number): string {
   // V4 fix (review round 1): nothing left to schedule is not itself
   // information — the row already says "finished" / "N of N played". An
   // empty cell here (rather than "Nothing scheduled next" on every settled
@@ -40,7 +40,20 @@ function nextLine(dict: Dict, d: DeskDivision, locale: string): string {
   const home = d.next.home ?? "—";
   const away = d.next.away ?? "—";
   if (d.next.in_play) return t(dict, "desk.ledger.now", { home, away });
-  const when = d.next.scheduled_at ? whenLabel(d.next.scheduled_at, locale, d.display_tz) : "";
+  // F5 fix (final review, Important): `d.next` is card-stats.ts's shared
+  // "next fixture" query (out of this wave's scope to change — see
+  // card-stats.ts:145-151) — it carries no `>= now()` floor and can name a
+  // fixture whose kick-off has already passed, or one with no time at all.
+  // A past kick-off is not "next", and neither is an undated one (the
+  // ledger's own copy already contradicted both live: "result missing —
+  // the match window has passed" sat directly above "Next: … 11:27" for the
+  // SAME fixture). Same malformed-instant guard `statusLine` got in
+  // b2fdef833, applied here at the one call site that renders it.
+  const at = d.next.scheduled_at;
+  if (!at) return "";
+  const ms = Date.parse(at);
+  if (Number.isNaN(ms) || ms < nowMs) return "";
+  const when = whenLabel(at, locale, d.display_tz);
   return t(dict, "desk.ledger.next", { when, home, away }).replace("  ", " ");
 }
 
@@ -62,7 +75,9 @@ function redAction(dict: Dict, d: DeskDivision, org: string, comp: string, slug:
   return { label: t(dict, "desk.needsYou.no_scorer.action"), href: routes.fixture(org, comp, slug, f?.fixture_no ?? 0) };
 }
 
-export function DivisionLedger({ dict, rows, org, comp, locale }: { dict: Dict; rows: LedgerRow[]; org: string; comp: string; locale: string }) {
+export function DivisionLedger({
+  dict, rows, org, comp, locale, now,
+}: { dict: Dict; rows: LedgerRow[]; org: string; comp: string; locale: string; now: string }) {
   // Fix round 2: nextLine() computed ONCE per row here, reused below — never
   // re-derived, and never called twice for the same row. `hasNext` decides
   // the WHOLE ledger's desktop grid template (not a per-row template, which
@@ -70,7 +85,14 @@ export function DivisionLedger({ dict, rows, org, comp, locale }: { dict: Dict; 
   // fixture): with V4's fix (empty string, not "Nothing scheduled next"),
   // a competition where nothing has a next fixture must not reserve a
   // ~1.4fr track for a column no row will ever fill.
-  const nextByRow = rows.map((r) => (r.desk ? nextLine(dict, r.desk, locale) : ""));
+  // `now` is REQUIRED (F5 fix), not defaulted to `Date.now()` here — a
+  // component reading the wall clock during its own render is impure
+  // (react-hooks/purity) and non-deterministic across re-renders/replay.
+  // The page captures one `now` and passes it down explicitly so the
+  // "is this kick-off past?" check (below) agrees with whatever instant
+  // the rest of the render used.
+  const nowMs = Date.parse(now);
+  const nextByRow = rows.map((r) => (r.desk ? nextLine(dict, r.desk, locale, nowMs) : ""));
   const hasNext = nextByRow.some((n) => n !== "");
   const desktopGridCols = hasNext
     ? "md:grid-cols-[36px_1fr_140px_130px_minmax(0,1.4fr)_auto]"

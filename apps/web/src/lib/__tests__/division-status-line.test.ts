@@ -35,6 +35,35 @@ describe("statusLine", () => {
   it("match day counts in play and appends unscheduled", () => {
     expect(statusLine(en, { ...base, phase: "match_day", inPlay: 2, unscheduled: 3 })).toBe("10 of 15 played · 2 in play · 3 unscheduled");
   });
+  it("match day minor fix: zero in play is an empty cell, not '0 in play'", () => {
+    const s = statusLine(en, { ...base, phase: "match_day", inPlay: 0, next: null });
+    expect(s).toBe("10 of 15 played");
+    expect(s).not.toMatch(/in play/);
+  });
+  it("match day with zero in play still appends the unscheduled suffix", () => {
+    expect(statusLine(en, { ...base, phase: "match_day", inPlay: 0, unscheduled: 2, next: null })).toBe("10 of 15 played · 2 unscheduled");
+  });
+
+  // F1 fix (final review, Critical): setting_up is now reachable for a
+  // division that already has fixtures (division-phase.ts rule 5's
+  // fallback) — the live defect was a "Scheduled" pill next to "nothing
+  // scheduled" text; this pins the replacement copy and the hard
+  // requirement that the two facts never contradict each other again.
+  it("setting up with fixtures states the played count, not the entrant count", () => {
+    const s = statusLine(en, { ...base, phase: "setting_up", played: 0, total: 6, entrants: 4, next: null });
+    expect(s).toBe("0 of 6 played");
+    expect(s).not.toContain("Setting up");
+    expect(s).not.toContain("entrant");
+  });
+  it("setting up with fixtures appends the unscheduled suffix and never says nothing scheduled", () => {
+    const s = statusLine(en, { ...base, phase: "setting_up", played: 0, total: 6, unscheduled: 6, next: null });
+    expect(s).toBe("0 of 6 played · 6 unscheduled");
+    expect(s).not.toMatch(/nothing scheduled/i);
+  });
+  it("setting up with SOME fixtures played still states the count, not entrants", () => {
+    const s = statusLine(en, { ...base, phase: "setting_up", played: 2, total: 6, unscheduled: 4, next: null });
+    expect(s).toBe("2 of 6 played · 4 unscheduled");
+  });
   it("scheduled leads with the next kick-off in the display zone", () => {
     expect(statusLine(en, base)).toBe("Next Sat 12 Sep 10:00 · 10 of 15 played");
   });
