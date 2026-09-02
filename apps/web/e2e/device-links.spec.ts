@@ -120,3 +120,78 @@ test("device links are Pro-only", async ({ browser }) => {
     await ctx.close();
   }
 });
+
+// The guard that keeps "scoring detail is free" from meaning "open scoring":
+// a dl_ token is minted for ONE fixture and must not reach another, even a
+// sibling in the same division and org. The unit suite drives
+// requireFixtureActor directly; only this test crosses the real HTTP boundary,
+// where routing, auth resolution and the HttpError→wire mapping all run.
+test("a device link cannot score a fixture it does not own", async ({ request, playwright }) => {
+  const seeded = await seedScoredDivision(request, ["Kilo", "Lima", "Mike", "November"], {
+    decide: false,
+  });
+  const gen = await apiJson<{ fixtures: { id: string }[] }>(
+    request,
+    `/api/v1/stages/${seeded.stageId}/generate`,
+    "POST",
+  );
+  const fixtureIds = gen.data!.fixtures.map((f) => f.id);
+  // Two fixtures is the premise of the whole test — assert it rather than let
+  // `other` come back undefined and the refusal be about a malformed id.
+  expect(fixtureIds.length).toBeGreaterThan(1);
+  const own = fixtureIds[0]!;
+  const other = fixtureIds[1]!;
+
+  const minted = await apiJson<{ secret: string }>(
+    request,
+    `/api/v1/fixtures/${own}/device-links`,
+    "POST",
+    { label: "Court 9" },
+  );
+  expect(minted.status).toBe(201);
+  const secret = minted.data!.secret;
+
+  const dlApi = await playwright.request.newContext({
+    baseURL: BASE,
+    extraHTTPHeaders: { Authorization: `Bearer ${secret}` },
+  });
+  try {
+    // Read the victim's ledger with the EDITOR's context, before and after —
+    // the link itself is not allowed to look, so it cannot be the witness.
+    const before = await apiJson<{ last_seq: number }>(request, `/api/v1/fixtures/${other}/state`);
+    expect(before.status).toBe(200);
+
+    const refused = await dlApi.post(`/api/v1/fixtures/${other}/events`, {
+      data: {
+        expected_seq: before.data!.last_seq,
+        type: "generic.result",
+        payload: { p1Score: 9, p2Score: 0 },
+      },
+    });
+    expect(refused.status()).toBe(403);
+    const body = (await refused.json()) as { error?: { code?: string; message?: string } };
+    expect(body.error?.code).toBe("FORBIDDEN");
+    expect(body.error?.message).toBe("This device link is for a different fixture");
+
+    // The refusal is a shut door, not a logged complaint: nothing landed.
+    const after = await apiJson<{ last_seq: number }>(request, `/api/v1/fixtures/${other}/state`);
+    expect(after.data!.last_seq).toBe(before.data!.last_seq);
+
+    // The same door refuses reads, so the link cannot even watch the fixture.
+    const peek = await dlApi.get(`/api/v1/fixtures/${other}/state`);
+    expect(peek.status()).toBe(403);
+
+    // Control: the token is live and the division is scorable — it writes to
+    // its OWN fixture. Without this, a 403 from an expired link, an unstarted
+    // division or a bad payload would read as the ownership refusal.
+    const ownState = await dlApi.get(`/api/v1/fixtures/${own}/state`);
+    expect(ownState.ok()).toBe(true);
+    const lastSeq = ((await ownState.json()) as { data: { last_seq: number } }).data.last_seq;
+    const allowed = await dlApi.post(`/api/v1/fixtures/${own}/events`, {
+      data: { expected_seq: lastSeq, type: "generic.result", payload: { p1Score: 2, p2Score: 1 } },
+    });
+    expect(allowed.status()).toBe(201);
+  } finally {
+    await dlApi.dispose();
+  }
+});
