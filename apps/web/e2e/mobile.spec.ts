@@ -27,6 +27,7 @@ import {
   measureHitTargets,
 } from "./scorepad-a11y-kit";
 import { V3_SKIN_CASES, type V3SkinRosterSlot } from "./v3-skin-catalog";
+import { WIDTH_MATRIX_CLOCK_SPORTS } from "./v3-width-matrix-coverage";
 
 // v3/02 §4 viewport gate — runs ONLY in the mobile-se / mobile-14 projects
 // (375×667, 390×844). Every audited route must render with zero page-level
@@ -1262,7 +1263,7 @@ test("cricket v3 pad: tiles + over-summary sheet + context strip hold the 44px f
   // would say "Over-by-over" over a pad that has just recorded a ball.
   const modeChip = pad.locator('[data-role="context-chip"][data-slot-kind="mode"]');
   await expect(modeChip, "the pad must state which scoring mode this innings locked into").toHaveCount(1);
-  await expect(modeChip).toHaveText("Ball-by-ball");
+  await expect(modeChip).toHaveText("Scoring: Ball-by-ball");
   for (let i = 0; i < chipCount; i++) {
     await assertFloor(chips.nth(i), `context chip ${i}`);
   }
@@ -3493,10 +3494,11 @@ function v3Sheet(page: Page): Locator {
 // floor with zero headroom (reference_v3_pad_44px_floor_has_zero_headroom).
 // It is therefore the one control here most likely to go red on a restyle,
 // and the one no other project measures at 320px.
-for (const [sportKey, short] of [
-  ["hockey", "HK"],
-  ["icehockey", "IH"],
-] as const) {
+// WS-M fix round 1, item 3: the pair comes from `v3-width-matrix-coverage.ts`,
+// not a literal here — that module is what `width-matrix-totality.test.ts` pins
+// against the skin registry, and reading it back is what stops the declaration
+// there from drifting away from this loop.
+for (const [sportKey, short] of WIDTH_MATRIX_CLOCK_SPORTS) {
   test(`${sportKey} v3 pad: the clock bar, goal tiles and the suspension sheet's class ladder hold the 44px floor, no horizontal scroll`, async ({
     page,
     request,

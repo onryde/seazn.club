@@ -230,7 +230,7 @@ test(
     await expect(
       pad(page).locator('[data-role="context-chip"][data-slot-kind="mode"]'),
       "a ball-opened innings must say it is ball-by-ball",
-    ).toHaveText("Ball-by-ball");
+    ).toHaveText("Scoring: Ball-by-ball");
 
     const overOneBalls = (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "cricket.ball");
     expect(overOneBalls, "five deliveries = five cricket.ball events, no more, no fewer").toHaveLength(5);
@@ -786,7 +786,7 @@ test(
     // the same chip read nothing at all a few lines above, before this
     // summary locked the innings.
     await expect(modeChip, "a coarse innings must say so").toHaveCount(1);
-    await expect(modeChip).toHaveText("Over-by-over");
+    await expect(modeChip).toHaveText("Scoring: Over-by-over");
     await expect(
       pad(page).locator('[data-role="context-slot-message"][data-slot-id="mode"]'),
       "and explains that the lock happened when the innings began",

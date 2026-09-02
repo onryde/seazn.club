@@ -1497,6 +1497,35 @@ describe("R8 — buildContext states the innings' locked scoring mode", () => {
     expect(slot.messageTone).toBe("info"); // a TIER, not a fault — badminton's own precedent
   });
 
+  // WS-M fix round 1, item 2 (controller ruling): SUPPRESS once the innings is
+  // closed. `currentInnings` deliberately falls back to the JUST-CLOSED
+  // innings (its own doc), so without this the chip renders a mode sourced
+  // from an innings nobody is recording any more — and the NEXT innings may
+  // open in the other lane, so the chip would state the wrong mode for the
+  // one the scorer is about to record. It also added a fourth message line
+  // under the three identical "innings is closed" lines.
+  it("SUPPRESSED once the innings is closed — the strip still renders, and still names the real cause, but states no mode", () => {
+    // Same fixture shape the file's own closed-innings blocks use: TWO closed
+    // innings under the default one-innings-per-side cfg, so nothing further
+    // is due and `buildContext` returns a real closure spec rather than the
+    // strip-less between-innings window.
+    const v = view({ state: state({ innings: [innings({ closed: true }), innings({ closed: true })] }) });
+    const spec = buildContext(v, t)!;
+    // Fixture guards, both directions: this IS the closed-but-rendering state
+    // (or the assertion below would pass for the wrong reason), and the fold
+    // still reports a real lane (so suppression is what removes the slot, not
+    // an "unopened" innings).
+    expect(spec, "fixture guard: the strip itself renders here").not.toBeNull();
+    expect(spec.slots.find((s) => s.id === "striker")!.message).toBe(t("pad.cricket.context.innings.closed"));
+    expect(inningsFidelity(currentInnings(state({ innings: [innings({ closed: true }), innings({ closed: true })] })))).toBe("fine");
+    expect(modeSlotOf(spec)).toBeNull();
+  });
+
+  it("the same fixture WITHOUT closed:true does carry the mode slot — proving the suppression above is a genuine gate, not a vacuous check", () => {
+    const spec = buildContext(view({ state: state({ innings: [innings({ closed: true }), innings()] }) }), t)!;
+    expect(modeSlotOf(spec)).not.toBeNull();
+  });
+
   it("both lanes' four keys resolve to real, DISTINCT English copy in the shipped dictionary", async () => {
     const en = (await import("@/dictionaries/en/ui.json")).default as Record<string, string>;
     const keys = [

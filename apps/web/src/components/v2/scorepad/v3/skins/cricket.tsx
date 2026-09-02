@@ -1944,6 +1944,21 @@ const MODE_COPY: Record<Exclude<InningsFidelity, "unopened">, { label: string; m
 };
 
 function modeSlot(innings: CricketInningsShape | null, t: TFn): ContextSlot | null {
+  // WS-M fix round 1, item 2 (controller ruling, 2026-09-02): SUPPRESS once
+  // the innings is closed. The strip answers "what am I recording right now",
+  // and once the innings is closed nothing is being recorded. Worse,
+  // `currentInnings` (above) deliberately falls back to the JUST-CLOSED
+  // innings for the display path, and the NEXT innings may be opened in the
+  // OTHER lane — so a chip sourced from the closed one is not merely
+  // redundant, it states the wrong mode for the innings the scorer is about
+  // to record. That is the D-17 family: a fact rendered where it does not
+  // belong. It also stacked a fourth message line under the three identical
+  // "This innings is closed." lines the closure gate already renders.
+  //
+  // Checked HERE rather than at the `buildContext` call site (which has its
+  // own `inningsClosed`) so the rule travels with the slot: a second caller
+  // cannot forget it.
+  if (innings?.closed === true) return null;
   const fidelity = inningsFidelity(innings);
   if (fidelity === "unopened") return null;
   const copy = MODE_COPY[fidelity];
@@ -1951,7 +1966,12 @@ function modeSlot(innings: CricketInningsShape | null, t: TFn): ContextSlot | nu
     id: "mode",
     kind: "mode",
     label: copy.label,
-    pool: "onfield", // unused — a mode slot never opens a picker (ContextSlot.kind)
+    // STRUCTURALLY DEAD, kept only because `ContextSlot.pool` is required
+    // (../types.ts). A mode slot is never `activeSlot` (`isStatic`,
+    // ../context-strip.tsx), so `resolvePool` never sees this value and no
+    // picker can ever open on it. Reviewed and left as-is rather than making
+    // `pool` optional, which would touch every other slot's contract.
+    pool: "onfield",
     required: false,
     readOnly: true,
     message: t(copy.message),
