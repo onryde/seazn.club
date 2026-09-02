@@ -1987,6 +1987,22 @@ function checkRegistration(p: PackShapeOut, ctx: Ctx): void {
   }
 }
 
+/**
+ * How many fixtures a circle-method round robin mints for `entrants` over
+ * `legs` — every pair meets once per leg, and an odd field's bye is not a
+ * fixture (`packages/engine/src/scheduling/roundrobin.ts`).
+ *
+ * Here, in the contract file, rather than beside either of its two callers:
+ * `lib/pack-io.ts` derives a runner's expected fixture count from it and
+ * `lib/validate-pack.ts` warns when a pack's own stream count disagrees with
+ * it, and two copies of one arithmetic is the parallel-vocabulary defect. The
+ * REFUSALS (a non-league stage, a leg count past the product's clamp) stay with
+ * the caller that has an author to talk to; this is only the arithmetic.
+ */
+export function roundRobinFixtureCount(entrants: number, legs: number): number {
+  return ((entrants * (entrants - 1)) / 2) * legs;
+}
+
 export const PackSchema = PackShape.superRefine((p, ctx) => {
   checkRefsUnique(p, ctx);
   checkEntrantDivisions(p, ctx);

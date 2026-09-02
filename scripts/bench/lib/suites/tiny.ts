@@ -129,6 +129,28 @@ export function tinyPlan(pack: Pack): TinySeedPlan {
   };
 }
 
+/**
+ * ADDENDUM 1's comparison, as a pure function.
+ *
+ * `null` = the generator minted what the pack implies. A message = what
+ * diverged, naming BOTH numbers and the legs that produced the expectation.
+ *
+ * Extracted from the HTTP path because that is where it was unreachable: the
+ * review inverted the operator in situ and the whole suite stayed green. The
+ * DERIVATION (`expectedFixtureCount`) was well covered; the line that CONSUMES
+ * it was not — and consuming it wrongly is exactly what shipped before, as
+ * `!== 1` against a pack declaring three. A silent inversion here reports a
+ * GREEN `_tiny` while the product mints the wrong number of fixtures, which is
+ * the one failure the addendum exists to prevent.
+ */
+export function fixtureCountIssue(actual: number, plan: TinySeedPlan): string | null {
+  if (actual === plan.expectedFixtures) return null;
+  return (
+    `expected ${plan.expectedFixtures} fixture(s) from the pack's ${plan.entrants.length}-entrant ` +
+    `league over ${plan.stage.config["legs"] ?? 1} leg(s), got ${actual}`
+  );
+}
+
 export type TinyPackStage =
   | { readonly ok: true; readonly plan: TinySeedPlan; readonly warnings: readonly string[] }
   | { readonly ok: false; readonly errors: readonly string[]; readonly warnings: readonly string[] };
@@ -260,13 +282,11 @@ export async function runTinySuite(input: TinySuiteInput): Promise<SuiteReport> 
     const generated = await request<GenerateOut>(base, s, `/api/v1/stages/${stage.id}/generate`, { method: "POST" });
     // DERIVED from the pack (entrants choose two, times its declared legs) —
     // never a constant. This assertion read `!== 1` while the pack declared
-    // three, which is a bound asserting yesterday's numbers.
-    if (generated.fixtures.length !== plan.expectedFixtures) {
-      errors.push(
-        `expected ${plan.expectedFixtures} fixture(s) from the pack's ${plan.entrants.length}-entrant ` +
-          `league over ${plan.stage.config["legs"] ?? 1} leg(s), got ${generated.fixtures.length}`,
-      );
-    }
+    // three, which is a bound asserting yesterday's numbers. The comparison
+    // itself lives in `fixtureCountIssue` so it sits on the TESTABLE side of
+    // the network boundary; in situ it could be inverted with nothing red.
+    const countIssue = fixtureCountIssue(generated.fixtures.length, plan);
+    if (countIssue !== null) errors.push(countIssue);
     timings.seedMs = Math.round(performance.now() - seedStart);
 
     const scheduleStart = performance.now();

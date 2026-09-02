@@ -31,7 +31,7 @@
 // emit-dependent syntax; `.ts` on every relative import; nothing from apps/web.
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import type { Pack } from "./pack-schema.ts";
+import { roundRobinFixtureCount, type Pack } from "./pack-schema.ts";
 import { validatePack, type PackFinding } from "./validate-pack.ts";
 
 // ---------------------------------------------------------------------------
@@ -183,7 +183,5 @@ export function expectedFixtureCount(pack: Pack, divisionRef: string, stageRef: 
     );
   }
   const entrants = pack.entrants.filter((e) => e.divisionRef === divisionRef).length;
-  // The circle method pairs every entrant with every other exactly once per
-  // leg (`scheduling/roundrobin.ts`); an odd field's bye is not a fixture.
-  return ((entrants * (entrants - 1)) / 2) * legs;
+  return roundRobinFixtureCount(entrants, legs);
 }

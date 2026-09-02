@@ -175,6 +175,7 @@ import {
 import {
   fixtureKey,
   PackSchema,
+  roundRobinFixtureCount,
   type Pack,
   type PackClaim,
   type PackDivision,
@@ -939,6 +940,48 @@ export function validatePack(raw: unknown, opts: ValidatePackOptions): PackValid
           `pack declares no expected.tables row for it — so nothing asserts its points or its tie ` +
           `order, and the derived-standings stage is the ONLY one that catches an end-to-end ` +
           `reversed stream`,
+      );
+    }
+  }
+
+  // A LEAGUE stage whose declared streams do not match the fixture count its
+  // own entrants and legs imply. Nothing checked this: `_tiny` declares
+  // `legs: 3` AND three streams and is consistent because it was AUTHORED that
+  // way, not because anything compared the two. Move `legs` without moving the
+  // streams and the pack validates green offline and reds only minutes into a
+  // live run against a real server, which is the whole class stage 0 exists to
+  // kill in seconds.
+  //
+  // A WARNING rather than an error, deliberately: a real suite pack may
+  // legitimately carry only the fixtures whose events were archived, and
+  // whether a partially-recorded season is an authoring defect is a human
+  // judgement. It says both numbers so a reader can make it.
+  for (const division of pack.divisions) {
+    const entrants = pack.entrants.filter((e) => e.divisionRef === division.ref).length;
+    for (const stage of division.stages) {
+      if (stage.kind !== "league") continue; // a bracket's count is a bracket shape; a group's is per pool
+      const legs = stage.config["legs"];
+      // Skip rather than guess when the pack's own legs are unusable. The
+      // product clamps to 8 (usecases/stages.ts:756), so past that the implied
+      // count is not the count the generator would mint and a warning built
+      // from it would be wrong rather than merely unhelpful.
+      if (!(legs === undefined || (typeof legs === "number" && Number.isInteger(legs) && legs >= 1 && legs <= 8))) {
+        continue;
+      }
+      const bound = streamsOf(division.ref).filter(
+        (st) => stageOfStream.get(fixtureKey(st.divisionRef, st.fixtureExtKey))?.ref === stage.ref,
+      );
+      if (bound.length === 0) continue; // an unplayed or unbindable stage is already reported elsewhere
+      const implied = roundRobinFixtureCount(entrants, legs ?? 1);
+      if (bound.length === implied) continue;
+      add(
+        "warning",
+        "streams.count_mismatch",
+        `divisions[ref=${division.ref}].stages[ref=${stage.ref}]`,
+        `league stage "${stage.ref}" implies ${implied} fixture(s) — ${entrants} entrants over ` +
+          `${legs ?? 1} leg(s) — and the pack carries ${bound.length} stream(s) for it. The seeded ` +
+          `run mints fixtures from the entrants and the legs, so a pack whose streams disagree ` +
+          `matches fewer of them by ext_key than it appears to`,
       );
     }
   }

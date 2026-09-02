@@ -893,7 +893,16 @@ describe("validatePack — specials", () => {
       return pack;
     };
     // Control: alpha DID play rr-r3-c1, so the same claim shape is green.
-    expectClean(validatePack(withCharlie("e-alpha"), TINY), TINY_NOT_DERIVED);
+    //
+    // The third entrant makes this pack's league stage imply nine fixtures
+    // (3 entrants over 3 legs) against the three streams `_tiny` carries, so
+    // stage 0 warns — correctly, and by construction of the fixture rather
+    // than by defect. Spelled out rather than filtered away: `expectClean`
+    // asserts the EXACT warning list on purpose.
+    expectClean(validatePack(withCharlie("e-alpha"), TINY), [
+      "streams.count_mismatch",
+      ...TINY_NOT_DERIVED,
+    ]);
 
     const finding = onlyError(validatePack(withCharlie("e-charlie"), TINY).findings);
     expect(finding.code).toBe("special.squads");
@@ -1058,6 +1067,13 @@ describe("validatePack — the standings derivation mirrors the product's own", 
       expected: Record<string, unknown>;
     };
     expect(pack.divisions[0]!["tiebreakers"]).toBeUndefined();
+    // Two entrants meeting twice IS a two-leg league, and the stage now says
+    // so. Added when stage 0 learned to compare a league stage's declared
+    // streams against the count its entrants and legs imply
+    // (`streams.count_mismatch`): this fixture was internally inconsistent —
+    // a single-leg stage carrying two meetings — and the new warning was
+    // right to say so. `legs` feeds nothing else on the fold path.
+    (pack.divisions[0]!["stages"] as Record<string, unknown>[])[0]!["config"] = { legs: 2 };
     pack.streams = [stream("f1", "e1", "e2", 1, 0), stream("f2", "e2", "e1", 5, 0)];
     pack.expected["matches"] = [
       { divisionRef: "d1", fixtureExtKey: "f1", outcome: { kind: "win", winner: "e1", loser: "e2" } },

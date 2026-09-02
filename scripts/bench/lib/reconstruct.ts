@@ -197,6 +197,44 @@ const scoreText = (set: ReconstructedSet): string => `${set.home}–${set.away}`
  */
 const MAX_SET_CELLS = 20_000;
 
+// ---------------------------------------------------------------------------
+// The generator's two INTERNAL refusals
+//
+// Both used to sit inline, and the review's mutation sweep found each of them
+// surviving ALONE with zero red — the textbook "two guards covering for each
+// other", plus the external oracle covering both. They are pure functions here
+// so each is killable on its own, because they are not decoration: the B03 pack
+// builder will depend on this generator THROWING rather than handing back a
+// wrong stream, and an untested refusal that a refactor silently removes is how
+// a wrong pack ships.
+//
+// `null` = no issue. A message = what diverged, with both values.
+// ---------------------------------------------------------------------------
+
+/** Did the module bank the set the caller asked for? Compares the ledger entry
+ *  the ENGINE produced against the target, on all three facts — a set that
+ *  closed on the wrong score, and a set that never closed at all, are different
+ *  defects and the message says which. */
+export function setBankedIssue(
+  banked: LedgerSet,
+  target: ReconstructedSet,
+  setIndex: number,
+): string | null {
+  if (banked.home === target.home && banked.away === target.away && banked.closed) return null;
+  return (
+    `set ${setIndex + 1}: asked for ${scoreText(target)}, the fold banked ` +
+    `${scoreText(banked)}${banked.closed ? "" : " (still open)"}`
+  );
+}
+
+/** Does the REAL fold path agree with the plan? Both sides arrive as the
+ *  already-joined score strings, so this function cannot re-derive either one
+ *  and cannot become a comparison of a value against itself. */
+export function foldAgreementIssue(got: string, want: string): string | null {
+  if (got === want) return null;
+  return `foldMatch disagrees with the plan: asked for [${want}], the real fold path produced [${got}]`;
+}
+
 export interface ReconstructSetRalliesInput {
   readonly module: AnySportModule;
   /** The division's RESOLVED cfg. Build it with `resolveDivisionCfg`
@@ -269,13 +307,8 @@ export function reconstructSetRallies(input: ReconstructSetRalliesInput): PackEv
     }
     // Engine-checked postcondition. The plan chose the order; the module says
     // whether the set it actually banked is the one that was asked for.
-    const banked = ledgerAt(setLedger(sportModule, state), setIndex);
-    if (banked.home !== target.home || banked.away !== target.away || !banked.closed) {
-      throw new Error(
-        `set ${setIndex + 1}: asked for ${scoreText(target)}, the fold banked ` +
-          `${scoreText(banked)}${banked.closed ? "" : " (still open)"}`,
-      );
-    }
+    const issue = setBankedIssue(ledgerAt(setLedger(sportModule, state), setIndex), target, setIndex);
+    if (issue !== null) throw new Error(issue);
   });
 
   if (outcomeOf(sportModule, state) === null) {
@@ -457,11 +490,8 @@ function verifyAgainstFoldMatch(
   // twenty-two exactness tests instead of the one note test it touched.
   const got = ledger.map((set) => `${scoreText(set)}${set.closed ? "" : "*"}`).join(", ");
   const want = sets.map(scoreText).join(", ");
-  if (got !== want) {
-    throw new Error(
-      `foldMatch disagrees with the plan: asked for [${want}], the real fold path produced [${got}]`,
-    );
-  }
+  const issue = foldAgreementIssue(got, want);
+  if (issue !== null) throw new Error(issue);
 }
 
 // ---------------------------------------------------------------------------
@@ -489,6 +519,19 @@ export interface ReconstructSetBasedStreamInput {
   readonly rallyType: string;
   readonly sets: readonly ReconstructedSet[];
   readonly seed: number;
+  /**
+   * The per-fixture team sheets, where the record gives them (doubles pairs
+   * and their declared `pairOrder`, a volleyball rotation order).
+   *
+   * ACCEPTED HERE rather than attached to the returned stream afterwards, and
+   * the difference is load-bearing. `packLineupPair` reads `stream.lineups`,
+   * so the pair the generator folds under is built from the draft BELOW — a
+   * caller who set `lineups` on the result would generate under empty sheets
+   * and validate under real ones, which is the placer/verifier fork this
+   * file's header warns about. Before this field existed the two agreed only
+   * because the field did not exist, which is an invariant by accident.
+   */
+  readonly lineups?: PackStream["lineups"];
 }
 
 /** `PackReconstruction.note` is bounded at 500 chars by the schema. */
@@ -513,6 +556,7 @@ export function reconstructSetBasedStream(input: ReconstructSetBasedStreamInput)
     away,
     provenance: "reconstructed",
     reconstruction: { seed, note },
+    ...(input.lineups === undefined ? {} : { lineups: input.lineups }),
     events: [],
   };
   // The SAME function stage 0 builds the fold's `LineupPair` with, off the
@@ -610,6 +654,20 @@ function markerCandidates(
       );
     }
     const enums = action.fields.filter(isEnumField).filter((f) => !f.path.includes("."));
+    // ONE top-level enum, or none. With two, the loop below would emit
+    // candidates that each set only ONE of them — a partial payload the engine
+    // would refuse, degrading to a confusing `accepted none of` rather than to
+    // a wrong marker. No shipped module declares two (football's period action
+    // has `phase` plus the dotted `at.period` stamp, which is filtered out
+    // above), so this refuses rather than guessing at a cross product whose
+    // shape no authored source gives.
+    if (enums.length > 1) {
+      throw new Error(
+        `"${markerType}" declares ${enums.length} top-level enum fields ` +
+          `([${enums.map((f) => f.path).join(", ")}]) — this filler names a marker by ONE of them, ` +
+          `and which combination is legal is a question no authored source answers`,
+      );
+    }
     const payloads: Record<string, unknown>[] =
       enums.length === 0
         ? [{}]

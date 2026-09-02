@@ -134,6 +134,93 @@ describe("loadPackValue — refusals", () => {
   });
 });
 
+describe("stage 0 cross-checks a league stage's stream count against its own declaration", () => {
+  // `_tiny` declares `legs: 3` AND three streams and is consistent because it
+  // was AUTHORED that way, not because anything compared the two. Move `legs`
+  // without moving the streams and the pack used to validate green offline and
+  // red only minutes into a live run against a real server — the class stage 0
+  // exists to kill in seconds.
+  const withLegs = (legs: number): unknown => {
+    const raw = tinyRaw() as { divisions: { stages: { config: { legs: number } }[] }[] };
+    const stage = raw.divisions[0]?.stages[0];
+    if (stage === undefined) throw new Error("fixture shape changed");
+    stage.config.legs = legs;
+    return raw;
+  };
+
+  it("is silent when the streams match what the entrants and legs imply", () => {
+    expect(codes(loadPackValue(tinyRaw(), TINY_PACK_PATH)).warnings).toEqual(TINY_WARNINGS);
+  });
+
+  it("warns, with BOTH counts, when the legs move and the streams do not", () => {
+    const load = loadPackValue(withLegs(5), TINY_PACK_PATH);
+    expect(codes(load).warnings).toEqual(["streams.count_mismatch", ...TINY_WARNINGS]);
+    const said = load.warnings[0]?.message ?? "";
+    // The implied count AND the carried count — an existence assertion here
+    // would pass against any pair of numbers.
+    expect(said).toContain("implies 5 fixture(s)");
+    expect(said).toContain("2 entrants over 5 leg(s)");
+    expect(said).toContain("carries 3 stream(s)");
+    // …and it is a WARNING, never a gate: whether a partially-recorded season
+    // is an authoring defect is a human judgement.
+    expect(load.ok).toBe(true);
+  });
+
+  it("warns in the OTHER direction too — fewer implied than carried", () => {
+    const load = loadPackValue(withLegs(1), TINY_PACK_PATH);
+    expect(codes(load).warnings).toContain("streams.count_mismatch");
+    const said = load.warnings.map((f) => f.message).join(" ");
+    expect(said).toContain("implies 1 fixture(s)");
+    expect(said).toContain("carries 3 stream(s)");
+  });
+
+  it("stays silent past the product's own leg clamp rather than warning a wrong number", () => {
+    // The product clamps legs to 8 (`usecases/stages.ts:756`), so at 9 the
+    // implied count is NOT the count the generator would mint and a warning
+    // built from it would be wrong rather than merely unhelpful. Refusing to
+    // answer beats answering wrongly; `expectedFixtureCount` refuses out loud
+    // on the same input, which is where an author gets told.
+    expect(codes(loadPackValue(withLegs(9), TINY_PACK_PATH)).warnings).not.toContain(
+      "streams.count_mismatch",
+    );
+    // …and 8 — the last legal value — is still checked.
+    expect(codes(loadPackValue(withLegs(8), TINY_PACK_PATH)).warnings).toContain(
+      "streams.count_mismatch",
+    );
+  });
+
+  it("stays silent on a stage with no streams bound to it at all", () => {
+    // An unplayed stage is not a count mismatch; a division that declares a
+    // second stage nobody has played yet must not be warned about here, and
+    // `standings.no_expected_table` already covers the reverse.
+    const raw = tinyRaw() as {
+      divisions: { stages: Record<string, unknown>[] }[];
+      streams: { stageRef?: string }[];
+    };
+    const stages = raw.divisions[0]?.stages;
+    if (stages === undefined) throw new Error("fixture shape changed");
+    stages.push({ ref: "s-empty", seq: 2, kind: "league", name: "Empty", config: { legs: 4 } });
+    for (const stream of raw.streams) stream.stageRef = "s-league";
+    expect(codes(loadPackValue(raw, TINY_PACK_PATH)).warnings).not.toContain(
+      "streams.count_mismatch",
+    );
+  });
+
+  it("stays silent on a stage kind whose count is not a round robin", () => {
+    const raw = tinyRaw() as { divisions: { stages: { kind: string; config: { legs: number } }[] }[] };
+    const stage = raw.divisions[0]?.stages[0];
+    if (stage === undefined) throw new Error("fixture shape changed");
+    stage.config.legs = 5;
+    stage.kind = "knockout";
+    // The knockout makes the expected TABLE underivable, so errors appear —
+    // but no count warning, because a bracket's fixture count is a bracket
+    // shape rather than a round robin.
+    expect(codes(loadPackValue(raw, TINY_PACK_PATH)).warnings).not.toContain(
+      "streams.count_mismatch",
+    );
+  });
+});
+
 describe("loadPackFile", () => {
   it("reads the committed pack off disk and loads it green", async () => {
     const load = await loadPackFile(TINY_PACK_PATH);

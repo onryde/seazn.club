@@ -25,7 +25,13 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import pino from "pino";
 import { loadPackValue } from "../pack-io.ts";
-import { runTinySuite, TINY_PACK_PATH, tinyPackStage, tinyPlan } from "../suites/tiny.ts";
+import {
+  fixtureCountIssue,
+  runTinySuite,
+  TINY_PACK_PATH,
+  tinyPackStage,
+  tinyPlan,
+} from "../suites/tiny.ts";
 import type { Pack } from "../pack-schema.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -86,6 +92,54 @@ describe("tinyPackStage — warnings are reportable, never fatal", () => {
     expect(said).toContain('pack declares suite "_tiny"');
     expect(said).toContain('the caller expected "wimbledon-2019"');
     rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("fixtureCountIssue — addendum 1's comparison, on the testable side of the network", () => {
+  // This is the ONE line the addendum exists for, and in situ on the HTTP path
+  // it was unreachable: the review inverted `!==` to `===` and the whole suite
+  // stayed green. Both arms are driven here.
+  const plan = (): ReturnType<typeof tinyPlan> => tinyPlan(tinyPack());
+
+  it("is null when the generator minted exactly what the pack implies", () => {
+    // `_tiny` implies three; three is not a mismatch.
+    expect(fixtureCountIssue(3, plan())).toBeNull();
+  });
+
+  it("names BOTH numbers and the legs when the count is short", () => {
+    const issue = fixtureCountIssue(1, plan());
+    expect(issue).toContain("expected 3 fixture(s)");
+    expect(issue).toContain("got 1");
+    // The legs are in the message because "3" alone does not tell a reader
+    // WHERE the expectation came from — 2 entrants over 3 legs does.
+    expect(issue).toContain("2-entrant");
+    expect(issue).toContain("over 3 leg(s)");
+  });
+
+  it("names both numbers when the count is LONG too — the inverted operator", () => {
+    // The direction matters: an inversion reports a mismatch as a match and a
+    // match as a mismatch, so an arm that only ever sees `actual < expected`
+    // cannot witness it.
+    const issue = fixtureCountIssue(6, plan());
+    expect(issue).toContain("expected 3 fixture(s)");
+    expect(issue).toContain("got 6");
+  });
+
+  it("moves with the plan rather than with a constant", () => {
+    const pack = tinyPack();
+    const fiveLegs = {
+      ...pack,
+      divisions: [
+        {
+          ...pack.divisions[0],
+          stages: [{ ...(pack.divisions[0]?.stages[0] as object), config: { legs: 5 } }],
+        },
+      ],
+    } as Pack;
+    // Three fixtures is now the DEFECT and five is correct — the reverse of
+    // the case above, so a hardcoded expectation cannot satisfy both.
+    expect(fixtureCountIssue(5, tinyPlan(fiveLegs))).toBeNull();
+    expect(fixtureCountIssue(3, tinyPlan(fiveLegs))).toContain("expected 5 fixture(s)");
   });
 });
 

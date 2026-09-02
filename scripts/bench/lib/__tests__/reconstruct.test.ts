@@ -30,8 +30,10 @@ import {
 } from "../validate-pack.ts";
 import {
   fillPeriodMarkers,
+  foldAgreementIssue,
   reconstructSetBasedStream,
   reconstructSetRallies,
+  setBankedIssue,
   type ReconstructedSet,
 } from "../reconstruct.ts";
 
@@ -376,6 +378,53 @@ describe("reconstructSetRallies — determinism", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// The generator's own two INTERNAL refusals.
+//
+// Both survived the sweep in situ with ZERO red, because each is covered by the
+// other plus the external oracle — "two guards covering for each other", one
+// level up from the lesson the suite already records. They are pure functions
+// now, so each is killable alone. That matters because they are not decoration:
+// B03's pack builder will rely on this generator THROWING rather than handing
+// back a wrong stream.
+// ---------------------------------------------------------------------------
+describe("setBankedIssue — did the module bank the set that was asked for", () => {
+  const target: ReconstructedSet = { home: 21, away: 15 };
+
+  it("is null when the ledger entry matches on all three facts", () => {
+    expect(setBankedIssue({ home: 21, away: 15, closed: true }, target, 0)).toBeNull();
+  });
+
+  it("names both scores when the set closed on the WRONG one", () => {
+    const issue = setBankedIssue({ home: 21, away: 14, closed: true }, target, 2);
+    // The set index a reader will look for, and BOTH values — never "a
+    // mismatch occurred".
+    expect(issue).toContain("set 3:");
+    expect(issue).toContain("asked for 21–15");
+    expect(issue).toContain("the fold banked 21–14");
+  });
+
+  it("says STILL OPEN when the score is right but the set never closed", () => {
+    // A distinct defect from a wrong score, and the message has to tell them
+    // apart: this is what a target that is no finished set at all produces if
+    // it ever reaches the walk.
+    const issue = setBankedIssue({ home: 21, away: 15, closed: false }, target, 0);
+    expect(issue).toContain("(still open)");
+  });
+});
+
+describe("foldAgreementIssue — does the REAL fold path agree with the plan", () => {
+  it("is null when the two score strings are equal", () => {
+    expect(foldAgreementIssue("21–15, 19–21", "21–15, 19–21")).toBeNull();
+  });
+
+  it("names both sides when they diverge", () => {
+    const issue = foldAgreementIssue("21–15, 19–21*", "21–15, 19–21");
+    expect(issue).toContain("asked for [21–15, 19–21]");
+    expect(issue).toContain("the real fold path produced [21–15, 19–21*]");
+  });
+});
+
 describe("reconstructSetRallies — refusals", () => {
   const call = (sets: readonly ReconstructedSet[]): PackEvent[] =>
     reconstructSetRallies({
@@ -549,6 +598,39 @@ describe("reconstructSetBasedStream — the stream a pack carries", () => {
   it("binds stageRef when given one, and omits it when not", () => {
     expect(build(1, "s").stageRef).toBe("s");
     expect(build(1).stageRef).toBeUndefined();
+  });
+
+  it("carries per-fixture LINEUPS through, and folds under the ones it generated under", () => {
+    // `packLineupPair` reads `stream.lineups`, so the pair the generator folds
+    // under is built from the draft — a caller attaching sheets to the RESULT
+    // would generate under empty ones and validate under real ones. Before the
+    // field existed the two agreed only because the field did not exist.
+    const lineups = {
+      home: [{ person: "p-ana", slot: "starting" as const, roles: [], pairOrder: 1 }],
+      away: [{ person: "p-bo", slot: "starting" as const, roles: [], pairOrder: 1 }],
+    };
+    const stream = reconstructSetBasedStream({
+      module: badminton,
+      cfg: cfgFor(badminton, "bwf"),
+      divisionRef: "d",
+      fixtureExtKey: "fx",
+      home: HOME,
+      away: AWAY,
+      rallyType: "badminton.rally",
+      sets: SETS,
+      seed: 5,
+      lineups,
+    });
+    expect(stream.lineups).toEqual(lineups);
+    // And the whole thing still folds green through the real validator, with
+    // the two people the sheets name declared on the pack.
+    const pack = badmintonPack(stream) as { persons: unknown[] };
+    pack.persons = [
+      { ref: "p-ana", fullName: "Ana Alvarez", lane: "player" },
+      { ref: "p-bo", fullName: "Bo Baptiste", lane: "player" },
+    ];
+    const result = validatePack(pack, { expectedSuite: "_unit" });
+    expect(errorsOf(result.findings)).toEqual([]);
   });
 
   it("validates GREEN through the real stage-0 validator", () => {
@@ -756,6 +838,47 @@ describe("fillPeriodMarkers — the whistles a match sheet does not record", () 
         segments: [[], []],
       }),
     ).toThrow(/accepted 2 markers here/);
+  });
+
+  it("REFUSES an action declaring two top-level enums rather than guessing a cross product", () => {
+    // The candidate builder names a marker by ONE enum. With two it would emit
+    // payloads that each set only one of them — a partial payload the engine
+    // refuses, degrading to a confusing "accepted none of". Which combination
+    // is legal is a question no authored source answers, so it refuses.
+    const twoEnums = {
+      ...(fakeModule() as unknown as { padSpec: unknown }),
+      padSpec: () => ({
+        panels: [
+          {
+            labelKey: { key: "p", label: "P" },
+            phase: "live",
+            layout: "grid",
+            actions: [
+              {
+                type: "fake.marker",
+                labelKey: { key: "a", label: "A" },
+                fields: [
+                  { kind: "enum", path: "to", values: ["a"] },
+                  { kind: "enum", path: "half", values: ["1"] },
+                ],
+                attribution: [],
+              },
+            ],
+          },
+        ],
+        fidelity: {},
+        fidelityEntitlements: {},
+      }),
+    } as unknown as AnySportModule;
+    expect(() =>
+      fillPeriodMarkers({
+        module: twoEnums,
+        cfg: {},
+        lineups: lineups(),
+        markerType: "fake.marker",
+        segments: [[], []],
+      }),
+    ).toThrow(/declares 2 top-level enum fields \(\[to, half\]\)/);
   });
 
   it("refuses a module that declares no padSpec at all", () => {
