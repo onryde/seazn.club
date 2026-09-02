@@ -1196,54 +1196,69 @@ export interface AmendSubmitters {
    *  `dropHeld` (:298) cancels the tick and deletes the entry WITHOUT calling
    *  `onDue`. `null` is `submitHeld`'s double-submit refusal — nothing was
    *  held, so nothing will ever be released. */
-  submitHeld: (
-    type: string,
-    payload: unknown,
-    onReleased: () => void,
-  ) => Promise<{ heldId: string; heldUntil: number } | null>;
-  submit: (type: string, payload: unknown) => Promise<void>;
+  submitHeld: (type: string, payload: unknown) => Promise<{ heldId: string; heldUntil: number } | null>;
+  /** `opts.dropWith` is the whole mechanism — see `runAmend` below. */
+  submit: (type: string, payload: unknown, opts?: { dropWith?: string }) => Promise<void>;
 }
 
 /**
- * R8/#675 fix round 1, CRITICAL — the amendment's two events, bound so that the
- * void can only ever happen BECAUSE the replacement survived.
+ * R8/#675 — the amendment's two events, bound so they live or die TOGETHER.
  *
- * THE DEFECT THIS SHAPE EXISTS TO PREVENT, and it was one ordinary tap. The
- * first cut enqueued the held replacement and then the `core.void` as SIBLINGS,
- * with nothing binding them. The drain could not reorder them (`peekInOrder`
- * stops at a held entry), so the void sat parked and live while the replacement
- * spent a whole `HOLD_MS` in a DROPPABLE state — and the pad deliberately
- * offers the control that drops it. `ribbonUndoTarget` always offers take-back
- * on a held tap by design, and the panel's own Void on that row routes to the
- * same place; `decideUndo` returns `{kind:"drop"}`, `dropHeldSubmission`
- * removes the replacement, and the void then drained ALONE. The original event
- * ended up struck through with nothing in its place and the score down a point
- * — the pad deleting the very event the scorer opened the amend to repair,
- * after a tap someone makes precisely when they hit Partial by mistake.
+ * An amendment is a `core.void` of the original plus a re-append of it carrying
+ * the detail the hold window cut short (see `amendPlan`). The re-append goes out
+ * HELD, so for a whole `HOLD_MS` the scorer is looking at an open dock that
+ * invites them to linger — and during that window the pad can be taken back,
+ * reloaded, crashed, or discarded by a mobile browser. The binding therefore
+ * needs TWO properties at once, and each of the two obvious designs has exactly
+ * one of them. Both shipped here, and each was caught in review:
  *
- * The fix is structural rather than another guard: the void is submitted from
- * the release callback, so both directions hold by construction —
+ *  - ROUND 1, the void as an ordinary SIBLING enqueued beside the replacement.
+ *    Durable — it survived a reload — but nothing could cancel it. Take-back
+ *    (`ribbonUndoTarget` always offers it on a held tap; the row's Void routes
+ *    the same way) dropped the replacement and STRANDED the void, which drained
+ *    alone and DELETED a scored event.
+ *  - ROUND 2, the void fired from the held entry's release CLOSURE. Cancellable
+ *    — a drop never calls it — but a closure is not durable. `ticksByStore`
+ *    (queue.ts) is an in-memory WeakMap keyed on the store OBJECT, registered
+ *    only by `enqueueHeld`; the resume path calls `releaseHeld` on a FRESH store
+ *    whose tick map is empty, so `onDue` never runs. The replacement sent, the
+ *    void did not, and the point DOUBLED — silently, durably, and only
+ *    discoverable by a scorer noticing a wrong score.
  *
- *  - released (tick, "Send now", or flushed by a later tap) => void submitted,
- *    and enqueued BEHIND the replacement, which is what keeps the server from
- *    ever seeing the original gone with nothing in its place (the score-dip
- *    fix, `handleAmend` below);
- *  - dropped, or refused by the double-submit guard => `onReleased` never runs,
- *    no void is ever enqueued, and the original event stands untouched.
+ * Swapping one for the other is how a fix round produces a mirror-image defect.
+ * Do not "simplify" this back to either.
  *
- * The second bullet is also the IMPORTANT this round raised about `heldSubmit`
- * swallowing `submitHeld`'s `null`: with the void moved inside the callback
- * there is no unconditional second submit left to skip.
+ * WHAT ENFORCES EACH PROPERTY, line by line:
  *
- * Returns the held id (so a caller can dock against it) or `null` if nothing
- * was held. Pure of React on purpose — `__tests__/partial-amend.test.ts` drives
- * it over a real `memoryQueueStore` and asserts the queue in all three states.
+ *  - DURABLE: `io.submit(..., { dropWith })` below writes the void into the
+ *    queue immediately, as a `PendingEvent` field persisted to IndexedDB. A
+ *    reload finds both entries and resumes them in order — the replacement is
+ *    still held and drains first, the void behind it.
+ *  - CANCELLABLE: `queue.ts`'s `dropHeld` cascade-deletes every entry whose
+ *    `dropWith` names the id it is dropping. Take-back removes the replacement
+ *    AND its void, leaving the original event untouched.
+ *
+ * Ordering is unchanged and still load-bearing (`handleAmend`): the void is
+ * enqueued BEHIND the replacement, and `peekInOrder` stops at a held entry, so
+ * no ack can ever show the ledger with the original gone and nothing in its
+ * place. That is the score-dip fix, and it survives this change.
+ *
+ * `null` from `submitHeld` is the pipeline's own double-submit refusal —
+ * nothing was held, so no void is written at all.
+ *
+ * Pure of React on purpose. `__tests__/partial-amend.test.ts` drives it over a
+ * real `memoryQueueStore` for the drop/release/order cases; the RELOAD case
+ * lives in `__tests__/use-pad-pipeline.test.tsx`, because only that suite owns
+ * the seam (a dbName-keyed store surviving an unmount) that can reach the
+ * resume path at all.
  */
 export async function runAmend(plan: AmendPlan, io: AmendSubmitters): Promise<string | null> {
-  const held = await io.submitHeld(plan.type, plan.payload, () => {
-    void io.submit("core.void", { event_id: plan.voidId });
-  });
-  return held?.heldId ?? null;
+  const held = await io.submitHeld(plan.type, plan.payload);
+  // `null` is the pipeline's own double-submit refusal: nothing was held, so
+  // there is nothing to retire and no void may be written.
+  if (held === null) return null;
+  await io.submit("core.void", { event_id: plan.voidId }, { dropWith: held.heldId });
+  return held.heldId;
 }
 
 // ---------------------------------------------------------------------------
@@ -1563,17 +1578,19 @@ export function PadHostV3(props: PadHostV3Props) {
   // this function's own soft-commit (submitHeld, never plain submit —
   // spec §2.3).
   //
-  // R8/#675 fix round 1 — `onReleased` and the RETURNED result are both new,
-  // and both exist for the amendment (`runAmend` above). The release hook is
-  // what lets a caller make a second write a CONSEQUENCE of this one surviving
-  // its hold rather than a sibling enqueued beside it, and returning the result
-  // stops `submitHeld`'s `null` double-submit refusal from being swallowed —
-  // an ordinary tap still ignores both, exactly as before.
+  // R8/#675 — the RETURNED result is new, and exists for the amendment
+  // (`runAmend` above): `submitHeld` answers `null` on its double-submit
+  // refusal, and swallowing that let a caller write a follow-up event for a
+  // submission that never happened. An ordinary tap ignores it, as before.
+  //
+  // There is deliberately NO release callback here. Fix round 1 added one so an
+  // amendment could chain its void off it; a closure cannot survive a reload,
+  // and that shipped a duplicated point. The binding is a durable `dropWith`
+  // field now — see `runAmend`.
   const heldSubmit = useCallback(
-    async (type: string, payload: unknown, onReleased?: () => void) => {
+    async (type: string, payload: unknown) => {
       const result = await pipeline.submitHeld(type, payload, HOLD_MS, () => {
         setHeld(null);
-        onReleased?.();
         void pipeline.retryDrain();
       });
       if (result) setHeld({ id: result.heldId, until: result.heldUntil, eventType: type, payload });
@@ -1911,8 +1928,8 @@ export function PadHostV3(props: PadHostV3Props) {
    * (once the first replacement is in `pendingEnvelopes` the original is no
    * longer the newest folding event, so the second tap returns early), and
    * failing that `submitHeld`'s own same-tick `submitInFlight` guard, which
-   * refuses an identical (type, payload) and returns `null` — and a `null` now
-   * means no void either. A latch here would be a third answer to a question
+   * refuses an identical (type, payload) and returns `null`, for which
+   * `runAmend` writes no void at all. A latch here would be a third answer to a question
    * two layers already answer; if one of them ever moves, this needs one.
    */
   async function handleAmend(eventId: string) {

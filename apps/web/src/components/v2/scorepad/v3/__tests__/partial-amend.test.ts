@@ -442,9 +442,20 @@ describe("amendPlan", () => {
 describe("runAmend — the void is a consequence of the replacement surviving", () => {
   const PLAN = { voidId: "e-1", type: RALLY_TYPE, payload: { wonBy: "H" } };
 
-  /** `pad-host`'s `heldSubmit`/`submit` pair, wired to the real queue. Mirrors
-   *  `use-pad-pipeline.ts`: `submitHeld` -> `enqueueHeld` with the release
-   *  callback, `submit` -> plain `enqueue`. */
+  /**
+   * `pad-host`'s `heldSubmit`/`submit` pair, wired to the real queue.
+   *
+   * KNOWN LIMIT OF THIS HARNESS, stated so nobody over-trusts what it proves.
+   * The queue PRIMITIVES below are the real ones, so the binding semantics
+   * genuinely are tested — but the wiring around them is a hand-written MIRROR
+   * of `use-pad-pipeline.ts`, and a mirror agrees with itself. It is
+   * structurally incapable of reaching the RESUME path (a fresh mount adopting
+   * a queue left in IndexedDB), which is exactly where the round-2 duplicate-
+   * point defect lived: this file was fully green while a reload mid-hold sent
+   * the replacement and dropped the void. That case is pinned in
+   * `__tests__/use-pad-pipeline.test.tsx`, over the REAL hook, and it belongs
+   * there rather than here. Do not add a resume case to this mirror.
+   */
   function realQueueIo(store: QueueStore, holdMs: number) {
     let n = 0;
     const pending = (type: string, payload: unknown): PendingEvent => ({
@@ -457,45 +468,59 @@ describe("runAmend — the void is a consequence of the replacement surviving", 
       attempts: 0,
     });
     return {
-      submitHeld: async (type: string, payload: unknown, onReleased: () => void) => {
+      submitHeld: async (type: string, payload: unknown) => {
         const event = pending(type, payload);
-        await enqueueHeld(store, event, holdMs, onReleased);
+        await enqueueHeld(store, event, holdMs, () => {});
         return { heldId: event.idempotencyKey, heldUntil: Date.now() + holdMs };
       },
-      submit: async (type: string, payload: unknown) => {
-        await enqueue(store, pending(type, payload));
+      submit: async (type: string, payload: unknown, opts?: { dropWith?: string }) => {
+        await enqueue(store, { ...pending(type, payload), ...(opts?.dropWith === undefined ? {} : { dropWith: opts.dropWith }) });
       },
     };
   }
 
   const typesIn = async (store: QueueStore) => (await store.list()).map((e) => e.type);
 
-  it("enqueues ONLY the held replacement while the dock is open — no void is parked beside it", async () => {
+  it("queues the replacement AND its void immediately, bound by a DURABLE marker", async () => {
     const store = memoryQueueStore();
     const heldId = await runAmend(PLAN, realQueueIo(store, 10_000));
     expect(heldId).not.toBeNull();
-    expect(await typesIn(store), "a void queued here is one a take-back can strand").toEqual([RALLY_TYPE]);
+    // Both entries exist from the moment the amendment opens — this is the
+    // DURABLE half. A reload mid-hold finds them both and resumes them in
+    // order; a design that waited for the release (round 2) lost the void to a
+    // reload and doubled the point.
+    expect(await typesIn(store)).toEqual([RALLY_TYPE, "core.void"]);
+    const queued = await store.list();
+    expect(queued[1]?.payload, "the void names the original").toEqual({ event_id: "e-1" });
+    expect(
+      queued[1]?.dropWith,
+      "and it is BOUND to the replacement — a plain sibling is what round 1 shipped, and a take-back stranded it",
+    ).toBe(heldId);
+    expect(queued[0]?.dropWith, "the replacement itself is bound to nothing").toBeUndefined();
   });
 
-  it("THE CRITICAL: dropping the replacement mid-hold leaves NO void — the original event survives intact", async () => {
+  it("THE CRITICAL: dropping the replacement mid-hold cascades to its void — the original event survives intact", async () => {
     const store = memoryQueueStore();
     const heldId = await runAmend(PLAN, realQueueIo(store, 10_000));
     // Exactly what `handleUndo` does inside the hold window: `decideUndo`
     // returns {kind:"drop"} and `dropHeldSubmission` calls this.
     expect(await dropHeld(store, heldId as string), "the replacement must really be droppable").toBe(true);
-    expect(
-      await typesIn(store),
-      "a void left behind here deletes a scored event the scorer never asked to lose",
-    ).toEqual([]);
+    // This is the CANCELLABLE half, and it is the whole reason `dropWith` is a
+    // field rather than a plain queued sibling: a void left behind here drains
+    // alone and DELETES a scored event the scorer never asked to lose.
+    expect(await typesIn(store)).toEqual([]);
   });
 
-  it("releasing it — Send now, or the hold's own tick — enqueues the void BEHIND it, never in front", async () => {
+  it("releasing it — Send now, or the hold's own tick — leaves the void BEHIND it, never in front", async () => {
     const store = memoryQueueStore();
     const heldId = await runAmend(PLAN, realQueueIo(store, 10_000));
     await releaseHeld(store, heldId as string);
+    // Order is unchanged by the release: `peekInOrder` stops at a held entry,
+    // so the void can never ack before the replacement and no reader ever sees
+    // the original gone with nothing in its place (the score-dip fix).
     expect(await typesIn(store)).toEqual([RALLY_TYPE, "core.void"]);
     const queued = await store.list();
-    expect(queued[1]?.payload, "and it must name the original").toEqual({ event_id: "e-1" });
+    expect(queued[0]?.heldUntil, "and the replacement is no longer held").toBeUndefined();
   });
 
   it("a replacement the double-submit guard refuses enqueues nothing at all — no orphan void", async () => {

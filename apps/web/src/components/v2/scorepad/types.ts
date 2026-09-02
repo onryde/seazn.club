@@ -66,6 +66,36 @@ export interface PendingEvent {
    *  change for this field to survive one — put()/list() already persist
    *  whatever fields PendingEvent carries, generically. */
   heldUntil?: number;
+  /**
+   * R8/#675 — this entry's LIFE IS BOUND TO another still-held entry's:
+   * `dropWith` names that entry's `idempotencyKey`, and `queue.ts`'s
+   * `dropHeld` cascade-deletes every entry carrying its id.
+   *
+   * The one user of it today is an amendment (`v3/pad-host.tsx`'s `runAmend`),
+   * which is a `core.void` of the original event plus a re-append of it
+   * carrying the detail the hold window cut short. Those two must live or die
+   * together, and the two obvious ways to arrange that each fail in exactly one
+   * direction — both were shipped and both were caught in review:
+   *
+   *  - enqueue the void as an ordinary SIBLING: durable across a reload, but
+   *    nothing can cancel it, so a take-back inside the hold window drops the
+   *    replacement and strands the void, which then drains alone and DELETES a
+   *    scored event;
+   *  - fire the void from the held entry's release CLOSURE: cancellable,
+   *    because a drop never calls it — but `ticksByStore` (queue.ts) is an
+   *    in-memory WeakMap keyed on the store OBJECT, so a reload mid-hold
+   *    resumes the replacement, sends it, and NEVER sends the void, DOUBLING
+   *    the point.
+   *
+   * A durable FIELD is the only shape that is both, and it is both for a reason
+   * worth stating: it is written to IndexedDB alongside the entry it binds (so
+   * a reload resumes both, in order), and it is a value `dropHeld` can read
+   * without any live callback (so a cancel reaches it). Absent on every other
+   * entry, and on any record persisted by a build predating this field —
+   * reading it as `undefined` must degrade to "not bound to anything", never
+   * throw.
+   */
+  dropWith?: string;
 }
 
 /** Network reachability as the pipeline understands it. The pipeline still

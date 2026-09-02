@@ -295,11 +295,49 @@ export async function releaseHeld(store: QueueStore, id: string): Promise<void> 
  *  left this device). Cancels the release tick first, so a natural timeout
  *  can never fire against an entry that no longer exists. Returns false,
  *  a no-op, if `id` names no currently-held entry. */
+/**
+ * R8/#675 — every entry whose life is bound to `id`'s (`PendingEvent.dropWith`).
+ *
+ * THE ONE definition of that rule, deliberately. It has two consumers that must
+ * never disagree: `dropHeld` below, which removes them from the durable QUEUE,
+ * and `use-pad-pipeline`'s `dropHeldSubmission`, which must remove the same set
+ * from the in-memory `pendingEnvelopes` mirror. Cancelling in one layer only is
+ * not a partial fix but a NEW defect — the queue goes clean while the optimistic
+ * fold still applies the void, so the pad shows a corrected event as retired
+ * with nothing replacing it. Found in a browser: the ledger read clean and the
+ * serve context stayed refused.
+ *
+ * Takes a snapshot rather than the store so both callers can read the entries
+ * BEFORE the deletes, and so this stays pure.
+ */
+export function boundTo(all: readonly PendingEvent[], id: string): string[] {
+  return all.filter((e) => e.dropWith === id).map((e) => e.idempotencyKey);
+}
+
 export async function dropHeld(store: QueueStore, id: string): Promise<boolean> {
-  const found = (await store.list()).find((e) => e.idempotencyKey === id);
+  const all = await store.list();
+  const found = all.find((e) => e.idempotencyKey === id);
   if (found === undefined || found.heldUntil === undefined) return false;
   cancelTick(store, id);
   await store.delete(id);
+  // R8/#675 — CASCADE. An entry whose `dropWith` names this one exists only to
+  // follow it (`PendingEvent.dropWith` carries the full reasoning): an
+  // amendment queues a `core.void` of the original behind the held re-append,
+  // and if the re-append is taken back the void must go with it or it drains
+  // ALONE and deletes a scored event the scorer never asked to lose.
+  //
+  // This line is the CANCELLABLE half of that binding; the durable half is that
+  // `dropWith` is a persisted field rather than a live callback, so a reload
+  // resumes both entries instead of losing the follower. Both halves are
+  // required and neither substitutes for the other — see `dropWith`'s own doc
+  // for the two one-sided designs this replaced.
+  //
+  // Read from the SAME `list()` snapshot taken above, so a follower enqueued
+  // concurrently cannot be missed by a second read racing the delete.
+  for (const boundId of boundTo(all, id)) {
+    cancelTick(store, boundId);
+    await store.delete(boundId);
+  }
   return true;
 }
 
