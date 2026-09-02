@@ -63,7 +63,7 @@ export default async function CompetitionPage({
   const trialAvailable = checkoutTrialDays(subRow) > 0;
   const compPhase = desk ? competitionPhase(desk) : null;
   const divisionNames = divisions.map((d) => ({ id: d.id, name: d.name, slug: d.slug }));
-  const needs = desk && canEdit ? needsYouItems(dict, desk, divisionNames, orgSlug, compSlug) : [];
+  const needs = desk && canEdit ? needsYouItems(dict, desk, divisionNames, orgSlug, compSlug, locale) : [];
   const ledgerRows: LedgerRow[] = divisions.map((d) => {
     const dd = desk?.divisions.get(d.id) ?? null;
     const s = stats.get(d.id);
@@ -169,7 +169,10 @@ export default async function CompetitionPage({
                   instead of hand-title-casing an internal key. */}
               <span>{[...new Set(divisions.map((d) => d.sport_key))].map((k) => t(dict, `sport.${k}`)).join(" · ")}</span>
               <span>·</span>
-              <span>{t(dict, "desk.masthead.divisions", { n: divisions.length })}</span>
+              {/* C4 fix (review round 3): was a bare `{n} divisions` — "1
+                  divisions" on a fresh competition. `plural()` picks the
+                  `.one`/`.other` dictionary form via Intl.PluralRules. */}
+              <span>{plural(dict, "desk.masthead.divisions", divisions.length, locale)}</span>
             </div>
           </div>
           {/* Header actions: icon + label on desktop, icon-only under `sm`

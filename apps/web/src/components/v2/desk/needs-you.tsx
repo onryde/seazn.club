@@ -1,6 +1,6 @@
 import Link from "@/components/ui/console-link";
-import { t } from "@/lib/i18n";
-import type { Dict } from "@/lib/i18n-constants";
+import { t, plural } from "@/lib/i18n";
+import type { Dict, Locale } from "@/lib/i18n-constants";
 import { routes } from "@/lib/routes";
 import { ATTENTION_SEVERITY, type Attention, type Severity } from "@/lib/division-phase";
 import type { CompetitionDesk } from "@/server/usecases/competition-desk";
@@ -23,6 +23,7 @@ export function needsYouItems(
   divisions: { id: string; name: string; slug: string }[],
   org: string,
   comp: string,
+  locale: Locale,
 ): NeedsYouItem[] {
   const items: NeedsYouItem[] = [];
   let waiting = 0;
@@ -43,7 +44,10 @@ export function needsYouItems(
         case "unscheduled":
           items.push({
             key: `${d.id}:unscheduled`, severity: sev, kind: a.kind,
-            title: t(dict, "desk.needsYou.unscheduled", { division: d.name, n: a.count }),
+            // C2 fix (review round 3): was a bare `{n} fixtures unscheduled`
+            // — "1 fixtures unscheduled" on the common end-of-scheduling
+            // case. `plural()` picks the `.one`/`.other` form.
+            title: plural(dict, "desk.needsYou.unscheduled", a.count, locale, { division: d.name }),
             sub: t(dict, "desk.needsYou.unscheduled.sub"),
             action: { label: t(dict, "desk.needsYou.unscheduled.action"), href: routes.divisionSchedule(org, comp, d.slug) },
           });
@@ -77,7 +81,9 @@ export function needsYouItems(
   if (waiting > 0) {
     items.push({
       key: "registrations", severity: "slate", kind: "registrations_waiting",
-      title: t(dict, "desk.needsYou.registrations_waiting", { n: waiting }),
+      // C3 fix (review round 3): was a bare `{n} registrations waiting for
+      // approval` — "1 registrations waiting for approval".
+      title: plural(dict, "desk.needsYou.registrations_waiting", waiting, locale),
       sub: t(dict, "desk.needsYou.registrations_waiting.sub"),
       action: { label: t(dict, "desk.needsYou.registrations_waiting.action"), href: routes.competitionRegistration(org, comp) },
     });

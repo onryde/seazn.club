@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import en from "@/dictionaries/en/ui.json";
+import { plural } from "@/lib/i18n";
 import { PhasePill } from "@/components/v2/desk/phase-pill";
 import { NeedsYou, needsYouItems } from "@/components/v2/desk/needs-you";
 import { DivisionLedger } from "@/components/v2/desk/division-ledger";
@@ -52,7 +53,7 @@ describe("NeedsYou", () => {
       ],
       fixture_names: { f9: { home: "Riverside FC", away: "Summit CC", fixture_no: 9 } },
     });
-    const items = needsYouItems(en, desk(d, 1), names, "org", "comp");
+    const items = needsYouItems(en, desk(d, 1), names, "org", "comp", "en");
     expect(items.map((i) => i.kind)).toEqual(["no_scorer", "unscheduled"]);
     expect(items[0].title).toBe("Premier Division · Riverside FC v Summit CC has no scorer");
     expect(items[0].action.href).toBe("/o/org/c/comp/d/premier-division/f/9");
@@ -61,6 +62,38 @@ describe("NeedsYou", () => {
     expect(html).toContain('data-attention="no_scorer"');
     expect(html).toContain('data-severity="red"');
     expect(html).toContain("Assign scorer");
+  });
+});
+
+describe("desk.* copy (review round 3 — pluralization and subject-verb agreement)", () => {
+  it("C2: exactly 1 unscheduled fixture reads singular, not '1 fixtures unscheduled'", () => {
+    const d = div({ attention: [{ kind: "unscheduled", count: 1 }] });
+    const items = needsYouItems(en, desk(d), names, "org", "comp", "en");
+    const item = items.find((i) => i.kind === "unscheduled");
+    expect(item?.title).toBe("Premier Division · 1 fixture unscheduled");
+  });
+  it("C2: more than 1 reads plural", () => {
+    const d = div({ attention: [{ kind: "unscheduled", count: 3 }] });
+    const items = needsYouItems(en, desk(d), names, "org", "comp", "en");
+    const item = items.find((i) => i.kind === "unscheduled");
+    expect(item?.title).toBe("Premier Division · 3 fixtures unscheduled");
+  });
+  it("C3: exactly 1 registration waiting reads singular, not '1 registrations waiting'", () => {
+    const d = div({ attention: [{ kind: "registrations_waiting", count: 1 }] });
+    const items = needsYouItems(en, desk(d), names, "org", "comp", "en");
+    const item = items.find((i) => i.kind === "registrations_waiting");
+    expect(item?.title).toBe("1 registration waiting for approval");
+  });
+  it("C4: masthead division count reads singular at n=1, plural otherwise", () => {
+    expect(plural(en, "desk.masthead.divisions", 1, "en")).toBe("1 division");
+    expect(plural(en, "desk.masthead.divisions", 2, "en")).toBe("2 divisions");
+  });
+  it("C1: a plural-looking stage name does not trigger subject-verb agreement on the title", () => {
+    const d = div({ attention: [{ kind: "needs_draw", stageId: "fin", stageName: "Finals" }] });
+    const items = needsYouItems(en, desk(d), names, "org", "comp", "en");
+    const item = items.find((i) => i.kind === "needs_draw");
+    expect(item?.title).not.toContain("Finals has");
+    expect(item?.title).toBe("Premier Division · no draw yet for Finals");
   });
 });
 
