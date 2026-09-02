@@ -59,6 +59,11 @@ describe("resolvePhase — rule order", () => {
     ];
     expect(resolvePhase(input({ stages, fixtures: [fx({ status: "decided" })] }))).toBe("setting_up");
   });
+  it("4 setting_up: a pending stage with fixtures generated but its draw still owed", () => {
+    // isolates needsProposal from hasFixtures: the other OR operand is false here
+    const stages = [stage({ id: "fin", name: "Finals", seq: 1, status: "pending", hasFixtures: true, needsProposal: true })];
+    expect(resolvePhase(input({ stages, fixtures: [fx({ scheduledAt: "2026-09-12T09:00:00Z" })] }))).toBe("setting_up");
+  });
   it("5 scheduled: fixtures exist, none today, none in play", () => {
     expect(resolvePhase(input())).toBe("scheduled");
   });
