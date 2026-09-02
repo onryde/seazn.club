@@ -4,19 +4,28 @@ description: Let players sign themselves up from your public page — fees, ques
 order: 1
 ---
 
-Instead of typing entrants yourself, open a division for **self-registration**: a *Register now* button appears on the competition's public page.
+Instead of typing entrants yourself, open a division for **self-registration**: a *Register now* button appears on the competition's public page. This article covers setting it up; for what a player sees when they click it, see [registering for a competition](/help/registration/registering-for-a-competition).
 
 The console's **Public registration link** card gives you the URL to share — **Copy** it, **Open** it, or press **QR** for a printable code (with a PNG download) that opens the register form from a club noticeboard.
 
 ## Set it up
 
-The division's **registration settings** are grouped by what matters when — **Open & close** (the enable switch, entrant type and window), **Capacity**, **Money**, and **Sign-up form**:
+The division's **registration settings** open as a panel of collapsible sections — **Eligibility**, **Open & close** (the enable switch, entrant type and window), **Capacity**, **Money**, and **Sign-up form**:
 
+- **Eligibility** — restrict a division by category (Men's, Women's, Mixed, Open) or an age range, and add a note entrants see on the sign-up form. This section also holds **Who approves entries?** (auto-confirm every entry, or hold each one for you to approve or reject — see below) and, for team divisions, **Allow solo sign-ups** — see "Solo sign-ups without a team" below.
 - **Capacity** — cap entries; beyond it, new entries join the [waitlist](/help/registration/waitlist). The group shows a live meter of spots taken and people waiting.
 - **Entry fees** (in **Money**) — pick how each division collects. Fee changes apply to new sign-ups only; current entries keep their price.
   - **Pay the organiser** (any plan) — cash or bank transfer. Set instructions once under *Settings → Connect* (a rich-text editor — bold your account details, add links), or override them per division. Write `{{reference}}` anywhere in the instructions and every registrant sees their own generated reference in its place — "quote {{reference}} on your transfer" personalises itself in the confirmation email and on the status page. Entries stay pending until you press **Mark paid**.
   - **Card at sign-up** (any plan) — Stripe checkout during registration, settling straight to your connected Stripe account. Connect Stripe first under *Settings → Connect* (a short one-time onboarding). Paid entries are **confirmed automatically**; unpaid ones hold their spot for **48 hours** (reminder at 24h) and then expire, promoting the waitlist. Your plan sets the platform fee, not whether you can charge — 8% on Community, 5% with an Event Pass, 2% on Pro, 1% on Pro Plus. The full journey — KYC, payouts, refunds and disputes — is in [how card entry fees flow](/help/registration/card-payments).
 - **Custom questions** (in **Sign-up form**) — shirt size, dietary needs, emergency contact; answers export with the entrant list.
+
+## Solo sign-ups without a team
+
+Turn on **Allow solo sign-ups** (Eligibility, team divisions only) and anyone without a team yet can still enter — they pay the same fee as a team by default, or set a separate **Solo sign-up fee** in Money (leave it blank to charge the team fee, or 0 to let them enter free). They land in a pool rather than on a roster.
+
+The Registrants tab shows that pool as **Solo sign-ups waiting for a team**: how many people are waiting and how many free slots your teams have. **Assign to a team** on a waiting entrant's row lists every team in the division, most room first; a team that's already full, or one that would leave the roster all one gender on a mixed division, is shown but disabled with the reason. Assigning takes them out of the pool and onto that team's roster; **Remove from team** on an assigned entrant puts them straight back in it.
+
+Set a **place-by date** (Eligibility, once solo sign-ups are on) and anyone still unplaced when it passes is refunded automatically — see [how card entry fees flow](/help/registration/card-payments).
 
 ## Privacy consent
 

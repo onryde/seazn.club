@@ -39,6 +39,8 @@ Withdrawals refund automatically **in full** when they land before the division'
 
 **No refund lock date set?** Then there is no cut-off: every paid withdrawal auto-refunds in full, right up to match day. If you don't want to refund late drop-outs, set the lock date in the division's registration settings.
 
+**Solo sign-ups left unplaced.** A division that allows solo sign-ups can also carry its own **place-by date** (registration settings, Eligibility). Anyone still waiting for a team when it passes is refunded automatically in full — this fires on its own schedule, separate from the refund-lock rule above, and doesn't need a withdrawal to trigger it. See [opening registration](/help/registration/open-registration).
+
 Refunds you make directly in the Stripe dashboard sync back — the entry shows as refunded on your console either way.
 
 ## 5. Disputes (chargebacks)

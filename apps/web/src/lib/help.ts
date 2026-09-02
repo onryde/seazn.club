@@ -29,6 +29,7 @@ export const HELP_ARTICLE_SLUGS = [
   "registration/reference-numbers",
   "registration/waitlist",
   "registration/youth",
+  "registration/registering-for-a-competition",
   "scheduling/board",
   "scheduling/locks",
   "scheduling/undo",

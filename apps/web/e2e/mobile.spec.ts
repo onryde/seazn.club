@@ -796,6 +796,17 @@ test("axe: no serious/critical violations on key surfaces (v3/11 gap 11)", async
     "/settings/billing",
     `/o/${orgSlug}/c/${compSlug}/upgrade`,
     `/shared/${orgSlug}/${compSlug}`,
+    // RS010 close-out (v3/11 gap 11 was never re-swept for the Registration
+    // redesign) — the public register stepper (divisionId above has
+    // registration enabled, open, individual entrant), the Registration hub
+    // (both tabs — same two routes the "console routes" no-h-scroll test
+    // audits above, reused here for axe), and the register status page
+    // (statusPath, seeded by the setup test with a real registration so this
+    // renders populated, not its empty state) had zero axe coverage.
+    `/shared/${orgSlug}/${compSlug}/register`,
+    `/o/${orgSlug}/c/${compSlug}/registration?tab=settings`,
+    `/o/${orgSlug}/c/${compSlug}/registration?tab=registrants`,
+    statusPath,
   ];
   for (const path of routes) {
     const response = await page.goto(path, { waitUntil: "load" });

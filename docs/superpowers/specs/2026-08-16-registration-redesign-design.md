@@ -102,3 +102,17 @@ Registration is intentionally unavailable to the public between P1 and P3 merges
 ## 9. Non-goals
 
 Consent ledger table, marketing consent, cross-competition carts, mandatory player accounts (claim stays optional), public team pages, any scheduling/engine change. Waitlist auto-promotion cron unchanged.
+
+---
+
+## Programme status: CLOSED (RS010, 2026-09-02)
+
+All four phases shipped across RS001–RS012 (2026-08-17 to 2026-09-01). RS010
+closed out the smoke/e2e/help/demo debt every prior session deferred, ran the
+one cross-flow audit nobody had run end-to-end, and found + fixed one real
+product bug along the way (waitlist promotion on a free/auto-approval
+division could never confirm — fixed at the root in `promoteWaitlistedRow`,
+covering the organiser-promote, withdraw-triggered, and sweep-triggered
+promotion paths alike). Full closing detail, debt roll-call, and final gate
+numbers: `2026-08-16-registration-redesign-prompts/_INDEX.md`'s RS010
+section.

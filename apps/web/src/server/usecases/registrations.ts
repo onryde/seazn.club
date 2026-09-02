@@ -1272,7 +1272,37 @@ export async function promoteWaitlistedRow(
     select ${regGroupCols(tx)}
     from registrations r join registration_groups g on g.id = r.group_id
     where r.id = ${regId}`;
-  return row ?? null;
+  if (!row) return null;
+
+  // RS010 fix — moved HERE (not left to each caller) after `/code-review`
+  // found the first attempt only patched `registration-approval.ts`'s
+  // `promoteFromWaitlist`, leaving the identical gap live at every OTHER
+  // caller of this function: `withdrawCore` (all three withdraw entry
+  // points — public, by-ref, organiser) and both `sweepRegistrations` loops.
+  // Every caller funnels through this one write, so fixing it here closes
+  // all of them at once instead of requiring each call site to remember.
+  //
+  // Mirrors `submitRegistrationGroup`'s own inline auto-confirm shortcut
+  // (`!waitlisted && live.approval === "auto" && feeCents === 0`,
+  // registration-submit.ts ~line 850): a FREE entry on an AUTO-approval
+  // division confirms immediately at submit, so a promotion out of the
+  // waitlist onto that same division must confirm immediately too — leaving
+  // it at `pending` here means NOTHING downstream can ever confirm it.
+  // `approveRegistration` refuses a `pending` row on an `auto` division
+  // ("nothing to approve manually"), and with feeCents === 0 there is no
+  // payment webhook either. Before this fix a promoted entry on a free/auto
+  // division sat at `pending` forever: no entrant materialised, never
+  // counted toward the public entrant list, while `notifyPromoted` (below)
+  // still emailed the registrant as if they were in.
+  if (settings?.approval === "auto" && feeCents === 0) {
+    await materialise(tx, row, settings.entrant_kind);
+    const [confirmed] = await tx<RegistrationWithGroupRow[]>`
+      select ${regGroupCols(tx)}
+      from registrations r join registration_groups g on g.id = r.group_id
+      where r.id = ${regId}`;
+    return confirmed ?? row;
+  }
+  return row;
 }
 
 /** Post-tx promoted email (fire-and-forget): card entries get a fresh

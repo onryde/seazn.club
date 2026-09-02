@@ -40,10 +40,10 @@ prompts dir) also writes — those two are **sequential, never parallel**.
 | RS005 | `RS005-hub-registrants-tab.md` | RS004 | **DONE** — merged `9d2ad39bc` (PR #651, 2026-08-26), 16/16 checks green. Known-open and stated in the PR: no pagination in the read path; `resend-confirmation` has no throttle (mirrors the pre-existing `/remind`). Smoke still owed by RS010 |
 | RS006 | `RS006-public-stepper.md` | RS003 | **DONE** — merged `ec5cc6e3a` (PR #666, 2026-08-27), 9/9 checks + seven-width e2e green. Follow-ups merged `81f2198a1` (PR #668) fixed three defects found by USING the flow, none of which three review passes caught: RS005's "public sign-up page isn't live yet" notices were still telling organisers the link and QR do not work; "This is me" was not exclusive within a division (one person, two slots, charged twice); step 3 blocked with a step-wide message and no field marked. Smoke still owed by RS010 |
 | RS007 | `RS007-status-page-join-payments.md` | RS006 | **DONE** — merged (PR #677 `a6fca57f2` + PR #680 `2b743185e`, 2026-08-30). Table was stale here; see git log. |
-| RS008 | `RS008-consent-claim-optout.md` (superseded by an inline brief, 2026-08-30 — that file's premises were checked against shipped code and found stale) | RS007 | **PR #682 updated** — branch `feat/rs008-consent-claim-optout`, 25 commits on `origin/main` (`e23dcf241`, unchanged merge-base — branch not rebased): the original 11 (A/B1-4/C1-3/#24), a review-fixes wave closing findings #1–#10, then a second `/code-review --high` pass closing 2 more (youth-axis gap in `previewJoinEntry`'s unclaimed-slot masking; `anyOptedOutByRegistration` dedupe). See closing notes below. |
+| RS008 | `RS008-consent-claim-optout.md` (superseded by an inline brief, 2026-08-30 — that file's premises were checked against shipped code and found stale) | RS007 | **DONE** — merged (PR #682 `fb81bd54f`; hotfix RS008.1 `be1374e52`, PR #684, closed a post-merge consent/claim gap). This row was stale (said "updated, not yet merged") until RS010 corrected it against `git log` directly. |
 | RS009 | `RS009-free-agents.md` | RS005, RS003 | **DONE** — merged `165628cce` (PR #683, 2026-08-30); hotfix `15b76f755` (PR #685, 2026-08-31, solo sign-up expanded-detail label). |
-| RS011 | `RS011-organiser-eligibility-gates.md` | RS002 | **IMPLEMENTED, awaiting review** — branch `feat/rs011-organiser-eligibility-gates`, 2 commits, not yet merged/PR'd (session ended per dispatch: "I'll run the review loop"). Closes #412 (re-homed from `L1`, now `L1` → DONE-VIA-RS011) and #407 WS1. See closing notes below |
-| RS010 | `RS010-closeout-e2e-smoke-help.md` | all | TODO |
+| RS011 | `RS011-organiser-eligibility-gates.md` | RS002 | **DONE** — merged `3a506246d` (PR #692). This row was stale (said "implemented, awaiting review, not yet merged/PR'd") until RS010 corrected it against `git log` directly — a live example of AGENTS.md's own "a read is not a run" / register-entry-is-a-pointer class of drift. |
+| RS010 | `RS010-closeout-e2e-smoke-help.md` | all | **DONE** — see closing notes below |
 | RS012 | `RS012-solo-signup-pool-promises.md` | RS009 | **DONE** — merged `c684633556090c196cf0a069663713e1e81fb8cf` (squash, PR #694, 2026-09-01). Capacity counts TEAM ENTRIES with a derived pool bound; unplaced solo sign-ups auto-refunded and withdrawn at the place-by date, organiser-editable; registrant + organiser-facing UI; 3 `/code-review high` passes, 2 severe capacity bugs found and fixed (see own section below) |
 
 Public registration was **intentionally down** between the RS001 and RS006
@@ -4952,3 +4952,133 @@ against the actual code, not just its own comment.
 
 **RS011 is now ready for a PR**, pending the owner's go-ahead to push and
 open one (out of scope for this session to do unprompted).
+
+---
+
+## RS010 — closeout: smoke, e2e debt, help, demo, audit (DONE, programme CLOSED)
+
+Session status corrections made first (both discovered `_INDEX.md` was stale
+against `git log`, not against reality): RS008 and RS011 were both already
+merged (`fb81bd54f`/`be1374e52` PR #682/#684; `3a506246d` PR #692) — the
+table above said "not yet merged" for both. Corrected before doing any of
+this session's own work, so the debt roll-call below is against the REAL
+merged state of the programme, not a stale snapshot.
+
+### Debt roll-call — every deferral this session found, discharged or re-argued
+
+- **Smoke** ("smoke still owed by RS010", recorded identically by RS004,
+  RS005, RS006, RS008): DISCHARGED. Four new suites added to `scripts/smoke.ts`
+  — `registrationOpenFlowSuite` (free vs manual-approval divisions),
+  `registrationWaitlistPromoteSuite` (waitlist position, public count,
+  promote-confirms-inline for free/auto divisions — the suite that surfaced
+  this session's own bug, see below), `registrationTeamOpsSuite` (join via
+  join_code, assign-solo-to-team), `registrationSelfLinkAndConsentSuite`
+  (#402 self-link across two divisions, opt-out masking). Also fixed
+  `regQueueSuite`'s pre-existing stale assertion (was asserting a "closed"
+  string that's actually present in the open-state page's hydration payload
+  regardless of state — a structurally-unfalsifiable check since before this
+  session; now anchors on the WHO step's own `id="reg-who-name"`). Live: 936
+  passed, 0 failed, against a rebuilt server.
+- **E2E debt**: `payments-hardening.spec.ts`'s T3/T7 entrant-cap-drop-128-to-64
+  halves (parked since RS001 deleted the endpoint they needed) restored
+  against RS006/RS007's real endpoint — 5/5 green. RS007's "two unrun specs"
+  concern and RS008's "walkthrough specs not run end-to-end" concern: both
+  ran clean at their own PR gates (git history confirms), re-verified fine
+  now. Seven-width matrix (mobile.spec.ts) already covered stepper (all 4
+  steps), status page, join page, and both hub tabs BEFORE this session —
+  found already discharged by RS006/RS007/RS009's own sessions, not a gap.
+  Added: axe coverage for all 4 of those surfaces (previously zero) — 0
+  violations, whole-page scope including header/chrome (no `.include()`).
+  New cross-flow walkthrough (`e2e/walkthrough/rs010-registration-cross-flow.spec.ts`)
+  — the "one flow nobody has run" pass: configure → register → join →
+  waitlist → approve → opt-out → verify hub/public/CSV screens agree.
+  3/3 green, mutation-checked (inverting the masking assertion goes red for
+  the right reason), screenshots at 1280/768/320. No contradiction found
+  between screens — the programme's surfaces genuinely agree with each
+  other.
+- **Help pages**: `content/help/registration/**` rewritten against the ACTUAL
+  current UI (not grepped — driven). `open-registration.md`'s "pulse strip"
+  premise was already false by RS005 (2026-08-26); the real staleness was
+  `reference-numbers.md` promising "add to calendar"/"save ticket" (wired to
+  zero components) and missing the RS009/RS012 solo-sign-up-pool flow. New
+  registrant-facing guide added (`registering-for-a-competition.md`) —
+  cart, join links, consent/opt-out, payment/status page. English-only, no
+  i18n owed.
+- **Demo**: genuinely greenfield (confirmed `seed:demo` wrote zero
+  registration rows before this session). `seedRegistrationDemo()` added to
+  `scripts/seed-demo.ts` — open/part-filled-team/waitlisted/manual-approval
+  states, pure HTTP (no direct DB writes — cannot fire during a test-DB
+  flow). Live-verified: real join_code minted, correct roster/waitlist/
+  pending counts.
+- **Axe**: genuinely greenfield (zero prior mention in this programme's
+  history). 0 serious/critical, 0 of ANY impact, across all 4 new routes.
+- **i18n**: `i18n:check` clean (5758 keys × 3 locales, no drift); no
+  hardcoded English introduced outside `content/help/**` (exempt).
+- **`public_person_name()` SQL vs `resolvePersonDisplayName()` divergence**
+  (RS008 open question, "decide whether to flip the default or document
+  both"): investigated, found ALREADY discharged — the entrants-list call
+  site was fixed 2026-08-30 (code-review item 5) to route through
+  `resolvePersonDisplayName`; the one remaining `public_person_name()` use
+  (discipline.ts/player-stats.ts) is explicitly documented as an
+  intentionally distinct, already-correct surface (`name-display.ts:60-62`).
+  No code change needed.
+
+### Unplanned fix — a real product bug, found by this session's own smoke coverage
+
+`promoteFromWaitlist` (organiser promote), and — caught only on `/code-review`,
+NOT by the first round of live verification — `withdrawCore` (all three
+withdraw entry points) and both `sweepRegistrations` promotion passes, ALL
+promote a waitlisted entry to `status='pending'` unconditionally, regardless
+of division approval mode. On a FREE (`fee_cents=0`) + AUTO-approval
+division — the platform default shape — nothing ever confirms that `pending`
+row afterward: `approveRegistration` refuses a `pending` row on an `auto`
+division ("nothing to approve manually"), and a $0 entry gets no payment
+webhook. The promoted registrant sat stuck forever: no entrant materialised,
+never counted toward the public entrant list, while `notifyPromoted` still
+emailed them as if they were confirmed with nothing due.
+
+Fixed at the ROOT — inside `promoteWaitlistedRow` (`registrations.ts`) itself,
+not at each caller — after the first pass only patched the one organiser-
+promote call site and `/code-review` traced all 5 callers of
+`promoteOldestWaitlisted`/`promoteWaitlistedRow` and found the other three
+still exposed. Mirrors `submitRegistrationGroup`'s own existing
+`!waitlisted && approval === "auto" && feeCents === 0` inline-confirm
+shortcut, so submit and promote now agree. New DB-backed regression tests at
+both the `promoteFromWaitlist` level (`registration-approval.test.ts`) and
+the `withdrawCore` level (`registrations.test.ts`, "Site A, free/auto
+division"). Full promote-adjacent test sweep (8 files): 432/432. Live via
+smoke + the cross-flow walkthrough, both green against a rebuilt server.
+
+### Environmental notes (unrelated, not chased, per programme standing rule)
+
+- The local `.env.local` `STRIPE_SECRET_KEY` in this worktree is genuinely
+  dead (confirmed via a direct `curl` to Stripe's `/v1/balance` — "Invalid
+  API Key", not scope-specific). Every Stripe-API-touching smoke suite after
+  `paymentMethodSuite` (Task 11, pre-existing, unrelated to registration)
+  aborted the whole script on first contact; ran smoke keyless for real
+  signal on everything else. `STRIPE_WEBHOOK_SECRET` is unaffected (HMAC
+  constant, not a live key) — payments-hardening's signed-webhook e2e ran
+  fine with it set alone.
+- A pre-existing, reproducible flake in `scripts/seed-demo.ts`'s general
+  (non-registration) competition seeding: `POST .../stages/{id}/complete`
+  409s "no generated TBD fixtures yet" on a different competition each run
+  (Spring Football League, then Racquet Masters, then Chess Open) — a
+  probabilistic race in `playStage`'s fill logic, unrelated to this
+  session's changes. `seedRegistrationDemo()` itself verified working in
+  isolation (temporarily exported, called directly, reverted) rather than
+  chasing the unrelated flake to get a full end-to-end `--phase=seed` run.
+- One `placement optimized: the optimiser measurably beat greedy` smoke
+  check failed once under machine load (concurrent tsc/vitest/smoke runs
+  this session) and passed clean on rerun — confirmed transient by the
+  seazn-local-env skill's own documented class of timing-sensitive-under-load
+  flake, not a real regression.
+
+### Final gate (rebuilt server, main thread's own reruns — not self-reported by any subagent)
+
+`tsc` (scripts + apps/web): EXIT=0 both. `seazn-env gate` (turbo lint+typecheck,
+scoped): 0 errors, 127 pre-existing warnings all outside this session's files.
+`i18n:check`: clean. `smoke.ts`: 936 passed, 0 failed. `payments-hardening.spec.ts`
+T3/T7: 5/5. `mobile.spec.ts` axe: 6/6. `rs010-registration-cross-flow.spec.ts`:
+3/3. Promote-adjacent unit sweep (8 files): 432/432.
+
+**Registration Redesign programme (RS001–RS012) is CLOSED.**
