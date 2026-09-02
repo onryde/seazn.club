@@ -46,11 +46,27 @@ export interface CompetitionDesk {
   divisions: Map<string, DeskDivision>;
 }
 
-/** Derived from the schema's own default so the two can never drift
- *  (schemas.ts's `ScheduleConfig.matchMinutes` `.default(30)`) — a division
- *  with no schedule_settings row at all parses an empty config the same way
- *  the read path does (schedule.ts:296's `ScheduleConfig.parse`). */
-const DEFAULT_MATCH_MINUTES = ScheduleConfig.parse({}).matchMinutes;
+let cachedMatchMinutes: number | undefined;
+/** The schema's own default (schemas.ts's `ScheduleConfig.matchMinutes`
+ *  `.default(30)`), read lazily and memoised: a division with no
+ *  schedule_settings row at all falls back to this, the same way the read
+ *  path parses an empty config (schedule.ts:296's `ScheduleConfig.parse`).
+ *  Deferred to first call, not evaluated at module load — a future required
+ *  field on ScheduleConfig must not throw at import time and take down
+ *  every importer of this module (Task 5 wires it into the competition page
+ *  route), so a parse failure here logs and falls back to the literal
+ *  instead of propagating. */
+function defaultMatchMinutes(): number {
+  if (cachedMatchMinutes === undefined) {
+    try {
+      cachedMatchMinutes = ScheduleConfig.parse({}).matchMinutes;
+    } catch (err) {
+      log.error({ event: "desk_default_match_minutes_failed", err }, "desk_default_match_minutes_failed");
+      cachedMatchMinutes = 30; // schemas.ts matchMinutes .default(30)
+    }
+  }
+  return cachedMatchMinutes;
+}
 
 type StageRaw = {
   id: string;
@@ -117,7 +133,7 @@ export async function getCompetitionDesk(
   for (const d of divisions) {
     const s = stats.get(d.id);
     const st = settings.find((x) => x.division_id === d.id);
-    const matchMinutes = st?.match_minutes ?? DEFAULT_MATCH_MINUTES;
+    const matchMinutes = st?.match_minutes ?? defaultMatchMinutes();
     const phaseStages: PhaseStage[] = stages
       .filter((x) => x.division_id === d.id)
       .map((x) => ({
