@@ -63,6 +63,18 @@ function redAction(dict: Dict, d: DeskDivision, org: string, comp: string, slug:
 }
 
 export function DivisionLedger({ dict, rows, org, comp, locale }: { dict: Dict; rows: LedgerRow[]; org: string; comp: string; locale: string }) {
+  // Fix round 2: nextLine() computed ONCE per row here, reused below — never
+  // re-derived, and never called twice for the same row. `hasNext` decides
+  // the WHOLE ledger's desktop grid template (not a per-row template, which
+  // would misalign columns across rows the moment only some have a next
+  // fixture): with V4's fix (empty string, not "Nothing scheduled next"),
+  // a competition where nothing has a next fixture must not reserve a
+  // ~1.4fr track for a column no row will ever fill.
+  const nextByRow = rows.map((r) => (r.desk ? nextLine(dict, r.desk, locale) : ""));
+  const hasNext = nextByRow.some((n) => n !== "");
+  const desktopGridCols = hasNext
+    ? "md:grid-cols-[36px_1fr_140px_130px_minmax(0,1.4fr)_auto]"
+    : "md:grid-cols-[36px_1fr_140px_130px_auto]";
   return (
     <section data-testid="desk-ledger">
       {/* V5 fix (review round 1): the page's own "Divisions" heading (with
@@ -70,11 +82,11 @@ export function DivisionLedger({ dict, rows, org, comp, locale }: { dict: Dict; 
           "DIVISIONS · N" heading here duplicated it. The page passes the
           count into its own heading now. */}
       <div className="card divide-y divide-purple-50">
-        {rows.map((r) => {
+        {rows.map((r, i) => {
           const d = r.desk;
           const pct = d && d.total > 0 ? Math.round((d.played / d.total) * 100) : 0;
           const href = routes.division(org, comp, r.slug);
-          const next = d ? nextLine(dict, d, locale) : "";
+          const next = nextByRow[i];
           const action = d ? redAction(dict, d, org, comp, r.slug) : null;
           const tile = (sizeClass: string) => (
             <span
@@ -131,7 +143,7 @@ export function DivisionLedger({ dict, rows, org, comp, locale }: { dict: Dict; 
                   thing in the row; consistent gaps with the name column
                   absorbing the flexible space (E); the glyph fills more of
                   its tile (F). */}
-              <div className="hidden items-center gap-3 px-4 py-3 md:grid md:grid-cols-[36px_1fr_140px_130px_minmax(0,1.4fr)_auto]">
+              <div className={`hidden items-center gap-3 px-4 py-3 md:grid ${desktopGridCols}`}>
                 {tile("text-xl")}
                 <div className="min-w-0">
                   <Link href={href} className="block truncate text-sm font-semibold text-slate-900">{r.name}</Link>
@@ -144,7 +156,15 @@ export function DivisionLedger({ dict, rows, org, comp, locale }: { dict: Dict; 
                   <i className={`block h-full rounded-full ${d ? BAR[d.phase] : "bg-purple-300"}`} style={{ width: `${pct}%` }} />
                 </div>
                 <div>{d && <PhasePill dict={dict} phase={d.phase} attention={d.attention} />}</div>
-                <p className="text-xs text-slate-900">{next}</p>
+                {/* Fix round 2: this cell exists ONLY when the ledger's
+                    template reserves its track (`hasNext`) — and then on
+                    EVERY row, even one whose own `next` is empty, so the
+                    Open column stays on the same grid axis as its
+                    neighbours. When no row in the whole ledger has a next
+                    fixture, the track itself is dropped above and this cell
+                    must not render at all — an empty `<p>` in a dropped
+                    track would shift Open into it. */}
+                {hasNext && <p className="text-xs text-slate-900">{next}</p>}
                 <div className="flex items-center gap-2">
                   <Link href={href} className="btn btn-ghost px-3 py-1.5 text-xs">{t(dict, "desk.ledger.open")}</Link>
                   {r.menu}

@@ -149,4 +149,40 @@ describe("DivisionLedger", () => {
     expect(htmlAction).toContain("Compute proposal");
     expect(htmlAction).toContain('href="/o/org/c/comp/d/u16-cup?tab=fixtures"');
   });
+  it("fix round 2: the desktop next column is dropped ledger-wide when no row has a next fixture — no reserved track, no empty cell", () => {
+    const rowA = div({ phase: "finished", played: 15, total: 15, next: null });
+    const rowB = div({ division_id: "d2", phase: "finished", played: 28, total: 28, next: null });
+    const html = renderToStaticMarkup(
+      <DivisionLedger dict={en} org="org" comp="comp" locale="en"
+        rows={[
+          { id: "d1", name: "Premier Division", slug: "premier-division", sportKey: "football", logoUrl: null, desk: rowA, statusLine: "s1" },
+          { id: "d2", name: "U16 Cup", slug: "u16-cup", sportKey: "football", logoUrl: null, desk: rowB, statusLine: "s2" },
+        ]} />,
+    );
+    expect(html).not.toContain("minmax(0,1.4fr)");
+    // Not just blank — the cell itself must not be emitted, or the Open
+    // column shifts into a dead track.
+    expect(html).not.toContain('class="text-xs text-slate-900"');
+  });
+  it("fix round 2: the desktop next column is present ledger-wide when ANY row has a next fixture, and every row emits its cell (even an empty one) so Open stays on the same axis", () => {
+    const withNext = div({
+      phase: "scheduled",
+      next: { home: "Riverside FC", away: "Summit CC", court_label: null, scheduled_at: "2026-09-12T09:00:00Z", in_play: false },
+    });
+    const withoutNext = div({ division_id: "d2", phase: "finished", next: null });
+    const html = renderToStaticMarkup(
+      <DivisionLedger dict={en} org="org" comp="comp" locale="en"
+        rows={[
+          { id: "d1", name: "Premier Division", slug: "premier-division", sportKey: "football", logoUrl: null, desk: withNext, statusLine: "s1" },
+          { id: "d2", name: "U16 Cup", slug: "u16-cup", sportKey: "football", logoUrl: null, desk: withoutNext, statusLine: "s2" },
+        ]} />,
+    );
+    expect(html).toContain("minmax(0,1.4fr)");
+    const [, row1, row2] = html.split('data-testid="desk-ledger-row"');
+    expect(row1).toContain("Riverside FC");
+    expect(row1).toMatch(/<p class="text-xs text-slate-900">[^<]*Riverside FC/);
+    // The row WITHOUT a next fixture still emits the (empty) cell.
+    expect(row2).not.toContain("Riverside FC");
+    expect(row2).toMatch(/<p class="text-xs text-slate-900"><\/p>/);
+  });
 });
