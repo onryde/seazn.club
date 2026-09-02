@@ -553,8 +553,8 @@ export function FixtureConsole({
   const padPlural = useMsgPlural();
   let activityDetail: ActivityDetailResolver | undefined;
   try {
-    const lane = resolvePad(sport.key, padT);
-    const skinDetail = lane.lane === "v3" ? lane.skin.activityDetail : undefined;
+    const skin = resolvePad(sport.key, padT);
+    const skinDetail = skin.activityDetail;
     if (skinDetail) {
       activityDetail = (eventType, payload, history) =>
         skinDetail({

@@ -25,6 +25,7 @@ import {
   type UsePadPipelineParams,
   type UsePadPipelineResult,
 } from "../use-pad-pipeline";
+import { runAmend } from "../v3/pad-host";
 
 // S12/#421 pass H test seam: this suite's vitest environment is Node, with
 // no real `indexedDB` (queue-store.ts's own documented fallback — see the
@@ -2464,5 +2465,161 @@ describe("R7-46: the double-submit window must stay out of human tapping range",
     // drifted below ~200ms would no longer describe a person, and the
     // inequality above would start passing for the wrong reason.
     expect(HUMAN_FASTEST_REPEAT_MS).toBeGreaterThanOrEqual(200);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R8/#675 — an amendment must survive a reload taken mid-hold
+// ---------------------------------------------------------------------------
+//
+// WHY THIS LIVES HERE AND NOT BESIDE `runAmend`'s own tests. Those drive the
+// real `queue.ts` primitives, but through a hand-written mirror of this file's
+// wiring — and a mirror is structurally incapable of reaching the RESUME path,
+// which is the one place this defect lives. This suite owns the seam that can:
+// `queueStoreRegistry` (top of file) keeps a dbName's queue alive across an
+// `unmount()` + fresh `mountPipeline()`, which is exactly what a reload is.
+//
+// THE DEFECT THIS PINS, and it is a mirror image of the one the round before it
+// fixed. Round 1 enqueued the void as a durable SIBLING of the held
+// replacement: it survived a reload, but nothing could cancel it, so a
+// take-back stranded it and DELETED a scored event. Round 2 moved the void into
+// the held entry's release CLOSURE: cancellable, but a closure does not survive
+// a reload. `ticksByStore` (queue.ts) is a module-level WeakMap keyed on the
+// store OBJECT and registered only by `enqueueHeld`; the resume path calls
+// `releaseHeld` on a FRESH store whose tick map is empty, so `tick?.onDue()` is
+// a no-op — use-pad-pipeline.ts says exactly that in its own comment. The
+// replacement still sends. The void never does. Both events fold and the point
+// DOUBLES, silently and durably, until a scorer notices.
+//
+// Neither half is the whole answer: the linkage has to be durable AND
+// cancellable. Do not "simplify" this back to a closure.
+describe("R8/#675 — a reload inside the amendment's hold window", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("still sends the void behind the resumed replacement, so the corrected point is not counted twice", async () => {
+    const DB_NAME = "amend-reload-fx";
+    const REAL_SERVER_ID = "server-row-for-the-original";
+    let ackSeq = 1;
+    const appendCalls: AppendEventBody[] = [];
+    // A transport that actually SERVES the ledger back, modelled on the pass-J
+    // reload test above. It matters here for the same reason it does there: a
+    // reload discards `ownEventIds`, so a queued void resolves its target
+    // through the DURABLE `voidTargetSeq` plus a `listEventsSince` read. A
+    // double that returns `[]` makes that read look like a transient network
+    // failure, and the void then sits queued forever — which would have let
+    // this test "fail" for a reason that has nothing to do with the binding.
+    const transport: PadTransport = {
+      async appendEvent(_fixtureId, body) {
+        appendCalls.push(body);
+        const seq = ackSeq;
+        ackSeq += 1;
+        return success(seq);
+      },
+      async listEventsSince(): Promise<LedgerSlotEvent[]> {
+        return [
+          {
+            id: REAL_SERVER_ID,
+            seq: 1,
+            type: "generic.score",
+            payload: { by: "H", points: 1 },
+            recorded_at: "2026-09-02T00:00:01.000Z",
+            recorded_by: "user-1",
+            device_link_id: null,
+          },
+        ];
+      },
+      async getLastSeq() {
+        return 0;
+      },
+      async fetchState(): Promise<FixtureStateResult> {
+        return { status: "in_play", last_seq: 1, state: null, summary: null, outcome: null };
+      },
+    };
+
+    // Mount 1: a scored, ACKED event — the one an amendment will correct.
+    const pad1 = mountPipeline(baseParams({ transport, queueDbName: DB_NAME }));
+    await vi.advanceTimersByTimeAsync(0);
+    await pad1.current.submit("generic.score", { by: "H", points: 1 });
+    const originalId = pad1.current.events.find((e) => e.type === "generic.score")!.id;
+    expect(appendCalls).toHaveLength(1);
+
+    // Clear the double-submit window: the amendment re-appends the SAME
+    // (type, payload), which inside 250ms is refused by design.
+    await vi.advanceTimersByTimeAsync(DOUBLE_SUBMIT_WINDOW_MS + 50);
+
+    // THE AMENDMENT, through the real `runAmend` over the real pipeline.
+    const heldId = await runAmend(
+      { voidId: originalId, type: "generic.score", payload: { by: "H", points: 1 } },
+      {
+        submitHeld: (type, payload) => pad1.current.submitHeld(type, payload, HOLD_MS, () => {}),
+        submit: (type, payload, opts) => pad1.current.submit(type, payload, opts),
+      },
+    );
+    expect(heldId).not.toBeNull();
+    expect(appendCalls, "the replacement is still held — nothing has drained").toHaveLength(1);
+
+    // THE RELOAD. A real one: every mount effect's cleanup runs, and the fresh
+    // instance gets a brand-new store object (hence a brand-new, EMPTY tick
+    // map) over the same durable queue.
+    pad1.unmount();
+    const pad2 = mountPipeline(baseParams({ transport, queueDbName: DB_NAME }));
+    await vi.advanceTimersByTimeAsync(0);
+    // The resumed hold's remaining window, then its drain.
+    await vi.advanceTimersByTimeAsync(HOLD_MS + 100);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(
+      appendCalls.map((c) => c.type),
+      "the resumed replacement must be followed by the void that retires the original",
+    ).toEqual(["generic.score", "generic.score", "core.void"]);
+    expect(appendCalls[2]!.payload, "and it must name the original row, not the replacement").toEqual({
+      event_id: REAL_SERVER_ID,
+    });
+    expect(await pad2.current.queueStore.list(), "nothing may be left queued").toEqual([]);
+  });
+
+  it("clears the bound void from the OPTIMISTIC fold too, not only from the queue", async () => {
+    // Found in a browser, and it is its own defect rather than a lesser version
+    // of the Critical: with the cascade in `dropHeld` alone, take-back left the
+    // durable queue clean while `pendingEnvelopes` still held the void, so the
+    // optimistic fold went on retiring the original. The ledger read perfectly
+    // and the pad showed a scored event struck through with nothing in its
+    // place — the same symptom as the Critical, one layer up.
+    const DB_NAME = "amend-cancel-optimistic";
+    const { transport, appendCalls } = fakeTransport({ appendResults: [success(1)] });
+    const pad = mountPipeline(baseParams({ transport, queueDbName: DB_NAME }));
+    await vi.advanceTimersByTimeAsync(0);
+    await pad.current.submit("generic.score", { by: "H", points: 1 });
+    const originalId = pad.current.events.find((e) => e.type === "generic.score")!.id;
+    await vi.advanceTimersByTimeAsync(DOUBLE_SUBMIT_WINDOW_MS + 50);
+
+    const heldId = await runAmend(
+      { voidId: originalId, type: "generic.score", payload: { by: "H", points: 1 } },
+      {
+        submitHeld: (type, payload) => pad.current.submitHeld(type, payload, HOLD_MS, () => {}),
+        submit: (type, payload, opts) => pad.current.submit(type, payload, opts),
+      },
+    );
+    expect(pad.current.events.filter((e) => e.type === "core.void")).toHaveLength(1);
+
+    // Take-back, exactly as `handleUndo`'s drop branch performs it.
+    expect(await pad.current.dropHeldSubmission(heldId as string)).toBe(true);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(await pad.current.queueStore.list(), "the queue is clean").toEqual([]);
+    expect(
+      pad.current.events.filter((e) => e.type === "core.void"),
+      "and so is the optimistic fold — a void left here retires the original on screen",
+    ).toEqual([]);
+    expect(
+      pad.current.events.filter((e) => e.type === "generic.score"),
+      "the original event stands, exactly once",
+    ).toHaveLength(1);
+    expect(appendCalls, "and nothing further was ever sent").toHaveLength(1);
   });
 });

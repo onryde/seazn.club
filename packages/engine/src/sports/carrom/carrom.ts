@@ -26,6 +26,7 @@ import {
   type StandingsDelta,
 } from "../../core/types.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
+import { stampAttributionRequired } from "../../sport/module.ts";
 import type {
   ModuleEvent,
   PadAction,
@@ -694,20 +695,25 @@ export function padSpec(cfg: CarromCfg): PadSpec {
     },
   ];
 
-  return {
-    panels,
-    // Modelled on carrom's OWN existing (untouched) `fidelityTiers` (below):
-    // tier 0 is the board summary alone, tier 1 adds the toss and umpire
-    // adjustments. Neither entry carries an entitlement — both bands ship
-    // free; strike-by-strike (reserved, `CarromStrike`) would be tiers 2/3
-    // whenever T4 lands, and is out of scope here (no `eventSchema` branch).
-    fidelity: {
-      "carrom.board.summary": 0,
-      "carrom.toss": 1,
-      "carrom.game.adjust": 1,
+  // R8/WS-B — `required` stamped ONCE, here, from CARROM_EVENT_SCHEMAS
+  // itself (never hand-typed per action; see module.ts's own doc comment).
+  return stampAttributionRequired(
+    {
+      panels,
+      // Modelled on carrom's OWN existing (untouched) `fidelityTiers` (below):
+      // tier 0 is the board summary alone, tier 1 adds the toss and umpire
+      // adjustments. Neither entry carries an entitlement — both bands ship
+      // free; strike-by-strike (reserved, `CarromStrike`) would be tiers 2/3
+      // whenever T4 lands, and is out of scope here (no `eventSchema` branch).
+      fidelity: {
+        "carrom.board.summary": 0,
+        "carrom.toss": 1,
+        "carrom.game.adjust": 1,
+      },
+      fidelityEntitlements: {},
     },
-    fidelityEntitlements: {},
-  };
+    CARROM_EVENT_SCHEMAS,
+  );
 }
 
 // ---------------------------------------------------------------------------

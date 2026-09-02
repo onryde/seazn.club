@@ -26,7 +26,7 @@ After a wicket the pad prompts for the incoming batter. **Retire** handles a bat
 
 ## Undo
 
-For about six seconds after a tap, **Undo** removes the entry outright — it never reaches the record, so there's nothing to explain later. After that it is [a correction on an append-only ledger](/help/scoring/corrections): the entry is undone rather than erased, and the scorecard can always be reconstructed.
+Straight after a tap, while the entry is still held, **Undo** removes it outright — it never reaches the record, so there's nothing to explain later. After that it is [a correction on an append-only ledger](/help/scoring/corrections): the entry is undone rather than erased, and the scorecard can always be reconstructed.
 
 ## The rest of the innings
 

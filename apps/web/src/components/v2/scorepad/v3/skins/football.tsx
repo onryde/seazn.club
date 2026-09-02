@@ -51,6 +51,7 @@ import type { FidelityBand } from "@seazn/engine/sport";
 // cricket's or tennis's own directories. Mirrors the cricket skin's
 // `import { eligibleBowlers, nextBattingSide, reviewsRemaining } from
 // "@seazn/engine/sports/cricket"`.
+import type { SquadState } from "@seazn/engine/core";
 import { expectedKicker, shootoutTally, type ShootoutKick } from "@seazn/engine/sports/football";
 import type { MessageKey } from "@/lib/messages";
 import { ENUM_VOCAB } from "@/lib/scoring-vocab";
@@ -59,6 +60,7 @@ import {
   MORE_SHEET_KEY,
   type ActivityDetailContext,
   type Blocked,
+  type CandidateMeta,
   type DockChip,
   type DockSpec,
   type GuidedSheetSpec,
@@ -1272,6 +1274,58 @@ function onCandidates(state: FootballStateShape, cfg: FootballCfgShape, side: Si
   return { candidates: [...bench, ...gone], blocked };
 }
 
+/**
+ * Row decoration for the substitution sheet (R8 sweep, task WS-D) — the R7
+ * `CandidateMeta` mechanism (`types.ts`, rendered by `context-strip.tsx`'s
+ * `renderCandidateRow`) that volleyball's `liberoCandidateMeta` already
+ * populates and football never wired, so eleven near-identical on-pitch
+ * names rendered with no distinguisher on the very step the whole sheet is
+ * about.
+ *
+ * Sourced from `view.squads`, deliberately NOT the live `squadOf(state,
+ * side)` this file's own `onCandidates`/`offCandidates` read above.
+ * `onCandidates`'s own doc explains why `view.squads` is the WRONG source
+ * for the candidate POOL — it degrades to `initSquads(lineups)`, the
+ * kickoff team sheet, frozen the moment a substitution happens. That
+ * staleness does not apply here: a squad number and a declared role do not
+ * change when a player is substituted, so the kickoff sheet is exactly the
+ * right (and only) place this file has either fact.
+ *
+ * The SQUAD NUMBER leads and `positionKey` is the fallback — owner ruling of
+ * 2026-09-01, superseding the position-led wording of 2026-08-30. Players are
+ * known by their shirt number and it is what a scorer reads off the jersey under
+ * time pressure; it is also unique per side, where a position code is not. Kept
+ * identical to `period-shared.ts`'s `periodCandidateMeta`: one rule, two sports.
+ *
+ * `positionKey` is carried only for a STARTING slot (`memberFromSlot`,
+ * core/lineup.ts — a bench slot's declared position is a preference, not an
+ * occupancy, the same distinction volleyball's own doc draws), so a bench
+ * candidate has only ever had their squad number to show, and an unnumbered
+ * starter still falls back to their position. `tag` mirrors the ONE
+ * role key football's own `PositionCatalog` declares (`football.ts`'s
+ * `positions.roles`, "captain") — matching this file's own precedent of
+ * mirroring the engine's closed vocabularies rather than typing a new one.
+ *
+ * Keyed over the WHOLE squad (starting and bench), matching
+ * `liberoCandidateMeta`'s own reasoning: the OFF step's pool is the live
+ * on-pitch set (`offCandidates`) and the ON step's is bench-plus-already-
+ * substituted (`candidates`), and a table built for only one would silently
+ * decorate one step and not the other.
+ */
+function footballCandidateMeta(squads: SquadState, side: Side, t: TFn): Readonly<Record<string, CandidateMeta>> {
+  const meta: Record<string, CandidateMeta> = {};
+  for (const member of squads[side].members) {
+    const lead = member.squadNumber !== undefined ? String(member.squadNumber) : member.positionKey;
+    const tag = member.roles?.includes("captain") ? t("pad.football.swap.captainTag") : undefined;
+    if (lead === undefined && tag === undefined) continue;
+    meta[member.personId] = {
+      ...(lead !== undefined ? { lead } : {}),
+      ...(tag !== undefined ? { tag } : {}),
+    };
+  }
+  return meta;
+}
+
 export function buildSwap(view: PadHostView, t: TFn): SwapSlot[] {
   const state = asState(view.state);
   const cfg = asCfg(view.cfg);
@@ -1288,6 +1342,7 @@ export function buildSwap(view: PadHostView, t: TFn): SwapSlot[] {
     const stamp = stampOf(state);
     return {
       id: swapSlotId(side),
+      candidateMeta: footballCandidateMeta(view.squads, side, t),
       offLabel: "scorepad.skin.football.swap.off",
       onLabel: "scorepad.skin.football.swap.on",
       side,

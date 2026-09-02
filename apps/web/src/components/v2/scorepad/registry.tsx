@@ -8,12 +8,11 @@
 // (`pad-renderer.tsx`, `skins/registry.ts`'s `skinFor`, the
 // `resolveScorePad`/`RESOLUTION_KIND`/`NO_V2_SKIN_SPORTS` decision table that
 // used to live here) once carrom — the last of the 11 engine sports — landed
-// its own v3 skin (`v3/registry.ts`'s `V3_SKINS`, R7/A3). `resolvePad`
-// (`v3/registry.ts`) now resolves EVERY `builtinModules` key to the "v3"
-// lane; its "legacy" arm is provably unreachable today
-// (`v3/__tests__/registry-totality.test.ts` pins `LEGACY_SPORTS.size` at 0)
-// and is handled below with a loud throw rather than silently rendering
-// nothing, in case a future engine sport ever ships without a v3 skin.
+// its own v3 skin (`v3/registry.ts`'s `V3_SKINS`, R7/A3). R8 finished the
+// job: `resolvePad` (`v3/registry.ts`) no longer HAS a "legacy" arm to fall
+// through to — it returns a v3 skin for every `builtinModules` key
+// directly, or throws for a key `V3_SKINS` does not own, in case a future
+// engine sport ever ships without a v3 skin.
 import { useCallback, useMemo } from "react";
 import type { EventEnvelope, Lineup, LineupPair, LineupSlot } from "@seazn/engine/core";
 import type { AnySportModule, FidelityBand } from "@seazn/engine/sport";
@@ -90,6 +89,48 @@ function toLineupSlot(s: LineupSlotIn, index: number): LineupSlot {
     // genuinely unset, the same "include only when meaningful" convention
     // `role`/`roles`/`positionKey` already use above.
     ...(s.pair_order != null ? { pairOrder: s.pair_order } : {}),
+    // `squadNumber` (shirt number) — R8 sweep, WS-SQ. The THIRD field to be
+    // found missing from this hand-copied list, after `role` (pass B) and
+    // `pairOrder` (pass D), and the same silent shape every time: the engine's
+    // `SquadMember.squadNumber` has existed since S3 (core/lineup.ts),
+    // `entrant_members.squad_number` is a real populated column,
+    // `readLineup`'s SQL (server/usecases/fixtures.ts) already selects it and
+    // `LineupSlotIn` already DECLARED it — the number simply was not listed
+    // here, so `initSquads` had nothing to carry and every squad member the
+    // pad ever saw had `squadNumber: undefined`. tsc cannot catch that: an
+    // optional field that is merely never set type-checks perfectly.
+    //
+    // What it unlocks: the substitution sheet's badge builders
+    // (`footballCandidateMeta` in v3/skins/football.tsx, and the shared
+    // `periodCandidateMeta` in v3/skins/period-shared.ts that hockey and ice
+    // hockey use) lead with the SQUAD NUMBER and fall back to `positionKey`:
+    //
+    //     const lead = member.squadNumber !== undefined
+    //       ? String(member.squadNumber) : member.positionKey;
+    //
+    // — owner ruling of 2026-09-01, superseding the position-led wording of
+    // 2026-08-30 (quoted from `footballCandidateMeta`'s own docstring, which
+    // is the ruling of record). R8 branch review: this comment used to say
+    // `member.positionKey ?? member.squadNumber`, i.e. exactly backwards, and
+    // it understated the blast radius with it.
+    //
+    // The real reach is every NUMBERED member, not just the bench.
+    // `memberFromSlot` (core/lineup.ts) deliberately drops a BENCH slot's
+    // declared position — a preference, not an occupancy — so before this
+    // line the entire ON step was unbadgeable in principle, not merely
+    // unbadged. But a numbered STARTER already had a badge, and this line
+    // flips its lead from the position code to the shirt number. An
+    // unnumbered starter still falls back to their position, unchanged.
+    // `squad-number-seam.test.ts` drives that from the wire row through the
+    // real fold into the real builder.
+    //
+    // `!= null` (not `!== undefined`) deliberately: this column is nullable
+    // and `readLineup` returns a real `null` for a member with no declared
+    // number. Omitted rather than carried as null, the same "absent unless it
+    // adds information" convention every field above uses — and the engine's
+    // own `memberFromSlot` omits the key entirely when the slot's is
+    // undefined, so a null here would be a shape the kernel never produces.
+    ...(s.squad_number != null ? { squadNumber: s.squad_number } : {}),
   };
 }
 
@@ -233,20 +274,13 @@ export function ScorePad(props: ScorePadProps) {
   //
   // R1 shipped six chassis primitives with zero production import sites;
   // this is that import site — `PadHostV3` (./v3/pad-host.tsx). R2 through
-  // R7/A3 (carrom, 2026-08-31) moved every sport onto it one at a time;
-  // `v3/registry.ts`'s own `LEGACY_SPORTS` is now provably empty
-  // (`__tests__/registry-totality.test.ts` pins its size at 0), so
-  // `padLane.lane` is "v3" for every real call today. The "legacy" arm below
-  // is a defensive throw, not a real branch: it would only fire for a future
-  // engine sport that ships without ever getting a v3 skin, which is exactly
-  // the situation `resolvePad`'s own header says should never be silent.
-  const padLane = resolvePad(props.sportKey, t);
-
-  if (padLane.lane !== "v3") {
-    throw new Error(
-      `ScorePad: "${props.sportKey}" resolved to the legacy pad lane, which no longer exists (R7 demolished it — see this file's own header)`,
-    );
-  }
+  // R7/A3 (carrom, 2026-08-31) moved every sport onto it one at a time, and
+  // R8 deleted the legacy lane `resolvePad` used to fall back to outright —
+  // it returns a v3 skin directly now, or throws, with no wrapper to check
+  // here (a future engine sport that ships without ever getting a v3 skin
+  // still fails loudly, just inside `resolvePad` itself rather than at a
+  // second check on this side).
+  const skin = resolvePad(props.sportKey, t);
 
   return (
     <PadHostV3
@@ -264,7 +298,7 @@ export function ScorePad(props: ScorePadProps) {
       personNames={personNames}
       showActivity={!props.hideActivity}
       onPartialResolver={props.onPartialResolver}
-      skin={padLane.skin}
+      skin={skin}
     />
   );
 }

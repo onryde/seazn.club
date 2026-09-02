@@ -13,7 +13,14 @@ export async function GET(req: Request, { params }: Ctx) {
   });
 }
 
-/** Replace an entrant's lineup for the fixture (doc 08 §3). */
+/** Replace an entrant's lineup for the fixture (doc 08 §3). R7-15/R8 WS-F:
+ *  the saved lineup is checked against `validateLineup` (engine catalog.ts)
+ *  WARNING-ONLY — `putLineup` itself resolves the fixture's sport module and
+ *  attaches the issues as `warnings: string[]` on this response (and logs
+ *  them); a flagged lineup still saves (2xx). Done inside the usecase, not
+ *  here, because it already runs inside `putLineup`'s tx with the division's
+ *  sport_key/module_version/config in hand — this handler stays a thin
+ *  auth+parse+delegate, matching every other route in this file. */
 export async function PUT(req: Request, { params }: Ctx) {
   return v1(async () => {
     const { id, entrantId } = await params;

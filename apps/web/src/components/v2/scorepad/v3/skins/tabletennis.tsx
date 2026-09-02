@@ -469,6 +469,46 @@ function nameOf(view: PadHostView, personId: string, t: TFn): string {
   return view.personNames[personId] ?? t("eventCopy.unknownPerson");
 }
 
+/**
+ * R8/#676 — every value the `server` slot can take, for width reservation
+ * only (`StripItem.reserve`); never displayed.
+ *
+ * A SUPERSET, deliberately. Unlike badminton, ITTF's `serverFromPairOrder`
+ * lets the reader name either member of a pair, so the value space is every
+ * on-field player, plus each side's label for the case where no person can be
+ * named at all (a squad that is not exactly `SERVE_PAIR_SIZE`, or a barred
+ * role). Reserving more than can land is harmless — the slot is as wide as its
+ * widest candidate either way; reserving less is the one thing that breaks it.
+ */
+function serverCandidates(view: PadHostView, t: TFn): string[] {
+  const sides = ["home", "away"] as const;
+  return [
+    ...sides.flatMap((side) => onFieldPlayers(view.squads, side).map((m) => nameOf(view, m.personId, t))),
+    ...sides.map((side) => t(SIDE_LABEL[side])),
+  ];
+}
+
+/** Both halves of ITTF 2.13.3's "which serve of this turn" — the `serve`
+ *  slot's whole value space. */
+function serveNumberCandidates(t: TFn): string[] {
+  return [
+    t("pad.tabletennis.scorebug.strip.serve.first"),
+    t("pad.tabletennis.scorebug.strip.serve.second"),
+  ];
+}
+
+/**
+ * Is the reader refusing because its two halves DISAGREE, rather than because
+ * the fixture has no server yet? Only the first justifies holding the slots'
+ * width open — see badminton's own `serveDrifted` for the full reasoning and
+ * the owner ruling behind it.
+ */
+function serveDrifted(view: PadHostView, state: TableTennisStateShape): boolean {
+  const ctx = serveContextOf(view, state);
+  if (ctx === null) return false;
+  return ctx.unknownBecause === "ledger-mismatch" || ctx.unknownBecause === "recorded-disagrees";
+}
+
 // ---------------------------------------------------------------------------
 // scorebug() — tapModel S.
 // ---------------------------------------------------------------------------
@@ -599,6 +639,7 @@ function buildStrip(
   phase: PadPhase,
   serving: ServingInfo | null,
   serveCtx: SetBasedServeContext | null,
+  drifted: boolean,
   t: TFn,
 ): StripItem[] {
   const items: StripItem[] = [
@@ -610,9 +651,23 @@ function buildStrip(
   ];
   // OMITTED, never rendered stale — D-17's whole point, badminton's own
   // posture: the engine's own `serveOrderKnown` is the verdict.
+  //
+  // R8/#676, badminton's own treatment: `reserve` holds each slot's width
+  // steady across every value it can take, and `reserved` holds it open while
+  // the reader refuses over DRIFT, so the centred row does not re-centre. A
+  // refusal costs this strip TWO items (server AND serve), which is exactly
+  // why the shift was worth fixing here.
+  const serverReserve = serverCandidates(view, t);
+  const serveReserve = serveNumberCandidates(t);
   if (serving) {
     const value = serving.personId ? nameOf(view, serving.personId, t) : t(SIDE_LABEL[serving.side]);
-    items.push({ id: "server", label: t("pad.tabletennis.scorebug.strip.server"), value, accent: true });
+    items.push({
+      id: "server",
+      label: t("pad.tabletennis.scorebug.strip.server"),
+      value,
+      accent: true,
+      reserve: serverReserve,
+    });
     // ITTF 2.13.3 — which serve of the current turn comes next, 1-based.
     // Present only while the reader's chain is unbroken (kernel.ts's own
     // `chainComplete` gate on `serveNumber`), so a mid-set drift omits this
@@ -629,8 +684,33 @@ function buildStrip(
       items.push({
         id: "serve",
         value: t(serveCtx.serveNumber === 1 ? "pad.tabletennis.scorebug.strip.serve.first" : "pad.tabletennis.scorebug.strip.serve.second"),
+        reserve: serveReserve,
       });
     }
+  } else if (drifted) {
+    // No `id` on either: these slots report nothing while the reader refuses,
+    // so nothing may locate them as if they did (assertScorebugSpec enforces
+    // it). Labels are still supplied where the answered state has one, because
+    // they are part of the width that state occupies.
+    items.push({
+      label: t("pad.tabletennis.scorebug.strip.server"),
+      value: "",
+      reserved: true,
+      reserve: serverReserve,
+    });
+    // UNCONDITIONAL, and unlike volleyball's rotation that is the SAME
+    // predicate as the answered twin rather than a looser one. The answered
+    // branch gates on `serveCtx.serveNumber !== undefined`, which the kernel
+    // populates for every `within: "fixed-turns"` preset with a complete chain
+    // — and table tennis declares `within: "fixed-turns"` unconditionally
+    // (`packages/engine/src/sports/setbased/tabletennis.ts:84`). So there is no
+    // table tennis fixture whose answered strip structurally lacks this slot,
+    // the way a beach pair's structurally lacks a rotation number; its only
+    // absence is a transient broken chain, which a set boundary re-anchors.
+    // Pinned by "an answered table tennis strip really does carry `serve`" in
+    // this skin's suite, so a preset change reds here instead of silently
+    // making this slot a phantom.
+    items.push({ value: "", reserved: true, reserve: serveReserve });
   }
   // Live only. ITTF 2.15.1 — the umpire's own introduction of expedite, in
   // force for the rest of the match (2.15.4) once given.
@@ -650,7 +730,7 @@ export function buildScorebug(view: PadHostView, t: TFn): ScorebugSpec {
     context: buildContext(state, cfg, t),
     phase,
     halves: [buildHalf(view, state, "home", serving, t), buildHalf(view, state, "away", serving, t)],
-    strip: buildStrip(view, state, phase, serving, serveCtx, t),
+    strip: buildStrip(view, state, phase, serving, serveCtx, serving === null && serveDrifted(view, state), t),
   };
 }
 

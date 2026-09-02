@@ -292,7 +292,17 @@ import { EngineError, type EventEnvelope, type LineupPair } from "@seazn/engine/
 import type { AnySportModule } from "@seazn/engine/sport";
 import { foldClient } from "./module-client";
 import { indexedDbQueueStore } from "./queue-store";
-import { depth, dropHeld, enqueue, enqueueHeld, markDropped, peekInOrder, recordAttempt, releaseHeld } from "./queue";
+import {
+  boundTo,
+  depth,
+  dropHeld,
+  enqueue,
+  enqueueHeld,
+  markDropped,
+  peekInOrder,
+  recordAttempt,
+  releaseHeld,
+} from "./queue";
 import type { QueueStore } from "./queue-store";
 import { deepEqual, reconcile, sendOne } from "./pipeline";
 import type { LedgerSlotEvent, OwnIdentity, PendingEvent } from "./types";
@@ -413,7 +423,12 @@ export interface UsePadPipelineResult {
   /** Submit one action: folds it in immediately, then durably enqueues and
    *  drains. Never throws — a permanent rejection surfaces via
    *  `lastRejection`, a network failure via `offline`. */
-  submit: (type: string, payload: unknown) => Promise<void>;
+  /** R8/#675 — `opts.dropWith` binds this entry's life to a still-held
+   *  entry's: `queue.ts`'s `dropHeld` cascade-deletes every entry carrying
+   *  that id, and the marker is DURABLE (a `PendingEvent` field, not a
+   *  callback), so a reload mid-hold resumes both. See `PendingEvent.dropWith`
+   *  for why an amendment needs exactly those two properties together. */
+  submit: (type: string, payload: unknown, opts?: { dropWith?: string }) => Promise<void>;
   /** Task 4 fix round 1 (controller review finding 2): a public trigger for
    *  a real drain pass, with no new enqueue attached — the SAME `runDrain`
    *  this hook already runs at mount, on `online`, and after every
@@ -1480,7 +1495,7 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
   }, []);
 
   const submit = useCallback(
-    async (type: string, payload: unknown) => {
+    async (type: string, payload: unknown, opts?: { dropWith?: string }) => {
       // Synchronous section — no `await` above this point (see below for
       // why that matters to the in-flight guard too). `expectedSeq` assumes
       // every event ahead (confirmed + already queued) lands, per the
@@ -1533,6 +1548,7 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
           createdAt: new Date().toISOString(),
           attempts: 0,
           ...(voidTargetSeq === undefined ? {} : { voidTargetSeq }),
+          ...(opts?.dropWith === undefined ? {} : { dropWith: opts.dropWith }),
         };
         // Review Q8 (S12/#421 pass J): deliberately NOT wrapped in
         // `pendingWithLocalVoidTarget`, unlike every OTHER place a
@@ -1654,10 +1670,19 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
   // R2 (spec §2.3) — see UsePadPipelineResult.dropHeldSubmission's own doc.
   const dropHeldSubmission = useCallback(
     async (id: string): Promise<boolean> => {
+      // R8/#675 — read the bound set BEFORE the drop, because `dropHeld`
+      // cascade-deletes it from the queue and it is gone afterwards. Same
+      // `boundTo` rule both layers use, never a second copy of it: clearing the
+      // queue while leaving the optimistic mirror holding the void is not a
+      // partial fix but its own defect — the pad then shows the corrected event
+      // retired with nothing in its place, which is exactly what a browser run
+      // caught here.
+      const boundIds = boundTo(await store.list(), id);
       const dropped = await dropHeld(store, id);
       if (!dropped) return false;
       const remaining = new Map(pendingEnvelopesRef.current);
       remaining.delete(id);
+      for (const boundId of boundIds) remaining.delete(boundId);
       commitPendingEnvelopes(remaining);
       await refreshDepth();
       return true;

@@ -92,6 +92,32 @@ const stripSpans = (spec: ScorebugSpec) =>
     (el) => propsOf(el)["data-strip-item-id"] !== undefined,
   );
 
+// ---------------------------------------------------------------------------
+// CLASS MEMBERSHIP, THE WAY A BROWSER READS IT — never `toContain`.
+//
+// Review round 3 (Important): every token in NIGHT_TILE_CLASSES that carries an
+// opacity step is a strict PREFIX of the step above it —
+//   creamText "pad-ink"  ⊂ creamTextMuted "pad-ink-70" ⊂ … "pad-ink-80"
+//   limeText  "pad-led"  ⊂ ledDot         "pad-led-dot"
+// so `expect(cls).toContain(NIGHT_TILE_CLASSES.creamText)` passes on a MUTED
+// element, and the accent-vs-muted branch of the strip (scorebug.tsx) had no
+// assertion that could fail: flipping accent to render muted left both of this
+// file's colour assertions green. A class attribute is a whitespace-separated
+// TOKEN LIST; assert membership in that list, not substring containment.
+//
+// Takes either a raw className string or a rendered HTML tag (from which it
+// pulls the `class="…"` attribute), so both harnesses in this file can use it.
+function classesOf(source: string): string[] {
+  const attr = /class="([^"]*)"/.exec(source);
+  return (attr ? attr[1]! : source).split(/\s+/).filter(Boolean);
+}
+const expectClass = (source: string, token: string) =>
+  expect(classesOf(source), `expected class token "${token}" in: ${source}`).toContain(token);
+const expectNoClass = (source: string, token: string) =>
+  expect(classesOf(source), `expected NO class token "${token}" in: ${source}`).not.toContain(
+    token,
+  );
+
 describe("a half that must ASK before it scores (ScorebugHalf.tapSheet)", () => {
   const half = (over: Record<string, unknown>) => ({
     who: [{ name: "Home" }],
@@ -143,7 +169,7 @@ describe("the strip's LED board (StripItem.tone)", () => {
   it("renders a toned item as the LED panel, with a stable tone hook and its label split from its value", () => {
     const [panel] = stripSpans(specWithStrip([{ id: "added", label: "Added", value: "+3", tone: "led" }]));
     const props = propsOf(panel!);
-    expect(props.className).toContain(NIGHT_TILE_CLASSES.ledPanel);
+    expectClass(props.className as string, NIGHT_TILE_CLASSES.ledPanel);
     expect(props["data-strip-tone"]).toBe("led");
     // Label and value are separate elements, not the concatenated string the
     // plain branch builds: the board's hierarchy IS the treatment.
@@ -159,18 +185,23 @@ describe("the strip's LED board (StripItem.tone)", () => {
       ]),
     );
     for (const el of [accent!, muted!]) {
-      expect(propsOf(el).className).not.toContain(NIGHT_TILE_CLASSES.ledPanel);
+      expectNoClass(propsOf(el).className as string, NIGHT_TILE_CLASSES.ledPanel);
       expect(propsOf(el)["data-strip-tone"]).toBeUndefined();
       expect(propsOf(el).style).toMatchObject({ fontVariantNumeric: "tabular-nums" });
     }
-    expect(propsOf(accent!).className).toContain(NIGHT_TILE_CLASSES.creamText);
-    expect(propsOf(muted!).className).toContain(NIGHT_TILE_CLASSES.creamTextMuted);
+    // EXACT TOKENS. `creamText` ("pad-ink") is a strict prefix of
+    // `creamTextMuted` ("pad-ink-70"), so the `toContain` these two lines used
+    // to be passed on a muted element and the accent branch was unguarded.
+    expectClass(propsOf(accent!).className as string, NIGHT_TILE_CLASSES.creamText);
+    expectNoClass(propsOf(accent!).className as string, NIGHT_TILE_CLASSES.creamTextMuted);
+    expectClass(propsOf(muted!).className as string, NIGHT_TILE_CLASSES.creamTextMuted);
+    expectNoClass(propsOf(muted!).className as string, NIGHT_TILE_CLASSES.creamText);
   });
 
   it("a toned item with NO label lights only its value — an omitted field must not print an empty caption", () => {
     const [panel] = stripSpans(specWithStrip([{ id: "added", value: "+3", tone: "led" }]));
     expect(walk(panel!).some((el) => propsOf(el).className === NIGHT_TILE_CLASSES.ledPanelLabel)).toBe(false);
-    expect(propsOf(panel!).className).toContain(NIGHT_TILE_CLASSES.ledPanel);
+    expectClass(propsOf(panel!).className as string, NIGHT_TILE_CLASSES.ledPanel);
   });
 });
 
@@ -358,13 +389,306 @@ describe("ScorebugHalf.sub — the decider's second figure (R3.5/D)", () => {
   it("renders `sub` on the SUBORDINATE cream token, never the lime the score digits use — equal weight is the confusion this field removes", () => {
     const html = renderHalfToString({ who: [{ name: "Home" }], big: "1", sub: "(2)" });
     const tag = html.slice(html.indexOf("data-half-sub"), html.indexOf(">", html.indexOf("data-half-sub")));
-    expect(tag).toContain(NIGHT_TILE_CLASSES.creamText);
-    expect(tag).not.toContain(NIGHT_TILE_CLASSES.limeText);
+    // Same prefix trap on BOTH lines: "pad-ink" ⊂ "pad-ink-70", and
+    // "pad-led" ⊂ "pad-led-dot" — the negative assertion was over-strict
+    // rather than vacuous, but it is wrong for the same reason.
+    expectClass(tag, NIGHT_TILE_CLASSES.creamText);
+    expectNoClass(tag, NIGHT_TILE_CLASSES.limeText);
     expect(tag).toContain("tabular-nums");
   });
 
   it("does not disturb the OTHER half, which has no `sub` of its own", () => {
     const html = renderHalfToString({ who: [{ name: "Home" }], big: "1", sub: "(2)" });
     expect((html.match(/data-half-sub/g) ?? []).length).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R8/#676 — StripItem.reserve / .reserved: the slot that holds its width
+// ---------------------------------------------------------------------------
+//
+// The chassis half of the fix. The SKINS decide when a slot is held open
+// (badminton/tabletennis/volleyball's own `serveDrifted`); this decides what a
+// held slot renders as, and — the part that matters on a phone — that holding
+// a width never becomes a width FLOOR.
+
+function renderStripToString(strip: StripItem[]): string {
+  const spec: ScorebugSpec = {
+    context: "ctx",
+    phase: "live",
+    halves: [
+      { who: [{ name: "Home" }], big: "0" },
+      { who: [{ name: "Other" }], big: "0" },
+    ],
+    strip,
+  };
+  return renderToStaticMarkup(Scorebug({ spec, t }) as never);
+}
+
+/** The full, BALANCED `<span>` subtree of the element carrying `marker` —
+ *  everything a DOM `textContent` read on that element would see, including
+ *  `visibility:hidden` descendants (which is exactly the point). */
+function subtreeOf(html: string, marker: string): string {
+  const at = html.indexOf(marker);
+  expect(at, `marker ${marker} not found in rendered strip`).toBeGreaterThan(-1);
+  const start = html.indexOf(">", at) + 1;
+  let depth = 1;
+  let i = start;
+  while (depth > 0 && i < html.length) {
+    const open = html.indexOf("<span", i);
+    const close = html.indexOf("</span>", i);
+    if (close === -1) break;
+    if (open !== -1 && open < close) {
+      depth += 1;
+      i = html.indexOf(">", open) + 1;
+    } else {
+      depth -= 1;
+      if (depth === 0) return html.slice(start, close);
+      i = close + "</span>".length;
+    }
+  }
+  return html.slice(start);
+}
+
+/** The rendered opening tag of the strip slot carrying `marker`. */
+function slotTag(html: string, marker: string): string {
+  const at = html.indexOf(marker);
+  expect(at, `marker ${marker} not found in rendered strip`).toBeGreaterThan(-1);
+  const open = html.lastIndexOf("<span", at);
+  return html.slice(open, html.indexOf(">", at) + 1);
+}
+
+describe("R8/#676 — a width-reserving strip slot", () => {
+  it("lays out EVERY reserve candidate invisibly, so the slot is as wide as the widest", () => {
+    const html = renderStripToString([
+      { id: "server", label: "Server", value: "Al", reserve: ["Al", "Bartholomew"], accent: true },
+    ]);
+    expect(html, "the candidate that sizes the slot must actually be in the markup").toContain(
+      "Bartholomew",
+    );
+    expect(html, "and it must be laid out but not seen").toContain("invisible");
+  });
+
+  it("a RESERVED slot prints nothing, carries no id, and is hidden from assistive tech", () => {
+    // `id: "server"` IS THE POINT, not a stray field. Without it the fixture
+    // declared no id at all, so `not.toContain('data-strip-item-id="server"')`
+    // could not fail and deleting `&& !item.reserved` from the chassis left
+    // this green. A skin never ships this shape (assertScorebugSpec forbids an
+    // id on a reserved item); the fixture carries one precisely so the
+    // CHASSIS's own suppression has something to suppress.
+    const html = renderStripToString([
+      { id: "server", label: "Server", value: "", reserved: true, reserve: ["Alice", "Bob"] },
+    ]);
+    expect(html).toContain("data-strip-reserved");
+    // Never locatable as the thing it is standing in for — this is what keeps
+    // the walkthrough's "before the first rally nobody can say who serves"
+    // count at zero, and what keeps D-17 intact.
+    expect(html).not.toContain('data-strip-item-id="server"');
+    expect(slotTag(html, "data-strip-reserved")).toContain("aria-hidden");
+  });
+
+  it("MOBILE FLOOR: the reserving WRAPPER and every sizer are min-w-0, never nowrap/truncate", () => {
+    // The 320px guard, and the reason this is a test rather than a comment.
+    // There are TWO independent floors and each needs its own assertion:
+    //
+    //   1. the WRAPPER is a flex item of the band — without `min-w-0` its
+    //      min-content width is a hard floor the band cannot shrink past;
+    //   2. each SIZER is a grid item of the wrapper — a grid track's automatic
+    //      minimum is its items' min-content, so without `min-w-0` on the
+    //      sizers the widest candidate is still a floor and the box yields
+    //      while the ink overflows.
+    //
+    // `truncate`/`nowrap` would put both floors straight back (they set
+    // white-space: nowrap, making min-content the whole un-wrapped string).
+    //
+    // ANCHORED ON THE WRAPPER, NOT ON `data-strip-item-id`. That marker moved
+    // onto the inner visible span in the C1 fix, so a `lastIndexOf("<span")`
+    // from it silently began inspecting the wrong element — and mutants M10 and
+    // M11 (drop `min-w-0` from wrapper / from sizers) both survived in
+    // consequence. The round-1 M4 kill had been carried entirely by its
+    // `truncate` half; the `min-w-0` half was guarding nothing.
+    const html = renderStripToString([
+      { id: "server", label: "Server", value: "Al", reserve: ["Al", "Bartholomew"] },
+    ]);
+
+    // Anchored on `data-strip-reserve`, the marker the chassis now emits on the
+    // wrapper in BOTH states — `justify-items-center` was a CLASS anchor, so
+    // the round-3 `place-items-center` fix would have silently un-anchored it.
+    //
+    // WITH THE `="`, always. `data-strip-reserve` is a strict PREFIX of the
+    // existing `data-strip-reserved`, which is the same shape as the
+    // "pad-ink" ⊂ "pad-ink-70" trap this round is fixing elsewhere in this
+    // file. A CSS/Playwright attribute selector matches the whole name so the
+    // browser — the marker's actual consumer — cannot confuse them, but a bare
+    // `indexOf` here can, and AGENTS.md already requires the `="` anchor on any
+    // assertion over rendered markup.
+    const wrapper = slotTag(html, 'data-strip-reserve="');
+    expectClass(wrapper, "min-w-0");
+    expect(wrapper).not.toContain("truncate");
+    expect(wrapper).not.toContain("nowrap");
+
+    const sizers = [...html.matchAll(/class="([^"]*\binvisible\b[^"]*)"/g)].map((m) => m[1]!);
+    expect(sizers.length, "the sizers must actually be in the markup to be checked").toBe(2);
+    for (const cls of sizers) {
+      expectClass(cls, "min-w-0");
+      expect(cls).not.toContain("truncate");
+      expect(cls).not.toContain("nowrap");
+    }
+
+    // THE THIRD ITEM IN THE SAME TRACK, and the one nothing asserted: the
+    // VISIBLE span is a grid item of this single-column wrapper exactly as the
+    // sizers are, so a grid track's automatic minimum is ITS min-content too.
+    // The `invisible`-keyed sweep above cannot see it by construction, and
+    // deleting its `min-w-0` restored the 320px floor this whole block exists
+    // to remove while every assertion here stayed green.
+    const visible = slotTag(html, 'data-strip-item-id="server"');
+    expectClass(visible, "min-w-0");
+    expect(visible).not.toContain("truncate");
+    expect(visible).not.toContain("nowrap");
+
+    expect(html, "nothing anywhere in the slot may reintroduce the floor").not.toContain("truncate");
+  });
+
+  it("the LOCATED element holds the visible text only — never the reserve sizers", () => {
+    // THE ROUND-1 REGRESSION, and the reason this is pinned in a node test
+    // rather than left to the e2e. `data-strip-item-id` first went on the
+    // reserving grid WRAPPER, which made the sizers children of the located
+    // element. Playwright's toHaveText/toContainText read `textContent`, not
+    // `innerText` (`useInnerText` is the opt-OUT), and `textContent` includes
+    // `visibility:hidden` subtrees — so table tennis's `toHaveText("2nd
+    // serve")` saw "1st serve2nd serve2nd serve", volleyball's saw "Rotation
+    // 6Rotation 2", and every `not.toContainText(<the other player>)` went
+    // vacuously green because a reserve holds both names by construction.
+    // Eight live assertions across four specs, all silently meaningless.
+    const html = renderStripToString([
+      { id: "server", label: "Server", value: "Al", reserve: ["Al", "Bartholomew"] },
+    ]);
+    // BALANCED subtree, not "up to the next </span>": under the regression the
+    // id sits on the wrapper, whose first closing tag belongs to its first
+    // SIZER — so a naive slice reads that sizer's text, finds the value in it
+    // and passes. That is how this very test survived its own mutant once.
+    const located = subtreeOf(html, 'data-strip-item-id="server"');
+    expect(located, "the located element's subtree is the visible layer").toContain("Al");
+    expect(located, "and must NOT include any reserve candidate").not.toContain("Bartholomew");
+  });
+
+  // -------------------------------------------------------------------------
+  // Review round 3 — the reservation did not actually hold the row still.
+  // -------------------------------------------------------------------------
+
+  /** Every SIZER's class attribute, in document order. */
+  const sizerClasses = (html: string) =>
+    [...html.matchAll(/class="([^"]*\binvisible\b[^"]*)"/g)].map((m) => m[1]!);
+
+  it("measures BOTH states with the same ruler — the sizer weight must not follow `accent`", () => {
+    // THE DEFECT THIS FEATURE SHIPPED WITH, and the reason the assertion is on
+    // the sizers' COMPUTED CLASSES rather than on the `reserve` arrays. Every
+    // guard in this wave compared the two states' reserve arrays, which were
+    // identical by construction; nothing compared what those identical strings
+    // were MEASURED IN. The answered server slot is `accent: true` and its
+    // reserved twin is not, and the chassis built one `weight` from `accent`
+    // and applied it to the sizers as well as to the visible span — so the same
+    // candidates measured `font-semibold` answered and `font-medium` reserved,
+    // the slot was two different widths, and the centred row still moved.
+    //
+    // Fixed in the CHASSIS, not in the three skins. Both were available (set
+    // `accent: true` on each reserved twin, or size the sizers unconditionally)
+    // and this one holds for every skin, present and future, instead of asking
+    // three of them — and every skin added later — to remember. It also keeps
+    // `accent` meaning what types.ts says it means: the VISIBLE strip's own
+    // emphasis. A slot that renders no ink has no emphasis to declare, and the
+    // sizers are `invisible` by construction, so their weight is a measuring
+    // instrument rather than a style and belongs to the chassis.
+    const reserve = ["Al", "Bartholomew"];
+    const answered = sizerClasses(
+      renderStripToString([{ id: "server", label: "Server", value: "Al", accent: true, reserve }]),
+    );
+    const held = sizerClasses(
+      renderStripToString([{ label: "Server", value: "", reserved: true, reserve }]),
+    );
+    expect(answered.length, "the sizers must be in the markup to be compared").toBe(2);
+    expect(held, "the same slot must be measured identically in both states").toEqual(answered);
+    // And it is the WIDEST weight the plain branch can render (`font-semibold`,
+    // the accent one), so the visible layer always fits inside the width its
+    // own sizer reserved — never the other way round.
+    for (const cls of answered) {
+      expectClass(cls, "font-semibold");
+      expectNoClass(cls, "font-medium");
+    }
+  });
+
+  it("centres the reserving cell VERTICALLY too — a wrapped sizer must not stretch the row", () => {
+    // A grid item defaults to `align-self: stretch`, so an `invisible` sizer
+    // that wraps to two lines made the cell two lines tall and top-aligned the
+    // visible value, while every sibling strip item sits on the band's own
+    // `items-center`. `place-items-center` = align + justify, in one token.
+    const html = renderStripToString([
+      { id: "server", label: "Server", value: "Al", reserve: ["Al", "Bartholomew"] },
+    ]);
+    const wrapper = slotTag(html, 'data-strip-reserve="');
+    expectClass(wrapper, "place-items-center");
+  });
+
+  it("marks the reserving WRAPPER in BOTH states, so its reserved width can be measured", () => {
+    // Prerequisite for the 320px browser measurement this feature is still
+    // owed. `data-strip-item-id` sits on the `justify-self:center` inner span,
+    // whose box is its own text and NOT the reserved cell; `data-strip-reserved`
+    // is emitted only while the slot is held. So an ANSWERED reserving slot
+    // carried no attribute at all and there was no element in either state
+    // whose rect is the width being reserved. `data-strip-reserve` is that
+    // element, and it is the same element in both states — which is the whole
+    // claim the feature makes.
+    const reserve = ["Al", "Bartholomew"];
+    const answered = renderStripToString([
+      { id: "server", label: "Server", value: "Al", accent: true, reserve },
+    ]);
+    const held = renderStripToString([{ label: "Server", value: "", reserved: true, reserve }]);
+    for (const html of [answered, held]) {
+      expect((html.match(/data-strip-reserve="/g) ?? []).length, "exactly one reserving cell").toBe(
+        1,
+      );
+    }
+    // The held one is additionally flagged and hidden; the answered one is not.
+    expect(held).toContain("data-strip-reserved");
+    expect(answered).not.toContain("data-strip-reserved");
+    expect(slotTag(answered, 'data-strip-reserve="')).not.toContain("aria-hidden");
+  });
+
+  it("D-17: a held slot with an EMPTY reserve still prints nothing — never a bare label", () => {
+    // `reserved` and `reserve` were two conditions and the chassis branched on
+    // the wrong one, so a `reserved: true` item whose reserve came back empty
+    // fell through to the plain branch and printed its own label with no value
+    // after it — "Serving " where a fact belongs, which is exactly what D-17
+    // refuses. `assertScorebugSpec` flags this shape, but it has NO production
+    // caller (test-only), so the chassis is the only thing standing here.
+    const html = renderStripToString([
+      { label: "Serving", value: "", reserved: true, reserve: [] },
+    ]);
+    expect(html, "a held slot renders no label of its own").not.toContain("Serving");
+    expect(html, "and is still a held slot, not a plain one").toContain("data-strip-reserved");
+    expect(slotTag(html, "data-strip-reserved")).toContain("aria-hidden");
+  });
+
+  it("lets a long unbroken candidate BREAK rather than be clipped by the tile", () => {
+    // The same fix this file already made for the who-line (`min-w-0` +
+    // `break-words`), which the reserving slot did not inherit. `min-w-0` alone
+    // lets the box shrink; without `overflow-wrap` an unbroken 20-character
+    // surname has no break opportunity, so the ink overflows a box that yielded
+    // and is clipped at BOTH ends by `justify-items-center` under the
+    // scorebug root's `overflow-hidden`. No page h-scroll, silent clipping —
+    // which is why the seven-width matrix cannot see it.
+    const html = renderStripToString([
+      { id: "server", label: "Server", value: "Al", reserve: ["Al", "Featherstonehaugh"] },
+    ]);
+    for (const cls of sizerClasses(html)) expectClass(cls, "break-words");
+    expectClass(slotTag(html, 'data-strip-item-id="server"'), "break-words");
+  });
+
+  it("an item with NO reserve renders exactly as it did before this field existed", () => {
+    const plain = renderStripToString([{ id: "games", label: "Games", value: "1-0" }]);
+    expect(plain).not.toContain("invisible");
+    expect(plain).not.toContain("data-strip-reserved");
+    expect(plain).toContain('data-strip-item-id="games"');
+    expect(plain).toContain("Games 1-0");
   });
 });

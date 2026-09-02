@@ -19,6 +19,15 @@ import {
   setBoolEntitlementOverrideSql,
   setDivisionConfigSql,
 } from "./helpers";
+import {
+  HIT_TARGET_FLOOR_PX,
+  dismissCookieBanner,
+  floorViolationLines,
+  hitTargetFloorReport,
+  measureHitTargets,
+} from "./scorepad-a11y-kit";
+import { V3_SKIN_CASES, type V3SkinRosterSlot } from "./v3-skin-catalog";
+import { WIDTH_MATRIX_CLOCK_SPORTS } from "./v3-width-matrix-coverage";
 
 // v3/02 §4 viewport gate — runs ONLY in the mobile-se / mobile-14 projects
 // (375×667, 390×844). Every audited route must render with zero page-level
@@ -1247,6 +1256,20 @@ test("cricket v3 pad: tiles + over-summary sheet + context strip hold the 44px f
   await expect(chips.first(), "context strip must render once an innings exists").toBeVisible({ timeout: 20_000 });
   const chipCount = await chips.count();
   expect(chipCount, "cricket declares striker, non-striker and bowler").toBe(3);
+  // R8 / WS-M round 2 — the mode statement is deliberately NOT among them: it
+  // renders as plain text with a lock glyph, not a pill, so the 44px floor
+  // loop below must not measure it — nothing can tap it, and a hit-target
+  // sweep that grades a statement is measuring the wrong thing. It must still
+  // READ correctly at every width: this innings was opened by the ball tapped
+  // above, so it is locked to the fine lane, and an indicator that ignored the
+  // fold would say "Over-by-over" over a pad that has just recorded a ball.
+  const modeLine = pad.locator('[data-role="context-mode"]');
+  await expect(modeLine, "the pad must state which scoring mode this innings locked into").toHaveCount(1);
+  await expect(modeLine).toHaveText("This innings: Ball-by-ball");
+  await expect(
+    pad.locator('[data-role="context-chip"][data-slot-kind="mode"]'),
+    "the mode statement must never render as a chip",
+  ).toHaveCount(0);
   for (let i = 0; i < chipCount; i++) {
     await assertFloor(chips.nth(i), `context chip ${i}`);
   }
@@ -3341,6 +3364,312 @@ test("volleyball v3 pad: the anchor sheet and the libero Swap-sheet hold the 44p
   const offChip = swap.locator("button[aria-label]");
   await assertNoContainerSpill(offChip, "swap sheet: the who-came-off chip");
   await assertTapFloor(offChip, "swap sheet: the who-came-off chip");
+  await expectNoHorizontalScroll(page);
+});
+
+// ---------------------------------------------------------------------------
+// R8/WS-I — THE FOUR v3 PADS THAT HAD NO WIDTH COVERAGE AT ALL.
+//
+// `V3_SKINS` owns eleven engine sports (R7/A3 closed the conversion). Before
+// this block, `git grep -a` for each of them across this file returned SEVEN:
+// cricket, football, generic, tennis, badminton, tabletennis, volleyball. The
+// other four — HOCKEY, ICE HOCKEY, CARROM and BOARDGAME — appeared nowhere,
+// and this file's seven width projects are the only place in the suite any
+// surface is driven at 320/360/375/390/430/768/834 at all. Four shipped pads
+// therefore had ZERO responsive enforcement (reference_new_ui_surface_
+// uncovered_until_in_mobile_spec): the R8 a11y sweep covers all eleven but
+// runs in the `parallel` project at a 1280 desktop viewport that it resizes
+// itself, which is a different measurement from a real 320x568 phone whose
+// FOLD and page height differ too.
+//
+// WHAT THIS BLOCK ASSERTS, AND WHAT IT DOES NOT.
+// `expectNoHorizontalScroll` catches PAGE OVERFLOW. It is not, and cannot be,
+// a claim that a layout looks right — a spill that gets CLIPPED never grows
+// `documentElement.scrollWidth` (see `assertNoContainerSpill` above, which
+// exists precisely because the page gate could not see a 77px spill). Layout
+// correctness at these widths is the gallery's and the walkthroughs' job. What
+// is proved here is narrower and worth having on its own: the pad RENDERS at
+// this width, every operable control inside it clears the 44px floor on both
+// axes, and the page does not scroll sideways.
+//
+// THE FLOOR IS ASSERTED OVER EVERY OPERABLE TARGET, never the smallest one.
+// `hitTargetFloorReport` (scorepad-a11y-kit.ts) is reused rather than
+// re-measured here, and its own doc records why: MIN-AREA IS NOT MIN-DIMENSION,
+// so a 200x30 control has a LARGER area than the 92.11x44 binding target and
+// would never be selected as "smallest". Sharing the kit also means this gate
+// and the a11y sweep compute one pixel one way — two hand-written copies of a
+// geometry measurement is how two gates drift into disagreeing.
+//
+// One test per sport, matching the T16/T17 blocks above: a 320px failure that
+// reads "carrom pad" is a different alarm from one that reads "the R7 pads".
+// ---------------------------------------------------------------------------
+
+/**
+ * A seed spec built from `V3_SKIN_CASES` — the catalog `a11y-sweep-totality
+ * .test.ts` already pins against `V3_SKINS` itself — rather than a second
+ * hand-rolled table of sport keys, variants and rosters. A twelfth sport, or a
+ * variant rename, then moves this block with the registry instead of leaving
+ * it seeding yesterday's fixture.
+ *
+ * The catalog deliberately carries no NAMES, and they have to be minted here
+ * per width project: `TAG` is per PROCESS and `e2e.yml`'s `phones-large` leg
+ * runs two width projects in ONE process, while `seedRosteredFixture`
+ * get-or-creates a person BY NAME — so two widths sharing a name roster the
+ * same person row. Same reasoning the badminton test above spells out in full.
+ */
+function v3SkinSeed(
+  sportKey: string,
+  short: string,
+): {
+  label: string;
+  sportKey: string;
+  variantKey: string;
+  entrantKind: "individual" | "team" | "pair";
+  home: { fullName: string; positionKey?: string }[];
+  away: { fullName: string; positionKey?: string }[];
+} {
+  const skin = V3_SKIN_CASES.find((c) => c.key === sportKey);
+  if (skin === undefined) {
+    throw new Error(
+      `v3SkinSeed: "${sportKey}" is not in V3_SKIN_CASES — the catalog is the ` +
+        `source of truth for which skins exist and what each one's fold needs`,
+    );
+  }
+  const roster = (sideCode: string, slots: readonly V3SkinRosterSlot[]) =>
+    slots.map((slot, i) => ({
+      fullName: `Mobile ${short} ${sideCode}${i + 1} ${TAG}-${projectTag()}`,
+      ...(slot.positionKey === undefined ? {} : { positionKey: slot.positionKey }),
+    }));
+  return {
+    label: `Mobile ${short} V3 ${TAG}-${projectTag()}`,
+    sportKey: skin.key,
+    variantKey: skin.variantKey,
+    entrantKind: skin.entrantKind,
+    home: roster("H", skin.home),
+    away: roster("A", skin.away),
+  };
+}
+
+/**
+ * The gate every one of these four pads owes at every one of the seven widths.
+ *
+ * `minOperable` is a VACUITY GUARD, not a census. `report.under` is `[]` both
+ * for a pad whose every control clears the floor and for a pad that rendered
+ * no controls at all — a sheet that silently failed to open, a fixture that
+ * came back decided (`reference_decided_fixture_hides_pad_both_routes`) — and
+ * those two states are indistinguishable in the passing output. Each caller
+ * additionally names the specific tiles that must be on screen, which is where
+ * the per-skin specificity actually lives; the per-skin OPERABLE CENSUS is the
+ * a11y sweep's job, not this file's.
+ */
+async function assertV3PadHoldsAtThisWidth(
+  page: Page,
+  label: string,
+  minOperable: number,
+): Promise<void> {
+  const pad = page.getByTestId("score-pad");
+  await expect(pad, `${label}: the v3 pad did not render`).toBeVisible({ timeout: 20_000 });
+  const report = hitTargetFloorReport(await measureHitTargets(pad));
+  expect(
+    report.operable.length,
+    `${label}: only ${report.operable.length} operable controls inside the pad ` +
+      `(expected at least ${minOperable}) — an empty measurement makes the floor ` +
+      `assertion below vacuous, so this is a failure, not a clean`,
+  ).toBeGreaterThanOrEqual(minOperable);
+  expect(
+    floorViolationLines(report),
+    `${label}: ${report.under.length} of ${report.operable.length} operable targets are ` +
+      `under ${HIT_TARGET_FLOOR_PX}px at ${projectTag()} (smallest by area, for reference: ` +
+      `"${report.smallest?.name ?? "-"}" ${report.smallest?.width ?? 0}x${report.smallest?.height ?? 0})`,
+  ).toEqual([]);
+  await expectNoHorizontalScroll(page);
+}
+
+/** The guided sheet the chassis renders for a tile whose action is a sheet. */
+function v3Sheet(page: Page): Locator {
+  return page.getByTestId("score-pad").locator('[data-role="v3-sheet"]');
+}
+
+// HOCKEY + ICE HOCKEY share one skin builder (`v3/skins/period-shared.ts`) and
+// one engine kernel under two presets, so they are driven by one parametrised
+// test rather than two hand-copied ones — but they get a test EACH (the loop
+// mints two `test()` calls), so a failure names the sport a scorer would be
+// holding. They are also the only two skins in the product that declare
+// `SkinDefV3.clock()`, and the clock's own start/pause toggle is the SMALLEST
+// operable target either pad has — 58.17 x 44 at rest, i.e. exactly on the
+// floor with zero headroom (reference_v3_pad_44px_floor_has_zero_headroom).
+// It is therefore the one control here most likely to go red on a restyle,
+// and the one no other project measures at 320px.
+// WS-M fix round 1, item 3: the pair comes from `v3-width-matrix-coverage.ts`,
+// not a literal here — that module is what `width-matrix-totality.test.ts` pins
+// against the skin registry, and reading it back is what stops the declaration
+// there from drifting away from this loop.
+for (const [sportKey, short] of WIDTH_MATRIX_CLOCK_SPORTS) {
+  test(`${sportKey} v3 pad: the clock bar, goal tiles and the suspension sheet's class ladder hold the 44px floor, no horizontal scroll`, async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(120_000);
+    const fx = await seedRosteredFixture(request, {
+      ...v3SkinSeed(sportKey, short),
+      emitCoreStart: true,
+    });
+
+    // The class ladder's expected size is read off the DIVISION'S OWN CONFIG,
+    // never a ladder typed into this test: hockey declares three cards
+    // (green/yellow/red) and ice hockey seven, and the `youth` variants change
+    // the durations — deriving it means a preset change moves this assertion
+    // with it instead of leaving it pinned to yesterday's ladder (AGENTS.md,
+    // recurring failure class 19).
+    const div = await apiJson<{ config: { suspensions?: { classes?: Record<string, unknown> } } }>(
+      request,
+      `/api/v1/divisions/${fx.divisionId}`,
+    );
+    expect(div.status, `GET division -> ${div.status}`).toBe(200);
+    const classKeys = Object.keys(div.data?.config.suspensions?.classes ?? {});
+    expect(
+      classKeys.length,
+      `${sportKey}'s division config declares no suspension classes, so the option ` +
+        `count asserted below would be pinned to nothing`,
+    ).toBeGreaterThan(0);
+
+    await page.goto(await fixturePath(page.request, fx.fixtureId), { waitUntil: "load" });
+    await dismissCookieBanner(page);
+    await assertV3PadHoldsAtThisWidth(page, `${sportKey} pad at rest`, 4);
+
+    // THE CLOCK BAR — the surface only these two skins have at all.
+    const clock = page.getByTestId("score-pad").locator('[data-role="v3-clock"]');
+    await expect(clock, `${sportKey} declares clock(), so the clock bar must render`).toBeVisible({
+      timeout: 20_000,
+    });
+    await assertTouchFloor(
+      clock.locator('[data-role="v3-clock-toggle"]'),
+      `${sportKey}: the clock start/pause toggle`,
+    );
+    await assertTouchFloor(
+      clock.locator('[data-role="v3-clock-value"]'),
+      `${sportKey}: the clock correction control`,
+    );
+
+    // The two primaries. `goal-<side>` is band 0 and phase "live", so both are
+    // unconditionally on a fresh started fixture — a missing one is a real
+    // failure here, never a legitimately absent tile.
+    await assertTouchFloor(padTile(page, "goal-home"), `${sportKey}: home goal tile`);
+    await assertTouchFloor(padTile(page, "goal-away"), `${sportKey}: away goal tile`);
+
+    // THE SUSPENSION SHEET — the densest surface either pad opens, and the one
+    // whose height scales with a preset this file does not control. Opening a
+    // sheet commits nothing (`action: {sheet}`), so this drives a real surface
+    // without posting an event or racing the pad's soft-commit hold.
+    await padTile(page, "suspension-home").click();
+    await expect(v3Sheet(page), `${sportKey}: the suspension sheet must open`).toBeVisible({
+      timeout: 20_000,
+    });
+    const classOptions = v3Sheet(page).locator("[data-choice-option-id]");
+    await expect(
+      classOptions,
+      `the class step must offer exactly the classes the division declares (${classKeys.join(", ")})`,
+    ).toHaveCount(classKeys.length, { timeout: 20_000 });
+    await assertV3PadHoldsAtThisWidth(page, `${sportKey} suspension sheet, class step`, 4);
+  });
+}
+
+test("carrom v3 pad: the two board tiles and the board sheet's winner/coins steps hold the 44px floor, no horizontal scroll", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(120_000);
+  const fx = await seedRosteredFixture(request, {
+    ...v3SkinSeed("carrom", "CR"),
+    emitCoreStart: true,
+  });
+
+  await page.goto(await fixturePath(page.request, fx.fixtureId), { waitUntil: "load" });
+  await dismissCookieBanner(page);
+  await assertV3PadHoldsAtThisWidth(page, "carrom pad at rest", 4);
+
+  // Carrom's tap model is T: the halves are NOT buttons (unlike the R5 racquet
+  // pads above), so the board tiles ARE the whole scoring surface. Both are
+  // band 0 and live-phase, i.e. unconditional on a started fixture.
+  await assertTapFloor(padTile(page, "board"), "carrom: Board tile");
+  await assertTapFloor(padTile(page, "boardQueen"), "carrom: Board (queen) tile");
+
+  // The board sheet, both of its steps. Step 1 is a two-option side choice;
+  // answering it advances to the COINS step, which is a `number` — a stepper,
+  // a different control shape from anything the choice steps render, and the
+  // narrowest column in the pad at 320px. Stopping at that step deliberately:
+  // answering it would commit `carrom.board.summary` and start the soft-commit
+  // hold, which this width gate has no reason to pay for.
+  await padTile(page, "board").click();
+  await expect(v3Sheet(page), "the board sheet must open").toBeVisible({ timeout: 20_000 });
+  await expect(
+    v3Sheet(page).locator("[data-choice-option-id]"),
+    "the winner step must offer both sides",
+  ).toHaveCount(2, { timeout: 20_000 });
+  await assertV3PadHoldsAtThisWidth(page, "carrom board sheet, winner step", 4);
+
+  await v3Sheet(page).locator('[data-choice-option-id="home"]').click();
+  await expect(
+    v3Sheet(page).locator("[data-choice-option-id]"),
+    "answering the winner step must advance off it, onto the coins stepper",
+  ).toHaveCount(0, { timeout: 20_000 });
+  await assertV3PadHoldsAtThisWidth(page, "carrom board sheet, coins number step", 4);
+});
+
+test("boardgame v3 pad: the pairing card (pre) and the halves + Draw tile (live) hold the 44px floor, no horizontal scroll", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(120_000);
+  // Seeded WITHOUT `emitCoreStart`, unlike every other pad test in this file,
+  // and for a reason specific to this skin: boardgame's tiles are split across
+  // the two phases — `pairing` is "pre" only and `draw` is "live" only — so a
+  // started fixture can never show the pairing card at all. Both phases are
+  // driven here off ONE fixture, the pre half first.
+  const fx = await seedRosteredFixture(request, v3SkinSeed("boardgame", "BG"));
+
+  await page.goto(await fixturePath(page.request, fx.fixtureId), { waitUntil: "load" });
+  await dismissCookieBanner(page);
+  // TWO, not the 4 its siblings carry, and measured rather than guessed: a
+  // boardgame pad in "pre" is the sparsest state any v3 skin reaches — the
+  // fidelity control and the pairing card, and nothing else. The halves render
+  // as plain `<div>`s until the match is live and the ribbon has no Take back
+  // until something is recorded, while Start match / Hand over device are
+  // console chrome OUTSIDE the pad. The floor is a vacuity guard, so it is set
+  // at what this state actually holds; the pairing tile asserted below is
+  // where this test's real specificity lives.
+  await assertV3PadHoldsAtThisWidth(page, "boardgame pad, pre phase", 2);
+
+  // The pairing card's first step is a `number` (the board number), the same
+  // stepper shape carrom's coins step uses and the only one this pad has.
+  await assertTapFloor(padTile(page, "pairing"), "boardgame: pairing-card tile");
+  await padTile(page, "pairing").click();
+  await expect(v3Sheet(page), "the pairing card must open").toBeVisible({ timeout: 20_000 });
+  await assertV3PadHoldsAtThisWidth(page, "boardgame pairing card, board step", 2);
+
+  // ---- LIVE. `core.start` posted directly rather than tapped: the Start
+  // control is console chrome OUTSIDE the pad, and this test is about the pad.
+  const state = await apiJson<{ last_seq: number }>(request, `/api/v1/fixtures/${fx.fixtureId}/state`);
+  expect(state.status, "state read before core.start").toBe(200);
+  const started = await apiJson(request, `/api/v1/fixtures/${fx.fixtureId}/events`, "POST", {
+    expected_seq: state.data!.last_seq,
+    type: "core.start",
+    payload: {},
+  });
+  expect(started.status, `core.start POST: ${JSON.stringify(started.error)}`).toBeLessThan(300);
+
+  await page.reload({ waitUntil: "load" });
+  await assertV3PadHoldsAtThisWidth(page, "boardgame pad, live phase", 3);
+
+  // Tap model S: the halves ARE the result buttons (R7-2, "tap decides, dock
+  // enriches"), so `padHalf`'s `button`-scoped locator resolves here exactly as
+  // it does for the R5 racquet pads — and it is scoped to `button` deliberately,
+  // because a half renders a plain `<div>` at the same grid position when it is
+  // not tappable. Measured, never tapped: a tap commits `boardgame.result` and
+  // DECIDES the match, which unmounts the pad.
+  await assertTouchFloor(padHalf(page, "home"), "boardgame: home result half");
+  await assertTouchFloor(padHalf(page, "away"), "boardgame: away result half");
+  await assertTapFloor(padTile(page, "draw"), "boardgame: Draw / no result tile");
   await expectNoHorizontalScroll(page);
 });
 

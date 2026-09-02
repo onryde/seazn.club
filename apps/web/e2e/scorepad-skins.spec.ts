@@ -1,6 +1,12 @@
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
-import AxeBuilder from "@axe-core/playwright";
 import { apiJson, fixturePath, seedRosteredFixture, expectNoHorizontalScroll, TAG } from "./helpers";
+import {
+  HIT_TARGET_FLOOR_PX,
+  floorViolationLines,
+  hitTargetFloorReport,
+  measureHitTargets,
+  scanPadContrast,
+} from "./scorepad-a11y-kit";
 
 // S11/#420 W9 — one real-browser headline flow per shipped skin (cricket,
 // racquet, tennis, football, period), all at 375px.
@@ -101,14 +107,41 @@ async function openLiveConsole(page: Page, fx: { fixtureId: string }): Promise<v
  * would miss whatever an expanded ActionForm, a chip row or a populated
  * header value newly draws, which is exactly the kind of state a courtside
  * scorer actually sees mid-match.
+ *
+ * R8/WS-H — TWO CHANGES, both additive.
+ *
+ * First, the axe invocation moved into `scorepad-a11y-kit.ts` (shared with the
+ * eleven-skin sweep in `scorepad-v3-a11y-sweep.spec.ts` and with
+ * `scorepad-a11y-evidence.spec.ts`, so all three run ONE implementation).
+ * Same tags, same scope, same serious/critical gate as the call it replaces —
+ * what it adds is a proof that the scan was not vacuous: a `.include()` that
+ * resolves to the page chrome or the cookie banner reports zero violations
+ * just as happily as a clean pad does, and this suite has already been fooled
+ * by exactly that once.
+ *
+ * Second, THE 44px HIT-TARGET FLOOR, which this file never measured. Before
+ * R8 it existed for `generic` and nothing else — one skin of eleven. The
+ * eleven-skin sweep now covers every skin's pad AT REST; this call adds the
+ * five sports here at their POST-INTERACTION state, where a Detail Dock chip
+ * row or a guided sheet's option list is on screen and the at-rest sweep
+ * cannot see it. `measureHitTargets` is imported, never re-derived: a
+ * `boundingBox()` is the real painted rectangle, whereas reading `min-h-11`
+ * off a class name cannot see a parent that clips it.
  */
-async function expectPadAxeClean(page: Page): Promise<void> {
-  const axe = await new AxeBuilder({ page })
-    .include('[data-testid="score-pad"]')
-    .withTags(["wcag2a", "wcag2aa"])
-    .analyze();
-  const serious = axe.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
-  expect(serious, JSON.stringify(serious, null, 2)).toEqual([]);
+async function expectPadA11yClean(page: Page): Promise<void> {
+  const scan = await scanPadContrast(page, '[data-testid="score-pad"]');
+  expect(scan.serious, JSON.stringify(scan.serious, null, 2)).toEqual([]);
+
+  // R8 review, Important 1 — asserted over EVERY operable target, not the
+  // min-AREA one: min-area is not min-dimension, so a control wider than the
+  // binding 92.11x44 but shorter than 44 would have a larger area and never
+  // be looked at. `hitTargetFloorReport`'s header carries the full reasoning.
+  const floor = hitTargetFloorReport(await measureHitTargets(pad(page)));
+  expect(floor.smallest, "no operable hit target rendered inside the pad — nothing was measured").not.toBeNull();
+  expect(
+    floorViolationLines(floor),
+    `${floor.under.length} of ${floor.operable.length} operable targets are under the ${HIT_TARGET_FLOOR_PX}px floor (smallest by area: "${floor.smallest?.name}" ${floor.smallest?.width}x${floor.smallest?.height})`,
+  ).toEqual([]);
 }
 
 /**
@@ -212,10 +245,10 @@ test("cricket skin: real roster, a couple of balls scored", async ({ page, reque
     expect([striker, nonStriker]).toContain(b.payload.striker);
     expect(b.payload.bowler).toBe(bowler);
   }
-  // S13/#422 W11 cutover — cricket's own scan (see expectPadAxeClean's
+  // S13/#422 W11 cutover — cricket's own scan (see expectPadA11yClean's
   // header comment for why this file, not just v6-sports.spec.ts's single
   // icehockey scan, needs one per skin).
-  await expectPadAxeClean(page);
+  await expectPadA11yClean(page);
   await expectNoHorizontalScroll(page);
 });
 
@@ -275,7 +308,7 @@ test("tennis skin: play points to deuce", async ({ page, request }) => {
   await expect(homeHalf).toContainText("40");
   await expect(awayHalf).toContainText("40");
   // S13/#422 W11 cutover — tennis's own scan.
-  await expectPadAxeClean(page);
+  await expectPadA11yClean(page);
   await expectNoHorizontalScroll(page);
 
   const points = await ledger(request, fx.fixtureId);
@@ -363,7 +396,7 @@ test("volleyball skin: a set summary then a rally", async ({ page, request }) =>
   const strip = pad(page).locator('[data-role="v3-scorebug"] [data-strip-item-id="games"]');
   await expect(strip).toContainText("1–0");
   // S13/#422 W11 cutover — volleyball's own scan.
-  await expectPadAxeClean(page);
+  await expectPadA11yClean(page);
   await expectNoHorizontalScroll(page);
 
   const rows = await ledger(request, fx.fixtureId);
@@ -414,7 +447,7 @@ test("football skin: a side-only goal", async ({ page, request }) => {
   await expect(scorebugHalf(page, 0), "the goal must reach the visible score").toContainText("1");
   await expect(scorebugHalf(page, 1), "the away half must be untouched").toContainText("0");
   // S13/#422 W11 cutover — football's own scan.
-  await expectPadAxeClean(page);
+  await expectPadA11yClean(page);
   await expectNoHorizontalScroll(page);
 
   const goal = (await ledger(request, fx.fixtureId)).find((e) => e.type === "football.goal")!;
@@ -486,7 +519,7 @@ test("period skin (icehockey): a goal and a period advance", async ({ page, requ
   // the icehockey e2e in v6-sports.spec.ts scans a DIFFERENT icehockey
   // fixture reaching the suspension flow, not this goal-scoring one, so
   // this is genuinely additional coverage, not a duplicate scan).
-  await expectPadAxeClean(page);
+  await expectPadA11yClean(page);
   await expectNoHorizontalScroll(page);
 
   const goal = (await ledger(request, fx.fixtureId)).find((e) => e.type === "icehockey.goal")!;

@@ -25,6 +25,7 @@ import type { LineupPair } from "../core/types.ts";
 import { resolvePositions } from "../sport/catalog.ts";
 import {
   buildPathObject,
+  isPathRequired,
   type FidelityBand,
   type PadAction,
   type PadAttribution,
@@ -292,6 +293,109 @@ export function checkActionPayloadsAccepted(
         }),
         { numRuns },
       );
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// (f)/(g) R8/WS-B — the live dead-end-tap closure. A pad let a scorer confirm
+// an action with a REQUIRED attribution item still unfilled; the engine's
+// `z.strictObject` then rejected the payload and the tap dead-ended with no
+// explanation (`cricket.toss.wonBy`, `cricket.review.by`, `football.goal.by`
+// confirmed live). `PadAttributionItem.required` closes it, but only if the
+// flag can never drift from the schema it claims to summarise — two halves:
+//
+// (f) STRUCTURAL — `item.required` literally equals
+// `isPathRequired(schema, item.path)`, so a drift between the stamped flag
+// and the schema is caught before any payload is ever built.
+//
+// (g) BEHAVIOURAL — the fact the flag is FOR: omitting a flagged-required
+// item's value really is rejected by the schema (the dead-end this closes),
+// and omitting a flagged-optional item's value really is accepted (so
+// optional items stay genuinely skippable, per the owner's design decision).
+// ---------------------------------------------------------------------------
+
+export function checkAttributionRequiredFlags(
+  spec: PadSpec,
+  eventSchemas: Readonly<Record<string, z.ZodTypeAny>>,
+): string[] {
+  const problems: string[] = [];
+  for (const panel of spec.panels) {
+    for (const action of panel.actions) {
+      const schema = eventSchemas[action.type];
+      if (schema === undefined) continue; // reported by checkActionCoverage
+      for (const item of action.attribution) {
+        const expected = isPathRequired(schema, item.path);
+        if (item.required !== expected) {
+          problems.push(
+            `action "${action.type}" (${action.labelKey.key}) attribution item "${item.path}" declares ` +
+              `required=${String(item.required)}, but its own payload schema (eventSchemas["${action.type}"]) ` +
+              `says required=${String(expected)} — required must be derived via isPathRequired/` +
+              `stampAttributionRequired, never hand-typed`,
+          );
+        }
+      }
+    }
+  }
+  return problems;
+}
+
+/** Same shape as `actionPayloadArbitrary`, but OMITS exactly the attribution
+ *  item at `omitIndex` — every OTHER attribution item and every field is
+ *  still populated, so a schema rejection can only be attributed to the one
+ *  item under test. */
+function actionPayloadOmittingArbitrary(
+  action: PadAction,
+  omitIndex: number,
+  entrantIds: readonly [string, string],
+  personPool: readonly string[],
+): fc.Arbitrary<unknown> {
+  const shape: Record<string, fc.Arbitrary<PadFieldValue>> = {};
+  for (const field of action.fields) shape[field.path] = fieldArbitrary(field);
+  const otherAttribution = action.attribution.filter((_, index) => index !== omitIndex);
+  return fc
+    .tuple(fc.record(shape), attributionArbitrary(otherAttribution, entrantIds, personPool))
+    .map(([values, attrEntries]) => buildPathObject([...Object.entries(values), ...attrEntries]));
+}
+
+/** Throws (via `fc.assert`) rather than returning a violation list, matching
+ *  `checkActionPayloadsAccepted`'s own contract — a failure keeps
+ *  fast-check's shrunk counterexample. */
+export function checkOmittedAttributionAcceptance(
+  spec: PadSpec,
+  eventSchemas: Readonly<Record<string, z.ZodTypeAny>>,
+  entrantIds: readonly [string, string],
+  personPool: readonly string[],
+  numRuns: number,
+): void {
+  for (const panel of spec.panels) {
+    for (const action of panel.actions) {
+      const schema = eventSchemas[action.type];
+      if (schema === undefined) continue; // reported by checkActionCoverage
+      action.attribution.forEach((item, index) => {
+        const arb = actionPayloadOmittingArbitrary(action, index, entrantIds, personPool);
+        fc.assert(
+          fc.property(arb, (payload) => {
+            const result = schema.safeParse(payload);
+            if (item.required === true && result.success) {
+              throw new Error(
+                `action "${action.type}" (${action.labelKey.key}) attribution item "${item.path}" is flagged ` +
+                  `required, but a payload omitting it was ACCEPTED by the schema: ${JSON.stringify(payload)} — ` +
+                  `an unfilled required tap must dead-end at Confirm, never reach the engine`,
+              );
+            }
+            if (item.required !== true && !result.success) {
+              throw new Error(
+                `action "${action.type}" (${action.labelKey.key}) attribution item "${item.path}" is NOT flagged ` +
+                  `required, but a payload omitting it was REJECTED by the schema: ${JSON.stringify(payload)} — ` +
+                  `${(result.error?.issues ?? []).map((issue) => issue.message).join("; ")} — this item must stay ` +
+                  `skippable or it is wrongly gating Confirm`,
+              );
+            }
+          }),
+          { numRuns },
+        );
+      });
     }
   }
 }
@@ -640,6 +744,14 @@ export function padSpecConformanceSuite<Cfg, Ev, State>(
 
     it("(d) fidelity bands cover every registered type and nest by construction", () => {
       expect(checkFidelityMap(spec, eventSchemas)).toEqual([]);
+    });
+
+    it("(f) attribution items declare required exactly as their own action's payload schema requires", () => {
+      expect(checkAttributionRequiredFlags(spec, eventSchemas)).toEqual([]);
+    });
+
+    it("(g) omitting a required attribution item is rejected by the schema; omitting an optional one is accepted", () => {
+      checkOmittedAttributionAcceptance(spec, eventSchemas, entrantIds, personPool, numRuns);
     });
 
     it("(e) DOMAIN.md is present for this module", () => {

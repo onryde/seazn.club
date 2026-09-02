@@ -194,6 +194,33 @@ describe("assertDisabledTilesExplained", () => {
       'tile "a": disabled with no context slot message explaining why',
     ]);
   });
+
+  // R8 — a `kind: "mode"` slot (../types.ts) states which entry lane the
+  // sport is locked into and so ALWAYS carries a message whenever it is
+  // present at all. Counting it would make this validator vacuously green for
+  // every skin that declares one — the exact "a guard nothing kills is not
+  // tested" shape it exists to catch — and it is not an answer to the
+  // question asked here anyway: "why is this tile grey" is never "because the
+  // innings is ball-by-ball".
+  it("a MODE slot's message does not count — it is always present, so counting it would disarm this validator outright", () => {
+    const tiles = [tile({ id: "a", disabled: true })];
+    const context = ctx([
+      { id: "striker", label: "pad.context.striker", pool: "onfield", required: true, readOnly: true },
+      { id: "mode", kind: "mode", label: "pad.cricket.context.mode.fine.label", pool: "onfield", required: false, message: "Set when this innings began." },
+    ]);
+    expect(assertDisabledTilesExplained(tiles, context)).toEqual([
+      'tile "a": disabled with no context slot message explaining why',
+    ]);
+  });
+
+  it("a REAL explanation alongside a mode slot still clears it — the exclusion is specific to kind, not a blanket refusal", () => {
+    const tiles = [tile({ id: "a", disabled: true })];
+    const context = ctx([
+      { id: "bowler", label: "pad.context.bowler", pool: "onfield", required: true, message: "No bowler is eligible." },
+      { id: "mode", kind: "mode", label: "pad.cricket.context.mode.fine.label", pool: "onfield", required: false, message: "Set when this innings began." },
+    ]);
+    expect(assertDisabledTilesExplained(tiles, context)).toEqual([]);
+  });
 });
 
 // Fix round 1, review finding 1 (Important): a grid item's default

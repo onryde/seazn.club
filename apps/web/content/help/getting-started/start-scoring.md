@@ -8,7 +8,7 @@ When the draw is ready, press **Start**. Starting locks entrants and format — 
 
 ## Scoring a match
 
-Set each side's [lineup](/help/scoring/lineups) before you start, then open any fixture and use its score pad — each sport gets the right one (sets for badminton, [real tennis scoring](/help/scoring/tennis) with tie-breaks, overs for cricket, [periods and penalties for the hockeys](/help/scoring/hockey), plain points for generic scoring). Every entry updates standings, progression and public dashboards immediately.
+Set each side's [lineup](/help/scoring/lineups) before you start, then open any fixture and use its score pad — each sport gets the right one (sets for badminton, [real tennis scoring](/help/scoring/tennis) with tie-breaks, overs for cricket, quarters and cards for [field hockey](/help/scoring/hockey), periods and penalties for [ice hockey](/help/scoring/icehockey), plain points for generic scoring). Every entry updates standings, progression and public dashboards immediately.
 
 ## Who can score
 

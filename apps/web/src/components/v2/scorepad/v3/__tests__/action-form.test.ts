@@ -324,17 +324,20 @@ describe("ActionFormList — generic walk over any padSpec(cfg) action", () => {
 
 // --- Defect 1 (r2-cricket review) --------------------------------------
 //
-// checkActionValidity (view-model.ts) deliberately never gates on
-// attribution, and buildActionPayload omits any attribution path with no
-// collected value — so BEFORE this fix, an action with declared
-// `attribution` items (cricket.review: by/person/against; cricket.toss:
-// wonBy) rendered no control for them at all: Confirm stayed enabled and
-// the submitted payload silently dropped the attributed people, with
-// nothing shown to the scorer. This block proves the collection UI exists
-// and reaches the built payload, and separately documents (as a passing
-// assertion, not a silent assumption) that Confirm still does NOT block on
-// an unfilled attribution item — matching the legacy renderer's own
-// behaviour verbatim rather than widening validation for all 11 sports.
+// checkActionValidity (view-model.ts) used to never gate on attribution at
+// all, and buildActionPayload omits any attribution path with no collected
+// value — so BEFORE this fix, an action with declared `attribution` items
+// (cricket.review: by/person/against; cricket.toss: wonBy) rendered no
+// control for them at all: Confirm stayed enabled and the submitted
+// payload silently dropped the attributed people, with nothing shown to
+// the scorer. This block proves the collection UI exists and reaches the
+// built payload. As of R8/WS-B2 (`PadAttributionItem.required`,
+// engine-stamped, d4c8ddbfb), an item explicitly marked required DOES gate
+// Confirm — see the dedicated describe block below — but the fixtures in
+// THIS block never set `required` on their attribution items, so they
+// stay optional/skippable exactly as before (the reviewAction below is
+// hand-typed with no `required` key, matching a hand-built fixture never
+// run through the engine's own stamp).
 describe("ActionFormList — attribution items (defect 1: the seam was dropped, not ported)", () => {
   const SQUADS: SquadState = {
     home: {
@@ -462,7 +465,7 @@ describe("ActionFormList — attribution items (defect 1: the seam was dropped, 
     expect(propsOf(chipsOf(byGroup())[0]!)["aria-pressed"]).toBe(false);
   });
 
-  it("RULING: Confirm stays enabled with every attribution item unfilled — checkActionValidity never gates on attribution, ported verbatim (not widened) from the legacy renderer", () => {
+  it("Confirm stays enabled with every OPTIONAL attribution item unfilled (none of this fixture's items are `required`)", () => {
     const { island } = renderReview();
     const kindSelect = island.tree().filter((el) => el.type === "select")[0]!;
     (propsOf(kindSelect).onChange as (e: { target: { value: string } }) => void)({ target: { value: "player" } });
@@ -496,6 +499,63 @@ describe("ActionFormList — attribution items (defect 1: the seam was dropped, 
     expect(chipsOf(group!)).toHaveLength(0);
   });
 
+  // R8 branch review, finding 6 — a REQUIRED person item with an empty
+  // roster renders "no roster" and zero chips, so `checkActionValidity` can
+  // never be satisfied and Confirm is disabled FOREVER. Not a regression
+  // (the engine's strictObject already refused the payload), but before R8
+  // the tap dead-ended at the engine, and now it dead-ends at a screen that
+  // offers no way out at all. The scorer needs to be told what to do.
+  it("a REQUIRED person item with zero candidates words the way out — Confirm is otherwise permanently unsatisfiable", () => {
+    const island = renderIsland(ActionFormList, {
+      actions: [
+        action({
+          type: "cricket.review",
+          labelKey: label("Review"),
+          attribution: [{ kind: "person", path: "person", required: true }],
+        }),
+      ],
+      t,
+      submittingType: null,
+      onSubmit: () => {},
+      squads: NO_SQUADS,
+      lineups: NO_LINEUPS,
+      personNames: NO_NAMES,
+    });
+    click(buttonsOf(island.tree())[0]!); // expand
+    const group = groupFor(island.tree(), "person")!;
+
+    // The dead end is real: nothing to tap, and Confirm cannot be satisfied.
+    expect(chipsOf(group)).toHaveLength(0);
+    const confirm = buttonsOf(island.tree()).find((b) => textOf(b) === "scorepad.action.confirm")!;
+    expect(propsOf(confirm).disabled).toBe(true);
+
+    // ...so the row must say what to DO, not merely that the roster is empty.
+    expect(textOf(group)).toContain("scorepad.attribution.noRosterRequired");
+  });
+
+  it("an OPTIONAL item with zero candidates keeps the plain 'no roster' wording — nothing to escalate, Confirm still works", () => {
+    const island = renderIsland(ActionFormList, {
+      actions: [
+        action({
+          type: "cricket.review",
+          labelKey: label("Review"),
+          attribution: [{ kind: "person", path: "person" }],
+        }),
+      ],
+      t,
+      submittingType: null,
+      onSubmit: () => {},
+      squads: NO_SQUADS,
+      lineups: NO_LINEUPS,
+      personNames: NO_NAMES,
+    });
+    click(buttonsOf(island.tree())[0]!); // expand
+    const group = groupFor(island.tree(), "person")!;
+    expect(textOf(group)).not.toContain("scorepad.attribution.noRosterRequired");
+    const confirm = buttonsOf(island.tree()).find((b) => textOf(b) === "scorepad.action.confirm")!;
+    expect(propsOf(confirm).disabled).toBeFalsy();
+  });
+
   it("a SIDE item always offers exactly Home/Away regardless of squads — its candidates come from lineups, not the roster", () => {
     const island = renderIsland(ActionFormList, {
       actions: [
@@ -516,5 +576,79 @@ describe("ActionFormList — attribution items (defect 1: the seam was dropped, 
     const group = groupFor(island.tree(), "wonBy");
     expect(group).toBeDefined();
     expect(chipsOf(group!).map((c) => propsOf(c)["data-value"])).toEqual(["home-1", "away-1"]);
+  });
+});
+
+// R8/WS-B2 — the owner-picked "disabled-until-complete" design: a required
+// attribution item's row gets a red asterisk + a "required" microcopy line,
+// and Confirm is disabled with a one-line reason until it's filled. Uses a
+// hand-typed `required: true` item (this file's own established
+// convention — see reviewAction above, "mirrors the REAL cricket.review
+// shape verbatim"), never the real engine padSpec (that derivation is
+// view-model.test.ts's job, per memory rule #19 — this file proves the
+// RENDERING wiring on top, using the same node-only `_hook-harness` the
+// rest of this file already relies on for `disabled` prop assertions).
+describe("ActionFormList — required attribution gates Confirm (R8/WS-B2, disabled-until-complete)", () => {
+  const tossAction = action({
+    type: "cricket.toss",
+    labelKey: label("Toss"),
+    attribution: [{ kind: "side", path: "wonBy", required: true }],
+  });
+
+  function chipsOf(group: ReturnType<typeof walk>[number]) {
+    return walk(propsOf(group).children as never).filter((el) => el.type === "button");
+  }
+
+  function renderToss() {
+    const calls: { type: string; payload: Record<string, unknown> }[] = [];
+    const island = renderIsland(ActionFormList, {
+      actions: [tossAction],
+      t,
+      submittingType: null,
+      onSubmit: (type, payload) => calls.push({ type, payload }),
+      squads: NO_SQUADS,
+      lineups: NO_LINEUPS,
+      personNames: NO_NAMES,
+    });
+    click(buttonsOf(island.tree())[0]!); // expand
+    return { island, calls };
+  }
+
+  it("marks the required row with a red asterisk and the 'required' microcopy", () => {
+    const { island } = renderToss();
+    const group = island.tree().find((el) => propsOf(el)["data-attribution-path"] === "wonBy")!;
+    expect(propsOf(group)["data-required"]).toBe(true);
+    expect(textOf(group)).toContain("scorepad.attribution.required");
+  });
+
+  it("Confirm is disabled with a one-line reason while the required item is unfilled", () => {
+    const { island } = renderToss();
+    const tree = island.tree();
+    const confirm = buttonsOf(tree).find((b) => textOf(b) === "scorepad.action.confirm")!;
+    expect(propsOf(confirm).disabled).toBe(true);
+    expect(island.text()).toContain("scorepad.validity.missingAttribution");
+  });
+
+  it("Confirm enables once the required item is filled, and the built payload carries it — no dead-end tap", () => {
+    const { island, calls } = renderToss();
+    const group = () => island.tree().find((el) => propsOf(el)["data-attribution-path"] === "wonBy")!;
+    click(chipsOf(group())[0]!); // "home-1"
+
+    const finalTree = island.tree();
+    const confirm = buttonsOf(finalTree).find((b) => textOf(b) === "scorepad.action.confirm")!;
+    expect(propsOf(confirm).disabled).toBeFalsy();
+
+    click(confirm);
+    expect(calls).toEqual([{ type: "cricket.toss", payload: { wonBy: "home-1" } }]);
+  });
+
+  it("re-clearing the required item (re-tap to deselect) disables Confirm again", () => {
+    const { island } = renderToss();
+    const group = () => island.tree().find((el) => propsOf(el)["data-attribution-path"] === "wonBy")!;
+    click(chipsOf(group())[0]!); // select
+    click(chipsOf(group())[0]!); // deselect
+
+    const confirm = buttonsOf(island.tree()).find((b) => textOf(b) === "scorepad.action.confirm")!;
+    expect(propsOf(confirm).disabled).toBe(true);
   });
 });

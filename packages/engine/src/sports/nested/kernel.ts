@@ -34,6 +34,7 @@ import {
   type StandingsDelta,
 } from "../../core/types.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
+import { stampAttributionRequired } from "../../sport/module.ts";
 import type {
   FidelityBand,
   FidelityTier,
@@ -2070,7 +2071,10 @@ export function makeNestedModule(
     configSchema,
     eventSchema: NestedEv,
     eventSchemas,
-    padSpec: (padCfg) => nestedPadSpec(preset, padCfg),
+    // R8/WS-B — `required` stamped ONCE here, from the SAME `eventSchemas`
+    // registry already declared above (never hand-typed per action; see
+    // module.ts's own doc comment).
+    padSpec: (padCfg) => stampAttributionRequired(nestedPadSpec(preset, padCfg), eventSchemas),
     positions: preset.positions,
     variants: preset.variants,
 

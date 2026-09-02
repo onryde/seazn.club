@@ -1897,6 +1897,96 @@ function superOverNoticeSlot(state: CricketStateShape, t: TFn): ContextSlot | nu
   };
 }
 
+/**
+ * R8 (owner ruling 2026-09-02, register row D2 — open since R2b) — THE
+ * SCORING-MODE INDICATOR.
+ *
+ * Cricket's two entry lanes are mutually exclusive within one innings and
+ * LOCKED by its first event (`inningsFidelity` above, and the fold's own
+ * two-way refusal it documents). Until this wave that fork was expressed on
+ * screen ONLY as which tiles happen to appear — `inningsFidelity`'s sole
+ * consumer was `buildTiles` — so a scorer who did not already know the rule
+ * had no way to learn it from the pad: the ball tiles are simply gone, with
+ * nothing anywhere saying why or that anything is locked.
+ *
+ * Shape: the chassis's read-only context-strip slot (`ContextSlot.kind:
+ * "mode"`, ../types.ts), descended from the pattern badminton/tabletennis/
+ * volleyball ship for "Game scores only"/"Set scores only" and from
+ * `superOverNoticeSlot` above — a person-less slot carrying one sentence.
+ * `readOnly: true` because there is nothing a tap could change (the chassis
+ * enforces it for `kind: "mode"` regardless, but declaring it keeps this file
+ * honest at the point of authorship). `messageTone: "info"` for badminton's
+ * own stated reason: this is a TIER the pad is working exactly as configured
+ * in, not a fault, and red here would teach a scorer that red on this pad
+ * means nothing in particular. The chassis renders it as plain text with a
+ * lock glyph rather than a pill (WS-M copy round 2) — this file chooses the
+ * words, not the shape.
+ *
+ * DISTINCT FROM THE BAND (../recording-chip.tsx), on AGENCY rather than topic.
+ * Both are granularity. The band is the SCORER'S CHOICE of how much to
+ * record — theirs, and changeable now. The mode is a FACT ABOUT THIS INNINGS,
+ * fixed by its first event, that nothing on this pad can move. Hence the
+ * label's own "This innings: …": it says whose the value is, which is what a
+ * scorer needs before deciding whether to reach for it. Stated in those terms
+ * rather than in terms of plans or entitlements deliberately — what the band
+ * means commercially has changed once already; what it means to a scorer is
+ * what makes this distinction hold.
+ *
+ * The MODE itself is never decided here — `inningsFidelity` reads it straight
+ * off the fold. `MODE_COPY` is a KEY table only, and typed
+ * `Record<Exclude<InningsFidelity, "unopened">, …>` deliberately: if the
+ * engine ever grows a third lane, this stops compiling instead of silently
+ * mislabelling it. "unopened" returns no slot at all — NEITHER lane has
+ * locked in yet, and a chip claiming one would be stating something the
+ * engine does not yet know.
+ */
+const MODE_COPY: Record<Exclude<InningsFidelity, "unopened">, { label: string; message: string }> = {
+  fine: {
+    label: "pad.cricket.context.mode.fine.label",
+    message: "pad.cricket.context.mode.fine.message",
+  },
+  coarse: {
+    label: "pad.cricket.context.mode.coarse.label",
+    message: "pad.cricket.context.mode.coarse.message",
+  },
+};
+
+function modeSlot(innings: CricketInningsShape | null, t: TFn): ContextSlot | null {
+  // WS-M fix round 1, item 2 (controller ruling, 2026-09-02): SUPPRESS once
+  // the innings is closed. The strip answers "what am I recording right now",
+  // and once the innings is closed nothing is being recorded. Worse,
+  // `currentInnings` (above) deliberately falls back to the JUST-CLOSED
+  // innings for the display path, and the NEXT innings may be opened in the
+  // OTHER lane — so a chip sourced from the closed one is not merely
+  // redundant, it states the wrong mode for the innings the scorer is about
+  // to record. That is the D-17 family: a fact rendered where it does not
+  // belong. It also stacked a fourth message line under the three identical
+  // "This innings is closed." lines the closure gate already renders.
+  //
+  // Checked HERE rather than at the `buildContext` call site (which has its
+  // own `inningsClosed`) so the rule travels with the slot: a second caller
+  // cannot forget it.
+  if (innings?.closed === true) return null;
+  const fidelity = inningsFidelity(innings);
+  if (fidelity === "unopened") return null;
+  const copy = MODE_COPY[fidelity];
+  return {
+    id: "mode",
+    kind: "mode",
+    label: copy.label,
+    // STRUCTURALLY DEAD, kept only because `ContextSlot.pool` is required
+    // (../types.ts). A mode slot is never `activeSlot` (`isStatic`,
+    // ../context-strip.tsx), so `resolvePool` never sees this value and no
+    // picker can ever open on it. Reviewed and left as-is rather than making
+    // `pool` optional, which would touch every other slot's contract.
+    pool: "onfield",
+    required: false,
+    readOnly: true,
+    message: t(copy.message),
+    messageTone: "info",
+  };
+}
+
 export function buildContext(view: PadHostView, t: TFn = (key) => key): ContextStripSpec | null {
   const state = asState(view.state);
   if (state.phase !== "live" && state.phase !== "super_over") return null;
@@ -1931,6 +2021,7 @@ export function buildContext(view: PadHostView, t: TFn = (key) => key): ContextS
   // "one default computed in one place" reasoning G5 already established
   // for WHO the bowler is.
   const blockReason = inningsClosed ? null : bowlerBlockReason(state, people, cfg);
+  const mode = modeSlot(innings, t);
   return {
     slots: [
       ...(superOverSlot ? [superOverSlot] : []),
@@ -2003,6 +2094,13 @@ export function buildContext(view: PadHostView, t: TFn = (key) => key): ContextS
         readOnly: inningsClosed || bowlerReadOnly ? true : undefined,
         message: closedMessage ?? (blockReason ? bowlerBlockMessage(t, blockReason, people.bowler, view.personNames, cfg) : undefined),
       },
+      // R8 — LAST, deliberately. The three chips above are the strip's
+      // working surface (bowler is a real control at an over boundary) and at
+      // 320px the strip wraps; an ambient, permanently-locked statement must
+      // not push them down a row. The super-over notice keeps its place at
+      // the FRONT for the opposite reason — it explains five greyed tiles, so
+      // it is closer to a fault than to ambient context.
+      ...(mode ? [mode] : []),
     ],
   };
 }

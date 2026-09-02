@@ -11,7 +11,7 @@ import { defaultLineupPair, makeEnvelope } from "@seazn/engine/testkit";
 import { cricket } from "@seazn/engine/sports/cricket";
 import { tennis } from "@seazn/engine/sports/tennis";
 import { foldClient, resolveModuleClient } from "../module-client";
-import { createSkinDispatch } from "../skins/types";
+import { createSkinDispatch } from "../v3/skin-dispatch";
 import {
   allActionViews,
   buildActionPayload,
@@ -61,7 +61,8 @@ describe("buildPadView — phase scoping", () => {
 
 // R7 defect fix — the "pad offers what the engine refuses" class R2c closed
 // three instances of. Before `everyPhase` (generic.ts), `createSkinDispatch`
-// (skins/types.ts) refused every generic.score/generic.result tap in "pre"
+// (v3/skin-dispatch.ts, migrated from skins/types.ts in R8) refused every
+// generic.score/generic.result tap in "pre"
 // phase with "skin dispatched an action the spec does not declare at this
 // phase... Declared here: (none)", even though `applyScore`/`applyResult`
 // (generic.ts) both accept "pre" — the FOLD and the PAD disagreed.
@@ -228,14 +229,14 @@ describe("buildPadView — fidelity band filtering (cricket: band0/1 free, band2
   });
 });
 
-describe("checkActionValidity — required FIELDS only (attribution is a later pass's concern)", () => {
+describe("checkActionValidity — required fields", () => {
   it("ok when every declared field has a value", () => {
-    const action = { fields: [{ kind: "number" as const, path: "over", min: 0, max: 10 }] };
+    const action = { fields: [{ kind: "number" as const, path: "over", min: 0, max: 10 }], attribution: [] };
     expect(checkActionValidity(action, { over: 3 })).toEqual({ ok: true });
   });
 
   it("not ok, with a renderable reason, when a declared field is unset", () => {
-    const action = { fields: [{ kind: "number" as const, path: "over", min: 0, max: 10 }] };
+    const action = { fields: [{ kind: "number" as const, path: "over", min: 0, max: 10 }], attribution: [] };
     const result = checkActionValidity(action, {});
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -246,12 +247,80 @@ describe("checkActionValidity — required FIELDS only (attribution is a later p
   });
 
   it("an action with zero declared fields is always valid", () => {
-    expect(checkActionValidity({ fields: [] }, {})).toEqual({ ok: true });
+    expect(checkActionValidity({ fields: [], attribution: [] }, {})).toEqual({ ok: true });
   });
 
   it("a toggle field counts as set even when its value is `false` (must check `undefined`, not falsy)", () => {
-    const action = { fields: [{ kind: "toggle" as const, path: "freeHit" }] };
+    const action = { fields: [{ kind: "toggle" as const, path: "freeHit" }], attribution: [] };
     expect(checkActionValidity(action, { freeHit: false })).toEqual({ ok: true });
+  });
+
+  // R8 branch review, finding 5 — `attribution` was OPTIONAL on this
+  // parameter (`Partial<Pick<PadAction, "attribution">>`), so a caller
+  // passing `{ fields }` alone silently disabled the whole attribution gate
+  // with no type error: the exact inert-seam shape this wave exists to
+  // close, sitting on the guard that closes it. Now required.
+  //
+  // A COMPILE-TIME guard, deliberately: vitest never typechecks (the runtime
+  // call below still works fine), so nothing at runtime can witness this.
+  // `@ts-expect-error` is what makes it enforceable — if the parameter is
+  // ever loosened back, this directive stops matching an error and tsc fails
+  // the file with TS2578 "Unused '@ts-expect-error' directive". Same
+  // mechanic, and same reasoning, as v3/__tests__/types.test.ts's own proofs.
+  it("a fields-only caller no longer type-checks — the gate cannot be dropped by omission", () => {
+    // @ts-expect-error — `attribution` is required; omitting it must not compile.
+    const disabled = checkActionValidity({ fields: [] }, {});
+    // Runtime is deliberately unchanged (view-model.ts keeps a `?? []` so a
+    // cast cannot crash the live Confirm path). The TYPE is the fix: the seam
+    // was that this call compiled, not that it returned something odd.
+    expect(disabled).toEqual({ ok: true });
+  });
+});
+
+// R8/WS-B2 — `PadAttributionItem.required` now exists (engine, d4c8ddbfb),
+// so `checkActionValidity` must gate on it too, closing the dead-end tap: a
+// scorer could confirm cricket.toss with `wonBy` unset and the engine's own
+// z.strictObject silently rejected the payload. Derives "which item is
+// required" from the REAL padSpec output for a real action (cricket.toss),
+// never a hand-typed required list (memory rule #19) — a change to the
+// engine's own schema-derived stamp moves this test with it.
+describe("checkActionValidity — required attribution (R8/WS-B2)", () => {
+  const cricketCfg = cricket.configSchema.parse({});
+  const cricketSpec = cricket.padSpec!(cricketCfg);
+  const tossAction = allActionViews(cricketSpec, { band: 3, entitlements: {} }).find(
+    (a) => a.type === "cricket.toss",
+  )!;
+  const wonByItem = tossAction.attribution.find((item) => item.path === "wonBy")!;
+
+  it("the fixture actually proves the engine stamped wonBy as required (else this suite proves nothing)", () => {
+    expect(wonByItem.required).toBe(true);
+  });
+
+  it("not ok when a required attribution item is unfilled, even with every declared FIELD filled", () => {
+    // cricket.toss also declares a `fields` entry (`elected`) — fill it, so
+    // this isolates the attribution gate rather than re-proving the
+    // pre-existing fields check above.
+    const result = checkActionValidity(tossAction, { elected: "bat" });
+    expect(result.ok).toBe(false);
+  });
+
+  it("ok once the required attribution item AND every declared field are filled", () => {
+    expect(checkActionValidity(tossAction, { elected: "bat", wonBy: "home-1" })).toEqual({ ok: true });
+  });
+
+  it("an OPTIONAL attribution item left unfilled does not block validity", () => {
+    const reviewAction = allActionViews(cricketSpec, { band: 3, entitlements: {} }).find(
+      (a) => a.type === "cricket.review",
+    )!;
+    // cricket.review's two fields (kind/outcome) plus its required `by` item
+    // filled; its OPTIONAL person/against items left unfilled.
+    const personItem = reviewAction.attribution.find((item) => item.path === "person")!;
+    expect(personItem.required).toBeFalsy(); // fixture proof: person really is optional
+    const values = Object.fromEntries([
+      ...reviewAction.fields.map((f) => [f.path, f.kind === "toggle" ? false : "x"]),
+      ["by", "home-1"],
+    ]);
+    expect(checkActionValidity(reviewAction, values).ok).toBe(true);
   });
 });
 

@@ -8,9 +8,9 @@ import {
   SCORING_VOCAB_KEYS, SPORT_KEY, type MsgFn,
 } from "@/lib/scoring-vocab";
 import { interpolate } from "@/lib/i18n-runtime";
-import { buildRibbon, ribbonKeyFor } from "@/components/v2/scorepad/v3/ribbon";
+import { buildRibbon, ribbonKeyFor, CORE_RIBBON_KEY } from "@/components/v2/scorepad/v3/ribbon";
 import { builtinModules } from "@seazn/engine/sports";
-import { EngineErrorCode, matchPositionOf, SquadRole } from "@seazn/engine/core";
+import { CORE_EVENT_SCHEMAS, EngineErrorCode, matchPositionOf, SquadRole } from "@seazn/engine/core";
 import { buildStream, defaultLineupPair } from "@seazn/engine/testkit";
 import uiEn from "@/dictionaries/en/ui.json";
 import uiEs from "@/dictionaries/es/ui.json";
@@ -77,6 +77,49 @@ function declaredEventTypes(): string[] {
   const out = new Set<string>();
   for (const m of builtinModules as unknown as EngineModule[]) {
     for (const tier of m.fidelityTiers ?? []) for (const t of tier.eventTypes) out.add(t);
+    for (const t of Object.keys(m.eventSchemas ?? {})) out.add(t);
+  }
+  return [...out].sort();
+}
+
+/**
+ * Every event type the engine will actually ACCEPT — the union of every
+ * module's registered payload schemas.
+ *
+ * R8/WS-R round 2: `fidelityTiers` alone is the WRONG source, and it was the
+ * one `declaredEventTypes()` used. Tiers are a fidelity BANDING of a subset,
+ * not a module's declaration of what it accepts, and for three sports they
+ * under-report — `setbased/kernel.ts:1816` builds a fixed six-key action map
+ * (summary, timeout, sanction, sub, expedite, rally) for EVERY preset and
+ * registers a schema for each, while each sport's `fidelityTiers` lists only
+ * the ones it bands. Measured against the tree: tiers 63, eventSchemas 68,
+ * the five extras being volleyball.expedite.start, badminton.expedite.start,
+ * badminton.sub, badminton.timeout and tabletennis.sub. FOUR of those five
+ * were live on the raw-type fallback ("badminton.sub recorded") and were
+ * invisible to a tiers-derived gate. (The fifth, badminton.timeout, already
+ * had four-locale copy — added opportunistically despite the tiers list not
+ * naming it, which is its own evidence that tiers are not the declaration.)
+ *
+ * `eventSchemas` is what the engine accepts, which is the right bar for "no
+ * raw internal type ever reaches a scorer". `declaredEventTypes()` takes the
+ * UNION of both rather than swapping one source for the other, because the
+ * field is OPTIONAL on `SportModule` (module.ts:501) and a module that omits
+ * it must still be swept rather than vanish.
+ *
+ * What that omission actually does (corrected round 3 — this comment used to
+ * say such a module would "degrade to its tiers", which undersells it): its
+ * tier types would then sit in the derivation but in no module's
+ * `eventSchemas`, so `assertNothingTheEngineAcceptsIsMissing`'s EXTRA
+ * direction REDS and names them. A hard failure, not a silent degrade —
+ * better behaviour than the old wording claimed, and worth stating accurately
+ * so nobody removes the union expecting a soft fallback. All eleven shipped
+ * modules populate the field today, and no module has a tier type absent from
+ * its own schema registry.
+ */
+function engineAcceptedEventTypes(): string[] {
+  const out = new Set<string>();
+  for (const m of builtinModules as unknown as EngineModule[]) {
+    for (const t of Object.keys(m.eventSchemas ?? {})) out.add(t);
   }
   return [...out].sort();
 }
@@ -84,7 +127,13 @@ function declaredEventTypes(): string[] {
 interface EngineModule {
   key: string;
   fidelityTiers?: readonly { eventTypes: readonly string[] }[];
+  /** The union of the sport's event PAYLOADS (module.ts:481, required on
+   *  SportModule) — what `declaredEnumMembers()` walks for enum options. */
   eventSchema?: unknown;
+  /** The per-TYPE payload registry (module.ts:501, optional on SportModule) —
+   *  the event types the engine will accept. A different field from
+   *  `eventSchema` above, one character apart; do not conflate them. */
+  eventSchemas?: Readonly<Record<string, unknown>>;
 }
 
 /**
@@ -379,56 +428,306 @@ describe("scoring-vocab covers every PadSpec label key the engine declares (#427
     }
   });
 
-  // R3/task C — football's v3 ribbon copy. `buildRibbon` (v3/ribbon.ts) gates
-  // its per-sport lookup on PAD_LABEL_KEYS membership BEFORE calling padLabel,
-  // so a missing entry — or an entry with no copy in one of the four locales —
-  // degrades SILENTLY to the generic `pad.ribbon.fallback` ("{event}
-  // recorded"), printing a raw internal type to a scorer with nothing failing.
-  // The test above cannot catch it: ribbon keys are exempt there by
-  // construction, since no module DECLARES one.
+  // R8/WS-R — v3 ribbon copy for EVERY sport, derived from the engine's own
+  // declarations. `buildRibbon` (v3/ribbon.ts) gates its per-sport lookup on
+  // PAD_LABEL_KEYS membership BEFORE calling padLabel, so a missing entry —
+  // or an entry with no copy in one of the four locales — degrades SILENTLY
+  // to the generic `pad.ribbon.fallback` ("{event} recorded"), printing a raw
+  // internal type to a scorer with nothing failing. The test above cannot
+  // catch it: ribbon keys are exempt there by construction, since no module
+  // DECLARES one.
   //
-  // Nothing is hand-copied here. The event types come from the engine's own
-  // fidelity tiers (`declaredEventTypes`) and the key from `ribbonKeyFor` —
-  // the SAME function buildRibbon calls, so the
-  // `pad.<sport>.ribbon.<rest-of-type>` convention is read off the code rather
-  // than restated. Add a football event type in packages/engine and this reds
-  // until its ribbon copy lands in all four dictionaries.
+  // Nothing is hand-copied here, and there is deliberately NO allow-list. The
+  // event types come from the engine's own fidelity tiers
+  // (`declaredEventTypes`) and the key from `ribbonKeyFor` — the SAME
+  // function buildRibbon calls, so the `pad.<sport>.ribbon.<rest-of-type>`
+  // convention is read off the code rather than restated. Add an event type
+  // in packages/engine and this reds until its ribbon copy lands in all four
+  // dictionaries.
   //
-  // Football-only on purpose: cricket (R2/R2b) deliberately registers ribbon
-  // copy for 8 of its 16 declared types and leaves the "More"-sheet remainder
-  // on the graceful fallback, so a sport-agnostic version of this assertion
-  // would red on that shipped decision.
-  it("registers four-locale ribbon copy for every football event type the engine declares", () => {
-    const types = declaredEventTypes().filter((t) => t.startsWith("football."));
-    // Vacuity guard: an empty derivation would satisfy the loop below.
-    expect(types).toHaveLength(9);
+  // This pair was FOOTBALL-ONLY until R8/WS-R, on an explicit premise written
+  // in this very comment: that cricket "deliberately registers ribbon copy
+  // for 8 of its 16 declared types and leaves the 'More'-sheet remainder on
+  // the graceful fallback". The premise was false twice over. The count was
+  // wrong (the engine declares 15 cricket types, not 16), and — the part that
+  // mattered — the fallback is NOT graceful: it prints the raw internal type.
+  // Seven cricket types were live on it, so a scorer taking the new ball read
+  // "cricket.newball recorded" in the ribbon and in the activity row. Those
+  // seven (followon, interruption, match.close, newball, player.line,
+  // powerplay, revise) are covered now, which leaves ZERO exemptions across
+  // all eleven shipped sports — so this gate carries no exemption mechanism
+  // at all, on purpose. If one ever looks necessary, the type is uncovered:
+  // cover it.
+  //
+  // All three assertions below COLLECT their misses and compare the whole
+  // list to `[]`, rather than asserting inside the loop. A per-iteration
+  // assertion stops at the first gap, so a wave that leaves seven types
+  // uncovered reads as one — the failure message has to show the true size of
+  // the hole, or the next session fixes one key and re-greens on the rest.
+
+  /** The sport prefix of an event type — the same first-segment split
+   *  `ribbonKeyFor` itself makes on the way to `pad.<sport>.ribbon.<rest>`. */
+  const sportOf = (type: string): string => type.split(".")[0];
+
+  /**
+   * Vacuity guard, DERIVED rather than a magic total. An empty or half-loaded
+   * derivation satisfies every loop below, so something has to prove the
+   * derivation is real — but a hard-coded count (the old `toHaveLength(9)`)
+   * only ever proves one sport's arithmetic and needs bumping forever.
+   * Asserting that the sport prefixes PRESENT in `declaredEventTypes()` are
+   * exactly `declaredSportKeys()` proves both halves at once: the derivation
+   * is non-empty, AND every sport the engine ships is actually inside the
+   * sweep. A new sport module reds this the day it lands.
+   */
+  function assertEverySportIsSwept(types: readonly string[]): void {
+    expect([...new Set(types.map(sportOf))].sort(), "declaredEventTypes() does not span every shipped sport").toEqual(
+      declaredSportKeys(),
+    );
+    assertNothingTheEngineAcceptsIsMissing(types);
+  }
+
+  /**
+   * The SECOND vacuity guard, and the one round 1 needed and did not have.
+   *
+   * The prefix-set guard above proves every SPORT is present. It does not
+   * prove every TYPE is: it passed identically at 63 types and at 68, because
+   * the five it was missing all belonged to sports that were already in the
+   * set by way of their other types. A partial derivation is the more
+   * dangerous shape than an empty one — it under-reports instead of zeroing,
+   * so every dependent assertion stays GREEN while the defect ships. That is
+   * exactly what happened: four raw-type leaks (volleyball.expedite.start,
+   * badminton.expedite.start, badminton.sub, tabletennis.sub) sat outside a
+   * green gate.
+   *
+   * So compare against every type the engine registers a payload schema for.
+   * Both directions are named, and each means something different. MISSING =
+   * the derivation under-reports and the sweep has a blind spot (the
+   * `fidelityTiers` regression). EXTRA = a module lost its `eventSchemas`
+   * registry and is carried by its tiers alone.
+   *
+   * CAVEAT, because this reads as broader cover than it is: while
+   * `declaredEventTypes()` keeps its `eventSchemas` line, `derived` is a
+   * SUPERSET of `accepted` by construction, so `missing` is structurally
+   * always `[]`. This is therefore NOT an independent cross-check of the
+   * enumeration. Its real and only job is catching a REPOINT of that
+   * derivation — someone "simplifying" it back to `fidelityTiers` alone —
+   * which is exactly the regression that shipped four raw-type leaks, and
+   * which the M5 mutant confirms it catches. Read it as a repoint tripwire,
+   * not as proof the enumeration is complete.
+   *
+   * Asserted as two separate arrays, not one object: vitest elides a
+   * composite to `...(5)` and the message would carry neither the count nor
+   * the names — the failure that made this test necessary would report as a
+   * shrug. Same rule as the three assertions above (see :116-120).
+   */
+  function assertNothingTheEngineAcceptsIsMissing(types: readonly string[]): void {
+    const derived = new Set(types);
+    const accepted = engineAcceptedEventTypes();
+    const missing = accepted.filter((t) => !derived.has(t));
+    const extra = [...derived].filter((t) => !accepted.includes(t)).sort();
+    expect(
+      missing,
+      `${missing.length} type(s) the engine accepts are MISSING from the enumeration ` +
+        `(${accepted.length} schema-registered) — has declaredEventTypes() been repointed at fidelityTiers?`,
+    ).toEqual([]);
+    expect(
+      extra,
+      `${extra.length} enumerated type(s) are in NO module's eventSchemas — has a module lost its registry?`,
+    ).toEqual([]);
+  }
+
+  /**
+   * A real locale dictionary behind an interpolating `MsgFn`, using the
+   * shipped `interpolate()`. Deliberately the real JSON and not a stub: a
+   * fixture on BOTH ends of `buildRibbon` would only prove the fixture. A key
+   * with no copy resolves to the empty string rather than `undefined`, so a
+   * dictionary hole surfaces as the assertion it belongs to (an empty ribbon)
+   * instead of a TypeError halfway down the loop.
+   */
+  function msgFnFor(locale: keyof typeof LOCALES): MsgFn {
+    return (key, vars) => interpolate(LOCALES[locale][key] ?? "", vars);
+  }
+
+  it("registers four-locale ribbon copy for every event type the engine declares, in every sport", () => {
+    const types = declaredEventTypes();
+    assertEverySportIsSwept(types);
+    const missing: string[] = [];
     for (const type of types) {
       const key = ribbonKeyFor(type);
-      expect(PAD_LABEL_KEYS, `no PAD_LABEL_KEYS entry for ribbon key "${key}" (${type})`).toContain(key);
+      if (!(PAD_LABEL_KEYS as readonly string[]).includes(key)) missing.push(`${type}: no PAD_LABEL_KEYS entry for "${key}"`);
       for (const [locale, dict] of Object.entries(LOCALES)) {
-        expect(dict, `missing ${locale} ribbon copy for "${key}" (${type})`).toHaveProperty(key);
+        if (dict[key] === undefined) missing.push(`${type}: no ${locale} copy for "${key}"`);
       }
     }
+    expect(missing, `${missing.length} ribbon gap(s) — a scorer reads the raw internal type for these`).toEqual([]);
   });
 
-  // …and the registration above actually CHANGES what a scorer reads. The
-  // membership test alone would still pass if buildRibbon's gate regressed,
-  // so drive the real builder: every football event must now render its own
-  // sentence, and must NEVER render the generic `pad.ribbon.fallback`
-  // ("{event} recorded"), which prints the raw internal type — "football.goal
-  // recorded" is the exact string this task exists to prevent.
-  it("renders football's own ribbon sentence, never the raw-event-type fallback", () => {
-    const t = (key: string, vars?: Record<string, string | number>) => {
-      const raw = LOCALES.en[key] ?? `«${key}»`;
-      return raw.replace(/\{(\w+)\}/g, (_m, v: string) => String(vars?.[v] ?? `{${v}}`));
-    };
-    const types = declaredEventTypes().filter((x) => x.startsWith("football."));
-    expect(types).toHaveLength(9);
+  // …and the registrations above actually CHANGE what a scorer reads. The
+  // membership half would still pass if buildRibbon's own gate regressed, so
+  // this half drives the REAL builder against the REAL en dictionary: every
+  // declared event must render its own registered sentence, and must NEVER
+  // render the generic `pad.ribbon.fallback` — "cricket.newball recorded" and
+  // "football.goal recorded" are the exact strings this gate exists to keep
+  // off a scorer's screen.
+  it("renders each sport's own ribbon sentence, never the raw-event-type fallback", () => {
+    const t = msgFnFor("en");
+    const types = declaredEventTypes();
+    assertEverySportIsSwept(types);
+    const wrong: string[] = [];
     for (const type of types) {
       const { text } = buildRibbon(type, {}, () => "", t);
-      expect(text, `${type} fell through to the generic fallback`).not.toContain(type);
-      expect(text, `${type} did not resolve to its own copy`).toBe(LOCALES.en[ribbonKeyFor(type)]);
+      if (text.includes(type)) wrong.push(`${type} fell through to the generic fallback: "${text}"`);
+      else if (text !== LOCALES.en[ribbonKeyFor(type)]) wrong.push(`${type} did not resolve to its own copy: "${text}"`);
     }
+    expect(wrong, `${wrong.length} event type(s) do not render their own ribbon sentence`).toEqual([]);
+  });
+
+  // The leak this wave closed has a SHAPE of its own, wider than the two
+  // assertions above: a dot-joined internal identifier reaching a scorer's
+  // eye. `text.includes(type)` catches the fallback rendering *this* type;
+  // this catches any dotted internal token at all — a fallback keyed on a
+  // neighbouring type, a half-interpolated key, a translator who pasted the
+  // key instead of prose. Run across all four locales because the fallback is
+  // locale-independent: the raw type is the same leak in Spanish. Real
+  // dictionaries + the real `buildRibbon`, per the same rule as above.
+  // R8/WS-R (scope extension) — a copy defect in the same event's OTHER
+  // surface. `event.cricket.player.line` read "Batting order" / "Orden de
+  // bateo" / "Ordre de batte" / "Slagvolgorde" in all four locales, naming a
+  // concept the event does not carry: the engine declares `CricketPlayerLine`
+  // as a per-player innings SCORECARD LINE — `z.strictObject({ innings,
+  // person, batting {runs, balls, out}, bowling {legalBalls, runs, wickets} })`
+  // (packages/engine/src/sports/cricket/cricket.ts:304). Nothing in the
+  // payload is an order.
+  //
+  // This is live, not legacy: `eventLabel` (scoring-vocab.ts) → `describeEvent`'s
+  // single `badge` (event-copy.ts:89) → `activity.tsx:47`, so it is the badge a
+  // scorer reads on that row of the v3 Activity panel — the same row whose
+  // sentence is `pad.cricket.ribbon.player.line`. No test pinned the old
+  // string, which is why it survived (checked before changing it: the only
+  // "Batting order" in the tree outside the dictionaries is prose about a
+  // real order — a different concept, correctly named. Round 3 correction:
+  // there are TWO such occurrences, not one, and the symbol is
+  // `SquadMember.orderNo` (packages/engine/src/core/lineup.ts:56-61), not
+  // `LineupEntry.order`, which does not exist — `LineupEntry` is a
+  // core.lineup.* payload, an unrelated type. The second occurrence is
+  // design/v2/04-sport-scoring-specs.md:160, which spells the same field
+  // `LineupSlot.order_no`.)
+  //
+  // Pinned two ways, neither a frozen full string. The order-word check
+  // witnesses THIS defect and reds on a straight revert; the badge/sentence
+  // agreement is the half that cannot rot silently, because the two strings
+  // render on the SAME row — move one and the other must move with it.
+  it("names cricket.player.line for what the engine declares — a scorecard line, not a batting order", () => {
+    const ORDER_WORD = /order|orden|ordre|volgorde/i;
+    const disagreements: string[] = [];
+    for (const [locale, dict] of Object.entries(LOCALES)) {
+      const badge = dict[EVENT_KEY["cricket.player.line"]];
+      const sentence = dict[ribbonKeyFor("cricket.player.line")];
+      if (badge === undefined || sentence === undefined) {
+        disagreements.push(`${locale}: badge=${badge} sentence=${sentence}`);
+        continue;
+      }
+      if (ORDER_WORD.test(badge)) disagreements.push(`${locale}: badge "${badge}" still names an ORDER`);
+      if (!sentence.startsWith(badge)) {
+        disagreements.push(`${locale}: badge "${badge}" and ribbon "${sentence}" disagree on the same row`);
+      }
+    }
+    expect(disagreements, "cricket.player.line copy does not match the payload the engine declares").toEqual([]);
+  });
+
+  const DOTTED_INTERNAL_TOKEN = /[a-z][a-z0-9]*\.[a-z][a-z0-9]*/;
+
+  // R8/WS-R round 3 — the `core.*` namespace, which every assertion above
+  // misses BY CONSTRUCTION and which round 2's header wrongly claimed was
+  // covered.
+  //
+  // `core.*` events are kernel-owned: no sport module declares them, so they
+  // appear in neither `fidelityTiers` nor any `module.eventSchemas`, and
+  // `declaredEventTypes()` is sport-prefixed. `assertEverySportIsSwept` pins
+  // the prefix set to the eleven module keys, so a `core.` prefix could not
+  // join the sweep even if something added it — it would FAIL the guard. They
+  // reach a scorer through a different door: `buildRibbon` checks
+  // `CORE_RIBBON_KEY` (v3/ribbon.ts) FIRST, before the per-sport lookup.
+  //
+  // That map is maintained BY HAND, which is the whole risk. All 14 entries
+  // are mapped and translated today, so there is no live leak — but a future
+  // `core.x` with no entry falls to `pad.ribbon.fallback` and reproduces D1
+  // verbatim: "core.start recorded", the string a 320px screenshot caught.
+  // Same defect class as the seven cricket types this wave fixed, one
+  // namespace over, and invisible to every gate above.
+  //
+  // Derived from the engine's own `CORE_EVENT_SCHEMAS`
+  // (packages/engine/src/core/events.ts:82) — never a hand-copied list, for
+  // the same reason as everywhere else in this file. Both directions matter:
+  // a MISSING entry is the D1 leak; an ORPHAN entry is a map that outlived
+  // the type it served, which is how a hand-maintained map rots quietly.
+  it("maps every core.* event type the engine declares, with four-locale copy", () => {
+    const coreTypes = Object.keys(CORE_EVENT_SCHEMAS).sort();
+    // Vacuity guards, both derived: an empty registry satisfies every loop
+    // below, and a non-core key here would mean this sweep is pointed at the
+    // wrong registry entirely.
+    expect(coreTypes, "CORE_EVENT_SCHEMAS is empty").not.toHaveLength(0);
+    expect(coreTypes.filter((t) => !t.startsWith("core.")), "non-core key in CORE_EVENT_SCHEMAS").toEqual([]);
+
+    const gaps: string[] = [];
+    for (const type of coreTypes) {
+      const key = CORE_RIBBON_KEY[type];
+      if (key === undefined) {
+        gaps.push(`${type}: no CORE_RIBBON_KEY entry — falls to the raw-type fallback`);
+        continue;
+      }
+      for (const [locale, dict] of Object.entries(LOCALES)) {
+        if (dict[key] === undefined) gaps.push(`${type}: no ${locale} copy for "${key}"`);
+      }
+    }
+    const orphans = Object.keys(CORE_RIBBON_KEY).filter((t) => !coreTypes.includes(t)).sort();
+    // Two assertions, not one object, for the reason spelled out on
+    // `assertNothingTheEngineAcceptsIsMissing` above: vitest elides a
+    // composite and the message must carry the size of the hole itself.
+    expect(
+      gaps,
+      `${gaps.length} core type(s) would print a raw internal type to a scorer ` +
+        `(of ${coreTypes.length} the engine declares) — the D1 defect, reopened`,
+    ).toEqual([]);
+    expect(
+      orphans,
+      `${orphans.length} CORE_RIBBON_KEY entr(y/ies) map a type the engine no longer declares`,
+    ).toEqual([]);
+  });
+
+  // …and the behavioural half, for the same reason the sport pair has one:
+  // membership in CORE_RIBBON_KEY would still pass if buildRibbon stopped
+  // consulting it. Real dictionaries, real builder, all four locales.
+  it("renders every core.* event's own sentence, never the raw-event-type fallback", () => {
+    const coreTypes = Object.keys(CORE_EVENT_SCHEMAS).sort();
+    expect(coreTypes, "CORE_EVENT_SCHEMAS is empty").not.toHaveLength(0);
+    const leaked: string[] = [];
+    for (const locale of Object.keys(LOCALES) as (keyof typeof LOCALES)[]) {
+      const t = msgFnFor(locale);
+      for (const type of coreTypes) {
+        const { text } = buildRibbon(type, {}, () => "", t);
+        if (text === "") leaked.push(`${locale}/${type} rendered nothing`);
+        else if (text.includes(type)) leaked.push(`${locale}/${type} fell through to the fallback: "${text}"`);
+        else if (DOTTED_INTERNAL_TOKEN.test(text)) leaked.push(`${locale}/${type} printed an identifier: "${text}"`);
+      }
+    }
+    expect(leaked, `${leaked.length} core ribbon line(s) show a scorer an internal identifier`).toEqual([]);
+  });
+
+
+  it("never prints a dot-joined internal identifier to a scorer, in any of the four locales", () => {
+    const types = declaredEventTypes();
+    assertEverySportIsSwept(types);
+    const leaked: string[] = [];
+    for (const locale of Object.keys(LOCALES) as (keyof typeof LOCALES)[]) {
+      const t = msgFnFor(locale);
+      for (const type of types) {
+        const { text } = buildRibbon(type, {}, () => "", t);
+        if (text === "") leaked.push(`${locale}/${type} rendered nothing`);
+        else if (DOTTED_INTERNAL_TOKEN.test(text)) leaked.push(`${locale}/${type} printed an internal identifier: "${text}"`);
+      }
+    }
+    expect(leaked, `${leaked.length} ribbon line(s) show a scorer an internal identifier`).toEqual([]);
   });
 
   it("resolves a pad label against the real en dictionary, and falls back to the engine's English", () => {

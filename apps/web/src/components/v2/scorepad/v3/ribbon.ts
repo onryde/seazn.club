@@ -1,13 +1,35 @@
 // Ribbon copy builder — R1 chassis (Task 3). The ribbon is the pad's only
 // always-on history element: every commit answers in plain sport words with
 // an inline Undo (design of record:
-// docs/superpowers/specs/2026-08-03-scoringpad-v2-design.md). R1 ships the
-// FALLBACK path only — no per-sport `pad.<sport>.ribbon.<suffix>` copy
-// exists yet in any dictionary. Per-event ribbon sentences land sport-by-
-// sport with each conversion wave (R2+); this function already looks them
-// up first, so a later wave only has to add dictionary copy + register the
-// key in PAD_LABEL_KEYS (scoring-vocab.ts) — it never has to touch this
-// file's logic.
+// docs/superpowers/specs/2026-08-03-scoringpad-v2-design.md). Per-event
+// ribbon sentences landed sport-by-sport with each conversion wave (R2+);
+// this function looks them up first, so a wave only has to add dictionary
+// copy + register the key in PAD_LABEL_KEYS (scoring-vocab.ts) — it never
+// has to touch this file's logic.
+//
+// Corrected R8/WS-R: this header used to say "R1 ships the FALLBACK path
+// only — no per-sport `pad.<sport>.ribbon.<suffix>` copy exists yet in any
+// dictionary". That has been false since R2, and it sat at the top of the
+// file whose fallback behaviour is the thing at issue.
+//
+// Where the fallback actually stands today (round 3 — the round-2 wording
+// here, "UNREACHABLE for any event the engine accepts", overstated it):
+//
+//   - SPORT events: every type all eleven modules register in
+//     `module.eventSchemas` has four-locale copy, so no sport event reaches
+//     the fallback. Gated by `scoring-vocab.test.ts`, derived from
+//     `eventSchemas` (NOT `fidelityTiers`, which under-reports by five).
+//   - `core.*` events: these never reach the per-sport lookup at all. They
+//     resolve through `CORE_RIBBON_KEY` below, a map maintained BY HAND, and
+//     they are structurally outside the sport sweep — `declaredEventTypes()`
+//     is sport-prefixed, so a `core.` type could never join it. All 14 are
+//     mapped and translated today; the totality of that map against the
+//     engine's own `CORE_EVENT_SCHEMAS` is what
+//     `scoring-vocab.test.ts`'s core sweep exists to hold, because an
+//     unmapped `core.x` reproduces D1 exactly ("core.start recorded").
+//
+// So the fallback is unreachable for everything the engine accepts TODAY,
+// held there by two separate derived gates rather than by this file.
 //
 // Reuses padLabel() (apps/web/src/lib/scoring-vocab.ts:907), the SAME vocab
 // path every legacy skin already calls for label text (S7/#427) — see
@@ -80,7 +102,7 @@ export function ribbonKeyFor(eventType: string): string {
  * `pad.ribbon.fallback` every other un-vocab'd type already gets, instead
  * of a `t()` call against a dictionary key that does not exist yet.
  */
-const CORE_RIBBON_KEY: Readonly<Record<string, MessageKey>> = {
+export const CORE_RIBBON_KEY: Readonly<Record<string, MessageKey>> = {
   "core.start": "pad.ribbon.core.start",
   "core.void": "pad.ribbon.core.void",
   "core.forfeit": "pad.ribbon.core.forfeit",
@@ -121,11 +143,15 @@ const CORE_RIBBON_KEY: Readonly<Record<string, MessageKey>> = {
  * assumption. Whoever computes `detail` owns the sport vocabulary — this
  * function never inspects `payload` for that purpose itself; see
  * `skins/cricket.tsx`'s `cricketBallDetail` for the first real one, wired
- * through `ActivityPanel`'s `resolveDetail` prop (activity.tsx). Omitted —
- * the only path any production caller exercises today, since
- * `resolveDetail` is not yet threaded from `pad-host.tsx` (out of this
- * fix's file grant, flagged in the task report) — reproduces exactly the
- * pre-fix text, byte for byte.
+ * through `ActivityPanel`'s `resolveDetail` prop (activity.tsx).
+ *
+ * `resolveDetail` IS threaded from production today (corrected R8/WS-R — the
+ * note here still said "not yet threaded", left over from the D2 fix that
+ * could not reach `pad-host.tsx` under its own file grant): `pad-host.tsx`
+ * builds the resolver at :1665, hands it to the top ribbon at :1708 and to
+ * `ActivityPanel` at :2054, and `activity.tsx:449` calls it per row. Omitting
+ * `detail` — still every caller that has no sport-specific fragment to add —
+ * reproduces exactly the pre-fix text, byte for byte.
  */
 export function buildRibbon(
   eventType: string,

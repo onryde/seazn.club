@@ -44,6 +44,7 @@ import {
   MORE_SHEET_KEY,
   type ActivityDetailContext,
   type Blocked,
+  type CandidateMeta,
   type DockChip,
   type DockSpec,
   type GuidedSheetSpec,
@@ -61,6 +62,15 @@ export type TFn = (key: string, vars?: Record<string, string | number>) => strin
 export type Side = "home" | "away";
 
 export const SIDES: readonly Side[] = ["home", "away"];
+
+/**
+ * The ONE role key both federations' `PositionCatalog` declares
+ * (`hockey.ts`/`icehockey.ts` `positions.roles`: `[{ key: "captain", unique:
+ * true }]`). A MIRROR of the engine, carrying the obligation every mirror in
+ * this file carries — `__tests__/period-pair.test.ts` reads the real catalogue
+ * through `resolvePositions` and fails if the two ever disagree.
+ */
+export const CAPTAIN_ROLE = "captain";
 
 const SIDE_LABEL: Record<Side, MessageKey> = {
   home: "scorepad.attribution.home",
@@ -96,7 +106,8 @@ type PeriodMessageKeyName =
   | "sheet.shootout.outcome.title"
   | "sheet.setPiece.by.title"
   | "sheet.setPiece.kind.title"
-  | "sheet.setPiece.outcome.title";
+  | "sheet.setPiece.outcome.title"
+  | "swap.captainTag";
 
 const PERIOD_MESSAGE_KEYS: Record<PeriodSkinSpec["key"], Record<PeriodMessageKeyName, MessageKey>> = {
   hockey: {
@@ -116,6 +127,7 @@ const PERIOD_MESSAGE_KEYS: Record<PeriodSkinSpec["key"], Record<PeriodMessageKey
     "sheet.setPiece.by.title": "pad.hockey.sheet.setPiece.by.title",
     "sheet.setPiece.kind.title": "pad.hockey.sheet.setPiece.kind.title",
     "sheet.setPiece.outcome.title": "pad.hockey.sheet.setPiece.outcome.title",
+    "swap.captainTag": "pad.hockey.swap.captainTag",
   },
   icehockey: {
     "action.goal": "pad.icehockey.action.goal",
@@ -134,6 +146,7 @@ const PERIOD_MESSAGE_KEYS: Record<PeriodSkinSpec["key"], Record<PeriodMessageKey
     "sheet.setPiece.by.title": "pad.icehockey.sheet.setPiece.by.title",
     "sheet.setPiece.kind.title": "pad.icehockey.sheet.setPiece.kind.title",
     "sheet.setPiece.outcome.title": "pad.icehockey.sheet.setPiece.outcome.title",
+    "swap.captainTag": "pad.icehockey.swap.captainTag",
   },
 };
 
@@ -1330,7 +1343,65 @@ export function buildSheets(spec: PeriodSkinSpec, view: PadHostView, t: TFn): Re
  * kernel has no substitution event of its own and adopts the core fold's squad
  * state through `onLineup` (kernel.ts:2450).
  */
-export function buildSwap(spec: PeriodSkinSpec, view: PadHostView): SwapSlot[] {
+/**
+ * Row decoration for the substitution sheet (R8 sweep, task WS-L) — the R7
+ * `CandidateMeta` mechanism (`types.ts`, drawn by `context-strip.tsx`'s
+ * `renderCandidateRow`) that volleyball's `liberoCandidateMeta` populates and
+ * this pair never wired. Ice hockey is where that bites hardest: the OFF step's
+ * pool is the SIX players on the ice (`icehockey.ts` `positions.lineup.size`),
+ * and six wrapping names with nothing in front of them is the exact symptom the
+ * owner ruling of 2026-08-30 minted the mechanism for.
+ *
+ * Sourced from `view.squads` — the squad state the HOST resolves, the same one
+ * `onFieldOf`/`benchOf` above read to build the two pools, so a row and its
+ * badge can never disagree about who is on.
+ *
+ * The SQUAD NUMBER leads and `positionKey` is the fallback — owner ruling of
+ * 2026-09-01, superseding the position-led wording of 2026-08-30. The reason is
+ * this pair specifically: ice hockey puts SIX skaters on the ice across only
+ * THREE position groups (G/D/F), so a position-led badge leaves three forwards
+ * reading identically — the six-identical-rows complaint the mechanism was
+ * minted for, unclosed. Shirt numbers are unique per side, so every skater the
+ * sheet numbers gets a distinct badge, and it is what a scorer reads off the
+ * jersey under time pressure. Position still shows for anyone declared without
+ * a number.
+ *
+ * Note both facts are OPTIONAL on `SquadMember` and the fold carries
+ * `positionKey` only while `onField` (`memberFromSlot`, core/lineup.ts: "a bench
+ * slot's declared position is a preference, not an occupancy"), so a bench
+ * candidate with no declared number gets NO entry and renders exactly the row it
+ * renders today. That empty default is the contract `CandidateMeta`'s own doc
+ * states, not a gap — `renderCandidateRow` is chassis shared with cricket's
+ * bowler picker and every context strip.
+ *
+ * Keyed over the WHOLE squad rather than one step's pool, matching
+ * `liberoCandidateMeta`'s reasoning: the OFF step's pool is the on-field set and
+ * the ON step's is the bench, and a table built for one would silently decorate
+ * one step and not the other.
+ *
+ * `tag` carries the ONE role both federations' catalogues declare
+ * (`CAPTAIN_ROLE` above) — the fact a position code cannot say.
+ */
+function periodCandidateMeta(
+  spec: PeriodSkinSpec,
+  view: PadHostView,
+  side: Side,
+  t: TFn,
+): Readonly<Record<string, CandidateMeta>> {
+  const meta: Record<string, CandidateMeta> = {};
+  for (const member of view.squads[side].members) {
+    const lead = member.squadNumber === undefined ? member.positionKey : String(member.squadNumber);
+    const tag = member.roles?.includes(CAPTAIN_ROLE) === true ? t(periodKey(spec, "swap.captainTag")) : undefined;
+    if (lead === undefined && tag === undefined) continue;
+    meta[member.personId] = {
+      ...(lead === undefined ? {} : { lead }),
+      ...(tag === undefined ? {} : { tag }),
+    };
+  }
+  return meta;
+}
+
+export function buildSwap(spec: PeriodSkinSpec, view: PadHostView, t: TFn): SwapSlot[] {
   const state = asState(view.state);
   if (!isPlayPhaseToken(readPhase(state)) || view.band < SWAP_BAND) return [];
   return SIDES.map((side) => {
@@ -1339,6 +1410,7 @@ export function buildSwap(spec: PeriodSkinSpec, view: PadHostView): SwapSlot[] {
     const blocked: Record<string, string> = {};
     return {
       id: swapSlotId(side),
+      candidateMeta: periodCandidateMeta(spec, view, side, t),
       offLabel: `pad.${spec.key}.swap.off`,
       onLabel: `pad.${spec.key}.swap.on`,
       side,
@@ -1654,7 +1726,7 @@ export function makePeriodSkin(spec: PeriodSkinSpec): (t: TFn) => SkinDefV3<PadH
     tiles: (view) => buildTiles(spec, view, t),
     dock: (eventType, view, payload) => buildDock(spec, eventType, view, t, payload),
     sheets: (view) => buildSheets(spec, view, t),
-    swap: (view) => buildSwap(spec, view),
+    swap: (view) => buildSwap(spec, view, t),
     refusedEventTypes: (view) => refusedEventTypesFor(spec, view),
     activityDetail: (ctx) => buildActivityDetail(spec, ctx),
     clock: buildClock,

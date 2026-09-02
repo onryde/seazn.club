@@ -1199,6 +1199,19 @@ export async function createStageAndGenerate(
 export interface RosterSlotSpec {
   fullName: string;
   positionKey?: string;
+  /** R8/WS-PREC — the shirt number, which the swap sheet's badge now LEADS with
+   *  (owner ruling 2026-09-01; `periodCandidateMeta`/`footballCandidateMeta`).
+   *
+   *  It is seeded on the ENTRANT MEMBER, not on the lineup slot: `squad_number`
+   *  is a column of `entrant_members`, and `readLineup` joins it back out
+   *  (`server/engine-db/lineups.ts`). So this rides the entrants POST below,
+   *  which already declares the field (`api-v1/schemas.ts`), and NOT the
+   *  lineup PUT, which has no such field to give it.
+   *
+   *  Omit it and the member is created exactly as before, so every existing
+   *  caller is byte-identical and their rows keep falling back to the position
+   *  code. */
+  squadNumber?: number;
   /** S13/#422 — omit for the (default) starting XI; "bench" seeds a real
    *  bench member so a `football.sub`/`core.lineup.substitution` flow has
    *  someone to bring ON. Matches the API's own `slot` enum
@@ -1333,13 +1346,19 @@ export async function seedRosteredFixture(
         kind,
         display_name: `Home ${spec.label}`,
         seed: 1,
-        members: spec.home.map((s) => ({ person_id: personIds[s.fullName] })),
+        members: spec.home.map((s) => ({
+          person_id: personIds[s.fullName],
+          ...(s.squadNumber === undefined ? {} : { squad_number: s.squadNumber }),
+        })),
       },
       {
         kind,
         display_name: `Away ${spec.label}`,
         seed: 2,
-        members: spec.away.map((s) => ({ person_id: personIds[s.fullName] })),
+        members: spec.away.map((s) => ({
+          person_id: personIds[s.fullName],
+          ...(s.squadNumber === undefined ? {} : { squad_number: s.squadNumber }),
+        })),
       },
     ],
   );

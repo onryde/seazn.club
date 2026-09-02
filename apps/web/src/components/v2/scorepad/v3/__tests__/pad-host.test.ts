@@ -16,7 +16,7 @@ import type { LineupPair, SquadState } from "@seazn/engine/core";
 import { initSquads } from "@seazn/engine/core";
 import type { PadField, PadPanel, PadSpec } from "@seazn/engine/sport";
 import type { MsgFn } from "@/lib/scoring-vocab";
-import { createSkinDispatch } from "../../skins/types";
+import { createSkinDispatch } from "../skin-dispatch";
 import { buildPadView, type PadViewCtx } from "../../view-model";
 import type { RejectionInfo } from "../../use-pad-pipeline";
 import type { GuidedSheetSpec, PadHostView, ScorebugSpec, SkinDefV3, SwapSlot, TileSpec } from "../types";

@@ -92,9 +92,12 @@ export const EVENT_KEY: Record<string, MessageKey> = {
   "core.lineup.retirement": "event.core.lineup.retirement",
   "core.lineup.entry": "event.core.lineup.entry",
 
+  "badminton.expedite.start": "event.badminton.expedite.start", // R8/WS-R r2
   "badminton.game.summary": "event.badminton.game.summary",
   "badminton.rally": "event.badminton.rally",
   "badminton.sanction": "event.badminton.sanction",
+  "badminton.sub": "event.badminton.sub", // R8/WS-R r2
+  "badminton.timeout": "event.badminton.timeout", // R8/WS-R r2
 
   "boardgame.pairing": "event.boardgame.pairing",
   "boardgame.result": "event.boardgame.result",
@@ -152,6 +155,7 @@ export const EVENT_KEY: Record<string, MessageKey> = {
   "tabletennis.game.summary": "event.tabletennis.game.summary",
   "tabletennis.rally": "event.tabletennis.rally",
   "tabletennis.sanction": "event.tabletennis.sanction",
+  "tabletennis.sub": "event.tabletennis.sub", // R8/WS-R r2
   "tabletennis.timeout": "event.tabletennis.timeout",
 
   "tennis.game.award": "event.tennis.game.award",
@@ -160,6 +164,7 @@ export const EVENT_KEY: Record<string, MessageKey> = {
   "tennis.sanction": "event.tennis.sanction",
   "tennis.set_summary": "event.tennis.set_summary",
 
+  "volleyball.expedite.start": "event.volleyball.expedite.start", // R8/WS-R r2
   "volleyball.rally": "event.volleyball.rally",
   "volleyball.sanction": "event.volleyball.sanction",
   "volleyball.set.summary": "event.volleyball.set.summary",
@@ -691,8 +696,39 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   // dictionary copy with no entry in this list stays silently on the generic
   // `pad.ribbon.fallback` ("{event} recorded") forever, with nothing failing.
   // One key per event type this skin's own halves/tiles/sheets dispatch
-  // directly. `sub`/`expedite.start` stay on the fallback: BWF Law 16 has no
-  // substitution at all, so no config can turn one on.
+  // directly.
+  //
+  // R8/WS-R round 2: `sub` and `expedite.start` are REGISTERED now too, and
+  // the note that used to sit here ("BWF Law 16 has no substitution at all,
+  // so no config can turn one on") repeated, for these two types, the exact
+  // reasoning the paragraph below already records as WRONG for `timeout`.
+  //
+  // The mechanism, pinned (round 3 — round 2 cited kernel.ts:1816 for this,
+  // which is the FIDELITY BAND map, the wrong construct; the claim was right
+  // and the pin was not). Two sets are built from different inputs:
+  //
+  //   - `eventSchemas` (kernel.ts:2166) registers all six branches
+  //     unconditionally, for every set-based preset.
+  //   - `fidelityTiers` (kernel.ts:2252-2255) carries
+  //     `extensionTypesFor(declaredRecords)` (:2196, :2204), and
+  //     `declaredRecords` is `preset.defaults.records` (:2185) — the STATIC
+  //     DEFAULT cfg.
+  //
+  // But `records` is cfg-OVERRIDABLE (`makeConfigSchema`, :113-122, where it
+  // is a plain object of booleans with `.default(defaults.records)`), and the
+  // live paths gate on the cfg, not the default: padSpec on
+  // `cfg.records.substitutions` (:1765) and the live extension set on
+  // `extensionTypesFor(state.cfg.records)` (:2510). So a division config can
+  // switch on a branch this sport's DEFAULTS leave off — the tiers list is a
+  // snapshot of the default cfg, not of what the engine accepts.
+  //
+  // That is the whole reason the two sets differ, and why reachability is the
+  // wrong test: it is a claim about config, and config varies. Membership in
+  // `eventSchemas` is a fact about the engine, and it is the one this list
+  // has to track. An accepted type on the fallback prints "badminton.sub
+  // recorded" to a scoring desk. (Found by repointing the gate's derivation
+  // from `fidelityTiers`, which does not list these, at `eventSchemas`,
+  // which does.)
   //
   // `timeout` is REGISTERED, and the reasoning that once grouped it with those
   // two was wrong (review of PR #678). `records.timeouts` is a plain
@@ -704,9 +740,11 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   // recorded" at a scoring desk. That is the exact defect volleyball's own
   // `sub` block was fixed for a few blocks down; "unreachable" is a claim
   // about config, and config is the thing that varies.
+  "pad.badminton.ribbon.expedite.start", // R8/WS-R r2
   "pad.badminton.ribbon.game.summary",
   "pad.badminton.ribbon.rally",
   "pad.badminton.ribbon.sanction",
+  "pad.badminton.ribbon.sub", // R8/WS-R r2
   "pad.badminton.ribbon.timeout",
   // R5 — tap model S's own hint. `ScorebugHalf.hintKey` resolves through the
   // SAME `padLabel()` gate (scorebug.tsx) as the ribbon copy above, so an
@@ -805,19 +843,36 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   // PAD_LABEL_KEYS membership BEFORE calling padLabel() — dictionary copy
   // with no entry here silently stays on the generic `pad.ribbon.fallback`
   // forever, with nothing failing (R1's own owed item, restated in the R2
-  // plan so this session doesn't repeat it). One key per event type this
-  // skin's tiles/sheets dispatch directly — the remaining 8 cricket.* types
-  // (reachable only via the "More" sheet) stay on the fallback, same
-  // graceful-degradation posture ribbon.ts's header already documents.
+  // plan so this session doesn't repeat it).
+  //
+  // R8/WS-R closed this list out: it is now one key per event type the engine
+  // DECLARES for cricket (15, read off the module's own fidelity tiers), not
+  // only the ones the skin's tiles/sheets dispatch directly. R2's note here
+  // used to say the remaining `cricket.*` types "stay on the fallback, same
+  // graceful-degradation posture" — that was the false premise. The fallback
+  // is `pad.ribbon.fallback` = "{event} recorded", which prints the RAW
+  // INTERNAL TYPE: a scorer taking the new ball read "cricket.newball
+  // recorded". Seven types were live on it (followon, interruption,
+  // match.close, newball, player.line, powerplay, revise); the seven marked
+  // below are that fix. `scoring-vocab.test.ts`'s ribbon gate is now derived
+  // from the engine's declarations for every sport, so this list can no
+  // longer fall behind a new event type in silence.
   "pad.cricket.ribbon.ball",
+  "pad.cricket.ribbon.followon", // R8/WS-R
   "pad.cricket.ribbon.innings.close",
   "pad.cricket.ribbon.innings.declare",
   // R2b: `cricket.innings.summary` is the over-by-over event this wave gives
   // a dedicated tile — without this entry the ribbon silently stays on the
   // generic "{event} recorded" fallback (ribbon.ts's own header comment).
   "pad.cricket.ribbon.innings.summary",
+  "pad.cricket.ribbon.interruption", // R8/WS-R
+  "pad.cricket.ribbon.match.close", // R8/WS-R
+  "pad.cricket.ribbon.newball", // R8/WS-R
+  "pad.cricket.ribbon.player.line", // R8/WS-R
+  "pad.cricket.ribbon.powerplay", // R8/WS-R
   "pad.cricket.ribbon.retire",
   "pad.cricket.ribbon.review",
+  "pad.cricket.ribbon.revise", // R8/WS-R
   "pad.cricket.ribbon.superover.ball",
   "pad.cricket.ribbon.toss",
 
@@ -949,6 +1004,7 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   "pad.tabletennis.ribbon.game.summary",
   "pad.tabletennis.ribbon.rally",
   "pad.tabletennis.ribbon.sanction",
+  "pad.tabletennis.ribbon.sub", // R8/WS-R r2
   "pad.tabletennis.ribbon.timeout",
   "pad.tabletennis.ribbon.expedite.start",
   // R5/C2 — tap model S's own hint, the identical
@@ -1028,6 +1084,7 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   "pad.volleyball.ribbon.sanction",
   "pad.volleyball.ribbon.timeout",
   "pad.volleyball.ribbon.sub",
+  "pad.volleyball.ribbon.expedite.start", // R8/WS-R r2
   // The pair line ("{on} for {off}") the Activity row hangs off — NOT a
   // ribbon base label, so `buildRibbon` never looks it up; `volleyballDetail`
   // resolves it directly. Registered anyway because `padLabel` membership is

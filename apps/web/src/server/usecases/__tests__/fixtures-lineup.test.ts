@@ -158,4 +158,63 @@ describe.skipIf(!HAS_DB)("putLineup/getLineup — role and pair_order round-trip
     expect(row?.role).toBe("player");
     expect(row?.pair_order).toBeNull();
   });
+
+  // R8 sweep, WS-SQ fix round 1 (IMPORTANT 1). `readLineup` is the pad's ONLY
+  // producer — both pad loaders reach it through `getLineup`
+  // (`f/[no]/page.tsx`, `score/[token]/page.tsx`) — and it is the one hop in
+  // the squadNumber chain that was already correct, so nothing tested it.
+  // Drop `em.squad_number` from that query and every other test in this wave
+  // stays green while the swap badge goes dark: the identical defect, on the
+  // hop that actually feeds the screen.
+  //
+  // `squad_number` is NOT a `lineups` column — it lives on `entrant_members`
+  // and arrives through `readLineup`'s LEFT join, which is why the
+  // un-numbered member below is a real case and not defensive padding.
+  it("a member's squad number rides the lineup read model — the pad's only producer", async () => {
+    const auth = await seedOrg();
+    const competition = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "Cup " + randomUUID().slice(0, 6),
+      visibility: "private",
+      branding: {},
+    });
+    const division = await createDivision(auth, competition.id, {
+      name: "Open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: GENERIC_CONFIG,
+    });
+    const [entrantA] = await createEntrants(auth, division.id, [
+      { kind: "individual" as const, display_name: "A", seed: 1, members: [] },
+      { kind: "individual" as const, display_name: "B", seed: 2, members: [] },
+    ]);
+    const [numbered] = await sql<{ id: string }[]>`
+      insert into persons (org_id, full_name) values (${auth.orgId}, 'Numbered Nine') returning id`;
+    const [unnumbered] = await sql<{ id: string }[]>`
+      insert into persons (org_id, full_name) values (${auth.orgId}, 'No Number') returning id`;
+    // The number is declared on the MEMBERSHIP, which is the whole point of
+    // the join under test.
+    await sql`
+      insert into entrant_members (entrant_id, person_id, squad_number)
+      values (${entrantA.id}, ${numbered.id}, 9), (${entrantA.id}, ${unnumbered.id}, null)`;
+
+    const [stage] = await createStages(auth, division.id, { seq: 1, kind: "league", name: "L", config: {} });
+    const { fixtures } = await generateStageFixtures(auth, stage.id);
+    const fx = fixtures[0];
+
+    await putLineup(auth, fx.id, entrantA.id, {
+      slots: [
+        { person_id: numbered.id, slot: "starting", position_key: null, order_no: 1, roles: [] },
+        { person_id: unnumbered.id, slot: "bench", position_key: null, order_no: 2, roles: [] },
+      ],
+    });
+
+    const read = await getLineup(auth, fx.id, entrantA.id);
+    const rows = read.slots as { person_id: string; squad_number: number | null }[];
+    expect(rows).toHaveLength(2); // non-vacuous: the read really returned both slots
+    expect(rows.find((r) => r.person_id === numbered.id)?.squad_number).toBe(9);
+    // A member with no declared number reads back as null, never absent and
+    // never invented — `toLineupSlot` relies on `!= null` to omit the field.
+    expect(rows.find((r) => r.person_id === unnumbered.id)?.squad_number).toBeNull();
+  });
 });

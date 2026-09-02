@@ -17,9 +17,9 @@
 // action, a guided sheet's completed wizard, a generic action-form
 // confirm, a swap's built event, a context-strip selection the skin turns
 // into an event — goes through ONE gateway: `dispatch`, built from
-// `createSkinDispatch(padView, heldSubmit)` (skins/types.ts, reused
-// verbatim — "a skin cannot invent an event" holds here exactly as it
-// does for every v2 skin). `heldSubmit` calls `pipeline.submitHeld`
+// `createSkinDispatch(padView, heldSubmit)` (skin-dispatch.ts, migrated
+// here from skins/types.ts in R8 — "a skin cannot invent an event" holds
+// here exactly as it did for every v2 skin). `heldSubmit` calls `pipeline.submitHeld`
 // (use-pad-pipeline.ts) — the optimistic fold advances immediately,
 // durable enqueue happens immediately, the actual network send is
 // deferred `HOLD_MS` (queue.ts's chassis constant) unless the dock is
@@ -58,7 +58,7 @@ import { buildPadView, summaryHeadline, type PadActionView, type PadViewCtx } fr
 // exactly where the legacy and v3 lanes would start to disagree about which
 // squad a football pad is reading.
 import { isSquadState } from "../attribution-picker";
-import { createSkinDispatch } from "../skins/types";
+import { createSkinDispatch } from "./skin-dispatch";
 import { ActionFormList } from "./action-form";
 import { Scorebug } from "./scorebug";
 import { TileGrid } from "./tile-grid";
@@ -84,6 +84,7 @@ import {
 import {
   ActivityPanel,
   activityRowState,
+  canAmendRow,
   latestRowDetail,
   type ActivityDetailResolver,
   type ActivityEvent,
@@ -351,8 +352,8 @@ export function dedicatedEventTypes(
  *  exactly like the panel walk `buildPadView` already does for the legacy
  *  renderer — reused verbatim, never re-derived. De-duplicated by type: a
  *  module may legitimately declare the same wire type more than once across
- *  panels (skins/types.ts's own `actionByType` doc); the FIRST resolved view
- *  wins, same "first match" convention that file already documents.
+ *  panels; the FIRST resolved view wins, the same "first match" convention
+ *  the v2 skin contract (deleted, R8) used to document.
  *
  *  TWO EXCLUSION SETS, ON PURPOSE (R3 review round). `dedicated` is "already
  *  reachable through a narrowed surface" — see `dedicatedEventTypes` above.
@@ -1129,6 +1130,137 @@ export function isPartialDockAnswer(
   return attribution.every((chip) => !deepEqual(chip.mutate(payload), payload));
 }
 
+/** R8/#675 — the two events an amendment IS. See `amendPlan` below. */
+export interface AmendPlan {
+  /** The original event, to be named by a `core.void`. */
+  readonly voidId: string;
+  /** Re-appended VERBATIM — the original's own type… */
+  readonly type: string;
+  /** …and its own payload, `at` stamp and all. */
+  readonly payload: Record<string, unknown>;
+}
+
+/**
+ * R8/#675 (owner ruling) — "tapping the Partial badge reopens that event's
+ * detail dock so the scorer can supply the detail that was missed… appended,
+ * the original never rewritten in place".
+ *
+ * WHAT AN AMENDMENT IS, AND WHY IT INVENTS NO EVENT TYPE. The engine has no
+ * `core.amend`, and this pad may not mint one. It does not need to: the engine
+ * already names its correction model, in its own words, beside the monotonic
+ * time guard (packages/engine/src/core/events.ts §4.1) — "Void back to the
+ * mistake, then re-append." So an amendment is `core.void` naming the original,
+ * plus a re-append of the SAME event type carrying the payload the dock has
+ * since completed. Both types already exist, no payload schema is loosened, and
+ * the ledger only ever grows: the original stays in it, voided and visible,
+ * byte for byte as it was recorded.
+ *
+ * WHY THE PAYLOAD IS COPIED VERBATIM AND NOT RE-STAMPED. `send` puts a fresh
+ * `at` on everything it dispatches (`stampFor`, below) because it is stamping
+ * the moment of a TAP. This is not a tap; it is the same event being recorded
+ * again, and moving its game time to "now" would make a correction lie about
+ * when the goal was scored. Carrying the original stamp is also what keeps the
+ * re-append legal: the void removes the only stamp the replacement could have
+ * been beaten by, which is exactly the case §4.1 describes as landing "forward
+ * of whatever survives".
+ *
+ * The re-append therefore also bypasses `dispatch`/`createSkinDispatch`. That
+ * gate exists so a SKIN cannot emit a type the current phase does not declare;
+ * this type is not a skin's proposal at all — it is already in the ledger, and
+ * a set boundary crossed since would otherwise refuse a correction to the very
+ * rally that caused it.
+ *
+ * Pure and total: `null` for an id this ledger does not carry, and for a
+ * `core.void` row, which the engine refuses to void a second time
+ * (`resolveVoids`: "voids are not themselves voidable"). Whether the row is
+ * amendable AT ALL — partial, unvoided, owned, and the newest thing the fold
+ * still applies — is `activity.tsx`'s `canAmendRow`, next to the badge that
+ * asks the question.
+ */
+export function amendPlan(
+  eventId: string,
+  events: readonly { id: string; type: string; payload: unknown }[],
+): AmendPlan | null {
+  const target = events.find((event) => event.id === eventId);
+  if (target === undefined || target.type === "core.void") return null;
+  return { voidId: target.id, type: target.type, payload: (target.payload ?? {}) as Record<string, unknown> };
+}
+
+/** The two pipeline calls `runAmend` needs, narrowed to exactly what it uses so
+ *  a node test can drive it over a REAL `QueueStore` without a React tree. */
+export interface AmendSubmitters {
+  /** `pad-host`'s own `heldSubmit`, plus the release hook. `onReleased` runs
+   *  when — and ONLY when — the held entry actually leaves the hold: the
+   *  natural tick, an explicit "Send now" (`releaseHeld`), or a following tap
+   *  flushing it (`flushHeldBefore`). Verified in `queue.ts`, not assumed:
+   *  `dropHeld` (:298) cancels the tick and deletes the entry WITHOUT calling
+   *  `onDue`. `null` is `submitHeld`'s double-submit refusal — nothing was
+   *  held, so nothing will ever be released. */
+  submitHeld: (type: string, payload: unknown) => Promise<{ heldId: string; heldUntil: number } | null>;
+  /** `opts.dropWith` is the whole mechanism — see `runAmend` below. */
+  submit: (type: string, payload: unknown, opts?: { dropWith?: string }) => Promise<void>;
+}
+
+/**
+ * R8/#675 — the amendment's two events, bound so they live or die TOGETHER.
+ *
+ * An amendment is a `core.void` of the original plus a re-append of it carrying
+ * the detail the hold window cut short (see `amendPlan`). The re-append goes out
+ * HELD, so for a whole `HOLD_MS` the scorer is looking at an open dock that
+ * invites them to linger — and during that window the pad can be taken back,
+ * reloaded, crashed, or discarded by a mobile browser. The binding therefore
+ * needs TWO properties at once, and each of the two obvious designs has exactly
+ * one of them. Both shipped here, and each was caught in review:
+ *
+ *  - ROUND 1, the void as an ordinary SIBLING enqueued beside the replacement.
+ *    Durable — it survived a reload — but nothing could cancel it. Take-back
+ *    (`ribbonUndoTarget` always offers it on a held tap; the row's Void routes
+ *    the same way) dropped the replacement and STRANDED the void, which drained
+ *    alone and DELETED a scored event.
+ *  - ROUND 2, the void fired from the held entry's release CLOSURE. Cancellable
+ *    — a drop never calls it — but a closure is not durable. `ticksByStore`
+ *    (queue.ts) is an in-memory WeakMap keyed on the store OBJECT, registered
+ *    only by `enqueueHeld`; the resume path calls `releaseHeld` on a FRESH store
+ *    whose tick map is empty, so `onDue` never runs. The replacement sent, the
+ *    void did not, and the point DOUBLED — silently, durably, and only
+ *    discoverable by a scorer noticing a wrong score.
+ *
+ * Swapping one for the other is how a fix round produces a mirror-image defect.
+ * Do not "simplify" this back to either.
+ *
+ * WHAT ENFORCES EACH PROPERTY, line by line:
+ *
+ *  - DURABLE: `io.submit(..., { dropWith })` below writes the void into the
+ *    queue immediately, as a `PendingEvent` field persisted to IndexedDB. A
+ *    reload finds both entries and resumes them in order — the replacement is
+ *    still held and drains first, the void behind it.
+ *  - CANCELLABLE: `queue.ts`'s `dropHeld` cascade-deletes every entry whose
+ *    `dropWith` names the id it is dropping. Take-back removes the replacement
+ *    AND its void, leaving the original event untouched.
+ *
+ * Ordering is unchanged and still load-bearing (`handleAmend`): the void is
+ * enqueued BEHIND the replacement, and `peekInOrder` stops at a held entry, so
+ * no ack can ever show the ledger with the original gone and nothing in its
+ * place. That is the score-dip fix, and it survives this change.
+ *
+ * `null` from `submitHeld` is the pipeline's own double-submit refusal —
+ * nothing was held, so no void is written at all.
+ *
+ * Pure of React on purpose. `__tests__/partial-amend.test.ts` drives it over a
+ * real `memoryQueueStore` for the drop/release/order cases; the RELOAD case
+ * lives in `__tests__/use-pad-pipeline.test.tsx`, because only that suite owns
+ * the seam (a dbName-keyed store surviving an unmount) that can reach the
+ * resume path at all.
+ */
+export async function runAmend(plan: AmendPlan, io: AmendSubmitters): Promise<string | null> {
+  const held = await io.submitHeld(plan.type, plan.payload);
+  // `null` is the pipeline's own double-submit refusal: nothing was held, so
+  // there is nothing to retire and no void may be written.
+  if (held === null) return null;
+  await io.submit("core.void", { event_id: plan.voidId }, { dropWith: held.heldId });
+  return held.heldId;
+}
+
 // ---------------------------------------------------------------------------
 // PadHostV3 — the React shell
 // ---------------------------------------------------------------------------
@@ -1445,6 +1577,16 @@ export function PadHostV3(props: PadHostV3Props) {
   // `createSkinDispatch`'s "a skin cannot invent an event" guard, then
   // this function's own soft-commit (submitHeld, never plain submit —
   // spec §2.3).
+  //
+  // R8/#675 — the RETURNED result is new, and exists for the amendment
+  // (`runAmend` above): `submitHeld` answers `null` on its double-submit
+  // refusal, and swallowing that let a caller write a follow-up event for a
+  // submission that never happened. An ordinary tap ignores it, as before.
+  //
+  // There is deliberately NO release callback here. Fix round 1 added one so an
+  // amendment could chain its void off it; a closure cannot survive a reload,
+  // and that shipped a duplicated point. The binding is a durable `dropWith`
+  // field now — see `runAmend`.
   const heldSubmit = useCallback(
     async (type: string, payload: unknown) => {
       const result = await pipeline.submitHeld(type, payload, HOLD_MS, () => {
@@ -1452,10 +1594,19 @@ export function PadHostV3(props: PadHostV3Props) {
         void pipeline.retryDrain();
       });
       if (result) setHeld({ id: result.heldId, until: result.heldUntil, eventType: type, payload });
+      return result;
     },
     [pipeline],
   );
-  const dispatch = useMemo(() => createSkinDispatch(padView, heldSubmit), [padView, heldSubmit]);
+  // Adapted rather than passed raw: `SkinDispatch` promises `Promise<void>`, and
+  // a skin has no business seeing a held id.
+  const dispatch = useMemo(
+    () =>
+      createSkinDispatch(padView, async (type, payload) => {
+        await heldSubmit(type, payload);
+      }),
+    [padView, heldSubmit],
+  );
 
   /**
    * THE send. Every dispatch site in this host goes through it.
@@ -1467,7 +1618,7 @@ export function PadHostV3(props: PadHostV3Props) {
    * produced no event, no banner, no console line, and no clue. The volleyball
    * libero swap hit exactly that: the sheet closed on a completed off/on pick
    * and NOTHING was written. The type gate is fixed at its own end
-   * (`skins/types.ts`'s `KERNEL_DISPATCHABLE`), but a swallow that turns any
+   * (`skin-dispatch.ts`'s `KERNEL_DISPATCHABLE`), but a swallow that turns any
    * future dispatch fault into a silent no-op is the deeper defect, so it is
    * closed here rather than only at the one type that tripped it.
    *
@@ -1720,6 +1871,94 @@ export function PadHostV3(props: PadHostV3Props) {
   );
 
   const [voidingId, setVoidingId] = useState<string | null>(null);
+  const [amendingId, setAmendingId] = useState<string | null>(null);
+
+  /**
+   * R8/#675 — the Partial badge's own handler. `amendPlan` (above) carries the
+   * whole ruling and the reason this is a void + re-append rather than a new
+   * event type; this is only the wiring.
+   *
+   * ORDER IS LOAD-BEARING, IT IS THIS WAY ROUND, AND IT WAS MEASURED. The
+   * replacement is enqueued FIRST and the void behind it. Both orders are legal
+   * — `resolveVoids` only requires the void's target to be EARLIER than the
+   * void, and the original is earlier than both — and both leave the same
+   * surviving fold, so a reader could reasonably assume it does not matter. It
+   * does, on screen:
+   *
+   * Voiding first, driven in a browser: the void acks while the replacement is
+   * still held, the server's fold (original gone, replacement not yet sent)
+   * diverges from the client's, `serverOverride` takes over — and the scorebug
+   * read 0—0 with the serve line blank for the WHOLE reopened hold window,
+   * before snapping back to 1—0. A scorer under time pressure taps "Partial"
+   * and watches the point they are trying to complete disappear for twelve
+   * seconds. That is the fear the owner's ruling was written against.
+   *
+   * Enqueued this way round, the queue's in-order drain does the rest: the void
+   * cannot leave until the held replacement releases, so no ack can ever show a
+   * ledger with the original gone and nothing in its place. Measured across the
+   * same three points on a real prod build — after the drain, mid-amendment,
+   * and after a reload — the scorebug reads 1—0 throughout. Pinned in TWO
+   * places, because the e2e alone left it unguarded until after merge (`e2e.yml`
+   * runs on push to `main`, so a PR gets no signal on it): the browser spec, and
+   * `partial-amend.test.ts`'s queue-order case, which drives `runAmend` over a
+   * real `memoryQueueStore` and reads `store.list()`.
+   *
+   * FIX ROUND 1, CRITICAL: the void is no longer submitted here at all. It is a
+   * consequence of the replacement surviving its hold — see `runAmend` above for
+   * the tap that deleted a scored event when the two were siblings.
+   *
+   * The replacement goes out HELD, through the identical `submitHeld` path an
+   * ordinary tap takes — which
+   * is the entire point: the dock reopens for a full `HOLD_MS` window with the
+   * skin's own chips over the queue's own entry, so the scorer answers it
+   * exactly as they would have the first time, and every mechanism in between
+   * (`dockStore.mutateHeld`, the depletion bar, dismiss-sends-now) is the one
+   * already in production rather than a second copy written for amendments.
+   *
+   * A dock that is dismissed or left to drain without a chip tap re-records the
+   * same payload and the badge comes straight back — honest, and no worse than
+   * the state it was in. `submitHeld`'s own double-submit guard cannot swallow
+   * this: it fires only inside DOUBLE_SUBMIT_WINDOW_MS (250ms) and a partial row
+   * is by definition at least a whole hold window old.
+   *
+   * DOUBLE-TAP, recorded rather than guarded (fix round 1, MINOR). There is no
+   * synchronous re-entrancy latch here: `amendingId` disables the badge, but
+   * only once React has re-rendered. Two layers already catch a real double tap
+   * and neither is this function's own — the `canAmendRow` re-derivation above
+   * (once the first replacement is in `pendingEnvelopes` the original is no
+   * longer the newest folding event, so the second tap returns early), and
+   * failing that `submitHeld`'s own same-tick `submitInFlight` guard, which
+   * refuses an identical (type, payload) and returns `null`, for which
+   * `runAmend` writes no void at all. A latch here would be a third answer to a question
+   * two layers already answer; if one of them ever moves, this needs one.
+   */
+  async function handleAmend(eventId: string) {
+    // RE-DERIVED at the moment of action, never trusted from the render that
+    // drew the badge — `decideUndo`'s own posture one function down. A tap can
+    // land after the ledger moved under it (the scorer hits a tile, then the
+    // badge that was amendable a frame ago), and the whole safety of this
+    // feature is the tail-only rule `canAmendRow` enforces.
+    const row = activityEvents.find((e) => e.id === eventId);
+    if (row === undefined) return;
+    const stillAmendable = canAmendRow(
+      row,
+      activityEvents,
+      pipeline.ownEventIds,
+      props.identity.deviceLinkId,
+      held?.id ?? null,
+      true,
+      isPartial(row.type, (row.payload ?? {}) as Record<string, unknown>),
+    );
+    if (!stillAmendable) return;
+    const plan = amendPlan(eventId, events);
+    if (plan === null) return;
+    setAmendingId(eventId);
+    try {
+      await runAmend(plan, { submitHeld: heldSubmit, submit: pipeline.submit });
+    } finally {
+      setAmendingId(null);
+    }
+  }
 
   async function handleUndo(eventId: string) {
     const decision = decideUndo(eventId, held?.id ?? null);
@@ -2057,6 +2296,16 @@ export function PadHostV3(props: PadHostV3Props) {
           // unwired helper is exactly the D2 defect this same comment
           // already warns about, one line up.
           isPartial={isPartial}
+          // R8/#675 (owner ruling) — the badge above becomes the repair, not
+          // just the diagnosis. Same "wire it, do not merely build it" warning
+          // as the two lines above: `handleAmend` with no call site would be a
+          // fourth inert seam in this same file.
+          onAmend={(eventId) => void handleAmend(eventId)}
+          amendingId={amendingId}
+          // The SAME `held?.id` `ribbonUndoTarget` above is handed: a row whose
+          // hold window is still open already has its dock on screen, and its
+          // id is client-fabricated. See `canAmendRow`'s own note.
+          heldEventId={held?.id ?? null}
         />
       </div>
       )}

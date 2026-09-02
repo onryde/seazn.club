@@ -15,6 +15,7 @@ import {
   type StageKind,
   type StandingsDelta,
 } from "../../core/types.ts";
+import { stampAttributionRequired } from "../../sport/module.ts";
 import type {
   ModuleEvent,
   PadAction,
@@ -380,18 +381,23 @@ export function padSpec(cfg: GenericCfg): PadSpec {
     ...resultPanels,
   ];
 
-  return {
-    panels,
-    // Modelled on generic's OWN existing (untouched) `fidelityTiers` (below):
-    // tier 0 is the terminal card alone, tier 1 adds the running tally.
-    // Neither entry carries an entitlement — the fallback ships free at
-    // every band it currently declares.
-    fidelity: {
-      "generic.result": 0,
-      "generic.score": 1,
+  // R8/WS-B — `required` stamped ONCE, here, from GENERIC_EVENT_SCHEMAS
+  // itself (never hand-typed per action; see module.ts's own doc comment).
+  return stampAttributionRequired(
+    {
+      panels,
+      // Modelled on generic's OWN existing (untouched) `fidelityTiers` (below):
+      // tier 0 is the terminal card alone, tier 1 adds the running tally.
+      // Neither entry carries an entitlement — the fallback ships free at
+      // every band it currently declares.
+      fidelity: {
+        "generic.result": 0,
+        "generic.score": 1,
+      },
+      fidelityEntitlements: {},
     },
-    fidelityEntitlements: {},
-  };
+    GENERIC_EVENT_SCHEMAS,
+  );
 }
 
 // ---------------------------------------------------------------------------

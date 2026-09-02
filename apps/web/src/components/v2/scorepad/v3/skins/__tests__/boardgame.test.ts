@@ -33,7 +33,7 @@ import uiEn from "@/dictionaries/en/ui.json";
 import { PAD_LABEL_KEYS } from "@/lib/scoring-vocab";
 import { foldClient } from "../../../module-client";
 import { dedicatedEventTypes, moreActions } from "../../pad-host";
-import { LEGACY_SPORTS, resolvePad } from "../../registry";
+import { resolvePad } from "../../registry";
 import { ribbonKeyFor } from "../../ribbon";
 import { assertScorebugSpec, type PadHostView, type TileSpec } from "../../types";
 import {
@@ -705,17 +705,10 @@ describe("boardgameDetail", () => {
 
 describe("registry", () => {
   it("resolves boardgame to the v3 lane, and hands back a real, tapModel-S skin", () => {
-    const lane = resolvePad("boardgame", t);
-    expect(lane.lane).toBe("v3");
-    if (lane.lane === "v3") {
-      expect(lane.skin.key).toBe("boardgame");
-      expect(lane.skin.tapModel).toBe("S");
-      expect(typeof lane.skin.phase).toBe("function");
-    }
-  });
-
-  it("no longer routes boardgame down the legacy lane", () => {
-    expect(LEGACY_SPORTS.has("boardgame")).toBe(false);
+    const skin = resolvePad("boardgame", t);
+    expect(skin.key).toBe("boardgame");
+    expect(skin.tapModel).toBe("S");
+    expect(typeof skin.phase).toBe("function");
   });
 });
 

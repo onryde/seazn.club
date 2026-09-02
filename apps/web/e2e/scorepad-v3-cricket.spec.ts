@@ -220,6 +220,18 @@ test(
         .toBe(delivered);
     }
 
+    // R8 (register row D2) — the MODE INDICATOR, fine half. The strip did not
+    // exist at all before the first ball (see the comment above); that ball
+    // both created the innings and LOCKED it to the ball-by-ball lane, and
+    // the chip now says so. Its sibling assertion — the same chip reading
+    // "Over-by-over" over a summary-opened innings — lives in the over-tile
+    // test below, so the two together prove the chip tracks the fold rather
+    // than printing a constant.
+    await expect(
+      pad(page).locator('[data-role="context-mode"]'),
+      "a ball-opened innings must say it is ball-by-ball",
+    ).toHaveText("This innings: Ball-by-ball");
+
     const overOneBalls = (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "cricket.ball");
     expect(overOneBalls, "five deliveries = five cricket.ball events, no more, no fewer").toHaveLength(5);
     expect(overOneBalls[0]!.payload.striker).toBe(striker);
@@ -680,6 +692,14 @@ test(
     await expect(pad(page).locator('[data-tile-id="run0"]')).toBeVisible();
     await expect(pad(page).locator('[data-tile-id="wicket"]')).toBeVisible();
 
+    // R8 (register row D2) — the MODE INDICATOR, unopened half. Both lanes
+    // are still legal here, so nothing has locked in and the pad must not
+    // claim otherwise. Pinned BEFORE the dispatch below so the "Over-by-over"
+    // assertion further down is a real transition, not a chip that reads the
+    // same in every state.
+    const modeLine = pad(page).locator('[data-role="context-mode"]');
+    await expect(modeLine, "no innings yet: neither lane has locked in, so there is no mode to state").toHaveCount(0);
+
     await overTile.click();
     const sheet = sheetRoot(page);
     await expect(sheet, "tapping the tile must open the guided sheet").toBeVisible({ timeout: 10_000 });
@@ -758,6 +778,20 @@ test(
       pad(page).locator('[data-tile-id="wicket"]'),
       "coarse innings: wicket tile must be GONE, not disabled",
     ).not.toBeVisible();
+    // R8 (register row D2) — the MODE INDICATOR, coarse half. Until this wave
+    // the ONLY on-screen expression of the lock above was the two assertions
+    // right before this one: the ball tiles silently vanishing. A scorer who
+    // did not already know the rule could not learn it from the pad. Now the
+    // strip says so in words, read off the fold's own `inningsFidelity` — and
+    // the same chip read nothing at all a few lines above, before this
+    // summary locked the innings.
+    await expect(modeLine, "a coarse innings must say so").toHaveCount(1);
+    await expect(modeLine).toHaveText("This innings: Over-by-over");
+    await expect(
+      pad(page).locator('[data-role="context-slot-message"][data-slot-id="mode"]'),
+      "and explains that the lock happened when the innings began",
+    ).toContainText("over summary");
+
     // The over tile survives — coarse stays eligible for the next partial —
     // and its sublabel now names over 2.
     await expect(overTile).toBeVisible();

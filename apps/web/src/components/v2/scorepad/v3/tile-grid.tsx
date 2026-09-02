@@ -106,6 +106,16 @@ export function assertTileHierarchy(tiles: readonly TileSpec[]): string[] {
  * renderer side — an empty-string message must not count as an
  * explanation either.
  *
+ * R8 — a `kind: "mode"` slot's message does NOT count. Such a slot states
+ * which entry lane the sport is locked into (`ContextSlot.kind`, ../types.ts)
+ * and therefore ALWAYS carries a message whenever it is present at all: count
+ * it and this validator goes vacuously green for every skin that declares
+ * one, which is precisely the "a guard nothing kills is not tested" shape it
+ * was written to catch. It is also not an answer to the question asked here —
+ * "why is this tile grey" is never "because the innings is ball-by-ball";
+ * cricket's coarse lane doesn't DISABLE the ball tiles, it withholds them
+ * (`buildTiles`, skins/cricket.tsx).
+ *
  * Never a throw — same non-throwing convention as `assertTileHierarchy`
  * below and `assertScorebugSpec` (../types.ts): a skin author's own test
  * suite asserts against the returned violation strings. Deliberately kept
@@ -123,7 +133,7 @@ export function assertDisabledTilesExplained(
 ): string[] {
   const disabledIds = tiles.filter((tile) => tile.disabled === true).map((tile) => tile.id);
   if (disabledIds.length === 0) return [];
-  const hasMessage = (context?.slots ?? []).some((slot) => !!slot.message);
+  const hasMessage = (context?.slots ?? []).some((slot) => !!slot.message && slot.kind !== "mode");
   if (hasMessage) return [];
   return disabledIds.map((id) => `tile "${id}": disabled with no context slot message explaining why`);
 }

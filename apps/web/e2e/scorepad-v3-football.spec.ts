@@ -3,6 +3,7 @@ import AxeBuilder from "@axe-core/playwright";
 import {
   activeOrg,
   apiJson,
+  expectNoHorizontalScroll,
   fixturePath,
   invalidateOrgEntitlements,
   loginUi,
@@ -466,6 +467,72 @@ test("football v3: the substitution WINDOW cap (subWindows) is a SECOND, indepen
     swap.locator('[data-role="swap-refusal"]'),
     "the WINDOW cap is its own string — 'players used' would be the wrong reason",
   ).toHaveText("Home has used all 1 substitution windows");
+});
+
+// ---------------------------------------------------------------------------
+// candidateMeta — distinguishing the "who comes off" rows (WS-D, R8 sweep)
+//
+// R7 shipped the MECHANISM (`CandidateMeta`, types.ts; `renderCandidateRow`,
+// context-strip.tsx) and volleyball populated it for its libero picker; this
+// is football's first wiring, and a pure `buildSwap` unit test (football.
+// test.ts) cannot see whether `renderCandidateRow` actually painted the
+// badge — AGENTS.md's own class-2 warning ("pure-builder tests cannot see
+// wiring"). Only a browser can prove the row a scorer taps actually shows a
+// badge, and shows a DIFFERENT one for two different on-pitch teammates.
+// ---------------------------------------------------------------------------
+
+test("football v3: the OFF-step swap rows carry a real, DISTINCT badge per on-pitch player, at 320px and 768px", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  const fx = await seedRosteredFixture(page.request, {
+    label: `V3 FB Meta ${TAG}`,
+    sportKey: "football",
+    variantKey: "11-a-side",
+    home: [
+      // One NUMBERED and one not, on the same pitch: the badge leads with the
+      // shirt number and falls back to the position code (owner ruling
+      // 2026-09-01), so this pair proves BOTH branches in a browser.
+      { fullName: `V3 CM Keeper ${TAG}`, positionKey: "GK", squadNumber: 1 },
+      { fullName: `V3 CM Back ${TAG}`, positionKey: "CB" },
+      { fullName: `V3 CM Bench1 ${TAG}`, slot: "bench" },
+    ],
+    away: [{ fullName: `V3 CM Away ${TAG}`, positionKey: "GK" }],
+  });
+  await postEvent(page.request, fx.fixtureId, "core.start", {});
+  await openConsoleAlreadyLive(page, fx);
+
+  await v3Tile(page, "sub-home").click();
+  const swap = pad(page).locator('[data-role="v3-swap"]');
+  await expect(swap).toBeVisible({ timeout: 10_000 });
+
+  const keeperId = fx.personIds[`V3 CM Keeper ${TAG}`]!;
+  const backId = fx.personIds[`V3 CM Back ${TAG}`]!;
+  const keeperLead = swap.locator(`[data-candidate-id="${keeperId}"] [data-candidate-lead]`);
+  const backLead = swap.locator(`[data-candidate-id="${backId}"] [data-candidate-lead]`);
+
+  // The rows are the OFF step's — the live on-pitch pool, not the kickoff
+  // sheet — so this also proves `footballCandidateMeta` is keyed off the
+  // same ids `offCandidates` actually offers, not merely present somewhere.
+  // The keeper is numbered, so their badge is the NUMBER (it would read "GK"
+  // under the old position-led order); the unnumbered centre-back falls back to
+  // their position code.
+  await expect(keeperLead, "shirt-number badge missing on the OFF-step row a scorer actually taps").toHaveText("1");
+  await expect(backLead, "fallback position badge missing on the OFF-step row a scorer actually taps").toHaveText("CB");
+  const keeperText = await keeperLead.textContent();
+  const backText = await backLead.textContent();
+  expect(keeperText, "two different on-pitch players must show DIFFERENT badges").not.toBe(backText);
+
+  // Visual proof at both required widths (AGENTS.md UI bar: 320px + 768px,
+  // no horizontal scroll) — screenshotted, not merely asserted on text, since
+  // the brief's own concern is a scorer visually distinguishing the rows.
+  for (const width of [320, 768] as const) {
+    await page.setViewportSize({ width, height: 900 });
+    await expect(keeperLead).toBeVisible();
+    await expect(backLead).toBeVisible();
+    await expectNoHorizontalScroll(page);
+    await page.screenshot({ path: test.info().outputPath(`swap-off-step-${width}.png`) });
+  }
 });
 
 // R3 task-D follow-up (owner-approved matrix): the two refusal tests above
@@ -1191,4 +1258,84 @@ test("football v3: group-stage shoot-out points reach the standings (R3.5/Task I
     standings.data!.rows.find((r) => r.entrantId === fx.awayEntrantId)?.points,
     "shoot-out LOSS pays 1, not the flat 0",
   ).toBe(1);
+});
+
+// R8/WS-B2 — the app-side half of "a required attribution item's dead-end
+// tap" (engine half: d4c8ddbfb, `PadAttributionItem.required`; app half:
+// view-model.ts's `checkActionValidity` + action-form.tsx's
+// `renderAttributionRow`, both sport-agnostic — no per-sport branching
+// anywhere in either file). The task brief pinned cricket.toss.wonBy as
+// this proof's real-browser target; that premise does not hold (memory
+// rule #5 — verified by RUNNING pad-host.tsx's own `dedicatedEventTypes`/
+// `moreActions` against the real cricket skin+engine padSpec, not assumed
+// from a read): cricket.toss (and cricket.review, the other action the
+// engine commit names) is one of cricket's dedicated-tile actions, and
+// every one of those opens its own GuidedSheet — a strictly sequential
+// step wizard with no Confirm separate from its own last step, so it
+// cannot structurally reach a dead-end tap at all. The one cricket action
+// that DOES ride the generic More sheet with a required item
+// (`cricket.player.line`, post-match) turned out to need a genuinely
+// completed fixture, and once a fixture is decided BOTH the console and
+// the device-link route replace the pad with a read-only summary — an
+// unrelated, pre-existing product gap, out of this task's scope.
+//
+// `football.shot` is the real, live-phase equivalent this file's own
+// "all nine football.* event types are reachable" test above already
+// drives through the generic More sheet — same required SIDE item shape
+// (`by`, engine-stamped `required: true`), same chassis code, no
+// completed-match complication. Reusing it here is the actual REAL
+// producer→consumer proof for R8/WS-B2: a node builder test cannot see
+// the rendered disabled Confirm button, the visible reason, or the
+// red-asterisk/"required" marker — this test drives all three through the
+// live pad, then confirms the built payload actually reaches the ledger.
+test("football v3 (R8/WS-B2): a required attribution item on the generic More sheet gates Confirm with a visible reason, and the built payload carries it once filled — no dead-end tap", async ({
+  page,
+}) => {
+  const fx = await seedRosteredFixture(page.request, {
+    label: `V3 FB ReqAttr ${TAG}`,
+    sportKey: "football",
+    variantKey: "11-a-side",
+    home: [{ fullName: `V3 FBRA Home ${TAG}`, positionKey: "FW" }],
+    away: [{ fullName: `V3 FBRA Away ${TAG}`, positionKey: "GK" }],
+  });
+  await openLiveConsole(page, fx);
+
+  await v3Tile(page, "more").click();
+  const sheet = v3Sheet(page);
+  await expect(sheet, "the More sheet must open").toBeVisible({ timeout: 10_000 });
+
+  await sheet.getByRole("button", { name: "Shot", exact: true }).click();
+
+  const confirm = sheet.getByRole("button", { name: "Confirm", exact: true });
+  await expect(confirm, "disabled before anything is filled").toBeDisabled();
+
+  const group = sheet.locator('[data-attribution-path="by"]');
+  await expect(group, "the required attribution row must render").toBeVisible({ timeout: 10_000 });
+  await expect(group, "red-asterisk marker (data-required)").toHaveAttribute("data-required", "true");
+  await expect(group, "the \"required\" microcopy must be visible text, not a tooltip").toContainText("Required");
+
+  // Every declared FIELD (the pre-existing gate) — Confirm must STAY
+  // disabled once these alone are filled: before this fix, fields alone
+  // satisfied checkActionValidity and the required side (`by`) could be
+  // skipped straight to a silently-rejected submit.
+  await sheet.getByLabel("Outcome").selectOption("blocked");
+  await sheet.getByLabel("At period").selectOption("H1");
+  await sheet.getByLabel("At elapsed", { exact: true }).fill("120");
+
+  await expect(
+    confirm,
+    "still disabled with every FIELD filled — fields alone must not satisfy the required attribution gate",
+  ).toBeDisabled();
+  await expect(sheet, "Confirm's one-line reason must name what's missing").toContainText("Choose who's required");
+
+  await sheet.getByRole("button", { name: "Home", exact: true }).click();
+
+  await expect(confirm, "enables once the required item is filled").toBeEnabled();
+  await confirm.click();
+
+  await expect.poll(async () => countOf(page.request, fx.fixtureId, "football.shot"), { timeout: 20_000 }).toBe(1);
+  const shot = (await ledger(page.request, fx.fixtureId)).find((e) => e.type === "football.shot")!;
+  expect(shot.payload.by, "the attributed side must reach the built payload — no silent drop").toBe(
+    fx.homeEntrantId,
+  );
 });

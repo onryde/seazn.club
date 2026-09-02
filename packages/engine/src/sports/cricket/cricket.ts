@@ -24,6 +24,7 @@ import {
   type StandingsDelta,
 } from "../../core/types.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
+import { stampAttributionRequired } from "../../sport/module.ts";
 import type {
   ModuleEvent,
   PadAction,
@@ -2969,39 +2970,44 @@ export function padSpec(cfg: CricketCfg): PadSpec {
     },
   ];
 
-  return {
-    panels,
-    // S6 owner ruling (`_INDEX.md`, "OWNER RULING: redesign the fidelity
-    // model, in S6") — one band per event type, no repetition. Modelled on
-    // cricket's OWN existing (untouched) `fidelityTiers` array, with ONE
-    // correction: the old cumulative-list model placed
-    // `cricket.superover.ball` in BOTH tier 1's list and tier 3's list
-    // (`fidelityTiers` below, tier 1 and tier 3), which is exactly the
-    // non-nesting inconsistency S2/#430 found and the reason for this
-    // redesign — under `requiredFeatureForEvent`'s lowest-tier-wins reading,
-    // that duplication meant a free-tier scorer could already record
-    // ball-by-ball super-over deliveries. A super-over ball is the same
-    // shape and the same granularity as an ordinary ball, so it belongs at
-    // band 3 here, matching `cricket.ball`, not band 1.
-    fidelity: {
-      "cricket.innings.summary": 0,
-      "cricket.toss": 1,
-      "cricket.innings.declare": 1,
-      "cricket.innings.close": 1,
-      "cricket.match.close": 1,
-      "cricket.interruption": 1,
-      "cricket.revise": 1,
-      "cricket.followon": 1,
-      "cricket.newball": 1,
-      "cricket.powerplay": 1,
-      "cricket.review": 1,
-      "cricket.player.line": 2,
-      "cricket.ball": 3,
-      "cricket.superover.ball": 3,
-      "cricket.retire": 3,
+  // R8/WS-B — `required` stamped ONCE, here, from CRICKET_EVENT_SCHEMAS
+  // itself (never hand-typed per action; see module.ts's own doc comment).
+  return stampAttributionRequired(
+    {
+      panels,
+      // S6 owner ruling (`_INDEX.md`, "OWNER RULING: redesign the fidelity
+      // model, in S6") — one band per event type, no repetition. Modelled on
+      // cricket's OWN existing (untouched) `fidelityTiers` array, with ONE
+      // correction: the old cumulative-list model placed
+      // `cricket.superover.ball` in BOTH tier 1's list and tier 3's list
+      // (`fidelityTiers` below, tier 1 and tier 3), which is exactly the
+      // non-nesting inconsistency S2/#430 found and the reason for this
+      // redesign — under `requiredFeatureForEvent`'s lowest-tier-wins reading,
+      // that duplication meant a free-tier scorer could already record
+      // ball-by-ball super-over deliveries. A super-over ball is the same
+      // shape and the same granularity as an ordinary ball, so it belongs at
+      // band 3 here, matching `cricket.ball`, not band 1.
+      fidelity: {
+        "cricket.innings.summary": 0,
+        "cricket.toss": 1,
+        "cricket.innings.declare": 1,
+        "cricket.innings.close": 1,
+        "cricket.match.close": 1,
+        "cricket.interruption": 1,
+        "cricket.revise": 1,
+        "cricket.followon": 1,
+        "cricket.newball": 1,
+        "cricket.powerplay": 1,
+        "cricket.review": 1,
+        "cricket.player.line": 2,
+        "cricket.ball": 3,
+        "cricket.superover.ball": 3,
+        "cricket.retire": 3,
+      },
+      fidelityEntitlements: { 2: "stats.player", 3: "scoring.ball_by_ball" },
     },
-    fidelityEntitlements: { 2: "stats.player", 3: "scoring.ball_by_ball" },
-  };
+    CRICKET_EVENT_SCHEMAS,
+  );
 }
 
 export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {

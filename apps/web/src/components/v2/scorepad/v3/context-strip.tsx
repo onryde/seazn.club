@@ -188,6 +188,122 @@ export interface ContextStripProps {
   onSelect: (slotId: string, personId: string) => void;
 }
 
+/**
+ * R8 — whether this slot can ever open a picker. `readOnly` is the skin's own
+ * per-render verdict (cricket's bowler is editable at an over boundary and not
+ * mid-over); `kind: "mode"` is unconditional and chassis-enforced, because a
+ * mode a sport has already locked can never be moved from the strip
+ * (ContextSlot.kind, ./types.ts). One predicate so the chip branch and the
+ * picker guard can never disagree about which slots are static.
+ */
+export function isStatic(slot: Pick<ContextSlot, "readOnly" | "kind">): boolean {
+  return slot.readOnly === true || slot.kind === "mode";
+}
+
+/**
+ * ContextSlot.message (./types.ts) — a PRE-LOCALISED raw string, rendered
+ * VERBATIM, never through `t()`.
+ *
+ * R2b (owner ruling, bowler-eligibility block, 2026-08-17): orthogonal to
+ * `readOnly` (rendered whatever chip shape the slot took) and to the picker
+ * (rendered whether or not one is open). Real visible text, never a
+ * `title`/tooltip, which is invisible on the touch surface this pad is built
+ * for, with a stable `data-*` hook for a Playwright spec. Most slots never set
+ * this and then nothing renders.
+ *
+ * R2b-cricket-over review fix (item 3): the callers use a TRUTHY check, not
+ * `!== undefined` — the same convention `StripItem.id` (scorebug.tsx) uses.
+ * `message: ""` must read as "no message", not as a real, empty <p> that still
+ * occupies DOM and layout.
+ *
+ * R5 — `messageTone` picks the register, DEFAULTING to "alert" so every
+ * pre-existing slot (cricket's bowler) is byte-identical to before. A skin
+ * whose message is a TIER rather than a FAULT opts into "info".
+ *
+ * A PLAIN FUNCTION, not a
+ * component, for this file's own established reason: the node-only
+ * `_hook-harness` walks `.props.children` and never invokes a nested custom
+ * component, so a real `<SlotMessage/>` would make this text invisible to
+ * `walk()`/`textOf()`. Shared by the generic block at the foot of the strip
+ * and by the mode statement, which renders its own so the sentence stays
+ * glued to the line it explains.
+ */
+function renderSlotMessage(slot: ContextSlot) {
+  return (
+    <p
+      key={`${slot.id}-message`}
+      data-role="context-slot-message"
+      data-slot-id={slot.id}
+      data-message-tone={slot.messageTone ?? "alert"}
+      className={`text-xs font-medium ${
+        (slot.messageTone ?? "alert") === "info" ? "text-amber-700" : "text-red-600"
+      }`}
+    >
+      {slot.message}
+    </p>
+  );
+}
+
+/**
+ * WS-M copy round 2 (controller ruling, 2026-09-02) — a `kind: "mode"` slot
+ * renders as PLAIN TEXT WITH A LOCK GLYPH, never a pill.
+ *
+ * The reason is agency, not topic. The strip sits directly under the pad's
+ * band control, which is the scorer's OWN choice of how much to record and is
+ * a real, tappable chip. A mode statement is the opposite: a fact the sport
+ * locked when the period/innings began, that no control on this pad can move.
+ * Both are granularity, so words alone separate them weakly — and a scorer
+ * under time pressure reads SHAPE before words. Three independent signals now
+ * say "not a control", and the strongest of them is that this is not shaped
+ * like one: the noun the skin puts in its label ("This innings: …"), the
+ * absence of pill styling, and the lock.
+ *
+ * Rendered as its own line rather than inside the chip row, so the row stays
+ * a row of controls — and carrying its own message, so the statement and the
+ * sentence explaining it cannot be separated by another slot's message.
+ * `data-role="context-mode"`, deliberately NOT `context-chip`: a 44px
+ * hit-target sweep over the chips must never measure something nobody can tap.
+ */
+function renderModeStatement(slot: ContextSlot, personNames: Readonly<Record<string, string>>, t: TFn) {
+  return (
+    <div key={`${slot.id}-mode`} className="flex flex-col gap-0.5">
+      {/* `data-role` sits on the STATEMENT LINE, not on this wrapper: a
+          wrapper carrying it would make `toHaveText` on the role return the
+          statement CONCATENATED with its own message ("This innings:
+          Over-by-overSet when this innings began, …"), which is what the
+          first version of this did and what the e2e caught. The message keeps
+          its own long-standing `context-slot-message` role. */}
+      <p
+        data-role="context-mode"
+        data-slot-kind="mode"
+        className="flex items-start gap-1.5 text-sm font-medium text-slate-700"
+      >
+        {/* The pad's own inline-SVG idiom (detail-dock.tsx, recording-chip.tsx):
+            a 16-unit box, stroke-only, `currentColor`. `aria-hidden` because
+            the label's own noun already carries the meaning in text — a screen
+            reader announcing a lock as well would say it twice. `mt-0.5`
+            keeps it optically centred on the first line when the label wraps
+            at 320. */}
+        <svg
+          aria-hidden="true"
+          viewBox="0 0 16 16"
+          className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-500"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={1.5}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="M5.25 7V5a2.75 2.75 0 0 1 5.5 0v2" />
+          <rect x="3.25" y="7" width="9.5" height="6.25" rx="1.75" />
+        </svg>
+        <span className="break-words">{chipLabel(slot, personNames, t)}</span>
+      </p>
+      {!!slot.message && renderSlotMessage(slot)}
+    </div>
+  );
+}
+
 function chipLabel(slot: ContextSlot, personNames: Readonly<Record<string, string>>, t: TFn): string {
   const label = t(slot.label);
   if (!slot.personId) return label;
@@ -212,12 +328,19 @@ export function ContextStrip({ spec, view, personNames, t, onSelect }: ContextSt
   // guards even a stray activeSlotId somehow naming one (belt-and-braces;
   // the row below already never attaches an onClick to a readOnly chip, so
   // activeSlotId can never actually BE set to one in the first place).
-  const activeSlot = spec.slots.find((s) => s.id === activeSlotId && !s.readOnly) ?? null;
+  //
+  // R8: `isStatic` — a `kind: "mode"` slot is read-only whatever it declares
+  // (ContextSlot.kind's own doc, ./types.ts, guarantee 1). A mode is locked by
+  // definition; the chassis enforces that rather than trusting every skin to
+  // remember `readOnly: true` beside it.
+  const activeSlot = spec.slots.find((s) => s.id === activeSlotId && !isStatic(s)) ?? null;
 
   return (
     <div data-role="context-strip" className="flex flex-col gap-2">
       <div className="flex flex-wrap gap-2">
-        {spec.slots.map((slot) => {
+        {/* WS-M round 2: mode statements are NOT chips and never enter this
+            row — see `renderModeStatement` above. */}
+        {spec.slots.filter((slot) => slot.kind !== "mode").map((slot) => {
           // Blocker 2 (R2 review, `docs/superpowers/plans/2026-08-16-
           // scorepad-v3-r2-cricket.md`): a readOnly slot (ContextSlot.
           // readOnly's own doc, ./types.ts) renders as plain, non-
@@ -227,12 +350,20 @@ export function ContextStrip({ spec, view, personNames, t, onSelect }: ContextSt
           // dropping it entirely would lose the on-strike marker/name for
           // no gain — it just never pretends to be a control the engine
           // will actually honour.
-          if (slot.readOnly) {
+          if (isStatic(slot)) {
             return (
               <span
                 key={slot.id}
                 data-role="context-chip"
                 data-readonly="true"
+                // R8 — the ONE thing that tells a mode statement apart from a
+                // person chip in the DOM. Both wear the identical read-only
+                // chip (deliberately: no fifth chip style), so a Playwright
+                // spec asserting "the pad says which mode this innings is in"
+                // has nothing else stable to select on. Emitted for every
+                // slot, not only mode ones, so the attribute means the same
+                // thing everywhere it appears.
+                data-slot-kind={slot.kind ?? "person"}
                 style={{ minHeight: 44 }}
                 className="inline-flex min-w-0 max-w-full cursor-default items-center gap-1.5 rounded-full border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700"
               >
@@ -248,6 +379,7 @@ export function ContextStrip({ spec, view, personNames, t, onSelect }: ContextSt
               type="button"
               data-role="context-chip"
               data-readonly="false"
+              data-slot-kind={slot.kind ?? "person"}
               aria-pressed={active}
               onClick={() => setActiveSlotId(active ? null : slot.id)}
               style={{ minHeight: 44 }}
@@ -302,26 +434,11 @@ export function ContextStrip({ spec, view, personNames, t, onSelect }: ContextSt
           (and, being a <p>, layout) for nothing. Not reachable today
           (cricket never sets `""`), but the divergence between "absent"
           and "empty" was a landmine for the next skin to compute one. */}
+      {/* WS-M round 2 — each mode statement, with its own message glued to it. */}
+      {spec.slots.filter((slot) => slot.kind === "mode").map((slot) => renderModeStatement(slot, personNames, t))}
       {spec.slots
-        .filter((slot) => !!slot.message)
-        .map((slot) => (
-          <p
-            key={`${slot.id}-message`}
-            data-role="context-slot-message"
-            data-slot-id={slot.id}
-            data-message-tone={slot.messageTone ?? "alert"}
-            // R5 — `messageTone` (types.ts) picks the register. ABSENT means
-            // "alert", so cricket's bowler message is byte-identical to what
-            // it has always rendered; a skin whose message is a TIER rather
-            // than a FAULT opts into `info`, which matches the recording
-            // chip's own amber plan wording sitting a few pixels away.
-            className={`text-xs font-medium ${
-              (slot.messageTone ?? "alert") === "info" ? "text-amber-700" : "text-red-600"
-            }`}
-          >
-            {slot.message}
-          </p>
-        ))}
+        .filter((slot) => !!slot.message && slot.kind !== "mode")
+        .map((slot) => renderSlotMessage(slot))}
     </div>
   );
 }
