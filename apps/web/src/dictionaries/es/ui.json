@@ -4575,8 +4575,6 @@
   "pad.activity.empty": "Aún no se ha registrado nada.",
   "pad.activity.recordedBy": "registrado por {name}",
   "pad.activity.void": "Anular",
-  "pad.activity.showAll": "Ver toda la actividad",
-  "pad.activity.showLatest": "Ver solo la última",
   "console.phone.showDetails": "Ver detalles del partido",
   "console.phone.hideDetails": "Ocultar detalles del partido",
   "console.phone.lineup": "Alineación",

@@ -2710,8 +2710,6 @@ export type DictionaryKey =
   | "pad.activity.partial.amend"
   | "pad.activity.partial.hint"
   | "pad.activity.recordedBy"
-  | "pad.activity.showAll"
-  | "pad.activity.showLatest"
   | "pad.activity.void"
   | "pad.activity.voided"
   | "pad.activity.voiding"

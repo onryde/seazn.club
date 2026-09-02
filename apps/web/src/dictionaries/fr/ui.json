@@ -4575,8 +4575,6 @@
   "pad.activity.empty": "Rien d'enregistré pour le moment.",
   "pad.activity.recordedBy": "saisi par {name}",
   "pad.activity.void": "Annuler",
-  "pad.activity.showAll": "Afficher toute l'activité",
-  "pad.activity.showLatest": "Afficher la dernière seulement",
   "console.phone.showDetails": "Afficher les détails du match",
   "console.phone.hideDetails": "Masquer les détails du match",
   "console.phone.lineup": "Composition",

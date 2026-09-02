@@ -4575,8 +4575,6 @@
   "pad.activity.empty": "Nothing recorded yet.",
   "pad.activity.recordedBy": "recorded by {name}",
   "pad.activity.void": "Void",
-  "pad.activity.showAll": "Show all activity",
-  "pad.activity.showLatest": "Show latest only",
   "console.phone.showDetails": "Show match details",
   "console.phone.hideDetails": "Hide match details",
   "console.phone.lineup": "Lineup",
