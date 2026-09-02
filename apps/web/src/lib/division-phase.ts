@@ -62,12 +62,14 @@ const SEVERITY_ORDER: Severity[] = ["red", "amber", "slate"];
 
 /** YYYY-MM-DD of an instant in a zone. en-CA gives ISO order natively. */
 export function localDateKey(iso: string, tz: string): string {
+  const ms = Date.parse(iso);
+  if (Number.isNaN(ms)) return ""; // never "today"; mirrors resolveAttention's silent NaN
   return new Intl.DateTimeFormat("en-CA", {
     timeZone: tz,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
-  }).format(new Date(iso));
+  }).format(ms);
 }
 
 const LIVE = new Set(["scheduled", "in_play"]);

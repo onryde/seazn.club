@@ -27,6 +27,10 @@ describe("localDateKey", () => {
     expect(localDateKey("2026-09-04T23:30:00Z", TZ)).toBe("2026-09-05");
     expect(localDateKey("2026-09-04T23:30:00Z", "UTC")).toBe("2026-09-04");
   });
+  it("returns an empty key for a malformed instant instead of throwing", () => {
+    expect(localDateKey("not-a-date", TZ)).toBe("");
+    expect(resolvePhase(input({ fixtures: [fx({ scheduledAt: "not-a-date" })] }))).toBe("scheduled");
+  });
 });
 
 describe("resolvePhase — rule order", () => {
@@ -35,6 +39,11 @@ describe("resolvePhase — rule order", () => {
   });
   it("1 finished: no pending/active stage and no live fixture", () => {
     expect(resolvePhase(input({ stages: [], fixtures: [fx({ status: "decided" })] }))).toBe("finished");
+  });
+  it("1 finished: every stage complete wins even with a fixture still scheduled", () => {
+    // isolates the everyStageComplete arm: noLiveFixture is false here
+    const stages = [stage({ status: "complete" })];
+    expect(resolvePhase(input({ stages, fixtures: [fx({ scheduledAt: "2026-09-05T18:00:00Z" })] }))).toBe("finished");
   });
   it("2 setting_up: division status setup wins over a fixture dated today", () => {
     expect(resolvePhase(input({ divisionStatus: "setup", fixtures: [fx({ scheduledAt: "2026-09-05T11:00:00Z" })] }))).toBe("setting_up");
