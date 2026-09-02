@@ -220,6 +220,75 @@ describe.skipIf(!HAS_DB)("getCompetitionDesk", () => {
     expect(d.attention).toContainEqual({ kind: "unscheduled", count: 5 });
   });
 
+  // G1 fix (fix round D, Critical): the root of the finding. card-stats.ts's
+  // own `next` query has no `>= now()` floor and picks the EARLIEST fixture
+  // overall (`scheduled_at asc nulls last`, LIMIT 1) — a past, unresulted
+  // kick-off sorts ahead of a genuinely future one and the query stops
+  // there, so `s?.next` alone can never see the later fact. `next` here must
+  // come from a SEARCH over the division's own full fixtures list instead.
+  // Live repro: "Next Tue 1 Sep 11:00 · 0 of 6 played · 4 unscheduled"
+  // directly under a Needs-you row reading "result missing for Riverside FC
+  // v Harbour CC / the match window has passed" — the SAME fixture.
+  describe("G1: getCompetitionDesk's own next SEARCHES the division's fixtures, never just card-stats' single (possibly stale) candidate", () => {
+    it("a past, unresulted kick-off is skipped in favor of a genuinely later dated fixture in the SAME division", async () => {
+      const { auth } = await seedOrg();
+      const { competitionId, divisionId } = await seedDivision(auth, 4);
+      const [stage] = await createStages(auth, divisionId, {
+        seq: 1, kind: "league", name: "League", config: {}, progression: null,
+      });
+      await generateStageFixtures(auth, stage!.id);
+      await sql`update divisions set status = 'active' where id = ${divisionId}`;
+      const rows = await sql<{ id: string }[]>`select id from fixtures where division_id = ${divisionId} order by fixture_no`;
+      // fixture 1: dated in the PAST, still 'scheduled' (no result) — this is
+      // the stale candidate card-stats' own query would pick (earliest
+      // scheduled_at, nulls last).
+      await sql`update fixtures set scheduled_at = now() - interval '2 days' where id = ${rows[0]!.id}`;
+      // fixture 2: dated genuinely in the FUTURE — the real answer. Rounded
+      // to the whole second before the round trip: comparing a sub-second
+      // JS timestamp against what a `timestamptz` column round-trips
+      // through pg-to-JS conversion flaked here on the fractional part.
+      const future = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000);
+      future.setMilliseconds(0);
+      await sql`update fixtures set scheduled_at = ${future.toISOString()} where id = ${rows[1]!.id}`;
+      const desk = await getCompetitionDesk(auth, competitionId);
+      const d = desk.divisions.get(divisionId)!;
+      expect(d.next).not.toBeNull();
+      expect(Date.parse(d.next!.scheduled_at!)).toBe(future.getTime());
+      expect(d.attention).toContainEqual({ kind: "result_missing", count: 1, fixtureIds: [rows[0]!.id] });
+    });
+    it("with ONLY a past-dated fixture, next is null and the masthead ladder does not claim a next date", async () => {
+      const { auth } = await seedOrg();
+      const { competitionId, divisionId } = await seedDivision(auth, 4);
+      const [stage] = await createStages(auth, divisionId, {
+        seq: 1, kind: "league", name: "League", config: {}, progression: null,
+      });
+      await generateStageFixtures(auth, stage!.id);
+      await sql`update divisions set status = 'active' where id = ${divisionId}`;
+      const [f] = await sql<{ id: string }[]>`select id from fixtures where division_id = ${divisionId} order by fixture_no limit 1`;
+      await sql`update fixtures set scheduled_at = now() - interval '2 days' where id = ${f!.id}`;
+      const desk = await getCompetitionDesk(auth, competitionId);
+      const d = desk.divisions.get(divisionId)!;
+      expect(d.next).toBeNull();
+      expect(competitionPhase(desk).kind).not.toBe("next");
+    });
+    it("an in_play fixture is always next, even with a later dated fixture also present", async () => {
+      const { auth } = await seedOrg();
+      const { competitionId, divisionId } = await seedDivision(auth, 4);
+      const [stage] = await createStages(auth, divisionId, {
+        seq: 1, kind: "league", name: "League", config: {}, progression: null,
+      });
+      await generateStageFixtures(auth, stage!.id);
+      await sql`update divisions set status = 'active' where id = ${divisionId}`;
+      const rows = await sql<{ id: string }[]>`select id from fixtures where division_id = ${divisionId} order by fixture_no`;
+      await sql`update fixtures set status = 'in_play', scheduled_at = now() - interval '5 minutes' where id = ${rows[0]!.id}`;
+      const future = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000);
+      await sql`update fixtures set scheduled_at = ${future.toISOString()} where id = ${rows[1]!.id}`;
+      const desk = await getCompetitionDesk(auth, competitionId);
+      const d = desk.divisions.get(divisionId)!;
+      expect(d.next?.in_play).toBe(true);
+    });
+  });
+
   it("regression #1: an all-decided league is finished, never 'nothing scheduled'", async () => {
     const { auth } = await seedOrg();
     const { competitionId, divisionId } = await seedDivision(auth, 4);

@@ -91,6 +91,27 @@ test("an organiser watches the desk go Setting up → Scheduled → Match day �
   await page.goto(compPath);
   await expect(row).toHaveAttribute("data-phase", "scheduled");
 
+  // 3c. Reach: the SAME fixture re-dated into the PAST, still unresulted
+  // (API PATCH). Read: a past kick-off is never "Next", and Needs You
+  // explains why instead. Coverage gap (fix round D): the walkthrough
+  // ladder ran unscheduled -> future -> today -> in-play -> decided and
+  // never "dated in the past, no result" — exactly the state G1 broke live:
+  // "Next Tue 1 Sep 11:00 · 0 of 6 played · 5 unscheduled" printed directly
+  // beside a Needs-you row reading "result missing … the match window has
+  // passed" for the SAME fixture, on the same screen. Confirmed to FAIL
+  // against the pre-fix build (fix-round-d-report.md) before the source fix
+  // landed.
+  const yesterday = new Date(); yesterday.setUTCDate(yesterday.getUTCDate() - 1); yesterday.setUTCHours(11, 0, 0, 0);
+  await apiJson(request, `/api/v1/fixtures/${ids[0]}`, "PATCH", { scheduled_at: yesterday.toISOString() });
+  await page.goto(compPath);
+  // The row must never claim this past kick-off as "Next" — division-
+  // status-line.ts's G1 fix (a `now` floor the `scheduled` arm never had).
+  await expect(row).not.toContainText("Next ");
+  await expect(row).toContainText(`0 of ${ids.length} played`);
+  // Needs You must explain WHY — result_missing on the exact fixture.
+  await expect(needs.locator('[data-attention="result_missing"]')).toBeVisible();
+  await shot("03c-past-kickoff-no-result");
+
   // 4. Reach: kick-off today (API PATCH). Read: Match day.
   const today = new Date(); today.setUTCHours(18, 0, 0, 0);
   await apiJson(request, `/api/v1/fixtures/${ids[0]}`, "PATCH", { scheduled_at: today.toISOString() });
@@ -121,7 +142,11 @@ test("an organiser watches the desk go Setting up → Scheduled → Match day �
   await page.goto(compPath);
   await expect(row).toHaveAttribute("data-phase", "finished");
   await expect(row).toContainText("complete");
-  await expect(row).not.toContainText("Nothing scheduled");
+  // Minor fix (fix round D): this exact string ("Nothing scheduled",
+  // capital N) is `card.next.none`, never rendered on this page — a FOURTH
+  // stale absence guard of the same shape as step 3's siblings above, which
+  // were already re-anchored on the case-insensitive regex. Same fix here.
+  await expect(row).not.toContainText(/nothing scheduled/i);
   await expect(page.getByTestId("desk-needs-you")).toHaveCount(0);
   await shot("06-finished");
 

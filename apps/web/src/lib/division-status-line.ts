@@ -12,49 +12,52 @@ export interface StatusLineInput {
   next: { scheduledAt: string | null; home: string | null; away: string | null } | null;
   needsDrawStageName: string | null;
   locale: Locale;
-  /** Display zone (schedule_settings.tz resolved) — formats HH:mm only
-   *  (spec: "the DISPLAY zone and formats HH:mm only"). */
+  /** Display zone (schedule_settings.tz resolved) — the ONLY zone a rendered
+   *  instant is formatted in (G2 fix, fix round D, corrected ruling: see
+   *  `whenLabel` below). `orgTz` governs day-BUCKETING elsewhere
+   *  (division-phase.ts's `localDateKey`) but never a printed label, so
+   *  there is deliberately no `orgTz` field here any more — see G2's report
+   *  for why that used to be two zones. */
   displayTz: string;
-  /** The GOVERNING clock (`resolveVenueTz(null, organizations.timezone)`) —
-   *  fix-round-c, Defect (c): every date-key/day-name computation (weekday,
-   *  day, month) uses this, so the row's own date never disagrees with the
-   *  masthead pill's "Next {when}", which has always used it
-   *  (competition-desk.ts's `competitionPhase` / page.tsx's `nextDateLabel`
-   *  call). Before this fix `whenLabel` took one tz and used it for BOTH the
-   *  date and the clock face, so a venue in a different zone from the org
-   *  could make the row name a different DAY than the masthead. */
-  orgTz: string;
+  /** G1 fix (fix round D, Critical): this field did not exist at all before
+   *  — the `scheduled` arm below had no way to ask "is this kick-off still
+   *  ahead of us?" and could print a past instant as "Next …" directly
+   *  beside a Needs-you row reading "the match window has passed" for the
+   *  SAME fixture. The caller captures ONE `now` (never reads the wall
+   *  clock inside a render — react-hooks/purity) and threads it through
+   *  every consumer that renders a fixture time, the same discipline
+   *  division-ledger.tsx's `nextLine` already had. */
+  now: string;
 }
 
 /**
- * "Sat 12 Sep 10:00" — the DAY (weekday/day/month) in the governing ORG
- * zone, the CLOCK FACE (hour/minute) in the display zone. Node's ICU
- * orders/punctuates `format()` by locale (US English gives "Sat, Sep 12,
- * 10:00") — pull the named parts and assemble the fixed product
+ * "Sat 12 Sep 10:00" — the WHOLE instant (day AND clock face) formatted in
+ * ONE zone, the DISPLAY zone: what the person standing at the venue reads.
+ * Node's ICU orders/punctuates `format()` by locale (US English gives "Sat,
+ * Sep 12, 10:00") — pull the named parts and assemble the fixed product
  * order/spacing ourselves so the string doesn't drift with the ICU version
  * or the CLDR locale data.
  *
- * fix-round-c, Defect (c): this used to take ONE tz and format both halves
- * with it (`displayTz`), which could name a different DAY than the
- * masthead's own "Next {when}" pill (always org tz) for a venue in a
- * different zone from the org — the two facts on one screen could disagree.
- * The spec's rule ("the governing clock is the ORG zone... `schedule_
- * settings.tz` is the DISPLAY zone and formats HH:mm only") is the tie-
- * breaker: the date half is chosen to agree with the masthead (org tz),
- * and only the clock digits stay venue-local, matching the spec's own
- * "formats HH:mm only" wording literally.
+ * G2 fix (fix round D, Important — corrected ruling): fix-round-c took the
+ * DAY from the org (governing) zone and the CLOCK from the display zone —
+ * that was round C's brief, taken literally and correctly, and it was
+ * WRONG. It names an instant that can exist in NEITHER zone: measured live,
+ * org `Europe/London`, division `America/New_York`, `2026-09-06T23:00Z`
+ * rendered "Mon 7 Sept 19:00" where the venue truth is Sun 6 Sept 19:00 —
+ * one hour of offset near midnight is enough to flip the day in one zone
+ * without flipping it in the other. A rendered instant names ONE reality;
+ * splitting it across two zones can name a reality that never happened in
+ * either. The org zone still governs day-BUCKETING (division-phase.ts's
+ * `localDateKey` — "what counts as today, which day group a fixture falls
+ * in") — never half of a printed label.
  */
-export function whenLabel(iso: string, locale: string, orgTz: string, displayTz: string): string {
+export function whenLabel(iso: string, locale: string, tz: string): string {
   const at = new Date(iso);
-  const dateParts = new Intl.DateTimeFormat(locale, {
-    timeZone: orgTz, weekday: "short", day: "numeric", month: "short",
+  const parts = new Intl.DateTimeFormat(locale, {
+    timeZone: tz, weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: false,
   }).formatToParts(at);
-  const timeParts = new Intl.DateTimeFormat(locale, {
-    timeZone: displayTz, hour: "2-digit", minute: "2-digit", hour12: false,
-  }).formatToParts(at);
-  const getDate = (type: Intl.DateTimeFormatPartTypes) => dateParts.find((p) => p.type === type)?.value ?? "";
-  const getTime = (type: Intl.DateTimeFormatPartTypes) => timeParts.find((p) => p.type === type)?.value ?? "";
-  return `${getDate("weekday")} ${getDate("day")} ${getDate("month")} ${getTime("hour")}:${getTime("minute")}`;
+  const get = (type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)?.value ?? "";
+  return `${get("weekday")} ${get("day")} ${get("month")} ${get("hour")}:${get("minute")}`;
 }
 
 /**
@@ -133,8 +136,17 @@ export function statusLine(dict: Dict, i: StatusLineInput): string {
       // any phase again: this now states the progress instead, the same
       // fallback `setting_up` and `match_day` already use when they have no
       // more specific fact to report.
-      line = at && !Number.isNaN(Date.parse(at))
-        ? t(dict, "desk.status.scheduled", { ...base, when: whenLabel(at, i.locale, i.orgTz, i.displayTz) })
+      //
+      // G1 fix (fix round D, Critical): this arm had NO floor against `now`
+      // at all — a past, unresulted kick-off rendered "Next {past date}"
+      // directly beside a Needs-you row reading "the match window has
+      // passed" for the SAME fixture, F5's own symptom, at the ONE consumer
+      // that had never gotten F5's guard. Same "not already past" floor
+      // division-ledger.tsx's `nextLine` already applies.
+      const nowMs = Date.parse(i.now);
+      const atMs = at ? Date.parse(at) : NaN;
+      line = at && !Number.isNaN(atMs) && atMs >= nowMs
+        ? t(dict, "desk.status.scheduled", { ...base, when: whenLabel(at, i.locale, i.displayTz) })
         : t(dict, "card.progress.played", base);
       break;
     }

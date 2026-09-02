@@ -23,7 +23,6 @@ import { listDivisionCardStats, type NextFixture } from "./card-stats";
 import { listDivisions } from "./divisions";
 
 export interface DeskDivision {
-  division_id: string;
   phase: DivisionPhase;
   attention: Attention[];
   played: number;
@@ -98,6 +97,54 @@ type SettingsRaw = { division_id: string; tz: string | null; match_minutes: numb
 /** F4 (final review, Important) — resolved once per competition, not N+1:
  *  who is on record to score, at either scope the finding names. */
 type ScorerAssignmentRaw = { scope_type: "fixture" | "division"; scope_id: string };
+
+/** The division's own "what's next" fact, SEARCHED from the full fixtures
+ *  list this function already has for the division (`rows`) — never
+ *  card-stats.ts's single `next` candidate, whose lateral join picks the
+ *  EARLIEST fixture overall (`scheduled_at asc nulls last`, no `>= now()`
+ *  floor at all) and stops at LIMIT 1. A past, unresulted kick-off sorts
+ *  ahead of a genuinely future one there, so that single candidate can BE
+ *  the stale one while a real "next" sits one row over, never looked at.
+ *
+ *  G1 fix (fix round D, Critical): this is the root of the finding's "grep
+ *  for every other consumer" note — F5's guard at division-ledger.tsx and
+ *  competition-desk.ts's own `nextFutureAt` both correctly REJECTED a past
+ *  candidate, but neither one SEARCHED for a replacement, so a genuinely
+ *  future fixture in the same division went unnamed (the ledger's `Next:`
+ *  cell blanked, and the masthead's ladder fell from "Next Sun 6 Sep" to a
+ *  bare "Scheduled"). Searching here, once, at the source every downstream
+ *  consumer reads from (`DeskDivision.next`), fixes all of them at once.
+ *
+ *  Same TBD-entrant exclusion and in_play-first tie-break as card-stats.ts's
+ *  query (:145-151, left untouched — other surfaces still depend on its
+ *  current shape). `round_no`/`seq_in_round` are not loaded into `rows`, so
+ *  a same-instant tie breaks on `fixture_no` instead; the tie itself is not
+ *  a case this row's copy depends on getting right. `court_label` is not
+ *  resolved here (no `courts` join in this query) — always `null`, which is
+ *  honest (no consumer within the desk reads it; card-stats.ts's own `next`
+ *  stays the only source of a real court label, e.g. the card grid). */
+function resolveDivisionNext(rows: FixtureRaw[], nowIso: string): NextFixture | null {
+  const nowMs = Date.parse(nowIso);
+  const candidates = rows.filter(
+    (f) => (f.status === "scheduled" || f.status === "in_play") && f.home !== null && f.away !== null,
+  );
+  const inPlay = candidates.filter((f) => f.status === "in_play");
+  const pool = inPlay.length > 0
+    ? inPlay
+    : candidates.filter((f) => {
+        if (f.scheduled_at === null) return false;
+        const ms = Date.parse(f.scheduled_at);
+        return !Number.isNaN(ms) && ms >= nowMs;
+      });
+  if (pool.length === 0) return null;
+  const sorted = [...pool].sort((a, b) => {
+    const aMs = a.scheduled_at ? Date.parse(a.scheduled_at) : Infinity;
+    const bMs = b.scheduled_at ? Date.parse(b.scheduled_at) : Infinity;
+    return aMs !== bMs ? aMs - bMs : a.fixture_no - b.fixture_no;
+  });
+  const picked = sorted[0]!;
+  return { home: picked.home, away: picked.away, court_label: null, scheduled_at: picked.scheduled_at, in_play: picked.status === "in_play" };
+}
 
 export async function getCompetitionDesk(
   auth: AuthCtx,
@@ -218,7 +265,6 @@ export async function getCompetitionDesk(
     const fixture_names: DeskDivision["fixture_names"] = {};
     for (const x of rows) fixture_names[x.id] = { home: x.home, away: x.away, fixture_no: x.fixture_no };
     out.set(d.id, {
-      division_id: d.id,
       phase: resolvePhase(input),
       attention,
       played: s?.played ?? 0,
@@ -226,7 +272,7 @@ export async function getCompetitionDesk(
       unscheduled: rows.filter((x) => x.status === "scheduled" && x.scheduled_at === null).length,
       in_play: inPlay,
       entrants: s?.entrants ?? 0,
-      next: s?.next ?? null,
+      next: resolveDivisionNext(rows, nowIso),
       needs_draw_stage:
         needsDraw && needsDraw.kind === "needs_draw" ? { id: needsDraw.stageId, name: needsDraw.stageName } : null,
       fixture_names,

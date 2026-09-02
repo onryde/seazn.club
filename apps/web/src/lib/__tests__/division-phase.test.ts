@@ -255,4 +255,39 @@ describe("resolveAttention", () => {
     const kinds = resolveAttention(input({ stages, fixtures, awaitingRegistrations: 1 })).map((a) => a.kind);
     expect(kinds).toEqual(["needs_draw", "unscheduled", "registrations_waiting"]);
   });
+
+  // G3 fix (fix round D, Important): resolveAttention used to never read
+  // `divisionStatus` at all — a never-started division whose fixtures were
+  // dated in the past (organiser published a schedule, or just dated
+  // fixtures, and never pressed Start) raised `result_missing` anyway. Live
+  // repro: "Unstarted · result missing for Alpha FC v Delta FC" directly
+  // above the SAME division's own "Setting up" row.
+  describe("G3: no_scorer/result_missing respect the division's own status", () => {
+    it("result_missing does NOT fire for a division that has never started (status 'setup'), even with the match window long passed", () => {
+      const fixtures = [fx({ id: "r", scheduledAt: "2026-09-01T07:00:00Z", matchMinutes: 90 })];
+      const out = resolveAttention(input({ divisionStatus: "setup", fixtures }));
+      expect(out.some((a) => a.kind === "result_missing")).toBe(false);
+    });
+    it("result_missing does NOT fire for a division that is only 'scheduled' (published, not started)", () => {
+      const fixtures = [fx({ id: "r", scheduledAt: "2026-09-01T07:00:00Z", matchMinutes: 90 })];
+      const out = resolveAttention(input({ divisionStatus: "scheduled", fixtures }));
+      expect(out.some((a) => a.kind === "result_missing")).toBe(false);
+    });
+    it("result_missing DOES fire once the division is 'active' — the mutant this class of test exists to kill", () => {
+      const fixtures = [fx({ id: "r", scheduledAt: "2026-09-01T07:00:00Z", matchMinutes: 90 })];
+      const out = resolveAttention(input({ divisionStatus: "active", fixtures }));
+      expect(out).toContainEqual({ kind: "result_missing", count: 1, fixtureIds: ["r"] });
+    });
+    it("no_scorer does NOT fire for an in_play fixture on a not-yet-active division (defensive — scoring itself is locked pre-start)", () => {
+      const fixtures = [fx({ id: "p", status: "in_play", eventCount: 0, hasScorer: false })];
+      const out = resolveAttention(input({ divisionStatus: "scheduled", fixtures }));
+      expect(out.some((a) => a.kind === "no_scorer")).toBe(false);
+    });
+    it("needs_draw, unscheduled and registrations_waiting are NOT gated by divisionStatus — every one legitimately applies before Start", () => {
+      const stages = [stage({ id: "fin", name: "Finals", seq: 1, status: "pending", hasFixtures: false, needsProposal: true })];
+      const fixtures = [fx({ id: "u", status: "scheduled", scheduledAt: null })];
+      const out = resolveAttention(input({ divisionStatus: "setup", stages, fixtures, awaitingRegistrations: 2 }));
+      expect(out.map((a) => a.kind).sort()).toEqual(["needs_draw", "registrations_waiting", "unscheduled"]);
+    });
+  });
 });

@@ -8,7 +8,11 @@ import { statusLine, whenLabel, type StatusLineInput } from "@/lib/division-stat
 const base: StatusLineInput = {
   phase: "scheduled", played: 10, total: 15, unscheduled: 0, inPlay: 0, entrants: 6,
   next: { scheduledAt: "2026-09-12T09:00:00Z", home: "Lakeside FC", away: "Harbour CC" },
-  needsDrawStageName: null, locale: "en", displayTz: "Europe/London", orgTz: "Europe/London",
+  needsDrawStageName: null, locale: "en", displayTz: "Europe/London",
+  // G1 fix: `now` fixed well before `next.scheduledAt` above, so the
+  // existing "scheduled leads with the next kick-off" cases below keep
+  // reading as future without each one having to restate it.
+  now: "2026-09-05T09:00:00Z",
 };
 
 describe("statusLine", () => {
@@ -98,6 +102,28 @@ describe("statusLine", () => {
     expect(s).toBe("10 of 15 played");
     expect(s).not.toMatch(/nothing scheduled/i);
   });
+  // G1 fix (fix round D, Critical): `StatusLineInput` had NO `now` field at
+  // all — this arm could not ask "is this kick-off still ahead of us?" and
+  // rendered a PAST kick-off as "Next …" directly beside a Needs-you row
+  // reading "the match window has passed" for the SAME fixture (F5's own
+  // symptom, reached live at the one consumer F5 never guarded). Mirrors
+  // division-ledger.tsx's own F5 guard on `nextLine`.
+  it("G1: a past kick-off falls back to the progress line, never renders as Next", () => {
+    const s = statusLine(en, {
+      ...base, now: "2026-09-05T09:00:00Z",
+      next: { scheduledAt: "2026-09-01T11:00:00Z", home: "Riverside FC", away: "Harbour CC" },
+    });
+    expect(s).toBe("10 of 15 played");
+    expect(s).not.toMatch(/next/i);
+  });
+  it("G1: a kick-off exactly AT now is still Next (the floor is inclusive, not strictly future)", () => {
+    const s = statusLine(en, { ...base, now: "2026-09-12T09:00:00Z" });
+    expect(s).toBe("Next Sat 12 Sep 10:00 · 10 of 15 played");
+  });
+  it("G1: a kick-off one minute in the future still renders as Next", () => {
+    const s = statusLine(en, { ...base, now: "2026-09-12T08:59:00Z" });
+    expect(s).toBe("Next Sat 12 Sep 10:00 · 10 of 15 played");
+  });
   // fix-round-c, Defect 1: the exact live repro — a knockout final carries a
   // date but its entrants are still TBD, so card-stats.ts's `next` query
   // excludes it; the phase is "scheduled" (division-phase.ts rule 5 doesn't
@@ -145,24 +171,38 @@ describe("statusLine", () => {
   });
 });
 
-// fix-round-c, Defect (c): the masthead's own date ladder step
-// (competition-desk.ts's `nextDateLabel`) always used the org zone; a row's
-// `whenLabel` used to take ONE tz for both halves (`displayTz`), so the two
-// could name a different DAY on the same screen for a venue in a different
-// zone from the org. 2026-09-12T23:30:00Z is chosen because the two zones
-// below disagree on the DAY it falls on: Sun 13 Sep in Europe/London (BST,
-// UTC+1 pushes it past midnight) vs Sat 12 Sep in Pacific/Honolulu (UTC-10).
+// G2 fix (fix round D, Important — corrected ruling): fix-round-c's original
+// rule ("date from the org zone, clock from the display zone") named an
+// instant that could exist in NEITHER zone — measured live, org
+// `Europe/London`, division `America/New_York`, `2026-09-06T23:00Z` rendered
+// "Mon 7 Sept 19:00" where the venue truth is Sun 6 Sept 19:00. The
+// corrected ruling: a rendered instant is formatted ENTIRELY in the display
+// zone — the venue's own local time, both halves. 2026-09-12T23:30:00Z is
+// kept as the probe instant because the two zones below still disagree on
+// which DAY it falls on (Sun 13 Sep in Europe/London (BST) vs Sat 12 Sep in
+// Pacific/Honolulu, UTC-10) — exactly the shape that would catch a
+// regression back to splitting the label across two zones.
 describe("whenLabel", () => {
   const AT = "2026-09-12T23:30:00Z";
-  it("takes the DAY from the org zone and the CLOCK from the display zone, even when they disagree", () => {
-    expect(whenLabel(AT, "en", "Europe/London", "Pacific/Honolulu")).toBe("Sun 13 Sep 13:30");
+  it("formats the WHOLE instant — day and clock — in the display zone alone", () => {
+    expect(whenLabel(AT, "en", "Pacific/Honolulu")).toBe("Sat 12 Sep 13:30");
   });
-  it("regression guard: the date half must NOT come from the display zone", () => {
-    // The pre-fix behaviour (single tz for both halves) would have produced
-    // "Sat 12 Sep 13:30" here — Honolulu's own day name, not London's.
-    expect(whenLabel(AT, "en", "Europe/London", "Pacific/Honolulu")).not.toBe("Sat 12 Sep 13:30");
+  it("a different display zone names a different day AND a different clock face for the SAME instant", () => {
+    expect(whenLabel(AT, "en", "Europe/London")).toBe("Sun 13 Sep 00:30");
   });
-  it("agrees with a same-zone call when org and display coincide (the common case)", () => {
-    expect(whenLabel(AT, "en", "Europe/London", "Europe/London")).toBe("Sun 13 Sep 00:30");
+  // Regression guard: the pre-fix behaviour took the day from a SEPARATE org
+  // zone. Passing London's day against Honolulu's clock is the exact
+  // defect shape — the corrected function must never produce it.
+  it("regression guard: never mixes one zone's day with a different zone's clock", () => {
+    expect(whenLabel(AT, "en", "Pacific/Honolulu")).not.toBe("Sun 13 Sep 13:30");
+  });
+  // The G2 finding's own exact repro, at the function level: org
+  // Europe/London / division America/New_York, instant 2026-09-06T23:00Z.
+  // Venue truth is Sun 6 Sept 19:00 — the OLD two-zone rule rendered
+  // "Mon 7 Sept 19:00" (Monday, from London's day).
+  it("the G2 repro: the venue-local label, never the org-zone day appended to it", () => {
+    const label = whenLabel("2026-09-06T23:00:00Z", "en", "America/New_York");
+    expect(label).toBe("Sun 6 Sep 19:00");
+    expect(label).not.toBe("Mon 7 Sep 19:00");
   });
 });

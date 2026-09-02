@@ -190,31 +190,47 @@ export function resolveAttention(input: PhaseInput): Attention[] {
   // the same way `unscheduled` already is above — collected here, pushed once.
   const noScorer: { id: string; since: number | null }[] = [];
   const resultMissing: string[] = [];
-  for (const f of input.fixtures) {
-    // F4 fix: the old test was bare `eventCount === 0` — a division- or
-    // fixture-scoped scorer sitting on a 0-0 read as "missing", and
-    // assigning one never cleared the row (only the first score event did).
-    // `hasScorer` is resolved by the caller from scorer_assignments at both
-    // scopes; once someone is assigned, the organiser's own job here is
-    // done, so the row clears immediately — matching design doc line 101
-    // ("a scorerless fixture reads 'No scorer' until it is assigned"), not
-    // left waiting on whether that scorer has actually typed anything yet.
-    // (Deliberate scope decision, recorded in fix-round-b-report.md: an
-    // assigned-but-silent scorer well past kick-off gets NO attention at
-    // all in this round, not a weaker one — a genuinely separate product
-    // question this fix does not take on.)
-    if (f.status === "in_play" && f.eventCount === 0 && !f.hasScorer) {
-      // division-phase.ts:134 minor fix: a fixture with no `scheduledAt` at
-      // all can never answer "minutes since kickoff" — `null`, not a
-      // permanent, misleading "0 min ago".
-      const since = f.scheduledAt ? Math.max(0, Math.round((nowMs - Date.parse(f.scheduledAt)) / 60_000)) : null;
-      noScorer.push({ id: f.id, since });
-    } else if (
-      f.status === "scheduled" &&
-      f.scheduledAt !== null &&
-      Date.parse(f.scheduledAt) + f.matchMinutes * 60_000 < nowMs
-    ) {
-      resultMissing.push(f.id);
+  // G3 fix (fix round D, Important): this function used to never read
+  // `divisionStatus` at all, so `no_scorer`/`result_missing` fired off raw
+  // fixture facts alone. A division an organiser has never started (`setup`)
+  // or has only published (`scheduled`) can still carry fixtures dated in
+  // the past — scoring itself stays LOCKED until `division_started`
+  // (scoring.ts:220, "A published-but-unstarted timetable stays read-only"),
+  // so an elapsed match window there is not a missed result, it is an
+  // organiser who has not pressed Start yet. Reproduced live: a brand-new,
+  // never-started division read "Unstarted" (setting_up) one row UNDER a
+  // Needs-you item reading "result missing … the match window has passed"
+  // for the same fixture. `needs_draw`/`unscheduled`/`registrations_waiting`
+  // are deliberately NOT gated here — every one of them is exactly the class
+  // of thing an organiser legitimately still owes before or after Start.
+  const canHaveLiveActivity = input.divisionStatus === "active";
+  if (canHaveLiveActivity) {
+    for (const f of input.fixtures) {
+      // F4 fix: the old test was bare `eventCount === 0` — a division- or
+      // fixture-scoped scorer sitting on a 0-0 read as "missing", and
+      // assigning one never cleared the row (only the first score event did).
+      // `hasScorer` is resolved by the caller from scorer_assignments at both
+      // scopes; once someone is assigned, the organiser's own job here is
+      // done, so the row clears immediately — matching design doc line 101
+      // ("a scorerless fixture reads 'No scorer' until it is assigned"), not
+      // left waiting on whether that scorer has actually typed anything yet.
+      // (Deliberate scope decision, recorded in fix-round-b-report.md: an
+      // assigned-but-silent scorer well past kick-off gets NO attention at
+      // all in this round, not a weaker one — a genuinely separate product
+      // question this fix does not take on.)
+      if (f.status === "in_play" && f.eventCount === 0 && !f.hasScorer) {
+        // division-phase.ts:134 minor fix: a fixture with no `scheduledAt` at
+        // all can never answer "minutes since kickoff" — `null`, not a
+        // permanent, misleading "0 min ago".
+        const since = f.scheduledAt ? Math.max(0, Math.round((nowMs - Date.parse(f.scheduledAt)) / 60_000)) : null;
+        noScorer.push({ id: f.id, since });
+      } else if (
+        f.status === "scheduled" &&
+        f.scheduledAt !== null &&
+        Date.parse(f.scheduledAt) + f.matchMinutes * 60_000 < nowMs
+      ) {
+        resultMissing.push(f.id);
+      }
     }
   }
   if (noScorer.length > 0) {

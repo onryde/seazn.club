@@ -3833,7 +3833,8 @@ async function playerAccountsSuite(admin: Session, orgId: string): Promise<void>
 
   // Competition desk (W1): the ledger row's data-phase attribute is a
   // derived fact, never stored — this competition has a started division
-  // with a generated fixture, so its row must carry one of the five phases.
+  // with a generated fixture, so its row must carry one of the four phases
+  // (DivisionPhase: setting_up | scheduled | match_day | finished).
   const compHtml = await (
     await fetch(`${BASE}/o/${orgSlug}/c/${compData.slug}`, {
       headers: { cookie: Object.entries(admin.cookies).map(([k, v]) => `${k}=${v}`).join("; ") },
