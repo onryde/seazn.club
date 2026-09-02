@@ -19,6 +19,7 @@ import {
 } from "@/components/v2/lineup-editor";
 import { ScoringErrorBoundary } from "@/components/v2/scoring-error-boundary";
 import { DeviceLinkPanel } from "@/components/v2/device-link-panel";
+import { PhoneDisclosure } from "@/components/v2/phone-disclosure";
 import { PadSuspensionBanner } from "@/components/discipline/pad-suspension-banner";
 import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { scoringErrorText, decidedOutcomeText, shootoutScoreFromDetail } from "@/lib/scoring-vocab";
@@ -865,22 +866,29 @@ export function FixtureConsole({
           {(["home", "away"] as const).map((sideKey) => {
             const s = sides[sideKey]!;
             return (
-              <LineupEditor
+              <PhoneDisclosure
                 key={s.id}
-                fixtureId={fixture.id}
-                // R7/C5 — the editor titles itself with `side.name`; hand it
-                // the RESOLVED one rather than the entry label. Resolved at
-                // the call site because `lineup-editor.tsx` is another wave's
-                // file this week, and because one resolution serving every
-                // reader is the point of `entrantDisplayName`.
-                side={{ ...s, name: entrantDisplayName(s) }}
-                positionGroups={sport.positionGroups}
-                roles={sport.roles}
-                lineupSize={sport.lineupSize}
-                canEdit={canEdit && live.status === "scheduled"}
-                onSaved={() => router.refresh()}
-                availability={availability}
-              />
+                summary={entrantDisplayName(s)}
+                aside={msg("console.phone.lineup")}
+                showLabel={msg("lineup.phone.show")}
+                hideLabel={msg("lineup.phone.hide")}
+              >
+                <LineupEditor
+                  fixtureId={fixture.id}
+                  // R7/C5 — the editor titles itself with `side.name`; hand it
+                  // the RESOLVED one rather than the entry label. Resolved at
+                  // the call site because `lineup-editor.tsx` is another wave's
+                  // file this week, and because one resolution serving every
+                  // reader is the point of `entrantDisplayName`.
+                  side={{ ...s, name: entrantDisplayName(s) }}
+                  positionGroups={sport.positionGroups}
+                  roles={sport.roles}
+                  lineupSize={sport.lineupSize}
+                  canEdit={canEdit && live.status === "scheduled"}
+                  onSaved={() => router.refresh()}
+                  availability={availability}
+                />
+              </PhoneDisclosure>
             );
           })}
         </div>
@@ -897,11 +905,18 @@ export function FixtureConsole({
           {(["home", "away"] as const).map((sideKey) => {
             const s = sides[sideKey]!;
             return (
-              <AvailabilityRoster
+              <PhoneDisclosure
                 key={s.id}
-                side={{ ...s, name: entrantDisplayName(s) }}
-                availability={availability}
-              />
+                summary={entrantDisplayName(s)}
+                aside={msg("console.phone.lineup")}
+                showLabel={msg("lineup.phone.show")}
+                hideLabel={msg("lineup.phone.hide")}
+              >
+                <AvailabilityRoster
+                  side={{ ...s, name: entrantDisplayName(s) }}
+                  availability={availability}
+                />
+              </PhoneDisclosure>
             );
           })}
         </div>
