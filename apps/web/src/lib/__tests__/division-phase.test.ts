@@ -51,6 +51,25 @@ describe("resolvePhase — rule order", () => {
     const stages = [stage({ status: "complete" })];
     expect(resolvePhase(input({ stages, fixtures: [fx({ scheduledAt: "2026-09-05T18:00:00Z" })] }))).toBe("finished");
   });
+  it("2 finished: all fixtures played even though the stage is still active (V1 fix)", () => {
+    // The organiser never clicked "Complete stage" on the League — with every
+    // fixture decided/finalized and no later stage owing work, the phase
+    // must not lag behind and read "scheduled".
+    const stages = [stage({ status: "active" })];
+    const fixtures = [fx({ id: "a", status: "decided" }), fx({ id: "b", status: "finalized" })];
+    expect(resolvePhase(input({ stages, fixtures }))).toBe("finished");
+  });
+  it("2 NOT finished: all fixtures played but a later stage still needs its draw", () => {
+    // The U16 Cup shape — the guard (`openStageOwesWork`) must win over the
+    // new all-played arm, or a fully-played league with an undrawn finals
+    // stage would wrongly read "finished".
+    const stages = [
+      stage({ id: "lg", seq: 1, status: "complete" }),
+      stage({ id: "fin", name: "Finals", seq: 2, status: "pending", hasFixtures: false, needsProposal: true }),
+    ];
+    const fixtures = [fx({ id: "a", status: "decided" }), fx({ id: "b", status: "finalized" })];
+    expect(resolvePhase(input({ stages, fixtures }))).toBe("setting_up");
+  });
   it("2 setting_up: division status setup wins over a fixture dated today", () => {
     expect(resolvePhase(input({ divisionStatus: "setup", fixtures: [fx({ scheduledAt: "2026-09-05T11:00:00Z" })] }))).toBe("setting_up");
   });
@@ -83,7 +102,13 @@ describe("resolvePhase — rule order", () => {
     expect(resolvePhase(input())).toBe("scheduled");
   });
   it("a decided fixture today does not make a match day", () => {
-    expect(resolvePhase(input({ fixtures: [fx({ status: "decided", scheduledAt: "2026-09-05T08:00:00Z" })] }))).toBe("scheduled");
+    // A second, still-unplayed fixture keeps this case out of the V1
+    // all-played "finished" arm added above, so it still isolates rule 3.
+    const fixtures = [
+      fx({ id: "d", status: "decided", scheduledAt: "2026-09-05T08:00:00Z" }),
+      fx({ id: "s" }),
+    ];
+    expect(resolvePhase(input({ fixtures }))).toBe("scheduled");
   });
 });
 

@@ -162,7 +162,12 @@ export default async function CompetitionPage({
             </h1>
             <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-600">
               {compPhase && <PhasePill dict={dict} phase={compPhase} inPlay={desk?.in_play ?? 0} />}
-              <span>{[...new Set(divisions.map((d) => d.sport_key))].join(" · ")}</span>
+              {/* Minor fix (review round 1): was the raw lowercase sport_key
+                  ("football") — the `sport.<key>` dictionary already carries
+                  a proper display name ("Ice hockey", "Table tennis") for
+                  every sport, in all 4 locales, so read it from there
+                  instead of hand-title-casing an internal key. */}
+              <span>{[...new Set(divisions.map((d) => d.sport_key))].map((k) => t(dict, `sport.${k}`)).join(" · ")}</span>
               <span>·</span>
               <span>{t(dict, "desk.masthead.divisions", { n: divisions.length })}</span>
             </div>
@@ -315,7 +320,11 @@ export default async function CompetitionPage({
 
           <section>
             <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-slate-700">{t(dict, "comp.detail.divisions")}</h2>
+              {/* V5 fix (review round 1): DivisionLedger no longer renders its
+                  own "Divisions · N" heading — this heading is the ONE
+                  "Divisions" heading on the page now, and carries the
+                  count DivisionLedger used to print itself. */}
+              <h2 className="text-sm font-semibold text-slate-700">{t(dict, "comp.detail.divisions")} · {divisions.length}</h2>
               {canEdit && !competition.frozen && (
                 <Link
                   href={routes.divisionNew(orgSlug, compSlug)}

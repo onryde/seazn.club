@@ -94,15 +94,36 @@ export function NeedsYou({ dict, items }: { dict: Dict; items: NeedsYouItem[] })
       </h2>
       <div className="card divide-y divide-purple-50">
         {items.map((it) => (
-          <div key={it.key} data-attention={it.kind} data-severity={it.severity} className="flex items-center gap-3 px-4 py-3">
-            <span aria-hidden className={`h-2 w-2 shrink-0 rounded-full ${DOT[it.severity]}`} />
-            <div className="min-w-0 flex-1">
-              <p className="text-sm text-slate-900">{it.title}</p>
-              <p className="text-xs text-slate-600">{it.sub}</p>
+          <div key={it.key} data-attention={it.kind} data-severity={it.severity}>
+            {/* Mobile (owner ruling, review round 1): the old layout centred
+                the dot against a wrapped multi-line title and squeezed the
+                text beside the button. Restacked instead — dot + title on
+                one line, sub-line beneath, then a full-width, >=44px action
+                under both. */}
+            <div className="p-4 md:hidden">
+              <div className="flex items-center gap-2">
+                <span aria-hidden className={`h-2 w-2 shrink-0 rounded-full ${DOT[it.severity]}`} />
+                <p className="min-w-0 flex-1 text-sm text-slate-900">{it.title}</p>
+              </div>
+              <p className="mt-1 text-xs text-slate-600">{it.sub}</p>
+              <Link
+                href={it.action.href}
+                className={`btn ${it.severity === "red" ? "btn-primary" : "btn-ghost"} mt-3 flex w-full items-center justify-center py-3 text-sm`}
+              >
+                {it.action.label}
+              </Link>
             </div>
-            <Link href={it.action.href} className={`btn ${it.severity === "red" ? "btn-primary" : "btn-ghost"} shrink-0 px-3 py-1.5 text-xs`}>
-              {it.action.label}
-            </Link>
+            {/* Desktop, `md` and up — unchanged three-column layout. */}
+            <div className="hidden items-center gap-3 px-4 py-3 md:flex">
+              <span aria-hidden className={`h-2 w-2 shrink-0 rounded-full ${DOT[it.severity]}`} />
+              <div className="min-w-0 flex-1">
+                <p className="text-sm text-slate-900">{it.title}</p>
+                <p className="text-xs text-slate-600">{it.sub}</p>
+              </div>
+              <Link href={it.action.href} className={`btn ${it.severity === "red" ? "btn-primary" : "btn-ghost"} shrink-0 px-3 py-1.5 text-xs`}>
+                {it.action.label}
+              </Link>
+            </div>
           </div>
         ))}
       </div>

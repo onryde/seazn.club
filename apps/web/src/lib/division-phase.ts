@@ -92,7 +92,20 @@ export function resolvePhase(input: PhaseInput): DivisionPhase {
   const everyStageComplete = stages.length > 0 && stages.every((s) => s.status === "complete");
   const noOpenStage = !stages.some((s) => s.status === "pending" || s.status === "active");
   const noLiveFixture = !fixtures.some((f) => LIVE.has(f.status));
-  if (everyStageComplete || (noOpenStage && noLiveFixture)) return "finished";
+  // V1 fix (review round 1): a division whose fixtures are ALL played reads
+  // "finished" even when the organiser never clicked "Complete stage" — the
+  // stage's own `status` lagging the fixtures underneath it must not read
+  // as "scheduled · nothing scheduled". `openStageOwesWork` guards this: a
+  // fully-played league with a later stage still awaiting its draw (the
+  // U16 Cup shape) must stay NOT finished so it can fall through to rule 4
+  // and read "setting_up" (with a needs_draw attention on top).
+  const open = lowestOpenStage(stages);
+  const openStageOwesWork = !!open && (!open.hasFixtures || open.needsProposal);
+  const TERMINAL = new Set(["decided", "finalized", "abandoned", "forfeited", "cancelled"]);
+  const allPlayed = fixtures.length > 0 && fixtures.every((f) => TERMINAL.has(f.status));
+  if (!openStageOwesWork && (everyStageComplete || (noOpenStage && noLiveFixture) || (allPlayed && noLiveFixture))) {
+    return "finished";
+  }
   // 3. match_day
   const today = localDateKey(input.now, input.tz);
   const matchDay = fixtures.some(
@@ -102,8 +115,7 @@ export function resolvePhase(input: PhaseInput): DivisionPhase {
   );
   if (matchDay) return "match_day";
   // 4. setting_up: the next stage has nothing to play yet
-  const open = lowestOpenStage(stages);
-  if (open && (!open.hasFixtures || open.needsProposal)) return "setting_up";
+  if (openStageOwesWork) return "setting_up";
   // 5.
   return "scheduled";
 }

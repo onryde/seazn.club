@@ -77,6 +77,17 @@ describe("DivisionLedger", () => {
     expect(html).toContain("15 of 15 played · complete");
     expect(html).not.toMatch(/Nothing scheduled yet/);
     expect(html).toContain('href="/o/org/c/comp/d/premier-division"');
+    // V2 fix (review round 1): the pill is the one thing that must survive
+    // every width, so it's rendered TWICE — inline under the name (visible
+    // below `md`) and in the dedicated column (visible at `md`+) — CSS
+    // alone decides which copy shows; neither width is ever pill-less.
+    expect(html.match(/data-pill="finished"/g)?.length).toBe(2);
+    // V4 fix: no next fixture on a settled row prints nothing at all, not
+    // "Nothing scheduled next".
+    expect(html).not.toContain("Nothing scheduled next");
+    // V5 fix: the ledger no longer renders its own "Divisions · N" heading
+    // — the page's existing "Divisions" heading owns the count now.
+    expect(html).not.toContain("Divisions · 1");
   });
   it("renders a row without pill or next line when the desk summary is unavailable", () => {
     const html = renderToStaticMarkup(
@@ -95,5 +106,47 @@ describe("DivisionLedger", () => {
     );
     expect(html).toContain('src="https://cdn/x.png"');
     expect(html).not.toContain("⚽");
+  });
+  it("mobile composition (review round 1, owner ruling): the pill and the full status line render in the SAME block as the name, and the two compositions stay each other's mutually-exclusive siblings", () => {
+    const d = div({
+      phase: "setting_up", played: 28, total: 28,
+      attention: [{ kind: "needs_draw", stageId: "fin", stageName: "Finals" }],
+    });
+    const html = renderToStaticMarkup(
+      <DivisionLedger dict={en} org="org" comp="comp" locale="en"
+        rows={[{
+          id: "d1", name: "U16 Cup", slug: "u16-cup", sportKey: "football", logoUrl: null, desk: d,
+          statusLine: "28 of 28 played · Finals not drawn",
+        }]} />,
+    );
+    // The mobile block and the desktop block are markup-distinguishable
+    // siblings — a future change that deletes one branch (rather than
+    // editing it) makes one of these substrings disappear and fails here.
+    expect(html).toContain("p-4 md:hidden");
+    expect(html).toMatch(/hidden items-center gap-3[^"]*md:grid/);
+    const mobileBlock = html.slice(html.indexOf("p-4 md:hidden"), html.indexOf("hidden items-center gap-3"));
+    expect(mobileBlock).toContain("U16 Cup");
+    // The pill renders in the mobile block itself — not behind a `hidden`
+    // wrapper of its own.
+    expect(mobileBlock).toContain('data-pill="needs_draw"');
+    // The full status line, unclamped/untruncated.
+    expect(mobileBlock).toContain("28 of 28 played · Finals not drawn");
+  });
+  it("mobile action button: absent without a red attention, 'Compute proposal' with needs_draw", () => {
+    const noAttention = div({ phase: "scheduled", attention: [] });
+    const htmlNone = renderToStaticMarkup(
+      <DivisionLedger dict={en} org="org" comp="comp" locale="en"
+        rows={[{ id: "d1", name: "Premier Division", slug: "premier-division", sportKey: "football", logoUrl: null, desk: noAttention, statusLine: "s" }]} />,
+    );
+    expect(htmlNone).not.toContain("Compute proposal");
+    expect(htmlNone).not.toContain("btn-primary");
+
+    const needsDraw = div({ phase: "setting_up", attention: [{ kind: "needs_draw", stageId: "fin", stageName: "Finals" }] });
+    const htmlAction = renderToStaticMarkup(
+      <DivisionLedger dict={en} org="org" comp="comp" locale="en"
+        rows={[{ id: "d1", name: "U16 Cup", slug: "u16-cup", sportKey: "football", logoUrl: null, desk: needsDraw, statusLine: "s" }]} />,
+    );
+    expect(htmlAction).toContain("Compute proposal");
+    expect(htmlAction).toContain('href="/o/org/c/comp/d/u16-cup?tab=fixtures"');
   });
 });
