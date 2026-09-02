@@ -282,10 +282,28 @@ export function partialBadge(
   amendEnabled: boolean,
   isPartial: ((eventType: string, payload: Record<string, unknown>) => boolean) | undefined,
 ): PartialBadgeKind {
-  const { voided } = activityRowState(event, all, ownEventIds, deviceLinkId, false);
-  if (voided) return "none";
   const partial = isPartial?.(event.type, (event.payload ?? {}) as Record<string, unknown>) ?? false;
   if (!partial) return "none";
+  const { voided } = activityRowState(event, all, ownEventIds, deviceLinkId, false);
+  // The voided suppression is SCOPED TO THE SURFACE THAT CAN AMEND, and that
+  // scoping is a controller ruling from fix round 1 rather than a refinement.
+  //
+  // It reads as an honesty rule in both directions and they disagree. Where the
+  // amendment exists, a voided partial row is one the scorer JUST SUPERSEDED —
+  // struck through, no longer folded, sitting directly above the completed row
+  // that replaced it — and leaving it reading "Partial" tells them there is
+  // still work to do on a row they have already fixed. Where the amendment does
+  // NOT exist (the organiser console, which mounts this panel outside any pad
+  // and wires no `onAmend`), the same row is not "superseded" at all: nothing on
+  // that screen could have amended it, and R7-42/F put the label there
+  // deliberately so an organiser can see what the courtside scorer left
+  // incomplete — including on a row somebody later voided.
+  //
+  // The first cut suppressed it globally and so quietly deleted a label from a
+  // surface this wave is not shipping to. Keyed on `amendEnabled` — the same
+  // flag that decides whether the badge is a control at all — so the two can
+  // never drift into disagreeing about which surface this is.
+  if (voided && amendEnabled) return "none";
   return canAmendRow(event, all, ownEventIds, deviceLinkId, heldEventId, amendEnabled, true) ? "amend" : "label";
 }
 

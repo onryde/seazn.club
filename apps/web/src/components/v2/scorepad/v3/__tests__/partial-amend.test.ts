@@ -39,7 +39,10 @@ import { makeEnvelope } from "@seazn/engine/testkit";
 import { badminton } from "@seazn/engine/sports/setbased";
 import { foldClient } from "../../module-client";
 import type { PadHostView } from "../types";
-import { amendPlan, isPartialDockAnswer } from "../pad-host";
+import { amendPlan, isPartialDockAnswer, runAmend } from "../pad-host";
+import { enqueue, enqueueHeld, dropHeld, releaseHeld } from "../../queue";
+import { memoryQueueStore, type QueueStore } from "../../queue-store";
+import type { PendingEvent } from "../../types";
 import { canAmendRow, isNewestFoldingEvent, partialBadge, type ActivityEvent } from "../activity";
 import { RALLY_ENTITLEMENT, RALLY_TYPE, badmintonSkinV3, buildDock } from "../skins/badminton";
 import type { TFn } from "../skins/badminton";
@@ -412,5 +415,137 @@ describe("amendPlan", () => {
 
   it("is null for a core.void row — a void is not itself voidable (engine: resolveVoids)", () => {
     expect(amendPlan("e-2", [...SETTLED, ev(2, "core.void", {}, "e-1")])).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runAmend — the CRITICAL from fix round 1, driven over a REAL queue
+// ---------------------------------------------------------------------------
+//
+// WHAT THIS BLOCK IS FOR. Round 1 shipped the void as a SIBLING of the held
+// replacement. The drain could not reorder them, but the void sat parked and
+// live while the replacement spent a whole hold window in a DROPPABLE state —
+// and the pad offers the control that drops it (`ribbonUndoTarget` always
+// offers take-back on a held tap; the row's own Void routes to the same place).
+// One ordinary tap and the void drained ALONE: the original struck through with
+// nothing in its place, the score down a point, the pad deleting the very event
+// the scorer opened the amend to repair.
+//
+// So this drives `runAmend` against the REAL `queue.ts` primitives over a REAL
+// `memoryQueueStore` — never a mock of them. The three states below are the
+// whole invariant, and the second one is the defect.
+//
+// It also closes the round's other IMPORTANT: the submit ORDER used to be
+// pinned ONLY by the e2e, and `e2e.yml` runs on push to `main`, so a PR carried
+// no signal on it at all — a reviewer flipped the order and the whole suite
+// stayed green. The release case below reads `store.list()` and fails.
+describe("runAmend — the void is a consequence of the replacement surviving", () => {
+  const PLAN = { voidId: "e-1", type: RALLY_TYPE, payload: { wonBy: "H" } };
+
+  /** `pad-host`'s `heldSubmit`/`submit` pair, wired to the real queue. Mirrors
+   *  `use-pad-pipeline.ts`: `submitHeld` -> `enqueueHeld` with the release
+   *  callback, `submit` -> plain `enqueue`. */
+  function realQueueIo(store: QueueStore, holdMs: number) {
+    let n = 0;
+    const pending = (type: string, payload: unknown): PendingEvent => ({
+      localId: `l-${++n}`,
+      idempotencyKey: `k-${n}`,
+      type,
+      payload,
+      expectedSeq: n,
+      createdAt: new Date(0).toISOString(),
+      attempts: 0,
+    });
+    return {
+      submitHeld: async (type: string, payload: unknown, onReleased: () => void) => {
+        const event = pending(type, payload);
+        await enqueueHeld(store, event, holdMs, onReleased);
+        return { heldId: event.idempotencyKey, heldUntil: Date.now() + holdMs };
+      },
+      submit: async (type: string, payload: unknown) => {
+        await enqueue(store, pending(type, payload));
+      },
+    };
+  }
+
+  const typesIn = async (store: QueueStore) => (await store.list()).map((e) => e.type);
+
+  it("enqueues ONLY the held replacement while the dock is open — no void is parked beside it", async () => {
+    const store = memoryQueueStore();
+    const heldId = await runAmend(PLAN, realQueueIo(store, 10_000));
+    expect(heldId).not.toBeNull();
+    expect(await typesIn(store), "a void queued here is one a take-back can strand").toEqual([RALLY_TYPE]);
+  });
+
+  it("THE CRITICAL: dropping the replacement mid-hold leaves NO void — the original event survives intact", async () => {
+    const store = memoryQueueStore();
+    const heldId = await runAmend(PLAN, realQueueIo(store, 10_000));
+    // Exactly what `handleUndo` does inside the hold window: `decideUndo`
+    // returns {kind:"drop"} and `dropHeldSubmission` calls this.
+    expect(await dropHeld(store, heldId as string), "the replacement must really be droppable").toBe(true);
+    expect(
+      await typesIn(store),
+      "a void left behind here deletes a scored event the scorer never asked to lose",
+    ).toEqual([]);
+  });
+
+  it("releasing it — Send now, or the hold's own tick — enqueues the void BEHIND it, never in front", async () => {
+    const store = memoryQueueStore();
+    const heldId = await runAmend(PLAN, realQueueIo(store, 10_000));
+    await releaseHeld(store, heldId as string);
+    expect(await typesIn(store)).toEqual([RALLY_TYPE, "core.void"]);
+    const queued = await store.list();
+    expect(queued[1]?.payload, "and it must name the original").toEqual({ event_id: "e-1" });
+  });
+
+  it("a replacement the double-submit guard refuses enqueues nothing at all — no orphan void", async () => {
+    const store = memoryQueueStore();
+    // `submitHeld` returning null is the pipeline's own refusal path, and the
+    // round-1 code fired the void straight past it.
+    const heldId = await runAmend(PLAN, {
+      submitHeld: async () => null,
+      submit: async (type, payload) => {
+        await enqueue(store, {
+          localId: "x",
+          idempotencyKey: "x",
+          type,
+          payload,
+          expectedSeq: 0,
+          createdAt: new Date(0).toISOString(),
+          attempts: 0,
+        });
+      },
+    });
+    expect(heldId).toBeNull();
+    expect(await typesIn(store), "nothing was held, so nothing may be voided").toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The console keeps its label (fix round 1, controller ruling)
+// ---------------------------------------------------------------------------
+
+describe("partialBadge on a surface with no amendment — the organiser console", () => {
+  // `fixture-console.tsx` mounts this panel outside any pad and passes
+  // `isPartial` but no `onAmend`, i.e. `amendEnabled: false`.
+  const CONSOLE = { amendEnabled: false } as const;
+
+  it("keeps the R7 label on a VOIDED partial row, which the pad suppresses", () => {
+    const all = rows(AMENDED());
+    const original = all[1]!;
+    // Same row, same ledger, two surfaces, two answers — and both are right.
+    expect(
+      partialBadge(original, all, OWN, null, null, true, partialOf(AMENDED())),
+      "on the pad it was just superseded by the row below it",
+    ).toBe("none");
+    expect(
+      partialBadge(original, all, OWN, null, null, CONSOLE.amendEnabled, partialOf(AMENDED())),
+      "on the console nothing could have amended it, so R7's label must stand",
+    ).toBe("label");
+  });
+
+  it("still says nothing about a row that was never partial", () => {
+    const all = rows(AMENDED());
+    expect(partialBadge(all[3]!, all, OWN, null, null, CONSOLE.amendEnabled, partialOf(AMENDED()))).toBe("none");
   });
 });

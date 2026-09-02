@@ -1186,6 +1186,66 @@ export function amendPlan(
   return { voidId: target.id, type: target.type, payload: (target.payload ?? {}) as Record<string, unknown> };
 }
 
+/** The two pipeline calls `runAmend` needs, narrowed to exactly what it uses so
+ *  a node test can drive it over a REAL `QueueStore` without a React tree. */
+export interface AmendSubmitters {
+  /** `pad-host`'s own `heldSubmit`, plus the release hook. `onReleased` runs
+   *  when — and ONLY when — the held entry actually leaves the hold: the
+   *  natural tick, an explicit "Send now" (`releaseHeld`), or a following tap
+   *  flushing it (`flushHeldBefore`). Verified in `queue.ts`, not assumed:
+   *  `dropHeld` (:298) cancels the tick and deletes the entry WITHOUT calling
+   *  `onDue`. `null` is `submitHeld`'s double-submit refusal — nothing was
+   *  held, so nothing will ever be released. */
+  submitHeld: (
+    type: string,
+    payload: unknown,
+    onReleased: () => void,
+  ) => Promise<{ heldId: string; heldUntil: number } | null>;
+  submit: (type: string, payload: unknown) => Promise<void>;
+}
+
+/**
+ * R8/#675 fix round 1, CRITICAL — the amendment's two events, bound so that the
+ * void can only ever happen BECAUSE the replacement survived.
+ *
+ * THE DEFECT THIS SHAPE EXISTS TO PREVENT, and it was one ordinary tap. The
+ * first cut enqueued the held replacement and then the `core.void` as SIBLINGS,
+ * with nothing binding them. The drain could not reorder them (`peekInOrder`
+ * stops at a held entry), so the void sat parked and live while the replacement
+ * spent a whole `HOLD_MS` in a DROPPABLE state — and the pad deliberately
+ * offers the control that drops it. `ribbonUndoTarget` always offers take-back
+ * on a held tap by design, and the panel's own Void on that row routes to the
+ * same place; `decideUndo` returns `{kind:"drop"}`, `dropHeldSubmission`
+ * removes the replacement, and the void then drained ALONE. The original event
+ * ended up struck through with nothing in its place and the score down a point
+ * — the pad deleting the very event the scorer opened the amend to repair,
+ * after a tap someone makes precisely when they hit Partial by mistake.
+ *
+ * The fix is structural rather than another guard: the void is submitted from
+ * the release callback, so both directions hold by construction —
+ *
+ *  - released (tick, "Send now", or flushed by a later tap) => void submitted,
+ *    and enqueued BEHIND the replacement, which is what keeps the server from
+ *    ever seeing the original gone with nothing in its place (the score-dip
+ *    fix, `handleAmend` below);
+ *  - dropped, or refused by the double-submit guard => `onReleased` never runs,
+ *    no void is ever enqueued, and the original event stands untouched.
+ *
+ * The second bullet is also the IMPORTANT this round raised about `heldSubmit`
+ * swallowing `submitHeld`'s `null`: with the void moved inside the callback
+ * there is no unconditional second submit left to skip.
+ *
+ * Returns the held id (so a caller can dock against it) or `null` if nothing
+ * was held. Pure of React on purpose — `__tests__/partial-amend.test.ts` drives
+ * it over a real `memoryQueueStore` and asserts the queue in all three states.
+ */
+export async function runAmend(plan: AmendPlan, io: AmendSubmitters): Promise<string | null> {
+  const held = await io.submitHeld(plan.type, plan.payload, () => {
+    void io.submit("core.void", { event_id: plan.voidId });
+  });
+  return held?.heldId ?? null;
+}
+
 // ---------------------------------------------------------------------------
 // PadHostV3 — the React shell
 // ---------------------------------------------------------------------------
@@ -1502,17 +1562,34 @@ export function PadHostV3(props: PadHostV3Props) {
   // `createSkinDispatch`'s "a skin cannot invent an event" guard, then
   // this function's own soft-commit (submitHeld, never plain submit —
   // spec §2.3).
+  //
+  // R8/#675 fix round 1 — `onReleased` and the RETURNED result are both new,
+  // and both exist for the amendment (`runAmend` above). The release hook is
+  // what lets a caller make a second write a CONSEQUENCE of this one surviving
+  // its hold rather than a sibling enqueued beside it, and returning the result
+  // stops `submitHeld`'s `null` double-submit refusal from being swallowed —
+  // an ordinary tap still ignores both, exactly as before.
   const heldSubmit = useCallback(
-    async (type: string, payload: unknown) => {
+    async (type: string, payload: unknown, onReleased?: () => void) => {
       const result = await pipeline.submitHeld(type, payload, HOLD_MS, () => {
         setHeld(null);
+        onReleased?.();
         void pipeline.retryDrain();
       });
       if (result) setHeld({ id: result.heldId, until: result.heldUntil, eventType: type, payload });
+      return result;
     },
     [pipeline],
   );
-  const dispatch = useMemo(() => createSkinDispatch(padView, heldSubmit), [padView, heldSubmit]);
+  // Adapted rather than passed raw: `SkinDispatch` promises `Promise<void>`, and
+  // a skin has no business seeing a held id.
+  const dispatch = useMemo(
+    () =>
+      createSkinDispatch(padView, async (type, payload) => {
+        await heldSubmit(type, payload);
+      }),
+    [padView, heldSubmit],
+  );
 
   /**
    * THE send. Every dispatch site in this host goes through it.
@@ -1803,9 +1880,15 @@ export function PadHostV3(props: PadHostV3Props) {
    * cannot leave until the held replacement releases, so no ack can ever show a
    * ledger with the original gone and nothing in its place. Measured across the
    * same three points on a real prod build — after the drain, mid-amendment,
-   * and after a reload — the scorebug reads 1—0 throughout. Pinned by
-   * `scorepad-v3-partial-amend.spec.ts`, because nothing in a node environment
-   * can see it.
+   * and after a reload — the scorebug reads 1—0 throughout. Pinned in TWO
+   * places, because the e2e alone left it unguarded until after merge (`e2e.yml`
+   * runs on push to `main`, so a PR gets no signal on it): the browser spec, and
+   * `partial-amend.test.ts`'s queue-order case, which drives `runAmend` over a
+   * real `memoryQueueStore` and reads `store.list()`.
+   *
+   * FIX ROUND 1, CRITICAL: the void is no longer submitted here at all. It is a
+   * consequence of the replacement surviving its hold — see `runAmend` above for
+   * the tap that deleted a scored event when the two were siblings.
    *
    * The replacement goes out HELD, through the identical `submitHeld` path an
    * ordinary tap takes — which
@@ -1820,6 +1903,17 @@ export function PadHostV3(props: PadHostV3Props) {
    * the state it was in. `submitHeld`'s own double-submit guard cannot swallow
    * this: it fires only inside DOUBLE_SUBMIT_WINDOW_MS (250ms) and a partial row
    * is by definition at least a whole hold window old.
+   *
+   * DOUBLE-TAP, recorded rather than guarded (fix round 1, MINOR). There is no
+   * synchronous re-entrancy latch here: `amendingId` disables the badge, but
+   * only once React has re-rendered. Two layers already catch a real double tap
+   * and neither is this function's own — the `canAmendRow` re-derivation above
+   * (once the first replacement is in `pendingEnvelopes` the original is no
+   * longer the newest folding event, so the second tap returns early), and
+   * failing that `submitHeld`'s own same-tick `submitInFlight` guard, which
+   * refuses an identical (type, payload) and returns `null` — and a `null` now
+   * means no void either. A latch here would be a third answer to a question
+   * two layers already answer; if one of them ever moves, this needs one.
    */
   async function handleAmend(eventId: string) {
     // RE-DERIVED at the moment of action, never trusted from the render that
@@ -1843,8 +1937,7 @@ export function PadHostV3(props: PadHostV3Props) {
     if (plan === null) return;
     setAmendingId(eventId);
     try {
-      await heldSubmit(plan.type, plan.payload);
-      await pipeline.submit("core.void", { event_id: plan.voidId });
+      await runAmend(plan, { submitHeld: heldSubmit, submit: pipeline.submit });
     } finally {
       setAmendingId(null);
     }
