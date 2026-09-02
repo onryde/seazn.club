@@ -431,7 +431,7 @@ export function DetailDock({ spec, heldId, store, heldUntil, t, now = Date.now }
         </button>
       </div>
 
-      <div className="flex flex-wrap gap-2 px-4 py-3">
+      <div className="flex flex-wrap gap-2 px-4 py-3 max-md:grid max-md:grid-cols-2">
         {controller.chips.map(({ chip, selected }) => (
           <button
             key={chip.id}
@@ -458,7 +458,7 @@ export function DetailDock({ spec, heldId, store, heldUntil, t, now = Date.now }
             // as the pill they already were. The radius is the only thing that
             // differs — same size, same border, same fill, so nothing about
             // this changes a dock whose chips set no `kind` (cricket's).
-            className={`inline-flex min-w-0 max-w-full items-center gap-1.5 border px-4 text-sm font-medium transition-colors ${
+            className={`inline-flex min-w-0 max-w-full items-center gap-1.5 border px-4 text-sm font-medium transition-colors max-md:justify-center max-md:px-3 ${
               chip.kind === "flag" ? "rounded-lg" : "rounded-full"
             } ${
               selected

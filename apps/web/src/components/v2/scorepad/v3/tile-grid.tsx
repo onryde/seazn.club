@@ -270,9 +270,9 @@ function Tile({
       disabled={isDisabled}
       onClick={handleClick}
       style={{ minHeight }}
-      className={`relative min-w-0 flex flex-col items-center justify-center gap-0.5 rounded-xl px-2 py-1.5 text-center transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${spanClass} ${KIND_CLASS[tile.kind]}`}
+      className={`relative min-w-0 flex flex-col items-center justify-center gap-0.5 rounded-xl px-2 py-1.5 text-center transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${spanClass} ${KIND_CLASS[tile.kind]} max-md:py-3`}
     >
-      <span className={`break-words ${tile.kind === "minor" ? "text-xs" : "text-sm"}`}>
+      <span className={`break-words ${tile.kind === "minor" ? "text-xs max-md:text-sm" : "text-sm max-md:text-[15px]"}`}>
         {tile.labelText ?? t(tile.label)}
       </span>
       {/* R3/task D — 90%, not 70%. Football was the FIRST skin to put a

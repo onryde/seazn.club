@@ -337,7 +337,7 @@ export function ContextStrip({ spec, view, personNames, t, onSelect }: ContextSt
 
   return (
     <div data-role="context-strip" className="flex flex-col gap-2">
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap gap-2 max-md:flex-col">
         {/* WS-M round 2: mode statements are NOT chips and never enter this
             row — see `renderModeStatement` above. */}
         {spec.slots.filter((slot) => slot.kind !== "mode").map((slot) => {
@@ -365,9 +365,9 @@ export function ContextStrip({ spec, view, personNames, t, onSelect }: ContextSt
                 // thing everywhere it appears.
                 data-slot-kind={slot.kind ?? "person"}
                 style={{ minHeight: 44 }}
-                className="inline-flex min-w-0 max-w-full cursor-default items-center gap-1.5 rounded-full border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700"
+                className="inline-flex min-w-0 max-w-full cursor-default items-center gap-1.5 rounded-full border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 max-md:w-full"
               >
-                <span className="break-words">{chipLabel(slot, personNames, t)}</span>
+                <span className="break-words max-md:truncate">{chipLabel(slot, personNames, t)}</span>
               </span>
             );
           }
@@ -383,7 +383,7 @@ export function ContextStrip({ spec, view, personNames, t, onSelect }: ContextSt
               aria-pressed={active}
               onClick={() => setActiveSlotId(active ? null : slot.id)}
               style={{ minHeight: 44 }}
-              className={`inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-full border px-4 text-sm font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400 ${
+              className={`inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-full border px-4 text-sm font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400 max-md:w-full ${
                 active
                   ? "border-transparent bg-violet-600 text-white hover:bg-violet-700"
                   : unset
@@ -394,7 +394,7 @@ export function ContextStrip({ spec, view, personNames, t, onSelect }: ContextSt
               {unset && !active && (
                 <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full bg-lime-400" />
               )}
-              <span className="break-words">{chipLabel(slot, personNames, t)}</span>
+              <span className="break-words max-md:truncate">{chipLabel(slot, personNames, t)}</span>
             </button>
           );
         })}

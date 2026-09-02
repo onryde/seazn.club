@@ -2207,7 +2207,7 @@ export function PadHostV3(props: PadHostV3Props) {
      * before the token layer existed. */
     <div
       data-role="pad-v3"
-      className="space-y-3"
+      className="flex flex-col gap-3"
       style={sportThemeStyle(props.skin.key)}
       /* R3 review round — the ATTRIBUTE twin of the style above, emitted from
        * the same key on the same element. A CSS rule can read a `--sport-*`
@@ -2277,7 +2277,7 @@ export function PadHostV3(props: PadHostV3Props) {
        *  shows one redundant bar rather than silently losing the only
        *  statement of its result. */}
       {shouldRenderHeadline(headline, props.skin, view) && headline && (
-        <p data-role="v3-headline" className="rounded-xl bg-slate-900 px-4 py-2 text-center text-sm font-semibold text-white">
+        <p data-role="v3-headline" className="rounded-xl bg-slate-900 px-4 py-2 text-center text-sm font-semibold text-white max-md:hidden">
           {headline}
         </p>
       )}
@@ -2358,7 +2358,7 @@ export function PadHostV3(props: PadHostV3Props) {
         </div>
       )}
 
-      <div data-role="v3-recording">
+      <div data-role="v3-recording" className="max-md:order-2">
         <RecordingChip
           activeBand={band}
           onBandChange={onBandChange}
@@ -2369,7 +2369,7 @@ export function PadHostV3(props: PadHostV3Props) {
       </div>
 
       {contextSpec && (
-        <div data-role="v3-context">
+        <div data-role="v3-context" className="max-md:order-1">
           <ContextStrip
             spec={contextSpec}
             view={combinedPool(squads)}
@@ -2495,7 +2495,7 @@ export function PadHostV3(props: PadHostV3Props) {
        *  scorer could not correct anything but the last ball once the hold
        *  window elapsed. Restored on the CHASSIS so R3-R6 inherit it. */}
       {(props.showActivity ?? true) && (
-      <div data-role="v3-activity-slot">
+      <div data-role="v3-activity-slot" className="max-md:order-3">
         <ActivityPanel
           events={activityEvents}
           ownEventIds={pipeline.ownEventIds}

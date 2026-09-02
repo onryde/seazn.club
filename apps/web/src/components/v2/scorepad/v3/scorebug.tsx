@@ -147,7 +147,7 @@ function HalfContent({ half, hintText }: { half: ScorebugHalf; hintText: string 
        *  Chassis-wide: every skin's ScorebugSpec renders through here, so
        *  this was verified against the other skins' captures too. */}
       <div
-        className={`line-clamp-6 min-w-0 text-center app-display text-[12px] font-semibold tracking-wide ${NIGHT_TILE_CLASSES.creamText} sm:text-sm`}
+        className={`line-clamp-6 min-w-0 text-center app-display text-[12px] font-semibold tracking-wide ${NIGHT_TILE_CLASSES.creamText} sm:text-sm max-md:line-clamp-2`}
       >
         {half.who.map((w, i) => (
           // NOT `inline-flex`: an inline-flex box is ATOMIC to the
@@ -210,7 +210,7 @@ function HalfContent({ half, hintText }: { half: ScorebugHalf; hintText: string 
         </div>
       )}
       {half.tappable && hintText && (
-        <span className={`text-[11px] font-medium ${NIGHT_TILE_CLASSES.creamTextMuted}`}>{hintText}</span>
+        <span className={`text-[11px] font-medium ${NIGHT_TILE_CLASSES.creamTextMuted} max-md:block max-md:max-w-full max-md:truncate`}>{hintText}</span>
       )}
     </>
   );
@@ -306,7 +306,7 @@ export function Scorebug({ spec, t, onTap, onOpenSheet }: ScorebugProps) {
                 }}
                 aria-label={[whoNames(half.who), hintText].filter(Boolean).join(" ")}
                 style={{ minHeight: 44 }}
-                className={`${NIGHT_TILE_CLASSES.half} flex min-w-0 flex-col items-center justify-center gap-1 px-3 py-3 text-center outline-offset-[-3px] transition-colors focus-visible:outline focus-visible:outline-2`}
+                className={`${NIGHT_TILE_CLASSES.half} flex min-w-0 flex-col items-center justify-center gap-1 px-3 py-3 text-center outline-offset-[-3px] transition-colors focus-visible:outline focus-visible:outline-2 max-md:px-2 max-md:py-2`}
               >
                 {content}
               </button>
@@ -316,7 +316,7 @@ export function Scorebug({ spec, t, onTap, onOpenSheet }: ScorebugProps) {
             <div
               key={i}
               data-role="v3-scorebug-half"
-              className="flex min-w-0 flex-col items-center justify-center gap-1 px-3 py-3 text-center"
+              className="flex min-w-0 flex-col items-center justify-center gap-1 px-3 py-3 text-center max-md:px-2 max-md:py-2"
             >
               {content}
             </div>
@@ -325,7 +325,7 @@ export function Scorebug({ spec, t, onTap, onOpenSheet }: ScorebugProps) {
       </div>
 
       {spec.strip.length > 0 && (
-        <div className={`flex flex-wrap items-center justify-center gap-x-4 gap-y-1 ${NIGHT_TILE_CLASSES.bandBg} px-3 py-1.5`}>
+        <div className={`flex flex-wrap items-center justify-center gap-x-4 gap-y-1 ${NIGHT_TILE_CLASSES.bandBg} px-3 py-1.5 max-md:flex-nowrap max-md:justify-start max-md:gap-x-3 max-md:overflow-x-auto max-md:[scrollbar-width:none]`}>
           {spec.strip.map((item, i) => {
             // R3/B4 (owner ruling R3-6, the per-sport signature): a strip item
             // may ask for the LED-panel treatment — the fourth official's
@@ -346,7 +346,7 @@ export function Scorebug({ spec, t, onTap, onOpenSheet }: ScorebugProps) {
                   key={i}
                   {...(item.id ? { "data-strip-item-id": item.id } : {})}
                   data-strip-tone="led"
-                  className={`${NIGHT_TILE_CLASSES.ledPanel} text-xs font-semibold`}
+                  className={`${NIGHT_TILE_CLASSES.ledPanel} text-xs font-semibold max-md:shrink-0 max-md:whitespace-nowrap`}
                 >
                   {item.label && (
                     <span className={NIGHT_TILE_CLASSES.ledPanelLabel}>{item.label}</span>
@@ -474,7 +474,7 @@ export function Scorebug({ spec, t, onTap, onOpenSheet }: ScorebugProps) {
                 // rendered when a skin actually sets it, so every other strip
                 // item (over dots, names, target) is unchanged.
                 {...(item.id ? { "data-strip-item-id": item.id } : {})}
-                className={weight}
+                className={`${weight} max-md:shrink-0 max-md:whitespace-nowrap`}
                 style={{ fontVariantNumeric: "tabular-nums" }}
               >
                 {text}
