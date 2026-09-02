@@ -10,12 +10,26 @@
 // Corrected R8/WS-R: this header used to say "R1 ships the FALLBACK path
 // only — no per-sport `pad.<sport>.ribbon.<suffix>` copy exists yet in any
 // dictionary". That has been false since R2, and it sat at the top of the
-// file whose fallback behaviour is the thing at issue. As of R8/WS-R every
-// event type all eleven modules register a payload schema for has four-locale
-// ribbon copy, so the FALLBACK BRANCH BELOW IS NOW UNREACHABLE for any event
-// the engine accepts — it is kept for a type a future engine wave adds before
-// its copy lands. `scoring-vocab.test.ts` derives that gate from
-// `module.eventSchemas` and reds the moment a new type arrives uncovered.
+// file whose fallback behaviour is the thing at issue.
+//
+// Where the fallback actually stands today (round 3 — the round-2 wording
+// here, "UNREACHABLE for any event the engine accepts", overstated it):
+//
+//   - SPORT events: every type all eleven modules register in
+//     `module.eventSchemas` has four-locale copy, so no sport event reaches
+//     the fallback. Gated by `scoring-vocab.test.ts`, derived from
+//     `eventSchemas` (NOT `fidelityTiers`, which under-reports by five).
+//   - `core.*` events: these never reach the per-sport lookup at all. They
+//     resolve through `CORE_RIBBON_KEY` below, a map maintained BY HAND, and
+//     they are structurally outside the sport sweep — `declaredEventTypes()`
+//     is sport-prefixed, so a `core.` type could never join it. All 14 are
+//     mapped and translated today; the totality of that map against the
+//     engine's own `CORE_EVENT_SCHEMAS` is what
+//     `scoring-vocab.test.ts`'s core sweep exists to hold, because an
+//     unmapped `core.x` reproduces D1 exactly ("core.start recorded").
+//
+// So the fallback is unreachable for everything the engine accepts TODAY,
+// held there by two separate derived gates rather than by this file.
 //
 // Reuses padLabel() (apps/web/src/lib/scoring-vocab.ts:907), the SAME vocab
 // path every legacy skin already calls for label text (S7/#427) — see
@@ -88,7 +102,7 @@ export function ribbonKeyFor(eventType: string): string {
  * `pad.ribbon.fallback` every other un-vocab'd type already gets, instead
  * of a `t()` call against a dictionary key that does not exist yet.
  */
-const CORE_RIBBON_KEY: Readonly<Record<string, MessageKey>> = {
+export const CORE_RIBBON_KEY: Readonly<Record<string, MessageKey>> = {
   "core.start": "pad.ribbon.core.start",
   "core.void": "pad.ribbon.core.void",
   "core.forfeit": "pad.ribbon.core.forfeit",

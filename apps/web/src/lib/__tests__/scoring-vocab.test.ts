@@ -8,9 +8,9 @@ import {
   SCORING_VOCAB_KEYS, SPORT_KEY, type MsgFn,
 } from "@/lib/scoring-vocab";
 import { interpolate } from "@/lib/i18n-runtime";
-import { buildRibbon, ribbonKeyFor } from "@/components/v2/scorepad/v3/ribbon";
+import { buildRibbon, ribbonKeyFor, CORE_RIBBON_KEY } from "@/components/v2/scorepad/v3/ribbon";
 import { builtinModules } from "@seazn/engine/sports";
-import { EngineErrorCode, matchPositionOf, SquadRole } from "@seazn/engine/core";
+import { CORE_EVENT_SCHEMAS, EngineErrorCode, matchPositionOf, SquadRole } from "@seazn/engine/core";
 import { buildStream, defaultLineupPair } from "@seazn/engine/testkit";
 import uiEn from "@/dictionaries/en/ui.json";
 import uiEs from "@/dictionaries/es/ui.json";
@@ -102,10 +102,19 @@ function declaredEventTypes(): string[] {
  *
  * `eventSchemas` is what the engine accepts, which is the right bar for "no
  * raw internal type ever reaches a scorer". `declaredEventTypes()` takes the
- * UNION of both rather than swapping one source for the other: the field is
- * OPTIONAL on `SportModule` (packages/engine/src/sport/module.ts:501), so a
- * module that ever omits it must degrade to its tiers, not vanish from the
- * sweep. All eleven shipped modules populate it today.
+ * UNION of both rather than swapping one source for the other, because the
+ * field is OPTIONAL on `SportModule` (module.ts:501) and a module that omits
+ * it must still be swept rather than vanish.
+ *
+ * What that omission actually does (corrected round 3 — this comment used to
+ * say such a module would "degrade to its tiers", which undersells it): its
+ * tier types would then sit in the derivation but in no module's
+ * `eventSchemas`, so `assertNothingTheEngineAcceptsIsMissing`'s EXTRA
+ * direction REDS and names them. A hard failure, not a silent degrade —
+ * better behaviour than the old wording claimed, and worth stating accurately
+ * so nobody removes the union expecting a soft fallback. All eleven shipped
+ * modules populate the field today, and no module has a tier type absent from
+ * its own schema registry.
  */
 function engineAcceptedEventTypes(): string[] {
   const out = new Set<string>();
@@ -490,12 +499,26 @@ describe("scoring-vocab covers every PadSpec label key the engine declares (#427
    * badminton.expedite.start, badminton.sub, tabletennis.sub) sat outside a
    * green gate.
    *
-   * So compare against a source the derivation does not itself define: every
-   * type the engine registers a payload schema for. Both directions are
-   * named, and each means something different. MISSING = the derivation
-   * under-reports and the sweep has a blind spot (the `fidelityTiers`
-   * regression). EXTRA = a module lost its `eventSchemas` registry and is
-   * being carried by its tiers alone, which is worth knowing too.
+   * So compare against every type the engine registers a payload schema for.
+   * Both directions are named, and each means something different. MISSING =
+   * the derivation under-reports and the sweep has a blind spot (the
+   * `fidelityTiers` regression). EXTRA = a module lost its `eventSchemas`
+   * registry and is carried by its tiers alone.
+   *
+   * CAVEAT, because this reads as broader cover than it is: while
+   * `declaredEventTypes()` keeps its `eventSchemas` line, `derived` is a
+   * SUPERSET of `accepted` by construction, so `missing` is structurally
+   * always `[]`. This is therefore NOT an independent cross-check of the
+   * enumeration. Its real and only job is catching a REPOINT of that
+   * derivation — someone "simplifying" it back to `fidelityTiers` alone —
+   * which is exactly the regression that shipped four raw-type leaks, and
+   * which the M5 mutant confirms it catches. Read it as a repoint tripwire,
+   * not as proof the enumeration is complete.
+   *
+   * Asserted as two separate arrays, not one object: vitest elides a
+   * composite to `...(5)` and the message would carry neither the count nor
+   * the names — the failure that made this test necessary would report as a
+   * shrug. Same rule as the three assertions above (see :116-120).
    */
   function assertNothingTheEngineAcceptsIsMissing(types: readonly string[]): void {
     const derived = new Set(types);
@@ -503,9 +526,14 @@ describe("scoring-vocab covers every PadSpec label key the engine declares (#427
     const missing = accepted.filter((t) => !derived.has(t));
     const extra = [...derived].filter((t) => !accepted.includes(t)).sort();
     expect(
-      { missing, extra },
-      `the enumeration is not what the engine accepts (${accepted.length} schema-registered types)`,
-    ).toEqual({ missing: [], extra: [] });
+      missing,
+      `${missing.length} type(s) the engine accepts are MISSING from the enumeration ` +
+        `(${accepted.length} schema-registered) — has declaredEventTypes() been repointed at fidelityTiers?`,
+    ).toEqual([]);
+    expect(
+      extra,
+      `${extra.length} enumerated type(s) are in NO module's eventSchemas — has a module lost its registry?`,
+    ).toEqual([]);
   }
 
   /**
@@ -576,9 +604,14 @@ describe("scoring-vocab covers every PadSpec label key the engine declares (#427
   // scorer reads on that row of the v3 Activity panel — the same row whose
   // sentence is `pad.cricket.ribbon.player.line`. No test pinned the old
   // string, which is why it survived (checked before changing it: the only
-  // "Batting order" in the tree outside the dictionaries is a doc comment on
-  // `LineupEntry.order`, packages/engine/src/core/lineup.ts:60 — a genuine
-  // order, a different concept, correctly named).
+  // "Batting order" in the tree outside the dictionaries is prose about a
+  // real order — a different concept, correctly named. Round 3 correction:
+  // there are TWO such occurrences, not one, and the symbol is
+  // `SquadMember.orderNo` (packages/engine/src/core/lineup.ts:56-61), not
+  // `LineupEntry.order`, which does not exist — `LineupEntry` is a
+  // core.lineup.* payload, an unrelated type. The second occurrence is
+  // design/v2/04-sport-scoring-specs.md:160, which spells the same field
+  // `LineupSlot.order_no`.)
   //
   // Pinned two ways, neither a frozen full string. The order-word check
   // witnesses THIS defect and reds on a straight revert; the badge/sentence
@@ -603,6 +636,84 @@ describe("scoring-vocab covers every PadSpec label key the engine declares (#427
   });
 
   const DOTTED_INTERNAL_TOKEN = /[a-z][a-z0-9]*\.[a-z][a-z0-9]*/;
+
+  // R8/WS-R round 3 — the `core.*` namespace, which every assertion above
+  // misses BY CONSTRUCTION and which round 2's header wrongly claimed was
+  // covered.
+  //
+  // `core.*` events are kernel-owned: no sport module declares them, so they
+  // appear in neither `fidelityTiers` nor any `module.eventSchemas`, and
+  // `declaredEventTypes()` is sport-prefixed. `assertEverySportIsSwept` pins
+  // the prefix set to the eleven module keys, so a `core.` prefix could not
+  // join the sweep even if something added it — it would FAIL the guard. They
+  // reach a scorer through a different door: `buildRibbon` checks
+  // `CORE_RIBBON_KEY` (v3/ribbon.ts) FIRST, before the per-sport lookup.
+  //
+  // That map is maintained BY HAND, which is the whole risk. All 14 entries
+  // are mapped and translated today, so there is no live leak — but a future
+  // `core.x` with no entry falls to `pad.ribbon.fallback` and reproduces D1
+  // verbatim: "core.start recorded", the string a 320px screenshot caught.
+  // Same defect class as the seven cricket types this wave fixed, one
+  // namespace over, and invisible to every gate above.
+  //
+  // Derived from the engine's own `CORE_EVENT_SCHEMAS`
+  // (packages/engine/src/core/events.ts:82) — never a hand-copied list, for
+  // the same reason as everywhere else in this file. Both directions matter:
+  // a MISSING entry is the D1 leak; an ORPHAN entry is a map that outlived
+  // the type it served, which is how a hand-maintained map rots quietly.
+  it("maps every core.* event type the engine declares, with four-locale copy", () => {
+    const coreTypes = Object.keys(CORE_EVENT_SCHEMAS).sort();
+    // Vacuity guards, both derived: an empty registry satisfies every loop
+    // below, and a non-core key here would mean this sweep is pointed at the
+    // wrong registry entirely.
+    expect(coreTypes, "CORE_EVENT_SCHEMAS is empty").not.toHaveLength(0);
+    expect(coreTypes.filter((t) => !t.startsWith("core.")), "non-core key in CORE_EVENT_SCHEMAS").toEqual([]);
+
+    const gaps: string[] = [];
+    for (const type of coreTypes) {
+      const key = CORE_RIBBON_KEY[type];
+      if (key === undefined) {
+        gaps.push(`${type}: no CORE_RIBBON_KEY entry — falls to the raw-type fallback`);
+        continue;
+      }
+      for (const [locale, dict] of Object.entries(LOCALES)) {
+        if (dict[key] === undefined) gaps.push(`${type}: no ${locale} copy for "${key}"`);
+      }
+    }
+    const orphans = Object.keys(CORE_RIBBON_KEY).filter((t) => !coreTypes.includes(t)).sort();
+    // Two assertions, not one object, for the reason spelled out on
+    // `assertNothingTheEngineAcceptsIsMissing` above: vitest elides a
+    // composite and the message must carry the size of the hole itself.
+    expect(
+      gaps,
+      `${gaps.length} core type(s) would print a raw internal type to a scorer ` +
+        `(of ${coreTypes.length} the engine declares) — the D1 defect, reopened`,
+    ).toEqual([]);
+    expect(
+      orphans,
+      `${orphans.length} CORE_RIBBON_KEY entr(y/ies) map a type the engine no longer declares`,
+    ).toEqual([]);
+  });
+
+  // …and the behavioural half, for the same reason the sport pair has one:
+  // membership in CORE_RIBBON_KEY would still pass if buildRibbon stopped
+  // consulting it. Real dictionaries, real builder, all four locales.
+  it("renders every core.* event's own sentence, never the raw-event-type fallback", () => {
+    const coreTypes = Object.keys(CORE_EVENT_SCHEMAS).sort();
+    expect(coreTypes, "CORE_EVENT_SCHEMAS is empty").not.toHaveLength(0);
+    const leaked: string[] = [];
+    for (const locale of Object.keys(LOCALES) as (keyof typeof LOCALES)[]) {
+      const t = msgFnFor(locale);
+      for (const type of coreTypes) {
+        const { text } = buildRibbon(type, {}, () => "", t);
+        if (text === "") leaked.push(`${locale}/${type} rendered nothing`);
+        else if (text.includes(type)) leaked.push(`${locale}/${type} fell through to the fallback: "${text}"`);
+        else if (DOTTED_INTERNAL_TOKEN.test(text)) leaked.push(`${locale}/${type} printed an identifier: "${text}"`);
+      }
+    }
+    expect(leaked, `${leaked.length} core ribbon line(s) show a scorer an internal identifier`).toEqual([]);
+  });
+
 
   it("never prints a dot-joined internal identifier to a scorer, in any of the four locales", () => {
     const types = declaredEventTypes();

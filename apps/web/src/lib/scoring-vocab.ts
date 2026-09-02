@@ -702,14 +702,33 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   // the note that used to sit here ("BWF Law 16 has no substitution at all,
   // so no config can turn one on") repeated, for these two types, the exact
   // reasoning the paragraph below already records as WRONG for `timeout`.
-  // Both are real entries in this module's `eventSchemas` — `kernel.ts:1816`
-  // builds the same six-key action map for every set-based preset — so the
-  // engine ACCEPTS them, and an accepted type on the fallback prints
-  // "badminton.sub recorded" to a scoring desk. Reachability is a claim about
-  // config; membership in `eventSchemas` is a fact about the engine, and it
-  // is the one this list has to track. (Found by repointing the gate's
-  // derivation from `fidelityTiers`, which does not list these, at
-  // `eventSchemas`, which does.)
+  //
+  // The mechanism, pinned (round 3 — round 2 cited kernel.ts:1816 for this,
+  // which is the FIDELITY BAND map, the wrong construct; the claim was right
+  // and the pin was not). Two sets are built from different inputs:
+  //
+  //   - `eventSchemas` (kernel.ts:2166) registers all six branches
+  //     unconditionally, for every set-based preset.
+  //   - `fidelityTiers` (kernel.ts:2252-2255) carries
+  //     `extensionTypesFor(declaredRecords)` (:2196, :2204), and
+  //     `declaredRecords` is `preset.defaults.records` (:2185) — the STATIC
+  //     DEFAULT cfg.
+  //
+  // But `records` is cfg-OVERRIDABLE (`makeConfigSchema`, :113-122, where it
+  // is a plain object of booleans with `.default(defaults.records)`), and the
+  // live paths gate on the cfg, not the default: padSpec on
+  // `cfg.records.substitutions` (:1765) and the live extension set on
+  // `extensionTypesFor(state.cfg.records)` (:2510). So a division config can
+  // switch on a branch this sport's DEFAULTS leave off — the tiers list is a
+  // snapshot of the default cfg, not of what the engine accepts.
+  //
+  // That is the whole reason the two sets differ, and why reachability is the
+  // wrong test: it is a claim about config, and config varies. Membership in
+  // `eventSchemas` is a fact about the engine, and it is the one this list
+  // has to track. An accepted type on the fallback prints "badminton.sub
+  // recorded" to a scoring desk. (Found by repointing the gate's derivation
+  // from `fidelityTiers`, which does not list these, at `eventSchemas`,
+  // which does.)
   //
   // `timeout` is REGISTERED, and the reasoning that once grouped it with those
   // two was wrong (review of PR #678). `records.timeouts` is a plain
