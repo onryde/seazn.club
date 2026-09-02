@@ -1784,11 +1784,31 @@ export function PadHostV3(props: PadHostV3Props) {
    * whole ruling and the reason this is a void + re-append rather than a new
    * event type; this is only the wiring.
    *
-   * ORDER IS LOAD-BEARING, and the `await` is what enforces it: `submit`
-   * resolves once the event is durably enqueued (use-pad-pipeline.ts), and the
-   * queue drains IN ORDER, so voiding first guarantees the server never sees a
-   * replacement standing beside a live original. The replacement then goes out
-   * HELD, through the identical `submitHeld` path an ordinary tap takes — which
+   * ORDER IS LOAD-BEARING, IT IS THIS WAY ROUND, AND IT WAS MEASURED. The
+   * replacement is enqueued FIRST and the void behind it. Both orders are legal
+   * — `resolveVoids` only requires the void's target to be EARLIER than the
+   * void, and the original is earlier than both — and both leave the same
+   * surviving fold, so a reader could reasonably assume it does not matter. It
+   * does, on screen:
+   *
+   * Voiding first, driven in a browser: the void acks while the replacement is
+   * still held, the server's fold (original gone, replacement not yet sent)
+   * diverges from the client's, `serverOverride` takes over — and the scorebug
+   * read 0—0 with the serve line blank for the WHOLE reopened hold window,
+   * before snapping back to 1—0. A scorer under time pressure taps "Partial"
+   * and watches the point they are trying to complete disappear for twelve
+   * seconds. That is the fear the owner's ruling was written against.
+   *
+   * Enqueued this way round, the queue's in-order drain does the rest: the void
+   * cannot leave until the held replacement releases, so no ack can ever show a
+   * ledger with the original gone and nothing in its place. Measured across the
+   * same three points on a real prod build — after the drain, mid-amendment,
+   * and after a reload — the scorebug reads 1—0 throughout. Pinned by
+   * `scorepad-v3-partial-amend.spec.ts`, because nothing in a node environment
+   * can see it.
+   *
+   * The replacement goes out HELD, through the identical `submitHeld` path an
+   * ordinary tap takes — which
    * is the entire point: the dock reopens for a full `HOLD_MS` window with the
    * skin's own chips over the queue's own entry, so the scorer answers it
    * exactly as they would have the first time, and every mechanism in between
@@ -1823,8 +1843,8 @@ export function PadHostV3(props: PadHostV3Props) {
     if (plan === null) return;
     setAmendingId(eventId);
     try {
-      await pipeline.submit("core.void", { event_id: plan.voidId });
       await heldSubmit(plan.type, plan.payload);
+      await pipeline.submit("core.void", { event_id: plan.voidId });
     } finally {
       setAmendingId(null);
     }
