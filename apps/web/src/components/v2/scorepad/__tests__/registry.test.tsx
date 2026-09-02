@@ -80,9 +80,15 @@ describe("lineupPairFrom", () => {
     };
     const away: SideInfo = { id: "ent-a", name: "Away", members: [], lineup: [] };
     const pair = lineupPairFrom(home, away);
+    // `squadNumber: 7` — R8 sweep, WS-SQ. This assertion previously omitted it
+    // while the fixture above declared `squad_number: 7`, and passed: it had
+    // frozen the inert seam (`toLineupSlot` silently dropping the field) as its
+    // own expected value, which is why an exhaustive `toEqual` right here never
+    // raised the alarm. Corrected, not relaxed — the whole point of `toEqual`
+    // over `toMatchObject` on this builder is that a field going missing fails.
     expect(pair.home).toEqual({
       entrantId: "ent-h",
-      slots: [{ personId: "p1", slot: "starting", orderNo: 1, positionKey: "GK", roles: ["captain"] }],
+      slots: [{ personId: "p1", slot: "starting", orderNo: 1, positionKey: "GK", roles: ["captain"], squadNumber: 7 }],
     });
     expect(pair.away).toEqual({ entrantId: "ent-a", slots: [] });
   });

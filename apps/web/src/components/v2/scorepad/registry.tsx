@@ -89,6 +89,33 @@ function toLineupSlot(s: LineupSlotIn, index: number): LineupSlot {
     // genuinely unset, the same "include only when meaningful" convention
     // `role`/`roles`/`positionKey` already use above.
     ...(s.pair_order != null ? { pairOrder: s.pair_order } : {}),
+    // `squadNumber` (shirt number) — R8 sweep, WS-SQ. The THIRD field to be
+    // found missing from this hand-copied list, after `role` (pass B) and
+    // `pairOrder` (pass D), and the same silent shape every time: the engine's
+    // `SquadMember.squadNumber` has existed since S3 (core/lineup.ts),
+    // `entrant_members.squad_number` is a real populated column,
+    // `readLineup`'s SQL (server/usecases/fixtures.ts) already selects it and
+    // `LineupSlotIn` already DECLARED it — the number simply was not listed
+    // here, so `initSquads` had nothing to carry and every squad member the
+    // pad ever saw had `squadNumber: undefined`. tsc cannot catch that: an
+    // optional field that is merely never set type-checks perfectly.
+    //
+    // What it unlocks: the substitution sheet's badge builders
+    // (`footballCandidateMeta`, and hockey/ice hockey's shared `buildSwap`)
+    // read `member.positionKey ?? member.squadNumber`, and `memberFromSlot`
+    // (core/lineup.ts) deliberately drops a BENCH slot's declared position —
+    // a preference, not an occupancy. So before this line the entire ON step
+    // was unbadgeable in principle, not merely unbadged.
+    // `squad-number-seam.test.ts` drives that from the wire row through the
+    // real fold into the real builder.
+    //
+    // `!= null` (not `!== undefined`) deliberately: this column is nullable
+    // and `readLineup` returns a real `null` for a member with no declared
+    // number. Omitted rather than carried as null, the same "absent unless it
+    // adds information" convention every field above uses — and the engine's
+    // own `memberFromSlot` omits the key entirely when the slot's is
+    // undefined, so a null here would be a shape the kernel never produces.
+    ...(s.squad_number != null ? { squadNumber: s.squad_number } : {}),
   };
 }
 
