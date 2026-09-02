@@ -373,29 +373,52 @@ export interface PadSpec {
 // gates Confirm on every item this derivation calls required.
 // ---------------------------------------------------------------------------
 
+/** How many `.optional()`/`.nullable()`/`.default()` hops `objectShapeOf`
+ *  will peel before giving up. A real payload schema never nests more than
+ *  one or two modifiers deep; the bound exists so a pathological or
+ *  self-referential schema fails loudly instead of hanging. */
+const MAX_WRAPPER_HOPS = 8;
+
+/**
+ * The outcome of looking for an object `.shape` under `t`. A discriminated
+ * result rather than `Record | undefined` because the two ways of NOT
+ * finding one are different faults with different repairs, and R8's branch
+ * review found them collapsed into a single (and, for one of them, false)
+ * "no field found" diagnosis at the `isPathRequired` call below:
+ *
+ *   - `not-object`  — `t` is a leaf (a `z.string()`, say). Nothing can be
+ *     resolved beneath it; the path is asking the wrong question.
+ *   - `too-deep`    — `t` DOES wrap an object, just further down than
+ *     `MAX_WRAPPER_HOPS`. The field the caller named may well exist; the
+ *     walk simply gave up before it could see it, so reporting it as
+ *     missing is a false statement about the schema.
+ */
+type ObjectShapeLookup =
+  | { readonly kind: "shape"; readonly shape: Record<string, z.ZodTypeAny> }
+  | { readonly kind: "not-object" }
+  | { readonly kind: "too-deep" };
+
 /**
  * Peels `.optional()`/`.nullable()`/`.default()` wrappers (anything with a
- * zod `.unwrap()`) off `t` until a plain object with a `.shape` is reached,
- * or returns `undefined` if `t` is not, and does not wrap, an object schema.
- * Bounded to a handful of hops — a real payload schema never nests more than
- * one or two modifiers deep, and an unbounded loop would hang on a
- * pathological/self-referential schema instead of failing loudly.
+ * zod `.unwrap()`) off `t` until a plain object with a `.shape` is reached.
+ * See `ObjectShapeLookup` for the two distinct failure outcomes.
  */
-function objectShapeOf(t: z.ZodTypeAny): Record<string, z.ZodTypeAny> | undefined {
+function objectShapeOf(t: z.ZodTypeAny): ObjectShapeLookup {
   let cursor: unknown = t;
-  for (let hops = 0; hops < 8; hops++) {
+  for (let hops = 0; hops < MAX_WRAPPER_HOPS; hops++) {
     const shaped = cursor as { shape?: unknown };
     if (shaped !== null && typeof shaped === "object" && shaped.shape !== undefined && typeof shaped.shape === "object") {
-      return shaped.shape as Record<string, z.ZodTypeAny>;
+      return { kind: "shape", shape: shaped.shape as Record<string, z.ZodTypeAny> };
     }
     const wrapped = cursor as { unwrap?: () => z.ZodTypeAny };
     if (typeof wrapped.unwrap === "function") {
       cursor = wrapped.unwrap();
       continue;
     }
-    return undefined;
+    return { kind: "not-object" };
   }
-  return undefined;
+  // Still unwrappable after the bound: an object may well be down there.
+  return { kind: "too-deep" };
 }
 
 /**
@@ -417,17 +440,39 @@ function objectShapeOf(t: z.ZodTypeAny): Record<string, z.ZodTypeAny> | undefine
  * a real payload key; a typo that this returned `false` for would silently
  * un-gate Confirm on a genuinely required field, reopening the exact
  * dead-end-tap bug this derivation exists to close.
+ *
+ * R8 branch review — the three ways a walk can fail each get their OWN
+ * message. They previously shared `no field "<segment>" found`, which is a
+ * correct diagnosis for exactly one of them and actively misleading for the
+ * other two: it sends the reader looking for a typo in a path that names a
+ * real key, when the actual fault is the schema's shape (a leaf, or wrappers
+ * nested past `MAX_WRAPPER_HOPS`).
  */
 export function isPathRequired(schema: z.ZodTypeAny, path: string): boolean {
   const segments = path.split(".");
   let cursor: z.ZodTypeAny = schema;
-  for (const segment of segments) {
-    const shape = objectShapeOf(cursor);
-    const field = shape?.[segment];
+  for (const [index, segment] of segments.entries()) {
+    const prefix = `isPathRequired: cannot resolve payload path "${path}" against its schema — `;
+    const at = index === 0 ? "the payload schema" : `"${segments.slice(0, index).join(".")}"`;
+    const lookup = objectShapeOf(cursor);
+    if (lookup.kind === "too-deep") {
+      throw new Error(
+        `${prefix}${at} still wraps something after ${MAX_WRAPPER_HOPS} modifier hops, so the walk gave up ` +
+          `before it could look for "${segment}" (this is a WRAPPER-DEPTH bound, not a missing field — "${segment}" ` +
+          `may well exist; unwrap the schema or raise MAX_WRAPPER_HOPS in sport/module.ts)`,
+      );
+    }
+    if (lookup.kind === "not-object") {
+      throw new Error(
+        `${prefix}${at} is not an object schema and does not wrap one, so nothing can be resolved beneath it ` +
+          `(a PadAttributionItem/PadField path must not walk past a leaf value)`,
+      );
+    }
+    const field = lookup.shape[segment];
     if (field === undefined) {
       throw new Error(
-        `isPathRequired: cannot resolve payload path "${path}" against its schema — no field "${segment}" found ` +
-          `while walking it (a PadAttributionItem/PadField path must name a real payload key)`,
+        `${prefix}no field "${segment}" found while walking it ` +
+          `(a PadAttributionItem/PadField path must name a real payload key)`,
       );
     }
     cursor = field;

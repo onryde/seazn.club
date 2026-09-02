@@ -1,14 +1,15 @@
 // S6/#416 (W5) — padSpec conformance for the nested kernel (tennis is its
 // sole preset today). Wired like cricket (sports/cricket/cricket.test.ts):
-// `padSpecConformanceSuite` per variant. `checkActionCoverage` is
-// deliberately NOT called — see the "no cfg-mutual-exclusivity" test below,
-// which checks that claim rather than merely asserting it in a comment.
+// `padSpecConformanceSuite` per variant, PLUS a module-level
+// `checkActionCoverage` — see the "action coverage" describe near the bottom
+// of this file, which also records why this file's original "deliberately
+// NOT called" note was wrong.
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { foldMatch } from "../../core/events.ts";
 import { resolvePositions } from "../../sport/catalog.ts";
-import { evalPadGate, type PadField, type PadSpec } from "../../sport/module.ts";
-import { padSpecConformanceSuite } from "../../testkit/conformance-pad.ts";
+import { evalPadGate, type PadAction, type PadField, type PadSpec } from "../../sport/module.ts";
+import { checkActionCoverage, padSpecConformanceSuite } from "../../testkit/conformance-pad.ts";
 import { defaultLineupPair, makeEnvelope } from "../../testkit/helpers.ts";
 import { tennis } from "../tennis/tennis.ts";
 import type { NestedCfg } from "./kernel.ts";
@@ -56,10 +57,15 @@ padSpecConformanceSuite(tennis, {
 // No cfg-mutual-exclusivity: unlike volleyball's beach/indoor split, NOTHING
 // on this kernel gates an event TYPE by preset or by variant — every
 // `apply()` case dispatches unconditionally (see the module-level note in
-// nested/kernel.ts above `nestedPadSpec`). `checkActionCoverage` therefore
-// has nothing to prove that a single cfg's own action set does not already
-// prove; this test checks that claim directly rather than leaving it as an
-// unverified comment.
+// nested/kernel.ts above `nestedPadSpec`). A UNION across variants therefore
+// adds nothing a single cfg's own action set does not already reach; this
+// test checks that claim directly rather than leaving it as an unverified
+// comment.
+//
+// CFG VARIANCE IS ALL IT SHOWS. This file originally drew a second
+// conclusion from it — that `checkActionCoverage` "has nothing to prove" and
+// could be skipped for tennis — and that inference is wrong; see the action
+// coverage describe below, which now calls it.
 // ---------------------------------------------------------------------------
 
 describe("tennis padSpec — no cfg-mutual-exclusivity (asserted, not merely claimed)", () => {
@@ -87,6 +93,73 @@ describe("tennis padSpec — no cfg-mutual-exclusivity (asserted, not merely cla
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// (a), the module-level half — R8 BRANCH REVIEW. Tennis was the ONLY sport
+// spec test in the repo with no `checkActionCoverage` call (boardgame,
+// carrom, cricket, football, generic, hockey, icehockey, volleyball,
+// badminton and tabletennis all have one). The note that justified the
+// omission argued from CFG VARIANCE — true, and re-proven directly by the
+// describe above — but coverage's other half is TYPE REGISTRATION, which cfg
+// invariance says nothing about, and which every arm of R8's `required`
+// machinery silently no-ops on:
+//
+//   - `stampAttributionRequired` returns an action whose `type` is not a key
+//     in `eventSchemas` UNTOUCHED (sport/module.ts) — by design, since
+//     flagging it is exactly this check's job;
+//   - conformance checks (b), (f) and (g) each `continue` past it
+//     (testkit/conformance-pad.ts).
+//
+// So a tennis action whose type drifted out of the registry would ship
+// `required: undefined` on every attribution item, which the pad's
+// `checkActionValidity` (apps/web view-model.ts) reads as NOT required —
+// reopening, for tennis alone, the dead-end tap R8 exists to close.
+//
+// Not merely theoretical: the describe above DOES red on a bare drift, but
+// only via its hand-typed type list, and "fix" that literal to match the
+// drift (the obvious repair, and precisely the rule-#19 failure mode) and the
+// whole engine suite returns to a clean 4278/4265/0 with `required` unstamped.
+// Verified by mutation before this block was written. `checkActionCoverage`
+// derives the expectation from `tennis.eventSchemas` itself, so it cannot be
+// silenced that way, and it also catches the reverse drift the literal list
+// cannot see at all: a 6th type registered with no action to reach it.
+// ---------------------------------------------------------------------------
+
+describe("tennis padSpec — action coverage against the type registry (R8 branch review)", () => {
+  const variantSpecs = Object.keys(tennis.variants).map((name) =>
+    tennis.padSpec!(tennis.configSchema.parse(tennis.variants[name])),
+  );
+
+  it("every registered event type is reachable from some action, and no action names an unregistered type", () => {
+    expect(checkActionCoverage(variantSpecs, tennis.eventSchemas!)).toEqual([]);
+  });
+
+  it("MUTATION SHAPE — an action whose type drifts OUT of eventSchemas is flagged (the drift that un-stamps `required`)", () => {
+    const problems = checkActionCoverage(driftFirstActionType(variantSpecs[0]!), tennis.eventSchemas!);
+    expect(problems.join(" ")).toMatch(/tennis\.point_DRIFTED/);
+  });
+
+  it("MUTATION SHAPE — a registered type no action reaches is flagged too (the direction the hand-typed list above cannot see)", () => {
+    const problems = checkActionCoverage(variantSpecs, {
+      ...tennis.eventSchemas!,
+      "tennis.unreached": tennis.eventSchemas!["tennis.point"]!,
+    });
+    expect(problems.join(" ")).toMatch(/tennis\.unreached/);
+  });
+});
+
+/** Returns a copy of `spec` with its FIRST action's `type` drifted, standing in
+ *  for a real edit to `nestedPadSpec` — the mutation the coverage check exists
+ *  to catch, without a test that has to edit production source to run. */
+function driftFirstActionType(spec: PadSpec): PadSpec {
+  let drifted = false;
+  const mutate = (action: PadAction): PadAction => {
+    if (drifted) return action;
+    drifted = true;
+    return { ...action, type: "tennis.point_DRIFTED" };
+  };
+  return { ...spec, panels: spec.panels.map((panel) => ({ ...panel, actions: panel.actions.map(mutate) })) };
+}
 
 // ---------------------------------------------------------------------------
 // Variant reshaping proof.

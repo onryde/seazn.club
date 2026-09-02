@@ -208,6 +208,49 @@ describe("isPathRequired", () => {
     expect(() => isPathRequired(Ball, "doesNotExist")).toThrow();
   });
 
+  // R8 branch review, finding 7 — three DIFFERENT faults used to share one
+  // message. `objectShapeOf` returns `undefined` both when a segment is not
+  // (and does not wrap) an object AND when its 8-hop wrapper bound is
+  // exhausted, and `isPathRequired` reported every one of them as
+  // `no field "<segment>" found` — a diagnosis that sends the reader hunting
+  // for a typo in a path that is perfectly correct. Each fault now names
+  // itself. Asserted on the MESSAGE, not merely that it throws: the old code
+  // threw too, so a bare `.toThrow()` cannot witness this regression.
+  function messageFrom(fn: () => unknown): string {
+    try {
+      fn();
+    } catch (err) {
+      return (err as Error).message;
+    }
+    throw new Error("expected isPathRequired to throw, but it returned");
+  }
+
+  it("a genuinely missing key still reports the missing FIELD", () => {
+    const message = messageFrom(() => isPathRequired(Ball, "wicket.doesNotExist"));
+    expect(message).toMatch(/no field "doesNotExist" found/);
+    expect(message).not.toMatch(/wrapper/i);
+  });
+
+  it("an OVER-WRAPPED schema reports the wrapper-depth bound, never a bogus missing field", () => {
+    // 9 modifier hops to reach the object — one past `objectShapeOf`'s bound.
+    // `a` is really there; the walk simply gives up before it can see it, so
+    // "no field a found" would be a false statement about the schema.
+    let overWrapped: z.ZodTypeAny = z.strictObject({ a: z.string() });
+    for (let i = 0; i < 9; i++) overWrapped = overWrapped.optional();
+    const outer = z.strictObject({ inner: overWrapped });
+    const message = messageFrom(() => isPathRequired(outer, "inner.a"));
+    expect(message).toMatch(/wrapper/i);
+    expect(message).not.toMatch(/no field "a" found/);
+  });
+
+  it("a segment that is not an object at all says so, rather than blaming the next segment", () => {
+    // `striker` is a z.string(); "foo" beneath it is unresolvable because
+    // striker is a leaf, not because the schema is missing a `foo` key.
+    const message = messageFrom(() => isPathRequired(Ball, "striker.foo"));
+    expect(message).toMatch(/striker/);
+    expect(message).not.toMatch(/no field "foo" found/);
+  });
+
   it("a nullable-but-not-optional field is still required (nullable != optional)", () => {
     const schema = z.strictObject({ maybe: z.string().nullable() });
     expect(isPathRequired(schema, "maybe")).toBe(true);
