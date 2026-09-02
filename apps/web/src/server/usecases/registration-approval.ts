@@ -399,6 +399,14 @@ export async function promoteFromWaitlist(
         from: "waitlist",
         by: "organiser",
       }, auth.userId);
+      // RS010 fix (a free/auto division must not confirm to `pending` and
+      // stay there forever) lives in `promoteWaitlistedRow`/
+      // `promoteOldestWaitlisted` themselves (registrations.ts) — both paths
+      // above funnel through one of those, so it applies here without being
+      // repeated. `/code-review` caught an earlier version of this fix that
+      // only patched THIS call site, leaving `withdrawCore` and
+      // `sweepRegistrations` (which promote through the same two functions,
+      // never through here) exposed to the identical bug.
     }
     return { promoted, competitionId, settings, freshlyPromoted: !!promoted && !alreadySettled };
   });

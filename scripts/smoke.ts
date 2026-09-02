@@ -1038,6 +1038,15 @@ async function main() {
   // path. Own fresh Pro AND fresh community org (the gate is not plan-gated
   // — no entitlement to skip, so both must behave identically).
   await eligibilityGateSuite();
+
+  // RS010: registration-core-flow smoke, rebuilt fresh against the CURRENT
+  // group-cart endpoints — see the block comment above these four functions'
+  // definitions for what RS001 dropped and why regQueueSuite/gapSuite are
+  // NOT where this coverage lives any more. Each owns a fresh org; keyless.
+  await registrationOpenFlowSuite();
+  await registrationWaitlistPromoteSuite();
+  await registrationTeamOpsSuite();
+  await registrationSelfLinkAndConsentSuite();
 }
 
 /** F5 remainder — build.ts's per-value i18n fallbacks (the "vs" result
@@ -5926,14 +5935,19 @@ async function configSnapshotSuite(admin: Session, adminEmail: string): Promise<
  *  view carries a 1-based position and the public register card shows the
  *  queue length behind a full division.
  *
- *  RS001 (registration demolition) deleted the public submit endpoint
- *  (`POST .../register`) this suite drove to build the queue, so every
- *  assertion downstream of a submission — the waitlist position, the "full —
- *  waitlist: N" copy — is gone with it; nothing can create a registration row
- *  through a live public entry point until RS006 restores one. What is left:
- *  registration-settings still PUTs successfully, and the public register
- *  page still 200s and renders its closed state (design §7 phasing) rather
- *  than 404ing or 500ing. */
+ *  RS001 (registration demolition) deleted the public submit endpoint this
+ *  suite originally drove to build the queue; RS006 restored it (cart-shaped,
+ *  `POST .../register`), and `registrationWaitlistPromoteSuite` (this file)
+ *  now covers the actual position/public-count premise through the real API.
+ *  What's left here is narrower: registration-settings still PUTs
+ *  successfully, and the public register PAGE — the RS006 client stepper,
+ *  not this suite's original queue widget — renders its OPEN state (the
+ *  WHO step) for an enabled division with no window bounds set. Found live-
+ *  broken this session (RS010): this suite's own division here has
+ *  `enabled: true` and no `opens_at`/`closes_at`, so `windowOpen()`
+ *  (registrations.ts:610) reads it as open — the page can never have shown
+ *  the closed string this suite asserted for, per
+ *  `register-page-live.test.tsx`'s own "not the closed message" case. */
 async function regQueueSuite(admin: Session): Promise<void> {
   // v1 writes land on the session's ACTIVE org (earlier suites switch it) —
   // resolve that org's slug, not the sign-in default's.
@@ -5983,10 +5997,19 @@ async function regQueueSuite(admin: Session): Promise<void> {
   );
 
   const registerPage = await html(newSession(), `/shared/${orgSlug}/${comp.slug}/register`);
+  // RS010 fix — the ORIGINAL assertion here also required the closed string
+  // to be ABSENT, which is not a reliable signal on this page: the literal
+  // "Registration is not open for this competition." string is present in
+  // the HTML regardless of state (it ships inside the client hydration
+  // payload alongside every other dictionary string this page could ever
+  // render, not just the one actually shown) — confirmed by fetching the
+  // live page for this open division and finding both strings present at
+  // once. The WHO step's own DOM id is the only reliable positive signal
+  // that the page rendered its OPEN state (register-page-live.test.tsx
+  // asserts the same id for the same reason).
   check(
-    "public register page renders its closed state (RS001 — no submit endpoint until RS006)",
-    registerPage.status === 200 &&
-      registerPage.body.includes("Registration is not open for this competition."),
+    "public register page renders the OPEN stepper's WHO step (RS010 fix)",
+    registerPage.status === 200 && registerPage.body.includes('id="reg-who-name"'),
   );
 }
 
@@ -16680,6 +16703,18 @@ async function cleanup(tag: string): Promise<void> {
     // applies to `regdupplayer_${tag}@example.com`/`regrefundplayer_${tag}@example.com`.
     `regdup_${tag}@example.com`,
     `regrefund_${tag}@example.com`,
+    // RS010 registration-core-flow smoke — each of the four new suites' own
+    // org owner. Same "anonymous registrant contact email needs no entry"
+    // reasoning as regpay_ above applies to every non-self contact email
+    // these suites submit (openflow_free_/openflow_manual_/wait*_/*cap_/
+    // soloplayer_) — none of them sign in, so none mint a users row.
+    // `selflink_${tag}@example.com` (registrationSelfLinkAndConsentSuite's
+    // own SIGNED-IN self-registrant) is already above, from gapSuite's now-
+    // orphaned #402 entry — reused, not duplicated.
+    `regopen_${tag}@example.com`,
+    `regwait_${tag}@example.com`,
+    `regteam_${tag}@example.com`,
+    `regself_${tag}@example.com`,
   ];
   const isLocal = /@(localhost|127\.0\.0\.1)[:/]/.test(url);
   const sql = postgres(url, {
@@ -17573,4 +17608,635 @@ async function eligibilityGateOnPlanSuite(plan: "pro" | "community"): Promise<vo
 async function eligibilityGateSuite(): Promise<void> {
   await eligibilityGateOnPlanSuite("pro");
   await eligibilityGateOnPlanSuite("community");
+}
+
+// ---------------------------------------------------------------------------
+// RS010 — registration core-flow smoke, rebuilt against the CURRENT
+// group-cart endpoints (RS006/RS007). RS001 (2026-08-17, the schema rebuild)
+// deleted the equivalent sections from `regQueueSuite` and `gapSuite` — both
+// functions still exist above (search their names) but now cover unrelated
+// ground (regQueueSuite: org-currency echo + a stale "registration closed"
+// page probe left over from before RS006 shipped a submit endpoint at all;
+// gapSuite: device links/lineups). Nothing here resurrects their old code —
+// every request below is built fresh against `PublicRegisterGroupRequest`/
+// `PublicJoinRequest` (schemas.ts), the group shape, not the deleted flat
+// single-entry one. `selflink_${tag}@example.com` was already present,
+// orphaned, in cleanup()'s emails array with a #402/gapSuite comment naming
+// exactly this suite's shape — reused rather than renamed.
+// ---------------------------------------------------------------------------
+
+/**
+ * RS010 — open-signup-confirms-an-entrant (gapSuite's dropped premise) vs an
+ * approval-required division (organiser must approve() before an entrant
+ * exists). Own fresh org; two "individual" divisions in one competition,
+ * differing only in `approval`. Keyless-safe (fee_cents 0 throughout).
+ */
+async function registrationOpenFlowSuite(): Promise<void> {
+  const owner = newSession();
+  const who = await signIn(owner, `regopen_${tag}@example.com`);
+  const orgId = who.org_id;
+  const orgs = (await call(owner, "/api/orgs")) as { id: string; slug: string }[];
+  const orgSlug = orgs.find((o) => o.id === orgId)!.slug;
+
+  // Defensive sports seed (registrationPaidLoopSuite/poolSummarySuite's own
+  // fallback): CI runs sync:sports, this only matters for a local DB that
+  // hasn't.
+  const genericConfig = {
+    resultMode: "score",
+    allowDraws: true,
+    points: { w: 3, d: 1, l: 0 },
+    progressScore: false,
+  };
+  const dbUrl = process.env.DATABASE_URL;
+  if (dbUrl) {
+    const db = smokeDb();
+    try {
+      await db`insert into sports (key, name, module_version, position_catalog)
+               values ('generic', 'Generic', '1.0.0', ${db.json({ groups: [], lineup: { size: 1, benchMax: 0 } })})
+               on conflict (key) do nothing`;
+      await db`insert into sport_variants (sport_key, key, name, config, is_system)
+               values ('generic', 'score', 'Score', ${db.json(genericConfig)}, true)
+               on conflict do nothing`;
+    } finally {
+      await db.end();
+    }
+  }
+
+  const comp = v1data<{ id: string; slug: string }>(
+    await v1(owner, "/api/v1/competitions", "POST", {
+      ends_on: "2030-12-31",
+      name: `Open Flow Cup ${tag}`,
+      visibility: "public",
+    }),
+  );
+
+  type SubmitOut = { entries: { registration_id: string; status: string }[] };
+
+  // --- FREE path: auto approval + zero fee confirms INLINE, no approve() ---
+  const freeDiv = v1data<{ id: string }>(
+    await v1(owner, `/api/v1/competitions/${comp.id}/divisions`, "POST", {
+      name: "Free Entry",
+      sport_key: "generic",
+      variant_key: "score",
+      config: genericConfig,
+    }),
+  );
+  const freeSettings = await v1(owner, `/api/v1/divisions/${freeDiv.id}/registration-settings`, "PUT", {
+    enabled: true,
+    entrant_kind: "individual",
+    fee_cents: 0,
+    approval: "auto",
+    form_fields: [],
+  });
+  check("open flow: free/auto division accepts registration settings", freeSettings.status === 200);
+
+  const freeSubmitted = await v1(
+    newSession(),
+    `/api/v1/public/orgs/${orgSlug}/competitions/${comp.slug}/register`,
+    "POST",
+    {
+      contact: { name: `Free Entrant ${tag}`, email: `openflow_free_${tag}@example.com` },
+      privacy_consent: true,
+      entries: [
+        {
+          division_id: freeDiv.id,
+          entrant_kind: "individual",
+          players: [{ full_name: `Free Entrant ${tag}` }],
+          answers: {},
+        },
+      ],
+    },
+  );
+  const freeOut = v1data<SubmitOut>(freeSubmitted);
+  check(
+    "open flow: a free auto-approval division confirms the entrant at submit — no approve() needed",
+    freeSubmitted.status === 201 && freeOut.entries[0]?.status === "confirmed",
+  );
+
+  const freeConfirmedList = v1data<{ id: string; entrant_id: string | null }[]>(
+    await v1(owner, `/api/v1/divisions/${freeDiv.id}/registrations?status=confirmed`),
+  );
+  check(
+    "open flow: the auto-confirmed entry materialises a real entrant (entrant_id resolves to a row)",
+    freeConfirmedList.some(
+      (r) => r.id === freeOut.entries[0]!.registration_id && !!r.entrant_id,
+    ),
+  );
+
+  // --- Approval-required path: stays pending until the organiser approves ---
+  const manualDiv = v1data<{ id: string }>(
+    await v1(owner, `/api/v1/competitions/${comp.id}/divisions`, "POST", {
+      name: "Approval Required",
+      sport_key: "generic",
+      variant_key: "score",
+      config: genericConfig,
+    }),
+  );
+  const manualSettings = await v1(owner, `/api/v1/divisions/${manualDiv.id}/registration-settings`, "PUT", {
+    enabled: true,
+    entrant_kind: "individual",
+    fee_cents: 0,
+    approval: "manual",
+    form_fields: [],
+  });
+  check("open flow: manual-approval division accepts registration settings", manualSettings.status === 200);
+
+  const manualSubmitted = await v1(
+    newSession(),
+    `/api/v1/public/orgs/${orgSlug}/competitions/${comp.slug}/register`,
+    "POST",
+    {
+      contact: { name: `Manual Entrant ${tag}`, email: `openflow_manual_${tag}@example.com` },
+      privacy_consent: true,
+      entries: [
+        {
+          division_id: manualDiv.id,
+          entrant_kind: "individual",
+          players: [{ full_name: `Manual Entrant ${tag}` }],
+          answers: {},
+        },
+      ],
+    },
+  );
+  const manualOut = v1data<SubmitOut>(manualSubmitted);
+  check(
+    "open flow: a manual-approval division leaves the entry pending — no auto-confirm",
+    manualSubmitted.status === 201 && manualOut.entries[0]?.status === "pending",
+  );
+
+  const manualRegId = manualOut.entries[0]!.registration_id;
+  type ApproveOut = { status: string; entrant_id: string | null };
+  const approved = await v1(owner, `/api/v1/registrations/${manualRegId}/approve`, "POST");
+  const approvedData = v1data<ApproveOut>(approved);
+  check(
+    "open flow: organiser approve() confirms a manual-approval entry and materialises an entrant",
+    approved.status === 200 && approvedData.status === "confirmed" && !!approvedData.entrant_id,
+  );
+}
+
+/**
+ * RS010 — the `regQueueSuite` premise RS001 dropped: submit a division to
+ * capacity, the next entrant WAITLISTS (never refused, never silently
+ * confirmed), the waitlisted row carries a 1-based queue position, and the
+ * PUBLIC entrant list only ever reflects confirmed entrants. Then promotes
+ * off the waitlist and proves — the part a shallower test would miss —
+ * that `promoteWaitlistedRow` always lands `pending` (registrations.ts's own
+ * doc comment), regardless of the division's `approval` setting: the public
+ * count does NOT move on promote alone, only once a follow-up approve()
+ * actually materialises an entrant. Own fresh org; keyless-safe.
+ */
+async function registrationWaitlistPromoteSuite(): Promise<void> {
+  const owner = newSession();
+  const who = await signIn(owner, `regwait_${tag}@example.com`);
+  const orgId = who.org_id;
+  const orgs = (await call(owner, "/api/orgs")) as { id: string; slug: string }[];
+  const orgSlug = orgs.find((o) => o.id === orgId)!.slug;
+
+  const genericConfig = {
+    resultMode: "score",
+    allowDraws: true,
+    points: { w: 3, d: 1, l: 0 },
+    progressScore: false,
+  };
+  const dbUrl = process.env.DATABASE_URL;
+  if (dbUrl) {
+    const db = smokeDb();
+    try {
+      await db`insert into sports (key, name, module_version, position_catalog)
+               values ('generic', 'Generic', '1.0.0', ${db.json({ groups: [], lineup: { size: 1, benchMax: 0 } })})
+               on conflict (key) do nothing`;
+      await db`insert into sport_variants (sport_key, key, name, config, is_system)
+               values ('generic', 'score', 'Score', ${db.json(genericConfig)}, true)
+               on conflict do nothing`;
+    } finally {
+      await db.end();
+    }
+  }
+
+  const comp = v1data<{ id: string; slug: string }>(
+    await v1(owner, "/api/v1/competitions", "POST", {
+      ends_on: "2030-12-31",
+      name: `Waitlist Cup ${tag}`,
+      visibility: "public",
+    }),
+  );
+  const div = v1data<{ id: string; slug: string }>(
+    await v1(owner, `/api/v1/competitions/${comp.id}/divisions`, "POST", {
+      name: "One Spot",
+      sport_key: "generic",
+      variant_key: "score",
+      config: genericConfig,
+    }),
+  );
+  const settingsRes = await v1(owner, `/api/v1/divisions/${div.id}/registration-settings`, "PUT", {
+    enabled: true,
+    entrant_kind: "individual",
+    fee_cents: 0,
+    approval: "auto",
+    capacity: 1,
+    form_fields: [],
+  });
+  check("waitlist: 1-capacity auto/free division accepts registration settings", settingsRes.status === 200);
+
+  type SubmitOut = { entries: { registration_id: string; status: string }[] };
+  const submitOne = async (label: string) =>
+    v1data<SubmitOut>(
+      await v1(newSession(), `/api/v1/public/orgs/${orgSlug}/competitions/${comp.slug}/register`, "POST", {
+        contact: { name: `${label} ${tag}`, email: `wait${label.toLowerCase()}_${tag}@example.com` },
+        privacy_consent: true,
+        entries: [
+          {
+            division_id: div.id,
+            entrant_kind: "individual",
+            players: [{ full_name: `${label} ${tag}` }],
+            answers: {},
+          },
+        ],
+      }),
+    );
+
+  const first = await submitOne("First");
+  check(
+    "waitlist: the first submit into a 1-capacity division confirms immediately",
+    first.entries[0]?.status === "confirmed",
+  );
+
+  const second = await submitOne("Second");
+  check(
+    "waitlist: the next submit into a full division waitlists — never refused, never silently confirmed",
+    second.entries[0]?.status === "waitlisted",
+  );
+  const secondId = second.entries[0]!.registration_id;
+
+  const waitlistRows = v1data<{ id: string; waitlist_position: number | null }[]>(
+    await v1(owner, `/api/v1/divisions/${div.id}/registrations?status=waitlisted`),
+  );
+  const secondRow = waitlistRows.find((r) => r.id === secondId);
+  check(
+    "waitlist: the waitlisted entry carries 1-based queue position 1 (the only one waiting)",
+    secondRow?.waitlist_position === 1,
+  );
+
+  type PublicEntrantsOut = { entrants: unknown[] };
+  const publicEntrantsUrl =
+    `/api/v1/public/orgs/${orgSlug}/competitions/${comp.slug}/divisions/${div.slug}/entrants`;
+
+  const countAfterSubmit = v1data<PublicEntrantsOut>(await v1(newSession(), publicEntrantsUrl));
+  check(
+    "waitlist: the public entrant list counts only the confirmed entry, never the waitlisted one",
+    countAfterSubmit.entrants.length === 1,
+  );
+
+  // RS010 fix (registration-approval.ts's promoteFromWaitlist): promoting a
+  // FREE entry on an AUTO-approval division confirms it INLINE, mirroring
+  // submitRegistrationGroup's own "!waitlisted && approval === 'auto' &&
+  // feeCents === 0" shortcut. Found live-broken by this exact suite before
+  // the fix — a promoted entry landed at 'pending' with no path ever
+  // confirming it (approveRegistration refuses a 'pending' row on an auto
+  // division, and a $0 entry has no payment webhook either). This division
+  // is auto/free (settings above), so promote is the confirming step here,
+  // not a separate approve() call.
+  type PromoteOut = { id: string; status: string; entrant_id: string | null } | null;
+  const promoted = await v1(owner, `/api/v1/registrations/${secondId}/promote`, "POST", {});
+  const promotedData = v1data<PromoteOut>(promoted);
+  check(
+    "waitlist: promoting on a free/auto division confirms it inline and materialises an entrant",
+    promoted.status === 200 &&
+      promotedData?.id === secondId &&
+      promotedData.status === "confirmed" &&
+      !!promotedData.entrant_id,
+  );
+
+  const countAfterPromote = v1data<PublicEntrantsOut>(await v1(newSession(), publicEntrantsUrl));
+  check(
+    "waitlist: the public entrant count updates to 2 right after the free/auto promotion, no separate approve() needed",
+    countAfterPromote.entrants.length === 2,
+  );
+
+  // approveRegistration is idempotent on an already-confirmed row (returns
+  // it as-is rather than refusing "auto division, nothing to approve") — a
+  // deliberate no-op check, not a second confirming step.
+  type ApproveOut = { status: string; entrant_id: string | null };
+  const approved = await v1(owner, `/api/v1/registrations/${secondId}/approve`, "POST");
+  const approvedData = v1data<ApproveOut>(approved);
+  check(
+    "waitlist: approve() on an already-confirmed promoted entry is a no-op, not a refusal",
+    approved.status === 200 &&
+      approvedData.status === "confirmed" &&
+      approvedData.entrant_id === promotedData?.entrant_id,
+  );
+}
+
+/**
+ * RS010 — join-via-join_code and assign-solo-to-team, over real HTTP.
+ * Football, not `generic` (every other registration suite in this file uses
+ * `generic`'s {size:1, benchMax:0} lineup on purpose — it would already read
+ * a captain-only team as "full" and refuse both a join and an assign before
+ * either gets to run; confirmed by reading both position catalogs directly,
+ * packages/engine/src/sports/{generic,football}/*.ts, and matches
+ * assign-routes.test.ts's own reason for the same choice). Local-run
+ * fallback seed only — CI's sync:sports already carries the real module.
+ * Own fresh org; keyless-safe (fee_cents 0 throughout).
+ */
+async function registrationTeamOpsSuite(): Promise<void> {
+  const owner = newSession();
+  const who = await signIn(owner, `regteam_${tag}@example.com`);
+  const orgId = who.org_id;
+  const orgs = (await call(owner, "/api/orgs")) as { id: string; slug: string }[];
+  const orgSlug = orgs.find((o) => o.id === orgId)!.slug;
+
+  const dbUrl = process.env.DATABASE_URL;
+  if (dbUrl) {
+    const db = smokeDb();
+    try {
+      await db`insert into sports (key, name, module_version, position_catalog)
+               values ('football', 'Football', '1.0.0', ${db.json({ groups: [], lineup: { size: 11, benchMax: 12 } })})
+               on conflict (key) do nothing`;
+      await db`insert into sport_variants (sport_key, key, name, config, is_system)
+               values ('football', 'default', 'Default', ${db.json({})}, true)
+               on conflict do nothing`;
+    } finally {
+      await db.end();
+    }
+  }
+
+  const comp = v1data<{ id: string; slug: string }>(
+    await v1(owner, "/api/v1/competitions", "POST", {
+      ends_on: "2030-12-31",
+      name: `Team Ops Cup ${tag}`,
+      visibility: "public",
+    }),
+  );
+  const div = v1data<{ id: string }>(
+    await v1(owner, `/api/v1/competitions/${comp.id}/divisions`, "POST", {
+      name: "Team Ops",
+      sport_key: "football",
+      variant_key: "default",
+      config: {},
+    }),
+  );
+  const settingsRes = await v1(owner, `/api/v1/divisions/${div.id}/registration-settings`, "PUT", {
+    enabled: true,
+    entrant_kind: "team",
+    fee_cents: 0,
+    approval: "auto",
+    allow_free_agents: true,
+    form_fields: [],
+  });
+  check("team ops: team division with free agents allowed accepts registration settings", settingsRes.status === 200);
+
+  type SubmitOut = {
+    entries: { registration_id: string; status: string; join_code: string | null }[];
+  };
+  const submitTeam = async (label: string) =>
+    v1data<SubmitOut>(
+      await v1(newSession(), `/api/v1/public/orgs/${orgSlug}/competitions/${comp.slug}/register`, "POST", {
+        contact: { name: `${label} Captain ${tag}`, email: `${label.toLowerCase()}cap_${tag}@example.com` },
+        privacy_consent: true,
+        entries: [
+          {
+            division_id: div.id,
+            entrant_kind: "team",
+            team_name: `${label} ${tag}`,
+            players: [{ full_name: `${label} Captain ${tag}` }],
+            answers: {},
+          },
+        ],
+      }),
+    );
+
+  const teamA = await submitTeam("Alpha");
+  const teamB = await submitTeam("Bravo");
+  check(
+    "team ops: a team entry confirms immediately (auto/free) and mints a join_code",
+    teamA.entries[0]?.status === "confirmed" && !!teamA.entries[0]?.join_code,
+  );
+  const teamAId = teamA.entries[0]!.registration_id;
+  const teamBId = teamB.entries[0]!.registration_id;
+  const joinCode = teamA.entries[0]!.join_code!;
+
+  const soloOut = v1data<SubmitOut>(
+    await v1(newSession(), `/api/v1/public/orgs/${orgSlug}/competitions/${comp.slug}/register`, "POST", {
+      contact: { name: `Solo Player ${tag}`, email: `soloplayer_${tag}@example.com` },
+      privacy_consent: true,
+      entries: [
+        {
+          division_id: div.id,
+          entrant_kind: "team",
+          free_agent: true,
+          players: [{ full_name: `Solo Player ${tag}` }],
+          answers: {},
+        },
+      ],
+    }),
+  );
+  check(
+    "team ops: a free-agent solo sign-up on an auto/free division confirms too — never held on a team slot",
+    soloOut.entries[0]?.status === "confirmed",
+  );
+  const soloId = soloOut.entries[0]!.registration_id;
+
+  // --- JOIN: a second player self-joins team A via its join_code ---
+  type JoinOut = { registration_id: string; player_id: string; consent_status: string };
+  const joined = await v1(
+    newSession(),
+    `/api/v1/public/orgs/${orgSlug}/competitions/${comp.slug}/register/join`,
+    "POST",
+    { join_code: joinCode, player: { full_name: `Joiner ${tag}` }, privacy_consent: true },
+  );
+  const joinedData = v1data<JoinOut>(joined);
+  check(
+    "team ops: joining via join_code succeeds and grants consent directly (this player typed it themselves)",
+    joined.status === 201 && joinedData.registration_id === teamAId && joinedData.consent_status === "granted",
+  );
+
+  const confirmedRows = v1data<{ id: string; roster_count: number }[]>(
+    await v1(owner, `/api/v1/divisions/${div.id}/registrations?status=confirmed`),
+  );
+  const teamARow = confirmedRows.find((r) => r.id === teamAId);
+  check(
+    "team ops: team A's roster grows from 1 (captain) to 2 once the joiner lands",
+    teamARow?.roster_count === 2,
+  );
+
+  // --- ASSIGN: the organiser places the pooled solo sign-up onto team B ---
+  type AssignOut = {
+    registration_id: string;
+    target_registration_id: string;
+    target_display_name: string;
+    roster_count: number;
+  };
+  const assigned = await v1(owner, `/api/v1/registrations/${soloId}/assign`, "POST", {
+    target_registration_id: teamBId,
+  });
+  const assignedData = v1data<AssignOut>(assigned);
+  check(
+    "team ops: assign places the pooled solo sign-up onto team B, growing its roster to 2",
+    assigned.status === 200 &&
+      assignedData.target_registration_id === teamBId &&
+      assignedData.target_display_name === `Bravo ${tag}` &&
+      assignedData.roster_count === 2,
+  );
+}
+
+/**
+ * RS010 — restores gapSuite's dropped #402 self-link/dedup block, plus the
+ * consent opt-out mask, over real HTTP.
+ *
+ * Unit-level coverage for the #402 headline claim ITSELF still exists and is
+ * thorough — checked before writing this, contrary to this task's own "may
+ * have been gutted" flag:
+ * apps/web/src/server/usecases/__tests__/registration-user-link.test.ts:240
+ * ("THE headline: one signed-in registrant, two divisions ⇒ ONE persons row,
+ * linked"). That test calls `seedPlayerEntry`/`confirmRegistration` directly
+ * — it never touches the public register ROUTE, so it proves nothing about
+ * whether that route actually reads the session cookie and threads
+ * `sessionUserId` through (`getCurrentUser()` in
+ * .../register/route.ts). This suite is that HTTP-wiring proof, layered on
+ * top of already-solid unit coverage, not a gap-fill for a missing one.
+ *
+ * Reuses `selflink_${tag}@example.com` — already present, orphaned, in
+ * cleanup()'s emails array with a #402/gapSuite comment naming exactly this
+ * suite's shape.
+ */
+async function registrationSelfLinkAndConsentSuite(): Promise<void> {
+  const owner = newSession();
+  const who = await signIn(owner, `regself_${tag}@example.com`);
+  const orgId = who.org_id;
+  const orgs = (await call(owner, "/api/orgs")) as { id: string; slug: string }[];
+  const orgSlug = orgs.find((o) => o.id === orgId)!.slug;
+
+  const genericConfig = {
+    resultMode: "score",
+    allowDraws: true,
+    points: { w: 3, d: 1, l: 0 },
+    progressScore: false,
+  };
+  const dbUrl = process.env.DATABASE_URL;
+  if (dbUrl) {
+    const db = smokeDb();
+    try {
+      await db`insert into sports (key, name, module_version, position_catalog)
+               values ('generic', 'Generic', '1.0.0', ${db.json({ groups: [], lineup: { size: 1, benchMax: 0 } })})
+               on conflict (key) do nothing`;
+      await db`insert into sport_variants (sport_key, key, name, config, is_system)
+               values ('generic', 'score', 'Score', ${db.json(genericConfig)}, true)
+               on conflict do nothing`;
+    } finally {
+      await db.end();
+    }
+  }
+
+  const comp = v1data<{ id: string; slug: string }>(
+    await v1(owner, "/api/v1/competitions", "POST", {
+      ends_on: "2030-12-31",
+      name: `Self Link Cup ${tag}`,
+      visibility: "public",
+    }),
+  );
+  const divA = v1data<{ id: string; slug: string }>(
+    await v1(owner, `/api/v1/competitions/${comp.id}/divisions`, "POST", {
+      name: "Singles",
+      sport_key: "generic",
+      variant_key: "score",
+      config: genericConfig,
+    }),
+  );
+  const divB = v1data<{ id: string }>(
+    await v1(owner, `/api/v1/competitions/${comp.id}/divisions`, "POST", {
+      name: "Doubles Feeder",
+      sport_key: "generic",
+      variant_key: "score",
+      config: genericConfig,
+    }),
+  );
+  for (const d of [divA, divB]) {
+    const set = await v1(owner, `/api/v1/divisions/${d.id}/registration-settings`, "PUT", {
+      enabled: true,
+      entrant_kind: "individual",
+      fee_cents: 0,
+      approval: "auto",
+      form_fields: [],
+    });
+    check(`self-link: division ${d.id.slice(0, 8)} accepts registration settings`, set.status === 200);
+  }
+
+  const registrant = newSession();
+  await signIn(registrant, `selflink_${tag}@example.com`);
+  const fullName = `Selflink Player ${tag}`;
+  const dob = "1990-01-01"; // adult — deriveLinkUserId refuses a minor regardless of affirmation
+
+  type SubmitOut = { entries: { registration_id: string; status: string }[] };
+  const submitSelf = async (divisionId: string) =>
+    v1data<SubmitOut>(
+      await v1(
+        registrant,
+        `/api/v1/public/orgs/${orgSlug}/competitions/${comp.slug}/register`,
+        "POST",
+        {
+          contact: { name: fullName, email: `selflink_${tag}@example.com`, dob },
+          privacy_consent: true,
+          entries: [
+            {
+              division_id: divisionId,
+              entrant_kind: "individual",
+              players: [{ full_name: fullName, dob }],
+              answers: {},
+              registering_self: true,
+              self_player_index: 0,
+            },
+          ],
+        },
+      ),
+    );
+
+  const subA = await submitSelf(divA.id);
+  const subB = await submitSelf(divB.id);
+  check(
+    "self-link: both self-registrations confirm immediately (auto/free)",
+    subA.entries[0]?.status === "confirmed" && subB.entries[0]?.status === "confirmed",
+  );
+
+  const myPersons = v1data<{ id: string; full_name: string }[]>(
+    await v1(registrant, "/api/v1/me/persons"),
+  );
+  check(
+    "self-link (#402): one signed-in registrant across two divisions resolves to ONE persons row, not two",
+    myPersons.length === 1 && myPersons[0]!.full_name === fullName,
+  );
+  const personId = myPersons[0]!.id;
+
+  type PublicEntrantsOut = { entrants: { display_name: string }[] };
+  const divAEntrantsUrl =
+    `/api/v1/public/orgs/${orgSlug}/competitions/${comp.slug}/divisions/${divA.slug}/entrants`;
+
+  // --- Baseline: no opt-out yet, the public entrant list shows the FULL name ---
+  const beforeEntrants = v1data<PublicEntrantsOut>(await v1(newSession(), divAEntrantsUrl));
+  check(
+    "consent: before any opt-out, the public entrant list shows the registrant's FULL name",
+    beforeEntrants.entrants.some((e) => e.display_name === fullName),
+  );
+
+  // --- Opt out, then prove the mask on the SAME public surface ---
+  type ConsentOut = { consent: { public_name?: boolean } };
+  const patched = await v1(registrant, `/api/v1/me/persons/${personId}/consent`, "PATCH", {
+    public_name: false,
+  });
+  check(
+    "consent: PATCH /me/persons/:id/consent {public_name:false} records the opt-out",
+    patched.status === 200 && v1data<ConsentOut>(patched).consent.public_name === false,
+  );
+
+  // Mirrors lib/name-display.ts's own maskOne exactly: first word + " " +
+  // last word's first letter + "." — derived from the SAME fullName this
+  // suite submitted, not a hand-typed guess, so a future change to that
+  // format moves this assertion with it.
+  const parts = fullName.trim().split(/\s+/);
+  const expectedMasked = `${parts[0]} ${parts[parts.length - 1]!.slice(0, 1)}.`;
+  const afterEntrants = v1data<PublicEntrantsOut>(await v1(newSession(), divAEntrantsUrl));
+  check(
+    `consent: after opting out, the SAME public entrant list masks the name to "${expectedMasked}" — not the full name`,
+    afterEntrants.entrants.some((e) => e.display_name === expectedMasked) &&
+      !afterEntrants.entrants.some((e) => e.display_name === fullName),
+  );
 }

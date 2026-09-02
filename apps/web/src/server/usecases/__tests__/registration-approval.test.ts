@@ -754,6 +754,49 @@ describe.skipIf(!HAS_DB)("promoteFromWaitlist", () => {
     expect(group!.expires_at).not.toBeNull();
   });
 
+  it("RS010: promoting into a FREE auto-approval division confirms it inline, mirroring submit's own shortcut", async () => {
+    // Found by RS010's smoke coverage: `promoteWaitlistedRow` always lands a
+    // promoted row at 'pending' regardless of approval mode, but
+    // `approveRegistration` REFUSES a 'pending' row on an 'auto' division
+    // ("nothing to approve manually") — and with feeCents === 0 there is no
+    // payment webhook to confirm it either. Before this fix a promoted entry
+    // on a free/auto division was stuck at 'pending' forever: no entrant
+    // materialised, never counted toward the public entrant list. This
+    // mirrors submitRegistrationGroup's own `!waitlisted && approval ===
+    // "auto" && feeCents === 0` inline-confirm condition.
+    const { orgId, orgSlug, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    await seedSettings(division.id, { entrant_kind: "individual", fee_cents: 0, approval: "auto", capacity: 1 });
+
+    const slot = await submitRegistrationGroup(
+      { orgSlug, compSlug: competition.slug },
+      { contact: baseContact(), privacy_consent: true, entries: [{ division_id: division.id, entrant_kind: "individual", players: [{ full_name: "Fills Slot" }], answers: {} }] },
+    );
+    const waiting = await submitRegistrationGroup(
+      { orgSlug, compSlug: competition.slug },
+      { contact: baseContact(), privacy_consent: true, entries: [{ division_id: division.id, entrant_kind: "individual", players: [{ full_name: "Waits Then Confirms" }], answers: {} }] },
+    );
+    expect(slot.entries[0]!.status).toBe("confirmed"); // auto-confirms at submit, as before
+    expect(waiting.entries[0]!.status).toBe("waitlisted");
+
+    const promoted = await promoteFromWaitlist(owner, division.id, {
+      registrationId: waiting.entries[0]!.registration_id,
+    });
+    expect(promoted!.status).toBe("confirmed");
+    expect(promoted!.entrant_id).not.toBeNull();
+
+    // Idempotent: promoting the same now-confirmed id again is a no-op, not
+    // a re-materialisation (materialise itself is idempotent — `if
+    // (reg.entrant_id) return reg.entrant_id` — but the SPOT_HOLDERS branch
+    // above short-circuits before ever calling it again here).
+    const replay = await promoteFromWaitlist(owner, division.id, {
+      registrationId: waiting.entries[0]!.registration_id,
+    });
+    expect(replay!.status).toBe("confirmed");
+    expect(replay!.entrant_id).toBe(promoted!.entrant_id);
+  });
+
   it("ROUTED MAJOR (wave 4 -> wave 5): promoting a waitlisted entry must not clobber a pending sibling's payment_method/expires_at", async () => {
     const { orgId, orgSlug, ownerId } = await seedOrg("pro");
     const owner = asOwner(orgId, ownerId);
@@ -809,7 +852,13 @@ describe.skipIf(!HAS_DB)("promoteFromWaitlist", () => {
 
     const [entryBRow] = await sql<{ status: string }[]>`
       select status from registrations where id = ${entryB.registration_id}`;
-    expect(entryBRow!.status).toBe("pending"); // divB's own promotion DID take effect
+    // divB's own promotion DID take effect — and (RS010) since divB is free
+    // with the default auto-approval, it confirms inline on promotion, same
+    // as the "RS010: promoting into a FREE auto-approval division..." test
+    // above. Before that fix this read 'pending' (stuck there forever, the
+    // bug that fix closes); the clobber assertions above are this test's
+    // real subject and are unaffected either way.
+    expect(entryBRow!.status).toBe("confirmed");
   });
 
   it("MAJOR (review): a card-fee promotion into a cart whose envelope is offline still gets a real, monotonic expires_at — never inherits null", async () => {

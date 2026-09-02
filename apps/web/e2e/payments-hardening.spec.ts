@@ -45,8 +45,8 @@ const GENERIC_CONFIG = {
  *
  *  RS001 deleted the only entry point that could observe this cap (the public
  *  register POST — see `submitPublicRegistration`); RS006 restored that
- *  route (cart-shaped) and the register page's live stepper, so T10 reads
- *  this live again rather than as parked/unexecuted body. */
+ *  route (cart-shaped) and the register page's live stepper, so T3, T7 and
+ *  T10 all read this live again rather than as parked/unexecuted bodies. */
 const COMMUNITY_ENTRANT_CAP = 64;
 
 // ---------------------------------------------------------------------------
@@ -233,11 +233,11 @@ async function seedStripeDivision(
  *  directly — 64 round-trips through the public endpoint would trip its per-IP
  *  rate limit long before they finished. One registration_groups cart per entry
  *  (V363/V364 split the old single-row shape); org_id is trigger-filled on both
- *  tables, never passed — `orgId` stays a parameter only so T10's frozen call
- *  site needs no edit. event-pass.spec.ts's sibling fillDivision was deleted
- *  outright (its only caller went with it); this one survives because T10
- *  (restored RS006, no longer test.skip'd) still calls it directly rather
- *  than round-tripping 64 entries through the public endpoint. */
+ *  tables, never passed — `orgId` stays a parameter only so callers seeded before
+ *  RS006 need no edit. event-pass.spec.ts's sibling fillDivision was deleted
+ *  outright (its only caller went with it); this one survives because T3, T7
+ *  and T10 (all restored, RS006/RS007) call it directly rather than
+ *  round-tripping 64 entries through the public endpoint. */
 async function fillDivision(divisionId: string, _orgId: string, taken: number): Promise<void> {
   const tag = randomBytes(5).toString("hex");
   await withDb(async (sql) => {
@@ -268,9 +268,9 @@ async function fillDivision(divisionId: string, _orgId: string, taken: number): 
  *
  *  RS001 deleted the old single-entry `submitRegistration` route; RS006
  *  restored public submit as `submitRegistrationGroup`, a cart. No
- *  `registering_self`/`self_player_index` here — T10 only cares about the
- *  capacity outcome, and leaving self-declaration unset keeps every request
- *  out of the schema's superRefine dob-required branch entirely. The
+ *  `registering_self`/`self_player_index` here — T3, T7 and T10 only care
+ *  about the capacity outcome, and leaving self-declaration unset keeps every
+ *  request out of the schema's superRefine dob-required branch entirely. The
  *  honeypot (`website`) is simply never sent — a filled value 400s the
  *  whole submit (route.ts). */
 async function submitPublicRegistration(
@@ -504,11 +504,27 @@ test.describe("T2 · API keys cannot delete a competition", () => {
 // ===========================================================================
 
 test.describe("T3 · Event Pass refund revokes the pass", () => {
-  test("charge.refunded revokes the pass", async ({ request }) => {
+  test("charge.refunded revokes the pass — the entrant cap drops 128 → 64", async ({
+    request,
+  }) => {
     const intent = uid("pi");
-    const org = await seedOrg({ plan: "community" });
-    const { compId } = await seedComp(org.orgId);
+    const org = await seedOrg({ plan: "community", chargesEnabled: true, connected: true });
+    const { compId, compSlug } = await seedComp(org.orgId);
+    // Uncapped by the organiser, so the PLAN quota is the only ceiling; sit the
+    // division ON the community cap so entry 65 separates a passed comp from a
+    // community one. (V310 killed the card-intake-closes proof — see the
+    // COMMUNITY_ENTRANT_CAP note; the entrant cap is what the pass still grants.)
+    const { divisionId } = await seedStripeDivision(compId, null);
     await grantPass(compId, org.orgId, "event_pass", intent);
+    await fillDivision(divisionId, org.orgId, COMMUNITY_ENTRANT_CAP);
+
+    // While the pass is held the cap is 128: entry 65 takes a real spot. A
+    // passless community org would waitlist this, so the assertion is NOT vacuous.
+    const held = await submitPublicRegistration(
+      request, org.orgSlug, compSlug, divisionId, "Held 65",
+    );
+    expect(held.status).toBe(201);
+    expect(held.data!.status).toBe("pending");
 
     // A fully-refunded pass charge revokes the pass.
     const res = await postSignedEvent(
@@ -528,19 +544,14 @@ test.describe("T3 · Event Pass refund revokes the pass", () => {
     );
     expect(passGone.length).toBe(0);
 
-    // This test used to ALSO prove the entrant cap drops 128 → 64 by
-    // submitting entry 65/66 through the public register endpoint. RS001
-    // deleted that endpoint (no surviving way to create a registration — see
-    // registrations.ts's "Public: submit — REMOVED" block), so the ROUTE to
-    // the cap is gone from here. The cap itself is still enforced —
-    // `usecases/entrants.ts` asserts `entrants.per_division.max` on the
-    // organiser create path — and stays covered by
-    // `pass-scope-entrant-cap.test.ts` and `entitlements-v2.test.ts`; what
-    // died is only this spec's way of reaching it. PARKED, not weakened:
-    // rather than assert
-    // something that no longer proves anything, that half is dropped here
-    // (same cause as event-pass.spec.ts's deleted U7); T10 keeps the fuller
-    // mechanism and, as of RS006, runs it live again (no longer test.skip'd).
+    // … and the cap has dropped back to 64: the next entry (the 66th spot-holder)
+    // is over the community ceiling and waitlists. Reverting the revocation leaves
+    // the cap at 128 and this comes back 'pending' — so the assertion can still fail.
+    const afterRevoke = await submitPublicRegistration(
+      request, org.orgSlug, compSlug, divisionId, "After Refund 66",
+    );
+    expect(afterRevoke.status).toBe(201);
+    expect(afterRevoke.data!.status).toBe("waitlisted");
   });
 });
 
@@ -779,11 +790,23 @@ test.describe("T7 · platform disputes truth-up entitlements", () => {
     ).toBeVisible({ timeout: 20_000 });
   });
 
-  test("Event Pass: a lost dispute revokes the pass", async ({ request }) => {
+  test("Event Pass: a lost dispute revokes the pass — the entrant cap drops 128 → 64", async ({
+    request,
+  }) => {
     const intent = uid("pi");
-    const org = await seedOrg({ plan: "community" });
-    const { compId } = await seedComp(org.orgId);
+    const org = await seedOrg({ plan: "community", chargesEnabled: true, connected: true });
+    const { compId, compSlug } = await seedComp(org.orgId);
+    // Same entrant-cap proof as T3 (card intake no longer closes on pass loss).
+    const { divisionId } = await seedStripeDivision(compId, null);
     await grantPass(compId, org.orgId, "event_pass", intent);
+    await fillDivision(divisionId, org.orgId, COMMUNITY_ENTRANT_CAP);
+
+    // Pass held → cap 128 → entry 65 holds a spot (a passless community waitlists).
+    const held = await submitPublicRegistration(
+      request, org.orgSlug, compSlug, divisionId, "Held 65",
+    );
+    expect(held.status).toBe(201);
+    expect(held.data!.status).toBe("pending");
 
     const lost = await postSignedEvent(
       request,
@@ -804,9 +827,13 @@ test.describe("T7 · platform disputes truth-up entitlements", () => {
     );
     expect(passGone.length).toBe(0);
 
-    // The entrant-cap-drops-128-to-64 half is PARKED here for the same reason
-    // as T3 (see its comment) — RS001 deleted the public register endpoint
-    // both relied on to observe the cap.
+    // Cap back to 64 → the 66th spot-holder waitlists. Reverting the dispute
+    // revocation leaves it 128 and this reads 'pending', so it can still fail.
+    const afterRevoke = await submitPublicRegistration(
+      request, org.orgSlug, compSlug, divisionId, "After Dispute 66",
+    );
+    expect(afterRevoke.status).toBe(201);
+    expect(afterRevoke.data!.status).toBe("waitlisted");
   });
 });
 

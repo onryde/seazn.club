@@ -5476,7 +5476,34 @@ describe.skipIf(!HAS_DB)("RS012 `/code-review high` finding 1 — freesTeamSlot 
 
     const [afterTeam] = await sql<{ status: string }[]>`
       select status from registrations where id = ${waitingTeam.id}`;
-    expect(afterTeam!.status).toBe("pending");
+    expect(afterTeam!.status).toBe("pending"); // this division is PAID (capRig's default fee_cents:500) — pending is correct, see the FREE-division case right below
+  });
+
+  // RS010 `/code-review` finding: the fix in `promoteWaitlistedRow` (mirrors
+  // submitRegistrationGroup's own free/auto inline-confirm shortcut) was
+  // first written only into `promoteFromWaitlist` (registration-approval.ts,
+  // the organiser-triggered explicit promote endpoint) — leaving the
+  // IDENTICAL gap live at `withdrawCore`, which promotes through this same
+  // `promoteWaitlistedRow`/`promoteOldestWaitlisted` pair but never through
+  // `promoteFromWaitlist`. Moved into the shared function so every caller
+  // gets it for free; this is the case the review named as uncovered by
+  // "Site A (positive)" above (that test's division is PAID, so it never
+  // exercises the free/auto branch this bug lives in).
+  it("Site A, free/auto division: a withdrawal-triggered promotion confirms inline, never stays 'pending' forever", async () => {
+    const { owner, competition, division } = await capRig({ capacity: 1, feeCents: 0 });
+    const confirmedTeam = await seedTeamEntry(competition.id, division.id, "confirmed");
+    const waitingTeam = await seedTeamEntry(competition.id, division.id, "waitlisted");
+
+    await withdrawRegistrationOrganiser(owner, confirmedTeam.id);
+
+    // Reverting the promoteWaitlistedRow fix makes this fail: the promoted
+    // team would stay 'pending' with entrant_id null — unconfirmable, since
+    // approveRegistration refuses a 'pending' row on an auto division and a
+    // $0 entry has no payment webhook to confirm it either.
+    const [afterTeam] = await sql<{ status: string; entrant_id: string | null }[]>`
+      select status, entrant_id from registrations where id = ${waitingTeam.id}`;
+    expect(afterTeam!.status).toBe("confirmed");
+    expect(afterTeam!.entrant_id).not.toBeNull();
   });
 
   it("Site C (negative): an unpaid pooled solo sign-up expiring does not promote a waitlisted team past capacity", async () => {

@@ -887,6 +887,10 @@ async function main() {
   // function for why.
   if (account === "pro") await seedTemplateCompetition();
 
+  // RS010 closeout: the four public-registration demo states — Pro-only,
+  // see the function for why.
+  if (account === "pro") await seedRegistrationDemo();
+
   // #376's `closed` state — community only, see the function.
   if (account === "community") await seedClosedCompetition();
 
@@ -1096,6 +1100,242 @@ async function seedTemplateCompetition(): Promise<void> {
     );
   } else {
     console.log(`${NAME} / ${division.name}: stage 1 already generated, skipped`);
+  }
+}
+
+/**
+ * RS010 closeout: `seed-demo.ts` never created a single registration row
+ * before this — the file touched `/registration-settings` PUT exactly once
+ * (`seedArchivedSlotHolder` above, only to CLOSE a division before archiving
+ * it), and nothing anywhere called `submitRegistrationGroup`. RS010's brief
+ * is a fresh org owner touring the redesign end to end: an OPEN division
+ * nobody has entered yet, a real TEAM entry with an open roster slot (a
+ * demoable join_code/join link), a division sitting AT CAPACITY with a
+ * genuine WAITLISTED entrant, and a division whose entry sits PENDING an
+ * organiser's approval.
+ *
+ * "Manual division" (brief's own wording) resolves to `approval: "manual"`
+ * on `registration_settings` (RS004/V364) — the ONLY manual-shaped mode this
+ * settings model has (registrations.ts's `RegistrationSettingsRow` /
+ * schemas.ts's `PutRegistrationSettings` both declare exactly `approval:
+ * "auto" | "manual"`, nothing else). There is no second "organiser-only, no
+ * public link" mode to pick instead — an `approval: "manual"` entry submits
+ * through the SAME public link as every other division and simply stops at
+ * `pending` instead of auto-confirming (registration-submit.ts's own
+ * `!waitlisted && live.approval === "auto" && feeCents === 0` gate), which
+ * is as literally "manual" as this model gets.
+ *
+ * PRO ONLY, same reason `seedAdvancedFormats`/`seedTemplateCompetition`
+ * above are: PLAN_COMMUNITY already spends the community plan's entire
+ * `competitions.max_active` (2) and its 1-division-per-competition budget,
+ * so a third competition here would be silently caught by
+ * `findOrCreateCompetition`'s own PLAN_CAP skip. Reusing an EXISTING
+ * competition instead is not viable either direction (checked first, per
+ * the brief): every PLAN_PRO/PLAN_COMMUNITY division already has entrants
+ * POSTed directly and stages generated/played by the loop above BEFORE this
+ * function ever runs — opening registration on top of an already-full,
+ * already-played division would show the tour capacity/waitlist numbers
+ * that contradict what is already on screen (a division simultaneously
+ * "closed" from the direct-entrant side and "open" from the registration
+ * side is not a state a real organiser can reach). A fresh, dedicated
+ * competition is the only shape that demos registration without
+ * contradicting a division seeded by the PLAN loop for something else.
+ *
+ * Drives the REAL public submit surface — `POST /api/v1/public/orgs/{org}/
+ * competitions/{comp}/register`, the SAME route the public stepper calls —
+ * rather than inserting `registrations` rows directly, so this proves the
+ * actual instantiation path rather than a shape the route could silently
+ * drift from (same reasoning `seedTemplateCompetition`'s own doc comment
+ * gives for `/api/v1/competitions/from-template`). The authenticated
+ * cookie jar is still attached on these calls — this file has no
+ * unauthenticated-call helper, and the route accepts a signed-in caller
+ * fine (registration-submit.ts's own `sessionUser?.id ?? null`); the only
+ * observable effect is `registration_groups.user_id` pointing at the
+ * organiser's own demo account, harmless for a demo cart, and it never
+ * fires the self-link path since none of these entries set
+ * `registering_self`.
+ *
+ * `visibility: "unlisted"` on the competition, not "public": every other
+ * competition this file creates defaults to "private" (`CreateCompetition`'s
+ * own schema default) and never clears `submitRegistrationGroup`'s /
+ * `publicRegistrationInfo`'s `visibility in ('public','unlisted')` gate.
+ * This competition needs to clear that gate to be registrable at all, but
+ * "public" would additionally make it the first demo competition this file
+ * has ever listed on seazn.club's own public discovery surface —
+ * "unlisted" clears the identical registration gate while staying
+ * reachable only by the direct link, which is all a product tour needs.
+ *
+ * Org slug resolved via `GET /api/orgs` (`getUserOrgs`, lib/auth.ts) — the
+ * one authenticated endpoint in this app that actually returns the caller's
+ * own org slug; no `/api/v1/competitions*` response carries an org join
+ * (`CompetitionRow` has `org_id`, never a slug), so nothing already called
+ * elsewhere in this file exposes it.
+ *
+ * Football (11-a-side, already used by PLAN_PRO's "Premier Division") gives
+ * the TEAM state a concrete, demoable roster cap: `lineup.size: 11 +
+ * benchMax: 12` (football.ts) via `rosterCapExpr` — 23 spots total, 1 filled
+ * by the submitted captain, 22 genuinely open for the join_code to fill.
+ *
+ * Resume-safe by NAME throughout, like every other function in this file:
+ * the competition and each division are found-before-created, and each
+ * state's own registration submit is gated behind a
+ * `GET .../divisions/{id}/registrations` read so a rerun never double-
+ * submits or drifts a division past the entrant count its state depends on
+ * — an extra confirmed entry on the capacity=1 division would flip the
+ * SECOND entrant from waitlisted to confirmed and quietly stop demoing a
+ * waitlist at all.
+ */
+async function seedRegistrationDemo(): Promise<void> {
+  const orgs = (await call("/api/orgs")) as { id: string; slug: string }[];
+  const orgSlug = orgs[0]?.slug;
+  if (!orgSlug) {
+    console.log("Registration demo: no org for this account, skipped");
+    return;
+  }
+
+  const COMP_NAME = "Autumn Open Registration";
+  const comp = await findOrCreateCompetition(call, COMP_NAME, {
+    ends_on: "2030-12-31",
+    visibility: "unlisted",
+  });
+  if (!comp) return;
+  const compId = comp.id;
+
+  const compsRes = await call("/api/v1/competitions?limit=100");
+  const compRow = (
+    (compsRes.items ?? compsRes) as { id: string; name: string; slug: string }[]
+  ).find((c) => c.id === compId);
+  const compSlug = compRow?.slug;
+  if (!compSlug) {
+    console.log(`${COMP_NAME}: could not resolve its own slug, skipping registration demo`);
+    return;
+  }
+
+  const existingRes = await call(`/api/v1/competitions/${compId}/divisions`);
+  const existingArr: { id: string; name: string }[] = Array.isArray(existingRes)
+    ? existingRes
+    : (existingRes.items ?? []);
+  const byName = new Map(existingArr.map((d) => [d.name, d]));
+
+  async function ensureDivision(
+    name: string,
+    sport: string,
+    variant: string,
+    config?: Record<string, unknown>,
+  ): Promise<{ id: string; name: string }> {
+    const found = byName.get(name);
+    if (found) return found;
+    const div = (await call(`/api/v1/competitions/${compId}/divisions`, "POST", {
+      name,
+      sport_key: sport,
+      variant_key: variant,
+      ...(config ? { config } : {}),
+    })) as { id: string; name: string };
+    byName.set(name, div);
+    return div;
+  }
+
+  async function regsFor(divisionId: string): Promise<{ id: string; status: string }[]> {
+    const res = await call(`/api/v1/divisions/${divisionId}/registrations`);
+    return (Array.isArray(res) ? res : (res.items ?? [])) as { id: string; status: string }[];
+  }
+
+  const contact = () => {
+    const name = person();
+    const email = `${name.toLowerCase().replace(/\s+/g, ".")}${rnd(9000)}@example.com`;
+    return { name, email };
+  };
+
+  // `who` is the caller's own — never generated in here — so a caller
+  // building `extra.players` off the SAME contact (the team captain, the
+  // solo entrant) names one real person once, not two different ones.
+  async function submit(
+    who: { name: string; email: string },
+    divisionId: string,
+    entrantKind: "individual" | "team",
+    extra: Record<string, unknown>,
+  ) {
+    return call(`/api/v1/public/orgs/${orgSlug}/competitions/${compSlug}/register`, "POST", {
+      contact: who,
+      privacy_consent: true,
+      entries: [{ division_id: divisionId, entrant_kind: entrantKind, ...extra }],
+    });
+  }
+
+  // (a) OPEN: enabled, generous capacity, nothing submitted — the owner runs
+  // the public stepper live.
+  const openDiv = await ensureDivision("Open Enrolment", "generic", "score", GENERIC_CFG);
+  await call(`/api/v1/divisions/${openDiv.id}/registration-settings`, "PUT", {
+    enabled: true,
+    entrant_kind: "individual",
+    capacity: 40,
+    fee_cents: 0,
+    approval: "auto",
+  });
+  console.log(`${COMP_NAME} / ${openDiv.name}: open, 0 submitted`);
+
+  // (b) TEAM, part-filled roster — 1 of 23 football spots (11 + 12 bench)
+  // filled; the join_code is real and still joinable.
+  const teamDiv = await ensureDivision("Sunday League Squads", "football", "11-a-side");
+  await call(`/api/v1/divisions/${teamDiv.id}/registration-settings`, "PUT", {
+    enabled: true,
+    entrant_kind: "team",
+    capacity: 12,
+    fee_cents: 0,
+    approval: "auto",
+  });
+  const teamRegs = await regsFor(teamDiv.id);
+  if (teamRegs.length === 0) {
+    const captain = contact();
+    const result = await submit(captain, teamDiv.id, "team", {
+      team_name: `${CLUBS[rnd(CLUBS.length)]} ${coin() ? "FC" : "CC"}`,
+      players: [{ full_name: captain.name, is_captain: true }],
+    });
+    const joinCode = result.entries?.[0]?.join_code ?? "(none)";
+    console.log(`${COMP_NAME} / ${teamDiv.name}: 1 team, 1/23 roster filled, join_code ${joinCode}`);
+  } else {
+    console.log(`${COMP_NAME} / ${teamDiv.name}: exists, skipped`);
+  }
+
+  // (c) AT CAPACITY + WAITLISTED — capacity 1; entrant #1 confirms and takes
+  // the only spot, entrant #2 waitlists.
+  const waitDiv = await ensureDivision("Members' Quiz Night", "generic", "score", GENERIC_CFG);
+  await call(`/api/v1/divisions/${waitDiv.id}/registration-settings`, "PUT", {
+    enabled: true,
+    entrant_kind: "individual",
+    capacity: 1,
+    fee_cents: 0,
+    approval: "auto",
+  });
+  let waitRegs = await regsFor(waitDiv.id);
+  for (let i = 0; i < 5 && waitRegs.length < 2; i++) {
+    const p = contact();
+    await submit(p, waitDiv.id, "individual", { players: [{ full_name: p.name }] });
+    waitRegs = await regsFor(waitDiv.id);
+  }
+  console.log(
+    `${COMP_NAME} / ${waitDiv.name}: ` +
+      `${waitRegs.filter((r) => r.status === "confirmed").length} confirmed, ` +
+      `${waitRegs.filter((r) => r.status === "waitlisted").length} waitlisted`,
+  );
+
+  // (d) MANUAL approval — approval='manual'; the one entry submitted sits
+  // 'pending', awaiting an organiser's POST /api/v1/registrations/{id}/approve.
+  const manualDiv = await ensureDivision("Advanced Coaching Group", "generic", "score", GENERIC_CFG);
+  await call(`/api/v1/divisions/${manualDiv.id}/registration-settings`, "PUT", {
+    enabled: true,
+    entrant_kind: "individual",
+    capacity: 20,
+    fee_cents: 0,
+    approval: "manual",
+  });
+  const manualRegs = await regsFor(manualDiv.id);
+  if (manualRegs.length === 0) {
+    const p = contact();
+    await submit(p, manualDiv.id, "individual", { players: [{ full_name: p.name }] });
+    console.log(`${COMP_NAME} / ${manualDiv.name}: 1 entry pending approval`);
+  } else {
+    console.log(`${COMP_NAME} / ${manualDiv.name}: exists, skipped`);
   }
 }
 

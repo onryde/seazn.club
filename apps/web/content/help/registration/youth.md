@@ -16,6 +16,8 @@ Public dashboards, standings and share images show youth players as **first name
 
 You can change the display style per division, and making a youth division public asks you to confirm you hold guardian consent for the players it will show.
 
+This sits alongside a second, personal setting covered in [registering for a competition](/help/registration/registering-for-a-competition): every registrant can also switch their own name (and photo) off public pages any time, from their own player home. The stricter of the two always wins, so a youth division's first-name-and-initial rule is never loosened by a player's own setting.
+
 ## Common questions
 
 **We're a school — can we hide names entirely?** Keep the division Private and share the dashboard link only with your community; link-only pages are not indexed by search engines.

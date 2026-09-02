@@ -8,9 +8,9 @@ Every registration gets a **reference** like `SZ-7F3K-Q2ND`, shown on the confir
 
 ## What a player can do with it
 
-Visiting `seazn.club/r/SZ-7F3K-Q2ND` shows their entry's live status — received, paid, confirmed, waitlisted — plus the competition details, an *add to calendar* button and a *save ticket* image made for sharing in the family group chat.
+Visiting `seazn.club/r/SZ-7F3K-Q2ND` shows a tear-off ticket for their whole cart — one stamp per entry (Received, Paid, Confirmed, Waitlist, Withdrawn…) — plus a QR code and a **Share** button that opens their phone's share sheet (WhatsApp on desktop) with a message and a link to the competition, ready for the family group chat.
 
-Withdrawing from there uses the email link sent at registration, so only the person who registered can do it.
+Withdrawing an entry from there needs the link sent at registration, so only the person who registered can do it. That same email links to their fuller **registration page** — where they can pay an outstanding fee, resend the confirmation, invite teammates onto a team entry, and withdraw — the reference/ticket page above is the short, memorable one for a quick status check or a day-of check-in.
 
 ## What you do with it
 
