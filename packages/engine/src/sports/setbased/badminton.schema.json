@@ -273,6 +273,12 @@
       "entrants[]": [
         "string"
       ],
+      "expedite": [
+        "boolean"
+      ],
+      "expediteUnchecked": [
+        "number"
+      ],
       "outcome": [
         "null",
         "object"
@@ -374,6 +380,39 @@
         "boolean"
       ],
       "sets[][]": [
+        "number"
+      ],
+      "subs": [
+        "object"
+      ],
+      "subs.log": [
+        "array"
+      ],
+      "subs.log[]": [
+        "object"
+      ],
+      "subs.log[].by": [
+        "string"
+      ],
+      "subs.log[].off": [
+        "string"
+      ],
+      "subs.log[].on": [
+        "string"
+      ],
+      "subs.thisSet": [
+        "object"
+      ],
+      "subs.thisSet[]": [
+        "number"
+      ],
+      "subs[]": [
+        "number"
+      ],
+      "timeouts": [
+        "object"
+      ],
+      "timeouts[]": [
         "number"
       ]
     }

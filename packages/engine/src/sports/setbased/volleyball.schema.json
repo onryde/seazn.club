@@ -277,6 +277,12 @@
       "entrants[]": [
         "string"
       ],
+      "expedite": [
+        "boolean"
+      ],
+      "expediteUnchecked": [
+        "number"
+      ],
       "outcome": [
         "null",
         "object"

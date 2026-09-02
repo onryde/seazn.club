@@ -370,27 +370,15 @@ export function declaredOptionalFields(module: AnySportModule): string[] {
  *    CFG — genuinely cfg-gated; prefer a COVERAGE_CONFIGS entry, and both that
  *      were found (generic's draws, hockey's assists) got one instead of a line
  *      here. Nothing is allow-listed under this class today. */
-export const UNREACHABLE_FIELDS: Record<string, Record<string, string>> = {
-  volleyball: {
-    returns:
-      "KERNEL-UNION: the setbased kernel gives all three sports ONE event union, but volleyball's preset registers no expedite system — apply refuses volleyball.expedite.start with `\"volleyball\" has no expedite system`, so no config or seed can record this field.",
-    serving:
-      "KERNEL-UNION: same as `returns` — the field rides on the expedite payload volleyball cannot record.",
-  },
-  badminton: {
-    off: "KERNEL-UNION: apply refuses badminton.sub with `\"badminton\" does not record substitutions`; `records` is a compile-time preset, not a cfg knob, so no coverage config reaches it.",
-    on: "KERNEL-UNION: same as `off` — the field rides on the substitution payload badminton cannot record.",
-    returns:
-      "KERNEL-UNION: apply refuses badminton.expedite.start with `\"badminton\" has no expedite system` — the expedite payload is table tennis's alone.",
-    serving: "KERNEL-UNION: same as `returns` — rides on the expedite payload badminton cannot record.",
-    technical:
-      "KERNEL-UNION: apply refuses badminton.timeout with `\"badminton\" does not record timeouts`; the field rides on that payload.",
-  },
-  tabletennis: {
-    off: "KERNEL-UNION: apply refuses tabletennis.sub with `\"tabletennis\" does not record substitutions` — its preset registers timeouts, sanctions and expedite, but no substitutions.",
-    on: "KERNEL-UNION: same as `off` — rides on the substitution payload tabletennis cannot record.",
-  },
-};
+// W1 (scoring free) golden-gap fix — `records` has been a per-cfg knob, not a
+// compile-time preset, since S6/#416 (W5) (see the setbased kernel's own
+// `SetBasedRecordFlags` doc comment); the three "no coverage config reaches
+// it" claims below were already stale before this task, just never exercised.
+// The `COVERAGE_CONFIGS` entries added alongside this comment flip exactly
+// the `records` flags none of volleyball/badminton/tabletennis's shipped
+// variants do, which is what made every field below reachable and is why
+// this allow-list is now empty for all three.
+export const UNREACHABLE_FIELDS: Record<string, Record<string, string>> = {};
 
 function corpusEvents(corpus: GoldenCorpus): GoldenEvent[] {
   return corpus.streams.flatMap((stream) => stream.events);
@@ -797,6 +785,21 @@ export function unreachableStatePathsGoneStale(
  *  coverage config is always preferable to an UNREACHABLE_FIELDS line: it makes
  *  the field genuinely recorded rather than exempted. */
 const COVERAGE_CONFIGS: Record<string, Record<string, unknown>> = {
+  // W1 (scoring free) golden-gap fix — golden coverage now measures against
+  // `padSpec.fidelity`, and the set-based kernel it is shared by declares
+  // `expedite.start`/`sub`/`timeout` fidelity bands unconditionally for every
+  // sport built on it, regardless of whether that sport's own `records` cfg
+  // flag is ever true in a shipped variant. Each entry below flips exactly
+  // the `records` flags none of that module's shipped variants do — a
+  // coverage instrument, not a preset; nothing outside this harness reads it.
+  badminton: {
+    // bwf/short both inherit `records: {timeouts:false, sanctions:true,
+    // substitutions:false, expedite:false}` — timeouts, substitutions AND
+    // expedite are unreachable from any shipped config.
+    activeRecords: {
+      records: { timeouts: true, sanctions: true, substitutions: true, expedite: true },
+    },
+  },
   cricket: {
     superOver: { superOver: true, ballsPerInnings: 30, maxOversPerBowler: 5, minOversForResult: 1 },
   },
@@ -817,6 +820,23 @@ const COVERAGE_CONFIGS: Record<string, Record<string, unknown>> = {
   // hockey defaults it on, which is why only one of the two period sports
   // needed this.
   hockey: { assisted: { assists: true } },
+  tabletennis: {
+    // default/bo7/hardbat-21 all inherit `records.substitutions: false` — the
+    // only one of the four flags no tabletennis variant ever turns on
+    // (timeouts, sanctions and expedite are already true by default).
+    subsEnabled: {
+      records: { timeouts: true, sanctions: true, substitutions: true, expedite: true },
+    },
+  },
+  volleyball: {
+    // indoor/beach both set `records.expedite: false` — FIVB volleyball has
+    // no ITTF-style expedite system, so no REAL variant will ever turn this
+    // on. Kept reachable here only because `padSpec.fidelity` (shared across
+    // the whole set-based kernel) still declares `volleyball.expedite.start`.
+    expedite: {
+      records: { timeouts: true, sanctions: true, substitutions: true, expedite: true },
+    },
+  },
 };
 
 /** T2 (#425 follow-up) — configs whose only job is to SET the optional knobs no
