@@ -149,6 +149,15 @@ Divisions  ledger rows: avatar · name + format line · progress bar + status li
   `match_day` → "Match day"; else earliest next fixture date; all `finished` →
   "Finished").
 - "Needs you" hides entirely when empty (no "all clear" box).
+- **Identity glyphs (owner ruling 2026-09-02):** every division row carries its
+  SPORT icon in the avatar slot — the uploaded division logo when one exists
+  (`resolveLogoUrl`, as `EntityCard` tile media does today), otherwise the sport
+  glyph from `sportEmoji(sport_key)` (`components/discovery-cards.tsx:21`,
+  already used by the org page), never a letter monogram. The competition
+  masthead carries NO sport icon: a competition can span sports, so its sub-line
+  names the sport(s) as text ("Football · 2 divisions") and the icon lives on the
+  rows. W1 reuses the emoji map; replacing it with a monochrome SVG set is a
+  follow-up, not this programme.
 - Division ledger replaces the `EntityCard` grid for divisions on this page only;
   `EntityCard` stays for orgs/competitions elsewhere. New
   `components/v2/desk/division-ledger.tsx`, `needs-you.tsx`, `phase-pill.tsx`.
