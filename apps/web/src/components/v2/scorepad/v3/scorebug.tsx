@@ -112,15 +112,24 @@ function HalfContent({ half, hintText }: { half: ScorebugHalf; hintText: string 
        *  `justify-center`). Measured at 320 in a real browser before and after
        *  — see __tests__/scorebug.test.ts's own note for the rects. Chassis-
        *  wide: every skin's ScorebugSpec renders through this component. */}
-      {/* R7-28 — capped at TWO lines, found by reading a real 320 capture:
-       *  a long entrant name wrapped to three lines above a single-digit
-       *  score, so the name outweighed the number on a surface whose entire
-       *  job is to show the score. `line-clamp-2` needs `display:-webkit-box`,
-       *  which is why this is no longer `flex` — the children are each
-       *  `inline-flex` already, so the LED dot and the "/" separator keep
-       *  their own alignment, and a half whose name fits on one or two lines
-       *  (cricket's, football's, every singles fixture, most doubles pairs)
-       *  renders exactly what it rendered before.
+      {/* R7-28 — capped at THREE lines (was two), found by reading a real 320
+       *  capture: a long entrant name wrapped to three lines above a single-
+       *  digit score, so the name outweighed the number on a surface whose
+       *  entire job is to show the score. `line-clamp-N` needs
+       *  `display:-webkit-box`, which is why this is no longer `flex` — the
+       *  children are each `inline-flex` already, so the LED dot and the "/"
+       *  separator keep their own alignment, and a half whose name fits on
+       *  one or two lines (cricket's, football's, every singles fixture,
+       *  most doubles pairs) renders exactly what it rendered before — a
+       *  clamp only takes effect once content actually needs the extra line.
+       *
+       *  Bumped 2→3 (found the same way, a real 320 capture of a doubles
+       *  pair with two long names): with the clamp at 2, `wrap-anywhere`
+       *  let the FIRST name alone consume both allowed lines, so the
+       *  separator and the SECOND partner's name were clamped away
+       *  entirely — invisible, not merely truncated. Three lines gives a
+       *  long doubles pair room for one wrapped line each; nothing renders
+       *  differently for the common case (short names still fit in one).
        *
        *  Nothing is lost when it clamps: `whoNames()` builds the half's
        *  ACCESSIBLE name from the same data and is unaffected, so a screen
@@ -128,7 +137,7 @@ function HalfContent({ half, hintText }: { half: ScorebugHalf; hintText: string 
        *  Chassis-wide: every skin's ScorebugSpec renders through here, so
        *  this was verified against the other skins' captures too. */}
       <div
-        className={`line-clamp-2 min-w-0 text-center app-display text-[13px] font-semibold tracking-wide ${NIGHT_TILE_CLASSES.creamText} sm:text-sm`}
+        className={`line-clamp-3 min-w-0 text-center app-display text-[13px] font-semibold tracking-wide ${NIGHT_TILE_CLASSES.creamText} sm:text-sm`}
       >
         {half.who.map((w, i) => (
           // NOT `inline-flex`: an inline-flex box is ATOMIC to the

@@ -305,11 +305,16 @@ describe("the scorebug who-line with a long unbroken name (R3/F)", () => {
     }
   });
 
-  it("caps the who-block at two lines, and lets it shrink", () => {
-    // The SCORE is what this surface exists to show. Before the cap a long
-    // entrant name wrapped to three lines above a single digit and outweighed
-    // it. Selected by the clamp itself, which is the behaviour under test.
-    const blocks = [...html().matchAll(/<div[^>]*\sclass="([^"]*line-clamp-2[^"]*)"/g)];
+  it("caps the who-block at three lines, and lets it shrink", () => {
+    // The SCORE is what this surface exists to show. Before the ORIGINAL cap
+    // a long entrant name wrapped to three lines above a single digit and
+    // outweighed it — that shipped as `line-clamp-2`. Bumped to 3 (mobile.
+    // spec.ts's real-browser doubles capture, mobile-320): at 2, a single
+    // long name alone could consume both allowed lines, clamping the
+    // separator and the SECOND doubles partner's name away entirely —
+    // invisible, not merely truncated. Selected by the clamp itself, which
+    // is the behaviour under test.
+    const blocks = [...html().matchAll(/<div[^>]*\sclass="([^"]*line-clamp-3[^"]*)"/g)];
     expect(blocks.length, "both halves cap their who-block").toBe(2);
     for (const block of blocks) {
       expect(block[1], "the who-block must still shrink below its longest word").toContain("min-w-0");
