@@ -44,7 +44,7 @@ While expedite is running, the strip shows **Expedite**, and each rally offers a
 
 ## Recording level
 
-Rally-by-rally is the finest level and needs a plan that includes it. Below that the halves stop being tappable and the pad explains why, naming the plan — *"Record each game's final score instead"* — beside a greyed-out **Rally by rally is locked** tile. Set score works at every level; time-outs and sanctions from **Card** upwards. See [choosing a detail level](/help/scoring/fidelity).
+Rally-by-rally is the finest level and needs a plan that includes it. Below that the halves stop being tappable and the pad explains why. A note names the plan that unlocks it and adds *"Record each game's final score instead."*; the rally tile itself is greyed out, reading **Rally by rally is locked** and captioned *"Record each game's final score"*. Set score works at every level; time-outs and sanctions from **Card** upwards. See [choosing a detail level](/help/scoring/fidelity).
 
 ## Common questions
 
