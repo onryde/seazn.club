@@ -15260,6 +15260,33 @@ async function gapSuite(admin: Session, org1Id: string, proOrgId: string): Promi
     { Authorization: `Bearer ${dlSecret}` },
   );
   check("gap device-link bearer can score", dlEvent.status === 201);
+
+  // …and ONLY its own fixture. A dl_ token is minted for one fixture; a
+  // sibling in the same division must be refused at the door. Pin 403 AND the
+  // message: a bare non-200 also passes for an expired link, a stale seq or a
+  // malformed payload, none of which is the ownership refusal. This is the
+  // difference between "scoring detail is free" and "open scoring", and smoke
+  // is the only gate that sees it before a merge (e2e runs on push to main).
+  const dlOtherFixtureId = v1data<{ fixtures: { id: string }[] }>(gen).fixtures[1]!.id;
+  const dlOtherBefore = v1data<{ last_seq: number }>(
+    await v1(admin, `/api/v1/fixtures/${dlOtherFixtureId}/state`),
+  ).last_seq;
+  const dlCross = await v1(
+    bare,
+    `/api/v1/fixtures/${dlOtherFixtureId}/events`,
+    "POST",
+    { expected_seq: dlOtherBefore, type: "generic.result", payload: { p1Score: 9, p2Score: 0 } },
+    { Authorization: `Bearer ${dlSecret}` },
+  );
+  const dlOtherAfter = v1data<{ last_seq: number }>(
+    await v1(admin, `/api/v1/fixtures/${dlOtherFixtureId}/state`),
+  ).last_seq;
+  check(
+    "gap device-link bearer refused on a fixture it does not own (403, message, nothing written)",
+    dlCross.status === 403 &&
+      dlCross.json.error?.message === "This device link is for a different fixture" &&
+      dlOtherAfter === dlOtherBefore,
+  );
   // The pad page wears the org brand (chain set by jul3Suite: org #1d4ed8);
   // Gap Cup has no competition color, so the org default shows through.
   const padHtml = await (await fetch(`${BASE}/score/${dlSecret}`)).text();
