@@ -120,6 +120,7 @@ self-serve.
 | R9 | AI credits: Free **5**/mo, Pro **35**/mo, Pass M **+25**, Pass L **+50** (per-rung grant). |
 | R10 | Staff seats (`members.max`): Free **3**, Pro **10**. |
 | R11 | Device hand-over (`scoring.device_links`) is a paid feature: Pro, and both pass rungs (PO recommendation accepted by silence — see §2). |
+| R13 | Extra-seat add-on is **hidden** for now (owner: "we don't have add-on for extra seat, right? so for now, hide that add-on"). Verified: `app/api/billing/extra-seats/route.ts` + `extra-seats.ts` + webhook sync exist, but no purchase control renders anywhere; only the pricing add-ons strip names it. Remove the strip line and every mention in copy/help; keep code and price dormant. |
 | R12 | **Prices come down** (owner: "reduce the price"), ladder R2: Pro **$9/mo, $79/yr**; Pass M **$15**, Pass L **$29**. Five currencies stay (USD/EUR/GBP/AUD/INR), each at a **purchasing-power set point**, never an FX copy. Table in §3a. |
 
 Product-owner defaults below were presented and not overridden; treat them as
@@ -136,7 +137,7 @@ Rationale is one line per changed row; unchanged rows say "keep".
 | key | Free | Pro | Pass M | Pass L | Ent | why |
 |---|---|---|---|---|---|---|
 | `orgs.max_owned` | 1 | 5 | – | – | ∞ | keep; extra org $9/mo add-on stays |
-| `members.max` (staff) | **3** | **10** | – | – | ∞ | R10; extra seat $4/mo add-on stays |
+| `members.max` (staff) | **3** | **10** | – | – | ∞ | R10; the extra-seat add-on is **hidden** (R13): backend and Stripe price stay dormant, nothing advertises it |
 | `scorers.max` | **2** | **10** | – | – | ∞ | pool exists (Background); 1/1 was indistinguishable from Free. Volunteer scorer logins are cheap seats; a club with ten is normal. Alternative rejected: merging into staff seats would let scorers eat the 10 staff |
 | `competitions.max_active` | **3** | ∞ | +1 | +1 | ∞ | R6; Pro headline stays "unlimited competitions" |
 | `dashboard.public.max` | **3** | ∞ | – | – | ∞ | growth: equals Free's 3 competitions so every free competition can be public and carry the badge. Org-level, a pass cannot lift it, which is why it must equal the comp cap |
@@ -272,7 +273,7 @@ Pro within 30 days.
 | Pro annual tier 2+ | 39 | 34 | 29 | 49 | 1,499 |
 | Event Pass M | 15 | 14 | 12 | 19 | 599 |
 | Event Pass L | 29 | 27 | 24 | 39 | 1,199 |
-| Extra seat / month | 2 | 2 | 2 | 3 | 99 |
+| Extra seat / month (**hidden**, R13 — catalog price kept for the dormant backend) | 2 | 2 | 2 | 3 | 99 |
 | Size pack +32 (one-time) | 5 | 5 | 4 | 7 | 199 |
 | AI credit packs 40 / 105 / 220 / 460 | unchanged (10 / 25 / 50 / 100 and today's set points) — credits are compute, not packaging |
 
@@ -501,6 +502,9 @@ dictionaries, help and `copy-truth.ts`, so no parallel lanes.
 ## 10. Out of scope (recorded so nobody re-derives them)
 
 - A `scorers.max` seat add-on; a team pack add-on (R4 chose a flat 100).
+- A purchase control for the extra-seat add-on (R13 hides it; the backend
+  stays so a later wave can surface it by mirroring the `addOns.extraOrg.*`
+  control).
 - Custom domain, white label, SSO — sold in conversation, built later.
 - A contact form; mailto stays.
 - Capping venues, courts, seasons, players, pending invites, API-key count,
