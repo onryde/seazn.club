@@ -171,12 +171,20 @@ describe("WS-SQ seam: a bench candidate's badge is reachable from the WIRE row (
       wireRow({ person_id: "h1", slot: "starting", position_key: "GK", order_no: 1, squad_number: 1 }),
       wireRow({ person_id: "h2", slot: "starting", position_key: "CB", order_no: 2, squad_number: 4, roles: ["captain"] }),
       wireRow({ person_id: "h3", slot: "starting", position_key: "ST", order_no: 3, squad_number: 9 }),
-      wireRow({ person_id: "h4", slot: "bench", order_no: 4, squad_number: 14 }),
-      wireRow({ person_id: "h5", slot: "bench", order_no: 5, squad_number: 15 }),
+      // Fix round 1 (MINOR): these two DECLARE a bench position. Previously
+      // both carried `position_key: null`, which made this case pass for the
+      // wrong reason — it would still have gone green if `memberFromSlot`
+      // stopped dropping a bench slot's declared position, because there was
+      // no position to drop. With a real one declared, `lead` is "14" ONLY
+      // because the fold refuses to treat a bench preference as an occupancy,
+      // so this case now witnesses the `positionKey ?? squadNumber`
+      // fall-through in the realistic arrangement rather than a degenerate one.
+      wireRow({ person_id: "h4", slot: "bench", position_key: "ST", order_no: 4, squad_number: 14 }),
+      wireRow({ person_id: "h5", slot: "bench", position_key: "CB", order_no: 5, squad_number: 15 }),
     ]);
     const away = side("ent-away", [
       wireRow({ person_id: "a1", slot: "starting", position_key: "GK", order_no: 1, squad_number: 1 }),
-      wireRow({ person_id: "a4", slot: "bench", order_no: 2, squad_number: 16 }),
+      wireRow({ person_id: "a4", slot: "bench", position_key: "ST", order_no: 2, squad_number: 16 }),
     ]);
     const lineups = lineupPairFrom(home, away);
     const state = foldClient(football, cfg, lineups, [makeEnvelope(0, { type: "core.start", payload: {} })]);
@@ -203,5 +211,10 @@ describe("WS-SQ seam: a bench candidate's badge is reachable from the WIRE row (
     expect(slot.candidateMeta?.["h5"]?.lead).toBe("15");
     // Two bench rows that were previously indistinguishable now are not.
     expect(slot.candidateMeta?.["h4"]?.lead).not.toBe(slot.candidateMeta?.["h5"]?.lead);
+    // And explicitly NOT their declared bench position — the fixture declares
+    // "ST"/"CB" for these two, so a fold that carried a bench preference as an
+    // occupancy would show those instead and this assertion would fail.
+    expect(slot.candidateMeta?.["h4"]?.lead).not.toBe("ST");
+    expect(slot.candidateMeta?.["h5"]?.lead).not.toBe("CB");
   });
 });
