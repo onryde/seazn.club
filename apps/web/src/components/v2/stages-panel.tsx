@@ -18,6 +18,7 @@ import { useLocaleOrDefault, useMsg } from "@/components/i18n/dict-provider";
 import { seedingErrorMessage } from "@/lib/seeding-error";
 import type { Locale } from "@/lib/i18n-constants";
 import type { MessageKey } from "@/lib/messages";
+import type { DivisionPhase } from "@/lib/division-phase";
 import { resolveSlotLabel } from "@/lib/slot-label";
 import { roundRoleFor, roundRoleLabel } from "@/lib/round-role-label";
 import { parseRoundRoleKey } from "@seazn/engine/competition";
@@ -169,6 +170,11 @@ interface Props {
   orgTz: string;
   /** Documents menu goes through the Jul3/06 / v12 exports (Pro `exports` gate). */
   canExport: boolean;
+  /** Competition Desk (2026-09-02): the division's derived phase
+   *  (`resolvePhase`, division-phase.ts). Optional — pre-existing
+   *  `stages-panel-*.test.tsx` files build props without it; an absent
+   *  phase hides the start-locks tip below, which is the safe direction. */
+  phase?: DivisionPhase;
 }
 
 // PROMPT-66: stage kinds that accept an ad-hoc match (standings fold every
@@ -390,7 +396,7 @@ export function capacityRequestForStage(
 }
 
 
-export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, venues = [], rosterDrift = {}, canEdit, tz, orgTz, canExport }: Props) {
+export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, venues = [], rosterDrift = {}, canEdit, tz, orgTz, canExport, phase }: Props) {
   const msg = useMsg();
   // Only for Intl.ListFormat in attachmentWarning below — the rebuild
   // confirm dialog joins its "this also clears …" list per locale. The
@@ -715,7 +721,7 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
 
   return (
     <div className="space-y-6">
-      {canEdit && <TipCallout id="division.start-locks" />}
+      {canEdit && phase === "setting_up" && <TipCallout id="division.start-locks" />}
       {notice && (
         <p className="flex items-center gap-2 rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
           {notice}
@@ -801,14 +807,12 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
         </section>
       )}
 
-      {/* Active work first: completed stages sink to the bottom, so once the
-          league wraps up the semis/final card is what the organiser lands on. */}
+      {/* Competition Desk (2026-09-02, task 6): stages always in seq order —
+          the old complete-sinks-last rule reshuffled a running division's own
+          progression order, which fought the phase/attention model's stage
+          identification (both key off `seq`). */}
       {[...stages]
-        .sort(
-          (a, b) =>
-            (a.status === "complete" ? 1 : 0) - (b.status === "complete" ? 1 : 0) ||
-            a.seq - b.seq,
-        )
+        .sort((a, b) => a.seq - b.seq)
         .map((stage) => {
         const stageFixtures = fixtures.filter((f) => f.stage_id === stage.id);
         const rounds = [...new Set(stageFixtures.map((f) => f.round_no))].sort((a, b) => a - b);

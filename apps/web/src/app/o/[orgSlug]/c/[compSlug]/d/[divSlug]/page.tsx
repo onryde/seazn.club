@@ -28,6 +28,7 @@ import { getScheduleSettings } from "@/server/usecases/schedule";
 // picker excludes archived courts either way via `courtGroups`).
 import { listVenues } from "@/server/usecases/venues";
 import { resolveVenueTz } from "@/lib/tz";
+import { resolvePhase, type DivisionStatus } from "@/lib/division-phase";
 import { hasFeature } from "@/lib/entitlements";
 import { listEntrantLogoUrls } from "@/server/usecases/teams";
 import { resolveModule } from "@/server/engine-db";
@@ -135,6 +136,36 @@ export default async function DivisionPage({
     // and venue-qualified on the board — the same court, two labels.
     listVenues(auth, { includeArchived: true }),
   ]);
+  // Competition Desk (2026-09-02, task 6): the division's derived phase
+  // (`resolvePhase`, division-phase.ts) — this page needs only the phase
+  // itself (gates the StagesPanel start-locks tip); ATTENTION is the
+  // competition page's job, so eventCount/awaitingRegistrations are stubbed
+  // at 0 rather than fetched here.
+  const phase = resolvePhase({
+    divisionStatus: division.status as DivisionStatus,
+    stages: stages.map((s) => ({
+      id: s.id,
+      name: s.name,
+      seq: s.seq,
+      status: s.status,
+      hasFixtures: fixtures.some((f) => f.stage_id === s.id),
+      needsProposal:
+        s.status === "pending" &&
+        (s.progression as { timing?: string } | null)?.timing === "setup" &&
+        !fixtures.some((f) => f.stage_id === s.id),
+    })),
+    fixtures: fixtures.map((f) => ({
+      id: f.id,
+      status: f.status,
+      scheduledAt: f.scheduled_at,
+      eventCount: 0,
+      matchMinutes: scheduleSettings.config.matchMinutes ?? 60,
+    })),
+    now: new Date().toISOString(),
+    // Exactly what StagesPanel's own `orgTz` prop already resolves below.
+    tz: resolveVenueTz(null, page.org.timezone),
+    awaitingRegistrations: 0,
+  });
   // Review wave 3: the panel gets court IDENTITY and display only — same trim
   // the schedule page does, and for the same reason. `listVenues` rows carry
   // every court's weekly `hours` and dated `exceptions` (the Directory calendar
@@ -526,6 +557,7 @@ export default async function DivisionPage({
               // zone override (#448).
               orgTz={resolveVenueTz(null, page.org.timezone)}
               canExport={canExport}
+              phase={phase}
             />
           </>
         )}
