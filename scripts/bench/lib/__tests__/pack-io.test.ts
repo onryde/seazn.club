@@ -200,6 +200,29 @@ describe("expectedFixtureCount — derived from the pack, never typed in", () =>
     expect(expectedFixtureCount(pack, "d-tiny", "s-league")).toBe(18);
   });
 
+  it("counts only the entrants of THAT division", () => {
+    // `_tiny` has exactly one division, so a count that ignored `divisionRef`
+    // would agree with the right answer on it — the fixture has to carry a
+    // SECOND division for the filter to be witnessable at all.
+    const pack = tinyPack();
+    const first = pack.divisions[0] as Pack["divisions"][number];
+    const anEntrant = pack.entrants[0] as Pack["entrants"][number];
+    const two = {
+      ...pack,
+      divisions: [first, { ...first, ref: "d-other" }],
+      entrants: [
+        ...pack.entrants,
+        { ...anEntrant, ref: "e-x", divisionRef: "d-other" },
+        { ...anEntrant, ref: "e-y", divisionRef: "d-other" },
+        { ...anEntrant, ref: "e-z", divisionRef: "d-other" },
+      ],
+    } as Pack;
+    // Two entrants over three legs, not five.
+    expect(expectedFixtureCount(two, "d-tiny", "s-league")).toBe(3);
+    // Three entrants over three legs is nine.
+    expect(expectedFixtureCount(two, "d-other", "s-league")).toBe(9);
+  });
+
   it("defaults to a single leg when the stage declares none", () => {
     const pack = tinyPack();
     const single = {

@@ -41,6 +41,12 @@ function fullReport(): BenchReportType {
         officials: { assigned: 0, conflicts: 0 },
         news: { drafted: 0, published: 0 },
         adaptations: [],
+        // B02 — a GREEN suite with something to say. Present in the canonical
+        // fixture (not only in the render test) because `writeReport` PARSES
+        // before it writes: a field missing from the schema is stripped from
+        // report.json and from report.md with it, silently, and a renderer
+        // test alone cannot see that — it renders the in-memory object.
+        warnings: ["leaderboards.not_derived @ expected.leaderboards: not checked offline"],
       },
     ],
     gate: "green",

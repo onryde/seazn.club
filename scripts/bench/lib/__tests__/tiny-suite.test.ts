@@ -23,8 +23,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import pino from "pino";
 import { loadPackValue } from "../pack-io.ts";
-import { TINY_PACK_PATH, tinyPackStage, tinyPlan } from "../suites/tiny.ts";
+import { runTinySuite, TINY_PACK_PATH, tinyPackStage, tinyPlan } from "../suites/tiny.ts";
 import type { Pack } from "../pack-schema.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -88,24 +89,71 @@ describe("tinyPackStage — warnings are reportable, never fatal", () => {
   });
 });
 
+describe("runTinySuite — what the SuiteReport carries", () => {
+  // Two paths, both reachable with no server: the pack stage refusing before
+  // anything is created, and the HTTP half failing after it. Neither is the
+  // live run — that needs a database and is the owner's to drive — but both
+  // are the report SHAPE, and the shape is where a warning goes missing.
+  const silent = pino({ level: "silent" });
+
+  it("refuses BEFORE the network when the pack is wrong, and says so in the report", async () => {
+    const report = await runTinySuite({
+      // A base that would fail loudly if anything reached it.
+      base: "http://127.0.0.1:1",
+      engine: "optimized",
+      keep: true,
+      log: silent,
+      packPath: path.join(REPO_ROOT, "scripts/bench/packs/_absent.json"),
+    });
+    expect(report.gate).toBe("red");
+    expect((report.errors ?? []).join(" | ")).toContain("pack.unreadable");
+    // `requestedEngine` still records what the CLI asked for, even on the
+    // path that never got as far as the solver.
+    expect(report.solver?.requestedEngine).toBe("optimized");
+  });
+
+  it("carries the pack's warnings into the report even when the HTTP half fails", async () => {
+    const report = await runTinySuite({
+      base: "http://127.0.0.1:1",
+      engine: "greedy",
+      keep: false,
+      log: silent,
+      packPath: TINY_PACK_PATH,
+    });
+    // The network is unreachable, so the gate is red for THAT reason…
+    expect(report.gate).toBe("red");
+    expect(report.errors ?? []).not.toHaveLength(0);
+    // …and the pack's two permanent warnings still reached the report rather
+    // than being dropped on the way through the run.
+    expect(report.warnings ?? []).toHaveLength(2);
+    expect((report.warnings ?? []).join(" | ")).toContain("leaderboards.not_derived");
+  });
+});
+
 describe("tinyPlan — every number the live run asserts comes from the pack", () => {
   it("derives the fixture count from the pack's entrants and legs, not from a constant", () => {
     // `_tiny` declares 2 entrants and `legs: 3`.
     expect(tinyPlan(tinyPack()).expectedFixtures).toBe(3);
   });
 
-  it("MOVES when the pack's legs move — 1, not 3, at a single leg", () => {
+  it("MOVES when the pack's legs move", () => {
     const pack = tinyPack();
-    const single = {
-      ...pack,
-      divisions: [
-        {
-          ...pack.divisions[0],
-          stages: [{ ...(pack.divisions[0]?.stages[0] as object), config: {} }],
-        },
-      ],
-    } as Pack;
-    expect(tinyPlan(single).expectedFixtures).toBe(1);
+    const withLegs = (legs: number): Pack =>
+      ({
+        ...pack,
+        divisions: [
+          {
+            ...pack.divisions[0],
+            stages: [{ ...(pack.divisions[0]?.stages[0] as object), config: { legs } }],
+          },
+        ],
+      }) as Pack;
+    // FIVE, not one and not three — the two values a hardcoded bound would
+    // plausibly be. A "moves" test whose expected value coincides with the
+    // wrong constant cannot witness the regression it exists for; this one
+    // was written with `1` and survived hardcoding `1`.
+    expect(tinyPlan(withLegs(5)).expectedFixtures).toBe(5);
+    expect(tinyPlan(withLegs(1)).expectedFixtures).toBe(1);
   });
 
   it("carries the pack's own competition, division, entrants and stage", () => {

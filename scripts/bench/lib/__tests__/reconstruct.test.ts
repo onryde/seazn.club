@@ -401,6 +401,26 @@ describe("reconstructSetRallies — refusals", () => {
     expect(() => call([{ home: 21, away: 21 }])).toThrow(/set 1 declares 21–21/);
   });
 
+  it("refuses a score that is no finished set AT ALL, before it walks anywhere", () => {
+    // 19–15 is a live badminton game, not a result. This is a DIFFERENT
+    // authoring error from 22–19 (which is over earlier) and it is caught by a
+    // DIFFERENT half of the plan: the lattice endpoint has to be a CLOSED set,
+    // not merely a reachable one.
+    //
+    // Found by the mutation sweep. Dropping that half survived the whole suite,
+    // because the engine-checked postcondition after the walk caught it instead
+    // and every existing test was satisfied by either message — two guards
+    // covering for each other, and so neither one tested. The assertion below
+    // pins the PLANNING refusal specifically: the postcondition's wording
+    // ("asked for …, the fold banked … (still open)") does not match it.
+    expect(() =>
+      call([
+        { home: 19, away: 15 },
+        { home: 21, away: 10 },
+      ]),
+    ).toThrow(/no legal rally order reaches set 1's declared 19–15/);
+  });
+
   it("refuses a set list that decides the match before its last set", () => {
     expect(() =>
       call([
@@ -611,10 +631,20 @@ describe("fillPeriodMarkers — the whistles a match sheet does not record", () 
       segments: [[start, puck(HOME)], [], [], [puck(HOME)]],
     });
     // Derived from the engine, never typed in: whatever labels this cfg
-    // declares, in the order the engine accepts them, ending at "FT".
-    expect(
-      events.filter((e) => e.type === "hockey.period.advance").map((e) => e.payload["to"]),
-    ).toEqual(["Q2", "Q3", "Q4", "FT"]);
+    // declares, in the order the engine accepts them, ending at "FT". The WHOLE
+    // sequence is pinned, not just the labels — WHICH PERIOD a goal was scored
+    // in is the fact a period filler exists to preserve, and a filler that
+    // dropped the inter-segment whistle would put every goal in Q1 while still
+    // emitting these four labels at the end.
+    expect(show(events)).toEqual([
+      "core.start:{}",
+      'hockey.goal:{"by":"@e-alpha","kind":"fg"}',
+      'hockey.period.advance:{"to":"Q2"}',
+      'hockey.period.advance:{"to":"Q3"}',
+      'hockey.period.advance:{"to":"Q4"}',
+      'hockey.goal:{"by":"@e-alpha","kind":"fg"}',
+      'hockey.period.advance:{"to":"FT"}',
+    ]);
     const { state } = foldMatchWithStoppage(
       hockey,
       cfg,
@@ -661,6 +691,110 @@ describe("fillPeriodMarkers — the whistles a match sheet does not record", () 
         segments: [[start], []],
       }),
     ).toThrow(/accepted none of/);
+  });
+
+  // ---------------------------------------------------------------------
+  // The filler's ARBITRATION policy, which no shipped module can reach.
+  //
+  // Every module that ships accepts exactly one marker from any given phase
+  // (football's `applyPeriod` and the period kernel's `applyAdvance` both
+  // refuse every other), so three of the filler's refusals are unreachable
+  // through a real sport — and an untested defensive branch is how a policy
+  // quietly becomes "pick the first one". The minimal modules below implement
+  // the same `SportModule` surface the filler consumes, so they exercise the
+  // policy rather than a mirror of it. Found as survivors by the mutation
+  // sweep.
+  // ---------------------------------------------------------------------
+  interface FakeOptions {
+    readonly values?: readonly string[];
+    readonly padSpec?: boolean;
+    readonly decides?: boolean;
+  }
+  const fakeModule = (options: FakeOptions = {}): AnySportModule => {
+    const values = options.values ?? ["a"];
+    const base = {
+      key: "fake",
+      version: "1.0.0",
+      init: () => ({ n: 0 }),
+      apply: (state: { n: number }) => ({ n: state.n + 1 }),
+      outcome: (state: { n: number }) =>
+        options.decides === true && state.n > 2 ? { kind: "draw" } : null,
+      summary: () => ({ headline: "", perSide: [] }),
+    };
+    if (options.padSpec === false) return base as unknown as AnySportModule;
+    return {
+      ...base,
+      padSpec: () => ({
+        panels: [
+          {
+            labelKey: { key: "p", label: "P" },
+            phase: "live",
+            layout: "grid",
+            actions: [
+              {
+                type: "fake.marker",
+                labelKey: { key: "a", label: "A" },
+                fields: [{ kind: "enum", path: "to", values }],
+                attribution: [],
+              },
+            ],
+          },
+        ],
+        fidelity: {},
+        fidelityEntitlements: {},
+      }),
+    } as unknown as AnySportModule;
+  };
+
+  it("REFUSES to pick when a module accepts more than one marker", () => {
+    expect(() =>
+      fillPeriodMarkers({
+        module: fakeModule({ values: ["a", "b"] }),
+        cfg: {},
+        lineups: lineups(),
+        markerType: "fake.marker",
+        segments: [[], []],
+      }),
+    ).toThrow(/accepted 2 markers here/);
+  });
+
+  it("refuses a module that declares no padSpec at all", () => {
+    expect(() =>
+      fillPeriodMarkers({
+        module: fakeModule({ padSpec: false }),
+        cfg: {},
+        lineups: lineups(),
+        markerType: "fake.marker",
+        segments: [[], []],
+      }),
+    ).toThrow(/declares no padSpec/);
+  });
+
+  it("stops rather than filling for ever when markers never decide the match", () => {
+    expect(() =>
+      fillPeriodMarkers({
+        module: fakeModule(),
+        cfg: {},
+        lineups: lineups(),
+        markerType: "fake.marker",
+        segments: [[]],
+        maxTrailingMarkers: 3,
+      }),
+    ).toThrow(/still undecided after 3 trailing marker\(s\)/);
+  });
+
+  it("stops as soon as the module says the match is decided", () => {
+    const events = fillPeriodMarkers({
+      module: fakeModule({ decides: true }),
+      cfg: {},
+      lineups: lineups(),
+      markerType: "fake.marker",
+      segments: [[]],
+      maxTrailingMarkers: 8,
+    });
+    // Three markers: the fake decides once its counter passes two, and the
+    // loop asks the MODULE rather than counting periods itself.
+    expect(events).toHaveLength(3);
   });
 
   it("folds green through the real validator as a REAL-provenance football stream", () => {

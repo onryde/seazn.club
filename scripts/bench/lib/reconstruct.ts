@@ -450,7 +450,12 @@ function verifyAgainstFoldMatch(
   const envelopes = events.map((event, i) => packEnvelope(fixtureId, event, i));
   const { state } = foldMatchWithStoppage(sportModule, cfg, lineups, envelopes, PACK_FOLD_OPTIONS);
   const ledger = setLedger(sportModule, state);
-  const got = ledger.map((set) => `${set.home}–${set.away}${set.closed ? "" : "*"}`).join(", ");
+  // Both sides through `scoreText`, never one inline template and one call: a
+  // comparison whose two halves format the same fact in two places diverges the
+  // first time either moves, and reds on the formatting rather than the data.
+  // The mutation sweep caught exactly that — changing the separator reddened
+  // twenty-two exactness tests instead of the one note test it touched.
+  const got = ledger.map((set) => `${scoreText(set)}${set.closed ? "" : "*"}`).join(", ");
   const want = sets.map(scoreText).join(", ");
   if (got !== want) {
     throw new Error(
