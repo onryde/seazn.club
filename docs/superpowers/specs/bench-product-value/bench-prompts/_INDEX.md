@@ -29,8 +29,8 @@ B03/B04/B05 are sequential (shared `scripts/bench/lib/`). B17 needs B15
 | Session | Prompt file | What | Depends on | Status |
 |---|---|---|---|---|
 | B00 | `B00-repin-and-refresh.md` | global re-pin, risk answers, env addendum | gate open | **DONE 2026-08-26** |
-| B01 | `B01-runner-core.md` | CLI, pre-flight, HTTP client, report writer | B00 | **in review (#658)** |
-| B02 | `B02-pack-lib.md` | PackSchema, stage-0 validator, reconstruction | B01 | TODO |
+| B01 | `B01-runner-core.md` | CLI, pre-flight, HTTP client, report writer | B00 | **MERGED #658 2026-08-26** |
+| B02 | `B02-pack-lib.md` | PackSchema, stage-0 validator, reconstruction | B01 | **in review** |
 | B03 | `B03-seeding-layer.md` | org/comp/divisions/persons/officials/plans/claims | B02 | TODO |
 | B03r | `B03r-registration-layer.md` | registration entry path: `--entry` flag, http+browser drivers, PackSchema `registration` block, Stripe test-mode payer, funnel oracle | B03 + **RS007–RS011, RS010 merged** | TODO (gated) |
 | B04 | `B04-scheduling-layer.md` | config apply, auto/validate, checker, certificate, metrics | B03 | TODO |
@@ -131,7 +131,7 @@ fall back from, is live — no B-prompt needs its fallback path.
   index's B09 row are corrected. No other B-prompt cites a stale
   file:line (only the design spec does; the B0*-B18 prompts cite none
   directly, confirmed by grep).
-- 2026-08-26 — **B01 in review, PR #658.** Runner core: bench.ts CLI,
+- 2026-08-26 — **B01 MERGED, PR #658** (merged 2026-08-26 17:19Z; this line said "in review" until B02 corrected it). Runner core: bench.ts CLI,
   lib/env.ts pre-flight (pure `runPreflight(base, probes)` over an
   injected `PreflightProbes`), lib/http.ts (hand-copied smoke.ts session
   shapes + a typed `request()` that fails the run on unallowed 4xx/5xx),
