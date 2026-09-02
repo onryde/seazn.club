@@ -523,6 +523,48 @@ function nameOf(view: PadHostView, personId: string, t: TFn): string {
   return view.personNames[personId] ?? t("eventCopy.unknownPerson");
 }
 
+/**
+ * R8/#676 — every value the `server` slot can take for THIS fixture, which is
+ * answerable WITHOUT knowing who is serving: each side contributes exactly the
+ * string `buildStrip` would print for it. Mirrors that derivation rather than
+ * restating it — `soleMemberOf` for a singles side, the side label for a pair,
+ * the same two branches and in the same order.
+ *
+ * Used only to hold the slot's width (`StripItem.reserve`), never displayed.
+ */
+function serverCandidates(view: PadHostView, t: TFn): string[] {
+  return (["home", "away"] as const).map((side) => {
+    const sole = soleMemberOf(view.squads, side);
+    return sole === null ? t(SIDE_LABEL[side]) : nameOf(view, sole, t);
+  });
+}
+
+/** Both BWF service courts — the `court` slot's whole value space. */
+function courtCandidates(t: TFn): string[] {
+  return [
+    t("pad.badminton.scorebug.strip.court.right"),
+    t("pad.badminton.scorebug.strip.court.left"),
+  ];
+}
+
+/**
+ * Is the reader refusing because its two halves DISAGREE, as opposed to a
+ * fixture that simply has no server yet?
+ *
+ * The distinction is the whole of the R8/#676 ruling. A drift refusal
+ * (`ledger-mismatch`, `recorded-disagrees`) is transient-shaped and the row
+ * must not re-flow around it, so the slots are RESERVED. `undeclared` and
+ * `match-over` are not: before the first rally nobody can say who serves and
+ * the pad renders nothing at all — today's behaviour, pinned by
+ * `walkthrough/scorepad-v3-badminton-match.spec.ts`'s own `toHaveCount(0)`,
+ * and explicitly kept by the owner ruling.
+ */
+function serveDrifted(view: PadHostView, state: BadmintonStateShape): boolean {
+  const ctx = serveContextOf(view, state);
+  if (ctx === null) return false;
+  return ctx.unknownBecause === "ledger-mismatch" || ctx.unknownBecause === "recorded-disagrees";
+}
+
 // ---------------------------------------------------------------------------
 // scorebug() — tapModel S, and D-11's fix: ONE score, rendered once.
 // ---------------------------------------------------------------------------
@@ -751,6 +793,7 @@ function buildStrip(
   cfg: BadmintonCfgShape,
   phase: PadPhase,
   serving: ServingInfo | null,
+  drifted: boolean,
   t: TFn,
 ): StripItem[] {
   const items: StripItem[] = [
@@ -763,6 +806,13 @@ function buildStrip(
   ];
   // OMITTED, never rendered stale — D-17's whole point. The engine's own
   // `serveOrderKnown` is the verdict, and there is no placeholder branch.
+  //
+  // R8/#676 adds a WIDTH branch, not a value branch. `reserve` carries both
+  // sides' possible answers so the slot is the same width whichever one lands,
+  // and `reserved` holds that width open while the reader is refusing over
+  // DRIFT — so the centred row does not re-centre around the gap. Nothing is
+  // printed in the gap; see `serveDrifted` for why `undeclared` is excluded.
+  const serverReserve = serverCandidates(view, t);
   if (serving) {
     const value = serving.personId
       ? nameOf(view, serving.personId, t)
@@ -774,13 +824,36 @@ function buildStrip(
     // COLOUR (`tone: "led"`) is reserved for the pip, so lifting it here costs
     // nothing from the one place the sport's colour is allowed to appear.
     // Games, court and interval stay at 70% behind it.
-    items.push({ id: "server", label: t("pad.badminton.scorebug.strip.server"), value, accent: true });
+    items.push({
+      id: "server",
+      label: t("pad.badminton.scorebug.strip.server"),
+      value,
+      accent: true,
+      reserve: serverReserve,
+    });
+  } else if (drifted) {
+    items.push({
+      // No `id`: this slot reports nothing, so nothing may locate it as if it
+      // did (assertScorebugSpec enforces that). The LABEL is still supplied —
+      // it is part of the width the answered state occupies, and the chassis
+      // renders it only into the invisible sizer.
+      label: t("pad.badminton.scorebug.strip.server"),
+      value: "",
+      reserved: true,
+      reserve: serverReserve,
+    });
   }
   // Live only, both of them. A finished match has no court to serve from and
   // no interval to come, and status that outlives its own match is furniture.
   if (phase === "live") {
+    const courtReserve = courtCandidates(t);
     const court = serviceCourt(state, serving, t);
-    if (court) items.push(court);
+    // The court DIES on a refusal and is never held: it reads the parity of
+    // the OPTIMISTIC score (`serviceCourt`), so a court kept across a drift
+    // would be a genuinely wrong answer rather than a stale one. Only its
+    // WIDTH survives.
+    if (court) items.push({ ...court, reserve: courtReserve });
+    else if (drifted) items.push({ value: "", reserved: true, reserve: courtReserve });
     const interval = intervalHint(view, state, cfg, t);
     if (interval) items.push(interval);
   }
@@ -796,7 +869,7 @@ export function buildScorebug(view: PadHostView, t: TFn): ScorebugSpec {
     context: buildContext(state, cfg, t),
     phase,
     halves: [buildHalf(view, state, "home", serving, t), buildHalf(view, state, "away", serving, t)],
-    strip: buildStrip(view, state, cfg, phase, serving, t),
+    strip: buildStrip(view, state, cfg, phase, serving, serving === null && serveDrifted(view, state), t),
   };
 }
 

@@ -610,6 +610,38 @@ function nameOf(view: PadHostView, personId: string, t: TFn): string {
   return view.personNames[personId] ?? t("eventCopy.unknownPerson");
 }
 
+/**
+ * R8/#676 — every value the `server` slot can take, for width reservation
+ * only (`StripItem.reserve`); never displayed.
+ *
+ * A SUPERSET, deliberately (table tennis's own note applies): FIVB's rotation
+ * lets the reader name any on-field player, and a side that fields no six — a
+ * beach pair — or whose candidate holds a barred role (19.3.2.4, the libero)
+ * falls back to the side label. Reserving more than can land is harmless;
+ * reserving less is the one thing that breaks the slot.
+ */
+function serverCandidates(view: PadHostView, t: TFn): string[] {
+  const sides = ["home", "away"] as const;
+  return [
+    ...sides.flatMap((side) => onFieldPlayers(view.squads, side).map((m) => nameOf(view, m.personId, t))),
+    ...sides.map((side) => t(SIDE_LABEL[side])),
+  ];
+}
+
+/**
+ * Is the reader refusing because its two halves DISAGREE, rather than because
+ * the fixture has no server yet? Only the first justifies holding the slots'
+ * width open — see badminton's own `serveDrifted` for the reasoning and the
+ * owner ruling. Note this is the SAME pair of reasons `needsServeAnchor`
+ * excludes above, read for a different purpose: there they mean "a fresh
+ * declaration cannot fix this", here they mean "this is drift, not absence".
+ */
+function serveDrifted(view: PadHostView, state: VolleyballStateShape): boolean {
+  const ctx = serveContextOf(view, state);
+  if (ctx === null) return false;
+  return ctx.unknownBecause === "ledger-mismatch" || ctx.unknownBecause === "recorded-disagrees";
+}
+
 // ---------------------------------------------------------------------------
 // scorebug() — tapModel S. The half carries the SIDE, not the roster (this
 // file's header); the strip carries every positional fact instead.
@@ -731,6 +763,7 @@ function buildStrip(
   phase: PadPhase,
   serving: ServingInfo | null,
   serveCtx: SetBasedServeContext | null,
+  drifted: boolean,
   t: TFn,
 ): StripItem[] {
   const items: StripItem[] = [
@@ -748,9 +781,25 @@ function buildStrip(
   ];
   // OMITTED, never rendered stale — D-17's whole point. The engine's own
   // `serveOrderKnown` is the verdict, and there is no placeholder branch.
+  //
+  // R8/#676, badminton's own treatment: `reserve` holds each slot's width
+  // steady across every value it can take, and `reserved` holds it open while
+  // the reader refuses over DRIFT, so the centred row does not re-centre.
+  const serverReserve = serverCandidates(view, t);
+  // FIVB 7.6.2's numbers are 1..6, and the chassis renders every strip item
+  // with `fontVariantNumeric: tabular-nums` — so all six are the SAME width
+  // and one digit reserves the slot exactly. Not a guess: tabular figures are
+  // defined to share an advance width.
+  const rotationReserve = ["6"];
   if (phase === "live" && serving) {
     const value = serving.personId ? nameOf(view, serving.personId, t) : t(SIDE_LABEL[serving.side]);
-    items.push({ id: "server", label: t("pad.volleyball.scorebug.strip.server"), value, accent: true });
+    items.push({
+      id: "server",
+      label: t("pad.volleyball.scorebug.strip.server"),
+      value,
+      accent: true,
+      reserve: serverReserve,
+    });
     // FIVB 7.6.2 — the serving side's own court-position number, 1-based.
     // Present only where the reader's own chain is unbroken AND the side
     // fields a full six (`sideFieldsTheRotation`, kernel.ts) — a beach pair
@@ -759,8 +808,30 @@ function buildStrip(
     // 1-based so `0` cannot legally occur, but the same discipline table
     // tennis's own `serveNumber` takes is followed regardless.
     if (serveCtx?.rotation !== undefined) {
-      items.push({ id: "rotation", label: t("pad.volleyball.scorebug.strip.rotation"), value: String(serveCtx.rotation) });
+      items.push({
+        id: "rotation",
+        label: t("pad.volleyball.scorebug.strip.rotation"),
+        value: String(serveCtx.rotation),
+        reserve: rotationReserve,
+      });
     }
+  } else if (phase === "live" && drifted) {
+    // No `id` on either: these slots report nothing while the reader refuses,
+    // so nothing may locate them as if they did (assertScorebugSpec enforces
+    // it). Labels are still supplied, because they are part of the width the
+    // answered state occupies.
+    items.push({
+      label: t("pad.volleyball.scorebug.strip.server"),
+      value: "",
+      reserved: true,
+      reserve: serverReserve,
+    });
+    items.push({
+      label: t("pad.volleyball.scorebug.strip.rotation"),
+      value: "",
+      reserved: true,
+      reserve: rotationReserve,
+    });
   }
   return items;
 }
@@ -775,7 +846,7 @@ export function buildScorebug(view: PadHostView, t: TFn): ScorebugSpec {
     context: buildContext(state, cfg, t),
     phase,
     halves: [buildHalf(view, state, "home", serving, t), buildHalf(view, state, "away", serving, t)],
-    strip: buildStrip(view, state, phase, serving, serveCtx, t),
+    strip: buildStrip(view, state, phase, serving, serveCtx, serving === null && serveDrifted(view, state), t),
   };
 }
 

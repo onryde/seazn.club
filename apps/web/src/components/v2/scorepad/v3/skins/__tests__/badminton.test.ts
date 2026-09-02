@@ -24,7 +24,7 @@ import { makeEnvelope } from "@seazn/engine/testkit";
 import { badminton } from "@seazn/engine/sports/setbased";
 import { foldClient } from "../../../module-client";
 import { assertDisabledTilesExplained } from "../../tile-grid";
-import { assertScorebugSpec, type PadHostView, type TileSpec } from "../../types";
+import { assertScorebugSpec, type PadHostView, type ScorebugSpec, type TileSpec } from "../../types";
 import { dedicatedEventTypes, filterTilesByBand, moreActions } from "../../pad-host";
 import {
   EVENT_BAND,
@@ -1131,5 +1131,130 @@ describe("copy truth", () => {
       expect(registered.has(key), `${key} is not in PAD_LABEL_KEYS — the ribbon stays on the fallback`).toBe(true);
       expect(key in (uiEn as Record<string, string>), `${key} has no English copy`).toBe(true);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R8/#676 — the strip's WIDTH, across a serve-reader refusal
+// ---------------------------------------------------------------------------
+//
+// WHAT #676 ACTUALLY IS, since the register entry says otherwise and was
+// believed for a wave. Its stated cause — "`PadHostView.state` is the
+// OPTIMISTIC fold while `PadHostView.events` is the CONFIRMED ledger, so they
+// disagree by one event for the whole hold" — was untrue when it was filed.
+// `PadHostView.events` is `pipeline.events` (`v3/pad-host.tsx`), which IS
+// `[...ledgerEvents, ...pendingEnvelopes.values()]` (`use-pad-pipeline.ts`) —
+// the same list `foldedState` folds. A soft-committed tap is in BOTH, so the
+// hold window cannot desynchronise them, and driving the real hook through a
+// held rally shows the strip keeping all four items with the server flipping
+// correctly mid-hold.
+//
+// The two halves CAN diverge, by exactly two routes: `serverOverride` (the
+// server's own fold, adopted when `reconcileAfterAck` finds a genuine
+// divergence) and the optimistic fold throwing and degrading to its last good
+// state. `divergedView` below builds the FIRST of those, which is the shape a
+// real diverged pad actually has — `state` from one ledger, `events` from
+// another — rather than hand-editing one fixture into disagreeing with itself.
+//
+// The residue this block pins is the LAYOUT, not the value: the reader still
+// refuses, nothing stale is printed, and the row keeps its shape.
+
+/** The `serverOverride` shape: `state` is the SERVER's fold of a ledger this
+ *  device does not have, `events` is the device's own. Exactly what
+ *  `use-pad-pipeline.ts`'s `setServerOverride(verdict.server)` leaves behind. */
+function divergedView(opts: ViewOpts = {}): PadHostView {
+  const lineups = opts.lineups ?? SINGLES;
+  const cfg = opts.cfg ?? BWF_CFG;
+  const localEvents = opts.events ?? stream(rally("H"), rally("H"));
+  // The server saw one more rally than this device did.
+  const serverEvents = [...localEvents, ev(localEvents.length, RALLY_TYPE, { wonBy: "A" })];
+  return {
+    ...view({ ...opts, events: localEvents }),
+    state: foldClient(badminton, cfg, lineups, serverEvents),
+  };
+}
+
+describe("R8/#676 — the strip holds its shape across a serve-reader refusal", () => {
+  it("the diverged view really does make the reader refuse, and for the drift reason", () => {
+    const v = divergedView();
+    const ctx = serveContextOf(v, v.state as never);
+    expect(ctx?.unknownBecause, "the fixture this block rests on must be a DRIFT refusal").toBe(
+      "ledger-mismatch",
+    );
+    expect(ctx?.side, "a refusing reader names no side").toBeNull();
+  });
+
+  it("keeps the server and court SLOTS across the refusal, carrying no value and no id", () => {
+    const spec = buildScorebug(divergedView(), t);
+    const ids = spec.strip.map((i) => i.id);
+    // D-17 is intact: nothing locates a server, because nothing reports one.
+    expect(ids).not.toContain("server");
+    expect(ids).not.toContain("court");
+
+    const reserved = spec.strip.filter((i) => i.reserved === true);
+    expect(reserved, "the serve refusal costs TWO items, so TWO slots are held").toHaveLength(2);
+    for (const slot of reserved) {
+      expect(slot.value, "a reserved slot prints nothing at all").toBe("");
+      expect(slot.id, "a reserved slot reports nothing, so nothing may locate it").toBeUndefined();
+      expect(slot.reserve?.length, "a slot holding no width holds nothing").toBeGreaterThan(0);
+    }
+    expect(assertScorebugSpec(spec), "the reserved slots must satisfy the spec's own contract").toEqual([]);
+  });
+
+  it("reserves the SAME width in both states — the whole point, and the half a builder can see", () => {
+    const answered = buildScorebug(view({ events: stream(rally("H"), rally("H")) }), t);
+    const refused = buildScorebug(divergedView(), t);
+
+    const answeredServer = answered.strip.find((i) => i.id === "server");
+    const answeredCourt = answered.strip.find((i) => i.id === "court");
+    expect(answeredServer?.value, "precondition: the answered state really does name a server").toBeTruthy();
+
+    const refusedSlots = refused.strip.filter((i) => i.reserved === true);
+    // Slot order is the row's order, so the first held slot is the server's.
+    expect(refusedSlots[0]?.reserve).toEqual(answeredServer?.reserve);
+    expect(refusedSlots[1]?.reserve).toEqual(answeredCourt?.reserve);
+    // And the reservation must actually COVER the value that lands, or the
+    // slot is narrower when answered than when refused and the row still moves.
+    expect(answeredServer?.reserve).toContain(answeredServer?.value);
+    expect(answeredCourt?.reserve).toContain(answeredCourt?.value);
+  });
+
+  it("reserves every value the slot can take, so the width cannot depend on WHICH side serves", () => {
+    // Home serving and away serving must produce the same reservation — that
+    // is what stops the row twitching on an ordinary side-out, with no
+    // divergence anywhere in sight.
+    const homeServing = buildScorebug(view({ events: stream(rally("H")) }), t);
+    const awayServing = buildScorebug(view({ events: stream(rally("A")) }), t);
+    const h = homeServing.strip.find((i) => i.id === "server");
+    const a = awayServing.strip.find((i) => i.id === "server");
+    expect(h?.value).not.toEqual(a?.value); // precondition: the server really did change
+    expect(h?.reserve, "the reservation is the value SPACE, not the current value").toEqual(a?.reserve);
+    expect(h?.reserve).toContain(h?.value);
+    expect(h?.reserve).toContain(a?.value);
+  });
+
+  it("does NOT reserve before the first rally — an absent server is not a drifting one", () => {
+    // The owner ruling keeps today's behaviour where there is no answer to be
+    // had at all, and `walkthrough/scorepad-v3-badminton-match.spec.ts` pins it
+    // in the browser with its own `toHaveCount(0)`.
+    const spec = buildScorebug(view({ events: stream() }), t);
+    expect(spec.strip.some((i) => i.reserved === true), "match open reserves nothing").toBe(false);
+    expect(spec.strip.map((i) => i.id)).not.toContain("server");
+  });
+
+  it("assertScorebugSpec rejects a reserved slot that reports something", () => {
+    const base = buildScorebug(divergedView(), t);
+    const withId: ScorebugSpec = {
+      ...base,
+      strip: [{ value: "", reserved: true, reserve: ["x"], id: "server" }],
+    };
+    expect(assertScorebugSpec(withId).join(" ")).toContain("must not carry an id");
+    const withValue: ScorebugSpec = {
+      ...base,
+      strip: [{ value: "Home", reserved: true, reserve: ["x"] }],
+    };
+    expect(assertScorebugSpec(withValue).join(" ")).toContain("must not carry a value");
+    const withoutReserve: ScorebugSpec = { ...base, strip: [{ value: "", reserved: true }] };
+    expect(assertScorebugSpec(withoutReserve).join(" ")).toContain("requires reserve");
   });
 });
