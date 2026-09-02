@@ -4,7 +4,7 @@ description: Goals with assists, the full penalty ladder with a live box countdo
 order: 20
 ---
 
-Ice hockey and field hockey share one pad, built around periods, penalties and shoot-outs — [the shared page](/help/scoring/hockey) covers what they have in common. This page is ice hockey's own: three twenty-minute periods, the seven-class penalty ladder, assists, and the game-winning shots.
+Ice hockey and field hockey run on one pad chassis and share the same clock and period model — and almost nothing else on the scoresheet. [The field hockey page](/help/scoring/hockey) is that sport's own. This page is ice hockey's: three twenty-minute periods, the seven-class penalty ladder, assists, and the game-winning shots.
 
 Pick a format when you create the division. **IIHF** is the default — 3 × 20, sudden-death overtime, a five-shooter shoot-out, and 3-2-1-0 points. **Recreational** turns overtime and the shoot-out off (draws stand, 2-1-0), and cuts the penalty ladder down to the two-minute pair, minor and bench minor, so nothing else is even offered.
 
@@ -78,6 +78,6 @@ Each level adds to the one below it — see [choosing a detail level](/help/scor
 
 **A penalty was recorded before I started the clock.** It stands, and the strip shows its class word rather than a countdown — there's no game time to count from yet.
 
-**Where's the field hockey card ladder?** On [the shared hockey page](/help/scoring/hockey). Ice hockey's classes are words on a scoresheet rather than cards an official holds up, which is why they read as words here.
+**Where's the field hockey card ladder?** On [the field hockey page](/help/scoring/hockey). Ice hockey's classes are words on a scoresheet rather than cards an official holds up, which is why they read as words here.
 
 **Signal dropped mid-period?** Entries queue on the device and send when it returns — see [scoring without signal](/help/scoring/offline-scoring).

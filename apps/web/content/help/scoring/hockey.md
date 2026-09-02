@@ -4,7 +4,7 @@ description: Quarters, cards that make the team play short, penalty corners and 
 order: 6
 ---
 
-Field hockey is scored on a pad built around quarters, cards and shoot-outs. Pick a format when you create the division: **FIH outdoor** is the default — four fifteen-minute quarters, draws standing, 3/1/0 points. **FIH shoot-out** settles a drawn match with a shoot-out instead. **Youth** shortens the quarters to ten minutes and changes nothing else.
+Field hockey is scored on a pad built around quarters, cards and shoot-outs. Pick a format when you create the division: **FIH outdoor** is the default — eleven a side, four fifteen-minute quarters, draws standing, 3/1/0 points. **FIH shoot-out** is the same game and settles a drawn match with a shoot-out rather than letting it stand. **Youth** is a different game, not just a shorter one: seven a side, four ten-minute quarters, and its own shorter cards.
 
 Ice hockey shares the same underlying clock and period model but almost nothing else on the scoresheet — it has assists, a seven-class penalty ladder and game-winning shots. It has [its own page](/help/scoring/icehockey).
 
@@ -16,7 +16,11 @@ A penalty corner or penalty stroke gets its own **Set piece awarded** entry as i
 
 ## Cards and team strength
 
-Tap **Card** to record a green, yellow or red card — and who it was shown to. The team plays short on **every** FIH card, whatever its colour, which is the main way field hockey's discipline differs from football's. While a card runs, the pad and the public scoreboard show the strength chip — `10v11`.
+Tap **Card** to record a green, yellow or red card. The sheet asks which card first; from the **Timeline** [recording level](/help/scoring/fidelity) up it then asks what the card was for, from FIH's own offence list.
+
+Next comes **Minutes**, which opens at that card's own declared duration for the format the division runs. On the FIH formats a green is two minutes and a yellow five. On Youth a green is one minute and a yellow three. Change it when the umpire gave more than the nominal — an FIH yellow is a minimum, and ten minutes is common. A red card is for the rest of the match, so it has no duration and that step is skipped. Last, again from Timeline up, is who serves the card when that isn't the player it was shown to; who was carded is asked straight after the tap, while the entry is still held.
+
+The team plays short on **every** FIH card, whatever its colour, which is the main way field hockey's discipline differs from football's. While a card runs, the pad and the public scoreboard show the strength chip, home side first: one card against the home side reads `10v11` on FIH formats and `6v7` on Youth. It's hidden while both sides are at full strength.
 
 The timer on the pad is a hint only: tap **Release** when the clock says the suspension is over. Red cards can't be released.
 
