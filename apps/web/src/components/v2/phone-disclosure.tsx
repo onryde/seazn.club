@@ -14,16 +14,32 @@ export interface PhoneDisclosureProps {
 /** Phone-only disclosure (spec 2026-09-02-scorepad-v3-phone-composition §3.10).
  *  Below `md` the body is hidden until the row is tapped; at `md` and up the
  *  row is not rendered (`md:hidden`) and the body carries no hiding class, so
- *  desktop is a plain wrapper around what it always rendered. Both this
- *  wrapper and the body carry `h-full`: when the caller is a grid item
- *  (`grid gap-4 lg:grid-cols-2` in `fixture-console.tsx`), grid's default
- *  `stretch` sizes THIS div to the track, and without propagating that
- *  height inward the real card one level deeper stays content-height —
- *  home/away cards can then render at different heights on desktop. */
+ *  desktop is a plain wrapper around what it always rendered.
+ *
+ *  Width (fix round 2, item 1): the wrapper is a `grid` item with no width
+ *  constraint of its own, so its default `min-width: auto` resolves to
+ *  min-content — and the truncating summary span then renders at its FULL
+ *  natural width instead of ellipsizing, overflowing the page at narrow
+ *  phone widths with a realistic (~40+ char) entrant name. `min-w-0`
+ *  overrides that floor so `truncate` can actually shrink the span below its
+ *  content width — the repo's recorded `truncate`-needs-`min-w-0`-on-the-
+ *  ancestor-chain trap, one level up from the span's own `min-w-0`.
+ *
+ *  Height (fix round 2, item 2): both this wrapper and the body carry
+ *  `h-full` so they stretch to the grid track (`grid gap-4 lg:grid-cols-2`
+ *  in `fixture-console.tsx`) — but `h-full` on a plain block only sizes that
+ *  block's own box, it does not cascade into a content-sized child. The body
+ *  is therefore ALSO `grid`: a single child of a grid container gets
+ *  `stretch` on both axes by default, so the real card underneath
+ *  (`lineup-editor.tsx`'s `<section class="card p-4">` / the roster's own
+ *  section) fills the wrapper instead of staying content-height. Do not add
+ *  `h-full` to `lineup-editor.tsx` itself — it is shared with the
+ *  registration surfaces and must not inherit this plan's layout
+ *  assumptions. */
 export function PhoneDisclosure({ summary, aside, showLabel, hideLabel, children }: PhoneDisclosureProps) {
   const [open, setOpen] = useState(false);
   return (
-    <div data-role="phone-disclosure" data-open={open} className="h-full">
+    <div data-role="phone-disclosure" data-open={open} className="h-full min-w-0">
       <button
         type="button"
         data-role="phone-disclosure-toggle"
@@ -38,7 +54,7 @@ export function PhoneDisclosure({ summary, aside, showLabel, hideLabel, children
           <span aria-hidden="true">{open ? "▴" : "▾"}</span>
         </span>
       </button>
-      <div className={open ? "h-full" : "h-full max-md:hidden"}>{children}</div>
+      <div className={open ? "grid h-full" : "grid h-full max-md:hidden"}>{children}</div>
     </div>
   );
 }
