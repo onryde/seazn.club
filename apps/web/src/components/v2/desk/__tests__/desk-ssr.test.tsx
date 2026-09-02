@@ -92,13 +92,20 @@ describe("competitionPhase", () => {
       next: { home: "A", away: "B", court_label: null, scheduled_at: "2026-09-20T09:00:00Z", in_play: false },
     });
     const earlier = div({
-      division_id: "d2", phase: "scheduled",
+      division_id: "d2", phase: "scheduled", display_tz: "America/New_York",
       next: { home: "C", away: "D", court_label: null, scheduled_at: "2026-09-12T09:00:00Z", in_play: false },
     });
     // Division map insertion order deliberately does NOT match date order —
     // a naive "first division's next" implementation would return the wrong
     // date here.
-    expect(competitionPhase(deskOf([later, earlier]))).toEqual({ kind: "next", at: "2026-09-12T09:00:00Z" });
+    // The zone travels WITH the date: the masthead names ONE division's
+    // fixture, and that division may sit in a different zone from the org.
+    // Formatting the winner in the org zone printed "Next Mon 7 Sep" above a
+    // row reading "Next Sun 6 Sep 19:00" — same fixture, two days, one screen
+    // (found by driving a London org with a New York division at 23:00Z).
+    expect(competitionPhase(deskOf([later, earlier]))).toEqual({
+      kind: "next", at: "2026-09-12T09:00:00Z", tz: "America/New_York",
+    });
   });
   it("a past-kicked-off or TBD-time next fixture is not a ladder answer (mirrors the F5 guard)", () => {
     const past = div({

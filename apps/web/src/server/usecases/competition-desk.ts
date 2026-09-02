@@ -298,7 +298,7 @@ export async function getCompetitionDesk(
 export type CompetitionPillPhase =
   | { kind: "in_play"; n: number }
   | { kind: "match_day" }
-  | { kind: "next"; at: string }
+  | { kind: "next"; at: string; tz: string }
   | { kind: "finished" }
   | { kind: "scheduled" }
   | { kind: "setting_up" };
@@ -354,11 +354,22 @@ export function competitionPhase(desk: CompetitionDesk): CompetitionPillPhase {
   if (desk.in_play > 0) return { kind: "in_play", n: desk.in_play };
   const divisions = [...desk.divisions.values()];
   if (divisions.some((d) => d.phase === "match_day")) return { kind: "match_day" };
-  const dates = divisions
-    .map((d) => nextFutureAt(d.next, desk.now))
-    .filter((x): x is string => x !== null)
-    .sort();
-  if (dates.length > 0) return { kind: "next", at: dates[0]! };
+  // The date travels WITH the zone it must be read in. The masthead names one
+  // specific division's fixture, and that division may sit in a different zone
+  // from the org: with a London org and a New York division, a 23:00Z kick-off
+  // is Mon 7 Sep in the org zone and Sun 6 Sep at the venue. Formatting this in
+  // `org_tz` put "Next Mon 7 Sep" directly above a row reading "Next Sun 6 Sep
+  // 19:00" — the same fixture, two days, one screen. A printed instant is
+  // formatted entirely in the DISPLAY zone of whoever owns it; the org zone
+  // governs day-bucketing, never a label.
+  const dated = divisions
+    .map((d) => {
+      const at = nextFutureAt(d.next, desk.now);
+      return at === null ? null : { at, tz: d.display_tz };
+    })
+    .filter((x): x is { at: string; tz: string } => x !== null)
+    .sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+  if (dated.length > 0) return { kind: "next", at: dated[0]!.at, tz: dated[0]!.tz };
   if (divisions.every((d) => d.phase === "finished")) return { kind: "finished" };
   // No usable date anywhere — the ladder's undefined case. It must still agree
   // with the rows beneath it: a competition whose divisions are in progress is

@@ -393,6 +393,35 @@ export async function eligibilityOverrideAuditRows(
  *    behaviour, not a limitation of the fixture — a spec that wants one org
  *    changed must put it in a group of its own first.
  */
+/** Put a division's venue in a different zone from its org, and date one of
+ *  its fixtures at an instant whose DAY differs between the two. The masthead
+ *  and the ledger row name the same fixture, so they must agree on the day —
+ *  a London org with a New York division at 23:00Z once printed
+ *  "Next Mon 7 Sep" above a row reading "Next Sun 6 Sep 19:00". No unit test
+ *  can see it: the page is a server component and apps/web vitest is node-env.
+ */
+export async function setZoneSplitSql(opts: {
+  divisionId: string;
+  orgTz: string;
+  divisionTz: string;
+  fixtureNo: number;
+  at: string;
+}): Promise<void> {
+  await withDb(async (sql) => {
+    await sql`update organizations set timezone = ${opts.orgTz}
+               where id = (select c.org_id from competitions c
+                             join divisions d on d.competition_id = c.id
+                            where d.id = ${opts.divisionId})`;
+    await sql`insert into schedule_settings (division_id, tz, config)
+              values (${opts.divisionId}, ${opts.divisionTz}, '{}'::jsonb)
+              on conflict (division_id) do update set tz = ${opts.divisionTz}`;
+    await sql`update fixtures set scheduled_at = ${opts.at}::timestamptz
+               where division_id = ${opts.divisionId} and fixture_no = ${opts.fixtureNo}`;
+    await sql`update fixtures set scheduled_at = null
+               where division_id = ${opts.divisionId} and fixture_no <> ${opts.fixtureNo}`;
+  });
+}
+
 export async function setOrgPlanBySql(
   target: { orgId?: string; email?: string },
   plan: "pro" | "community" | "pro_plus",

@@ -6,8 +6,7 @@ import {
   addEntrantsViaApi,
   createStageAndGenerate,
   setFixtureStatusSql,
-  setStageStatusSql,
-} from "./helpers";
+  setStageStatusSql, setZoneSplitSql } from "./helpers";
 
 async function seed(request: APIRequestContext) {
   const comp = await apiJson<{ id: string; slug: string }>(request, "/api/v1/competitions", "POST", {
@@ -19,7 +18,7 @@ async function seed(request: APIRequestContext) {
   await addEntrantsViaApi(request, div.data!.id, ["Riverside FC", "Valley CC", "Lakeside FC", "Harbour CC"], "team");
   const { stageId, fixtureIds } = await createStageAndGenerate(request, div.data!.id);
   await apiJson(request, `/api/v1/divisions/${div.data!.id}/start`, "POST");
-  return { compId: comp.data!.id, compSlug: comp.data!.slug, divSlug: div.data!.slug, stageId, fixtureIds };
+  return { compId: comp.data!.id, compSlug: comp.data!.slug, divisionId: div.data!.id, divSlug: div.data!.slug, stageId, fixtureIds };
 }
 
 test.describe("competition desk", () => {
@@ -147,5 +146,38 @@ test.describe("competition desk", () => {
     await expect(row).toContainText(`1 of ${rig.fixtureIds.length} played`);
     await expect(row).not.toContainText(/setting up/i);
     await expect(row).not.toContainText(/nothing scheduled/i);
+  });
+
+  // Found by DRIVING the round-D fix, not by a suite — and no unit test can
+  // guard it: the masthead label is computed in a server component, and
+  // apps/web vitest is `environment: "node"`, so reverting the page to the
+  // buggy zone leaves the desk unit suite 35/35 green.
+  //
+  // The masthead names ONE division's fixture. When that division sits in a
+  // different zone from its org, formatting the label in the ORG zone prints a
+  // different DAY from the row beneath it: a London org with a New York
+  // division at 23:00Z read "Next Mon 7 Sep" above "Next Sun 6 Sep 19:00" —
+  // the same match, two days, one screen.
+  test("a division in another timezone: masthead and row name the SAME day", async ({ page, request }) => {
+    const org = await activeOrg(page);
+    const rig = await seed(request);
+    // 23:00Z is Sun 6 Sep at the venue (New York) and Mon 7 Sep in the org's
+    // zone (London) — the day differs, which is what makes this discriminate.
+    await setZoneSplitSql({
+      divisionId: rig.divisionId,
+      orgTz: "Europe/London",
+      divisionTz: "America/New_York",
+      fixtureNo: 1,
+      at: "2026-09-06T23:00:00Z",
+    });
+
+    await page.goto(`/o/${org.slug}/c/${rig.compSlug}`);
+    const row = page.getByTestId("desk-ledger-row").filter({ hasText: "Premier" }).first();
+    // The venue's day, in both places.
+    await expect(row).toContainText("Sun 6 Sep");
+    await expect(row).not.toContainText("Mon 7 Sep");
+    const masthead = page.getByTestId("desk-masthead-pill");
+    await expect(masthead).toContainText("Sun 6 Sep");
+    await expect(masthead).not.toContainText("Mon 7 Sep");
   });
 });

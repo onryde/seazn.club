@@ -16,7 +16,7 @@ const PHASE_CLASS: Record<DivisionPhase | "in_play" | "next", string> = {
 };
 
 export function PhasePill({
-  dict, phase, inPlay = 0, when, attention = [], className = "",
+  dict, phase, inPlay = 0, when, attention = [], className = "", testId,
 }: {
   dict: Dict;
   phase: DivisionPhase | "in_play" | "next";
@@ -27,6 +27,10 @@ export function PhasePill({
   when?: string;
   attention?: Attention[];
   className?: string;
+  /** Optional stable hook. The masthead pill needs one: it is the only
+   *  rendering of the competition-level ladder, and no unit test can reach it
+   *  (server component, node-env vitest). */
+  testId?: string;
 }) {
   // Spec: a RED attention outranks the phase on the pill; amber/slate do not.
   const red = attention.find((a) => ATTENTION_SEVERITY[a.kind] === "red");
@@ -40,6 +44,7 @@ export function PhasePill({
   const cls = red ? "bg-red-50 text-red-700" : PHASE_CLASS[phase];
   return (
     <span
+      data-testid={testId}
       data-phase={phase}
       data-pill={red ? red.kind : phase}
       className={`badge inline-flex items-center gap-1.5 normal-case ${cls} ${className}`}

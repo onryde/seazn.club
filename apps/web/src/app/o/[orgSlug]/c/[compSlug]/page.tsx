@@ -179,7 +179,8 @@ export default async function CompetitionPage({
                   dict={dict}
                   phase={compPhase.kind}
                   inPlay={compPhase.kind === "in_play" ? compPhase.n : 0}
-                  when={compPhase.kind === "next" ? nextDateLabel(compPhase.at, locale, desk!.org_tz) : undefined}
+                  when={compPhase.kind === "next" ? nextDateLabel(compPhase.at, locale, compPhase.tz) : undefined}
+                  testId="desk-masthead-pill"
                 />
               )}
               {/* Minor fix (review round 1): was the raw lowercase sport_key
