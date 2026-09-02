@@ -7,10 +7,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { PackRef, PackSchema, fixtureKey, type Pack } from "../pack-schema.ts";
+import { packToTemplateSkeleton } from "../pack-template.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, "../../../..");
 const TINY_PACK_PATH = path.join(REPO_ROOT, "scripts/bench/packs/_tiny.json");
+const TEMPLATE_SCHEMA_PATH = path.join(REPO_ROOT, "apps/web/src/server/templates/schema.ts");
 
 // ---------------------------------------------------------------------------
 // Fixture builder — a minimal well-formed pack. Every test clones it and
@@ -718,5 +720,90 @@ describe("packs/_tiny.json", () => {
     const p = parsed(raw);
     expect(p.streams.map((s) => s.fixtureExtKey)).toEqual(["rr-r1-c1", "rr-r2-c1", "rr-r3-c1"]);
     expect(p.divisions[0]?.stages[0]?.config).toEqual({ legs: 3 });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The template-subset proof. The product schema is `server-only` and reaches
+// @grpc/grpc-js, and tsconfig.scripts.json cannot resolve its `@/` aliases —
+// so it is read as TEXT and its declared key list extracted. An extraction
+// that silently matches nothing would pass vacuously, which is why every
+// guard below exists.
+// ---------------------------------------------------------------------------
+
+/** Pulls the top-level key names out of one `export const <name> = z.object({…})`
+ *  declaration. Throws — never returns empty — when the anchor is missing, so a
+ *  RENAME of the product symbol reds this suite instead of quietly yielding []. */
+export function declaredKeys(source: string, symbol: string): string[] {
+  const anchor = `export const ${symbol} = z.object({`;
+  const start = source.indexOf(anchor);
+  if (start < 0) {
+    throw new Error(
+      `templates/schema.ts declares no "${anchor}" — the product symbol was renamed or reshaped; ` +
+        `this extraction (and the subset proof built on it) is stale.`,
+    );
+  }
+  const body = source.slice(start + anchor.length);
+  const end = body.indexOf("\n});");
+  if (end < 0) throw new Error(`could not find the end of ${symbol}'s object literal`);
+  const withoutComments = body
+    .slice(0, end)
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*\/\/.*$/gm, "");
+  const keys: string[] = [];
+  for (const line of withoutComments.split("\n")) {
+    const m = /^ {2}([A-Za-z_][A-Za-z0-9_]*):/.exec(line);
+    if (m?.[1]) keys.push(m[1]);
+  }
+  return keys;
+}
+
+describe("packToTemplateSkeleton — the pack schema is a superset of the template schema", () => {
+  const source = readFileSync(TEMPLATE_SCHEMA_PATH, "utf8");
+
+  it("the extraction is not vacuous — it finds real keys, and throws on a rename", () => {
+    const compKeys = declaredKeys(source, "CompetitionTemplate");
+    const divKeys = declaredKeys(source, "TemplateDivision");
+    // The zero-key trap this test exists to make impossible.
+    expect(compKeys.length).toBeGreaterThan(0);
+    expect(divKeys.length).toBeGreaterThan(0);
+    // Sentinels: an extraction that returned garbage (comment prose, say)
+    // would still have a non-zero length, so pin one load-bearing key each.
+    expect(compKeys).toContain("divisions");
+    expect(divKeys).toContain("sportKey");
+    expect(() => declaredKeys(source, "ThisSymbolDoesNotExist")).toThrow(/renamed or reshaped/);
+  });
+
+  it("every declared CompetitionTemplate key is produced by the skeleton", () => {
+    const skeleton = packToTemplateSkeleton(parsed(basePack()));
+    for (const key of declaredKeys(source, "CompetitionTemplate")) {
+      expect(Object.keys(skeleton), `skeleton is missing CompetitionTemplate key "${key}"`).toContain(key);
+    }
+  });
+
+  it("every declared TemplateDivision key is produced by the skeleton", () => {
+    const skeleton = packToTemplateSkeleton(parsed(basePack()));
+    const division = skeleton.divisions[0];
+    expect(division).toBeDefined();
+    for (const key of declaredKeys(source, "TemplateDivision")) {
+      expect(Object.keys(division ?? {}), `skeleton division is missing TemplateDivision key "${key}"`).toContain(key);
+    }
+  });
+
+  it("entrantKind and entrantCount are DERIVED from the entrant list, never stored on the pack", () => {
+    const skeleton = packToTemplateSkeleton(parsed(basePack()));
+    expect(skeleton.divisions[0]?.entrantKind).toBe("individual");
+    expect(skeleton.divisions[0]?.entrantCount).toBe(2);
+  });
+
+  it("i18n keys are MINTED — a pack carries a real English tournament name, a template carries a key", () => {
+    const skeleton = packToTemplateSkeleton(parsed(basePack()));
+    expect(skeleton.i18n.nameKey).toMatch(/^bench\.pack\._unit\./);
+    expect(skeleton.divisions[0]?.i18nNameKey).toMatch(/^bench\.pack\._unit\.division\.d-main\./);
+  });
+
+  it("carries every stage in order, with the pack's own stage kind", () => {
+    const skeleton = packToTemplateSkeleton(parsed(basePack()));
+    expect(skeleton.divisions[0]?.stages.map((s) => s.kind)).toEqual(["league"]);
   });
 });
