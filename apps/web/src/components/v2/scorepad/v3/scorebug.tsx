@@ -135,9 +135,22 @@ function HalfContent({ half, hintText }: { half: ScorebugHalf; hintText: string 
        *  ACCESSIBLE name from the same data and is unaffected, so a screen
        *  reader still hears every name in full — the clamp is visual only.
        *  Chassis-wide: every skin's ScorebugSpec renders through here, so
-       *  this was verified against the other skins' captures too. */}
+       *  this was verified against the other skins' captures too.
+       *
+       *  13px→12px (found on CI, not locally): the same long doubles pair
+       *  still overflowed by 2-4px at 375 in CI's Ubuntu Chromium, even at
+       *  three lines and even though a wider local macOS run of the exact
+       *  same fixture was clean — `-webkit-line-clamp` boxes are known to
+       *  round their max-height to whole line-boxes against fractional text
+       *  metrics, so a name sitting right at the boundary can clip by a
+       *  couple of px on one renderer and not another. One step down in
+       *  font-size buys proportional slack on every line (this text is
+       *  already uppercase with `0.03em` tracking — `.app-display`,
+       *  globals.css — both of which scale with size), which is more robust
+       *  against that class of rounding than another clamp line would be;
+       *  `sm:text-sm` is untouched, so nothing changes above phone width. */}
       <div
-        className={`line-clamp-3 min-w-0 text-center app-display text-[13px] font-semibold tracking-wide ${NIGHT_TILE_CLASSES.creamText} sm:text-sm`}
+        className={`line-clamp-3 min-w-0 text-center app-display text-[12px] font-semibold tracking-wide ${NIGHT_TILE_CLASSES.creamText} sm:text-sm`}
       >
         {half.who.map((w, i) => (
           // NOT `inline-flex`: an inline-flex box is ATOMIC to the
