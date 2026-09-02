@@ -17,7 +17,7 @@ import { describe, it, expect } from "vitest";
 import { AttemptOutcome } from "@seazn/engine/core";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { AnySportModule, PadSpec } from "@seazn/engine/sport";
+import { resolvePositions, type AnySportModule, type PadSpec } from "@seazn/engine/sport";
 import { initSquads } from "@seazn/engine/core";
 import { CLOCK_NUDGE_SECONDS, adjustClock, initClock, startClock, reseatClock, elapsedOf, stampOf } from "../clock";
 import { stampFor } from "../pad-host";
@@ -30,6 +30,7 @@ import { icehockeySkinV3, icehockeySpec, ICEHOCKEY_REASONS } from "../skins/iceh
 import {
   bandsOf,
   buildClock,
+  CAPTAIN_ROLE,
   eventTypesOf,
   isPlayPhaseToken,
   boxOf,
@@ -1877,6 +1878,108 @@ describe("the swap slot is offered only where a line change is recordable", () =
       expect(sport.factory(T).swap!(pre)).toEqual([]);
       const done = foldedPhases(sport.module).find((row) => row.phase === "done")!;
       expect(sport.factory(T).swap!(viewFor(sport, done.cfg, done.state, 3))).toEqual([]);
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// 6b. The swap sheet's rows say WHO — WS-L (R8 sweep)
+// ---------------------------------------------------------------------------
+
+/**
+ * WS-L. The R7 `CandidateMeta` mechanism (types.ts, drawn by context-strip.tsx's
+ * `renderCandidateRow`) puts a position badge and a role chip on a picker row
+ * when the skin supplies one. Volleyball's `liberoCandidateMeta` was the first
+ * populator; this pair supplied none, so ice hockey's SIX on-ice rows rendered
+ * as six wrapping names with nothing to tell them apart — the exact symptom the
+ * owner ruling of 2026-08-30 minted the mechanism for.
+ *
+ * Every assertion below runs against a REAL fold (`livePhaseState` ->
+ * `viewFor`), and the EXPECTED value comes from `lineupsFor`'s team sheet — the
+ * lineup the fold was fed — rather than from a table typed into this file or
+ * from `view.squads`, which is the same object the builder reads. A drift in
+ * `memberFromSlot`'s "a bench slot's position is a preference, not an
+ * occupancy" rule therefore moves this test rather than leaving it agreeing
+ * with itself.
+ *
+ * Both sports are swept because they are two `PeriodSkinSpec` instances over
+ * ONE builder: a per-sport regression (a key table missing an entry, a badge
+ * sourced from the wrong side) is invisible from one of them.
+ */
+describe("the swap sheet distinguishes its candidate rows by position and role", () => {
+  for (const sport of SPORTS) {
+    describe(sport.key, () => {
+      const cfg = periodCfg(sport.module);
+
+      function slotsNow(): SwapSlot[] {
+        return sport.factory(T).swap!(viewFor(sport, cfg, livePhaseState(sport, cfg))) as SwapSlot[];
+      }
+
+      /** What the HOME team sheet declared for each person — the independent
+       *  source. `undefined` for the two bench players, who are declared with
+       *  neither a position nor a squad number. */
+      function declaredPosition(): Map<string, string | undefined> {
+        const declared = new Map<string, string | undefined>();
+        for (const slot of lineupsFor(sport.module, cfg).home.slots) declared.set(slot.personId, slot.positionKey);
+        return declared;
+      }
+
+      it("gives every OFF candidate the position their own team sheet declared", () => {
+        const slot = slotsNow()[0]!;
+        const declared = declaredPosition();
+        expect(slot.offCandidates!.length, "the OFF pool is too small to be identical rows").toBeGreaterThan(1);
+        for (const id of slot.offCandidates!) {
+          expect(slot.candidateMeta?.[id]?.lead, id).toBe(declared.get(id));
+        }
+      });
+
+      it("renders as many DISTINCT badges as the sheet declares positions — a builder stamping ONE meta on every row must fail this", () => {
+        const slot = slotsNow()[0]!;
+        const declared = declaredPosition();
+        const expected = new Set(slot.offCandidates!.map((id) => declared.get(id)));
+        const actual = new Set(slot.offCandidates!.map((id) => slot.candidateMeta?.[id]?.lead));
+        expect(expected.size, "this sport's on-field catalogue is one position wide").toBeGreaterThan(1);
+        expect(actual).toEqual(expected);
+
+        // …and named explicitly, the way a scorer meets it: two teammates on the
+        // ice/pitch at the same moment, declared at different positions, whose
+        // rows must not read the same.
+        const first = slot.offCandidates![0]!;
+        const other = slot.offCandidates!.find((id) => declared.get(id) !== declared.get(first))!;
+        expect(other, "no two on-field candidates differ in declared position").toBeDefined();
+        expect(slot.candidateMeta?.[first]?.lead).not.toBe(slot.candidateMeta?.[other]?.lead);
+      });
+
+      it("tags the captain — the one role BOTH federations declare, which a position code cannot say — and nobody else", () => {
+        // The skin restates the engine's role vocabulary, so it owes the check
+        // every mirror in this chassis owes: the key it uses is one the real
+        // catalogue declares.
+        const catalog = resolvePositions(sport.module, cfg);
+        expect((catalog.roles ?? []).map((role) => role.key)).toContain(CAPTAIN_ROLE);
+
+        const slot = slotsNow()[0]!;
+        const captain = lineupsFor(sport.module, cfg).home.slots.find((s) => s.roles?.includes(CAPTAIN_ROLE))!;
+        expect(captain, "the fixture team sheet names no captain").toBeDefined();
+        expect(slot.candidateMeta?.[captain.personId]?.tag).toBe(`pad.${sport.key}.swap.captainTag`);
+        for (const id of slot.offCandidates!) {
+          if (id !== captain.personId) expect(slot.candidateMeta?.[id]?.tag, id).toBeUndefined();
+        }
+      });
+
+      it("decorates NOTHING for a bench candidate the sheet gave neither position nor number — the documented empty contract, not a gap", () => {
+        const slot = slotsNow()[0]!;
+        const declared = declaredPosition();
+        const bare = slot.candidates!.filter((id) => declared.get(id) === undefined);
+        expect(bare.length, "no undeclared bench player in the fixture").toBeGreaterThan(0);
+        for (const id of bare) expect(slot.candidateMeta?.[id], id).toBeUndefined();
+      });
+
+      it("keys the AWAY slot's table off the away squad, never the home one", () => {
+        const away = slotsNow()[1]!;
+        const ids = Object.keys(away.candidateMeta ?? {});
+        expect(ids.length, "the away slot carries no decoration at all").toBeGreaterThan(1);
+        for (const id of ids) expect(id.startsWith("A-"), `${id} is not an away person`).toBe(true);
+      });
     });
   }
 });
