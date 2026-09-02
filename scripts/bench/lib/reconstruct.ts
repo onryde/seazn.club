@@ -84,8 +84,14 @@ import {
   type Rng,
 } from "@seazn/engine/core";
 import type { AnySportModule, PadFieldEnum } from "@seazn/engine/sport";
-import { fixtureKey, type PackEvent, type PackStream } from "./pack-schema.ts";
-import { PACK_FOLD_OPTIONS, packEnvelope, packLineupPair, sigil } from "./validate-pack.ts";
+import { fixtureKey, type PackEvent, type PackStage, type PackStream } from "./pack-schema.ts";
+import {
+  PACK_FOLD_OPTIONS,
+  packEnvelope,
+  packLineupPair,
+  sigil,
+  stageScopedFoldCfg,
+} from "./validate-pack.ts";
 
 // ---------------------------------------------------------------------------
 // Shared plumbing
@@ -105,6 +111,32 @@ function outcomeOf(sportModule: AnySportModule, state: unknown): unknown {
 }
 
 const CORE_START: PackEvent = { type: "core.start", payload: {} };
+
+/**
+ * THE CFG A STREAM ACTUALLY FOLDS UNDER.
+ *
+ * `stageScopedFoldCfg` (lib/validate-pack.ts), imported rather than mirrored,
+ * for the same reason this file imports `packEnvelope`, `packLineupPair`,
+ * `sigil` and `PACK_FOLD_OPTIONS`: the builder and the checker must not answer
+ * one question two ways.
+ *
+ * This was the ONE seam that did not get carried across, and it was not
+ * theoretical. Stage 0 folds every stream with
+ * `stageScopedFoldCfg(divisionCfg, stage?.config)` — the two stage-scoped
+ * decider keys, `shootout` and `extraTime` — while the generators folded under
+ * the division cfg alone. A division enabling extra time whose knockout stage
+ * turns it OFF therefore generated `ET_HT`/`ET_FT` markers that the validator
+ * then refused as `ALREADY_DECIDED`, because under the overlay the match was
+ * already a draw at full time. The `stageRef` doc below actively told authors
+ * to set the field that arms it.
+ *
+ * So `cfg` on every input in this file is the DIVISION cfg — exactly what
+ * `resolveDivisionCfg` returns — and the stage is passed separately. One
+ * function applies the overlay, and it is the validator's own.
+ */
+function foldCfgFor(divisionCfg: unknown, stage: PackStage | undefined): unknown {
+  return stageScopedFoldCfg(divisionCfg, stage?.config);
+}
 
 /** The fixtureId every synthesised envelope carries when the caller names no
  *  fixture. No fold reads it (see `packEnvelope`'s own doc), so it exists only
@@ -237,10 +269,17 @@ export function foldAgreementIssue(got: string, want: string): string | null {
 
 export interface ReconstructSetRalliesInput {
   readonly module: AnySportModule;
-  /** The division's RESOLVED cfg. Build it with `resolveDivisionCfg`
-   *  (lib/validate-pack.ts) so the stream is generated under exactly the cfg
-   *  stage 0 will later fold it under. */
+  /** The DIVISION's resolved cfg — exactly what `resolveDivisionCfg`
+   *  (lib/validate-pack.ts) returns, with no stage overlay applied. Pass the
+   *  stage below and `foldCfgFor` applies the overlay through the validator's
+   *  own function, so the stream is generated under exactly the cfg stage 0
+   *  will later fold it under. */
   readonly cfg: unknown;
+  /** The stage this stream belongs to, when it has one. Its `shootout` /
+   *  `extraTime` keys OVERLAY the division cfg on the fold path — see
+   *  `foldCfgFor`. Absent means no overlay, which is what a single-stage
+   *  division with a plain stage config already gets. */
+  readonly stage?: PackStage;
   /** Who played, on which side. Build it with `packLineupPair` from the same
    *  stream the events are going into — the entrant ids the fold sees are the
    *  SIGILLED pack refs, and a generator that used bare refs would emit
@@ -269,7 +308,8 @@ export interface ReconstructSetRalliesInput {
  * index and the offending score — on anything it cannot honestly produce.
  */
 export function reconstructSetRallies(input: ReconstructSetRalliesInput): PackEvent[] {
-  const { module: sportModule, cfg, lineups, rallyType, sets, seed } = input;
+  const { module: sportModule, lineups, rallyType, sets, seed } = input;
+  const cfg = foldCfgFor(input.cfg, input.stage);
   const fixtureId = input.fixtureId ?? UNNAMED_FIXTURE;
   assertDeclaresEventType(sportModule, rallyType);
   if (sets.length === 0) throw new Error("a reconstruction needs at least one set score");
@@ -500,18 +540,25 @@ function verifyAgainstFoldMatch(
 
 export interface ReconstructSetBasedStreamInput {
   readonly module: AnySportModule;
+  /** The DIVISION cfg, unoverlaid — see `ReconstructSetRalliesInput.cfg`. */
   readonly cfg: unknown;
   readonly divisionRef: string;
   /**
-   * WHICH STAGE of that division. Optional on `PackStream` because a
-   * single-stage division binds without it — but SET IT whenever the stage
-   * carries a cfg overlay (`shootout` / `extraTime`, the only two keys
-   * `stageScopedFoldCfg` applies), or whenever the division has more than one
-   * stage. An unbound overlay is stage 0's one FALSE-RED path: the fixture
-   * folds under the division cfg instead and the divergence reported is the
-   * gap rather than the pack.
+   * WHICH STAGE of that division — the STAGE ITSELF, not merely its ref.
+   *
+   * It supplies two facts that must never disagree: the `stageRef` written
+   * onto the returned stream, and the `shootout` / `extraTime` overlay the
+   * fold applies (`foldCfgFor`). Taking the ref alone is how they came to
+   * disagree: the doc here used to say "SET IT whenever the stage carries a
+   * cfg overlay", and setting it made the VALIDATOR apply an overlay the
+   * generator never had — so the field that was supposed to close the gap was
+   * the one that opened it. One object, one answer.
+   *
+   * Optional because a single-stage division binds without a `stageRef` at
+   * all; pass it whenever the division has more than one stage, and always
+   * when the stage's config carries either decider key.
    */
-  readonly stageRef?: string;
+  readonly stage?: PackStage;
   readonly fixtureExtKey: string;
   /** Entrant REFS, bare — the sigil is applied where the fold needs it. */
   readonly home: string;
@@ -550,7 +597,7 @@ export function reconstructSetBasedStream(input: ReconstructSetBasedStreamInput)
   const note = `reconstructed to fold to ${sets.map(scoreText).join(", ")}`.slice(0, MAX_NOTE);
   const draft: PackStream = {
     divisionRef,
-    ...(input.stageRef === undefined ? {} : { stageRef: input.stageRef }),
+    ...(input.stage === undefined ? {} : { stageRef: input.stage.ref }),
     fixtureExtKey,
     home,
     away,
@@ -568,6 +615,7 @@ export function reconstructSetBasedStream(input: ReconstructSetBasedStreamInput)
     events: reconstructSetRallies({
       module: input.module,
       cfg: input.cfg,
+      ...(input.stage === undefined ? {} : { stage: input.stage }),
       lineups,
       rallyType: input.rallyType,
       sets,
@@ -583,7 +631,16 @@ export function reconstructSetBasedStream(input: ReconstructSetBasedStreamInput)
 
 export interface FillPeriodMarkersInput {
   readonly module: AnySportModule;
+  /** The DIVISION cfg, unoverlaid — see `ReconstructSetRalliesInput.cfg`. This
+   *  is the football/hockey entry point, i.e. exactly the sports where
+   *  `shootout` and `extraTime` exist, so the stage below is the difference
+   *  between a sheet that folds and one the validator refuses. */
   readonly cfg: unknown;
+  /** The stage this fixture belongs to. Its overlay decides which period
+   *  markers `padSpec` even OFFERS: football declares `ET_HT`/`ET_FT` only
+   *  under `cfg.extraTime.enabled` (`football.ts:2160`) and enters `ET_H1` at
+   *  full time only under the same flag (`:1004`). */
+  readonly stage?: PackStage;
   readonly lineups: LineupPair;
   /**
    * The sheet's own events, GROUPED BY PERIOD: one array per period, in the
@@ -693,7 +750,8 @@ function markerCandidates(
  * filler REFUSES rather than picking, because picking would be the invention.
  */
 export function fillPeriodMarkers(input: FillPeriodMarkersInput): PackEvent[] {
-  const { module: sportModule, cfg, lineups, segments, markerType } = input;
+  const { module: sportModule, lineups, segments, markerType } = input;
+  const cfg = foldCfgFor(input.cfg, input.stage);
   const fixtureId = input.fixtureId ?? UNNAMED_FIXTURE;
   const maxTrailing = input.maxTrailingMarkers ?? DEFAULT_MAX_TRAILING_MARKERS;
   // NO `assertDeclaresEventType` here, deliberately. `markerCandidates` already

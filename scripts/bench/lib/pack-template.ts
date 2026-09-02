@@ -48,7 +48,13 @@
 //     version means "bumps on ANY content change" (templates/schema.ts) —
 //     a curation act on a catalog entry, a different fact from which revision
 //     of the PACK contract this file was authored against.
-import type { Pack, PackDivision, PackEntrantKind, PackJsonValue } from "./pack-schema.ts";
+import {
+  entrantsOfDivision,
+  type Pack,
+  type PackDivision,
+  type PackEntrantKind,
+  type PackJsonValue,
+} from "./pack-schema.ts";
 
 export interface TemplateStageSkeleton {
   i18nNameKey: string;
@@ -87,7 +93,7 @@ export function packToTemplateSkeleton(pack: Pack): TemplateSkeleton {
     version: 1,
     i18n: { nameKey: `${base}.name`, descriptionKey: `${base}.description` },
     divisions: pack.divisions.map((division) => {
-      const entrants = pack.entrants.filter((e) => e.divisionRef === division.ref);
+      const entrants = entrantsOfDivision(pack.entrants, division.ref);
       // `checkEntrantDivisions` in pack-schema.ts guarantees at least two, so
       // this index is total for any value that parsed. The fallback exists
       // only so a hand-built object that skipped the parse degrades to a

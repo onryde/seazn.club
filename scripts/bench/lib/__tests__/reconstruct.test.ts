@@ -18,7 +18,7 @@ import { badminton, tabletennis, volleyball } from "@seazn/engine/sports/setbase
 import { football } from "@seazn/engine/sports/football";
 import { generic } from "@seazn/engine/sports/generic";
 import { hockey } from "@seazn/engine/sports/hockey";
-import type { PackEvent, PackStream } from "../pack-schema.ts";
+import type { PackEvent, PackStage, PackStream } from "../pack-schema.ts";
 import {
   PACK_FOLD_OPTIONS,
   packEnvelopes,
@@ -98,6 +98,7 @@ interface UnitPackInput {
   readonly streams: readonly PackStream[];
   readonly expected: Record<string, unknown>;
   readonly stages?: readonly Record<string, unknown>[];
+  readonly cfgOverrides?: Record<string, unknown>;
 }
 
 /** A whole pack around a generated stream, so the generator's output is driven
@@ -117,6 +118,7 @@ function unitPack(input: UnitPackInput): unknown {
         sportKey: input.sportKey,
         variantKey: input.variantKey,
         moduleVersion: input.moduleVersion,
+        ...(input.cfgOverrides === undefined ? {} : { cfgOverrides: input.cfgOverrides }),
         stages: input.stages ?? [{ ref: "s", seq: 1, kind: "league", name: "League" }],
       },
     ],
@@ -526,12 +528,14 @@ describe("reconstructSetBasedStream — the stream a pack carries", () => {
     { home: 19, away: 21 },
     { home: 24, away: 22 },
   ];
+  const stageNamed = (ref: string): PackStage =>
+    ({ ref, seq: 1, kind: "league", name: "League", config: {} }) as PackStage;
   const build = (seed: number, stageRef?: string): PackStream =>
     reconstructSetBasedStream({
       module: badminton,
       cfg: cfgFor(badminton, "bwf"),
       divisionRef: "d",
-      ...(stageRef === undefined ? {} : { stageRef }),
+      ...(stageRef === undefined ? {} : { stage: stageNamed(stageRef) }),
       fixtureExtKey: "fx",
       home: HOME,
       away: AWAY,
@@ -595,7 +599,12 @@ describe("reconstructSetBasedStream — the stream a pack carries", () => {
     expect(build(1).reconstruction?.note).toBe("reconstructed to fold to 21–15, 19–21, 24–22");
   });
 
-  it("binds stageRef when given one, and omits it when not", () => {
+  it("binds the stage's OWN ref when given one, and omits it when not", () => {
+    // A ref that is not "s". Every stage in this file was named "s", so
+    // returning a hardcoded "s" instead of `stage.ref` survived the whole
+    // suite — a fixture whose value coincides with the wrong constant cannot
+    // witness the regression it exists for.
+    expect(build(1, "s-quarter-final").stageRef).toBe("s-quarter-final");
     expect(build(1, "s").stageRef).toBe("s");
     expect(build(1).stageRef).toBeUndefined();
   });
@@ -735,6 +744,85 @@ describe("fillPeriodMarkers — the whistles a match sheet does not record", () 
       PACK_FOLD_OPTIONS,
     );
     expect(hockey.outcome(state)).not.toBeNull();
+  });
+
+  // -------------------------------------------------------------------------
+  // THE STAGE OVERLAY, which the whole-branch review found the generators not
+  // applying. `stageScopedFoldCfg` overlays a stage's `shootout`/`extraTime`
+  // onto the division cfg on the fold path, so a division that ENABLES extra
+  // time and a knockout stage that turns it OFF fold differently — and the
+  // generator used to fold under the division cfg alone.
+  //
+  // Both directions are driven, because the positive test alone cannot tell a
+  // working overlay from a cfg where the overlay makes no difference.
+  // -------------------------------------------------------------------------
+  const ET_DIVISION = { extraTime: { enabled: true, halfMinutes: 15 }, shootout: false };
+  const noExtraTime: PackStage = {
+    ref: "s",
+    seq: 1,
+    kind: "league",
+    name: "Knockout",
+    config: { extraTime: { enabled: false } },
+  } as PackStage;
+
+  const levelSheet = (): PackEvent[][] => [
+    [start, goal(HOME)],
+    [goal(AWAY)],
+  ];
+
+  const drawnPack = (events: readonly PackEvent[]): unknown =>
+    unitPack({
+      sportKey: "football",
+      variantKey: "11-a-side",
+      moduleVersion: football.version,
+      cfgOverrides: ET_DIVISION,
+      stages: [{ ref: "s", seq: 1, kind: "league", name: "Knockout", config: { extraTime: { enabled: false } } }],
+      streams: [{ ...streamOf(events, "real"), stageRef: "s" } as unknown as PackStream],
+      expected: {
+        matches: [{ divisionRef: "d", fixtureExtKey: "fx", outcome: { kind: "draw" } }],
+      },
+    });
+
+  it("folds under the STAGE-scoped cfg, so a stage that disables extra time stops at FT", () => {
+    const events = fillPeriodMarkers({
+      module: football,
+      cfg: cfgFor(football, "11-a-side", ET_DIVISION),
+      stage: noExtraTime,
+      lineups: lineups(),
+      markerType: "football.period",
+      segments: levelSheet(),
+    });
+    // The overlay disables extra time, so 1–1 at FT is a draw and no ET marker
+    // is legal — nor is one even offered, since padSpec is asked under the
+    // overlaid cfg too.
+    expect(show(events)).toEqual([
+      "core.start:{}",
+      'football.goal:{"by":"@e-alpha"}',
+      'football.period:{"phase":"HT"}',
+      'football.goal:{"by":"@e-bravo"}',
+      'football.period:{"phase":"FT"}',
+    ]);
+    const result = validatePack(drawnPack(events), { expectedSuite: "_unit" });
+    expect(errorsOf(result.findings)).toEqual([]);
+  });
+
+  it("CONTROL: the same sheet generated WITHOUT the stage is refused by the validator", () => {
+    // This is the defect the review proved with a probe. Under the DIVISION
+    // cfg alone extra time is enabled, so the filler carries on into ET_HT —
+    // and stage 0, which folds under the overlay, finds the match already
+    // decided at full time. Without this control the positive test above
+    // cannot tell "the overlay is applied" from "the overlay changes nothing".
+    const events = fillPeriodMarkers({
+      module: football,
+      cfg: cfgFor(football, "11-a-side", ET_DIVISION),
+      lineups: lineups(),
+      markerType: "football.period",
+      segments: levelSheet(),
+    });
+    expect(events.map((e) => e.payload["phase"])).toContain("ET_HT");
+    const result = validatePack(drawnPack(events), { expectedSuite: "_unit" });
+    const fold = errorsOf(result.findings).find((f) => f.code === "fold.rejected");
+    expect(fold?.message).toContain("ALREADY_DECIDED");
   });
 
   it("refuses to fill an ATTRIBUTED action — the honesty clause, mechanically", () => {

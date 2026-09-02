@@ -9,9 +9,11 @@ import { z } from "zod";
 import { StandingsDelta } from "@seazn/engine/core";
 import { describe, expect, it } from "vitest";
 import {
+  entrantsOfDivision,
   PackProvenance,
   PackRef,
   PackSchema,
+  roundRobinFixtureCount,
   SEED_LEGAL_BY_PROVENANCE,
   STANDINGS_SCALAR_FIELDS,
   fixtureKey,
@@ -2177,5 +2179,301 @@ describe("packToTemplateSkeleton — the pack schema is a superset of the templa
   it("carries every stage in order, with the pack's own stage kind", () => {
     const skeleton = packToTemplateSkeleton(parsed(basePack()));
     expect(skeleton.divisions[0]?.stages.map((s) => s.kind)).toEqual(["league"]);
+  });
+});
+
+describe("entrantsOfDivision — the ONE division selector", () => {
+  // The review found four hand-rolled copies of this filter, and a mutation
+  // spot-check found the thinnest of them held by exactly one test. It is one
+  // exported function now, so this is the whole family's guard.
+  const many = (): Pack =>
+    parsed(
+      pack((p) => {
+        (p["divisions"] as Record<string, unknown>[]).push({
+          ref: "d-other",
+          name: "Other",
+          sportKey: "generic",
+          variantKey: "score",
+          moduleVersion: "1.0.0",
+          stages: [{ ref: "s-other", seq: 1, kind: "league", name: "L" }],
+        });
+        (p["entrants"] as Record<string, unknown>[]).push(
+          { ref: "e-charlie", divisionRef: "d-other", kind: "individual", displayName: "Charlie" },
+          { ref: "e-delta", divisionRef: "d-other", kind: "individual", displayName: "Delta" },
+          { ref: "e-echo", divisionRef: "d-other", kind: "individual", displayName: "Echo" },
+        );
+      }),
+    );
+
+  it("returns only that division's entrants, in pack order", () => {
+    // Two divisions with DIFFERENT counts, so a selector that ignored the ref
+    // cannot agree with the right answer on either of them.
+    expect(entrantsOfDivision(many().entrants, "d-main").map((e) => e.ref)).toEqual([
+      "e-alpha",
+      "e-bravo",
+    ]);
+    expect(entrantsOfDivision(many().entrants, "d-other").map((e) => e.ref)).toEqual([
+      "e-charlie",
+      "e-delta",
+      "e-echo",
+    ]);
+  });
+
+  it("is empty, not everything, for a division nobody entered", () => {
+    expect(entrantsOfDivision(many().entrants, "d-ghost")).toEqual([]);
+  });
+});
+
+describe("roundRobinFixtureCount — the ONE round-robin arithmetic", () => {
+  it("is every pair once per leg", () => {
+    // Enumerated rather than sampled: n(n-1)/2 and n*legs agree at n=2,legs=1
+    // and at n=3,legs=1, so a single case cannot tell the two apart.
+    expect(roundRobinFixtureCount(2, 1)).toBe(1);
+    expect(roundRobinFixtureCount(2, 3)).toBe(3);
+    expect(roundRobinFixtureCount(3, 1)).toBe(3);
+    expect(roundRobinFixtureCount(4, 1)).toBe(6);
+    expect(roundRobinFixtureCount(4, 2)).toBe(12);
+    // An odd field's bye is not a fixture — 5 entrants still meet 10 times.
+    expect(roundRobinFixtureCount(5, 1)).toBe(10);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The two blocks the whole-branch review found missing, landed before the B06
+// freeze because an additive change after it is an owner escalation.
+// ---------------------------------------------------------------------------
+
+describe("expected.finalRanks — a stage's placement order", () => {
+  /** The block under test, on the base pack. */
+  const withRanks = (
+    order: string[],
+    stageRef = "s-league",
+    mutate: (p: Record<string, unknown>) => void = () => {},
+  ): Record<string, unknown> =>
+    pack((p) => {
+      (p["expected"] as Record<string, unknown>)["finalRanks"] = [
+        { divisionRef: "d-main", stageRef, order },
+      ];
+      mutate(p);
+    });
+
+  it("parses, and is the ONLY block that can order a bracket's placings", () => {
+    const out = parsed(withRanks(["e-alpha", "e-bravo"]));
+    expect(out.expected.finalRanks).toEqual([
+      { divisionRef: "d-main", stageRef: "s-league", order: ["e-alpha", "e-bravo"] },
+    ]);
+    // The gap it closes: expected.tables is a HARD ERROR on a bracket stage,
+    // so before this block a knockout's 2nd place was unassertable.
+    expect(out.expected.tables).toEqual([]);
+  });
+
+  it("refuses an entrant of another division", () => {
+    expectIssue(
+      withRanks(["e-alpha", "e-outsider"], "s-league", (p) => {
+        (p["divisions"] as Record<string, unknown>[]).push({
+          ref: "d-other",
+          name: "Other",
+          sportKey: "generic",
+          variantKey: "score",
+          moduleVersion: "1.0.0",
+          stages: [{ ref: "s-other", seq: 1, kind: "league", name: "L" }],
+        });
+        (p["entrants"] as Record<string, unknown>[]).push(
+          { ref: "e-outsider", divisionRef: "d-other", kind: "individual", displayName: "Outsider" },
+          { ref: "e-second", divisionRef: "d-other", kind: "individual", displayName: "Second" },
+        );
+      }),
+      ["expected", "finalRanks", 0, "order", 1],
+      /unknown entrant ref "e-outsider" for division "d-main"/,
+    );
+  });
+
+  it("refuses a stage of another division", () => {
+    expectIssue(
+      withRanks(["e-alpha", "e-bravo"], "s-nope"),
+      ["expected", "finalRanks", 0, "stageRef"],
+      /unknown stage ref "s-nope" for division "d-main"/,
+    );
+  });
+
+  it("refuses the same entrant placed twice", () => {
+    expectIssue(
+      withRanks(["e-alpha", "e-alpha"]),
+      ["expected", "finalRanks", 0, "order", 1],
+      /entrant "e-alpha" is placed twice/,
+    );
+  });
+
+  it("refuses two final orders for one stage", () => {
+    expectIssue(
+      pack((p) => {
+        (p["expected"] as Record<string, unknown>)["finalRanks"] = [
+          { divisionRef: "d-main", stageRef: "s-league", order: ["e-alpha", "e-bravo"] },
+          { divisionRef: "d-main", stageRef: "s-league", order: ["e-bravo", "e-alpha"] },
+        ];
+      }),
+      ["expected", "finalRanks", 1],
+      /declares more than one final order/,
+    );
+  });
+
+  it("refuses an order of one — that is a champion, which champions already says", () => {
+    expectIssue(
+      withRanks(["e-alpha"]),
+      ["expected", "finalRanks", 0, "order"],
+      /at least 2|too small|>=2/i,
+    );
+  });
+
+  it("refuses a final order that CONTRADICTS the stage's own expected table", () => {
+    // Anti-contradiction, not an oracle: a pack must not state one fact in two
+    // blocks and have them disagree, exactly as `rank` must equal its row's
+    // position. The message names both orders so an author can see which they
+    // meant.
+    expectIssue(
+      withRanks(["e-bravo", "e-alpha"], "s-league", (p) => {
+        (p["expected"] as Record<string, unknown>)["tables"] = [
+          {
+            divisionRef: "d-main",
+            stageRef: "s-league",
+            rows: [
+              { entrant: "e-alpha", rank: 1, played: 1, won: 1, drawn: 0, lost: 0, points: 3 },
+              { entrant: "e-bravo", rank: 2, played: 1, won: 0, drawn: 0, lost: 1, points: 0 },
+            ],
+          },
+        ];
+      }),
+      ["expected", "finalRanks", 0, "order"],
+      /the table ranks \[e-alpha, e-bravo\], this order says \[e-bravo, e-alpha\]/,
+    );
+  });
+
+  it("ACCEPTS a final order that agrees with the stage's table", () => {
+    const out = parsed(
+      withRanks(["e-alpha", "e-bravo"], "s-league", (p) => {
+        (p["expected"] as Record<string, unknown>)["tables"] = [
+          {
+            divisionRef: "d-main",
+            stageRef: "s-league",
+            rows: [
+              { entrant: "e-alpha", rank: 1, played: 1, won: 1, drawn: 0, lost: 0, points: 3 },
+              { entrant: "e-bravo", rank: 2, played: 1, won: 0, drawn: 0, lost: 1, points: 0 },
+            ],
+          },
+        ];
+      }),
+    );
+    expect(out.expected.finalRanks[0]?.order).toEqual(["e-alpha", "e-bravo"]);
+  });
+});
+
+describe("expected.champions — now stage-scopable", () => {
+  it("accepts a champion per STAGE, so a group winner and a knockout winner are two claims", () => {
+    const out = parsed(
+      pack((p) => {
+        (p["divisions"] as Record<string, unknown>[])[0]!["stages"] = [
+          { ref: "s-league", seq: 1, kind: "league", name: "League", config: { legs: 1 } },
+          { ref: "s-ko", seq: 2, kind: "knockout", name: "Knockout" },
+        ];
+        (p["expected"] as Record<string, unknown>)["champions"] = [
+          { divisionRef: "d-main", stageRef: "s-league", entrant: "e-alpha" },
+          { divisionRef: "d-main", stageRef: "s-ko", entrant: "e-bravo" },
+        ];
+      }),
+    );
+    expect(out.expected.champions.map((c) => c.stageRef)).toEqual(["s-league", "s-ko"]);
+  });
+
+  it("still refuses two UNSCOPED champions for one division", () => {
+    expectIssue(
+      pack((p) => {
+        (p["expected"] as Record<string, unknown>)["champions"] = [
+          { divisionRef: "d-main", entrant: "e-alpha" },
+          { divisionRef: "d-main", entrant: "e-bravo" },
+        ];
+      }),
+      ["expected", "champions", 1, "divisionRef"],
+      /declares more than one champion/,
+    );
+  });
+
+  it("refuses two champions for the SAME stage", () => {
+    expectIssue(
+      pack((p) => {
+        (p["expected"] as Record<string, unknown>)["champions"] = [
+          { divisionRef: "d-main", stageRef: "s-league", entrant: "e-alpha" },
+          { divisionRef: "d-main", stageRef: "s-league", entrant: "e-bravo" },
+        ];
+      }),
+      ["expected", "champions", 1, "divisionRef"],
+      /more than one champion for stage "s-league"/,
+    );
+  });
+
+  it("refuses a stage of another division", () => {
+    expectIssue(
+      pack((p) => {
+        (p["expected"] as Record<string, unknown>)["champions"] = [
+          { divisionRef: "d-main", stageRef: "s-nope", entrant: "e-alpha" },
+        ];
+      }),
+      ["expected", "champions", 0, "stageRef"],
+      /unknown stage ref "s-nope"/,
+    );
+  });
+});
+
+describe("expected.careers — the cross-division person rollup", () => {
+  it("parses, and is PACK-scoped: it names no division at all", () => {
+    const out = parsed(
+      pack((p) => {
+        (p["expected"] as Record<string, unknown>)["careers"] = [
+          { person: "p-ana", name: "Ana Alvarez", metricKey: "points", count: 42 },
+        ];
+      }),
+    );
+    expect(out.expected.careers).toEqual([
+      { person: "p-ana", name: "Ana Alvarez", metricKey: "points", count: 42 },
+    ]);
+    // A leaderboard entry cannot express this: its own block REQUIRES a
+    // divisionRef, which is the whole gap.
+    expect(Object.keys(out.expected.careers[0] ?? {})).not.toContain("divisionRef");
+  });
+
+  it("refuses an undeclared person", () => {
+    expectIssue(
+      pack((p) => {
+        (p["expected"] as Record<string, unknown>)["careers"] = [
+          { person: "p-ghost", name: "Ghost", metricKey: "points", count: 1 },
+        ];
+      }),
+      ["expected", "careers", 0, "person"],
+      /unknown person ref "p-ghost"/,
+    );
+  });
+
+  it("refuses one person claiming the same metric twice", () => {
+    expectIssue(
+      pack((p) => {
+        (p["expected"] as Record<string, unknown>)["careers"] = [
+          { person: "p-ana", name: "Ana Alvarez", metricKey: "points", count: 42 },
+          { person: "p-ana", name: "Ana Alvarez", metricKey: "points", count: 43 },
+        ];
+      }),
+      ["expected", "careers", 1],
+      /declares metric "points" twice/,
+    );
+  });
+
+  it("ACCEPTS one person across two DIFFERENT metrics", () => {
+    const out = parsed(
+      pack((p) => {
+        (p["expected"] as Record<string, unknown>)["careers"] = [
+          { person: "p-ana", name: "Ana Alvarez", metricKey: "points", count: 42 },
+          { person: "p-ana", name: "Ana Alvarez", metricKey: "serves", count: 99 },
+        ];
+      }),
+    );
+    expect(out.expected.careers).toHaveLength(2);
   });
 });

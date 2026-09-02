@@ -14,11 +14,14 @@ import { foldMatchWithStoppage } from "@seazn/engine/core";
 import { builtinModules } from "@seazn/engine/sports";
 import { boardgame } from "@seazn/engine/sports/boardgame";
 import { PackSchema, fixtureKey } from "../pack-schema.ts";
+import { fillPeriodMarkers, reconstructSetRallies } from "../reconstruct.ts";
 import {
   OFFLINE_RECORDED_AT,
   PACK_FOLD_OPTIONS,
+  packEnvelope,
   packEnvelopes,
   packLineupPair,
+  resolveDivisionCfg,
   resolveStatePath,
   sigil,
   stageScopedFoldCfg,
@@ -1590,6 +1593,49 @@ describe("validatePack — the oracles it does NOT derive say so", () => {
     expect(suspension?.message).toContain("1 declared expected.suspensions entry is NOT checked");
   });
 
+  it("warns for finalRanks — a bracket's placement order is the product's answer, not the fold's", () => {
+    const pack = tiny();
+    (pack.expected as Record<string, unknown>)["finalRanks"] = [
+      { divisionRef: "d-tiny", stageRef: "s-league", order: ["e-alpha", "e-bravo"] },
+    ];
+    const result = validatePack(pack, TINY);
+    // The block is REACHABLE and the warning names its count and its owner —
+    // a shape the schema accepts and stage 0 never mentions is the inert seam
+    // this warning channel exists to prevent.
+    expectClean(result, [...TINY_NOT_DERIVED, "finalRanks.not_derived"]);
+    const found = warnings(result.findings).find((f) => f.code === "finalRanks.not_derived");
+    expect(found?.message).toContain("1 declared expected.finalRanks entry is NOT checked");
+    expect(found?.message).toContain("B05");
+    // …and it says what IS checked offline, so a reader does not conclude the
+    // block is unchecked in every respect.
+    expect(found?.message).toContain("checked at parse");
+  });
+
+  it("warns for careers, and counts them", () => {
+    const pack = tiny();
+    (pack.expected as Record<string, unknown>)["careers"] = [
+      { person: "p-ana", name: "Ana Alvarez", metricKey: "scores", count: 2 },
+      { person: "p-bo", name: "Bo Baptiste", metricKey: "scores", count: 1 },
+    ];
+    const result = validatePack(pack, TINY);
+    expectClean(result, [...TINY_NOT_DERIVED, "careers.not_derived"]);
+    const found = warnings(result.findings).find((f) => f.code === "careers.not_derived");
+    expect(found?.message).toContain("2 declared expected.careers entries are NOT checked");
+    // The REASON matters: summing the per-division leaderboards here would
+    // compute one expected value out of others, which is the oracle direction
+    // inverted.
+    expect(found?.message).toContain("expected value out of others");
+  });
+
+  it("stays silent about both new blocks when they are empty", () => {
+    const pack = tiny();
+    pack.expected.leaderboards = [];
+    pack.expected.champions = [];
+    (pack.expected as Record<string, unknown>)["finalRanks"] = [];
+    (pack.expected as Record<string, unknown>)["careers"] = [];
+    expectClean(validatePack(pack, TINY), []);
+  });
+
   it("warns when a SPECIAL's own stream did not fold", () => {
     // The only unpinned warning site on the first sweep: `_tiny`'s special is
     // on rr-r3-c1 while every other corruption breaks rr-r1-c1 or rr-r2-c1, so
@@ -1903,7 +1949,14 @@ describe("engine facts that make two of this file's mirrors unfalsifiable today"
   });
 
 
-  it("every shipped module renders perSide as [home, away]", () => {
+  it("every shipped module renders perSide as [home, away] AT INIT", () => {
+    // TITLE NARROWED (whole-branch review N2). This loop measures `init` and
+    // nothing else, where every score is zero and a module that ordered
+    // `perSide` BY SCORE is indistinguishable from one that never reorders.
+    // "Every shipped module" was true of the SWEEP and false of the CLAIM, and
+    // conflating the two is how one sample gets read as a parity sweep. The
+    // decided-fold sweep below is where the claim has teeth.
+    //
     // stage 2 matches a pack's score lines to the module's summary BY ENTRANT,
     // never by index, because `ScoreSummary.perSide`'s order is not
     // contractual. Measured here: all eleven shipped modules order it
@@ -1930,7 +1983,109 @@ describe("engine facts that make two of this file's mirrors unfalsifiable today"
     }
   });
 
-  it("still renders perSide as [home, away] after a DECIDED fold", () => {
+  it("still renders perSide as [home, away] after a DECIDED fold, on SEVEN modules", () => {
+    // The `init` loop above cannot see a score-ordering module. These can: each
+    // stream below is decided with an UNEVEN score, built by this branch's own
+    // generators through the real fold path, so a module that reordered by
+    // score would put the winner first and red here.
+    //
+    // Seven of eleven. The four not covered — cricket, boardgame, carrom,
+    // tennis — need a bespoke decided stream each and no generator in this
+    // branch produces one; they stay `init`-only, and saying which four is the
+    // point of narrowing the title above.
+    const pair = packLineupPair({
+      divisionRef: "d",
+      fixtureExtKey: "fx",
+      home: "e-home",
+      away: "e-away",
+      provenance: "reconstructed",
+      events: [],
+    } as never);
+    const cfgOf = (m: (typeof builtinModules)[number], variantKey: string): unknown => {
+      const resolved = resolveDivisionCfg(m, { variantKey, cfgOverrides: {} });
+      if (!resolved.ok) throw new Error(`${m.key}/${variantKey}: ${JSON.stringify(resolved)}`);
+      return resolved.cfg;
+    };
+    const byKey = (key: string): (typeof builtinModules)[number] => {
+      const found = builtinModules.find((m) => m.key === key);
+      if (found === undefined) throw new Error(`no module "${key}"`);
+      return found;
+    };
+
+    // Each sport's OWN set target — a score is only a finished set under the
+    // module's own predicate, and the generator refuses one that is not.
+    const setBased: [string, string, string, { home: number; away: number }[]][] = [
+      ["badminton", "bwf", "badminton.rally", [{ home: 21, away: 15 }, { home: 21, away: 9 }]],
+      ["volleyball", "indoor", "volleyball.rally", [
+        { home: 25, away: 20 },
+        { home: 25, away: 12 },
+        { home: 25, away: 23 },
+      ]],
+      ["tabletennis", "bo5", "tabletennis.rally", [
+        { home: 11, away: 4 },
+        { home: 11, away: 9 },
+        { home: 11, away: 7 },
+      ]],
+    ];
+    for (const [key, variantKey, rallyType, sets] of setBased) {
+      const sportModule = byKey(key);
+      const cfg = cfgOf(sportModule, variantKey);
+      const events = reconstructSetRallies({
+        module: sportModule,
+        cfg,
+        lineups: pair,
+        rallyType,
+        // The HOME side wins every set, and by different margins, so neither a
+        // score order nor a winner-first order can pass by luck.
+        sets,
+        seed: 1,
+      });
+      const { state } = foldMatchWithStoppage(
+        sportModule,
+        cfg,
+        pair,
+        events.map((ev, i) => packEnvelope("fx", ev, i)),
+        PACK_FOLD_OPTIONS,
+      );
+      expect(sportModule.outcome(state), key).not.toBeNull();
+      expect(sportModule.summary(state).perSide.map((x) => x.entrantId), key).toEqual([
+        "@e-home",
+        "@e-away",
+      ]);
+    }
+
+    const period: [string, string, string][] = [
+      ["football", "11-a-side", "football.period"],
+      ["hockey", "fih-outdoor", "hockey.period.advance"],
+      ["icehockey", "iihf", "icehockey.period.advance"],
+    ];
+    for (const [key, variantKey, markerType] of period) {
+      const sportModule = byKey(key);
+      const cfg = cfgOf(sportModule, variantKey);
+      const goal = { type: `${key}.goal`, payload: { by: "@e-home" } };
+      const events = fillPeriodMarkers({
+        module: sportModule,
+        cfg,
+        lineups: pair,
+        markerType,
+        segments: [[{ type: "core.start", payload: {} }, goal, goal]],
+      });
+      const { state } = foldMatchWithStoppage(
+        sportModule,
+        cfg,
+        pair,
+        events.map((ev, i) => packEnvelope("fx", ev, i)),
+        PACK_FOLD_OPTIONS,
+      );
+      expect(sportModule.outcome(state), key).not.toBeNull();
+      expect(sportModule.summary(state).perSide.map((x) => x.entrantId), key).toEqual([
+        "@e-home",
+        "@e-away",
+      ]);
+    }
+  });
+
+  it("still renders perSide as [home, away] after a DECIDED generic fold", () => {
     // `init` alone is too weak a pin for the claim it carries: a module that
     // ordered `perSide` BY SCORE would be [home, away] at kick-off, when both
     // are zero, and reversed the moment anyone scores. `_tiny`'s rr-r1-c1 is a

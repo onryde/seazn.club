@@ -73,13 +73,15 @@
 //    (`usecases/player-stats.ts:124-140`), and a second, differently-built ctx
 //    here would be the placer/verifier fork rather than a check. Owed to B05's
 //    live run. Pinned by a test so this limit cannot quietly become false.
-//  * `expected.champions` and `expected.suspensions` are likewise not derived
-//    offline: a champion is the product's stage-completion + progression
-//    answer, and a suspension is a discipline carry-over across fixtures. Both
-//    are B05's.
+//  * `expected.champions`, `expected.finalRanks`, `expected.careers` and
+//    `expected.suspensions` are likewise not derived offline: a champion and a
+//    stage's placement ORDER are the product's stage-completion + progression
+//    answers, a career rollup rides the player-stats fold across divisions, and
+//    a suspension is a discipline carry-over across fixtures. All are B05's.
 //
-//    All three of those blocks now emit a `warning` when they are non-empty
+//    All five of those blocks emit a `warning` when they are non-empty
 //    (`leaderboards.not_derived` / `champions.not_derived` /
+//    `finalRanks.not_derived` / `careers.not_derived` /
 //    `suspensions.not_derived`). Not deriving them is the right call; being
 //    SILENT about them was not, because a pack with a wholly fabricated
 //    leaderboard then reported "ok, no findings" — the "looks like it passed"
@@ -173,6 +175,7 @@ import {
   type TableStage,
 } from "@seazn/engine/competition";
 import {
+  entrantsOfDivision,
   fixtureKey,
   PackSchema,
   roundRobinFixtureCount,
@@ -957,7 +960,7 @@ export function validatePack(raw: unknown, opts: ValidatePackOptions): PackValid
   // whether a partially-recorded season is an authoring defect is a human
   // judgement. It says both numbers so a reader can make it.
   for (const division of pack.divisions) {
-    const entrants = pack.entrants.filter((e) => e.divisionRef === division.ref).length;
+    const entrants = entrantsOfDivision(pack.entrants, division.ref).length;
     for (const stage of division.stages) {
       if (stage.kind !== "league") continue; // a bracket's count is a bracket shape; a group's is per pool
       const legs = stage.config["legs"];
@@ -1005,6 +1008,23 @@ export function validatePack(raw: unknown, opts: ValidatePackOptions): PackValid
       "expected.champions",
       pack.expected.champions.length,
       "a champion is the product's stage-completion and progression answer, not the fold's",
+    ],
+    [
+      "finalRanks.not_derived",
+      "expected.finalRanks",
+      pack.expected.finalRanks.length,
+      "a stage's placement order is the product's progression answer, exactly like a champion — a " +
+        "bracket writes a `placementTable`-wrapped row (usecases/stages.ts:2400) that stage 0 has no " +
+        "fixture rows to reproduce. The REFS and the order's internal consistency are checked at " +
+        "parse (PackSchema), including against a sibling expected.tables row where the stage has one",
+    ],
+    [
+      "careers.not_derived",
+      "expected.careers",
+      pack.expected.careers.length,
+      "a career rollup spans divisions and rides the same player-stats fold as a leaderboard, which " +
+        "needs a PlayerStatsFoldCtx built from entrant-member rows (usecases/player-stats.ts:124-140). " +
+        "Summing the per-division leaderboards here would compute one expected value out of others",
     ],
     [
       "suspensions.not_derived",

@@ -32,7 +32,7 @@ import { fileURLToPath } from "node:url";
 import type pino from "pino";
 import { newSession, request, signIn, type Session } from "../http.ts";
 import { expectedFixtureCount, formatFinding, loadPackFile } from "../pack-io.ts";
-import type { Pack, PackJsonValue } from "../pack-schema.ts";
+import { entrantsOfDivision, type Pack, type PackJsonValue } from "../pack-schema.ts";
 import type { SuiteReport } from "../report.ts";
 
 /** The committed micro-pack, resolved from THIS module rather than from the
@@ -117,8 +117,7 @@ export function tinyPlan(pack: Pack): TinySeedPlan {
     sportKey: division.sportKey,
     variantKey: division.variantKey,
     divisionConfig: division.cfgOverrides,
-    entrants: pack.entrants
-      .filter((e) => e.divisionRef === division.ref)
+    entrants: entrantsOfDivision(pack.entrants, division.ref)
       .map((e) => ({
         kind: e.kind,
         display_name: e.displayName,

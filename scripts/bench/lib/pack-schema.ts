@@ -908,8 +908,42 @@ export type PackExpectedTable = z.infer<typeof PackExpectedTable>;
 
 export const PackExpectedChampion = z.strictObject({
   divisionRef: PackRef,
+  /** WHICH stage crowned them. Optional, and absent means "the division's
+   *  outright champion" — which is all a single-stage division has to say. A
+   *  multi-stage division could not previously name the stage at all, so a
+   *  group winner and a knockout winner were the same unqualified claim. */
+  stageRef: PackRef.optional(),
   entrant: PackRef,
 });
+
+/**
+ * A stage's FINAL PLACEMENT ORDER, first to last.
+ *
+ * The gap this closes: `champions` gives 1st and nothing else, and
+ * `expected.tables` — the only ordered block — is a HARD ERROR on a bracket
+ * stage (`validate-pack.ts`'s `TABLE_STAGE_KINDS` is league/group/swiss/
+ * americano). So a knockout's 2nd, 3rd, 4th … were unassertable by any block in
+ * the contract, in a programme whose freeze-closing pilot (B06) is a 96-player
+ * knockout and whose B05 oracle list names `finalRanks` by that name.
+ *
+ * The product does snapshot one for every stage kind — a bracket/ladder writes
+ * a single `placementTable`-wrapped row (`usecases/stages.ts:2400-2401`, via
+ * `engine-db/competition.ts:487-499`, rows from `competition/progression.ts:
+ * 716-730` with the rank set and all stats zeroed) — so this is a real product
+ * fact a pack can be held to, not an invented one.
+ *
+ * ORDER IS THE ASSERTION, and there is deliberately no per-entry `rank` field.
+ * `PackExpectedTableRow` carries both and needs a refinement forcing them to
+ * agree; here there is only one place to write the fact, so they cannot
+ * disagree. `min(2)` because a one-entrant order says nothing `champions` does
+ * not already say.
+ */
+export const PackExpectedFinalRanks = z.strictObject({
+  divisionRef: PackRef,
+  stageRef: PackRef,
+  order: z.array(PackRef).min(2),
+});
+export type PackExpectedFinalRanks = z.infer<typeof PackExpectedFinalRanks>;
 
 /** Names AND counts, per design §8: asserting a count alone passes for the
  *  wrong player, and asserting a name alone passes for the wrong tally. */
@@ -920,6 +954,40 @@ export const PackExpectedLeaderboardEntry = z.strictObject({
   name: z.string().min(1).max(200),
   count: z.number(),
 });
+
+/**
+ * ONE person's rollup for one metric ACROSS THE WHOLE PACK.
+ *
+ * `PackExpectedLeaderboard` requires a `divisionRef`, so every person-stat
+ * oracle in the contract was scoped to a single division — and two authored
+ * sources ask for a cross-division one: `bench-prompts/_INDEX.md:66-68` ("a
+ * player in two suites gets a career-rollup oracle") and
+ * `B12-pack-badminton.md`, which owns the `personCareerStats` oracle
+ * programme-wide. B12 sits well after the B06 freeze, so the alternative to
+ * declaring it now is an owner escalation for a field two written prompts
+ * already require.
+ *
+ * A SEPARATE BLOCK rather than making `divisionRef` optional, deliberately.
+ * "Absent means the whole pack" is a second meaning for one field, and the
+ * validator would then have to guess which meaning an author intended from
+ * whether they remembered to type it. Two blocks, two questions.
+ *
+ * NOT derivable by summing the per-division leaderboards, which is why it has
+ * to be authored: that would make the bench compute its own expected value out
+ * of its other expected values, and the number the oracle asserts would stop
+ * being an authored historical fact. `name` rides alongside `person` for the
+ * same reason it does on a leaderboard entry — a count alone passes for the
+ * wrong player.
+ */
+export const PackExpectedCareer = z.strictObject({
+  person: PackRef,
+  name: z.string().min(1).max(200),
+  /** A `SportModule.playerStats` metric key. Free string, per-module and open,
+   *  exactly as on a leaderboard. */
+  metricKey: z.string().min(1).max(60),
+  count: z.number(),
+});
+export type PackExpectedCareer = z.infer<typeof PackExpectedCareer>;
 
 export const PackExpectedLeaderboard = z.strictObject({
   divisionRef: PackRef,
@@ -1055,7 +1123,12 @@ export const PackExpected = z.strictObject({
   matches: z.array(PackExpectedMatch).default([]),
   tables: z.array(PackExpectedTable).default([]),
   champions: z.array(PackExpectedChampion).default([]),
+  /** A stage's full placement order — the block `expected.tables` cannot be for
+   *  a bracket. See `PackExpectedFinalRanks`. */
+  finalRanks: z.array(PackExpectedFinalRanks).default([]),
   leaderboards: z.array(PackExpectedLeaderboard).default([]),
+  /** Cross-division person rollups. See `PackExpectedCareer`. */
+  careers: z.array(PackExpectedCareer).default([]),
   suspensions: z.array(PackExpectedSuspension).default([]),
   specials: z.array(PackExpectedSpecial).default([]),
 });
@@ -1169,8 +1242,27 @@ export type PackRegistration = z.infer<typeof PackRegistration>;
 // ---------------------------------------------------------------------------
 
 const PackShape = z.strictObject({
-  /** Bumped by ANY change to this contract. A pack authored against an older
-   *  shape then fails loudly instead of parsing into a different meaning. */
+  /**
+   * FROZEN AT 1 UNTIL THE B06 FREEZE; bumped by any change after it.
+   *
+   * The rule this comment used to state — "bumped by ANY change to this
+   * contract" — was already false when it was written, and a later session
+   * would have read it as a rule and been wrong about what version 1 means.
+   * This branch made a BREAKING change under it: removing `method` from the
+   * `award` outcome variant, which (the union members being `strictObject`s)
+   * makes a pack that wrote `{kind:"award", method:"walkover"}` fail to parse.
+   * Harmless in practice, because `_tiny.json` is the only pack in existence
+   * and moved with the schema — but the discipline the comment claimed was not
+   * being kept.
+   *
+   * So the honest rule, for the window this contract is still being designed
+   * in: version 1 means "the pre-freeze shape, whatever it currently is", and
+   * every pack in the tree moves with it. After B06 closes the freeze, an
+   * additive change is an owner escalation and a BREAKING one bumps this
+   * literal — at which point it becomes the only migration signal the contract
+   * has, and a pack authored against an older shape fails loudly instead of
+   * parsing into a different meaning.
+   */
   schemaVersion: z.literal(1),
   /** The pack's own identity, checked against its filename by the validator.
    *  Deliberately NOT a closed enum of suite keys: `bench.ts`'s
@@ -1743,12 +1835,68 @@ function checkExpected(p: PackShapeOut, ctx: Ctx): void {
   p.expected.champions.forEach((c, i) => {
     const base: (string | number)[] = ["expected", "champions", i];
     if (!checkDivision(base, c.divisionRef)) return;
-    if (championed.has(c.divisionRef)) {
-      issue(ctx, [...base, "divisionRef"], `division "${c.divisionRef}" declares more than one champion`);
+    // Scoped by STAGE where one is named, so a group winner and a knockout
+    // winner are two claims rather than a duplicate.
+    const scope = `${c.divisionRef}\u0000${c.stageRef ?? ""}`;
+    if (championed.has(scope)) {
+      issue(
+        ctx,
+        [...base, "divisionRef"],
+        c.stageRef === undefined
+          ? `division "${c.divisionRef}" declares more than one champion`
+          : `division "${c.divisionRef}" declares more than one champion for stage "${c.stageRef}"`,
+      );
     }
-    championed.add(c.divisionRef);
+    championed.add(scope);
+    if (c.stageRef !== undefined && !(stagesByDivision.get(c.divisionRef) ?? new Set<string>()).has(c.stageRef)) {
+      issue(ctx, [...base, "stageRef"], `unknown stage ref "${c.stageRef}" for division "${c.divisionRef}"`);
+    }
     if (!entrantIn(c.divisionRef, c.entrant)) {
       issue(ctx, [...base, "entrant"], `unknown entrant ref "${c.entrant}" for division "${c.divisionRef}"`);
+    }
+  });
+
+  // A stage's placement ORDER. Every ref an entrant of that division, no
+  // entrant twice, one order per stage — and, where the stage ALSO declares a
+  // table, the two orders must agree. That last rule is anti-contradiction,
+  // not an oracle: a pack must not state one fact in two blocks and have them
+  // disagree, exactly as `rank` must equal its row's position and `perSide`
+  // must be `[home, away]`.
+  const ranked = new Set<string>();
+  const tableOrderOf = new Map<string, string[]>();
+  for (const table of p.expected.tables) {
+    if (table.poolKey !== undefined) continue; // a pool table orders a pool, not the stage
+    tableOrderOf.set(fixtureKey(table.divisionRef, table.stageRef), table.rows.map((r) => r.entrant));
+  }
+  p.expected.finalRanks.forEach((fr, i) => {
+    const base: (string | number)[] = ["expected", "finalRanks", i];
+    if (!checkDivision(base, fr.divisionRef)) return;
+    if (!(stagesByDivision.get(fr.divisionRef) ?? new Set<string>()).has(fr.stageRef)) {
+      issue(ctx, [...base, "stageRef"], `unknown stage ref "${fr.stageRef}" for division "${fr.divisionRef}"`);
+    }
+    const scope = fixtureKey(fr.divisionRef, fr.stageRef);
+    if (ranked.has(scope)) {
+      issue(ctx, base, `stage "${fr.stageRef}" of division "${fr.divisionRef}" declares more than one final order`);
+    }
+    ranked.add(scope);
+    const seen = new Set<string>();
+    fr.order.forEach((ref, j) => {
+      if (!entrantIn(fr.divisionRef, ref)) {
+        issue(ctx, [...base, "order", j], `unknown entrant ref "${ref}" for division "${fr.divisionRef}"`);
+      }
+      if (seen.has(ref)) {
+        issue(ctx, [...base, "order", j], `entrant "${ref}" is placed twice in this final order`);
+      }
+      seen.add(ref);
+    });
+    const table = tableOrderOf.get(scope);
+    if (table !== undefined && table.join("\u0000") !== fr.order.join("\u0000")) {
+      issue(
+        ctx,
+        [...base, "order"],
+        `stage "${fr.stageRef}" declares BOTH an expected table and a final order, and they disagree — ` +
+          `the table ranks [${table.join(", ")}], this order says [${fr.order.join(", ")}]. One fact, one answer`,
+      );
     }
   });
 
@@ -1760,6 +1908,22 @@ function checkExpected(p: PackShapeOut, ctx: Ctx): void {
         issue(ctx, [...base, "entries", j, "person"], `unknown person ref "${entry.person}"`);
       }
     });
+  });
+
+  // Cross-division career rollups: the person exists, and one (person, metric)
+  // is claimed once. Two rows for the same pair are a contradiction, not two
+  // oracles.
+  const claimedCareer = new Set<string>();
+  p.expected.careers.forEach((c, i) => {
+    const base: (string | number)[] = ["expected", "careers", i];
+    if (!personRefs.has(c.person)) {
+      issue(ctx, [...base, "person"], `unknown person ref "${c.person}"`);
+    }
+    const key = fixtureKey(c.person, c.metricKey);
+    if (claimedCareer.has(key)) {
+      issue(ctx, base, `person "${c.person}" declares metric "${c.metricKey}" twice`);
+    }
+    claimedCareer.add(key);
   });
 
   p.expected.suspensions.forEach((s, i) => {
@@ -1985,6 +2149,26 @@ function checkRegistration(p: PackShapeOut, ctx: Ctx): void {
       if (!entryKeys.has(a.target)) issue(ctx, [...base, "organiser", i, "target"], `unknown registration entry "${a.target}"`);
     });
   }
+}
+
+/**
+ * THE entrants of one division, in pack order.
+ *
+ * One exported selector because there were four hand-rolled copies of
+ * `pack.entrants.filter(e => e.divisionRef === …)` — in the template strip, the
+ * runner's fixture-count derivation, stage 0's stream-count cross-check and the
+ * `_tiny` seed plan — all agreeing today. The ARITHMETIC they feed was
+ * deliberately unified below with a comment saying two copies of one rule is
+ * the parallel-vocabulary defect; the SELECTOR feeding it was left forked in
+ * four places, which is the same defect one step earlier. A division filter
+ * that drifted in one of the four would mint a different fixture count in the
+ * runner than the validator warned about.
+ */
+export function entrantsOfDivision(
+  entrants: readonly PackEntrant[],
+  divisionRef: string,
+): PackEntrant[] {
+  return entrants.filter((e) => e.divisionRef === divisionRef);
 }
 
 /**

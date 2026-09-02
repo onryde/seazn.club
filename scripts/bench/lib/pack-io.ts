@@ -31,7 +31,7 @@
 // emit-dependent syntax; `.ts` on every relative import; nothing from apps/web.
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { roundRobinFixtureCount, type Pack } from "./pack-schema.ts";
+import { entrantsOfDivision, roundRobinFixtureCount, type Pack } from "./pack-schema.ts";
 import { validatePack, type PackFinding } from "./validate-pack.ts";
 
 // ---------------------------------------------------------------------------
@@ -182,6 +182,6 @@ export function expectedFixtureCount(pack: Pack, divisionRef: string, stageRef: 
         `merely unhelpful`,
     );
   }
-  const entrants = pack.entrants.filter((e) => e.divisionRef === divisionRef).length;
+  const entrants = entrantsOfDivision(pack.entrants, divisionRef).length;
   return roundRobinFixtureCount(entrants, legs);
 }
