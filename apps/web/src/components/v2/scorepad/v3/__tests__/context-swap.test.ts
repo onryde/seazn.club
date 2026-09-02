@@ -1458,10 +1458,15 @@ describe("SwapSheet — OFF-step enforcement (opt-in, owner ruling 2026-08-25)",
 //      `readOnly: true` beside it — the specs below therefore declare a mode
 //      slot with NO readOnly at all, which is the only shape that can tell
 //      "the chassis enforces it" from "the fixture happened to set it".
-//   2. it is findable — every chip renders `data-slot-kind`, because a mode
-//      statement and a person chip wear the IDENTICAL read-only chip (no
-//      fifth chip style) and a Playwright spec has nothing else stable to
-//      select on.
+//   2. it does not LOOK like a control either. WS-M copy round 2 (controller
+//      ruling, 2026-09-02): a mode statement renders as PLAIN TEXT with a lock
+//      glyph, never a pill — the band control beside it in the product is a
+//      chip with a chevron, and a scorer under time pressure reads SHAPE
+//      before words. Word ("This innings:"), shape (not a pill) and glyph (the
+//      lock) are three independent signals, and the shape one carries most.
+//      `data-role="context-mode"` is what a spec selects it by; it is
+//      deliberately NOT `context-chip`, so a 44px hit-target sweep over the
+//      chips does not measure something nobody can tap.
 // ---------------------------------------------------------------------------
 
 describe("ContextStrip rendering — mode slots (R8)", () => {
@@ -1503,16 +1508,41 @@ describe("ContextStrip rendering — mode slots (R8)", () => {
     expect(render(modeSpec()).text()).toContain("pad.cricket.context.mode.fine.label");
   });
 
-  it("its chip carries data-slot-kind=\"mode\"; a person chip carries \"person\" — the hook a spec selects the mode statement by", () => {
-    const chips = render(modeSpec()).tree().filter((el) => propsOf(el)["data-role"] === "context-chip");
-    expect(chips).toHaveLength(2);
-    const kinds = chips.map((c) => propsOf(c)["data-slot-kind"]);
-    expect(kinds).toEqual(["person", "mode"]);
-    // ...and the mode chip is the read-only shape, sharing the person chips'
-    // own 44px footprint rather than a new one.
-    const modeChip = chips.find((c) => propsOf(c)["data-slot-kind"] === "mode")!;
-    expect(propsOf(modeChip)["data-readonly"]).toBe("true");
-    expect(propsOf(modeChip).style).toMatchObject({ minHeight: 44 });
+  it("is NOT a chip — the chip row holds the person slots only, so a hit-target sweep never measures an untappable pill", () => {
+    const tree = render(modeSpec()).tree();
+    const chips = tree.filter((el) => propsOf(el)["data-role"] === "context-chip");
+    expect(chips).toHaveLength(1); // the bowler; the mode statement is not among them
+    expect(chips.map((c) => propsOf(c)["data-slot-kind"])).toEqual(["person"]);
+    // No chip styling anywhere on the mode statement: no rounded-full pill, no
+    // border, no 44px footprint asking for a thumb.
+    const mode = tree.find((el) => propsOf(el)["data-role"] === "context-mode")!;
+    expect(mode, "the mode statement renders under its own role").toBeDefined();
+    expect(propsOf(mode).style).toBeUndefined();
+    const modeClasses = walk(mode)
+      .map((el) => (propsOf(el).className as string | undefined) ?? "")
+      .join(" ");
+    expect(modeClasses).not.toContain("rounded-full");
+    expect(modeClasses).not.toContain("border");
+  });
+
+  it("the statement line's own text is the LABEL ALONE — its message is a sibling, not a child", () => {
+    // Caught in e2e, pinned here: with `data-role="context-mode"` on a wrapper
+    // that also held the message, Playwright's `toHaveText` on that role
+    // returned "This innings: Over-by-overSet when this innings began, …" —
+    // green in every unit test, and a spec asserting the label exactly could
+    // never pass. The role belongs on the statement line.
+    const mode = render(modeSpec()).tree().find((el) => propsOf(el)["data-role"] === "context-mode")!;
+    expect(textOf(mode)).toBe("pad.cricket.context.mode.fine.label");
+    expect(textOf(mode)).not.toContain("Set when this innings began.");
+  });
+
+  it("carries the lock glyph, decorative — the third signal, alongside the noun and the shape", () => {
+    const mode = render(modeSpec()).tree().find((el) => propsOf(el)["data-role"] === "context-mode")!;
+    const svg = walk(mode).find((el) => el.type === "svg");
+    expect(svg, "a lock glyph must render inside the mode statement").toBeDefined();
+    // aria-hidden: "This innings:" already carries the meaning in text, so the
+    // glyph must not be announced a second time.
+    expect(propsOf(svg!)["aria-hidden"]).toBe("true");
   });
 
   it("never shows the unset attention dot, even declared required — there is nothing to go and set", () => {

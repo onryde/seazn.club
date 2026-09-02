@@ -1406,11 +1406,14 @@ describe("buildContext", () => {
 // already know the rule could not learn it from the pad.
 //
 // The affordance is the chassis's own read-only context-strip slot
-// (`ContextSlot.kind: "mode"`, ../../types.ts), the same pattern badminton/
-// tabletennis/volleyball already ship for "Game scores only". NOT the
-// recording chip (../../recording-chip.tsx): that expresses the fidelity
-// BAND, a plan/entitlement concept, and conflating band with scoring MODE is
-// forbidden by the programme rules.
+// (`ContextSlot.kind: "mode"`, ../../types.ts), descended from the pattern
+// badminton/tabletennis/volleyball ship for "Game scores only", and rendered
+// as plain text with a lock glyph rather than a pill.
+//
+// DISTINCT FROM THE BAND (../../recording-chip.tsx) on AGENCY, not topic: the
+// band is the scorer's own choice of how much to record, changeable now; the
+// mode is a fact this innings locked at its first event. Hence the label's
+// "This innings: …". Conflating the two is forbidden by the programme rules.
 //
 // Every fixture below is a REAL fold (`_cricket-fold`) and GUARDS ITSELF by
 // asserting the ENGINE's own `inningsFidelity` before it asserts the slot: a

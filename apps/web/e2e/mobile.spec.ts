@@ -1255,15 +1255,21 @@ test("cricket v3 pad: tiles + over-summary sheet + context strip hold the 44px f
   const chips = pad.locator('[data-role="context-chip"]');
   await expect(chips.first(), "context strip must render once an innings exists").toBeVisible({ timeout: 20_000 });
   const chipCount = await chips.count();
-  expect(chipCount, "cricket declares striker, non-striker, bowler and (R8) the innings' locked scoring mode").toBe(4);
-  // R8 — the mode statement is a chip like any other here: it must clear the
-  // same 44px floor at all seven widths (the loop below covers it), and it
-  // must READ correctly. This innings was opened by the ball tapped above, so
-  // it is locked to the fine lane; a mode indicator that ignored the fold
-  // would say "Over-by-over" over a pad that has just recorded a ball.
-  const modeChip = pad.locator('[data-role="context-chip"][data-slot-kind="mode"]');
-  await expect(modeChip, "the pad must state which scoring mode this innings locked into").toHaveCount(1);
-  await expect(modeChip).toHaveText("Scoring: Ball-by-ball");
+  expect(chipCount, "cricket declares striker, non-striker and bowler").toBe(3);
+  // R8 / WS-M round 2 — the mode statement is deliberately NOT among them: it
+  // renders as plain text with a lock glyph, not a pill, so the 44px floor
+  // loop below must not measure it — nothing can tap it, and a hit-target
+  // sweep that grades a statement is measuring the wrong thing. It must still
+  // READ correctly at every width: this innings was opened by the ball tapped
+  // above, so it is locked to the fine lane, and an indicator that ignored the
+  // fold would say "Over-by-over" over a pad that has just recorded a ball.
+  const modeLine = pad.locator('[data-role="context-mode"]');
+  await expect(modeLine, "the pad must state which scoring mode this innings locked into").toHaveCount(1);
+  await expect(modeLine).toHaveText("This innings: Ball-by-ball");
+  await expect(
+    pad.locator('[data-role="context-chip"][data-slot-kind="mode"]'),
+    "the mode statement must never render as a chip",
+  ).toHaveCount(0);
   for (let i = 0; i < chipCount; i++) {
     await assertFloor(chips.nth(i), `context chip ${i}`);
   }

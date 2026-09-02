@@ -396,23 +396,33 @@ export interface ContextSlot {
    *
    * A chassis-wide field, not a cricket hack: any skin whose sport has more
    * than one entry lane may declare one, and the chassis then guarantees the
-   * two things a mode statement must be, so no skin can get them wrong:
+   * three things a mode statement must be, so no skin can get them wrong:
    *
-   *   1. NEVER A CONTROL. `context-strip.tsx` renders a `"mode"` slot with the
-   *      read-only chip shape and never opens a picker on it, whatever
-   *      `readOnly` says. The mode is locked; a picker that cannot move it is
-   *      the "opens and silently fails" defect `readOnly` above exists to
-   *      close, in its purest form.
-   *   2. NEVER AN EXCUSE FOR A DISABLED TILE. `assertDisabledTilesExplained`
+   *   1. NEVER A CONTROL. `context-strip.tsx` never opens a picker on a
+   *      `"mode"` slot, whatever `readOnly` says. The mode is locked; a picker
+   *      that cannot move it is the "opens and silently fails" defect
+   *      `readOnly` above exists to close, in its purest form.
+   *   2. NEVER SHAPED LIKE ONE. WS-M copy round 2 (controller ruling,
+   *      2026-09-02): it renders as PLAIN TEXT with a lock glyph, never a
+   *      pill — see `renderModeStatement` (context-strip.tsx) for why shape
+   *      carries more of this signal than words do.
+   *   3. NEVER AN EXCUSE FOR A DISABLED TILE. `assertDisabledTilesExplained`
    *      (tile-grid.tsx) counts context-slot messages as the explanation a
    *      disabled tile owes; a mode slot's message is ALWAYS present, so
    *      counting it would make that validator vacuously green for every skin
    *      that declares one. It is excluded there by `kind` for that reason.
    *
-   * NOT the fidelity BAND (recording-chip.tsx): the band is a plan/entitlement
-   * ceiling ("Result only" … "Every detail"), display-and-upsell only. Band
-   * and mode wear similar words and are different concepts; the programme
-   * rules forbid conflating them.
+   * DISTINCT FROM THE BAND (recording-chip.tsx), and the axis is AGENCY, not
+   * topic. Both are granularity, which is exactly why they are easy to
+   * conflate. What separates them is whose value it is: the band is the
+   * SCORER'S CHOICE of how much to record, changeable now; a mode is a FACT
+   * THE SPORT LOCKED when the period began, and no control on this pad can
+   * move it. That is why a mode slot's own label names its owner ("This
+   * innings: …") — a scorer needs to know whose the value is before deciding
+   * whether to reach for it. Deliberately worded without reference to plans or
+   * entitlements: what the band means commercially has changed once already
+   * and may change again; what it means to a SCORER — my choice, not the
+   * innings' — is the part that makes this distinction stable.
    */
   kind?: "person" | "mode";
   /**

@@ -228,9 +228,9 @@ test(
     // test below, so the two together prove the chip tracks the fold rather
     // than printing a constant.
     await expect(
-      pad(page).locator('[data-role="context-chip"][data-slot-kind="mode"]'),
+      pad(page).locator('[data-role="context-mode"]'),
       "a ball-opened innings must say it is ball-by-ball",
-    ).toHaveText("Scoring: Ball-by-ball");
+    ).toHaveText("This innings: Ball-by-ball");
 
     const overOneBalls = (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "cricket.ball");
     expect(overOneBalls, "five deliveries = five cricket.ball events, no more, no fewer").toHaveLength(5);
@@ -697,8 +697,8 @@ test(
     // claim otherwise. Pinned BEFORE the dispatch below so the "Over-by-over"
     // assertion further down is a real transition, not a chip that reads the
     // same in every state.
-    const modeChip = pad(page).locator('[data-role="context-chip"][data-slot-kind="mode"]');
-    await expect(modeChip, "no innings yet: neither lane has locked in, so there is no mode to state").toHaveCount(0);
+    const modeLine = pad(page).locator('[data-role="context-mode"]');
+    await expect(modeLine, "no innings yet: neither lane has locked in, so there is no mode to state").toHaveCount(0);
 
     await overTile.click();
     const sheet = sheetRoot(page);
@@ -785,8 +785,8 @@ test(
     // strip says so in words, read off the fold's own `inningsFidelity` — and
     // the same chip read nothing at all a few lines above, before this
     // summary locked the innings.
-    await expect(modeChip, "a coarse innings must say so").toHaveCount(1);
-    await expect(modeChip).toHaveText("Scoring: Over-by-over");
+    await expect(modeLine, "a coarse innings must say so").toHaveCount(1);
+    await expect(modeLine).toHaveText("This innings: Over-by-over");
     await expect(
       pad(page).locator('[data-role="context-slot-message"][data-slot-id="mode"]'),
       "and explains that the lock happened when the innings began",

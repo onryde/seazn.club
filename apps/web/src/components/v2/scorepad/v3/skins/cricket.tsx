@@ -1910,19 +1910,27 @@ function superOverNoticeSlot(state: CricketStateShape, t: TFn): ContextSlot | nu
  * nothing anywhere saying why or that anything is locked.
  *
  * Shape: the chassis's read-only context-strip slot (`ContextSlot.kind:
- * "mode"`, ../types.ts), which is the pattern badminton/tabletennis/
- * volleyball already ship for "Game scores only"/"Set scores only", and the
- * same shape `superOverNoticeSlot` above uses — a person-less chip carrying
- * one sentence. `readOnly: true` because there is nothing a tap could change
- * (the chassis enforces it for `kind: "mode"` regardless, but declaring it
- * keeps this file honest at the point of authorship). `messageTone: "info"`
- * for badminton's own stated reason: this is a TIER the pad is working
- * exactly as configured in, not a fault, and red here would teach a scorer
- * that red on this pad means nothing in particular.
+ * "mode"`, ../types.ts), descended from the pattern badminton/tabletennis/
+ * volleyball ship for "Game scores only"/"Set scores only" and from
+ * `superOverNoticeSlot` above — a person-less slot carrying one sentence.
+ * `readOnly: true` because there is nothing a tap could change (the chassis
+ * enforces it for `kind: "mode"` regardless, but declaring it keeps this file
+ * honest at the point of authorship). `messageTone: "info"` for badminton's
+ * own stated reason: this is a TIER the pad is working exactly as configured
+ * in, not a fault, and red here would teach a scorer that red on this pad
+ * means nothing in particular. The chassis renders it as plain text with a
+ * lock glyph rather than a pill (WS-M copy round 2) — this file chooses the
+ * words, not the shape.
  *
- * NOT the recording chip (../recording-chip.tsx): that expresses the fidelity
- * BAND — a plan/entitlement ceiling, display-and-upsell only. Band and
- * scoring MODE wear similar words and are different concepts.
+ * DISTINCT FROM THE BAND (../recording-chip.tsx), on AGENCY rather than topic.
+ * Both are granularity. The band is the SCORER'S CHOICE of how much to
+ * record — theirs, and changeable now. The mode is a FACT ABOUT THIS INNINGS,
+ * fixed by its first event, that nothing on this pad can move. Hence the
+ * label's own "This innings: …": it says whose the value is, which is what a
+ * scorer needs before deciding whether to reach for it. Stated in those terms
+ * rather than in terms of plans or entitlements deliberately — what the band
+ * means commercially has changed once already; what it means to a scorer is
+ * what makes this distinction hold.
  *
  * The MODE itself is never decided here — `inningsFidelity` reads it straight
  * off the fold. `MODE_COPY` is a KEY table only, and typed
