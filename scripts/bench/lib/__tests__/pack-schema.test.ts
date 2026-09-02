@@ -15,6 +15,7 @@ import {
   SEED_LEGAL_BY_PROVENANCE,
   STANDINGS_SCALAR_FIELDS,
   fixtureKey,
+  seedRefusalMessage,
   type Pack,
 } from "../pack-schema.ts";
 import { packToTemplateSkeleton } from "../pack-template.ts";
@@ -668,8 +669,11 @@ describe("PackSchema — one ref namespace for everything the @ sigil resolves",
     const collided = structuredClone(raw);
     const persons = collided.persons as Record<string, unknown>[];
     const entrants = collided.entrants as Record<string, unknown>[];
+    // `persons` has NO minimum in the schema, so an empty _tiny would make the
+    // collision below a no-op and this test vacuous — a real guard. `entrants`
+    // needs none: PackSchema declares `.min(2)`, so asserting it here would
+    // restate the schema.
     expect(persons.length, "_tiny declares no persons to collide").toBeGreaterThan(0);
-    expect(entrants.length, "_tiny declares no entrants to collide").toBeGreaterThan(0);
     persons[0]!.ref = entrants[0]!.ref;
     const result = PackSchema.safeParse(collided);
     expect(result.success, "a collided _tiny still parsed").toBe(false);
@@ -733,6 +737,41 @@ describe("PackSchema — @-refs inside the OTHER opaque blocks", () => {
     });
   }
 
+  it("the refusal tells the author what to DO, not only what is wrong", () => {
+    // Header note 6 rules a literal leading "@" an owner escalation with no
+    // escape hatch. Stating the requirement without the remedy leaves an
+    // author stuck at exactly the moment the schema is least negotiable.
+    expectIssue(
+      pack((p) => {
+        const d = (p.divisions as Record<string, unknown>[])[0] as Record<string, unknown>;
+        d.cfgOverrides = { resultMode: "score", allowDraws: true, nominatedFor: "@e-alpah" };
+      }),
+      ["divisions", 0, "cfgOverrides"],
+      /owner escalation, not something to work around/i,
+    );
+  });
+
+  it("scheduleConfig stays NARROW while the cfg blocks stay broad — both from one walk", () => {
+    // The narrowing is a filter over `collectSigilRefs`, not a second
+    // membership. A person is declared, so the broad scan accepts it; a
+    // scheduleConfig ref is a PLACE, so the narrow resolver must not.
+    const inCfg = pack((p) => {
+      const d = (p.divisions as Record<string, unknown>[])[0] as Record<string, unknown>;
+      d.cfgOverrides = { resultMode: "score", allowDraws: true, scorer: "@p-ana" };
+    });
+    expect(PackSchema.safeParse(inCfg).success, "a declared person was refused in cfgOverrides").toBe(true);
+
+    expectIssue(
+      pack((p) => {
+        p.venues = [{ ref: "v-main", name: "Arena", courts: [{ ref: "c-1", name: "Court 1" }] }];
+        const d = (p.divisions as Record<string, unknown>[])[0] as Record<string, unknown>;
+        d.scheduleConfig = { matchMinutes: 30, courts: ["@c-1", "@p-ana"] };
+      }),
+      ["divisions", 0, "scheduleConfig"],
+      /unknown pack ref "@p-ana".*declared venue or court/is,
+    );
+  });
+
   it("it resolves against the WHOLE shared namespace, not just entrants", () => {
     // Deliberately broad: no authored source says what a cfg blob may
     // reference, so the honest rule is "must resolve to something declared".
@@ -776,10 +815,13 @@ describe("PackSchema — a generated stream records its seed", () => {
     // and the behaviour agree, for every value the enum actually holds — so a
     // hand-edit of one entry reds here rather than silently changing what a
     // pack may declare.
-    const values = PackProvenance.options;
-    expect(values.length).toBeGreaterThan(0);
-    expect(Object.keys(SEED_LEGAL_BY_PROVENANCE).sort()).toEqual([...values].sort());
-    for (const provenance of values) {
+    // `options.length > 0` and "the key set matches the enum" are both
+    // already guaranteed — a zod enum cannot be empty, and the table is typed
+    // `Record<PackProvenance, boolean>`, so tsc rejects a missing or extra key
+    // (mutant M79 proves it). Asserting them here restated the compiler.
+    // What is NOT guaranteed is that the table's ANSWERS match the schema's
+    // behaviour, which is what this loop checks.
+    for (const provenance of PackProvenance.options) {
       const withSeedFor = pack((p) => {
         const stream = (p.streams as Record<string, unknown>[])[0] as Record<string, unknown>;
         stream.provenance = provenance;
@@ -812,8 +854,73 @@ describe("PackSchema — a generated stream records its seed", () => {
     expect(at.some((i) => i.code === "invalid_type")).toBe(true);
   });
 
-  it("a real stream may NOT — nothing generated the historical record", () => {
-    expectIssue(withSeed("real"), ["streams", 0, "reconstruction"], /nothing generated it/i);
+  it("a real stream may NOT, and the refusal names the STREAM's provenance", () => {
+    // Nothing asserted the message before, so it could — and did — hardcode
+    // `provenance "real"` and enumerate the three current values. A fourth
+    // value would then have told an author their stream was "real" when it
+    // was not. Both halves of the message are derived; this pins both.
+    expectIssue(
+      withSeed("real"),
+      ["streams", 0, "reconstruction"],
+      /a stream with provenance "real" may not carry a reconstruction seed/i,
+    );
+    expectIssue(
+      withSeed("real"),
+      ["streams", 0, "reconstruction"],
+      /generated provenances are "reconstructed" or "synthetic"/i,
+    );
+  });
+
+  it("the refusal names the OFFENDING provenance, proven on a table the enum does not yet hold", () => {
+    // The teeth for the interpolation. While "real" is the only forbidden
+    // value, a hardcoded `provenance "real"` and an interpolated
+    // `${s.provenance}` produce identical output for every pack that can be
+    // built — so driving the schema cannot tell them apart. Handing the pure
+    // builder a FOUR-value table can: this is the exact case the message
+    // exists for, where an author of an "estimated" stream must not be told
+    // their stream is "real".
+    const future = { real: false, estimated: false, reconstructed: true, synthetic: true };
+    const message = seedRefusalMessage("estimated", future);
+    expect(message).toContain('provenance "estimated"');
+    expect(message).not.toContain('provenance "real"');
+    expect(message).toContain('"reconstructed" or "synthetic"');
+    // And the permitted list is the table's, not a literal: neither forbidden
+    // value may appear in it.
+    expect(message.split("generated provenances are")[1]).not.toContain('"real"');
+    expect(message.split("generated provenances are")[1]).not.toContain('"estimated"');
+
+    // A SECOND table, whose permitted set is deliberately NOT
+    // {reconstructed, synthetic}. The table above cannot catch a filter that
+    // hardcodes today's two permitted values, because it happens to permit
+    // exactly those two — a fixture that agrees with the bug it is meant to
+    // find. This one disagrees: a hardcoded filter says "reconstructed or
+    // synthetic" where the table says "estimated or reconstructed".
+    const reshuffled = { real: false, estimated: true, reconstructed: true, synthetic: false };
+    const other = seedRefusalMessage("synthetic", reshuffled);
+    expect(other).toContain('provenance "synthetic"');
+    expect(other).toContain('"estimated" or "reconstructed"');
+    expect(other.split("generated provenances are")[1]).not.toContain('"synthetic"');
+  });
+
+  it("the refusal's permitted list is read from the table, not typed into the message", () => {
+    // Drive it from the table rather than from a literal: every provenance the
+    // table permits must appear in the message, and every one it forbids must
+    // not. A hardcoded list passes the test above and fails this one.
+    const forbidden = PackProvenance.options.filter((v) => !SEED_LEGAL_BY_PROVENANCE[v]);
+    const permitted = PackProvenance.options.filter((v) => SEED_LEGAL_BY_PROVENANCE[v]);
+    expect(forbidden.length, "no provenance forbids a seed — the test asserts nothing").toBeGreaterThan(0);
+    expect(permitted.length, "no provenance permits a seed — the test asserts nothing").toBeGreaterThan(0);
+
+    const result = PackSchema.safeParse(withSeed(forbidden[0] as string));
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    const message = result.error.issues
+      .filter((i) => JSON.stringify(i.path) === JSON.stringify(["streams", 0, "reconstruction"]))
+      .map((i) => i.message)
+      .join(" ");
+    expect(message).not.toBe("");
+    for (const value of permitted) expect(message).toContain(`"${value}"`);
+    for (const value of forbidden.slice(1)) expect(message).not.toContain(`"${value}"`);
   });
 });
 
@@ -1443,7 +1550,9 @@ describe("PackSchema — the expected block", () => {
     // Non-vacuity: a derivation that matched nothing would make the loop below
     // assert nothing at all.
     expect(engineScalars.length).toBeGreaterThan(0);
-    expect(engineScalars).toEqual([...STANDINGS_SCALAR_FIELDS]);
+    // Sorted: a cosmetic field reorder in core/types.ts must not red the
+    // bench. The SET is the contract; the order is the engine's business.
+    expect([...engineScalars].sort()).toEqual([...STANDINGS_SCALAR_FIELDS].sort());
     for (const field of engineScalars) {
       const ok = pack((p) => {
         const expected = p.expected as Record<string, unknown>;

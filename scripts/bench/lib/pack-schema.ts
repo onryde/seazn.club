@@ -242,6 +242,33 @@ export const SEED_LEGAL_BY_PROVENANCE: Readonly<Record<PackProvenance, boolean>>
   synthetic: true, // generated, and modelling no real event at all
 };
 
+/**
+ * The refusal an author reads when a stream carries a seed it may not.
+ *
+ * A separate pure function, taking the table as an argument, for one reason:
+ * hardcoding `"real"` in the message is INVISIBLE while `"real"` is the only
+ * forbidden provenance, so a test driving the real schema cannot tell the
+ * interpolated version from the hardcoded one. Passing the table in lets a
+ * unit test hand it a four-value one and observe the difference — which is
+ * the whole failure mode this message exists to avoid, since the fourth value
+ * is exactly when an author would be told their stream is "real" when it is
+ * not.
+ */
+export function seedRefusalMessage(
+  provenance: string,
+  legalBy: Readonly<Record<string, boolean>>,
+): string {
+  const generated = Object.keys(legalBy)
+    .filter((value) => legalBy[value])
+    .sort()
+    .map((value) => `"${value}"`)
+    .join(" or ");
+  return (
+    `a stream with provenance "${provenance}" may not carry a reconstruction seed — only a GENERATED ` +
+    `stream records what generated it, and the generated provenances are ${generated}`
+  );
+}
+
 /** The 19 comparator keys the competition engine's tiebreaker registry
  *  resolves. Written out because the engine ships `TiebreakerKey` as a TYPE
  *  only (packages/engine/src/sport/module.ts:41) — there is no runtime array
@@ -1183,19 +1210,63 @@ export function fixtureKey(divisionRef: string, extKey: string): string {
   return JSON.stringify([divisionRef, extKey]);
 }
 
-/** Every ref in the shared sigil namespace — persons, entrants, venues,
- *  courts, officials. `checkRefsUnique` guarantees it is collision-free; this
- *  is the same membership, read back for the resolvers. One builder, so the
- *  "is this ref declared?" question cannot be answered two ways. */
-function sigilNamespace(p: PackShapeOut): Set<string> {
+/** The ref kinds that share the `@` sigil's ONE namespace.
+ *
+ *  A closed union, not a loose string, so every table keyed by a ref kind is
+ *  checked against it — see `DUPLICATE_REF_REASON` below, where a typo'd key
+ *  used to yield silently no reason at all.
+ *
+ *  A type rather than an `as const` array: nothing iterates the kinds at
+ *  runtime (`collectSigilRefs` walks the pack, not this list), and an array
+ *  used only as a type is dead weight lint correctly objects to. Adding a
+ *  kind means adding it here AND to `collectSigilRefs` — the union is what
+ *  makes the second half impossible to forget, because the walk's `kind`
+ *  field is typed by it. */
+export type PackRefKind = "person" | "entrant" | "venue" | "court" | "official";
+
+/** One declared ref, with the kind that declared it and where it sits. */
+interface DeclaredRef {
+  ref: string;
+  kind: PackRefKind;
+  at: (string | number)[];
+}
+
+/**
+ * THE walk over every ref the `@` sigil can resolve. Genuinely one function,
+ * not three that agree: uniqueness (`checkRefsUnique`), the broad resolver for
+ * the opaque blocks, and the narrow venue/court resolver for `scheduleConfig`
+ * are all built from this list.
+ *
+ * That matters for the NEXT session rather than this one. B03r adds ref kinds
+ * (claim invites, registration entries). Registering a kind here registers it
+ * for uniqueness AND for both resolvers at once — whereas with three separate
+ * walks, adding it to the uniqueness pass alone would leave a legitimate
+ * `@claimInvite` inside `cfgOverrides` unresolvable, with the error pointing at
+ * the author's ref rather than at the missing registration.
+ */
+function collectSigilRefs(p: PackShapeOut): DeclaredRef[] {
+  const out: DeclaredRef[] = [];
+  p.persons.forEach((x, i) => out.push({ ref: x.ref, kind: "person", at: ["persons", i, "ref"] }));
+  p.entrants.forEach((x, i) => out.push({ ref: x.ref, kind: "entrant", at: ["entrants", i, "ref"] }));
+  p.venues?.forEach((v, i) => {
+    out.push({ ref: v.ref, kind: "venue", at: ["venues", i, "ref"] });
+    v.courts.forEach((c, j) =>
+      out.push({ ref: c.ref, kind: "court", at: ["venues", i, "courts", j, "ref"] }),
+    );
+  });
+  p.officials?.forEach((o, i) => out.push({ ref: o.ref, kind: "official", at: ["officials", i, "ref"] }));
+  return out;
+}
+
+/** The refs a resolver may accept — every kind, or just the named ones. Both
+ *  callers read the SAME walk, so a narrowing is a filter over one truth
+ *  rather than a second, hand-maintained membership. */
+function sigilNamespace(p: PackShapeOut, kinds?: readonly PackRefKind[]): Set<string> {
+  const want = kinds === undefined ? undefined : new Set<PackRefKind>(kinds);
   const refs = new Set<string>();
-  for (const person of p.persons) refs.add(person.ref);
-  for (const e of p.entrants) refs.add(e.ref);
-  for (const v of p.venues ?? []) {
-    refs.add(v.ref);
-    for (const c of v.courts) refs.add(c.ref);
+  for (const declared of collectSigilRefs(p)) {
+    if (want === undefined || want.has(declared.kind)) refs.add(declared.ref);
   }
-  for (const o of p.officials ?? []) refs.add(o.ref);
   return refs;
 }
 
@@ -1205,8 +1276,14 @@ const article = (word: string): string => (/^[aeiou]/i.test(word) ? "an" : "a");
 /** Why a same-kind duplicate matters, where the reason is not obvious from the
  *  word "duplicate" alone. Court refs earn one: two venues each holding a
  *  "court-1" is a perfectly reasonable thing to write, and the reason it is
- *  refused lives in a different file's field. */
-const DUPLICATE_REF_REASON: Readonly<Record<string, string>> = {
+ *  refused lives in a different file's field.
+ *
+ *  `Partial<Record<PackRefKind, …>>`, not `Record<string, …>`: a mistyped key
+ *  ("courts", "Court") used to compile fine and silently produce no reason,
+ *  which is the same failure the provenance seed table was rewritten to avoid.
+ *  Partial rather than total because most kinds need no extra explanation —
+ *  the point is that a key that IS present must name a real kind. */
+const DUPLICATE_REF_REASON: Readonly<Partial<Record<PackRefKind, string>>> = {
   court:
     " — court refs are unique across ALL venues, because a division's scheduleConfig names them unqualified",
 };
@@ -1261,8 +1338,8 @@ function checkRefsUnique(p: PackShapeOut, ctx: Ctx): void {
   // owner escalation, while the cost of joining now is that an official may
   // not share a name with a court. The stated reason below is literally true
   // of persons, entrants, venues and courts; for officials it is insurance.
-  const claimed = new Map<string, string>(); // ref -> the kind that took it
-  const take = (ref: string, kind: string, at: (string | number)[]): void => {
+  const claimed = new Map<string, PackRefKind>(); // ref -> the kind that took it
+  const take = (ref: string, kind: PackRefKind, at: (string | number)[]): void => {
     const owner = claimed.get(ref);
     if (owner === kind) {
       issue(ctx, at, `duplicate ${kind} ref "${ref}"${DUPLICATE_REF_REASON[kind] ?? ""}`);
@@ -1281,13 +1358,7 @@ function checkRefsUnique(p: PackShapeOut, ctx: Ctx): void {
     claimed.set(ref, kind);
   };
 
-  p.persons.forEach((person, i) => take(person.ref, "person", ["persons", i, "ref"]));
-  p.entrants.forEach((e, i) => take(e.ref, "entrant", ["entrants", i, "ref"]));
-  p.venues?.forEach((v, i) => {
-    take(v.ref, "venue", ["venues", i, "ref"]);
-    v.courts.forEach((c, j) => take(c.ref, "court", ["venues", i, "courts", j, "ref"]));
-  });
-  p.officials?.forEach((o, i) => take(o.ref, "official", ["officials", i, "ref"]));
+  for (const declared of collectSigilRefs(p)) take(declared.ref, declared.kind, declared.at);
 }
 
 /** Rosters: known people, one captain, no repeated person or squad number,
@@ -1435,12 +1506,9 @@ function checkStreams(p: PackShapeOut, ctx: Ctx): void {
     // Read off the exhaustive map rather than tested with a predicate, so a
     // future provenance value cannot silently inherit either answer.
     if (s.reconstruction !== undefined && !SEED_LEGAL_BY_PROVENANCE[s.provenance]) {
-      issue(
-        ctx,
-        ["streams", i, "reconstruction"],
-        `a stream with provenance "real" may not carry a reconstruction seed — a real stream is the historical ` +
-          `record and nothing generated it; a "reconstructed" or "synthetic" stream may carry one`,
-      );
+      // Both halves derived — the offending value from the stream, the
+      // permitted list from the same table the guard just read.
+      issue(ctx, ["streams", i, "reconstruction"], seedRefusalMessage(s.provenance, SEED_LEGAL_BY_PROVENANCE));
     }
     const entrantRefs = entrantsByDivision.get(s.divisionRef) ?? new Set<string>();
 
@@ -1713,15 +1781,13 @@ function checkReservations(p: PackShapeOut, ctx: Ctx): void {
   // officials, so a court sharing a ref with another court — or with an
   // entrant — is reported there, once. This pass only needs the sets, to
   // resolve the @-refs below.
-  const venueRefs = new Set<string>();
-  const courtRefs = new Set<string>();
-  p.venues?.forEach((v) => {
-    venueRefs.add(v.ref);
-    v.courts.forEach((c) => courtRefs.add(c.ref));
-  });
+  // NARROWED from the same walk `checkRefsUnique` uses, never re-derived: a
+  // scheduleConfig ref is a place, so it resolves against venues and courts
+  // only. A filter over one truth, not a second membership.
+  const placeRefs = sigilNamespace(p, ["venue", "court"]);
 
   // ---- @-sigilled court/venue refs inside the opaque scheduleConfig ----
-  const knownPlace = (ref: string): boolean => courtRefs.has(ref) || venueRefs.has(ref);
+  const knownPlace = (ref: string): boolean => placeRefs.has(ref);
   p.divisions.forEach((d, i) => {
     if (d.scheduleConfig === undefined) return;
     const bad: string[] = [];
@@ -1758,7 +1824,13 @@ function checkReservations(p: PackShapeOut, ctx: Ctx): void {
     const bad: string[] = [];
     unresolvedPayloadRefs(block, knownRef, bad);
     for (const ref of bad) {
-      issue(ctx, at, `unknown pack ref "${ref}" — an @-prefixed string in ${what} must name a declared person, entrant, venue, court or official`);
+      issue(
+        ctx,
+        at,
+        `unknown pack ref "${ref}" — an @-prefixed string in ${what} must name a declared person, entrant, ` +
+          `venue, court or official. There is deliberately no escape for a literal leading "@" (header note 6): ` +
+          `if this value really is meant to start with one, that is an owner escalation, not something to work around`,
+      );
     }
   };
   p.divisions.forEach((d, i) => {
