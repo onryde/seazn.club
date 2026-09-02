@@ -1639,7 +1639,8 @@ The walkthrough rule: the API may be used to REACH a state; every step that IS t
 import { expect, test, type Page } from "@playwright/test";
 import {
   activeOrg, apiJson, TAG, createCompetitionViaUi, createDivisionViaUi, addEntrantsViaApi,
-  scoreFixture, setFixtureStatusSql, setStageStatusSql, screenshotAtWidths, expectNoHorizontalScroll,
+  createStageAndGenerate, scoreFixture, setFixtureStatusSql, setStageStatusSql,
+  screenshotAtWidths, expectNoHorizontalScroll,
 } from "../helpers";
 
 test.describe.configure({ mode: "serial" });
@@ -1669,11 +1670,8 @@ test("an organiser watches the desk go Setting up → Scheduled → Match day �
 
   // 3. Reach: entrants + generated fixtures (API). Read: Needs you names the unscheduled round.
   await addEntrantsViaApi(request, divId, ["Riverside FC", "Valley CC", "Lakeside FC", "Harbour CC"], "team");
-  const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divId}/stages`, "POST", { seq: 1, kind: "league", name: "League", config: {}, progression: null });
-  await apiJson(request, `/api/v1/stages/${stage.data!.id}/generate`, "POST");
+  const { stageId, fixtureIds: ids } = await createStageAndGenerate(request, divId);
   await apiJson(request, `/api/v1/divisions/${divId}/start`, "POST");
-  const fixtures = await apiJson<{ id: string; fixture_no: number }[]>(request, `/api/v1/divisions/${divId}/fixtures`, "GET");
-  const ids = fixtures.data!.map((f) => f.id);
   await page.goto(compPath);
   await expect(row).toHaveAttribute("data-phase", "scheduled");
   const needs = page.getByTestId("desk-needs-you");
@@ -1698,12 +1696,12 @@ test("an organiser watches the desk go Setting up → Scheduled → Match day �
   await expect(page.locator('[data-phase="in_play"]').first()).toContainText("1 in play");
   await shot("05-no-scorer");
   await needs.getByRole("link", { name: "Assign scorer" }).click();
-  await expect(page).toHaveURL(new RegExp(`/f/${fixtures.data![0].fixture_no}$`));
+  await expect(page).toHaveURL(/\/f\/\d+$/);
 
   // 6. Reach: every result in, stage complete (API + SQL). Read: Finished, nothing needs the organiser.
   await setFixtureStatusSql(ids[0], "scheduled");
   for (const id of ids) await scoreFixture(request, id, 2, 1);
-  await setStageStatusSql(stage.data!.id, "complete");
+  await setStageStatusSql(stageId, "complete");
   await page.goto(compPath);
   await expect(row).toHaveAttribute("data-phase", "finished");
   await expect(row).toContainText("complete");
@@ -1712,12 +1710,14 @@ test("an organiser watches the desk go Setting up → Scheduled → Match day �
   await shot("06-finished");
 
   // 7. The page holds at every width, in this final state.
-  await screenshotAtWidths(page, compPath, `${testInfo.outputPath()}/widths`);
+  await screenshotAtWidths(page, testInfo, "desk-finished");
   await expectNoHorizontalScroll(page);
 });
 ```
 
-Adjust to the real helper signatures if `screenshotAtWidths`/`expectNoHorizontalScroll` take different arguments (read their definitions in `../helpers`, `grep -na "export async function screenshotAtWidths\|export async function expectNoHorizontalScroll" apps/web/e2e/helpers.ts`), and if `scoreFixture` requires the fixture to be `scheduled` first keep the reset in step 6 as written. If `GET /api/v1/divisions/{id}/fixtures` is not a route, take the ids from `createStageAndGenerate` instead (Task 7 uses it) — but keep stage creation visible in this file so the walkthrough reads top to bottom.
+Helper signatures confirmed 2026-09-02 (`apps/web/e2e/helpers.ts`): `expectNoHorizontalScroll(page, { allowancePx? })` :43; `screenshotAtWidths(page, testInfo, name, widths?)` :240 (defaults to the standard width set); `addEntrantsViaApi(request, divisionId, names, kind?, seedOffset?)` :1157; `createStageAndGenerate(request, divisionId, stage?)` :1174 returning `{ stageId, fixtureIds }`; `scoreFixture(request, fixtureId, p1Score, p2Score)` :1397; `createCompetitionViaUi(page, name, visibility?)` :1460 returning the competition id; `createDivisionViaUi(page, competitionId, name)` :1497 returning the division id; `setFixtureStatusSql(fixtureId, status)` :620; `activeOrg(page)` :1013.
+
+`scoreFixture` reads the fixture's state first, so the fixture left `in_play` by step 5 must be reset to `scheduled` before step 6 scores it — the reset in step 6 is deliberate, keep it.
 
 - [ ] **Step 2: Run it in the walkthrough project**
 
