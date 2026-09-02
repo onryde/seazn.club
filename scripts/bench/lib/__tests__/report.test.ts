@@ -41,6 +41,12 @@ function fullReport(): BenchReportType {
         officials: { assigned: 0, conflicts: 0 },
         news: { drafted: 0, published: 0 },
         adaptations: [],
+        // B02 — a GREEN suite with something to say. Present in the canonical
+        // fixture (not only in the render test) because `writeReport` PARSES
+        // before it writes: a field missing from the schema is stripped from
+        // report.json and from report.md with it, silently, and a renderer
+        // test alone cannot see that — it renders the in-memory object.
+        warnings: ["leaderboards.not_derived @ expected.leaderboards: not checked offline"],
       },
     ],
     gate: "green",
@@ -147,5 +153,30 @@ describe("renderMarkdown", () => {
     const report = { ...fullReport(), suites: [] };
     const md = renderMarkdown(report);
     expect(md).toContain("(none ran)");
+  });
+
+  // B02 — a suite may be GREEN and still have something to say. Stage 0 names
+  // what it does not derive offline, and `_tiny` carries two such warnings on
+  // every clean run; a channel that only printed beside a failure would be a
+  // channel nobody reads.
+  it("prints a green suite's warnings, and they do not touch the gate", () => {
+    const base = fullReport();
+    const suite = { ...(base.suites[0] as BenchReportType["suites"][number]) };
+    const report: BenchReportType = {
+      ...base,
+      suites: [
+        {
+          ...suite,
+          gate: "green",
+          warnings: [
+            "leaderboards.not_derived @ expected.leaderboards: 2 declared entries are NOT checked offline",
+          ],
+        },
+      ],
+    };
+    const md = renderMarkdown(report);
+    expect(md).toContain("Warnings (not gated)");
+    expect(md).toContain("leaderboards.not_derived");
+    expect(gateOf(report)).toBe("green");
   });
 });

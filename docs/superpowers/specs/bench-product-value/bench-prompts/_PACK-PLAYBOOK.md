@@ -59,6 +59,36 @@ oracles). Read `_RULES.md` §4 first. Spec: bench design §4 (packs), §5
 - [ ] Unit/regression for any new reconstruction generator or oracle
       differ added for this sport (bench lib tests, CI-safe)
 
+## Authoring constraints the schema enforces (B02)
+
+Learned in B02 and enforced by `PackSchema` / stage 0 — a pack that breaks
+one of these is refused before any suite runs, so meet them while authoring
+rather than debugging them later.
+
+- **A court, an entrant and an official cannot share a name.** Sigil
+  references (`@name`) resolve in ONE namespace across all three, so a name
+  reused across kinds is ambiguous and refused. Rename one — in
+  `meta.adaptations[]` if the source really did use the same string.
+- **Bind a stream to its stage (`streams[].stageRef`) whenever the stage
+  carries a cfg overlay.** A stream binds by `divisionRef` + `fixtureExtKey`
+  alone otherwise, and an unbindable overlay is stage 0's one FALSE-RED path
+  — a knockout stage declaring `shootout` folds under the wrong cfg and the
+  pack is blamed for an engine-correct result.
+- **`legs` must match the meetings actually present.** Two entrants meeting
+  twice IS a two-leg league; stage 0 warns `streams.count_mismatch` on the
+  mismatch. A B02 fixture carried this error and it survived a full review.
+- **Declare `provenance` on every stream** — the validator reds when it is
+  MISSING. Note that an absent enum and an invalid one are indistinguishable
+  in the reported issue (measured on zod 4.4.3), so read the field, not the
+  message, when debugging.
+- **Leaderboards, champions and suspensions are NOT derived offline.** Stage 0
+  says so with a `*.not_derived` WARNING rather than staying silent, so every
+  pack carries warnings by design and a green run still prints them. **A
+  runner must gate on `result.ok` (no error-severity finding), never on
+  "any finding".** Those oracles are owed to the seeded HTTP run in B05, so a
+  mis-transcribed leaderboard will not be caught until then — transcribe with
+  that in mind.
+
 ## Suite sheet template (what each B06+ prompt contains)
 
 ```

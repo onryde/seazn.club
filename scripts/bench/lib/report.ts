@@ -60,6 +60,21 @@ export const SuiteReport = z.object({
   news: z.object({ drafted: z.number(), published: z.number() }).optional(),
   adaptations: z.array(z.string()).optional(),
   errors: z.array(z.string()).optional(),
+  /**
+   * Non-fatal findings the run is REQUIRED to surface, and never a gate.
+   *
+   * A SEPARATE FIELD from `errors`, structurally, because the two are decided
+   * by a severity field rather than by a caller remembering to filter: stage 0
+   * says what it did NOT derive offline (`leaderboards.not_derived`,
+   * `champions.not_derived`, `suspensions.not_derived`) rather than staying
+   * silent, so `_tiny` permanently carries two of these on a GREEN run. Fold
+   * them into `errors` and the bench reds forever for saying something true,
+   * and the obvious repair is to delete the honest warning.
+   *
+   * `gateOf` reads only each suite's own `gate`, so nothing here can turn a
+   * run red by accident.
+   */
+  warnings: z.array(z.string()).optional(),
 });
 export type SuiteReport = z.infer<typeof SuiteReport>;
 
@@ -184,6 +199,13 @@ function renderSuitesSection(report: BenchReport): string {
     if (suite.errors && suite.errors.length > 0) {
       lines.push("- Errors:");
       for (const e of suite.errors) lines.push(`  - ${e}`);
+    }
+    // Rendered on a GREEN suite too — that is the whole point of the channel:
+    // "this oracle was not checked offline" is a fact a reader has to see, and
+    // a warning printed only next to a failure is a warning nobody reads.
+    if (suite.warnings && suite.warnings.length > 0) {
+      lines.push("- Warnings (not gated):");
+      for (const w of suite.warnings) lines.push(`  - ${w}`);
     }
     lines.push("");
   }

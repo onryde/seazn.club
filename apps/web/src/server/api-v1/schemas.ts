@@ -1081,8 +1081,13 @@ export const AppendEventRequest = z.object({
 });
 export type AppendEventRequest = z.infer<typeof AppendEventRequest>;
 
-/** P11 (D6) batch score-event import. `seq` is assigned server-side 0..n — a
- *  caller never sends one. `core.void` is refused here rather than downstream:
+/** P11 (D6) batch score-event import. `seq` is assigned server-side 1..n,
+ *  gapless — a caller never sends one. (This said "0..n" until 2026-09-02; the
+ *  implementation has always assigned `seq: i + 1` from the array index —
+ *  `usecases/event-import.ts:289`, whose own comment at :282 correctly says
+ *  "seq 1..n, gapless". Corrected because an offline replayer that mints
+ *  0-based seq from this comment would disagree with the write path about
+ *  event identity.) `core.void` is refused here rather than downstream:
  *  a void is a live-scoring undo, and a wrong import is re-run under a new
  *  import_id (owner ruling R2). */
 export const EventImportRequest = z.object({
