@@ -1192,3 +1192,83 @@ test("football v3: group-stage shoot-out points reach the standings (R3.5/Task I
     "shoot-out LOSS pays 1, not the flat 0",
   ).toBe(1);
 });
+
+// R8/WS-B2 — the app-side half of "a required attribution item's dead-end
+// tap" (engine half: d4c8ddbfb, `PadAttributionItem.required`; app half:
+// view-model.ts's `checkActionValidity` + action-form.tsx's
+// `renderAttributionRow`, both sport-agnostic — no per-sport branching
+// anywhere in either file). The task brief pinned cricket.toss.wonBy as
+// this proof's real-browser target; that premise does not hold (memory
+// rule #5 — verified by RUNNING pad-host.tsx's own `dedicatedEventTypes`/
+// `moreActions` against the real cricket skin+engine padSpec, not assumed
+// from a read): cricket.toss (and cricket.review, the other action the
+// engine commit names) is one of cricket's dedicated-tile actions, and
+// every one of those opens its own GuidedSheet — a strictly sequential
+// step wizard with no Confirm separate from its own last step, so it
+// cannot structurally reach a dead-end tap at all. The one cricket action
+// that DOES ride the generic More sheet with a required item
+// (`cricket.player.line`, post-match) turned out to need a genuinely
+// completed fixture, and once a fixture is decided BOTH the console and
+// the device-link route replace the pad with a read-only summary — an
+// unrelated, pre-existing product gap, out of this task's scope.
+//
+// `football.shot` is the real, live-phase equivalent this file's own
+// "all nine football.* event types are reachable" test above already
+// drives through the generic More sheet — same required SIDE item shape
+// (`by`, engine-stamped `required: true`), same chassis code, no
+// completed-match complication. Reusing it here is the actual REAL
+// producer→consumer proof for R8/WS-B2: a node builder test cannot see
+// the rendered disabled Confirm button, the visible reason, or the
+// red-asterisk/"required" marker — this test drives all three through the
+// live pad, then confirms the built payload actually reaches the ledger.
+test("football v3 (R8/WS-B2): a required attribution item on the generic More sheet gates Confirm with a visible reason, and the built payload carries it once filled — no dead-end tap", async ({
+  page,
+}) => {
+  const fx = await seedRosteredFixture(page.request, {
+    label: `V3 FB ReqAttr ${TAG}`,
+    sportKey: "football",
+    variantKey: "11-a-side",
+    home: [{ fullName: `V3 FBRA Home ${TAG}`, positionKey: "FW" }],
+    away: [{ fullName: `V3 FBRA Away ${TAG}`, positionKey: "GK" }],
+  });
+  await openLiveConsole(page, fx);
+
+  await v3Tile(page, "more").click();
+  const sheet = v3Sheet(page);
+  await expect(sheet, "the More sheet must open").toBeVisible({ timeout: 10_000 });
+
+  await sheet.getByRole("button", { name: "Shot", exact: true }).click();
+
+  const confirm = sheet.getByRole("button", { name: "Confirm", exact: true });
+  await expect(confirm, "disabled before anything is filled").toBeDisabled();
+
+  const group = sheet.locator('[data-attribution-path="by"]');
+  await expect(group, "the required attribution row must render").toBeVisible({ timeout: 10_000 });
+  await expect(group, "red-asterisk marker (data-required)").toHaveAttribute("data-required", "true");
+  await expect(group, "the \"required\" microcopy must be visible text, not a tooltip").toContainText("Required");
+
+  // Every declared FIELD (the pre-existing gate) — Confirm must STAY
+  // disabled once these alone are filled: before this fix, fields alone
+  // satisfied checkActionValidity and the required side (`by`) could be
+  // skipped straight to a silently-rejected submit.
+  await sheet.getByLabel("Outcome").selectOption("blocked");
+  await sheet.getByLabel("At period").selectOption("H1");
+  await sheet.getByLabel("At elapsed", { exact: true }).fill("120");
+
+  await expect(
+    confirm,
+    "still disabled with every FIELD filled — fields alone must not satisfy the required attribution gate",
+  ).toBeDisabled();
+  await expect(sheet, "Confirm's one-line reason must name what's missing").toContainText("Choose who's required");
+
+  await sheet.getByRole("button", { name: "Home", exact: true }).click();
+
+  await expect(confirm, "enables once the required item is filled").toBeEnabled();
+  await confirm.click();
+
+  await expect.poll(async () => countOf(page.request, fx.fixtureId, "football.shot"), { timeout: 20_000 }).toBe(1);
+  const shot = (await ledger(page.request, fx.fixtureId)).find((e) => e.type === "football.shot")!;
+  expect(shot.payload.by, "the attributed side must reach the built payload — no silent drop").toBe(
+    fx.homeEntrantId,
+  );
+});

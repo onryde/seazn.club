@@ -21,6 +21,7 @@ import {
   type FidelityBand,
   type PadAction,
   type PadAttribution,
+  type PadAttributionItem,
   type PadField,
   type PadFieldValue,
   type PadGate,
@@ -53,6 +54,14 @@ export interface ChassisLabel {
 const MISSING_FIELDS_REASON: ChassisLabel = {
   key: "scorepad.validity.missingFields",
   label: "Fill in the required fields to continue.",
+};
+
+/** R8/WS-B2 — Confirm's one-line reason when every field is set but a
+ *  required attribution item (asterisk + "required" microcopy on its own
+ *  row — action-form.tsx's `renderAttributionRow`) is still unfilled. */
+const MISSING_ATTRIBUTION_REASON: ChassisLabel = {
+  key: "scorepad.validity.missingAttribution",
+  label: "Choose who's required before you can continue.",
 };
 
 const LOCKED_REASON: ChassisLabel = {
@@ -193,24 +202,35 @@ export function buildPadView(spec: PadSpec, ctx: PadViewCtx): PadView {
 
 export type ActionValidity =
   | { ok: true }
-  | { ok: false; missing: readonly PadField[]; reason: ChassisLabel };
+  | { ok: false; missing: readonly (PadField | PadAttributionItem)[]; reason: ChassisLabel };
 
 /**
  * Spec-derived only (this file never sees a module's zod `eventSchemas`, by
  * design — see the brief). Every declared FIELD is required for the action
- * to fire; attribution is deliberately excluded — the attribution picker is
- * a later pass (module header), so nothing collects those values yet, and
- * several attribution items are legitimately optional in the engine's own
- * schema (a wicket with no named fielder) with no per-item flag on
- * `PadAttributionItem` to tell required from optional even if this file
- * wanted to check them.
+ * to fire. Attribution is checked too, as of R8/WS-B2: `PadAttributionItem
+ * .required` (stamped by the engine's own `stampAttributionRequired`,
+ * derived from the action's real payload schema — module.ts's own header)
+ * now tells required from optional, closing the dead-end tap where a scorer
+ * could confirm e.g. cricket.toss with `wonBy` unset and the engine's
+ * `z.strictObject` silently rejected the payload. `required` falsy (or
+ * absent, for a hand-built test fixture never run through the stamp) stays
+ * skippable, exactly as before — several attribution items are legitimately
+ * optional in the engine's own schema (a wicket with no named fielder).
+ * `attribution` is optional on the parameter itself so a caller checking a
+ * fields-only shape need not pass it.
  */
 export function checkActionValidity(
-  action: Pick<PadAction, "fields">,
+  action: Pick<PadAction, "fields"> & Partial<Pick<PadAction, "attribution">>,
   values: Readonly<Record<string, PadFieldValue | undefined>>,
 ): ActionValidity {
-  const missing = action.fields.filter((field) => values[field.path] === undefined);
-  if (missing.length > 0) return { ok: false, missing, reason: MISSING_FIELDS_REASON };
+  const missingFields = action.fields.filter((field) => values[field.path] === undefined);
+  if (missingFields.length > 0) return { ok: false, missing: missingFields, reason: MISSING_FIELDS_REASON };
+  const missingAttribution = (action.attribution ?? []).filter(
+    (item) => item.required === true && values[item.path] === undefined,
+  );
+  if (missingAttribution.length > 0) {
+    return { ok: false, missing: missingAttribution, reason: MISSING_ATTRIBUTION_REASON };
+  }
   return { ok: true };
 }
 

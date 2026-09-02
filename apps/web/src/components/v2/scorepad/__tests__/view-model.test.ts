@@ -229,7 +229,7 @@ describe("buildPadView — fidelity band filtering (cricket: band0/1 free, band2
   });
 });
 
-describe("checkActionValidity — required FIELDS only (attribution is a later pass's concern)", () => {
+describe("checkActionValidity — required fields", () => {
   it("ok when every declared field has a value", () => {
     const action = { fields: [{ kind: "number" as const, path: "over", min: 0, max: 10 }] };
     expect(checkActionValidity(action, { over: 3 })).toEqual({ ok: true });
@@ -253,6 +253,53 @@ describe("checkActionValidity — required FIELDS only (attribution is a later p
   it("a toggle field counts as set even when its value is `false` (must check `undefined`, not falsy)", () => {
     const action = { fields: [{ kind: "toggle" as const, path: "freeHit" }] };
     expect(checkActionValidity(action, { freeHit: false })).toEqual({ ok: true });
+  });
+});
+
+// R8/WS-B2 — `PadAttributionItem.required` now exists (engine, d4c8ddbfb),
+// so `checkActionValidity` must gate on it too, closing the dead-end tap: a
+// scorer could confirm cricket.toss with `wonBy` unset and the engine's own
+// z.strictObject silently rejected the payload. Derives "which item is
+// required" from the REAL padSpec output for a real action (cricket.toss),
+// never a hand-typed required list (memory rule #19) — a change to the
+// engine's own schema-derived stamp moves this test with it.
+describe("checkActionValidity — required attribution (R8/WS-B2)", () => {
+  const cricketCfg = cricket.configSchema.parse({});
+  const cricketSpec = cricket.padSpec!(cricketCfg);
+  const tossAction = allActionViews(cricketSpec, { band: 3, entitlements: {} }).find(
+    (a) => a.type === "cricket.toss",
+  )!;
+  const wonByItem = tossAction.attribution.find((item) => item.path === "wonBy")!;
+
+  it("the fixture actually proves the engine stamped wonBy as required (else this suite proves nothing)", () => {
+    expect(wonByItem.required).toBe(true);
+  });
+
+  it("not ok when a required attribution item is unfilled, even with every declared FIELD filled", () => {
+    // cricket.toss also declares a `fields` entry (`elected`) — fill it, so
+    // this isolates the attribution gate rather than re-proving the
+    // pre-existing fields check above.
+    const result = checkActionValidity(tossAction, { elected: "bat" });
+    expect(result.ok).toBe(false);
+  });
+
+  it("ok once the required attribution item AND every declared field are filled", () => {
+    expect(checkActionValidity(tossAction, { elected: "bat", wonBy: "home-1" })).toEqual({ ok: true });
+  });
+
+  it("an OPTIONAL attribution item left unfilled does not block validity", () => {
+    const reviewAction = allActionViews(cricketSpec, { band: 3, entitlements: {} }).find(
+      (a) => a.type === "cricket.review",
+    )!;
+    // cricket.review's two fields (kind/outcome) plus its required `by` item
+    // filled; its OPTIONAL person/against items left unfilled.
+    const personItem = reviewAction.attribution.find((item) => item.path === "person")!;
+    expect(personItem.required).toBeFalsy(); // fixture proof: person really is optional
+    const values = Object.fromEntries([
+      ...reviewAction.fields.map((f) => [f.path, f.kind === "toggle" ? false : "x"]),
+      ["by", "home-1"],
+    ]);
+    expect(checkActionValidity(reviewAction, values).ok).toBe(true);
   });
 });
 

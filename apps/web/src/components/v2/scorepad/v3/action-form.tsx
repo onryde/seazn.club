@@ -217,13 +217,14 @@ function attributionOptions(
  * file's own header note on why the sheet reuses v3's card idiom rather
  * than the legacy renderer's classes).
  *
- * Deliberately does NOT affect `checkActionValidity` — that function
- * (view-model.ts) never gates Confirm on an attribution item's own value,
- * by design (its own header: several attribution items are legitimately
- * optional in the engine's schema, with no per-item flag to tell required
- * from optional). This row exists to COLLECT the value so it reaches
- * `buildActionPayload`, not to add new validation this chassis file does
- * not own.
+ * R8/WS-B2 — "disabled-until-complete" (owner-picked design): a row whose
+ * item is `required` (engine-stamped, `checkActionValidity`'s own new
+ * gate — view-model.ts) gets a red asterisk plus a small "required"
+ * microcopy line, purely presentational here; `renderActionRow` below is
+ * what actually disables Confirm, by feeding the SAME `item.required`
+ * through `checkActionValidity` — one flag, read in both places, never two
+ * gates that could drift (this repo's most-repeated defect class). An
+ * optional item (falsy/absent `required`) renders exactly as before.
  */
 function renderAttributionRow(
   item: PadAttributionItem,
@@ -238,9 +239,26 @@ function renderAttributionRow(
 ): ReactNode {
   const caption = attributionItemCaption(item, index, t, actionLabel);
   const options = attributionOptions(item, squads, lineups, personNames, t);
+  const required = item.required === true;
+  const requiredMicrocopy = t("scorepad.attribution.required");
   return (
-    <div key={item.path} data-attribution-path={item.path} role="group" aria-label={caption} className="space-y-1">
-      <span className={fieldLabelClass}>{caption}</span>
+    <div
+      key={item.path}
+      data-attribution-path={item.path}
+      data-required={required || undefined}
+      role="group"
+      aria-label={required ? `${caption} — ${requiredMicrocopy}` : caption}
+      className="space-y-1"
+    >
+      <span className={fieldLabelClass}>
+        {caption}
+        {required && (
+          <span aria-hidden="true" className="ml-0.5 text-red-600">
+            *
+          </span>
+        )}
+      </span>
+      {required && <p className="text-xs font-medium text-red-600">{requiredMicrocopy}</p>}
       {options.length === 0 ? (
         <p className="text-xs text-slate-600">{t("scorepad.attribution.noRoster")}</p>
       ) : (
