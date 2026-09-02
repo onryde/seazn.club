@@ -33,6 +33,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import stripePlans from "@/config/stripe-plans.json";
 import { sql } from "@/lib/db";
 import { PASS_CREDIT_GRANT } from "@/lib/pricing-cards";
+import { FEATURE_REASONS } from "@/lib/feature-copy";
 import { passPrice, proPrice } from "@/lib/currency";
 import { TIPS } from "@/config/tips";
 import * as copyTruth from "@/lib/copy-truth";
@@ -53,6 +54,7 @@ import {
   inertPatternFaults,
   riderRateFaults,
   scoringFreeClaimFaults,
+  sentences,
   localeCoverageFaults,
   localeCreditGrantFaults,
   localeCreditLeadershipFaults,
@@ -3239,6 +3241,15 @@ describe("no dictionary string sells scoring detail (W1: it is free on every pla
     .map((f) => f.replace(/\.json$/, ""))
     .sort();
 
+  /**
+   * SENTENCE-scoped, exactly like the help consumer in `help-copy-truth.test.ts`
+   * (review M-3). `scoringFreeClaimFaults` exempts a text that affirms the thing
+   * is free, and that exemption is whole-text: feeding a multi-sentence value in
+   * one piece would let "…on every plan." in sentence one excuse a paid claim in
+   * sentence two. Splitting first makes the exemption cover only the sentence
+   * that earns it. `tips.*` and the `emails.*` bodies are paragraphs, so this is
+   * not hypothetical.
+   */
   const everyValue = (): Array<readonly [string, string]> =>
     DICTIONARY_LOCALES.flatMap((locale) =>
       DICT_FILES.flatMap((file) =>
@@ -3249,7 +3260,9 @@ describe("no dictionary string sells scoring detail (W1: it is free on every pla
           >,
         )
           .filter((entry): entry is [string, string] => typeof entry[1] === "string")
-          .map(([key, value]) => [`${locale}/${file}.json ${key}`, value] as const),
+          .flatMap(([key, value]) =>
+            sentences(value).map((s) => [`${locale}/${file}.json ${key}`, s] as const),
+          ),
       ),
     );
 
@@ -3262,7 +3275,43 @@ describe("no dictionary string sells scoring detail (W1: it is free on every pla
   });
 
   it("names no plan beside ball-by-ball, rally-by-rally, a match timeline or a detail level", () => {
-    expect(scoringFreeClaimFaults(everyValue())).toEqual([]);
+    const faults = scoringFreeClaimFaults(everyValue());
+    // The message argument carries the offending key into a CI JSON report —
+    // `failureMessages` otherwise says only "expected [ Array(1) ] to deeply
+    // equal []" and the locale/key/sentence lives in the terminal diff alone.
+    expect(faults, faults.join(" | ")).toEqual([]);
+  });
+
+  /**
+   * ── AND THE MAP THAT HELD ALL THREE OF THEM (review I-1) ───────────────────
+   *
+   * `FEATURE_REASONS` is not a dictionary — it is hardcoded English in
+   * `lib/feature-copy.ts` — so the file scan above cannot see it, and it is the
+   * single most customer-visible surface this task cleaned: `featureReason()`
+   * is what `<UpgradeGate>` renders as the paywall body (upgrade-gate.tsx:168)
+   * and what `/admin/entitlements` prints. It is also where all three retired
+   * upsell sentences LIVED, which makes it the likeliest place a future wave
+   * puts one back.
+   *
+   * Measured before this test existed: re-adding
+   * `"scoring.ball_by_ball": "Ball-by-ball scoring is a Pro feature."` to the
+   * map left 249/249 copy tests green. The map is scanned WHOLE — every entry,
+   * not a hand-kept key list, which is the shape that missed four help articles.
+   */
+  it("no entitlement upsell reason sells scoring detail either", () => {
+    const reasons = Object.entries(FEATURE_REASONS).flatMap(([key, text]) =>
+      sentences(text).map((s) => [`FEATURE_REASONS ${key}`, s] as const),
+    );
+    expect(reasons.length, "FEATURE_REASONS resolved almost nothing").toBeGreaterThan(30);
+    const faults = scoringFreeClaimFaults(reasons);
+    expect(faults, faults.join(" | ")).toEqual([]);
+
+    // …and it is a check, not a restatement: the exact sentence V390 retired.
+    expect(
+      scoringFreeClaimFaults([
+        ["FEATURE_REASONS scoring.ball_by_ball", "Ball-by-ball scoring is a Pro feature."],
+      ]),
+    ).toHaveLength(1);
   });
 
   /**
@@ -3292,5 +3341,28 @@ describe("no dictionary string sells scoring detail (W1: it is free on every pla
       ]),
       "naming the capability, or the plan, or saying it is free, is not a fault",
     ).toEqual([]);
+  });
+
+  /**
+   * WHY `everyValue` SPLITS (review M-3). The affirmation exemption is
+   * whole-TEXT by design — it has to be, or "…available on every plan" could
+   * not be written at all. That makes the SPLIT the caller's job: a value fed
+   * in one piece lets an affirmation in sentence one excuse a price claim in
+   * sentence two. This pins the property rather than trusting the call site,
+   * because the call site is one `.flatMap` a future edit can drop.
+   */
+  it("a paid claim cannot hide in the second sentence of an exempted value", () => {
+    const twoClaims =
+      "Every detail level is available on every plan. Ball-by-ball scoring is a Pro feature.";
+    expect(
+      scoringFreeClaimFaults([["whole", twoClaims]]),
+      "whole-value: the affirmation exempts the paid sentence beside it",
+    ).toEqual([]);
+    expect(
+      scoringFreeClaimFaults(sentences(twoClaims).map((s) => ["split", s] as const)),
+      "split: the paid sentence stands on its own and is caught",
+    ).toHaveLength(1);
+    // …and the scan the suite actually runs is the split one.
+    expect(sentences(twoClaims)).toHaveLength(2);
   });
 });

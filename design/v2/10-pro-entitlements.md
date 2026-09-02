@@ -20,11 +20,20 @@ service layer (never in UI only).
 | `formats.double_elim` | ✗ | ✓ | ✓ |
 
 ### Sport depth (the new differentiators)
+
+> **RETIRED 2026-09-02 — entitlements v18 / W1 (owner ruling 2026-08-30).**
+> `scoring.ball_by_ball`, `scoring.rally_by_rally` and `scoring.match_timeline`
+> were the three rows this section opened with. `V390__scoring_free.sql` DELETED
+> them from `plan_entitlements` (and every `org_entitlement_overrides` row for
+> them), and the same wave deleted their server gate from `scoreEvent` and the
+> batch importer. **How much detail a match records is not a price boundary and
+> no longer appears in any matrix.** `PadSpec.fidelity` survives as a UX filter
+> — the band is the scorer's own pick on the pad's Recording chip. The rows are
+> struck from the table below rather than left rendering a ✗ for Community
+> against a capability Community has in full.
+
 | feature_key | Community | Pro |
 |---|---|---|
-| `scoring.ball_by_ball` (cricket fine events, wagon-wheel-ready data) | ✗ (innings summaries) | ✓ |
-| `scoring.rally_by_rally` (volleyball/badminton/TT point log) | ✗ (set summaries) | ✓ |
-| `scoring.match_timeline` (football goal/card minutes) | ✗ (final score) | ✓ |
 | `cricket.dls` (DLS targets + live par curve) | ✗ (manual revise) | ✓ |
 | `stats.player` (batting/bowling averages, top scorers, MVP tables) | ✗ | ✓ |
 | `stats.club_championship` (cross-division aggregate, doc 06 §4.4) | ✗ | ✓ |

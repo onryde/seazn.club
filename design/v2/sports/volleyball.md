@@ -25,7 +25,9 @@ bestOf) targets `finalSetTo`. Match = first to ⌈bestOf/2⌉ sets. `supportsDra
 everywhere.
 
 ## 3. Events — dual fidelity
-- Fine (Pro `scoring.rally_by_rally`): `rally {wonBy}`; optional no-score events
+- Fine (band 3; was `Pro scoring.rally_by_rally` until V390 deleted that row in
+  entitlements v18 / W1, 2026-09-02 — every band is free on every plan):
+  `rally {wonBy}`; optional no-score events
   `timeout {by}`, `sub {by, off, on}`, `libero {by, in, out}` — validated (2 timeouts/
   set, libero replacement rules as *warnings* not blocks — courtside reality).
 - Coarse (Community): `set.summary {home, away}` — validated reachable under the predicate

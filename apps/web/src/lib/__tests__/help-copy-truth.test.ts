@@ -2844,7 +2844,10 @@ describe("no help article anywhere prices scoring detail (W1: it is free on ever
   it("the tree, as it stands today, makes the claim nowhere", () => {
     const { faults, scanned } = scoringFreeFaultsAcrossTree();
     expect(scanned, "the scan resolved almost no sentences").toBeGreaterThan(1500);
-    expect(faults).toEqual([]);
+    // The message argument carries the ARTICLE NAME into a CI JSON report: the
+    // reporter's own `failureMessages` says only "expected [ Array(1) ] to
+    // deeply equal []", and the filename lives in the terminal diff alone.
+    expect(faults, faults.join(" | ")).toEqual([]);
   });
 
   // ANTI-VACUITY, in the exact shape the brief missed four times: an article

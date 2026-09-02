@@ -16602,7 +16602,12 @@ async function footballFidelityGateSuite(admin: Session, proOrgId: string): Prom
     proShot.status === 201,
   );
 
-  // ---- Free (community): band 3 refused, band 0 still reachable ----
+  // ---- Free (community): band 3 ACCEPTED here too, band 0 as the control ----
+  // W1 (entitlements v18) inverted this leg deliberately — it asserted a 402
+  // until V390 deleted `scoring.ball_by_ball` and Task 3 deleted its gate. If
+  // you are here because the 201 below looks wrong, the assertion is right and
+  // this comment is the record of why; putting the 402 back re-establishes a
+  // paywall the owner removed on 2026-08-30.
   const freeOwner = newSession();
   await signIn(freeOwner, `fidelitygatefree_${tag}@example.com`);
   const freeOrgId = ((await call(freeOwner, "/api/orgs")) as { id: string }[])[0]!.id;
