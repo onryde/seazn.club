@@ -178,6 +178,7 @@ import {
   type Pack,
   type PackClaim,
   type PackDivision,
+  type PackEvent,
   type PackExpectedMatch,
   type PackExpectedTable,
   type PackLineupSlot,
@@ -369,9 +370,18 @@ export function stageScopedFoldCfg(
  */
 export const OFFLINE_RECORDED_AT = "1970-01-01T00:00:00.000Z";
 
-export function packEnvelopes(stream: PackStream): EventEnvelope[] {
-  const fixtureId = fixtureKey(stream.divisionRef, stream.fixtureExtKey);
-  return stream.events.map((ev, i) => ({
+/**
+ * ONE authored event, at array index `i`, as the envelope the fold sees.
+ *
+ * Extracted from `packEnvelopes` (which is now its only fan-out) so
+ * `lib/reconstruct.ts` can mint the SAME envelope for the single event it is
+ * about to append while it walks a stream forward. A generator with its own
+ * synthesis would be a second implementation of P1: the two would agree until
+ * one of the three parity facts moved, and the stream a builder emitted would
+ * then fold differently here than it did while it was being built.
+ */
+export function packEnvelope(fixtureId: string, ev: PackEvent, i: number): EventEnvelope {
+  return {
     id: String(i),
     fixtureId,
     seq: i + 1,
@@ -379,7 +389,12 @@ export function packEnvelopes(stream: PackStream): EventEnvelope[] {
     payload: ev.payload,
     recordedAt: ev.at ?? OFFLINE_RECORDED_AT,
     recordedBy: null,
-  }));
+  };
+}
+
+export function packEnvelopes(stream: PackStream): EventEnvelope[] {
+  const fixtureId = fixtureKey(stream.divisionRef, stream.fixtureExtKey);
+  return stream.events.map((ev, i) => packEnvelope(fixtureId, ev, i));
 }
 
 /** PARITY POINT P1, second half — `event-import.ts:305` folds the dry run with
@@ -427,6 +442,49 @@ export function packLineupPair(stream: PackStream): LineupPair {
     home: side(stream.home, stream.lineups?.home),
     away: side(stream.away, stream.lineups?.away),
   };
+}
+
+/**
+ * The cfg one division folds under, built exactly as `createDivision` builds
+ * it (`usecases/divisions.ts:237-254`): the named variant PRESET, then the
+ * pack's overrides spread over it, then the module's own `configSchema`. A
+ * variant is a cfg preset, never a module selector.
+ *
+ * EXPORTED, and used by `lib/reconstruct.ts` as well as by the fold below.
+ * A generator that resolved its own cfg would be the placer/verifier fork this
+ * repo keeps shipping: a stream built under one resolution and validated under
+ * another folds differently, and the divergence reads as a pack defect. One
+ * function, one answer.
+ *
+ * Returns a discriminated result rather than throwing, because the validator
+ * turns each reason into its own finding code and message and a caller
+ * building a pack wants to say something different again.
+ */
+export type DivisionCfgResolution =
+  | { readonly ok: true; readonly cfg: unknown }
+  | { readonly ok: false; readonly reason: "unknown_variant"; readonly declared: readonly string[] }
+  | { readonly ok: false; readonly reason: "cfg_invalid"; readonly detail: string };
+
+export function resolveDivisionCfg(
+  sportModule: AnySportModule,
+  division: Pick<PackDivision, "variantKey" | "cfgOverrides">,
+): DivisionCfgResolution {
+  const variants = sportModule.variants as Record<string, unknown>;
+  if (!Object.prototype.hasOwnProperty.call(variants, division.variantKey)) {
+    return { ok: false, reason: "unknown_variant", declared: Object.keys(variants) };
+  }
+  const merged = { ...(variants[division.variantKey] as object), ...division.cfgOverrides };
+  const parsed = sportModule.configSchema.safeParse(merged);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      reason: "cfg_invalid",
+      detail: parsed.error.issues
+        .map((is) => `${is.path.join(".") || "<root>"}: ${is.message}`)
+        .join("; "),
+    };
+  }
+  return { ok: true, cfg: parsed.data };
 }
 
 // ---------------------------------------------------------------------------
@@ -685,31 +743,27 @@ export function validatePack(raw: unknown, opts: ValidatePackOptions): PackValid
       return;
     }
 
-    // cfg, exactly as `createDivision` builds it (usecases/divisions.ts:
-    // 237-254): the named variant PRESET, then the pack's overrides spread
-    // over it, then the module's own `configSchema`. A variant is a cfg
-    // preset, never a module selector.
-    const variants = sportModule.variants as Record<string, unknown>;
-    if (!Object.prototype.hasOwnProperty.call(variants, division.variantKey)) {
-      fail(
-        "fold.unknown_variant",
-        `unknown variant "${division.variantKey}" for sport "${division.sportKey}" — ` +
-          `declared variants are [${Object.keys(variants).join(", ")}]`,
-      );
-      return;
-    }
-    const merged = { ...(variants[division.variantKey] as object), ...division.cfgOverrides };
-    const cfgParse = sportModule.configSchema.safeParse(merged);
-    if (!cfgParse.success) {
-      fail(
-        "fold.cfg_invalid",
-        `division "${division.ref}" cfg is rejected by ${division.sportKey}'s own configSchema: ` +
-          cfgParse.error.issues.map((is) => `${is.path.join(".") || "<root>"}: ${is.message}`).join("; "),
-      );
+    // cfg, through the ONE shared resolution (`resolveDivisionCfg` above) —
+    // the same function `lib/reconstruct.ts` builds a stream under.
+    const resolved = resolveDivisionCfg(sportModule, division);
+    if (!resolved.ok) {
+      if (resolved.reason === "unknown_variant") {
+        fail(
+          "fold.unknown_variant",
+          `unknown variant "${division.variantKey}" for sport "${division.sportKey}" — ` +
+            `declared variants are [${resolved.declared.join(", ")}]`,
+        );
+      } else {
+        fail(
+          "fold.cfg_invalid",
+          `division "${division.ref}" cfg is rejected by ${division.sportKey}'s own configSchema: ` +
+            resolved.detail,
+        );
+      }
       return;
     }
     const stage = stageOfStream.get(fixtureKey(stream.divisionRef, stream.fixtureExtKey));
-    const cfg = stageScopedFoldCfg(cfgParse.data, stage?.config);
+    const cfg = stageScopedFoldCfg(resolved.cfg, stage?.config);
 
     let state: unknown;
     let squads: SquadState;
