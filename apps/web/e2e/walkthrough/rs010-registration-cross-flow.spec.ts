@@ -225,9 +225,33 @@ test("configure, register, join, waitlist, approve, opt-out — every screen agr
   // rows genuinely complete (the captain's own); the second names the
   // team-mate but stays pending until claimed in step 3.
   // ===================================================================
-  const anonA = await browser.newContext();
-  const anonB = await browser.newContext();
-  const anonC = await browser.newContext();
+  // `storageState: { cookies: [], origins: [] }` is what makes these
+  // ACTUALLY anonymous, and it is load-bearing — `browser.newContext()` bare
+  // inherits the project's `storageState: AUTH_STATE` (playwright.config.ts),
+  // so every "anonymous" registrant below was in fact submitting as the
+  // signed-in e2e organiser. That is not cosmetic: a signed-in submitter
+  // registering THEMSELVES with an adult dob makes `deriveLinkUserId`
+  // (registrations.ts) link the entry to that account's own
+  // `(org_id, user_id, 'player')` person, and that upsert is
+  // `do update set full_name = persons.full_name` (registrations.ts:667-676)
+  // — the EXISTING person's name wins and the name this test submitted is
+  // discarded. So the captain rendered on the public Entrants tab under
+  // whatever name that shared account's player person already had.
+  //
+  // It passed locally and failed only in CI because the collision needs a
+  // PRIOR spec to have created that person first: `registration-connect.
+  // spec.ts` self-registers the same account as its own name, and it runs
+  // only when the real Stripe/Connect secrets exist — i.e. on the
+  // walkthrough leg, ahead of this file. On a fresh local DB running this
+  // spec alone the upsert INSERTS, the submitted name survives, and the
+  // assertion passes. A green local run could never have caught it.
+  //
+  // Line ~352 below already does this for `mate2Ctx`; these three were the
+  // ones that never got it.
+  const emptyState = { storageState: { cookies: [], origins: [] } } as const;
+  const anonA = await browser.newContext(emptyState);
+  const anonB = await browser.newContext(emptyState);
+  const anonC = await browser.newContext(emptyState);
   let mate2Ctx: import("@playwright/test").BrowserContext | undefined;
 
   try {
@@ -401,41 +425,29 @@ test("configure, register, join, waitlist, approve, opt-out — every screen agr
     // — a single read right after approve can race that regeneration.
     const divisionUrl = `/shared/${org.slug}/${compSlug}/${divisionSlug}`;
     const activePanel = () => captainPage.locator('[role="tabpanel"]:not([hidden])');
-    // Every read below is against ONE navigation's DOM, and materialise()
-    // writes the entrant + both roster members atomically in one tx
-    // (registrations.ts:927-1027) — so there is no legitimate snapshot where
-    // the mate's masked row is present but the captain's is not. The whole
-    // block used to retry ONLY the mateMasked line, then read the rest
-    // un-retried off whatever page that left behind: a snapshot from mid-way
-    // through the ISR/SWR regeneration this page documents above (stale
-    // pre-approve HTML served while a background regen completes) could
-    // satisfy `mateMasked` on one field-order pass and still be the OLD
-    // zero-entrants render for a check that reads a different part of the
-    // same DOM an instant later. Retrying the FULL set together means a
-    // transient stale read fails the whole attempt and re-navigates, instead
-    // of leaving four assertions to race a caching layer none of them can see.
     await expect(async () => {
       await captainPage.goto(divisionUrl, { waitUntil: "load" });
       await captainPage.getByRole("button", { name: /^accept$/i }).click({ timeout: 1500 }).catch(() => {});
       await captainPage.getByRole("tab", { name: "Entrants" }).click();
       await expect(activePanel().getByText(mateMasked, { exact: false })).toBeVisible({ timeout: 3000 });
-      await expect(
-        activePanel().getByText(captainName),
-        "the never-opted-out captain must still render in full on the public Entrants tab",
-      ).toBeVisible({ timeout: 3000 });
-      await expect(
-        activePanel().getByText(mateName),
-        "the opted-out mate's RAW full name must not be visible on the public Entrants tab",
-      ).not.toBeVisible({ timeout: 3000 });
-      await expect(
-        activePanel().getByText(teamName, { exact: false }),
-        "the confirmed team must appear exactly once in the public entrant count",
-      ).toHaveCount(1, { timeout: 3000 });
-      await expect(
-        activePanel().getByText(overflowTeamName, { exact: false }),
-        "the still-waitlisted entry must be EXCLUDED from the public entrant count",
-      ).toHaveCount(0, { timeout: 3000 });
     }).toPass({ timeout: 40_000, intervals: [2000, 2000, 3000, 3000, 5000, 5000, 5000] });
+
+    await expect(
+      activePanel().getByText(captainName),
+      "the never-opted-out captain must still render in full on the public Entrants tab",
+    ).toBeVisible();
+    await expect(
+      activePanel().getByText(mateName),
+      "the opted-out mate's RAW full name must not be visible on the public Entrants tab",
+    ).not.toBeVisible();
+    await expect(
+      activePanel().getByText(teamName, { exact: false }),
+      "the confirmed team must appear exactly once in the public entrant count",
+    ).toHaveCount(1);
+    await expect(
+      activePanel().getByText(overflowTeamName, { exact: false }),
+      "the still-waitlisted entry must be EXCLUDED from the public entrant count",
+    ).toHaveCount(0);
     await shot(captainPage, "08-public-entrants-cross-checked");
     await screenshotAtWidths(captainPage, testInfo, "08-public-entrants-cross-checked");
     await expectNoHorizontalScroll(captainPage);
