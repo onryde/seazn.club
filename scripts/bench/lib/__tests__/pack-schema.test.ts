@@ -69,6 +69,8 @@ function basePack(): Record<string, unknown> {
       {
         divisionRef: "d-main",
         fixtureExtKey: "rr-r1-c1",
+        home: "e-alpha",
+        away: "e-bravo",
         provenance: "real",
         events: [
           { type: "core.start" },
@@ -391,6 +393,8 @@ describe("PackSchema — streams and events", () => {
       streams.push({
         divisionRef: "d-other",
         fixtureExtKey: "rr-r1-c1",
+        home: "e-x",
+        away: "e-y",
         provenance: "real",
         events: [{ type: "generic.result", payload: { p1Score: 1, p2Score: 0 } }],
       });
@@ -491,6 +495,501 @@ describe("PackSchema — streams and events", () => {
       ["expected", "matches"],
       /no expected match/i,
     );
+  });
+});
+
+describe("PackSchema — a stream declares who played", () => {
+  // Review round 1, C1. foldMatch takes LineupPair as a REQUIRED argument
+  // (core/events.ts:445-451) and stage-0 folds in process, so a stream that
+  // named only its ext_key would have its sides re-derived from the
+  // scheduling generator — an undeclared dependency that silently decides
+  // oracles, because generic.result maps p1Score to HOME (generic.ts:113-114)
+  // and a multi-leg round robin mirrors home/away on even legs.
+
+  it("home and away are REQUIRED — not merely refined once present", () => {
+    // The issue CODE is the assertion, not just the path. Making these
+    // `.optional()` still produces an issue at the same path (the cross-field
+    // rule then reports `undefined` as an unknown entrant ref), so a test that
+    // only checked the path passed for both shapes — it survived a mutation
+    // sweep exactly that way. `invalid_type` is what "the key is missing"
+    // looks like; `custom` is what the refinement looks like.
+    for (const side of ["home", "away"] as const) {
+      const result = PackSchema.safeParse(
+        pack((p) => {
+          const streams = p.streams as Record<string, unknown>[];
+          delete (streams[0] as Record<string, unknown>)[side];
+        }),
+      );
+      expect(result.success, `a stream without ${side} parsed`).toBe(false);
+      if (result.success) continue;
+      const at = result.error.issues.filter(
+        (i) => JSON.stringify(i.path) === JSON.stringify(["streams", 0, side]),
+      );
+      expect(at.length, `no issue at streams[0].${side}`).toBeGreaterThan(0);
+      expect(
+        at.some((i) => i.code === "invalid_type"),
+        `streams[0].${side} was reported as ${JSON.stringify(at.map((i) => i.code))}, not a missing required key`,
+      ).toBe(true);
+    }
+  });
+
+  it("a lineup slot refuses an unknown key — including the engine's own `personId` spelling", () => {
+    // The likeliest authoring mistake in this whole block: the engine's
+    // LineupSlot calls it `personId` (core/types.ts:180) and the pack calls it
+    // `person`, because a pack ref is not a UUID. Non-strict, that typo would
+    // be SILENTLY STRIPPED and the slot would parse with no person at all.
+    const result = PackSchema.safeParse(
+      pack((p) => {
+        const streams = p.streams as Record<string, unknown>[];
+        (streams[0] as Record<string, unknown>).lineups = {
+          home: [{ person: "p-ana", personId: "p-ana" }],
+          away: [{ person: "p-bo" }],
+        };
+      }),
+    );
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(
+      result.error.issues.some(
+        (i) =>
+          i.code === "unrecognized_keys" &&
+          JSON.stringify(i.path) === JSON.stringify(["streams", 0, "lineups", "home", 0]),
+      ),
+      `expected an unrecognized_keys issue on the slot; got ${JSON.stringify(result.error.issues)}`,
+    ).toBe(true);
+  });
+
+  it("a side must be an entrant of the stream's own division", () => {
+    expectIssue(
+      pack((p) => {
+        const streams = p.streams as Record<string, unknown>[];
+        (streams[0] as Record<string, unknown>).home = "e-ghost";
+      }),
+      ["streams", 0, "home"],
+      /unknown entrant ref/i,
+    );
+  });
+
+  it("one entrant cannot be on both sides", () => {
+    expectIssue(
+      pack((p) => {
+        const streams = p.streams as Record<string, unknown>[];
+        (streams[0] as Record<string, unknown>).away = "e-alpha";
+      }),
+      ["streams", 0, "away"],
+      /both sides/i,
+    );
+  });
+
+  it("an expected perSide line may not name an entrant that did not play this fixture", () => {
+    // Reachable in a real pack: entrant refs are division-scoped, so a
+    // copy-paste from the neighbouring fixture resolves fine and asserts
+    // nothing true. Only the declared sides make this catchable at all.
+    expectIssue(
+      pack((p) => {
+        (p.entrants as unknown[]).push({
+          ref: "e-charlie",
+          divisionRef: "d-main",
+          kind: "individual",
+          displayName: "Cy Chen",
+        });
+        (p.persons as unknown[]).push({ ref: "p-cy", fullName: "Cy Chen", lane: "player" });
+        const expected = p.expected as Record<string, unknown>;
+        const first = (expected.matches as Record<string, unknown>[])[0] as Record<string, unknown>;
+        first.perSide = [
+          { entrant: "e-alpha", line: "3" },
+          { entrant: "e-charlie", line: "1" },
+        ];
+      }),
+      ["expected", "matches", 0, "perSide", 1, "entrant"],
+      /did not play fixture/i,
+    );
+  });
+
+  it("perSide is [home, away] — a flipped stream then contradicts its own score lines", () => {
+    // The second place a fixture's orientation is written down. Without it,
+    // swapping a stream's home/away (the even-leg mirror) parses clean and
+    // silently reassigns the winner — which is precisely how the pre-C1 pack
+    // depended on the scheduling generator.
+    expectIssue(
+      pack((p) => {
+        const streams = p.streams as Record<string, unknown>[];
+        const first = streams[0] as Record<string, unknown>;
+        first.home = "e-bravo";
+        first.away = "e-alpha";
+        const expected = p.expected as Record<string, unknown>;
+        const m = (expected.matches as Record<string, unknown>[])[0] as Record<string, unknown>;
+        m.perSide = [
+          { entrant: "e-alpha", line: "3" },
+          { entrant: "e-bravo", line: "1" },
+        ];
+      }),
+      ["expected", "matches", 0, "perSide"],
+      /perSide is \[home, away\]/i,
+    );
+  });
+
+  it("per-fixture lineups parse, and slot/orderNo carry their documented defaults", () => {
+    const p = parsed(
+      pack((draft) => {
+        const streams = draft.streams as Record<string, unknown>[];
+        (streams[0] as Record<string, unknown>).lineups = {
+          home: [{ person: "p-ana", squadNumber: 1, roles: ["captain"] }],
+          away: [{ person: "p-bo", slot: "bench", orderNo: 4, role: "coach", pairOrder: 1 }],
+        };
+      }),
+    );
+    const lineups = p.streams[0]?.lineups;
+    expect(lineups?.home[0]?.slot).toBe("starting");
+    expect(lineups?.home[0]?.orderNo).toBeUndefined();
+    expect(lineups?.away[0]?.slot).toBe("bench");
+    expect(lineups?.away[0]?.role).toBe("coach");
+    expect(lineups?.away[0]?.pairOrder).toBe(1);
+  });
+
+  it("a lineup may name a person who was never rostered, but never one the pack did not declare", () => {
+    // The product allows exactly this (api-v1 CreateEntrant/PutLineup's
+    // eligibility_override: "a lineup can name a person who was never gated
+    // at roster time"), so the rule is DECLARED, not rostered.
+    const neverRostered = pack((p) => {
+      (p.persons as unknown[]).push({ ref: "p-late", fullName: "Late Arrival", lane: "player" });
+      const streams = p.streams as Record<string, unknown>[];
+      (streams[0] as Record<string, unknown>).lineups = {
+        home: [{ person: "p-late" }],
+        away: [{ person: "p-bo" }],
+      };
+    });
+    expect(PackSchema.safeParse(neverRostered).success).toBe(true);
+
+    expectIssue(
+      pack((p) => {
+        const streams = p.streams as Record<string, unknown>[];
+        (streams[0] as Record<string, unknown>).lineups = {
+          home: [{ person: "p-ghost" }],
+          away: [{ person: "p-bo" }],
+        };
+      }),
+      ["streams", 0, "lineups", "home", 0, "person"],
+      /unknown person ref/i,
+    );
+  });
+
+  it("a team sheet may not name one person twice, or reuse a squad number or orderNo", () => {
+    const dup = (
+      home: Record<string, unknown>[],
+      at: (string | number)[],
+      message: RegExp,
+    ): void =>
+      expectIssue(
+        pack((p) => {
+          (p.persons as unknown[]).push({ ref: "p-cy", fullName: "Cy Chen", lane: "player" });
+          const streams = p.streams as Record<string, unknown>[];
+          (streams[0] as Record<string, unknown>).lineups = { home, away: [{ person: "p-bo" }] };
+        }),
+        at,
+        message,
+      );
+    dup(
+      [{ person: "p-ana" }, { person: "p-ana" }],
+      ["streams", 0, "lineups", "home", 1, "person"],
+      /twice on the home sheet/i,
+    );
+    dup(
+      [{ person: "p-ana", squadNumber: 7 }, { person: "p-cy", squadNumber: 7 }],
+      ["streams", 0, "lineups", "home", 1, "squadNumber"],
+      /duplicate squad number/i,
+    );
+    dup(
+      [{ person: "p-ana", orderNo: 1 }, { person: "p-cy", orderNo: 1 }],
+      ["streams", 0, "lineups", "home", 1, "orderNo"],
+      /duplicate orderNo/i,
+    );
+  });
+});
+
+describe("PackSchema — the registration block (declared for B03r, unpopulated in v1)", () => {
+  // Review round 1, I4: ~120 lines of contract shipped with no test and no
+  // mutant is the inert-seam failure this programme keeps repeating. The block
+  // stays (B03r needs it); the coverage is what was missing.
+  function withRegistration(mutate: (block: Record<string, unknown>) => void): Record<string, unknown> {
+    return pack((p) => {
+      (p.persons as unknown[]).push(
+        { ref: "p-cap", fullName: "Cap Tain", lane: "player" },
+        { ref: "p-joiner", fullName: "Joe Iner", lane: "player" },
+      );
+      const block: Record<string, unknown> = {
+        category: "open",
+        entrantKind: "team",
+        feeCents: 0,
+        currency: "GBP",
+        approval: "manual",
+        entries: [
+          { extKey: "entry-1", captain: "p-cap", roster: ["p-ana"], pay: false, expect: "entrant" },
+        ],
+        joins: [{ entry: "entry-1", person: "p-joiner", consent: "granted" }],
+        organiser: [{ action: "approve", target: "entry-1" }],
+        expect: { entrants: 1, waitlisted: 0, rejected: 0, paidCents: 0 },
+      };
+      mutate(block);
+      p.registration = { byDivision: { "d-main": block } };
+    });
+  }
+
+  it("a well-formed registration block parses", () => {
+    const p = parsed(withRegistration(() => {}));
+    expect(Object.keys(p.registration?.byDivision ?? {})).toEqual(["d-main"]);
+    expect(p.registration?.byDivision["d-main"]?.entries[0]?.expect).toBe("entrant");
+  });
+
+  it("byDivision is keyed by a DECLARED division ref", () => {
+    const bad = pack((p) => {
+      (p.persons as unknown[]).push({ ref: "p-cap", fullName: "Cap Tain", lane: "player" });
+      p.registration = {
+        byDivision: {
+          "d-ghost": {
+            category: "open",
+            entrantKind: "team",
+            feeCents: 0,
+            currency: "GBP",
+            approval: "auto",
+            expect: { entrants: 0, waitlisted: 0, rejected: 0, paidCents: 0 },
+          },
+        },
+      };
+    });
+    expectIssue(bad, ["registration", "byDivision", "d-ghost"], /unknown division ref/i);
+  });
+
+  it("an entry's captain must be a declared person", () => {
+    expectIssue(
+      withRegistration((b) => {
+        (b.entries as Record<string, unknown>[])[0]!.captain = "p-ghost";
+      }),
+      ["registration", "byDivision", "d-main", "entries", 0, "captain"],
+      /unknown person ref/i,
+    );
+  });
+
+  it("an entry's submitted roster must be declared people", () => {
+    expectIssue(
+      withRegistration((b) => {
+        (b.entries as Record<string, unknown>[])[0]!.roster = ["p-ana", "p-ghost"];
+      }),
+      ["registration", "byDivision", "d-main", "entries", 0, "roster", 1],
+      /unknown person ref/i,
+    );
+  });
+
+  it("a join must target a declared entry, by a declared person", () => {
+    expectIssue(
+      withRegistration((b) => {
+        (b.joins as Record<string, unknown>[])[0]!.entry = "entry-nope";
+      }),
+      ["registration", "byDivision", "d-main", "joins", 0, "entry"],
+      /unknown registration entry/i,
+    );
+    expectIssue(
+      withRegistration((b) => {
+        (b.joins as Record<string, unknown>[])[0]!.person = "p-ghost";
+      }),
+      ["registration", "byDivision", "d-main", "joins", 0, "person"],
+      /unknown person ref/i,
+    );
+  });
+
+  it("an organiser action must target a declared entry", () => {
+    expectIssue(
+      withRegistration((b) => {
+        (b.organiser as Record<string, unknown>[])[0]!.target = "entry-nope";
+      }),
+      ["registration", "byDivision", "d-main", "organiser", 0, "target"],
+      /unknown registration entry/i,
+    );
+  });
+});
+
+describe("PackSchema — pre-freeze reservations (venues, officials, claim invites)", () => {
+  function withReservations(mutate: (p: Record<string, unknown>) => void): Record<string, unknown> {
+    return pack((p) => {
+      (p.persons as unknown[]).push({ ref: "p-ref", fullName: "Ref Eree", lane: "official" });
+      p.venues = [
+        {
+          ref: "v-main",
+          name: "Bench Arena",
+          address: "1 Bench Way",
+          courts: [
+            { ref: "c-1", name: "Court 1", tags: ["indoor"] },
+            { ref: "c-2", name: "Court 2" },
+          ],
+        },
+      ];
+      p.officials = [
+        {
+          ref: "o-ref",
+          person: "p-ref",
+          displayName: "Ref Eree",
+          roleKeys: ["referee", "umpire"],
+          maxPerDay: 3,
+          unavailable: [{ date: "2099-01-02", note: "travelling" }],
+          assignments: [{ divisionRef: "d-main", fixtureExtKey: "rr-r1-c1", roleKey: "referee" }],
+        },
+      ];
+      p.claimInvites = [{ person: "p-ana", email: "ana@example.com" }];
+      const divisions = p.divisions as Record<string, unknown>[];
+      (divisions[0] as Record<string, unknown>).scheduleConfig = {
+        matchMinutes: 30,
+        gapMinutes: 0,
+        courts: ["@c-1", "@c-2"],
+      };
+      mutate(p);
+    });
+  }
+
+  it("a fully-populated reservation set parses", () => {
+    const p = parsed(withReservations(() => {}));
+    expect(p.venues?.[0]?.courts.map((c) => c.ref)).toEqual(["c-1", "c-2"]);
+    expect(p.venues?.[0]?.courts[1]?.tags).toEqual([]);
+    expect(p.officials?.[0]?.roleKeys).toEqual(["referee", "umpire"]);
+    expect(p.claimInvites?.[0]?.email).toBe("ana@example.com");
+  });
+
+  it("court refs are unique across ALL venues, because scheduleConfig names them unqualified", () => {
+    expectIssue(
+      withReservations((p) => {
+        (p.venues as Record<string, unknown>[]).push({
+          ref: "v-second",
+          name: "Second Arena",
+          courts: [{ ref: "c-1", name: "Court 1" }],
+        });
+      }),
+      ["venues", 1, "courts", 0, "ref"],
+      /duplicate court ref/i,
+    );
+  });
+
+  it("an @-ref inside the opaque scheduleConfig must name a declared court or venue", () => {
+    expectIssue(
+      withReservations((p) => {
+        const divisions = p.divisions as Record<string, unknown>[];
+        const cfg = (divisions[0] as Record<string, unknown>).scheduleConfig as Record<string, unknown>;
+        cfg.courts = ["@c-1", "@c-ghost"];
+      }),
+      ["divisions", 0, "scheduleConfig"],
+      /unknown pack ref "@c-ghost"/i,
+    );
+  });
+
+  it("an official must be a person in the OFFICIAL lane", () => {
+    // Bench design §9 P1 seeds officials as lane=official; persons.lane admits
+    // it (V348, widened by V356). A player-lane person here would seed an
+    // official the product's own lane split says is not one.
+    expectIssue(
+      withReservations((p) => {
+        (p.officials as Record<string, unknown>[])[0]!.person = "p-ana";
+      }),
+      ["officials", 0, "person"],
+      /lane "player".*must be a person in the "official" lane/i,
+    );
+  });
+
+  it("an official's assignment must name a fixture the pack declares", () => {
+    expectIssue(
+      withReservations((p) => {
+        const a = ((p.officials as Record<string, unknown>[])[0]!.assignments as Record<string, unknown>[])[0]!;
+        a.fixtureExtKey = "rr-r9-c9";
+      }),
+      ["officials", 0, "assignments", 0, "fixtureExtKey"],
+      /no stream declares fixture/i,
+    );
+  });
+
+  it("an official cannot be assigned a role they do not declare", () => {
+    expectIssue(
+      withReservations((p) => {
+        const a = ((p.officials as Record<string, unknown>[])[0]!.assignments as Record<string, unknown>[])[0]!;
+        a.roleKey = "timekeeper";
+      }),
+      ["officials", 0, "assignments", 0, "roleKey"],
+      /not declared for role/i,
+    );
+  });
+
+  it("an official may not declare the same blackout date twice (mirrors V284's unique(official_id, date))", () => {
+    expectIssue(
+      withReservations((p) => {
+        (p.officials as Record<string, unknown>[])[0]!.unavailable = [
+          { date: "2099-01-02" },
+          { date: "2099-01-02", note: "again" },
+        ];
+      }),
+      ["officials", 0, "unavailable", 1, "date"],
+      /unavailable twice/i,
+    );
+  });
+
+  it("a claim invite names a declared person, once, at a unique address", () => {
+    expectIssue(
+      withReservations((p) => {
+        (p.claimInvites as Record<string, unknown>[])[0]!.person = "p-ghost";
+      }),
+      ["claimInvites", 0, "person"],
+      /unknown person ref/i,
+    );
+    expectIssue(
+      withReservations((p) => {
+        (p.claimInvites as Record<string, unknown>[]).push({ person: "p-ana", email: "other@example.com" });
+      }),
+      ["claimInvites", 1, "person"],
+      /already has a claim invite/i,
+    );
+    expectIssue(
+      withReservations((p) => {
+        (p.claimInvites as Record<string, unknown>[]).push({ person: "p-bo", email: "ANA@example.com" });
+      }),
+      ["claimInvites", 1, "email"],
+      /invited twice/i,
+    );
+  });
+
+  it("persons carry the B03r dob/gender reservation; divisions default entry to admin", () => {
+    const p = parsed(
+      pack((draft) => {
+        const persons = draft.persons as Record<string, unknown>[];
+        (persons[0] as Record<string, unknown>).dob = "1998-04-11";
+        (persons[0] as Record<string, unknown>).gender = "f";
+      }),
+    );
+    expect(p.persons[0]?.dob).toBe("1998-04-11");
+    expect(p.persons[0]?.gender).toBe("f");
+    // Default, not absence: "no entry mode declared" and "admin" must not be
+    // two different shapes for B03r's mode resolver.
+    expect(p.divisions[0]?.entry).toBe("admin");
+  });
+
+  it("provenance admits the B03r 'synthetic' value, and still refuses anything else", () => {
+    const ok = pack((p) => {
+      const streams = p.streams as Record<string, unknown>[];
+      (streams[0] as Record<string, unknown>).provenance = "synthetic";
+    });
+    expect(PackSchema.safeParse(ok).success).toBe(true);
+    const bad = pack((p) => {
+      const streams = p.streams as Record<string, unknown>[];
+      (streams[0] as Record<string, unknown>).provenance = "made-up";
+    });
+    expect(PackSchema.safeParse(bad).success).toBe(false);
+  });
+
+  it("org.timezone is required — there is no UTC default to silently shift a certificate", () => {
+    const result = PackSchema.safeParse(
+      pack((p) => {
+        delete (p.org as Record<string, unknown>).timezone;
+      }),
+    );
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(
+      result.error.issues.some((i) => JSON.stringify(i.path) === JSON.stringify(["org", "timezone"])),
+    ).toBe(true);
   });
 });
 
@@ -618,29 +1117,209 @@ describe("PackSchema — the expected block", () => {
     );
   });
 
-  it("all nine special kinds are expressible", () => {
-    const kinds = [
-      "super_over",
-      "dls_revise",
-      "shootout",
-      "ot_gws",
-      "final_set_tb",
-      "expedite",
-      "retirement",
-      "concussion_sub",
-      "draw_half_points",
-    ];
+  // -------------------------------------------------------------------------
+  // The nine specials, each with a REALISTIC claim derived from the engine
+  // site that actually represents it.
+  //
+  // The previous version of this test gave all nine the identical placeholder
+  // claim `{on:"state", path:"phase", equals:"done"}` and asserted the enum
+  // round-tripped — which proved the list had nine members and nothing about
+  // whether any of them could be expressed. That is exactly how the
+  // concussion-substitute gap (no claim branch reached SquadState.exemptUsed)
+  // survived a full mutation sweep. Review round 1, I2.
+  //
+  // `on` is pinned per kind on purpose: it is the assertion that would have
+  // caught that gap, because `concussion_sub` is the one row that CANNOT be
+  // an `outcome`, a `state` or a `standings` claim.
+  // -------------------------------------------------------------------------
+  const NINE_SPECIALS: {
+    kind: string;
+    on: string;
+    claim: Record<string, unknown>;
+    /** The engine site this representation comes from. */
+    from: string;
+  }[] = [
+    {
+      kind: "super_over",
+      on: "outcome",
+      // MatchOutcome.method's own comment lists 'super_over' (core/types.ts).
+      claim: { on: "outcome", kind: "win", winner: "e-alpha", method: "super_over" },
+      from: "core/types.ts MatchOutcome.method; cricket.ts:365 cricket.superover.ball",
+    },
+    {
+      kind: "dls_revise",
+      on: "state",
+      // CricketState.revisedTarget / targetSource, cricket.ts:465-466.
+      claim: { on: "state", path: "revisedTarget", equals: 231 },
+      from: "cricket.ts:465-466",
+    },
+    {
+      kind: "shootout",
+      on: "outcome",
+      // period/kernel.ts:1433 winPoints(cfg, "shootout"); :2284 reads
+      // outcome.method !== "shootout".
+      claim: { on: "outcome", kind: "win", winner: "e-alpha", method: "shootout" },
+      from: "period/kernel.ts:1433, :2284",
+    },
+    {
+      kind: "ot_gws",
+      on: "outcome",
+      // period/kernel.ts:1009 / :1109 decideWin(..., "extra_time").
+      claim: { on: "outcome", kind: "win", winner: "e-alpha", method: "extra_time" },
+      from: "period/kernel.ts:1009, :1109",
+    },
+    {
+      kind: "final_set_tb",
+      on: "state",
+      // ClosedSet.mtb — 'non-null = the set IS a match tie-break'
+      // (nested/kernel.ts SetRules/rulesFor, ClosedSet.mtb?: boolean).
+      claim: { on: "state", path: "sets.2.mtb", equals: true },
+      from: "nested/kernel.ts ClosedSet.mtb, rulesFor():853",
+    },
+    {
+      kind: "expedite",
+      on: "state",
+      // SetBasedState.expedite?: boolean, setbased/kernel.ts:346.
+      claim: { on: "state", path: "expedite", equals: true },
+      from: "setbased/kernel.ts:346",
+    },
+    {
+      kind: "retirement",
+      on: "outcome",
+      // core.forfeit is a CORE type; generic folds it to {kind:"award"}
+      // (generic.ts:555-562) and _tiny proves that end to end.
+      claim: { on: "outcome", kind: "award", winner: "e-alpha" },
+      from: "core/events.ts CoreForfeit; generic.ts:555-562",
+    },
+    {
+      kind: "concussion_sub",
+      // THE ROW THAT FORCED THE `squads` BRANCH. No event type; the charge is
+      // only observable in SquadState.exemptUsed (core/lineup.ts:100), which
+      // foldMatchWithStoppage returns SEPARATELY from the module state
+      // (core/events.ts:464) — so no outcome/state/standings claim reaches it.
+      on: "squads",
+      claim: { on: "squads", entrant: "e-alpha", field: "exemptUsed", exemption: "concussion", equals: 1 },
+      from: "core/lineup.ts:100 exemptUsed; core/events.ts:464; cricket.ts:103 cap",
+    },
+    {
+      kind: "draw_half_points",
+      on: "standings",
+      // Half-points are the SCORING MODEL, points stored doubled: win 2,
+      // draw 1, loss 0 (boardgame.ts:38-44). A draw is worth 1, not 0.5.
+      claim: { on: "standings", entrant: "e-alpha", field: "points", equals: 1 },
+      from: "boardgame.ts:38-44",
+    },
+  ];
+
+  it("all nine special kinds are expressible, each with its real representation", () => {
     const ok = pack((p) => {
       const expected = p.expected as Record<string, unknown>;
-      expected.specials = kinds.map((kind) => ({
-        kind,
+      expected.specials = NINE_SPECIALS.map((row) => ({
+        kind: row.kind,
         divisionRef: "d-main",
         fixtureExtKey: "rr-r1-c1",
-        claims: [{ on: "state", path: "phase", equals: "done" }],
+        note: row.from,
+        claims: [row.claim],
       }));
     });
     const p = parsed(ok);
-    expect(p.expected.specials.map((s) => s.kind)).toEqual(kinds);
+    expect(p.expected.specials).toHaveLength(9);
+    // Each kind keeps the claim SHAPE its engine representation requires.
+    // Asserting `on` per kind is what makes this test able to fail: a claim
+    // union that lost a branch would stop parsing exactly one row.
+    expect(p.expected.specials.map((sp) => [sp.kind, sp.claims[0]?.on])).toEqual(
+      NINE_SPECIALS.map((row) => [row.kind, row.on]),
+    );
+  });
+
+  it("each of the nine parses on its own — a red names ONE kind, not the batch", () => {
+    for (const row of NINE_SPECIALS) {
+      const one = pack((p) => {
+        const expected = p.expected as Record<string, unknown>;
+        expected.specials = [
+          { kind: row.kind, divisionRef: "d-main", fixtureExtKey: "rr-r1-c1", claims: [row.claim] },
+        ];
+      });
+      const result = PackSchema.safeParse(one);
+      expect(
+        result.success,
+        `special "${row.kind}" (${row.from}) did not parse: ${
+          result.success ? "" : JSON.stringify(result.error.issues)
+        }`,
+      ).toBe(true);
+    }
+  });
+
+  it("concussion_sub needs the squads branch — no state path can reach exemptUsed", () => {
+    // The gap I2 exposed, pinned. `foldMatchWithStoppage` returns
+    // `{ state, stoppage, squads }` (core/events.ts:464): `squads` is a
+    // SIBLING of the module state, so a `{on:"state"}` path rooted at the
+    // module state cannot address it however it is spelled. This test asserts
+    // the branch exists and carries the exemption key; it is the branch's
+    // reason to exist.
+    const claim = NINE_SPECIALS.find((r) => r.kind === "concussion_sub")?.claim;
+    expect(claim).toBeDefined();
+    expect(claim?.on).toBe("squads");
+    expect(claim?.exemption).toBe("concussion");
+  });
+
+  it("a squads claim on exemptUsed MUST name the exemption key", () => {
+    expectIssue(
+      pack((p) => {
+        const expected = p.expected as Record<string, unknown>;
+        expected.specials = [
+          {
+            kind: "concussion_sub",
+            divisionRef: "d-main",
+            fixtureExtKey: "rr-r1-c1",
+            claims: [{ on: "squads", entrant: "e-alpha", field: "exemptUsed", equals: 1 }],
+          },
+        ];
+      }),
+      ["expected", "specials", 0, "claims", 0, "exemption"],
+      /must name the exemption key/i,
+    );
+  });
+
+  it("a squads claim on subsUsed must NOT name an exemption key", () => {
+    // The other direction. subsUsed is a single scalar; an exemption key on it
+    // reads as a claim about a channel it does not describe — and the two are
+    // deliberately separate (core/lineup.ts:93-96).
+    expectIssue(
+      pack((p) => {
+        const expected = p.expected as Record<string, unknown>;
+        expected.specials = [
+          {
+            kind: "concussion_sub",
+            divisionRef: "d-main",
+            fixtureExtKey: "rr-r1-c1",
+            claims: [
+              { on: "squads", entrant: "e-alpha", field: "subsUsed", exemption: "concussion", equals: 3 },
+            ],
+          },
+        ];
+      }),
+      ["expected", "specials", 0, "claims", 0, "exemption"],
+      /must not/i,
+    );
+  });
+
+  it("a squads claim names an entrant of the special's own division", () => {
+    expectIssue(
+      pack((p) => {
+        const expected = p.expected as Record<string, unknown>;
+        expected.specials = [
+          {
+            kind: "concussion_sub",
+            divisionRef: "d-main",
+            fixtureExtKey: "rr-r1-c1",
+            claims: [{ on: "squads", entrant: "e-ghost", field: "subsUsed", equals: 1 }],
+          },
+        ];
+      }),
+      ["expected", "specials", 0, "claims", 0, "entrant"],
+      /unknown entrant ref/i,
+    );
   });
 });
 
@@ -731,10 +1410,23 @@ describe("packs/_tiny.json", () => {
 // guard below exists.
 // ---------------------------------------------------------------------------
 
-/** Pulls the top-level key names out of one `export const <name> = z.object({…})`
- *  declaration. Throws — never returns empty — when the anchor is missing, so a
- *  RENAME of the product symbol reds this suite instead of quietly yielding []. */
-export function declaredKeys(source: string, symbol: string): string[] {
+/** One key as the product schema declares it. `optional` is read from the
+ *  declaration text, so a key that becomes required (or stops being) moves
+ *  this test with it instead of leaving it asserting yesterday's shape. */
+export interface DeclaredKey {
+  name: string;
+  optional: boolean;
+}
+
+/** Pulls the top-level keys out of one `export const <name> = z.object({…})`
+ *  declaration. Throws — never returns empty — when the anchor is missing, so
+ *  a RENAME of the product symbol reds this suite instead of quietly yielding
+ *  []. Also reports whether the object literal closes with `.strict()`, since
+ *  that is what makes a STRAY key a hard failure rather than a silent strip. */
+export function declaredKeys(
+  source: string,
+  symbol: string,
+): { keys: DeclaredKey[]; strict: boolean } {
   const anchor = `export const ${symbol} = z.object({`;
   const start = source.indexOf(anchor);
   if (start < 0) {
@@ -744,39 +1436,62 @@ export function declaredKeys(source: string, symbol: string): string[] {
     );
   }
   const body = source.slice(start + anchor.length);
-  const end = body.indexOf("\n});");
+  const end = body.indexOf("\n})");
   if (end < 0) throw new Error(`could not find the end of ${symbol}'s object literal`);
+  const strict = body.slice(end, end + 20).startsWith("\n}).strict()");
   const withoutComments = body
     .slice(0, end)
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .replace(/^\s*\/\/.*$/gm, "");
-  const keys: string[] = [];
-  for (const line of withoutComments.split("\n")) {
+  const lines = withoutComments.split("\n");
+  const hits: { name: string; line: number }[] = [];
+  lines.forEach((line, i) => {
     const m = /^ {2}([A-Za-z_][A-Za-z0-9_]*):/.exec(line);
-    if (m?.[1]) keys.push(m[1]);
-  }
-  return keys;
+    if (m?.[1]) hits.push({ name: m[1], line: i });
+  });
+  const keys = hits.map((hit, i) => {
+    // A declaration may wrap, so read to the START of the next key (or the
+    // end of the literal) rather than assuming one line per key.
+    const until = hits[i + 1]?.line ?? lines.length;
+    const declaration = lines.slice(hit.line, until).join("\n");
+    return { name: hit.name, optional: /\.(optional|nullish)\(\)/.test(declaration) };
+  });
+  return { keys, strict };
 }
+
+const keyNames = (source: string, symbol: string): string[] =>
+  declaredKeys(source, symbol).keys.map((k) => k.name);
 
 describe("packToTemplateSkeleton — the pack schema is a superset of the template schema", () => {
   const source = readFileSync(TEMPLATE_SCHEMA_PATH, "utf8");
 
   it("the extraction is not vacuous — it finds real keys, and throws on a rename", () => {
-    const compKeys = declaredKeys(source, "CompetitionTemplate");
-    const divKeys = declaredKeys(source, "TemplateDivision");
+    const compKeys = keyNames(source, "CompetitionTemplate");
+    const divKeys = keyNames(source, "TemplateDivision");
+    const stageKeys = keyNames(source, "TemplateStage");
     // The zero-key trap this test exists to make impossible.
     expect(compKeys.length).toBeGreaterThan(0);
     expect(divKeys.length).toBeGreaterThan(0);
+    expect(stageKeys.length).toBeGreaterThan(0);
     // Sentinels: an extraction that returned garbage (comment prose, say)
     // would still have a non-zero length, so pin one load-bearing key each.
     expect(compKeys).toContain("divisions");
     expect(divKeys).toContain("sportKey");
+    expect(stageKeys).toContain("kind");
     expect(() => declaredKeys(source, "ThisSymbolDoesNotExist")).toThrow(/renamed or reshaped/);
+  });
+
+  it("the optionality read is not vacuous — TemplateStage has both required and optional keys", () => {
+    // Without this, a broken optionality parse that marked everything optional
+    // would make the required-key check below assert nothing at all.
+    const { keys } = declaredKeys(source, "TemplateStage");
+    expect(keys.filter((k) => k.optional).length).toBeGreaterThan(0);
+    expect(keys.filter((k) => !k.optional).length).toBeGreaterThan(0);
   });
 
   it("every declared CompetitionTemplate key is produced by the skeleton", () => {
     const skeleton = packToTemplateSkeleton(parsed(basePack()));
-    for (const key of declaredKeys(source, "CompetitionTemplate")) {
+    for (const key of keyNames(source, "CompetitionTemplate")) {
       expect(Object.keys(skeleton), `skeleton is missing CompetitionTemplate key "${key}"`).toContain(key);
     }
   });
@@ -785,8 +1500,54 @@ describe("packToTemplateSkeleton — the pack schema is a superset of the templa
     const skeleton = packToTemplateSkeleton(parsed(basePack()));
     const division = skeleton.divisions[0];
     expect(division).toBeDefined();
-    for (const key of declaredKeys(source, "TemplateDivision")) {
+    for (const key of keyNames(source, "TemplateDivision")) {
       expect(Object.keys(division ?? {}), `skeleton division is missing TemplateDivision key "${key}"`).toContain(key);
+    }
+  });
+
+  it("every REQUIRED TemplateStage key is produced by the skeleton's stages", () => {
+    // Review round 1, minor item. The stage objects were proven against
+    // nothing. Only the required keys are asserted here: `size`, `groups`,
+    // `points` and `scheduleDefaults` are catalog sugar a pack carries no data
+    // for, and the template declares all four optional — emitting them empty
+    // would be inventing values, not carrying them.
+    const skeleton = packToTemplateSkeleton(parsed(basePack()));
+    const required = declaredKeys(source, "TemplateStage").keys.filter((k) => !k.optional);
+    expect(required.length).toBeGreaterThan(0);
+    for (const stage of skeleton.divisions[0]?.stages ?? []) {
+      for (const key of required) {
+        expect(Object.keys(stage), `skeleton stage is missing required TemplateStage key "${key.name}"`).toContain(key.name);
+      }
+    }
+  });
+
+  it("TemplateStage is .strict(), so a stray skeleton key would be REFUSED — assert there are none", () => {
+    // This is the direction that actually bites for a strict schema: a missing
+    // optional key is fine, an extra key is a hard parse failure. Asserting
+    // `.strict()` itself means the day the product drops it, this test says so
+    // rather than silently guarding nothing.
+    const { keys, strict } = declaredKeys(source, "TemplateStage");
+    expect(strict, "TemplateStage is no longer .strict() — re-read why this check exists").toBe(true);
+    const declared = new Set(keys.map((k) => k.name));
+    const skeleton = packToTemplateSkeleton(parsed(basePack()));
+    for (const stage of skeleton.divisions[0]?.stages ?? []) {
+      for (const key of Object.keys(stage)) {
+        expect(declared, `skeleton stage emits "${key}", which TemplateStage does not declare`).toContain(key);
+      }
+    }
+  });
+
+  it("the skeleton emits no key the root or division schemas do not declare", () => {
+    const skeleton = packToTemplateSkeleton(parsed(basePack()));
+    const rootDeclared = new Set(keyNames(source, "CompetitionTemplate"));
+    for (const key of Object.keys(skeleton)) {
+      expect(rootDeclared, `skeleton emits root key "${key}", undeclared by CompetitionTemplate`).toContain(key);
+    }
+    const divDeclared = new Set(keyNames(source, "TemplateDivision"));
+    for (const division of skeleton.divisions) {
+      for (const key of Object.keys(division)) {
+        expect(divDeclared, `skeleton emits division key "${key}", undeclared by TemplateDivision`).toContain(key);
+      }
     }
   });
 

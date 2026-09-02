@@ -125,6 +125,18 @@
 //    check below — so a new key in the engine reds `tsc`, and the two lists
 //    cannot drift apart in either direction.
 //
+// 9. A STREAM DECLARES ITS SIDES. `foldMatch(module, cfg, lineups, events)`
+//    takes `LineupPair` as a REQUIRED argument (`core/events.ts:445-451`;
+//    `Lineup = { entrantId, slots }` at `core/types.ts:226-230`), and stage-0
+//    folds every stream in process. A stream that named only its fixture
+//    `ext_key` would force the sides to be recovered by re-running the
+//    scheduling generator over the pack's seeds — an undeclared dependency on
+//    a different subsystem, silently deciding oracles. So `streams[].home` /
+//    `.away` are required entrant refs, and `streams[].lineups` optionally
+//    carries the real per-fixture team sheets (needed by the concussion and
+//    suspension oracles, which read the kernel's squad state rather than a
+//    season roster).
+//
 // Runtime constraints (B02 GLOBAL.md): no TS `enum`, no `namespace`, no
 // emit-dependent syntax — this file is read by `node
 // --experimental-strip-types`. Every relative import carries `.ts`.
@@ -187,11 +199,30 @@ export type PackPersonLane = z.infer<typeof PackPersonLane>;
 export const PackEntrantKind = z.enum(["team", "individual", "pair"]);
 export type PackEntrantKind = z.infer<typeof PackEntrantKind>;
 
-/** Bench doctrine (`_RULES.md` §3, GLOBAL.md): exactly two values, never
- *  disguised. A reconstructed stream flagged `"real"` is undetectable by
- *  code, so the only thing a validator can enforce is that the flag is
- *  PRESENT — which is why this has no default. */
-export const PackProvenance = z.enum(["real", "reconstructed"]);
+/** Bench doctrine (`_RULES.md` §3, GLOBAL.md): provenance is never disguised.
+ *  A reconstructed stream flagged `"real"` is undetectable by code, so the
+ *  only thing a validator can enforce is that the flag is PRESENT — which is
+ *  why this has no default.
+ *
+ *  - `"real"`      the stream is the historical record, event for event.
+ *  - `"reconstructed"` a legal sequence generated to fold to the EXACT real
+ *                  score, because the per-rally sequence was never archived.
+ *  - `"synthetic"` the stream models no real event at all. Added for B03r
+ *                  (`bench-prompts/B03r-registration-layer.md` §1), whose
+ *                  registration-driven fixtures are invented by construction.
+ *
+ *  GLOBAL.md states the vocabulary as two values; `"synthetic"` was added on
+ *  a coordinator instruction in review round 1, ahead of the B06 freeze. It
+ *  does not weaken the doctrine — the doctrine is that the flag tells the
+ *  truth, and a third, MORE honest bucket for "this never happened" is the
+ *  doctrine applied, not relaxed. Flagged in the task report so the owner
+ *  sees the vocabulary changed.
+ *
+ *  Distinct from `meta.synthetic`, which is PACK-scoped ("this pack describes
+ *  no real tournament"). A real suite pack may carry a synthetic stream; a
+ *  synthetic pack may carry a stream flagged `"real"`, meaning that stream is
+ *  the authored ground truth within the fixture. */
+export const PackProvenance = z.enum(["real", "reconstructed", "synthetic"]);
 export type PackProvenance = z.infer<typeof PackProvenance>;
 
 /** The 19 comparator keys the competition engine's tiebreaker registry
@@ -271,10 +302,12 @@ export const PackOrg = z.strictObject({
     .min(1)
     .max(80)
     .regex(/^[a-z0-9][a-z0-9-]*$/, "slug is lower-case kebab"),
-  /** IANA zone the real tournament was played in. Not optional: every
-   *  historical start time in `historicalAssignment` is meaningless without
-   *  one, and "assume UTC" is how a certificate silently shifts by hours. */
-  timezone: z.string().min(1).max(60).default("UTC"),
+  /** IANA zone the real tournament was played in. REQUIRED, with no default:
+   *  every historical start time in `historicalAssignment` is meaningless
+   *  without one, and "assume UTC" is exactly how a feasibility certificate
+   *  silently shifts by hours. A `.default("UTC")` here would have been that
+   *  assumption wearing the comment that forbids it (review round 1, I3). */
+  timezone: z.string().min(1).max(60),
 });
 export type PackOrg = z.infer<typeof PackOrg>;
 
@@ -347,6 +380,29 @@ export const PackDivision = z.strictObject({
   cfgOverrides: z.record(z.string(), PackJsonValue).default({}),
   tiebreakers: z.array(PackTiebreakerKey).optional(),
   stages: z.array(PackStage).min(1),
+  // ---- PRE-FREEZE RESERVATION for B03r (registration layer) ----
+  // `divisions[].entry: "admin" | "registration-api" | "registration-ui"`,
+  // default `admin` — `designs/2026-08-27-bench-customer-journey-design.md`
+  // §3 and §4, and `bench-prompts/B03r-registration-layer.md` §1. The CLI's
+  // `--entry` overrides it at run time; this is the pack's own declaration.
+  entry: z.enum(["admin", "registration-api", "registration-ui"]).default("admin"),
+  // ---- PRE-FREEZE RESERVATION for B04 (scheduling layer) ----
+  // "apply the pack's `ScheduleConfig` per division"
+  // (`bench-prompts/B04-scheduling-layer.md` §1); the knob vocabulary is
+  // bench design §5, whose authority is `ScheduleConfig` in
+  // `apps/web/src/server/api-v1/schemas.ts`.
+  //
+  // Carried OPAQUE, exactly like `stages[].config` and `stages[].progression`,
+  // and for the same reason: a second copy of that vocabulary here is how two
+  // shapes of one fact drift apart, and it is ~20 knobs deep with its own
+  // migration history (`courts` and `blackouts[].court` both moved from names
+  // to real ids in V374).
+  //
+  // Court and venue references inside it use the SAME `@`-sigil convention as
+  // event payloads (header note 6) — `ScheduleConfig.courts` is an array of
+  // real court UUIDs that do not exist at authoring time — and the sigil is
+  // checked here against the pack's declared venues and courts.
+  scheduleConfig: z.record(z.string(), PackJsonValue).optional(),
 });
 export type PackDivision = z.infer<typeof PackDivision>;
 
@@ -362,6 +418,18 @@ export const PackPerson = z.strictObject({
   /** ISO-3166 alpha-3 where the real record gives one (squad lists are
    *  routinely published by nation). Display-only. */
   countryCode: z.string().length(3).optional(),
+  // ---- PRE-FREEZE RESERVATION for B03r (registration layer) ----
+  // Shapes taken verbatim from
+  // `designs/2026-08-27-bench-customer-journey-design.md` §4:
+  //   persons[].dob?: string        // ISO date
+  //   persons[].gender?: "m"|"f"
+  // "required when any division the person enters carries an age band /
+  // category" — that CONDITIONAL requirement is a stage-0 funnel rule B03r
+  // owns (design §4's five checks), not a shape rule, so both stay optional
+  // here. Declared now because PackSchema freezes at the end of B06 and an
+  // additive change after that is an owner escalation.
+  dob: z.iso.date().optional(),
+  gender: z.enum(["m", "f"]).optional(),
 });
 export type PackPerson = z.infer<typeof PackPerson>;
 
@@ -431,17 +499,188 @@ export const PackReconstruction = z.strictObject({
 });
 export type PackReconstruction = z.infer<typeof PackReconstruction>;
 
+/** One person on one side's team sheet FOR THIS FIXTURE. Mirrors the engine's
+ *  `LineupSlot` (`packages/engine/src/core/types.ts:179-223`) with `personId`
+ *  replaced by a pack ref.
+ *
+ *  `orderNo` is optional here and defaults to the member's 1-based position in
+ *  its side's array — the same "array order IS the ordinal" rule the pack
+ *  applies to event `seq` (header note 2), and for the same reason: two
+ *  sources of truth for one fact drift. The engine requires `orderNo`, so a
+ *  consumer building a real `LineupSlot` substitutes `index + 1` when it is
+ *  absent. `slot` defaults to `"starting"`; a bench player says so.
+ *
+ *  `role` is the engine's `"player" | "coach" | "staff"` slot role, which is
+ *  how a coach reaches a team sheet without entering a playing projection
+ *  (S3/#426 ruling 3). `pairOrder` is DECLARED order within a pair
+ *  (`core/types.ts:222`) and lives here rather than on `PackRosterMember`,
+ *  because it is a lineup fact: `entrant_members` has no such column
+ *  (V213 carries only squad_number / default_position_key / is_captain /
+ *  roles). */
+export const PackLineupSlot = z.strictObject({
+  person: PackRef,
+  slot: z.enum(["starting", "bench"]).default("starting"),
+  orderNo: z.number().int().positive().optional(),
+  positionKey: z.string().min(1).max(60).optional(),
+  roles: z.array(z.string().min(1).max(60)).default([]),
+  squadNumber: z.number().int().nonnegative().max(999).optional(),
+  role: z.enum(["player", "coach", "staff"]).optional(),
+  pairOrder: z.number().int().positive().optional(),
+});
+export type PackLineupSlot = z.infer<typeof PackLineupSlot>;
+
 export const PackStream = z.strictObject({
   /** Which division's fixture this is. Required because `ext_key` is unique
    *  per division, not globally, and because the product's own resolver
    *  looks up `division_id + ext_key` (header notes 4 and 5). */
   divisionRef: PackRef,
   fixtureExtKey: PackExtKey,
+  /**
+   * WHO PLAYED, and on which side. Required — see header note 9.
+   *
+   * `foldMatch` takes `LineupPair` as a REQUIRED argument
+   * (`packages/engine/src/core/events.ts:445-451`), and stage-0 folds every
+   * stream in process, so without these the sides can only be recovered by
+   * re-running the scheduling generator against the pack's seeds — an
+   * undeclared dependency on a completely different subsystem, and one that
+   * silently decides oracles. It is not hypothetical: `generic.result`'s
+   * `p1Score` maps to HOME (`sports/generic/generic.ts:113-114`), and a
+   * multi-leg round robin MIRRORS home/away on even legs
+   * (`scheduling/roundrobin.ts` — `if (leg % 2 === 0) [home, away] = [away, home]`),
+   * so the same `{p1Score: 3, p2Score: 1}` names a different winner in leg 1
+   * and leg 2. The pack must say which.
+   */
+  home: PackRef,
+  away: PackRef,
   provenance: PackProvenance,
   reconstruction: PackReconstruction.optional(),
+  /**
+   * The real team sheets for this fixture, where the record gives them.
+   *
+   * OPTIONAL, because an entrant-level sport (boardgame, generic, carrom) has
+   * nothing to put here and the seeding layer can synthesise a one-slot
+   * lineup from the entrant's roster. REQUIRED IN PRACTICE for the oracles
+   * that read the squad: a `core.lineup.replacement` charged to the
+   * `"concussion"` exemption, and the discipline oracle asserting the real
+   * suspended player is absent from a specific fixture's sheet, both need a
+   * per-fixture sheet rather than a season roster.
+   */
+  lineups: z
+    .strictObject({
+      home: z.array(PackLineupSlot).min(1),
+      away: z.array(PackLineupSlot).min(1),
+    })
+    .optional(),
   events: z.array(PackEvent).min(1),
 });
 export type PackStream = z.infer<typeof PackStream>;
+
+// ---------------------------------------------------------------------------
+// Venues, officials and claim invites
+//
+// PRE-FREEZE RESERVATIONS. Nothing in v1 populates these; they are declared
+// now because PackSchema freezes at the end of B06 and every one of them has
+// a named consumer session already. Every field below is copied from an
+// authored source and cited — nothing here is invented. Two things a later
+// session might expect and will NOT find, because no authored source gives
+// them a shape, are listed in this task's report instead.
+// ---------------------------------------------------------------------------
+
+/** One court. Fields from `CreateCourt` (`apps/web/src/server/api-v1/
+ *  schemas.ts`): `name`, `sort`, `tags` — the last bounded by
+ *  `RequiredCourtTags`, `z.array(z.string().min(1).max(40)).max(50)`. */
+export const PackCourt = z.strictObject({
+  ref: PackRef,
+  name: z.string().min(1).max(200),
+  sort: z.number().int().optional(),
+  tags: z.array(z.string().min(1).max(40)).max(50).default([]),
+});
+export type PackCourt = z.infer<typeof PackCourt>;
+
+/** One venue and its courts. Fields from `CreateVenue` (`name`, `address`,
+ *  `sort`). Consumers: B03 seeds them (bench design §10's pre-flight seeds a
+ *  venue/court chain today in `lib/suites/tiny.ts`), and B04's independent
+ *  checker needs court identity to detect a double-booking
+ *  (`bench-prompts/B04-scheduling-layer.md` §2). Design §5's suite matrix is
+ *  the requirement: "9 stadiums as courts", "18 courts", "many tables to few".
+ *
+ *  This is deliberately SEPARATE from `historicalAssignment[].venue`, which
+ *  stays free text: that field records where the REAL WORLD played a fixture
+ *  (often a stadium the bench never seeds), while these are the venues the
+ *  bench creates and schedules onto. Conflating them would make the
+ *  feasibility certificate assert against the bench's own fixtures instead of
+ *  history's. */
+export const PackVenue = z.strictObject({
+  ref: PackRef,
+  name: z.string().min(1).max(200),
+  address: z.string().max(500).optional(),
+  sort: z.number().int().optional(),
+  courts: z.array(PackCourt).min(1),
+});
+export type PackVenue = z.infer<typeof PackVenue>;
+
+/** A blackout date for one official — one `official_availability` row
+ *  (`db/migration/deltas/V284__official_onboarding.sql:28-37`: `date`,
+ *  `status` CHECK-constrained to the single value `'unavailable'`, `note`,
+ *  and `unique (official_id, date)`). `status` is not modelled: a row IS the
+ *  unavailability, and the column admits exactly one value. */
+export const PackOfficialUnavailability = z.strictObject({
+  date: z.iso.date(),
+  note: z.string().min(1).max(200).optional(),
+});
+
+/** One official's named assignment to a fixture. Bench design §9 P1: "the
+ *  final's official == the real final's official" is the oracle this exists
+ *  to make expressible. `roleKey` is one of the official's own `roleKeys`. */
+export const PackOfficialAssignment = z.strictObject({
+  divisionRef: PackRef,
+  fixtureExtKey: PackExtKey,
+  roleKey: z.string().min(1).max(60).optional(),
+});
+
+/** A real match official. Fields from `CreateOfficial`
+ *  (`api-v1/schemas.ts`): `display_name`, `person_id`, `role_keys`
+ *  (default `["referee"]`), `max_per_day`. Consumers: B03 §4 seeds officials
+ *  and their blackouts; B04 §2's checker asserts no official double-booking;
+ *  bench design §9 P1 owns the scenarios.
+ *
+ *  `person` is required and must name a person with `lane: "official"` —
+ *  design §9 P1 says officials are seeded in that lane, and `persons.lane`
+ *  admits it (`V348`, widened by `V356`). A pack that put a player-lane
+ *  person here would seed an official the product's own lane split says is
+ *  not one.
+ *
+ *  NOT modelled, deliberately: any auto-assign-vs-manual switch. B03 §4 says
+ *  "auto-assign where the pack says, manual where named", but no authored
+ *  source gives that switch a shape, and the distinction is already carried
+ *  by the data — an official with named `assignments` is manual, one without
+ *  is left to `autoAssignOfficials`. Recorded in the task report. */
+export const PackOfficial = z.strictObject({
+  ref: PackRef,
+  person: PackRef,
+  displayName: z.string().min(1).max(200),
+  roleKeys: z.array(z.string().min(1).max(60)).min(1).default(["referee"]),
+  maxPerDay: z.number().int().positive().optional(),
+  unavailable: z.array(PackOfficialUnavailability).default([]),
+  assignments: z.array(PackOfficialAssignment).default([]),
+});
+export type PackOfficial = z.infer<typeof PackOfficial>;
+
+/** A player-claim invite for one of the suite's stars. Bench design §9 P2:
+ *  "`pc_` claim invites for ~3 stars/suite; accepted via magic-link as fresh
+ *  users; claimed profile shows the real stats". The request body is
+ *  `CreateClaimInvite = z.object({ email })` (`api-v1/schemas.ts:553`); the
+ *  `pc_` prefix is `CLAIM_PREFIX` (`usecases/person-claims.ts:14`) and is
+ *  minted server-side, so it is not a pack field.
+ *
+ *  B03 §5 mints the invites; B05 accepts them. Named `claimInvites`, not
+ *  `claims`, because `PackClaim` already means an assertion about a fold and
+ *  one contract must not give one word two meanings. */
+export const PackClaimInvite = z.strictObject({
+  person: PackRef,
+  email: z.email().max(200),
+});
+export type PackClaimInvite = z.infer<typeof PackClaimInvite>;
 
 /** The feasibility-certificate input (design §6.3): where and when the real
  *  tournament actually played this fixture. `venue`/`court` are the REAL
@@ -604,11 +843,18 @@ export const PackClaim = z.discriminatedUnion("on", [
         c.loser !== undefined,
       { message: "an outcome claim must assert at least one of kind/method/winner/loser" },
     ),
-  /** A dotted path into the module's folded State, compared by deep equality.
-   *  This is what makes the four event-type-less specials assertable:
-   *  `revisedTarget` / `targetSource` for DLS, `expedite` for the ITTF
-   *  expedite system, the nested kernel's final-set shape for a match
-   *  tie-break. */
+  /** A dotted path into the MODULE's folded State, compared by deep equality.
+   *  Three of the event-type-less specials live here: `revisedTarget` /
+   *  `targetSource` for DLS (`cricket.ts:465-466`), `expedite` for the ITTF
+   *  expedite system (`setbased/kernel.ts:346`), and the deciding set's
+   *  `mtb` flag for a final-set match tie-break (`ClosedSet.mtb`,
+   *  `nested/kernel.ts`).
+   *
+   *  The root is `module.outcome`'s own state object — i.e. what `foldMatch`
+   *  RETURNS. It deliberately does NOT reach the kernel's squad bookkeeping:
+   *  `foldMatchWithStoppage` returns `{ state, stoppage, squads }`
+   *  (`core/events.ts:464`) and `squads` is a SIBLING of `state`, not a field
+   *  on it. Use the `squads` claim below for that. */
   z.strictObject({
     on: z.literal("state"),
     path: z
@@ -632,6 +878,45 @@ export const PackClaim = z.discriminatedUnion("on", [
     field: z.enum(["played", "won", "drawn", "lost", "points"]),
     equals: z.number(),
   }),
+  /**
+   * A number off ONE SIDE's kernel-folded squad bookkeeping —
+   * `SideSquad.subsUsed` or `SideSquad.exemptUsed[<key>]`
+   * (`packages/engine/src/core/lineup.ts:90-101`).
+   *
+   * This branch exists because the CONCUSSION SUBSTITUTE special is otherwise
+   * inexpressible. It has no event type of its own: it is a generic
+   * `core.lineup.replacement` charged to the named exemption string
+   * `"concussion"`, and the only place that charge is observable is
+   * `exemptUsed`, which the kernel returns as a field SEPARATE from the module
+   * state (`foldMatchWithStoppage` -> `{ state, stoppage, squads }`,
+   * `core/events.ts:464`). A `{on: "state", path: "..."}` claim can never
+   * reach it. `subsUsed` is included alongside because the two are the
+   * SEPARATION the exemption channel exists to express — an exempt
+   * replacement deliberately does not count against `maxSubs`
+   * (`lineup.ts:93-96`) — and a claim that pins only one of them cannot see a
+   * replacement charged to the wrong channel.
+   *
+   * Addressed by ENTRANT rather than by `"home"`/`"away"`, like every other
+   * claim branch; the stream's own declared `home`/`away` (header note 9)
+   * makes the mapping to `SquadState`'s two sides total.
+   */
+  z
+    .strictObject({
+      on: z.literal("squads"),
+      entrant: PackRef,
+      field: z.enum(["subsUsed", "exemptUsed"]),
+      /** The exemption KEY — `"concussion"` (cricket's cap is
+       *  `lineupChanges.concussionReplacements`, `cricket.ts:103`),
+       *  `"libero"` (FIVB 19.3.2.1), … Required for `exemptUsed`, and
+       *  meaningless on `subsUsed`, which is a single scalar. */
+      exemption: z.string().min(1).max(60).optional(),
+      equals: z.number().nonnegative(),
+    })
+    .refine((c) => (c.field === "exemptUsed") === (c.exemption !== undefined), {
+      message:
+        'a squads claim on "exemptUsed" must name the exemption key, and a claim on "subsUsed" must not',
+      path: ["exemption"],
+    }),
 ]);
 export type PackClaim = z.infer<typeof PackClaim>;
 
@@ -782,6 +1067,10 @@ const PackShape = z.strictObject({
   entrants: z.array(PackEntrant).min(2),
   streams: z.array(PackStream).default([]),
   historicalAssignment: z.array(PackHistoricalAssignment).optional(),
+  // ---- PRE-FREEZE RESERVATIONS (see the block above each type) ----
+  venues: z.array(PackVenue).optional(),
+  officials: z.array(PackOfficial).optional(),
+  claimInvites: z.array(PackClaimInvite).optional(),
   expected: PackExpected,
   registration: PackRegistration.optional(),
   meta: PackMeta,
@@ -1007,6 +1296,55 @@ function checkStreams(p: PackShapeOut, ctx: Ctx): void {
       issue(ctx, ["streams", i, "reconstruction"], `only a stream with provenance "reconstructed" may carry a reconstruction seed`);
     }
     const entrantRefs = entrantsByDivision.get(s.divisionRef) ?? new Set<string>();
+
+    // Header note 9 — the sides. Without these the fold's required LineupPair
+    // has to be re-derived from the scheduling generator.
+    for (const side of ["home", "away"] as const) {
+      if (!entrantRefs.has(s[side])) {
+        issue(ctx, ["streams", i, side], `unknown entrant ref "${s[side]}" for division "${s.divisionRef}"`);
+      }
+    }
+    if (s.home === s.away) {
+      issue(ctx, ["streams", i, "away"], `a fixture cannot have "${s.home}" on both sides`);
+    }
+
+    // Per-fixture team sheets, where the record gives them.
+    if (s.lineups !== undefined) {
+      for (const side of ["home", "away"] as const) {
+        const slots = s.lineups[side];
+        const seenPerson = new Set<string>();
+        const seenSquad = new Set<number>();
+        const seenOrder = new Set<number>();
+        slots.forEach((slot, j) => {
+          const at = ["streams", i, "lineups", side, j] as (string | number)[];
+          // A lineup MAY name a person who was never on the roster — the
+          // product allows exactly that (api-v1 `CreateEntrant`/`PutLineup`'s
+          // `eligibility_override`: "a lineup can name a person who was never
+          // gated at roster time"). So the check is that the pack DECLARED
+          // them, not that they are rostered.
+          if (!personRefs.has(slot.person)) {
+            issue(ctx, [...at, "person"], `unknown person ref "${slot.person}"`);
+          }
+          if (seenPerson.has(slot.person)) {
+            issue(ctx, [...at, "person"], `person "${slot.person}" appears twice on the ${side} sheet`);
+          }
+          seenPerson.add(slot.person);
+          if (slot.squadNumber !== undefined) {
+            if (seenSquad.has(slot.squadNumber)) {
+              issue(ctx, [...at, "squadNumber"], `duplicate squad number ${slot.squadNumber} on the ${side} sheet`);
+            }
+            seenSquad.add(slot.squadNumber);
+          }
+          if (slot.orderNo !== undefined) {
+            if (seenOrder.has(slot.orderNo)) {
+              issue(ctx, [...at, "orderNo"], `duplicate orderNo ${slot.orderNo} on the ${side} sheet`);
+            }
+            seenOrder.add(slot.orderNo);
+          }
+        });
+      }
+    }
+
     const known = (ref: string): boolean => entrantRefs.has(ref) || personRefs.has(ref);
     s.events.forEach((ev, j) => {
       const bad: string[] = [];
@@ -1063,9 +1401,44 @@ function checkExpected(p: PackShapeOut, ctx: Ctx): void {
     if ("loser" in o && !entrantIn(m.divisionRef, o.loser)) {
       issue(ctx, [...base, "outcome", "loser"], `unknown entrant ref "${o.loser}" for division "${m.divisionRef}"`);
     }
+    // The two sides this fixture's stream declares (header note 9), used to
+    // scope perSide below. Undefined only when the stream is missing, which
+    // the fixtureExtKey check above has already reported.
+    const stream = p.streams.find(
+      (st) => fixtureKey(st.divisionRef, st.fixtureExtKey) === fixtureKey(m.divisionRef, m.fixtureExtKey),
+    );
+    if (m.perSide !== undefined && stream !== undefined) {
+      // perSide is [home, away], in the stream's own declared order. This is a
+      // PACK convention, not an engine one — `ScoreSummary.perSide`'s order is
+      // not contractual, so a validator must match the module's summary by
+      // ENTRANT, never by index. Its job here is to pin the fixture's
+      // orientation in a second place: a stream whose sides were flipped (the
+      // even-leg mirror, header note 9) then contradicts its own score lines
+      // instead of quietly asserting the wrong winner.
+      if (m.perSide.length !== 2) {
+        issue(ctx, [...base, "perSide"], `perSide names ${m.perSide.length} sides; a fixture has exactly two`);
+      } else if (m.perSide[0]?.entrant !== stream.home || m.perSide[1]?.entrant !== stream.away) {
+        issue(
+          ctx,
+          [...base, "perSide"],
+          `perSide is [home, away] — expected ["${stream.home}", "${stream.away}"], got ` +
+            `[${m.perSide.map((x) => `"${x.entrant}"`).join(", ")}]`,
+        );
+      }
+    }
     m.perSide?.forEach((side, j) => {
       if (!entrantIn(m.divisionRef, side.entrant)) {
         issue(ctx, [...base, "perSide", j, "entrant"], `unknown entrant ref "${side.entrant}" for division "${m.divisionRef}"`);
+      } else if (stream !== undefined && side.entrant !== stream.home && side.entrant !== stream.away) {
+        // A score line for an entrant that did not play this fixture is an
+        // oracle about the wrong match. Reachable in a real pack: entrant refs
+        // are division-scoped, so a copy-paste from the neighbouring fixture
+        // resolves fine and asserts nothing true.
+        issue(
+          ctx,
+          [...base, "perSide", j, "entrant"],
+          `entrant "${side.entrant}" did not play fixture "${m.fixtureExtKey}" — its sides are "${stream.home}" and "${stream.away}"`,
+        );
       }
     });
   });
@@ -1146,7 +1519,7 @@ function checkExpected(p: PackShapeOut, ctx: Ctx): void {
       if (claim.on === "outcome") {
         if (claim.winner !== undefined) refs.push(["winner", claim.winner]);
         if (claim.loser !== undefined) refs.push(["loser", claim.loser]);
-      } else if (claim.on === "standings") {
+      } else if (claim.on === "standings" || claim.on === "squads") {
         refs.push(["entrant", claim.entrant]);
       }
       for (const [field, ref] of refs) {
@@ -1173,6 +1546,100 @@ function checkHistoricalAssignment(p: PackShapeOut, ctx: Ctx): void {
       issue(ctx, ["historicalAssignment", i, "fixtureExtKey"], `duplicate historical assignment for "${a.fixtureExtKey}" in division "${a.divisionRef}"`);
     }
     seen.add(composite);
+  });
+}
+
+/** The pre-freeze reservations: venues/courts, officials, claim invites, and
+ *  the `@`-sigilled court refs inside a division's opaque `scheduleConfig`.
+ *
+ *  These rules ship WITH the shapes rather than after them. A declared block
+ *  with no rules and no tests is the inert-seam failure this programme keeps
+ *  shipping — the shape exists, nothing exercises it, and the first session to
+ *  populate it discovers the contract never meant anything. */
+function checkReservations(p: PackShapeOut, ctx: Ctx): void {
+  const personLane = new Map(p.persons.map((person) => [person.ref, person.lane]));
+  const streamKeys = new Set(p.streams.map((st) => fixtureKey(st.divisionRef, st.fixtureExtKey)));
+
+  // ---- venues and courts ----
+  // Court refs are unique across ALL venues, not per venue: a division's
+  // `scheduleConfig.courts` names them with no venue qualifier, so two venues
+  // holding a "court-1" would make that reference ambiguous.
+  const venueRefs = new Set<string>();
+  const courtRefs = new Set<string>();
+  p.venues?.forEach((v, i) => {
+    if (venueRefs.has(v.ref)) issue(ctx, ["venues", i, "ref"], `duplicate venue ref "${v.ref}"`);
+    venueRefs.add(v.ref);
+    v.courts.forEach((c, j) => {
+      if (courtRefs.has(c.ref)) {
+        issue(ctx, ["venues", i, "courts", j, "ref"], `duplicate court ref "${c.ref}" — court refs are unique across ALL venues, because a division's scheduleConfig names them unqualified`);
+      }
+      courtRefs.add(c.ref);
+    });
+  });
+
+  // ---- @-sigilled court/venue refs inside the opaque scheduleConfig ----
+  const knownPlace = (ref: string): boolean => courtRefs.has(ref) || venueRefs.has(ref);
+  p.divisions.forEach((d, i) => {
+    if (d.scheduleConfig === undefined) return;
+    const bad: string[] = [];
+    unresolvedPayloadRefs(d.scheduleConfig, knownPlace, bad);
+    for (const ref of bad) {
+      issue(
+        ctx,
+        ["divisions", i, "scheduleConfig"],
+        `unknown pack ref "${ref}" — an @-prefixed string in scheduleConfig must name a declared venue or court`,
+      );
+    }
+  });
+
+  // ---- officials ----
+  const officialRefs = new Set<string>();
+  p.officials?.forEach((o, i) => {
+    if (officialRefs.has(o.ref)) issue(ctx, ["officials", i, "ref"], `duplicate official ref "${o.ref}"`);
+    officialRefs.add(o.ref);
+    const lane = personLane.get(o.person);
+    if (lane === undefined) {
+      issue(ctx, ["officials", i, "person"], `unknown person ref "${o.person}"`);
+    } else if (lane !== "official") {
+      issue(ctx, ["officials", i, "person"], `person "${o.person}" is lane "${lane}" — an official must be a person in the "official" lane`);
+    }
+    const roleKeys = new Set(o.roleKeys);
+    const seenDate = new Set<string>();
+    o.unavailable.forEach((u, j) => {
+      // Mirrors `unique (official_id, date)` on official_availability (V284).
+      if (seenDate.has(u.date)) {
+        issue(ctx, ["officials", i, "unavailable", j, "date"], `official "${o.ref}" declares ${u.date} unavailable twice`);
+      }
+      seenDate.add(u.date);
+    });
+    o.assignments.forEach((a, j) => {
+      if (!streamKeys.has(fixtureKey(a.divisionRef, a.fixtureExtKey))) {
+        issue(ctx, ["officials", i, "assignments", j, "fixtureExtKey"], `no stream declares fixture "${a.fixtureExtKey}" in division "${a.divisionRef}"`);
+      }
+      if (a.roleKey !== undefined && !roleKeys.has(a.roleKey)) {
+        issue(ctx, ["officials", i, "assignments", j, "roleKey"], `official "${o.ref}" is not declared for role "${a.roleKey}" (declares ${[...roleKeys].join(", ")})`);
+      }
+    });
+  });
+
+  // ---- claim invites ----
+  const claimedPersons = new Set<string>();
+  const claimedEmails = new Set<string>();
+  p.claimInvites?.forEach((c, i) => {
+    if (!personLane.has(c.person)) {
+      issue(ctx, ["claimInvites", i, "person"], `unknown person ref "${c.person}"`);
+    }
+    if (claimedPersons.has(c.person)) {
+      issue(ctx, ["claimInvites", i, "person"], `person "${c.person}" already has a claim invite`);
+    }
+    claimedPersons.add(c.person);
+    const email = c.email.toLowerCase();
+    if (claimedEmails.has(email)) {
+      // One email accepts one magic-link identity; two invites to it would
+      // race for the same fresh user (design §9 P2's accept flow).
+      issue(ctx, ["claimInvites", i, "email"], `email "${c.email}" is invited twice`);
+    }
+    claimedEmails.add(email);
   });
 }
 
@@ -1226,6 +1693,7 @@ export const PackSchema = PackShape.superRefine((p, ctx) => {
   checkStreams(p, ctx);
   checkExpected(p, ctx);
   checkHistoricalAssignment(p, ctx);
+  checkReservations(p, ctx);
   checkSources(p, ctx);
   checkRegistration(p, ctx);
 });

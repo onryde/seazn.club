@@ -66,6 +66,8 @@
     {
       "divisionRef": "d-tiny",
       "fixtureExtKey": "rr-r1-c1",
+      "home": "e-alpha",
+      "away": "e-bravo",
       "provenance": "real",
       "events": [
         { "type": "core.start" },
@@ -75,6 +77,8 @@
     {
       "divisionRef": "d-tiny",
       "fixtureExtKey": "rr-r2-c1",
+      "home": "e-bravo",
+      "away": "e-alpha",
       "provenance": "reconstructed",
       "events": [
         { "type": "core.start" },
@@ -87,6 +91,8 @@
     {
       "divisionRef": "d-tiny",
       "fixtureExtKey": "rr-r3-c1",
+      "home": "e-alpha",
+      "away": "e-bravo",
       "provenance": "real",
       "events": [
         { "type": "core.start" },
@@ -187,6 +193,11 @@
         "what": "The reconstructed stream (rr-r2-c1) is hand-written and therefore carries no reconstruction.seed.",
         "why": "Task 3 owns the deterministic generators; this file must not wait on them. A generated stream carries its seed so the same bytes come out on every machine.",
         "where": "streams[1].reconstruction"
+      },
+      {
+        "what": "Each stream declares its own home/away entrants rather than leaving them to be re-derived from the round-robin generator.",
+        "why": "foldMatch takes LineupPair as a required argument, and generic.result maps p1Score to HOME (sports/generic/generic.ts:113-114) while a multi-leg round robin mirrors home/away on even legs (scheduling/roundrobin.ts). rr-r2-c1 is leg 2, so its sides ARE swapped: without a declaration, the same payload would name a different winner depending on a generator this pack never mentions. B03 should assert the seeded fixture's sides match these.",
+        "where": "streams[].home / streams[].away"
       },
       {
         "what": "The expected table omits per-entrant metrics (for/against/diff).",
