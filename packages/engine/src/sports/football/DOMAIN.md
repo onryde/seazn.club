@@ -188,12 +188,12 @@ Nothing here was acted on.
    breaks — but they will read as raw snake_case until they get labels, in all
    four locale dictionaries.
 2. **New event types the pad must be able to emit**: `football.penalty` and
-   `football.sinbin.start`/`.end`, all tier-2/3 only (`scoring.match_timeline`
-   entitlement — they are declared at tier 2, and `requiredFeatureForEvent`
-   resolves the LOWEST tier declaring a type, so tier 3 re-listing them does
-   not move them onto band 3's key). Neither moves the score. The one event
-   that IS band-3-only, `football.shot`, carries band 3's own entitlement,
-   `scoring.ball_by_ball` (R3-3) — see the shots row above.
+   `football.sinbin.start`/`.end`, both declared at fidelity band 2
+   (`padSpec(cfg).fidelity` — W1/entitlements-v18, 2026-09-02: bands are a
+   UX-only filter now, not an entitlement; `requiredFeatureForEvent`, which
+   used to resolve the LOWEST tier declaring a type into a paywall key, is
+   deleted). Neither moves the score. `football.shot` is the one event at
+   band 3 — see the shots row above.
 3. **Facts the pad must prompt for**: the penalty `outcome` (required — there
    is no valid `football.penalty` without it); the sin-bin duration when
    `Cfg.sinBinMinutes` is not set; `addedMinutes` at each period marker.

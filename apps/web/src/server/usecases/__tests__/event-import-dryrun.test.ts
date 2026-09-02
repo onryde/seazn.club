@@ -181,7 +181,18 @@ describe.skipIf(!HAS_DB)("importEvents — guards and dry run", () => {
       import_id: "imp-entitlement-gone",
       streams: [{ fixture: { id: fixtureId }, events: [{ type: "cricket.ball", payload: {} }] }],
     });
-    expect(report.results[0]!.error?.code).not.toBe("import.entitlement");
+    // Fix round 1, M-1: pin the ACTUAL code, not just "not import.entitlement"
+    // — that alone passes when `error` is `undefined` or the code is
+    // anything at all. This fixture has no lineup (`startedCricketDivision
+    // WithFixture`'s own doc: seeded with zero members), so the dry-run fold
+    // itself refuses the bare `{}` payload with `WRONG_PHASE` before ever
+    // reaching a real ball — a structural fold rejection, observed directly
+    // (not assumed), pinned so both facts hold: not gated by entitlement, AND
+    // failing for the specific reason this test's title claims.
+    expect(report.results[0]!.error).toMatchObject({
+      code: "import.fold_rejected",
+      engineCode: "WRONG_PHASE",
+    });
   });
 
   // Final review C-2: a SECOND entitlement gate the fidelity map cannot

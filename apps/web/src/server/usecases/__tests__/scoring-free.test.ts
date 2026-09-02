@@ -204,7 +204,74 @@ describe.skipIf(!HAS_DB)("scoring is free on every plan (R9)", () => {
       // recorded via the assertion message rather than silently skipped, so
       // a future module that regresses to band-0-only is still visible here.
       expect(picked, `${sportModule.key}: no fidelity-banded event is reachable under its default cfg`).not.toBeNull();
+      // Fix round 1, I-2: a reachability test is satisfied by ANY value
+      // (house rule 19) — pin the BAND too, derived from the module's own
+      // declaration, never a table typed here. A module whose declared
+      // ceiling is >= 2 (a real paid-shaped band under the old model) must
+      // have picked an event AT that ceiling; boardgame/carrom/generic
+      // legitimately top out at band 1 (their real ceiling, confirmed via
+      // `module.padSpec(cfg).fidelity`), so they are correctly exempt, not
+      // silently passing.
+      const declaredMax = Math.max(...Object.values(sportModule.padSpec!(cfg).fidelity), 0);
+      if (declaredMax >= 2) {
+        expect(
+          picked!.band,
+          `${sportModule.key}: picked event should reach the module's declared ceiling (band ${declaredMax})`,
+        ).toBeGreaterThanOrEqual(2);
+      }
       await expect(recordTopBand(rig, sportModule, picked!)).resolves.toBeDefined();
     });
   }
+
+  // Fix round 1, I-1 (owner ruling, sanctioned): deleting
+  // `requiredFeatureForEvent` also deleted the write-side gate on
+  // `stats.player` — cricket.ts's own `{tier: 2, eventTypes:
+  // ["cricket.player.line"], entitlement: "stats.player"}`, a FOURTH key the
+  // old model gated, not three. The owner has ruled the new boundary is
+  // correct: scoring is free to WRITE, player-stats ANALYSIS stays paid to
+  // READ — `player-stats.ts`'s `divisionPlayerStats`/`personStats`/
+  // `personCareerStats` still gate `stats.player` on read, untouched by this
+  // task, and V390 does not drop its `plan_entitlements` rows (verified:
+  // still 3 rows, one per plan). This pins the new WRITE-side boundary.
+  //
+  // `cricket.player.line` is POST-decision only (`postDecisionTypes`, and its
+  // own padSpec panel is literally commented "Post-match") — `pickTopBand
+  // Reachable` above deliberately never reaches it (it excludes `"post"`-
+  // phase panels on purpose), so this is hand-built rather than routed
+  // through the generic per-module loop. It needs only ONE closed innings,
+  // not a fully decided match: `applyPlayerLine` only requires
+  // `state.innings[n].closed`.
+  it("cricket.player.line (Tier-2 scorecard, stats.player) is free to WRITE for a community org", async () => {
+    const rig = await makeCommunityRig("cricket");
+    await scoreEvent(rig.auth, rig.fixtureId, { expected_seq: 0, type: "core.start", payload: {} });
+    // One real ball — striker/nonStriker from the batting (home) side,
+    // bowler from the fielding (away) side, the same convention
+    // `recordTopBand`'s retry loop discovers empirically for `cricket.ball`
+    // in the loop above. `over`/`ballInOver` are never read by `apply()`
+    // (`CricketBall`'s own doc comment) — any value is fine.
+    const striker = rig.personIdsBySide[0][0]!;
+    const nonStriker = rig.personIdsBySide[0][1]!;
+    const bowler = rig.personIdsBySide[1][0]!;
+    const ball = await scoreEvent(rig.auth, rig.fixtureId, {
+      expected_seq: 1,
+      type: "cricket.ball",
+      payload: { over: 0, ballInOver: 1, striker, nonStriker, bowler, runs: { bat: 0 } },
+    });
+    const close = await scoreEvent(rig.auth, rig.fixtureId, {
+      expected_seq: ball.seq,
+      type: "cricket.innings.close",
+      payload: {},
+    });
+    // The line must match the ball's own outcome exactly: fine-grained
+    // per-ball tracking is populated for ANY recorded ball now (scoring
+    // detail is free to write for every org), and `applyPlayerLine` checks
+    // the submitted line against that tracked innings ledger, not against
+    // any entitlement.
+    const line = await scoreEvent(rig.auth, rig.fixtureId, {
+      expected_seq: close.seq,
+      type: "cricket.player.line",
+      payload: { innings: 1, person: striker, batting: { runs: 0, balls: 1 } },
+    });
+    expect(line.seq).toBe(close.seq + 1);
+  });
 });

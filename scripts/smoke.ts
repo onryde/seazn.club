@@ -16303,12 +16303,14 @@ async function appendScoreEvent(
  *   2. football.goal        — tallies the goal that decides it    (needs a play phase)
  *   3. football.period{HT}  — phase "H1" -> "H2"                  (WRONG_PHASE otherwise)
  *   4. football.period{FT}  — resolves from the ACCUMULATED score (WRONG_PHASE otherwise)
- * `football.goal`/`football.period` sit in football's OWN tier 0 (its
- * `fidelityTiers`), and `fidelity.ts`'s `requiredFeatureForEvent` treats tier
- * 0 AND tier 1 as equally free (`lowest.tier <= 1` → null) — this sequence
- * needs no Pro entitlement. It still runs on the Pro org only, matching the
- * coordinator's own scope for this pass; the free path keeps proving the
- * one-shot minimal path in `scorePadV2AppendSuite`, unchanged.
+ * `football.goal`/`football.period` sit at fidelity band 0 in football's
+ * `padSpec(cfg).fidelity`. W1 (entitlements v18, 2026-09-02) made every band
+ * free on every plan — `fidelity.ts`'s `requiredFeatureForEvent`, which used
+ * to treat tier 0/1 as free and gate the rest, is deleted — so this sequence
+ * needed no Pro entitlement even before, and needs none now. It still runs
+ * on the Pro org only, matching the coordinator's own scope for this pass;
+ * the free path keeps proving the one-shot minimal path in
+ * `scorePadV2AppendSuite`, unchanged.
  *
  * `expected_seq` for event N+1 is read from event N's OWN ack `seq` field —
  * never from a fresh GET .../state, and never through `appendScoreEvent`'s
@@ -16420,9 +16422,9 @@ async function footballDecidedSequenceSuite(admin: Session, proOrgId: string): P
  * reported outcome — never merely a 201. See `footballDecidedSequenceSuite`
  * above for the companion multi-event path this alone cannot cover.
  *
- * Sport chosen: generic. generic.ts's own `fidelityTiers` declares band/tier
- * 0 (the lowest granularity — module.ts's `FIDELITY[0] === "result"`, what
- * the design docs called "quick" before that three-word vocabulary was
+ * Sport chosen: generic. generic.ts's own `padSpec(cfg).fidelity` declares
+ * band 0 (the lowest granularity — module.ts's `FIDELITY[0] === "result"`,
+ * what the design docs called "quick" before that three-word vocabulary was
  * retired 2026-08-06 in favour of the closed 0-3 numeric scale) as EXACTLY
  * ONE event type: `generic.result` alone, nothing else. That event legally
  * folds from a fixture's initial "pre" phase (generic.ts's apply(): the only
@@ -16436,12 +16438,13 @@ async function footballDecidedSequenceSuite(admin: Session, proOrgId: string): P
  * `pagePlayoffSuite`'s own `decide()` helper and `v1Suite`'s
  * standings-decide loop already score fixtures elsewhere in this file.
  *
- * Tier 0 is free on every plan (fidelity.ts's `requiredFeatureForEvent`:
- * `core.*` is always free, and generic's tier 0 carries no `entitlement` at
- * all — `padSpec`'s own `fidelityEntitlements` is `{}` for generic) — so the
- * free half is expected to reach the SAME decided outcome as the Pro half,
- * with no plan flip. If it did not, that would be a finding to report, not
- * something to paper over with a Pro entitlement on the free org.
+ * Band 0 is free on every plan — since W1 (entitlements v18, 2026-09-02),
+ * EVERY band is free on every plan for every module: `fidelity.ts`'s
+ * `requiredFeatureForEvent`, which used to gate a band onto a paywall key, is
+ * deleted entirely. So the free half is expected to reach the SAME decided
+ * outcome as the Pro half, with no plan flip. If it did not, that would be a
+ * finding to report, not something to paper over with a Pro entitlement on
+ * the free org.
  */
 async function scorePadV2AppendSuite(admin: Session, proOrgId: string): Promise<void> {
   const genericConfig = { points: { w: 3, d: 1, l: 0 }, progressScore: false };

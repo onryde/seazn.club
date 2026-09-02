@@ -467,12 +467,19 @@ describe.skipIf(!HAS_DB)("event pass (v3/07 §3)", () => {
   // fallthrough rule ("keys missing from the pass matrix fall through to the
   // community plan") with `football.card`/`scoring.match_timeline` as the
   // still-Pro-only example — that key is deleted (scoring detail is free on
-  // every plan since R9), so it can no longer witness the rule. Swapped for
-  // `cricket.dls`, a Pro-only feature the pass matrix has NEVER named
-  // (verified against the seeded `event_pass` rows: no `cricket.dls` row
-  // exists, so it falls through to community's `false` exactly like
-  // `scoring.match_timeline` used to) — the rule is unchanged, only the
-  // witness moved to a key this wave did not touch.
+  // every plan since R9), so it can no longer witness the rule.
+  //
+  // Fix round 1, M-3: a first swap landed on `cricket.dls`, which the wave
+  // plan itself says W2 changes — a witness that would need moving again one
+  // wave later, and would then share a single point of failure with
+  // `scoring-dls-gate.test.ts` and the `MATRIX`'s own two `cricket.dls` rows.
+  // Swapped again, to `api.access` — confirmed absent from BOTH `event_pass`
+  // and `event_pass_l` (`plan_entitlements` query against the wave DB: zero
+  // rows), and out of scope for this entire programme (no task in this wave
+  // touches API keys), so this witness survives W2 untouched. `api.access`
+  // is also already the MATRIX's own established Pro-only probe two rows
+  // above (`case "api.access"`), so this reuses a pattern rather than
+  // inventing a new one.
   it("unlocks advanced formats on the passed comp; Pro-only features stay Pro", async () => {
     const { auth } = await seedOrg("community");
     const comp = await makeCompetition(auth, "PF");
@@ -485,17 +492,10 @@ describe.skipIf(!HAS_DB)("event pass (v3/07 §3)", () => {
     ).resolves.toBeDefined();
 
     // Keys missing from the pass matrix fall through to the community plan:
-    // `cricket.dls` remains a Pro upsell even on a passed comp.
-    const rig = await makeFixture(auth, comp.id, "cricket", {
-      dls: { enabled: true, edition: "standard" },
-    });
+    // `api.access` remains a Pro upsell even on a passed comp.
     await expect(
-      scoreEvent(auth, rig.fixtureId, {
-        expected_seq: 0,
-        type: "cricket.revise",
-        payload: { oversPerSide: 10 },
-      }),
-    ).rejects.toMatchObject({ status: 402, featureKey: "cricket.dls" });
+      createApiKey(auth, { name: "k", scopes: ["read"] }),
+    ).rejects.toMatchObject({ status: 402, featureKey: "api.access" });
   });
 
   it("is moot under Pro and revives after a downgrade", async () => {
