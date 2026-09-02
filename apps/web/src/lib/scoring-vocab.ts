@@ -92,9 +92,12 @@ export const EVENT_KEY: Record<string, MessageKey> = {
   "core.lineup.retirement": "event.core.lineup.retirement",
   "core.lineup.entry": "event.core.lineup.entry",
 
+  "badminton.expedite.start": "event.badminton.expedite.start", // R8/WS-R r2
   "badminton.game.summary": "event.badminton.game.summary",
   "badminton.rally": "event.badminton.rally",
   "badminton.sanction": "event.badminton.sanction",
+  "badminton.sub": "event.badminton.sub", // R8/WS-R r2
+  "badminton.timeout": "event.badminton.timeout", // R8/WS-R r2
 
   "boardgame.pairing": "event.boardgame.pairing",
   "boardgame.result": "event.boardgame.result",
@@ -152,6 +155,7 @@ export const EVENT_KEY: Record<string, MessageKey> = {
   "tabletennis.game.summary": "event.tabletennis.game.summary",
   "tabletennis.rally": "event.tabletennis.rally",
   "tabletennis.sanction": "event.tabletennis.sanction",
+  "tabletennis.sub": "event.tabletennis.sub", // R8/WS-R r2
   "tabletennis.timeout": "event.tabletennis.timeout",
 
   "tennis.game.award": "event.tennis.game.award",
@@ -160,6 +164,7 @@ export const EVENT_KEY: Record<string, MessageKey> = {
   "tennis.sanction": "event.tennis.sanction",
   "tennis.set_summary": "event.tennis.set_summary",
 
+  "volleyball.expedite.start": "event.volleyball.expedite.start", // R8/WS-R r2
   "volleyball.rally": "event.volleyball.rally",
   "volleyball.sanction": "event.volleyball.sanction",
   "volleyball.set.summary": "event.volleyball.set.summary",
@@ -691,8 +696,20 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   // dictionary copy with no entry in this list stays silently on the generic
   // `pad.ribbon.fallback` ("{event} recorded") forever, with nothing failing.
   // One key per event type this skin's own halves/tiles/sheets dispatch
-  // directly. `sub`/`expedite.start` stay on the fallback: BWF Law 16 has no
-  // substitution at all, so no config can turn one on.
+  // directly.
+  //
+  // R8/WS-R round 2: `sub` and `expedite.start` are REGISTERED now too, and
+  // the note that used to sit here ("BWF Law 16 has no substitution at all,
+  // so no config can turn one on") repeated, for these two types, the exact
+  // reasoning the paragraph below already records as WRONG for `timeout`.
+  // Both are real entries in this module's `eventSchemas` — `kernel.ts:1816`
+  // builds the same six-key action map for every set-based preset — so the
+  // engine ACCEPTS them, and an accepted type on the fallback prints
+  // "badminton.sub recorded" to a scoring desk. Reachability is a claim about
+  // config; membership in `eventSchemas` is a fact about the engine, and it
+  // is the one this list has to track. (Found by repointing the gate's
+  // derivation from `fidelityTiers`, which does not list these, at
+  // `eventSchemas`, which does.)
   //
   // `timeout` is REGISTERED, and the reasoning that once grouped it with those
   // two was wrong (review of PR #678). `records.timeouts` is a plain
@@ -704,9 +721,11 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   // recorded" at a scoring desk. That is the exact defect volleyball's own
   // `sub` block was fixed for a few blocks down; "unreachable" is a claim
   // about config, and config is the thing that varies.
+  "pad.badminton.ribbon.expedite.start", // R8/WS-R r2
   "pad.badminton.ribbon.game.summary",
   "pad.badminton.ribbon.rally",
   "pad.badminton.ribbon.sanction",
+  "pad.badminton.ribbon.sub", // R8/WS-R r2
   "pad.badminton.ribbon.timeout",
   // R5 — tap model S's own hint. `ScorebugHalf.hintKey` resolves through the
   // SAME `padLabel()` gate (scorebug.tsx) as the ribbon copy above, so an
@@ -966,6 +985,7 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   "pad.tabletennis.ribbon.game.summary",
   "pad.tabletennis.ribbon.rally",
   "pad.tabletennis.ribbon.sanction",
+  "pad.tabletennis.ribbon.sub", // R8/WS-R r2
   "pad.tabletennis.ribbon.timeout",
   "pad.tabletennis.ribbon.expedite.start",
   // R5/C2 — tap model S's own hint, the identical
@@ -1045,6 +1065,7 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   "pad.volleyball.ribbon.sanction",
   "pad.volleyball.ribbon.timeout",
   "pad.volleyball.ribbon.sub",
+  "pad.volleyball.ribbon.expedite.start", // R8/WS-R r2
   // The pair line ("{on} for {off}") the Activity row hangs off — NOT a
   // ribbon base label, so `buildRibbon` never looks it up; `volleyballDetail`
   // resolves it directly. Registered anyway because `padLabel` membership is

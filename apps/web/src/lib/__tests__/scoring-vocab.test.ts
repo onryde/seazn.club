@@ -77,6 +77,40 @@ function declaredEventTypes(): string[] {
   const out = new Set<string>();
   for (const m of builtinModules as unknown as EngineModule[]) {
     for (const tier of m.fidelityTiers ?? []) for (const t of tier.eventTypes) out.add(t);
+    for (const t of Object.keys(m.eventSchemas ?? {})) out.add(t);
+  }
+  return [...out].sort();
+}
+
+/**
+ * Every event type the engine will actually ACCEPT — the union of every
+ * module's registered payload schemas.
+ *
+ * R8/WS-R round 2: `fidelityTiers` alone is the WRONG source, and it was the
+ * one `declaredEventTypes()` used. Tiers are a fidelity BANDING of a subset,
+ * not a module's declaration of what it accepts, and for three sports they
+ * under-report — `setbased/kernel.ts:1816` builds a fixed six-key action map
+ * (summary, timeout, sanction, sub, expedite, rally) for EVERY preset and
+ * registers a schema for each, while each sport's `fidelityTiers` lists only
+ * the ones it bands. Measured against the tree: tiers 63, eventSchemas 68,
+ * the five extras being volleyball.expedite.start, badminton.expedite.start,
+ * badminton.sub, badminton.timeout and tabletennis.sub. FOUR of those five
+ * were live on the raw-type fallback ("badminton.sub recorded") and were
+ * invisible to a tiers-derived gate. (The fifth, badminton.timeout, already
+ * had four-locale copy — added opportunistically despite the tiers list not
+ * naming it, which is its own evidence that tiers are not the declaration.)
+ *
+ * `eventSchemas` is what the engine accepts, which is the right bar for "no
+ * raw internal type ever reaches a scorer". `declaredEventTypes()` takes the
+ * UNION of both rather than swapping one source for the other: the field is
+ * OPTIONAL on `SportModule` (packages/engine/src/sport/module.ts:501), so a
+ * module that ever omits it must degrade to its tiers, not vanish from the
+ * sweep. All eleven shipped modules populate it today.
+ */
+function engineAcceptedEventTypes(): string[] {
+  const out = new Set<string>();
+  for (const m of builtinModules as unknown as EngineModule[]) {
+    for (const t of Object.keys(m.eventSchemas ?? {})) out.add(t);
   }
   return [...out].sort();
 }
@@ -84,7 +118,13 @@ function declaredEventTypes(): string[] {
 interface EngineModule {
   key: string;
   fidelityTiers?: readonly { eventTypes: readonly string[] }[];
+  /** The union of the sport's event PAYLOADS (module.ts:481, required on
+   *  SportModule) — what `declaredEnumMembers()` walks for enum options. */
   eventSchema?: unknown;
+  /** The per-TYPE payload registry (module.ts:501, optional on SportModule) —
+   *  the event types the engine will accept. A different field from
+   *  `eventSchema` above, one character apart; do not conflate them. */
+  eventSchemas?: Readonly<Record<string, unknown>>;
 }
 
 /**
@@ -434,6 +474,38 @@ describe("scoring-vocab covers every PadSpec label key the engine declares (#427
     expect([...new Set(types.map(sportOf))].sort(), "declaredEventTypes() does not span every shipped sport").toEqual(
       declaredSportKeys(),
     );
+    assertNothingTheEngineAcceptsIsMissing(types);
+  }
+
+  /**
+   * The SECOND vacuity guard, and the one round 1 needed and did not have.
+   *
+   * The prefix-set guard above proves every SPORT is present. It does not
+   * prove every TYPE is: it passed identically at 63 types and at 68, because
+   * the five it was missing all belonged to sports that were already in the
+   * set by way of their other types. A partial derivation is the more
+   * dangerous shape than an empty one — it under-reports instead of zeroing,
+   * so every dependent assertion stays GREEN while the defect ships. That is
+   * exactly what happened: four raw-type leaks (volleyball.expedite.start,
+   * badminton.expedite.start, badminton.sub, tabletennis.sub) sat outside a
+   * green gate.
+   *
+   * So compare against a source the derivation does not itself define: every
+   * type the engine registers a payload schema for. Both directions are
+   * named, and each means something different. MISSING = the derivation
+   * under-reports and the sweep has a blind spot (the `fidelityTiers`
+   * regression). EXTRA = a module lost its `eventSchemas` registry and is
+   * being carried by its tiers alone, which is worth knowing too.
+   */
+  function assertNothingTheEngineAcceptsIsMissing(types: readonly string[]): void {
+    const derived = new Set(types);
+    const accepted = engineAcceptedEventTypes();
+    const missing = accepted.filter((t) => !derived.has(t));
+    const extra = [...derived].filter((t) => !accepted.includes(t)).sort();
+    expect(
+      { missing, extra },
+      `the enumeration is not what the engine accepts (${accepted.length} schema-registered types)`,
+    ).toEqual({ missing: [], extra: [] });
   }
 
   /**

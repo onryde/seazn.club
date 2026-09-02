@@ -1,13 +1,21 @@
 // Ribbon copy builder — R1 chassis (Task 3). The ribbon is the pad's only
 // always-on history element: every commit answers in plain sport words with
 // an inline Undo (design of record:
-// docs/superpowers/specs/2026-08-03-scoringpad-v2-design.md). R1 ships the
-// FALLBACK path only — no per-sport `pad.<sport>.ribbon.<suffix>` copy
-// exists yet in any dictionary. Per-event ribbon sentences land sport-by-
-// sport with each conversion wave (R2+); this function already looks them
-// up first, so a later wave only has to add dictionary copy + register the
-// key in PAD_LABEL_KEYS (scoring-vocab.ts) — it never has to touch this
-// file's logic.
+// docs/superpowers/specs/2026-08-03-scoringpad-v2-design.md). Per-event
+// ribbon sentences landed sport-by-sport with each conversion wave (R2+);
+// this function looks them up first, so a wave only has to add dictionary
+// copy + register the key in PAD_LABEL_KEYS (scoring-vocab.ts) — it never
+// has to touch this file's logic.
+//
+// Corrected R8/WS-R: this header used to say "R1 ships the FALLBACK path
+// only — no per-sport `pad.<sport>.ribbon.<suffix>` copy exists yet in any
+// dictionary". That has been false since R2, and it sat at the top of the
+// file whose fallback behaviour is the thing at issue. As of R8/WS-R every
+// event type all eleven modules register a payload schema for has four-locale
+// ribbon copy, so the FALLBACK BRANCH BELOW IS NOW UNREACHABLE for any event
+// the engine accepts — it is kept for a type a future engine wave adds before
+// its copy lands. `scoring-vocab.test.ts` derives that gate from
+// `module.eventSchemas` and reds the moment a new type arrives uncovered.
 //
 // Reuses padLabel() (apps/web/src/lib/scoring-vocab.ts:907), the SAME vocab
 // path every legacy skin already calls for label text (S7/#427) — see
