@@ -599,8 +599,9 @@ export function ActivityPanel({
   const nameOf = (id: string) => personNames[id] ?? id;
   const [expanded, setExpanded] = useState(false);
   // `rows` is `orderedActivity`'s NEWEST-FIRST output (this file's own doc,
-  // above `latestRowDetail`), so the latest-by-seq row is simply `rows[0]` —
-  // no reduce needed, and no risk of picking index 0 of the ASCENDING input.
+  // above `latestRowDetail`) — a bare reverse of the chronological `events`
+  // list, not a seq sort — so the newest row is simply `rows[0]`. No reduce
+  // needed, and no risk of picking `events[0]` (the OLDEST entry) instead.
   const latestId = rows[0]?.id ?? null;
   const collapsed = collapsible && !expanded;
 
@@ -617,6 +618,7 @@ export function ActivityPanel({
               type="button"
               data-role="v3-activity-toggle"
               aria-expanded={expanded}
+              aria-controls="v3-activity-list"
               aria-label={t(expanded ? "pad.activity.showLatest" : "pad.activity.showAll")}
               onClick={() => setExpanded((v) => !v)}
               className="flex h-11 w-11 items-center justify-center rounded-lg text-slate-600 transition-colors hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400 md:hidden"
@@ -635,7 +637,11 @@ export function ActivityPanel({
         // page. `overscroll-contain` stops a flick at the list's end from
         // scrolling the page behind it, which on a phone reads as the pad
         // jumping while a scorer is reviewing.
-        <ul className="max-h-96 divide-y divide-slate-100 overflow-y-auto overscroll-contain" data-role="v3-activity-list">
+        <ul
+          id="v3-activity-list"
+          className="max-h-96 divide-y divide-slate-100 overflow-y-auto overscroll-contain"
+          data-role="v3-activity-list"
+        >
           {rows.map((event, index) => {
             const { voided, canVoid } = activityRowState(
               event,
@@ -683,7 +689,7 @@ export function ActivityPanel({
                 )}
                 <span
                   data-role="v3-activity-caption"
-                  className={`min-w-0 flex-1 break-words text-sm max-md:min-w-0 ${voided ? "text-slate-400 line-through" : "text-slate-700"}`}
+                  className={`min-w-0 flex-1 break-words text-sm ${voided ? "text-slate-400 line-through" : "text-slate-700"}`}
                 >
                   {caption.text}
                   {badge !== "none" &&
