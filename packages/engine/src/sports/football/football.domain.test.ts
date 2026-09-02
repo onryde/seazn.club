@@ -395,13 +395,13 @@ describe("penalties in open play (Law 14)", () => {
     ).toThrowError(expect.objectContaining({ code: "INVALID_EVENT" }));
   });
 
-  it("is reachable from the attributed fidelity tiers and never from the coarse ones", () => {
-    const types = (tier: number) =>
-      football.fidelityTiers.find((t) => t.tier === tier)?.eventTypes ?? [];
-    expect(types(2)).toContain("football.penalty");
-    expect(types(3)).toContain("football.penalty");
-    expect(types(0)).not.toContain("football.penalty");
-    expect(types(1)).not.toContain("football.penalty");
+  it("is reachable at the attributed fidelity band, never the coarse one", () => {
+    // W1: formerly asserted the event type was named in both tier 2's AND
+    // tier 3's arrays (the old cumulative-list model duplicated tier 2 into
+    // tier 3), and absent from tiers 0/1. `padSpec.fidelity` names ONE band
+    // per type, no repetition, so it now asserts the single band directly.
+    const spec = football.padSpec!(cfgOf({}));
+    expect(spec.fidelity["football.penalty"]).toBe(2);
   });
 
   it("is dropped by coarsen — it never moves the score", () => {
@@ -475,10 +475,13 @@ describe("temporary dismissals / sin bins (Law 12 addendum)", () => {
   });
 
   it("names its pair the way the period kernel does, so one pad control serves both", () => {
-    const types = football.fidelityTiers.find((t) => t.tier === 2)?.eventTypes ?? [];
-    expect(types).toContain("football.sinbin.start");
-    expect(types).toContain("football.sinbin.end");
-    expect(types).not.toContain("football.sinbin");
+    // W1: formerly read both names off the shared tier-2 eventTypes array;
+    // padSpec.fidelity keys each type individually, so it now checks both
+    // keys carry the same band.
+    const spec = football.padSpec!(cfgOf({}));
+    expect(spec.fidelity["football.sinbin.start"]).toBe(2);
+    expect(spec.fidelity["football.sinbin.end"]).toBe(2);
+    expect(spec.fidelity["football.sinbin"]).toBeUndefined();
   });
 
   it("falls back to cfg.sinBinMinutes when the event omits a duration", () => {
@@ -551,12 +554,12 @@ describe("temporary dismissals / sin bins (Law 12 addendum)", () => {
     expect(state.squads.home.sentOff).toEqual(["H-p6"]);
   });
 
-  it("is reachable from the attributed fidelity tiers only", () => {
-    const types = (tier: number) =>
-      football.fidelityTiers.find((t) => t.tier === tier)?.eventTypes ?? [];
-    expect(types(2)).toContain("football.sinbin.start");
-    expect(types(3)).toContain("football.sinbin.start");
-    expect(types(0)).not.toContain("football.sinbin.start");
+  it("is reachable at the attributed fidelity band only", () => {
+    // W1: formerly asserted the event type was named in both tier 2's AND
+    // tier 3's arrays (the old cumulative-list model's duplicate), and
+    // absent from tier 0. padSpec.fidelity keys it once.
+    const spec = football.padSpec!(cfgOf({}));
+    expect(spec.fidelity["football.sinbin.start"]).toBe(2);
   });
 
   it("is dropped by coarsen and stays out of the summary", () => {
@@ -753,10 +756,14 @@ describe("event union disambiguation", () => {
     ]);
   });
 
-  it("keeps every fidelity-tier event type dispatchable", () => {
-    const declared = new Set(football.fidelityTiers.flatMap((t) => t.eventTypes));
+  it("keeps every fidelity-band event type dispatchable", () => {
+    // W1: formerly flattened every tier's eventTypes array and de-duplicated
+    // via Set (the old model repeated types across tiers). padSpec.fidelity
+    // keys each type exactly once, so its key set IS the declared set.
+    const spec = football.padSpec!(cfgOf({}));
+    const declared = new Set(Object.keys(spec.fidelity));
     for (const type of declared) {
-      expect(Object.keys(canonical), `tier type ${type} has no canonical payload`).toContain(type);
+      expect(Object.keys(canonical), `type ${type} has no canonical payload`).toContain(type);
     }
     expect(declared).toEqual(new Set(Object.keys(canonical)));
   });

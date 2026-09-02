@@ -277,9 +277,7 @@ export const EXTEND_GOLDEN = process.env.EXTEND_GOLDEN === "1";
 
 /** Event types `module.padSpec(cfg).fidelity` bands for the given (raw) cfg —
  *  the single fidelity model since W1 (scoring free). Shared by golden
- *  coverage, the conformance identity check and `emitsCards`. Replaces the
- *  legacy fidelityTiers enumeration; parity was proven by
- *  sport/__tests__/fidelity-parity.test.ts before every reader moved here. */
+ *  coverage, the conformance identity check and `emitsCards`. */
 export function padEventTypes(module: AnySportModule, cfg: unknown): string[] {
   const spec = module.padSpec?.(module.configSchema.parse(cfg));
   if (!spec) throw new Error(`${module.key}: golden coverage needs a padSpec`);

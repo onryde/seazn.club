@@ -250,7 +250,6 @@ export const icehockey = makePeriodModule({
   // nobody gains, so `hockey` leaves the flag off even though its `fih-detail`
   // config declares `skaters`.
   overtimeSkaterAdvantage: true,
-  timelineEntitlement: "scoring.match_timeline",
   playerStats,
   // SPEC-1 — IIHF penalty classes the discipline rules editor may ban on
   // (default policy is dismissal-only: match/game misconduct → 1 match).

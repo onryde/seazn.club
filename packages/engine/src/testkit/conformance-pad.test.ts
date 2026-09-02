@@ -84,7 +84,6 @@ function fakePadSpec(_cfg: FakeCfg): PadSpec {
       },
     ],
     fidelity: { "fake.run": 3, "fake.reset": 1 },
-    fidelityEntitlements: { 3: "scoring.detail" },
   };
 }
 
@@ -118,7 +117,6 @@ function makeFakeModule(over: Partial<SportModule<FakeCfg, FakeEv, FakeState>> =
     defaultTiebreakers: ["points"],
     supportsDraws: () => true,
     declaredPointsSets: () => [0],
-    fidelityTiers: [{ tier: 0, eventTypes: ["fake.run"] }],
     officialLabel: { scorer: "Scorer" },
     padSpec: fakePadSpec,
     ...over,
@@ -274,7 +272,6 @@ describe("checkActionPayloadsAccepted", () => {
         },
       ],
       fidelity: { "fake.person": 3 },
-      fidelityEntitlements: {},
     };
     expect(() =>
       checkActionPayloadsAccepted(spec, { "fake.person": PersonEv }, entrantIds, personPool, 30),
@@ -328,7 +325,6 @@ describe("checkActionPayloadsAccepted", () => {
         },
       ],
       fidelity: { "fake.review": 1 },
-      fidelityEntitlements: {},
     };
     expect(() =>
       checkActionPayloadsAccepted(spec, { "fake.review": ReviewLikeEv }, entrantIds, personPool, 40),
@@ -608,14 +604,6 @@ describe("checkFidelityMap", () => {
   it("fails when the map bands a type that is not registered", () => {
     const phantomBand: PadSpec = { ...goodSpec, fidelity: { ...goodSpec.fidelity, "fake.phantom": 2 } };
     expect(checkFidelityMap(phantomBand, FAKE_EVENT_SCHEMAS)).not.toEqual([]);
-  });
-
-  it("fails when fidelityEntitlements keys a band outside 0-3", () => {
-    const badEntitlement: PadSpec = {
-      ...goodSpec,
-      fidelityEntitlements: { ...goodSpec.fidelityEntitlements, 4: "not.a.real.band" } as PadSpec["fidelityEntitlements"],
-    };
-    expect(checkFidelityMap(badEntitlement, FAKE_EVENT_SCHEMAS)).not.toEqual([]);
   });
 });
 

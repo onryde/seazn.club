@@ -587,11 +587,6 @@ export function checkFidelityMap(spec: PadSpec, eventSchemas: Readonly<Record<st
       problems.push(`event type "${type}" declares fidelity band ${String(band)}, outside the closed 0-3 scale`);
     }
   }
-  for (const bandKey of Object.keys(spec.fidelityEntitlements)) {
-    if (!VALID_BANDS.includes(Number(bandKey) as FidelityBand) || String(Number(bandKey)) !== bandKey) {
-      problems.push(`fidelityEntitlements declares a key outside the closed 0-3 scale: "${bandKey}"`);
-    }
-  }
   if (problems.length > 0) return problems; // nesting is meaningless over a malformed map
 
   // Nesting — structural by construction (band <= i implies band <= j for

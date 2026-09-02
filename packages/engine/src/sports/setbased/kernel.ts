@@ -38,7 +38,6 @@ import {
 } from "../../stats/stats.ts";
 import type {
   FidelityBand,
-  FidelityTier,
   ModuleEvent,
   PadAction,
   PadAttribution,
@@ -1491,7 +1490,6 @@ export interface SetBasedPreset {
   defaultTiebreakers: TiebreakerKey[];
   officialLabel: { scorer: string };
   coarseEventType: "set.summary" | "game.summary";
-  rallyEntitlement: string; // doc 10 FeatureKey for Tier-2/3 rally scoring
   /**
    * S7/#427 — which steps of the shared `SetBasedSanctionLevel` ladder THIS
    * federation's umpire can actually award, in the enum's own order. Read by
@@ -1571,7 +1569,7 @@ function makeMetrics(unit: { one: string; many: string }): MetricSpec[] {
 // S6/#416 (W5) — padSpec. Pure function of (preset, resolved cfg). One
 // builder shared by volleyball/badminton/tabletennis — the same "kernel owns
 // the logic, presets add data" split every other per-sport hook on this
-// factory already uses (fidelityTiers, discipline, arbitraryEvent…).
+// factory already uses (discipline, arbitraryEvent…).
 //
 // `eventSchemas` is built separately, in `makeSetBasedModule` below, and is
 // DELIBERATELY the same 6 branches (Rally/Summary/Timeout/Sanction/Sub/
@@ -1807,13 +1805,10 @@ function setBasedPadSpec(preset: SetBasedPreset, cfg: SetBasedCfg): PadSpec {
     // none of which touches the score) sit at band 1, the same band cricket
     // gives its own admin events (toss, interruption, review, powerplay);
     // rally-by-rally scoring is the maximum-granularity record for this
-    // kernel, band 3, matching `rallyEntitlement`'s own name
-    // ("scoring.rally_by_rally", the direct sibling of cricket's
-    // "scoring.ball_by_ball" at band 3). Band 2 is genuinely unoccupied for
-    // this kernel today — there is no player-line/box-score analogue — which
-    // is honest, not a gap: S2/#430 parked exactly this (per-event
-    // rally-length / 1st-vs-2nd-serve detail) as future T3-lane work, not
-    // this session's.
+    // kernel, band 3. Band 2 is genuinely unoccupied for this kernel today —
+    // there is no player-line/box-score analogue — which is honest, not a
+    // gap: S2/#430 parked exactly this (per-event rally-length / 1st-vs-2nd
+    // -serve detail) as future T3-lane work, not this session's.
     fidelity: {
       [summaryType]: 0,
       [timeoutType]: 1,
@@ -1822,7 +1817,6 @@ function setBasedPadSpec(preset: SetBasedPreset, cfg: SetBasedCfg): PadSpec {
       [expediteType]: 1,
       [rallyType]: 3,
     } satisfies Record<string, FidelityBand>,
-    fidelityEntitlements: { 3: preset.rallyEntitlement },
   };
 }
 
@@ -2177,12 +2171,10 @@ export function makeSetBasedModule(preset: SetBasedPreset): SetBasedModule {
   // where each is called below) — the beach-volleyball regression was
   // exactly this: a module-level constant can never let `beach` and `indoor`
   // disagree on `substitutions`. `declaredRecords` here is deliberately the
-  // STATIC declared-default answer, used only for the two things that
-  // describe the MODULE as a whole rather than one fixture: `fidelityTiers`
-  // (a plain array — `SportModule` has no per-cfg fidelityTiers hook) and
-  // `coarsen`'s pass-through classification (which only ever sees events a
-  // real fixture's `apply()` already accepted, so a superset costs it
-  // nothing — narrower-per-variant precision is not needed there).
+  // STATIC declared-default answer, used only for `coarsen`'s pass-through
+  // classification (which only ever sees events a real fixture's `apply()`
+  // already accepted, so a superset costs it nothing — narrower-per-variant
+  // precision is not needed there).
   const declaredRecords = preset.defaults.records;
   const coarsenParams = preset.defaults; // spec 04 §9.6 conformance runs at default cfg
   // One per module, so the init handshake it keys on cannot leak between the
@@ -2245,15 +2237,6 @@ export function makeSetBasedModule(preset: SetBasedPreset): SetBasedModule {
           },
         }
       : undefined;
-
-  // Tiers 0/1 stay a bare final score; the attributed timeline (who served, who
-  // scored, cards, timeouts, subs) rides with rally scoring at tiers 2/3.
-  const fidelityTiers: FidelityTier[] = [
-    { tier: 0, eventTypes: [summaryType] },
-    { tier: 1, eventTypes: [summaryType] },
-    { tier: 2, eventTypes: [rallyType, ...extensionTypes], entitlement: preset.rallyEntitlement },
-    { tier: 3, eventTypes: [rallyType, ...extensionTypes], entitlement: preset.rallyEntitlement },
-  ];
 
   // Award/forfeit points = a clean-sweep win pair: "*" (or the first entry).
   const cleanSweepPair = (cfg: SetBasedCfg): PointsPair =>
@@ -2487,7 +2470,6 @@ export function makeSetBasedModule(preset: SetBasedPreset): SetBasedModule {
       return [...new Set(Object.values(cfg.pointsMap).map(([w, l]) => w + l))];
     },
 
-    fidelityTiers,
     officialLabel: preset.officialLabel,
 
     // spec 03 §6 — deterministic generator. Summary-dominant so best-of-N

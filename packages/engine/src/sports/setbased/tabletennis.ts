@@ -57,7 +57,6 @@ export const tabletennis = makeSetBasedModule({
   defaultTiebreakers: ["points", "wins", "set_ratio", "point_ratio", "h2h_points"],
   officialLabel: { scorer: "Umpire" }, // doc 13 §1
   coarseEventType: "game.summary",
-  rallyEntitlement: "scoring.rally_by_rally", // doc 10 / table-tennis.md §3
   // S7/#427 — the ITTF umpire has exactly two cards, yellow and red, and no
   // third: "only `warning` and `penalty` correspond to the ITTF yellow and
   // red cards; a pad should probably surface just those two"

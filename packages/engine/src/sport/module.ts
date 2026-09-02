@@ -1,4 +1,4 @@
-// SportModule contract — spec 03 §3, extended by doc 14 §2 (fidelityTiers),
+// SportModule contract — spec 03 §3, extended by
 // doc 13 §1 (officialLabel) and the conformance kit's needs (PROMPT-03 §4:
 // declaredPointsSets; arbitraryEvent/coarsen hooks from spec 03 §6 + §9.6).
 import { z } from "zod";
@@ -59,15 +59,6 @@ export type TiebreakerKey =
   | "seed"
   | "lots";
 
-// doc 14 §1–2 — the four-tier granularity ladder. The scoring UI, the
-// entitlement gate (PROMPT-13) and API docs all derive from this declaration.
-export const FidelityTier = z.object({
-  tier: z.union([z.literal(0), z.literal(1), z.literal(2), z.literal(3)]),
-  eventTypes: z.array(z.string().min(1)).min(1),
-  entitlement: z.string().min(1).optional(), // FeatureKey, doc 10
-});
-export type FidelityTier = z.infer<typeof FidelityTier>;
-
 // A type + payload pair before persistence stamps the envelope fields
 // (id/seq/recordedAt) — what generators and coarsen produce.
 export interface ModuleEvent<Ev = unknown> {
@@ -96,29 +87,11 @@ export interface ModuleEvent<Ev = unknown> {
 // ---------------------------------------------------------------------------
 
 /**
- * The redesigned fidelity model (owner ruling, 2026-08-06 — see
- * `docs/superpowers/specs/2026-08-06-scoringpad-v2-prompts/_INDEX.md`,
- * search "OWNER RULING: redesign the fidelity model, in S6"). This is
- * additive alongside `FidelityTier`/`fidelityTiers` above, NOT a replacement:
- * the paywall (`apps/web/src/server/usecases/fidelity.ts`) and every other
- * `apps/web` read site keep reading the sealed `tier: 0|1|2|3` union and the
- * per-sport `fidelityTiers` array exactly as they do today — out of scope to
- * touch, and untouched. What changes is PadSpec's OWN shape: instead of a
- * cumulative `eventTypes` list per tier (which does not actually nest for
- * cricket — `cricket.superover.ball` sits in both tier 1's and tier 3's list
- * under the old model — and is a byte-identical duplicate of tier 2 into
- * tier 3 for 7 of the other 8 modules), `PadSpec.fidelity` names ONE band per
- * event type, no repetition. Nesting is then STRUCTURAL: "every event at or
- * below band N" grows monotonically with N by construction, so it stops
- * being a test that can fail and becomes a property that cannot — see
- * `eventsAtOrBelowBand` in `testkit/conformance-pad.ts`.
- *
- * Both scales are the SAME closed 0–3 numbers (`FidelityTier.tier` above) —
- * never a second vocabulary. The three-word string vocabulary this replaces
- * (quick / standard / full, superseded 2026-08-06 by S2/#430) must never
- * reappear as a tier name anywhere in this package. Written without the
- * quoting a `git grep` for it uses, deliberately: quoting the words here
- * would itself be a new grep hit.
+ * `fidelity` names ONE detail band (0–3) per event type. Since W1 of the
+ * entitlements v18 programme (2026-09) it is a UX filter only — the scorer
+ * picks how much detail to record, and the pad hides tiles above that band.
+ * No band is paywalled and nothing in apps/web reads an entitlement from it.
+ * The 0–3 scale is closed (v2 ruling); its semantics live in this file.
  */
 export const FIDELITY = { 0: "result", 1: "card", 2: "timeline", 3: "detail" } as const;
 export type FidelityBand = 0 | 1 | 2 | 3;
@@ -352,11 +325,8 @@ export interface PadSpec {
   panels: readonly PadPanel[];
   /** One band per event type this module can emit — see `FIDELITY` above.
    *  Keys are envelope type strings (the same universe as `eventSchemas`);
-   *  every value is on the SAME closed 0–3 scale as `FidelityTier.tier`. */
+   *  every value is on the SAME closed 0–3 scale. */
   fidelity: Readonly<Record<string, FidelityBand>>;
-  /** Which bands need an entitlement beyond the free floor (`fidelity.ts`'s
-   *  `tier <= 1`). Bands 0 and 1 are never keyed here. */
-  fidelityEntitlements: Readonly<Partial<Record<FidelityBand, string>>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -665,7 +635,6 @@ export interface SportModule<Cfg, Ev, State> extends FoldableModule<Cfg, State> 
   // the conformance kit checks Σ points of both deltas is in this set.
   declaredPointsSets(cfg: Cfg): readonly number[];
 
-  fidelityTiers: FidelityTier[]; // doc 14 §2
   officialLabel: { scorer: string }; // doc 13 §1 — 'Umpire'/'Referee'/'Arbiter'
 
   // spec 03 §6 — deterministic valid-event generator for property tests.

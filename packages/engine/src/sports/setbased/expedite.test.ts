@@ -392,14 +392,26 @@ describe("expedite is table tennis's alone", () => {
     });
   });
 
-  it("tier 3 reaches tabletennis.expedite.start; tier 0 does not", () => {
-    const tier3 = tabletennis.fidelityTiers.find((t) => t.tier === 3)!;
-    const tier0 = tabletennis.fidelityTiers.find((t) => t.tier === 0)!;
-    expect(tier3.eventTypes).toContain("tabletennis.expedite.start");
-    expect(tier0.eventTypes).not.toContain("tabletennis.expedite.start");
-    for (const mod of [volleyball, badminton] as Mod[]) {
-      const other = mod.fidelityTiers.find((t) => t.tier === 3)!;
-      expect(other.eventTypes).not.toContain(`${mod.key}.expedite.start`);
+  it("expedite.start sits at band 1 (admin/incident), never band 0 or band 3", () => {
+    // W1: formerly asserted tabletennis's removed per-tier eventTypes array
+    // reached "tabletennis.expedite.start" only at tier 3, and never at tier 0 or in
+    // volleyball/badminton's tier 3 — the OLD model's `extensionTypes` was
+    // filtered by each sport's `records.expedite` flag (false for
+    // volleyball/badminton), so their arrays never named the type at all.
+    // `padSpec.fidelity` (kernel.ts's "One band per REGISTERED type (all 6...)
+    // — not merely the ones this cfg happens to build an action for") is
+    // schema-level, not cfg-gated: every setbased sport's `eventSchema` has
+    // the same 6 branches, so `fidelity` names `expedite.start` for all
+    // three, at band 1 alongside timeout/sanction/sub. Whether a given sport
+    // actually ACCEPTS the event at write time is `records.expedite`'s job
+    // (the preceding "refuse a rally carrying `returns`" test covers that);
+    // this test only pins the declared band.
+    for (const mod of [tabletennis, volleyball, badminton] as Mod[]) {
+      const spec = mod.padSpec!(mod.configSchema.parse({}));
+      const band = spec.fidelity[`${mod.key}.expedite.start`];
+      expect(band).toBe(1);
+      expect(band).not.toBe(0);
+      expect(band).not.toBe(spec.fidelity[`${mod.key}.rally`]);
     }
   });
 

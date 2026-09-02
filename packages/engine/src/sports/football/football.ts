@@ -2361,20 +2361,17 @@ export function padSpec(cfg: FootballCfg): PadSpec {
     {
     panels,
     // S6 owner ruling (_INDEX.md, "redesign the fidelity model, in S6") — one
-    // band per event type, no repetition. Football's OLD (untouched)
-    // `fidelityTiers` duplicates tier 0/tier 1 and duplicates tier 2/tier 3
-    // (S2/#430 finding); the two REAL levels underneath both duplicates are
-    // "the bare score" and "the full timeline", which is exactly what these
-    // two bands carry. Band 1 is deliberately unused: this sport has no
+    // band per event type, no repetition. The two REAL levels for football
+    // are "the bare score" and "the full timeline", which is exactly what
+    // these two bands carry. Band 1 is deliberately unused: this sport has no
     // admin/context event group between them (no toss/interruption/powerplay
     // equivalent exists for football today) — a different reason from
     // carrom's stop-at-1, but the same shape, a module using only the bands
     // it needs.
     //
-    // S8/#417 W6 — band 3 ("detail") is NO LONGER unused: S2/#430 found
-    // football's tier 3 was an unfilled duplicate of tier 2 and parked real
-    // detail-level content for a later session — this is that session.
-    // `football.shot` is the one band-3 event.
+    // S8/#417 W6 — band 3 ("detail") carries real content: `football.shot` is
+    // the one band-3 event. W1 (entitlements v18, 2026-09): this is a UX
+    // filter only — no band is paywalled.
     fidelity: {
       "football.goal": 0,
       "football.period": 0,
@@ -2386,27 +2383,12 @@ export function padSpec(cfg: FootballCfg): PadSpec {
       "football.sinbin.end": 2,
       "football.shot": 3,
     },
-    // R3-3 — band 2 unchanged; band 3 is its OWN key, "scoring.ball_by_ball".
-    // Bands 2 and 3 differ by exactly ONE event (`football.shot`), so sharing
-    // a key made the two bands indistinguishable to every consumer that reads
-    // entitlements to decide what to show (the recording chip could not tell
-    // them apart). "scoring.ball_by_ball" ALREADY exists as a FeatureKey and
-    // is already granted on the identical plan boundary as
-    // "scoring.match_timeline" — community false / pro true / business true
-    // (V112__entitlements_v2.sql) and pro_plus true (V290__pro_plus_plan.sql)
-    // — so no new FeatureKey and no migration were needed.
-    //
-    // That parity is PLAN-level, and the original wording ("no org's access
-    // changes") overclaimed. Entitlements also resolve through
-    // `org_entitlement_overrides` and `competition_passes`, which are keyed per
-    // FEATURE (V306__entitlement_resolver_parity.sql): an org holding a
-    // hand-set override or a pass for "scoring.match_timeline" and NOT
-    // "scoring.ball_by_ball" keeps band 2 and silently loses band 3
-    // (`football.shot`). No such row is known to exist, and none is created by
-    // this wave — but a backfill is owed before anyone relies on the stronger
-    // claim. `fidelityTiers` below carries the SAME two literals; the
-    // pair is hand-kept and must move in lockstep.
-    fidelityEntitlements: { 2: "scoring.match_timeline", 3: "scoring.ball_by_ball" },
+    // Bands 2 and 3 differ by exactly ONE event (`football.shot`). That
+    // split used to carry a billing meaning — band 3 had its own
+    // FeatureKey so the two bands stayed distinguishable to whatever read
+    // entitlements to decide what to show. W1 retired the entitlement
+    // model entirely, so the split now means only what it says: how much
+    // detail the scorer chose to record.
     },
     FOOTBALL_EVENT_SCHEMAS,
   );
@@ -2654,45 +2636,6 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
     return [...new Set(totals)];
   },
 
-  // doc 14 §2 — Tier 1 = bare goals/periods (final score); Tier 2/3 = the
-  // attributed timeline (scorers, minutes, cards, subs), Pro-gated.
-  fidelityTiers: [
-    { tier: 0, eventTypes: ["football.goal", "football.period", "football.shootout.kick"] },
-    { tier: 1, eventTypes: ["football.goal", "football.period", "football.shootout.kick"] },
-    {
-      tier: 2,
-      eventTypes: [
-        "football.goal",
-        "football.card",
-        "football.sub",
-        "football.period",
-        "football.shootout.kick",
-        // W4 — neither moves the score, so both stay out of tiers 0/1.
-        "football.penalty",
-        "football.sinbin.start",
-        "football.sinbin.end",
-      ],
-      entitlement: "scoring.match_timeline",
-    },
-    {
-      tier: 3,
-      eventTypes: [
-        "football.goal",
-        "football.card",
-        "football.sub",
-        "football.period",
-        "football.shootout.kick",
-        "football.penalty",
-        "football.sinbin.start",
-        "football.sinbin.end",
-        // S8/#417 W6 — band-3-only, per padSpec's `fidelity` map above.
-        "football.shot",
-      ],
-      // R3-3 — tier 3's own key, NOT tier 2's. Must stay in lockstep with
-      // `padSpec`'s `fidelityEntitlements` above; the two are hand-kept.
-      entitlement: "scoring.ball_by_ball",
-    },
-  ],
   officialLabel: { scorer: "Referee" }, // doc 13 §1
   // Jul3/07 §3 — goals/assists auto (16 Apr), points = goals + assists
   // (hockey-style), cards. Own goals never credit the striker.

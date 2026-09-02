@@ -56,7 +56,6 @@ export const tennis = makeNestedModule({
   // v6/00 §4 — points → set ratio → game ratio → h2h → seed.
   defaultTiebreakers: ["points", "set_ratio", "game_ratio", "h2h_points", "seed"],
   officialLabel: { scorer: "Chair Umpire" }, // ITF App VII
-  rallyEntitlement: "scoring.rally_by_rally",
   // Jul3/07 §3 — unlocked by W4's optional `server`/`winner` on the point.
   // Aces and double faults are SERVING statistics, so both credit the server:
   // a double fault is a point for the receiver but a fault by the server, which

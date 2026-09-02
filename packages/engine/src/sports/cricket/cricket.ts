@@ -2976,15 +2976,10 @@ export function padSpec(cfg: CricketCfg): PadSpec {
     {
       panels,
       // S6 owner ruling (`_INDEX.md`, "OWNER RULING: redesign the fidelity
-      // model, in S6") — one band per event type, no repetition. Modelled on
-      // cricket's OWN existing (untouched) `fidelityTiers` array, with ONE
-      // correction: the old cumulative-list model placed
-      // `cricket.superover.ball` in BOTH tier 1's list and tier 3's list
-      // (`fidelityTiers` below, tier 1 and tier 3), which is exactly the
-      // non-nesting inconsistency S2/#430 found and the reason for this
-      // redesign — under `requiredFeatureForEvent`'s lowest-tier-wins reading,
-      // that duplication meant a free-tier scorer could already record
-      // ball-by-ball super-over deliveries. A super-over ball is the same
+      // model, in S6") — one band per event type, no repetition. The retired
+      // cumulative-tier model listed `cricket.superover.ball` in BOTH tier 1
+      // and tier 3 — the non-nesting inconsistency S2/#430 found, and the
+      // reason for this redesign. A super-over ball is the same
       // shape and the same granularity as an ordinary ball, so it belongs at
       // band 3 here, matching `cricket.ball`, not band 1.
       fidelity: {
@@ -3004,7 +2999,6 @@ export function padSpec(cfg: CricketCfg): PadSpec {
         "cricket.superover.ball": 3,
         "cricket.retire": 3,
       },
-      fidelityEntitlements: { 2: "stats.player", 3: "scoring.ball_by_ball" },
     },
     CRICKET_EVENT_SCHEMAS,
   );
@@ -3460,38 +3454,6 @@ export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
     ];
   },
 
-  // doc 14 §2 — the four-tier ladder; cricket is the sport with a real Tier 2.
-  fidelityTiers: [
-    { tier: 0, eventTypes: ["cricket.innings.summary"] },
-    {
-      tier: 1,
-      eventTypes: [
-        "cricket.innings.summary",
-        "cricket.toss",
-        "cricket.innings.declare",
-        "cricket.innings.close",
-        "cricket.match.close",
-        "cricket.interruption",
-        "cricket.revise",
-        "cricket.followon",
-        "cricket.superover.ball",
-        // W4 — innings context a card-level scorer can mark without going
-        // ball-by-ball: the new ball, powerplay blocks and reviews.
-        "cricket.newball",
-        "cricket.powerplay",
-        "cricket.review",
-      ],
-    },
-    { tier: 2, eventTypes: ["cricket.player.line"], entitlement: "stats.player" },
-    {
-      tier: 3,
-      // `cricket.retire` needs the crease to be tracked (it swaps a batter
-      // without a delivery), so it is a ball-by-ball event even though a
-      // retired-out shows up in a coarse innings' wicket column.
-      eventTypes: ["cricket.ball", "cricket.superover.ball", "cricket.retire"],
-      entitlement: "scoring.ball_by_ball",
-    },
-  ],
   playerStats: CRICKET_PLAYER_STATS,
   officialLabel: { scorer: "Umpire" }, // doc 13 §1
 

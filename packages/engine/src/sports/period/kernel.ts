@@ -31,7 +31,6 @@ import {
 import type { PositionCatalog } from "../../sport/catalog.ts";
 import { stampAttributionRequired } from "../../sport/module.ts";
 import type {
-  FidelityTier,
   ModuleEvent,
   PadAction,
   PadField,
@@ -1765,7 +1764,6 @@ export interface PeriodPreset {
   // own `fih-detail` config declares `overtime.skaters: 7`, so the field being
   // present is not evidence the rule applies.
   overtimeSkaterAdvantage?: boolean;
-  timelineEntitlement: string; // FeatureKey for tier-2/3 attributed scoring
   playerStats?: PlayerStatsModel;
   entrantModel?: EntrantModel;
   // SPEC-1 — the card/penalty classes the discipline rules editor may offer
@@ -1827,7 +1825,6 @@ export function makePeriodModule(
   const suspEndType = `${preset.key}.suspension.end`;
   const attemptType = `${preset.key}.shootout.attempt`;
   const setPieceType = `${preset.key}.set_piece`;
-  const setPieceKinds = preset.setPieceKinds;
   // S8/#417 W6 — gated on `preset.shotTracking`, never on a cfg list like
   // `setPieceKinds`: see `PeriodPreset.shotTracking`'s own comment.
   const shotType = `${preset.key}.shot`;
@@ -1837,43 +1834,15 @@ export function makePeriodModule(
   const squadAdopter = makeSquadAdopter<PeriodState>();
 
   // R6 fix pass 4, finding E (owner ruling, 2026-08-30 — see _INDEX.md's "R6
-  // FIX PASS 4" entry for the full analysis this executes). Hockey/ice-hockey
-  // cards and penalties are FREE: in these sports a suspension IS match
-  // state — it changes on-field strength, which changes how the score is
-  // reached — so a free-plan org that cannot record one has a WRONG
-  // scorebug, not merely a plainer one. `suspStartType`/`suspEndType` move
-  // OUT of the attributed-scoring (Pro-gated) group and into the tier-0/1
-  // group instead — PERIOD FAMILY ONLY. This is the legacy `fidelityTiers`
-  // model `server/usecases/fidelity.ts`'s `requiredFeatureForEvent` actually
-  // walks (lowest tier wins, `tier <= 1` is free); `PadSpec.fidelity` (the
-  // OTHER, newer model `padSpec` below publishes) already had suspStart/
-  // suspEnd at band 1 and is untouched by this change — the two models are
-  // DOCUMENTED to disagree until R9 reconciles them (`sport/module.ts:
-  // 102-106`). Do not extend this reasoning to any other sport's
-  // `fidelityTiers` here: football's card/sin-bin, cricket's wickets and
-  // every racquet sport's sanction stay exactly as gated as they were —
-  // that is a separate, registered wave (`R9-scoring-free.md`), and a
-  // wholesale realignment to `padSpec` would newly PAYWALL
-  // `cricket.superover.ball` (tier 1 today, `padSpec` band 3) in the
-  // opposite direction.
-  const tier1Types = [goalType, advanceType, attemptType, suspStartType, suspEndType];
-  // Set pieces are attributed-scoring detail (who took it, did it convert), so
-  // they join tiers 2/3 only — a tier-0 scorer taps goals, not awards.
-  const attributed = [goalType, advanceType, attemptType];
-  const tier2Types = setPieceKinds === undefined ? attributed : [...attributed, setPieceType];
-  // S8/#417 W6 — shots are band-3 ("detail") ONLY, per S2/#430's ruling
-  // (parked as "the T2 lane... not built here" until this session): tier 2
-  // stays exactly what it was, tier 3 additionally grows a shot-tracking
-  // sport's `<key>.shot`. Byte-identical to the old shared `attributedTypes`
-  // list when `shotTracking` is unset, which is what keeps this change
-  // additive for any future period-kernel sport that omits the flag.
-  const tier3Types = shotTracking ? [...tier2Types, shotType] : tier2Types;
-  const fidelityTiers: FidelityTier[] = [
-    { tier: 0, eventTypes: [goalType, advanceType, attemptType] },
-    { tier: 1, eventTypes: tier1Types },
-    { tier: 2, eventTypes: tier2Types, entitlement: preset.timelineEntitlement },
-    { tier: 3, eventTypes: tier3Types, entitlement: preset.timelineEntitlement },
-  ];
+  // FIX PASS 4" entry for the full analysis). Hockey/ice-hockey cards and
+  // penalties are FREE: in these sports a suspension IS match state — it
+  // changes on-field strength, which changes how the score is reached — so a
+  // free-plan org that cannot record one has a WRONG scorebug, not merely a
+  // plainer one. `suspStartType`/`suspEndType` sit at band 1, not band 2/3,
+  // for PERIOD FAMILY ONLY — do not extend this reasoning to any other
+  // sport's admin/incident events: football's card/sin-bin, cricket's
+  // wickets and every racquet sport's sanction stay exactly as gated as they
+  // were, a separate concern from this kernel's own band choice.
 
   // S6/#416 (W5) — event type -> its own payload schema, keyed by THIS
   // module's own prefixed type strings but pointing at the SAME shared
@@ -1901,7 +1870,7 @@ export function makePeriodModule(
 
   // S6/#416 (W5) — the pad's own contract, shared machinery for both period
   // sports (hockey + icehockey pull the SAME builder through
-  // `makePeriodModule`, exactly like `fidelityTiers`/`init`/`apply` above);
+  // `makePeriodModule`, exactly like `init`/`apply` above);
   // sport-specific vocabulary (label text, the shoot-out's own name, the
   // declared suspension-reason subset) comes from `preset`, cfg-derived
   // bounds come from `cfg` — never a hardcoded preset number, so a variant
@@ -2164,25 +2133,19 @@ export function makePeriodModule(
       // `cricket.ball`), this kernel has NO coarser way to record a goal or
       // reach a decided outcome — `${key}.goal` is the only event that ever
       // credits a score, at every fidelity level, just with progressively
-      // more populated optional fields. A free-tier scorer must be able to
-      // reach all three, matching this kernel's own (untouched)
-      // `fidelityTiers` above, which already puts exactly these three in
-      // tier 0.
+      // more populated optional fields.
       //
       // suspension start/end are band 1 — literally "card", `FIDELITY[1]`.
       //
       // Set piece (PC/stroke/penalty-shot AWARDED, not merely converted) is
-      // band 2 ("timeline") — attributed detail beyond the bare goal,
-      // matching this file's own comment above `tier2Types` ("Set pieces
-      // are attributed-scoring detail... so they join tiers 2/3 only").
+      // band 2 ("timeline") — attributed detail beyond the bare goal: a set
+      // piece names WHO was awarded it and, once converted, how.
       //
       // S8/#417 W6 — a shot (per-attempt outcome: scored/saved/missed/
       // blocked) is band 3 ("detail"), the T2 lane `_INDEX.md` parked for a
       // later session — this is that session. Gated on `shotTracking`, not
       // unconditional, so a period-kernel sport without the flag declares no
-      // band-3 event at all (`fidelity` has no `[shotType]` key), matching
-      // how `setPieceType` is band-2 only when `cfg.setPieceKinds` is
-      // non-empty.
+      // band-3 event at all (`fidelity` has no `[shotType]` key).
       fidelity: {
         [goalType]: 0,
         [advanceType]: 0,
@@ -2191,30 +2154,6 @@ export function makePeriodModule(
         [suspEndType]: 1,
         [setPieceType]: 2,
         ...(shotTracking ? { [shotType]: 3 } : {}),
-      },
-      fidelityEntitlements: {
-        2: preset.timelineEntitlement,
-        // Reuses the SAME entitlement as band 2, never a new FeatureKey — but
-        // NOT because this kernel has no real band-3 event: `shotType` is
-        // genuinely band-3-only when `shotTracking` is on, same shape as
-        // football's own `football.shot`. The reuse is THIS kernel's own
-        // S2/#430 ruling (hockey/DOMAIN.md's "Shots on goal" row): a
-        // deliberate choice not to mint a new billing-plan row for shot
-        // detail, made on hockey/icehockey's own product terms, not borrowed
-        // from anywhere else.
-        //
-        // Do NOT cite football as precedent for this (a stale claim this
-        // comment used to make — see `_INDEX.md`'s "R3 — debt routed OUT of
-        // this wave" entry, 2026-08-15-scoringpad-v3-prompts): R3-3 gave
-        // football's own band-3 shot event its OWN key,
-        // "scoring.ball_by_ball", precisely because a shared key there left
-        // bands 2 and 3 indistinguishable to anything reading entitlements
-        // to decide what to show (football/DOMAIN.md's shots-on-goal row).
-        // If hockey/icehockey shot detail is ever priced as its own tier,
-        // this reuse is what would need to split the same way — a product
-        // decision, not something
-        // this file can make for itself.
-        ...(shotTracking ? { 3: preset.timelineEntitlement } : {}),
       },
     }, eventSchemas);
   };
@@ -2670,7 +2609,6 @@ export function makePeriodModule(
       return [...new Set(totals)];
     },
 
-    fidelityTiers,
     officialLabel: preset.officialLabel,
     ...(preset.playerStats === undefined ? {} : { playerStats: preset.playerStats }),
     ...(preset.entrantModel === undefined ? {} : { entrantModel: preset.entrantModel }),

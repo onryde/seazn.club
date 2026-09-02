@@ -700,17 +700,14 @@ export function padSpec(cfg: CarromCfg): PadSpec {
   return stampAttributionRequired(
     {
       panels,
-      // Modelled on carrom's OWN existing (untouched) `fidelityTiers` (below):
-      // tier 0 is the board summary alone, tier 1 adds the toss and umpire
-      // adjustments. Neither entry carries an entitlement — both bands ship
-      // free; strike-by-strike (reserved, `CarromStrike`) would be tiers 2/3
+      // Band 0 is the board summary alone, band 1 adds the toss and umpire
+      // adjustments. Strike-by-strike (reserved, `CarromStrike`) would be tiers 2/3
       // whenever T4 lands, and is out of scope here (no `eventSchema` branch).
       fidelity: {
         "carrom.board.summary": 0,
         "carrom.toss": 1,
         "carrom.game.adjust": 1,
       },
-      fidelityEntitlements: {},
     },
     CARROM_EVENT_SCHEMAS,
   );
@@ -994,12 +991,6 @@ export const carrom: SportModule<CarromCfg, CarromEv, CarromState> = {
     return [...new Set([cfg.points.win + cfg.points.loss, cfg.points.draw * 2])];
   },
 
-  // carrom.md §6 — board-level fidelity ships; strike-by-strike is reserved
-  // (`scoring.strike_by_strike`) and gets tiers 2/3 when it lands.
-  fidelityTiers: [
-    { tier: 0, eventTypes: ["carrom.board.summary"] },
-    { tier: 1, eventTypes: ["carrom.board.summary", "carrom.toss", "carrom.game.adjust"] },
-  ],
   officialLabel: { scorer: "Umpire" }, // ICF laws officiate through an Umpire
 
   // W4 — person credit off the board summary and the umpire adjustment. Board

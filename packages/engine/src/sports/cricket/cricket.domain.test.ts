@@ -654,15 +654,19 @@ describe("cricket W4: the extensions are additive", () => {
     expect(JSON.stringify(declared)).not.toBe(JSON.stringify(newBall));
   });
 
-  it("declares every new event type in a fidelity tier", () => {
-    const declared = new Set(cricket.fidelityTiers.flatMap((tier) => tier.eventTypes));
+  it("declares every new event type at a fidelity band", () => {
+    // W1: formerly flattened every tier's eventTypes array into one Set (the
+    // old model repeated types across tiers). padSpec.fidelity keys each
+    // type once, so its key set already IS "every declared type".
+    const spec = cricket.padSpec!(cricket.configSchema.parse({}));
+    const declared = new Set(Object.keys(spec.fidelity));
     for (const type of [
       "cricket.retire",
       "cricket.newball",
       "cricket.powerplay",
       "cricket.review",
     ]) {
-      expect(declared.has(type), `${type} must appear in a fidelity tier`).toBe(true);
+      expect(declared.has(type), `${type} must appear at a fidelity band`).toBe(true);
     }
   });
 

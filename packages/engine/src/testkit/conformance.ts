@@ -99,10 +99,9 @@ export function conformanceSuite<Cfg, Ev, State>(
       parseSemver(module.version); // throws on non-semver
       PositionCatalog.parse(module.positions);
       PositionCatalog.parse(catalog);
-      // W1 (scoring free): fidelity is the single model, read off PadSpec —
-      // parity with the legacy fidelityTiers enumeration was proven by
-      // sport/__tests__/fidelity-parity.test.ts before this moved. `cfg` above
-      // is already parsed, so no second `configSchema.parse` is needed here.
+      // W1 (scoring free): fidelity is the single model, read off PadSpec.
+      // `cfg` above is already parsed, so no second `configSchema.parse` is
+      // needed here.
       const spec = module.padSpec?.(cfg);
       expect(spec, "every module declares a padSpec").toBeDefined();
       expect(Object.keys(spec!.fidelity).length).toBeGreaterThan(0);

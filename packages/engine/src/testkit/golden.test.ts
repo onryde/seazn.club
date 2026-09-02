@@ -178,9 +178,9 @@ if (corpusWriteRefusal !== null) {
 
       // W4 review item 3 — `types.length > 2` was the whole coverage claim, and
       // it was nowhere near what the gate advertised: football recorded 4 of
-      // its 7 declared tier types, cricket 3 of 15, so adding a required field
+      // its 7 declared event types, cricket 3 of 15, so adding a required field
       // to the PRE-EXISTING FootballSub left all 45 golden tests green. A
-      // module's `fidelityTiers` is its own claim about what a scorer can
+      // module's `padSpec.fidelity` is its own claim about what a scorer can
       // record; every one of those types has to be in the corpus or the
       // back-compat tripwire simply does not cover it.
       //
