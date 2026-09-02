@@ -52,6 +52,7 @@ import {
   controlCharacterFaults,
   inertPatternFaults,
   riderRateFaults,
+  scoringFreeClaimFaults,
   localeCoverageFaults,
   localeCreditGrantFaults,
   localeCreditLeadershipFaults,
@@ -631,6 +632,19 @@ const KNOWN_POSITIVES: string[] = [
   "The console sends one request per division when you undo.",
   "Undo makes a separate restore for each division.",
   "Undo rewinds each division in turn.",
+  // ── Scoring detail sold as paid (entitlements v18 / W1) ──
+  //    One fixture per alternation of SCORING_DETAIL, and one each for the two
+  //    halves of the price vocabulary, so a mangled escape in any of the three
+  //    reds `inertPatternFaults` instead of silently matching nothing.
+  "Ball-by-ball scoring is a Pro feature.",
+  "Rally-by-rally is the finest level and needs a plan that includes it.",
+  "Timeline and Detail need a plan that includes match-timeline scoring.",
+  "Match timelines (scorers, cards, minutes) are a Pro feature.",
+  "The recording detail you want is on Pro.",
+  "One of the events needs a scoring detail your organisation isn't entitled to.",
+  "Needs a detail level this plan doesn't include — upgrade to record it.",
+  "Recording detail beyond Card is not included on Community.",
+  "Every recording level is available on every plan.",
   // ── Task 3's APPROVED FORMS (the help-tree allowlist) ──
   // These are positives in the opposite sense to everything else here: they are
   // the shapes the help copy is ALLOWED to use, so each one is a real sentence
@@ -1425,7 +1439,11 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
     { key: "billing.community.f5", plan: "community", polarity: "denied", features: ["exports.branded", "dashboard.player_profiles"] },
     { key: "billing.community.f6", plan: "community", polarity: "denied", features: ["dashboard.branding"] },
     { key: "billing.community.f7", plan: "community", polarity: "denied", features: ["realtime"] },
-    { key: "billing.pro.f4", plan: "pro", polarity: "granted", features: ["scoring.ball_by_ball", "scoring.rally_by_rally"] },
+    // W1 (entitlements v18): was `["scoring.ball_by_ball", "scoring.rally_by_rally"]`
+    // until V390 deleted both rows. The bullet is now the third capability that
+    // sentence used to name — `stats.player` — which is the one of the three
+    // that is still Pro-only.
+    { key: "billing.pro.f4", plan: "pro", polarity: "granted", features: ["stats.player"] },
     { key: "billing.pro.f5", plan: "pro", polarity: "granted", features: ["dashboard.branding"] },
     { key: "billing.pro.f6", plan: "pro", polarity: "granted", features: ["exports"] },
     { key: "billing.pro.f7", plan: "pro", polarity: "granted", features: ["realtime"] },
@@ -3194,5 +3212,85 @@ describe("the ended-pass next-edition link (cadence-neutral)", () => {
       );
     });
     expect(faults).toEqual([]);
+  });
+});
+
+/**
+ * ── NOTHING IN ANY DICTIONARY SELLS SCORING DETAIL (entitlements v18 / W1) ───
+ *
+ * V390 deleted `scoring.ball_by_ball`, `scoring.rally_by_rally` and
+ * `scoring.match_timeline` from `plan_entitlements`, and the same wave deleted
+ * their gate from `scoreEvent` and the batch importer. Every band of recording
+ * detail is now free on every plan.
+ *
+ * The three tests this wave inherited already fail when a BULLET is pinned to a
+ * row that no longer exists. None of them can see a sentence — an upsell reason,
+ * a help paragraph, an error message — that names the capability and a price in
+ * the same breath while pointing at no entitlement row at all. That is the
+ * shape that survives a row deletion, and it is the one a customer reads.
+ *
+ * Scanned across ALL EIGHT dictionary files, not the two this file's other
+ * rules read: `errors.json` and `emails.json` are where an upsell reason ends
+ * up when it is not on the pricing page.
+ */
+describe("no dictionary string sells scoring detail (W1: it is free on every plan)", () => {
+  const DICT_FILES = readdirSync("src/dictionaries/en")
+    .filter((f) => f.endsWith(".json"))
+    .map((f) => f.replace(/\.json$/, ""))
+    .sort();
+
+  const everyValue = (): Array<readonly [string, string]> =>
+    DICTIONARY_LOCALES.flatMap((locale) =>
+      DICT_FILES.flatMap((file) =>
+        Object.entries(
+          JSON.parse(readFileSync(`src/dictionaries/${locale}/${file}.json`, "utf8")) as Record<
+            string,
+            unknown
+          >,
+        )
+          .filter((entry): entry is [string, string] => typeof entry[1] === "string")
+          .map(([key, value]) => [`${locale}/${file}.json ${key}`, value] as const),
+      ),
+    );
+
+  it("scans every file, in every locale — not a subset", () => {
+    expect(DICT_FILES, "a dictionary file appeared or vanished").toContain("ui");
+    expect(DICT_FILES).toContain("marketing");
+    expect(DICT_FILES).toContain("errors");
+    expect(DICT_FILES.length).toBeGreaterThanOrEqual(7);
+    expect(everyValue().length, "the scan resolved almost nothing").toBeGreaterThan(4000);
+  });
+
+  it("names no plan beside ball-by-ball, rally-by-rally, a match timeline or a detail level", () => {
+    expect(scoringFreeClaimFaults(everyValue())).toEqual([]);
+  });
+
+  /**
+   * …and the rule fires. Each of these is a string that shipped in this repo
+   * before W1, or the exact shape of one; a rule that returned `[]` for all of
+   * them would be decoration. The last two are the NEGATIVE controls: naming
+   * the capability alone, or the plan alone, is not a fault — the help tree and
+   * the billing articles have to do both.
+   */
+  it("is a check, not a restatement", () => {
+    const faults = scoringFreeClaimFaults([
+      ["feature-copy", "Ball-by-ball scoring is a Pro feature."],
+      ["feature-copy", "Match timelines (scorers, cards, minutes) are a Pro feature."],
+      ["help/badminton", "Rally-by-rally is the finest level and needs a plan that includes it."],
+      ["help/batch-import", "Needs a detail level this plan doesn't include."],
+      ["help/fidelity", "Timeline and Detail need a plan that includes match-timeline scoring."],
+      ["discipline", "Ball-by-ball attribution is itself a Pro feature."],
+    ]);
+    expect(faults).toHaveLength(6);
+    expect(faults[0]).toContain("presents scoring detail as paid");
+
+    expect(
+      scoringFreeClaimFaults([
+        ["ok/capability-only", "Cricket divisions score ball by ball: one tap per delivery."],
+        ["ok/plan-only", "Custom branding and the API are Pro features."],
+        ["ok/affirmation", "Every detail level is available on every plan."],
+      ]),
+      "naming the capability, or the plan, or saying it is free, is not a fault",
+    ).toEqual([]);
   });
 });

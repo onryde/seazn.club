@@ -507,6 +507,65 @@ export function passCreditGrantFaults(rungs: Rung[]): string[] {
   return faults;
 }
 
+/**
+ * ── SCORING DETAIL IS NEVER FOR SALE (entitlements v18 / W1, owner ruling
+ * 2026-08-30) ───────────────────────────────────────────────────────────────
+ *
+ * `scoring.ball_by_ball`, `scoring.rally_by_rally` and `scoring.match_timeline`
+ * were deleted from `plan_entitlements` by V390 and their server gate was
+ * deleted from `scoreEvent` and the batch importer. How much detail a scorer
+ * records is now a UX choice (`PadSpec.fidelity`), not a price boundary.
+ *
+ * Copy is the half that does not move on its own. A string that still tells a
+ * customer that ball-by-ball, rally-by-rally, a match timeline or a recording
+ * detail level costs money is the worst of the two possible errors: a free org
+ * either pays for something it already has, or never tries the feature at all.
+ * Free in the product and paid on the page is strictly worse than paid in both.
+ *
+ * SHAPE: the caller supplies `[id, text]` pairs — one dictionary key and its
+ * value, or one help-article SENTENCE and its article slug. A sentence, not a
+ * whole article: "every plan can charge entry fees" and "cricket scores ball by
+ * ball" are two true claims that share a page, and a window that crossed the
+ * full stop between them would read them as one false one.
+ *
+ * It is deliberately a PAIR test. Naming the capability is fine (the help tree
+ * has to, to explain it) and naming a plan is fine (the billing articles have
+ * to). Only the two TOGETHER assert a price, and only that is a fault.
+ */
+export const SCORING_DETAIL =
+  /\b(ball[- ]by[- ]ball|rally[- ]by[- ]rally|match[- ]timelines?|recording detail|scoring detail|detail levels?)\b/i;
+
+/** The plan NAMES, case-sensitive on purpose: they are proper nouns, and
+ *  matching them case-insensitively would read "a pro scorer" and "the
+ *  community pitch" as pricing claims. */
+export const PAID_PLAN_NAME = /\b(Pro Plus|Pro|Event Pass|Community)\b/;
+
+/** The price VERBS, case-insensitive — these are ordinary words wherever they
+ *  appear, and a sentence-initial "Upgrade" must read the same as an inline
+ *  one. */
+export const PAID_VERB = /\b(upgrades?|upgrading|upgraded|paid plan|entitled|entitlement|unlocks?|plans?)\b/i;
+
+/** The AFFIRMATION, and the reason this rule is not simply "never say `plan`
+ *  near `detail`". The truthful sentence the help tree now has to be able to
+ *  write — "every level is available on every plan" — names a detail level AND
+ *  a plan, and would otherwise be the one string the rule most wants to allow.
+ *  A text that says the thing is free is exempt, whatever else it says. */
+export const SCORING_FREE_AFFIRMATION =
+  /\b(on every plan|on all plans|on any plan|whatever your plan|no matter (?:your|which) plan|at no extra cost|costs nothing|free on every plan|never a paid feature|is never for sale)\b/i;
+
+export function scoringFreeClaimFaults(
+  strings: ReadonlyArray<readonly [id: string, text: string]>,
+): string[] {
+  const faults: string[] = [];
+  for (const [id, text] of strings) {
+    if (SCORING_FREE_AFFIRMATION.test(text)) continue;
+    if (SCORING_DETAIL.test(text) && (PAID_PLAN_NAME.test(text) || PAID_VERB.test(text))) {
+      faults.push(`${id}: presents scoring detail as paid: "${text.slice(0, 120)}"`);
+    }
+  }
+  return faults;
+}
+
 /** A rung's live caps, as the matrix holds them. `null` means unlimited. */
 export interface RungCaps {
   key: string;

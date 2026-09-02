@@ -50,6 +50,7 @@ import {
   proseBlocks,
   sentences,
   retiredRunCapProseFaults,
+  scoringFreeClaimFaults,
   riderRateFaults,
   statesFeeLock,
   unmeteredAiRunProseFaults,
@@ -2802,5 +2803,75 @@ describe.skipIf(!HAS_DB)("the OpenAPI checkpoint summary quotes the seeded quota
       ROUTES.find((r) => r.path === "/divisions/{id}/checkpoints" && r.method === "post")
         ?.summary ?? "";
     expect(summary.toLowerCase()).toContain("replaced");
+  });
+});
+
+/**
+ * ── NO HELP ARTICLE SELLS SCORING DETAIL (entitlements v18 / W1) ─────────────
+ *
+ * V390 deleted the three fidelity feature keys from `plan_entitlements` and the
+ * same wave deleted their gate from `scoreEvent` and the batch importer. Every
+ * band of recording detail is free on every plan, and the pad's Recording chip
+ * is a picker with no lock, no plan name and nothing to unlock.
+ *
+ * TREE-WIDE for the reason `unmeteredFaultsAcrossTree` above is: the brief for
+ * this task named six articles and MISSED four — `scoring/fidelity.md`,
+ * `scoring/badminton.md`, `scoring/tabletennis.md` and `scoring/volleyball.md`
+ * — each of which told a reader in as many words that the finest level "needs a
+ * plan that includes it". A guard scoped to a filename list would have shipped
+ * all four. This one reds wherever the sentence lands, including in an article
+ * nobody has written yet.
+ *
+ * SENTENCE-scoped, not article-scoped: `billing/plans.md` names every plan we
+ * sell and `scoring/cricket.md` explains ball-by-ball scoring at length. Both
+ * are true; only the two claims INSIDE ONE SENTENCE assert a price.
+ */
+const scoringFreeFaultsAcrossTree = (
+  extra: Array<{ slug: string; text: string }> = [],
+): { faults: string[]; scanned: number } => {
+  const pairs: Array<readonly [string, string]> = [];
+  const push = (slug: string, markdown: string): void => {
+    for (const block of claimTexts(markdown)) {
+      for (const sentence of sentences(block)) pairs.push([`${slug}.md`, sentence] as const);
+    }
+  };
+  for (const article of allHelpArticles().values()) push(article.slug, helpArticleBySlug(article.slug));
+  for (const e of extra) push(e.slug, e.text);
+  return { faults: scoringFreeClaimFaults(pairs), scanned: pairs.length };
+};
+
+describe("no help article anywhere prices scoring detail (W1: it is free on every plan)", () => {
+  it("the tree, as it stands today, makes the claim nowhere", () => {
+    const { faults, scanned } = scoringFreeFaultsAcrossTree();
+    expect(scanned, "the scan resolved almost no sentences").toBeGreaterThan(1500);
+    expect(faults).toEqual([]);
+  });
+
+  // ANTI-VACUITY, in the exact shape the brief missed four times: an article
+  // this list never names, saying it in the words those four used.
+  it("would catch the claim in an article this list never named", () => {
+    const { faults } = scoringFreeFaultsAcrossTree([
+      {
+        slug: "scoring/some-sport-nobody-named",
+        text: "Rally-by-rally is the finest level and needs a plan that includes it.",
+      },
+    ]);
+    expect(faults.join(" ")).toContain("presents scoring detail as paid");
+  });
+
+  // …and it does not fire on the two things the tree legitimately does: explain
+  // the capability, and name the plans.
+  it("leaves a true sentence alone", () => {
+    const { faults } = scoringFreeFaultsAcrossTree([
+      {
+        slug: "scoring/probe-true",
+        text: [
+          "Cricket divisions score ball by ball: one tap per delivery.",
+          "Pro covers 5 organisations and Pro Plus covers 10.",
+          "Every detail level is available on every plan.",
+        ].join("\n\n"),
+      },
+    ]);
+    expect(faults.filter((f) => f.startsWith("scoring/probe-true"))).toEqual([]);
   });
 });
