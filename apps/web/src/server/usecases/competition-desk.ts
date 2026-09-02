@@ -200,6 +200,13 @@ export async function getCompetitionDesk(
 
 /** The competition's own pill: in play beats match day beats everything else. */
 export function competitionPhase(desk: CompetitionDesk): DivisionPhase | "in_play" {
+  // A competition with no divisions has not begun, so it cannot be finished.
+  // The empty `phases` array below satisfies none of the `includes` tests and
+  // used to fall through to "finished" — the first thing an organiser saw
+  // after creating a competition was "Finished · 0 divisions" sitting above
+  // "No divisions yet". Same vacuous-truth shape as the division rule this
+  // wave already amended (spec amendment 2), one level up.
+  if (desk.divisions.size === 0) return "setting_up";
   if (desk.in_play > 0) return "in_play";
   const phases = [...desk.divisions.values()].map((d) => d.phase);
   if (phases.includes("match_day")) return "match_day";

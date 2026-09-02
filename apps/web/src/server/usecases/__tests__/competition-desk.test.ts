@@ -79,6 +79,24 @@ describe.skipIf(!HAS_DB)("getCompetitionDesk", () => {
     await sql.end({ timeout: 1 });
   });
 
+  // Found by driving the product: a competition created seconds ago rendered
+  // "Finished · 0 divisions" in its masthead, directly above the "No divisions
+  // yet" empty state. `competitionPhase` derives from the division phases, and
+  // an EMPTY set satisfied none of the `includes` tests and fell through to
+  // finished — the same vacuous truth the division rule was amended for.
+  it("a competition with no divisions is setting up, never finished", async () => {
+    const { auth } = await seedOrg();
+    const comp = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "Af Empty " + randomUUID().slice(0, 6),
+      visibility: "private",
+      branding: {},
+    });
+    const desk = await getCompetitionDesk(auth, comp.id);
+    expect(desk.divisions.size).toBe(0);
+    expect(competitionPhase(desk)).toBe("setting_up");
+  });
+
   it("a fresh division with no stage is setting_up with no attention", async () => {
     const { auth } = await seedOrg();
     const { competitionId, divisionId } = await seedDivision(auth, 4);
