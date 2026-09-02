@@ -4626,6 +4626,7 @@ export type DictionaryKey =
   | "scorepad.attribution.away"
   | "scorepad.attribution.home"
   | "scorepad.attribution.noRoster"
+  | "scorepad.attribution.noRosterRequired"
   | "scorepad.attribution.person"
   | "scorepad.attribution.required"
   | "scorepad.attribution.side"

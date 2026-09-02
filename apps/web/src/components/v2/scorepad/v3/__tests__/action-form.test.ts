@@ -499,6 +499,63 @@ describe("ActionFormList — attribution items (defect 1: the seam was dropped, 
     expect(chipsOf(group!)).toHaveLength(0);
   });
 
+  // R8 branch review, finding 6 — a REQUIRED person item with an empty
+  // roster renders "no roster" and zero chips, so `checkActionValidity` can
+  // never be satisfied and Confirm is disabled FOREVER. Not a regression
+  // (the engine's strictObject already refused the payload), but before R8
+  // the tap dead-ended at the engine, and now it dead-ends at a screen that
+  // offers no way out at all. The scorer needs to be told what to do.
+  it("a REQUIRED person item with zero candidates words the way out — Confirm is otherwise permanently unsatisfiable", () => {
+    const island = renderIsland(ActionFormList, {
+      actions: [
+        action({
+          type: "cricket.review",
+          labelKey: label("Review"),
+          attribution: [{ kind: "person", path: "person", required: true }],
+        }),
+      ],
+      t,
+      submittingType: null,
+      onSubmit: () => {},
+      squads: NO_SQUADS,
+      lineups: NO_LINEUPS,
+      personNames: NO_NAMES,
+    });
+    click(buttonsOf(island.tree())[0]!); // expand
+    const group = groupFor(island.tree(), "person")!;
+
+    // The dead end is real: nothing to tap, and Confirm cannot be satisfied.
+    expect(chipsOf(group)).toHaveLength(0);
+    const confirm = buttonsOf(island.tree()).find((b) => textOf(b) === "scorepad.action.confirm")!;
+    expect(propsOf(confirm).disabled).toBe(true);
+
+    // ...so the row must say what to DO, not merely that the roster is empty.
+    expect(textOf(group)).toContain("scorepad.attribution.noRosterRequired");
+  });
+
+  it("an OPTIONAL item with zero candidates keeps the plain 'no roster' wording — nothing to escalate, Confirm still works", () => {
+    const island = renderIsland(ActionFormList, {
+      actions: [
+        action({
+          type: "cricket.review",
+          labelKey: label("Review"),
+          attribution: [{ kind: "person", path: "person" }],
+        }),
+      ],
+      t,
+      submittingType: null,
+      onSubmit: () => {},
+      squads: NO_SQUADS,
+      lineups: NO_LINEUPS,
+      personNames: NO_NAMES,
+    });
+    click(buttonsOf(island.tree())[0]!); // expand
+    const group = groupFor(island.tree(), "person")!;
+    expect(textOf(group)).not.toContain("scorepad.attribution.noRosterRequired");
+    const confirm = buttonsOf(island.tree()).find((b) => textOf(b) === "scorepad.action.confirm")!;
+    expect(propsOf(confirm).disabled).toBeFalsy();
+  });
+
   it("a SIDE item always offers exactly Home/Away regardless of squads — its candidates come from lineups, not the roster", () => {
     const island = renderIsland(ActionFormList, {
       actions: [

@@ -4393,6 +4393,7 @@
   "scorepad.attribution.home": "Local",
   "scorepad.attribution.away": "Visitante",
   "scorepad.attribution.noRoster": "Todavía no hay una alineación disponible.",
+  "scorepad.attribution.noRosterRequired": "Esta acción necesita una persona nombrada. Añade primero una alineación para este encuentro.",
   "scorepad.attribution.required": "Obligatorio",
   "scorepad.timeline.heading": "Actividad",
   "scorepad.timeline.empty": "Todavía no hay eventos registrados.",

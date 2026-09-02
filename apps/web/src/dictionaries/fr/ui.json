@@ -4393,6 +4393,7 @@
   "scorepad.attribution.home": "Domicile",
   "scorepad.attribution.away": "Extérieur",
   "scorepad.attribution.noRoster": "Aucun effectif disponible pour le moment.",
+  "scorepad.attribution.noRosterRequired": "Cette action nécessite une personne nommée. Ajoutez d'abord une composition pour cette rencontre.",
   "scorepad.attribution.required": "Obligatoire",
   "scorepad.timeline.heading": "Activité",
   "scorepad.timeline.empty": "Aucun événement enregistré pour le moment.",

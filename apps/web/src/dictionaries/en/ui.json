@@ -4393,6 +4393,7 @@
   "scorepad.attribution.home": "Home",
   "scorepad.attribution.away": "Away",
   "scorepad.attribution.noRoster": "No roster available yet.",
+  "scorepad.attribution.noRosterRequired": "This action needs a named person. Add a lineup for this fixture first.",
   "scorepad.attribution.required": "Required",
   "scorepad.timeline.heading": "Activity",
   "scorepad.timeline.empty": "No events recorded yet.",

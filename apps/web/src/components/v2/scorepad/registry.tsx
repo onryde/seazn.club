@@ -101,11 +101,26 @@ function toLineupSlot(s: LineupSlotIn, index: number): LineupSlot {
     // optional field that is merely never set type-checks perfectly.
     //
     // What it unlocks: the substitution sheet's badge builders
-    // (`footballCandidateMeta`, and hockey/ice hockey's shared `buildSwap`)
-    // read `member.positionKey ?? member.squadNumber`, and `memberFromSlot`
-    // (core/lineup.ts) deliberately drops a BENCH slot's declared position —
-    // a preference, not an occupancy. So before this line the entire ON step
-    // was unbadgeable in principle, not merely unbadged.
+    // (`footballCandidateMeta` in v3/skins/football.tsx, and the shared
+    // `periodCandidateMeta` in v3/skins/period-shared.ts that hockey and ice
+    // hockey use) lead with the SQUAD NUMBER and fall back to `positionKey`:
+    //
+    //     const lead = member.squadNumber !== undefined
+    //       ? String(member.squadNumber) : member.positionKey;
+    //
+    // — owner ruling of 2026-09-01, superseding the position-led wording of
+    // 2026-08-30 (quoted from `footballCandidateMeta`'s own docstring, which
+    // is the ruling of record). R8 branch review: this comment used to say
+    // `member.positionKey ?? member.squadNumber`, i.e. exactly backwards, and
+    // it understated the blast radius with it.
+    //
+    // The real reach is every NUMBERED member, not just the bench.
+    // `memberFromSlot` (core/lineup.ts) deliberately drops a BENCH slot's
+    // declared position — a preference, not an occupancy — so before this
+    // line the entire ON step was unbadgeable in principle, not merely
+    // unbadged. But a numbered STARTER already had a badge, and this line
+    // flips its lead from the position code to the shirt number. An
+    // unnumbered starter still falls back to their position, unchanged.
     // `squad-number-seam.test.ts` drives that from the wire row through the
     // real fold into the real builder.
     //

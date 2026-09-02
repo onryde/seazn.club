@@ -4393,6 +4393,7 @@
   "scorepad.attribution.home": "Thuis",
   "scorepad.attribution.away": "Uit",
   "scorepad.attribution.noRoster": "Nog geen opstelling beschikbaar.",
+  "scorepad.attribution.noRosterRequired": "Voor deze actie is een genoemde persoon nodig. Voeg eerst een opstelling toe voor deze wedstrijd.",
   "scorepad.attribution.required": "Verplicht",
   "scorepad.timeline.heading": "Activiteit",
   "scorepad.timeline.empty": "Nog geen gebeurtenissen geregistreerd.",

@@ -260,7 +260,18 @@ function renderAttributionRow(
       </span>
       {required && <p className="text-xs font-medium text-red-600">{requiredMicrocopy}</p>}
       {options.length === 0 ? (
-        <p className="text-xs text-slate-600">{t("scorepad.attribution.noRoster")}</p>
+        // R8 branch review, finding 6 — a REQUIRED item with an empty roster
+        // is a DEAD END: zero chips to tap, and `checkActionValidity` can
+        // never be satisfied, so Confirm stays disabled forever. Required
+        // person items really exist (cricket's striker/nonStriker/bowler and
+        // `wicket.out`). Not a regression — the engine's `z.strictObject`
+        // already refused such a payload — but the tap used to dead-end at
+        // the engine and now dead-ends at a screen, so the screen owes the
+        // scorer the way out. An OPTIONAL item has nothing to escalate:
+        // Confirm still works without it, so it keeps the plain wording.
+        <p className={required ? "text-xs font-medium text-amber-700" : "text-xs text-slate-600"}>
+          {t(required ? "scorepad.attribution.noRosterRequired" : "scorepad.attribution.noRoster")}
+        </p>
       ) : (
         <div className="flex flex-wrap gap-2">
           {options.map((opt) => {
