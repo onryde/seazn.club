@@ -1832,6 +1832,10 @@ function checkExpected(p: PackShapeOut, ctx: Ctx): void {
   });
 
   const championed = new Set<string>();
+  /** Stage-scoped champions only: (division, stage) -> the entrant crowned.
+   *  A division-scoped champion (no `stageRef`) is deliberately NOT collected —
+   *  see the finalRanks check below. */
+  const stageChampion = new Map<string, string>();
   p.expected.champions.forEach((c, i) => {
     const base: (string | number)[] = ["expected", "champions", i];
     if (!checkDivision(base, c.divisionRef)) return;
@@ -1848,6 +1852,7 @@ function checkExpected(p: PackShapeOut, ctx: Ctx): void {
       );
     }
     championed.add(scope);
+    if (c.stageRef !== undefined) stageChampion.set(fixtureKey(c.divisionRef, c.stageRef), c.entrant);
     if (c.stageRef !== undefined && !(stagesByDivision.get(c.divisionRef) ?? new Set<string>()).has(c.stageRef)) {
       issue(ctx, [...base, "stageRef"], `unknown stage ref "${c.stageRef}" for division "${c.divisionRef}"`);
     }
@@ -1889,13 +1894,36 @@ function checkExpected(p: PackShapeOut, ctx: Ctx): void {
       }
       seen.add(ref);
     });
+    // The pair that ALWAYS coexists on the kind this block exists for. The
+    // table rule below covers a pair that can NEVER coexist there —
+    // `expected.tables` is a hard error on a bracket stage — so without this a
+    // knockout could say `champions: e-alpha` and, two lines later,
+    // `finalRanks.order: [e-bravo, …]`, and parse clean. Which is B06's exact
+    // shape: a champion and a placement order and no table at all.
+    //
+    // STAGE-SCOPED champions only. A division-scoped champion is the OVERALL
+    // winner of a multi-stage division and need not be any particular stage's
+    // first place, so comparing it would be the over-refusal the pool-table
+    // exclusion above was careful to avoid.
+    const champion = stageChampion.get(scope);
+    if (champion !== undefined && fr.order[0] !== champion) {
+      issue(
+        ctx,
+        [...base, "order", 0],
+        `stage "${fr.stageRef}" crowns "${champion}" but its final order starts with ` +
+          `"${fr.order[0]}" — a champion IS first place, and one fact stated in two blocks ` +
+          `must not disagree`,
+      );
+    }
     const table = tableOrderOf.get(scope);
     if (table !== undefined && table.join("\u0000") !== fr.order.join("\u0000")) {
       issue(
         ctx,
         [...base, "order"],
         `stage "${fr.stageRef}" declares BOTH an expected table and a final order, and they disagree — ` +
-          `the table ranks [${table.join(", ")}], this order says [${fr.order.join(", ")}]. One fact, one answer`,
+          `the table ranks [${table.join(", ")}], this order says [${fr.order.join(", ")}]. One fact, one answer. ` +
+            `The comparison is EXACT, so where a stage carries a table the order must be complete — a ` +
+            `published top-three beside a full league table is refused here rather than half-checked`,
       );
     }
   });

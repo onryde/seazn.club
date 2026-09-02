@@ -2325,6 +2325,50 @@ describe("expected.finalRanks — a stage's placement order", () => {
     );
   });
 
+  it("refuses a final order whose FIRST place is not the stage's own champion", () => {
+    // The pair that always coexists on a bracket. `expected.tables` is a hard
+    // error on bracket kinds, so the table rule below guards a pair that can
+    // never occur there — while `champions` + `finalRanks` with no table is
+    // exactly B06's shape. Before this rule the pack could say e-alpha won and,
+    // two lines later, that e-bravo finished first, and parse clean.
+    expectIssue(
+      withRanks(["e-bravo", "e-alpha"], "s-league", (p) => {
+        (p["expected"] as Record<string, unknown>)["champions"] = [
+          { divisionRef: "d-main", stageRef: "s-league", entrant: "e-alpha" },
+        ];
+      }),
+      ["expected", "finalRanks", 0, "order", 0],
+      /crowns "e-alpha" but its final order starts with "e-bravo"/,
+    );
+  });
+
+  it("ACCEPTS a final order whose first place IS the stage's champion", () => {
+    const out = parsed(
+      withRanks(["e-alpha", "e-bravo"], "s-league", (p) => {
+        (p["expected"] as Record<string, unknown>)["champions"] = [
+          { divisionRef: "d-main", stageRef: "s-league", entrant: "e-alpha" },
+        ];
+      }),
+    );
+    expect(out.expected.finalRanks[0]?.order[0]).toBe("e-alpha");
+  });
+
+  it("leaves a DIVISION-scoped champion alone — it is the overall winner, not a stage's first place", () => {
+    // Deliberately NOT compared. In a multi-stage division the unscoped
+    // champion is who won the whole thing, which need not top any particular
+    // stage's order; refusing that would be the over-refusal the pool-table
+    // exclusion was careful to avoid. A group-stage order topped by someone
+    // who did not go on to win must stay expressible.
+    const out = parsed(
+      withRanks(["e-bravo", "e-alpha"], "s-league", (p) => {
+        (p["expected"] as Record<string, unknown>)["champions"] = [
+          { divisionRef: "d-main", entrant: "e-alpha" },
+        ];
+      }),
+    );
+    expect(out.expected.finalRanks[0]?.order).toEqual(["e-bravo", "e-alpha"]);
+  });
+
   it("refuses a final order that CONTRADICTS the stage's own expected table", () => {
     // Anti-contradiction, not an oracle: a pack must not state one fact in two
     // blocks and have them disagree, exactly as `rank` must equal its row's

@@ -138,6 +138,23 @@ function foldCfgFor(divisionCfg: unknown, stage: PackStage | undefined): unknown
   return stageScopedFoldCfg(divisionCfg, stage?.config);
 }
 
+// Compile-time: `stage` is a REQUIRED property on all three generator inputs,
+// not an optional one. An optional property does not satisfy a required one, so
+// relaxing any of them back to `stage?:` reds `tsc` HERE — in a non-test file,
+// because `tsconfig.scripts.json:35` excludes `scripts/**/*.test.ts` and a
+// type-level guard written in a test is checked by nothing. Same technique as
+// `EXPECTED_SUITE_IS_REQUIRED` (validate-pack.ts), and for the same reason: the
+// obligation is on callers that do not exist yet, so no runtime test in this
+// suite can witness it.
+type _StageIsRequired = ReconstructSetRalliesInput extends { stage: PackStage | undefined }
+  ? FillPeriodMarkersInput extends { stage: PackStage | undefined }
+    ? ReconstructSetBasedStreamInput extends { stage: PackStage | undefined }
+      ? true
+      : never
+    : never
+  : never;
+export const STAGE_IS_REQUIRED_ON_EVERY_GENERATOR: _StageIsRequired = true;
+
 /** The fixtureId every synthesised envelope carries when the caller names no
  *  fixture. No fold reads it (see `packEnvelope`'s own doc), so it exists only
  *  to keep the synthesis identical to the validator's. */
@@ -275,11 +292,27 @@ export interface ReconstructSetRalliesInput {
    *  own function, so the stream is generated under exactly the cfg stage 0
    *  will later fold it under. */
   readonly cfg: unknown;
-  /** The stage this stream belongs to, when it has one. Its `shootout` /
-   *  `extraTime` keys OVERLAY the division cfg on the fold path — see
-   *  `foldCfgFor`. Absent means no overlay, which is what a single-stage
-   *  division with a plain stage config already gets. */
-  readonly stage?: PackStage;
+  /**
+   * The stage this stream belongs to. Its `shootout` / `extraTime` keys OVERLAY
+   * the division cfg on the fold path — see `foldCfgFor`.
+   *
+   * REQUIRED, and `undefined` must be written out. It was optional, and the
+   * fork survived on OMISSION: `resolveStage` (validate-pack.ts) binds a
+   * SINGLE-STAGE division's only stage whether or not the stream names one, so
+   * a one-stage division carrying a decider key, generated with the argument
+   * left off, reproduced byte for byte the `fold.rejected … ALREADY_DECIDED`
+   * this whole seam was found for. The old doc's own first clause — "optional
+   * because a single-stage division binds without a stageRef" — is exactly the
+   * reasoning that leads an author to omit it.
+   *
+   * Same precedent as `ValidatePackOptions.expectedSuite` (ruling R27): an
+   * argument that silently changes the fold when unset is this repo's classic
+   * inert seam, and making it required turns "the caller must remember" into
+   * `tsc` exit 1. A caller always has the stage in hand — it comes off the same
+   * `PackDivision` as `cfg` — so typing `undefined` costs nothing and becomes a
+   * decision rather than an oversight.
+   */
+  readonly stage: PackStage | undefined;
   /** Who played, on which side. Build it with `packLineupPair` from the same
    *  stream the events are going into — the entrant ids the fold sees are the
    *  SIGILLED pack refs, and a generator that used bare refs would emit
@@ -363,7 +396,8 @@ export function reconstructSetRallies(input: ReconstructSetRalliesInput): PackEv
   // finished stream through `foldMatch` and re-read the ledger. A generator
   // that handed back a stream the product's own import would refuse is worse
   // than one that refused to generate it.
-  verifyAgainstFoldMatch(sportModule, cfg, lineups, events, sets, fixtureId);
+  const foldIssue = foldMatchLedgerIssue(sportModule, cfg, lineups, events, sets, fixtureId);
+  if (foldIssue !== null) throw new Error(foldIssue);
   return events;
 }
 
@@ -509,17 +543,39 @@ function earliestCloseHint(
   return "";
 }
 
-/** The generated stream, re-folded through `foldMatch` and re-read off the
- *  module's ledger. This is the ONLY legality proof this file makes; the walk
- *  itself proves nothing, because it was built with `module.apply`. */
-function verifyAgainstFoldMatch(
+/**
+ * The generated stream, re-folded through `foldMatch` and re-read off the
+ * module's ledger. This is the ONLY legality proof this file makes; the walk
+ * itself proves nothing, because it was built with `module.apply`.
+ *
+ * EXPORTED and returning `string | null` rather than throwing in place, so the
+ * guard's whole behaviour — the fold, the ledger read and the comparison — is
+ * driveable from a test with a deliberately corrupted event list. It used to be
+ * a `void` function whose only test was of `foldAgreementIssue`, the string
+ * compare it delegates to; the re-review showed the surrounding fold had no
+ * test of its own, which is the derivation-tested / consuming-line-untested
+ * shape this branch has now hit three times.
+ *
+ * ITS INVOCATION remains a declared equivalent, and the boundary is structural
+ * rather than incidental: deleting the call from `reconstructSetRallies` leaves
+ * the suite green, because for the ONE stream shape this generator emits —
+ * `core.start` plus unstamped rallies — `foldMatch` does nothing `module.apply`
+ * has not already done. Its extra work is void resolution, `core.suspend` /
+ * `core.resume` consumption and the monotonic game-time guard, and this
+ * generator emits no void, no suspension and no `at` stamp. So no input exists
+ * for which this guard is the only catcher, and a test that manufactured one
+ * would be testing a stream the generator cannot produce. It stays because the
+ * day either fold path grows a check the other lacks, it is the thing that
+ * notices.
+ */
+export function foldMatchLedgerIssue(
   sportModule: AnySportModule,
   cfg: unknown,
   lineups: LineupPair,
   events: readonly PackEvent[],
   sets: readonly ReconstructedSet[],
   fixtureId: string,
-): void {
+): string | null {
   const envelopes = events.map((event, i) => packEnvelope(fixtureId, event, i));
   const { state } = foldMatchWithStoppage(sportModule, cfg, lineups, envelopes, PACK_FOLD_OPTIONS);
   const ledger = setLedger(sportModule, state);
@@ -530,8 +586,7 @@ function verifyAgainstFoldMatch(
   // twenty-two exactness tests instead of the one note test it touched.
   const got = ledger.map((set) => `${scoreText(set)}${set.closed ? "" : "*"}`).join(", ");
   const want = sets.map(scoreText).join(", ");
-  const issue = foldAgreementIssue(got, want);
-  if (issue !== null) throw new Error(issue);
+  return foldAgreementIssue(got, want);
 }
 
 // ---------------------------------------------------------------------------
@@ -554,11 +609,12 @@ export interface ReconstructSetBasedStreamInput {
    * generator never had — so the field that was supposed to close the gap was
    * the one that opened it. One object, one answer.
    *
-   * Optional because a single-stage division binds without a `stageRef` at
-   * all; pass it whenever the division has more than one stage, and always
-   * when the stage's config carries either decider key.
+   * REQUIRED, `undefined` written out — see
+   * `ReconstructSetRalliesInput.stage` for why optional was not safe. Passing
+   * `undefined` yields a stream with no `stageRef` and no overlay, which is
+   * correct only for a division whose stages carry neither decider key.
    */
-  readonly stage?: PackStage;
+  readonly stage: PackStage | undefined;
   readonly fixtureExtKey: string;
   /** Entrant REFS, bare — the sigil is applied where the fold needs it. */
   readonly home: string;
@@ -615,7 +671,7 @@ export function reconstructSetBasedStream(input: ReconstructSetBasedStreamInput)
     events: reconstructSetRallies({
       module: input.module,
       cfg: input.cfg,
-      ...(input.stage === undefined ? {} : { stage: input.stage }),
+      stage: input.stage,
       lineups,
       rallyType: input.rallyType,
       sets,
@@ -639,8 +695,12 @@ export interface FillPeriodMarkersInput {
   /** The stage this fixture belongs to. Its overlay decides which period
    *  markers `padSpec` even OFFERS: football declares `ET_HT`/`ET_FT` only
    *  under `cfg.extraTime.enabled` (`football.ts:2160`) and enters `ET_H1` at
-   *  full time only under the same flag (`:1004`). */
-  readonly stage?: PackStage;
+   *  full time only under the same flag (`:1004`).
+   *
+   *  REQUIRED, `undefined` written out — see
+   *  `ReconstructSetRalliesInput.stage`. This is the entry point the omission
+   *  path was proven on. */
+  readonly stage: PackStage | undefined;
   readonly lineups: LineupPair;
   /**
    * The sheet's own events, GROUPED BY PERIOD: one array per period, in the

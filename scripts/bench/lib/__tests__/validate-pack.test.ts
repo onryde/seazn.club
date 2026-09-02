@@ -2031,6 +2031,7 @@ describe("engine facts that make two of this file's mirrors unfalsifiable today"
       const sportModule = byKey(key);
       const cfg = cfgOf(sportModule, variantKey);
       const events = reconstructSetRallies({
+        stage: undefined,
         module: sportModule,
         cfg,
         lineups: pair,
@@ -2064,6 +2065,7 @@ describe("engine facts that make two of this file's mirrors unfalsifiable today"
       const cfg = cfgOf(sportModule, variantKey);
       const goal = { type: `${key}.goal`, payload: { by: "@e-home" } };
       const events = fillPeriodMarkers({
+        stage: undefined,
         module: sportModule,
         cfg,
         lineups: pair,
