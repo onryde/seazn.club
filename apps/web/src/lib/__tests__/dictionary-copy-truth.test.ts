@@ -3344,25 +3344,75 @@ describe("no dictionary string sells scoring detail (W1: it is free on every pla
   });
 
   /**
-   * WHY `everyValue` SPLITS (review M-3). The affirmation exemption is
-   * whole-TEXT by design — it has to be, or "…available on every plan" could
-   * not be written at all. That makes the SPLIT the caller's job: a value fed
-   * in one piece lets an affirmation in sentence one excuse a price claim in
-   * sentence two. This pins the property rather than trusting the call site,
-   * because the call site is one `.flatMap` a future edit can drop.
+   * ── `everyValue()` REALLY SPLITS, MEASURED ON THE REAL DICTIONARIES ────────
+   *
+   * WHY THE SPLIT MATTERS (review M-3). `scoringFreeClaimFaults`'s affirmation
+   * exemption is whole-TEXT by design — it has to be, or "every level is
+   * available on every plan" could not be written at all. That makes splitting
+   * the CALLER's job: a value fed in one piece lets an affirmation in sentence
+   * one excuse a price claim in sentence two.
+   *
+   * WHY THIS TEST IS SHAPED THE WAY IT IS (re-review, fix round 2). My first
+   * attempt at pinning this called `scoringFreeClaimFaults` on a synthetic
+   * two-sentence string. The re-reviewer reverted `everyValue()`'s `.flatMap`
+   * back to whole-text and ALL FIVE tests in this block stayed green: that test
+   * pinned the SCANNER, which was never at risk, while the call site — the one
+   * `.flatMap` this is actually about — went unexercised. A fixture on both
+   * ends proves the fixture.
+   *
+   * So this drives the REAL producer over the REAL dictionaries, three ways,
+   * each of which fails on its own if the split is reverted:
+   *   1. the scan must yield strictly MORE entries than there are values —
+   *      equality is exactly what whole-text produces;
+   *   2. every entry it yields must BE one sentence, and a violation names the
+   *      locale, file and key that slipped through;
+   *   3. one real, stable multi-sentence key must appear as several entries,
+   *      so the rule is not satisfied by dictionaries that happen to be
+   *      one-sentence throughout.
    */
-  it("a paid claim cannot hide in the second sentence of an exempted value", () => {
+  it("splits real dictionary values into sentences at the call site, not just in principle", () => {
+    // Counted independently of `everyValue`, by re-reading the files: a count
+    // derived from the thing under test would move with it and prove nothing.
+    let rawValues = 0;
+    for (const locale of DICTIONARY_LOCALES) {
+      for (const file of DICT_FILES) {
+        const parsed = JSON.parse(
+          readFileSync(`src/dictionaries/${locale}/${file}.json`, "utf8"),
+        ) as Record<string, unknown>;
+        rawValues += Object.values(parsed).filter((v) => typeof v === "string").length;
+      }
+    }
+    const scanned = everyValue();
+    expect(rawValues, "the independent count resolved almost nothing").toBeGreaterThan(4000);
+    expect(
+      scanned.length,
+      `the scan yielded ${scanned.length} entries for ${rawValues} values — that is whole-text, not sentences`,
+    ).toBeGreaterThan(rawValues);
+
+    // 2. Nothing the scan hands to the guard may be more than one sentence.
+    const unsplit = scanned
+      .filter(([, text]) => sentences(text).length > 1)
+      .map(([id, text]) => `${id}: ${sentences(text).length} sentences — "${text.slice(0, 60)}…"`);
+    expect(unsplit, unsplit.slice(0, 3).join(" | ")).toEqual([]);
+
+    // 3. …and it is not vacuous: a real value that IS several sentences, in
+    //    every locale, must arrive as several entries. `cookie.message` is the
+    //    stable one — three sentences in en/es/fr/nl.
+    for (const locale of DICTIONARY_LOCALES) {
+      const id = `${locale}/common.json cookie.message`;
+      expect(
+        scanned.filter(([entryId]) => entryId === id).length,
+        `${id} must arrive split, or this rule is satisfied by a one-sentence dictionary`,
+      ).toBeGreaterThan(1);
+    }
+
+    // …and the reason the split is load-bearing, stated against the scanner
+    // itself: whole-text, the affirmation excuses the paid sentence beside it.
     const twoClaims =
       "Every detail level is available on every plan. Ball-by-ball scoring is a Pro feature.";
+    expect(scoringFreeClaimFaults([["whole", twoClaims]])).toEqual([]);
     expect(
-      scoringFreeClaimFaults([["whole", twoClaims]]),
-      "whole-value: the affirmation exempts the paid sentence beside it",
-    ).toEqual([]);
-    expect(
-      scoringFreeClaimFaults(sentences(twoClaims).map((s) => ["split", s] as const)),
-      "split: the paid sentence stands on its own and is caught",
+      scoringFreeClaimFaults(sentences(twoClaims).map((part) => ["split", part] as const)),
     ).toHaveLength(1);
-    // …and the scan the suite actually runs is the split one.
-    expect(sentences(twoClaims)).toHaveLength(2);
   });
 });
