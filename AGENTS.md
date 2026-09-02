@@ -367,4 +367,18 @@ one, read its index first. Cross-programme sequencing and gates:
   **closed at 0–3** (no tier 4, ever), and engine comments citing
   **"doc 14" point at a document that does not exist** — the scale's
   semantics live in `packages/engine/src/sport/module.ts`, nowhere else.
+
+- **The competition page, the division ledger, the derived division phase,
+  the fixtures tab as a run sheet** →
+  `docs/superpowers/specs/2026-09-02-competition-desk-prompts/_INDEX.md`,
+  then `_RULES.md` beside it. Design of record:
+  `docs/superpowers/specs/2026-09-02-competition-desk-design.md`.
+  Three rulings that bite immediately: **"Fixture Console" in owner
+  vocabulary means the DIVISION page's `?tab=fixtures`
+  (`components/v2/stages-panel.tsx`), NOT `components/v2/fixture-console.tsx`**
+  (that component belongs to R7); phase and attention are **orthogonal** and a
+  red attention outranks the phase on a pill; and a phase rule set whose tests
+  are all "does the set contain X" **states its empty case first** — the empty
+  set answers no to every question and lands on the default, which shipped
+  three separate vacuous "Finished" defects in one wave.
 <!-- END:orchestration -->
