@@ -779,10 +779,10 @@ async function main() {
   // entitlement grant.
   await scorePadV2AppendSuite(admin, org2.id);
 
-  // --- R8 sweep, task G: the v3 pad's entitlement gating (fidelity band vs
-  // plan) had ZERO smoke coverage — a football.shot band-3 action reachable
-  // on org2 (Pro) and refused 402 on a fresh community org, with a band-0
-  // control proving the free org isn't just blanket-refused. ---
+  // --- R8 sweep task G, inverted by W1 (entitlements v18): a football.shot
+  // band-3 action reachable on org2 (Pro) and EQUALLY reachable on a fresh
+  // community org — recording detail is not a plan boundary any more — with a
+  // band-0 control proving the free org isn't just blanket-accepted. ---
   await footballFidelityGateSuite(admin, org2.id);
 
   // --- R8 sweep, task G: cricket's ball-by-ball and over-by-over lanes,
@@ -5081,9 +5081,12 @@ interface TennisFold {
 /**
  * W4a (#425) — game-time over HTTP on the four sports that grew a time model.
  *
- * PRO path: the full scenario per sport. FREE path: the same four events are
- * Tier-2 scoring, so a community org gets 402 — with a Tier-0 stamped event
- * accepted alongside, so the check cannot pass by blocking everything.
+ * PRO path: the full scenario per sport. FREE path: the same four events on a
+ * community org. They used to be Tier-2 scoring and 402'd there; W1
+ * (entitlements v18, owner ruling 2026-08-30) made every recording level free,
+ * so the free leg now asserts 201 — with a band-0 stamped event accepted
+ * alongside, which is what keeps the leg from passing on a door that accepts
+ * everything, including events it should still refuse.
  */
 async function w4aTimeModelSuite(admin: Session): Promise<void> {
   // Local-run fallback for the one sport no earlier suite reaches (CI runs
@@ -5465,19 +5468,24 @@ async function w4aTimeModelSuite(admin: Session): Promise<void> {
       sameStamp(tenSet2[3]!.at, stamp("S2", 60)),
   );
 
-  // === FREE path — the time model is Tier-2 scoring on three of four sports. ===
+  // === FREE path — the W4a time model on a COMMUNITY org. ===
   // Every W4a event sat in fidelityTiers 2/3 behind scoring.match_timeline
-  // (period/football) or scoring.rally_by_rally (nested/set-based), so a
-  // community org was paywalled out of it. The Tier-0 stamped advance below is
-  // the control: a gate that answered 402 to EVERY stamped event would pass the
-  // three checks below and fail this one.
+  // (period/football) or scoring.rally_by_rally (nested/set-based), and a
+  // community org was paywalled out of all of it.
   //
-  // R6 fix pass 4, finding E (owner ruling, 2026-08-30) — icehockey (and
-  // hockey) suspension.start/.end are the ONE exception now: `period/
-  // kernel.ts` moved them to tier 1 (free), period family only. Football's
-  // sin bin and both racquet interruptions below are untouched and stay
-  // Pro-gated — see the icehockey-suspension check further down, which used
-  // to sit in the loop below asserting the opposite.
+  // W1 (entitlements v18, owner ruling 2026-08-30) ended that: V390 deleted
+  // the three fidelity keys from plan_entitlements and the same wave deleted
+  // `requiredFeatureForEvent` from `scoreEvent` and the batch importer. Every
+  // recording level is free on every plan, so these three tuples — which
+  // asserted 402 + a feature_key here through the R6 wave — now assert 201.
+  //
+  // They are still worth driving, and through the REAL HTTP door rather than
+  // the usecase: a gate removed from one of the two write paths and left in
+  // the other is exactly the shape this file exists to catch, and a community
+  // org posting a sin bin and two interruptions is the only check in the repo
+  // that runs the free plan through the live route. The Tier-0 stamped advance
+  // further down stays as the CONTROL for the opposite failure: a door that
+  // has stopped stamping `at` at all would pass everything above and fail it.
   const free = newSession();
   await signIn(free, `w4a_free_${tag}@example.com`);
   const freeComp = v1data<{ id: string }>(
@@ -5486,7 +5494,11 @@ async function w4aTimeModelSuite(admin: Session): Promise<void> {
       visibility: "public",
     }),
   );
-  const gated: [string, string, string, string, unknown][] = [];
+  // W1: was `gated`, and the fourth member was the feature_key each tuple
+  // expected in the 402 body. It is kept as the key the tuple USED to be
+  // paywalled behind, so the check line names what changed rather than
+  // asserting a bare 201 nobody can trace back to a ruling.
+  const alwaysFree: [string, string, string, string, unknown][] = [];
   const freeIce = await timedFixture(free, freeComp.id, {
     name: "Free Ice",
     sport_key: "icehockey",
@@ -5523,7 +5535,7 @@ async function w4aTimeModelSuite(admin: Session): Promise<void> {
       { kind: "individual", display_name: `Free Sascha ${tag}`, seed: 2 },
     ],
   });
-  gated.push(
+  alwaysFree.push(
     [
       "football sin bin",
       freeFoot.fixtureId,
@@ -5547,25 +5559,26 @@ async function w4aTimeModelSuite(admin: Session): Promise<void> {
     ],
   );
   const freeLedgers = new Map<string, ReturnType<typeof ledger>>();
-  for (const [label, fixtureId, type, featureKey, payload] of gated) {
+  // W1: these formerly 402'd with a feature_key; scoring detail is free on
+  // every plan. The assertion is 201 AND no error body — a 4xx that stopped
+  // carrying `feature_key` would otherwise read as a pass on the status alone.
+  for (const [label, fixtureId, type, formerKey, payload] of alwaysFree) {
     const l = ledger(free, fixtureId);
     freeLedgers.set(fixtureId, l);
     await l.send("core.start", {});
     const res = await l.send(type, payload);
     check(
-      `w4a free: ${label} is Pro-gated (402 ${featureKey})`,
-      res.status === 402 &&
-        (res.json.error as { feature_key?: string } | undefined)?.feature_key === featureKey,
+      `w4a free: ${label} records on community (201; formerly 402 ${formerKey})`,
+      res.status === 201 && res.json.error === undefined,
     );
   }
-  // R6 fix pass 4, finding E (owner ruling, 2026-08-30). This case used to
-  // sit in the `gated` loop above and assert a 402 + `scoring.match_timeline`
-  // feature_key for icehockey.suspension.start, the same as football's sin
-  // bin and the two racquet interruptions still do. `period/kernel.ts`'s
-  // `fidelityTiers` now lists suspStart/suspEnd at tier 1 (free) for the
-  // period family ONLY — every other sport's timeline event above is
-  // untouched and stays Pro. Verified through the REAL HTTP door, not at the
-  // usecase: a free-plan org's own suspension.start now succeeds outright.
+  // R6 fix pass 4, finding E (owner ruling, 2026-08-30). This case used to sit
+  // in the loop above and assert a 402 + `scoring.match_timeline` feature_key
+  // for icehockey.suspension.start; R6 moved suspStart/suspEnd to tier 1 for
+  // the period family and it became free ahead of the others. W1 caught the
+  // rest up, so it is no longer the exception — kept as its own check because
+  // it also reads the FOLD back (the tuples above only read a status), which
+  // is what proves the event was recorded rather than merely accepted.
   const freeIceLedger = ledger(free, freeIce.fixtureId);
   freeLedgers.set(freeIce.fixtureId, freeIceLedger);
   await freeIceLedger.send("core.start", {});
@@ -5575,7 +5588,7 @@ async function w4aTimeModelSuite(admin: Session): Promise<void> {
     at: stamp("P1", 100),
   });
   check(
-    "w4a free: icehockey suspension.start is NO LONGER Pro-gated (owner ruling, R6 fix pass 4)",
+    "w4a free: icehockey suspension.start records on community (201)",
     freeSuspension.status === 201,
   );
   // The control — a Tier-0 event carrying the SAME `at` shape is ALSO free.
@@ -16519,32 +16532,34 @@ async function scorePadV2AppendSuite(admin: Session, proOrgId: string): Promise<
 }
 
 /**
- * R8 sweep, task G — smoke has never asserted the v3 pad's ENTITLEMENT
- * gating: the fidelity BAND (module.ts's closed 0-3 scale) an org's plan
- * resolves a fixture to, and that an action reachable at a HIGHER band on
- * Pro is genuinely absent at the lower band Community caps out at.
- * `resolveFidelityBand`/`requiredFeatureForEvent` (server/usecases/
- * fidelity.ts) compute this server-side off each module's own
- * `fidelityTiers`, and neither is surfaced on any /api/v1 route — smoke can
- * only observe the band THROUGH what a fixture accepts or refuses, which is
- * exactly the limit the pad itself renders under too (its tiles are built
- * off the SAME resolved band, never a raw plan check).
+ * R8 sweep, task G, TURNED AROUND BY W1 (entitlements v18, owner ruling
+ * 2026-08-30).
  *
- * Concrete pair, per the programme index: football's bands 2 and 3 differ
- * by exactly ONE event, `football.shot` (football.ts's own `padSpec.fidelity`
- * comment, "the one band-3 event"; its `fidelityTiers` tier-3 entry keys it
- * to "scoring.ball_by_ball"). V112__entitlements_v2.sql grants that key to
- * pro/business only (community: false) — so a Community fixture must sit
- * BELOW band 3 (refuse `football.shot`) while an identical Pro fixture
- * clears it. `football.goal` (band 0, always free — `requiredFeatureForEvent`
- * treats tier <= 1 as free unconditionally) is the CONTROL: it proves the
- * free fixture is genuinely scoreable, not merely refusing every event — an
- * over-eager gate that 402s everything would pass a "the paid action was
- * refused" check for the wrong reason (AGENTS.md recurring failure class 6).
+ * As written, this suite asserted the v3 pad's ENTITLEMENT gating: that
+ * `football.shot` — football's ONE band-3 event (football.ts's own
+ * `padSpec.fidelity` comment) — was reachable on Pro and refused 402 on
+ * Community, because its `fidelityTiers` tier-3 entry keyed it to
+ * `scoring.ball_by_ball` and V112 granted that key to pro/business only.
+ *
+ * V390 deleted `scoring.ball_by_ball` and the other two fidelity keys from
+ * `plan_entitlements`, and the same wave deleted `fidelityTiers`,
+ * `requiredFeatureForEvent` and `resolveFidelityBand` outright. There is no
+ * band-to-plan resolution left anywhere on the server: `PadSpec.fidelity` is
+ * a UX filter the pad reads, and the band is the scorer's own pick.
+ *
+ * So the suite is INVERTED, not deleted — and it is more valuable inverted
+ * than it was before. The claim it now carries is the acceptance criterion of
+ * the whole wave, driven through the real HTTP door on two orgs at once:
+ * `football.shot` behaves IDENTICALLY on Community and on Pro. A gate left
+ * behind in `scoreEvent` — or reintroduced by a later wave — reds here.
+ *
+ * `football.goal` (band 0, free before and after) stays as the CONTROL, for
+ * the inverse of its original reason: it proves the free fixture is genuinely
+ * scoreable, so a door that accepted everything unconditionally cannot be
+ * told from one that is correctly ungated. The two together bound it.
  *
  * Free-org setup reuses `scorePadV2AppendSuite`'s own primitive just above
- * (a fresh sign-up mints a community-plan org with no plan flip needed) —
- * no new entitlement-setup helper was needed.
+ * (a fresh sign-up mints a community-plan org with no plan flip needed).
  */
 async function footballFidelityGateSuite(admin: Session, proOrgId: string): Promise<void> {
   const shotFixture = async (
@@ -16583,7 +16598,7 @@ async function footballFidelityGateSuite(admin: Session, proOrgId: string): Prom
     outcome: "saved",
   });
   check(
-    "fidelity gate pro: football.shot (band 3, scoring.ball_by_ball) accepted (201) — Pro reaches band 3",
+    "fidelity band pro: football.shot (band 3) accepted (201)",
     proShot.status === 201,
   );
 
@@ -16597,14 +16612,14 @@ async function footballFidelityGateSuite(admin: Session, proOrgId: string): Prom
     outcome: "saved",
   });
   check(
-    "fidelity gate free: football.shot refused 402 PAYMENT_REQUIRED — Community caps below band 3",
-    freeShot.status === 402 && freeShot.json.error?.code === "PAYMENT_REQUIRED",
+    "fidelity band free: football.shot (band 3) accepted (201) on COMMUNITY too — recording detail is not a plan boundary (W1; formerly 402 scoring.ball_by_ball)",
+    freeShot.status === 201 && freeShot.json.error === undefined,
   );
   const freeGoal = await appendScoreEvent(freeOwner, free.fixtureId, "football.goal", {
     by: free.homeId,
   });
   check(
-    "fidelity gate free: football.goal (band 0, always free) still accepted (201) — the refusal above is the band boundary, not a blanket paywall",
+    "fidelity band free: football.goal (band 0) accepted (201) — the control, so an all-accepting door cannot be mistaken for a correctly ungated one",
     freeGoal.status === 201,
   );
 }

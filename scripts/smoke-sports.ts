@@ -570,7 +570,7 @@ const DRIVERS: SportDriver[] = [
         seq,
       );
       check(`${label}: decreasing partial snapshot → 422`, dec.status === 422, `got ${dec.status}`);
-      // Rally-by-rally (Pro) finishes the open set: 10 home rallies → 25-12.
+      // Rally-by-rally finishes the open set: 10 home rallies → 25-12.
       seq = await appendAll(
         s,
         fx.id,
@@ -905,10 +905,22 @@ async function signIn(s: Session, email: string): Promise<V1Res> {
 }
 
 // ---------------------------------------------------------------------------
-// Entitlement gate: fine-fidelity scoring is 402 on community
+// Fine-fidelity scoring on COMMUNITY — 201, not 402
+//
+// W1 (entitlements v18, owner ruling 2026-08-30). This suite asserted the
+// opposite until V390 deleted `scoring.rally_by_rally` (and the other two
+// fidelity keys) from plan_entitlements and the same wave deleted
+// `requiredFeatureForEvent` from `scoreEvent`. Recording detail is not a price
+// boundary any more, so a community org's volleyball rally must be accepted.
+//
+// Kept, not deleted, and pointed the other way: it is the only check in the
+// repo that drives the free plan's finest recording level through the real
+// HTTP door, and the coarse set-summary check below is still the control —
+// a door that accepted everything unconditionally would pass both, while a
+// door that refused everything would pass neither.
 // ---------------------------------------------------------------------------
 
-async function communityGateSuite(): Promise<void> {
+async function communityFineFidelitySuite(): Promise<void> {
   const s = newSession();
   await signIn(s, `community_${tag}@example.com`);
 
@@ -946,18 +958,12 @@ async function communityGateSuite(): Promise<void> {
   await must(s, `/api/v1/divisions/${divId}/start`, "POST");
   await appendAll(s, f.id, [start], 0);
 
-  const rally = await append(
-    s,
-    f.id,
-    { type: "volleyball.rally", payload: { wonBy: f.home_entrant_id } },
-    1,
-  );
-  check(
-    "community: rally-by-rally → 402 PAYMENT_REQUIRED",
-    rally.status === 402 && rally.json.error?.code === "PAYMENT_REQUIRED",
-    `got ${rally.status} ${rally.json.error?.code}`,
-  );
-
+  // COARSE FIRST, then FINE — and the order is load-bearing now that both
+  // land. They share a fixture and therefore a seq counter, and a set summary
+  // is only offered while the current set has no rally in it (volleyball's own
+  // rule, nothing to do with plans): with the rally first the summary would
+  // 409 on the seq the rally just consumed. The summary closes set 1, the
+  // rally then opens set 2.
   const coarse = await append(
     s,
     f.id,
@@ -965,9 +971,38 @@ async function communityGateSuite(): Promise<void> {
     1,
   );
   check(
-    "community: coarse set summary still allowed (doc 10 §2)",
+    "community: coarse set summary accepted (201)",
     coarse.status === 201,
     `got ${coarse.status}`,
+  );
+
+  const rally = await append(
+    s,
+    f.id,
+    { type: "volleyball.rally", payload: { wonBy: f.home_entrant_id } },
+    2,
+  );
+  check(
+    "community: rally-by-rally records (201; formerly 402 scoring.rally_by_rally)",
+    rally.status === 201 && rally.json.error === undefined,
+    `got ${rally.status} ${rally.json.error?.code}`,
+  );
+
+  // …and the door still REFUSES. With both legs above now green, this suite
+  // could not otherwise tell an ungated door from one that accepts anything
+  // at all — and "accepts anything" is exactly what a botched gate removal
+  // looks like. A football event on a volleyball fixture is the cheapest
+  // proof that the append route still reads what it is given.
+  const foreign = await append(
+    s,
+    f.id,
+    { type: "football.goal", payload: { by: f.home_entrant_id } },
+    3,
+  );
+  check(
+    "community: an event the sport does not have is still refused",
+    foreign.status >= 400 && foreign.status !== 402,
+    `got ${foreign.status} ${foreign.json.error?.code}`,
   );
 }
 
@@ -976,9 +1011,9 @@ async function communityGateSuite(): Promise<void> {
 // could not be scored on the pad at all, and nothing here drove a tie past
 // the point of decision to catch it. The DRIVERS cricket entry above never
 // exercises this: it only ever posts coarse `cricket.innings.summary`
-// events, which have no super-over analogue — `cricket.superover.ball` is
-// tier 3 (scoring.ball_by_ball) ball-by-ball only, so a real fixture roster
-// (persons + lineups), not just bare entrants, is load-bearing here.
+// events, which have no super-over analogue — `cricket.superover.ball` is a
+// band-3 ball-by-ball event, so a real fixture roster (persons + lineups), not
+// just bare entrants, is load-bearing here.
 //
 // R8 sweep, task G — the `cricket.ball` payloads below ({over, ballInOver,
 // striker, nonStriker, bowler, runs: {bat}}) are already the exact key set
@@ -991,10 +1026,15 @@ async function communityGateSuite(): Promise<void> {
 
 async function cricketSuperOverSuite(): Promise<void> {
   const s = newSession();
-  const ver = data<{ org_id: string }>(await signIn(s, `superover_${tag}@example.com`));
-  // cricket.ball / cricket.superover.ball are tier 3 — same gate
-  // communityGateSuite exercises above for volleyball's rally-by-rally.
-  await setPlan(ver.org_id, "pro");
+  await signIn(s, `superover_${tag}@example.com`);
+  // NO setPlan: this org stays on COMMUNITY. It used to be flipped to pro for
+  // one reason only — `cricket.ball` / `cricket.superover.ball` sat behind
+  // `scoring.ball_by_ball`, the same gate the volleyball suite above exercised
+  // — and W1 (entitlements v18) deleted that key and its gate. Nothing else
+  // here needs a paid plan: one competition, one division, two team entrants,
+  // one stage and two lineups all sit inside Community's caps. Leaving it on
+  // community makes the whole super-over sequence a second, sport-independent
+  // proof that ball-by-ball scoring is free.
 
   // Two 2-player rosters — tagged so a leftover run's persons can never
   // collide with this run's. Only 2 players per side are ever needed: no
@@ -1182,9 +1222,11 @@ async function main() {
   const ver = data<{ org_id: string }>(await signIn(s, `sports_${tag}@example.com`));
   check("owner signed in + org provisioned", !!ver.org_id);
 
-  // Pro BEFORE any division exists: 8 divisions in one competition and the
-  // fine-fidelity (rally / ball-by-ball) paths need it. Flipping later would
-  // race the 5-min entitlement cache.
+  // Pro BEFORE any division exists: 8 divisions in one competition need it
+  // (Community allows 4). Flipping later would race the 5-min entitlement
+  // cache. The fine-fidelity (rally / ball-by-ball) paths used to need it too
+  // and no longer do — W1 (entitlements v18) made every recording level free —
+  // but the division count alone still does, so this stays.
   await setPlan(ver.org_id, "pro");
 
   const comp = await must(s, "/api/v1/competitions", "POST", { ends_on: "2030-12-31",
@@ -1204,7 +1246,7 @@ async function main() {
     }
   }
 
-  await communityGateSuite();
+  await communityFineFidelitySuite();
   await cricketSuperOverSuite();
 }
 

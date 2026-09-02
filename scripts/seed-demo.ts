@@ -137,9 +137,14 @@ type Ev = { type: string; payload: unknown };
 let iceSeeded = 0;
 let fihSeeded = 0;
 let tennisSeeded = 0;
-// Suspension/card events are tier-2/3 (scoring.match_timeline, Pro) — the
-// community seed keeps its FIH draw but skips the cards.
-let seedIsPro = true;
+// W1 (entitlements v18, owner ruling 2026-08-30): `seedIsPro` is GONE, with
+// its four call sites. It existed for exactly one reason — suspension/card
+// events were tier-2/3 behind `scoring.match_timeline`, so the community seed
+// had to keep its FIH draw and skip the cards or the appends would 402. V390
+// deleted that key and the same wave deleted its gate, so the community demo
+// org now gets the identical card ladder the pro one does, which is the point:
+// the demo is what a prospect looks at to decide whether the free plan can
+// score their sport.
 function resultEvents(
   sport: string,
   variant: string,
@@ -317,30 +322,14 @@ function resultEvents(
       const adv = (to: string) => events.push({ type: "hockey.period.advance", payload: { to } });
       if (scenario === 0) {
         goal(w, { kind: "pc" });
-        if (seedIsPro)
-          events.push({
-            type: "hockey.suspension.start",
-            payload: { by: l, class: "green" },
-          });
+        events.push({ type: "hockey.suspension.start", payload: { by: l, class: "green" } });
         adv("Q2");
-        if (seedIsPro)
-          events.push({
-            type: "hockey.suspension.end",
-            payload: { by: l, class: "green" },
-          });
+        events.push({ type: "hockey.suspension.end", payload: { by: l, class: "green" } });
         goal(l);
         adv("Q3");
-        if (seedIsPro)
-          events.push({
-            type: "hockey.suspension.start",
-            payload: { by: l, class: "yellow" },
-          });
+        events.push({ type: "hockey.suspension.start", payload: { by: l, class: "yellow" } });
         adv("Q4");
-        if (seedIsPro)
-          events.push({
-            type: "hockey.suspension.end",
-            payload: { by: l, class: "yellow" },
-          });
+        events.push({ type: "hockey.suspension.end", payload: { by: l, class: "yellow" } });
         adv("FT"); // level ⇒ draw
         return events;
       }
@@ -562,8 +551,10 @@ const PLAN_PRO: { name: string; divisions: DivPlan[] }[] = [
         template: "league",
         ratio: 1,
       },
-      // FIH with the full card ladder (draw + green/yellow) — cards are Pro
-      // (match_timeline), so the discipline demo lives on this org.
+      // FIH with the full card ladder (draw + green/yellow). Recording the
+      // cards is free on every plan since W1 (entitlements v18); what is still
+      // Pro is `discipline.enforced` — the ledger, thresholds and automatic
+      // suspensions built ON those cards — so the discipline demo lives here.
       {
         name: "FIH Outdoor Cup",
         sport: "hockey",
@@ -755,7 +746,6 @@ async function main() {
   const account = (process.argv.find((a) => a.startsWith("--account="))?.split("=")[1] ?? "pro") as
     "community" | "pro";
   const PLAN = account === "community" ? PLAN_COMMUNITY : PLAN_PRO;
-  seedIsPro = account === "pro";
 
   if (phase === "setup") {
     const email = `smoke-${account}-${1000 + rnd(9000)}@example.com`;
