@@ -4575,6 +4575,8 @@
   "pad.activity.empty": "Nog niets vastgelegd.",
   "pad.activity.recordedBy": "vastgelegd door {name}",
   "pad.activity.void": "Ongeldig maken",
+  "pad.activity.showAll": "Alle activiteit tonen",
+  "pad.activity.showLatest": "Alleen laatste tonen",
   "console.phone.showDetails": "Wedstrijddetails tonen",
   "console.phone.hideDetails": "Wedstrijddetails verbergen",
   "console.phone.lineup": "Opstelling",

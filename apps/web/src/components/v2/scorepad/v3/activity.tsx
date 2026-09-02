@@ -1,3 +1,5 @@
+"use client";
+
 // R2 gap found at sign-off review (2026-08-17): flipping cricket onto the v3
 // lane silently DROPPED the legacy pad's event history.
 //
@@ -42,7 +44,7 @@
 //        server-side once anything has been recorded since. Fixed by
 //        `isVoidableEventType` below, replacing the old bare
 //        `!== "core.void"` check.
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { ClientTime } from "@/components/client-time";
 import { describeEvent, type EventDescription } from "@/lib/event-copy";
 import { buildRibbon, type MsgFn } from "./ribbon";
@@ -510,6 +512,10 @@ export interface ActivityPanelProps {
    * wrong.
    */
   footer?: ReactNode;
+  /** Phone composition (spec §3.9): below `md` show only the latest row until
+   *  the scorer taps the toggle. At `md` and up the toggle is not rendered and
+   *  no row is hidden — desktop markup is what it was. Omitted = today. */
+  collapsible?: boolean;
 }
 
 /**
@@ -587,16 +593,37 @@ export function ActivityPanel({
   heldEventId = null,
   authority = false,
   footer,
+  collapsible = false,
 }: ActivityPanelProps): ReactNode {
   const rows = orderedActivity(events);
   const nameOf = (id: string) => personNames[id] ?? id;
+  const [expanded, setExpanded] = useState(false);
+  // `rows` is `orderedActivity`'s NEWEST-FIRST output (this file's own doc,
+  // above `latestRowDetail`), so the latest-by-seq row is simply `rows[0]` —
+  // no reduce needed, and no risk of picking index 0 of the ASCENDING input.
+  const latestId = rows[0]?.id ?? null;
+  const collapsed = collapsible && !expanded;
 
   return (
     <section className="rounded-2xl border border-slate-200 bg-white" data-role="v3-activity">
       <header className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
         <h2 className="text-sm font-semibold text-slate-700">{t("pad.activity.heading")}</h2>
-        <span className="text-sm font-medium text-slate-600 tabular-nums" data-role="v3-activity-count">
-          {events.length}
+        <span className="flex items-center gap-2">
+          <span className="text-sm font-medium text-slate-600 tabular-nums" data-role="v3-activity-count">
+            {events.length}
+          </span>
+          {collapsible && rows.length > 1 && (
+            <button
+              type="button"
+              data-role="v3-activity-toggle"
+              aria-expanded={expanded}
+              aria-label={t(expanded ? "pad.activity.showLatest" : "pad.activity.showAll")}
+              onClick={() => setExpanded((v) => !v)}
+              className="flex h-11 w-11 items-center justify-center rounded-lg text-slate-600 transition-colors hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400 md:hidden"
+            >
+              <span aria-hidden="true">{expanded ? "▴" : "▾"}</span>
+            </button>
+          )}
         </span>
       </header>
 
@@ -629,7 +656,9 @@ export function ActivityPanel({
             return (
               <li
                 key={event.id}
-                className={`flex items-start gap-3 border-l-[3px] px-4 py-2 ${stripe}`}
+                className={`flex items-start gap-3 border-l-[3px] px-4 py-2 ${stripe}${
+                  collapsed && event.id !== latestId ? " max-md:hidden" : ""
+                }`}
                 data-role="v3-activity-row"
                 data-voided={voided}
                 // The row's own event id. Without it a test can only target
@@ -654,7 +683,7 @@ export function ActivityPanel({
                 )}
                 <span
                   data-role="v3-activity-caption"
-                  className={`min-w-0 flex-1 break-words text-sm ${voided ? "text-slate-400 line-through" : "text-slate-700"}`}
+                  className={`min-w-0 flex-1 break-words text-sm max-md:min-w-0 ${voided ? "text-slate-400 line-through" : "text-slate-700"}`}
                 >
                   {caption.text}
                   {badge !== "none" &&
@@ -755,7 +784,7 @@ export function ActivityPanel({
                   {provenance && (
                     <span
                       data-role="v3-activity-provenance"
-                      className="mt-0.5 block text-xs font-normal text-slate-500 no-underline"
+                      className="mt-0.5 block text-xs font-normal text-slate-500 no-underline max-md:truncate"
                     >
                       {event.recordedAt ? <ClientTime value={event.recordedAt} mode="time" /> : null}
                       {event.recordedAt && event.recordedByLabel ? " · " : null}

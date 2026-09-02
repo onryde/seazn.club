@@ -742,6 +742,7 @@ export function FixtureConsole({
         personNames={entrantNames}
         t={msg}
         authority
+        collapsible
         resolveDetail={activityDetail}
         // R7-46. Reads through the ref at call time rather than closing over a
         // value, so the panel does not need to re-render when the pad's view
