@@ -248,10 +248,12 @@ test("configure, register, join, waitlist, approve, opt-out — every screen agr
   //
   // Line ~352 below already does this for `mate2Ctx`; these three were the
   // ones that never got it.
-  const emptyState = { storageState: { cookies: [], origins: [] } } as const;
-  const anonA = await browser.newContext(emptyState);
-  const anonB = await browser.newContext(emptyState);
-  const anonC = await browser.newContext(emptyState);
+  // NOT `as const` — that makes the arrays `readonly` and
+  // `BrowserContextOptions` wants mutable ones (TS2345).
+  const emptyState = () => ({ storageState: { cookies: [], origins: [] } });
+  const anonA = await browser.newContext(emptyState());
+  const anonB = await browser.newContext(emptyState());
+  const anonC = await browser.newContext(emptyState());
   let mate2Ctx: import("@playwright/test").BrowserContext | undefined;
 
   try {
