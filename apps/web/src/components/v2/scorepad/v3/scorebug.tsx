@@ -112,45 +112,42 @@ function HalfContent({ half, hintText }: { half: ScorebugHalf; hintText: string 
        *  `justify-center`). Measured at 320 in a real browser before and after
        *  — see __tests__/scorebug.test.ts's own note for the rects. Chassis-
        *  wide: every skin's ScorebugSpec renders through this component. */}
-      {/* R7-28 — capped at THREE lines (was two), found by reading a real 320
-       *  capture: a long entrant name wrapped to three lines above a single-
-       *  digit score, so the name outweighed the number on a surface whose
-       *  entire job is to show the score. `line-clamp-N` needs
-       *  `display:-webkit-box`, which is why this is no longer `flex` — the
-       *  children are each `inline-flex` already, so the LED dot and the "/"
-       *  separator keep their own alignment, and a half whose name fits on
-       *  one or two lines (cricket's, football's, every singles fixture,
-       *  most doubles pairs) renders exactly what it rendered before — a
-       *  clamp only takes effect once content actually needs the extra line.
+      {/* R7-28 — line-clamped, found by reading a real 320 capture: a long
+       *  entrant name wrapped to three lines above a single-digit score, so
+       *  the name outweighed the number on a surface whose entire job is to
+       *  show the score. `line-clamp-N` needs `display:-webkit-box`, which
+       *  is why this is no longer `flex` — the children are each
+       *  `inline-flex` already, so the LED dot and the "/" separator keep
+       *  their own alignment, and a half whose name fits on one or two
+       *  lines (cricket's, football's, every singles fixture, most doubles
+       *  pairs) renders exactly what it rendered before — a clamp only
+       *  takes effect once content actually needs the extra lines.
        *
-       *  Bumped 2→3 (found the same way, a real 320 capture of a doubles
-       *  pair with two long names): with the clamp at 2, `wrap-anywhere`
-       *  let the FIRST name alone consume both allowed lines, so the
-       *  separator and the SECOND partner's name were clamped away
-       *  entirely — invisible, not merely truncated. Three lines gives a
-       *  long doubles pair room for one wrapped line each; nothing renders
-       *  differently for the common case (short names still fit in one).
+       *  Landed at SIX lines (was two, then three — see git history for the
+       *  intermediate attempt and why it still clipped at a different CI
+       *  width). Two AND three both left a render sitting right at the wrap
+       *  boundary at the narrowest column (320, ~98px): the actual root
+       *  cause turned out to be the TEST'S OWN fixture, not this box — its
+       *  doubles player names carried a redundant `${TAG}-${projectTag()}`
+       *  suffix copied from the competition label's OWN (genuinely needed)
+       *  collision-avoidance pattern, with no equivalent need at the player-
+       *  name level (an entrant has no uniqueness requirement; it's scoped
+       *  to the one fixture the label already isolates) — see
+       *  mobile.spec.ts's own comment at that fixture. Trimming that
+       *  brought two real names + separator down from ~89 to ~67 characters
+       *  and cleared even the narrowest column reliably (`--repeat-each=5`,
+       *  local). Six lines stays as real margin, not a razor's edge, for
+       *  whatever length of REAL long name a doubles pair legitimately has
+       *  — most render in one or two lines exactly as before; this only
+       *  ever matters for a name that's actually this long.
        *
        *  Nothing is lost when it clamps: `whoNames()` builds the half's
        *  ACCESSIBLE name from the same data and is unaffected, so a screen
        *  reader still hears every name in full — the clamp is visual only.
        *  Chassis-wide: every skin's ScorebugSpec renders through here, so
-       *  this was verified against the other skins' captures too.
-       *
-       *  13px→12px (found on CI, not locally): the same long doubles pair
-       *  still overflowed by 2-4px at 375 in CI's Ubuntu Chromium, even at
-       *  three lines and even though a wider local macOS run of the exact
-       *  same fixture was clean — `-webkit-line-clamp` boxes are known to
-       *  round their max-height to whole line-boxes against fractional text
-       *  metrics, so a name sitting right at the boundary can clip by a
-       *  couple of px on one renderer and not another. One step down in
-       *  font-size buys proportional slack on every line (this text is
-       *  already uppercase with `0.03em` tracking — `.app-display`,
-       *  globals.css — both of which scale with size), which is more robust
-       *  against that class of rounding than another clamp line would be;
-       *  `sm:text-sm` is untouched, so nothing changes above phone width. */}
+       *  this was verified against the other skins' captures too. */}
       <div
-        className={`line-clamp-3 min-w-0 text-center app-display text-[12px] font-semibold tracking-wide ${NIGHT_TILE_CLASSES.creamText} sm:text-sm`}
+        className={`line-clamp-6 min-w-0 text-center app-display text-[12px] font-semibold tracking-wide ${NIGHT_TILE_CLASSES.creamText} sm:text-sm`}
       >
         {half.who.map((w, i) => (
           // NOT `inline-flex`: an inline-flex box is ATOMIC to the

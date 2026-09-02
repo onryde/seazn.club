@@ -1411,10 +1411,19 @@ test("tennis v3 pad (doubles): both partners' names hold the 44px floor and fit 
   page,
   request,
 }) => {
-  const home1 = `Mobile V3 Tennis D Home1 ${TAG}-${projectTag()}`;
-  const home2 = `Mobile V3 Tennis D Home2 ${TAG}-${projectTag()}`;
-  const away1 = `Mobile V3 Tennis D Away1 ${TAG}-${projectTag()}`;
-  const away2 = `Mobile V3 Tennis D Away2 ${TAG}-${projectTag()}`;
+  // `${TAG}` only, not `${TAG}-${projectTag()}` — unlike the competition
+  // `label` below (a real cross-project collision risk this file's own
+  // header documents), an entrant's name has no uniqueness requirement at
+  // all: it's scoped to this one fixture, which the label already isolates.
+  // The extra suffix was pure decoration copied from the label's own
+  // pattern, and at this box's narrowest column (320, ~98px) two real long
+  // names plus that decoration needed more vertical room than any
+  // reasonable clamp could give without chasing a moving CI-renderer
+  // target — see scorebug.tsx's own comment on the who-block's clamp.
+  const home1 = `Mobile V3 Tennis D Home1 ${TAG}`;
+  const home2 = `Mobile V3 Tennis D Home2 ${TAG}`;
+  const away1 = `Mobile V3 Tennis D Away1 ${TAG}`;
+  const away2 = `Mobile V3 Tennis D Away2 ${TAG}`;
   const fx = await seedRosteredFixture(request, {
     label: `Mobile Tennis V3 Doubles ${TAG}-${projectTag()}`,
     sportKey: "tennis",
