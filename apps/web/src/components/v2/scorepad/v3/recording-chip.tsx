@@ -214,10 +214,13 @@ export function RecordingChip({ activeBand, onBandChange, actionCounts, t, plura
             aria-label={pickLabel}
             className="relative w-full max-w-md rounded-t-[20px] bg-white px-3 pb-4 pt-2 shadow-[0_-8px_30px_rgba(21,11,54,0.22)] sm:rounded-[20px] sm:shadow-[0_10px_40px_rgba(21,11,54,0.28)]"
           >
-            {/* The phone affordance only: a grab handle on a card that floats
-                in the middle of a 1280 screen would be a lie about how it
-                moves. */}
-            <div aria-hidden="true" className="mx-auto mb-2.5 h-1 w-9 rounded-full bg-slate-300 sm:hidden" />
+            {/* NO GRAB HANDLE (W1/Task 4 review, M-3). The approved mockup drew
+                one, and it was carried over as `aria-hidden` decoration — but
+                this sheet does not respond to a drag at any width, so a bar
+                that reads "drag me down" is a promise the sheet does not keep.
+                Dismissal is the scrim, Escape, or picking a band; all three
+                work. Restore the handle only alongside a real drag-to-dismiss,
+                never on its own. */}
             <h2 className="mb-2 px-1 text-sm font-semibold tracking-[-0.01em] text-slate-900">
               {t("pad.recording.question")}
             </h2>

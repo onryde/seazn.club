@@ -139,6 +139,26 @@ for (const width of [320, 768, 1280]) {
       await expect(bandRow(page, band), `band ${band} must be offered`).toBeVisible();
     }
     await expect(bandRow(page, 3)).toHaveAttribute("aria-checked", "true");
+    // W1/Task 4 review, C-1 — the rows' own counts. The first build computed
+    // these from a tile list the skin had ALREADY truncated to the current
+    // band, so every row above it came back capped and a low-band scorer was
+    // told all four options were identical. Read the four captions here rather
+    // than trusting a unit fixture: this is the only place they are rendered
+    // by the real skin at a real band.
+    const rowCaptions = await page.locator("[data-band]").evaluateAll((rows) =>
+      rows.map((row) => (row.textContent ?? "").match(/(\d+)\s+action/)?.[1] ?? null),
+    );
+    expect(rowCaptions.every((n) => n !== null), `every row must caption a count: ${rowCaptions.join("/")}`).toBe(true);
+    expect(
+      new Set(rowCaptions).size,
+      `the four rows all read alike (${rowCaptions.join("/")}) — the picker is advertising itself as a no-op`,
+    ).toBeGreaterThan(1);
+    // ...and specifically the top two differ, which a GRID-TILE count cannot
+    // express on football: `football.shot` is band 3 and has no tile of its
+    // own, so it rides the never-band-filtered More sheet.
+    expect(Number(rowCaptions[3]), `band 3 must offer more than band 2 (${rowCaptions.join("/")})`).toBeGreaterThan(
+      Number(rowCaptions[2]),
+    );
     const rowBox = (await bandRow(page, 1).boundingBox())!;
     expect(rowBox.height, `a sheet row must be a real target at ${width}`).toBeGreaterThanOrEqual(44);
     expect(await hitAt(page, rowBox)).toBe("1");
@@ -147,7 +167,7 @@ for (const width of [320, 768, 1280]) {
     // --- picking a LOWER band takes the deep tiles off the board ------------
     await bandRow(page, 1).click();
     await expect(chip(page)).toHaveAttribute("aria-expanded", "false");
-    await expect(chip(page)).toContainText("Cards & key moments");
+    await expect(chip(page)).toContainText("Key moments");
     for (const tile of ["card-home", "card-away", "sub-home", "sub-away", "penalty"]) {
       await expect(
         v3Tile(page, tile),
@@ -182,3 +202,71 @@ for (const width of [320, 768, 1280]) {
     await expectNoHorizontalScroll(page);
   });
 }
+
+// ---------------------------------------------------------------------------
+// W1 / Task 4 review, I-2 — the band must not be read during the first render
+// ---------------------------------------------------------------------------
+//
+// `<ScorePad/>` server-renders: `fixture-console.tsx` mounts it unconditionally,
+// with no `mounted` gate and no `ssr: false`. The band was originally seeded
+// from `localStorage` inside the `useState` initializer, so a returning scorer
+// with a stored non-default band got server HTML built at the default and a
+// hydration render built at their pick — React discards the tree and rebuilds
+// it client-side on every fixture page view. With a stored "1" on football the
+// server emits nine tiles and the client's first pass has three.
+//
+// UNTESTABLE IN NODE, WHICH IS WHY IT SHIPPED. `apps/web` vitest has no
+// `window`, so the very guard that made the old initializer "safe" on the
+// server (`typeof window === "undefined"`) also made every unit test agree with
+// it. Only a real browser hydrating real server HTML can see this.
+test("a stored band does not cost a hydration pass on the next page load", async ({ page }) => {
+  test.setTimeout(180_000);
+  const hydrationErrors: string[] = [];
+  // A PRODUCTION React bundle does not spell the word "hydration". It emits
+  // `Minified React error #418` (hydration failed), `#423` (error while
+  // hydrating) or `#425` (text content did not match server-rendered HTML)
+  // with a link to the decoder — so a filter that only looks for the English
+  // sentence passes happily over the very defect it is watching for, which is
+  // exactly what the first version of this test did.
+  const record = (text: string) => {
+    if (/hydrat|did not match|server[- ]rendered HTML|Minified React error #(418|421|423|425)/i.test(text)) {
+      hydrationErrors.push(text);
+    }
+  };
+  page.on("console", (msg) => {
+    if (msg.type() === "error") record(msg.text());
+  });
+  page.on("pageerror", (err) => record(err.message));
+
+  const email = `e2e-hyd-${TAG}-${Math.random().toString(36).slice(2, 7)}@example.com`;
+  await loginUi(page, email);
+  await page.goto("/dashboard", { waitUntil: "load" });
+  const org = await activeOrg(page);
+  await setOrgPlanBySql({ email }, "community");
+  await invalidateOrgEntitlements(page.request, org.id);
+
+  const fx = await seedRosteredFixture(page.request, {
+    label: `Free Hydration ${TAG}`,
+    sportKey: "football",
+    variantKey: "11-a-side",
+    home: [{ fullName: `FH Home ${TAG}`, positionKey: "MF" }],
+    away: [{ fullName: `FH Away ${TAG}`, positionKey: "GK" }],
+  });
+  await openLiveConsole(page, fx);
+
+  // Store a NON-DEFAULT band, the way a scorer does — through the control.
+  await chip(page).click();
+  await bandRow(page, 1).click();
+  await expect(chip(page)).toContainText("Key moments", { timeout: 10_000 });
+  await expect(v3Tile(page, "card-home")).toHaveCount(0);
+
+  // Now reload. This is the load the defect was about: the server knows
+  // nothing of the pick, the client does.
+  hydrationErrors.length = 0;
+  await page.reload({ waitUntil: "load" });
+  await expect(chip(page)).toBeVisible({ timeout: 20_000 });
+  // The pick survives — it is read after mount, not during the first render.
+  await expect(chip(page)).toContainText("Key moments", { timeout: 10_000 });
+  await expect(v3Tile(page, "card-home")).toHaveCount(0);
+  expect(hydrationErrors, `React reported a hydration problem: ${hydrationErrors.join(" | ")}`).toEqual([]);
+});

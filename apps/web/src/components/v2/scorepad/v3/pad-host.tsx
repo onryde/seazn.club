@@ -745,6 +745,91 @@ export function filterTilesByBand(
   });
 }
 
+/**
+ * The distinct event types a scorer can actually DISPATCH at `band`, on this
+ * fixture, right now — the number the Recording sheet promises under each of
+ * its four rows.
+ *
+ * REBUILT PER CANDIDATE BAND, WHICH IS THE WHOLE POINT (W1/Task 4 review, C-1).
+ * The first version of this counted the host's own `allTiles` re-run through
+ * `filterTilesByBand` at each candidate. That is wrong, and wrong in the
+ * direction that makes the picker useless: `allTiles` is `skin.tiles(view)`,
+ * and SEVEN skins band-filter INSIDE `buildTiles` via their own `withinBand`
+ * (football, badminton, tabletennis, tennis, volleyball, generic, boardgame).
+ * So the list handed to the chassis filter has already been truncated to the
+ * CURRENT band, and the chassis filter can only ever REMOVE — every row above
+ * the current band came back capped. Measured on 11-a-side football at H1: at
+ * band 0 or 1 all four rows read the same number, so a scorer sitting at
+ * band 1 opened the picker to decide whether to raise it and was told every
+ * option was identical. Rebuilding the skin's own tiles/sheets/swaps at the
+ * candidate band is what makes the four rows independent of where the scorer
+ * currently is.
+ *
+ * COUNTS ACTIONS, NOT GRID TILES (owner ruling, same review). A tile count
+ * cannot express the difference between football's band 2 and band 3 at all:
+ * `football.shot` is band 3 and has NO tile of its own — it rides the More
+ * sheet, and the More tile is deliberately never band-filtered
+ * (`filterTilesByBand`'s own MORE case), so it is counted once at every band.
+ * The copy says "{count} actions on the pad"; this is that promise kept —
+ * every type reachable through a dedicated surface (tile, sheet, swap, or a
+ * tapModel-S scorebug half) UNION every type left in the More sheet.
+ *
+ * Which also settles the suppression question the review raises (I-1): a band
+ * whose More sheet is empty contributes nothing here, so the count can no
+ * longer advertise a More tile the grid then suppresses. No second suppression
+ * rule to keep in step with `suppressEmptyMoreTile` — an empty set has nothing
+ * to subtract.
+ *
+ * TYPES, NOT CONTROLS: football's Goal Home and Goal Away are two buttons for
+ * ONE dispatchable action (`football.goal`), and they count once. That is the
+ * ruling's own wording ("the dispatchable event types reachable at band N")
+ * and it is what makes the number comparable across bands rather than a
+ * restatement of the grid's shape.
+ */
+export function reachableActionTypes(
+  skin: SkinDefV3,
+  spec: PadSpec,
+  view: PadHostView,
+  band: FidelityBand,
+): Set<string> {
+  // The view the skin would see if the scorer picked this band. Reused by
+  // reference when it IS the current band, so the common row costs nothing
+  // extra and cannot disagree with the grid the host actually rendered.
+  const at: PadHostView = view.band === band ? view : { ...view, band };
+  const sheets = skin.sheets?.(at);
+  const swaps = skin.swap?.(at) ?? [];
+  const tiles = filterTilesByBand(skin.tiles(at), sheets ?? {}, swaps, spec.fidelity, band);
+  const scorebug = skin.scorebug(at);
+  const refused = new Set(skin.refusedEventTypes?.(at) ?? []);
+
+  // `dedicated` is built exactly as the host builds it, and is used for
+  // exactly what the host uses it for: deciding what the More sheet holds.
+  const dedicated = dedicatedEventTypes(tiles, sheets, swaps, scorebug);
+  const more = moreActions(spec, { state: at.state, summary: at.summary, phase: at.phase, band }, dedicated, refused);
+
+  // ...but it is NOT the reachable set, and the difference is load-bearing.
+  // `dedicatedEventTypes` deliberately keeps a sheet's event CLAIMED when no
+  // tile opens it at all ("left claimed, deliberately" — its own doc), because
+  // for its real job an over-claim only removes a duplicate from More. Counted
+  // as reachable it lies in the other direction: at band 0 football still
+  // BUILDS its card and penalty sheets, no tile opens either, and the caption
+  // would advertise two actions the scorer cannot reach. So the reachable set
+  // is rebuilt from surfaces a thumb can actually land on — an ENABLED tile
+  // (resolved through its own sheet or swap slot) or a tapModel-S scorebug
+  // half — plus whatever survives into More.
+  const types = new Set<string>();
+  for (const tile of tiles) {
+    if (tile.disabled === true) continue;
+    const type = tileEventType(tile, sheets ?? {}, swaps);
+    if (type !== null) types.add(type);
+  }
+  for (const half of scorebug.halves) {
+    if (half.tappable === true && half.tapEvent) types.add(half.tapEvent.type);
+  }
+  for (const action of more) types.add(action.type);
+  return types;
+}
+
 const PHASE_ORDER: readonly PadPhase[] = ["pre", "live", "post"];
 
 /** The distinct phases at least one tile currently declares, canonically
@@ -1434,21 +1519,43 @@ export function PadHostV3(props: PadHostV3Props) {
   // from the Recording chip, and this is the component that filters the tiles
   // with it — one owner, so a picked band and a rendered grid cannot drift.
   //
-  // Seeded lazily from `localStorage`, inside a try: Safari private mode
-  // throws on access, and a scoring pad must not fail to mount because a
-  // preference could not be read. A first-ever load falls through to
-  // `defaultBandFor(spec.fidelity)` — the top band the SPORT declares, not a
-  // constant (see that function's own doc for why carrom must not open at 3).
+  // THE FIRST RENDER NEVER TOUCHES STORAGE (W1/Task 4 review, I-2). This used
+  // to read `localStorage` in the `useState` initializer. `<ScorePad/>` SERVER
+  // -RENDERS — `fixture-console.tsx` mounts it unconditionally, no `mounted`
+  // gate and no `ssr: false` — so the server rendered the default band while a
+  // returning scorer's hydration render read their stored one, and React threw
+  // the whole tree away and re-rendered it client-side on every fixture page
+  // view. With a stored "1" on football the server emits nine tiles and the
+  // client's first render has three. That is the exact regression class
+  // `__tests__/fixture-console-ssr.test.tsx` was written for, and it is
+  // invisible to a node test because there IS no `window` there — the guard
+  // that made the old code "safe" on the server is what hid it.
+  //
+  // The house pattern instead (`schedule-board.tsx`'s density modes): default
+  // in `useState`, storage in a mount `useEffect`. Both renders agree, and the
+  // stored band lands one frame later.
   const bandKey = bandStorageKey(props.fixtureId);
-  const [band, setBand] = useState<FidelityBand>(() => {
+  const [band, setBand] = useState<FidelityBand>(() => defaultBandFor(spec.fidelity));
+  useEffect(() => {
+    // Inside a try: Safari private mode throws on the accessor itself, and a
+    // scoring pad must not fail to mount because a preference could not be
+    // read. Re-runs only when the FIXTURE or the sport's own band map changes,
+    // both of which are re-seeds rather than clobbers — and `onBandChange`
+    // writes through, so a re-run reads back the scorer's own latest pick.
     let stored: string | null = null;
     try {
-      stored = typeof window === "undefined" ? null : window.localStorage.getItem(bandKey);
+      stored = window.localStorage.getItem(bandKey);
     } catch {
       stored = null;
     }
-    return resolveInitialBand(stored, spec.fidelity);
-  });
+    const seeded = resolveInitialBand(stored, spec.fidelity);
+    // `react-hooks/set-state-in-effect` warns here, as it does on
+    // `schedule-board.tsx:856` — the same mount-time storage read, and the same
+    // accepted cost: a preference that cannot be read on the server has to
+    // arrive one frame after mount or not at all. The functional update keeps
+    // the second render a no-op when storage agrees with the default.
+    setBand((current) => (current === seeded ? current : seeded));
+  }, [bandKey, spec.fidelity]);
   const onBandChange = useCallback(
     (next: FidelityBand) => {
       setBand(next);
@@ -1581,20 +1688,26 @@ export function PadHostV3(props: PadHostV3Props) {
     () => filterTilesByBand(allTiles, sheets ?? {}, swapSlots, spec.fidelity, band),
     [allTiles, sheets, swapSlots, spec.fidelity, band],
   );
-  // What the Recording sheet promises under each row: the REAL number of
-  // tiles that band would put on this pad, run through the same filter the
-  // grid above uses. Derived rather than estimated, so two bands a sport does
-  // not distinguish read the same number and the scorer can see it before
-  // tapping rather than after. `sheets` is deliberately not memoized (see its
-  // declaration), so this recomputes with the fold — which is correct: the
-  // count is about the pad as it stands right now.
+  // What the Recording sheet promises under each row — see
+  // `reachableActionTypes` above for why each candidate band rebuilds the
+  // SKIN's own tiles rather than re-filtering the current band's list, and why
+  // the metric is dispatchable actions rather than grid tiles. Derived from
+  // the skin and the engine, never estimated, so two bands a sport genuinely
+  // does not distinguish read the same number and the scorer can see that
+  // before tapping rather than after.
+  //
+  // `view` is the whole dependency: it already carries state, summary, phase,
+  // squads and the fold's events, and every skin call below reads it. `sheets`
+  // is deliberately not memoized (see its declaration), so this recomputes
+  // with the fold — correct, because the count is about the pad as it stands
+  // right now.
   const bandActionCounts = useMemo(() => {
     const counts = {} as Record<FidelityBand, number>;
     for (const candidate of BANDS) {
-      counts[candidate] = filterTilesByBand(allTiles, sheets ?? {}, swapSlots, spec.fidelity, candidate).length;
+      counts[candidate] = reachableActionTypes(props.skin, spec, view, candidate).size;
     }
     return counts;
-  }, [allTiles, sheets, swapSlots, spec.fidelity]);
+  }, [props.skin, spec, view]);
   const availablePhases = useMemo(() => phasesWithTiles(tiles), [tiles]);
   // G3: a skin's own phase(view), when declared, overrides the self-correcting
   // default below rather than being cross-checked against it — see
@@ -1625,9 +1738,15 @@ export function PadHostV3(props: PadHostV3Props) {
     if (adjusting) setAdjusting(false);
   }
 
+  // W1/Task 4 review, M-1: `entitlements` used to ride along here. `PadViewCtx`
+  // no longer declares it (view-model.ts) and `buildPadView` never reads it, so
+  // it was an orphan surviving only because `useMemo`'s generic hides an
+  // excess property from tsc — and it kept an unstable `props.entitlements`
+  // identity in the deps, churning padViewCtx -> padView -> moreActionsList on
+  // every render. Dropped from both.
   const padViewCtx: PadViewCtx = useMemo(
-    () => ({ state: pipeline.state, summary: pipeline.summary, phase, band, entitlements }),
-    [pipeline.state, pipeline.summary, phase, band, entitlements],
+    () => ({ state: pipeline.state, summary: pipeline.summary, phase, band }),
+    [pipeline.state, pipeline.summary, phase, band],
   );
   const padView = useMemo(() => buildPadView(spec, padViewCtx), [spec, padViewCtx]);
   // `sheets` is declared once, further up — it had to move above the tile
