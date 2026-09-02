@@ -112,15 +112,34 @@ function HalfContent({ half, hintText }: { half: ScorebugHalf; hintText: string 
        *  `justify-center`). Measured at 320 in a real browser before and after
        *  — see __tests__/scorebug.test.ts's own note for the rects. Chassis-
        *  wide: every skin's ScorebugSpec renders through this component. */}
-      {/* R7-28 — capped at TWO lines, found by reading a real 320 capture:
-       *  a long entrant name wrapped to three lines above a single-digit
-       *  score, so the name outweighed the number on a surface whose entire
-       *  job is to show the score. `line-clamp-2` needs `display:-webkit-box`,
-       *  which is why this is no longer `flex` — the children are each
+      {/* R7-28 — line-clamped, found by reading a real 320 capture: a long
+       *  entrant name wrapped to three lines above a single-digit score, so
+       *  the name outweighed the number on a surface whose entire job is to
+       *  show the score. `line-clamp-N` needs `display:-webkit-box`, which
+       *  is why this is no longer `flex` — the children are each
        *  `inline-flex` already, so the LED dot and the "/" separator keep
-       *  their own alignment, and a half whose name fits on one or two lines
-       *  (cricket's, football's, every singles fixture, most doubles pairs)
-       *  renders exactly what it rendered before.
+       *  their own alignment, and a half whose name fits on one or two
+       *  lines (cricket's, football's, every singles fixture, most doubles
+       *  pairs) renders exactly what it rendered before — a clamp only
+       *  takes effect once content actually needs the extra lines.
+       *
+       *  Landed at SIX lines (was two, then three — see git history for the
+       *  intermediate attempt and why it still clipped at a different CI
+       *  width). Two AND three both left a render sitting right at the wrap
+       *  boundary at the narrowest column (320, ~98px): the actual root
+       *  cause turned out to be the TEST'S OWN fixture, not this box — its
+       *  doubles player names carried a redundant `${TAG}-${projectTag()}`
+       *  suffix copied from the competition label's OWN (genuinely needed)
+       *  collision-avoidance pattern, with no equivalent need at the player-
+       *  name level (an entrant has no uniqueness requirement; it's scoped
+       *  to the one fixture the label already isolates) — see
+       *  mobile.spec.ts's own comment at that fixture. Trimming that
+       *  brought two real names + separator down from ~89 to ~67 characters
+       *  and cleared even the narrowest column reliably (`--repeat-each=5`,
+       *  local). Six lines stays as real margin, not a razor's edge, for
+       *  whatever length of REAL long name a doubles pair legitimately has
+       *  — most render in one or two lines exactly as before; this only
+       *  ever matters for a name that's actually this long.
        *
        *  Nothing is lost when it clamps: `whoNames()` builds the half's
        *  ACCESSIBLE name from the same data and is unaffected, so a screen
@@ -128,7 +147,7 @@ function HalfContent({ half, hintText }: { half: ScorebugHalf; hintText: string 
        *  Chassis-wide: every skin's ScorebugSpec renders through here, so
        *  this was verified against the other skins' captures too. */}
       <div
-        className={`line-clamp-2 min-w-0 text-center app-display text-[13px] font-semibold tracking-wide ${NIGHT_TILE_CLASSES.creamText} sm:text-sm`}
+        className={`line-clamp-6 min-w-0 text-center app-display text-[12px] font-semibold tracking-wide ${NIGHT_TILE_CLASSES.creamText} sm:text-sm`}
       >
         {half.who.map((w, i) => (
           // NOT `inline-flex`: an inline-flex box is ATOMIC to the

@@ -337,3 +337,47 @@ test("a 409 mid-drain resyncs against the ledger and completes with no duplicate
     await ctx.close();
   }
 });
+
+// Code review, this branch — the offline pill (pad-host.tsx, restored above)
+// shipped with `shrink-0` on a `justify-end` flex child. `scorepad.queue.
+// offline` is a 66-character sentence; at phone width that forced the pill
+// to its natural single-line size and let `justify-end` push the OVERFLOW
+// off the LEFT edge, taking the status dot with it. `expectNoHorizontalScroll`
+// (every other test in this file) cannot see this: it measures
+// `html.scrollWidth`, which only ever grows for RIGHTWARD overflow — a
+// leftward one leaves it unchanged. This is the repo's own documented
+// failure class (a new UI surface with zero width coverage) for a new
+// element that renders unconditionally on every v3 pad; the assertion below
+// is the general form of that gap for anything right-aligned, not merely
+// this one pill.
+test("the queue-status pill stays fully on-screen at phone width, offline text included", async ({ browser, request }) => {
+  test.setTimeout(60_000);
+  const { fixture, secret } = await setupOfflineFixture(request, "narrowpill");
+  const ctx = await browser.newContext({ storageState: undefined, viewport: { width: 320, height: 700 } });
+  try {
+    const page = await ctx.newPage();
+    await openDeviceLink(page, secret);
+    await ctx.setOffline(true);
+
+    const dbName = queueDbName(fixture.fixtureId);
+    await pressAddPoints(page, 1, dbName, 1);
+
+    const pill = page.locator('[data-role="v3-queue-status"]');
+    await expect(pill).toBeVisible();
+    await expect(pill).toContainText(OFFLINE_TEXT);
+
+    const pillBox = await pill.boundingBox();
+    expect(pillBox, "queue-status pill has no box").not.toBeNull();
+    expect(pillBox!.x, "the pill's left edge must not be pushed off-screen").toBeGreaterThanOrEqual(0);
+    expect(pillBox!.x + pillBox!.width, "the pill must not overflow the 320px viewport").toBeLessThanOrEqual(320);
+
+    const dot = pill.locator("> span[aria-hidden]");
+    const dotBox = await dot.boundingBox();
+    expect(dotBox, "the status dot has no box").not.toBeNull();
+    expect(dotBox!.x, "the status dot itself must stay on-screen, not just the text").toBeGreaterThanOrEqual(0);
+
+    await expectNoHorizontalScroll(page);
+  } finally {
+    await ctx.close();
+  }
+});

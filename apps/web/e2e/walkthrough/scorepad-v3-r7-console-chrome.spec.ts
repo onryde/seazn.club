@@ -334,13 +334,20 @@ test("R7 lineup: a one-player sport shows no editor, and football names what its
   // ANTI-VACUITY. The chess half below asserts an ABSENCE, and an absence probe
   // is worthless unless the same anchor is proven to APPEAR somewhere. So the
   // anchor is pinned positive here, on the same run, before it is pinned
-  // negative there. (A first draft of this spec probed
-  // `data-role="lineup-editor"`, which that component does not render at all —
-  // it would have passed in both states and proven nothing.)
-  const editorAnchor = '[data-testid="availability-chip"]';
-  const footballChips = await page.locator(editorAnchor).count();
-  expect(footballChips, "the anchor must actually appear where the editor DOES render").toBeGreaterThan(0);
-  expect(await page.content()).toContain('data-testid="availability-chip"');
+  // negative there. (A first draft of this spec probed `data-role=
+  // "lineup-editor"` — wrong ATTRIBUTE, not a wrong claim: the component's own
+  // root carries `data-testid="lineup-editor"`, lineup-editor.tsx:378 — and
+  // concluded no anchor existed, falling back to `availability-chip`. That
+  // reuse broke the same wave it was written in: `<AvailabilityRoster>`
+  // — the sibling component `lineupEditorApplies` renders INSTEAD of
+  // `<LineupEditor>` for a one-player sport — renders its own
+  // `availability-chip` per roster member, so a 1-member chess side makes the
+  // "absent" anchor appear too. `lineup-editor` is exclusive to the real
+  // editor; `<AvailabilityRoster>` carries `data-testid="availability-roster"`.)
+  const editorAnchor = '[data-testid="lineup-editor"]';
+  const footballEditors = await page.locator(editorAnchor).count();
+  expect(footballEditors, "the anchor must actually appear where the editor DOES render").toBeGreaterThan(0);
+  expect(await page.content()).toContain('data-testid="lineup-editor"');
 
   await page.screenshot({ path: `${SHOTS}/walk-lineup-needs.png`, fullPage: true, animations: "disabled" });
 
@@ -363,7 +370,7 @@ test("R7 lineup: a one-player sport shows no editor, and football names what its
   // prop as "$undefined" and a bare `data-*` probe passes in both states.
   const html = await page.content();
   expect(html, "no lineup editor for a one-player sport").not.toContain(
-    'data-testid="availability-chip"',
+    'data-testid="lineup-editor"',
   );
   await expect(page.locator(editorAnchor)).toHaveCount(0);
 

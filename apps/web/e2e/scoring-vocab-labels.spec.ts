@@ -228,11 +228,16 @@ test("tennis: a sanction's level renders as words in the activity feed", async (
   await expect(page.getByTestId("score-pad")).toBeVisible({ timeout: 30_000 });
 
   // Scope to the sanction's own ledger row — "Default" is a common word, and a
-  // page-wide search would pass on unrelated chrome. Every row carries
-  // `title="<type> <payload json>"`, which is the only stable per-event hook.
-  const row = page.getByTitle(/^tennis\.sanction /);
+  // page-wide search would pass on unrelated chrome. The old v2-scorepad row
+  // carried `title="<type> <payload json>"`; the v3 chassis's `<ActivityPanel>`
+  // (activity.tsx) never renders one (this fixture only seeds two events, so
+  // filtering v3's own `data-role="v3-activity-row"` on the sanction's caption
+  // text is an equally stable per-event hook here).
+  const row = page.locator('[data-role="v3-activity-row"]').filter({ hasText: "Code violation" });
   await expect(row).toBeVisible({ timeout: 20_000 });
-  await expect(row.getByText("Default", { exact: true })).toBeVisible();
+  // The row's caption is one merged string (headline + tennisDetail), not a
+  // separate node per word — substring, not `getByText(..., {exact:true})`.
+  await expect(row).toContainText("Default");
   await expect(row).toContainText(`Ana ${TAG}`);
   // Before e55e10b7 this row read "level: default" — the raw payload dump from
   // `scalars()`, which is what a missing describeEvent branch degrades to.

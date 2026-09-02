@@ -454,14 +454,14 @@ test("tennis v3: the Set-score tile is withheld while the set is in progress, re
   ).toHaveCount(0);
 
   // The other half of D-16: no dead-end tap via the generic More sheet
-  // either.
-  await v3Tile(page, "more").click();
-  const sheet = v3Sheet(page);
-  await expect(sheet).toBeVisible({ timeout: 10_000 });
-  await expect(
-    sheet.getByRole("button", { name: "Set score", exact: true }),
-    "the More sheet must not offer the same mid-set-refused action a second time",
-  ).toHaveCount(0);
+  // either. Every OTHER tennis action (Code violation, Award game,
+  // Interruption) is already its own dedicated tile mid-set — Set score was
+  // the only thing that could ever have landed in More here, and D-16
+  // withholds it — so `suppressEmptyMoreTile` (R7-39, owner-approved,
+  // pad-host.tsx) correctly hides the now-empty More tile itself, rather
+  // than leaving a dead-end tap to open a sheet with nothing in it. Stronger
+  // than "not offered a second time inside the sheet": there is no sheet.
+  await expect(v3Tile(page, "more"), "no dead-end More tile once its only content is refused").toHaveCount(0);
 
   await page.reload();
   await expect(pad(page)).toBeVisible({ timeout: 20_000 });

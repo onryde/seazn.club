@@ -32,6 +32,8 @@ import {
   isPartialDockAnswer,
   moreActions,
   phasesWithTiles,
+  queueStatusAttention,
+  queueStatusText,
   rejectionText,
   resolveDockSpec,
   resolveNextPhase,
@@ -826,6 +828,58 @@ describe("rejectionText", () => {
   it("falls back to the fallback key when there is neither an engine code nor a known wire code", () => {
     const text = rejectionText({ code: "NETWORK_ERROR", message: "" }, identityMsg);
     expect(text).toBe("scorepad.rejection.fallback");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// queueStatusText / queueStatusAttention — the durable queue's own status,
+// the OTHER half of `usePadPipeline` this host built and held but never
+// rendered (R7 deleted the legacy renderer's `queueLabel`/`queueAttention`
+// without ever porting it onto v3 — the durable queue kept working, only the
+// on-screen indicator was lost). Same precedence pad-renderer.tsx used:
+// offline beats resyncing beats a non-zero queue beats synced.
+// ---------------------------------------------------------------------------
+
+const echoMsg = ((key: string, vars?: Record<string, string | number>) =>
+  vars ? `${key}:${JSON.stringify(vars)}` : key) as MsgFn;
+
+describe("queueStatusText", () => {
+  it("offline beats every other state, even mid-resync with a full queue", () => {
+    expect(queueStatusText({ offline: true, resyncing: true, queueDepth: 4 }, identityMsg)).toBe(
+      "scorepad.queue.offline",
+    );
+  });
+
+  it("resyncing beats a non-zero queue when not offline", () => {
+    expect(queueStatusText({ offline: false, resyncing: true, queueDepth: 4 }, identityMsg)).toBe(
+      "scorepad.queue.resyncing",
+    );
+  });
+
+  it("a non-zero queue reports its own count", () => {
+    expect(queueStatusText({ offline: false, resyncing: false, queueDepth: 2 }, echoMsg)).toBe(
+      'scorepad.queue.pending:{"count":2}',
+    );
+  });
+
+  it("synced when offline, resyncing and the queue are all clear", () => {
+    expect(queueStatusText({ offline: false, resyncing: false, queueDepth: 0 }, identityMsg)).toBe(
+      "scorepad.queue.synced",
+    );
+  });
+});
+
+describe("queueStatusAttention", () => {
+  it("true while offline, even with an empty queue", () => {
+    expect(queueStatusAttention({ offline: true, queueDepth: 0 })).toBe(true);
+  });
+
+  it("true with a non-zero queue, even back online", () => {
+    expect(queueStatusAttention({ offline: false, queueDepth: 3 })).toBe(true);
+  });
+
+  it("false only once both offline and queueDepth are clear", () => {
+    expect(queueStatusAttention({ offline: false, queueDepth: 0 })).toBe(false);
   });
 });
 

@@ -305,11 +305,17 @@ describe("the scorebug who-line with a long unbroken name (R3/F)", () => {
     }
   });
 
-  it("caps the who-block at two lines, and lets it shrink", () => {
-    // The SCORE is what this surface exists to show. Before the cap a long
-    // entrant name wrapped to three lines above a single digit and outweighed
-    // it. Selected by the clamp itself, which is the behaviour under test.
-    const blocks = [...html().matchAll(/<div[^>]*\sclass="([^"]*line-clamp-2[^"]*)"/g)];
+  it("caps the who-block at six lines, and lets it shrink", () => {
+    // The SCORE is what this surface exists to show. Before the ORIGINAL cap
+    // a long entrant name wrapped to three lines above a single digit and
+    // outweighed it — that shipped as `line-clamp-2`. Landed at 6 (was 3)
+    // once the actual root cause of mobile.spec.ts's doubles-fixture
+    // clipping turned out to be that TEST's own over-decorated player
+    // names, not this box — see scorebug.tsx's own comment above this
+    // element for the full account. Six stays as real margin for whatever
+    // length of name a doubles pair legitimately has, not a razor's edge.
+    // Selected by the clamp itself, which is the behaviour under test.
+    const blocks = [...html().matchAll(/<div[^>]*\sclass="([^"]*line-clamp-6[^"]*)"/g)];
     expect(blocks.length, "both halves cap their who-block").toBe(2);
     for (const block of blocks) {
       expect(block[1], "the who-block must still shrink below its longest word").toContain("min-w-0");
