@@ -43,6 +43,19 @@ describe("statusLine", () => {
     expect(s).toBe("10 of 15 played");
     expect(s).not.toMatch(/in play/);
   });
+  // English cannot witness this: its adjectives do not inflect, so " · 1
+  // unscheduled" reads correctly against BOTH the singular and plural key.
+  // French does inflect, and the hardcoded plural rendered "1 non planifiés"
+  // on a live page. The French case is the one that can fail.
+  it("the unscheduled suffix agrees with its count, in a locale that inflects", async () => {
+    const fr = (await import("@/dictionaries/fr/ui.json")).default as unknown as typeof en;
+    const one = statusLine(fr, { ...base, phase: "match_day", inPlay: 0, unscheduled: 1, next: null, locale: "fr" });
+    const many = statusLine(fr, { ...base, phase: "match_day", inPlay: 0, unscheduled: 3, next: null, locale: "fr" });
+    expect(one).toContain("1 non planifié");
+    expect(one).not.toContain("non planifiés");
+    expect(many).toContain("3 non planifiés");
+  });
+
   it("match day with zero in play still appends the unscheduled suffix", () => {
     expect(statusLine(en, { ...base, phase: "match_day", inPlay: 0, unscheduled: 2, next: null })).toBe("10 of 15 played · 2 unscheduled");
   });

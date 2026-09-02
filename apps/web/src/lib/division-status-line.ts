@@ -140,7 +140,11 @@ export function statusLine(dict: Dict, i: StatusLineInput): string {
     }
   }
   if (i.unscheduled > 0 && i.phase !== "finished") {
-    line += t(dict, "desk.status.unscheduledSuffix", { n: i.unscheduled });
+    // Pluralised: French inflects the adjective, so a hardcoded plural read
+    // "1 non planifiés" — a defect English cannot show, since its adjectives
+    // do not agree. Found by rendering n=1 in all four locales, not by parity
+    // (the key existed everywhere and was wrong in one of them).
+    line += plural(dict, "desk.status.unscheduledSuffix", i.unscheduled, i.locale);
   }
   return line;
 }
