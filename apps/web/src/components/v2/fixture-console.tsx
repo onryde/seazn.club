@@ -919,9 +919,8 @@ export function FixtureConsole({
               <PhoneDisclosure
                 key={s.id}
                 summary={entrantDisplayName(s)}
-                aside={msg("console.phone.lineup")}
-                showLabel={msg("lineup.phone.show")}
-                hideLabel={msg("lineup.phone.hide")}
+                showLabel={msg("lineup.availabilityTitle", { name: entrantDisplayName(s) })}
+                hideLabel={msg("lineup.availabilityTitle", { name: entrantDisplayName(s) })}
               >
                 <AvailabilityRoster
                   side={{ ...s, name: entrantDisplayName(s) }}

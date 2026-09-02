@@ -14,11 +14,16 @@ export interface PhoneDisclosureProps {
 /** Phone-only disclosure (spec 2026-09-02-scorepad-v3-phone-composition §3.10).
  *  Below `md` the body is hidden until the row is tapped; at `md` and up the
  *  row is not rendered (`md:hidden`) and the body carries no hiding class, so
- *  desktop is a plain wrapper around what it always rendered. */
+ *  desktop is a plain wrapper around what it always rendered. Both this
+ *  wrapper and the body carry `h-full`: when the caller is a grid item
+ *  (`grid gap-4 lg:grid-cols-2` in `fixture-console.tsx`), grid's default
+ *  `stretch` sizes THIS div to the track, and without propagating that
+ *  height inward the real card one level deeper stays content-height —
+ *  home/away cards can then render at different heights on desktop. */
 export function PhoneDisclosure({ summary, aside, showLabel, hideLabel, children }: PhoneDisclosureProps) {
   const [open, setOpen] = useState(false);
   return (
-    <div data-role="phone-disclosure" data-open={open}>
+    <div data-role="phone-disclosure" data-open={open} className="h-full">
       <button
         type="button"
         data-role="phone-disclosure-toggle"
@@ -33,7 +38,7 @@ export function PhoneDisclosure({ summary, aside, showLabel, hideLabel, children
           <span aria-hidden="true">{open ? "▴" : "▾"}</span>
         </span>
       </button>
-      <div className={open ? "" : "max-md:hidden"}>{children}</div>
+      <div className={open ? "h-full" : "h-full max-md:hidden"}>{children}</div>
     </div>
   );
 }

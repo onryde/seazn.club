@@ -15,8 +15,8 @@ describe("PhoneDisclosure", () => {
     expect(html).toMatch(/data-role="phone-disclosure-toggle"[^>]*aria-label="Show lineup"/);
     expect(html).toMatch(/data-role="phone-disclosure-toggle"[^>]*class="[^"]*\bmd:hidden\b/);
   });
-  it("hides the body on phones while closed and never on desktop", () => {
-    expect(html).toMatch(/<div class="max-md:hidden"><p data-role="body">the editor<\/p><\/div>/);
+  it("closed body carries max-md:hidden alongside h-full (h-full propagates the grid track's stretch height inward, so a phone-only card doesn't leave blank space in a taller sibling)", () => {
+    expect(html).toMatch(/<div class="h-full max-md:hidden"><p data-role="body">the editor<\/p><\/div>/);
   });
   it("shows the summary and aside in the toggle", () => {
     expect(html).toContain("Home Gallery Badminton");
