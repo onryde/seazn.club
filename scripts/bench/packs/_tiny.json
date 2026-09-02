@@ -1,0 +1,198 @@
+{
+  "schemaVersion": 1,
+  "suite": "_tiny",
+  "org": {
+    "name": "Bench Tiny Club",
+    "slug": "bench-tiny-club",
+    "timezone": "UTC"
+  },
+  "competition": {
+    "name": "Bench Tiny Series",
+    "slug": "bench-tiny-series",
+    "startsOn": "2099-01-01",
+    "endsOn": "2099-01-03",
+    "description": "The bench's own proof fixture: the smallest pack that still exercises every part of PackSchema."
+  },
+  "divisions": [
+    {
+      "ref": "d-tiny",
+      "name": "Tiny",
+      "sportKey": "generic",
+      "variantKey": "score",
+      "moduleVersion": "1.0.0",
+      "cfgOverrides": {
+        "resultMode": "score",
+        "allowDraws": true,
+        "points": { "w": 3, "d": 1, "l": 0 },
+        "progressScore": false
+      },
+      "tiebreakers": ["points", "diff"],
+      "stages": [
+        {
+          "ref": "s-league",
+          "seq": 1,
+          "kind": "league",
+          "name": "League",
+          "config": { "legs": 3 },
+          "seeding": ["e-alpha", "e-bravo"]
+        }
+      ]
+    }
+  ],
+  "persons": [
+    { "ref": "p-ana", "fullName": "Ana Alvarez", "lane": "player", "shortName": "A. Alvarez" },
+    { "ref": "p-bo", "fullName": "Bo Baptiste", "lane": "player", "shortName": "B. Baptiste" },
+    { "ref": "p-dee", "fullName": "Dee Duarte", "lane": "official" }
+  ],
+  "entrants": [
+    {
+      "ref": "e-alpha",
+      "divisionRef": "d-tiny",
+      "kind": "individual",
+      "displayName": "Ana Alvarez",
+      "seed": 1,
+      "roster": [{ "person": "p-ana", "captain": true, "squadNumber": 1 }]
+    },
+    {
+      "ref": "e-bravo",
+      "divisionRef": "d-tiny",
+      "kind": "individual",
+      "displayName": "Bo Baptiste",
+      "seed": 2,
+      "roster": [{ "person": "p-bo", "captain": true, "squadNumber": 2 }]
+    }
+  ],
+  "streams": [
+    {
+      "divisionRef": "d-tiny",
+      "fixtureExtKey": "rr-r1-c1",
+      "provenance": "real",
+      "events": [
+        { "type": "core.start" },
+        { "type": "generic.result", "payload": { "p1Score": 3, "p2Score": 1 } }
+      ]
+    },
+    {
+      "divisionRef": "d-tiny",
+      "fixtureExtKey": "rr-r2-c1",
+      "provenance": "reconstructed",
+      "events": [
+        { "type": "core.start" },
+        { "type": "generic.score", "payload": { "by": "@e-bravo", "points": 2, "person": "@p-bo" } },
+        { "type": "generic.score", "payload": { "by": "@e-alpha", "points": 1, "person": "@p-ana" } },
+        { "type": "generic.score", "payload": { "by": "@e-alpha", "points": 1, "person": "@p-ana" } },
+        { "type": "generic.result" }
+      ]
+    },
+    {
+      "divisionRef": "d-tiny",
+      "fixtureExtKey": "rr-r3-c1",
+      "provenance": "real",
+      "events": [
+        { "type": "core.start" },
+        { "type": "core.forfeit", "payload": { "by": "@e-bravo", "reason": "retired hurt" } }
+      ]
+    }
+  ],
+  "expected": {
+    "matches": [
+      {
+        "divisionRef": "d-tiny",
+        "fixtureExtKey": "rr-r1-c1",
+        "outcome": { "kind": "win", "winner": "e-alpha", "loser": "e-bravo", "method": "regulation" },
+        "perSide": [
+          { "entrant": "e-alpha", "line": "3" },
+          { "entrant": "e-bravo", "line": "1" }
+        ]
+      },
+      {
+        "divisionRef": "d-tiny",
+        "fixtureExtKey": "rr-r2-c1",
+        "outcome": { "kind": "draw" },
+        "perSide": [
+          { "entrant": "e-bravo", "line": "2" },
+          { "entrant": "e-alpha", "line": "2" }
+        ]
+      },
+      {
+        "divisionRef": "d-tiny",
+        "fixtureExtKey": "rr-r3-c1",
+        "outcome": { "kind": "award", "winner": "e-alpha" },
+        "perSide": [
+          { "entrant": "e-alpha", "line": "W/O" },
+          { "entrant": "e-bravo", "line": "L" }
+        ]
+      }
+    ],
+    "tables": [
+      {
+        "divisionRef": "d-tiny",
+        "stageRef": "s-league",
+        "rows": [
+          { "entrant": "e-alpha", "rank": 1, "played": 3, "won": 2, "drawn": 1, "lost": 0, "points": 7 },
+          { "entrant": "e-bravo", "rank": 2, "played": 3, "won": 0, "drawn": 1, "lost": 2, "points": 1 }
+        ]
+      }
+    ],
+    "champions": [{ "divisionRef": "d-tiny", "entrant": "e-alpha" }],
+    "leaderboards": [
+      {
+        "divisionRef": "d-tiny",
+        "metricKey": "scores",
+        "entries": [
+          { "person": "p-ana", "name": "Ana Alvarez", "count": 2 },
+          { "person": "p-bo", "name": "Bo Baptiste", "count": 1 }
+        ]
+      },
+      {
+        "divisionRef": "d-tiny",
+        "metricKey": "points",
+        "entries": [
+          { "person": "p-ana", "name": "Ana Alvarez", "count": 2 },
+          { "person": "p-bo", "name": "Bo Baptiste", "count": 2 }
+        ]
+      }
+    ],
+    "suspensions": [],
+    "specials": [
+      {
+        "kind": "retirement",
+        "divisionRef": "d-tiny",
+        "fixtureExtKey": "rr-r3-c1",
+        "note": "Bravo retires hurt; the match is awarded to Alpha. Asserted against the FOLDED outcome, because a retirement has no event type of its own — it is the CORE type core.forfeit.",
+        "claims": [
+          { "on": "outcome", "kind": "award", "winner": "e-alpha" },
+          { "on": "state", "path": "phase", "equals": "done" },
+          { "on": "standings", "entrant": "e-alpha", "field": "won", "equals": 1 },
+          { "on": "standings", "entrant": "e-bravo", "field": "lost", "equals": 1 }
+        ]
+      }
+    ]
+  },
+  "meta": {
+    "synthetic": true,
+    "sources": [],
+    "adaptations": [
+      {
+        "what": "The whole pack is invented. There is no historical tournament behind it, which is why meta.synthetic is true and meta.sources is empty.",
+        "why": "_tiny is the shared fixture the pack validator (B02 task 2) and the _tiny runner suite (B02 task 3) both prove themselves on. Binding it to a real event would make every future edit an archival research task, and a two-entrant three-game series has no real-world analogue worth citing.",
+        "where": "the whole file"
+      },
+      {
+        "what": "Per-stream provenance describes how each stream was AUTHORED inside this fixture, not correspondence to a real event.",
+        "why": "The bench's provenance doctrine ('real' vs 'reconstructed', never disguised) is a property of the stream's authoring method. In a synthetic pack 'real' means the stream IS the authored ground truth and 'reconstructed' means it was built to fold to a target score — which is exactly the distinction the validator and the report need to exercise.",
+        "where": "streams[1]"
+      },
+      {
+        "what": "The reconstructed stream (rr-r2-c1) is hand-written and therefore carries no reconstruction.seed.",
+        "why": "Task 3 owns the deterministic generators; this file must not wait on them. A generated stream carries its seed so the same bytes come out on every machine.",
+        "where": "streams[1].reconstruction"
+      },
+      {
+        "what": "The expected table omits per-entrant metrics (for/against/diff).",
+        "why": "How the competition layer AGGREGATES a StandingsDelta's metrics across fixtures is verified by the stage-0 validator (task 2), not authored blind here. Points, played, won, drawn and lost are derivable from the module's own standingsDelta and are asserted.",
+        "where": "expected.tables[0].rows"
+      }
+    ]
+  }
+}
