@@ -180,11 +180,40 @@ export interface LineupOut {
   slots: unknown[];
 }
 
-/** R7-15/R8 WS-F: the PUT response, `LineupOut` plus the (possibly empty)
- *  `validateLineup` warnings for the lineup just saved. A separate type from
- *  `LineupOut` rather than widening it — same reasoning as `PatchedFixtureOut`
- *  above: GET never validates, so `warnings` would be a lie on every read. */
-export type PutLineupOut = LineupOut & { warnings: string[] };
+/** R8 branch review, finding 2 — the lineup check's own outcome, DISCRIMINATED
+ *  on `checked`. Before this the check was fail-OPEN and silent about it: the
+ *  `catch` in `checkStoredLineup` returns no warnings, so `warnings: []` meant
+ *  EITHER "validated, nothing wrong" OR "validation threw and we swallowed
+ *  it", and the two were indistinguishable on the wire. A caller that wanted
+ *  to fail closed — refuse to start a fixture on an unvalidated lineup, say —
+ *  had nothing to branch on. `checked: false` says so explicitly; `warnings`
+ *  stays present on both branches so every existing reader keeps working. */
+export type LineupCheck =
+  | { checked: true; warnings: string[] }
+  | { checked: false; warnings: string[]; reason: string };
+
+/** R7-15/R8 WS-F: the PUT response, `LineupOut` plus the outcome of checking
+ *  the lineup just saved. A separate type from `LineupOut` rather than
+ *  widening it — same reasoning as `PatchedFixtureOut` above: GET never
+ *  validates, so these fields would be a lie on every read. */
+export type PutLineupOut = LineupOut & LineupCheck;
+
+/** One row of `readLineup`'s SQL, named so the validation below can be driven
+ *  from what was actually STORED rather than from the request that asked for
+ *  it (finding 3). `slot` is `text` in the DDL but carries
+ *  `check (slot in ('starting','bench'))` (V215), so the narrowing where it is
+ *  read is the database's guarantee, not an assumption. */
+interface StoredLineupSlot {
+  person_id: string;
+  full_name: string;
+  squad_number: number | null;
+  slot: string;
+  position_key: string | null;
+  order_no: number | null;
+  roles: string[];
+  role: string | null;
+  pair_order: number | null;
+}
 
 /** Human-readable rendering of one `validateLineup` issue (catalog.ts) for the
  *  PUT response + logs. Server-side only, English (no server i18n — AGENTS.md)
@@ -218,41 +247,59 @@ function formatLineupIssue(issue: LineupIssue): string {
  *  response as strings and are logged. Never throws: a registry/config
  *  problem resolving the catalog must not turn a working lineup save into a
  *  500 — the same "best effort, never blocks the write" posture
- *  `lineupCatalogFor` already documents for its own config-parse fallback. */
-function lineupValidationWarnings(
+ *  `lineupCatalogFor` already documents for its own config-parse fallback.
+ *
+ *  R8 branch review, finding 3 — takes the rows `readLineup` gives back, NOT
+ *  the request that asked for them. Validating `input.slots` described what
+ *  the caller ASKED FOR: any normalisation, reordering or dropping the write
+ *  applied was invisible to the warnings, which is the wrong answer to
+ *  "is the lineup I now have valid?". Observable today in issue ORDER —
+ *  `validateLineup` emits issues in slot-walk order and the read-back is
+ *  ordered by `order_no nulls last, full_name`, so a request sent in some
+ *  other order produced a list in the request's order, about rows stored in
+ *  a different one.
+ *
+ *  Finding 2 — returns a DISCRIMINATED `LineupCheck` rather than a bare
+ *  string[], so the `catch` below is no longer indistinguishable from a
+ *  clean run. */
+function checkStoredLineup(
   fixtureId: string,
   entrantId: string,
   sport: { sport_key: string; module_version: string; config: unknown },
-  slots: PutLineup["slots"],
-): string[] {
+  stored: readonly StoredLineupSlot[],
+): LineupCheck {
   try {
     const sportModule = resolveModule(sport.sport_key, sport.module_version);
     const catalog = lineupCatalogFor(sportModule, sport.config);
     const lineup: Lineup = {
       entrantId,
-      slots: slots.map((s, i) => ({
+      slots: stored.map((s, i) => ({
         personId: s.person_id,
-        slot: s.slot,
+        // V215's own check constraint is what makes this narrowing safe.
+        slot: s.slot === "bench" ? "bench" : "starting",
         orderNo: s.order_no ?? i + 1,
         ...(s.position_key ? { positionKey: s.position_key } : {}),
-        ...(s.roles.length > 0 ? { roles: s.roles } : {}),
+        ...(Array.isArray(s.roles) && s.roles.length > 0 ? { roles: s.roles } : {}),
       })),
     };
     const issues = validateLineup(catalog, lineup);
-    if (issues.length === 0) return [];
+    if (issues.length === 0) return { checked: true, warnings: [] };
     // IDs, kinds and keys only — never a payload/free-text value (case K5,
     // engine-db/append-event.ts's own logging convention).
     log.warn(
       { fixtureId, entrantId, sportKey: sport.sport_key, issues },
       "lineup saved with validateLineup warnings",
     );
-    return issues.map(formatLineupIssue);
+    return { checked: true, warnings: issues.map(formatLineupIssue) };
   } catch (err) {
     log.error(
       { fixtureId, entrantId, sportKey: sport.sport_key, err },
-      "lineup validation crashed — save proceeded without warnings",
+      "lineup validation crashed — save proceeded UNCHECKED",
     );
-    return [];
+    // The error's KIND, never its message: a message can carry config or
+    // payload text, and this string rides the HTTP response (same convention
+    // as the log fields above).
+    return { checked: false, warnings: [], reason: err instanceof Error ? err.name : "unknown" };
   }
 }
 
@@ -325,14 +372,15 @@ export async function putLineup(
                 ${s.position_key ?? null}, ${s.order_no ?? i + 1}, ${tx.json(s.roles as never)},
                 ${s.role ?? "player"}, ${s.pair_order ?? null})`;
     }
-    const warnings = lineupValidationWarnings(
+    // Finding 3: read back FIRST, then validate what was actually stored.
+    const lineup = await readLineup(tx, fixtureId, entrantId);
+    const check = checkStoredLineup(
       fixtureId,
       entrantId,
       { sport_key: fixture.sport_key, module_version: fixture.module_version, config: fixture.config },
-      input.slots,
+      lineup.slots,
     );
-    const lineup = await readLineup(tx, fixtureId, entrantId);
-    return { ...lineup, warnings };
+    return { ...lineup, ...check };
   });
 }
 
@@ -350,10 +398,10 @@ async function readLineup(
   tx: postgres.TransactionSql,
   fixtureId: string,
   entrantId: string,
-): Promise<LineupOut> {
+): Promise<{ fixture_id: string; entrant_id: string; slots: StoredLineupSlot[] }> {
   // Jul3/07 §5 (9 Sep ×4): shirt numbers ride the lineup read model so every
   // scorer picker can render "#7 — Name".
-  const slots = await tx<Record<string, unknown>[]>`
+  const slots = await tx<StoredLineupSlot[]>`
     select l.person_id, p.full_name, em.squad_number, l.slot, l.position_key, l.order_no, l.roles, l.role, l.pair_order
     from lineups l
     join persons p on p.id = l.person_id

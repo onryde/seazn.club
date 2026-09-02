@@ -124,3 +124,92 @@ describe.skipIf(!HAS_DB)("putLineup — validateLineup warnings (R7-15/R8 WS-F)"
     expect(result.warnings).toEqual([]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// R8 branch review, finding 2 — `warnings: []` used to mean EITHER "validated,
+// nothing wrong" OR "validation threw and we swallowed it": the catch returned
+// `[]` and the two were indistinguishable on the wire, so no caller could fail
+// closed even if it wanted to. `checked` now discriminates them. Driven
+// through the REAL crash path (an unresolvable pinned module_version makes
+// `resolveModule` throw MODULE_NOT_FOUND inside the try) rather than by
+// mocking the validator — a mock on both ends would only prove the mock.
+// ---------------------------------------------------------------------------
+
+describe.skipIf(!HAS_DB)("putLineup — validated-clean vs validation-crashed are distinguishable (R8 finding 2)", () => {
+  it("a clean lineup reports checked: true alongside its empty warnings", async () => {
+    const auth = await seedOrg();
+    const { fixtureId, entrantId, playerOne } = await seedFixture(auth);
+
+    const result = await putLineup(auth, fixtureId, entrantId, {
+      slots: [{ person_id: playerOne.id, slot: "starting", position_key: null, order_no: 1, roles: [] }],
+    });
+
+    expect(result.warnings).toEqual([]);
+    expect(result.checked).toBe(true);
+  });
+
+  it("a lineup whose validation CRASHES reports checked: false — not the same empty list a clean lineup returns", async () => {
+    const auth = await seedOrg();
+    const { fixtureId, entrantId, playerOne } = await seedFixture(auth);
+    // Pin the division at a module_version no registry entry has, so
+    // `resolveModule` throws inside `lineupValidationWarnings`'s try.
+    await sql`
+      update divisions set module_version = '9.9.9'
+      where id = (select division_id from fixtures where id = ${fixtureId})`;
+
+    const result = await putLineup(auth, fixtureId, entrantId, {
+      slots: [{ person_id: playerOne.id, slot: "starting", position_key: null, order_no: 1, roles: [] }],
+    });
+
+    // Still non-blocking — the whole point of the warning-only posture is
+    // that a registry problem must not turn a working save into a 500.
+    const read = await getLineup(auth, fixtureId, entrantId);
+    expect(read.slots).toHaveLength(1);
+
+    // ...but the caller can now tell this apart from the clean case above,
+    // which returns the SAME empty `warnings` with `checked: true`.
+    expect(result.warnings).toEqual([]);
+    expect(result.checked).toBe(false);
+    if (!result.checked) expect(result.reason.length).toBeGreaterThan(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R8 branch review, finding 3 — the warnings described the REQUEST
+// (`input.slots`, with `orderNo` synthesised from the request's own index),
+// not the rows that were actually stored. Witnessed through issue ORDER,
+// which is the one place the two orderings are observably different today:
+// `validateLineup` emits issues in the order it walks `lineup.slots`, and
+// `readLineup` returns rows ordered by `order_no nulls last, full_name` while
+// the request is in whatever order the caller sent. Send the two starting
+// slots in the REVERSE of their `order_no` and the request-sourced list comes
+// out backwards.
+// ---------------------------------------------------------------------------
+
+describe.skipIf(!HAS_DB)("putLineup — warnings describe the STORED lineup, not the request (R8 finding 3)", () => {
+  it("issue order follows the read-back's own ordering, not the order the slots were sent in", async () => {
+    const auth = await seedOrg();
+    const { fixtureId, entrantId, playerOne, playerTwo } = await seedFixture(auth);
+
+    // Sent Two-then-One; stored/read-back order is One-then-Two (order_no).
+    // The generic catalog declares no position groups, so BOTH position keys
+    // are `unknown_position` — one issue per person, in walk order.
+    const result = await putLineup(auth, fixtureId, entrantId, {
+      slots: [
+        { person_id: playerTwo.id, slot: "starting", position_key: "bogus_two", order_no: 2, roles: [] },
+        { person_id: playerOne.id, slot: "starting", position_key: "bogus_one", order_no: 1, roles: [] },
+      ],
+    });
+
+    const read = await getLineup(auth, fixtureId, entrantId);
+    const storedOrder = (read.slots as { person_id: string }[]).map((s) => s.person_id);
+    expect(storedOrder).toEqual([playerOne.id, playerTwo.id]); // fixture proof: the read really does reorder
+
+    const unknownPosition = result.warnings.filter((w) => /unknown position/i.test(w));
+    expect(unknownPosition).toHaveLength(2);
+    // The assertion that fails when the warnings are sourced from the
+    // request: sent Two first, so a request-sourced list names Two first.
+    expect(unknownPosition[0]).toContain(playerOne.id);
+    expect(unknownPosition[1]).toContain(playerTwo.id);
+  });
+});
