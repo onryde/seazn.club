@@ -77,24 +77,40 @@
 //    offline: a champion is the product's stage-completion + progression
 //    answer, and a suspension is a discipline carry-over across fixtures. Both
 //    are B05's.
-//  * STAGE AND POOL BINDING. A stream declares `divisionRef` +
-//    `fixtureExtKey`, never a stage or a pool — in the product the FIXTURE row
-//    carries that, and a pack declares no fixtures. So stage 0 can bind
-//    streams to a stage only when the division has exactly ONE stage, and can
-//    never bind them to a pool. A table it cannot bind is skipped with a
-//    `warning` naming the reason, never silently. A pre-freeze
-//    `streams[].stageRef` would close it (recorded in the task report;
-//    PackSchema freezes at end of B06).
 //
-//    It costs more than a skipped table. The stage-scoped cfg overlay (see
-//    `stageScopedFoldCfg`) also cannot be bound, so a groups+knockout division
-//    whose knockout stage declares `shootout` or `extraTime` folds EVERY one
-//    of its fixtures under the division cfg — and stage 0 will then report a
-//    divergence the pack did not commit. That is the one place stage 0 can
-//    produce a FALSE RED, so it is named on its own
-//    (`fold.stage_overlay_unbindable`) rather than left to look like a data
-//    defect: a false red a reader can explain is recoverable, one they cannot
-//    is where a correct pack gets edited to match a broken gate.
+//    All three of those blocks now emit a `warning` when they are non-empty
+//    (`leaderboards.not_derived` / `champions.not_derived` /
+//    `suspensions.not_derived`). Not deriving them is the right call; being
+//    SILENT about them was not, because a pack with a wholly fabricated
+//    leaderboard then reported "ok, no findings" — the "looks like it passed"
+//    shape the warning channel exists for.
+//  * A TABLE-KIND STAGE WITH NO DECLARED TABLE. `PackSchema`'s anti-vacuity
+//    rule covers streams (every stream needs an `expected.matches` oracle) and
+//    stops there, so a league stage can fold twenty streams and assert no
+//    points and no tie order at all — and stage 3 is the ONLY stage that
+//    catches an end-to-end reversed stream. Reported as
+//    `standings.no_expected_table`; the better long-term home is the schema's
+//    own anti-vacuity check, before the B06 freeze.
+//  * STAGE AND POOL BINDING. In the product the stage is a FIXTURE-row fact
+//    and a pack declares no fixtures, so a stream says which stage it belongs
+//    to through `streams[].stageRef` — added to `PackSchema` for exactly this
+//    — and absent means "the division's only stage". A MULTI-stage division
+//    whose streams declare no `stageRef` therefore binds nothing, and every
+//    consequence is reported rather than guessed: its table is skipped
+//    (`standings.stage_unbindable`), and the stage-scoped cfg overlay is not
+//    applied (`fold.stage_overlay_unbindable`).
+//
+//    The second of those is the one place stage 0 can produce a FALSE RED: a
+//    groups+knockout division whose knockout stage declares `shootout` or
+//    `extraTime` would fold those fixtures under the division cfg, and the
+//    divergence reported is the gap rather than the pack. It is named on its
+//    own for that reason — a false red a reader can explain is recoverable,
+//    one they cannot is where a correct pack gets edited to match a broken
+//    gate. Declaring `stageRef` on every stream silences both.
+//
+//    A POOL still cannot be bound at all: a pack declares none, and no field
+//    was invented for it because no authored source gives one a shape. A
+//    pooled table is skipped with `standings.pool_unbindable`.
 //  * ROUND NUMBER. `StageCtx.roundNo` is a fixture fact and is likewise
 //    undeclared, so `standingsDelta` is called without one. No shipped module
 //    reads it, but a future one could.
@@ -227,15 +243,38 @@ export interface ValidatePackOptions {
    * The suite key the CALLER expects — normally the pack filename without its
    * extension. `PackSchema`'s own comment on `suite` says it "is checked
    * against its filename by the validator", and this is that check; it is an
-   * option rather than a read because stage 0 does no filesystem I/O.
+   * option rather than a filesystem read because stage 0 does no I/O.
    *
-   * Omitted ⇒ not checked. The runner (Task 3) must pass it, or this check is
-   * inert — recorded in the task report as a wiring obligation.
+   * REQUIRED, and the whole options object with it. It was optional, and that
+   * made the check an inert seam: the runner could simply not pass it and the
+   * comparison would silently never run — the failure class this repo has
+   * shipped six times. `scripts/bench/**` non-test files ARE in the
+   * `tsconfig.scripts.json` program, so a caller omitting it is now a `tsc`
+   * error rather than a quiet no-op. If a genuinely suite-agnostic caller ever
+   * exists it must say so explicitly rather than inherit it from a default.
    */
-  readonly expectedSuite?: string;
+  readonly expectedSuite: string;
 }
 
+// Compile-time: `expectedSuite` is REQUIRED, not optional. An optional
+// property does not satisfy a required one, so relaxing it back reds `tsc`
+// here — in a NON-test file, because `tsconfig.scripts.json:35` excludes
+// `scripts/**/*.test.ts` and a type-level guard written in a test is checked by
+// nothing. Same technique as Task 1's vocabulary pins, and it is what turns
+// "the runner must remember to pass it" from a comment into a gate: the
+// obligation is on a caller that does not exist yet, so no runtime test in
+// this suite can witness it.
+type _ExpectedSuiteIsRequired = ValidatePackOptions extends { expectedSuite: string }
+  ? true
+  : never;
+export const EXPECTED_SUITE_IS_REQUIRED: _ExpectedSuiteIsRequired = true;
+
 const EMPTY_SPLIT: ProvenanceSplit = { real: 0, reconstructed: 0, synthetic: 0, total: 0 };
+
+/** The stage kinds that produce a TABLE rather than a bracket. `americano`
+ *  rides the league fold (`engine-db/competition.ts:333`, "Jul3/08 §3"), which
+ *  is why it belongs here and not with the bracket kinds. */
+const TABLE_STAGE_KINDS: ReadonlySet<string> = new Set(["league", "group", "swiss", "americano"]);
 
 // ---------------------------------------------------------------------------
 // Registry boot — mirrors apps/web/src/server/engine-db/registry.ts
@@ -466,24 +505,46 @@ function streamLabel(stream: PackStream, index: number): string {
   return `streams[${index}] (${stream.divisionRef}/${stream.fixtureExtKey})`;
 }
 
-/** The one stage a stream can be bound to, or undefined when it cannot be. */
-function soleStage(division: PackDivision): PackStage | undefined {
+/**
+ * WHICH STAGE this stream belongs to, or undefined when nothing can say.
+ *
+ * The declared `streams[].stageRef` wins. It is optional, so a single-stage
+ * division still binds without one — that is what every v1 pack relies on.
+ * A MULTI-stage division with no `stageRef` cannot be bound at all, and every
+ * consequence of that is reported rather than guessed at (see LIMITS): the
+ * stage's cfg overlay is not applied, its table is not checked, and both say
+ * so.
+ *
+ * `stageRef` is already cross-checked by `PackSchema` against the stream's own
+ * division, so a ref that resolves to nothing here is unreachable for a parsed
+ * pack — the `find` still returns `undefined` rather than asserting.
+ */
+function resolveStage(division: PackDivision, stream: PackStream): PackStage | undefined {
+  if (stream.stageRef !== undefined) {
+    return division.stages.find((stage) => stage.ref === stream.stageRef);
+  }
   return division.stages.length === 1 ? division.stages[0] : undefined;
 }
 
 /**
- * A multi-stage division cannot bind its streams to a stage (see LIMITS), so
- * its folds run on the DIVISION cfg with no stage overlay. That is the honest
+ * The stage-scoped decider keys a division declares but cannot bind, because
+ * at least one of its streams resolves to no stage.
+ *
+ * Such a stream folds on the DIVISION cfg with no overlay. That is the honest
  * default — but it is not free: a groups+knockout division whose knockout
- * stage declares `shootout` or `extraTime` will fold its knockout fixtures
- * under the wrong cfg and report a divergence the pack did not commit.
+ * stage declares `shootout` or `extraTime` folds its knockout fixtures under
+ * the wrong cfg and reports a divergence the pack did not commit.
  *
  * So the risk is NAMED rather than left to look like a data defect. A false
  * red a reader can explain is recoverable; one they cannot is where a correct
- * pack gets edited to match a broken gate.
+ * pack gets edited to match a broken gate. Declaring `stageRef` on every
+ * stream silences it, because then nothing is unbound.
  */
-function unbindableOverlayKeys(division: PackDivision): readonly string[] {
-  if (division.stages.length <= 1) return [];
+function unbindableOverlayKeys(
+  division: PackDivision,
+  unboundStreams: readonly PackStream[],
+): readonly string[] {
+  if (unboundStreams.length === 0) return [];
   const keys = new Set<string>();
   for (const stage of division.stages) {
     for (const key of STAGE_DECIDER_KEYS) {
@@ -497,7 +558,7 @@ function unbindableOverlayKeys(division: PackDivision): readonly string[] {
 // The validator
 // ---------------------------------------------------------------------------
 
-export function validatePack(raw: unknown, opts: ValidatePackOptions = {}): PackValidation {
+export function validatePack(raw: unknown, opts: ValidatePackOptions): PackValidation {
   const findings: PackFinding[] = [];
   const add = (
     severity: PackFindingSeverity,
@@ -528,7 +589,7 @@ export function validatePack(raw: unknown, opts: ValidatePackOptions = {}): Pack
   }
   const pack = parsed.data;
 
-  if (opts.expectedSuite !== undefined && pack.suite !== opts.expectedSuite) {
+  if (pack.suite !== opts.expectedSuite) {
     add(
       "error",
       "pack.suite_mismatch",
@@ -561,17 +622,35 @@ export function validatePack(raw: unknown, opts: ValidatePackOptions = {}): Pack
   }
   const registryHandle = bootRegistry();
 
+  // WHICH STAGE each stream folds under — resolved ONCE, so the fold, the
+  // overlay warning and the standings derivation cannot answer it three ways.
+  const stageOfStream = new Map<string, PackStage | undefined>();
+  for (const stream of pack.streams) {
+    const division = divisionByRef.get(stream.divisionRef);
+    stageOfStream.set(
+      fixtureKey(stream.divisionRef, stream.fixtureExtKey),
+      division === undefined ? undefined : resolveStage(division, stream),
+    );
+  }
+  const streamsOf = (divisionRef: string): PackStream[] =>
+    pack.streams.filter((stream) => stream.divisionRef === divisionRef);
+  const unboundOf = (divisionRef: string): PackStream[] =>
+    streamsOf(divisionRef).filter(
+      (stream) => stageOfStream.get(fixtureKey(stream.divisionRef, stream.fixtureExtKey)) === undefined,
+    );
+
   for (const division of pack.divisions) {
-    const keys = unbindableOverlayKeys(division);
+    const unbound = unboundOf(division.ref);
+    const keys = unbindableOverlayKeys(division, unbound);
     if (keys.length === 0) continue;
     add(
       "warning",
       "fold.stage_overlay_unbindable",
       `divisions[ref=${division.ref}]`,
-      `division "${division.ref}" has ${division.stages.length} stages and one of them declares ` +
-        `[${keys.join(", ")}] — a stage-scoped decider key. A stream names no stage, so stage 0 folds ` +
-        `every one of this division's fixtures under the DIVISION cfg with no overlay, and any ` +
-        `divergence it reports for that division may be this gap rather than the pack`,
+      `division "${division.ref}" declares [${keys.join(", ")}] — a stage-scoped decider key — and ` +
+        `${unbound.length} of its stream(s) name no stage, so stage 0 folds those fixtures under the ` +
+        `DIVISION cfg with no overlay. Any divergence reported for them may be this gap rather than ` +
+        `the pack. Declaring streams[].stageRef on every stream closes it`,
     );
   }
 
@@ -629,7 +708,7 @@ export function validatePack(raw: unknown, opts: ValidatePackOptions = {}): Pack
       );
       return;
     }
-    const stage = soleStage(division);
+    const stage = stageOfStream.get(fixtureKey(stream.divisionRef, stream.fixtureExtKey));
     const cfg = stageScopedFoldCfg(cfgParse.data, stage?.config);
 
     let state: unknown;
@@ -722,14 +801,15 @@ export function validatePack(raw: unknown, opts: ValidatePackOptions = {}): Pack
     const stage = division.stages.find((s) => s.ref === table.stageRef);
     if (stage === undefined) return; // unreachable for a parsed pack
 
-    if (division.stages.length > 1) {
+    const unbound = unboundOf(division.ref);
+    if (unbound.length > 0) {
       add(
         "warning",
         "standings.stage_unbindable",
         where,
-        `not checked: division "${division.ref}" has ${division.stages.length} stages and a stream ` +
-          `declares only divisionRef + fixtureExtKey, so stage 0 cannot tell which of its streams ` +
-          `belong to stage "${stage.ref}". A pre-freeze streams[].stageRef would close this`,
+        `not checked: ${unbound.length} stream(s) in division "${division.ref}" name no stage and ` +
+          `the division has ${division.stages.length} stages, so stage 0 cannot tell which of them ` +
+          `belong to stage "${stage.ref}". Declaring streams[].stageRef on every stream closes this`,
       );
       return;
     }
@@ -743,7 +823,7 @@ export function validatePack(raw: unknown, opts: ValidatePackOptions = {}): Pack
       );
       return;
     }
-    if (stage.kind !== "league" && stage.kind !== "group" && stage.kind !== "swiss" && stage.kind !== "americano") {
+    if (!TABLE_STAGE_KINDS.has(stage.kind)) {
       add(
         "error",
         "standings.not_a_table_stage",
@@ -765,7 +845,11 @@ export function validatePack(raw: unknown, opts: ValidatePackOptions = {}): Pack
       return;
     }
 
-    const streams = pack.streams.filter((s) => s.divisionRef === division.ref);
+    // Only the streams that belong to THIS stage. With every stream bound,
+    // a multi-stage division gets a table per stage instead of one wrong one.
+    const streams = streamsOf(division.ref).filter(
+      (st) => stageOfStream.get(fixtureKey(st.divisionRef, st.fixtureExtKey))?.ref === stage.ref,
+    );
     const rows = deriveStandings(division, stage, streams, seedByEntrant, folded);
     if (typeof rows === "string") {
       add("error", "standings.underivable", where, rows);
@@ -774,6 +858,74 @@ export function validatePack(raw: unknown, opts: ValidatePackOptions = {}): Pack
     const divergence = firstTableDivergence(rows, table);
     if (divergence !== null) add("error", divergence.code, where, divergence.message);
   });
+
+  // Q3 — a TABLE-kind stage with folded streams and no `expected.tables` row
+  // is unasserted, and stage 3 is the only thing that catches an end-to-end
+  // reversed stream. `PackSchema`'s anti-vacuity rule covers streams (every
+  // stream needs an `expected.matches` oracle) and stops there, so this is the
+  // gate's own blind spot. Reported, not failed: whether a stage's table is
+  // owed is an authoring judgement, and the better long-term home is the
+  // schema's own anti-vacuity check before the B06 freeze.
+  const tabled = new Set(
+    pack.expected.tables.map((table) => fixtureKey(table.divisionRef, table.stageRef)),
+  );
+  for (const division of pack.divisions) {
+    for (const stage of division.stages) {
+      if (!TABLE_STAGE_KINDS.has(stage.kind)) continue;
+      if (tabled.has(fixtureKey(division.ref, stage.ref))) continue;
+      const played = streamsOf(division.ref).filter(
+        (st) => stageOfStream.get(fixtureKey(st.divisionRef, st.fixtureExtKey))?.ref === stage.ref,
+      );
+      if (played.length === 0) continue;
+      add(
+        "warning",
+        "standings.no_expected_table",
+        `divisions[ref=${division.ref}].stages[ref=${stage.ref}]`,
+        `${played.length} stream(s) fold into stage "${stage.ref}" (kind "${stage.kind}") and the ` +
+          `pack declares no expected.tables row for it — so nothing asserts its points or its tie ` +
+          `order, and the derived-standings stage is the ONLY one that catches an end-to-end ` +
+          `reversed stream`,
+      );
+    }
+  }
+
+  // Q2 — three declared oracle blocks stage 0 does NOT derive. Unlike the four
+  // things it cannot bind, these were silent: a pack with a wholly fabricated
+  // leaderboard reported "ok, no findings", which is exactly the "looks like
+  // it passed" shape the warning channel exists for. Each names its count and
+  // its owner. The DECISION not to derive them is in the LIMITS block above.
+  const notDerived: readonly [string, string, number, string][] = [
+    [
+      "leaderboards.not_derived",
+      "expected.leaderboards",
+      pack.expected.leaderboards.length,
+      "the product's player-stats fold needs a PlayerStatsFoldCtx built from entrant-member rows " +
+        "(usecases/player-stats.ts:124-140), and a second, differently-built ctx here would be a " +
+        "parallel implementation rather than a check",
+    ],
+    [
+      "champions.not_derived",
+      "expected.champions",
+      pack.expected.champions.length,
+      "a champion is the product's stage-completion and progression answer, not the fold's",
+    ],
+    [
+      "suspensions.not_derived",
+      "expected.suspensions",
+      pack.expected.suspensions.length,
+      "a discipline carry-over spans fixtures, and stage 0 folds each fixture on its own",
+    ],
+  ];
+  for (const [code, block, count, why] of notDerived) {
+    if (count === 0) continue;
+    add(
+      "warning",
+      code,
+      block,
+      `${count} declared ${block} entr${count === 1 ? "y is" : "ies are"} NOT checked offline: ${why}. ` +
+        `Owed to the seeded HTTP run (B05)`,
+    );
+  }
 
   // -- Stage 4: specials --------------------------------------------------
   pack.expected.specials.forEach((special, i) => {
@@ -833,17 +985,30 @@ function firstMatchDivergence(fold: FoldedStream, expected: PackExpectedMatch): 
       message: `outcome kind: pack expects "${want.kind}", the fold produced "${outcome.kind}"`,
     };
   }
-  if ("winner" in want && "winner" in outcome && outcome.winner !== sigil(want.winner)) {
-    return {
-      code: "match.outcome_winner",
-      message: `winner: pack expects "${want.winner}", the fold produced "${outcome.winner}"`,
-    };
+  // `got = "x" in outcome ? outcome.x : undefined`, the same shape
+  // `claimDivergence` uses — NOT `"x" in want && "x" in outcome && ...`. The
+  // conjunction reads as a guard and is structurally always true (the two
+  // unions are discriminated on the same five kinds, and Task 1's
+  // `OUTCOME_KINDS_ARE_EXHAUSTIVE` proves the kind sets are equal), so it
+  // cannot fail open today — but two shapes answering one question in one file
+  // is how a later reader picks the one that can.
+  if ("winner" in want) {
+    const got = "winner" in outcome ? outcome.winner : undefined;
+    if (got !== sigil(want.winner)) {
+      return {
+        code: "match.outcome_winner",
+        message: `winner: pack expects "${want.winner}", the fold produced ${show(got)}`,
+      };
+    }
   }
-  if ("loser" in want && "loser" in outcome && outcome.loser !== sigil(want.loser)) {
-    return {
-      code: "match.outcome_loser",
-      message: `loser: pack expects "${want.loser}", the fold produced "${outcome.loser}"`,
-    };
+  if ("loser" in want) {
+    const got = "loser" in outcome ? outcome.loser : undefined;
+    if (got !== sigil(want.loser)) {
+      return {
+        code: "match.outcome_loser",
+        message: `loser: pack expects "${want.loser}", the fold produced ${show(got)}`,
+      };
+    }
   }
   // `method` is asserted only when the pack states one — a pack that does not
   // care which method decided a fixture must not be forced to guess.
@@ -903,6 +1068,13 @@ function deriveStandings(
   seedByEntrant: ReadonlyMap<string, number>,
   folded: ReadonlyMap<string, FoldedStream>,
 ): readonly StandingsRow[] | string {
+  // The string return is a DERIVATION failure, reported as
+  // `standings.underivable`. Exactly one of its three cases is reachable for a
+  // parsed pack — a stage `points` rule the engine's own schema refuses, which
+  // has its own test. The other two are defensive: a stream with no folded
+  // outcome cannot get here (the caller's `failedDivisions` gate returns
+  // first), and `completeTableStage` always yields at least one pool. Said out
+  // loud so neither is mistaken for a tested branch.
   const ctxBase: StageCtx = { kind: stage.kind };
   const pointsRuleRaw = stage.config["points"];
   let pointsRule: PointsRule | null = null;
@@ -950,6 +1122,19 @@ function deriveStandings(
   // in full rather than in part: a stage-config key the product applies and
   // stage 0 ignores makes the offline table differ from the seeded one, which
   // is a false red on a correct pack.
+  //
+  // WHICH OF THESE `completeTableStage` ACTUALLY READS, measured rather than
+  // assumed, because a mirror line nothing consumes is dead weight a reader
+  // will take for a live one:
+  //   consumed  — entrants, cascade, seeds, rngSeed (the `lots` draw),
+  //               swiss (assembles the ledger buchholz/sberger/direct need),
+  //               openingDeltas, rankLocks, h2hScope. Each has its own test.
+  //   CARRIED ONLY — `kind` and `rounds`. `completeTableStage` reads neither:
+  //               `kind` is a required field of `TableStage` and `rounds` is
+  //               read by `isTableStageComplete`, which this path never calls.
+  //               They are kept so the construction stays diff-able against
+  //               `toTableStage`, and their mutants are recorded as equivalent
+  //               in the task report rather than chased with a fake test.
   const stageConfig = stage.config as Record<string, unknown>;
   const carry = stageConfig["carry_deltas"];
   const overrides = stageConfig["rank_overrides"];
@@ -960,8 +1145,14 @@ function deriveStandings(
     entrants,
     cascade: (division.tiebreakers ?? tiebreakersOf(folded, streams)) as TableStage["cascade"],
     ...(seeds.size > 0 ? { seeds } : {}),
-    ...(typeof stageConfig["rngSeed"] === "number" ? { rngSeed: stageConfig["rngSeed"] } : {}),
-    ...(typeof stageConfig["rounds"] === "number" ? { rounds: stageConfig["rounds"] } : {}),
+    // `!= null`, matching `toTableStage` exactly (competition.ts:337-338) and
+    // NOT a `typeof === "number"` sniff. `PackStage.config` is an opaque JSON
+    // record, so a string `rngSeed` is expressible; a type sniff would drop it
+    // here while the product forwards it, and a pack with a typo'd seed would
+    // then fold green offline and rank differently on seeding — the exact
+    // divergence "mirrored in full" exists to prevent.
+    ...(stageConfig["rngSeed"] != null ? { rngSeed: stageConfig["rngSeed"] as number } : {}),
+    ...(stageConfig["rounds"] != null ? { rounds: stageConfig["rounds"] as number } : {}),
     ...(stage.kind === "swiss" ? { swiss: true } : {}),
     ...(Array.isArray(carry) ? { openingDeltas: carry as readonly StandingsDelta[] } : {}),
     ...(Array.isArray(overrides)

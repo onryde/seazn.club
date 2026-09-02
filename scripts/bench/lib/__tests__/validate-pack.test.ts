@@ -24,6 +24,7 @@ import {
   stageScopedFoldCfg,
   validatePack,
   type PackFinding,
+  type PackValidation,
 } from "../validate-pack.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -85,10 +86,39 @@ interface TinyShape {
   meta: { synthetic: boolean; sources: unknown[] };
 }
 
+/** `expectedSuite` is REQUIRED, so every call site names the pack it drives —
+ *  which is the point: a runner that forgets it no longer compiles. */
+const TINY = { expectedSuite: "_tiny" } as const;
+const UNIT = { expectedSuite: "_unit" } as const;
+
+/**
+ * `_tiny` declares two leaderboards and a champion, and stage 0 derives
+ * NEITHER — so every green `_tiny` run carries exactly these two warnings.
+ * Spelled out rather than filtered away, because the whole point of the
+ * not-derived warnings is that a reader sees them.
+ */
+const TINY_NOT_DERIVED = ["leaderboards.not_derived", "champions.not_derived"];
+
+/** `genericPack` declares a league stage and no `expected.tables`, so stage 0
+ *  says the stage's points and tie order are asserted by nothing. */
+const UNIT_NO_TABLE = ["standings.no_expected_table"];
+
 const errors = (findings: readonly PackFinding[]): readonly PackFinding[] =>
   findings.filter((f) => f.severity === "error");
 const warnings = (findings: readonly PackFinding[]): readonly PackFinding[] =>
   findings.filter((f) => f.severity === "warning");
+
+/**
+ * No errors, and EXACTLY these warnings — never "no findings", which stopped
+ * being expressible the moment stage 0 started SAYING what it does not derive.
+ * Spelling the warnings out per call is deliberate: a helper that filtered
+ * them away would hide the one thing they exist to make visible.
+ */
+function expectClean(result: PackValidation, expectedWarnings: readonly string[]): void {
+  expect(errors(result.findings)).toEqual([]);
+  expect(warnings(result.findings).map((f) => f.code)).toEqual([...expectedWarnings]);
+  expect(result.ok).toBe(true);
+}
 
 /** The single error a corruption is expected to produce. Fails loudly on 0 or
  *  2+, so a test can never assert against "the first of several". */
@@ -222,15 +252,19 @@ function boardgamePack(pairing: Record<string, unknown>): Record<string, unknown
 // ===========================================================================
 
 describe("validatePack — _tiny.json, the shared fixture", () => {
-  it("validates green end to end, with no findings of any severity", () => {
-    const result = validatePack(tiny(), { expectedSuite: "_tiny" });
-    expect(result.findings).toEqual([]);
-    expect(result.ok).toBe(true);
+  it("validates green end to end — no errors, and only the not-derived notices", () => {
+    const result = validatePack(tiny(), TINY);
+    expectClean(result, TINY_NOT_DERIVED);
     expect(result.pack?.suite).toBe("_tiny");
+    // The notices are not decoration: each names what it did not check.
+    expect(warnings(result.findings).map((f) => f.message)).toEqual([
+      expect.stringContaining("2 declared expected.leaderboards entries are NOT checked offline"),
+      expect.stringContaining("1 declared expected.champions entry is NOT checked offline"),
+    ]);
   });
 
   it("reports the provenance split per division and overall", () => {
-    const result = validatePack(tiny());
+    const result = validatePack(tiny(), TINY);
     // Two `real` streams and one `reconstructed`, per the committed file.
     expect(result.provenance.overall).toEqual({
       real: 2,
@@ -249,7 +283,7 @@ describe("validatePack — _tiny.json, the shared fixture", () => {
     pack.expected.matches = [];
     pack.expected.tables = [];
     pack.expected.specials = [];
-    const result = validatePack(pack);
+    const result = validatePack(pack, TINY);
     // An absent key and a zero count are different facts: a report that cannot
     // tell them apart hides a division nothing replayed.
     expect(result.provenance.byDivision).toEqual({
@@ -271,7 +305,7 @@ describe("validatePack — corrupted streams die naming the stream and the diver
     expect(stream.fixtureExtKey).toBe("rr-r2-c1");
     (stream.events[1] as { payload: Record<string, unknown> }).payload["by"] = "@e-alpha";
 
-    const finding = onlyError(validatePack(pack).findings);
+    const finding = onlyError(validatePack(pack, TINY).findings);
     expect(finding.code).toBe("match.outcome_kind");
     expect(finding.where).toBe("streams[1] (d-tiny/rr-r2-c1)");
     expect(finding.message).toBe('outcome kind: pack expects "draw", the fold produced "win"');
@@ -287,7 +321,7 @@ describe("validatePack — corrupted streams die naming the stream and the diver
       payload: { by: "@e-alpha", points: 1, person: "@p-ana" },
     });
 
-    const finding = onlyError(validatePack(pack).findings);
+    const finding = onlyError(validatePack(pack, TINY).findings);
     expect(finding.code).toBe("match.outcome_kind");
     expect(finding.where).toBe("streams[1] (d-tiny/rr-r2-c1)");
     expect(finding.message).toContain('pack expects "draw"');
@@ -301,7 +335,7 @@ describe("validatePack — corrupted streams die naming the stream and the diver
     // the perSide comparison can see it.
     (stream.events[1] as { payload: Record<string, unknown> }).payload["p1Score"] = 4;
 
-    const result = validatePack(pack);
+    const result = validatePack(pack, TINY);
     const finding = onlyError(result.findings);
     expect(finding.code).toBe("match.side_line");
     expect(finding.where).toBe("streams[0] (d-tiny/rr-r1-c1)");
@@ -310,14 +344,17 @@ describe("validatePack — corrupted streams die naming the stream and the diver
     );
     // And the table is not silently skipped: the skip says why, so a reader
     // cannot mistake "not checked" for "checked and fine".
-    expect(warnings(result.findings).map((f) => f.code)).toEqual(["standings.upstream_fold_failed"]);
+    expect(warnings(result.findings).map((f) => f.code)).toEqual([
+      "standings.upstream_fold_failed",
+      ...TINY_NOT_DERIVED,
+    ]);
   });
 
   it("a SWAPPED WINNER reds the fold even though the outcome kind is right", () => {
     const pack = tiny();
     const match = pack.expected.matches[0]!;
     match.outcome = { kind: "win", winner: "e-bravo", loser: "e-alpha", method: "regulation" };
-    const finding = onlyError(validatePack(pack).findings);
+    const finding = onlyError(validatePack(pack, TINY).findings);
     expect(finding.code).toBe("match.outcome_winner");
     expect(finding.message).toBe('winner: pack expects "e-bravo", the fold produced "@e-alpha"');
   });
@@ -334,7 +371,7 @@ describe("validatePack — corrupted streams die naming the stream and the diver
     } as TinyShape["entrants"][number]);
     const match = pack.expected.matches[0]!;
     match.outcome = { kind: "win", winner: "e-alpha", loser: "e-charlie", method: "regulation" };
-    const finding = onlyError(validatePack(pack).findings);
+    const finding = onlyError(validatePack(pack, TINY).findings);
     expect(finding.code).toBe("match.outcome_loser");
     expect(finding.message).toBe('loser: pack expects "e-charlie", the fold produced "@e-bravo"');
   });
@@ -342,7 +379,7 @@ describe("validatePack — corrupted streams die naming the stream and the diver
   it("a WRONG METHOD reds the fold, and an unstated method asserts nothing", () => {
     const pack = tiny();
     (pack.expected.matches[0]!.outcome as Record<string, unknown>)["method"] = "extra_time";
-    const finding = onlyError(validatePack(pack).findings);
+    const finding = onlyError(validatePack(pack, TINY).findings);
     expect(finding.code).toBe("match.outcome_method");
     expect(finding.message).toBe('method: pack expects "extra_time", the fold produced "regulation"');
 
@@ -350,7 +387,7 @@ describe("validatePack — corrupted streams die naming the stream and the diver
     // forced to guess one.
     const silent = tiny();
     delete (silent.expected.matches[0]!.outcome as Record<string, unknown>)["method"];
-    expect(validatePack(silent).findings).toEqual([]);
+    expectClean(validatePack(silent, TINY), TINY_NOT_DERIVED);
   });
 
   it("a SWAPPED TIE ORDER in the expected table reds the standings", () => {
@@ -365,7 +402,7 @@ describe("validatePack — corrupted streams die naming the stream and the diver
       { ...first, rank: 2 },
     ];
 
-    const finding = onlyError(validatePack(pack).findings);
+    const finding = onlyError(validatePack(pack, TINY).findings);
     expect(finding.code).toBe("standings.order");
     expect(finding.where).toBe("expected.tables[0] (d-tiny/s-league)");
     expect(finding.message).toBe('rank 1: pack expects "e-bravo", the fold ranked "@e-alpha" there');
@@ -386,7 +423,7 @@ describe("validatePack — corrupted streams die naming the stream and the diver
       { entrant: "e-alpha", line: "1" },
     ];
 
-    const result = validatePack(pack);
+    const result = validatePack(pack, TINY);
     // The fixture itself is now self-consistent: stage 2 has nothing to say.
     expect(errors(result.findings).filter((f) => f.code.startsWith("match."))).toEqual([]);
     // The cumulative table is where the reversal shows up: alpha and bravo end
@@ -423,7 +460,7 @@ describe("validatePack — provenance", () => {
     const pack = tiny();
     mutate(pack.streams[0] as TinyStream);
 
-    const result = validatePack(pack);
+    const result = validatePack(pack, TINY);
     expect(result.ok).toBe(false);
     expect(result.pack).toBe(null);
     const finding = onlyError(result.findings);
@@ -441,8 +478,8 @@ describe("validatePack — provenance", () => {
     // `synthetic` was added in Task 1's fix round; GLOBAL.md still names two
     // values. A validator that hardcoded the old pair would red here.
     (pack.streams[1] as TinyStream).provenance = "synthetic";
-    const result = validatePack(pack);
-    expect(result.findings).toEqual([]);
+    const result = validatePack(pack, TINY);
+    expectClean(result, TINY_NOT_DERIVED);
     expect(result.provenance.overall).toEqual({
       real: 2,
       reconstructed: 0,
@@ -465,7 +502,7 @@ describe("validatePack — resolving the module and its cfg", () => {
   };
 
   it("reds a division pinned to a module version the registry does not hold", () => {
-    const finding = onlyError(validatePack(withDivision({ moduleVersion: "9.9.9" })).findings);
+    const finding = onlyError(validatePack(withDivision({ moduleVersion: "9.9.9" }), UNIT).findings);
     expect(finding.code).toBe("fold.module_not_found");
     expect(finding.where).toBe("streams[0] (d1/f1)");
     expect(finding.message).toContain('no engine module "generic@9.9.9"');
@@ -477,7 +514,7 @@ describe("validatePack — resolving the module and its cfg", () => {
     // 422s on exactly this (`usecases/divisions.ts:242`), reading the preset
     // from the `sport_variants` rows `scripts/sync-sports.ts` generates from
     // `module.variants`. Offline that map IS the source.
-    const finding = onlyError(validatePack(withDivision({ variantKey: "banana" })).findings);
+    const finding = onlyError(validatePack(withDivision({ variantKey: "banana" }), UNIT).findings);
     expect(finding.code).toBe("fold.unknown_variant");
     expect(finding.message).toContain('unknown variant "banana" for sport "generic"');
     // Derived from the module, so a new variant moves the message with it.
@@ -488,7 +525,7 @@ describe("validatePack — resolving the module and its cfg", () => {
 
   it("reds a cfg the module's own configSchema refuses", () => {
     const finding = onlyError(
-      validatePack(withDivision({ cfgOverrides: { resultMode: "banana" } })).findings,
+      validatePack(withDivision({ cfgOverrides: { resultMode: "banana" } }), UNIT).findings,
     );
     expect(finding.code).toBe("fold.cfg_invalid");
     expect(finding.message).toContain("configSchema");
@@ -544,7 +581,7 @@ describe("validatePack — parity P1: envelope synthesis", () => {
     // A boardgame division with `colors: false` and a pairing card that names
     // a white player. `applyPairing` refuses that ONLY when strict
     // (boardgame.ts:297), so the two modes genuinely disagree here.
-    const strictRefused = validatePack(boardgamePack({ white: "@e1" }));
+    const strictRefused = validatePack(boardgamePack({ white: "@e1" }), UNIT);
     const finding = onlyError(strictRefused.findings);
     expect(finding.code).toBe("fold.rejected");
     expect(finding.where).toBe("streams[0] (d1/f1)");
@@ -553,7 +590,7 @@ describe("validatePack — parity P1: envelope synthesis", () => {
     // Control 1: the same stream with a pairing card that carries no colour
     // folds green, so the refusal above is the colours rule and not a broken
     // fixture.
-    expect(validatePack(boardgamePack({ board: 1 })).findings).toEqual([]);
+    expectClean(validatePack(boardgamePack({ board: 1 }), UNIT), UNIT_NO_TABLE);
 
     // Control 2: the SAME events fold cleanly with the tolerant (replay)
     // reading. Without this the test could pass against a validator that
@@ -569,7 +606,7 @@ describe("validatePack — parity P1: envelope synthesis", () => {
 
 describe("validatePack — parity P2: the not-decided rejection", () => {
   it("reds a stream that folds legally but reaches no outcome", () => {
-    const result = validatePack(genericPack({ events: [{ type: "core.start" }] }));
+    const result = validatePack(genericPack({ events: [{ type: "core.start" }] }), UNIT);
     const finding = onlyError(result.findings);
     expect(finding.code).toBe("fold.not_decided");
     expect(finding.where).toBe("streams[0] (d1/f1)");
@@ -596,6 +633,7 @@ describe("validatePack — an EngineError is a finding, never a crash", () => {
           { type: "generic.score", payload: { by: "@e1", points: 1 } },
         ],
       }),
+      UNIT,
     );
     const finding = onlyError(result.findings);
     expect(finding.code).toBe("fold.rejected");
@@ -619,6 +657,7 @@ describe("validatePack — an EngineError is a finding, never a crash", () => {
           { type: "generic.result", payload: { p1Score: 2, p2Score: 1 } },
         ],
       }),
+      UNIT,
     );
     const finding = onlyError(result.findings);
     expect(finding.code).toBe("fold.rejected");
@@ -634,13 +673,16 @@ describe("validatePack — an EngineError is a finding, never a crash", () => {
     (pack.streams[0] as TinyStream).events.splice(1, 0, { type: "core.start" });
     (pack.expected.matches[1] as { outcome: Record<string, unknown> }).outcome = { kind: "tie" };
 
-    const result = validatePack(pack);
+    const result = validatePack(pack, TINY);
     const codes = errors(result.findings).map((f) => `${f.code} @ ${f.where}`);
     expect(codes).toEqual([
       "fold.rejected @ streams[0] (d-tiny/rr-r1-c1)",
       "match.outcome_kind @ streams[1] (d-tiny/rr-r2-c1)",
     ]);
-    expect(warnings(result.findings).map((f) => f.code)).toEqual(["standings.upstream_fold_failed"]);
+    expect(warnings(result.findings).map((f) => f.code)).toEqual([
+      "standings.upstream_fold_failed",
+      ...TINY_NOT_DERIVED,
+    ]);
   });
 
   it("a fold failure suppresses its table as a WARNING, not a second error", () => {
@@ -653,9 +695,12 @@ describe("validatePack — an EngineError is a finding, never a crash", () => {
     const pack = tiny();
     (pack.streams[0] as TinyStream).events.splice(1, 0, { type: "core.start" });
 
-    const result = validatePack(pack);
+    const result = validatePack(pack, TINY);
     expect(onlyError(result.findings).code).toBe("fold.rejected");
-    expect(warnings(result.findings).map((f) => f.code)).toEqual(["standings.upstream_fold_failed"]);
+    expect(warnings(result.findings).map((f) => f.code)).toEqual([
+      "standings.upstream_fold_failed",
+      ...TINY_NOT_DERIVED,
+    ]);
   });
 });
 
@@ -672,7 +717,7 @@ describe("validatePack — specials", () => {
     // never resolve. `ClosedSet.mtb` is the reachable representation.
     pack.expected.specials[0]!.claims = [{ on: "state", path: "mtbTo", equals: true }];
 
-    const finding = onlyError(validatePack(pack).findings);
+    const finding = onlyError(validatePack(pack, TINY).findings);
     expect(finding.code).toBe("special.state");
     expect(finding.where).toBe("expected.specials[0] (retirement d-tiny/rr-r3-c1) claims[0]");
     expect(finding.message).toContain('state path "mtbTo" does not exist');
@@ -681,38 +726,61 @@ describe("validatePack — specials", () => {
   it("reds a state path that resolves to the wrong value, naming both", () => {
     const pack = tiny();
     pack.expected.specials[0]!.claims = [{ on: "state", path: "phase", equals: "live" }];
-    const finding = onlyError(validatePack(pack).findings);
+    const finding = onlyError(validatePack(pack, TINY).findings);
     expect(finding.code).toBe("special.state");
     expect(finding.message).toBe('state "phase": claim expects "live", the fold produced "done"');
   });
 
-  it("reds an outcome claim on each of kind, winner and loser", () => {
-    const claimed = (claim: Record<string, unknown>): PackFinding => {
-      const pack = tiny();
-      pack.expected.specials[0]!.claims = [claim];
-      return onlyError(validatePack(pack).findings);
-    };
-    expect(claimed({ on: "outcome", kind: "draw" }).message).toBe(
-      'outcome kind: claim expects "draw", the fold produced "award"',
-    );
-    expect(claimed({ on: "outcome", winner: "e-bravo" }).message).toBe(
-      'outcome winner: claim expects "e-bravo", the fold produced "@e-alpha"',
-    );
-    // An `award` outcome carries no `loser` at all — the claim must red on the
-    // absence, not quietly pass because there is nothing to compare.
-    expect(claimed({ on: "outcome", loser: "e-bravo" }).message).toBe(
-      'outcome loser: claim expects "e-bravo", the fold produced undefined',
+  /**
+   * Every claim below is posed against a fixture whose fold COULD satisfy it,
+   * with a green control alongside. That distinction is not cosmetic: a claim
+   * naming `loser` or `method` on an AWARD outcome can never hold — the
+   * engine's award variant has neither field — so a "reds" assertion there
+   * proves nothing about the comparison. (PackSchema now refuses `method` on
+   * an award for the same reason; `PackClaim` is a flat union and still
+   * permits the shape, which is why the absence case below is kept and
+   * labelled rather than deleted.)
+   *
+   * `_tiny`'s rr-r1-c1 folds to `{win, winner: e-alpha, loser: e-bravo,
+   * method: "regulation"}`, which carries all four fields.
+   */
+  const onWin = (claim: Record<string, unknown>): TinyShape => {
+    const pack = tiny();
+    pack.expected.specials[0]!.fixtureExtKey = "rr-r1-c1";
+    pack.expected.specials[0]!.claims = [claim];
+    return pack;
+  };
+  const winClaims: [string, Record<string, unknown>, string][] = [
+    ["kind", { on: "outcome", kind: "draw" }, 'outcome kind: claim expects "draw", the fold produced "win"'],
+    ["winner", { on: "outcome", winner: "e-bravo" }, 'outcome winner: claim expects "e-bravo", the fold produced "@e-alpha"'],
+    ["loser", { on: "outcome", loser: "e-alpha" }, 'outcome loser: claim expects "e-alpha", the fold produced "@e-bravo"'],
+    ["method", { on: "outcome", method: "shootout" }, 'outcome method: claim expects "shootout", the fold produced "regulation"'],
+  ];
+  it.each(winClaims)("reds an outcome claim on %s, against a fold that carries it", (_f, claim, message) => {
+    expect(onlyError(validatePack(onWin(claim), TINY).findings).message).toBe(message);
+  });
+
+  it("holds when every field of the same outcome claim is right", () => {
+    // The control the four cases above need: without it each of them could be
+    // passing because the claim shape is unsatisfiable rather than wrong.
+    expectClean(
+      validatePack(
+        onWin({ on: "outcome", kind: "win", winner: "e-alpha", loser: "e-bravo", method: "regulation" }),
+        TINY,
+      ),
+      TINY_NOT_DERIVED,
     );
   });
 
-  it("reds an outcome claim whose method the fold did not produce", () => {
+  it("reds a claim on a field the folded outcome does not carry at all", () => {
+    // An `award` has no `loser`. The claim must red on the ABSENCE rather than
+    // quietly pass because there is nothing to compare — the direction that
+    // `"loser" in outcome &&` guarding would have got wrong.
     const pack = tiny();
-    pack.expected.specials[0]!.claims = [
-      { on: "outcome", kind: "award", winner: "e-alpha", method: "shootout" },
-    ];
-    const finding = onlyError(validatePack(pack).findings);
-    expect(finding.code).toBe("special.outcome");
-    expect(finding.message).toContain('claim expects "shootout"');
+    pack.expected.specials[0]!.claims = [{ on: "outcome", loser: "e-bravo" }];
+    expect(onlyError(validatePack(pack, TINY).findings).message).toBe(
+      'outcome loser: claim expects "e-bravo", the fold produced undefined',
+    );
   });
 
   it("reds a standings claim against THIS fixture's own delta", () => {
@@ -723,7 +791,7 @@ describe("validatePack — specials", () => {
     pack.expected.specials[0]!.claims = [
       { on: "standings", entrant: "e-alpha", field: "won", equals: 2 },
     ];
-    const finding = onlyError(validatePack(pack).findings);
+    const finding = onlyError(validatePack(pack, TINY).findings);
     expect(finding.code).toBe("special.standings");
     expect(finding.message).toBe(
       'standings won for "e-alpha": claim expects 2, this fixture\'s delta gives 1',
@@ -736,7 +804,7 @@ describe("validatePack — specials", () => {
       { on: "state", path: "phase", equals: "live" },
       { on: "standings", entrant: "e-alpha", field: "won", equals: 9 },
     ];
-    const finding = onlyError(validatePack(pack).findings);
+    const finding = onlyError(validatePack(pack, TINY).findings);
     expect(finding.where).toContain("claims[0]");
   });
 
@@ -779,8 +847,8 @@ describe("validatePack — specials", () => {
         ],
       });
 
-    expect(validatePack(withSub(1)).findings).toEqual([]);
-    const finding = onlyError(validatePack(withSub(0)).findings);
+    expectClean(validatePack(withSub(1), UNIT), UNIT_NO_TABLE);
+    const finding = onlyError(validatePack(withSub(0), UNIT).findings);
     expect(finding.code).toBe("special.squads");
     expect(finding.message).toBe(
       'squads subsUsed for "e1": claim expects 0, the fold produced 1',
@@ -798,11 +866,11 @@ describe("validatePack — specials", () => {
     });
     const green = tiny();
     green.expected.specials = [claim(0) as TinyShape["expected"]["specials"][number]];
-    expect(validatePack(green).findings).toEqual([]);
+    expectClean(validatePack(green, TINY), TINY_NOT_DERIVED);
 
     const red = tiny();
     red.expected.specials = [claim(1) as TinyShape["expected"]["specials"][number]];
-    expect(onlyError(validatePack(red).findings).message).toBe(
+    expect(onlyError(validatePack(red, TINY).findings).message).toBe(
       'squads exemptUsed["concussion"] for "e-alpha": claim expects 1, the fold produced 0',
     );
   });
@@ -825,9 +893,9 @@ describe("validatePack — specials", () => {
       return pack;
     };
     // Control: alpha DID play rr-r3-c1, so the same claim shape is green.
-    expect(validatePack(withCharlie("e-alpha")).findings).toEqual([]);
+    expectClean(validatePack(withCharlie("e-alpha"), TINY), TINY_NOT_DERIVED);
 
-    const finding = onlyError(validatePack(withCharlie("e-charlie")).findings);
+    const finding = onlyError(validatePack(withCharlie("e-charlie"), TINY).findings);
     expect(finding.code).toBe("special.squads");
     expect(finding.message).toContain("is neither side of this fixture");
   });
@@ -845,7 +913,7 @@ describe("validatePack — the limits stage 0 declares", () => {
     // stage 0 deliberately does not derive — changes.
     const stream = pack.streams[1] as TinyStream;
     (stream.events[2] as { payload: Record<string, unknown> }).payload["person"] = "@p-bo";
-    expect(validatePack(pack).findings).toEqual([]);
+    expectClean(validatePack(pack, TINY), TINY_NOT_DERIVED);
   });
 
   it("cannot bind streams to a stage in a MULTI-STAGE division, and says so", () => {
@@ -857,7 +925,7 @@ describe("validatePack — the limits stage 0 declares", () => {
       name: "Knockout",
       config: {},
     });
-    const result = validatePack(pack);
+    const result = validatePack(pack, TINY);
     expect(errors(result.findings)).toEqual([]);
     expect(result.ok).toBe(true);
     const warning = warnings(result.findings)[0];
@@ -869,9 +937,12 @@ describe("validatePack — the limits stage 0 declares", () => {
   it("cannot bind streams to a POOL, and says so", () => {
     const pack = tiny();
     pack.expected.tables[0]!.poolKey = "A";
-    const result = validatePack(pack);
+    const result = validatePack(pack, TINY);
     expect(errors(result.findings)).toEqual([]);
-    expect(warnings(result.findings).map((f) => f.code)).toEqual(["standings.pool_unbindable"]);
+    expect(warnings(result.findings).map((f) => f.code)).toEqual([
+      "standings.pool_unbindable",
+      ...TINY_NOT_DERIVED,
+    ]);
   });
 });
 
@@ -883,7 +954,7 @@ describe("validatePack — the standings derivation mirrors the product's own", 
   it("reds a table declared against a stage that produces a bracket, not a table", () => {
     const pack = tiny();
     pack.divisions[0]!.stages[0]!.kind = "knockout";
-    const finding = onlyError(validatePack(pack).findings);
+    const finding = onlyError(validatePack(pack, TINY).findings);
     expect(finding.code).toBe("standings.not_a_table_stage");
     expect(finding.message).toContain('kind "knockout"');
   });
@@ -896,7 +967,7 @@ describe("validatePack — the standings derivation mirrors the product's own", 
     // The pack now expects 7 + 5. Green ONLY if the opening delta is applied;
     // ignoring `carry_deltas` gives 7 and reds.
     pack.expected.tables[0]!.rows[0]!.points = 12;
-    expect(validatePack(pack).findings).toEqual([]);
+    expectClean(validatePack(pack, TINY), TINY_NOT_DERIVED);
   });
 
   it("applies the stage's manual rank locks (stage.config.rank_overrides)", () => {
@@ -911,7 +982,7 @@ describe("validatePack — the standings derivation mirrors the product's own", 
       { ...bravo, rank: 1 },
       { ...alpha, rank: 2 },
     ];
-    expect(validatePack(pack).findings).toEqual([]);
+    expectClean(validatePack(pack, TINY), TINY_NOT_DERIVED);
   });
 
   it("carries the entrants' declared seeds into the ranking", () => {
@@ -946,7 +1017,7 @@ describe("validatePack — the standings derivation mirrors the product's own", 
         ],
       },
     ];
-    expect(validatePack(pack as unknown as Record<string, unknown>).findings).toEqual([]);
+    expectClean(validatePack(pack as unknown as Record<string, unknown>, UNIT), []);
   });
 
   // Every scalar, one at a time. One sample is not a parity sweep: with only
@@ -958,7 +1029,7 @@ describe("validatePack — the standings derivation mirrors the product's own", 
     const row = pack.expected.tables[0]!.rows[0]!;
     const before = row[field];
     row[field] = before + 1;
-    const finding = onlyError(validatePack(pack).findings);
+    const finding = onlyError(validatePack(pack, TINY).findings);
     expect(finding.code).toBe("standings.value");
     expect(finding.message).toBe(
       `rank 1 "e-alpha" ${field}: pack expects ${before + 1}, the fold produced ${before}`,
@@ -1002,30 +1073,30 @@ describe("validatePack — the standings derivation mirrors the product's own", 
         ],
       },
     ];
-    expect(validatePack(pack as unknown as Record<string, unknown>).findings).toEqual([]);
+    expectClean(validatePack(pack as unknown as Record<string, unknown>, UNIT), []);
   });
 
   it("reds when the fold produces a different number of rows", () => {
     const pack = tiny();
     pack.expected.tables[0]!.rows = [pack.expected.tables[0]!.rows[0]!];
-    const finding = onlyError(validatePack(pack).findings);
+    const finding = onlyError(validatePack(pack, TINY).findings);
     expect(finding.code).toBe("standings.row_count");
     expect(finding.message).toBe("the fold produced 2 row(s), the pack declares 1");
   });
 
   it("compares declared metrics, and asserts none when the pack declares none", () => {
     const green = tiny();
-    expect(validatePack(green).findings).toEqual([]); // `_tiny` declares no metrics
+    expectClean(validatePack(green, TINY), TINY_NOT_DERIVED); // `_tiny` declares no metrics
 
     const exact = tiny();
     // The real derived ledger for alpha, so the comparison has a green case
     // and is not merely "any metrics block reds".
     exact.expected.tables[0]!.rows[0]!.metrics = { for: 5, against: 3, diff: 2 };
-    expect(validatePack(exact).findings).toEqual([]);
+    expectClean(validatePack(exact, TINY), TINY_NOT_DERIVED);
 
     const red = tiny();
     red.expected.tables[0]!.rows[0]!.metrics = { nonsense: 1 };
-    const finding = onlyError(validatePack(red).findings);
+    const finding = onlyError(validatePack(red, TINY).findings);
     expect(finding.code).toBe("standings.metrics");
     expect(finding.message).toContain('rank 1 "e-alpha" metrics');
   });
@@ -1041,9 +1112,517 @@ describe("validatePack — the standings derivation mirrors the product's own", 
   it.each(metricsCases)("reds a metrics block that is %s the derived ledger", (_l, metrics) => {
     const pack = tiny();
     pack.expected.tables[0]!.rows[0]!.metrics = metrics;
-    const finding = onlyError(validatePack(pack).findings);
+    const finding = onlyError(validatePack(pack, TINY).findings);
     expect(finding.code).toBe("standings.metrics");
     expect(finding.message).toContain('the fold produced {"for":5,"against":3,"diff":2}');
+  });
+});
+
+
+// ===========================================================================
+// Stage 3's `toTableStage` mirror — the region the first sweep never reached
+//
+// Nine mirrored lines exist so the offline table cannot differ from the seeded
+// one, and not one of them was driven: no test declared a stage `points` rule,
+// an americano or swiss stage, `rngSeed`, `rounds` or `h2h_scope`. Every case
+// below is built so that DROPPING its mirror line changes the derived table.
+// ===========================================================================
+
+interface LeagueSpec {
+  readonly entrants: readonly string[];
+  /** `[extKey, home, away, homeScore, awayScore]` */
+  readonly fixtures: readonly [string, string, string, number, number][];
+  readonly stage?: Record<string, unknown>;
+  readonly stageKind?: string;
+  readonly tiebreakers?: readonly string[];
+  readonly seeds?: Readonly<Record<string, number>>;
+  readonly rows?: readonly Record<string, unknown>[];
+}
+
+/** A multi-fixture generic league, for the stage-3 cases `_tiny` cannot pose. */
+function leaguePack(spec: LeagueSpec): Record<string, unknown> {
+  const outcomeOf = (home: string, away: string, hs: number, as_: number): Record<string, unknown> =>
+    hs === as_
+      ? { kind: "draw" }
+      : { kind: "win", winner: hs > as_ ? home : away, loser: hs > as_ ? away : home };
+  return {
+    schemaVersion: 1,
+    suite: "_unit",
+    org: { name: "Unit Org", slug: "unit-org", timezone: "UTC" },
+    competition: { name: "Unit Cup", slug: "unit-cup", endsOn: "2099-01-02" },
+    divisions: [
+      {
+        ref: "d1",
+        name: "D1",
+        sportKey: "generic",
+        variantKey: "score",
+        moduleVersion: "1.0.0",
+        cfgOverrides: {
+          resultMode: "score",
+          allowDraws: true,
+          points: { w: 3, d: 1, l: 0 },
+          progressScore: false,
+        },
+        ...(spec.tiebreakers === undefined ? {} : { tiebreakers: [...spec.tiebreakers] }),
+        stages: [
+          {
+            ref: "s1",
+            seq: 1,
+            kind: spec.stageKind ?? "league",
+            name: "Stage",
+            config: spec.stage ?? {},
+          },
+        ],
+      },
+    ],
+    persons: [],
+    entrants: spec.entrants.map((ref) => ({
+      ref,
+      divisionRef: "d1",
+      kind: "individual",
+      displayName: ref.toUpperCase(),
+      ...(spec.seeds?.[ref] === undefined ? {} : { seed: spec.seeds[ref] }),
+    })),
+    streams: spec.fixtures.map(([key, home, away, hs, as_]) => ({
+      divisionRef: "d1",
+      fixtureExtKey: key,
+      home,
+      away,
+      provenance: "real",
+      events: [
+        { type: "core.start" },
+        { type: "generic.result", payload: { p1Score: hs, p2Score: as_ } },
+      ],
+    })),
+    expected: {
+      matches: spec.fixtures.map(([key, home, away, hs, as_]) => ({
+        divisionRef: "d1",
+        fixtureExtKey: key,
+        outcome: outcomeOf(home, away, hs, as_),
+      })),
+      ...(spec.rows === undefined
+        ? {}
+        : { tables: [{ divisionRef: "d1", stageRef: "s1", rows: spec.rows.map((r) => ({ ...r })) }] }),
+    },
+    meta: { synthetic: true, sources: [] },
+  };
+}
+
+const row = (
+  entrant: string,
+  rank: number,
+  played: number,
+  won: number,
+  drawn: number,
+  lost: number,
+  points: number,
+): Record<string, unknown> => ({ entrant, rank, played, won, drawn, lost, points });
+
+describe("validatePack — the stage-config mirror is DRIVEN, key by key", () => {
+  it("applies the stage's own points rule, which the division cfg cannot express", () => {
+    // The competition layer's `applyPointsRule` path, not the module's
+    // `standingsDelta` path — a real group stage sets 3/1/0 at the STAGE. The
+    // division cfg awards 3/1/0; the stage rule awards 10/4/1, so the table is
+    // green ONLY if the rule ran.
+    const pack = leaguePack({
+      entrants: ["e1", "e2"],
+      fixtures: [["f1", "e1", "e2", 3, 1]],
+      stage: { points: { base: { win: 10, draw: 4, loss: 1 } } },
+      rows: [row("e1", 1, 1, 1, 0, 0, 10), row("e2", 2, 1, 0, 0, 1, 1)],
+    });
+    expectClean(validatePack(pack, UNIT), []);
+
+    // The control: the SAME fixtures with no stage rule fall back to the
+    // module's own 3/0, so the two paths are visibly different numbers.
+    const bare = leaguePack({
+      entrants: ["e1", "e2"],
+      fixtures: [["f1", "e1", "e2", 3, 1]],
+      rows: [row("e1", 1, 1, 1, 0, 0, 3), row("e2", 2, 1, 0, 0, 1, 0)],
+    });
+    expectClean(validatePack(bare, UNIT), []);
+  });
+
+  it("reds a stage points rule the engine's own schema refuses", () => {
+    // `stages[].config` is an opaque JSON record in the pack, so a malformed
+    // rule parses at stage 1 and is only caught here. Ignoring it silently
+    // would derive the table under the MODULE's points instead — a wrong
+    // table reported as a right one.
+    const pack = leaguePack({
+      entrants: ["e1", "e2"],
+      fixtures: [["f1", "e1", "e2", 3, 1]],
+      stage: { points: { base: { win: "three", draw: 1, loss: 0 } } },
+      rows: [row("e1", 1, 1, 1, 0, 0, 3), row("e2", 2, 1, 0, 0, 1, 0)],
+    });
+    const finding = onlyError(validatePack(pack, UNIT).findings);
+    expect(finding.code).toBe("standings.underivable");
+    expect(finding.message).toContain("points rule the engine refuses");
+  });
+
+  it("assembles the Swiss ledger for a swiss stage, so buchholz can separate", () => {
+    // e2 and e3 are level on points; buchholz splits them (e3's opponents
+    // scored 9 half-points, e2's 3). Without the assembled ledger the
+    // comparator returns 0 for every pair and the tie falls through to
+    // entrant id — which would put e2 first.
+    const pack = leaguePack({
+      stageKind: "swiss",
+      stage: { rounds: 2 },
+      tiebreakers: ["points", "buchholz"],
+      entrants: ["e1", "e2", "e3", "e4"],
+      fixtures: [
+        ["f1", "e1", "e3", 2, 0],
+        ["f2", "e2", "e4", 2, 0],
+        ["f3", "e3", "e2", 2, 0],
+        ["f4", "e1", "e4", 2, 0],
+      ],
+      rows: [
+        row("e1", 1, 2, 2, 0, 0, 6),
+        row("e3", 2, 2, 1, 0, 1, 3),
+        row("e2", 3, 2, 1, 0, 1, 3),
+        row("e4", 4, 2, 0, 0, 2, 0),
+      ],
+    });
+    expectClean(validatePack(pack, UNIT), []);
+  });
+
+  it("carries the stage's rngSeed into a drawing of lots", () => {
+    // Two entrants level after a draw, cascade ending in `lots`. Seed 4 draws
+    // them [e2, e1]; with no seed the engine uses 0 and draws [e1, e2]. The
+    // draw is reproducible by design (spec 05 §4.4), which is the only reason
+    // a pack can assert its result at all.
+    const drawn = (stage: Record<string, unknown>, rows: readonly Record<string, unknown>[]) =>
+      leaguePack({
+        entrants: ["e1", "e2"],
+        fixtures: [["f1", "e1", "e2", 1, 1]],
+        tiebreakers: ["points", "lots"],
+        stage,
+        rows,
+      });
+    expectClean(
+      validatePack(drawn({ rngSeed: 4 }, [row("e2", 1, 1, 0, 1, 0, 1), row("e1", 2, 1, 0, 1, 0, 1)]), UNIT),
+      [],
+    );
+    expectClean(
+      validatePack(drawn({}, [row("e1", 1, 1, 0, 1, 0, 1), row("e2", 2, 1, 0, 1, 0, 1)]), UNIT),
+      [],
+    );
+
+    // And a NON-numeric seed is forwarded, not dropped. `stages[].config` is
+    // an opaque JSON record, so `"4"` is expressible; the product's
+    // `toTableStage` tests `!= null` and passes it through, and the engine
+    // coerces it — so `"4"` draws the same order as `4`. A `typeof === "number"`
+    // sniff here would drop it, fold green offline, and rank differently on
+    // seeding: the exact divergence "mirrored in full" exists to prevent.
+    expectClean(
+      validatePack(drawn({ rngSeed: "4" }, [row("e2", 1, 1, 0, 1, 0, 1), row("e1", 2, 1, 0, 1, 0, 1)]), UNIT),
+      [],
+    );
+  });
+
+  it("carries h2h_scope: overall, which skips the mini-table for a 3-way tie", () => {
+    // e1/e2/e3 are circular on points. Their head-to-head mini-table orders
+    // them e3 > e2 > e1; overall goal difference orders them the OTHER way,
+    // because of how heavily each beat e4. `h2h_scope: "overall"` is the
+    // organiser's choice between those two answers.
+    const fixtures: [string, string, string, number, number][] = [
+      ["f1", "e1", "e2", 2, 1],
+      ["f2", "e2", "e3", 2, 1],
+      ["f3", "e3", "e1", 4, 1],
+      ["f4", "e1", "e4", 10, 0],
+      ["f5", "e2", "e4", 5, 0],
+      ["f6", "e3", "e4", 1, 0],
+    ];
+    const base = {
+      entrants: ["e1", "e2", "e3", "e4"],
+      fixtures,
+      tiebreakers: ["points", "h2h_diff", "diff"],
+    } as const;
+    const table = (order: readonly string[]): Record<string, unknown>[] =>
+      order.map((ref, i) =>
+        ref === "e4" ? row(ref, i + 1, 3, 0, 0, 3, 0) : row(ref, i + 1, 3, 2, 0, 1, 6),
+      );
+
+    expectClean(
+      validatePack(leaguePack({ ...base, stage: { h2h_scope: "overall" }, rows: table(["e1", "e2", "e3", "e4"]) }), UNIT),
+      [],
+    );
+    // The default (mini-table) gives the opposite order for the tied three,
+    // so the two modes are genuinely distinguishable by this fixture.
+    expectClean(
+      validatePack(leaguePack({ ...base, rows: table(["e3", "e2", "e1", "e4"]) }), UNIT),
+      [],
+    );
+  });
+
+  it("derives an AMERICANO stage's table, which rides the league fold", () => {
+    const pack = leaguePack({
+      stageKind: "americano",
+      entrants: ["e1", "e2"],
+      fixtures: [["f1", "e1", "e2", 3, 1]],
+      rows: [row("e1", 1, 1, 1, 0, 0, 3), row("e2", 2, 1, 0, 0, 1, 0)],
+    });
+    expectClean(validatePack(pack, UNIT), []);
+  });
+
+  it("warns when a table-kind stage folds streams and the pack asserts no table", () => {
+    // Stage 3 is the ONLY stage that catches an end-to-end reversed stream,
+    // and PackSchema's anti-vacuity rule stops at streams — so a stage with no
+    // declared table is the gate's own blind spot.
+    const noTable = leaguePack({ entrants: ["e1", "e2"], fixtures: [["f1", "e1", "e2", 3, 1]] });
+    const result = validatePack(noTable, UNIT);
+    expect(errors(result.findings)).toEqual([]);
+    const warning = warnings(result.findings)[0];
+    expect(warning?.code).toBe("standings.no_expected_table");
+    expect(warning?.where).toBe("divisions[ref=d1].stages[ref=s1]");
+    expect(warning?.message).toContain("1 stream(s) fold into stage \"s1\"");
+
+    // And it goes quiet the moment the table is declared — otherwise it would
+    // fire on every pack and mean nothing.
+    const withTable = leaguePack({
+      entrants: ["e1", "e2"],
+      fixtures: [["f1", "e1", "e2", 3, 1]],
+      rows: [row("e1", 1, 1, 1, 0, 0, 3), row("e2", 2, 1, 0, 0, 1, 0)],
+    });
+    expectClean(validatePack(withTable, UNIT), []);
+  });
+
+  it("does NOT warn about a BRACKET stage with no table — it has none to declare", () => {
+    const ko = leaguePack({
+      stageKind: "knockout",
+      entrants: ["e1", "e2"],
+      fixtures: [["f1", "e1", "e2", 3, 1]],
+    });
+    expectClean(validatePack(ko, UNIT), []);
+  });
+});
+
+// ===========================================================================
+// streams[].stageRef — bound, not merely accepted
+// ===========================================================================
+
+describe("validatePack — a stream's declared stageRef binds it to a stage", () => {
+  /** A two-stage football division: a league group, then a knockout that turns
+   *  `shootout` on. A goalless fixture is a decided DRAW under the division
+   *  cfg and an UNDECIDED shootout under the knockout stage's overlay, so
+   *  which stage a stream binds to is directly observable in the outcome. */
+  const twoStage = (stageRef: string | undefined): Record<string, unknown> => ({
+    schemaVersion: 1,
+    suite: "_unit",
+    org: { name: "Unit Org", slug: "unit-org", timezone: "UTC" },
+    competition: { name: "Unit Cup", slug: "unit-cup", endsOn: "2099-01-02" },
+    divisions: [
+      {
+        ref: "d1",
+        name: "D1",
+        sportKey: "football",
+        variantKey: "11-a-side",
+        moduleVersion: "1.0.0",
+        cfgOverrides: { shootout: false },
+        stages: [
+          { ref: "s-group", seq: 1, kind: "group", name: "Group", config: {} },
+          { ref: "s-ko", seq: 2, kind: "knockout", name: "KO", config: { shootout: true } },
+        ],
+      },
+    ],
+    persons: [],
+    entrants: [
+      { ref: "e1", divisionRef: "d1", kind: "team", displayName: "One" },
+      { ref: "e2", divisionRef: "d1", kind: "team", displayName: "Two" },
+    ],
+    streams: [
+      {
+        divisionRef: "d1",
+        fixtureExtKey: "f1",
+        ...(stageRef === undefined ? {} : { stageRef }),
+        home: "e1",
+        away: "e2",
+        provenance: "real",
+        events: [
+          { type: "core.start" },
+          { type: "football.period", payload: { phase: "HT" } },
+          { type: "football.period", payload: { phase: "FT" } },
+        ],
+      },
+    ],
+    expected: {
+      matches: [{ divisionRef: "d1", fixtureExtKey: "f1", outcome: { kind: "draw" } }],
+    },
+    meta: { synthetic: true, sources: [] },
+  });
+
+  it("folds under the NAMED stage's decider overlay", () => {
+    // Bound to the knockout: `shootout` overlays, the goalless match enters the
+    // shootout phase and never decides. This is the assertion that proves the
+    // field is CONSULTED — a schema that merely accepts it leaves this green.
+    const finding = onlyError(validatePack(twoStage("s-ko"), UNIT).findings);
+    expect(finding.code).toBe("fold.not_decided");
+    expect(finding.where).toBe("streams[0] (d1/f1)");
+  });
+
+  it("folds under the group stage's when that is the one named", () => {
+    // Same events, same division, different stageRef — a decided draw, and NO
+    // unbindable warning, because nothing is unbound any more.
+    const result = validatePack(twoStage("s-group"), UNIT);
+    expectClean(result, ["standings.no_expected_table"]);
+  });
+
+  it("without a stageRef, a multi-stage division binds nothing and says so", () => {
+    const result = validatePack(twoStage(undefined), UNIT);
+    expect(errors(result.findings)).toEqual([]);
+    expect(warnings(result.findings).map((f) => f.code)).toEqual(["fold.stage_overlay_unbindable"]);
+    expect(warnings(result.findings)[0]?.message).toContain("[shootout]");
+    expect(warnings(result.findings)[0]?.message).toContain("1 of its stream(s) name no stage");
+  });
+
+  it("checks a MULTI-STAGE division's per-stage table once every stream is bound", () => {
+    // The payoff: with streams bound, `expected.tables` for one stage is
+    // derived from THAT stage's streams only. Two stages, one fixture each,
+    // and each table must see just its own.
+    const pack = {
+      schemaVersion: 1,
+      suite: "_unit",
+      org: { name: "Unit Org", slug: "unit-org", timezone: "UTC" },
+      competition: { name: "Unit Cup", slug: "unit-cup", endsOn: "2099-01-02" },
+      divisions: [
+        {
+          ref: "d1",
+          name: "D1",
+          sportKey: "generic",
+          variantKey: "score",
+          moduleVersion: "1.0.0",
+          cfgOverrides: { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 }, progressScore: false },
+          stages: [
+            { ref: "sA", seq: 1, kind: "league", name: "A", config: {} },
+            { ref: "sB", seq: 2, kind: "league", name: "B", config: {} },
+          ],
+        },
+      ],
+      persons: [],
+      entrants: [
+        { ref: "e1", divisionRef: "d1", kind: "individual", displayName: "One" },
+        { ref: "e2", divisionRef: "d1", kind: "individual", displayName: "Two" },
+      ],
+      streams: [
+        {
+          divisionRef: "d1",
+          stageRef: "sA",
+          fixtureExtKey: "a1",
+          home: "e1",
+          away: "e2",
+          provenance: "real",
+          events: [{ type: "core.start" }, { type: "generic.result", payload: { p1Score: 3, p2Score: 1 } }],
+        },
+        {
+          divisionRef: "d1",
+          stageRef: "sB",
+          fixtureExtKey: "b1",
+          home: "e2",
+          away: "e1",
+          provenance: "real",
+          events: [{ type: "core.start" }, { type: "generic.result", payload: { p1Score: 2, p2Score: 0 } }],
+        },
+      ],
+      expected: {
+        matches: [
+          { divisionRef: "d1", fixtureExtKey: "a1", outcome: { kind: "win", winner: "e1", loser: "e2" } },
+          { divisionRef: "d1", fixtureExtKey: "b1", outcome: { kind: "win", winner: "e2", loser: "e1" } },
+        ],
+        tables: [
+          // Each stage's table counts ONE fixture. A derivation that pooled
+          // both would give `played: 2` on every row.
+          { divisionRef: "d1", stageRef: "sA", rows: [row("e1", 1, 1, 1, 0, 0, 3), row("e2", 2, 1, 0, 0, 1, 0)] },
+          { divisionRef: "d1", stageRef: "sB", rows: [row("e2", 1, 1, 1, 0, 0, 3), row("e1", 2, 1, 0, 0, 1, 0)] },
+        ],
+      },
+      meta: { synthetic: true, sources: [] },
+    };
+    expectClean(validatePack(pack, UNIT), []);
+  });
+});
+
+// ===========================================================================
+// The warning channel's own coverage
+// ===========================================================================
+
+describe("validatePack — the oracles it does NOT derive say so", () => {
+  it("names a fabricated leaderboard as unchecked rather than reporting nothing", () => {
+    // `_tiny`'s declared leaderboard is factually wrong once the scorer is
+    // flipped, and stage 0 still cannot see it — but the report no longer
+    // reads "ok, no findings".
+    const pack = tiny();
+    const stream = pack.streams[1] as TinyStream;
+    (stream.events[2] as { payload: Record<string, unknown> }).payload["person"] = "@p-bo";
+    const result = validatePack(pack, TINY);
+    expectClean(result, TINY_NOT_DERIVED);
+    expect(warnings(result.findings)[0]?.message).toContain("B05");
+  });
+
+  it("stays silent about an EMPTY block — a warning that always fires means nothing", () => {
+    const pack = tiny();
+    pack.expected.leaderboards = [];
+    pack.expected.champions = [];
+    expectClean(validatePack(pack, TINY), []);
+  });
+
+  it("warns for suspensions too, and counts them", () => {
+    const pack = tiny();
+    pack.expected.suspensions = [
+      { divisionRef: "d-tiny", person: "p-bo", missesFixtureExtKeys: ["rr-r3-c1"] },
+    ] as TinyShape["expected"]["suspensions"];
+    const result = validatePack(pack, TINY);
+    expectClean(result, [...TINY_NOT_DERIVED, "suspensions.not_derived"]);
+    const suspension = warnings(result.findings).find((f) => f.code === "suspensions.not_derived");
+    expect(suspension?.message).toContain("1 declared expected.suspensions entry is NOT checked");
+  });
+
+  it("warns when a SPECIAL's own stream did not fold", () => {
+    // The only unpinned warning site on the first sweep: `_tiny`'s special is
+    // on rr-r3-c1 while every other corruption breaks rr-r1-c1 or rr-r2-c1, so
+    // the special always folded and the skip was never exercised.
+    const pack = tiny();
+    const stream = pack.streams[2] as TinyStream;
+    expect(stream.fixtureExtKey).toBe("rr-r3-c1");
+    stream.events.splice(1, 0, { type: "core.start" });
+
+    const result = validatePack(pack, TINY);
+    expect(onlyError(result.findings).code).toBe("fold.rejected");
+    const codes = warnings(result.findings).map((f) => f.code);
+    expect(codes).toContain("special.upstream_fold_failed");
+    // And no special ERROR: an unfolded stream must not also be reported as a
+    // failed claim, which would bury the fold failure under a derived one.
+    expect(errors(result.findings).filter((f) => f.code.startsWith("special."))).toEqual([]);
+  });
+});
+
+// ===========================================================================
+// The mirrored product constant, checked against the product itself
+// ===========================================================================
+
+describe("STAGE_DECIDER_KEYS — the mirror is diffed against apps/web, not itself", () => {
+  it("equals the product's own constant, read as TEXT", () => {
+    // GLOBAL.md forbids IMPORTING from apps/web (the `@/` aliases do not
+    // resolve here and most of that tree is `server-only`). Reading the file
+    // as text is not importing it, and it is the only thing that can catch the
+    // failure the mirror actually has: the PRODUCT adding a third key. A test
+    // asserting the mirror against a copy of itself cannot.
+    const source = readFileSync(
+      path.join(REPO_ROOT, "apps/web/src/server/engine-db/stage-cfg.ts"),
+      "utf8",
+    );
+    const literal = /const STAGE_DECIDER_KEYS = \[([^\]]*)\] as const;/.exec(source);
+    // Red on ABSENCE rather than skipping: a bench that cannot see the product
+    // it mirrors must say so, not quietly pass.
+    expect(literal, "STAGE_DECIDER_KEYS not found in engine-db/stage-cfg.ts").not.toBeNull();
+    const productKeys = [...(literal?.[1] ?? "").matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+    expect(productKeys.length).toBeGreaterThan(0);
+
+    // Driven through the mirror rather than read off a copied array: the
+    // overlay must carry every key the product carries, and nothing else.
+    const stageCfg = Object.fromEntries(productKeys.map((k) => [k, `v-${k}`]));
+    stageCfg["legs"] = 3;
+    expect(stageScopedFoldCfg({ base: 1 }, stageCfg)).toEqual({
+      base: 1,
+      ...Object.fromEntries(productKeys.map((k) => [k, `v-${k}`])),
+    });
   });
 });
 
@@ -1095,9 +1674,9 @@ describe("stageScopedFoldCfg — the product's two-key stage overlay", () => {
   });
 
   it("is APPLIED at the fold, not merely correct in isolation", () => {
-    expect(validatePack(goalless({})).findings).toEqual([]);
+    expectClean(validatePack(goalless({}), UNIT), []);
 
-    const applied = validatePack(goalless({ shootout: true }));
+    const applied = validatePack(goalless({ shootout: true }), UNIT);
     expect(onlyError(applied.findings).code).toBe("fold.not_decided");
     // And NO warning: a single-stage division binds its overlay, so there is
     // nothing unbindable to report. Without this the unbindable warning could
@@ -1114,7 +1693,7 @@ describe("stageScopedFoldCfg — the product's two-key stage overlay", () => {
     };
     pack.divisions[0]!.stages.push({ ref: "s2", seq: 2, kind: "knockout", name: "KO2", config: {} });
 
-    const result = validatePack(pack as unknown as Record<string, unknown>);
+    const result = validatePack(pack as unknown as Record<string, unknown>, UNIT);
     expect(errors(result.findings)).toEqual([]);
     const warning = warnings(result.findings)[0];
     expect(warning?.code).toBe("fold.stage_overlay_unbindable");
@@ -1125,7 +1704,7 @@ describe("stageScopedFoldCfg — the product's two-key stage overlay", () => {
     // the warning must not fire on every multi-stage pack.
     const quiet = goalless({}) as unknown as { divisions: { stages: Record<string, unknown>[] }[] };
     quiet.divisions[0]!.stages.push({ ref: "s2", seq: 2, kind: "knockout", name: "KO2", config: {} });
-    expect(validatePack(quiet as unknown as Record<string, unknown>).findings).toEqual([]);
+    expectClean(validatePack(quiet as unknown as Record<string, unknown>, UNIT), []);
   });
 
   // The same football fold is the only place in this suite whose state carries
@@ -1150,8 +1729,8 @@ describe("stageScopedFoldCfg — the product's two-key stage overlay", () => {
   ];
 
   it("holds when a state claim deep-equals the folded value", () => {
-    expect(validatePack(withClaim(periods, "periods")).findings).toEqual([]);
-    expect(validatePack(withClaim({ home: 0, away: 0 }, "goals")).findings).toEqual([]);
+    expectClean(validatePack(withClaim(periods, "periods"), UNIT), []);
+    expectClean(validatePack(withClaim({ home: 0, away: 0 }, "goals"), UNIT), []);
   });
 
   // Each of these is caught by a DIFFERENT line of the comparison, and each
@@ -1167,7 +1746,7 @@ describe("stageScopedFoldCfg — the product's two-key stage overlay", () => {
     ["an element whose value differs", [periods[0], { phase: "H2", home: 1, away: 0 }]],
   ];
   it.each(claimShapes)("reds a state claim that is %s", (_label, equals) => {
-    expect(onlyError(validatePack(withClaim(equals, "periods")).findings).code).toBe(
+    expect(onlyError(validatePack(withClaim(equals, "periods"), UNIT).findings).code).toBe(
       "special.state",
     );
   });
@@ -1195,7 +1774,7 @@ describe("validatePack — stage 1 is the pipeline's shape gate", () => {
   it("refuses a duplicate ext_key within one division", () => {
     const pack = tiny();
     (pack.streams[1] as TinyStream).fixtureExtKey = "rr-r1-c1";
-    const result = validatePack(pack);
+    const result = validatePack(pack, TINY);
     expect(result.ok).toBe(false);
     // The rule and its reason live in PackSchema's `checkStreams`, not here —
     // one implementation, reached through the pipeline.
@@ -1205,7 +1784,7 @@ describe("validatePack — stage 1 is the pipeline's shape gate", () => {
   });
 
   it("stops after stage 1 and returns no pack when the shape is wrong", () => {
-    const result = validatePack({ schemaVersion: 2 });
+    const result = validatePack({ schemaVersion: 2 }, UNIT);
     expect(result.pack).toBe(null);
     expect(result.ok).toBe(false);
     expect(result.provenance.overall.total).toBe(0);
@@ -1216,8 +1795,14 @@ describe("validatePack — stage 1 is the pipeline's shape gate", () => {
     const finding = onlyError(validatePack(tiny(), { expectedSuite: "worldcup-2019" }).findings);
     expect(finding.code).toBe("pack.suite_mismatch");
     expect(finding.message).toContain('pack declares suite "_tiny"');
-    // Omitting the option must not silently red — the runner may not pass one.
-    expect(validatePack(tiny()).findings).toEqual([]);
+    expectClean(validatePack(tiny(), TINY), TINY_NOT_DERIVED);
+    // `expectedSuite` is REQUIRED, so the previous version of this test — "an
+    // omitted option must not red" — is no longer expressible: omitting it is
+    // a tsc error, which is the point. `tsconfig.scripts.json` covers every
+    // non-test file under `scripts/bench/**`, so Task 3's runner cannot forget
+    // it. Pinned by mutant M69b (make it optional again → tsc still passes,
+    // which is exactly why the REQUIRED form is the guard and a comment was
+    // not).
   });
 
   it("warns when a REAL suite key waives the cite-a-source rule", () => {
@@ -1226,7 +1811,10 @@ describe("validatePack — stage 1 is the pipeline's shape gate", () => {
     const result = validatePack(pack, { expectedSuite: "worldcup-2019" });
     expect(errors(result.findings)).toEqual([]);
     expect(result.ok).toBe(true);
-    expect(warnings(result.findings).map((f) => f.code)).toEqual(["pack.synthetic_suite"]);
+    expect(warnings(result.findings).map((f) => f.code)).toEqual([
+      "pack.synthetic_suite",
+      ...TINY_NOT_DERIVED,
+    ]);
   });
 });
 
@@ -1270,22 +1858,27 @@ describe("engine facts that make two of this file's mirrors unfalsifiable today"
     // a module starts varying its delta by stage kind — knockout football
     // forbidding draws is the obvious one — this reds and the mirror becomes
     // load-bearing.
-    const sportModule = builtinModules.find((m) => m.key === "generic");
-    expect(sportModule).toBeDefined();
-    const cfg = sportModule!.configSchema.parse({
-      ...sportModule!.variants["score"],
-      allowDraws: true,
-      points: { w: 3, d: 1, l: 0 },
-    });
     const lineups = {
-      home: { entrantId: "HOME", slots: [] },
-      away: { entrantId: "AWAY", slots: [] },
+      home: { entrantId: "HOME", slots: [{ personId: "ph", slot: "starting" as const, orderNo: 1 }] },
+      away: { entrantId: "AWAY", slots: [{ personId: "pa", slot: "starting" as const, orderNo: 1 }] },
     };
-    const state = sportModule!.init(cfg, lineups);
-    const outcome = { kind: "draw" as const };
-    expect(sportModule!.standingsDelta(outcome, cfg, { kind: "league" }, state)).toEqual(
-      sportModule!.standingsDelta(outcome, cfg, { kind: "knockout" }, state),
-    );
+    // EVERY shipped module, not just the one this file happens to fold — the
+    // mirror is generic and so is the claim about it.
+    let compared = 0;
+    for (const sportModule of builtinModules) {
+      const raws = [{}, ...Object.values(sportModule.variants)];
+      const raw = raws.find((candidate) => sportModule.configSchema.safeParse(candidate).success);
+      if (raw === undefined) continue;
+      const cfg = sportModule.configSchema.parse(raw);
+      const state = sportModule.init(cfg, lineups);
+      const outcome = { kind: "win" as const, winner: "HOME", loser: "AWAY" };
+      const league = sportModule.standingsDelta(outcome, cfg, { kind: "league" }, state);
+      const knockout = sportModule.standingsDelta(outcome, cfg, { kind: "knockout" }, state);
+      expect(league, sportModule.key).toEqual(knockout);
+      compared += 1;
+    }
+    // Non-vacuity: a loop that compared nothing would pass silently.
+    expect(compared).toBe(builtinModules.length);
   });
 
 
@@ -1315,7 +1908,40 @@ describe("engine facts that make two of this file's mirrors unfalsifiable today"
       expect(summary.perSide.map((s) => s.entrantId), sportModule.key).toEqual(["HOME", "AWAY"]);
     }
   });
+
+  it("still renders perSide as [home, away] after a DECIDED fold", () => {
+    // `init` alone is too weak a pin for the claim it carries: a module that
+    // ordered `perSide` BY SCORE would be [home, away] at kick-off, when both
+    // are zero, and reversed the moment anyone scores. `_tiny`'s rr-r1-c1 is a
+    // 3-1 home win, so a score-ordering module would fail here and not above.
+    const summary = foldTinyFirstFixtureSummary();
+    expect(summary.map((s) => s.entrantId)).toEqual(["@e-alpha", "@e-bravo"]);
+    // And the losing side really is second — otherwise the assertion above
+    // could hold for a module that simply never reorders anything.
+    expect(summary.map((s) => s.line)).toEqual(["3", "1"]);
+  });
 });
+
+/** rr-r1-c1's folded `ScoreSummary.perSide` — a DECIDED 3-1 home win, driven
+ *  through the same envelopes and lineups the validator builds. */
+function foldTinyFirstFixtureSummary(): readonly { entrantId: string; line: string }[] {
+  const pack = PackSchema.parse(tiny());
+  const division = pack.divisions[0]!;
+  const sportModule = builtinModules.find((m) => m.key === division.sportKey)!;
+  const cfg = sportModule.configSchema.parse({
+    ...(sportModule.variants[division.variantKey] as object),
+    ...division.cfgOverrides,
+  });
+  const stream = pack.streams[0]!;
+  const { state } = foldMatchWithStoppage(
+    sportModule,
+    cfg,
+    packLineupPair(stream),
+    packEnvelopes(stream),
+    PACK_FOLD_OPTIONS,
+  );
+  return sportModule.summary(state).perSide;
+}
 
 describe("packLineupPair", () => {
   it("gives an entrant with no team sheet an EMPTY slot list, as the product does", () => {
