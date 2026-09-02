@@ -193,6 +193,15 @@ const coinflip: SportModule<CoinCfg, CoinEv, CoinState> = {
     { tier: 1, eventTypes: ["coin.summary"] },
     { tier: 3, eventTypes: ["coin.flip"] },
   ],
+  // W1 (scoring free) ruling: every SportModule the conformance identity
+  // check runs against needs a padSpec now, including this pre-PadSpec toy
+  // module — mirrors fidelityTiers above 1:1. fidelityEntitlements stays
+  // empty (Task 2 deletes the field; fidelityTiers above stays for now too).
+  padSpec: () => ({
+    panels: [],
+    fidelity: { "coin.stop": 0, "coin.summary": 1, "coin.flip": 3 },
+    fidelityEntitlements: {},
+  }),
   officialLabel: { scorer: "Scorer" },
 
   arbitraryEvent(state, rng): ModuleEvent<CoinEv> | null {

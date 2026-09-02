@@ -15,17 +15,27 @@ import { tennis } from "../sports/tennis/index.ts";
 import { volleyball } from "../sports/setbased/index.ts";
 import { resolvePositions } from "../sport/catalog.ts";
 import { buildStream, defaultLineupPair, makeEnvelope } from "../testkit/helpers.ts";
+import { readCorpus } from "../testkit/golden.ts";
 import type { AnySportModule } from "../sport/module.ts";
 
-// A module emits cards iff any fidelity tier declares a sanction-shaped event
-// type. W4 review item 7 — this regex used to stop at card|suspension|penalty,
-// which is why three whole families shipped a local sanction record and NO
-// discipline descriptor: the gate could not see `volleyball.sanction`,
-// `tennis.sanction` or carrom's `carrom.game.adjust` (the umpire's Laws 51/55
-// row, which is the only sanction carrom records).
+// A module emits cards iff PadSpec.fidelity (the single fidelity model since
+// W1, scoring free) declares a sanction-shaped event type. W4 review item 7 —
+// this regex used to stop at card|suspension|penalty, which is why three
+// whole families shipped a local sanction record and NO discipline
+// descriptor: the gate could not see `volleyball.sanction`, `tennis.sanction`
+// or carrom's `carrom.game.adjust` (the umpire's Laws 51/55 row, which is the
+// only sanction carrom records).
+//
+// Config source: the module's own committed golden corpus, same as
+// testkit/golden.ts's tierEventTypes/uncoveredTierTypes — NOT `{}`, because
+// `generic`'s bare `{}` config does not parse (`resultMode`/`allowDraws` have
+// no zod defaults) and this runs across every builtin, generic included.
 const CARD_EVENT = /\.(card|suspension|penalty|sanction|adjust)/;
 function emitsCards(module: AnySportModule): boolean {
-  return module.fidelityTiers.some((tier) => tier.eventTypes.some((t) => CARD_EVENT.test(t)));
+  const corpus = readCorpus(module.key);
+  const cfg = module.configSchema.parse(corpus.configs[corpus.streams[0]!.config]);
+  const spec = module.padSpec?.(cfg);
+  return Object.keys(spec?.fidelity ?? {}).some((t) => CARD_EVENT.test(t));
 }
 
 // Collect every card the module's generator produces across a spread of seeds

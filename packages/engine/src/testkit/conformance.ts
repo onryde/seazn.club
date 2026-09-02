@@ -13,7 +13,7 @@ import {
   type StageCtx,
 } from "../core/types.ts";
 import { PositionCatalog, resolvePositions, validateLineup } from "../sport/catalog.ts";
-import { FidelityTier, type SportModule } from "../sport/module.ts";
+import type { SportModule } from "../sport/module.ts";
 import { parseSemver } from "../sport/registry.ts";
 import {
   aggregatePlayerStats,
@@ -99,8 +99,13 @@ export function conformanceSuite<Cfg, Ev, State>(
       parseSemver(module.version); // throws on non-semver
       PositionCatalog.parse(module.positions);
       PositionCatalog.parse(catalog);
-      expect(module.fidelityTiers.length).toBeGreaterThan(0);
-      for (const tier of module.fidelityTiers) FidelityTier.parse(tier);
+      // W1 (scoring free): fidelity is the single model, read off PadSpec —
+      // parity with the legacy fidelityTiers enumeration was proven by
+      // sport/__tests__/fidelity-parity.test.ts before this moved. `cfg` above
+      // is already parsed, so no second `configSchema.parse` is needed here.
+      const spec = module.padSpec?.(cfg);
+      expect(spec, "every module declares a padSpec").toBeDefined();
+      expect(Object.keys(spec!.fidelity).length).toBeGreaterThan(0);
       expect(module.officialLabel.scorer.length).toBeGreaterThan(0);
       for (const metric of module.metrics) MetricSpec.parse(metric);
       expect(module.defaultTiebreakers.length).toBeGreaterThan(0);

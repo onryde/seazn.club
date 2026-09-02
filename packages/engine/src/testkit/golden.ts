@@ -275,17 +275,33 @@ export const EXTEND_GOLDEN = process.env.EXTEND_GOLDEN === "1";
 // The fix is coverage, and coverage means new streams. Existing streams are
 // PRESERVED byte for byte — this only ever appends.
 
-/** Event types a module declares in `fidelityTiers`. That declaration is the
- *  module's own claim about what a scorer can record, so it is the right
- *  yardstick for "does the corpus guard what it says it guards". */
-export function tierEventTypes(module: AnySportModule): string[] {
-  return [...new Set(module.fidelityTiers.flatMap((tier) => tier.eventTypes))].sort();
+/** Event types `module.padSpec(cfg).fidelity` bands for the given (raw) cfg —
+ *  the single fidelity model since W1 (scoring free). Shared by golden
+ *  coverage, the conformance identity check and `emitsCards`. Replaces the
+ *  legacy fidelityTiers enumeration; parity was proven by
+ *  sport/__tests__/fidelity-parity.test.ts before every reader moved here. */
+export function padEventTypes(module: AnySportModule, cfg: unknown): string[] {
+  const spec = module.padSpec?.(module.configSchema.parse(cfg));
+  if (!spec) throw new Error(`${module.key}: golden coverage needs a padSpec`);
+  return Object.keys(spec.fidelity);
 }
 
-/** Tier types with no recorded event of that type. */
+/** Every event type the module bands in PadSpec.fidelity, deduped and sorted
+ *  for stable coverage-diffing — the yardstick for "does the corpus guard
+ *  what it says it guards". */
+export function tierEventTypes(module: AnySportModule, cfg: unknown): string[] {
+  return [...new Set(padEventTypes(module, cfg))].sort();
+}
+
+/** Tier types with no recorded event of that type. `corpus.streams[0].config`
+ *  is a key into `corpus.configs` that a real recorded stream actually used
+ *  (a literal `"default"` key does not exist on every corpus — `generic`'s
+ *  keys its configs `win_loss`/`score`/`drawable` because its bare `{}` config
+ *  does not parse). */
 export function uncoveredTierTypes(module: AnySportModule, corpus: GoldenCorpus): string[] {
   const seen = new Set(eventTypesIn(corpus));
-  return tierEventTypes(module).filter((type) => !seen.has(type));
+  const cfg = corpus.configs[corpus.streams[0]!.config];
+  return tierEventTypes(module, cfg).filter((type) => !seen.has(type));
 }
 
 // ------------------------------------------------- optional-FIELD coverage

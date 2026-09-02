@@ -196,9 +196,10 @@ if (corpusWriteRefusal !== null) {
       // second dimension (W4a T10); read a green HERE as "every type appears".
       it("records every event type the module declares in a fidelity tier", () => {
         const missing = uncoveredTierTypes(module, corpus);
+        const cfg = corpus.configs[corpus.streams[0]!.config];
         expect(
           missing,
-          `${module.key} declares ${tierEventTypes(module).length} tier event types and its ` +
+          `${module.key} declares ${tierEventTypes(module, cfg).length} tier event types and its ` +
             `corpus never exercises ${missing.length} of them, so a tightening of those ` +
             `branches would not red anything. Extend the corpus: ` +
             `EXTEND_GOLDEN=1 npx vitest run src/testkit/golden.test.ts`,
