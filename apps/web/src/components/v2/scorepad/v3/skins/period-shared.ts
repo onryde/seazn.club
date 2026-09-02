@@ -1356,15 +1356,23 @@ export function buildSheets(spec: PeriodSkinSpec, view: PadHostView, t: TFn): Re
  * `onFieldOf`/`benchOf` above read to build the two pools, so a row and its
  * badge can never disagree about who is on.
  *
- * `positionKey` LEADS, which is the ruling's own wording ("the position code
- * leads"); a squad number is the fallback for somebody the sheet declared
- * without one. Note both facts are OPTIONAL on `SquadMember` and the fold
- * carries `positionKey` only while `onField` (`memberFromSlot`, core/lineup.ts:
- * "a bench slot's declared position is a preference, not an occupancy"), so a
- * bench candidate with no declared number gets NO entry and renders exactly the
- * row it renders today. That empty default is the contract `CandidateMeta`'s
- * own doc states, not a gap — `renderCandidateRow` is chassis shared with
- * cricket's bowler picker and every context strip.
+ * The SQUAD NUMBER leads and `positionKey` is the fallback — owner ruling of
+ * 2026-09-01, superseding the position-led wording of 2026-08-30. The reason is
+ * this pair specifically: ice hockey puts SIX skaters on the ice across only
+ * THREE position groups (G/D/F), so a position-led badge leaves three forwards
+ * reading identically — the six-identical-rows complaint the mechanism was
+ * minted for, unclosed. Shirt numbers are unique per side, so every skater the
+ * sheet numbers gets a distinct badge, and it is what a scorer reads off the
+ * jersey under time pressure. Position still shows for anyone declared without
+ * a number.
+ *
+ * Note both facts are OPTIONAL on `SquadMember` and the fold carries
+ * `positionKey` only while `onField` (`memberFromSlot`, core/lineup.ts: "a bench
+ * slot's declared position is a preference, not an occupancy"), so a bench
+ * candidate with no declared number gets NO entry and renders exactly the row it
+ * renders today. That empty default is the contract `CandidateMeta`'s own doc
+ * states, not a gap — `renderCandidateRow` is chassis shared with cricket's
+ * bowler picker and every context strip.
  *
  * Keyed over the WHOLE squad rather than one step's pool, matching
  * `liberoCandidateMeta`'s reasoning: the OFF step's pool is the on-field set and
@@ -1382,7 +1390,7 @@ function periodCandidateMeta(
 ): Readonly<Record<string, CandidateMeta>> {
   const meta: Record<string, CandidateMeta> = {};
   for (const member of view.squads[side].members) {
-    const lead = member.positionKey ?? (member.squadNumber === undefined ? undefined : String(member.squadNumber));
+    const lead = member.squadNumber === undefined ? member.positionKey : String(member.squadNumber);
     const tag = member.roles?.includes(CAPTAIN_ROLE) === true ? t(periodKey(spec, "swap.captainTag")) : undefined;
     if (lead === undefined && tag === undefined) continue;
     meta[member.personId] = {

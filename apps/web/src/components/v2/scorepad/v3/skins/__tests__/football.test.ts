@@ -1332,11 +1332,14 @@ describe("buildSwap", () => {
   // context-strip.tsx's `renderCandidateRow`) already renders a position
   // badge + role tag when a skin supplies one; volleyball's `liberoCandidateMeta`
   // was the first populator, football never wired it, so eleven near-identical
-  // on-pitch names rendered with no distinguisher. Sourced from `view.squads`
+  // on-pitch names rendered with no distinguisher. The SHIRT NUMBER leads and
+  // the position falls back (owner ruling 2026-09-01) — a squad number is
+  // unique per side, where eleven players across a handful of position codes
+  // are not. Sourced from `view.squads`
   // (the kickoff team sheet — see `onCandidates`'s own doc above for why THAT
   // field is stale for the POOL but is exactly right for a squad number/role
   // that does not change when a player is substituted).
-  describe("candidateMeta — distinguishing the OFF-step rows by position/number", () => {
+  describe("candidateMeta — distinguishing the OFF-step rows by shirt number, position as fallback", () => {
     function squadsWithMeta(): SquadState {
       return initSquads({
         home: {
@@ -1362,18 +1365,40 @@ describe("buildSwap", () => {
       });
     }
 
-    it("gives every OFF candidate a real position distinguisher, and two on-pitch teammates DISTINCT meta — the mutation witness", () => {
+    it("leads every OFF candidate with their SHIRT NUMBER, and two on-pitch teammates DISTINCT meta — the mutation witness", () => {
       const home = buildSwap(view({ squads: squadsWithMeta() }), t)[0]!;
-      // The OFF pool is the live on-pitch three (h1 GK, h2 CB, h3 ST).
+      // The OFF pool is the live on-pitch three (h1 #1, h2 #4, h3 #9).
       for (const id of home.offCandidates ?? []) {
         expect(home.candidateMeta?.[id]?.lead, id).not.toBeUndefined();
       }
-      expect(home.candidateMeta?.h1?.lead).toBe("GK");
-      expect(home.candidateMeta?.h2?.lead).toBe("CB");
-      expect(home.candidateMeta?.h3?.lead).toBe("ST");
+      // Owner ruling 2026-09-01: the number leads, the position falls back.
+      // These three DO have declared positions (GK/CB/ST), so a builder still
+      // running the old `positionKey ?? squadNumber` order fails here.
+      expect(home.candidateMeta?.h1?.lead).toBe("1");
+      expect(home.candidateMeta?.h2?.lead).toBe("4");
+      expect(home.candidateMeta?.h3?.lead).toBe("9");
       // A builder that stamped the SAME meta on every row must fail this.
       expect(home.candidateMeta?.h1?.lead).not.toBe(home.candidateMeta?.h2?.lead);
       expect(home.candidateMeta?.h2?.lead).not.toBe(home.candidateMeta?.h3?.lead);
+    });
+
+    it("falls back to the declared position for a starter the sheet numbered NOBODY — and only for them", () => {
+      const squads = initSquads({
+        home: {
+          entrantId: "home-1",
+          slots: [
+            { personId: "h1", slot: "starting", orderNo: 1, positionKey: "GK" },
+            { personId: "h2", slot: "starting", orderNo: 2, positionKey: "CB", squadNumber: 4 },
+            { personId: "h3", slot: "starting", orderNo: 3, positionKey: "ST" },
+          ],
+        },
+        away: { entrantId: "away-1", slots: [{ personId: "a1", slot: "starting", orderNo: 1, positionKey: "GK" }] },
+      });
+      const home = buildSwap(view({ squads }), t)[0]!;
+      expect(home.candidateMeta?.h1?.lead).toBe("GK");
+      expect(home.candidateMeta?.h3?.lead).toBe("ST");
+      // The numbered team-mate beside them still leads with the number.
+      expect(home.candidateMeta?.h2?.lead).toBe("4");
     });
 
     it("tags the captain with the role a position code cannot say, and leaves everyone else untagged", () => {
@@ -1383,7 +1408,7 @@ describe("buildSwap", () => {
       expect(home.candidateMeta?.h3?.tag).toBeUndefined();
     });
 
-    it("falls back to the squad number for a bench candidate — the ON step's own pool, whose declared position is a preference the fold never carries as occupancy", () => {
+    it("shows the squad number for a bench candidate — the ON step's own pool, whose declared position is a preference the fold never carries as occupancy", () => {
       const home = buildSwap(view({ squads: squadsWithMeta() }), t)[0]!;
       expect(home.candidates).toContain("h4");
       expect(home.candidateMeta?.h4?.lead).toBe("14");
@@ -1855,7 +1880,10 @@ describe("against a real engine fold", () => {
         entrantId: "H",
         slots: [
           { personId: "h1", slot: "starting", orderNo: 1, positionKey: "GK", squadNumber: 1, roles: ["captain"] },
-          ...[2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map((n) => ({ personId: `h${n}`, slot: "starting" as const, orderNo: n })),
+          // Declared with a position and NO number, so this fixture exercises
+          // BOTH sides of the precedence through the real fold.
+          { personId: "h2", slot: "starting" as const, orderNo: 2, positionKey: "CB" },
+          ...[3, 4, 5, 6, 7, 8, 9, 10, 11].map((n) => ({ personId: `h${n}`, slot: "starting" as const, orderNo: n })),
           { personId: "h12", slot: "bench" as const, orderNo: 12, squadNumber: 20 },
         ],
       },
@@ -1876,7 +1904,12 @@ describe("against a real engine fold", () => {
       contextOverrides: {},
     };
     const home = buildSwap(foldedV, t)[0]!;
-    expect(home.candidateMeta?.h1?.lead).toBe("GK");
+    // The number leads (h1 is #1 AND a declared GK — under the old
+    // position-first order this read "GK"), the position falls back for the
+    // team-mate the sheet left unnumbered, and both facts came through a REAL
+    // fold rather than a hand-built squad literal.
+    expect(home.candidateMeta?.h1?.lead).toBe("1");
+    expect(home.candidateMeta?.h2?.lead).toBe("CB");
     expect(home.candidateMeta?.h1?.tag).toBe("pad.football.swap.captainTag");
     expect(home.candidateMeta?.h2?.tag).toBeUndefined();
   });

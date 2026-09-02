@@ -478,10 +478,10 @@ test("football v3: the substitution WINDOW cap (subWindows) is a SECOND, indepen
 // test.ts) cannot see whether `renderCandidateRow` actually painted the
 // badge — AGENTS.md's own class-2 warning ("pure-builder tests cannot see
 // wiring"). Only a browser can prove the row a scorer taps actually shows a
-// position, and shows a DIFFERENT one for two different on-pitch teammates.
+// badge, and shows a DIFFERENT one for two different on-pitch teammates.
 // ---------------------------------------------------------------------------
 
-test("football v3: the OFF-step swap rows carry a real, DISTINCT position badge per on-pitch player, at 320px and 768px", async ({
+test("football v3: the OFF-step swap rows carry a real, DISTINCT badge per on-pitch player, at 320px and 768px", async ({
   page,
 }) => {
   test.setTimeout(120_000);
@@ -490,7 +490,10 @@ test("football v3: the OFF-step swap rows carry a real, DISTINCT position badge 
     sportKey: "football",
     variantKey: "11-a-side",
     home: [
-      { fullName: `V3 CM Keeper ${TAG}`, positionKey: "GK" },
+      // One NUMBERED and one not, on the same pitch: the badge leads with the
+      // shirt number and falls back to the position code (owner ruling
+      // 2026-09-01), so this pair proves BOTH branches in a browser.
+      { fullName: `V3 CM Keeper ${TAG}`, positionKey: "GK", squadNumber: 1 },
       { fullName: `V3 CM Back ${TAG}`, positionKey: "CB" },
       { fullName: `V3 CM Bench1 ${TAG}`, slot: "bench" },
     ],
@@ -511,8 +514,11 @@ test("football v3: the OFF-step swap rows carry a real, DISTINCT position badge 
   // The rows are the OFF step's — the live on-pitch pool, not the kickoff
   // sheet — so this also proves `footballCandidateMeta` is keyed off the
   // same ids `offCandidates` actually offers, not merely present somewhere.
-  await expect(keeperLead, "GK badge missing on the OFF-step row a scorer actually taps").toHaveText("GK");
-  await expect(backLead, "CB badge missing on the OFF-step row a scorer actually taps").toHaveText("CB");
+  // The keeper is numbered, so their badge is the NUMBER (it would read "GK"
+  // under the old position-led order); the unnumbered centre-back falls back to
+  // their position code.
+  await expect(keeperLead, "shirt-number badge missing on the OFF-step row a scorer actually taps").toHaveText("1");
+  await expect(backLead, "fallback position badge missing on the OFF-step row a scorer actually taps").toHaveText("CB");
   const keeperText = await keeperLead.textContent();
   const backText = await backLead.textContent();
   expect(keeperText, "two different on-pitch players must show DIFFERENT badges").not.toBe(backText);

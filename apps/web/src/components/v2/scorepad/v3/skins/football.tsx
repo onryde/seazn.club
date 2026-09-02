@@ -1291,11 +1291,17 @@ function onCandidates(state: FootballStateShape, cfg: FootballCfgShape, side: Si
  * change when a player is substituted, so the kickoff sheet is exactly the
  * right (and only) place this file has either fact.
  *
+ * The SQUAD NUMBER leads and `positionKey` is the fallback — owner ruling of
+ * 2026-09-01, superseding the position-led wording of 2026-08-30. Players are
+ * known by their shirt number and it is what a scorer reads off the jersey under
+ * time pressure; it is also unique per side, where a position code is not. Kept
+ * identical to `period-shared.ts`'s `periodCandidateMeta`: one rule, two sports.
+ *
  * `positionKey` is carried only for a STARTING slot (`memberFromSlot`,
  * core/lineup.ts — a bench slot's declared position is a preference, not an
  * occupancy, the same distinction volleyball's own doc draws), so a bench
- * candidate falls back to their squad number: still a real distinguisher
- * from data the view already has, never invented. `tag` mirrors the ONE
+ * candidate has only ever had their squad number to show, and an unnumbered
+ * starter still falls back to their position. `tag` mirrors the ONE
  * role key football's own `PositionCatalog` declares (`football.ts`'s
  * `positions.roles`, "captain") — matching this file's own precedent of
  * mirroring the engine's closed vocabularies rather than typing a new one.
@@ -1309,7 +1315,7 @@ function onCandidates(state: FootballStateShape, cfg: FootballCfgShape, side: Si
 function footballCandidateMeta(squads: SquadState, side: Side, t: TFn): Readonly<Record<string, CandidateMeta>> {
   const meta: Record<string, CandidateMeta> = {};
   for (const member of squads[side].members) {
-    const lead = member.positionKey ?? (member.squadNumber !== undefined ? String(member.squadNumber) : undefined);
+    const lead = member.squadNumber !== undefined ? String(member.squadNumber) : member.positionKey;
     const tag = member.roles?.includes("captain") ? t("pad.football.swap.captainTag") : undefined;
     if (lead === undefined && tag === undefined) continue;
     meta[member.personId] = {

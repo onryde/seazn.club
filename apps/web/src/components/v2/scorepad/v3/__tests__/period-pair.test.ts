@@ -1894,6 +1894,14 @@ describe("the swap slot is offered only where a line change is recordable", () =
  * as six wrapping names with nothing to tell them apart — the exact symptom the
  * owner ruling of 2026-08-30 minted the mechanism for.
  *
+ * The badge leads with the SHIRT NUMBER and falls back to the position code
+ * (owner ruling 2026-09-01, superseding the position-led wording of 08-30) —
+ * ice hockey is the reason: six skaters on the ice across three position groups
+ * means a position-led badge leaves three forwards identical, which is the
+ * complaint itself. This fixture's catalog lineup declares no numbers, so the
+ * cases below split into a fallback half (guarded, so they cannot silently
+ * re-interpret themselves) and a numbered half.
+ *
  * Every assertion below runs against a REAL fold (`livePhaseState` ->
  * `viewFor`), and the EXPECTED value comes from `lineupsFor`'s team sheet — the
  * lineup the fold was fed — rather than from a table typed into this file or
@@ -1924,7 +1932,21 @@ describe("the swap sheet distinguishes its candidate rows by position and role",
         return declared;
       }
 
-      it("gives every OFF candidate the position their own team sheet declared", () => {
+      /** The badge rule is `lead = squadNumber ?? positionKey` (owner ruling
+       *  2026-09-01). This fixture's team sheet comes from `lineupFromCatalog`,
+       *  which declares NO squad numbers — so every assertion in the two cases
+       *  below is exercising the POSITION FALLBACK, and would quietly stop
+       *  doing so if numbers ever appeared in the catalog fixture. Hence the
+       *  guard: it fails loudly instead of the tests re-interpreting themselves.
+       *  The number-led branch is asserted separately, below. */
+      function assertFixtureDeclaresNoNumbers(): void {
+        for (const slot of lineupsFor(sport.module, cfg).home.slots) {
+          expect(slot.squadNumber, `${slot.personId} now declares a number — these cases test the FALLBACK`).toBeUndefined();
+        }
+      }
+
+      it("falls back to the position their own team sheet declared, for players the sheet left unnumbered", () => {
+        assertFixtureDeclaresNoNumbers();
         const slot = slotsNow()[0]!;
         const declared = declaredPosition();
         expect(slot.offCandidates!.length, "the OFF pool is too small to be identical rows").toBeGreaterThan(1);
@@ -1933,7 +1955,51 @@ describe("the swap sheet distinguishes its candidate rows by position and role",
         }
       });
 
+      /** The same live view, but with the home team sheet NUMBERED — the
+       *  arrangement a real fixture console produces (`entrant_members.
+       *  squad_number` is a populated column). `initSquads` is the engine's own
+       *  fold-entry, applied to the engine's own catalog lineup, which is
+       *  exactly what `viewFor` does in its fallback branch. */
+      function numberedSlot(): SwapSlot {
+        const lineups = lineupsFor(sport.module, cfg);
+        const numbered = {
+          ...lineups,
+          home: {
+            ...lineups.home,
+            slots: lineups.home.slots.map((s, i) => ({ ...s, squadNumber: (i + 1) * 3 })),
+          },
+        };
+        const base = viewFor(sport, cfg, livePhaseState(sport, cfg));
+        const view: PadHostView = { ...base, squads: initSquads(numbered) as PadHostView["squads"] };
+        return (sport.factory(T).swap!(view) as SwapSlot[])[0]!;
+      }
+
+      it("leads with the SHIRT NUMBER once the sheet declares one, overriding the position code", () => {
+        const slot = numberedSlot();
+        const lineups = lineupsFor(sport.module, cfg);
+        const expected = new Map(lineups.home.slots.map((s, i) => [s.personId, String((i + 1) * 3)]));
+        expect(slot.offCandidates!.length).toBeGreaterThan(1);
+        for (const id of slot.offCandidates!) {
+          expect(slot.candidateMeta?.[id]?.lead, id).toBe(expected.get(id));
+        }
+      });
+
+      it("gives EVERY on-field player a distinct badge once numbered — which the position catalogue alone cannot do", () => {
+        const slot = numberedSlot();
+        const off = slot.offCandidates!;
+        const declared = declaredPosition();
+        // The point of the ruling, stated as the comparison that motivated it:
+        // more players on the field than the sheet has distinct position codes
+        // for them (ice hockey: six skaters, three groups). Numbers separate
+        // all of them; positions provably cannot.
+        const positions = new Set(off.map((id) => declared.get(id)));
+        const badges = new Set(off.map((id) => slot.candidateMeta?.[id]?.lead));
+        expect(badges.size).toBe(off.length);
+        expect(badges.size).toBeGreaterThanOrEqual(positions.size);
+      });
+
       it("renders as many DISTINCT badges as the sheet declares positions — a builder stamping ONE meta on every row must fail this", () => {
+        assertFixtureDeclaresNoNumbers();
         const slot = slotsNow()[0]!;
         const declared = declaredPosition();
         const expected = new Set(slot.offCandidates!.map((id) => declared.get(id)));

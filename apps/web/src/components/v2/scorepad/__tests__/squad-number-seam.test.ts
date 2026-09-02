@@ -20,17 +20,18 @@
 //     -> squadStateOf                    (v3/pad-host.tsx — what `view.squads` IS)
 //     -> buildSwap                       (v3/skins/football.tsx — the real consumer)
 //
-// SCOPE NOTE, so a future reader does not misread this file's green. The badge
-// builders compute `lead = positionKey ?? squadNumber`, and `??` SHORT-CIRCUITS.
-// For a player who is ON the field with a declared position, the number can
-// never be reached, so plumbing it does NOT make six on-ice ice-hockey skaters
-// across three position groups render six distinct badges. That precedence is a
-// user-visible design decision owned by a separate follow-up, and this file
-// asserts nothing about it. What plumbing DOES deliver, and what this file
-// pins, is (a) the number genuinely ARRIVES in the squad state every badge
-// builder reads, and (b) the BENCH/ON step — whose members carry no
-// `positionKey` at all, by `memberFromSlot`'s deliberate design — gets its
-// distinguisher for the first time.
+// SCOPE. Sections A and B pin the PLUMBING: (a) the number genuinely ARRIVES in
+// the squad state every badge builder reads, and (b) the BENCH/ON step — whose
+// members carry no `positionKey` at all, by `memberFromSlot`'s deliberate
+// design — gets its distinguisher.
+//
+// Section C pins the PRECEDENCE that spends it. The builders originally computed
+// `lead = positionKey ?? squadNumber`, and `??` SHORT-CIRCUITS, so for a player
+// ON the field with a declared position the number could never be reached and
+// the plumbing alone did not make six on-ice ice-hockey skaters across three
+// position groups render six distinct badges. The owner reversed that on
+// 2026-09-01 (`lead = squadNumber ?? positionKey`); section C is that case,
+// driven end to end, and it fails under the old order.
 import { describe, expect, it } from "vitest";
 import type { AnySportModule } from "@seazn/engine/sport";
 import type { SquadMember } from "@seazn/engine/core";
@@ -43,6 +44,8 @@ import { squadStateOf } from "../v3/pad-host";
 import type { PadHostView } from "../v3/types";
 import { buildSwap } from "../v3/skins/football";
 import type { TFn } from "../v3/skins/football";
+import { icehockeySkinV3 } from "../v3/skins/icehockey";
+import type { SwapSlot } from "../v3/types";
 
 const t: TFn = (key, vars) => (vars ? `${key}(${JSON.stringify(vars)})` : key);
 
@@ -77,31 +80,37 @@ const memberOf = (members: readonly SquadMember[], personId: string): SquadMembe
 // point: a fixture whose positions are conveniently all-distinct could not
 // witness anything.
 // ---------------------------------------------------------------------------
-describe("WS-SQ seam: squadNumber reaches `view.squads` through the real chain (ice hockey)", () => {
-  const HOME_ROWS: readonly LineupSlotIn[] = [
-    wireRow({ person_id: "h-g", slot: "starting", position_key: "G", order_no: 1, squad_number: 30 }),
-    wireRow({ person_id: "h-d1", slot: "starting", position_key: "D", order_no: 2, squad_number: 4 }),
-    wireRow({ person_id: "h-d2", slot: "starting", position_key: "D", order_no: 3, squad_number: 77 }),
-    wireRow({ person_id: "h-f1", slot: "starting", position_key: "F", order_no: 4, squad_number: 9 }),
-    wireRow({ person_id: "h-f2", slot: "starting", position_key: "F", order_no: 5, squad_number: 11 }),
-    wireRow({ person_id: "h-f3", slot: "starting", position_key: "F", order_no: 6, squad_number: 19 }),
-    // The bench. `memberFromSlot` (core/lineup.ts) deliberately drops a bench
-    // slot's declared position — a preference, not an occupancy — so the shirt
-    // number is the ONLY distinguisher these rows can ever have.
-    wireRow({ person_id: "h-b1", slot: "bench", position_key: "F", order_no: 7, squad_number: 21 }),
-    wireRow({ person_id: "h-b2", slot: "bench", position_key: "D", order_no: 8, squad_number: 55 }),
-  ];
+const HOME_ROWS: readonly LineupSlotIn[] = [
+  wireRow({ person_id: "h-g", slot: "starting", position_key: "G", order_no: 1, squad_number: 30 }),
+  wireRow({ person_id: "h-d1", slot: "starting", position_key: "D", order_no: 2, squad_number: 4 }),
+  wireRow({ person_id: "h-d2", slot: "starting", position_key: "D", order_no: 3, squad_number: 77 }),
+  wireRow({ person_id: "h-f1", slot: "starting", position_key: "F", order_no: 4, squad_number: 9 }),
+  wireRow({ person_id: "h-f2", slot: "starting", position_key: "F", order_no: 5, squad_number: 11 }),
+  wireRow({ person_id: "h-f3", slot: "starting", position_key: "F", order_no: 6, squad_number: 19 }),
+  // The bench. `memberFromSlot` (core/lineup.ts) deliberately drops a bench
+  // slot's declared position — a preference, not an occupancy — so the shirt
+  // number is the ONLY distinguisher these rows can ever have.
+  wireRow({ person_id: "h-b1", slot: "bench", position_key: "F", order_no: 7, squad_number: 21 }),
+  wireRow({ person_id: "h-b2", slot: "bench", position_key: "D", order_no: 8, squad_number: 55 }),
+];
 
-  function homeSquad() {
-    const icehockey = moduleFor("icehockey");
-    const cfg = icehockey.configSchema.parse({});
-    const lineups = lineupPairFrom(
-      side("ent-home", HOME_ROWS),
-      side("ent-away", [wireRow({ person_id: "a1", position_key: "G", order_no: 1, squad_number: 1 })]),
-    );
-    const state = foldClient(icehockey, cfg, lineups, [makeEnvelope(0, { type: "core.start", payload: {} })]);
-    return squadStateOf(state, lineups).home;
-  }
+/** The real chain, up to `view.squads`, for an ice-hockey home side given as
+ *  WIRE ROWS. Shared by section A (which reads the squad) and section C (which
+ *  drives the real skin one hop further), so the realism guard section A puts
+ *  on this fixture protects section C's badges too. */
+function icehockeyHome(rows: readonly LineupSlotIn[] = HOME_ROWS) {
+  const icehockey = moduleFor("icehockey");
+  const cfg = icehockey.configSchema.parse({});
+  const lineups = lineupPairFrom(
+    side("ent-home", rows),
+    side("ent-away", [wireRow({ person_id: "a1", position_key: "G", order_no: 1, squad_number: 1 })]),
+  );
+  const state = foldClient(icehockey, cfg, lineups, [makeEnvelope(0, { type: "core.start", payload: {} })]);
+  return { cfg, state, squads: squadStateOf(state, lineups) };
+}
+
+describe("WS-SQ seam: squadNumber reaches `view.squads` through the real chain (ice hockey)", () => {
+  const homeSquad = () => icehockeyHome().squads.home;
 
   it("the fixture is REALISTIC: six on-ice skaters collapse into only three position groups", () => {
     const onIce = homeSquad().members.filter((m) => m.onField);
@@ -154,10 +163,11 @@ describe("WS-SQ seam: squadNumber reaches `view.squads` through the real chain (
 
 // ---------------------------------------------------------------------------
 // B. Football — the same chain driven one hop further, into the REAL badge
-// builder, for the case the `??` precedence does NOT short-circuit: the ON
-// step's bench pool, whose members have no `positionKey` at all.
+// builder, for the ON step's bench pool: members who have no `positionKey` at
+// all, and for whom the shirt number is therefore the only badge possible under
+// EITHER precedence. That is what makes this section a stable plumbing witness
+// rather than a precedence one — section C owns the precedence.
 //
-// This is the user-visible behaviour this plumbing actually delivers today.
 // `football.test.ts`'s own WS-D case asserts the same `lead` from a hand-built
 // `initSquads({... squadNumber: 14 ...})` fixture — which is exactly the
 // arrangement that stayed green for the entire time the number could not
@@ -171,14 +181,15 @@ describe("WS-SQ seam: a bench candidate's badge is reachable from the WIRE row (
       wireRow({ person_id: "h1", slot: "starting", position_key: "GK", order_no: 1, squad_number: 1 }),
       wireRow({ person_id: "h2", slot: "starting", position_key: "CB", order_no: 2, squad_number: 4, roles: ["captain"] }),
       wireRow({ person_id: "h3", slot: "starting", position_key: "ST", order_no: 3, squad_number: 9 }),
-      // Fix round 1 (MINOR): these two DECLARE a bench position. Previously
-      // both carried `position_key: null`, which made this case pass for the
-      // wrong reason — it would still have gone green if `memberFromSlot`
-      // stopped dropping a bench slot's declared position, because there was
-      // no position to drop. With a real one declared, `lead` is "14" ONLY
-      // because the fold refuses to treat a bench preference as an occupancy,
-      // so this case now witnesses the `positionKey ?? squadNumber`
-      // fall-through in the realistic arrangement rather than a degenerate one.
+      // These two DECLARE a bench position, so the fixture stays realistic
+      // rather than degenerate. Under the ORIGINAL `positionKey ?? squadNumber`
+      // order that made the case load-bearing: `lead` was "14" only because the
+      // fold refuses to treat a bench preference as an occupancy. Since the
+      // 2026-09-01 reversal the number leads regardless, so the two
+      // `not.toBe("ST"/"CB")` assertions below no longer witness that drop —
+      // they are kept as a cheap guard that a bench row shows a number and not
+      // a position. `memberFromSlot`'s rule is pinned directly by section A's
+      // "a bench member ... carries NO positionKey" case.
       wireRow({ person_id: "h4", slot: "bench", position_key: "ST", order_no: 4, squad_number: 14 }),
       wireRow({ person_id: "h5", slot: "bench", position_key: "CB", order_no: 5, squad_number: 15 }),
     ]);
@@ -216,5 +227,100 @@ describe("WS-SQ seam: a bench candidate's badge is reachable from the WIRE row (
     // occupancy would show those instead and this assertion would fail.
     expect(slot.candidateMeta?.["h4"]?.lead).not.toBe("ST");
     expect(slot.candidateMeta?.["h5"]?.lead).not.toBe("CB");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// C. THE CASE THE PRECEDENCE CHANGE EXISTS FOR — owner ruling, 2026-09-01:
+//
+//     "Number leads, position falls back — `lead = squadNumber ?? positionKey`.
+//      Every skater with a declared number gets a unique badge; this is what
+//      actually closes the six-identical-rows complaint. Players are known by
+//      their shirt number, and it's what a scorer reads off the jersey under
+//      time pressure. Position still shows for anyone with no number declared."
+//
+// Ice hockey puts SIX skaters on the ice across only THREE position groups
+// (icehockey.ts `positions.groups`: G/D/F), so a position-LED badge can never
+// distinguish more than three of them however well the number is plumbed —
+// which is why section A above, written while the precedence still ran
+// `positionKey ?? squadNumber`, could only pin the number's ARRIVAL and
+// explicitly disclaimed the badge.
+//
+// Driven through the REAL ice-hockey skin — `icehockeySkinV3(t).swap`, i.e.
+// `period-shared.ts`'s `periodCandidateMeta` — from the SAME wire rows section
+// A folds. Not a hand-built `SquadState` handed to a builder: that arrangement
+// is precisely what stayed green for the whole time the number could not
+// physically reach production.
+// ---------------------------------------------------------------------------
+describe("WS-PREC: the swap badge leads with the shirt number (ice hockey, the six-identical-rows case)", () => {
+  function homeSwapSlot(rows: readonly LineupSlotIn[] = HOME_ROWS): SwapSlot {
+    const { cfg, state, squads } = icehockeyHome(rows);
+    const view: PadHostView = {
+      cfg,
+      state,
+      summary: {},
+      phase: "live",
+      band: 3,
+      entitlements: {},
+      personNames: {},
+      squads,
+      events: [],
+      contextOverrides: {},
+    };
+    return icehockeySkinV3(t).swap!(view)[0]!;
+  }
+
+  it("gives the six on-ice skaters SIX DISTINCT badges — three position groups could only ever make three", () => {
+    const slot = homeSwapSlot();
+    const off = slot.offCandidates!;
+    expect(off).toHaveLength(6);
+
+    // Expected values derived from the WIRE ROWS themselves, never a second
+    // table typed here: a change to the fixture moves the expectation with it.
+    const declaredNumber = new Map(HOME_ROWS.map((row) => [row.person_id, row.squad_number]));
+    for (const id of off) {
+      expect(slot.candidateMeta?.[id]?.lead, id).toBe(String(declaredNumber.get(id)));
+    }
+
+    // The headline, and the assertion the old `positionKey ?? squadNumber`
+    // precedence fails: six rows, six different things to read. Under the old
+    // rule this Set held {"G","D","F"}.
+    expect(new Set(off.map((id) => slot.candidateMeta?.[id]?.lead)).size).toBe(6);
+  });
+
+  it("the three FORWARDS — indistinguishable under a position-led badge — now read differently from each other", () => {
+    const slot = homeSwapSlot();
+    // Named explicitly, the way a scorer meets it: three players who share one
+    // position group and must still be told apart at a glance.
+    const forwards = ["h-f1", "h-f2", "h-f3"];
+    const leads = forwards.map((id) => slot.candidateMeta?.[id]?.lead);
+    expect(leads).toEqual(["9", "11", "19"]);
+    expect(new Set(leads).size).toBe(3);
+  });
+
+  it("a skater with a position and NO declared number still shows the position — the fallback keeps working", () => {
+    const slot = homeSwapSlot([
+      wireRow({ person_id: "h-g", slot: "starting", position_key: "G", order_no: 1, squad_number: 30 }),
+      wireRow({ person_id: "h-d1", slot: "starting", position_key: "D", order_no: 2 }),
+      wireRow({ person_id: "h-d2", slot: "starting", position_key: "D", order_no: 3, squad_number: null }),
+      wireRow({ person_id: "h-f1", slot: "starting", position_key: "F", order_no: 4, squad_number: 9 }),
+      wireRow({ person_id: "h-f2", slot: "starting", position_key: "F", order_no: 5, squad_number: 11 }),
+      wireRow({ person_id: "h-f3", slot: "starting", position_key: "F", order_no: 6, squad_number: 19 }),
+    ]);
+    // Absent and explicitly-null both fall back; neither invents a number.
+    expect(slot.candidateMeta?.["h-d1"]?.lead).toBe("D");
+    expect(slot.candidateMeta?.["h-d2"]?.lead).toBe("D");
+    // …while their numbered team-mates on the same ice still lead with theirs.
+    expect(slot.candidateMeta?.["h-g"]?.lead).toBe("30");
+    expect(slot.candidateMeta?.["h-f1"]?.lead).toBe("9");
+  });
+
+  it("neither a number nor a position -> no badge at all: the row renders exactly as it does today", () => {
+    const slot = homeSwapSlot([
+      wireRow({ person_id: "h-g", slot: "starting", position_key: "G", order_no: 1, squad_number: 30 }),
+      wireRow({ person_id: "h-bare", slot: "bench", order_no: 2 }),
+    ]);
+    expect(slot.candidates).toContain("h-bare");
+    expect(slot.candidateMeta?.["h-bare"]).toBeUndefined();
   });
 });

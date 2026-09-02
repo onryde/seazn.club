@@ -5,7 +5,9 @@ import { apiJson, expectNoHorizontalScroll, fixturePath, seedRosteredFixture, TA
 //
 // `period-shared.ts`'s `buildSwap` now populates `SwapSlot.candidateMeta` for
 // both period skins, so `renderCandidateRow` (context-strip.tsx) draws a
-// position badge and a captain chip on each row. `period-pair.test.ts` proves
+// badge and a captain chip on each row. The badge leads with the SHIRT NUMBER
+// and falls back to the position code (owner ruling 2026-09-01, superseding the
+// position-led wording of 08-30). `period-pair.test.ts` proves
 // the BUILDER over a real fold — but `apps/web` vitest is `environment:
 // "node"` with no DOM, so it cannot see whether the badge survives the adapter
 // (`adaptSwapSlot` copies `candidateMeta` BY HAND), whether the chassis renders
@@ -26,19 +28,41 @@ import { apiJson, expectNoHorizontalScroll, fixturePath, seedRosteredFixture, TA
 test.describe.configure({ mode: "parallel" });
 
 /** The seeded ICE lineup — the source of truth for what this fixture DECLARED,
- *  and therefore for what each row must show. `G`/`D`/`F` are the only keys
- *  `icehockey.ts`'s own `positions.groups` declares (a lineup naming anything
- *  else is an `unknown_position` issue), so three distinct codes over six
- *  skaters is the REAL best case — the badge groups the six, and the captain
- *  chip separates one more. Anything less is the six-identical-rows bug. */
-const ON_ICE: readonly { readonly name: string; readonly positionKey: string; readonly captain?: true }[] = [
-  { name: `V3 Ice G ${TAG}`, positionKey: "G" },
-  { name: `V3 Ice D1 ${TAG}`, positionKey: "D", captain: true },
-  { name: `V3 Ice D2 ${TAG}`, positionKey: "D" },
-  { name: `V3 Ice F1 ${TAG}`, positionKey: "F" },
-  { name: `V3 Ice F2 ${TAG}`, positionKey: "F" },
+ *  and therefore for what each row must show.
+ *
+ *  `G`/`D`/`F` are the only keys `icehockey.ts`'s own `positions.groups`
+ *  declares (a lineup naming anything else is an `unknown_position` issue), so
+ *  six skaters can only ever carry THREE distinct position codes — three
+ *  forwards reading identically is the six-identical-rows bug itself, not a
+ *  best case. That is why the owner reversed the badge order on 2026-09-01:
+ *  the SHIRT NUMBER leads and the position falls back, and a shirt number is
+ *  unique per side.
+ *
+ *  So every skater here is numbered, and `expectedLead` below is what the row
+ *  must show — derived from the seed, never a second table. The unnumbered
+ *  case is covered by `noNumber` at the end. */
+const ON_ICE: readonly {
+  readonly name: string;
+  readonly positionKey: string;
+  readonly squadNumber?: number;
+  readonly captain?: true;
+}[] = [
+  { name: `V3 Ice G ${TAG}`, positionKey: "G", squadNumber: 30 },
+  { name: `V3 Ice D1 ${TAG}`, positionKey: "D", squadNumber: 4, captain: true },
+  { name: `V3 Ice D2 ${TAG}`, positionKey: "D", squadNumber: 77 },
+  { name: `V3 Ice F1 ${TAG}`, positionKey: "F", squadNumber: 9 },
+  { name: `V3 Ice F2 ${TAG}`, positionKey: "F", squadNumber: 11 },
+  // Deliberately NUMBERLESS, and on the ice: the fallback has to keep working
+  // beside five numbered team-mates, or "position still shows for anyone with
+  // no number declared" is only true in a unit test.
   { name: `V3 Ice F3 ${TAG}`, positionKey: "F" },
 ];
+
+/** What the badge must read for a seeded skater: the number when the sheet
+ *  declares one, otherwise the position code. This is the ruling, expressed
+ *  once, so the assertions below cannot drift from it. */
+const expectedLead = (p: (typeof ON_ICE)[number]): string =>
+  p.squadNumber === undefined ? p.positionKey : String(p.squadNumber);
 
 const BENCH = `V3 Ice Bench ${TAG}`;
 
@@ -74,7 +98,7 @@ async function postEvent(
   }
 }
 
-test("ice hockey v3: the OFF step's six on-ice rows carry their own position badge and the captain's chip, at 768 and 320", async ({
+test("ice hockey v3: the OFF step's six on-ice rows carry their own shirt-number badge and the captain's chip, at 768 and 320", async ({
   page,
 }) => {
   test.setTimeout(120_000);
@@ -87,6 +111,7 @@ test("ice hockey v3: the OFF step's six on-ice rows carry their own position bad
       ...ON_ICE.map((p) => ({
         fullName: p.name,
         positionKey: p.positionKey,
+        ...(p.squadNumber === undefined ? {} : { squadNumber: p.squadNumber }),
         ...(p.captain === true ? { roles: ["captain"] as const } : {}),
       })),
       { fullName: BENCH, slot: "bench" as const },
@@ -111,12 +136,12 @@ test("ice hockey v3: the OFF step's six on-ice rows carry their own position bad
     await expect(row, `${player.name} is not offered on the OFF step`).toBeVisible();
     await expect(
       row.locator("[data-candidate-lead]"),
-      `${player.name}'s row carries no position badge`,
-    ).toHaveAttribute("data-candidate-lead", player.positionKey);
+      `${player.name}'s row carries no badge`,
+    ).toHaveAttribute("data-candidate-lead", expectedLead(player));
     // …and the badge is VISIBLE TEXT, not just an attribute a CSS rule could
     // be hiding: `renderCandidateRow` prints `meta.lead` inside the span it
     // stamps the attribute on.
-    await expect(row.locator("[data-candidate-lead]")).toHaveText(player.positionKey);
+    await expect(row.locator("[data-candidate-lead]")).toHaveText(expectedLead(player));
   }
 
   // The whole point: the rows are NOT all the same. Read back off the rendered
@@ -126,12 +151,17 @@ test("ice hockey v3: the OFF step's six on-ice rows carry their own position bad
   const leads = await swap.locator("[data-candidate-lead]").evaluateAll((els) =>
     els.map((el) => el.getAttribute("data-candidate-lead")),
   );
+  // Stated as the comparison that motivated the ruling, so this cannot pass by
+  // accident: the position codes alone can separate only THREE of these six,
+  // and the rendered badges separate all six.
   expect(new Set(ON_ICE.map((p) => p.positionKey)).size, "the fixture declares one position for the whole line").toBe(
     3,
   );
-  expect(new Set(leads.filter((l) => l !== null)), "six rows still render as one badge").toEqual(
-    new Set(["G", "D", "F"]),
-  );
+  expect(
+    new Set(leads.filter((l) => l !== null)),
+    "six rows do not render six distinct badges — a position-led badge collapses the three forwards",
+  ).toEqual(new Set(ON_ICE.map(expectedLead)));
+  expect(new Set(ON_ICE.map(expectedLead)).size).toBe(6);
 
   // The captain — the one thing a position code cannot say, and the only
   // separator between the two defenders.
@@ -158,8 +188,8 @@ test("ice hockey v3: the OFF step's six on-ice rows carry their own position bad
   for (const width of [768, 320]) {
     await page.setViewportSize({ width, height: 1100 });
     await expect(swap, `the swap sheet closed at ${width}px`).toBeVisible();
-    await expect(keeperLead, `the position badge is not rendered at ${width}px`).toBeVisible();
-    await expect(keeperLead).toHaveText("G");
+    await expect(keeperLead, `the badge is not rendered at ${width}px`).toBeVisible();
+    await expect(keeperLead).toHaveText(expectedLead(ON_ICE[0]!));
     await expectNoHorizontalScroll(page);
     await page.screenshot({
       path: `e2e-artifacts/swap-candidate-badges/icehockey-off-step-${width}.png`,
