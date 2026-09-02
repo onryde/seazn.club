@@ -3987,6 +3987,7 @@
   "pad.football.context.sub.blocked.subWindows": "{side} ha usado las {windows} ventanas de sustitución",
   "pad.football.context.sub.blocked.reentry.short": "Ya fue sustituido",
   "pad.football.context.sub.blocked.sentOff.short": "Expulsado",
+  "pad.football.swap.captainTag": "Capitán",
   "pad.football.context.period.blocked.wrongPhase": "No durante {phase}",
   "pad.football.context.card.blocked.allBooked": "Todos los jugadores en el campo ya están amonestados",
   "pad.football.context.card.blocked.nobodyOnPitch": "No hay nadie en el campo para amonestar",

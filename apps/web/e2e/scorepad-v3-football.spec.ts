@@ -3,6 +3,7 @@ import AxeBuilder from "@axe-core/playwright";
 import {
   activeOrg,
   apiJson,
+  expectNoHorizontalScroll,
   fixturePath,
   invalidateOrgEntitlements,
   loginUi,
@@ -466,6 +467,66 @@ test("football v3: the substitution WINDOW cap (subWindows) is a SECOND, indepen
     swap.locator('[data-role="swap-refusal"]'),
     "the WINDOW cap is its own string — 'players used' would be the wrong reason",
   ).toHaveText("Home has used all 1 substitution windows");
+});
+
+// ---------------------------------------------------------------------------
+// candidateMeta — distinguishing the "who comes off" rows (WS-D, R8 sweep)
+//
+// R7 shipped the MECHANISM (`CandidateMeta`, types.ts; `renderCandidateRow`,
+// context-strip.tsx) and volleyball populated it for its libero picker; this
+// is football's first wiring, and a pure `buildSwap` unit test (football.
+// test.ts) cannot see whether `renderCandidateRow` actually painted the
+// badge — AGENTS.md's own class-2 warning ("pure-builder tests cannot see
+// wiring"). Only a browser can prove the row a scorer taps actually shows a
+// position, and shows a DIFFERENT one for two different on-pitch teammates.
+// ---------------------------------------------------------------------------
+
+test("football v3: the OFF-step swap rows carry a real, DISTINCT position badge per on-pitch player, at 320px and 768px", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  const fx = await seedRosteredFixture(page.request, {
+    label: `V3 FB Meta ${TAG}`,
+    sportKey: "football",
+    variantKey: "11-a-side",
+    home: [
+      { fullName: `V3 CM Keeper ${TAG}`, positionKey: "GK" },
+      { fullName: `V3 CM Back ${TAG}`, positionKey: "CB" },
+      { fullName: `V3 CM Bench1 ${TAG}`, slot: "bench" },
+    ],
+    away: [{ fullName: `V3 CM Away ${TAG}`, positionKey: "GK" }],
+  });
+  await postEvent(page.request, fx.fixtureId, "core.start", {});
+  await openConsoleAlreadyLive(page, fx);
+
+  await v3Tile(page, "sub-home").click();
+  const swap = pad(page).locator('[data-role="v3-swap"]');
+  await expect(swap).toBeVisible({ timeout: 10_000 });
+
+  const keeperId = fx.personIds[`V3 CM Keeper ${TAG}`]!;
+  const backId = fx.personIds[`V3 CM Back ${TAG}`]!;
+  const keeperLead = swap.locator(`[data-candidate-id="${keeperId}"] [data-candidate-lead]`);
+  const backLead = swap.locator(`[data-candidate-id="${backId}"] [data-candidate-lead]`);
+
+  // The rows are the OFF step's — the live on-pitch pool, not the kickoff
+  // sheet — so this also proves `footballCandidateMeta` is keyed off the
+  // same ids `offCandidates` actually offers, not merely present somewhere.
+  await expect(keeperLead, "GK badge missing on the OFF-step row a scorer actually taps").toHaveText("GK");
+  await expect(backLead, "CB badge missing on the OFF-step row a scorer actually taps").toHaveText("CB");
+  const keeperText = await keeperLead.textContent();
+  const backText = await backLead.textContent();
+  expect(keeperText, "two different on-pitch players must show DIFFERENT badges").not.toBe(backText);
+
+  // Visual proof at both required widths (AGENTS.md UI bar: 320px + 768px,
+  // no horizontal scroll) — screenshotted, not merely asserted on text, since
+  // the brief's own concern is a scorer visually distinguishing the rows.
+  for (const width of [320, 768] as const) {
+    await page.setViewportSize({ width, height: 900 });
+    await expect(keeperLead).toBeVisible();
+    await expect(backLead).toBeVisible();
+    await expectNoHorizontalScroll(page);
+    await page.screenshot({ path: test.info().outputPath(`swap-off-step-${width}.png`) });
+  }
 });
 
 // R3 task-D follow-up (owner-approved matrix): the two refusal tests above

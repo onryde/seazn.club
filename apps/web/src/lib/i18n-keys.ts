@@ -2963,6 +2963,7 @@ export type DictionaryKey =
   | "pad.football.sheet.penalty.outcome.title"
   | "pad.football.sheet.period.marker.title"
   | "pad.football.sheet.shootoutKick.outcome.title"
+  | "pad.football.swap.captainTag"
   | "pad.generic.action.addPoints"
   | "pad.generic.action.correctPoints"
   | "pad.generic.action.decisive"

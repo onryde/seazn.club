@@ -3987,6 +3987,7 @@
   "pad.football.context.sub.blocked.subWindows": "{side} heeft alle {windows} wisselmomenten gebruikt",
   "pad.football.context.sub.blocked.reentry.short": "Al gewisseld",
   "pad.football.context.sub.blocked.sentOff.short": "Van het veld gestuurd",
+  "pad.football.swap.captainTag": "Aanvoerder",
   "pad.football.context.period.blocked.wrongPhase": "Niet tijdens {phase}",
   "pad.football.context.card.blocked.allBooked": "Iedereen op het veld heeft al geel",
   "pad.football.context.card.blocked.nobodyOnPitch": "Niemand op het veld om te boeken",

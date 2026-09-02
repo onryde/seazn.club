@@ -1327,6 +1327,74 @@ describe("buildSwap", () => {
     expect(home.offLabel).toBe("scorepad.skin.football.swap.off");
     expect(home.onLabel).toBe("scorepad.skin.football.swap.on");
   });
+
+  // WS-D (R8 sweep) — the R7 `CandidateMeta` mechanism (types.ts,
+  // context-strip.tsx's `renderCandidateRow`) already renders a position
+  // badge + role tag when a skin supplies one; volleyball's `liberoCandidateMeta`
+  // was the first populator, football never wired it, so eleven near-identical
+  // on-pitch names rendered with no distinguisher. Sourced from `view.squads`
+  // (the kickoff team sheet — see `onCandidates`'s own doc above for why THAT
+  // field is stale for the POOL but is exactly right for a squad number/role
+  // that does not change when a player is substituted).
+  describe("candidateMeta — distinguishing the OFF-step rows by position/number", () => {
+    function squadsWithMeta(): SquadState {
+      return initSquads({
+        home: {
+          entrantId: "home-1",
+          slots: [
+            { personId: "h1", slot: "starting", orderNo: 1, positionKey: "GK", squadNumber: 1 },
+            { personId: "h2", slot: "starting", orderNo: 2, positionKey: "CB", squadNumber: 4, roles: ["captain"] },
+            { personId: "h3", slot: "starting", orderNo: 3, positionKey: "ST", squadNumber: 9 },
+            { personId: "h4", slot: "bench", orderNo: 4, squadNumber: 14 },
+            { personId: "h5", slot: "bench", orderNo: 5, squadNumber: 15 },
+          ],
+        },
+        away: {
+          entrantId: "away-1",
+          slots: [
+            { personId: "a1", slot: "starting", orderNo: 1, positionKey: "GK", squadNumber: 1 },
+            { personId: "a2", slot: "starting", orderNo: 2, positionKey: "CB", squadNumber: 5 },
+            { personId: "a3", slot: "starting", orderNo: 3, positionKey: "ST", squadNumber: 10 },
+            { personId: "a4", slot: "bench", orderNo: 4, squadNumber: 16 },
+            { personId: "a5", slot: "bench", orderNo: 5, squadNumber: 17 },
+          ],
+        },
+      });
+    }
+
+    it("gives every OFF candidate a real position distinguisher, and two on-pitch teammates DISTINCT meta — the mutation witness", () => {
+      const home = buildSwap(view({ squads: squadsWithMeta() }), t)[0]!;
+      // The OFF pool is the live on-pitch three (h1 GK, h2 CB, h3 ST).
+      for (const id of home.offCandidates ?? []) {
+        expect(home.candidateMeta?.[id]?.lead, id).not.toBeUndefined();
+      }
+      expect(home.candidateMeta?.h1?.lead).toBe("GK");
+      expect(home.candidateMeta?.h2?.lead).toBe("CB");
+      expect(home.candidateMeta?.h3?.lead).toBe("ST");
+      // A builder that stamped the SAME meta on every row must fail this.
+      expect(home.candidateMeta?.h1?.lead).not.toBe(home.candidateMeta?.h2?.lead);
+      expect(home.candidateMeta?.h2?.lead).not.toBe(home.candidateMeta?.h3?.lead);
+    });
+
+    it("tags the captain with the role a position code cannot say, and leaves everyone else untagged", () => {
+      const home = buildSwap(view({ squads: squadsWithMeta() }), t)[0]!;
+      expect(home.candidateMeta?.h2?.tag).toBe("pad.football.swap.captainTag");
+      expect(home.candidateMeta?.h1?.tag).toBeUndefined();
+      expect(home.candidateMeta?.h3?.tag).toBeUndefined();
+    });
+
+    it("falls back to the squad number for a bench candidate — the ON step's own pool, whose declared position is a preference the fold never carries as occupancy", () => {
+      const home = buildSwap(view({ squads: squadsWithMeta() }), t)[0]!;
+      expect(home.candidates).toContain("h4");
+      expect(home.candidateMeta?.h4?.lead).toBe("14");
+      expect(home.candidateMeta?.h5?.lead).toBe("15");
+    });
+
+    it("renders NOTHING extra when the view carries no position/number data — every existing fixture keeps its exact current row", () => {
+      const home = buildSwap(view(), t)[0]!;
+      expect(home.candidateMeta).toEqual({});
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1774,6 +1842,43 @@ describe("against a real engine fold", () => {
     expect(() => skin.dock("football.goal", view, { by: "H" })).not.toThrow();
     expect(skin.phase!(view)).toBe("live");
     expect(buildScorebug(view, t).halves[0].big).toBe("1");
+  });
+
+  // WS-D — the "mirror agrees with itself" trap this file's own header warns
+  // about: a hand-built `view({ squads: ... })` literal cannot prove the real
+  // `squadStateOf(folded, lineups)` degrade still carries a declared position/
+  // squad number/role through. This drives the REAL fold and reads
+  // `candidateMeta` off its result.
+  it("carries the KICKOFF lineup's declared position, squad number and captain role through a REAL fold — not a fixture agreeing with itself", () => {
+    const lineups: LineupPair = {
+      home: {
+        entrantId: "H",
+        slots: [
+          { personId: "h1", slot: "starting", orderNo: 1, positionKey: "GK", squadNumber: 1, roles: ["captain"] },
+          ...[2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map((n) => ({ personId: `h${n}`, slot: "starting" as const, orderNo: n })),
+          { personId: "h12", slot: "bench" as const, orderNo: 12, squadNumber: 20 },
+        ],
+      },
+      away: { entrantId: "A", slots: eleven("a") },
+    };
+    const engineCfgValue = footballModule!.configSchema.parse({ maxSubs: 3, subWindows: 3 });
+    const folded = foldClient(footballModule as never, engineCfgValue, lineups, kickoff) as Record<string, unknown>;
+    const foldedV: PadHostView = {
+      cfg: engineCfgValue,
+      state: folded,
+      summary: {},
+      phase: "live",
+      band: 3,
+      entitlements: {},
+      personNames: {},
+      squads: squadStateOf(folded, lineups),
+      events: kickoff,
+      contextOverrides: {},
+    };
+    const home = buildSwap(foldedV, t)[0]!;
+    expect(home.candidateMeta?.h1?.lead).toBe("GK");
+    expect(home.candidateMeta?.h1?.tag).toBe("pad.football.swap.captainTag");
+    expect(home.candidateMeta?.h2?.tag).toBeUndefined();
   });
 });
 
