@@ -7020,3 +7020,71 @@ and found none. It could not have found any of these three: two were only
 observable by running a browser, and the third by running the clock forward ten
 minutes. **A review reads code; only CI runs it.** Dispatching e2e against the
 PR was the single highest-value action taken on this branch.
+
+---
+
+## R8 — sweep and close (IN FLIGHT, 2026-09-01/02)
+
+Branch `feat/scorepad-v3-r8-sweep`, worktree `.claude/worktrees/r8-sweep`.
+Plan: `docs/superpowers/plans/2026-09-01-scorepad-v3-r8-sweep.md` (committed).
+Session ledger lives in `.superpowers/` which is **gitignored** — this section is
+the durable record. Rebased three times onto main; last base `11343aa3f` (#699).
+
+### Landed and reviewed (each: implementer -> reviewer -> fix round where needed)
+
+| WS | What shipped |
+|---|---|
+| A | Legacy pad lane deleted — `LEGACY_SPORTS`, `CONVERTED_SPORTS`, the `"legacy"` arm and `skins/` all gone; `resolvePad` returns `SkinDefV3` directly; `createSkinDispatch` re-homed to `v3/skin-dispatch.ts` |
+| B | **Required-attribution flag** — `PadAttributionItem.required` DERIVED from each action's own zod schema (never hand-typed), stamped across all 8 padSpec builders, honoured in `checkActionValidity`, surfaced as owner-picked "disabled-until-complete" in `action-form.tsx` |
+| D / L | Swap candidates distinguishable — `candidateMeta` populated for football and for hockey/icehockey |
+| SQ | **`squadNumber` plumbed DB->pad** (inert seam closed), incl. a DB-hop test at the real producer |
+| PREC | **Number-leads badge** (owner ruling) — six ice-hockey skaters over three position groups now give six DISTINCT badges |
+| F | `validateLineup` warnings on the lineup PUT route (discharges R7-15), proven through `v1()` to the HTTP body |
+| E | Dead-`pad.*`-key detector + **5 dead keys removed**; guard isolated in a tmpdir fixture |
+| G | Smoke drives free vs pro band gating + cricket BOTH lanes; band mutation reds exactly 1 check |
+| H | axe + 44px across **all 11 skins**, parametrised, with a two-way totality pin; 7 mutants all dead |
+| I | 7-width matrix extended to icehockey/hockey/carrom/boardgame (28 new cases, run vs prod build) |
+| J | The **7 missing per-sport help pages**, registered, with a both-directions registry gate |
+| DOC | `cricket.md`'s stale undo duration removed + a gate that reds on any duration near undo/hold copy; `hockey.md` narrowed to FIH, ending the ice-hockey overlap |
+
+### Owner rulings made this wave
+
+1. **Attribution marker = "disabled-until-complete"** — required rows get an asterisk + microcopy; Confirm greyed with a one-line reason until satisfied.
+2. **Swap badge leads with the SHIRT NUMBER**, falling back to position (`lead = squadNumber ?? positionKey`). Numbers are unique per side and are what a scorer reads off the jersey; position-led badges left three forwards identical.
+3. **Mode indicator = a read-only CONTEXT-STRIP SLOT**, chassis-wide — the pattern badminton/tabletennis/volleyball already ship. NOT the `RecordingChip`, which expresses the fidelity BAND (a plan/entitlement concept) and is fully occupied. Band and mode are different concepts wearing similar words.
+4. **Cricket shot-type chip = DEFERRED with a named owner.** `CricketBall` is a `z.strictObject`, so the field is recorded surface (golden + conformance) — and **nothing reads shot type today**, so it would land as a seventh inert seam in the wave whose job is closing them. It ships with its consumer.
+5. **#675 = AMENDABLE** — tapping the existing "Partial" badge reopens that event's dock; the detail APPENDS as a follow-up event so the ledger stays append-only. Void-and-rescore was rejected: voiding a correct event to fix one missing name risks losing it under time pressure.
+6. **#676 = closed as mis-diagnosed** (see FP-R8-5), fixing only the re-flow by reserving the slot width.
+7. **Deferred OUT of R8, needs a named owner:** the doubles `pairOrder` fold fork, and the `match_states` snapshot drift attached to it.
+
+### False premises found (the brief is a hypothesis — 5 this wave, one self-inflicted)
+
+- **FP-R8-1.** The brief's headline dead-end examples `cricket.toss.wonBy` / `cricket.review.by` route through **GuidedSheet**, whose choice steps cannot be skipped — they NEVER dead-ended. The real reachable class is action-form actions; proven on `football.shot`.
+- **FP-R8-2.** "Delete `skins/cricket-skin.tsx`" — already gone in R7. "Finish `fidelity.md`" — it already reads the converged tier model. "Swap sheet shows six identical rows" — R7's `CandidateMeta` had already fixed volleyball.
+- **FP-R8-3.** `verifyStateConsistency` does **not** run in cron/CI — it has no production caller at all (only two tests, which build fresh fixtures and so can never witness the drift it was feared to raise).
+- **FP-R8-4.** The `pairOrder` deferral was first recorded with an inflated basis ("flips `state.squads` for 7 of 8 sports at init"). FALSE: `declaresSquadDetail` also keys on `role`, which `buildLineup` ALREADY maps, so that flip is a live path today. The deferral stands on one narrower fact: mapping `pairOrder` activates `serverFromPairOrder` on the authoritative fold for tabletennis/volleyball.
+- **FP-R8-5. #676's stated cause was untrue when it was filed, and its proposed fix had already shipped.** `pipeline.events` IS `[...ledgerEvents, ...pendingEnvelopes.values()]` (`use-pad-pipeline.ts:1673`) — the same list `foldedState` folds (`:1038`), so optimistic state and the confirmed ledger cannot disagree by a held tap. Wiring dates to 2026-08-13/17; the note filing #676 dates to 2026-08-30. It survived because the walkthrough that should have caught it polls at 20s against a 3s CI `HOLD_MS` and could never witness a transient blank.
+
+### Defects found INCIDENTALLY (not in the brief)
+
+- **Doubles `pairOrder` fold fork** — `buildLineup` never maps `pairOrder` though the column, the read path and the set-based kernel all carry it. Server state and the scorer's screen disagree for doubles TODAY. Deferred, needs a named owner.
+- **Serve strip never self-heals** after a `serverOverride` or fold throw — collapses 4->2 and stays collapsed. Unbounded, not transient. A DIFFERENT defect from #676; carry separately.
+- **Tests that froze a bug as their expected value, twice**: `registry.test.tsx`'s exhaustive `toEqual` froze the inert `squadNumber` seam; `scorepad-v3-swap-candidate-badges.spec.ts` asserted `Set(["G","D","F"])`, freezing the six-rows-collapse-to-three symptom as the contract.
+- **Tennis scorebug clips at 320px**, intermittently — root-caused to the test FIXTURE NAME (`-${projectTag()}`, a suffix the doubles test already documents as decoration and trims; R7-28 never applied it to singles) plus `.app-display` falling back from condensed Barlow to Geist until the webfont swaps. NOT the same defect as #699's `AvailabilityRoster` overflow. Still open.
+- **`scorepad/timeline.tsx` is orphaned** by the A demolition — only its own test imports it.
+- **`isPartialDockAnswer` is invisible on decided fixtures**; `cricket.player.line` ("Scorecard line") has no live route once a fixture is decided.
+
+### Register audit (`register-audit.md`, re-pinned at `4dde91fff`)
+
+19 rows: **17 verified CLOSED**, D-5 closed-with-residual, D-7 open under R9's name.
+Register acceptance MET. Two structural findings:
+- **The design-of-record §8 was never corrected** — untouched since R2 while this index accumulated corrections for D-2/3/8/9/11/13/16/17, so a session told to "argue from the design of record" gets **7 of 19 rows wrong**. Amend §8, or add an as-closed §8.2.
+- **D-5's event-copy gate is football-only by design** (`scoring-vocab.test.ts:397-412`), so R8's "verify it reds on a missing `pad.<sport>.ribbon` key" currently holds for 1 sport of 11.
+- Namespace collision: R4's findings D-20..D-24 share a numbering space with register rows D-1..D-19 — rename to R4-F1..F5.
+
+### Still owed before this wave can close
+
+- In flight: mode-indicator slot (M), amendable Partial (C), reserve-slot-width (K2).
+- Extend the event-copy gate to all 11 sports; delete `timeline.tsx`; amend design §8; give the deferred items real owner names; two one-line help follow-ups (`basics.md` label, `icehockey.md` back-reference); the wider stale-"6s" comment sweep.
+- **e2e run debt** — several specs are written but unrun, and `e2e.yml` triggers on push to `main` ONLY, so this branch gets no automatic signal. The gate must run them locally against a prod build.
+- WS-P: 12-capture gallery, the owner walkthrough (incl. the five never-verdicted cricket screens `06-overtile`, `07-oversheet`, `08-bowlerpicker`, `09-retiresheet`, `10-reviewblocked`, and GF-1/GF-7 which are only settleable by reading the running product), then PROGRAMME CLOSED.
