@@ -94,6 +94,11 @@ export default async function CompetitionPage({
         entrants: dd.entrants,
         next: dd.next ? { scheduledAt: dd.next.scheduled_at, home: dd.next.home, away: dd.next.away } : null,
         needsDrawStageName: dd.needs_draw_stage?.name ?? null, locale, displayTz: dd.display_tz,
+        // fix-round-c, Defect (c): `dd` only ever exists when `desk` does
+        // (it comes from `desk.divisions.get`), so this non-null assertion
+        // is safe the same way the masthead's own `desk!.org_tz` read
+        // (below) already is.
+        orgTz: desk!.org_tz,
       }),
       menu: (
         <CardMenu
@@ -362,7 +367,15 @@ export default async function CompetitionPage({
                 )}
               </div>
             ) : (
-              <DivisionLedger dict={dict} rows={ledgerRows} org={orgSlug} comp={compSlug} locale={locale} now={now} />
+              <DivisionLedger
+                dict={dict} rows={ledgerRows} org={orgSlug} comp={compSlug} locale={locale} now={now}
+                // fix-round-c, Defect (c): the desk-summary-failed path
+                // (`desk` null) has no `next` data on any row to render at
+                // all (every `r.desk` is null there too), so this fallback
+                // is never actually read — same reasoning as `now`'s own
+                // fallback a few lines up.
+                orgTz={desk?.org_tz ?? "UTC"}
+              />
             )}
           </section>
       </main>

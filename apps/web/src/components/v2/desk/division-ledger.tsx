@@ -30,7 +30,7 @@ const BAR: Record<DeskDivision["phase"], string> = {
   setting_up: "bg-purple-600", scheduled: "bg-purple-600", match_day: "bg-amber-600", finished: "bg-green-700",
 };
 
-function nextLine(dict: Dict, d: DeskDivision, locale: string, nowMs: number): string {
+function nextLine(dict: Dict, d: DeskDivision, locale: string, nowMs: number, orgTz: string): string {
   // V4 fix (review round 1): nothing left to schedule is not itself
   // information — the row already says "finished" / "N of N played". An
   // empty cell here (rather than "Nothing scheduled next" on every settled
@@ -53,7 +53,11 @@ function nextLine(dict: Dict, d: DeskDivision, locale: string, nowMs: number): s
   if (!at) return "";
   const ms = Date.parse(at);
   if (Number.isNaN(ms) || ms < nowMs) return "";
-  const when = whenLabel(at, locale, d.display_tz);
+  // fix-round-c, Defect (c): the DAY half comes from the org (governing)
+  // zone — the same zone the masthead's own "Next {when}" pill always used —
+  // so this cell can never name a different day than the pill above it; only
+  // the clock digits stay venue-local (`d.display_tz`).
+  const when = whenLabel(at, locale, orgTz, d.display_tz);
   return t(dict, "desk.ledger.next", { when, home, away }).replace("  ", " ");
 }
 
@@ -83,8 +87,14 @@ function redAction(dict: Dict, d: DeskDivision, org: string, comp: string, slug:
 }
 
 export function DivisionLedger({
-  dict, rows, org, comp, locale, now,
-}: { dict: Dict; rows: LedgerRow[]; org: string; comp: string; locale: string; now: string }) {
+  dict, rows, org, comp, locale, now, orgTz,
+}: {
+  dict: Dict; rows: LedgerRow[]; org: string; comp: string; locale: string; now: string;
+  /** fix-round-c, Defect (c) — the governing org clock, threaded down to
+   *  `nextLine`'s own `whenLabel` call so the desktop "Next: …" cell's date
+   *  half agrees with the masthead pill above it. */
+  orgTz: string;
+}) {
   // Fix round 2: nextLine() computed ONCE per row here, reused below — never
   // re-derived, and never called twice for the same row. `hasNext` decides
   // the WHOLE ledger's desktop grid template (not a per-row template, which
@@ -99,7 +109,7 @@ export function DivisionLedger({
   // "is this kick-off past?" check (below) agrees with whatever instant
   // the rest of the render used.
   const nowMs = Date.parse(now);
-  const nextByRow = rows.map((r) => (r.desk ? nextLine(dict, r.desk, locale, nowMs) : ""));
+  const nextByRow = rows.map((r) => (r.desk ? nextLine(dict, r.desk, locale, nowMs, orgTz) : ""));
   const hasNext = nextByRow.some((n) => n !== "");
   const desktopGridCols = hasNext
     ? "md:grid-cols-[36px_1fr_140px_130px_minmax(0,1.4fr)_auto]"

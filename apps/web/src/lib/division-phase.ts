@@ -87,6 +87,11 @@ export function localDateKey(iso: string, tz: string): string {
 }
 
 const LIVE = new Set(["scheduled", "in_play"]);
+/** card-stats.ts's own PLAYED set ("a result exists"), mirrored here so a
+ *  purely-derived phase check agrees with what the desk's own played/total
+ *  count shows — never abandoned/forfeited/cancelled, which are terminal but
+ *  not a played result. */
+const PLAYED_STATUSES = new Set(["decided", "finalized"]);
 
 function lowestOpenStage(stages: PhaseStage[]): PhaseStage | null {
   return (
@@ -146,16 +151,30 @@ export function resolvePhase(input: PhaseInput): DivisionPhase {
   if (matchDay) return "match_day";
   // 4. setting_up: the next stage has nothing to play yet
   if (openStageOwesWork) return "setting_up";
-  // 5. scheduled — ONLY when a live (non-terminal, i.e. status "scheduled";
-  // "in_play" always won rule 3 above) fixture actually carries a time.
+  // 5. scheduled — a live (non-terminal, i.e. status "scheduled"; "in_play"
+  // always won rule 3 above) fixture actually carries a time.
   // F1 fix (final review, Critical): the old rule 5 was a bare "otherwise",
   // so a started division whose fixtures were all generated with no time
   // read "Scheduled" while its own status line said "nothing scheduled" —
-  // three contradicting facts in one row. With no dated fixture the
-  // division is still setting_up, which already carries the `unscheduled`
-  // attention that says so in words.
+  // three contradicting facts in one row.
   const hasScheduledFixture = fixtures.some((f) => f.status === "scheduled" && f.scheduledAt !== null);
-  return hasScheduledFixture ? "scheduled" : "setting_up";
+  if (hasScheduledFixture) return "scheduled";
+  // fix-round-c, Defect 2 / owner ruling 2026-09-02: F1's fallback (nothing
+  // dated ⇒ "setting_up") over-applied. `setting_up` may only mean "nothing
+  // has happened yet" — a mid-season division that has already played
+  // fixtures but has not yet dated its NEXT round (a league dated a round at
+  // a time, the normal way one runs) is IN PROGRESS, not "setting up", even
+  // though nothing is currently dated. Reproduced live: a division 1 of 6
+  // played, 5 unscheduled, read "Setting up" beside a part-filled progress
+  // bar. `played` is derived from the SAME fixtures list the desk's own
+  // played/total count comes from (card-stats.ts's PLAYED_STATUSES mirrored
+  // above), so this never drifts from the number the row already shows.
+  //
+  // F1's own original case is unaffected: 0 played AND nothing dated still
+  // has `anyPlayed` false, so it falls through to `setting_up` exactly as
+  // before — the `unscheduled` attention already says so in words.
+  const anyPlayed = fixtures.some((f) => PLAYED_STATUSES.has(f.status));
+  return anyPlayed ? "scheduled" : "setting_up";
 }
 
 export function resolveAttention(input: PhaseInput): Attention[] {

@@ -220,7 +220,7 @@ describe("DivisionLedger", () => {
   it("row carries the sport glyph, the status line, the phase and no monogram letter", () => {
     const d = div({ phase: "finished", played: 15, total: 15 });
     const html = renderToStaticMarkup(
-      <DivisionLedger dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z"
+      <DivisionLedger dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z" orgTz="Europe/London"
         rows={[{ id: "d1", name: "Premier Division", slug: "premier-division", sportKey: "football", logoUrl: null, desk: d, statusLine: "15 of 15 played · complete" }]} />,
     );
     expect(html).toContain('data-testid="desk-ledger-row"');
@@ -265,11 +265,11 @@ describe("DivisionLedger", () => {
     const attention = resolveAttention(phaseInput);
     const line = statusLine(en, {
       phase, played: 0, total: 6, unscheduled: 6, inPlay: 0, entrants: 4,
-      next: null, needsDrawStageName: null, locale: "en", displayTz: "Europe/London",
+      next: null, needsDrawStageName: null, locale: "en", displayTz: "Europe/London", orgTz: "Europe/London",
     });
     const d = div({ phase, played: 0, total: 6, unscheduled: 6, next: null, attention });
     const html = renderToStaticMarkup(
-      <DivisionLedger dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z"
+      <DivisionLedger dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z" orgTz="Europe/London"
         rows={[{ id: "d1", name: "Premier", slug: "premier", sportKey: "football", logoUrl: null, desk: d, statusLine: line }]} />,
     );
     expect(phase).toBe("setting_up");
@@ -280,7 +280,7 @@ describe("DivisionLedger", () => {
   });
   it("renders a row without pill or next line when the desk summary is unavailable", () => {
     const html = renderToStaticMarkup(
-      <DivisionLedger dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z"
+      <DivisionLedger dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z" orgTz="Europe/London"
         rows={[{ id: "d1", name: "X", slug: "x", sportKey: "football", logoUrl: null, desk: null, statusLine: "10 of 15 played" }]} />,
     );
     expect(html).toContain('data-testid="desk-ledger-row"');
@@ -290,7 +290,7 @@ describe("DivisionLedger", () => {
   });
   it("uses the uploaded logo instead of the glyph when present", () => {
     const html = renderToStaticMarkup(
-      <DivisionLedger dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z"
+      <DivisionLedger dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z" orgTz="Europe/London"
         rows={[{ id: "d1", name: "X", slug: "x", sportKey: "football", logoUrl: "https://cdn/x.png", desk: div(), statusLine: "s" }]} />,
     );
     expect(html).toContain('src="https://cdn/x.png"');
@@ -302,7 +302,7 @@ describe("DivisionLedger", () => {
       attention: [{ kind: "needs_draw", stageId: "fin", stageName: "Finals" }],
     });
     const html = renderToStaticMarkup(
-      <DivisionLedger dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z"
+      <DivisionLedger dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z" orgTz="Europe/London"
         rows={[{
           id: "d1", name: "U16 Cup", slug: "u16-cup", sportKey: "football", logoUrl: null, desk: d,
           statusLine: "28 of 28 played · Finals not drawn",
@@ -324,7 +324,7 @@ describe("DivisionLedger", () => {
   it("mobile action button: absent without a red attention, 'Compute proposal' with needs_draw", () => {
     const noAttention = div({ phase: "scheduled", attention: [] });
     const htmlNone = renderToStaticMarkup(
-      <DivisionLedger dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z"
+      <DivisionLedger dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z" orgTz="Europe/London"
         rows={[{ id: "d1", name: "Premier Division", slug: "premier-division", sportKey: "football", logoUrl: null, desk: noAttention, statusLine: "s" }]} />,
     );
     expect(htmlNone).not.toContain("Compute proposal");
@@ -332,7 +332,7 @@ describe("DivisionLedger", () => {
 
     const needsDraw = div({ phase: "setting_up", attention: [{ kind: "needs_draw", stageId: "fin", stageName: "Finals" }] });
     const htmlAction = renderToStaticMarkup(
-      <DivisionLedger dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z"
+      <DivisionLedger dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z" orgTz="Europe/London"
         rows={[{ id: "d1", name: "U16 Cup", slug: "u16-cup", sportKey: "football", logoUrl: null, desk: needsDraw, statusLine: "s" }]} />,
     );
     expect(htmlAction).toContain("Compute proposal");
@@ -348,7 +348,7 @@ describe("DivisionLedger", () => {
       fixture_names: { f9: { home: "Riverside FC", away: "Summit CC", fixture_no: 9 } },
     });
     const htmlOne = renderToStaticMarkup(
-      <DivisionLedger dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z"
+      <DivisionLedger dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z" orgTz="Europe/London"
         rows={[{ id: "d1", name: "Premier Division", slug: "premier-division", sportKey: "football", logoUrl: null, desk: oneScorerless, statusLine: "s" }]} />,
     );
     expect(htmlOne).toContain("Assign scorer");
@@ -359,7 +359,7 @@ describe("DivisionLedger", () => {
       attention: [{ kind: "no_scorer", count: 2, fixtureIds: ["f9", "f10"], minutesSinceKickoff: 5 }],
     });
     const htmlMany = renderToStaticMarkup(
-      <DivisionLedger dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z"
+      <DivisionLedger dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z" orgTz="Europe/London"
         rows={[{ id: "d1", name: "Premier Division", slug: "premier-division", sportKey: "football", logoUrl: null, desk: manyScorerless, statusLine: "s" }]} />,
     );
     expect(htmlMany).toContain("Assign scorer");
@@ -369,7 +369,7 @@ describe("DivisionLedger", () => {
     const rowA = div({ phase: "finished", played: 15, total: 15, next: null });
     const rowB = div({ division_id: "d2", phase: "finished", played: 28, total: 28, next: null });
     const html = renderToStaticMarkup(
-      <DivisionLedger dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z"
+      <DivisionLedger dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z" orgTz="Europe/London"
         rows={[
           { id: "d1", name: "Premier Division", slug: "premier-division", sportKey: "football", logoUrl: null, desk: rowA, statusLine: "s1" },
           { id: "d2", name: "U16 Cup", slug: "u16-cup", sportKey: "football", logoUrl: null, desk: rowB, statusLine: "s2" },
@@ -390,7 +390,7 @@ describe("DivisionLedger", () => {
       // `now` pinned before the fixture's 2026-09-12 kick-off — F5's fix
       // hides a past-kickoff "next", so this test's own passage of time
       // must not silently start relying on the real wall clock.
-      <DivisionLedger dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z"
+      <DivisionLedger dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z" orgTz="Europe/London"
         rows={[
           { id: "d1", name: "Premier Division", slug: "premier-division", sportKey: "football", logoUrl: null, desk: withNext, statusLine: "s1" },
           { id: "d2", name: "U16 Cup", slug: "u16-cup", sportKey: "football", logoUrl: null, desk: withoutNext, statusLine: "s2" },
@@ -415,7 +415,7 @@ describe("DivisionLedger", () => {
       next: { home: "Riverside FC", away: "Harbour CC", court_label: null, scheduled_at: "2026-09-02T11:27:00Z", in_play: false },
     });
     const html = renderToStaticMarkup(
-      <DivisionLedger dict={en} org="org" comp="comp" locale="en" now="2026-09-02T12:00:00Z"
+      <DivisionLedger dict={en} org="org" comp="comp" locale="en" now="2026-09-02T12:00:00Z" orgTz="Europe/London"
         rows={[{ id: "d1", name: "Premier", slug: "premier", sportKey: "football", logoUrl: null, desk: past, statusLine: "s" }]} />,
     );
     expect(html).not.toContain("Riverside FC");
@@ -427,7 +427,7 @@ describe("DivisionLedger", () => {
       next: { home: "Riverside FC", away: "Harbour CC", court_label: null, scheduled_at: null, in_play: false },
     });
     const html = renderToStaticMarkup(
-      <DivisionLedger dict={en} org="org" comp="comp" locale="en" now="2026-09-02T12:00:00Z"
+      <DivisionLedger dict={en} org="org" comp="comp" locale="en" now="2026-09-02T12:00:00Z" orgTz="Europe/London"
         rows={[{ id: "d1", name: "Premier", slug: "premier", sportKey: "football", logoUrl: null, desk: undated, statusLine: "s" }]} />,
     );
     expect(html).not.toContain("Riverside FC");
@@ -438,7 +438,7 @@ describe("DivisionLedger", () => {
       next: { home: "Riverside FC", away: "Harbour CC", court_label: null, scheduled_at: "2026-09-02T12:30:00Z", in_play: false },
     });
     const html = renderToStaticMarkup(
-      <DivisionLedger dict={en} org="org" comp="comp" locale="en" now="2026-09-02T12:00:00Z"
+      <DivisionLedger dict={en} org="org" comp="comp" locale="en" now="2026-09-02T12:00:00Z" orgTz="Europe/London"
         rows={[{ id: "d1", name: "Premier", slug: "premier", sportKey: "football", logoUrl: null, desk: future, statusLine: "s" }]} />,
     );
     expect(html).toContain("Riverside FC");
@@ -449,7 +449,7 @@ describe("DivisionLedger", () => {
       next: { home: "Riverside FC", away: "Harbour CC", court_label: null, scheduled_at: null, in_play: true },
     });
     const html = renderToStaticMarkup(
-      <DivisionLedger dict={en} org="org" comp="comp" locale="en" now="2026-09-02T12:00:00Z"
+      <DivisionLedger dict={en} org="org" comp="comp" locale="en" now="2026-09-02T12:00:00Z" orgTz="Europe/London"
         rows={[{ id: "d1", name: "Premier", slug: "premier", sportKey: "football", logoUrl: null, desk: live, statusLine: "s" }]} />,
     );
     expect(html).toContain("Now: Riverside FC v Harbour CC");

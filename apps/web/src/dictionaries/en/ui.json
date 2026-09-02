@@ -566,7 +566,6 @@
   "desk.status.settingUp.other": "Setting up · {count} entrants",
   "desk.status.matchDay": "{played} of {total} played · {inPlay} in play",
   "desk.status.scheduled": "Next {when} · {played} of {total} played",
-  "desk.status.noNext": "{played} of {total} played · nothing scheduled",
   "desk.status.unscheduledSuffix": " · {n} unscheduled",
   "desk.needsYou.title": "Needs you",
   "desk.needsYou.needs_draw": "{division} · no draw yet for {stage}",

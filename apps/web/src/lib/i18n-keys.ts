@@ -1443,7 +1443,6 @@ export type DictionaryKey =
   | "desk.status.finished"
   | "desk.status.matchDay"
   | "desk.status.needsDraw"
-  | "desk.status.noNext"
   | "desk.status.scheduled"
   | "desk.status.settingUp.one"
   | "desk.status.settingUp.other"

@@ -566,7 +566,6 @@
   "desk.status.settingUp.other": "En préparation · {count} participants",
   "desk.status.matchDay": "{played} sur {total} joués · {inPlay} en cours",
   "desk.status.scheduled": "Prochain {when} · {played} sur {total} joués",
-  "desk.status.noNext": "{played} sur {total} joués · rien de planifié",
   "desk.status.unscheduledSuffix": " · {n} non planifiés",
   "desk.needsYou.title": "À traiter",
   "desk.needsYou.needs_draw": "{division} · pas encore de tirage pour {stage}",

@@ -164,6 +164,34 @@ describe.skipIf(!HAS_DB)("getCompetitionDesk", () => {
     expect(d.attention).toContainEqual({ kind: "unscheduled", count: 5 });
   });
 
+  // fix-round-c, Defect 2 (owner ruling 2026-09-02): F1's fallback
+  // over-applied — a mid-season division that has already played a fixture
+  // but not yet dated its next round read "setting_up" beside a part-filled
+  // progress bar. Proven end to end through the real `getCompetitionDesk`
+  // assembly (not just the pure resolver's own unit coverage), the same way
+  // the F1 fix above is. Reproduced live before this fix: 1 of 6 played, 5
+  // unscheduled, "Setting up".
+  it("fix-round-c Defect 2: a played fixture with nothing else dated reads 'scheduled', never 'setting_up'", async () => {
+    const { auth } = await seedOrg();
+    const { competitionId, divisionId } = await seedDivision(auth, 4);
+    const [stage] = await createStages(auth, divisionId, {
+      seq: 1,
+      kind: "league",
+      name: "League",
+      config: {},
+      progression: null,
+    });
+    await generateStageFixtures(auth, stage!.id);
+    await sql`update divisions set status = 'active' where id = ${divisionId}`;
+    const [f] = await sql<{ id: string }[]>`select id from fixtures where division_id = ${divisionId} order by fixture_no limit 1`;
+    await sql`update fixtures set status = 'decided' where id = ${f!.id}`;
+    const desk = await getCompetitionDesk(auth, competitionId);
+    const d = desk.divisions.get(divisionId)!;
+    expect(d.phase).toBe("scheduled");
+    expect(d.played).toBe(1);
+    expect(d.attention).toContainEqual({ kind: "unscheduled", count: 5 });
+  });
+
   it("regression #1: an all-decided league is finished, never 'nothing scheduled'", async () => {
     const { auth } = await seedOrg();
     const { competitionId, divisionId } = await seedDivision(auth, 4);
