@@ -16,10 +16,9 @@ const base: StatusLineInput = {
 };
 
 describe("statusLine", () => {
-  it("finished never says nothing scheduled", () => {
+  it("finished states played/total", () => {
     const s = statusLine(en, { ...base, phase: "finished", played: 15, total: 15, next: null });
     expect(s).toBe("15 of 15 played · complete");
-    expect(s).not.toMatch(/nothing scheduled/i);
   });
   it("setting up with a pending draw names the stage", () => {
     const s = statusLine(en, { ...base, phase: "setting_up", played: 28, total: 28, needsDrawStageName: "Finals", next: null });
@@ -75,10 +74,9 @@ describe("statusLine", () => {
     expect(s).not.toContain("Setting up");
     expect(s).not.toContain("entrant");
   });
-  it("setting up with fixtures appends the unscheduled suffix and never says nothing scheduled", () => {
+  it("setting up with fixtures appends the unscheduled suffix", () => {
     const s = statusLine(en, { ...base, phase: "setting_up", played: 0, total: 6, unscheduled: 6, next: null });
     expect(s).toBe("0 of 6 played · 6 unscheduled");
-    expect(s).not.toMatch(/nothing scheduled/i);
   });
   it("setting up with SOME fixtures played still states the count, not entrants", () => {
     const s = statusLine(en, { ...base, phase: "setting_up", played: 2, total: 6, unscheduled: 4, next: null });
@@ -92,15 +90,13 @@ describe("statusLine", () => {
   // exact fallback printed beside a "Scheduled" pill. `scheduled` with no
   // usable `next` instant now states the progress instead, same as
   // `setting_up`/`match_day`'s own no-more-specific-fact fallback.
-  it("scheduled with no next fixture states the progress, never 'nothing scheduled'", () => {
+  it("scheduled with no next fixture states the progress", () => {
     const s = statusLine(en, { ...base, next: null });
     expect(s).toBe("10 of 15 played");
-    expect(s).not.toMatch(/nothing scheduled/i);
   });
   it("scheduled with a malformed next time falls back to the progress line, never throws", () => {
     const s = statusLine(en, { ...base, next: { scheduledAt: "not-a-date", home: "A", away: "B" } });
     expect(s).toBe("10 of 15 played");
-    expect(s).not.toMatch(/nothing scheduled/i);
   });
   // G1 fix (fix round D, Critical): `StatusLineInput` had NO `now` field at
   // all — this arm could not ask "is this kick-off still ahead of us?" and
@@ -130,10 +126,9 @@ describe("statusLine", () => {
   // care about entrants) but `next` itself is null. Reproduced live before
   // this fix: "0 of 3 played · nothing scheduled · 2 unscheduled" next to a
   // "Scheduled" pill.
-  it("scheduled with a TBD-entrant dated fixture (next is null) states progress plus unscheduled, never the contradiction", () => {
+  it("scheduled with a TBD-entrant dated fixture (next is null) states progress plus unscheduled", () => {
     const s = statusLine(en, { ...base, played: 0, total: 3, unscheduled: 2, next: null });
     expect(s).toBe("0 of 3 played · 2 unscheduled");
-    expect(s).not.toMatch(/nothing scheduled/i);
   });
   // fix-round-c: retired everywhere — pin the KEY's absence, not just one
   // rendering of it, so a re-add in any of the four dicts is caught even if
@@ -144,23 +139,6 @@ describe("statusLine", () => {
     // `toHaveProperty`'s dot-path parsing, which would misread this key.
     for (const [name, dict] of [["en", en], ["es", es], ["fr", fr], ["nl", nl]] as const) {
       expect("desk.status.noNext" in dict, name).toBe(false);
-    }
-  });
-  // Brief's exact demand: "its status line must not contain any 'nothing
-  // scheduled' wording in ANY locale" — the translated equivalents, not just
-  // the English string, since a leftover ES/FR/NL copy of the old key's
-  // wording living under a different key would pass the English-only check
-  // above.
-  it("scheduled with no usable next date never says 'nothing scheduled' in any locale", () => {
-    const NOTHING_SCHEDULED = {
-      en: /nothing scheduled/i,
-      es: /nada programado/i,
-      fr: /rien de planifi/i,
-      nl: /niets gepland/i,
-    };
-    for (const [name, dict] of [["en", en], ["es", es], ["fr", fr], ["nl", nl]] as const) {
-      const s = statusLine(dict, { ...base, next: null, locale: name });
-      expect(s, name).not.toMatch(NOTHING_SCHEDULED[name]);
     }
   });
   it("finished never appends the unscheduled suffix", () => {

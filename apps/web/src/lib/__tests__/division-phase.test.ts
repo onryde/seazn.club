@@ -102,6 +102,26 @@ describe("resolvePhase — rule order", () => {
     expect(resolvePhase(input({ fixtures: [fx({ scheduledAt: "2026-09-04T23:30:00Z" })] }))).toBe("match_day");
     expect(resolvePhase(input({ tz: "UTC", fixtures: [fx({ scheduledAt: "2026-09-04T23:30:00Z" })] }))).toBe("scheduled");
   });
+  // H1 fix (final review round 3, Critical — corrected ruling): `resolvePhase`
+  // itself has no opinion about org vs venue — it just buckets by whatever
+  // `tz` it is given. The bug was the CALLER (competition-desk.ts) passing
+  // the bare org zone instead of `resolveVenueTz(divisionTz, orgTz)`; this
+  // pins WHY that choice matters, with a same-instant-different-days case a
+  // single-zone test cannot witness (a same-zone case is vacuously
+  // consistent — see the class-of-bug note in AGENTS.md). NOW and the
+  // fixture's `scheduledAt` are two DIFFERENT instants (2026-09-02T20:00Z
+  // and 2026-09-02T23:30Z) chosen so the venue zone (Kolkata, UTC+5:30)
+  // reads both as the SAME calendar day (Sep 3) while the org zone (London,
+  // BST, UTC+1) reads them as DIFFERENT days (Sep 2 vs Sep 3) — live,
+  // exactly this shape hid match day for a division whose venue was ahead
+  // of its org.
+  it("3 match_day: one zone per fixture — the SAME instant reads match_day in the venue zone and NOT in the org zone", () => {
+    const now = "2026-09-02T20:00:00Z";
+    const scheduledAt = "2026-09-02T23:30:00Z";
+    const fixtures = [fx({ scheduledAt })];
+    expect(resolvePhase(input({ now, tz: "Asia/Kolkata", fixtures }))).toBe("match_day");
+    expect(resolvePhase(input({ now, tz: "Europe/London", fixtures }))).toBe("scheduled");
+  });
   it("4 setting_up: lowest non-complete stage has no fixtures", () => {
     expect(resolvePhase(input({ stages: [stage({ hasFixtures: false })], fixtures: [] }))).toBe("setting_up");
   });
@@ -256,31 +276,51 @@ describe("resolveAttention", () => {
     expect(kinds).toEqual(["needs_draw", "unscheduled", "registrations_waiting"]);
   });
 
-  // G3 fix (fix round D, Important): resolveAttention used to never read
-  // `divisionStatus` at all — a never-started division whose fixtures were
-  // dated in the past (organiser published a schedule, or just dated
-  // fixtures, and never pressed Start) raised `result_missing` anyway. Live
-  // repro: "Unstarted · result missing for Alpha FC v Delta FC" directly
-  // above the SAME division's own "Setting up" row.
-  describe("G3: no_scorer/result_missing respect the division's own status", () => {
+  // G3 fix (fix round D, Important), CORRECTED by H2 (final review round 3,
+  // Important): resolveAttention used to never read `divisionStatus` at all
+  // — a never-started division whose fixtures were dated in the past raised
+  // `result_missing` anyway. Live repro: "Unstarted · result missing for
+  // Alpha FC v Delta FC" directly above the SAME division's own "Setting
+  // up" row. G3's fix gated on `divisionStatus === "active"`, which ALSO
+  // excluded `scheduled` — but `scheduled` is exactly what the ordinary
+  // Publish action sets (schedule.ts's `publishSchedule`), not a "not yet
+  // real" state. Live: six fixtures dated YESTERDAY on a published,
+  // never-started division produced NO "Needs you" section at all — an
+  // organiser who published a timetable and never pressed Start got no
+  // prompt of any kind. RULING (H2): the gate excludes `setup` only —
+  // `setup`, `scheduled`, `active`, `completed` are the full
+  // divisions_status_check set, and every one but `setup` genuinely owes a
+  // result once its match window has passed.
+  describe("G3/H2: no_scorer/result_missing respect the division's own status", () => {
     it("result_missing does NOT fire for a division that has never started (status 'setup'), even with the match window long passed", () => {
       const fixtures = [fx({ id: "r", scheduledAt: "2026-09-01T07:00:00Z", matchMinutes: 90 })];
       const out = resolveAttention(input({ divisionStatus: "setup", fixtures }));
       expect(out.some((a) => a.kind === "result_missing")).toBe(false);
     });
-    it("result_missing does NOT fire for a division that is only 'scheduled' (published, not started)", () => {
+    // H2 fix: this used to assert `false` here — G3's gate wrongly excluded
+    // a published-but-unstarted timetable, the desk's headline silence bug.
+    it("H2: result_missing DOES fire for a division that is only 'scheduled' (published, not started)", () => {
       const fixtures = [fx({ id: "r", scheduledAt: "2026-09-01T07:00:00Z", matchMinutes: 90 })];
       const out = resolveAttention(input({ divisionStatus: "scheduled", fixtures }));
-      expect(out.some((a) => a.kind === "result_missing")).toBe(false);
+      expect(out).toContainEqual({ kind: "result_missing", count: 1, fixtureIds: ["r"] });
     });
-    it("result_missing DOES fire once the division is 'active' — the mutant this class of test exists to kill", () => {
+    it("result_missing DOES fire once the division is 'active'", () => {
       const fixtures = [fx({ id: "r", scheduledAt: "2026-09-01T07:00:00Z", matchMinutes: 90 })];
       const out = resolveAttention(input({ divisionStatus: "active", fixtures }));
       expect(out).toContainEqual({ kind: "result_missing", count: 1, fixtureIds: ["r"] });
     });
-    it("no_scorer does NOT fire for an in_play fixture on a not-yet-active division (defensive — scoring itself is locked pre-start)", () => {
+    // H2 fix: `completed` is also not `setup`, so it is included too — the
+    // gate is a single exclusion, never an allowlist of specific statuses
+    // (a reordering/allowlist mutant that special-cased "active" only would
+    // survive every test above but die here).
+    it("H2: result_missing DOES fire for a 'completed' division too — the gate excludes setup ONLY, not an allowlist of the other three", () => {
+      const fixtures = [fx({ id: "r", scheduledAt: "2026-09-01T07:00:00Z", matchMinutes: 90 })];
+      const out = resolveAttention(input({ divisionStatus: "completed", fixtures }));
+      expect(out).toContainEqual({ kind: "result_missing", count: 1, fixtureIds: ["r"] });
+    });
+    it("no_scorer does NOT fire for an in_play fixture on a division that has never started (status 'setup')", () => {
       const fixtures = [fx({ id: "p", status: "in_play", eventCount: 0, hasScorer: false })];
-      const out = resolveAttention(input({ divisionStatus: "scheduled", fixtures }));
+      const out = resolveAttention(input({ divisionStatus: "setup", fixtures }));
       expect(out.some((a) => a.kind === "no_scorer")).toBe(false);
     });
     it("needs_draw, unscheduled and registrations_waiting are NOT gated by divisionStatus — every one legitimately applies before Start", () => {

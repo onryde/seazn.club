@@ -22,6 +22,13 @@ import {
 import { listDivisionCardStats, type NextFixture } from "./card-stats";
 import { listDivisions } from "./divisions";
 
+/** The desk's own "next" fact (`resolveDivisionNext` below) is a SEPARATE
+ *  query from card-stats.ts's `NextFixture` — no `courts` join, so it can
+ *  never resolve a real `court_label` (final review round 3, minor fix: the
+ *  old code hardcoded `court_label: null` on the full `NextFixture` shape
+ *  instead of just not carrying the field). */
+export type DeskNextFixture = Omit<NextFixture, "court_label">;
+
 export interface DeskDivision {
   phase: DivisionPhase;
   attention: Attention[];
@@ -30,7 +37,15 @@ export interface DeskDivision {
   unscheduled: number;
   in_play: number;
   entrants: number;
-  next: NextFixture | null;
+  // Minor fix (final review round 3): was `NextFixture | null` — the full
+  // card-stats.ts shape, `court_label` included, even though this row's OWN
+  // `resolveDivisionNext` below (a separate query, no `courts` join) can
+  // never populate it and always hardcoded `null`. Dropping the field from
+  // the type here (rather than "populating" it with a join no desk consumer
+  // needs) means a future desk consumer that tries to read it fails to
+  // compile, instead of silently reading a value that is wrong the day a
+  // real court label exists and this type kept claiming there wasn't one.
+  next: DeskNextFixture | null;
   needs_draw_stage: { id: string; name: string } | null;
   /** For attention rows that name a fixture. */
   fixture_names: Record<string, { home: string | null; away: string | null; fixture_no: number }>;
@@ -120,10 +135,12 @@ type ScorerAssignmentRaw = { scope_type: "fixture" | "division"; scope_id: strin
  *  current shape). `round_no`/`seq_in_round` are not loaded into `rows`, so
  *  a same-instant tie breaks on `fixture_no` instead; the tie itself is not
  *  a case this row's copy depends on getting right. `court_label` is not
- *  resolved here (no `courts` join in this query) — always `null`, which is
- *  honest (no consumer within the desk reads it; card-stats.ts's own `next`
- *  stays the only source of a real court label, e.g. the card grid). */
-function resolveDivisionNext(rows: FixtureRaw[], nowIso: string): NextFixture | null {
+ *  resolved here at all (no `courts` join in this query, and no consumer
+ *  within the desk reads it — card-stats.ts's own `next` stays the only
+ *  source of a real court label, e.g. the card grid) — see `DeskNextFixture`
+ *  above; a hardcoded `court_label: null` used to sit here instead, which
+ *  reads as a real (empty) answer rather than "not resolved by this query". */
+function resolveDivisionNext(rows: FixtureRaw[], nowIso: string): DeskNextFixture | null {
   const nowMs = Date.parse(nowIso);
   const candidates = rows.filter(
     (f) => (f.status === "scheduled" || f.status === "in_play") && f.home !== null && f.away !== null,
@@ -143,7 +160,7 @@ function resolveDivisionNext(rows: FixtureRaw[], nowIso: string): NextFixture | 
     return aMs !== bMs ? aMs - bMs : a.fixture_no - b.fixture_no;
   });
   const picked = sorted[0]!;
-  return { home: picked.home, away: picked.away, court_label: null, scheduled_at: picked.scheduled_at, in_play: picked.status === "in_play" };
+  return { home: picked.home, away: picked.away, scheduled_at: picked.scheduled_at, in_play: picked.status === "in_play" };
 }
 
 export async function getCompetitionDesk(
@@ -230,6 +247,15 @@ export async function getCompetitionDesk(
     const s = stats.get(d.id);
     const st = settings.find((x) => x.division_id === d.id);
     const matchMinutes = st?.match_minutes ?? defaultMatchMinutes();
+    // H1 fix (final review round 3, Critical — corrected ruling): resolved
+    // ONCE per division and reused for BOTH the phase input's bucketing zone
+    // and the row's own display_tz below — the same value division-status-
+    // line.ts's `whenLabel` already prints in. `resolveVenueTz`'s own
+    // precedence (division tz -> org tz -> UTC) IS the "venue zone, org as
+    // fallback" rule H1 asks for; the bug was never in this function, it was
+    // in division-phase.ts's caller passing the bare org zone instead of
+    // this resolved value.
+    const displayTz = resolveVenueTz(st?.tz, orgTz);
     const phaseStages: PhaseStage[] = stages
       .filter((x) => x.division_id === d.id)
       .map((x) => ({
@@ -255,7 +281,7 @@ export async function getCompetitionDesk(
       stages: phaseStages,
       fixtures: phaseFixtures,
       now: nowIso,
-      tz: orgTz,
+      tz: displayTz,
       awaitingRegistrations: s?.awaiting_confirmation ?? 0,
     };
     const attention = resolveAttention(input);
@@ -276,7 +302,7 @@ export async function getCompetitionDesk(
       needs_draw_stage:
         needsDraw && needsDraw.kind === "needs_draw" ? { id: needsDraw.stageId, name: needsDraw.stageName } : null,
       fixture_names,
-      display_tz: resolveVenueTz(st?.tz, orgTz),
+      display_tz: displayTz,
     });
   }
   log.info(
@@ -308,7 +334,7 @@ export type CompetitionPillPhase =
  *  ledger.tsx's `nextLine`): non-null, parseable, not already kicked off.
  *  Duplicated rather than imported — the ledger's guard lives beside the
  *  React it renders into; this one feeds a plain date, not JSX. */
-function nextFutureAt(next: NextFixture | null, nowIso: string): string | null {
+function nextFutureAt(next: DeskNextFixture | null, nowIso: string): string | null {
   if (!next || next.in_play || !next.scheduled_at) return null;
   const ms = Date.parse(next.scheduled_at);
   return Number.isNaN(ms) || ms < Date.parse(nowIso) ? null : next.scheduled_at;

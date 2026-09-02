@@ -82,18 +82,18 @@ describe("competitionPhase", () => {
     const onMatchDay = div({ division_id: "d1", phase: "match_day" });
     const dated = div({
       division_id: "d2", phase: "scheduled",
-      next: { home: "A", away: "B", court_label: null, scheduled_at: "2026-09-06T09:00:00Z", in_play: false },
+      next: { home: "A", away: "B", scheduled_at: "2026-09-06T09:00:00Z", in_play: false },
     });
     expect(competitionPhase(deskOf([onMatchDay, dated]))).toEqual({ kind: "match_day" });
   });
   it("else: the EARLIEST next fixture date across divisions, not a ranked phase word", () => {
     const later = div({
       division_id: "d1", phase: "scheduled",
-      next: { home: "A", away: "B", court_label: null, scheduled_at: "2026-09-20T09:00:00Z", in_play: false },
+      next: { home: "A", away: "B", scheduled_at: "2026-09-20T09:00:00Z", in_play: false },
     });
     const earlier = div({
       division_id: "d2", phase: "scheduled", display_tz: "America/New_York",
-      next: { home: "C", away: "D", court_label: null, scheduled_at: "2026-09-12T09:00:00Z", in_play: false },
+      next: { home: "C", away: "D", scheduled_at: "2026-09-12T09:00:00Z", in_play: false },
     });
     // Division map insertion order deliberately does NOT match date order —
     // a naive "first division's next" implementation would return the wrong
@@ -110,11 +110,11 @@ describe("competitionPhase", () => {
   it("a past-kicked-off or TBD-time next fixture is not a ladder answer (mirrors the F5 guard)", () => {
     const past = div({
       division_id: "d1", phase: "scheduled",
-      next: { home: "A", away: "B", court_label: null, scheduled_at: "2026-09-01T09:00:00Z", in_play: false },
+      next: { home: "A", away: "B", scheduled_at: "2026-09-01T09:00:00Z", in_play: false },
     });
     const undated = div({
       division_id: "d2", phase: "setting_up",
-      next: { home: "C", away: "D", court_label: null, scheduled_at: null, in_play: false },
+      next: { home: "C", away: "D", scheduled_at: null, in_play: false },
     });
     const phase = competitionPhase(deskOf([past, undated], 0, "2026-09-05T09:00:00Z"));
     // What this test is FOR: neither a past kick-off nor a null time may be
@@ -257,15 +257,6 @@ describe("DivisionLedger", () => {
     // alone decides which copy shows; neither width is ever pill-less.
     expect(html.match(/data-pill="finished"/g)?.length).toBe(2);
     // V4 fix: no next fixture on a settled row prints nothing at all.
-    // Minor fix (fix round D): the old exact-string assertion here
-    // ("Nothing scheduled next") named a string that lives in NO dictionary
-    // and NO component — unreachable, so it could never fail. Re-anchored
-    // on the same case-insensitive `/nothing scheduled/i` regression guard
-    // its sibling tests already use (division-status-line.test.ts,
-    // e2e/competition-desk.spec.ts): it DOES catch a real, partially-live
-    // string (`card.next.none`, "Nothing scheduled yet") if that key were
-    // ever accidentally rendered on this page.
-    expect(html).not.toMatch(/nothing scheduled/i);
     // V5 fix: the ledger no longer renders its own "Divisions · N" heading
     // — the page's existing "Divisions" heading owns the count now.
     expect(html).not.toContain("Divisions · 1");
@@ -278,9 +269,9 @@ describe("DivisionLedger", () => {
   // produced it anyway. Vacuous twice over. This test drives the REAL
   // `resolvePhase` + `statusLine` functions over the exact live repro (a
   // started division, one active stage with 6 generated fixtures, none
-  // carrying a time) and checks the LIVE copy — lowercase, no "yet",
-  // "nothing scheduled" — never appears next to a played-progress count.
-  it("F1: a started division with generated-but-unscheduled fixtures never renders 'nothing scheduled' beside a played count", () => {
+  // carrying a time) and checks the LIVE copy renders the played/unscheduled
+  // counts a reader actually needs.
+  it("F1: a started division with generated-but-unscheduled fixtures renders setting_up with its played/unscheduled counts", () => {
     const phaseInput: PhaseInput = {
       divisionStatus: "active",
       stages: [{ id: "s1", name: "League", seq: 1, status: "active", hasFixtures: true, needsProposal: false }],
@@ -304,7 +295,6 @@ describe("DivisionLedger", () => {
     );
     expect(phase).toBe("setting_up");
     expect(html).toContain('data-phase="setting_up"');
-    expect(html).not.toMatch(/nothing scheduled/i);
     expect(html).toContain("0 of 6 played");
     expect(html).toContain("6 unscheduled");
   });
@@ -413,7 +403,7 @@ describe("DivisionLedger", () => {
   it("fix round 2: the desktop next column is present ledger-wide when ANY row has a next fixture, and every row emits its cell (even an empty one) so Open stays on the same axis", () => {
     const withNext = div({
       phase: "scheduled",
-      next: { home: "Riverside FC", away: "Summit CC", court_label: null, scheduled_at: "2026-09-12T09:00:00Z", in_play: false },
+      next: { home: "Riverside FC", away: "Summit CC", scheduled_at: "2026-09-12T09:00:00Z", in_play: false },
     });
     const withoutNext = div({ division_id: "d2", phase: "finished", next: null });
     const html = renderToStaticMarkup(
@@ -442,7 +432,7 @@ describe("DivisionLedger", () => {
   it("F5: a past kick-off never renders as Next", () => {
     const past = div({
       phase: "scheduled",
-      next: { home: "Riverside FC", away: "Harbour CC", court_label: null, scheduled_at: "2026-09-02T11:27:00Z", in_play: false },
+      next: { home: "Riverside FC", away: "Harbour CC", scheduled_at: "2026-09-02T11:27:00Z", in_play: false },
     });
     const html = renderToStaticMarkup(
       <DivisionLedger dict={en} org="org" comp="comp" locale="en" now="2026-09-02T12:00:00Z"
@@ -454,7 +444,7 @@ describe("DivisionLedger", () => {
   it("F5: a next fixture with no scheduled_at (TBD time) never renders as Next", () => {
     const undated = div({
       phase: "scheduled",
-      next: { home: "Riverside FC", away: "Harbour CC", court_label: null, scheduled_at: null, in_play: false },
+      next: { home: "Riverside FC", away: "Harbour CC", scheduled_at: null, in_play: false },
     });
     const html = renderToStaticMarkup(
       <DivisionLedger dict={en} org="org" comp="comp" locale="en" now="2026-09-02T12:00:00Z"
@@ -465,7 +455,7 @@ describe("DivisionLedger", () => {
   it("F5: a future, correctly-timed kick-off still renders as Next", () => {
     const future = div({
       phase: "scheduled",
-      next: { home: "Riverside FC", away: "Harbour CC", court_label: null, scheduled_at: "2026-09-02T12:30:00Z", in_play: false },
+      next: { home: "Riverside FC", away: "Harbour CC", scheduled_at: "2026-09-02T12:30:00Z", in_play: false },
     });
     const html = renderToStaticMarkup(
       <DivisionLedger dict={en} org="org" comp="comp" locale="en" now="2026-09-02T12:00:00Z"
@@ -476,7 +466,7 @@ describe("DivisionLedger", () => {
   it("F5: an in-play fixture always renders as Now, even with no scheduled_at", () => {
     const live = div({
       phase: "match_day",
-      next: { home: "Riverside FC", away: "Harbour CC", court_label: null, scheduled_at: null, in_play: true },
+      next: { home: "Riverside FC", away: "Harbour CC", scheduled_at: null, in_play: true },
     });
     const html = renderToStaticMarkup(
       <DivisionLedger dict={en} org="org" comp="comp" locale="en" now="2026-09-02T12:00:00Z"

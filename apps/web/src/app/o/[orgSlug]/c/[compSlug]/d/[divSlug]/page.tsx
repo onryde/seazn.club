@@ -175,8 +175,15 @@ export default async function DivisionPage({
       hasScorer: false,
     })),
     now: new Date().toISOString(),
-    // Exactly what StagesPanel's own `orgTz` prop already resolves below.
-    tz: resolveVenueTz(null, page.org.timezone),
+    // H1 fix (final review round 3, Critical — corrected ruling): this used
+    // to be the bare org zone (`resolveVenueTz(null, page.org.timezone)`) —
+    // the same bucket-vs-print split competition-desk.ts had, one level up.
+    // `scheduleSettings.tz` IS the resolved venue zone for THIS division
+    // (`ScheduleSettingsWire.tz` = `loadSettings`'s `displayTz`: the
+    // division's own schedule_settings.tz override, falling back to the
+    // org's timezone only when the division has none) — the same single
+    // value this page already passes to `StagesPanel`'s `tz` prop below.
+    tz: scheduleSettings.tz,
     awaitingRegistrations: 0,
   });
   // Review wave 3: the panel gets court IDENTITY and display only — same trim

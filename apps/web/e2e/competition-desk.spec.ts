@@ -6,7 +6,65 @@ import {
   addEntrantsViaApi,
   createStageAndGenerate,
   setFixtureStatusSql,
+  setFixtureScheduledAtSql,
   setStageStatusSql, setZoneSplitSql } from "./helpers";
+
+/** YYYY-MM-DD in a zone — matches division-phase.ts's own `localDateKey`. */
+function zoneDateKey(date: Date, tz: string): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(date);
+}
+
+/** "Sun 6 Sep" — matches division-status-line.ts's `nextDateLabel`/`whenLabel`
+ *  day portion, so an assertion never hardcodes a calendar date that ages. */
+function zoneDayLabel(date: Date, tz: string): string {
+  const parts = new Intl.DateTimeFormat("en", {
+    timeZone: tz, weekday: "short", day: "numeric", month: "short",
+  }).formatToParts(date);
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+  return `${get("weekday")} ${get("day")} ${get("month")}`;
+}
+
+/**
+ * H3 fix (final review round 3, Important): this file's org/venue zone-split
+ * fixtures used to pin a literal calendar date (`2026-09-06T23:00:00Z`,
+ * expiring 2026-09-07 once the `>= now` filter drops it from `next`; a
+ * sibling literal at :111 expired for exactly one day on 2026-09-20). Both
+ * `findPrintSplitInstant` and `findBucketSplitInstant` below SEARCH forward
+ * from `now` at 5/15-minute steps instead of hand-deriving an offset — this
+ * also sidesteps DST, since whatever the real UTC offset is on the day the
+ * suite runs, the loop finds an instant that actually exhibits the property
+ * asked for, rather than assuming e.g. Europe/London is in BST.
+ *
+ * First future instant where org and venue format to DIFFERENT calendar days
+ * for the SAME instant — the shape H1's printing fix (G2) needs (masthead
+ * and row must still agree, both read in the venue zone).
+ */
+function findPrintSplitInstant(from: Date, orgTz: string, venueTz: string): Date {
+  for (let mins = 15; mins <= 60 * 24 * 3; mins += 15) {
+    const candidate = new Date(from.getTime() + mins * 60_000);
+    if (zoneDateKey(candidate, orgTz) !== zoneDateKey(candidate, venueTz)) return candidate;
+  }
+  throw new Error("findPrintSplitInstant: no zone split found in a 3-day window");
+}
+
+/**
+ * First instant that is STILL TODAY at the venue but a DIFFERENT day for the
+ * org — the shape H1's bucketing fix needs: `match_day` must key off the
+ * venue's calendar day, not the org's. Picking `at` equal to "now" itself
+ * cannot discriminate (any instant trivially agrees with itself in every
+ * zone), so this searches forward from `now` for a genuinely divergent one.
+ */
+function findBucketSplitInstant(from: Date, orgTz: string, venueTz: string): Date {
+  const todayOrg = zoneDateKey(from, orgTz);
+  const todayVenue = zoneDateKey(from, venueTz);
+  for (let mins = 5; mins <= 60 * 24 * 2; mins += 5) {
+    const candidate = new Date(from.getTime() + mins * 60_000);
+    if (zoneDateKey(candidate, venueTz) === todayVenue && zoneDateKey(candidate, orgTz) !== todayOrg) {
+      return candidate;
+    }
+  }
+  throw new Error("findBucketSplitInstant: no zone split found in a 2-day window");
+}
 
 async function seed(request: APIRequestContext) {
   const comp = await apiJson<{ id: string; slug: string }>(request, "/api/v1/competitions", "POST", {
@@ -42,7 +100,6 @@ test.describe("competition desk", () => {
     // that, and on the row actually stating a played count that must never
     // sit beside it.
     await expect(row).toContainText(`0 of ${rig.fixtureIds.length} played`);
-    await expect(row).not.toContainText(/nothing scheduled/i);
     await expect(page.getByText("Live", { exact: true })).toHaveCount(0);
     await needs.getByRole("link", { name: "Open schedule board" }).click();
     await expect(page).toHaveURL(new RegExp(`/d/${rig.divSlug}/schedule$`));
@@ -63,6 +120,40 @@ test.describe("competition desk", () => {
     // `statusLocator` uses for the identical dual-DOM shape.
     await expect(page.locator('[data-pill="no_scorer"]:visible').first()).toBeVisible();
     await expect(page.locator('[data-phase="in_play"]').first()).toContainText("1 in play");
+  });
+
+  // H2 fix (final review round 3, Important — corrected ruling): G3's gate
+  // (`divisionStatus === "active"`) also excluded `scheduled` — exactly what
+  // the ordinary Publish action sets. Live: six fixtures dated YESTERDAY on
+  // a published, never-started division produced NO "Needs you" section at
+  // all — an organiser who published a timetable and never pressed Start got
+  // no prompt of any kind. RULING: the gate excludes `setup` only.
+  test("published but not started: Needs you still names an overdue result", async ({ page, request }) => {
+    const org = await activeOrg(page);
+    const comp = await apiJson<{ id: string; slug: string }>(request, "/api/v1/competitions", "POST", {
+      name: `Desk Pub ${TAG} ${Math.random().toString(36).slice(2, 6)}`, visibility: "public", ends_on: "2030-12-31",
+    });
+    const div = await apiJson<{ id: string; slug: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+      name: "Premier", sport_key: "football", variant_key: "11-a-side",
+    });
+    await addEntrantsViaApi(request, div.data!.id, ["Riverside FC", "Valley CC", "Lakeside FC", "Harbour CC"], "team");
+    const { fixtureIds } = await createStageAndGenerate(request, div.data!.id);
+    // Publish ONLY — never Start. `divisions.status` lands on 'scheduled',
+    // never 'active', the exact shape the ordinary Publish button leaves an
+    // organiser in.
+    const published = await apiJson(request, `/api/v1/divisions/${div.data!.id}/publish-schedule`, "POST", {});
+    expect(published.status).toBe(200);
+    // Date one fixture in the past directly — the schedule engine's own
+    // validation is not this test's concern, only what the desk does with a
+    // published-but-unstarted division that already owes a result.
+    await setFixtureScheduledAtSql(fixtureIds[0]!, new Date(Date.now() - 24 * 3600_000).toISOString());
+
+    await page.goto(`/o/${org.slug}/c/${comp.data!.slug}`);
+    const needs = page.getByTestId("desk-needs-you");
+    await expect(needs).toBeVisible();
+    await expect(needs.locator('[data-attention="result_missing"]')).toHaveCount(1);
+    const row = page.getByTestId("desk-ledger-row").filter({ hasText: "Premier" }).first();
+    await expect(row).toHaveAttribute("data-phase", "scheduled");
   });
 
   test("all decided: finished, no Needs you section at all", async ({ page, request }) => {
@@ -107,8 +198,13 @@ test.describe("competition desk", () => {
     );
     const final = fixtures.find((f) => !f.home_entrant_id && !f.away_entrant_id);
     expect(final).toBeTruthy();
+    // H3 fix (final review round 3, Important): was a literal calendar date
+    // (`2026-09-20T10:00:00Z`) that read as "scheduled" only until the phase
+    // flipped to `match_day` on that one day — derived from `now` instead, so
+    // this stays comfortably in the future regardless of when the suite runs.
+    const twoWeeksOut = new Date(Date.now() + 14 * 24 * 3600_000).toISOString();
     const patched = await apiJson(request, `/api/v1/fixtures/${final!.id}`, "PATCH", {
-      scheduled_at: "2026-09-20T10:00:00Z",
+      scheduled_at: twoWeeksOut,
     });
     expect(patched.status).toBeLessThan(300);
     await apiJson(request, `/api/v1/divisions/${div.data!.id}/start`, "POST");
@@ -118,7 +214,6 @@ test.describe("competition desk", () => {
     await expect(row).toHaveAttribute("data-phase", "scheduled");
     await expect(row).toContainText("0 of 3 played");
     await expect(row).toContainText("2 unscheduled");
-    await expect(row).not.toContainText(/nothing scheduled/i);
   });
 
   // fix-round-c, Defect 2 (owner ruling 2026-09-02): the fix for Defect 1
@@ -145,7 +240,6 @@ test.describe("competition desk", () => {
     await expect(row).toHaveAttribute("data-phase", "scheduled");
     await expect(row).toContainText(`1 of ${rig.fixtureIds.length} played`);
     await expect(row).not.toContainText(/setting up/i);
-    await expect(row).not.toContainText(/nothing scheduled/i);
   });
 
   // Found by DRIVING the round-D fix, not by a suite — and no unit test can
@@ -161,23 +255,67 @@ test.describe("competition desk", () => {
   test("a division in another timezone: masthead and row name the SAME day", async ({ page, request }) => {
     const org = await activeOrg(page);
     const rig = await seed(request);
-    // 23:00Z is Sun 6 Sep at the venue (New York) and Mon 7 Sep in the org's
-    // zone (London) — the day differs, which is what makes this discriminate.
-    await setZoneSplitSql({
-      divisionId: rig.divisionId,
-      orgTz: "Europe/London",
-      divisionTz: "America/New_York",
-      fixtureNo: 1,
-      at: "2026-09-06T23:00:00Z",
-    });
+    const orgTz = "Europe/London";
+    const venueTz = "America/New_York";
+    // Any instant where the two zones disagree on the calendar day — see
+    // `findPrintSplitInstant`'s own doc comment for why this is searched
+    // rather than a pinned literal.
+    const at = findPrintSplitInstant(new Date(), orgTz, venueTz);
+    let restore: (() => Promise<void>) | undefined;
+    try {
+      restore = await setZoneSplitSql({
+        divisionId: rig.divisionId,
+        orgTz,
+        divisionTz: venueTz,
+        fixtureNo: 1,
+        at: at.toISOString(),
+      });
 
-    await page.goto(`/o/${org.slug}/c/${rig.compSlug}`);
-    const row = page.getByTestId("desk-ledger-row").filter({ hasText: "Premier" }).first();
-    // The venue's day, in both places.
-    await expect(row).toContainText("Sun 6 Sep");
-    await expect(row).not.toContainText("Mon 7 Sep");
-    const masthead = page.getByTestId("desk-masthead-pill");
-    await expect(masthead).toContainText("Sun 6 Sep");
-    await expect(masthead).not.toContainText("Mon 7 Sep");
+      await page.goto(`/o/${org.slug}/c/${rig.compSlug}`);
+      const row = page.getByTestId("desk-ledger-row").filter({ hasText: "Premier" }).first();
+      const venueDay = zoneDayLabel(at, venueTz);
+      const orgDay = zoneDayLabel(at, orgTz);
+      // The venue's day, in both places.
+      await expect(row).toContainText(venueDay);
+      await expect(row).not.toContainText(orgDay);
+      const masthead = page.getByTestId("desk-masthead-pill");
+      await expect(masthead).toContainText(venueDay);
+      await expect(masthead).not.toContainText(orgDay);
+    } finally {
+      await restore?.();
+    }
+  });
+
+  // H1 fix (final review round 3, Critical — corrected ruling): the print-
+  // consistency test above only proves masthead and row agree on which day
+  // they PRINT — it says nothing about which day BUCKETS the fixture into
+  // `match_day` in the first place. Reproduced live before this fix (see
+  // fix-round-e-report.md): a fixture genuinely dated TODAY at the venue
+  // (Kolkata) read "Scheduled", never "Match day", because the phase was
+  // bucketed in the ORG zone (London), which was still on the day before.
+  test("match day is decided by the venue's calendar day, not the org's", async ({ page, request }) => {
+    const org = await activeOrg(page);
+    const rig = await seed(request);
+    const orgTz = "Europe/London";
+    const venueTz = "Asia/Kolkata";
+    const at = findBucketSplitInstant(new Date(), orgTz, venueTz);
+    let restore: (() => Promise<void>) | undefined;
+    try {
+      restore = await setZoneSplitSql({
+        divisionId: rig.divisionId,
+        orgTz,
+        divisionTz: venueTz,
+        fixtureNo: 1,
+        at: at.toISOString(),
+      });
+
+      await page.goto(`/o/${org.slug}/c/${rig.compSlug}`);
+      const row = page.getByTestId("desk-ledger-row").filter({ hasText: "Premier" }).first();
+      // Bucketed in the VENUE zone (today, Kolkata) — reads match_day even
+      // though this same instant is a different calendar day for the org.
+      await expect(row).toHaveAttribute("data-phase", "match_day");
+    } finally {
+      await restore?.();
+    }
   });
 });

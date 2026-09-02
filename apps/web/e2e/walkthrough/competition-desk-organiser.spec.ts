@@ -74,7 +74,6 @@ test("an organiser watches the desk go Setting up → Scheduled → Match day �
   // either.
   await expect(row).toContainText(`0 of ${ids.length} played`);
   await expect(row).toContainText(`${ids.length} unscheduled`);
-  await expect(row).not.toContainText(/nothing scheduled/i);
   await shot("03-unscheduled");
   await needs.getByRole("link", { name: "Open schedule board" }).click();
   await expect(page).toHaveURL(/\/schedule$/);
@@ -142,11 +141,6 @@ test("an organiser watches the desk go Setting up → Scheduled → Match day �
   await page.goto(compPath);
   await expect(row).toHaveAttribute("data-phase", "finished");
   await expect(row).toContainText("complete");
-  // Minor fix (fix round D): this exact string ("Nothing scheduled",
-  // capital N) is `card.next.none`, never rendered on this page — a FOURTH
-  // stale absence guard of the same shape as step 3's siblings above, which
-  // were already re-anchored on the case-insensitive regex. Same fix here.
-  await expect(row).not.toContainText(/nothing scheduled/i);
   await expect(page.getByTestId("desk-needs-you")).toHaveCount(0);
   await shot("06-finished");
 

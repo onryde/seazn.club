@@ -485,4 +485,63 @@ describe.skipIf(!HAS_DB)("getCompetitionDesk", () => {
     expect(d.phase).toBe("setting_up");
     expect(d.total).toBe(0);
   });
+
+  // H1 fix (final review round 3, Critical — corrected ruling): proves the
+  // CALLER's own choice of zone, not just the pure resolver's behaviour
+  // (division-phase.test.ts's unit coverage) — `getCompetitionDesk` used to
+  // pass the bare org zone to `resolvePhase`'s bucketing `tz`, even though
+  // `display_tz` (the value it ALREADY prints with) is the division's own
+  // resolved venue zone. Live: a division with venue Asia/Kolkata inside an
+  // org based in Europe/London read "Scheduled" on a fixture that was
+  // genuinely dated TODAY at the venue. NOW and the fixture's `scheduled_at`
+  // are two DIFFERENT instants (2026-09-02T20:00Z / 2026-09-02T23:30Z),
+  // chosen so Kolkata (UTC+5:30) reads both as the SAME calendar day while
+  // London (BST, UTC+1) reads them as DIFFERENT days — a same-zone case
+  // cannot witness this, see division-phase.test.ts's sibling unit test.
+  it("H1: match_day is bucketed in the division's own venue zone, not the org's", async () => {
+    const { auth } = await seedOrg();
+    const { competitionId, divisionId } = await seedDivision(auth, 4);
+    const [stage] = await createStages(auth, divisionId, {
+      seq: 1, kind: "league", name: "League", config: {}, progression: null,
+    });
+    await generateStageFixtures(auth, stage!.id);
+    await sql`update divisions set status = 'active' where id = ${divisionId}`;
+    const [{ org_id: orgId }] = await sql<{ org_id: string }[]>`
+      select org_id from competitions where id = ${competitionId}`;
+    await sql`update organizations set timezone = 'Europe/London' where id = ${orgId}`;
+    await sql`insert into schedule_settings (division_id, tz, config)
+               values (${divisionId}, 'Asia/Kolkata', '{}'::jsonb)`;
+    const [f] = await sql<{ id: string }[]>`select id from fixtures where division_id = ${divisionId} order by fixture_no limit 1`;
+    await sql`update fixtures set scheduled_at = '2026-09-02T23:30:00Z' where id = ${f!.id}`;
+    await sql`update fixtures set scheduled_at = null where division_id = ${divisionId} and id <> ${f!.id}`;
+    const desk = await getCompetitionDesk(auth, competitionId, new Date("2026-09-02T20:00:00Z"));
+    const d = desk.divisions.get(divisionId)!;
+    expect(d.display_tz).toBe("Asia/Kolkata");
+    expect(d.phase).toBe("match_day");
+  });
+
+  // H2 fix (final review round 3, Important — corrected ruling): G3's gate
+  // (`divisionStatus === "active"`) also excluded `scheduled` — exactly what
+  // the ordinary Publish action sets (schedule.ts's `publishSchedule`). Live:
+  // six fixtures dated YESTERDAY on a published, never-started division
+  // produced NO "Needs you" section at all. Proven end to end through the
+  // real usecase (not just division-phase.test.ts's pure resolver coverage):
+  // a division that has been PUBLISHED (status 'scheduled') but never
+  // started still raises `result_missing` for an overdue fixture.
+  it("H2: a published-but-unstarted division (status 'scheduled') still raises result_missing for an overdue fixture", async () => {
+    const { auth } = await seedOrg();
+    const { competitionId, divisionId } = await seedDivision(auth, 4);
+    const [stage] = await createStages(auth, divisionId, {
+      seq: 1, kind: "league", name: "League", config: {}, progression: null,
+    });
+    await generateStageFixtures(auth, stage!.id);
+    // Deliberately 'scheduled', never 'active' — the exact shape the ordinary
+    // Publish action leaves a division in when the organiser never presses Start.
+    await sql`update divisions set status = 'scheduled' where id = ${divisionId}`;
+    const [f] = await sql<{ id: string }[]>`select id from fixtures where division_id = ${divisionId} order by fixture_no limit 1`;
+    await sql`update fixtures set scheduled_at = now() - interval '1 day' where id = ${f!.id}`;
+    const desk = await getCompetitionDesk(auth, competitionId);
+    const d = desk.divisions.get(divisionId)!;
+    expect(d.attention).toContainEqual({ kind: "result_missing", count: 1, fixtureIds: [f!.id] });
+  });
 });

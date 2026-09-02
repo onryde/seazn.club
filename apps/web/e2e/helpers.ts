@@ -399,19 +399,29 @@ export async function eligibilityOverrideAuditRows(
  *  a London org with a New York division at 23:00Z once printed
  *  "Next Mon 7 Sep" above a row reading "Next Sun 6 Sep 19:00". No unit test
  *  can see it: the page is a server component and apps/web vitest is node-env.
- */
+ *
+ *  Minor fix (final review round 3): `division`/`schedule_settings`/
+ *  `fixtures` rows are scoped to the ONE division the caller just created —
+ *  fine to leave mutated. `organizations.timezone` is not: on the shared Pro
+ *  org every parallel spec runs against (auth.setup.ts:78-81) it is a
+ *  cross-spec contamination risk. Returns a restore function — call it in a
+ *  `finally` — that puts the org's timezone back to whatever it was before
+ *  this call, rather than assuming any particular default. */
 export async function setZoneSplitSql(opts: {
   divisionId: string;
   orgTz: string;
   divisionTz: string;
   fixtureNo: number;
   at: string;
-}): Promise<void> {
-  await withDb(async (sql) => {
-    await sql`update organizations set timezone = ${opts.orgTz}
-               where id = (select c.org_id from competitions c
-                             join divisions d on d.competition_id = c.id
-                            where d.id = ${opts.divisionId})`;
+}): Promise<() => Promise<void>> {
+  const orgId = await withDb(async (sql) => {
+    const [row] = await sql<{ org_id: string; timezone: string | null }[]>`
+      select c.org_id, o.timezone from competitions c
+        join divisions d on d.competition_id = c.id
+        join organizations o on o.id = c.org_id
+       where d.id = ${opts.divisionId}`;
+    if (!row) throw new Error(`setZoneSplitSql: no org for division ${opts.divisionId}`);
+    await sql`update organizations set timezone = ${opts.orgTz} where id = ${row.org_id}`;
     await sql`insert into schedule_settings (division_id, tz, config)
               values (${opts.divisionId}, ${opts.divisionTz}, '{}'::jsonb)
               on conflict (division_id) do update set tz = ${opts.divisionTz}`;
@@ -419,7 +429,13 @@ export async function setZoneSplitSql(opts: {
                where division_id = ${opts.divisionId} and fixture_no = ${opts.fixtureNo}`;
     await sql`update fixtures set scheduled_at = null
                where division_id = ${opts.divisionId} and fixture_no <> ${opts.fixtureNo}`;
+    return { orgId: row.org_id, previousTimezone: row.timezone };
   });
+  return async () => {
+    await withDb((sql) =>
+      sql`update organizations set timezone = ${orgId.previousTimezone} where id = ${orgId.orgId}`,
+    );
+  };
 }
 
 export async function setOrgPlanBySql(
@@ -649,6 +665,19 @@ export async function getFixtureScheduleSources(
 export async function setFixtureStatusSql(fixtureId: string, status: string): Promise<void> {
   await withDb(async (sql) => {
     await sql`update fixtures set status = ${status} where id = ${fixtureId}`;
+  });
+}
+
+/** Force a fixture's `scheduled_at` directly, bypassing the schedule engine
+ *  (H2 e2e, final review round 3): a division that has only been PUBLISHED
+ *  (`publishSchedule`, status 'scheduled') never got that far through the
+ *  normal write API in this file's other fixtures — `publish-schedule`
+ *  itself validates the timetable it is publishing, which is not what this
+ *  helper needs to prove. Same bypass-the-engine convention as
+ *  `setFixtureStatusSql` above. */
+export async function setFixtureScheduledAtSql(fixtureId: string, at: string | null): Promise<void> {
+  await withDb(async (sql) => {
+    await sql`update fixtures set scheduled_at = ${at} where id = ${fixtureId}`;
   });
 }
 

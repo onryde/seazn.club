@@ -64,6 +64,33 @@ was wrong).
   English copied, then `npm run i18n:gen-keys` (root script; `i18n-keys.ts` is
   GENERATED) and `npm run i18n:check`. `content/help/**` is English-only.
 
+## The phase ladder is ORDER, not a set of predicates
+
+`resolvePhase` and `competitionPhase` are ladders: the first matching branch
+wins, so a rule's POSITION is part of its meaning and no grep can see it.
+Everything below follows from that.
+
+- **Quote the ORDER in any evidence about phase behaviour, never just the
+  matching line.** "The finished rule checks X" is not a claim about what
+  renders; "the finished rule is third, after the setup check and before
+  match_day" is. Three of this wave's defects were rules that existed, were
+  correct in isolation, and sat in the wrong place.
+- **State the empty case FIRST.** The empty set answers no to every "does the
+  set contain X" test and falls through to whatever the default is. Four
+  vacuous "Finished" defects shipped from this one shape (amendment 2 and 3).
+- **A test that pins a phase must pin the ORDER too** — a case whose expected
+  value differs between two candidate orderings. `division-phase.test.ts` has
+  one; it is the sole mutant that kills a reordering, and a reviewer proved
+  that by reverting the order live and watching everything else stay green.
+- **One zone per fixture.** A fixture's DAY is its venue's day — the display
+  zone — for BOTH bucketing ("is this today?") and printing ("Sun 6 Sep"). The
+  org zone is a FALLBACK when a division has no venue zone, never a second
+  authority. This ruling was got wrong twice: first "date from org, clock from
+  display" (an instant existing in neither zone), then "print in display,
+  bucket in org" (a Match-day pill beside tomorrow's date, and a division on
+  match day that never says so). Two zones in one row is the bug, wherever the
+  seam is drawn.
+
 ## Verification
 
 - **A claim about what a PERSON SEES is settled by driving the product.** Every

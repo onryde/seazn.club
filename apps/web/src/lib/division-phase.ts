@@ -34,7 +34,16 @@ export interface PhaseInput {
   fixtures: PhaseFixture[];
   /** ISO instant "now". Injected so tests and SSR agree. */
   now: string;
-  /** The governing org clock (resolveVenueTz(null, organizations.timezone)). */
+  /** H1 fix (final review round 3, Critical — corrected ruling, again): a
+   *  fixture's DAY is its VENUE's day, for both bucketing (`localDateKey`
+   *  below) and printing (division-status-line.ts's `whenLabel`) — ONE zone
+   *  per fixture, everywhere. Callers pass `resolveVenueTz(divisionTz,
+   *  orgTz)` here (the division's own schedule_settings.tz override, falling
+   *  back to the org's timezone only when the division has none) — never the
+   *  bare org zone. Getting this backwards was the bug: bucketing in the org
+   *  zone while every printed label already used the venue zone put a
+   *  "Match day" pill beside a date reading tomorrow, and hid match day
+   *  entirely for a division whose venue was ahead of its org. */
   tz: string;
   awaitingRegistrations: number;
 }
@@ -190,20 +199,27 @@ export function resolveAttention(input: PhaseInput): Attention[] {
   // the same way `unscheduled` already is above — collected here, pushed once.
   const noScorer: { id: string; since: number | null }[] = [];
   const resultMissing: string[] = [];
-  // G3 fix (fix round D, Important): this function used to never read
-  // `divisionStatus` at all, so `no_scorer`/`result_missing` fired off raw
-  // fixture facts alone. A division an organiser has never started (`setup`)
-  // or has only published (`scheduled`) can still carry fixtures dated in
-  // the past — scoring itself stays LOCKED until `division_started`
-  // (scoring.ts:220, "A published-but-unstarted timetable stays read-only"),
-  // so an elapsed match window there is not a missed result, it is an
-  // organiser who has not pressed Start yet. Reproduced live: a brand-new,
-  // never-started division read "Unstarted" (setting_up) one row UNDER a
-  // Needs-you item reading "result missing … the match window has passed"
-  // for the same fixture. `needs_draw`/`unscheduled`/`registrations_waiting`
-  // are deliberately NOT gated here — every one of them is exactly the class
-  // of thing an organiser legitimately still owes before or after Start.
-  const canHaveLiveActivity = input.divisionStatus === "active";
+  // G3 fix (fix round D, Important), CORRECTED by H2 (final review round 3,
+  // Important): G3's gate was `divisionStatus === "active"`, which also
+  // excludes `scheduled` — but `scheduled` is exactly what the ordinary
+  // Publish action sets (schedule.ts's `publishSchedule`), not a state
+  // reserved for "not yet real". Live: six fixtures dated YESTERDAY on a
+  // published (`scheduled`), never-started division produced NO "Needs you"
+  // section at all — an organiser who published a timetable and never
+  // pressed Start got no prompt of any kind. Silence is the worse failure
+  // than G3's original wrongly-worded row: this wave exists to tell an
+  // organiser what needs them.
+  //
+  // RULING: the gate excludes `setup` only. `setup`, `scheduled`, `active`
+  // and `completed` are the full set (divisions_status_check) — a division
+  // whose timetable is published (`scheduled`) or further along, with a
+  // match time that has passed, genuinely owes a result; only `setup` (no
+  // timetable published at all — scoring can't even be locked-open yet,
+  // scoring.ts:220) is the "not yet real" state G3 meant to exclude.
+  // `needs_draw`/`unscheduled`/`registrations_waiting` are still deliberately
+  // NOT gated here — every one of them is exactly the class of thing an
+  // organiser legitimately still owes before or after Start.
+  const canHaveLiveActivity = input.divisionStatus !== "setup";
   if (canHaveLiveActivity) {
     for (const f of input.fixtures) {
       // F4 fix: the old test was bare `eventCount === 0` — a division- or
