@@ -380,6 +380,42 @@ export interface ContextSlot {
    */
   readOnly?: boolean;
   /**
+   * R8 (owner ruling 2026-09-02, register row D2) — WHAT this slot names.
+   *
+   * Absent (or `"person"`) is every pre-existing slot and stays byte-identical:
+   * a PERSON in a role, whose chip may open a picker when the fold would
+   * actually honour the pick.
+   *
+   * `"mode"` is a locked SCORING MODE — how the sport is currently being
+   * entered, where the sport itself offers more than one lane and the choice
+   * is already made. Cricket is the first: an innings is ball-by-ball or
+   * over-by-over, decided by its FIRST event and reversible only by undoing
+   * back past it (`inningsFidelity`, skins/cricket.tsx). Before this the pad
+   * expressed that fork only as WHICH TILES APPEAR — no words anywhere — so a
+   * scorer who did not already know the rule could not learn it from the pad.
+   *
+   * A chassis-wide field, not a cricket hack: any skin whose sport has more
+   * than one entry lane may declare one, and the chassis then guarantees the
+   * two things a mode statement must be, so no skin can get them wrong:
+   *
+   *   1. NEVER A CONTROL. `context-strip.tsx` renders a `"mode"` slot with the
+   *      read-only chip shape and never opens a picker on it, whatever
+   *      `readOnly` says. The mode is locked; a picker that cannot move it is
+   *      the "opens and silently fails" defect `readOnly` above exists to
+   *      close, in its purest form.
+   *   2. NEVER AN EXCUSE FOR A DISABLED TILE. `assertDisabledTilesExplained`
+   *      (tile-grid.tsx) counts context-slot messages as the explanation a
+   *      disabled tile owes; a mode slot's message is ALWAYS present, so
+   *      counting it would make that validator vacuously green for every skin
+   *      that declares one. It is excluded there by `kind` for that reason.
+   *
+   * NOT the fidelity BAND (recording-chip.tsx): the band is a plan/entitlement
+   * ceiling ("Result only" … "Every detail"), display-and-upsell only. Band
+   * and mode wear similar words and are different concepts; the programme
+   * rules forbid conflating them.
+   */
+  kind?: "person" | "mode";
+  /**
    * R2b (owner ruling, bowler-eligibility block, 2026-08-17): a
    * PRE-LOCALISED raw string, rendered VERBATIM by the chassis
    * (context-strip.tsx) — never resolved through `t()` itself, same

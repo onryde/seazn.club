@@ -1444,3 +1444,92 @@ describe("SwapSheet — OFF-step enforcement (opt-in, owner ruling 2026-08-25)",
     expect(buttonsOf(tree).find((b) => textOf(b) === "Player A")).toBeDefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// R8 (owner ruling 2026-09-02, register row D2) — `ContextSlot.kind: "mode"`
+// (../types.ts): a slot that states which entry lane a sport is LOCKED into,
+// not a person. Cricket is the first caller ("Ball-by-ball" / "Over-by-over"),
+// but the field is chassis-wide, and the chassis owes two guarantees no skin
+// should have to remember:
+//
+//   1. it is NEVER a control — the mode is already locked, so a picker on it
+//      is `readOnly`'s own "opens and silently fails" defect in its purest
+//      form. Enforced HERE, not by trusting each skin to write
+//      `readOnly: true` beside it — the specs below therefore declare a mode
+//      slot with NO readOnly at all, which is the only shape that can tell
+//      "the chassis enforces it" from "the fixture happened to set it".
+//   2. it is findable — every chip renders `data-slot-kind`, because a mode
+//      statement and a person chip wear the IDENTICAL read-only chip (no
+//      fifth chip style) and a Playwright spec has nothing else stable to
+//      select on.
+// ---------------------------------------------------------------------------
+
+describe("ContextStrip rendering — mode slots (R8)", () => {
+  const baseSquad = squad([
+    member({ personId: "kannan", onField: true }),
+    member({ personId: "arjun", onField: true }),
+  ]);
+  const names = { kannan: "Kannan", arjun: "Arjun" };
+
+  /** A mode slot deliberately declaring NO `readOnly` — see the block header:
+   *  the chassis, not the caller, is what must make this static. */
+  function modeSpec(): ContextStripSpec {
+    return {
+      slots: [
+        { id: "bowler", label: "pad.context.bowler", personId: "arjun", pool: "onfield", required: true },
+        { id: "mode", kind: "mode", label: "pad.cricket.context.mode.fine.label", pool: "onfield", required: false, message: "Set when this innings began.", messageTone: "info" },
+      ],
+    };
+  }
+
+  function render(spec: ContextStripSpec) {
+    return renderIsland(ContextStrip, {
+      spec,
+      view: { squad: baseSquad },
+      personNames: names,
+      t,
+      onSelect: () => {},
+    });
+  }
+
+  it("a mode slot renders NO <button> even without readOnly — the chassis makes it static, the skin does not have to", () => {
+    const island = render(modeSpec());
+    const buttons = buttonsOf(island.tree());
+    expect(buttons).toHaveLength(1); // the bowler chip only
+    expect(buttons.some((b) => textOf(b).includes("pad.cricket.context.mode"))).toBe(false);
+  });
+
+  it("but it still SHOWS — a locked mode a scorer cannot read is the defect this closes", () => {
+    expect(render(modeSpec()).text()).toContain("pad.cricket.context.mode.fine.label");
+  });
+
+  it("its chip carries data-slot-kind=\"mode\"; a person chip carries \"person\" — the hook a spec selects the mode statement by", () => {
+    const chips = render(modeSpec()).tree().filter((el) => propsOf(el)["data-role"] === "context-chip");
+    expect(chips).toHaveLength(2);
+    const kinds = chips.map((c) => propsOf(c)["data-slot-kind"]);
+    expect(kinds).toEqual(["person", "mode"]);
+    // ...and the mode chip is the read-only shape, sharing the person chips'
+    // own 44px footprint rather than a new one.
+    const modeChip = chips.find((c) => propsOf(c)["data-slot-kind"] === "mode")!;
+    expect(propsOf(modeChip)["data-readonly"]).toBe("true");
+    expect(propsOf(modeChip).style).toMatchObject({ minHeight: 44 });
+  });
+
+  it("never shows the unset attention dot, even declared required — there is nothing to go and set", () => {
+    const island = render({
+      slots: [{ id: "mode", kind: "mode", label: "pad.cricket.context.mode.coarse.label", pool: "onfield", required: true }],
+    });
+    const dots = island.tree().filter((el) => (propsOf(el).className as string | undefined)?.includes("bg-lime-400"));
+    expect(dots).toHaveLength(0);
+  });
+
+  it("its message still renders, through the same verbatim message line every other slot uses", () => {
+    const island = render(modeSpec());
+    const line = island.tree().find(
+      (el) => propsOf(el)["data-role"] === "context-slot-message" && propsOf(el)["data-slot-id"] === "mode",
+    )!;
+    expect(line).toBeDefined();
+    expect(textOf(line)).toBe("Set when this innings began.");
+    expect(propsOf(line)["data-message-tone"]).toBe("info");
+  });
+});

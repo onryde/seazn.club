@@ -188,6 +188,19 @@ export interface ContextStripProps {
   onSelect: (slotId: string, personId: string) => void;
 }
 
+/**
+ * R8 — whether this slot renders as plain, non-interactive markup rather than
+ * a tap target. `readOnly` is the skin's own per-render verdict (cricket's
+ * bowler is editable at an over boundary and not mid-over); `kind: "mode"` is
+ * unconditional and chassis-enforced, because a scoring mode a sport has
+ * already locked can never be moved from a chip (ContextSlot.kind, ./types.ts).
+ * One predicate so the chip shape and the picker guard can never disagree
+ * about which slots are static.
+ */
+export function isStatic(slot: Pick<ContextSlot, "readOnly" | "kind">): boolean {
+  return slot.readOnly === true || slot.kind === "mode";
+}
+
 function chipLabel(slot: ContextSlot, personNames: Readonly<Record<string, string>>, t: TFn): string {
   const label = t(slot.label);
   if (!slot.personId) return label;
@@ -212,7 +225,12 @@ export function ContextStrip({ spec, view, personNames, t, onSelect }: ContextSt
   // guards even a stray activeSlotId somehow naming one (belt-and-braces;
   // the row below already never attaches an onClick to a readOnly chip, so
   // activeSlotId can never actually BE set to one in the first place).
-  const activeSlot = spec.slots.find((s) => s.id === activeSlotId && !s.readOnly) ?? null;
+  //
+  // R8: `isStatic` — a `kind: "mode"` slot is read-only whatever it declares
+  // (ContextSlot.kind's own doc, ./types.ts, guarantee 1). A mode is locked by
+  // definition; the chassis enforces that rather than trusting every skin to
+  // remember `readOnly: true` beside it.
+  const activeSlot = spec.slots.find((s) => s.id === activeSlotId && !isStatic(s)) ?? null;
 
   return (
     <div data-role="context-strip" className="flex flex-col gap-2">
@@ -227,12 +245,20 @@ export function ContextStrip({ spec, view, personNames, t, onSelect }: ContextSt
           // dropping it entirely would lose the on-strike marker/name for
           // no gain — it just never pretends to be a control the engine
           // will actually honour.
-          if (slot.readOnly) {
+          if (isStatic(slot)) {
             return (
               <span
                 key={slot.id}
                 data-role="context-chip"
                 data-readonly="true"
+                // R8 — the ONE thing that tells a mode statement apart from a
+                // person chip in the DOM. Both wear the identical read-only
+                // chip (deliberately: no fifth chip style), so a Playwright
+                // spec asserting "the pad says which mode this innings is in"
+                // has nothing else stable to select on. Emitted for every
+                // slot, not only mode ones, so the attribute means the same
+                // thing everywhere it appears.
+                data-slot-kind={slot.kind ?? "person"}
                 style={{ minHeight: 44 }}
                 className="inline-flex min-w-0 max-w-full cursor-default items-center gap-1.5 rounded-full border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700"
               >
@@ -248,6 +274,7 @@ export function ContextStrip({ spec, view, personNames, t, onSelect }: ContextSt
               type="button"
               data-role="context-chip"
               data-readonly="false"
+              data-slot-kind={slot.kind ?? "person"}
               aria-pressed={active}
               onClick={() => setActiveSlotId(active ? null : slot.id)}
               style={{ minHeight: 44 }}

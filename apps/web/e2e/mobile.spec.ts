@@ -1254,7 +1254,15 @@ test("cricket v3 pad: tiles + over-summary sheet + context strip hold the 44px f
   const chips = pad.locator('[data-role="context-chip"]');
   await expect(chips.first(), "context strip must render once an innings exists").toBeVisible({ timeout: 20_000 });
   const chipCount = await chips.count();
-  expect(chipCount, "cricket declares striker, non-striker and bowler").toBe(3);
+  expect(chipCount, "cricket declares striker, non-striker, bowler and (R8) the innings' locked scoring mode").toBe(4);
+  // R8 — the mode statement is a chip like any other here: it must clear the
+  // same 44px floor at all seven widths (the loop below covers it), and it
+  // must READ correctly. This innings was opened by the ball tapped above, so
+  // it is locked to the fine lane; a mode indicator that ignored the fold
+  // would say "Over-by-over" over a pad that has just recorded a ball.
+  const modeChip = pad.locator('[data-role="context-chip"][data-slot-kind="mode"]');
+  await expect(modeChip, "the pad must state which scoring mode this innings locked into").toHaveCount(1);
+  await expect(modeChip).toHaveText("Ball-by-ball");
   for (let i = 0; i < chipCount; i++) {
     await assertFloor(chips.nth(i), `context chip ${i}`);
   }

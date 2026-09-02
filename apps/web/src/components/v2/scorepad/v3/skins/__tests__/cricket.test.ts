@@ -1380,14 +1380,134 @@ describe("buildContext", () => {
   it("is null with no innings open yet", () => {
     expect(buildContext(view({ state: state({ innings: [] }) }))).toBeNull();
   });
-  it("three required slots, personId from the fold", () => {
+  it("three required person slots, personId from the fold — and R8's mode statement LAST, behind them", () => {
     const spec = buildContext(view())!;
-    expect(spec.slots.map((s) => s.id)).toEqual(["striker", "nonStriker", "bowler"]);
-    expect(spec.slots.every((s) => s.required)).toBe(true);
+    // R8 appended `mode` (the innings' locked scoring lane). Order is pinned
+    // deliberately: the three person chips are the strip's working surface
+    // and must keep the front of the row at 320px, where it wraps.
+    expect(spec.slots.map((s) => s.id)).toEqual(["striker", "nonStriker", "bowler", "mode"]);
+    expect(spec.slots.filter((s) => s.kind !== "mode").every((s) => s.required)).toBe(true);
     expect(spec.slots.find((s) => s.id === "striker")!.personId).toBe("h1");
   });
   it("stays available during a super over", () => {
     expect(buildContext(view({ state: state({ phase: "super_over" }) }))).not.toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R8 (owner ruling 2026-09-02, register row D2 — open since R2b) — THE
+// SCORING-MODE INDICATOR.
+//
+// Cricket has two mutually exclusive entry lanes WITHIN one innings
+// (`inningsFidelity`, ../cricket.tsx): "fine" once a `cricket.ball` opened
+// it, "coarse" once a `cricket.innings.summary` did, locked by the innings'
+// FIRST event. Until this wave the pad expressed that fork ONLY as which
+// tiles happen to appear — no words anywhere — so a scorer who did not
+// already know the rule could not learn it from the pad.
+//
+// The affordance is the chassis's own read-only context-strip slot
+// (`ContextSlot.kind: "mode"`, ../../types.ts), the same pattern badminton/
+// tabletennis/volleyball already ship for "Game scores only". NOT the
+// recording chip (../../recording-chip.tsx): that expresses the fidelity
+// BAND, a plan/entitlement concept, and conflating band with scoring MODE is
+// forbidden by the programme rules.
+//
+// Every fixture below is a REAL fold (`_cricket-fold`) and GUARDS ITSELF by
+// asserting the ENGINE's own `inningsFidelity` before it asserts the slot: a
+// fixture that silently stopped being coarse would otherwise turn the coarse
+// case into a second fine case and stay green.
+// ---------------------------------------------------------------------------
+
+describe("R8 — buildContext states the innings' locked scoring mode", () => {
+  const modeSlotOf = (spec: ReturnType<typeof buildContext>) =>
+    spec?.slots.find((s) => s.kind === "mode") ?? null;
+
+  /** An innings opened by a real `cricket.ball` — the fine lane. */
+  function fineFold() {
+    const cfg = cricket.configSchema.parse({});
+    const b = ballSeq();
+    const st = foldCricket(cfg, [
+      ["core.start"],
+      b("cricket.ball", { striker: "H-1", nonStriker: "H-2", bowler: "A-11", bat: 1 }),
+    ]);
+    return { cfg, st };
+  }
+
+  /** An innings opened by a real `cricket.innings.summary` — the coarse lane.
+   *  `partial: true` is what the pad's OWN over-summary sheet sends
+   *  (`overSummarySheet`, ../cricket.tsx), and it is what leaves the innings
+   *  OPEN (`applySummary`, engine cricket.ts: a non-partial summary closes it
+   *  and the strip would then be in its between-innings window instead). */
+  function coarseFold() {
+    const cfg = cricket.configSchema.parse({});
+    const st = foldCricket(cfg, [
+      ["core.start"],
+      ["cricket.innings.summary", { runs: 8, wickets: 0, legalBalls: 6, partial: true }],
+    ]);
+    return { cfg, st };
+  }
+
+  it("a BALL-opened innings reads ball-by-ball", () => {
+    const { cfg, st } = fineFold();
+    expect(inningsFidelity(currentInnings(st)), "fixture guard: the ENGINE says this innings is fine").toBe("fine");
+    const slot = modeSlotOf(buildContext(view({ cfg, state: st }), t))!;
+    expect(slot, "a live innings must carry a mode slot").toBeTruthy();
+    expect(slot.label).toBe("pad.cricket.context.mode.fine.label");
+    expect(slot.message).toBe("pad.cricket.context.mode.fine.message");
+  });
+
+  it("a SUMMARY-opened innings reads over-by-over", () => {
+    const { cfg, st } = coarseFold();
+    expect(inningsFidelity(currentInnings(st)), "fixture guard: the ENGINE says this innings is coarse").toBe("coarse");
+    const slot = modeSlotOf(buildContext(view({ cfg, state: st }), t))!;
+    expect(slot, "a live innings must carry a mode slot").toBeTruthy();
+    expect(slot.label).toBe("pad.cricket.context.mode.coarse.label");
+    expect(slot.message).toBe("pad.cricket.context.mode.coarse.message");
+  });
+
+  it("the two lanes DISAGREE — a constant that ignored the fold would satisfy neither case above nor this one", () => {
+    const fine = modeSlotOf(buildContext(view({ cfg: fineFold().cfg, state: fineFold().st }), t))!;
+    const coarse = modeSlotOf(buildContext(view({ cfg: coarseFold().cfg, state: coarseFold().st }), t))!;
+    expect(fine.label).not.toBe(coarse.label);
+    expect(fine.message).not.toBe(coarse.message);
+  });
+
+  it("no innings yet: the slot is ABSENT even where the strip itself renders — nothing has locked in, so there is no mode to state", () => {
+    // The super-over gap window (before the first super-over ball) is the one
+    // state where `currentInnings` is null and `buildContext` still returns a
+    // real strip — so this proves ABSENCE of the mode slot, not merely
+    // absence of the whole strip (which the `buildContext` block above
+    // already covers and which would pass with this feature never built).
+    const { cfg, events } = tieToSuperOver();
+    const st = foldCricket(cfg, events);
+    expect(currentInnings(st), "fixture guard: this window genuinely has no innings").toBeNull();
+    expect(inningsFidelity(currentInnings(st))).toBe("unopened");
+    const spec = buildContext(view({ cfg, state: st }), t);
+    expect(spec, "fixture guard: the strip itself DOES render here").not.toBeNull();
+    expect(modeSlotOf(spec)).toBeNull();
+  });
+
+  it("is READ-ONLY and person-less — the mode is locked by the innings' first event, so a control that cannot change it would be worse than saying nothing", () => {
+    const { cfg, st } = fineFold();
+    const slot = modeSlotOf(buildContext(view({ cfg, state: st }), t))!;
+    expect(slot.readOnly).toBe(true);
+    expect(slot.required).toBe(false);
+    expect(slot.personId).toBeUndefined();
+    expect(slot.candidates).toBeUndefined();
+    expect(slot.messageTone).toBe("info"); // a TIER, not a fault — badminton's own precedent
+  });
+
+  it("both lanes' four keys resolve to real, DISTINCT English copy in the shipped dictionary", async () => {
+    const en = (await import("@/dictionaries/en/ui.json")).default as Record<string, string>;
+    const keys = [
+      "pad.cricket.context.mode.fine.label",
+      "pad.cricket.context.mode.fine.message",
+      "pad.cricket.context.mode.coarse.label",
+      "pad.cricket.context.mode.coarse.message",
+    ];
+    for (const k of keys) expect(en[k], `${k} must be in en/ui.json`).toBeTruthy();
+    expect(en["pad.cricket.context.mode.fine.label"]).not.toBe(en["pad.cricket.context.mode.coarse.label"]);
+    expect(en["pad.cricket.context.mode.fine.message"]).not.toBe(en["pad.cricket.context.mode.coarse.message"]);
   });
 });
 
@@ -1449,8 +1569,13 @@ describe("buildContext — striker/non-striker are read-only (blocker 2)", () =>
     expect(buildContext(view())!.slots.find((s) => s.id === "nonStriker")!.readOnly).toBe(true);
   });
 
-  it("all three slots stay required — readOnly is orthogonal to required, informational vs editable", () => {
-    expect(buildContext(view())!.slots.every((s) => s.required)).toBe(true);
+  it("all three PERSON slots stay required — readOnly is orthogonal to required, informational vs editable", () => {
+    // R8's `mode` slot is deliberately NOT required: `required` drives the
+    // chassis's unset attention dot, which asks a scorer to go and set
+    // something. There is nothing to set — see the R8 block above.
+    const people = buildContext(view())!.slots.filter((s) => s.kind !== "mode");
+    expect(people).toHaveLength(3);
+    expect(people.every((s) => s.required)).toBe(true);
   });
 });
 
@@ -3584,7 +3709,15 @@ describe("R3.5 F3 — every super-over window that disables review/retire/inning
     // an open innings, a bowler already locked in for the over, nothing
     // closed — so the ordinary striker/nonStriker/bowler slots carry no
     // message of their own; only the super-over notice does.
-    expect(ctx!.slots.filter((s) => s.id !== "superOver").every((s) => !s.message)).toBe(true);
+    //
+    // R8: the mode slot is excluded here for the SAME reason
+    // `assertDisabledTilesExplained` (tile-grid.tsx) now excludes it — its
+    // message is always present, so counting it would make both this
+    // window-check and the validator below vacuously green. That exclusion
+    // is what keeps the assertion on the next line a real proof.
+    expect(
+      ctx!.slots.filter((s) => s.id !== "superOver" && s.kind !== "mode").every((s) => !s.message),
+    ).toBe(true);
     expect(assertDisabledTilesExplained(tiles, ctx)).toEqual([]);
   });
 
