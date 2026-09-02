@@ -979,6 +979,14 @@ async function communityGateSuite(): Promise<void> {
 // events, which have no super-over analogue — `cricket.superover.ball` is
 // tier 3 (scoring.ball_by_ball) ball-by-ball only, so a real fixture roster
 // (persons + lineups), not just bare entrants, is load-bearing here.
+//
+// R8 sweep, task G — the `cricket.ball` payloads below ({over, ballInOver,
+// striker, nonStriker, bowler, runs: {bat}}) are already the exact key set
+// apps/web's v3 `cricket.tsx` `basePayload`/`runPayload` build for the pad's
+// ball-by-ball lane. `cricketBothLanesSuite` (scripts/smoke.ts) pins that
+// shape explicitly against the main innings (not the super over this suite
+// covers) and adds the mutual-exclusion coverage against
+// `cricket.innings.summary` that this suite does not need.
 // ---------------------------------------------------------------------------
 
 async function cricketSuperOverSuite(): Promise<void> {
