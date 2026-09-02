@@ -32,8 +32,11 @@ test("device link opens the pad anonymously and authorises scoring", async ({
   const secret = minted.data!.secret;
   expect(secret.startsWith("dl_")).toBe(true);
 
-  // A signed-out browser opens the pad from the token alone.
-  const anonCtx = await browser.newContext();
+  // A signed-out browser opens the pad from the token alone. Explicit empty
+  // state: `browser.newContext()` inherits `use.storageState` from
+  // playwright.config.ts, so a bare context carries the e2e organiser's
+  // cookie and the word "anonymously" would be a claim this test cannot make.
+  const anonCtx = await browser.newContext({ storageState: { cookies: [], origins: [] } });
   try {
     const page = await anonCtx.newPage();
     await page.goto(`/score/${secret}`);
@@ -42,9 +45,33 @@ test("device link opens the pad anonymously and authorises scoring", async ({
     await anonCtx.close();
   }
 
+  // Control BEFORE the grant: no cookie and no token is refused outright. If
+  // this ever passes, the contexts below are carrying the organiser's session
+  // and every success under them is measuring the cookie, not the link.
+  const noCred = await playwright.request.newContext({
+    baseURL: BASE,
+    storageState: { cookies: [], origins: [] },
+  });
+  try {
+    const anon = await noCred.get(`/api/v1/fixtures/${fixtureId}/state`);
+    expect(anon.status()).toBe(401);
+    expect(((await anon.json()) as { error?: { code?: string } }).error?.code).toBe(
+      "UNAUTHENTICATED",
+    );
+  } finally {
+    await noCred.dispose();
+  }
+
   // The token is also the API credential for this fixture's events.
   const dlApi = await playwright.request.newContext({
     baseURL: BASE,
+    // `playwright.request.newContext()` inherits `use.storageState` too, and
+    // here it is NOT harmless the way it is in the refusal test below: this is
+    // a SUCCESS claim, so an inherited editor cookie authorises the read and
+    // the write with no token at all. Measured 2026-09-03 — with the
+    // Authorization header deleted and the context left bare, this test still
+    // passed.
+    storageState: { cookies: [], origins: [] },
     extraHTTPHeaders: { Authorization: `Bearer ${secret}` },
   });
   try {
