@@ -40,11 +40,21 @@ function zoneDayLabel(date: Date, tz: string): string {
  * and row must still agree, both read in the venue zone).
  */
 function findPrintSplitInstant(from: Date, orgTz: string, venueTz: string): Date {
-  for (let mins = 15; mins <= 60 * 24 * 3; mins += 15) {
+  // Two conditions, not one. The obvious search — "first instant where the two
+  // zones disagree on the day" — returns something a few hours out, which is
+  // TODAY at the venue, and the ladder answers `match_day` before it ever
+  // reaches its date step. The masthead then reads "Match day" and this test
+  // fails against correct code. Existence is not behaviour when branch ORDER
+  // decides the outcome: the instant must also be on a LATER venue day, so the
+  // date step is the branch under test.
+  const venueToday = zoneDateKey(from, venueTz);
+  for (let mins = 15; mins <= 60 * 24 * 8; mins += 15) {
     const candidate = new Date(from.getTime() + mins * 60_000);
-    if (zoneDateKey(candidate, orgTz) !== zoneDateKey(candidate, venueTz)) return candidate;
+    const splits = zoneDateKey(candidate, orgTz) !== zoneDateKey(candidate, venueTz);
+    const notToday = zoneDateKey(candidate, venueTz) !== venueToday;
+    if (splits && notToday) return candidate;
   }
-  throw new Error("findPrintSplitInstant: no zone split found in a 3-day window");
+  throw new Error("findPrintSplitInstant: no future-day zone split found in an 8-day window");
 }
 
 /**
