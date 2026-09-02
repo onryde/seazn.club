@@ -81,3 +81,36 @@ was wrong).
 - Zoom into the component under test. Full-page screenshots hide alignment,
   duplication and truncation defects; the owner found several that way after a
   full-page shot had been signed off.
+- **Print the asserted CONTENT beside every gate result.** A width or scroll
+  gate cannot tell you it measured the wrong page STATE. A probe here reported
+  "no horizontal scroll" at 320/768/1280 on a page that was never in the state
+  under test — its setup calls had silently failed (stages 400 on a wrong body
+  shape, generate 404 on a wrong route, start 422) — and every width passed
+  cleanly. It was caught only because the row's text was printed next to the
+  gate and read "Setting up · 4 entrants" instead of the six-fixture state.
+  A green gate on the wrong state is worse than a red one. Build API setup from
+  `e2e/helpers.ts` (`createStageAndGenerate`, `:1183`), never invented shapes.
+- **Hit-test, do not measure.** `boundingBox()` reports paint, not hit area: a
+  control can measure 44px and still be untappable under an overlay. Take the
+  element's centre and check `document.elementFromPoint` resolves to it or a
+  child.
+- **To prove a surface is DESIGNED for mobile rather than shrunk, compare the
+  visible CONTROL SET at both widths, not the box sizes.** Same set with
+  smaller boxes is a shrink; different sets is a composition. Measured on the
+  division row: 320 shows two controls (the whole card body as one link, plus a
+  full-width action) and 1280 shows three (name link, "Open", "⋯"). A
+  screenshot cannot distinguish these two cases; the DOM can.
+- **Driving a page has two traps that both report a FALSE DEFECT.** (1) The
+  desk renders dual mobile/desktop DOM, so an unqualified locator resolves to
+  the hidden variant — `[data-testid="desk-needs-you"] a` picks the mobile
+  button at 1280 and the click times out on "element is not visible". Use
+  `:visible`. (2) `waitForLoadState("networkidle")` can resolve BEFORE a
+  client-side navigation begins, so `page.url()` reads the old URL and the
+  action looks dead. Use `waitForURL`. Both of these made a working "Compute
+  proposal" button look broken here, twice, before the script was fixed.
+  Dismiss the cookie banner deterministically too — a `try/catch` click with a
+  short timeout leaves it overlaying the control.
+- **A DOM sweep, not a screenshot, settles whether a control is labelled.** The
+  tools row LOOKS like bare glyphs at 320; a sweep of `main` for controls with
+  no text, no `aria-label` and no `title` returned zero. "Unlabelled" and
+  "visually icon-only" look identical in a capture.
