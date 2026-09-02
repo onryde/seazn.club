@@ -44,6 +44,7 @@ import {
   TAG,
   type RosteredFixture,
 } from "../helpers";
+import { HUMAN_FASTEST_REPEAT_MS } from "../../src/components/v2/scorepad/use-pad-pipeline";
 
 test.describe.configure({ mode: "parallel" });
 
@@ -140,13 +141,50 @@ async function sendHeldNowIfAsked(page: Page): Promise<void> {
  * mechanism exists to prevent — and would also hide it firing where it should
  * not, which is the cost side of the same feature.
  *
- * R7-42/R7-30/R7-43 (owner ruling, `_INDEX.md`) — this used to pay a 750ms
- * clearance on a same-side repeat (tracked in the now-deleted `lastSide`,
- * shared with `tapAnchor` below) so it would not collide with
- * `DOUBLE_SUBMIT_WINDOW_MS`. That window is now 250ms (was 600ms), and a
- * refused repeat is VISIBLE rather than silent, so the clearance and its
- * bookkeeping are gone.
+ * R7-42/R7-30/R7-43 (owner ruling, `_INDEX.md`) — this used to pay a flat
+ * 750ms clearance on a same-side repeat (tracked in `lastSide`, shared with
+ * `tapAnchor` below) so it would not collide with `DOUBLE_SUBMIT_WINDOW_MS`.
+ * That window is now 250ms (was 600ms) and a refused repeat is VISIBLE
+ * rather than silent, so the flat clearance was deleted.
+ *
+ * DELETING IT ENTIRELY WAS A STEP TOO FAR, and this flaked in CI because of
+ * it: `Expected: 8, Received: 7`, the poll's OWN 20s timeout exceeded (so a
+ * genuine missing rally, not a blown budget — AGENTS.md rule 20). Visible
+ * is not the same as recorded. The guard still REFUSES a byte-identical
+ * repeat inside 250ms, and two consecutive rallies to the same side are
+ * byte-identical by construction, so the refused tap writes no ledger row
+ * and this helper's own poll then waits 20s for a row that will never come.
+ * The only thing that had been keeping it green was the round trip in the
+ * ledger poll below usually taking longer than 250ms — i.e. luck, load-
+ * dependent, which is exactly the shape of a flake.
+ *
+ * What is restored is NOT the old flat 750ms sleep, and it is deliberately
+ * NOT pinned to `DOUBLE_SUBMIT_WINDOW_MS` either. It is pinned to
+ * `HUMAN_FASTEST_REPEAT_MS` — R7-46's own resolution of this exact tension,
+ * already used by `scorepad-v3-honest-recording.spec.ts`'s `RUN_TAP_PACE_MS`:
+ * the fastest a real scorer can deliberately repeat a tap and mean both.
+ *
+ * That distinction is the whole point. A wait derived from the GUARD's window
+ * is a workaround — it dodges the guard, and it is what R7-43 ruled must be
+ * deletable. A wait derived from the HUMAN floor is the test stating what it
+ * actually claims: a scorer tapping at a human cadence never loses a rally.
+ * The unit suite asserts `DOUBLE_SUBMIT_WINDOW_MS < HUMAN_FASTEST_REPEAT_MS`,
+ * so pacing at the human floor clears the guard BY CONSTRUCTION and keeps
+ * doing so if the window moves — no `+60` fudge factor to go stale.
+ *
+ * It waits only the REMAINDER, and only when the previous tap was the same
+ * side (a different side changes the payload, so the guard cannot fire). In
+ * the common case the ledger round trip has already outlived it and the wait
+ * is zero.
  */
+let lastTap: { side: "home" | "away"; at: number } | null = null;
+async function clearGuard(page: Page, side: "home" | "away"): Promise<void> {
+  if (lastTap !== null && lastTap.side === side) {
+    const remaining = HUMAN_FASTEST_REPEAT_MS - (Date.now() - lastTap.at);
+    if (remaining > 0) await page.waitForTimeout(remaining);
+  }
+  lastTap = { side, at: Date.now() };
+}
 async function tapRally(
   page: Page,
   fx: RosteredFixture,
@@ -155,6 +193,7 @@ async function tapRally(
 ): Promise<void> {
   const before = (await ledger(page.request, fx.fixtureId)).length;
   if (PACE > 0) await page.waitForTimeout(PACE);
+  await clearGuard(page, side);
   await half(page, side).click();
   const sheet = v3Sheet(page);
   if (opener !== undefined) {
@@ -184,6 +223,12 @@ async function tapAnchor(
 ): Promise<void> {
   const before = (await ledger(page.request, fx.fixtureId)).length;
   if (PACE > 0) await page.waitForTimeout(PACE);
+  // Keyed on `wonBy` — the anchor dispatches ONE rally won by that side, so
+  // that is the side a FOLLOWING tap could be an identical repeat of. Shared
+  // bookkeeping with `tapRally`, exactly as the old `lastSide` was. In
+  // practice the two sheet answers below already outlast the window, so this
+  // records far more often than it waits.
+  await clearGuard(page, wonBy);
   await v3Tile(page, "serveAnchor").click();
   const sheet = v3Sheet(page);
   await expect(sheet).toBeVisible({ timeout: 20_000 });

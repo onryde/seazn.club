@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 import { apiJson, seedRosteredFixture, expectNoHorizontalScroll, TAG, type RosteredFixture } from "./helpers";
+import { DOUBLE_SUBMIT_WINDOW_MS } from "../src/components/v2/scorepad/use-pad-pipeline";
 
 // S10/#419 W8 — the three acceptance criteria this file proves: the offline
 // queue survives tab death, scoring continues with the network down, and it
@@ -161,14 +162,22 @@ function homeHalf(page: Page) {
  * Every call site uses a DISTINCT amount so the final ledger assertion pins an
  * exact payload per slot, not merely a count. That is doubly load-bearing on
  * v3: the double-submit guard compares (type, payload) at SUBMIT time, before
- * any chip has run, so three half taps are three IDENTICAL submissions and the
- * guard would legitimately swallow two of them if they landed inside its
- * window (`DOUBLE_SUBMIT_WINDOW_MS`, 250ms as of R7-42 — was 600ms).
- * `expectDepth` is what actually separates them — polling the durable
- * queue after each press both spaces the taps and proves each one landed,
- * which the old fixed-value version could only assert once at the end.
+ * any chip has run, so three half taps are three IDENTICAL submissions
+ * (every half tap's PRE-amend payload is the same `points: 1`) and the guard
+ * legitimately swallows any repeat landing inside its window
+ * (`DOUBLE_SUBMIT_WINDOW_MS`, 250ms as of R7-42 — was 600ms).
+ *
+ * `expectDepth`'s poll does NOT space the taps by itself — this file's whole
+ * scenario is offline (route-aborted or `setOffline`), so the queue write is
+ * a same-tick IndexedDB op with no network round trip to force a gap, and the
+ * poll can resolve well under 250ms. Confirmed live: every scenario in this
+ * file failed on exactly its SECOND tap ("press worth N must reach the
+ * durable queue", `Expected: 2, Received: 1`) until the explicit wait below
+ * was added — the same fix `scorepad-v3-badminton.spec.ts`'s `tapRally`
+ * already applies for the identical reason (R7-46).
  */
 async function pressAddPoints(page: Page, points: number, dbName: string, expectDepth: number): Promise<void> {
+  if (expectDepth > 1) await page.waitForTimeout(DOUBLE_SUBMIT_WINDOW_MS + 60);
   await homeHalf(page).click();
   const dock = page.locator('[data-role="v3-dock"]');
   await expect(dock, "a tally tap must open the amend dock").toBeVisible({ timeout: 20_000 });

@@ -225,9 +225,35 @@ test("configure, register, join, waitlist, approve, opt-out — every screen agr
   // rows genuinely complete (the captain's own); the second names the
   // team-mate but stays pending until claimed in step 3.
   // ===================================================================
-  const anonA = await browser.newContext();
-  const anonB = await browser.newContext();
-  const anonC = await browser.newContext();
+  // `storageState: { cookies: [], origins: [] }` is what makes these
+  // ACTUALLY anonymous, and it is load-bearing — `browser.newContext()` bare
+  // inherits the project's `storageState: AUTH_STATE` (playwright.config.ts),
+  // so every "anonymous" registrant below was in fact submitting as the
+  // signed-in e2e organiser. That is not cosmetic: a signed-in submitter
+  // registering THEMSELVES with an adult dob makes `deriveLinkUserId`
+  // (registrations.ts) link the entry to that account's own
+  // `(org_id, user_id, 'player')` person, and that upsert is
+  // `do update set full_name = persons.full_name` (registrations.ts:667-676)
+  // — the EXISTING person's name wins and the name this test submitted is
+  // discarded. So the captain rendered on the public Entrants tab under
+  // whatever name that shared account's player person already had.
+  //
+  // It passed locally and failed only in CI because the collision needs a
+  // PRIOR spec to have created that person first: `registration-connect.
+  // spec.ts` self-registers the same account as its own name, and it runs
+  // only when the real Stripe/Connect secrets exist — i.e. on the
+  // walkthrough leg, ahead of this file. On a fresh local DB running this
+  // spec alone the upsert INSERTS, the submitted name survives, and the
+  // assertion passes. A green local run could never have caught it.
+  //
+  // Line ~352 below already does this for `mate2Ctx`; these three were the
+  // ones that never got it.
+  // NOT `as const` — that makes the arrays `readonly` and
+  // `BrowserContextOptions` wants mutable ones (TS2345).
+  const emptyState = () => ({ storageState: { cookies: [], origins: [] } });
+  const anonA = await browser.newContext(emptyState());
+  const anonB = await browser.newContext(emptyState());
+  const anonC = await browser.newContext(emptyState());
   let mate2Ctx: import("@playwright/test").BrowserContext | undefined;
 
   try {

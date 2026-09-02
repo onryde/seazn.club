@@ -192,7 +192,21 @@ test("RS006 — organiser settings, team entry, Stripe Connect payment", async (
     await page.waitForTimeout(1500);
 
     // ---- the public side -------------------------------------------------
+    // `storageState: { cookies: [], origins: [] }` is what makes this context
+    // ACTUALLY anonymous. Bare `browser.newContext()` INHERITS the project's
+    // `storageState: AUTH_STATE` (playwright.config.ts), so this "public
+    // registrant" was submitting as the signed-in e2e organiser — and a
+    // signed-in submitter registering THEMSELVES with an adult dob links the
+    // entry to that account's own `(org_id, user_id, 'player')` person
+    // (`deriveLinkUserId`, registrations.ts). That upsert keeps the EXISTING
+    // name (`do update set full_name = persons.full_name`), so this spec was
+    // naming the shared e2e account's player person "Priya Raman" for every
+    // OTHER walkthrough in the same job — which is precisely how it broke
+    // rs010-registration-cross-flow, whose captain then rendered under this
+    // spec's name instead of its own. Everything below drives only public
+    // `/shared/...` pages, so there is nothing here that wanted auth.
     const ctx = await browser.newContext({
+      storageState: { cookies: [], origins: [] },
       viewport: { width: 1280, height: 900 },
       ...(WATCH ? { recordVideo: { dir: SHOTS } } : {}),
     });

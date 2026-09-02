@@ -31,6 +31,7 @@ import {
   type RosteredFixture,
 } from "../helpers";
 import { HOLD_MS } from "../../src/components/v2/scorepad/queue";
+import { HUMAN_FASTEST_REPEAT_MS } from "../../src/components/v2/scorepad/use-pad-pipeline";
 
 test.describe.configure({ mode: "parallel" });
 
@@ -94,18 +95,49 @@ async function shot(page: Page, caption: string): Promise<void> {
 
 /** Tap a rally on one half and wait for it to REACH the ledger.
  *
- * R7-42/R7-30/R7-43 (owner ruling, `_INDEX.md`) — this used to pay a 750ms
- * clearance on a same-side repeat (a side that wins a WHOLE game unanswered
- * is nothing but same-side repeats) so it would not collide with
- * `DOUBLE_SUBMIT_WINDOW_MS`, tracking the prior side in the now-deleted
- * `lastSide` for exactly that check. That window is now 250ms (was 600ms),
- * and a refused repeat is VISIBLE rather than silent, so the clearance (and
- * the bookkeeping that only ever existed to gate it) is gone — THIS is the
- * acceptance test R7-43 named: reproduced live here under Playwright's own
- * multi-worker load. */
+ * R7-42/R7-30/R7-43 (owner ruling, `_INDEX.md`) — this used to pay a flat
+ * 750ms clearance on a same-side repeat (a side that wins a WHOLE game
+ * unanswered is nothing but same-side repeats), tracking the prior side in
+ * `lastSide` for exactly that check. The window narrowed 600ms -> 250ms and a
+ * refused repeat became VISIBLE rather than silent, so the flat clearance was
+ * deleted and this call site was named as R7-43's acceptance test.
+ *
+ * IT WAS DELETED TOO COMPLETELY, and the identical omission in
+ * `scorepad-v3-volleyball-match.spec.ts` flaked in CI for it (`Expected: 4,
+ * Received: 3`, a different rally each run, the poll's own 20s exceeded).
+ * Visible is not recorded: the guard still REFUSES a byte-identical repeat
+ * inside 250ms, consecutive same-side rallies ARE byte-identical, and a
+ * refused tap writes no ledger row. Nothing was keeping this file green but
+ * the ledger round trip usually outlasting the window.
+ *
+ * THE ACCEPTANCE TEST IS PRESERVED, NOT WEAKENED, because what returns is not
+ * a guard clearance. `pace` is pinned to `HUMAN_FASTEST_REPEAT_MS` — R7-46's
+ * own resolution of this tension, already used by
+ * `scorepad-v3-honest-recording.spec.ts`'s `RUN_TAP_PACE_MS`. R7-43's ruling
+ * was that a wait DERIVED FROM THE GUARD'S WINDOW must be deletable, because
+ * such a wait only dodges the guard and would pass at any window value. A
+ * wait derived from the HUMAN floor is a different claim entirely, and it is
+ * this test's real one: a scorer tapping as fast as a person can deliberately
+ * tap never loses a rally. It clears the guard by construction, since the
+ * unit suite asserts `DOUBLE_SUBMIT_WINDOW_MS < HUMAN_FASTEST_REPEAT_MS` and
+ * pins that floor as a real human bound. Demanding that taps FASTER than a
+ * human land is the tautology R7-46 already rejected — no window could pass
+ * it without abandoning double-submit protection altogether.
+ *
+ * Waits only the remainder, and only on a same-side repeat. */
+let lastTap: { side: "home" | "away"; at: number } | null = null;
+async function pace(page: Page, side: "home" | "away"): Promise<void> {
+  if (lastTap !== null && lastTap.side === side) {
+    const remaining = HUMAN_FASTEST_REPEAT_MS - (Date.now() - lastTap.at);
+    if (remaining > 0) await page.waitForTimeout(remaining);
+  }
+  lastTap = { side, at: Date.now() };
+}
+
 async function tapRally(page: Page, fx: RosteredFixture, side: "home" | "away"): Promise<void> {
   const before = (await ledger(page.request, fx.fixtureId)).length;
   if (PACE > 0) await page.waitForTimeout(PACE);
+  await pace(page, side);
   await half(page, side).click();
   await expect
     .poll(async () => (await ledger(page.request, fx.fixtureId)).length, { timeout: 20_000 })
