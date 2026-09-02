@@ -43,6 +43,125 @@ const projectViewport = (): { width: number; height: number } | null =>
   (test.info().project.use as { viewport?: { width: number; height: number } })
     .viewport ?? null;
 
+/** Phone composition (spec 2026-09-02-scorepad-v3-phone-composition-design.md §6.2).
+ *  Prints the visible control list so a reviewer can diff phone vs desktop by
+ *  eye, then asserts the composition — not the box sizes — at this project's
+ *  width. `model` "S": the scorebug halves are the rally buttons; "T": the
+ *  first tile is the primary tap. */
+async function expectPhoneComposition(page: Page, model: "S" | "T"): Promise<void> {
+  const vp = projectViewport();
+  if (!vp) return;
+  const phone = vp.width < 768;
+  await page.evaluate(() => window.scrollTo(0, 0));
+  const controls = await page.evaluate(() =>
+    Array.from(document.querySelectorAll<HTMLElement>('button, a[href], select, [role="button"]'))
+      .filter((el) => {
+        const r = el.getBoundingClientRect();
+        const cs = getComputedStyle(el);
+        return r.width > 0 && r.height > 0 && cs.visibility !== "hidden";
+      })
+      .map((el) => (el.getAttribute("aria-label") ?? el.textContent ?? "").trim().replace(/\s+/g, " ").slice(0, 60)),
+  );
+  console.log(`[phone-composition ${vp.width}x${vp.height}] ${controls.length} visible controls:\n  ${controls.join("\n  ")}`);
+
+  const deskHandover = page.locator('[data-role="device-handover"]');
+  const phoneHandover = page.locator('[data-role="device-handover-phone"]');
+  const handoverOffered = (await deskHandover.count()) > 0;
+  const detailsToggle = page.locator('[data-role="match-details-toggle"]');
+  const scoringHeading = page.locator('[data-role="console-scoring"] h2');
+  const activityToggle = page.locator('[data-role="v3-activity-toggle"]');
+  const rows = page.locator('[data-role="v3-activity-row"]');
+  const rowCount = await rows.count();
+
+  if (phone) {
+    if (handoverOffered) {
+      await expect(phoneHandover).toBeVisible();
+      await expect(deskHandover).toBeHidden();
+    }
+    await expect(detailsToggle).toBeVisible();
+    await expect(scoringHeading).toBeHidden();
+    await expect(page.locator('[data-role="v3-headline"]')).toBeHidden();
+
+    // The primary tap sits inside the first screen, with the page at the top.
+    expect(await page.evaluate(() => window.scrollY)).toBe(0);
+    const target =
+      model === "S"
+        ? page.locator('button[data-role="v3-scorebug-half"]').first()
+        : page.locator('[data-role="v3-tiles"] button[data-tile-id]').first();
+    const box = await target.boundingBox();
+    expect(box, "primary tap target must render").not.toBeNull();
+    // Claim 3 evidence: printed regardless of pass/fail, since Playwright
+    // only echoes the assertion message on FAILURE and this task's report
+    // needs the real measured numbers even from a passing run.
+    console.log(
+      `[phone-composition ${vp.width}x${vp.height}] primary tap target ("${model}"): y=${Math.round(box!.y)} height=${Math.round(box!.height)} bottom=${Math.round(box!.y + box!.height)} (first screen is ${vp.height}px)`,
+    );
+    expect(
+      box!.y + box!.height,
+      `primary tap target bottom edge (${Math.round(box!.y + box!.height)}px) must sit inside the ${vp.height}px first screen`,
+    ).toBeLessThanOrEqual(vp.height);
+    // Nothing overlays it at its centre — a 44px box under a sheet is still a miss.
+    expect(
+      await target.evaluate((el) => {
+        const r = el.getBoundingClientRect();
+        const at = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+        return at !== null && (at === el || el.contains(at));
+      }),
+    ).toBe(true);
+
+    // Claim 1 (2026-09-02-scorepad-v3-phone-composition Task 6 — never
+    // measured before this): scorebug.tsx line ~424 reasons that
+    // `max-md:shrink-0` alone, with deliberately NO `whitespace-nowrap`
+    // (its own comment: nowrap would reintroduce the min-content floor
+    // `min-w-0` exists to remove), holds a RESERVED strip item at its full
+    // natural width on the phone rail instead of letting flex-shrink squeeze
+    // the cell until an unbroken token (a candidate name) overflows it.
+    // Only badminton's flow (model "S") ever produces a reserved item here —
+    // the "server" slot, skins/badminton.tsx:851 — cricket's strip carries no
+    // `reserve` at all. Measured directly: the wrapper's rendered width
+    // against its own scrollWidth; if shrink-0 were not holding, an unbroken
+    // token would push scrollWidth past rect.width.
+    if (model === "S") {
+      const reservedServer = page.locator('[data-strip-reserve="true"]:has([data-strip-item-id="server"])');
+      if ((await reservedServer.count()) > 0) {
+        const [rectWidth, scrollW] = await reservedServer.first().evaluate((el) => [
+          el.getBoundingClientRect().width,
+          el.scrollWidth,
+        ]);
+        console.log(
+          `[phone-composition ${vp.width}x${vp.height}] reserved "server" strip item: rect.width=${rectWidth} scrollWidth=${scrollW}`,
+        );
+        expect(
+          scrollW,
+          `reserved strip item content (scrollWidth ${scrollW}px) must not exceed its box (rect.width ${rectWidth}px) — max-md:shrink-0 must hold the width without whitespace-nowrap`,
+        ).toBeLessThanOrEqual(Math.ceil(rectWidth));
+      }
+    }
+
+    // Ledger: latest only until the toggle is tapped; every row after.
+    if (rowCount > 1) {
+      await expect(activityToggle).toBeVisible();
+      expect(await rows.evaluateAll((els) => els.filter((e) => (e as HTMLElement).offsetHeight > 0).length)).toBe(1);
+      await activityToggle.click();
+      expect(await rows.evaluateAll((els) => els.filter((e) => (e as HTMLElement).offsetHeight > 0).length)).toBe(rowCount);
+      await activityToggle.click();
+    }
+    // Lineup disclosures: rows visible, editors folded.
+    const disclosures = page.locator('[data-role="phone-disclosure-toggle"]');
+    for (let i = 0; i < (await disclosures.count()); i++) await expect(disclosures.nth(i)).toBeVisible();
+  } else {
+    if (handoverOffered) {
+      await expect(deskHandover).toBeVisible();
+      await expect(phoneHandover).toBeHidden();
+    }
+    await expect(detailsToggle).toBeHidden();
+    await expect(scoringHeading).toBeVisible();
+    await expect(activityToggle).toBeHidden();
+    for (const el of await page.locator('[data-role="phone-disclosure-toggle"]').all()) await expect(el).toBeHidden();
+  }
+  await expectNoHorizontalScroll(page);
+}
+
 /** The project (viewport) this test is running under, e.g. "mobile-430".
  *  helpers.ts's `TAG` is `Date.now().toString(36)`, evaluated once per
  *  worker process — and a single `npx playwright test` invocation starts
@@ -1282,6 +1401,7 @@ test("cricket v3 pad: tiles + over-summary sheet + context strip hold the 44px f
   ).toHaveCount(0);
 
   await expectNoHorizontalScroll(page);
+  await expectPhoneComposition(page, "T");
 });
 
 /**
@@ -3230,6 +3350,7 @@ test("badminton v3 pad: both scoring halves and the Set-score tile hold the 44px
     timeout: 20_000,
   });
   await expectNoHorizontalScroll(page);
+  await expectPhoneComposition(page, "S");
 });
 
 test("table tennis v3 pad: the serve-anchor tile and its sheet hold the 44px floor, no horizontal scroll", async ({
