@@ -30,9 +30,12 @@ everything bespoke to a conversation:
 | Offer | One-line sell | Value metric |
 |---|---|---|
 | **Free** | Run a club night. | 1 org, small caps, badge on |
-| **Event Pass** (M $29 / L $59, one-time) | One tournament, fully powered. | competition size |
-| **Pro** ($19/mo, $159/yr) | Your whole season. | organisation scale: seats, teams, squads, credits |
+| **Event Pass** (M $15 / L $29, one-time) | One tournament, fully powered. | competition size |
+| **Pro** ($9/mo, $79/yr) | Your whole season. | organisation scale: seats, teams, squads, credits |
 | **Contact Us** (dark `enterprise`) | Your federation. | unlimited + bespoke |
+
+Prices are the R2 ladder ruled 2026-09-02 (§3a); they land in W2 with the
+matrix.
 
 Pro Plus is retired. No public plan carries an unlimited team, squad, seat or
 credit figure; only the dark `enterprise` plan does, and it is never
@@ -117,6 +120,7 @@ self-serve.
 | R9 | AI credits: Free **5**/mo, Pro **35**/mo, Pass M **+25**, Pass L **+50** (per-rung grant). |
 | R10 | Staff seats (`members.max`): Free **3**, Pro **10**. |
 | R11 | Device hand-over (`scoring.device_links`) is a paid feature: Pro, and both pass rungs (PO recommendation accepted by silence — see §2). |
+| R12 | **Prices come down** (owner: "reduce the price"), ladder R2: Pro **$9/mo, $79/yr**; Pass M **$15**, Pass L **$29**. Five currencies stay (USD/EUR/GBP/AUD/INR), each at a **purchasing-power set point**, never an FX copy. Table in §3a. |
 
 Product-owner defaults below were presented and not overridden; treat them as
 approved and change any single cell at review without touching the design.
@@ -244,12 +248,44 @@ re-derived from the matrix and guarded by `lib/copy-truth.ts`. Target copy
   +50 credits. Live scoreboard · hand-over scoring devices · auto officials ·
   suspension tracking · advanced formats · top-scorer stats · branded exports
   · sponsors · 5 restore points · 5% fee · counts toward Pro if you subscribe
-  within 30 days. Nudge: three L passes ($177) cost more than Pro annual
-  ($159).
+  within 30 days. Nudge: three L passes ($87) cost more than Pro annual
+  ($79).
 - **Pro — "Your whole season."** Unlimited competitions · 100 teams · squads
   of 40 · 25 clubs · 10 staff + 10 scorer seats · 5 organisations on one bill
   · everything the pass has, all season · badge removed · API (read) · 35 AI
-  credits a month · 2% fee · annual = two months free.
+  credits a month · 2% fee · annual ≈ 8.8 months, "over three months free".
+
+### 3a. Prices (R12) — every amount is a SET point per currency
+
+Ladder rules that every number below satisfies and that
+`org-addon-catalog-parity.test.ts` / `copy-truth.ts` keep pinned: Pass M <
+Pass L < Pro annual; three L passes ≥ Pro annual; annual ≈ 8–9 months; the
+graduated tier-2 (extra organisation) rate = half the base rounded DOWN to a
+whole major unit (INR down to the nearest x99); pass price redeemable against
+Pro within 30 days.
+
+| Price | USD | EUR | GBP | AUD | INR |
+|---|---|---|---|---|---|
+| Pro monthly (tier 1) | 9 | 8 | 7 | 12 | 399 |
+| Pro monthly tier 2+ / extra org add-on | 4 | 4 | 3 | 6 | 199 |
+| Pro annual (tier 1) | 79 | 69 | 59 | 99 | 2,999 |
+| Pro annual tier 2+ | 39 | 34 | 29 | 49 | 1,499 |
+| Event Pass M | 15 | 14 | 12 | 19 | 599 |
+| Event Pass L | 29 | 27 | 24 | 39 | 1,199 |
+| Extra seat / month | 2 | 2 | 2 | 3 | 99 |
+| Size pack +32 (one-time) | 5 | 5 | 4 | 7 | 199 |
+| AI credit packs 40 / 105 / 220 / 460 | unchanged (10 / 25 / 50 / 100 and today's set points) — credits are compute, not packaging |
+
+Checks: 3 × L = 87 ≥ 79 (USD); 3 × 27 = 81 ≥ 69 (EUR); 3 × 24 = 72 ≥ 59
+(GBP); 3 × 39 = 117 ≥ 99 (AUD); 3 × 1,199 = 3,597 ≥ 2,999 (INR). Two L passes
+are cheaper than annual in every currency, so a two-tournament organiser is
+never pushed into a subscription.
+
+Why these points: INR at ₹399 is 29% of today's ₹1,399 — Indian clubs are the
+volume market and were being charged near FX parity. GBP/EUR sit under USD
+because club budgets there are set in whole tens. AUD sits above because AUD
+prices are read against an AUD 15–20 coffee-and-court norm. Revenue per Pro
+org falls 53% against today; the bet is volume plus the badge network.
 - **Contact Us — "Your federation."** A strip, not a card: unlimited seats,
   teams and organisations · write API · 1% fee · pooled AI credits · priority
   support. Listed as *"ask us"* and never as included: custom domain, white
