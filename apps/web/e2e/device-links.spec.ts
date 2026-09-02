@@ -153,6 +153,11 @@ test("a device link cannot score a fixture it does not own", async ({ request, p
 
   const dlApi = await playwright.request.newContext({
     baseURL: BASE,
+    // Explicit: request.newContext() inherits `use.storageState` (see the
+    // realtime test below). Harmless here — requireFixtureActor takes the dl_
+    // branch before it ever looks at a cookie — but "the token is the only
+    // credential" has to be true, not merely intended.
+    storageState: { cookies: [], origins: [] },
     extraHTTPHeaders: { Authorization: `Bearer ${secret}` },
   });
   try {
@@ -193,5 +198,110 @@ test("a device link cannot score a fixture it does not own", async ({ request, p
     expect(allowed.status()).toBe(201);
   } finally {
     await dlApi.dispose();
+  }
+});
+
+// The other door the same ownership predicate guards: the public realtime
+// token. It is NOT reachable on the seeds the tests above use — the eligibility
+// chain is `fixtureRealtimeEligible || isFixtureOfficial || <device link owns
+// it>`, and fixtureRealtimeEligible reads `public_fixtures_v`, so a PUBLIC
+// competition on a Pro org (which is what seedScoredDivision builds) returns
+// true and short-circuits before the device-link branch is consulted. On a
+// PRIVATE competition it returns false, and the device link is the whole
+// authorisation. Without this test that route can `return true` and nothing in
+// the repo notices.
+test("a device link mints a realtime token for its own fixture only (private competition)", async ({
+  request,
+  playwright,
+}) => {
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `DL Realtime ${TAG}-${Math.random().toString(36).slice(2, 6)}`,
+    visibility: "private",
+  });
+  const div = await apiJson<{ id: string }>(
+    request,
+    `/api/v1/competitions/${comp.data!.id}/divisions`,
+    "POST",
+    {
+      name: "Open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    },
+  );
+  await apiJson(
+    request,
+    `/api/v1/divisions/${div.data!.id}/entrants`,
+    "POST",
+    ["Oscar", "Papa", "Quebec", "Romeo"].map((n, i) => ({
+      kind: "individual",
+      display_name: n,
+      seed: i + 1,
+    })),
+  );
+  const stage = await apiJson<{ id: string }>(
+    request,
+    `/api/v1/divisions/${div.data!.id}/stages`,
+    "POST",
+    { seq: 1, kind: "league", name: "League" },
+  );
+  const gen = await apiJson<{ fixtures: { id: string }[] }>(
+    request,
+    `/api/v1/stages/${stage.data!.id}/generate`,
+    "POST",
+  );
+  const ids = gen.data!.fixtures.map((f) => f.id);
+  expect(ids.length).toBeGreaterThan(1);
+  const own = ids[0]!;
+  const other = ids[1]!;
+  await apiJson(request, `/api/v1/divisions/${div.data!.id}/start`, "POST");
+
+  const minted = await apiJson<{ secret: string }>(
+    request,
+    `/api/v1/fixtures/${own}/device-links`,
+    "POST",
+    { label: "Court 9" },
+  );
+  expect(minted.status).toBe(201);
+  const secret = minted.data!.secret;
+
+  // storageState EXPLICITLY empty on both. `playwright.config.ts` sets
+  // `use: { storageState: AUTH_STATE }` and `playwright.request.newContext()`
+  // inherits it exactly as `browser.newContext()` does — measured here: with
+  // the bare options this test PASSED its own-fixture 200 and then got 200 for
+  // the OTHER fixture too, because the inherited editor cookie made
+  // `isFixtureOfficial()` true and short-circuited the device-link branch
+  // before it was ever consulted. An anonymous curl against the same two
+  // fixtures returned 200/403 correctly. Naming a variable `anon` proves
+  // nothing; passing the empty state does.
+  const emptyState = { cookies: [], origins: [] };
+  const dlApi = await playwright.request.newContext({
+    baseURL: BASE,
+    storageState: emptyState,
+    extraHTTPHeaders: { Authorization: `Bearer ${secret}` },
+  });
+  const anon = await playwright.request.newContext({ baseURL: BASE, storageState: emptyState });
+  try {
+    // Precondition, first, because everything below is vacuous without it:
+    // this fixture is NOT eligible on its own. If it ever returns 200 the
+    // competition is public, or the context is signed in, and the two
+    // assertions after it prove nothing.
+    const noToken = await anon.get(`/api/v1/public/fixtures/${own}/realtime-token`);
+    expect(noToken.status()).toBe(403);
+
+    // So a 200 here is the device-link branch granting it, and nothing else.
+    const ownToken = await dlApi.get(`/api/v1/public/fixtures/${own}/realtime-token`);
+    expect(ownToken.status()).toBe(200);
+    const granted = (await ownToken.json()) as { data: { token: string; channel: string } };
+    expect(granted.data.channel).toBe(`fixture:${own}`);
+    expect(granted.data.token.length).toBeGreaterThan(0);
+
+    // The refusal this test exists for: the same live token, one fixture over.
+    const crossToken = await dlApi.get(`/api/v1/public/fixtures/${other}/realtime-token`);
+    expect(crossToken.status()).toBe(403);
+  } finally {
+    await dlApi.dispose();
+    await anon.dispose();
   }
 });

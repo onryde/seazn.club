@@ -30,13 +30,20 @@ export async function GET(req: Request, { params }: Ctx) {
 }
 
 /** Doc 13 §7: a valid device link for THIS fixture gets the realtime token —
- *  same officials bypass as scorers; the holder is producing the data. The
- *  ownership comparison is NOT re-spelled here: it is the same predicate the
- *  scoring door refuses on (device-links.ts), so a change to one is a change
- *  to both. This wrapper exists only to keep that import lazy — the usecase
- *  module (and the entitlement lane behind it) must not load on every public
- *  spectator's token request. */
+ *  same officials bypass as scorers; the holder is producing the data.
+ *
+ *  Ownership is NOT re-spelled here: it is the same predicate the scoring door
+ *  refuses on (`deviceLinkCoversFixture`, device-links.ts), so a change to one
+ *  is a change to both.
+ *
+ *  The prefix test stays HERE, ahead of the dynamic import, because this is a
+ *  public route: an anonymous spectator with no `dl_` token must not pull the
+ *  usecase module (and the entitlement lane behind it) into their request. It
+ *  is a cheap negative filter, not the authorisation decision —
+ *  `requestDeviceLinkCoversFixture` re-tests it against `DEVICE_LINK_PREFIX`
+ *  and is the only thing that can return true. */
 async function isFixtureDeviceLink(req: Request, fixtureId: string): Promise<boolean> {
+  if (!req.headers.get("authorization")?.startsWith("Bearer dl_")) return false;
   const { requestDeviceLinkCoversFixture } = await import("@/server/usecases/device-links");
   return requestDeviceLinkCoversFixture(req, fixtureId);
 }
