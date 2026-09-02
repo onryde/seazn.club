@@ -438,15 +438,16 @@ In each `ui.json`, immediately after the line `"card.progress.played": …,` ins
   "desk.ledger.nothingNext": "Nothing scheduled next",
   "desk.ledger.open": "Open",
   "desk.ledger.runSheet": "Fixtures",
+  "desk.masthead.divisions": "{n} divisions",
 ```
 
 Translations (same keys, same `{vars}`):
 
-es: "Configurando", "Programada", "Día de partido", "Finalizada", "{n} en juego", "Falta el sorteo", "Sin anotador", "{played} de {total} jugados · completa", "{played} de {total} jugados · {stage} sin sortear", "Configurando · {entrants} participantes", "{played} de {total} jugados · {inPlay} en juego", "Próximo {when} · {played} de {total} jugados", "{played} de {total} jugados · nada programado", " · {n} sin programar", "Requiere tu atención", "{division} · {stage} aún no tiene sorteo", "Los participantes esperan la propuesta.", "Calcular propuesta", "{division} · {n} partidos sin programar", "Sin hora ni pista. La presentación los muestra como pendientes.", "Abrir tablero de horarios", "{division} · {home} v {away} no tiene anotador", "Empezó hace {minutes} min. No se está registrando nada.", "Asignar anotador", "{division} · falta el resultado de {home} v {away}", "La ventana del partido pasó sin resultado.", "Introducir resultado", "{n} inscripciones esperan aprobación", "Revísalas antes de bloquear los participantes.", "Revisar", "Divisiones", "Próximo: {when} {home} v {away}", "Ahora: {home} v {away}", "Nada programado a continuación", "Abrir", "Partidos".
+es: "Configurando", "Programada", "Día de partido", "Finalizada", "{n} en juego", "Falta el sorteo", "Sin anotador", "{played} de {total} jugados · completa", "{played} de {total} jugados · {stage} sin sortear", "Configurando · {entrants} participantes", "{played} de {total} jugados · {inPlay} en juego", "Próximo {when} · {played} de {total} jugados", "{played} de {total} jugados · nada programado", " · {n} sin programar", "Requiere tu atención", "{division} · {stage} aún no tiene sorteo", "Los participantes esperan la propuesta.", "Calcular propuesta", "{division} · {n} partidos sin programar", "Sin hora ni pista. La presentación los muestra como pendientes.", "Abrir tablero de horarios", "{division} · {home} v {away} no tiene anotador", "Empezó hace {minutes} min. No se está registrando nada.", "Asignar anotador", "{division} · falta el resultado de {home} v {away}", "La ventana del partido pasó sin resultado.", "Introducir resultado", "{n} inscripciones esperan aprobación", "Revísalas antes de bloquear los participantes.", "Revisar", "Divisiones", "Próximo: {when} {home} v {away}", "Ahora: {home} v {away}", "Nada programado a continuación", "Abrir", "Partidos", "{n} divisiones".
 
-fr: "En préparation", "Planifiée", "Jour de match", "Terminée", "{n} en cours", "Tirage requis", "Sans marqueur", "{played} sur {total} joués · terminée", "{played} sur {total} joués · {stage} non tiré", "En préparation · {entrants} participants", "{played} sur {total} joués · {inPlay} en cours", "Prochain {when} · {played} sur {total} joués", "{played} sur {total} joués · rien de planifié", " · {n} non planifiés", "À traiter", "{division} · {stage} n'a pas encore de tirage", "Les participants attendent la proposition.", "Calculer la proposition", "{division} · {n} matchs non planifiés", "Ni heure ni terrain. Le diaporama les affiche comme à confirmer.", "Ouvrir le tableau de planification", "{division} · {home} v {away} n'a pas de marqueur", "Coup d'envoi il y a {minutes} min. Rien n'est enregistré.", "Attribuer un marqueur", "{division} · résultat manquant pour {home} v {away}", "Le créneau du match est passé sans résultat.", "Saisir le résultat", "{n} inscriptions en attente d'approbation", "Vérifiez-les avant le verrouillage des participants.", "Vérifier", "Divisions", "Prochain : {when} {home} v {away}", "En cours : {home} v {away}", "Rien de planifié ensuite", "Ouvrir", "Matchs".
+fr: "En préparation", "Planifiée", "Jour de match", "Terminée", "{n} en cours", "Tirage requis", "Sans marqueur", "{played} sur {total} joués · terminée", "{played} sur {total} joués · {stage} non tiré", "En préparation · {entrants} participants", "{played} sur {total} joués · {inPlay} en cours", "Prochain {when} · {played} sur {total} joués", "{played} sur {total} joués · rien de planifié", " · {n} non planifiés", "À traiter", "{division} · {stage} n'a pas encore de tirage", "Les participants attendent la proposition.", "Calculer la proposition", "{division} · {n} matchs non planifiés", "Ni heure ni terrain. Le diaporama les affiche comme à confirmer.", "Ouvrir le tableau de planification", "{division} · {home} v {away} n'a pas de marqueur", "Coup d'envoi il y a {minutes} min. Rien n'est enregistré.", "Attribuer un marqueur", "{division} · résultat manquant pour {home} v {away}", "Le créneau du match est passé sans résultat.", "Saisir le résultat", "{n} inscriptions en attente d'approbation", "Vérifiez-les avant le verrouillage des participants.", "Vérifier", "Divisions", "Prochain : {when} {home} v {away}", "En cours : {home} v {away}", "Rien de planifié ensuite", "Ouvrir", "Matchs", "{n} divisions".
 
-nl: "In voorbereiding", "Gepland", "Wedstrijddag", "Afgerond", "{n} bezig", "Loting nodig", "Geen scorer", "{played} van {total} gespeeld · afgerond", "{played} van {total} gespeeld · {stage} niet geloot", "In voorbereiding · {entrants} deelnemers", "{played} van {total} gespeeld · {inPlay} bezig", "Volgende {when} · {played} van {total} gespeeld", "{played} van {total} gespeeld · niets gepland", " · {n} ongepland", "Vraagt om jou", "{division} · {stage} heeft nog geen loting", "Deelnemers wachten op het voorstel.", "Voorstel berekenen", "{division} · {n} wedstrijden ongepland", "Geen tijd of baan. De slideshow toont ze als nader te bepalen.", "Planbord openen", "{division} · {home} v {away} heeft geen scorer", "{minutes} min geleden afgetrapt. Er wordt niets vastgelegd.", "Scorer toewijzen", "{division} · uitslag ontbreekt voor {home} v {away}", "Het wedstrijdvenster is verstreken zonder uitslag.", "Uitslag invoeren", "{n} inschrijvingen wachten op goedkeuring", "Beoordeel ze voordat deelnemers worden vergrendeld.", "Beoordelen", "Divisies", "Volgende: {when} {home} v {away}", "Nu: {home} v {away}", "Niets gepland hierna", "Openen", "Wedstrijden".
+nl: "In voorbereiding", "Gepland", "Wedstrijddag", "Afgerond", "{n} bezig", "Loting nodig", "Geen scorer", "{played} van {total} gespeeld · afgerond", "{played} van {total} gespeeld · {stage} niet geloot", "In voorbereiding · {entrants} deelnemers", "{played} van {total} gespeeld · {inPlay} bezig", "Volgende {when} · {played} van {total} gespeeld", "{played} van {total} gespeeld · niets gepland", " · {n} ongepland", "Vraagt om jou", "{division} · {stage} heeft nog geen loting", "Deelnemers wachten op het voorstel.", "Voorstel berekenen", "{division} · {n} wedstrijden ongepland", "Geen tijd of baan. De slideshow toont ze als nader te bepalen.", "Planbord openen", "{division} · {home} v {away} heeft geen scorer", "{minutes} min geleden afgetrapt. Er wordt niets vastgelegd.", "Scorer toewijzen", "{division} · uitslag ontbreekt voor {home} v {away}", "Het wedstrijdvenster is verstreken zonder uitslag.", "Uitslag invoeren", "{n} inschrijvingen wachten op goedkeuring", "Beoordeel ze voordat deelnemers worden vergrendeld.", "Beoordelen", "Divisies", "Volgende: {when} {home} v {away}", "Nu: {home} v {away}", "Niets gepland hierna", "Openen", "Wedstrijden", "{n} divisies".
 
 - [ ] **Step 2: Regenerate keys and check parity**
 
@@ -1359,7 +1360,7 @@ Move the entire `<CompetitionPassEntry … />` element (lines 118-141) out of th
             </div>
 ```
 
-`card.meta.divisions` does not exist (checked 2026-09-02): add `"desk.masthead.divisions": "{n} divisions"` to all four dictionaries (es "{n} divisiones", fr "{n} divisions", nl "{n} divisies") next to the other `desk.*` keys, then `npm run i18n:gen-keys && npm run i18n:check`. The sport list is TEXT — no icon on the masthead (owner ruling).
+`desk.masthead.divisions` was added in Task 2. The sport list is TEXT — no icon on the masthead (owner ruling).
 
 - [ ] **Step 4: Needs you + ledger**
 
@@ -1406,7 +1407,7 @@ Claude-Session: https://claude.ai/code/session_013UrscuUPj2x28AZFkQ9uNR"
 
 **Interfaces:**
 - Consumes: `resolvePhase`, `PhaseInput` (Task 1); the page already has `stages: StageRow[]`, `fixtures` (from `listDivisionFixtures`), `settings` (from `getScheduleSettings`, display tz only) and `division.status`.
-- Produces: `StagesPanel` prop `phase: DivisionPhase` (required).
+- Produces: `StagesPanel` prop `phase?: DivisionPhase` (optional; absent ⇒ tip hidden).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1462,7 +1463,7 @@ Expected: `0 2 2`.
 
 - [ ] **Step 3: StagesPanel changes**
 
-At `:393` add to the props destructure and type: `phase: DivisionPhase;` (import `type { DivisionPhase } from "@/lib/division-phase"`).
+At `:393` add to the props destructure and type: `phase?: DivisionPhase;` (import `type { DivisionPhase } from "@/lib/division-phase"`). Optional by controller ruling: fifteen existing `stages-panel-*.test.tsx` files build props without it and the tsc gate would red on every one; an absent `phase` hides the tip (the gate is `phase === "setting_up"`), which is the safe direction.
 
 At `:718` replace `{canEdit && <TipCallout id="division.start-locks" />}` with:
 
@@ -1611,6 +1612,121 @@ In the competition-page article (found by the grep above), add one paragraph und
 
 ```bash
 cd /Users/ashokhein/github/seazn.club-fxc && git add apps/web/e2e/competition-desk.spec.ts apps/web/e2e/helpers.ts scripts/smoke.ts content/help && git commit -m "test(desk): competition desk e2e, smoke phase check, help copy
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_013UrscuUPj2x28AZFkQ9uNR"
+```
+
+---
+
+### Task 7b: Customer walkthrough — an organiser takes a competition from blank to finished and the desk tells the truth at every step
+
+**Files:**
+- Create: `apps/web/e2e/walkthrough/competition-desk-organiser.spec.ts`
+- Verify: `apps/web/playwright.config.ts:119` selects `e2e/walkthrough/` into the `walkthrough` project automatically (no config edit).
+
+**Interfaces:**
+- Consumes: helpers `activeOrg`, `apiJson`, `TAG`, `loginUi`, `createCompetitionViaUi(page, name, visibility?)`, `createDivisionViaUi(page, competitionId, name, …)`, `addEntrantsViaApi`, `scoreFixture(request, fixtureId, p1, p2)`, `setFixtureStatusSql`, `setStageStatusSql` (Task 7), `screenshotAtWidths`, `expectNoHorizontalScroll` from `../helpers`; `data-testid`/`data-phase`/`data-attention`/`data-pill` hooks from Task 4.
+
+The walkthrough rule: the API may be used to REACH a state; every step that IS the thing under test — reading the desk and acting from it — is done through the UI. Here the thing under test is the desk's honesty and its buttons, so creating the competition and division goes through the UI (that is where a new organiser starts), entrants/results are reached via API (they are not this wave's surface), and every read + click on the competition page is by hand.
+
+- [ ] **Step 1: Write the walkthrough**
+
+`apps/web/e2e/walkthrough/competition-desk-organiser.spec.ts`:
+
+```ts
+import { expect, test, type Page } from "@playwright/test";
+import {
+  activeOrg, apiJson, TAG, createCompetitionViaUi, createDivisionViaUi, addEntrantsViaApi,
+  scoreFixture, setFixtureStatusSql, setStageStatusSql, screenshotAtWidths, expectNoHorizontalScroll,
+} from "../helpers";
+
+test.describe.configure({ mode: "serial" });
+
+test("an organiser watches the desk go Setting up → Scheduled → Match day → No scorer → Finished, and every button lands where it says", async ({ page, request }, testInfo) => {
+  test.setTimeout(240_000);
+  const shot = (name: string) => page.screenshot({ path: `${testInfo.outputPath()}/${name}.png`, fullPage: true });
+  const org = await activeOrg(page);
+
+  // 1. Blank competition, made by hand.
+  const compId = await createCompetitionViaUi(page, `Desk Walk ${TAG}`, "public");
+  const comp = await apiJson<{ slug: string }>(request, `/api/v1/competitions/${compId}`, "GET");
+  const compPath = `/o/${org.slug}/c/${comp.data!.slug}`;
+  await page.goto(compPath);
+  await expect(page.getByTestId("desk-needs-you")).toHaveCount(0);
+  await expect(page.getByTestId("desk-ledger-row")).toHaveCount(0);
+  await shot("01-blank");
+
+  // 2. One division, made by hand: the row appears with its sport glyph and Setting up.
+  const divId = await createDivisionViaUi(page, compId, "Premier");
+  await page.goto(compPath);
+  const row = page.getByTestId("desk-ledger-row").first();
+  await expect(row).toHaveAttribute("data-phase", "setting_up");
+  await expect(row).toContainText("Setting up");
+  await expect(row.locator("span[aria-hidden]").first()).not.toHaveText(/^[A-Z]$/); // glyph or logo, never a monogram
+  await shot("02-setting-up");
+
+  // 3. Reach: entrants + generated fixtures (API). Read: Needs you names the unscheduled round.
+  await addEntrantsViaApi(request, divId, ["Riverside FC", "Valley CC", "Lakeside FC", "Harbour CC"], "team");
+  const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divId}/stages`, "POST", { seq: 1, kind: "league", name: "League", config: {}, progression: null });
+  await apiJson(request, `/api/v1/stages/${stage.data!.id}/generate`, "POST");
+  await apiJson(request, `/api/v1/divisions/${divId}/start`, "POST");
+  const fixtures = await apiJson<{ id: string; fixture_no: number }[]>(request, `/api/v1/divisions/${divId}/fixtures`, "GET");
+  const ids = fixtures.data!.map((f) => f.id);
+  await page.goto(compPath);
+  await expect(row).toHaveAttribute("data-phase", "scheduled");
+  const needs = page.getByTestId("desk-needs-you");
+  await expect(needs.locator('[data-attention="unscheduled"]')).toContainText(`${ids.length} fixtures unscheduled`);
+  await shot("03-unscheduled");
+  await needs.getByRole("link", { name: "Open schedule board" }).click();
+  await expect(page).toHaveURL(/\/schedule$/);
+
+  // 4. Reach: kick-off today (API PATCH). Read: Match day.
+  const today = new Date(); today.setUTCHours(18, 0, 0, 0);
+  await apiJson(request, `/api/v1/fixtures/${ids[0]}`, "PATCH", { scheduled_at: today.toISOString() });
+  await page.goto(compPath);
+  await expect(row).toHaveAttribute("data-phase", "match_day");
+  await expect(page.locator('[data-phase="match_day"]').first()).toBeVisible();
+  await shot("04-match-day");
+
+  // 5. Reach: in play, nobody scoring (SQL). Read: No scorer leads, and the button lands on the fixture.
+  await setFixtureStatusSql(ids[0], "in_play");
+  await page.goto(compPath);
+  await expect(needs.locator("[data-attention]").first()).toHaveAttribute("data-attention", "no_scorer");
+  await expect(row.locator('[data-pill="no_scorer"]')).toBeVisible();
+  await expect(page.locator('[data-phase="in_play"]').first()).toContainText("1 in play");
+  await shot("05-no-scorer");
+  await needs.getByRole("link", { name: "Assign scorer" }).click();
+  await expect(page).toHaveURL(new RegExp(`/f/${fixtures.data![0].fixture_no}$`));
+
+  // 6. Reach: every result in, stage complete (API + SQL). Read: Finished, nothing needs the organiser.
+  await setFixtureStatusSql(ids[0], "scheduled");
+  for (const id of ids) await scoreFixture(request, id, 2, 1);
+  await setStageStatusSql(stage.data!.id, "complete");
+  await page.goto(compPath);
+  await expect(row).toHaveAttribute("data-phase", "finished");
+  await expect(row).toContainText("complete");
+  await expect(row).not.toContainText("Nothing scheduled");
+  await expect(page.getByTestId("desk-needs-you")).toHaveCount(0);
+  await shot("06-finished");
+
+  // 7. The page holds at every width, in this final state.
+  await screenshotAtWidths(page, compPath, `${testInfo.outputPath()}/widths`);
+  await expectNoHorizontalScroll(page);
+});
+```
+
+Adjust to the real helper signatures if `screenshotAtWidths`/`expectNoHorizontalScroll` take different arguments (read their definitions in `../helpers`, `grep -na "export async function screenshotAtWidths\|export async function expectNoHorizontalScroll" apps/web/e2e/helpers.ts`), and if `scoreFixture` requires the fixture to be `scheduled` first keep the reset in step 6 as written. If `GET /api/v1/divisions/{id}/fixtures` is not a route, take the ids from `createStageAndGenerate` instead (Task 7 uses it) — but keep stage creation visible in this file so the walkthrough reads top to bottom.
+
+- [ ] **Step 2: Run it in the walkthrough project**
+
+Run: `cd /Users/ashokhein/github/seazn.club-fxc && eval "$(~/.claude/skills/seazn-local-env/scripts/seazn-env.sh env --label fxc)" && cd apps/web && E2E_PROD_TARGET=1 PLAYWRIGHT_BASE=$SMOKE_BASE npx playwright test --project=walkthrough e2e/walkthrough/competition-desk-organiser.spec.ts --reporter=line 2>&1 | tail -12`
+Expected: `1 passed`. Open the six numbered screenshots in the test's output dir and confirm each shows the state its name claims (pill text, Needs you rows). A screenshot that shows the previous state is a defect in the product or the wait, not a pass.
+
+- [ ] **Step 3: Commit**
+
+```bash
+cd /Users/ashokhein/github/seazn.club-fxc && git add apps/web/e2e/walkthrough/competition-desk-organiser.spec.ts && git commit -m "test(desk): organiser walkthrough — blank to finished through the competition desk
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_013UrscuUPj2x28AZFkQ9uNR"
