@@ -40,7 +40,7 @@ import {
   runRate,
   variantCode,
 } from "../cricket";
-import type { TFn } from "../cricket";
+import type { InningsFidelity, TFn } from "../cricket";
 import type { Dict } from "@/lib/i18n-constants";
 import { t as realT } from "@/lib/i18n-runtime";
 
@@ -1527,6 +1527,133 @@ describe("R8 — buildContext states the innings' locked scoring mode", () => {
   it("the same fixture WITHOUT closed:true does carry the mode slot — proving the suppression above is a genuine gate, not a vacuous check", () => {
     const spec = buildContext(view({ state: state({ innings: [innings({ closed: true }), innings()] }) }), t)!;
     expect(modeSlotOf(spec)).not.toBeNull();
+  });
+
+  // -------------------------------------------------------------------------
+  // PROGRAMME RULE 19 — pin what the statement SAYS, not that one rendered.
+  //
+  // R6 shipped a reachable `minutes` field past twelve mutants and a full
+  // branch review and still wrote an FIH yellow as 2 minutes against a
+  // declared 5, because every test asserted the field was REACHABLE and none
+  // asserted its VALUE against the class the scorer picked. The analogue here
+  // is worse than a missing chip: a statement reading "Over-by-over" over a
+  // ball-by-ball innings is a lie a scorer would act on.
+  //
+  // Nothing below is a table of expected strings. Each expectation is read
+  // back off (a) the fold, (b) `buildTiles` — the pad's OWN, independent
+  // expression of the same lane — or (c) the shipped dictionary. The single
+  // human-readable anchor is marked where it appears, and exists so that all
+  // three cannot quietly agree on the wrong words.
+  // -------------------------------------------------------------------------
+
+  /** The lane the pad's TILES put this view in. `buildTiles` gates the ball
+   *  row and the over-summary tile on the same `inningsFidelity` the statement
+   *  reads, through a completely separate branch — so it is a genuine second
+   *  opinion, not a mirror of the statement's own code path. */
+  function laneFromTiles(v: PadHostView): "fine" | "coarse" | "unopened" {
+    const ids = new Set(buildTiles(v).map((tl) => tl.id));
+    const ball = ids.has("run0");
+    const summary = ids.has("overSummary");
+    if (ball && summary) return "unopened"; // neither lane has locked in
+    return ball ? "fine" : "coarse";
+  }
+
+  function assertStatementMatchesTheInningsItDescribes(
+    cfg: unknown,
+    st: ReturnType<typeof foldCricket>,
+    en: Record<string, string>,
+  ) {
+    const v = view({ cfg, state: st });
+    // The ENGINE's answer for the innings the strip is actually describing —
+    // `currentInnings`, the same accessor `buildContext` feeds `modeSlot`, so
+    // a statement sourced from the WRONG innings fails here rather than
+    // silently agreeing with a fixture's declared intent.
+    const fidelity = inningsFidelity(currentInnings(st));
+    // A THROW, not an `expect(...).not.toBe(...)`: this both guards the
+    // fixture and NARROWS the type, so `READS` below can be exhaustive over
+    // the engine's own lanes instead of being indexed by a wider union.
+    // (vitest never typechecks — `npx tsc --noEmit` is what caught the first
+    // version of this line, with every test green.)
+    if (fidelity === "unopened") throw new Error("this helper covers an OPEN innings only");
+
+    // (a) INDEPENDENT OBSERVABLE: the tiles the scorer can actually press must
+    //     put this innings in the same lane the statement claims. A statement
+    //     that disagreed with its own pad is the defect this catches.
+    expect(laneFromTiles(v), "the tiles and the statement must agree").toBe(fidelity);
+
+    const slot = modeSlotOf(buildContext(v, t))!;
+    expect(slot, "an open innings must carry a mode statement").toBeTruthy();
+
+    // (b) the statement names the ENGINE's lane for THIS innings.
+    expect(slot.label).toBe(`pad.cricket.context.mode.${fidelity}.label`);
+    expect(slot.message).toBe(`pad.cricket.context.mode.${fidelity}.message`);
+
+    // (c) and the English a scorer reads is that lane's shipped copy.
+    const shown = en[slot.label];
+    expect(shown, `${slot.label} must be in en/ui.json`).toBeTruthy();
+
+    // THE ONE HUMAN ANCHOR in this block. (a)-(c) are all derived, which means
+    // they would still pass if every lane's copy said the wrong words in
+    // unison. This is what stops that, and it is deliberately asserted in both
+    // directions — present AND absent — so a label containing both phrases
+    // cannot satisfy it.
+    // Typed against the ENGINE's own lane union minus "unopened", so a third
+    // lane in the engine stops this compiling rather than silently skipping.
+    const READS: Record<Exclude<InningsFidelity, "unopened">, string> = {
+      fine: "Ball-by-ball",
+      coarse: "Over-by-over",
+    };
+    expect(shown).toContain(READS[fidelity]);
+    expect(shown).not.toContain(READS[fidelity === "fine" ? "coarse" : "fine"]);
+  }
+
+  it("rule 19 — a ball-opened innings: statement, tiles and shipped copy all say ball-by-ball", async () => {
+    const en = (await import("@/dictionaries/en/ui.json")).default as Record<string, string>;
+    const { cfg, st } = fineFold();
+    assertStatementMatchesTheInningsItDescribes(cfg, st, en);
+  });
+
+  it("rule 19 — a summary-opened innings: all three say over-by-over", async () => {
+    const en = (await import("@/dictionaries/en/ui.json")).default as Record<string, string>;
+    const { cfg, st } = coarseFold();
+    assertStatementMatchesTheInningsItDescribes(cfg, st, en);
+  });
+
+  // The two cases a CONSTANT cannot survive, and the two a first-innings read
+  // cannot survive either: the match's two innings are in DIFFERENT lanes, so
+  // "the innings the statement describes" and "the first innings" give
+  // opposite answers. Both are real folds — the engine genuinely allows one
+  // innings summarised and the next scored ball-by-ball.
+  it("rule 19 — coarse innings 1 CLOSED, fine innings 2 open: the statement follows the innings being scored, not the first one", async () => {
+    const en = (await import("@/dictionaries/en/ui.json")).default as Record<string, string>;
+    const cfg = cricket.configSchema.parse({});
+    const b = ballSeq();
+    const st = foldCricket(cfg, [
+      ["core.start"],
+      // No `partial`, so this summary opens innings 1 coarse AND closes it.
+      ["cricket.innings.summary", { runs: 150, wickets: 5, legalBalls: 120 }],
+      // ...and the next side's first BALL opens innings 2 in the other lane.
+      b("cricket.ball", { striker: "A-1", nonStriker: "A-2", bowler: "H-11", bat: 1 }),
+    ]);
+    // Fixture guard, both halves — this fixture is worthless unless the two
+    // innings really are in opposite lanes.
+    expect(st.innings.map((i) => (i.fine === null ? "coarse" : "fine"))).toEqual(["coarse", "fine"]);
+    assertStatementMatchesTheInningsItDescribes(cfg, st, en);
+  });
+
+  it("rule 19 — the MIRROR: fine innings 1 closed, coarse innings 2 open — so neither lane's constant can pass both", async () => {
+    const en = (await import("@/dictionaries/en/ui.json")).default as Record<string, string>;
+    const cfg = cricket.configSchema.parse({ ballsPerInnings: 6, ballsPerOver: 6, minOversForResult: 1 });
+    const b = ballSeq(6);
+    const st = foldCricket(cfg, [
+      ["core.start"],
+      // Six legal balls exhaust a one-over innings, closing it in the fine lane.
+      ...Array.from({ length: 6 }, () => b("cricket.ball", { striker: "H-1", nonStriker: "H-2", bowler: "A-11", bat: 1 })),
+      // Innings 2 then opens COARSE, and stays open (`partial`).
+      ["cricket.innings.summary", { runs: 3, wickets: 0, legalBalls: 3, partial: true }],
+    ]);
+    expect(st.innings.map((i) => (i.fine === null ? "coarse" : "fine"))).toEqual(["fine", "coarse"]);
+    assertStatementMatchesTheInningsItDescribes(cfg, st, en);
   });
 
   it("both lanes' four keys resolve to real, DISTINCT English copy in the shipped dictionary", async () => {
