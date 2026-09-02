@@ -307,6 +307,40 @@ changes each; smoke demo script updated in W2.
   missing; no run sheet header.
 - Unknown `filter` param → treated as All.
 
+## W1 sign-off — per-screen verdicts (2026-09-02)
+
+Driven on a standalone prod build at commit `6adb4d3b5`, four phases x three
+widths. All twelve images exist and have twelve DISTINCT hashes — the capture
+harness in this repo has previously errored before taking a single screenshot,
+and shared states have come out pixel-identical because nothing opened, so
+"the images differ" is part of the verdict, not an assumption.
+
+| Screen | 1280 | 768 | 320 | Verdict |
+| --- | --- | --- | --- | --- |
+| Empty competition (no divisions) | "Setting up", empty state | same | same | PASS — amendment 3; read "Finished · 0 divisions" before the fix |
+| Needs draw (U16 28/28, finals undrawn; Premier complete) | row "Needs draw" over "28 of 28 played · Finals not drawn"; Premier "Finished · complete" | same | card: name + pill, bar, wrapped status, one full-width action | PASS |
+| Scheduled, nothing dated (1 of 6 played) | "Scheduled" / "1 of 6 played · 5 unscheduled" | same | same, restacked | PASS — read "Setting up" (round C) and before that "nothing scheduled" (F1) |
+| Match day, one live (assigned scorer) | masthead "1 in play"; row "0 of 6 played · 1 in play · Now: Riverside FC v Harbour CC" | same | card omits the "Now:" line | PASS with a note, below |
+
+No horizontal scroll at any of the twelve. Masthead and rows agree on every
+screen. Tap targets hit-tested with `elementFromPoint` at their centres rather
+than measured: needs-you action 254x46, ledger card link 254x78, both resolving
+to themselves.
+
+Two OBSERVATIONS, recorded rather than fixed — both are product questions for
+W2/W3, not defects against this spec:
+
+1. **The masthead ignores attention while the rows honour it.** On the needs-
+   draw screen the pill reads "Setting up" (true of the phase — the finals
+   stage is being set up) directly above a row whose pill reads "Needs draw".
+   Not a contradiction of fact, but the summary at the top of the page is less
+   informative than the row beneath it, and the ladder in this spec has no
+   attention step. Recommend the masthead surface a red attention the way a row
+   does.
+2. **The phone drops the live match name.** At 320 the card omits the "Now:
+   home v away" line the desktop row carries, so the width most likely to be
+   held at the venue is the one that does not name the match in play.
+
 ## Out of scope
 
 Scorepad skins and `fixture-console.tsx`; `/schedule` board and its toolbar
