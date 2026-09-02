@@ -2336,7 +2336,7 @@ export function PadHostV3(props: PadHostV3Props) {
       {ribbon && (
         <div
           data-role="v3-ribbon"
-          className="flex items-center justify-between gap-2 rounded-full border border-slate-200 bg-white px-4 py-2"
+          className="flex items-center justify-between gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 max-md:order-1"
         >
           <span className="min-w-0 flex-1 truncate text-sm text-slate-700">{ribbon.text}</span>
           {/* Withdrawn, not disabled, when nothing on the strip can be taken
