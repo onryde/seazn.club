@@ -1039,13 +1039,18 @@ test.describe("RS005 registrants tab", () => {
     expect(promoted.data!.id, "the OLDEST waitlisted entry promotes, not the one in the URL").toBe(
       oldestWaitlisted.registration_id,
     );
-    expect(promoted.data!.status, "promotion moves waitlisted -> pending, never straight to confirmed").toBe(
-      "pending",
+    // RS010: promoteWaitlistedRow confirms immediately on a FREE + AUTO
+    // division (registrations.ts:1297) — the same shortcut submit-time
+    // auto-confirm uses — because a pending row on an auto division can
+    // never be confirmed by anything downstream (approveRegistration
+    // refuses "auto", and there is no Stripe webhook for a $0 fee).
+    expect(promoted.data!.status, "a free/auto promotion confirms immediately, never sits at pending").toBe(
+      "confirmed",
     );
 
     await page.goto(registrantsPath(org.slug, competitionSlug), { waitUntil: "load" });
     const promotedRow = await expandRow(page, oldestWaitlisted.registration_id);
-    await expect(statusLocator(promotedRow, "pending"), "the promoted row reflects its new status").toBeVisible({
+    await expect(statusLocator(promotedRow, "confirmed"), "the promoted row reflects its new status").toBeVisible({
       timeout: 20_000,
     });
     const untouchedRow = await expandRow(page, newerWaitlisted.registration_id);
