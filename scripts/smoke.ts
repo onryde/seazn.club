@@ -16623,6 +16623,20 @@ async function footballFidelityGateSuite(admin: Session, proOrgId: string): Prom
  * set once by whichever event opens the innings — so this drives TWO
  * fixtures, one per lane, and then proves the exclusion itself: the lane
  * NOT chosen for an innings is refused on it, not merely untried.
+ *
+ * KNOWN LIMIT (fix round 1, review) — the payload literals below are
+ * HAND-COPIED from `cricket.tsx`'s `basePayload`/`runPayload`/
+ * `overSummarySheet.buildPayload`, confirmed to match by direct reading at
+ * the time this was written, not by import: `scripts/smoke.ts` runs under
+ * plain `node --experimental-strip-types` and cannot import a `"use
+ * client"` React `.tsx` component. A future key rename in `cricket.tsx`
+ * (e.g. `legalBalls` → something else) leaves this suite green — it is
+ * indistinguishable from any other hand-typed API-shape smoke check. That
+ * regression is owned elsewhere: `cricket.tsx`'s own builder unit tests
+ * (whichever asserts `overSummarySheet`/`basePayload`'s return shape) and
+ * the WS-H/I e2e (which drives the real rendered pad through the browser)
+ * are what would actually catch it — this suite is not, and cannot be
+ * made, a substitute for either.
  */
 async function cricketBothLanesSuite(admin: Session, proOrgId: string): Promise<void> {
   admin.cookies["seazn_org"] = proOrgId;
@@ -16716,10 +16730,25 @@ async function cricketBothLanesSuite(admin: Session, proOrgId: string): Promise<
 
   // Mode lock: this innings opened FINE — an over-by-over summary on the
   // SAME innings must now be refused, not silently accepted as a second lane.
+  //
+  // Fix round 1 (review) — the values here used to be {runs:999, wickets:0,
+  // legalBalls:999, partial:true}: legalBalls:999 exceeds t20's own
+  // ballsLimit (120), so `applySummary`'s STRICT "legalBalls exceed the
+  // innings quota" check (cricket.ts ~1519-1524) would refuse that payload
+  // on its own even with the mode-lock guard (cricket.ts ~1485-1487)
+  // deleted — the probe passed without ever exercising the guard it names.
+  // {runs:6, wickets:0, legalBalls:6} is legal on every OTHER check this
+  // innings could hit — clears the monotone floor (current 5/0/2), clears
+  // all-out (wickets 0), clears the ball quota (6 << 120) — so the
+  // mode-lock guard is the ONLY possible refuser. Mutation-verified
+  // (2026-09-02): neutering cricket.ts's `open.innings.fine !== null` check
+  // for `cricket.innings.summary` turns this exact assertion red (the
+  // payload is then accepted, 201) and nothing else in this suite moves;
+  // restored before committing.
   const crossToSummary = await ballLedger.send("cricket.innings.summary", {
-    runs: 999,
+    runs: 6,
     wickets: 0,
-    legalBalls: 999,
+    legalBalls: 6,
     partial: true,
   });
   check(
@@ -16782,6 +16811,19 @@ async function cricketBothLanesSuite(admin: Session, proOrgId: string): Promise<
   // that's fine here: the fidelity-mode guard fires before any lineup
   // membership check (cricket.ts's `cricket.ball` apply() arm reads
   // `innings.fine` first, ahead of `applyDelivery`'s own on-pitch checks).
+  //
+  // Fix round 1 (review) — unlike `crossToSummary` above, this probe is
+  // DOUBLE-GUARDED by construction, not by accident: `cricket.ts`'s
+  // `cricket.ball` apply() switch-case checks `open.innings.fine === null`
+  // BEFORE calling `applyDelivery`, which then re-checks the identical
+  // `fine === null` condition itself as its own first statement (belt and
+  // braces — `applyDelivery` has a second caller, the super-over path,
+  // that does not go through the switch-case guard). Deleting either ONE
+  // of those two checks alone leaves this exact assertion green (the other
+  // still refuses it), so this probe cannot witness the removal of a
+  // single guard the way `crossToSummary` now can — it only reds if BOTH
+  // are gone at once. Left as-is (not mutation-proved) rather than
+  // engineered into a false sense of single-guard sensitivity.
   const crossToBall = await coarseLedger.send("cricket.ball", {
     over: 2,
     ballInOver: 1,
@@ -16939,6 +16981,10 @@ async function cleanup(tag: string): Promise<void> {
     `p72_${tag}@example.com`,
     // #451 cricketDlsSuite — its own Pro org (two cricket divisions cascade).
     `dls_${tag}@example.com`,
+    // S13/W11 scorePadV2AppendSuite's own free (community) org — pre-existing
+    // gap, found and fixed in R8 sweep task G's review (fix round 1): missing
+    // here since that suite was added, every smoke run leaked its org.
+    `scorepadfree_${tag}@example.com`,
     // R8 sweep, task G — footballFidelityGateSuite's own free (community)
     // org (its one division/fixture cascades with it).
     `fidelitygatefree_${tag}@example.com`,
