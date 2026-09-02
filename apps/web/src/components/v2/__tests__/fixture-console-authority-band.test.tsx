@@ -217,3 +217,54 @@ describe("the console's own undo says what it does (ruling R7-5)", () => {
     expect(html).not.toContain("Undo last");
   });
 });
+
+// Task 4 (2026-09-02 phone-composition plan, spec §3.1) — below md the
+// header re-lays as a compact match strip: names on one truncated line, the
+// status badge, a compact score, a 44px hand-over icon, and a toggle that
+// reveals the round/venue/time line.
+//
+// This file mocks no `useMsg`/`DictProvider` — `consoleHtml` renders
+// `<FixtureConsole>` bare (see the helper above), and dict-provider.tsx's
+// `useMsg` falls back to the real English catalog (`@/lib/messages`)
+// OUTSIDE a `<DictProvider>`. So every assertion below matches the actual
+// English sentence a viewer would read (e.g. "recorded by the referee"),
+// never the raw dictionary key — an alternation accepting either shape
+// would pass without checking anything real (the brief's own draft had
+// exactly that bug: an un-grouped `|` splits the whole regex, so its
+// right-hand side matched the bare literal "recorded by" unconditionally).
+describe("phone composition — the match strip (spec §3.1)", () => {
+  it("offers Hand over device twice: the desktop button hides on phones, the phone icon hides on desktop", () => {
+    const html = consoleHtml({ deviceHandover: true });
+    expect(html).toMatch(/data-role="device-handover"[^>]*class="[^"]*\bmax-md:hidden\b/);
+    expect(html).toMatch(/<button[^>]*data-role="device-handover-phone"[^>]*>/);
+    expect(html).toMatch(/data-role="device-handover-phone"[^>]*class="[^"]*\bmd:hidden\b/);
+    expect(html).toMatch(/data-role="device-handover-phone"[^>]*aria-label="[^"]+"/);
+  });
+
+  it("renders neither hand-over control when the page says this fixture may not be handed over", () => {
+    const html = consoleHtml({ deviceHandover: false });
+    expect(html).not.toContain('data-role="device-handover"');
+    expect(html).not.toContain('data-role="device-handover-phone"');
+  });
+
+  it("ships a phone-only match-details toggle, closed, and hides the meta line behind it on phones", () => {
+    const html = consoleHtml();
+    expect(html).toMatch(/data-role="match-details-toggle"[^>]*aria-expanded="false"/);
+    expect(html).toMatch(/data-role="match-details-toggle"[^>]*class="[^"]*\bmd:hidden\b/);
+    // The round/venue/recorded-by line — real English catalog, so this reads
+    // "… recorded by the referee", never the "score.recordedBy" key.
+    const metaIdx = html.indexOf("recorded by the referee");
+    expect(metaIdx, "the round/venue/recorded-by line must still render").toBeGreaterThan(-1);
+    const wrapperIdx = html.lastIndexOf('class="max-md:hidden"', metaIdx);
+    expect(
+      wrapperIdx,
+      "closed by default, the meta line must sit inside a max-md:hidden wrapper",
+    ).toBeGreaterThan(-1);
+  });
+
+  it("hides the Scoring heading on phones — the strip is the heading there", () => {
+    const html = consoleHtml();
+    // Real English catalog again: "score.scoring" renders as "Scoring".
+    expect(html).toMatch(/<h2[^>]*class="[^"]*\bmax-md:hidden\b[^"]*"[^>]*>[^<]*Scoring</);
+  });
+});

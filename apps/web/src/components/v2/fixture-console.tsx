@@ -348,6 +348,7 @@ export function FixtureConsole({
   /** The row whose Void is in flight — the panel dims exactly that button. */
   const [voidingId, setVoidingId] = useState<string | null>(null);
   const [handoverOpen, setHandoverOpen] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
 
   const resync = useCallback(async () => {
     const [state, all] = await Promise.all([
@@ -578,11 +579,17 @@ export function FixtureConsole({
   const flaggedSuspensions = activeSuspensions.filter((s) => referencedPersons.has(s.personId));
 
   return (
-    <div className="space-y-6">
-      {/* Scoreline header */}
-      <header className="card p-5">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <h1 className="text-lg font-semibold tracking-tight text-slate-900">
+    <div className="space-y-6 max-md:space-y-3">
+      {/* Scoreline header — on phones this IS the match strip (spec §3.1):
+          names on one truncated line, status, a compact score, hand-over as
+          an icon, and the round/venue/time line behind a details toggle. */}
+      <header className="card p-5 max-md:p-3">
+        <div className="flex flex-wrap items-center justify-between gap-3 max-md:flex-nowrap max-md:gap-2">
+          <h1
+            className={`text-lg font-semibold tracking-tight text-slate-900 max-md:min-w-0 max-md:flex-1 max-md:text-[13px] ${
+              detailsOpen ? "" : "max-md:truncate"
+            }`}
+          >
             {homeName ?? resolveSlotLabel(fixture.home_slot_label ?? null, msg, "schedule.tbd")}{" "}
             {/* R3.5 accessibility fix — was text-slate-400 (~2.6:1 on white,
                 under the WCAG AA 4.5:1 floor for normal text); text-slate-600
@@ -597,32 +604,75 @@ export function FixtureConsole({
           <span className={`badge ${STATUS_STYLE[live.status] ?? ""}`}>
             {scoreStatusLabel(msg, live.status)}
           </span>
+          {deviceHandover && (
+            <button
+              type="button"
+              data-role="device-handover-phone"
+              aria-label={msg("score.handOverDevice")}
+              aria-expanded={handoverOpen}
+              onClick={() => setHandoverOpen((v) => !v)}
+              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-slate-200 text-slate-700 transition-colors hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400 md:hidden"
+            >
+              <svg
+                aria-hidden="true"
+                viewBox="0 0 20 20"
+                className="h-5 w-5"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={1.75}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M3 7h11M11 4l3 3-3 3M17 13H6M9 10l-3 3 3 3" />
+              </svg>
+            </button>
+          )}
         </div>
-        {!suppressHeadline && (
-          <p className="mt-2 font-mono text-2xl text-slate-800">
-            {summary?.headline ?? "—"}
-          </p>
-        )}
+        <div className="max-md:mt-1 max-md:flex max-md:items-center max-md:justify-between max-md:gap-2">
+          {!suppressHeadline && (
+            <p className="mt-2 font-mono text-2xl text-slate-800 max-md:mt-0 max-md:text-lg">
+              {summary?.headline ?? "—"}
+            </p>
+          )}
+          <button
+            type="button"
+            data-role="match-details-toggle"
+            aria-expanded={detailsOpen}
+            aria-label={msg(detailsOpen ? "console.phone.hideDetails" : "console.phone.showDetails")}
+            onClick={() => setDetailsOpen((v) => !v)}
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-slate-600 transition-colors hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400 md:hidden"
+          >
+            <span aria-hidden="true">{detailsOpen ? "▴" : "▾"}</span>
+          </button>
+        </div>
         {/* R3.5/Task G — the v3 pad unmounts once decided; this is the
             organiser console's surviving surface for "who won, and how". */}
         {decidedLine && <p className="mt-1 text-sm font-medium text-slate-700">{decidedLine}</p>}
-        {/* R3.5/Task P — was text-slate-400 (2.63:1 on this .card's white,
-            under the WCAG AA 4.5:1 floor); text-slate-600 clears 7.58:1,
-            same fix as the "vs" separator above. */}
-        <p className="mt-1 text-xs text-slate-600">
-          {msg("schedule.round", { n: fixture.round_no })}
-          {fixture.scheduled_at ? (
-            <>
-              {" · "}
-              <ClientTime value={fixture.scheduled_at} mode="datetime" tz={fixture.scheduled_tz} showZone />
-            </>
-          ) : (
-            ""
-          )}
-          {fixture.venue_name ? ` · ${fixture.venue_name}` : ""}
-          {fixture.court_name ? ` · ${fixture.court_name}` : ""}
-          {` · ${msg("score.recordedBy", { scorer: sport.scorerLabel.toLowerCase() })}`}
-        </p>
+        {/* Phone-only: the round/venue/time line sits behind
+            `match-details-toggle` below md (spec §3.1) — wrapped in this div
+            rather than folded into the <p>'s own className so
+            history-panel-contrast.test.tsx's source-scan regex for this
+            exact line (`<p className="mt-1 text-xs text-slate-(\d+)">`)
+            keeps matching untouched. */}
+        <div className={detailsOpen ? undefined : "max-md:hidden"}>
+          {/* R3.5/Task P — was text-slate-400 (2.63:1 on this .card's white,
+              under the WCAG AA 4.5:1 floor); text-slate-600 clears 7.58:1,
+              same fix as the "vs" separator above. */}
+          <p className="mt-1 text-xs text-slate-600">
+            {msg("schedule.round", { n: fixture.round_no })}
+            {fixture.scheduled_at ? (
+              <>
+                {" · "}
+                <ClientTime value={fixture.scheduled_at} mode="datetime" tz={fixture.scheduled_tz} showZone />
+              </>
+            ) : (
+              ""
+            )}
+            {fixture.venue_name ? ` · ${fixture.venue_name}` : ""}
+            {fixture.court_name ? ` · ${fixture.court_name}` : ""}
+            {` · ${msg("score.recordedBy", { scorer: sport.scorerLabel.toLowerCase() })}`}
+          </p>
+        </div>
       </header>
 
       {paywallFeature && <UpgradeGate feature={paywallFeature} />}
@@ -657,9 +707,9 @@ export function FixtureConsole({
           record more", and a section that outlived the pad would answer
           that question wrong. */}
       {scoring && home && away && (
-        <section className="card p-5" data-role="console-scoring">
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-            <h2 className="text-sm font-semibold text-slate-700">{msg("score.scoring")}</h2>
+        <section className="card p-5 max-md:p-3" data-role="console-scoring">
+          <div className={`mb-3 flex flex-wrap items-center justify-between gap-2 ${started ? "max-md:hidden" : ""}`}>
+            <h2 className="text-sm font-semibold text-slate-700 max-md:hidden">{msg("score.scoring")}</h2>
             <div className="flex flex-wrap items-center gap-2">
               {deviceHandover && (
                 <button
@@ -667,7 +717,7 @@ export function FixtureConsole({
                   data-role="device-handover"
                   aria-expanded={handoverOpen}
                   onClick={() => setHandoverOpen((v) => !v)}
-                  className="btn btn-ghost min-h-11"
+                  className="btn btn-ghost min-h-11 max-md:hidden"
                 >
                   {msg("score.handOverDevice")}
                 </button>
