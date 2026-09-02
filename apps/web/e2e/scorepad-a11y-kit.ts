@@ -142,13 +142,110 @@ export async function measureHitTargets(scope: Locator): Promise<HitTarget[]> {
   return out;
 }
 
-/** The smallest OPERABLE target by area, or null when nothing operable is
+/** The smallest OPERABLE target by AREA, or null when nothing operable is
  *  rendered. Disabled controls are excluded deliberately: a disabled button is
- *  not a tap a scorer can miss. */
+ *  not a tap a scorer can miss.
+ *
+ *  THIS IS A HEADLINE, NOT A GATE — see `hitTargetFloorReport` below for why
+ *  the floor must never be asserted against this value alone. */
 export function smallestOperable(targets: readonly HitTarget[]): HitTarget | null {
   return targets
     .filter((t) => !t.disabled)
     .reduce<HitTarget | null>((min, t) => (!min || t.width * t.height < min.width * min.height ? t : min), null);
+}
+
+/** One target that fails the floor, with the axis (or axes) that failed. */
+export interface FloorViolation {
+  target: HitTarget;
+  /** "44x32" style, so the assertion message says WHAT was wrong. */
+  failed: string;
+}
+
+export interface FloorReport {
+  /** Every operable target measured — the denominator. */
+  operable: HitTarget[];
+  /** Every operable target failing the floor on either axis. */
+  under: FloorViolation[];
+  /** Smallest by area, for the headline message only. */
+  smallest: HitTarget | null;
+}
+
+/**
+ * THE 44px GATE, over EVERY operable target — never over the min-area one.
+ *
+ * R8 review, Important 1. The first cut of this sweep asserted the floor
+ * against `smallestOperable` alone, and MIN-AREA IS NOT MIN-DIMENSION. With
+ * the binding control at 92.11 x 44 (area 4053), any target WIDER than ~92px
+ * and SHORTER than 44px has a LARGER area, is therefore never selected as
+ * "smallest", and is never asserted at all — a 200 x 30 button would have
+ * sailed through a gate whose whole purpose is to catch it.
+ *
+ * Nothing escapes today (`tile-grid.tsx`'s `KIND_MIN_HEIGHT` is 52/52/52/44
+ * and the chassis controls carry an explicit `minHeight: 44`), so that was
+ * latent rather than live — but the gate read far stronger than it was, which
+ * is the more dangerous of the two states. Every caller now asserts over the
+ * whole array; the per-skin JSON records already carried it, so this costs
+ * nothing but the loop.
+ */
+export function hitTargetFloorReport(
+  targets: readonly HitTarget[],
+  floor: number = HIT_TARGET_FLOOR_PX,
+): FloorReport {
+  const operable = targets.filter((t) => !t.disabled);
+  const under = operable
+    .filter((t) => t.width < floor || t.height < floor)
+    .map((t) => ({
+      target: t,
+      failed: `"${t.name}" (${t.role}) is ${t.width}x${t.height}px${
+        t.width < floor && t.height < floor ? " — both axes" : t.width < floor ? " — width" : " — height"
+      }`,
+    }));
+  return { operable, under, smallest: smallestOperable(targets) };
+}
+
+/** The `under` list rendered for an assertion message, newest-reader-first:
+ *  the count and denominator, then each offender. Returned as a string[] so
+ *  `toEqual([])` prints the offenders themselves rather than a bare count. */
+export function floorViolationLines(report: FloorReport): string[] {
+  return report.under.map((v) => v.failed);
+}
+
+/**
+ * How far the page overflows its viewport horizontally, in px (0 when it does
+ * not). Measured with the SAME clip-lifting technique `expectNoHorizontalScroll`
+ * (helpers.ts) uses, not a naive `documentElement.scrollWidth` vs
+ * `clientWidth` comparison: globals.css sets `overflow-x: clip` on html/body,
+ * which pins `scrollWidth` to the viewport width no matter how far a child
+ * overflows — the exact reason the pre-#325 version of that gate could never
+ * fail.
+ *
+ * This MEASURES and does not assert, so a caller can record the real number
+ * whether its own assertion passed or failed. Moved here from
+ * `scorepad-a11y-evidence.spec.ts` (where it was `measureScrollOverflow`)
+ * unchanged, so the sweep and the evidence recorder report one number
+ * computed one way.
+ */
+export async function measureOverflow(
+  page: Page,
+): Promise<{ scrollWidth: number; viewportWidth: number; overflowPx: number }> {
+  return page.evaluate(() => {
+    const html = document.documentElement;
+    const body = document.body;
+    const vw = html.clientWidth;
+    const htmlPrev = html.style.overflowX;
+    const bodyPrev = body.style.overflowX;
+    html.style.overflowX = "visible";
+    body.style.overflowX = "visible";
+    const scrollWidth = html.scrollWidth;
+    html.style.overflowX = htmlPrev;
+    body.style.overflowX = bodyPrev;
+    return { scrollWidth, viewportWidth: vw, overflowPx: Math.max(0, scrollWidth - vw) };
+  });
+}
+
+/** Just the overflow number, for a record that only keeps the one field. */
+export async function measureOverflowPx(page: Page): Promise<number> {
+  return (await measureOverflow(page)).overflowPx;
 }
 
 export interface ContrastScan {
@@ -213,9 +310,28 @@ export async function scanPadContrast(
  *  into the shared storageState, so an authed spec never sees one — but an
  *  anonymous context (the device-link pad) does, and a banner sitting over the
  *  pad both blocks taps and distorts every geometry measurement below it.
- *  Idempotent: a no-op when no banner is on screen. */
+ *  Idempotent: a no-op when no banner is on screen.
+ *
+ *  R8 review, Minor 4 — SCOPED TO THE BANNER, not page-wide. A bare
+ *  `page.getByRole("button", {name: "Accept"})` is a page-wide match, so the
+ *  day any pad, sheet or dialog ships its own "Accept" control this helper
+ *  starts clicking it — silently dispatching a real scoring action in a
+ *  routine that is supposed to be a no-op.
+ *
+ *  The banner (`src/components/cookie-consent.tsx`) carries no testid or
+ *  landmark role, so it is identified by the one thing only it has: it is the
+ *  innermost `<div>` containing a link to the cookie policy. `.last()` on the
+ *  ancestor chain is the innermost such div — the link sits inside a `<p>`, so
+ *  the deepest DIV that contains it IS the banner's own container. Structural
+ *  rather than class-based on purpose: the container's classes are pure
+ *  layout (`fixed bottom-4 left-4 …`) and would break on any restyle. */
 export async function dismissCookieBanner(page: Page): Promise<void> {
-  const accept = page.getByRole("button", { name: "Accept", exact: true });
+  const banner = page
+    .locator("div")
+    .filter({ has: page.locator('a[href="/legal/cookie-policy"]') })
+    .last();
+  if ((await banner.count()) === 0) return;
+  const accept = banner.getByRole("button", { name: "Accept", exact: true });
   if ((await accept.count()) > 0) {
     await accept.first().click();
     await expect(accept).toHaveCount(0, { timeout: 10_000 });

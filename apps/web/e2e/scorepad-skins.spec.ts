@@ -1,6 +1,12 @@
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 import { apiJson, fixturePath, seedRosteredFixture, expectNoHorizontalScroll, TAG } from "./helpers";
-import { HIT_TARGET_FLOOR_PX, measureHitTargets, scanPadContrast, smallestOperable } from "./scorepad-a11y-kit";
+import {
+  HIT_TARGET_FLOOR_PX,
+  floorViolationLines,
+  hitTargetFloorReport,
+  measureHitTargets,
+  scanPadContrast,
+} from "./scorepad-a11y-kit";
 
 // S11/#420 W9 — one real-browser headline flow per shipped skin (cricket,
 // racquet, tennis, football, period), all at 375px.
@@ -126,11 +132,16 @@ async function expectPadA11yClean(page: Page): Promise<void> {
   const scan = await scanPadContrast(page, '[data-testid="score-pad"]');
   expect(scan.serious, JSON.stringify(scan.serious, null, 2)).toEqual([]);
 
-  const smallest = smallestOperable(await measureHitTargets(pad(page)));
-  expect(smallest, "no operable hit target rendered inside the pad — nothing was measured").not.toBeNull();
-  const detail = `smallest operable target "${smallest?.name}" (${smallest?.role}) is ${smallest?.width}x${smallest?.height}px`;
-  expect(smallest!.width, detail).toBeGreaterThanOrEqual(HIT_TARGET_FLOOR_PX);
-  expect(smallest!.height, detail).toBeGreaterThanOrEqual(HIT_TARGET_FLOOR_PX);
+  // R8 review, Important 1 — asserted over EVERY operable target, not the
+  // min-AREA one: min-area is not min-dimension, so a control wider than the
+  // binding 92.11x44 but shorter than 44 would have a larger area and never
+  // be looked at. `hitTargetFloorReport`'s header carries the full reasoning.
+  const floor = hitTargetFloorReport(await measureHitTargets(pad(page)));
+  expect(floor.smallest, "no operable hit target rendered inside the pad — nothing was measured").not.toBeNull();
+  expect(
+    floorViolationLines(floor),
+    `${floor.under.length} of ${floor.operable.length} operable targets are under the ${HIT_TARGET_FLOOR_PX}px floor (smallest by area: "${floor.smallest?.name}" ${floor.smallest?.width}x${floor.smallest?.height})`,
+  ).toEqual([]);
 }
 
 /**

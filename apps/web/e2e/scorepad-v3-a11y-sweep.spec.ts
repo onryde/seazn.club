@@ -6,9 +6,11 @@ import { fixturePath, seedRosteredFixture, expectNoHorizontalScroll, TAG } from 
 import {
   HIT_TARGET_FLOOR_PX,
   dismissCookieBanner,
+  floorViolationLines,
+  hitTargetFloorReport,
   measureHitTargets,
+  measureOverflowPx,
   scanPadContrast,
-  smallestOperable,
   type HitTarget,
 } from "./scorepad-a11y-kit";
 import { V3_SKIN_CASES, type V3SkinCase } from "./v3-skin-catalog";
@@ -113,8 +115,14 @@ interface WidthRecord {
    *  genuine (the smallest control is intrinsically sized) but nothing in the
    *  record could tell the two explanations apart. Now it can. */
   padWidthPx: number | null;
-  overflowPx: number | null;
+  /** The REAL measured horizontal page overflow at this width, in px — 0 when
+   *  there is none. Never a sentinel: a record that cannot say how far the
+   *  page scrolled is not evidence (R8 review, Minor 5). */
+  overflowPx: number;
   operableCount: number;
+  /** Every operable target failing the 44px floor at this width, already
+   *  formatted. Empty is the pass. */
+  underFloor: string[];
   smallest: HitTarget | null;
   contrastNodes: number;
   violations: { id: string; impact: string | null; nodes: number }[];
@@ -193,27 +201,37 @@ for (const skin of V3_SKIN_CASES) {
       // Soft, via try/catch, for the same reason the evidence spec does it:
       // the helper throws, and a throw here would abandon the two gates this
       // file actually exists for.
-      let overflowPx: number | null = null;
+      //
+      // R8 review, Minor 5 — the MEASURED overflow is recorded, never a `-1`
+      // sentinel. A record that says "-1" cannot answer the one question a
+      // reader will have ("by how much?"), which is the whole point of keeping
+      // a record. Measured independently of the assertion, so the number
+      // exists whether the gate passed or failed.
+      const overflowPx = await measureOverflowPx(page);
       try {
         await expectNoHorizontalScroll(page);
-        overflowPx = 0;
       } catch (err) {
-        overflowPx = -1;
         expect.soft(false, `${where}: ${err instanceof Error ? err.message : String(err)}`).toBe(true);
       }
 
-      // --- the 44px floor ---------------------------------------------------
+      // --- the 44px floor, over EVERY operable target ------------------------
+      // R8 review, Important 1: asserted across the WHOLE array, never against
+      // the min-AREA target alone. See `hitTargetFloorReport`'s own header — a
+      // 200x30 control has a LARGER area than the binding 92.11x44 one, so a
+      // min-area gate would never have looked at it. `smallest` survives as
+      // the headline in the message, not as the thing being gated.
       const targets = await measureHitTargets(pad(page));
-      const operable = targets.filter((t) => !t.disabled);
-      const smallest = smallestOperable(targets);
+      const floor = hitTargetFloorReport(targets);
+      const { operable, smallest } = floor;
       expect
         .soft(smallest, `${where}: no operable hit target rendered inside the pad — nothing was measured`)
         .not.toBeNull();
-      if (smallest) {
-        const detail = `${where}: smallest operable target "${smallest.name}" (${smallest.role}) is ${smallest.width}x${smallest.height}px`;
-        expect.soft(smallest.width, detail).toBeGreaterThanOrEqual(HIT_TARGET_FLOOR_PX);
-        expect.soft(smallest.height, detail).toBeGreaterThanOrEqual(HIT_TARGET_FLOOR_PX);
-      }
+      expect
+        .soft(
+          floorViolationLines(floor),
+          `${where}: ${floor.under.length} of ${operable.length} operable targets are under the ${HIT_TARGET_FLOOR_PX}px floor (smallest by area: "${smallest?.name}" ${smallest?.width}x${smallest?.height})`,
+        )
+        .toEqual([]);
 
       // --- WCAG A/AA, serious+critical --------------------------------------
       // The scope is the pad's own wrapper, never the page: pre-existing
@@ -230,6 +248,7 @@ for (const skin of V3_SKIN_CASES) {
         padWidthPx: padBox ? Math.round(padBox.width * 100) / 100 : null,
         overflowPx,
         operableCount: operable.length,
+        underFloor: floorViolationLines(floor),
         smallest,
         contrastNodes: scan.contrastNodes,
         violations: scan.violations,

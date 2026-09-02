@@ -6,9 +6,11 @@ import { apiJson, fixturePath, seedRosteredFixture, expectNoHorizontalScroll, TA
 import {
   HIT_TARGET_FLOOR_PX,
   dismissCookieBanner,
+  floorViolationLines,
+  hitTargetFloorReport,
   measureHitTargets,
+  measureOverflow,
   scanPadContrast,
-  smallestOperable,
   type HitTarget,
 } from "./scorepad-a11y-kit";
 
@@ -264,23 +266,11 @@ function backwardJumps(order: FocusStep[], rowTolerance = 8): number {
   return jumps;
 }
 
-async function measureScrollOverflow(
-  page: Page,
-): Promise<{ scrollWidth: number; viewportWidth: number; overflowPx: number }> {
-  return page.evaluate(() => {
-    const html = document.documentElement;
-    const body = document.body;
-    const vw = html.clientWidth;
-    const htmlPrev = html.style.overflowX;
-    const bodyPrev = body.style.overflowX;
-    html.style.overflowX = "visible";
-    body.style.overflowX = "visible";
-    const scrollWidth = html.scrollWidth;
-    html.style.overflowX = htmlPrev;
-    body.style.overflowX = bodyPrev;
-    return { scrollWidth, viewportWidth: vw, overflowPx: Math.max(0, scrollWidth - vw) };
-  });
-}
+// R8/WS-H fix round 1 — `measureScrollOverflow` MOVED to the kit as
+// `measureOverflow`, unchanged, so the eleven-skin sweep and this recorder
+// report one number computed one way (the clip-lifting technique; a naive
+// scrollWidth/clientWidth comparison can never fail under globals.css's
+// `overflow-x: clip`).
 
 /** Measures everything, writes the PNG + JSON record, THEN asserts —
  *  entirely with `expect.soft` (plus a try/catch around the one throwing
@@ -290,7 +280,7 @@ async function recordEvidence(page: Page, comboName: string, scopeSelector: stri
   await mkdir(OUT_DIR, { recursive: true });
   const scope = page.locator(scopeSelector);
 
-  const scroll = await measureScrollOverflow(page);
+  const scroll = await measureOverflow(page);
   try {
     await expectNoHorizontalScroll(page);
   } catch (err) {
@@ -299,24 +289,21 @@ async function recordEvidence(page: Page, comboName: string, scopeSelector: stri
 
   await page.screenshot({ path: join(OUT_DIR, `${comboName}.png`), fullPage: true });
 
+  // R8 review, Important 1 — the floor is asserted over EVERY operable target
+  // now, not against the min-AREA one. Min-area is not min-dimension: a
+  // control wider than the binding 92.11x44 but shorter than 44px has a
+  // LARGER area, so it was never the "smallest" and was never checked. See
+  // `hitTargetFloorReport` (the kit) for the full reasoning.
   const hitTargets: HitTarget[] = await measureHitTargets(scope);
-  const operable = hitTargets.filter((t) => !t.disabled);
-  const smallest = smallestOperable(hitTargets);
+  const floor = hitTargetFloorReport(hitTargets);
+  const { operable, smallest } = floor;
   expect.soft(smallest, "no operable hit target found inside the pad to measure").not.toBeNull();
-  if (smallest) {
-    expect
-      .soft(
-        smallest.width,
-        `smallest hit target "${smallest.name}" (${smallest.role}) is ${smallest.width}x${smallest.height}px`,
-      )
-      .toBeGreaterThanOrEqual(HIT_TARGET_FLOOR_PX);
-    expect
-      .soft(
-        smallest.height,
-        `smallest hit target "${smallest.name}" (${smallest.role}) is ${smallest.width}x${smallest.height}px`,
-      )
-      .toBeGreaterThanOrEqual(HIT_TARGET_FLOOR_PX);
-  }
+  expect
+    .soft(
+      floorViolationLines(floor),
+      `${floor.under.length} of ${operable.length} operable targets are under the ${HIT_TARGET_FLOOR_PX}px floor (smallest by area: "${smallest?.name}" ${smallest?.width}x${smallest?.height})`,
+    )
+    .toEqual([]);
 
   // S13/#422 W11 cutover — the `device-*` combinations are LEFT RED here,
   // reported rather than fixed (out of scope: this pass records evidence,
