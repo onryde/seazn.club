@@ -68,11 +68,11 @@ plain object so the resolver is table-testable and the same on server and client
 
 ```ts
 type PhaseInput = {
-  divisionStatus: "draft" | "active" | "complete" | string; // divisions.status as-is
+  divisionStatus: "setup" | "scheduled" | "active" | "completed"; // divisions.status (V209 check constraint, zod DivisionStatus)
   stages: { seq: number; status: "pending" | "active" | "complete" | string; hasFixtures: boolean; needsProposal: boolean }[];
   fixtures: { status: string; scheduledAt: string | null }[]; // API status set: scheduled|in_play|decided|finalized|abandoned|forfeited|cancelled
   now: string;            // ISO
-  tz: string;             // schedule settings tz (settings.tz, not orgTz — see memory)
+  tz: string;             // the GOVERNING clock: ScheduleSettingsOut.orgTz, never settings.tz (display lane) — memory reference_settings_tz_vs_orgtz_trap
 };
 type DivisionPhase = "setting_up" | "scheduled" | "match_day" | "finished";
 ```
@@ -81,8 +81,9 @@ Rules, first match wins:
 
 1. `finished` — every stage is `complete`, or no stage is `pending`/`active` and
    no fixture is `scheduled`/`in_play`.
-2. `setting_up` — division not `active` (a draft division cannot be scored, even
-   with fixtures dated today).
+2. `setting_up` — `divisionStatus` is `setup` (a division that has not been started
+   cannot be scored, even with fixtures dated today). `scheduled`/`active`/`completed`
+   fall through to the rules below; `completed` normally exits at rule 1.
 3. `match_day` — any fixture `in_play`, OR any `scheduled` fixture whose
    `scheduledAt` falls on today's date in `tz`.
 4. `setting_up` — the lowest-seq non-complete stage has `hasFixtures === false`
@@ -102,7 +103,7 @@ type Attention =
   | { kind: "needs_draw"; stageId: string }
   | { kind: "unscheduled"; count: number }
   | { kind: "no_scorer"; fixtureId: string; minutesSinceKickoff: number }   // in_play, zero score events
-  | { kind: "result_missing"; fixtureId: string }                          // scheduled, scheduledAt + duration < now
+  | { kind: "result_missing"; fixtureId: string }                          // scheduled, scheduledAt + settings.config.matchMinutes < now
   | { kind: "registrations_waiting"; count: number };
 ```
 
@@ -195,7 +196,7 @@ Left — the sheet:
 - Filter segment: Today · Needs result (n) · Unscheduled (n) · All. Default = Today
   when phase is `match_day`, else All. URL param `?tab=fixtures&filter=…` so it is
   linkable from "Needs you".
-- Groups by calendar day in schedule tz (`settings.tz`), ascending; header
+- Groups by calendar day in the org clock (`settings.orgTz`, the governing zone; `settings.tz` is display-only and formats the HH:mm), ascending; header
   "Saturday 5 September · venue · n fixtures". A final group "Not yet scheduled"
   lists rows with `scheduled_at` null, ordered by stage seq, round, seq_in_round.
   Round is shown INSIDE the row (small label under the court), never as a bar.
