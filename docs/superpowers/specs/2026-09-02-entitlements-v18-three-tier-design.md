@@ -494,8 +494,12 @@ dictionaries, help and `copy-truth.ts`, so no parallel lanes.
    `featurePlan`, labels, add-on sets, credits math, per-rung pass grant,
    officials competition id, `stripe-plans.json`, unit pins, copy-truth
    guards.
-3. **W3 — surfaces:** pricing page, billing settings, gates, dictionaries
-   ×4, emails, help, e2e replacements, screenshots at three widths.
+3. **W3 — surfaces:** pricing page **redesigned** (owner 2026-09-02:
+   "redesign price page as well, with admin ticket theme pricing card" —
+   ticket-styled offer cards, the Event Pass literally a ticket stub;
+   `frontend-design` first, two layout options to the owner before build,
+   sign-off on screenshots at 1280/768/320), billing settings, gates,
+   dictionaries ×4, emails, help, e2e replacements.
 4. **W4 — proofs & walkthrough:** pass and Free proof e2es, full product
    walkthrough on a prod build, Stripe archive ops step.
 
