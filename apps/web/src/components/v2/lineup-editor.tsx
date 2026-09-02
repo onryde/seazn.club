@@ -653,10 +653,25 @@ export function AvailabilityRoster({
   return (
     <section className="rounded-2xl border border-slate-200 bg-white p-4" data-testid="availability-roster">
       <h3 className="text-sm font-semibold text-slate-700">{msg("lineup.availabilityTitle", { name: side.name })}</h3>
+      {/* `min-w-0` on BOTH the row and the name is load-bearing, not tidiness:
+          `truncate` sets `white-space: nowrap`, so the span's MIN-CONTENT width
+          is the entire un-wrapped name. A flex/grid child defaults to
+          `min-width: auto`, which refuses to shrink below that — so the row,
+          this section, and the `lg:grid-cols-2` grid item it sits in
+          (fixture-console.tsx) each inherited a floor of "the longest full
+          name", and `truncate` never got the chance to truncate anything. At
+          320px that pushed this section to ~305px inside a 288px column and
+          overflowed the page (caught by the boardgame walkthrough's own
+          320px `expectNoHorizontalScroll`, on a one-player sport where this
+          roster renders in place of the lineup editor). Real names get long;
+          this is not a fixture-only shape. */}
       <ul className="mt-3 grid gap-2">
         {side.members.map((m) => (
-          <li key={m.person_id} className="flex items-center justify-between gap-3 text-sm text-slate-700">
-            <span className="truncate">{m.full_name}</span>
+          <li
+            key={m.person_id}
+            className="flex min-w-0 items-center justify-between gap-3 text-sm text-slate-700"
+          >
+            <span className="min-w-0 truncate">{m.full_name}</span>
             <AvailabilityChip personName={m.full_name} info={availability[m.person_id]} />
           </li>
         ))}

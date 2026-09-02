@@ -401,29 +401,41 @@ test("configure, register, join, waitlist, approve, opt-out — every screen agr
     // — a single read right after approve can race that regeneration.
     const divisionUrl = `/shared/${org.slug}/${compSlug}/${divisionSlug}`;
     const activePanel = () => captainPage.locator('[role="tabpanel"]:not([hidden])');
+    // Every read below is against ONE navigation's DOM, and materialise()
+    // writes the entrant + both roster members atomically in one tx
+    // (registrations.ts:927-1027) — so there is no legitimate snapshot where
+    // the mate's masked row is present but the captain's is not. The whole
+    // block used to retry ONLY the mateMasked line, then read the rest
+    // un-retried off whatever page that left behind: a snapshot from mid-way
+    // through the ISR/SWR regeneration this page documents above (stale
+    // pre-approve HTML served while a background regen completes) could
+    // satisfy `mateMasked` on one field-order pass and still be the OLD
+    // zero-entrants render for a check that reads a different part of the
+    // same DOM an instant later. Retrying the FULL set together means a
+    // transient stale read fails the whole attempt and re-navigates, instead
+    // of leaving four assertions to race a caching layer none of them can see.
     await expect(async () => {
       await captainPage.goto(divisionUrl, { waitUntil: "load" });
       await captainPage.getByRole("button", { name: /^accept$/i }).click({ timeout: 1500 }).catch(() => {});
       await captainPage.getByRole("tab", { name: "Entrants" }).click();
       await expect(activePanel().getByText(mateMasked, { exact: false })).toBeVisible({ timeout: 3000 });
+      await expect(
+        activePanel().getByText(captainName),
+        "the never-opted-out captain must still render in full on the public Entrants tab",
+      ).toBeVisible({ timeout: 3000 });
+      await expect(
+        activePanel().getByText(mateName),
+        "the opted-out mate's RAW full name must not be visible on the public Entrants tab",
+      ).not.toBeVisible({ timeout: 3000 });
+      await expect(
+        activePanel().getByText(teamName, { exact: false }),
+        "the confirmed team must appear exactly once in the public entrant count",
+      ).toHaveCount(1, { timeout: 3000 });
+      await expect(
+        activePanel().getByText(overflowTeamName, { exact: false }),
+        "the still-waitlisted entry must be EXCLUDED from the public entrant count",
+      ).toHaveCount(0, { timeout: 3000 });
     }).toPass({ timeout: 40_000, intervals: [2000, 2000, 3000, 3000, 5000, 5000, 5000] });
-
-    await expect(
-      activePanel().getByText(captainName),
-      "the never-opted-out captain must still render in full on the public Entrants tab",
-    ).toBeVisible();
-    await expect(
-      activePanel().getByText(mateName),
-      "the opted-out mate's RAW full name must not be visible on the public Entrants tab",
-    ).not.toBeVisible();
-    await expect(
-      activePanel().getByText(teamName, { exact: false }),
-      "the confirmed team must appear exactly once in the public entrant count",
-    ).toHaveCount(1);
-    await expect(
-      activePanel().getByText(overflowTeamName, { exact: false }),
-      "the still-waitlisted entry must be EXCLUDED from the public entrant count",
-    ).toHaveCount(0);
     await shot(captainPage, "08-public-entrants-cross-checked");
     await screenshotAtWidths(captainPage, testInfo, "08-public-entrants-cross-checked");
     await expectNoHorizontalScroll(captainPage);
