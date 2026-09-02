@@ -324,6 +324,63 @@ export function Scorebug({ spec, t, onTap, onOpenSheet }: ScorebugProps) {
                 </span>
               );
             }
+            const text = `${item.label ? `${item.label} ` : ""}${item.value}`;
+            const weight = item.accent
+              ? `text-xs font-semibold ${NIGHT_TILE_CLASSES.creamText}`
+              : `text-xs font-medium ${NIGHT_TILE_CLASSES.creamTextMuted}`;
+
+            // R8/#676 — WIDTH-RESERVING SLOT. `reserve` (types.ts) is the
+            // widest value this slot can take; it is laid out INVISIBLY in the
+            // same single-cell grid as the real text, so the cell is as wide as
+            // the wider of the two and stops depending on WHICH value landed —
+            // or on whether one landed at all. That is what keeps the centred
+            // row from re-centring when the serve reader refuses and badminton
+            // loses both `server` and `court` at once.
+            //
+            // `invisible` (visibility:hidden), never `display:none` or `w-0`:
+            // the sizer must still take part in layout, which is the whole job.
+            // `aria-hidden` on the sizer because it is a duplicate of text the
+            // visible layer already carries, and on a RESERVED slot because
+            // there is no text at all — an empty item announced as one would be
+            // exactly the placeholder D-17 refuses.
+            //
+            // MOBILE FIRST, and this is the part that is easy to get wrong
+            // (owner ruling, R8: compose at 320 and expand upward). The
+            // reservation must be a PREFERRED width, never a floor. Two things
+            // keep it one:
+            //
+            //  - `min-w-0` — without it a grid/flex child's min-content width is
+            //    a hard floor the parent cannot shrink past, so reserving the
+            //    WIDER of two names would push the band into horizontal scroll
+            //    on a 320px phone: an overflow traded for a re-flow, which is
+            //    the worse defect and one the no-h-scroll gate would catch.
+            //  - NO `truncate`/`whitespace-nowrap` anywhere in here. `truncate`
+            //    sets `white-space: nowrap`, which makes min-content the whole
+            //    un-wrapped string — reintroducing exactly the floor `min-w-0`
+            //    just removed. The sizers wrap like any other text.
+            //
+            // So where there is room the slot holds its width and the row stops
+            // moving; where there is not, it yields and the band wraps (the row
+            // is already `flex-wrap` with a `gap-y-1` for precisely that).
+            if (item.reserve?.length) {
+              return (
+                <span
+                  key={i}
+                  {...(item.id && !item.reserved ? { "data-strip-item-id": item.id } : {})}
+                  {...(item.reserved ? { "aria-hidden": true, "data-strip-reserved": "true" } : {})}
+                  className="grid min-w-0 justify-items-center"
+                  style={{ fontVariantNumeric: "tabular-nums" }}
+                >
+                  {item.reserve.map((candidate, c) => (
+                    <span key={c} aria-hidden className={`invisible col-start-1 row-start-1 ${weight}`}>
+                      {item.label ? `${item.label} ` : ""}
+                      {candidate}
+                    </span>
+                  ))}
+                  <span className={`col-start-1 row-start-1 ${weight}`}>{item.reserved ? "" : text}</span>
+                </span>
+              );
+            }
             return (
               <span
                 key={i}
@@ -333,15 +390,10 @@ export function Scorebug({ spec, t, onTap, onOpenSheet }: ScorebugProps) {
                 // rendered when a skin actually sets it, so every other strip
                 // item (over dots, names, target) is unchanged.
                 {...(item.id ? { "data-strip-item-id": item.id } : {})}
-                className={
-                  item.accent
-                    ? `text-xs font-semibold ${NIGHT_TILE_CLASSES.creamText}`
-                    : `text-xs font-medium ${NIGHT_TILE_CLASSES.creamTextMuted}`
-                }
+                className={weight}
                 style={{ fontVariantNumeric: "tabular-nums" }}
               >
-                {item.label ? `${item.label} ` : ""}
-                {item.value}
+                {text}
               </span>
             );
           })}

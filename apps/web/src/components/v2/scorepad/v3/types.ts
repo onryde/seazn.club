@@ -69,7 +69,54 @@ export type PadPhase = "pre" | "live" | "post";
  * plain strip's own emphasis, and an item may set either, neither, or both
  * (`tone` wins, since it replaces the rendering entirely).
  */
-export interface StripItem { id?: string; label?: string; value: string; accent?: boolean; tone?: "led" }
+export interface StripItem {
+  id?: string;
+  label?: string;
+  value: string;
+  accent?: boolean;
+  tone?: "led";
+  /**
+   * R8/#676 — WIDTH RESERVATION for a slot whose value comes and goes.
+   *
+   * EVERY value this slot can take right now, all of them laid out INVISIBLY
+   * in the slot so its width is the widest of them — the same whichever value
+   * lands in it, and the same again when no value lands at all. Purely
+   * presentational: never read, never announced, never a fact. Pre-localised by
+   * the skin, like `value` itself, so the chassis still resolves no
+   * sport-namespaced key.
+   *
+   * A LIST, not the skin's guess at the longest one. Picking "the longest
+   * string" is a proxy for width that a proportional font is free to disagree
+   * with ("Wim" is wider than "Illi"), and a reserve narrower than the value
+   * that actually lands reserves nothing. Stacking them all makes the slot's
+   * width max(candidates) by construction, in every state, with no measuring.
+   *
+   * WHY IT EXISTS. The strip is a CENTRED flex row (scorebug.tsx), so removing
+   * one item moves every other one: when the serve reader refuses, badminton's
+   * row loses BOTH `server` and `court` (they die on the same predicate) and
+   * the whole band silently re-centres. #676 was filed against that shift
+   * while mis-diagnosing its cause; the shift is the part that was real.
+   *
+   * A skin that sets this must set it on the SAME slot in BOTH states — the
+   * answered one and the reserved one — or the two states have different
+   * widths and the row still moves. That is the entire contract, and
+   * `assertScorebugSpec` enforces the half of it a builder can see.
+   */
+  reserve?: readonly string[];
+  /**
+   * This slot is HOLDING SPACE, not reporting anything: no value is rendered,
+   * no `data-strip-item-id` is emitted, and it is `aria-hidden`. The skin sets
+   * it when a fact it normally shows here is genuinely unknown but the row's
+   * shape must not change.
+   *
+   * NOT a placeholder in D-17's sense, which is the defect of printing an
+   * em dash or "Unknown" WHERE A FACT BELONGS. Nothing is printed. A reserved
+   * slot is invisible to a reader, to a screen reader, and to a Playwright
+   * locator on `data-strip-item-id` — the existing "before the first rally
+   * nobody can say who serves" assertion (`toHaveCount(0)`) still counts zero.
+   */
+  reserved?: boolean;
+}
 // Fix round 2 (Task 5 review, Important — controller ruling): servingLabel
 // is a deliberate, additive contract change. The chassis (v3/scorebug.tsx)
 // must never resolve a sport-namespaced i18n key itself — reusing
@@ -1387,6 +1434,15 @@ export function assertScorebugSpec(spec: ScorebugSpec): string[] {
     if (h.tappable && !h.hintKey) out.push(`halves[${i}]: tappable requires hintKey`);
     if (h.tappable && !h.tapEvent) out.push(`halves[${i}]: tappable requires tapEvent`);
     if (!h.who.length) out.push(`halves[${i}]: who must be non-empty`);
+  });
+  // R8/#676 — the half of StripItem.reserve's contract a single spec can see.
+  // The other half (the SAME slot reserves the SAME width in both states) needs
+  // two specs and is asserted in the skins' own suites.
+  spec.strip.forEach((item, i) => {
+    if (!item.reserved) return;
+    if (!item.reserve?.length) out.push(`strip[${i}]: reserved requires reserve (a slot holding no width holds nothing)`);
+    if (item.value) out.push(`strip[${i}]: reserved must not carry a value`);
+    if (item.id) out.push(`strip[${i}]: reserved must not carry an id — it reports nothing and must stay invisible to locators`);
   });
   return out;
 }

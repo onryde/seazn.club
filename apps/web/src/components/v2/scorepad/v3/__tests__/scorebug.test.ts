@@ -368,3 +368,84 @@ describe("ScorebugHalf.sub — the decider's second figure (R3.5/D)", () => {
     expect((html.match(/data-half-sub/g) ?? []).length).toBe(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// R8/#676 — StripItem.reserve / .reserved: the slot that holds its width
+// ---------------------------------------------------------------------------
+//
+// The chassis half of the fix. The SKINS decide when a slot is held open
+// (badminton/tabletennis/volleyball's own `serveDrifted`); this decides what a
+// held slot renders as, and — the part that matters on a phone — that holding
+// a width never becomes a width FLOOR.
+
+function renderStripToString(strip: StripItem[]): string {
+  const spec: ScorebugSpec = {
+    context: "ctx",
+    phase: "live",
+    halves: [
+      { who: [{ name: "Home" }], big: "0" },
+      { who: [{ name: "Other" }], big: "0" },
+    ],
+    strip,
+  };
+  return renderToStaticMarkup(Scorebug({ spec, t }) as never);
+}
+
+/** The rendered opening tag of the strip slot carrying `marker`. */
+function slotTag(html: string, marker: string): string {
+  const at = html.indexOf(marker);
+  expect(at, `marker ${marker} not found in rendered strip`).toBeGreaterThan(-1);
+  const open = html.lastIndexOf("<span", at);
+  return html.slice(open, html.indexOf(">", at) + 1);
+}
+
+describe("R8/#676 — a width-reserving strip slot", () => {
+  it("lays out EVERY reserve candidate invisibly, so the slot is as wide as the widest", () => {
+    const html = renderStripToString([
+      { id: "server", label: "Server", value: "Al", reserve: ["Al", "Bartholomew"], accent: true },
+    ]);
+    expect(html, "the candidate that sizes the slot must actually be in the markup").toContain(
+      "Bartholomew",
+    );
+    expect(html, "and it must be laid out but not seen").toContain("invisible");
+  });
+
+  it("a RESERVED slot prints nothing, carries no id, and is hidden from assistive tech", () => {
+    const html = renderStripToString([
+      { label: "Server", value: "", reserved: true, reserve: ["Alice", "Bob"] },
+    ]);
+    expect(html).toContain("data-strip-reserved");
+    // Never locatable as the thing it is standing in for — this is what keeps
+    // the walkthrough's "before the first rally nobody can say who serves"
+    // count at zero, and what keeps D-17 intact.
+    expect(html).not.toContain('data-strip-item-id="server"');
+    expect(slotTag(html, "data-strip-reserved")).toContain("aria-hidden");
+  });
+
+  it("MOBILE FLOOR: the reserving slot is min-w-0 and never nowrap/truncate", () => {
+    // The 320px guard, and the reason this is a test rather than a comment.
+    // A grid/flex child's min-content width is a HARD floor its parent cannot
+    // shrink past, so a slot reserving the wider of two names would push the
+    // band into horizontal scroll on a phone — an overflow traded for a
+    // re-flow, which is the worse defect. `min-w-0` makes the reservation a
+    // PREFERRED width that yields under pressure; `truncate`/`nowrap` would put
+    // the floor straight back (both set white-space: nowrap, which makes
+    // min-content the whole un-wrapped string).
+    const html = renderStripToString([
+      { id: "server", label: "Server", value: "Al", reserve: ["Al", "Bartholomew"] },
+    ]);
+    const tag = slotTag(html, 'data-strip-item-id="server"');
+    expect(tag, "a reserving slot must be able to shrink below its content").toContain("min-w-0");
+    expect(tag).not.toContain("truncate");
+    expect(tag).not.toContain("nowrap");
+    expect(html, "and no sizer inside it may reintroduce the floor either").not.toContain("truncate");
+  });
+
+  it("an item with NO reserve renders exactly as it did before this field existed", () => {
+    const plain = renderStripToString([{ id: "games", label: "Games", value: "1-0" }]);
+    expect(plain).not.toContain("invisible");
+    expect(plain).not.toContain("data-strip-reserved");
+    expect(plain).toContain('data-strip-item-id="games"');
+    expect(plain).toContain("Games 1-0");
+  });
+});
