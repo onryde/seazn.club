@@ -225,6 +225,23 @@ export type PackEntrantKind = z.infer<typeof PackEntrantKind>;
 export const PackProvenance = z.enum(["real", "reconstructed", "synthetic"]);
 export type PackProvenance = z.infer<typeof PackProvenance>;
 
+/** Which provenances describe a GENERATED stream, and may therefore carry a
+ *  `reconstruction.seed`.
+ *
+ *  A `Record<PackProvenance, boolean>` rather than a predicate, deliberately.
+ *  Both `provenance === "real"` and `provenance !== "reconstructed" &&
+ *  !== "synthetic"` are correct today and neither is testable, because with
+ *  three values they are the same function — the difference only appears on a
+ *  FOURTH value, where one fails open and the other closed. An exhaustive map
+ *  removes the choice: adding a value to `PackProvenance` without deciding
+ *  this question fails `tsc` with a missing property. The safe direction stops
+ *  being a convention someone has to remember. */
+export const SEED_LEGAL_BY_PROVENANCE: Readonly<Record<PackProvenance, boolean>> = {
+  real: false, // the historical record; nothing generated it
+  reconstructed: true, // generated to fold to a real score
+  synthetic: true, // generated, and modelling no real event at all
+};
+
 /** The 19 comparator keys the competition engine's tiebreaker registry
  *  resolves. Written out because the engine ships `TiebreakerKey` as a TYPE
  *  only (packages/engine/src/sport/module.ts:41) — there is no runtime array
@@ -1166,6 +1183,34 @@ export function fixtureKey(divisionRef: string, extKey: string): string {
   return JSON.stringify([divisionRef, extKey]);
 }
 
+/** Every ref in the shared sigil namespace — persons, entrants, venues,
+ *  courts, officials. `checkRefsUnique` guarantees it is collision-free; this
+ *  is the same membership, read back for the resolvers. One builder, so the
+ *  "is this ref declared?" question cannot be answered two ways. */
+function sigilNamespace(p: PackShapeOut): Set<string> {
+  const refs = new Set<string>();
+  for (const person of p.persons) refs.add(person.ref);
+  for (const e of p.entrants) refs.add(e.ref);
+  for (const v of p.venues ?? []) {
+    refs.add(v.ref);
+    for (const c of v.courts) refs.add(c.ref);
+  }
+  for (const o of p.officials ?? []) refs.add(o.ref);
+  return refs;
+}
+
+/** "a entrant" is not a message, it is a defect wearing one. */
+const article = (word: string): string => (/^[aeiou]/i.test(word) ? "an" : "a");
+
+/** Why a same-kind duplicate matters, where the reason is not obvious from the
+ *  word "duplicate" alone. Court refs earn one: two venues each holding a
+ *  "court-1" is a perfectly reasonable thing to write, and the reason it is
+ *  refused lives in a different file's field. */
+const DUPLICATE_REF_REASON: Readonly<Record<string, string>> = {
+  court:
+    " — court refs are unique across ALL venues, because a division's scheduleConfig names them unqualified",
+};
+
 /** ONE namespace for every ref the `@` sigil can resolve, plus the two
  *  ref kinds it cannot.
  *
@@ -1208,19 +1253,28 @@ function checkRefsUnique(p: PackShapeOut, ctx: Ctx): void {
 
   // The sigil-resolvable namespace, walked in one pass so a collision is
   // reported wherever the SECOND use appears.
+  //
+  // OFFICIALS ARE IN IT PRE-EMPTIVELY. Nothing resolves an `@official` today —
+  // an official is reached through `officials[].ref` and typed assignment
+  // fields, never through the sigil. They are held here anyway because this
+  // contract freezes at the end of B06 and the cost of joining later is an
+  // owner escalation, while the cost of joining now is that an official may
+  // not share a name with a court. The stated reason below is literally true
+  // of persons, entrants, venues and courts; for officials it is insurance.
   const claimed = new Map<string, string>(); // ref -> the kind that took it
   const take = (ref: string, kind: string, at: (string | number)[]): void => {
     const owner = claimed.get(ref);
     if (owner === kind) {
-      issue(ctx, at, `duplicate ${kind} ref "${ref}"`);
+      issue(ctx, at, `duplicate ${kind} ref "${ref}"${DUPLICATE_REF_REASON[kind] ?? ""}`);
       return;
     }
     if (owner !== undefined) {
       issue(
         ctx,
         at,
-        `ref "${ref}" is already used by a ${owner} — persons, entrants, venues, courts and officials share ONE ` +
-          `namespace, because an @-prefixed reference carries no kind and the seeding layer resolves it in a single pass`,
+        `ref "${ref}" is already used by ${article(owner)} ${owner} — persons, entrants, venues, courts and ` +
+          `officials share ONE ref namespace, because an @-prefixed reference carries no kind and the seeding ` +
+          `layer resolves it in a single pass`,
       );
       return;
     }
@@ -1378,7 +1432,9 @@ function checkStreams(p: PackShapeOut, ctx: Ctx): void {
       );
     }
     seen.add(composite);
-    if (s.reconstruction !== undefined && s.provenance === "real") {
+    // Read off the exhaustive map rather than tested with a predicate, so a
+    // future provenance value cannot silently inherit either answer.
+    if (s.reconstruction !== undefined && !SEED_LEGAL_BY_PROVENANCE[s.provenance]) {
       issue(
         ctx,
         ["streams", i, "reconstruction"],
@@ -1679,11 +1735,46 @@ function checkReservations(p: PackShapeOut, ctx: Ctx): void {
     }
   });
 
+  // ---- the OTHER opaque blocks ----
+  // `cfgOverrides` and `stages[].config` are carried verbatim (header note on
+  // PackDivision), which means nothing type-checks their contents — and until
+  // now nothing scanned them for `@`-refs either. A typo'd `@ref` in either
+  // block was silently passed through to the seeding layer, which would fail
+  // to rewrite it and hand the engine a literal "@e-alpah" string. Same class
+  // as the cross-kind collision: a sigil that resolves to nothing, with
+  // nothing red.
+  //
+  // Checked against the WHOLE shared namespace rather than a narrower set, on
+  // purpose. A payload ref is narrowed to its own division's entrants and a
+  // scheduleConfig ref to venues/courts, because in both cases an authored
+  // source says which kinds belong there. No authored source says what a cfg
+  // blob may reference, so the honest check is "it must resolve to something
+  // declared" — which catches the typo this exists for without inventing a
+  // constraint that a later sport's cfg might legitimately break.
+  const declared = sigilNamespace(p);
+  const knownRef = (ref: string): boolean => declared.has(ref);
+  const scanOpaque = (block: PackJsonValue | undefined, at: (string | number)[], what: string): void => {
+    if (block === undefined) return;
+    const bad: string[] = [];
+    unresolvedPayloadRefs(block, knownRef, bad);
+    for (const ref of bad) {
+      issue(ctx, at, `unknown pack ref "${ref}" — an @-prefixed string in ${what} must name a declared person, entrant, venue, court or official`);
+    }
+  };
+  p.divisions.forEach((d, i) => {
+    scanOpaque(d.cfgOverrides, ["divisions", i, "cfgOverrides"], "cfgOverrides");
+    d.stages.forEach((st, j) => {
+      scanOpaque(st.config, ["divisions", i, "stages", j, "config"], "a stage's config");
+      scanOpaque(st.progression, ["divisions", i, "stages", j, "progression"], "a stage's progression");
+    });
+  });
+
   // ---- officials ----
-  const officialRefs = new Set<string>();
+  // Ref uniqueness is `checkRefsUnique`'s job, exactly as for venues and
+  // courts above. This pass keeping its own copy meant a duplicate official
+  // ref was reported TWICE at the same path, contradicting the comment above
+  // that says "once" — and nothing asserted the message, so no test saw it.
   p.officials?.forEach((o, i) => {
-    if (officialRefs.has(o.ref)) issue(ctx, ["officials", i, "ref"], `duplicate official ref "${o.ref}"`);
-    officialRefs.add(o.ref);
     const lane = personLane.get(o.person);
     if (lane === undefined) {
       issue(ctx, ["officials", i, "person"], `unknown person ref "${o.person}"`);

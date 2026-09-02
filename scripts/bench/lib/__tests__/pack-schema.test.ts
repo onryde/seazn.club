@@ -5,8 +5,18 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { z } from "zod";
+import { StandingsDelta } from "@seazn/engine/core";
 import { describe, expect, it } from "vitest";
-import { PackRef, PackSchema, STANDINGS_SCALAR_FIELDS, fixtureKey, type Pack } from "../pack-schema.ts";
+import {
+  PackProvenance,
+  PackRef,
+  PackSchema,
+  SEED_LEGAL_BY_PROVENANCE,
+  STANDINGS_SCALAR_FIELDS,
+  fixtureKey,
+  type Pack,
+} from "../pack-schema.ts";
 import { packToTemplateSkeleton } from "../pack-template.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -523,7 +533,7 @@ describe("PackSchema — one ref namespace for everything the @ sigil resolves",
         ((venues[0] as Record<string, unknown>).courts as Record<string, unknown>[])[0]!.ref = "e-alpha";
       }),
       ["venues", 0, "courts", 0, "ref"],
-      /already used by a entrant.*share ONE/is,
+      /already used by an entrant.*share ONE/is,
     );
   });
 
@@ -586,6 +596,46 @@ describe("PackSchema — one ref namespace for everything the @ sigil resolves",
     );
   });
 
+  it("a duplicate official ref reads as a duplicate, ONCE", () => {
+    // Nothing asserted this message, which is how a second copy of the rule
+    // survived in checkReservations and emitted the same issue twice at the
+    // same path — contradicting the comment that says "once". The count is
+    // the assertion, not just the presence.
+    const result = PackSchema.safeParse(
+      withPlaces((p) => {
+        (p.officials as Record<string, unknown>[]).push({
+          ref: "o-ref",
+          person: "p-ref",
+          displayName: "Ref Eree Again",
+        });
+      }),
+    );
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    const at = result.error.issues.filter(
+      (i) => JSON.stringify(i.path) === JSON.stringify(["officials", 1, "ref"]),
+    );
+    expect(at.map((i) => i.message)).toEqual(['duplicate official ref "o-ref"']);
+  });
+
+  it("a duplicate COURT ref still says why court refs are global", () => {
+    // The reason lives in a different file's field (scheduleConfig names
+    // courts unqualified), so "duplicate court ref" alone leaves an author
+    // with no idea why two venues may not each have a Court 1.
+    expectIssue(
+      withPlaces((p) => {
+        const venues = p.venues as Record<string, unknown>[];
+        (venues as Record<string, unknown>[]).push({
+          ref: "v-second",
+          name: "Second Arena",
+          courts: [{ ref: "c-1", name: "Court 1" }],
+        });
+      }),
+      ["venues", 1, "courts", 0, "ref"],
+      /duplicate court ref .*unique across ALL venues.*scheduleConfig names them unqualified/is,
+    );
+  });
+
   it("divisions and stages keep their own namespace — they are never @-referenced", () => {
     // Deliberately outside the shared namespace: they are addressed only
     // through typed fields (divisionRef, stageRef, registration.byDivision
@@ -603,17 +653,96 @@ describe("PackSchema — one ref namespace for everything the @ sigil resolves",
     expect(PackSchema.safeParse(shared).success).toBe(true);
   });
 
-  it("_tiny.json's own refs do not collide", () => {
-    // The fixture two later tasks build on, checked against the rule rather
-    // than assumed to predate it.
-    const p = parsed(JSON.parse(readFileSync(TINY_PACK_PATH, "utf8")));
-    const refs = [
-      ...p.persons.map((x) => x.ref),
-      ...p.entrants.map((x) => x.ref),
-      ...(p.venues ?? []).flatMap((v) => [v.ref, ...v.courts.map((c) => c.ref)]),
-      ...(p.officials ?? []).map((o) => o.ref),
-    ];
-    expect(new Set(refs).size).toBe(refs.length);
+  it("_tiny.json is refused if one of its own refs is made to collide", () => {
+    // The first version of this test parsed _tiny and then asserted its refs
+    // were distinct — dead, because `parsed()` throws on a collision, so the
+    // Set-size line could never be the thing that red. It asserted a property
+    // of a value the parser had already guaranteed.
+    //
+    // Driving it the other way is what has teeth: take the real fixture two
+    // later tasks build on, introduce ONE collision, and require the schema to
+    // refuse it. Green today AND still checking tomorrow, when _tiny grows.
+    const raw = JSON.parse(readFileSync(TINY_PACK_PATH, "utf8")) as Record<string, unknown>;
+    expect(PackSchema.safeParse(raw).success).toBe(true);
+
+    const collided = structuredClone(raw);
+    const persons = collided.persons as Record<string, unknown>[];
+    const entrants = collided.entrants as Record<string, unknown>[];
+    expect(persons.length, "_tiny declares no persons to collide").toBeGreaterThan(0);
+    expect(entrants.length, "_tiny declares no entrants to collide").toBeGreaterThan(0);
+    persons[0]!.ref = entrants[0]!.ref;
+    const result = PackSchema.safeParse(collided);
+    expect(result.success, "a collided _tiny still parsed").toBe(false);
+    if (result.success) return;
+    expect(result.error.issues.some((i) => /share ONE ref namespace/.test(i.message))).toBe(true);
+  });
+});
+
+describe("PackSchema — @-refs inside the OTHER opaque blocks", () => {
+  // The gap hunt. `cfgOverrides`, `stages[].config` and `stages[].progression`
+  // are carried verbatim, so nothing type-checks them — and nothing scanned
+  // them for @-refs either. A typo'd ref went straight through to the seeding
+  // layer, which would fail to rewrite it and hand the engine a literal
+  // "@e-alpah" string. Same class as the cross-kind collision: a sigil that
+  // resolves to nothing, with nothing red.
+
+  const opaque: { label: string; at: (string | number)[]; put: (p: Record<string, unknown>, v: unknown) => void }[] = [
+    {
+      label: "cfgOverrides",
+      at: ["divisions", 0, "cfgOverrides"],
+      put: (p, v) => {
+        const d = (p.divisions as Record<string, unknown>[])[0] as Record<string, unknown>;
+        d.cfgOverrides = { resultMode: "score", allowDraws: true, nominatedFor: v };
+      },
+    },
+    {
+      label: "a stage's config",
+      at: ["divisions", 0, "stages", 0, "config"],
+      put: (p, v) => {
+        const st = ((p.divisions as Record<string, unknown>[])[0] as Record<string, unknown>)
+          .stages as Record<string, unknown>[];
+        (st[0] as Record<string, unknown>).config = { legs: 1, pinnedTo: v };
+      },
+    },
+    {
+      label: "a stage's progression",
+      at: ["divisions", 0, "stages", 0, "progression"],
+      put: (p, v) => {
+        const st = ((p.divisions as Record<string, unknown>[])[0] as Record<string, unknown>)
+          .stages as Record<string, unknown>[];
+        (st[0] as Record<string, unknown>).progression = { sources: [{ stage: "previous", carry: v }] };
+      },
+    },
+  ];
+
+  for (const block of opaque) {
+    it(`an unresolvable @-ref in ${block.label} is refused`, () => {
+      expectIssue(
+        pack((p) => block.put(p, "@e-alpah")),
+        block.at,
+        /unknown pack ref "@e-alpah"/i,
+      );
+    });
+
+    it(`a RESOLVABLE @-ref in ${block.label} is accepted`, () => {
+      // The other direction, so the rule is a resolver and not a blanket ban
+      // on the "@" character inside an opaque block.
+      const ok = pack((p) => block.put(p, "@e-alpha"));
+      const result = PackSchema.safeParse(ok);
+      expect(result.success, result.success ? "" : JSON.stringify(result.error.issues)).toBe(true);
+    });
+  }
+
+  it("it resolves against the WHOLE shared namespace, not just entrants", () => {
+    // Deliberately broad: no authored source says what a cfg blob may
+    // reference, so the honest rule is "must resolve to something declared".
+    const ok = pack((p) => {
+      (p.persons as unknown[]).push({ ref: "p-ref", fullName: "Ref Eree", lane: "official" });
+      p.venues = [{ ref: "v-main", name: "Arena", courts: [{ ref: "c-1", name: "Court 1" }] }];
+      const d = (p.divisions as Record<string, unknown>[])[0] as Record<string, unknown>;
+      d.cfgOverrides = { resultMode: "score", allowDraws: true, homeCourt: "@c-1", scorer: "@p-ref" };
+    });
+    expect(PackSchema.safeParse(ok).success).toBe(true);
   });
 });
 
@@ -639,6 +768,28 @@ describe("PackSchema — a generated stream records its seed", () => {
       result.success ? "" : JSON.stringify(result.error.issues),
     ).toBe(true);
     expect(parsed(withSeed("synthetic")).streams[0]?.reconstruction?.seed).toBe(20260902);
+  });
+
+  it("every declared provenance has a decided seed answer, and the schema obeys it", () => {
+    // The map is exhaustive at compile time (a fourth PackProvenance value
+    // fails tsc with a missing property). This is the runtime half: the table
+    // and the behaviour agree, for every value the enum actually holds — so a
+    // hand-edit of one entry reds here rather than silently changing what a
+    // pack may declare.
+    const values = PackProvenance.options;
+    expect(values.length).toBeGreaterThan(0);
+    expect(Object.keys(SEED_LEGAL_BY_PROVENANCE).sort()).toEqual([...values].sort());
+    for (const provenance of values) {
+      const withSeedFor = pack((p) => {
+        const stream = (p.streams as Record<string, unknown>[])[0] as Record<string, unknown>;
+        stream.provenance = provenance;
+        stream.reconstruction = { seed: 7 };
+      });
+      expect(
+        PackSchema.safeParse(withSeedFor).success,
+        `provenance "${provenance}" disagrees with SEED_LEGAL_BY_PROVENANCE`,
+      ).toBe(SEED_LEGAL_BY_PROVENANCE[provenance]);
+    }
   });
 
   it("a reconstruction block without a seed is refused — the seed IS the block's purpose", () => {
@@ -1277,7 +1428,23 @@ describe("PackSchema — the expected block", () => {
     // pack-schema.ts). tsc catches a drift in the LIST; this catches a claim
     // reaching for a field that is not a scalar at all — `metrics` is a
     // Record and `entrantId` a string, so neither is comparable with `equals`.
-    for (const field of STANDINGS_SCALAR_FIELDS) {
+    //
+    // The positive loop is DERIVED FROM THE ENGINE, not from
+    // STANDINGS_SCALAR_FIELDS. Iterating the enum's own source could not fail
+    // whatever that list held: dropping two entries left this green, and it
+    // was typecheck and the _tiny tests that caught it. `StandingsDelta` ships
+    // as a runtime zod object, so its scalar fields are recoverable
+    // behaviourally — a number field accepts 0, a string field and a record
+    // do not — which gives the test a path to the truth the schema does not
+    // sit on.
+    const engineScalars = Object.entries(StandingsDelta.shape)
+      .filter(([, member]) => (member as z.ZodTypeAny).safeParse(0).success)
+      .map(([key]) => key);
+    // Non-vacuity: a derivation that matched nothing would make the loop below
+    // assert nothing at all.
+    expect(engineScalars.length).toBeGreaterThan(0);
+    expect(engineScalars).toEqual([...STANDINGS_SCALAR_FIELDS]);
+    for (const field of engineScalars) {
       const ok = pack((p) => {
         const expected = p.expected as Record<string, unknown>;
         expected.specials = [
