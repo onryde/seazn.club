@@ -624,6 +624,30 @@ export const PackStream = z.strictObject({
   divisionRef: PackRef,
   fixtureExtKey: PackExtKey,
   /**
+   * WHICH STAGE of that division this fixture belongs to.
+   *
+   * OPTIONAL, and absent means "the division's only stage" — which is why a
+   * single-stage pack (every v1 pack) need not carry it and none was changed
+   * when this was added.
+   *
+   * It exists because in the PRODUCT the stage is a FIXTURE-row fact, and a
+   * pack declares no fixtures. Without it a consumer of a multi-stage
+   * division cannot answer three questions at all: which streams feed which
+   * `expected.tables` row, which pool a fixture sat in, and — the one with
+   * teeth — which stage's `shootout` / `extraTime` overlay the fixture folds
+   * under (`apps/web/src/server/engine-db/stage-cfg.ts:9`, the two keys and
+   * only those two). The third is not a missing check but a WRONG one: a
+   * groups+knockout division whose knockout stage turns `shootout` on folds
+   * its knockout fixtures under the division cfg instead, and the validator
+   * then reports a divergence the pack never committed.
+   *
+   * Additive on purpose, and landed BEFORE the B06 freeze rather than
+   * escalated after it. Cross-checked below against the stages the stream's
+   * own division declares — a stageRef naming another division's stage
+   * resolves to nothing and is refused.
+   */
+  stageRef: PackRef.optional(),
+  /**
    * WHO PLAYED, and on which side. Required — see header note 9.
    *
    * `foldMatch` takes `LineupPair` as a REQUIRED argument
@@ -804,10 +828,19 @@ export const PackExpectedOutcome = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("draw") }),
   z.strictObject({ kind: z.literal("tie") }),
   z.strictObject({ kind: z.literal("no_result") }),
+  /** NO `method`, deliberately. The engine's own `award` variant is
+   *  `{kind, winner, score?}` (`packages/engine/src/core/types.ts:128-131`) —
+   *  it has no `method` field at all, so a folded award outcome can never
+   *  carry one. A pack writing `{kind: "award", method: "walkover"}` would
+   *  parse cleanly and then be UNSATISFIABLE: the comparison reads
+   *  `undefined` from the fold and reds forever. Same class as the `mtbTo`
+   *  trap in header note 7, failing closed rather than open, which makes it an
+   *  authoring dead end rather than a hole — and the fix is to make it
+   *  unwritable. `win` keeps `method` because `MatchOutcome`'s win variant
+   *  declares one (`types.ts:122`). */
   z.strictObject({
     kind: z.literal("award"),
     winner: PackRef,
-    method: z.string().min(1).max(60).optional(),
   }),
 ]);
 export type PackExpectedOutcome = z.infer<typeof PackExpectedOutcome>;
@@ -1480,6 +1513,9 @@ function unresolvedPayloadRefs(
  *  5), reconstruction only where provenance says so, payload refs resolvable. */
 function checkStreams(p: PackShapeOut, ctx: Ctx): void {
   const divisionRefs = new Set(p.divisions.map((d) => d.ref));
+  const stagesByDivisionRef = new Map<string, Set<string>>(
+    p.divisions.map((d) => [d.ref, new Set(d.stages.map((st) => st.ref))]),
+  );
   const personRefs = new Set(p.persons.map((person) => person.ref));
   const entrantsByDivision = new Map<string, Set<string>>();
   for (const e of p.entrants) {
@@ -1509,6 +1545,22 @@ function checkStreams(p: PackShapeOut, ctx: Ctx): void {
       // Both halves derived — the offending value from the stream, the
       // permitted list from the same table the guard just read.
       issue(ctx, ["streams", i, "reconstruction"], seedRefusalMessage(s.provenance, SEED_LEGAL_BY_PROVENANCE));
+    }
+    // The stage a stream names must belong to the stream's OWN division.
+    // Division-scoped rather than global: stage refs are only unique within a
+    // division (they are not in the `@`-sigil namespace, see
+    // `checkRefsUnique`), so a global check would accept a neighbouring
+    // division's stage and bind the fixture to the wrong points rule, pool and
+    // decider overlay.
+    if (s.stageRef !== undefined) {
+      const stageRefs = stagesByDivisionRef.get(s.divisionRef) ?? new Set<string>();
+      if (!stageRefs.has(s.stageRef)) {
+        issue(
+          ctx,
+          ["streams", i, "stageRef"],
+          `unknown stage ref "${s.stageRef}" for division "${s.divisionRef}"`,
+        );
+      }
     }
     const entrantRefs = entrantsByDivision.get(s.divisionRef) ?? new Set<string>();
 

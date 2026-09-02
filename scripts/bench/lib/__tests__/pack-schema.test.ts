@@ -373,6 +373,109 @@ describe("PackSchema — stages, seeding and brackets", () => {
   });
 });
 
+describe("PackSchema — a stream may name its stage", () => {
+  // Additive, landed before the B06 freeze. Optional, so every v1 pack is
+  // unchanged — `_tiny` declares none and still parses (asserted in the
+  // packs/_tiny.json block below, which parses the committed file).
+  it("accepts a stageRef naming a stage of the stream's own division, and KEEPS it", () => {
+    const out = parsed(
+      pack((p) => {
+        (p.streams as Record<string, unknown>[])[0]!["stageRef"] = "s-league";
+      }),
+    );
+    // The PARSED value, not merely that parsing succeeded: a field the schema
+    // strips is a field the fold can never consult.
+    expect(out.streams[0]?.stageRef).toBe("s-league");
+  });
+
+  it("is absent by default rather than defaulted to the sole stage", () => {
+    // Absence means "the division's only stage" TO A CONSUMER; the schema must
+    // not decide that for it, because the consumer is also what reports the
+    // multi-stage case it cannot resolve.
+    expect(parsed(basePack()).streams[0]?.stageRef).toBeUndefined();
+  });
+
+  it("refuses a stageRef that names no stage at all", () => {
+    expectIssue(
+      pack((p) => {
+        (p.streams as Record<string, unknown>[])[0]!["stageRef"] = "s-nope";
+      }),
+      ["streams", 0, "stageRef"],
+      /unknown stage ref "s-nope" for division "d-main"/,
+    );
+  });
+
+  it("refuses a stageRef that names ANOTHER division's stage", () => {
+    // The realistic mistake, and the one a global check would wave through:
+    // stage refs are only unique within a division, so "s-other" exists — just
+    // not here. Binding to it would fold this fixture under the wrong points
+    // rule, pool and decider overlay.
+    expectIssue(
+      pack((p) => {
+        (p.divisions as Record<string, unknown>[]).push({
+          ref: "d-other",
+          name: "Other",
+          sportKey: "generic",
+          variantKey: "score",
+          moduleVersion: "1.0.0",
+          stages: [{ ref: "s-other", seq: 1, kind: "league", name: "L" }],
+        });
+        (p.entrants as unknown[]).push(
+          { ref: "e-x", divisionRef: "d-other", kind: "individual", displayName: "X" },
+          { ref: "e-y", divisionRef: "d-other", kind: "individual", displayName: "Y" },
+        );
+        (p.streams as Record<string, unknown>[])[0]!["stageRef"] = "s-other";
+      }),
+      ["streams", 0, "stageRef"],
+      /unknown stage ref "s-other" for division "d-main"/,
+    );
+  });
+});
+
+describe("PackSchema — an award outcome cannot claim a method", () => {
+  // The engine's `award` variant is `{kind, winner, score?}` — no `method`
+  // (core/types.ts). A pack that could write one would parse and then be
+  // UNSATISFIABLE against every possible fold.
+  it("refuses `method` on an award", () => {
+    expectIssue(
+      pack((p) => {
+        const matches = (p.expected as Record<string, unknown>)["matches"] as Record<string, unknown>[];
+        (matches[0]!["outcome"] as Record<string, unknown>) = {
+          kind: "award",
+          winner: "e-alpha",
+          method: "walkover",
+        };
+      }),
+      // zod reports an unrecognized key at the OBJECT, not at the key — so
+      // this path is what the parse really produces, not what reads naturally.
+      ["expected", "matches", 0, "outcome"],
+      /unrecognized key: "method"/i,
+    );
+  });
+
+  it("still accepts `method` on a win, and KEEPS the parsed value", () => {
+    // The other half: dropping the field from the wrong variant would look
+    // identical to this test if it only checked that the award reds.
+    const out = parsed(
+      pack((p) => {
+        const matches = (p.expected as Record<string, unknown>)["matches"] as Record<string, unknown>[];
+        (matches[0]!["outcome"] as Record<string, unknown>)["method"] = "extra_time";
+      }),
+    );
+    expect(out.expected.matches[0]?.outcome).toMatchObject({ kind: "win", method: "extra_time" });
+  });
+
+  it("accepts an award with no method at all", () => {
+    const out = parsed(
+      pack((p) => {
+        const matches = (p.expected as Record<string, unknown>)["matches"] as Record<string, unknown>[];
+        (matches[0]!["outcome"] as Record<string, unknown>) = { kind: "award", winner: "e-alpha" };
+      }),
+    );
+    expect(out.expected.matches[0]?.outcome).toEqual({ kind: "award", winner: "e-alpha" });
+  });
+});
+
 describe("PackSchema — streams and events", () => {
   it("a fixture ext_key is unique per DIVISION, stricter than the DB's per-stage index", () => {
     expectIssue(
