@@ -421,7 +421,7 @@ export function Scorebug({ spec, t, onTap, onOpenSheet }: ScorebugProps) {
                   // and top-aligned the visible value inside it, while every
                   // sibling strip item sits on the band's own `items-center`.
                   // The reservation is a WIDTH; it must not buy height.
-                  className="grid min-w-0 place-items-center"
+                  className="grid min-w-0 place-items-center max-md:shrink-0"
                   style={{ fontVariantNumeric: "tabular-nums" }}
                 >
                   {/* THE SIZERS ARE SIBLINGS OF THE VISIBLE LAYER, NEVER ITS
