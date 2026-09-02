@@ -4,7 +4,7 @@ description: Card thresholds fold into a disciplinary ledger, auto-raise pending
 order: 8
 ---
 
-Card-sport divisions (football, hockey, ice hockey) get a **Discipline tab** beside Settings. It turns the cards your scorers record into a running disciplinary ledger, raises **pending** suspensions when a player crosses a threshold, and flags banned players across the console, the score pad, the public page and each player's own home. Discipline is a **Pro** feature (cards are already Pro), so free organisations see the upgrade prompt on the tab.
+Card-sport divisions (football, hockey, ice hockey) get a **Discipline tab** beside Settings. It turns the cards your scorers record into a running disciplinary ledger, raises **pending** suspensions when a player crosses a threshold, and flags banned players across the console, the score pad, the public page and each player's own home. Discipline is a **Pro** feature, so free organisations see the upgrade prompt on the tab. Recording the cards themselves is not: every plan can record a card, name the player it was shown to and show it on the public page. What Pro adds is the ledger built on top of them — the running counts, the thresholds and the automatic suspensions.
 
 ## Rules
 
@@ -15,7 +15,7 @@ Two families of rule, each over the card colours your sport actually shows:
 
 Sport defaults are prefilled the first time you open the tab; edit the counts, the ban length or the colours, add or remove rows, then **Save rules**. Turn the whole thing off with the **Enforce suspensions** toggle without losing your rules.
 
-Only **person-attributed** cards count — a card recorded against a named player, not an anonymous team card. (Ball-by-ball attribution is itself a Pro feature.)
+Only **person-attributed** cards count — a card recorded against a named player, not an anonymous team card. Attributing a card to a player costs nothing: it is a matter of scoring the card with the player named, which every plan can do.
 
 ## The review queue
 

@@ -64,7 +64,13 @@ export const PRO_FEATURES = [
   "Unlimited competitions & divisions",
   "256 entrants per division",
   "Entry fees at a 2% platform fee",
-  "Ball-by-ball & rally scoring, player stats",
+  // W1 (entitlements v18, owner ruling 2026-08-30): was "Ball-by-ball & rally
+  // scoring, player stats". V390 deleted `scoring.ball_by_ball` and
+  // `scoring.rally_by_rally` from `plan_entitlements`, so two thirds of that
+  // bullet promised rows that no longer exist — and, worse, sold a capability
+  // Community now has in full. `stats.player` is the third of the three and is
+  // still Pro-only, so the bullet keeps its row and loses its falsehood.
+  "Player stats & scorecards",
   "Officials, exports, API keys, device links",
   "Remove the “Powered by Seazn” badge",
   // v16 league-ops (T84): suspensions/discipline, official ratings and

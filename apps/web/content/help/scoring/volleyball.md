@@ -48,7 +48,7 @@ Indoor pays the usual volleyball match points — 3-0 for a 3-0 or 3-1, and 2-1 
 
 ## Recording level
 
-Rally-by-rally is the finest level and needs a plan that includes it. Below that the halves stop being tappable and the pad says why. A note names the plan that unlocks it and adds *"Record each set's final score instead."*; the rally tile itself is greyed out, reading **Rally by rally is locked** and captioned *"Record each set's final score"*. Set score works at every level; time-outs, sanctions and the libero exchange from **Card** upwards. See [choosing a detail level](/help/scoring/fidelity).
+Rally by rally is the finest level volleyball records, and it is available on every plan — a volleyball pad opens there. Drop to a lower level on the **Recording** chip and the halves stop being tappable, because a rally is no longer something this pad records; use **Set score** for each set's final score instead. Set score works at every level; time-outs, sanctions and the libero exchange from **Key moments** upwards. See [choosing a detail level](/help/scoring/fidelity).
 
 ## Common questions
 

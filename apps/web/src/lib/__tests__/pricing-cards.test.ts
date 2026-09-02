@@ -224,12 +224,12 @@ const APPROVED_CARD_BULLETS: ApprovedBullets[] = [
   },
   {
     array: "PRO_FEATURES",
-    why: "the Pro card on /pricing (and, sliced, the home ticket stub). Pinned to the live matrix by CARD_SURFACES below: competitions.max_active and divisions.per_competition.max are null on pro, so 'Unlimited competitions & divisions' must stay literally true; entrants.per_division.max is 256 and registration.fee_percent is 2. The capability bullets are boolean pro grants (scoring.*, stats.player, api.access, dashboard.branding for the badge, discipline.enforced, news.auto, officials.marks). It must NOT claim a pro_plus-only feature — crossCardExclusivityFaults judges that against the rows.",
+    why: "the Pro card on /pricing (and, sliced, the home ticket stub). Pinned to the live matrix by CARD_SURFACES below: competitions.max_active and divisions.per_competition.max are null on pro, so 'Unlimited competitions & divisions' must stay literally true; entrants.per_division.max is 256 and registration.fee_percent is 2. The capability bullets are boolean pro grants (stats.player, scoring.device_links, api.access, exports, dashboard.branding for the badge, discipline.enforced, news.auto, officials.marks). It must NOT claim a pro_plus-only feature — crossCardExclusivityFaults judges that against the rows. W1 (entitlements v18, owner ruling 2026-08-30): bullet 4 was 'Ball-by-ball & rally scoring, player stats'. V390 deleted scoring.ball_by_ball and scoring.rally_by_rally from plan_entitlements — recording detail is free on every plan — so two thirds of that sentence pointed at no row and sold Community something it already has. Only stats.player survives of the three, and it is what the bullet now names.",
     bullets: [
       "Unlimited competitions & divisions",
       "256 entrants per division",
       "Entry fees at a 2% platform fee",
-      "Ball-by-ball & rally scoring, player stats",
+      "Player stats & scorecards",
       "Officials, exports, API keys, device links",
       "Remove the “Powered by Seazn” badge",
       "Suspensions & discipline tracking",
@@ -579,8 +579,10 @@ const CARD_SURFACES: CardSurface[] = [
       { feature: "registration.fee_percent", plan: "pro", betterWhen: "lower", says: (n) => new RegExp(`\\b${n}%\\s+platform\\s+fee\\b`, "i") },
     ],
     booleans: [
-      { feature: "scoring.ball_by_ball", plans: ["pro"], says: /\bball-by-ball\b/i },
-      { feature: "scoring.rally_by_rally", plans: ["pro"], says: /\brally scoring\b/i },
+      // W1 (entitlements v18, owner ruling 2026-08-30): the `scoring.ball_by_ball`
+      // and `scoring.rally_by_rally` claims are GONE, not reworded — V390 deleted
+      // both rows from `plan_entitlements`, so the Pro card can no longer promise
+      // either. `stats.player` is what is left of that bullet, and it is real.
       { feature: "stats.player", plans: ["pro"], says: /\bplayer stats\b/i },
       { feature: "api.access", plans: ["pro"], says: /\bAPI keys\b/i },
       { feature: "scoring.device_links", plans: ["pro"], says: /\bdevice links\b/i },

@@ -26,8 +26,13 @@ export const ENTITLEMENT_DOMAINS: { slug: string; features: string[] }[] = [
     "scheduling.ai",
     "schedule.checkpoints.max", "schedule.versioning",
   ]},
+  // W1 (entitlements v18, owner ruling 2026-08-30): `scoring.ball_by_ball`,
+  // `scoring.rally_by_rally` and `scoring.match_timeline` are NOT listed —
+  // V390 deleted their `plan_entitlements` rows, so a comparison row here
+  // would render an empty column on every plan while telling a reader that
+  // recording detail is something plans differ on. It is not: every band is
+  // free on every plan.
   { slug: "scoring", features: [
-    "scoring.ball_by_ball", "scoring.rally_by_rally", "scoring.match_timeline",
     "scoring.device_links", "cricket.dls", "stats.player",
     // The public player card that carries those stats. Grouped with the player
     // data rather than with `brand` so a reader comparing plans finds both

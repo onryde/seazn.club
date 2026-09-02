@@ -68,9 +68,9 @@ Individual shots stay under **More** rather than taking two of the board's four 
 Each level adds to the one below it — see [choosing a detail level](/help/scoring/fidelity).
 
 - **Result only** — goals, period advances and shoot-out attempts. The score is right; nobody is named.
-- **Card** — penalties and releases, which is what brings the box countdown and the **On ice** strength chip to life.
-- **Timeline** — who scored, the assists, the offence a penalty was for, who served it, line changes, and penalty shots. This is the level per-player stats are built from.
-- **Detail** — individual shots, and with them the goalkeeper save numbers.
+- **Key moments** — penalties and releases, which is what brings the box countdown and the **On ice** strength chip to life.
+- **Full timeline** — who scored, the assists, the offence a penalty was for, who served it, line changes, and penalty shots. This is the level per-player stats are built from.
+- **Every detail** — individual shots, and with them the goalkeeper save numbers.
 
 ## Common questions
 

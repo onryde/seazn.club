@@ -163,7 +163,11 @@ describe("ImportClient — the report table (every rejection code the design doc
           fixture: "fx-7",
           status: "rejected",
           eventsAppended: 0,
-          error: { code: "import.entitlement", feature: "scoring.ball_by_ball" },
+          // W1 (entitlements v18): `cricket.dls`, not `scoring.ball_by_ball`.
+          // V390 deleted the three fidelity keys, and `event-import.ts` can now
+          // only ever put `cricket.dls` in this field — a fixture naming a key
+          // production cannot emit proves the renderer against nothing.
+          error: { code: "import.entitlement", feature: "cricket.dls" },
         },
         { fixture: "fx-8", status: "rejected", eventsAppended: 0, error: { code: "import.slots_unfilled" } },
         // Final review I-4: the catch-all row. It carries no named fields, so
@@ -207,7 +211,7 @@ describe("ImportClient — the report table (every rejection code the design doc
       }),
     );
     expect(text).toContain(msg("eventImport.error.not_decided"));
-    expect(text).toContain(msg("eventImport.error.entitlement", { feature: "scoring.ball_by_ball" }));
+    expect(text).toContain(msg("eventImport.error.entitlement", { feature: "cricket.dls" }));
     expect(text).toContain(msg("eventImport.error.slots_unfilled"));
     expect(text).toContain(msg("eventImport.error.stream_failed"));
     // And it is a real sentence, not the generic fallback naming the code.

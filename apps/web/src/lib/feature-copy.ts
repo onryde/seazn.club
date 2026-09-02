@@ -2,7 +2,7 @@
 // Isomorphic on purpose: the 402 handlers (server) and <UpgradeGate> (client)
 // read the same map so the paywall reason is identical everywhere.
 
-const FEATURE_REASONS: Record<string, string> = {
+export const FEATURE_REASONS: Record<string, string> = {
   // Structure & scale
   "embeds.enabled": "Embedding live widgets on your own website is a Pro feature.",
   // Billing groups (spec 2026-07-21): the cap belongs to the billing GROUP, so
@@ -37,10 +37,17 @@ const FEATURE_REASONS: Record<string, string> = {
   "stages.per_division.max": "Adding another stage needs a bigger plan.",
   "formats.double_elim": "Double-elimination brackets are a Pro format.",
   "formats.advanced": "Americano, ladders, custom brackets, cross-stage feeds and auto-advance are Pro formats.",
-  // Sport depth
-  "scoring.ball_by_ball": "Ball-by-ball scoring is a Pro feature.",
-  "scoring.rally_by_rally": "Rally-by-rally scoring is a Pro feature.",
-  "scoring.match_timeline": "Match timelines (scorers, cards, minutes) are a Pro feature.",
+  // Sport depth.
+  //
+  // W1 (entitlements v18, owner ruling 2026-08-30): the three fidelity keys —
+  // `scoring.ball_by_ball`, `scoring.rally_by_rally`, `scoring.match_timeline`
+  // — are gone from this map because V390 deleted them from
+  // `plan_entitlements` and the same wave deleted their gate from `scoreEvent`
+  // and the batch importer. Nothing can raise a 402 for them any more, so a
+  // reason here would be an upsell for a feature that is already free — the
+  // one error worse than paywalling something, because a free org reads it and
+  // stops. `featureReason` falls back to the generic line for any key not
+  // listed, so their removal cannot crash a caller.
   "cricket.dls": "DLS revised targets are a Pro feature — a manual umpire target still works.",
   "stats.player": "Player stats and scorecard entry are a Pro feature.",
   "scoring.audit_export": "The signed match audit trail download is a Pro feature.",

@@ -334,8 +334,10 @@ export async function divisionPlayerStats(
       }))
       .sort((a, b) => dir * ((a.stats[metric] ?? 0) - (b.stats[metric] ?? 0)) || a.full_name.localeCompare(b.full_name));
 
-    // Community with ball-by-ball off: coarse events yield no per-player rows —
-    // say so instead of showing wrong zeros (Jul3/07 §8).
+    // A division scored at a coarse recording level yields no per-player rows —
+    // say so instead of showing wrong zeros (Jul3/07 §8). NOT a plan question
+    // since W1 (entitlements v18): every recording level is free, so this is
+    // about the level the scorer PICKED, not one the org could not afford.
     const [{ decided }] = await tx<{ decided: number }[]>`
       select count(*) filter (where status = 'decided')::int as decided
       from fixtures where division_id = ${divisionId}`;

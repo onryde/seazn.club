@@ -4,31 +4,35 @@ description: Pick how much a match records, from the final result up to the fine
 order: 11
 ---
 
-Every pad states its **detail level** above the scoring actions, and lets you change it. It decides how much gets recorded, from the bare result up to the finest grain the sport supports. Most pads show the four levels as a switch; [cricket](/help/scoring/cricket) states the level in words — "Recording ball by ball" — and opens the same choices when you tap it.
+Every pad carries a **Recording** chip directly above the scoring actions: a four-rung meter, the level you're on in words, and a chevron. Tap it and a sheet offers all four levels, each captioned with how many actions the pad gives you at that level — so you can see what a level buys you before you pick it, rather than after.
 
 ## The four levels
 
 - **Result only** — the final score and outcome. Nothing else.
-- **Card** — enough for a scoreboard or matchday card: the headline events, not a full account.
-- **Timeline** — a full, attributed account of the match, in order. This is usually what [player stats](/help/players/player-stats-and-photo) are built from.
-- **Detail** — the finest grain a sport offers. Not every sport has extra detail beyond Timeline yet — where it doesn't, Detail records the same as Timeline.
+- **Key moments** — enough for a scoreboard or matchday card: the headline events, not a full account.
+- **Full timeline** — a full, attributed account of the match, in order. This is usually what [player stats](/help/players/player-stats-and-photo) are built from.
+- **Every detail** — the finest grain a sport offers. Not every sport has extra detail beyond the timeline; where it doesn't, the sheet's two top rows read the same count, and you can see that instead of discovering it by tapping.
 
 Each level records strictly more than the one below it, and picking a higher level never removes anything you could already see.
 
-## Free vs paid
+## Every level is on every plan
 
-**Result only** and **Card** are available on every plan. **Timeline** and **Detail** need a plan that includes match-timeline scoring. Pick a level you're not entitled to and it still shows rather than disappearing, so you know it exists without being able to use it. It says which plan carries it — "records every ball on Pro" — so what's missing and what would fix it are both on screen.
+There is nothing to buy here. All four levels are available on every plan, including Community — how much detail you record is a scoring decision, not a purchase, so the chip names no plan and nothing on it is locked.
+
+Pick the level that matches how closely you can follow the match. A parent keeping score one-handed on a phone and an official scorer at a national final are answering different questions, and both answers are correct.
 
 ## Changing level mid-match
 
-Moving **up** applies immediately — you just see more actions to record from that point on. Moving **down** asks you to confirm first, because it hides actions above the level you're dropping to: *"Switching to a lower detail level hides actions above it. Nothing already recorded is deleted."* Cancel keeps you where you were; confirming only changes what you can enter next, never what's already on the record.
+Change it whenever you like; it applies straight away. Moving **up** puts more actions on the board from that point on. Moving **down** takes the deeper actions off the board — they are removed rather than greyed out, so the pad only ever shows what a tap will actually record. Nothing already recorded is deleted either way, and moving back up brings the actions straight back.
 
 ## It's personal to your pad
 
-The level you pick applies to your own screen only. Someone else scoring the same match — another scorer, a [device link](/help/scoring/device-links) at the other end of the court — can be on a different level at the same time; changing yours doesn't change theirs. Reloading the page puts you back on the match's default level.
+The level you pick applies to your own screen only. Someone else scoring the same match — another scorer, a [device link](/help/scoring/device-links) at the other end of the court — can be on a different level at the same time; changing yours doesn't change theirs.
+
+Your pick is remembered for that match on that device, so a reload puts you back where you were. A match you have never picked a level for opens at the finest level its sport records.
 
 ## Common questions
 
 **Does a low detail level mean worse stats?** It means fewer of them, not wrong ones. Scoring at Result only still produces a correct final score and correct standings.
 
-**I can see a level but can't afford it — why is it still showing?** So you know it exists rather than wondering why it's missing. Ask an organiser to upgrade the plan if you need it.
+**Why can't I tap something I could tap a minute ago?** You are on a lower level than the action needs. Open the Recording chip and pick a higher one — it comes straight back.
