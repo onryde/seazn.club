@@ -82,13 +82,17 @@ function lowestOpenStage(stages: PhaseStage[]): PhaseStage | null {
 
 export function resolvePhase(input: PhaseInput): DivisionPhase {
   const { stages, fixtures } = input;
-  // 1. finished
+  // 1. setting_up: not started. Checked BEFORE "finished": a brand-new
+  // division with zero stages and zero fixtures satisfies rule 2's "nothing
+  // open, nothing live" vacuously (Task 3 competition-desk.test.ts, "a fresh
+  // division with no stage is setting_up") — divisionStatus wins so it never
+  // reads as finished before it has even begun.
+  if (input.divisionStatus === "setup") return "setting_up";
+  // 2. finished
   const everyStageComplete = stages.length > 0 && stages.every((s) => s.status === "complete");
   const noOpenStage = !stages.some((s) => s.status === "pending" || s.status === "active");
   const noLiveFixture = !fixtures.some((f) => LIVE.has(f.status));
   if (everyStageComplete || (noOpenStage && noLiveFixture)) return "finished";
-  // 2. setting_up: not started
-  if (input.divisionStatus === "setup") return "setting_up";
   // 3. match_day
   const today = localDateKey(input.now, input.tz);
   const matchDay = fixtures.some(
