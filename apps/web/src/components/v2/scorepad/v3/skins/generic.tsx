@@ -28,7 +28,7 @@
 // every builder below:
 //
 //  * "score"    — a RUNNING TALLY. A half tap commits `generic.score
-//                 {by, points: 1}` immediately; the ~6s dock amends the AMOUNT
+//                 {by, points: 1}` immediately; the hold-window dock amends the AMOUNT
 //                 on that same held submission (2/3/5) rather than posting a
 //                 second event, and names the scorer when the side has more
 //                 than one player.
@@ -639,7 +639,7 @@ export function buildSheets(view: PadHostView, t: TFn): Record<string, GuidedShe
 // `mutateHeld`) and never posts a second event. That is the honest reading of
 // "tap decides, dock enriches" for generic, and it is why one tap can stay
 // worth exactly one point: the common case costs nothing and the uncommon one
-// costs one more tap inside the same ~6s window.
+// costs one more tap inside the same hold window (`HOLD_MS`, queue.ts).
 //
 // EVERY CHIP STAYS ON SCREEN FOR THE WHOLE HOLD, deliberately — this dock has
 // no steps. `resolveDockSpec` (pad-host.tsx) calls this with the ORIGINAL tap
