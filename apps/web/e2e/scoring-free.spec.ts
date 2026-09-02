@@ -1,4 +1,6 @@
 import { test, expect, type Page, type APIRequestContext } from "@playwright/test";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { football } from "@seazn/engine/sports/football";
 import {
   activeOrg,
@@ -280,6 +282,17 @@ test("a stored band does not cost a hydration pass on the next page load", async
   expect(hydrationErrors, `React reported a hydration problem: ${hydrationErrors.join(" | ")}`).toEqual([]);
 });
 
+const LOCALES = ["en", "es", "fr", "nl"] as const;
+
+/** That locale's OWN copy, read from the shipped dictionary rather than typed
+ *  here — so a copy change moves the expectation with it instead of reddening
+ *  a test that has gone stale. */
+function uiFor(locale: (typeof LOCALES)[number]): Record<string, string> {
+  return JSON.parse(
+    readFileSync(fileURLToPath(new URL(`../src/dictionaries/${locale}/ui.json`, import.meta.url)), "utf8"),
+  ) as Record<string, string>;
+}
+
 // ---------------------------------------------------------------------------
 // The band labels have to FIT, in every locale, at the narrowest width
 // ---------------------------------------------------------------------------
@@ -330,8 +343,22 @@ test("the band-1 label fits the chip at 320 in every locale", async ({ page }) =
   await page.locator('[data-band="1"]').click();
   await expect(chip(page)).toHaveAttribute("aria-expanded", "false", { timeout: 10_000 });
 
+  // NON-VACUITY, ASSERTED FIRST. Everything below compares what the browser
+  // rendered against that locale's own dictionary entry. If the four entries
+  // were identical the comparison could not tell a working locale switch from
+  // an inert one, which is the exact hole this block closes — so the premise
+  // is checked rather than assumed.
+  const expected = Object.fromEntries(
+    LOCALES.map((locale) => [locale, { lead: uiFor(locale)["pad.recording.lead"], band1: uiFor(locale)["pad.recording.band.1"] }]),
+  ) as Record<(typeof LOCALES)[number], { lead: string; band1: string }>;
+  expect(
+    new Set(LOCALES.map((locale) => `${expected[locale].lead}|${expected[locale].band1}`)).size,
+    `the four locales' chip copy is not distinct, so this test cannot witness an inert locale switch: ${JSON.stringify(expected)}`,
+  ).toBe(LOCALES.length);
+
   const results: string[] = [];
-  for (const locale of ["en", "es", "fr", "nl"] as const) {
+  const wrongLocale: string[] = [];
+  for (const locale of LOCALES) {
     // `resolveLocale` reads the `seazn_locale` cookie FIRST — above the
     // signed-in user's own locale and above the org default — so this is the
     // lever, not `setOrgLocaleSql` (which sits at priority 3 and is used only
@@ -351,8 +378,27 @@ test("the band-1 label fits the chip at 320 in every locale", async ({ page }) =
     results.push(
       `LOCALE_FIT_320 ${locale}: lead=${JSON.stringify(lead)} value=${JSON.stringify(fit.text)} scroll=${fit.scroll} client=${fit.client} truncated=${fit.scroll > fit.client}`,
     );
+    // WHAT WAS MEASURED, NOT JUST HOW WIDE IT WAS (review I-1, fix round 3).
+    // A width test alone passes just as happily when the locale switch is
+    // INERT — which is not hypothetical: the first version of this loop drove
+    // `setOrgLocaleSql`, which sits below the signed-in user's own locale in
+    // `resolveLocale`, and measured English four times while reporting four
+    // green rows. Comparing against each locale's OWN dictionary entry is what
+    // makes a silent revert of the lever red instead of green. It also pins
+    // the positional `span.nth(1)`/`nth(2)` this measurement depends on: if
+    // the chip's children are ever re-ordered, these stop matching.
+    if (lead !== expected[locale].lead || fit.text !== expected[locale].band1) {
+      wrongLocale.push(
+        `${locale}: expected lead ${JSON.stringify(expected[locale].lead)} + value ${JSON.stringify(expected[locale].band1)}, ` +
+          `rendered lead ${JSON.stringify(lead)} + value ${JSON.stringify(fit.text)}`,
+      );
+    }
   }
   for (const line of results) console.log(line);
+  expect(
+    wrongLocale,
+    `the chip did not render each locale's own copy — the locale switch is inert or the chip's spans moved:\n${wrongLocale.join("\n")}`,
+  ).toEqual([]);
   const truncated = results.filter((line) => line.endsWith("truncated=true"));
   expect(truncated, `the band-1 label overflows the chip at 320:\n${truncated.join("\n")}`).toEqual([]);
 });
