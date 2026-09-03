@@ -1152,6 +1152,25 @@ export async function setOwnerStaffSql(orgId: string, on: boolean): Promise<void
   );
 }
 
+/** Set the org owner's staff role precisely — `setOwnerStaffSql` can only
+ *  express superadmin, so it cannot reach the staff-but-not-superadmin case
+ *  that separates requireStaff() from requireSuperadmin(). Pass null to clear.
+ *  ALWAYS restore in a finally: the shared Pro user outlives the borrower. */
+export async function setOwnerStaffRoleSql(
+  orgId: string,
+  role: "support" | "superadmin" | null,
+): Promise<void> {
+  await withDb((sql) =>
+    role
+      ? sql`update users set is_staff = true, staff_role = ${role}
+              where id in (select user_id from org_members
+                            where org_id = ${orgId} and role = 'owner')`
+      : sql`update users set is_staff = false, staff_role = null
+              where id in (select user_id from org_members
+                            where org_id = ${orgId} and role = 'owner')`,
+  );
+}
+
 export interface OrgInfo {
   id: string;
   slug: string;
