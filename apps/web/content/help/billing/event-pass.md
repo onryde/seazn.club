@@ -10,7 +10,7 @@ It comes in two sizes, **M** and **L**. They differ in exactly one respect — h
 
 ## Two sizes: M and L
 
-| | M — $29 | L — $59 |
+| | M — $15 | L — $39 |
 |---|---|---|
 | Entrants per division | 128 | Unlimited |
 | Divisions in the competition | Up to 10 | Up to 20 |
@@ -113,7 +113,7 @@ When that happens the event stays fully **readable** — nothing you built is de
 
 **What happens to the passed competition if my Pro subscription lapses?** It keeps everything the pass grants — the pass is bought outright for that event and survives a downgrade. Only the rest of your org falls back to Community limits ([what downgrading freezes](/help/billing/downgrade)).
 
-**Where do I buy one?** Wherever the competition is: open it and the **Event Pass — from $29 one-time** link sits above its name, on the overview and on its settings page. From the competition list, it's in the **⋯** menu on the card. Your [billing page](/o/settings/billing) lists the same link for each competition you could still pass, under **Event Pass** below the usage meter. All four go to the same one-page checkout, where you choose M or L before paying. All four also disappear together once that competition is [closed to new passes](#when-a-competition-closes-to-new-passes) — we stop offering what the checkout would refuse.
+**Where do I buy one?** Wherever the competition is: open it and the **Event Pass — from $15 one-time** link sits above its name, on the overview and on its settings page. From the competition list, it's in the **⋯** menu on the card. Your [billing page](/o/settings/billing) lists the same link for each competition you could still pass, under **Event Pass** below the usage meter. All four go to the same one-page checkout, where you choose M or L before paying. All four also disappear together once that competition is [closed to new passes](#when-a-competition-closes-to-new-passes) — we stop offering what the checkout would refuse.
 
 Once a competition holds a pass, those links are replaced by an **Event Pass M active** or **Event Pass L active** marker, naming the size you bought — there's nothing left to buy for that event. On a paid plan they appear only where a size still raises a limit your plan caps: with Pro that is **L**, which lifts the 256-entrant ceiling on a division. Where your plan already covers the size, no link appears and the checkout refuses that sale. Once that competition is over the marker becomes **Event Pass ended** and points you at the next edition instead — see [when a pass stops applying](#when-a-pass-stops-applying).
 

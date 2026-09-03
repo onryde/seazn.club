@@ -164,14 +164,17 @@ describe("the cap", () => {
 
 // WHICH remedy a full bill is told to take (v17 gap #293). One sentence used to
 // serve every plan — "Upgrade to cover more" — and the extra-organisation rider
-// made it wrong for the two plans that sell one: it sends a paying customer to
-// change their plan when what they need is a $9/$19 monthly add-on.
+// made it wrong for the plans that sell one: it sends a paying customer to
+// change their plan when what they need is a monthly add-on.
 describe("the cap's remedy", () => {
   const atCapOn = (over: Partial<ViewGroup>) =>
     view([group({ max_orgs: 1, orgs: [org()], ...over })])!;
 
-  it("points Pro and Pro Plus at the Add-ons tab, not at an upgrade", () => {
-    for (const plan of ["pro", "pro_plus"]) {
+  it("points a rider-selling plan at the Add-ons tab, not at an upgrade", () => {
+    // Pro alone since entitlements v18 retired Pro Plus; the list is still a
+    // loop rather than one call, because the rule is "every plan that sells a
+    // rider", not "Pro".
+    for (const plan of ["pro"]) {
       const v = atCapOn({ plan_key: plan });
       expect(v.atCap, plan).toBe(true);
       expect(v.atCapKey, plan).toBe("billing.group.atCapAddOn");

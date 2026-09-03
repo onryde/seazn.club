@@ -142,7 +142,7 @@ describe("seed shape", () => {
   });
 
   it("fails closed on a half-declared tiered spec instead of minting a flat price", () => {
-    // A per_unit price bills quantity × base: a 2-org Pro group would pay $38.
+    // A per_unit price bills quantity × base: a 2-org Pro group would pay $24.
     const noScheme: PriceSpec = { ...proMonthly, billing_scheme: undefined };
     const noTiers: PriceSpec = { ...proMonthly, tiers: undefined };
     expect(() => isTiered(noScheme)).toThrow(/half-declared/);
@@ -154,8 +154,8 @@ describe("seed shape", () => {
 describe("priceCreateParams — flat", () => {
   it("sends unit_amount + flat currency_options, and no tier fields", () => {
     const params = priceCreateParams(eventPass, "prod_1", "usd", "event_pass");
-    expect(params.unit_amount).toBe(2900);
-    expect(params.currency_options?.gbp).toEqual({ unit_amount: 2500 });
+    expect(params.unit_amount).toBe(1500);
+    expect(params.currency_options?.gbp).toEqual({ unit_amount: 1200 });
     expect(params.billing_scheme).toBeUndefined();
     expect(params.tiers).toBeUndefined();
     expect(params.recurring).toBeUndefined(); // one-time pass must not regress
@@ -171,8 +171,8 @@ describe("priceCreateParams — tiered", () => {
     expect(params.billing_scheme).toBe("tiered");
     expect(params.tiers_mode).toBe("graduated");
     expect(params.tiers).toEqual([
-      { up_to: 1, unit_amount: 1900 },
-      { up_to: "inf", unit_amount: 900 },
+      { up_to: 1, unit_amount: 1200 },
+      { up_to: "inf", unit_amount: 600 },
     ]);
     // Stripe rejects unit_amount when billing_scheme=tiered.
     expect(params.unit_amount).toBeUndefined();
@@ -182,8 +182,8 @@ describe("priceCreateParams — tiered", () => {
   it("transposes per-tier currency amounts into per-currency ladders", () => {
     expect(params.currency_options?.gbp).toEqual({
       tiers: [
-        { up_to: 1, unit_amount: 1500 },
-        { up_to: "inf", unit_amount: 700 },
+        { up_to: 1, unit_amount: 900 },
+        { up_to: "inf", unit_amount: 400 },
       ],
     });
     // No currency option may carry a flat unit_amount on a tiered price.
@@ -196,7 +196,7 @@ describe("priceCreateParams — tiered", () => {
   it("throws when a tier skips a currency instead of billing a partial ladder", () => {
     const holed: PriceSpec = {
       ...proMonthly,
-      tiers: [proTiers[0]!, { ...proTiers[1]!, currency_options: { eur: 900 } }],
+      tiers: [proTiers[0]!, { ...proTiers[1]!, currency_options: { eur: 500 } }],
     };
     expect(() => tieredCurrencyOptionsParam(holed)).toThrow(/missing a gbp amount/);
   });
@@ -219,9 +219,9 @@ describe("currency coverage", () => {
   it("refuses a FLAT price that skips a currency instead of letting Stripe adaptive-price it", () => {
     const holed: PriceSpec = {
       ...eventPass,
-      currency_options: without(eventPass.currency_options!, "aud"),
+      currency_options: without(eventPass.currency_options!, "gbp"),
     };
-    expect(() => priceCreateParams(holed, "prod_1", "usd", "event_pass")).toThrow(/aud/);
+    expect(() => priceCreateParams(holed, "prod_1", "usd", "event_pass")).toThrow(/gbp/);
     const bare: PriceSpec = { ...eventPass, currency_options: undefined };
     expect(() => priceCreateParams(bare, "prod_1", "usd", "event_pass")).toThrow(/eur/);
   });
@@ -268,7 +268,7 @@ describe("priceHasDrifted — tiered", () => {
 
   it("detects a missing currency price point", () => {
     const p = liveTieredPro();
-    delete p.currency_options!.aud;
+    delete p.currency_options!.gbp;
     expect(priceHasDrifted(p, proMonthly)).toBe(true);
   });
 
@@ -290,7 +290,7 @@ describe("priceHasDrifted — tiered", () => {
 describe("priceHasDrifted — flat", () => {
   it("is false when amounts match and true on a currency amount change", () => {
     const match = livePrice({
-      unit_amount: 2900,
+      unit_amount: 1500,
       currency_options: Object.fromEntries(
         Object.entries(eventPass.currency_options ?? {}).map(([c, a]) => [
           c,
@@ -335,7 +335,7 @@ describe("ensurePrice — flat → tiered", () => {
   }
 
   it("mints a replacement and archives the old flat price (never updates it)", async () => {
-    const flat = livePrice({ unit_amount: 1900, billing_scheme: "per_unit" });
+    const flat = livePrice({ unit_amount: 1200, billing_scheme: "per_unit" });
     const { stripe, create, update, list } = fakeStripe(flat);
     const out = await ensurePrice(stripe, proMonthly, { name: "Pro" }, "pro", "usd", null);
 
@@ -358,7 +358,7 @@ describe("ensurePrice — flat → tiered", () => {
   // .tiers` is silently IGNORED — only naming each currency
   // (`data.currency_options.gbp.tiers`) expands it. Without that, every run
   // logged "! <price>: <currency> tiers were not expanded — skipping its drift
-  // check" and a changed eur/gbp/inr/aud tier amount was never re-minted.
+  // check" and a changed eur/gbp/inr tier amount was never re-minted.
   it("expands the tier ladder INSIDE currency_options, naming each currency", async () => {
     const { stripe, list } = fakeStripe(liveTieredPro());
     await ensurePrice(stripe, proMonthly, { name: "Pro" }, "pro", "usd", null);
@@ -369,7 +369,7 @@ describe("ensurePrice — flat → tiered", () => {
   });
 
   it("asks for no per-currency ladders on a flat price", async () => {
-    const { stripe, list } = fakeStripe(livePrice({ unit_amount: 2900 }));
+    const { stripe, list } = fakeStripe(livePrice({ unit_amount: 1500 }));
     await ensurePrice(stripe, eventPass, { name: "Pass" }, "event_pass", "usd", null);
     const expand = list.mock.calls[0]![0].expand ?? [];
     expect(expand.filter((e) => e.startsWith("data.currency_options."))).toEqual([]);

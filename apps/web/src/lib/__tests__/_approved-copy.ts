@@ -91,7 +91,7 @@ export const APPROVED_EVENT_PASS_INVENTORY: string[] = [
   "7b44a9ceda103f3a",
   "2b5ae63b6b4f7fef",
   "c265587d5f9e7989",
-  "ab3d2d6b1335de57",
+  "37e81a7ecaaf9aaa",
   "57618eb0b22ecf4c",
   "c568f8fe6e21cf2a",
   "ca5e9f43ca10e67f",
@@ -232,7 +232,7 @@ export const APPROVED_EVENT_PASS_INVENTORY: string[] = [
   // and settings chip, "closed" arm), `o/[orgSlug]/page.tsx:235`'s
   // `!isPassLocked(c.status, c.ends_on)` on the ⋯ menu item, and the billing
   // page's `pass_applies` (V343) offer list.
-  "f84bab0a6dac4e46",
+  "57c447dbb79fa27f",
   // Re-approved 2026-07-29 (W8 final review, M-1). Both surfaces carried a
   // SUPERSET claim — "your plan already grants more" and "buying one would give
   // you less than you hold" — which is #337: V341 gives event_pass_l unlimited
@@ -304,10 +304,10 @@ export const APPROVED_PLANS_INVENTORY: string[] = [
   // finalized or forfeited, or abandoned with a non-`no_result` outcome. The
   // linked article (divisions/archive.md) is the long form of the same rule.
   "c7fa6c9c9e79fc08",
-  "4cc311ddc69a48c1",
+  "bca076641be382c0",
   "4d5875384bf155e4",
-  "43e1d69d597e5579",
-  "b3b732cc02d27ad8",
+  "8ec8fabaf41d206e",
+  "6a1f456e0a759472",
   "9fea5a1e65adc92a",
   // Re-approved 2026-08-06 (cadence-neutral pass link). Two clauses in the
   // Event Pass pitch: "Right for the annual tournament that doesn't justify a
@@ -323,7 +323,7 @@ export const APPROVED_PLANS_INVENTORY: string[] = [
   // often enough to keep a subscription running, which is what it now says and
   // is the same rule `passExceedsPlan` encodes.
   "6e856342deb34abe",
-  "1d48d4377c637fbb",
+  "76e1bde87c583dcc",
   "87619eb00e3415c4",
   "88f54c8d84fe39f9",
   "894ad2338e0976bf",
@@ -340,7 +340,7 @@ export const APPROVED_PLANS_INVENTORY: string[] = [
   "edd2b6da9a126c56",
   "077d725be913cdc7",
   "0acb8e961819e27a",
-  "4ee173df88b4ac53",
+  "819018646ac518c0",
   "da146eaf5a60a77b",
   "36e15d26466a260a",
   "03e4c9c866a25934",
@@ -486,27 +486,23 @@ export const APPROVED_PLANS_INVENTORY: string[] = [
  */
 export const APPROVED_ADD_ONS_INVENTORY: string[] = [
   "58a683b53e5184b9",
-  "2f6f0a90f146909c",
-  "86f7fbbc9cd26f08",
+  "3c91c5603471c7ec",
+  "4fead1c6b8b471ba",
   "535adfa4bbb23fb0",
   "7bc95c0f047118eb",
   "ecd4ad8f51fde6ab",
-  "f58db85d7d962581",
   "7a3863a273a702d6",
   "fe1787304c8e8f0c",
   "696896c6174d0812",
   "81f45d76b157c68a",
   "5cbbcf82d4703a2e",
-  "51ec9ed81333165c",
-  "05b585e71c12137b",
-  "b315422a65436656",
   "628281436c3b5d97",
   "57ab4cb8d1c7ae64",
   "dd3682cfbbbd86eb",
   "904600a779329e0b",
   "81ba6ce07303ccdc",
   "88ce7e8f444d70eb",
-  "122c884440848810",
+  "bbaba7db595534ff",
   // FIX ROUND 6 (M1). Was "the number of organisations the group is actually
   // using", which names the wrong quantity: the floor is on the RIDER count,
   // not the org count. `ridersInUse` (`lib/billing-group.ts:431-437`) is
@@ -627,7 +623,7 @@ export const APPROVED_GROUPS_INVENTORY: string[] = [
   "889eb9bb8adb1b8f",
   "0b3f064c075f4830",
   "2c08e52c75400e40",
-  "b27d737d14d930a1",
+  "0f84588df6f06091",
   "650ab572d939bca6",
   "f78e9f343b9dc2e8",
   "d2190ce79f9684a3",
@@ -659,8 +655,8 @@ export const APPROVED_GROUPS_INVENTORY: string[] = [
   "bb6e0a58fdb569a4",
   "93cbb9e0a733ea84",
   "a082daadd09b8b31",
-  "506437e366fdbb9f",
-  "3eca421ec4c1ecd2",
+  "43b207e289885846",
+  "6278a7ff81e5aee3",
   "ce62fde77df9f3cb",
   "af77535948d286c5",
   "791c29feee358ae2",

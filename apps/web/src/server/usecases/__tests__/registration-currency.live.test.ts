@@ -107,7 +107,6 @@ const FEES: Record<string, [number, number]> = {
   usd: [500, 700],
   eur: [500, 700],
   gbp: [500, 700],
-  aud: [500, 700],
   inr: [30000, 50000], // ₹300 + ₹500
 };
 

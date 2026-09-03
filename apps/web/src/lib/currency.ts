@@ -4,7 +4,24 @@
 import stripePlans from "@/config/stripe-plans.json";
 import type { PlanKey, PurchasablePlanKey } from "@/lib/types";
 
-export const SUPPORTED_CURRENCIES = ["usd", "eur", "gbp", "inr", "aud"] as const;
+/**
+ * Every currency the platform quotes, charges and settles in.
+ *
+ * THIS LIST AND `config/stripe-plans.json` MOVE IN ONE COMMIT. `amountFor`
+ * below falls back to `unit_amount` when a currency has no SET point, so a code
+ * listed here but absent from the seed renders the USD number under the wrong
+ * symbol — no error, a wrong price. The reverse (a seed point for a code not
+ * listed here) is dead weight `stripe-sync.test.ts` reds on.
+ *
+ * AUD was withdrawn outright by the owner on 2026-09-03 (entitlements v18,
+ * T10), knowing the cost: it did two jobs, and this took both — our own plan
+ * prices AND `organizations.currency`, so Australian clubs can no longer
+ * collect registration entry fees in AUD either. `organizations.currency`'s
+ * CHECK constraint was narrowed to match in V392; `org-currency.test.ts` parses
+ * that constraint back out of the catalog and compares it to
+ * `REGISTRATION_CURRENCIES`, so this list and the database cannot drift.
+ */
+export const SUPPORTED_CURRENCIES = ["usd", "eur", "gbp", "inr"] as const;
 export type Currency = (typeof SUPPORTED_CURRENCIES)[number];
 
 /** Cookie the pricing-page switcher writes; checkout honours it (v3/07 §4). */
@@ -232,8 +249,8 @@ export function creditPackOptions(currency: Currency): CreditPackOption[] {
  * v17 gap wave 7, fix round 2: `pricing.addons.credits` hardcoded "$10" in all
  * four locales and rendered statically, on a page where every other price goes
  * through `formatMinor(…, currency)` behind the `CurrencySwitcher`. The seed's
- * cheapest pack is eur 900 / gbp 800 / aud 1500 / inr 79900, so the literal was
- * false in FOUR of the five supported currencies — the same defect #191 was
+ * cheapest pack is eur 900 / gbp 800 / inr 79900, so the literal was
+ * false in three of the four supported currencies — the same defect #191 was
  * filed for, which is why the FAQ answers interpolate their prices.
  *
  * DERIVED, not named: the smallest AMOUNT in the switched currency, so adding a
@@ -276,7 +293,6 @@ export function currencyFromAcceptLanguage(header: string | null): Currency {
   const region = lang.split("-")[1] ?? "";
   if (region === "gb" || region === "uk") return "gbp";
   if (region === "in" || lang.startsWith("hi")) return "inr";
-  if (region === "au") return "aud";
   const EURO_REGIONS = new Set([
     "de", "fr", "es", "it", "nl", "pt", "ie", "at", "be", "fi", "gr", "sk", "si", "lv", "lt", "ee", "lu", "mt", "cy", "hr",
   ]);

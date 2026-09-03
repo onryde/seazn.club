@@ -38,6 +38,7 @@ import {
   LOCALE_CLAIMS,
   localeHalfClaimFaults,
   riderClaimShape,
+  SEED_CURRENCIES,
   type LocalisedValue,
   unapprovedClaimFaults,
   lockedRateConstantFaults,
@@ -1440,8 +1441,8 @@ describe("every surface a reader sees is covered, not just the paragraphs", () =
   // sibling section used to raise zero faults.
   it("covers plans.md outside the Event Pass section", () => {
     const mutated = plans.replace(
-      "## Pro — $19/month",
-      "The pass has no end date and applies for the life of the event.\n\n## Pro — $19/month",
+      "## Pro — $12/month",
+      "The pass has no end date and applies for the life of the event.\n\n## Pro — $12/month",
     );
     expect(mutated, "the section anchor moved").not.toBe(plans);
     expect(inventoryFaults("x", mutated, APPROVED_PLANS_INVENTORY)).not.toEqual([]);
@@ -1531,7 +1532,6 @@ const GATED_ARTICLES: Record<string, string[]> = {
 /** The seed rows this article quotes. Read from the seed, never restated — the
  *  claim and the number have to come from different places or the comparison
  *  proves nothing. */
-const seatAddon = stripePlans.seats.find((s) => s.key === "extra_seat")!;
 const sizePack = stripePlans.size_packs.find((s) => s.key === "size_pack_32")!;
 const orgAddons = stripePlans.org_addons;
 
@@ -1565,7 +1565,7 @@ describe("the add-ons article says what the billing code actually does", () => {
   // not "always demand 'no more than'".
   it("quotes the extra-organisation rate in the shape the seed licenses", () => {
     const shape = riderClaimShape(stripePlans.plans as unknown as PricedPlan[]);
-    expect(shape, "usd riders round DOWN (47.4% / 48.7%) while eur and aud are exact halves").toBe(
+    expect(shape, "gbp (44.4%) and inr (40%) round DOWN while usd and eur are exact halves").toBe(
       "atMost",
     );
     expect(localeHalfClaimFaults(addOnsClaim(addOns), shape)).toEqual([]);
@@ -1593,7 +1593,13 @@ describe("the add-ons article says what the billing code actually does", () => {
   // The three additive deltas, taken from the seed rather than restated. A
   // catalog edit that changes what a pack grants reds the page that sells it.
   it("quotes the seed's own add-on deltas", () => {
-    expect(addOns, "the extra seat's delta").toContain(`+${seatAddon.delta_each} each`);
+    // The EXTRA SEAT's delta used to be pinned here too. Entitlements v18 R13
+    // hid that add-on: the article no longer names it, and the assertion could
+    // not simply stay — `+1 each` is also the extra ORGANISATION's delta, so it
+    // would have gone on passing against a row it no longer describes. A
+    // vacuously-green assertion is worse than a deleted one, because it reads
+    // as coverage. The seat's own catalog shape is still guarded, in
+    // config/__tests__/stripe-plans.test.ts.
     expect(addOns, "the size pack's delta").toContain(`+${sizePack.delta_each} each`);
     expect(sizePack.delta_each, "the prose spells this one out in words too").toBe(32);
     expect(addOns).toContain(`limit by ${sizePack.delta_each}`);
@@ -1604,9 +1610,8 @@ describe("the add-ons article says what the billing code actually does", () => {
       // plan's own billing period"), so it is pinned to the seed, not assumed.
       expect(addon.price.interval, `${addon.key} is no longer monthly`).toBe("month");
     }
-    expect(seatAddon.price.interval, "the extra seat is no longer monthly").toBe("month");
-    // …and the two one-time add-ons have no interval at all, which is what
-    // makes "one-time" true of them and "every month" true of the other two.
+    // …and the one-time add-ons have no interval at all, which is what makes
+    // "one-time" true of them and "every month" true of the recurring rider.
     expect(sizePack.price).not.toHaveProperty("interval");
   });
 });
@@ -2282,10 +2287,15 @@ describe("the add-ons article's behaviour claims are pinned to the code", () => 
     );
     // BOTH raise paths say it. One would leave the other free to drift back to
     // "now" — which is exactly the shape round 1 shipped.
+    // ONE, not two. The seat's own raise paragraph went with the extra-seat
+    // advertisement (entitlements v18 R13); the extra-organisation paragraph is
+    // the only place left that states the timing, and it still must. A count
+    // rather than a floor, so re-adding the hidden add-on's copy reds and gets
+    // read against `create_prorations` above.
     expect(
       addOns.match(/\*\*added to your next invoice\*\* rather than charged on the spot/g) ?? [],
-      "both raise paths must state the timing",
-    ).toHaveLength(2);
+      "the raise path must state the timing",
+    ).toHaveLength(1);
     expect(addOns).not.toMatch(/charged pro rata straight away|the difference[^.]*\bnow\b/i);
 
     // The product's own UI copy already avoided "now" on this exact claim; the
@@ -2464,7 +2474,7 @@ describe("the add-ons article's behaviour claims are pinned to the code", () => 
         .map(([file]) => file);
       expect(
         callers,
-        `${addOn} now has a caller in the UI — content/help/billing/add-ons.md still says there is no control in Settings, and that sentence has to go`,
+        `${addOn} now has a caller in the UI. For size packs, content/help/billing/add-ons.md still says there is no control in Settings and that sentence has to go; for extra seats, entitlements v18 R13 hid the add-on from the article altogether, so a purchase control appearing means the hide has been undone and the copy has to come back`,
       ).toEqual([]);
     }
     // KNOWN-POSITIVE on the same read: the routes DO exist, so the walk is
@@ -2475,7 +2485,10 @@ describe("the add-ons article's behaviour claims are pinned to the code", () => 
       files.some(([f]) => f === "app/api/billing/extra-seats/route.ts"),
       "the extra-seats route moved — re-point this guard",
     ).toBe(true);
-    expect(addOns.match(/no control in Settings yet/g) ?? []).toHaveLength(2);
+    // ONE, not two: R13 removed the extra-seat section, so only the size pack
+    // still makes this claim. A count rather than a floor, so re-adding the
+    // hidden add-on's copy reds here and gets read.
+    expect(addOns.match(/no control in Settings yet/g) ?? []).toHaveLength(1);
   });
 
   // CLAIM: the rider matches the half rate monthly but NOT annually — "about a
@@ -2485,7 +2498,7 @@ describe("the add-ons article's behaviour claims are pinned to the code", () => 
     for (const addon of orgAddons) {
       const plan = stripePlans.plans.find((p) => p.key === addon.plan_key)!;
       const annualRider = plan.prices.annual.tiers!.find((t) => t.up_to === "inf")!;
-      for (const currency of ["usd", "eur", "gbp", "inr", "aud"] as const) {
+      for (const currency of SEED_CURRENCIES) {
         const perMonth =
           currency === "usd"
             ? addon.price.unit_amount
@@ -2507,18 +2520,26 @@ describe("the add-ons article's behaviour claims are pinned to the code", () => 
         // true description of them. Changing the wording means changing this
         // constant, deliberately, in the same edit.
         //
-        // "AT LEAST a third more" is a FLOOR, and it is a floor because the
-        // gap is not one number: measured across the seed it runs 1.355 (gbp)
-        // to 1.472 (inr). The review that caught the original "exactly that
-        // same rate" quoted usd alone (+36.7% / +39.9%), and a sentence tuned
-        // to usd would have been false in eur and inr by the same mechanism
-        // that made "half the base rate" false — the third time this wave has
-        // met a comparative that only holds in one currency. So the claim is
-        // the LOWER bound over all ten combinations, and this is what keeps it
-        // honest if a price moves.
-        if (ratio < 4 / 3)
+        // "AT LEAST a sixth more" is a FLOOR, and it is a floor because the
+        // gap is not one number: measured across the seed it runs 1.195 (inr)
+        // to 1.469 (usd). The review that caught the original "exactly that
+        // same rate" quoted usd alone, and a sentence tuned to usd would have
+        // been false in gbp and inr by the same mechanism that made "half the
+        // base rate" false — the third time this wave has met a comparative
+        // that only holds in one currency. So the claim is the LOWER bound
+        // over every (add-on x currency) combination, and this is what keeps
+        // it honest if a price moves.
+        //
+        // 4/3 -> 7/6 at the entitlements v18 reprice (2026-09-03). The gap
+        // NARROWED because the monthly rider fell further than the annual one
+        // ($9 -> $6 against $79 -> $49 a year), and INR narrowed most of all:
+        // its x99 rounding takes the monthly rider to 40% of base while the
+        // annual rider is a clean half. "A third" became false in gbp (1.231)
+        // and inr (1.195) on the day the prices moved, which is precisely the
+        // drift this constant exists to force somebody to read.
+        if (ratio < 7 / 6)
           ratios.push(
-            `${addon.key} ${currency}: ratio ${ratio.toFixed(3)} is below a third more — "at least a third more over a year" is now false`,
+            `${addon.key} ${currency}: ratio ${ratio.toFixed(3)} is below a sixth more — "at least a sixth more over a year" is now false`,
           );
         // …and a floor that has drifted absurdly far below the truth is also a
         // defect: it under-warns a customer the sentence exists to warn.
@@ -2532,7 +2553,7 @@ describe("the add-ons article's behaviour claims are pinned to the code", () => 
     expect(addOns, "the annual divergence is stated").toMatch(
       /on a monthly bill it matches that half rate exactly, and on an annual bill it does not/i,
     );
-    expect(addOns).toMatch(/at least a third more over a year/i);
+    expect(addOns).toMatch(/at least a sixth more over a year/i);
     // …and the false round-1 clause cannot come back.
     expect(addOns).not.toMatch(/charged at exactly that same rate/i);
   });
@@ -2756,9 +2777,9 @@ describe("the add-ons gate catches what the vocabulary cannot", () => {
     expect(deleted, "the section anchor moved").not.toBe(addOns);
     expect(inventoryFaults("x", deleted, APPROVED_ADD_ONS_INVENTORY)).not.toEqual([]);
 
-    const rows = /\| Extra seat \|([^\n]*)\n(\| Size pack \|[^\n]*)\n/.exec(addOns);
+    const rows = /\| AI credit pack \|([^\n]*)\n(\| Size pack \|[^\n]*)\n/.exec(addOns);
     expect(rows, "the table rows moved").not.toBeNull();
-    const swapped = addOns.replace(rows![0], `${rows![2]}\n| Extra seat |${rows![1]}\n`);
+    const swapped = addOns.replace(rows![0], `${rows![2]}\n| AI credit pack |${rows![1]}\n`);
     expect(swapped, "the swap was a no-op").not.toBe(addOns);
     expect(inventoryFaults("x", swapped, APPROVED_ADD_ONS_INVENTORY)).not.toEqual([]);
   });

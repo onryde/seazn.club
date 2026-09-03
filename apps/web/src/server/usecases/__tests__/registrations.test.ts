@@ -5722,7 +5722,7 @@ describe.skipIf(!HAS_DB)("mintGroupCheckout — per-currency matrix (RS003 W4)",
   // which side moved, so this reproduces exactly the diff a real
   // currency.ts edit would leave.
   it("pins REGISTRATION_CURRENCIES to the five currencies this matrix covers", () => {
-    expect(REGISTRATION_CURRENCIES).toEqual(["usd", "eur", "gbp", "inr", "aud"]);
+    expect(REGISTRATION_CURRENCIES).toEqual(["usd", "eur", "gbp", "inr"]);
   });
 
   it.each(REGISTRATION_CURRENCIES)(

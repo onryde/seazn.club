@@ -389,15 +389,11 @@ export default async function PricingPage({
                   {/* fix round 2: this line hardcoded "$10" in all four
                       locales while every other price on the page honours the
                       CurrencySwitcher. The seed's cheapest pack is eur 900 /
-                      gbp 800 / aud 1500 / inr 79900, so the literal was false
-                      in four of five currencies — #191's defect, again. */}
+                      gbp 800 / inr 79900, so the literal was false in three
+                      of four currencies — #191's defect, again. */}
                   {t(d, "pricing.addons.credits", {
                     price: formatMinor(lowestCreditPackAmount(currency), currency),
                   })}
-                </span>
-                <span className="flex items-center gap-1.5">
-                  <span aria-hidden>＋</span>
-                  {t(d, "pricing.addons.seat")}
                 </span>
                 <span className="flex items-center gap-1.5">
                   <span aria-hidden>＋</span>

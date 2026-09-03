@@ -819,7 +819,7 @@ export function riderClaimIn(text: string): "under" | "atMost" | "exactly" | nul
 }
 
 /** usd rides `unit_amount`; the rest are SET points in `currency_options`. */
-export const SEED_CURRENCIES = ["usd", "eur", "gbp", "inr", "aud"] as const;
+export const SEED_CURRENCIES = ["usd", "eur", "gbp", "inr"] as const;
 
 const amountIn = (
   node: { unit_amount: number; currency_options?: Record<string, number> },

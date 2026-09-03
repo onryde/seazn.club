@@ -962,8 +962,10 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
       expect(pinned.has(key), `${key} is an in-app panel claim but is not pinned`).toBe(true);
     }
     // 236 -> 256: the five `pass.entry.ended.*` keys x four locales, pinned by
-    // the W8 review round. A count, not a floor, so a DELETED pin reds too.
-    expect(APPROVED_DICTIONARY_COPY.length * DICTIONARY_LOCALES.length).toBe(256);
+    // the W8 review round. 256 -> 252: entitlements v18 R13 hid the extra-seat
+    // add-on, so `pricing.addons.seat` no longer exists to pin in any locale.
+    // A count, not a floor, so a DELETED pin reds too.
+    expect(APPROVED_DICTIONARY_COPY.length * DICTIONARY_LOCALES.length).toBe(252);
     // Every entry must say what it claims and what decides it — a pin with no
     // `why` is a snapshot, and a snapshot teaches the next editor to re-record
     // rather than to re-check.
@@ -1302,7 +1304,7 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
     // A symbol, or an amount with an ISO code. Deliberately not a bare digit:
     // caps, percentages and credit counts are locale-agnostic DATA and belong in
     // the copy.
-    const CURRENCY = /[$£€₹]|\b\d[\d.,]*\s?(?:USD|EUR|GBP|INR|AUD)\b|\b(?:USD|EUR|GBP|INR|AUD)\s?\d/i;
+    const CURRENCY = /[$£€₹]|\b\d[\d.,]*\s?(?:USD|EUR|GBP|INR)\b|\b(?:USD|EUR|GBP|INR)\s?\d/i;
     // SEO METADATA IS THE ONE HONEST EXCEPTION, and it is pinned rather than
     // waved through (below). A description is a SINGLE cached document served to
     // every visitor and to crawlers — there is no per-visitor currency to switch
@@ -1346,8 +1348,8 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
   it("pins the metadata's hardcoded amounts to the seed that sets them", () => {
     const pass = passPrice("usd", "event_pass") / 100;
     const pro = proPrice("monthly", "usd") / 100;
-    expect(pass, "the seed's M-rung list price").toBe(29);
-    expect(pro, "the seed's Pro monthly list price").toBe(19);
+    expect(pass, "the seed's M-rung list price").toBe(15);
+    expect(pro, "the seed's Pro monthly list price").toBe(12);
     for (const locale of DICTIONARY_LOCALES) {
       const description = load(locale, "marketing")["pricing.meta.description"]!;
       expect(description, `${locale}: the pass price`).toMatch(
@@ -1995,7 +1997,7 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
   // nothing. `riderClaimShape` decides which qualifier is honest today.
   it("quotes an extra-organisation rate the seed's tiers actually charge", () => {
     const shape = riderClaimShape(stripePlans.plans as unknown as PricedPlan[]);
-    expect(shape, "eur/aud land on exact halves while usd is 47.4% — only 'no more than half' is true").toBe(
+    expect(shape, "usd/eur land on exact halves while gbp is 44.4% — only 'no more than half' is true").toBe(
       "atMost",
     );
     expect(localeHalfClaimFaults(HALF_CLAIM_VALUES, shape)).toEqual([]);
@@ -2925,8 +2927,8 @@ describe("the dictionary guards survive a rewording, in every locale", () => {
             lookup_key: "x_monthly",
             unit_amount: 2000,
             tiers: [
-              { up_to: 1, unit_amount: 2000, currency_options: { eur: 2000, gbp: 2000, inr: 2000, aud: 2000 } },
-              { up_to: "inf", unit_amount: 1000, currency_options: { eur: 1000, gbp: 1000, inr: 1000, aud: 1000 } },
+              { up_to: 1, unit_amount: 2000, currency_options: { eur: 2000, gbp: 2000, inr: 2000 } },
+              { up_to: "inf", unit_amount: 1000, currency_options: { eur: 1000, gbp: 1000, inr: 1000 } },
             ],
           },
         },

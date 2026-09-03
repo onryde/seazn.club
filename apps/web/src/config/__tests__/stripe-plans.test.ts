@@ -3,6 +3,7 @@
 // pin its shape. No DB, no Stripe — pure structural validation.
 import { describe, expect, it } from "vitest";
 import seed from "../stripe-plans.json";
+import { SUPPORTED_CURRENCIES } from "@/lib/currency";
 
 interface PriceSpec {
   lookup_key: string;
@@ -79,11 +80,16 @@ function allPrices(source: unknown = seed): SeedAmount[] {
   return out;
 }
 
-/** The four currencies every price must SET a point in (usd is `unit_amount`).
- *  A hole here does NOT fail at sync time — lib/currency's `amountFor` falls
- *  back to `unit_amount` and Stripe falls back to adaptive pricing — so it is
- *  only ever caught here. */
-const CURRENCIES = ["eur", "gbp", "inr", "aud"] as const;
+/** The non-base currencies every price must SET a point in (usd is
+ *  `unit_amount`). A hole here does NOT fail at sync time — lib/currency's
+ *  `amountFor` falls back to `unit_amount` and Stripe falls back to adaptive
+ *  pricing — so it is only ever caught here.
+ *
+ *  DERIVED from `SUPPORTED_CURRENCIES` rather than listed again (entitlements
+ *  v18 T10, which withdrew AUD): the two lists have to be the same set or the
+ *  guard checks a currency nobody can be quoted in, or — the direction that
+ *  actually ships a wrong price — stops checking one they can. */
+const CURRENCIES = SUPPORTED_CURRENCIES.filter((c) => c !== seed.currency);
 
 /** Loose mirror of the seed, for building deliberately-broken clones: the
  *  imported JSON's inferred type has every currency as a required key, which is
@@ -160,8 +166,8 @@ describe("stripe-plans seed", () => {
   //    one entry and archive the other's on every run, flapping the price ids;
   //  - a missing currency_options entry does NOT fail — lib/currency's
   //    `amountFor` falls back to `unit_amount`, so the L rung would advertise
-  //    and charge 5900 *gbp* minor units (£59) instead of its £49 price point.
-  it("gives every price a SET amount in all five supported currencies", () => {
+  //    and charge 3900 *gbp* minor units (£39) instead of its £29 price point.
+  it("gives every price a SET amount in every supported currency", () => {
     expect(missingCurrencyPoints()).toEqual([]);
     for (const price of allPrices()) {
       expect(price.unit_amount, `${price.label} usd amount`).toBeGreaterThan(0);
@@ -203,9 +209,14 @@ describe("stripe-plans seed", () => {
   });
 
   it("catches a duplicated lookup_key in a NEWER section", () => {
+    // The clash is made ACROSS sections (org_addons against the plan ladder)
+    // rather than between two org_addons entries. Entitlements v18 retired Pro
+    // Plus, so `org_addons` is a one-element array and the old within-section
+    // clone had nothing to collide with — a shape that would have made this
+    // guard silently unprovable rather than red.
     const dupe = holedClone();
-    dupe.org_addons![1]!.price.lookup_key = dupe.org_addons![0]!.price.lookup_key;
-    expect(duplicateLookupKeys(dupe)).toEqual(["seazn_extra_org_pro_monthly"]);
+    dupe.org_addons![0]!.price.lookup_key = dupe.plans[0]!.prices.monthly!.lookup_key;
+    expect(duplicateLookupKeys(dupe)).toEqual(["seazn_pro_monthly"]);
   });
 
   it("keys both Event Pass rungs to their plans rows, at M < L", () => {
@@ -213,7 +224,7 @@ describe("stripe-plans seed", () => {
     expect(passes.map((p) => p.key)).toEqual(["event_pass", "event_pass_l"]);
     const [m, l] = passes;
     expect(l!.price.unit_amount).toBeGreaterThan(m!.price.unit_amount);
-    for (const currency of ["eur", "gbp", "inr", "aud"] as const) {
+    for (const currency of CURRENCIES) {
       expect(
         l!.price.currency_options?.[currency] ?? 0,
         `${currency}: L must cost more than M`,

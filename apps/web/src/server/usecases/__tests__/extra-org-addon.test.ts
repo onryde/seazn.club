@@ -207,7 +207,31 @@ let proPlusBase: number;
  *  suspended org all read this plan. The floor must never. */
 let communityBase: number;
 const proEntry = ORG_ADDONS.find((e) => e.planKey === "pro")!;
-const proPlusEntry = ORG_ADDONS.find((e) => e.planKey === "pro_plus")!;
+/**
+ * The RETIRED Pro Plus rider SKU, as a literal rather than a catalog lookup.
+ *
+ * Entitlements v18 T4 deleted `extra_org_pro_plus` from `stripe-plans.json`, so
+ * `ORG_ADDONS.find(planKey === "pro_plus")` is now `undefined` — but the price
+ * itself is still ACTIVE in Stripe: `scripts/stripe-sync.ts` only ever visits
+ * entries the seed still names, so a removed one is never archived (v18 plan,
+ * "Finding A"). A subscription item minted against it therefore still exists
+ * and still bills, and `convergeOrgAddonPrices` re-pricing it onto Pro's SKU is
+ * exactly the fail-safe this wave has to keep proving. Reading it from the
+ * catalog would have made these cases vanish with the row they test.
+ *
+ * TWO CASES BELOW ARE RED ON PURPOSE, AND NAME A REAL GAP — do not delete them
+ * to get green. `isOrgAddonItem` matches an item's `lookup_key` against the
+ * CATALOG's set, so the moment the seed row went, a rider sitting on the
+ * retired SKU stopped being recognised as an org add-on at all: it is not
+ * re-priced, not synced into `org_addons`, and not staff-alerted. It simply
+ * keeps billing. That is bounded to the Stripe SANDBOX today (owner, 2026-09-03:
+ * there is no live catalogue), which is why T4 did not invent a retirement
+ * mechanism on the money path unasked. The decision owed is one of: archive the
+ * price in Stripe as part of the sandbox sync, or give the catalog an explicit
+ * RETIRED list that `isOrgAddonItem` still matches and `convergeOrgAddonPrices`
+ * re-prices off.
+ */
+const proPlusEntry = { planKey: "pro_plus", lookupKey: "seazn_extra_org_pro_plus_monthly" };
 
 beforeAll(async () => {
   if (!HAS_DB) return;

@@ -73,9 +73,9 @@ describe("/pricing renders the Event Pass M/L ladder", () => {
   it("shows BOTH rungs, each with its own price and its own caps", async () => {
     const { markup, text } = await render();
     expect(markup, "the ladder block itself").toContain("data-pass-ladder");
-    // Both prices. $29 alone was always on this page; $59 is the new claim.
-    expect(text).toContain("$29");
-    expect(text).toContain("$59");
+    // Both prices. M's alone was always on this page; L's is the new claim.
+    expect(text).toContain("$15");
+    expect(text).toContain("$39");
     // Both rungs' caps, read from the matrix rather than written in copy.
     expect(text).toContain("Up to 10 divisions, 128 entrants each");
     expect(text).toContain("Up to 20 divisions, unlimited entrants");
@@ -121,7 +121,7 @@ describe("/pricing renders the Event Pass M/L ladder", () => {
 
   it("suppresses the ladder rather than quoting a figure it does not have", async () => {
     // A DB unreachable at build makes `loadMatrix` fail soft to `{}`; a missing
-    // row read through `?? null` would advertise an UNLIMITED pass for $29.
+    // row read through `?? null` would advertise an UNLIMITED pass for $15.
     // Absence must suppress, never embellish.
     const { markup, text } = await render(LIVE.filter((r) => r.plan_key !== "event_pass_l"));
     expect(markup, "no rung may be priced from a row that isn't there").not.toContain(
@@ -132,12 +132,12 @@ describe("/pricing renders the Event Pass M/L ladder", () => {
     expect(text).not.toContain("unlimited entrants");
     // …and the card still renders. Suppressing the ladder must not take the
     // Event Pass offer down with it.
-    expect(text).toContain("$29");
-    // Deliberately NOT a page-wide "$59" negative. The FAQ answer interpolates
+    expect(text).toContain("$15");
+    // Deliberately NOT a page-wide "$39" negative. The FAQ answer interpolates
     // {passL} from stripe-plans.json, a STATIC file that is never unavailable —
     // so it keeps naming both rungs' prices even when the matrix read fails.
     // That is correct: the suppression rule guards against quoting a CAP we do
     // not have, not against quoting a price we always do.
-    expect(text).toContain("$59");
+    expect(text).toContain("$39");
   });
 });

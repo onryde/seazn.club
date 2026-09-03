@@ -644,7 +644,7 @@ describe("the guards survive a rewording, not just a revert", () => {
     // fault (the guard says so, and config/__tests__/stripe-plans.test.ts covers
     // it in depth) — supplying only one would drown the rate signal in three
     // "no price point" faults.
-    const points = (amount: number) => ({ eur: amount, gbp: amount, inr: amount, aud: amount });
+    const points = (amount: number) => ({ eur: amount, gbp: amount, inr: amount });
     const priced = (description: string, base: number, rider: number): PricedPlan[] => [
       {
         key: "pro",
@@ -693,7 +693,7 @@ describe("the guards survive a rewording, not just a revert", () => {
   // and the only way a DELETED add-on can be caught is if the guard also walks
   // the plans. Both directions are asserted.
   it("catches an extra-organisation add-on that drifts off its rider", () => {
-    const points = (amount: number) => ({ eur: amount, gbp: amount, inr: amount, aud: amount });
+    const points = (amount: number) => ({ eur: amount, gbp: amount, inr: amount });
     const plans: PricedPlan[] = [
       {
         key: "pro",

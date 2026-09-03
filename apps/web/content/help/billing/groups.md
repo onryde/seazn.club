@@ -10,7 +10,7 @@ A subscription isn't tied to one organisation. It's a **billing group**: one pla
 
 Two things, and the second is usually the bigger one.
 
-**A cheaper bill.** The first organisation pays the plan's normal rate. Every organisation after that costs **no more than half the base rate** — Pro is $19/month plus $9/month each, Pro Plus is $39/month plus $19/month each. Annually that's $159 plus $79, and $327 plus $163. Eight clubs on Pro Plus annually come to $1,468 for the group, against eight separate Pro subscriptions at $1,272 — and the group buys the 1% entry-fee rate for all eight.
+**A cheaper bill.** The first organisation pays the plan's normal rate. Every organisation after that costs **no more than half the base rate** — Pro is $12/month plus $6/month each, Pro Plus is $39/month plus $19/month each. Annually that's $99 plus $49, and $327 plus $163. Eight clubs on Pro Plus annually come to $1,468 for the group, against eight separate Pro subscriptions at $792 — and the group buys the 1% entry-fee rate for all eight.
 
 **A cheaper entry-fee rate.** Every organisation in the group runs on the *group's* plan, so the platform fee on entry fees follows it:
 
@@ -52,8 +52,8 @@ If that invoice later fails, the organisation stays in the group — it doesn't 
 
 The added organisation becomes an extra **seat on the bill you already have** — never a new, separate subscription. So it inherits your bill's shape:
 
-- **On a monthly bill** it's no more than half the base rate per month (Pro **+$9/mo**, Pro Plus **+$19/mo**), prorated for the rest of the current month and added to your next invoice.
-- **On an annual bill** it's no more than half the base rate per **year** (Pro **+$79/yr**, Pro Plus **+$163/yr**), prorated for the rest of the current year and added to your next invoice — it renews on your existing annual date, not a new one. Mid-year, the proration covers only the slice of the year that's left; the full amount lands at your next renewal.
+- **On a monthly bill** it's no more than half the base rate per month (Pro **+$6/mo**, Pro Plus **+$19/mo**), prorated for the rest of the current month and added to your next invoice.
+- **On an annual bill** it's no more than half the base rate per **year** (Pro **+$49/yr**, Pro Plus **+$163/yr**), prorated for the rest of the current year and added to your next invoice — it renews on your existing annual date, not a new one. Mid-year, the proration covers only the slice of the year that's left; the full amount lands at your next renewal.
 
 You never guess the figure: the "Add to an existing bill" step shows the **exact amount that will be added to your bill**, taken live from Stripe, before you confirm.
 

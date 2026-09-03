@@ -8,7 +8,6 @@ const LABELS: Record<Currency, string> = {
   eur: "€ EUR",
   gbp: "£ GBP",
   inr: "₹ INR",
-  aud: "A$ AUD",
 };
 
 /** Pricing-page currency switcher (v3/07 §4): writes the cookie the checkout

@@ -128,7 +128,7 @@ describe.skipIf(!HAS_DB)("PATCH /api/orgs/[id] — entry-fee currency", () => {
   it("REFUSES the write while a Connect account is attached", async () => {
     const id = await seedOrg({ connected: true });
     const before = (await read(id)).currency;
-    const res = await PATCH(patchReq({ currency: "aud" }), {
+    const res = await PATCH(patchReq({ currency: "eur" }), {
       params: Promise.resolve({ id }),
     });
 

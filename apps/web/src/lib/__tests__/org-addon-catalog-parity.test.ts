@@ -15,8 +15,13 @@ import {
 import { ORG_ADDON_PLAN_KEYS, planSellsExtraOrg } from "@/lib/org-addon-plans";
 
 describe("extra-organisation add-on catalog (v17 gap #293)", () => {
-  it("has exactly one recurring price per paid plan", () => {
-    expect(ORG_ADDONS.map((e) => e.planKey).sort()).toEqual(["pro", "pro_plus"]);
+  it("has exactly one recurring price per SELF-SERVE plan", () => {
+    // Entitlements v18 T4 deleted `extra_org_pro_plus` from the seed along with
+    // the plan itself, so the catalog is one entry. Pinned as an exact list
+    // rather than a length: a rider appearing for a plan that cannot be bought
+    // self-serve (Community has no subscription to ride, Enterprise is sold by
+    // hand) is the failure this names.
+    expect(ORG_ADDONS.map((e) => e.planKey).sort()).toEqual(["pro"]);
   });
 
   it("lifts orgs.max_owned by 1 per unit, for every plan tier", () => {
@@ -28,14 +33,14 @@ describe("extra-organisation add-on catalog (v17 gap #293)", () => {
     expect(ORG_ADDON_DELTA_EACH).toBe(1);
   });
 
-  it("orgAddonForPlan resolves pro/pro_plus and refuses community", () => {
+  it("orgAddonForPlan resolves pro and refuses community", () => {
     expect(orgAddonForPlan("pro")?.lookupKey).toBe(
       ORG_ADDONS.find((e) => e.planKey === "pro")!.lookupKey,
     );
-    expect(orgAddonForPlan("pro_plus")?.lookupKey).toBe(
-      ORG_ADDONS.find((e) => e.planKey === "pro_plus")!.lookupKey,
-    );
     expect(orgAddonForPlan("community")).toBeUndefined();
+    // The retired tier resolves to nothing rather than to Pro's SKU — a
+    // fallback here would sell a Pro-priced rider on a plan that is gone.
+    expect(orgAddonForPlan("pro_plus")).toBeUndefined();
   });
 
   it("the CLIENT-safe plan list is the same catalog, not a second opinion", () => {
@@ -44,7 +49,7 @@ describe("extra-organisation add-on catalog (v17 gap #293)", () => {
     // derivations of one catalog is exactly how a "buy another slot" link ends
     // up on a tier that sells nothing.
     expect([...ORG_ADDON_PLAN_KEYS]).toEqual(ORG_ADDONS.map((e) => e.planKey));
-    for (const planKey of ["pro", "pro_plus", "community", "unknown_plan"]) {
+    for (const planKey of ["pro", "enterprise", "community", "unknown_plan"]) {
       expect(planSellsExtraOrg(planKey), planKey).toBe(!!orgAddonForPlan(planKey));
     }
     expect(planSellsExtraOrg("community")).toBe(false);
@@ -57,31 +62,18 @@ describe("extra-organisation add-on catalog (v17 gap #293)", () => {
         currency === "usd" ? proSpec.price.unit_amount : proSpec.price.currency_options[currency];
       expect(proAmount, `pro ${currency}`).toBe(extraOrgPrice("pro", "monthly", currency));
     }
-    // The pro_plus half of this parity check is dropped: `extraOrgPrice()`
-    // is retired down to `PurchasablePlanKey` ("pro" only — entitlements
-    // v18, V391), so it can no longer price that tier at all. The
-    // `org_addons[1]` (`extra_org_pro_plus`) JSON row itself is still live
-    // in stripe-plans.json pending T4's deletion — untouched here.
+    // The pro_plus half of this parity check is gone in both directions now:
+    // `extraOrgPrice()` narrowed to `PurchasablePlanKey` ("pro" only) in V391,
+    // and T4 deleted the `extra_org_pro_plus` row from the seed, so there is no
+    // second tier left to price. ANTI-VACUITY for the loop above: an empty
+    // currency list would pass it in silence.
+    expect(SUPPORTED_CURRENCIES.length).toBeGreaterThanOrEqual(4);
   });
 
   it("is a RECURRING monthly price — rides the subscription like extra-seat, never one-time", () => {
     expect(stripePlans.org_addons?.length).toBeGreaterThan(0);
     for (const entry of stripePlans.org_addons ?? []) {
       expect(entry.price.interval, entry.key).toBe("month");
-    }
-  });
-
-  it("charges less for Pro than Pro Plus, mirroring the plan ladder itself", () => {
-    const pro = stripePlans.org_addons!.find((o) => o.plan_key === "pro")!;
-    const proPlus = stripePlans.org_addons!.find((o) => o.plan_key === "pro_plus")!;
-    expect(pro.price.unit_amount).toBeLessThan(proPlus.price.unit_amount);
-    // The $9-vs-$19 gap is what stops "Pro + extras" undercutting Pro Plus, so
-    // it is load-bearing in EVERY currency, not just the usd headline.
-    for (const currency of ["eur", "gbp", "inr", "aud"] as const) {
-      expect(
-        proPlus.price.currency_options[currency],
-        `${currency}: Pro Plus extras must cost more than Pro extras`,
-      ).toBeGreaterThan(pro.price.currency_options[currency]);
     }
   });
 

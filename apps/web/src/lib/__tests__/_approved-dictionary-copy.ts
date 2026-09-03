@@ -342,17 +342,6 @@ export const APPROVED_DICTIONARY_COPY: ApprovedValue[] = [
   },
   {
     file: "marketing",
-    key: "pricing.addons.seat",
-    why: "the extra-seat add-on label. Priced and delta-ed in config/stripe-plans.json (seat add-on, monthly interval, +1 each) and described in content/help/billing/add-ons.md, which task 7 pins against the seed.",
-    text: {
-      en: "Extra seat",
-      es: "Plaza adicional",
-      fr: "Siège supplémentaire",
-      nl: "Extra plaats",
-    },
-  },
-  {
-    file: "marketing",
     key: "pricing.addons.org",
     why: "the extra-organisation add-on label. Its RATE is the “no more than half the base rate” claim pinned on pricing.faq.groups.a and pricing.faq.proPlus.a and verified against the seed’s graduated tiers by riderClaimShape.",
     text: {

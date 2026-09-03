@@ -3598,7 +3598,6 @@ export type DictionaryKey =
   | "pricing.addons.credits"
   | "pricing.addons.label"
   | "pricing.addons.org"
-  | "pricing.addons.seat"
   | "pricing.addons.sizePack"
   | "pricing.community.cta"
   | "pricing.community.name"

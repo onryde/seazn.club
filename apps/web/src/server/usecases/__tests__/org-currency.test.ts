@@ -121,8 +121,8 @@ describe.skipIf(!HAS_DB)("same-currency lock on Connect sync (owner ruling 2026-
     const acct = "acct_again_" + randomUUID().slice(0, 8);
     const orgId = await seedOrg("gbp", acct);
     await syncConnectAccount(account(acct, "eur"));
-    await syncConnectAccount(account(acct, "aud"));
-    expect((await orgCurrency(orgId)).currency).toBe("aud");
+    await syncConnectAccount(account(acct, "inr"));
+    expect((await orgCurrency(orgId)).currency).toBe("inr");
   });
 
   it("an unsupported settlement currency sets the card-unsupported state and leaves currency alone", async () => {

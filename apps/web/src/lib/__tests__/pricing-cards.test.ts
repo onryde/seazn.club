@@ -42,15 +42,15 @@ describe("pricing cards", () => {
   });
   it("prices come from lib/currency (multi-currency stays correct)", () => {
     const [, passUsd, proUsd] = ticketTiers("usd");
-    expect(passUsd!.price).toBe("$29");
-    expect(proUsd!.price).toBe("$19");
+    expect(passUsd!.price).toBe("$15");
+    expect(proUsd!.price).toBe("$12");
     expect(proUsd!.period).toBe("/mo");
     const [, passInr] = ticketTiers("inr");
-    expect(passInr!.price).not.toBe("$29");
+    expect(passInr!.price).not.toBe("$15");
   });
   // v17 #294: the home stub still leads with M's price, because M is what the
   // lowest rung costs — but with two rungs on sale that figure is a FLOOR, not
-  // the price. Unprefixed it reads as "an Event Pass costs $29", which is
+  // the price. Unprefixed it reads as "an Event Pass costs $15", which is
   // false for half the product. Community has no prefix: Free really is free.
   it("marks the Event Pass price as a floor, and only that one", () => {
     const [community, pass, pro] = ticketTiers("usd");
@@ -133,12 +133,11 @@ describe("pricing cards", () => {
   // array stripe-sync seeds Stripe from, so a quoted price cannot drift from
   // the price object Stripe holds for that rung.
   it("passPrice resolves both Event Pass rungs, keyed by passKey", () => {
-    expect(passPrice("usd", "event_pass")).toBe(2900);
-    expect(passPrice("usd", "event_pass_l")).toBe(5900);
-    expect(passPrice("gbp", "event_pass_l")).toBe(4900);
-    expect(passPrice("eur", "event_pass_l")).toBe(5900);
-    expect(passPrice("inr", "event_pass_l")).toBe(449900);
-    expect(passPrice("aud", "event_pass_l")).toBe(8900);
+    expect(passPrice("usd", "event_pass")).toBe(1500);
+    expect(passPrice("usd", "event_pass_l")).toBe(3900);
+    expect(passPrice("gbp", "event_pass_l")).toBe(2900);
+    expect(passPrice("eur", "event_pass_l")).toBe(3500);
+    expect(passPrice("inr", "event_pass_l")).toBe(159900);
   });
 
   // `passKey` is REQUIRED (no default), so a surface that forgets the rung is a

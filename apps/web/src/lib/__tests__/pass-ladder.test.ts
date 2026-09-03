@@ -38,13 +38,13 @@ describe("passLadderOptions", () => {
     const options = passLadderOptions("usd", CAPS);
     expect(options.map((o) => o.key)).toEqual(["event_pass", "event_pass_l"]);
     expect(options[0]).toMatchObject({
-      amountMinor: 2900,
+      amountMinor: 1500,
       entrants: 128,
       divisions: 10,
       credits: 25,
     });
     expect(options[1]).toMatchObject({
-      amountMinor: 5900,
+      amountMinor: 3900,
       entrants: null,
       divisions: 20,
       credits: 25,
@@ -53,15 +53,15 @@ describe("passLadderOptions", () => {
 
   it("prices in the requested currency", () => {
     const options = passLadderOptions("gbp", CAPS);
-    expect(options[0]!.amountMinor).toBe(2500);
-    expect(options[1]!.amountMinor).toBe(4900);
+    expect(options[0]!.amountMinor).toBe(1200);
+    expect(options[1]!.amountMinor).toBe(2900);
   });
 
   it("never quotes the same amount for both rungs, in any supported currency", () => {
     // The failure this exists for: a rung that silently reads the other rung's
     // price point. Asserted as a joined string so the reporter NAMES the
     // currency — `toEqual([])` on an array of currencies elides the contents.
-    const same = (["usd", "eur", "gbp", "inr", "aud"] as const).filter((c) => {
+    const same = SUPPORTED_CURRENCIES.filter((c) => {
       const [m, l] = passLadderOptions(c, CAPS);
       return m!.amountMinor === l!.amountMinor;
     });
@@ -116,7 +116,7 @@ describe("lowestPricedRung", () => {
 
 describe("lowestPassRung", () => {
   // Every surface that quotes ONE number for a two-rung product ("Event Pass —
-  // from $29") has to quote the floor. Before #294 they each passed the literal
+  // from $15") has to quote the floor. Before #294 they each passed the literal
   // "event_pass", which is right only for as long as M stays the cheapest rung
   // — and `tsc` cannot see that assumption at all.
   it("is the cheapest rung in every supported currency", () => {
@@ -128,8 +128,8 @@ describe("lowestPassRung", () => {
   });
 
   it("quotes M's real price point today, and names M as the rung it quoted", () => {
-    expect(lowestPassRung("usd")).toEqual({ key: "event_pass", amountMinor: 2900 });
-    expect(lowestPassRung("gbp")).toEqual({ key: "event_pass", amountMinor: 2500 });
+    expect(lowestPassRung("usd")).toEqual({ key: "event_pass", amountMinor: 1500 });
+    expect(lowestPassRung("gbp")).toEqual({ key: "event_pass", amountMinor: 1200 });
   });
 
   it("never quotes the more expensive rung", () => {

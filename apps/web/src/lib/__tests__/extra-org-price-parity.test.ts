@@ -97,8 +97,20 @@ describe("extra-organisation price", () => {
           // exact halves are not required — but the customer must never be
           // charged MORE than half, and never so much less that "half" is a
           // meaningfully wrong description of what they pay.
+          //
+          // THE FLOOR IS THE ROUNDING RULE'S OWN STEP, not a percentage. It was
+          // `half * 0.9` (i.e. at least 45% of base), a bound tuned to the
+          // pre-v18 prices where the worst case was 47.4%. The entitlements
+          // v18 reprice put INR monthly at ₹199 against a ₹499 base — 39.9%,
+          // which the owner ruled is the x99 rule working as written, not a
+          // mispricing. A percentage floor cannot express that: rounding down
+          // to a grid costs a FIXED amount, so it eats a larger FRACTION of a
+          // cheaper plan. Expressed as one grid step, the bound still catches a
+          // real drift (a rider set to half of half) at every price point,
+          // including the ones this seed does not use today.
+          const step = currency === "inr" ? 100_00 : 1_00;
           const half = base / 2;
-          if (extra > half || extra < half * 0.9)
+          if (extra > half || extra < half - step)
             offenders.push(`${plan} ${interval} ${currency}: base ${base}, extra ${extra}`);
         }
       }

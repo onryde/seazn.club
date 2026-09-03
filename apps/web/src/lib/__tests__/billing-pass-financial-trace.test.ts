@@ -242,14 +242,14 @@ describe.skipIf(!HAS_DB)("Event Pass leaves a financial trace (webhook)", () => 
     const cid = "cus_pass_hook_" + uniq();
 
     await processStripeEvent(
-      passEvent(passSession(orgId, compId, { customer: cid, currency: "aud" })),
+      passEvent(passSession(orgId, compId, { customer: cid, currency: "inr" })),
     );
 
     const [sub] = await readSub(orgId);
     // The pass branch `return`s before the shared linkStripeCustomer call at the
     // bottom of handleCheckoutCompleted, so it needed its own.
     expect(sub.stripe_customer_id).toBe(cid);
-    expect(sub.currency).toBe("aud");
+    expect(sub.currency).toBe("inr");
   });
 
   it("a refunded duplicate does NOT repoint the org's customer or currency", async () => {
