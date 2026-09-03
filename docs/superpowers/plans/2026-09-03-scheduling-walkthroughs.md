@@ -601,7 +601,9 @@ local warm.**
   `expectNoHorizontalScroll(page, opts?)`, `TAG`.
 - Existing board testids: `schedule-auto`, `schedule-result-strip`,
   `schedule-result-provenance`, `board-freeze`, `board-publish-schedule`,
-  `board-start-division`, `stage-court-tags` (on `?tab=fixtures`).
+  `board-start-division`. Court tags come from `division-settings.tsx:628`
+  (`PATCH /divisions/{id}`), NOT `stage-court-tags` — that surface is being
+  rewritten by the concurrent competition-desk W2 wave.
 
 - [ ] **Step 1: Write the spec, setup first**
 
@@ -1114,14 +1116,14 @@ git commit -m "docs(walkthrough): record the scheduling walkthroughs and their c
 
 **Spec coverage.** Every spec section maps to a task: the surface map → Tasks 4
 and 5; F1 → Task 1; F2 → Task 2; F3 → Task 5 step 4; F4 → Task 4 step 2; F5 →
-Task 4 (stage court tags, `?tab=fixtures`, `stage-court-tags`); testids → Task
+Task 4 (court tags via `division-settings.tsx:628`); testids → Task
 3; the four test types → Task 1 steps 1/6 and Task 4 step 4 and the mutation
 steps; verification bars → Task 6. The owner's speed constraint, added after the
 spec was approved, is carried as a Global Constraint and gated in Task 6.
 
 **Known gap, deliberate.** Task 4's step-2 code block shows steps 1, 3, 4 and 5
 but not the `?tab=fixtures` court-tags step (step 2) or the capacity precheck
-read (step 6) as literal code — both are single taps on `stage-court-tags` and
+read (step 6) as literal code — both are single taps on the court-tags control and
 the capacity card, and the surrounding pattern (tap, then read the record back
 through `apiJson`) is shown three times in the same block. An executor who
 cannot write those two from the pattern should stop and ask rather than guess.

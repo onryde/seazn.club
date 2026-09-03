@@ -49,7 +49,7 @@ grepped.
 | Auto-schedule | `schedule-board.tsx:1273` `schedule-auto` | `?tab=board` |
 | Re-flow / Improve | `schedule-board.tsx:1294`, `:1312` | `?tab=board` |
 | Required courts | `shared/court-multi-picker.tsx` (aria-label only) | `?tab=settings` |
-| Required court tags | `stages-panel.tsx:2035` `stage-court-tags` | `?tab=fixtures` |
+| Required court tags | TWO writers: `division-settings.tsx:628` (used here) and `stages-panel.tsx:2021` `stage-court-tags` | division settings / `?tab=fixtures` |
 | Settings (hours, match/gap minutes) | `board/settings-panel.tsx` | `?tab=settings` |
 | Constraint matrix | `constraints-panel.tsx:588` | `?tab=constraints` |
 | Blackout editor | `constraints-panel.tsx:822-940` | `?tab=constraints` |
@@ -166,8 +166,14 @@ Tapped, in order:
 
 1. `?tab=settings` — choose the required courts in the multi-picker; set
    match minutes, gap minutes and the play-hours window.
-2. `?tab=fixtures` — set the stage's required court tags through
-   `stage-court-tags`, closing F5.
+2. Required court tags — set them through `division-settings.tsx:628`
+   (`PATCH /divisions/{id}`), NOT `stage-court-tags` on `?tab=fixtures`.
+   Both write `required_court_tags`. The run-sheet writer is being
+   structurally rewritten by the concurrent competition-desk W2 wave
+   (`stages-panel.tsx`: per-stage cards become a two-column sheet and rail),
+   and a walkthrough pinned to a surface under redesign would merge cleanly
+   at file level and then red on `main` — where the walkthrough leg actually
+   runs — rather than in either branch. Closes F5 through the stable writer.
 3. `?tab=constraints` — set `min_rest_minutes` and `max_fixtures_per_day`
    through the matrix; read the values back from `schedule_settings.config`.
 4. `?tab=constraints` — create a court blackout window in the editor,
