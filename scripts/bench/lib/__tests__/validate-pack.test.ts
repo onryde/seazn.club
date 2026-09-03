@@ -2266,10 +2266,13 @@ function registrationPack(opts: {
   };
 }
 
-/** A division base with no restriction at all — entries tagged
- *  `rejected_eligibility` must never appear against it (nothing can
- *  violate an unrestricted division), so rules other than #1 use this. */
-const OPEN_DIVISION = { category: "open" } as const;
+/** A registration BLOCK fragment (`category`/`ageMin`/`ageMax` are
+ *  `PackRegistrationBlock` fields, not `PackDivision` ones — spread into a
+ *  test's `block:`, never into `registrationPack`'s `division:`) with no
+ *  restriction at all — an entry tagged `rejected_eligibility` must never
+ *  appear against it (nothing can violate an unrestricted division), so
+ *  rules other than #1, which are not testing eligibility, use this. */
+const OPEN_RESTRICTION = { category: "open" } as const;
 
 function baseExpect(overrides: Partial<Record<"entrants" | "waitlisted" | "rejected" | "paidCents", number>> = {}) {
   return { entrants: 0, waitlisted: 0, rejected: 0, paidCents: 0, ...overrides };
@@ -2351,5 +2354,54 @@ describe("registration funnel — rule 1: rejected_eligibility must actually vio
     const finding = onlyError(validatePack(pack, UNIT).findings);
     expect(finding.code).toBe("registration.rejected_not_violating");
     expect(finding.message).toContain("e-lies");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Rule 2 — `expect.entrants == entries − rejected − waitlisted`, counted
+// from the entries' own `expect` tags (design §4 check 2).
+// ---------------------------------------------------------------------------
+
+describe("registration funnel — rule 2: expect arithmetic", () => {
+  it("entries(4) − rejected(1) − waitlisted(1) = 2, and a wrong declared entrants reds naming the tally", () => {
+    const pack = registrationPack({
+      block: {
+        ...OPEN_RESTRICTION,
+        entrantKind: "individual",
+        feeCents: 0,
+        approval: "auto",
+        entries: [
+          { extKey: "e-1", captain: "p1", roster: [], pay: false, expect: "entrant" },
+          { extKey: "e-2", captain: "p2", roster: [], pay: false, expect: "entrant" },
+          { extKey: "e-3", captain: "p1", roster: [], pay: false, expect: "rejected_manual" },
+          { extKey: "e-4", captain: "p2", roster: [], pay: false, expect: "waitlisted" },
+        ],
+        // Wrong on purpose: should be 4 − 1 − 1 = 2.
+        expect: baseExpect({ entrants: 3, waitlisted: 1, rejected: 1 }),
+      },
+    });
+    const finding = onlyError(validatePack(pack, UNIT).findings);
+    expect(finding.code).toBe("registration.expect_arithmetic");
+    expect(finding.message).toContain("e-3"); // the rejected offender
+    expect(finding.message).toContain("e-4"); // the waitlisted offender
+  });
+
+  it("the correct tally does not red", () => {
+    const pack = registrationPack({
+      block: {
+        ...OPEN_RESTRICTION,
+        entrantKind: "individual",
+        feeCents: 0,
+        approval: "auto",
+        entries: [
+          { extKey: "e-1", captain: "p1", roster: [], pay: false, expect: "entrant" },
+          { extKey: "e-2", captain: "p2", roster: [], pay: false, expect: "entrant" },
+          { extKey: "e-3", captain: "p1", roster: [], pay: false, expect: "rejected_manual" },
+          { extKey: "e-4", captain: "p2", roster: [], pay: false, expect: "waitlisted" },
+        ],
+        expect: baseExpect({ entrants: 2, waitlisted: 1, rejected: 1 }),
+      },
+    });
+    expect(errors(validatePack(pack, UNIT).findings)).toEqual([]);
   });
 });

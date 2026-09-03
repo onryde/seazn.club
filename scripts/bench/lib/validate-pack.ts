@@ -713,6 +713,33 @@ function checkRejectedEligibilityOffenders(
   return findings;
 }
 
+/** Design §4 check 2: `expect.entrants == entries − rejected − waitlisted`,
+ *  where `rejected` counts entries tagged `rejected_eligibility` OR
+ *  `rejected_manual` and `waitlisted` counts entries tagged `waitlisted` —
+ *  both tallied from the entries' OWN `expect` tags, so the identity is a
+ *  pure consistency check on the block's own declarations (it does not
+ *  re-derive who SHOULD be rejected/waitlisted; rules 1 and 3 do that). */
+function checkExpectArithmetic(divisionRef: string, block: PackRegistrationBlock): PackFinding[] {
+  const rejected = block.entries.filter(
+    (e) => e.expect === "rejected_eligibility" || e.expect === "rejected_manual",
+  );
+  const waitlisted = block.entries.filter((e) => e.expect === "waitlisted");
+  const expectedEntrants = block.entries.length - rejected.length - waitlisted.length;
+  if (block.expect.entrants === expectedEntrants) return [];
+  return [
+    {
+      code: "registration.expect_arithmetic",
+      severity: "error",
+      where: `registration.byDivision[${divisionRef}].expect.entrants`,
+      message:
+        `division "${divisionRef}" declares expect.entrants:${block.expect.entrants} but ` +
+        `entries(${block.entries.length}) − rejected(${rejected.length}) − waitlisted(${waitlisted.length}) ` +
+        `= ${expectedEntrants} — rejected:[${rejected.map((e) => e.extKey).join(", ")}] ` +
+        `waitlisted:[${waitlisted.map((e) => e.extKey).join(", ")}]`,
+    },
+  ];
+}
+
 // ---------------------------------------------------------------------------
 // Stage 2 — the per-stream fold
 // ---------------------------------------------------------------------------
@@ -863,6 +890,7 @@ export function validatePack(raw: unknown, opts: ValidatePackOptions): PackValid
       if (block === undefined) continue;
       findings.push(
         ...checkRejectedEligibilityOffenders(division.ref, block, personsByRef, seasonStartYear),
+        ...checkExpectArithmetic(division.ref, block),
       );
     }
   }
