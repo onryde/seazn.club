@@ -135,6 +135,12 @@ export type Attention =
   // and is `null` when every one of them has no `scheduledAt` at all (never
   // a permanent, misleading "0 min ago").
   | { kind: "no_scorer"; count: number; fixtureIds: string[]; minutesSinceKickoff: number | null }
+  // F3 (round J): `no_scorer`'s twin, and the other half of the question that
+  // one deliberately left open (fix-round-b-report.md: "an assigned-but-silent
+  // scorer well past kick-off gets NO attention at all in this round"). Same
+  // aggregate shape, and `minutesSinceKickoff` is never null here — the row
+  // cannot exist without a known elapsed time (see NOT_RECORDING_GRACE_MINUTES).
+  | { kind: "not_recording"; count: number; fixtureIds: string[]; minutesSinceKickoff: number }
   | { kind: "result_missing"; count: number; fixtureIds: string[] }
   | { kind: "registrations_waiting"; count: number };
 
@@ -149,6 +155,13 @@ export const ATTENTION_SEVERITY: Record<Attention["kind"], Severity> = {
   // behind a "Finished" pill.
   needs_fixtures: "red",
   no_scorer: "red",
+  // AMBER, not red, and the grace period is why. `no_scorer` is red because
+  // nobody is even nominated: the organiser must act or the match goes
+  // unrecorded. Here someone IS nominated and simply has not started —
+  // overwhelmingly a slow start rather than an abandonment, and a red on
+  // every slow start would teach organisers to ignore the colour that
+  // `no_scorer` needs them to trust.
+  not_recording: "amber",
   unscheduled: "amber",
   result_missing: "amber",
   registrations_waiting: "slate",
@@ -188,11 +201,35 @@ const KIND_ORDER: Attention["kind"][] = [
   "needs_draw",
   "needs_fixtures",
   "no_scorer",
+  // Directly after `no_scorer`, and the position is the MEANING, not a
+  // formatting choice: the two describe the same failure — a live match going
+  // unrecorded — at two different distances from the organiser's hand. Read
+  // in order they are one escalation ("nobody is assigned" / "someone is, and
+  // nothing is arriving"); split apart by an unrelated kind they read as two
+  // unrelated problems. Ties inside a severity band are broken by this array,
+  // so moving this line changes what an organiser sees first.
+  "not_recording",
   "unscheduled",
   "result_missing",
   "registrations_waiting",
 ];
 const SEVERITY_ORDER: Severity[] = ["red", "amber", "slate"];
+
+/**
+ * How long a live match may show no recorded events before `not_recording`
+ * is raised, in minutes.
+ *
+ * The grace is the whole difference between a useful row and a nag: a scorer
+ * who has not typed anything in the first minutes of a match is normal (the
+ * toss, the walk-out, a pad that is open but not yet tapped), and a row that
+ * fires there would appear on almost every fixture at kick-off. Fifteen
+ * minutes into a live match with nothing recorded is not a slow start.
+ *
+ * Exported so tests derive their boundary from the constant instead of
+ * typing `15` — a table typed into a test asserts yesterday's number the
+ * moment this one moves (recurring failure class 19).
+ */
+export const NOT_RECORDING_GRACE_MINUTES = 15;
 
 /** YYYY-MM-DD of an instant in a zone. en-CA gives ISO order natively. */
 export function localDateKey(iso: string, tz: string): string {
@@ -512,6 +549,7 @@ export function resolveAttention(input: PhaseInput): Attention[] {
   // F3+F4 fix (final review, Important): both aggregated per division below,
   // the same way `unscheduled` already is above — collected here, pushed once.
   const noScorer: { id: string; since: number | null }[] = [];
+  const notRecording: { id: string; since: number }[] = [];
   const resultMissing: string[] = [];
   // G3 fix (fix round D, Important), CORRECTED by H2 (final review round 3,
   // Important): G3's gate was `divisionStatus === "active"`, which also
@@ -548,23 +586,48 @@ export function resolveAttention(input: PhaseInput): Attention[] {
       // assigned-but-silent scorer well past kick-off gets NO attention at
       // all in this round, not a weaker one — a genuinely separate product
       // question this fix does not take on.)
+      // Hoisted out of the `no_scorer` arm (round J): `not_recording` asks the
+      // same question of the same clock, and a second copy of this derivation
+      // is a second authority for one displayed fact — the shape that produced
+      // this wave's worst defects.
+      //
+      // division-phase.ts:134 minor fix: a fixture with no `scheduledAt` at
+      // all can never answer "minutes since kickoff" — `null`, not a
+      // permanent, misleading "0 min ago".
+      //
+      // Minor 1 (fix round G): the clamp that used to sit here,
+      // `Math.max(0, …)`, reintroduced the very zero it was meant to
+      // prevent — an `in_play` fixture dated in the FUTURE (an organiser
+      // starts a match early, or re-dates one after kick-off) printed
+      // "Kicked off 0 min ago", and a malformed `scheduledAt` printed
+      // "Kicked off NaN min ago", since `Math.max(0, NaN)` is `NaN`. An
+      // elapsed time we cannot state is `null` — the same "unknown"
+      // sub-line the no-date case already renders — never a number that
+      // reads as a fact.
+      const kickoffMs = f.scheduledAt === null ? NaN : Date.parse(f.scheduledAt);
+      const rawElapsed = Number.isNaN(kickoffMs) ? null : Math.round((nowMs - kickoffMs) / 60_000);
+      const elapsed = rawElapsed !== null && rawElapsed >= 0 ? rawElapsed : null;
       if (f.status === "in_play" && f.eventCount === 0 && !f.hasScorer) {
-        // division-phase.ts:134 minor fix: a fixture with no `scheduledAt` at
-        // all can never answer "minutes since kickoff" — `null`, not a
-        // permanent, misleading "0 min ago".
+        noScorer.push({ id: f.id, since: elapsed });
+      } else if (
+        // F3 (round J). `no_scorer`'s exact complement: same status, same zero
+        // event count, `hasScorer` the other way round — so no fixture can ever
+        // raise both, and the two rows can never contradict each other on the
+        // same match.
         //
-        // Minor 1 (fix round G): the clamp that used to sit here,
-        // `Math.max(0, …)`, reintroduced the very zero it was meant to
-        // prevent — an `in_play` fixture dated in the FUTURE (an organiser
-        // starts a match early, or re-dates one after kick-off) printed
-        // "Kicked off 0 min ago", and a malformed `scheduledAt` printed
-        // "Kicked off NaN min ago", since `Math.max(0, NaN)` is `NaN`. An
-        // elapsed time we cannot state is `null` — the same "unknown"
-        // sub-line the no-date case already renders — never a number that
-        // reads as a fact.
-        const kickoffMs = f.scheduledAt === null ? NaN : Date.parse(f.scheduledAt);
-        const elapsed = Number.isNaN(kickoffMs) ? null : Math.round((nowMs - kickoffMs) / 60_000);
-        noScorer.push({ id: f.id, since: elapsed !== null && elapsed >= 0 ? elapsed : null });
+        // `elapsed === null` raises NOTHING, deliberately. The row's whole
+        // claim is that recording is LATE; a fixture whose kick-off we cannot
+        // state (no `scheduledAt`, or a malformed one) cannot support that
+        // claim, and inventing a zero would make every undated live fixture
+        // permanently late. Silence is the correct answer to a question we
+        // cannot answer — the same rule the `no_scorer` sub-line follows.
+        f.status === "in_play" &&
+        f.eventCount === 0 &&
+        f.hasScorer &&
+        elapsed !== null &&
+        elapsed >= NOT_RECORDING_GRACE_MINUTES
+      ) {
+        notRecording.push({ id: f.id, since: elapsed });
       } else if (
         f.status === "scheduled" &&
         f.scheduledAt !== null &&
@@ -581,6 +644,18 @@ export function resolveAttention(input: PhaseInput): Attention[] {
       count: noScorer.length,
       fixtureIds: noScorer.map((n) => n.id),
       minutesSinceKickoff: known.length > 0 ? Math.max(...known) : null,
+    });
+  }
+  if (notRecording.length > 0) {
+    // `since` is a number by construction here (the predicate refuses a null
+    // elapsed), so unlike `no_scorer` this row always has a figure to print
+    // and needs no "unknown" sub-line. The WORST — longest silent — fixture
+    // is the one worth naming, same choice `no_scorer` makes.
+    out.push({
+      kind: "not_recording",
+      count: notRecording.length,
+      fixtureIds: notRecording.map((n) => n.id),
+      minutesSinceKickoff: Math.max(...notRecording.map((n) => n.since)),
     });
   }
   if (resultMissing.length > 0) {

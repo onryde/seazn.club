@@ -28,6 +28,10 @@ export const RED_PILL_KEY: Record<Attention["kind"], DictionaryKey | null> = {
   needs_draw: "desk.pill.needs_draw",
   needs_fixtures: "desk.pill.needs_fixtures",
   no_scorer: "desk.pill.no_scorer",
+  // `null` because it is amber, not red — the pill keeps showing the phase.
+  // Pinned against ATTENTION_SEVERITY by desk-ssr.test.tsx, so this cannot
+  // silently disagree with the severity table.
+  not_recording: null,
   unscheduled: null,
   result_missing: null,
   registrations_waiting: null,

@@ -123,6 +123,32 @@ export function needsYouItems(
           });
           break;
         }
+        // F3 (round J). Deliberately NOT merged into `no_scorer`'s case even
+        // though the shape is identical: the two rows say different things to
+        // the organiser ("nominate someone" vs "your scorer has not started"),
+        // and one case printing two different sets of words behind a boolean
+        // is how a row ends up saying the wrong one.
+        case "not_recording": {
+          const single = a.fixtureIds.length === 1 ? dd.fixture_names[a.fixtureIds[0]!] : null;
+          items.push({
+            key: `${d.id}:not_recording`, severity: sev, kind: a.kind,
+            title: single
+              ? t(dict, "desk.needsYou.not_recording", { division: d.name, home: single.home ?? "—", away: single.away ?? "—" })
+              : plural(dict, "desk.needsYou.not_recording.count", a.count, locale, { division: d.name }),
+            // No `sub_unknown` twin, unlike `no_scorer`: `minutesSinceKickoff`
+            // is a number by construction here (division-phase.ts refuses the
+            // row when the elapsed time is unknown), so there is no state this
+            // sub-line cannot state.
+            sub: t(dict, "desk.needsYou.not_recording.sub", { minutes: a.minutesSinceKickoff }),
+            action: {
+              label: t(dict, "desk.needsYou.not_recording.action"),
+              href: single
+                ? routes.fixture(org, comp, d.slug, single.fixture_no)
+                : routes.division(org, comp, d.slug, "fixtures"),
+            },
+          });
+          break;
+        }
         case "result_missing": {
           const single = a.fixtureIds.length === 1 ? dd.fixture_names[a.fixtureIds[0]!] : null;
           items.push({
@@ -143,6 +169,14 @@ export function needsYouItems(
         case "registrations_waiting":
           waiting += a.count; // one competition-level row, not one per division
           break;
+        default: {
+          // Round J: this switch had no exhaustiveness guard, so a new
+          // `Attention` kind compiled clean and rendered NOTHING — the inert
+          // seam this programme keeps producing, one surface further on. tsc
+          // now refuses a kind that reaches here without a case.
+          const never: never = a;
+          throw new Error(`unhandled attention kind: ${JSON.stringify(never)}`);
+        }
       }
     }
   }
