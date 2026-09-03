@@ -609,7 +609,16 @@ export function resolveAttention(input: PhaseInput): Attention[] {
       const elapsed = rawElapsed !== null && rawElapsed >= 0 ? rawElapsed : null;
       if (f.status === "in_play" && f.eventCount === 0 && !f.hasScorer) {
         noScorer.push({ id: f.id, since: elapsed });
-      } else if (
+      }
+      // A SEPARATE `if`, deliberately not chained onto the one above. Chained,
+      // `!f.hasScorer` on the first arm made `f.hasScorer` on this one
+      // redundant — a mutation sweep deleted that conjunct and all 79 tests
+      // stayed green, because branch ORDER was doing the work the conjunct
+      // claimed to do. Two guards covering for each other are each untested
+      // (recurring failure class 3), and the pair's whole promise here is that
+      // one match can never raise both rows. Independent predicates, each
+      // killable on its own.
+      if (
         // F3 (round J). `no_scorer`'s exact complement: same status, same zero
         // event count, `hasScorer` the other way round — so no fixture can ever
         // raise both, and the two rows can never contradict each other on the
@@ -624,6 +633,12 @@ export function resolveAttention(input: PhaseInput): Attention[] {
         f.status === "in_play" &&
         f.eventCount === 0 &&
         f.hasScorer &&
+        // Behaviourally redundant at today's grace — `null >= 15` is already
+        // false — and kept anyway for two reasons a mutant cannot show: it is
+        // what narrows `elapsed` to a number for `since` below (without it the
+        // push needs a non-null assertion, which this repo does not allow),
+        // and it is the one thing standing between a grace of 0 and a row
+        // whose `minutesSinceKickoff` is null, which the type forbids.
         elapsed !== null &&
         elapsed >= NOT_RECORDING_GRACE_MINUTES
       ) {

@@ -5,6 +5,7 @@ import {
   localDateKey,
   ledgerRank,
   hasPlayedFixture,
+  NOT_RECORDING_GRACE_MINUTES,
   type PhaseInput,
   type PhaseFixture,
   type PhaseStage,
@@ -510,6 +511,105 @@ describe("resolveAttention", () => {
       kind: "no_scorer", count: 1, fixtureIds: ["p"], minutesSinceKickoff: null,
     });
   });
+  // ── F3 (round J): `not_recording` — the assigned-but-silent scorer ──────
+  //
+  // Every boundary below is DERIVED from NOT_RECORDING_GRACE_MINUTES. A `15`
+  // typed in here would keep asserting yesterday's number the moment the
+  // constant moves (recurring failure class 19), and the pair of cases either
+  // side of the boundary is what makes the constant itself load-bearing:
+  // widening or narrowing the grace kills exactly one of them.
+  const minutesAgo = (m: number) => new Date(Date.parse(NOW) - m * 60_000).toISOString();
+  const silent = (o: Partial<PhaseFixture> = {}): PhaseFixture =>
+    fx({ id: "s", status: "in_play", eventCount: 0, hasScorer: true,
+         scheduledAt: minutesAgo(NOT_RECORDING_GRACE_MINUTES), ...o });
+
+  it("not_recording: the grace is fifteen minutes — the shipped value, not just whatever the constant says", () => {
+    // Every other case here DERIVES its boundary from the constant, which is
+    // right (they must not freeze yesterday's number) and is exactly why none
+    // of them can witness the constant itself changing: a sweep that set the
+    // grace to 0 left all of them green. This is the one guard that pins the
+    // VALUE, so widening or removing the grace is a deliberate edit here and
+    // not a silent one (recurring failure class 19).
+    expect(NOT_RECORDING_GRACE_MINUTES).toBe(15);
+  });
+  it("not_recording: five minutes into a live match is a slow start, not a row", () => {
+    // Stated in absolute terms on purpose — the customer fact is "the desk
+    // does not nag five minutes after kick-off", and it must stay true
+    // however the constant is expressed.
+    const fixtures = [silent({ scheduledAt: minutesAgo(5) })];
+    expect(resolveAttention(input({ fixtures })).map((a) => a.kind)).toEqual([]);
+  });
+  it("not_recording: raised at exactly the grace, with the elapsed minutes it claims", () => {
+    expect(resolveAttention(input({ fixtures: [silent()] }))).toContainEqual({
+      kind: "not_recording", count: 1, fixtureIds: ["s"],
+      minutesSinceKickoff: NOT_RECORDING_GRACE_MINUTES,
+    });
+  });
+  it("not_recording: NOT raised one minute inside the grace — a slow start is not a defect", () => {
+    const fixtures = [silent({ scheduledAt: minutesAgo(NOT_RECORDING_GRACE_MINUTES - 1) })];
+    // And nothing else takes its place: the fixture is silent but excused,
+    // so the organiser sees no row at all rather than a differently-worded one.
+    expect(resolveAttention(input({ fixtures })).map((a) => a.kind)).toEqual([]);
+  });
+  it("not_recording: an unknown elapsed time raises NOTHING, never a synthesised zero", () => {
+    // Three ways the clock can be unstatable. None of them may produce a row
+    // claiming recording is late — the claim needs a number to stand on.
+    for (const scheduledAt of [null, "not-a-date", minutesAgo(-30)]) {
+      const kinds = resolveAttention(input({ fixtures: [silent({ scheduledAt })] })).map((a) => a.kind);
+      expect(kinds, `scheduledAt=${String(scheduledAt)}`).not.toContain("not_recording");
+    }
+  });
+  it("not_recording: cleared by the first recorded event", () => {
+    const fixtures = [silent({ eventCount: 1 })];
+    expect(resolveAttention(input({ fixtures })).some((a) => a.kind === "not_recording")).toBe(false);
+  });
+  it("not_recording and no_scorer are complements — no fixture can ever raise both", () => {
+    // The pair, on one division: same status, same zero events, `hasScorer`
+    // the other way round. Two rows, disjoint fixture sets. If either
+    // predicate ever stops consulting `hasScorer`, one of these fixtures
+    // appears in both lists and the desk contradicts itself about one match.
+    const fixtures = [
+      silent({ id: "assigned" }),
+      silent({ id: "nobody", hasScorer: false }),
+    ];
+    const out = resolveAttention(input({ fixtures }));
+    const nr = out.find((a) => a.kind === "not_recording");
+    const ns = out.find((a) => a.kind === "no_scorer");
+    expect(nr).toMatchObject({ fixtureIds: ["assigned"] });
+    expect(ns).toMatchObject({ fixtureIds: ["nobody"] });
+  });
+  it("not_recording aggregates per division — one row, worst silence wins", () => {
+    const fixtures = [
+      silent({ id: "s1", scheduledAt: minutesAgo(NOT_RECORDING_GRACE_MINUTES) }),
+      silent({ id: "s2", scheduledAt: minutesAgo(NOT_RECORDING_GRACE_MINUTES + 27) }),
+    ];
+    const out = resolveAttention(input({ fixtures }));
+    expect(out.filter((a) => a.kind === "not_recording")).toHaveLength(1);
+    expect(out).toContainEqual({
+      kind: "not_recording", count: 2, fixtureIds: ["s1", "s2"],
+      minutesSinceKickoff: NOT_RECORDING_GRACE_MINUTES + 27,
+    });
+  });
+  it("not_recording respects the division's own status: a `setup` division raises nothing", () => {
+    const kinds = resolveAttention(input({ divisionStatus: "setup", fixtures: [silent()] })).map((a) => a.kind);
+    expect(kinds).not.toContain("not_recording");
+  });
+  it("not_recording sorts directly after no_scorer, ahead of the other ambers", () => {
+    // An ORDERING-differential case: severity puts the red first, and inside
+    // the amber band KIND_ORDER is the only thing that puts `not_recording`
+    // ahead of `unscheduled` and `result_missing`. Move it in that array and
+    // this is the test that dies.
+    const fixtures = [
+      silent({ id: "nobody", hasScorer: false }),                       // no_scorer, red
+      silent({ id: "quiet" }),                                          // not_recording, amber
+      fx({ id: "u", status: "scheduled", scheduledAt: null }),          // unscheduled, amber
+      fx({ id: "r", status: "scheduled", scheduledAt: minutesAgo(300), matchMinutes: 90 }), // result_missing, amber
+    ];
+    expect(resolveAttention(input({ fixtures })).map((a) => a.kind)).toEqual([
+      "no_scorer", "not_recording", "unscheduled", "result_missing",
+    ]);
+  });
+
   it("result_missing: scheduled, kickoff + matchMinutes already passed", () => {
     const fixtures = [fx({ id: "r", scheduledAt: "2026-09-05T07:00:00Z", matchMinutes: 90 })];
     expect(resolveAttention(input({ fixtures }))).toContainEqual({ kind: "result_missing", count: 1, fixtureIds: ["r"] });

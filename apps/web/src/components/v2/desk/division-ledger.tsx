@@ -177,6 +177,18 @@ export function DivisionLedger({
                       needs (owner ruling: "the STATUS LINE wraps to as many
                       lines as it needs"). */}
                   <p className="mt-2 text-xs text-slate-600">{r.statusLine}</p>
+                  {/* F5 (round J): the phone card used to DROP this line, so
+                      the width most likely to be in a hand at the venue was
+                      the only one that never said a match was live right now
+                      — "Now: Alpha v Bravo" appeared on the desktop row and
+                      nowhere else. Same `nextLine` value the desktop row
+                      prints (computed once per row above, never re-derived):
+                      a second derivation of one displayed fact is how this
+                      wave produced its worst defects. Empty stays empty —
+                      "nothing left to schedule" is not information — and it
+                      wraps rather than truncating, like the status line it
+                      sits under. */}
+                  {next !== "" && <p className="mt-1 text-xs font-medium text-slate-900">{next}</p>}
                 </Link>
                 {action && (
                   <Link href={action.href} className="btn btn-primary mt-3 flex w-full items-center justify-center py-3 text-sm">

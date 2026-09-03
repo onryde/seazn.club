@@ -63,6 +63,12 @@ const UNREACHABLE: Record<string, string> = {
   "finished/no_scorer": "no_scorer needs an in_play fixture, which is match day",
   "setting_up/no_scorer": "no_scorer needs an in_play fixture, which is match day",
   "scheduled/no_scorer": "no_scorer needs an in_play fixture, which is match day",
+  // `not_recording` (round J) needs an in_play fixture for exactly the same
+  // reason its complement does — the two differ only on whether a scorer is
+  // assigned, never on the fixture status either one requires.
+  "finished/not_recording": "not_recording needs an in_play fixture, which is match day",
+  "setting_up/not_recording": "not_recording needs an in_play fixture, which is match day",
+  "scheduled/not_recording": "not_recording needs an in_play fixture, which is match day",
   "finished/unscheduled": "unscheduled needs a `scheduled` fixture, which is live",
   "finished/result_missing": "result_missing needs a `scheduled` fixture, which is live",
   // `needs_draw` is raised for the FIRST open stage (a later one needs
@@ -176,6 +182,15 @@ const SHAPES: Shape[] = [
     why: "match_day/no_scorer — kicked off, nothing being recorded",
     stages: [st()],
     fixtures: [fxt({ id: "a", status: "in_play", hasScorer: false, scheduledAt: PAST })],
+  },
+  {
+    // The complement of the row above: a scorer IS assigned, and nothing has
+    // arrived from them. `PAST` is 3h42m before NOW, comfortably past the
+    // grace, so this shape survives a change to the constant in either
+    // direction rather than sitting on its boundary.
+    why: "match_day/not_recording — kicked off with a scorer assigned, still nothing recorded",
+    stages: [st()],
+    fixtures: [fxt({ id: "a", status: "in_play", hasScorer: true, eventCount: 0, scheduledAt: PAST })],
   },
   {
     why: "match_day/unscheduled — playing today, later rounds undated",

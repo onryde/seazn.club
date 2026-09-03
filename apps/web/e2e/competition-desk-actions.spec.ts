@@ -1,11 +1,12 @@
 import { test, expect, type Page, type APIRequestContext } from "@playwright/test";
 import {
   TAG, apiJson, activeOrg, addEntrantsViaApi, scoreFixture,
-  setFixtureStatusSql, setFixtureScheduledAtSql, seedBareRegistrationSql,
+  setFixtureStatusSql,
+  assignScorerSql, setFixtureScheduledAtSql, seedBareRegistrationSql,
 } from "./helpers";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { ATTENTION_SEVERITY, DRAW_DOORS, type Attention } from "../src/lib/division-phase";
+import { ATTENTION_SEVERITY, DRAW_DOORS, NOT_RECORDING_GRACE_MINUTES, type Attention } from "../src/lib/division-phase";
 
 /** The SHIPPED English strings, read the way `board-v3.spec.ts` reads them —
  *  a JSON `import` needs an import attribute Playwright's loader does not
@@ -269,6 +270,34 @@ const ROWS: Row[] = [
     // The row says nothing is being recorded; the door is the pad itself,
     // which is on this screen for every plan (unlike "Hand over device",
     // which is entitlement-gated and would make this assertion plan-specific).
+    land: async (page) => {
+      await assertUsable(page, '[data-role="console-scoring"]', "the scoring section");
+      await assertUsable(page, '[data-role="console-scoring"] button', "a scoring control");
+    },
+  },
+  {
+    id: "not_recording",
+    kind: "not_recording",
+    label: en["desk.needsYou.not_recording.action"],
+    build: async (request) => {
+      const rig = await leagueOfFour(request, "notrec");
+      expect((await apiJson(request, `/api/v1/divisions/${rig.div.id}/start`, "POST")).status).toBe(200);
+      const fixtureId = rig.fixtureIds[0]!;
+      // The complement of the `no_scorer` row above: someone IS assigned and
+      // the fixture is live with nothing recorded. The kick-off is pushed
+      // well past NOT_RECORDING_GRACE_MINUTES rather than sitting on it, so
+      // this fixture keeps producing the state it is built for if the grace
+      // is ever widened.
+      await assignScorerSql(fixtureId);
+      await setFixtureScheduledAtSql(
+        fixtureId,
+        new Date(Date.now() - (NOT_RECORDING_GRACE_MINUTES + 45) * 60_000).toISOString(),
+      );
+      await setFixtureStatusSql(fixtureId, "in_play");
+      return { compSlug: rig.comp.slug, divSlug: rig.div.slug };
+    },
+    // Same door as `no_scorer`, for the same reason: the row is about a match
+    // nobody is recording, and the pad is the control that answers it.
     land: async (page) => {
       await assertUsable(page, '[data-role="console-scoring"]', "the scoring section");
       await assertUsable(page, '[data-role="console-scoring"] button', "a scoring control");
