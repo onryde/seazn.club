@@ -52,6 +52,13 @@ const OWNED: Record<string, readonly string[]> = {
   "src/components/me/officiating-lane.tsx": [
     "official-blackout-date",
     "official-blackout-add",
+    // The card root, and the ONLY thing in this lane that carries an identity.
+    // Review round 1: the three response testids below repeat once per
+    // assignment — `officiating-lane.tsx:78` maps `<AssignmentCard>` over
+    // `assignments`, and an official holding two open offers is the ordinary
+    // case — so `getByTestId("me-official-accept")` is a strict-mode violation
+    // on its own. They are scoped through this card's `data-fixture-id`.
+    "me-official-card",
     "me-official-accept",
     "me-official-decline",
     // Declining is two steps — the first button opens the reason field, the
@@ -71,12 +78,15 @@ const OWNED: Record<string, readonly string[]> = {
  *
  * `blackout-from` / `blackout-to` / `blackout-court` also repeat, but they are
  * nested INSIDE `blackout-row`, so a spec scopes them through the row's own
- * `data-blackout-index` rather than needing a column of their own.
+ * `data-blackout-index` rather than needing a column of their own. The three
+ * `me-official-*` response testids are the same shape, scoped through
+ * `me-official-card`.
  */
 const IDENTITY: Record<string, readonly (readonly [string, string])[]> = {
   "src/components/v2/shared/court-multi-picker.tsx": [["court-option", "data-court-id"]],
   "src/components/v2/officials-panel.tsx": [["officials-assign-select", "data-fixture-id"]],
   "src/components/v2/constraints-panel.tsx": [["blackout-row", "data-blackout-index"]],
+  "src/components/me/officiating-lane.tsx": [["me-official-card", "data-fixture-id"]],
 };
 
 /**

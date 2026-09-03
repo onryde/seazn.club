@@ -263,7 +263,11 @@ function AssignmentCard({ a }: { a: MyOfficiatingAssignment }) {
     a.scheduled_at !== null && new Date(a.scheduled_at).getTime() <= Date.now();
 
   return (
-    <li className={`card space-y-2 border-l-4 p-4 ${RAIL[response]}`}>
+    <li
+      data-testid="me-official-card"
+      data-fixture-id={a.fixture_id}
+      className={`card space-y-2 border-l-4 p-4 ${RAIL[response]}`}
+    >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="min-w-0">
           <p className="truncate text-sm font-medium text-slate-800">
