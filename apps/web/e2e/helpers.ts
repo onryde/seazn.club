@@ -531,6 +531,14 @@ export async function setOrgConnectSql(
  * the FK is satisfiable regardless of which org a test is looking at.
  */
 export async function claimProfileBySql(email: string): Promise<void> {
+  // Round J: the seven width projects share one database and one account, so
+  // the SECOND project to reach this helper collided on the
+  // `persons_org_user_lane_uq` partial index and aborted its whole serial
+  // file — 33 tests "did not run" behind one red. Solo runs never saw it.
+  // The precondition this helper exists to set up is "this user has a claimed
+  // player profile", which an existing row already satisfies, so a conflict
+  // is success rather than an idempotency guard swallowing a new arrival:
+  // the identity conflicted on is the same person, org and lane.
   await withDb(async (sql) => {
     const res = await sql`
       insert into persons (org_id, full_name, user_id, lane)
@@ -538,8 +546,26 @@ export async function claimProfileBySql(email: string): Promise<void> {
       from users u
       join org_members m on m.user_id = u.id
       where u.email = ${email}
-      limit 1`;
-    if (res.count === 0) throw new Error(`claimProfileBySql: no org membership for ${email}`);
+      limit 1
+      -- The predicate MUST match the partial index's own (V349:
+      -- user_id is not null and lane = 'player' and merged_into is null) --
+      -- Postgres only infers a partial index whose predicate the statement
+      -- implies, and a narrower guess raises "no unique or exclusion
+      -- constraint matching the ON CONFLICT spec".
+      on conflict (org_id, user_id, lane)
+        where user_id is not null and lane = 'player' and merged_into is null
+        do nothing`;
+    if (res.count === 0) {
+      // Distinguish the two zeros. A conflict means the profile is already
+      // claimed (fine); anything else means the SELECT matched nothing, which
+      // is the real failure this guard was written for.
+      const [existing] = await sql<{ id: string }[]>`
+        select p.id from persons p
+        join users u on u.id = p.user_id
+        where u.email = ${email} and p.lane = 'player' and p.merged_into is null
+        limit 1`;
+      if (!existing) throw new Error(`claimProfileBySql: no org membership for ${email}`);
+    }
   });
 }
 

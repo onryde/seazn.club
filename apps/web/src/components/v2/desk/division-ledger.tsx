@@ -167,7 +167,13 @@ export function DivisionLedger({
                 <Link href={href} className="block rounded-lg focus-visible:outline-offset-4">
                   <div className="flex items-center gap-2">
                     {tile("text-2xl")}
-                    <span className="min-w-0 flex-1 truncate text-sm font-semibold text-slate-900">{r.name}</span>
+                    {/* Round J, from looking at 320: `truncate` cut
+                        "Championship Cup" to "Champions…" beside its pill —
+                        on a phone the division NAME is the identifier, and an
+                        ellipsis three characters in makes two divisions
+                        indistinguishable. Two lines below `md`, unchanged
+                        single-line truncation above it. */}
+                    <span className="line-clamp-2 min-w-0 flex-1 text-sm font-semibold text-slate-900 md:truncate">{r.name}</span>
                     {d && <PhasePill dict={dict} phase={d.phase} attention={d.attention} className="shrink-0" />}
                   </div>
                   <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-purple-100">

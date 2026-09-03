@@ -75,14 +75,22 @@ export function DeskToolsMore({
       {/* `hidden` rather than an unmounted branch: the panel's links stay in
           the DOM so a test can tell "folded away" from "never rendered" — the
           two diagnoses this wave has already confused once. */}
-      <div id={panelId} hidden={!open} className="mt-2 flex flex-col gap-1">
+      {/* Round J, from looking at 320: an open fold of bare links floated
+          against the page with no edge of its own, reading as loose text
+          rather than as the menu the trigger just opened. It is a contained
+          panel now, with the same border language as the buttons above it. */}
+      <div
+        id={panelId}
+        hidden={!open}
+        className="mt-2 flex flex-col overflow-hidden rounded-xl border border-purple-200 bg-white"
+      >
         {items.map((item) => (
           <Link
             key={item.href}
             href={item.href}
             target={item.external ? "_blank" : undefined}
             onClick={() => setOpen(false)}
-            className="flex min-h-11 items-center rounded-lg px-3 text-sm text-purple-700 hover:bg-purple-50"
+            className="flex min-h-11 items-center border-b border-purple-100 px-4 text-sm text-purple-700 last:border-b-0 hover:bg-purple-50"
           >
             {item.label}
             {item.external ? " ↗" : ""}

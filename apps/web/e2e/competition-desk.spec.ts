@@ -73,7 +73,20 @@ test.describe("competition desk", () => {
     await expect(page).toHaveURL(new RegExp(`/d/${rig.divSlug}/schedule$`));
   });
 
-  test("in play with no events: No scorer leads and the competition pill counts it", async ({ page, request }) => {
+  // RENAMED by F4 (round J), and the rename is the point. This used to assert
+  // that the masthead printed "1 in play" while a division below it said "No
+  // scorer". It does not any more: the masthead now obeys the same model rule
+  // the rows have always obeyed — a RED attention OUTRANKS the phase — so it
+  // says "No scorer" too.
+  //
+  // RULING (round J): that is the better answer for the organiser and the
+  // cost is stated plainly. A live match nobody is recording is more urgent
+  // and more actionable than the count of live matches, and the count is
+  // still on screen in the rows underneath. The cost is that while ANY
+  // division is red, the competition-level "N in play" figure is not in the
+  // masthead — accepted, because the alternative is the exact contradiction
+  // this wave exists to remove: a calm summary sitting above an alarmed row.
+  test("in play with no events: No scorer leads, and the masthead says it too rather than counting calmly", async ({ page, request }) => {
     const org = await activeOrg(page);
     const rig = await seed(request);
     await setFixtureStatusSql(rig.fixtureIds[0]!, "in_play");
@@ -87,7 +100,13 @@ test.describe("competition desk", () => {
     // copy actually renders here, the same fix registration-hub.spec.ts's
     // `statusLocator` uses for the identical dual-DOM shape.
     await expect(page.locator('[data-pill="no_scorer"]:visible').first()).toBeVisible();
-    await expect(page.locator('[data-phase="in_play"]').first()).toContainText("1 in play");
+    // The masthead's PHASE is still `in_play` — the underlying fact is
+    // unchanged and a later change to the phase ladder would still be caught
+    // here — but the WORDS it prints are the red row's, not the count.
+    const masthead = page.getByTestId("desk-masthead-pill");
+    await expect(masthead).toHaveAttribute("data-phase", "in_play");
+    await expect(masthead).toHaveAttribute("data-pill", "no_scorer");
+    await expect(masthead).not.toContainText("in play");
   });
 
   // H2 fix (final review round 3, Important — corrected ruling): G3's gate
@@ -438,7 +457,11 @@ test.describe("competition desk", () => {
     const masthead = page.getByTestId("desk-masthead-pill");
     const row = page.getByTestId("desk-ledger-row").filter({ hasText: "Cup" }).first();
     // The row raises it...
-    await expect(row.locator('[data-pill="needs_fixtures"]')).toHaveCount(1);
+    // The row renders its pill TWICE (mobile card + desktop row, one hidden
+    // per width) — the same dual-DOM shape that has produced a false reading
+    // three times in this wave. `:visible` picks the copy that renders here.
+    const rowPill = row.locator('[data-pill="needs_fixtures"]:visible').first();
+    await expect(rowPill).toBeVisible();
     // ...and so does the masthead, with the same word, not a phase word.
     await expect(masthead).toHaveAttribute("data-pill", "needs_fixtures");
     await expect(masthead).toHaveText(/needs fixtures/i);
@@ -448,7 +471,7 @@ test.describe("competition desk", () => {
     expect(
       (await masthead.textContent())?.trim().toLowerCase(),
       "masthead and row must say the same thing",
-    ).toBe((await row.locator('[data-pill="needs_fixtures"]').first().textContent())?.trim().toLowerCase());
+    ).toBe((await rowPill.textContent())?.trim().toLowerCase());
   });
 
   test("K2: the masthead never reads Setting up above a row that has played its whole league", async ({
