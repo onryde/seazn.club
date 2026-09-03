@@ -71,6 +71,11 @@ interface TinyShape {
   persons: { ref: string; fullName: string; lane: string }[];
   entrants: { ref: string }[];
   streams: TinyStream[];
+  // B03 T6 — loose, like every other field here: an official's `assignments`
+  // name a (divisionRef, fixtureExtKey) that must resolve against `streams`,
+  // so a test that empties `streams` has to empty this too or the pack
+  // fails to validate for a reason unrelated to what that test is proving.
+  officials?: { ref: string; assignments?: { divisionRef: string; fixtureExtKey: string }[] }[];
   expected: {
     matches: {
       divisionRef: string;
@@ -268,15 +273,18 @@ describe("validatePack — _tiny.json, the shared fixture", () => {
 
   it("reports the provenance split per division and overall", () => {
     const result = validatePack(tiny(), TINY);
-    // Two `real` streams and one `reconstructed`, per the committed file.
+    // d-tiny: two `real` streams and one `reconstructed`. d-badminton (B03
+    // T5): one `reconstructed` stream (`reconstructSetBasedStream`, folded
+    // through the real generator). Overall sums both divisions.
     expect(result.provenance.overall).toEqual({
       real: 2,
-      reconstructed: 1,
+      reconstructed: 2,
       synthetic: 0,
-      total: 3,
+      total: 4,
     });
     expect(result.provenance.byDivision).toEqual({
       "d-tiny": { real: 2, reconstructed: 1, synthetic: 0, total: 3 },
+      "d-badminton": { real: 0, reconstructed: 1, synthetic: 0, total: 1 },
     });
   });
 
@@ -286,11 +294,18 @@ describe("validatePack — _tiny.json, the shared fixture", () => {
     pack.expected.matches = [];
     pack.expected.tables = [];
     pack.expected.specials = [];
+    // officials[].assignments name a (divisionRef, fixtureExtKey) that must
+    // resolve against `streams` — emptied above, so this has to empty too,
+    // or `checkReservations` reds the pack for a reason this test is not
+    // about (an unrelated "no stream declares fixture ..." error).
+    pack.officials = [];
     const result = validatePack(pack, TINY);
     // An absent key and a zero count are different facts: a report that cannot
-    // tell them apart hides a division nothing replayed.
+    // tell them apart hides a division nothing replayed. Both declared
+    // divisions appear, each zeroed.
     expect(result.provenance.byDivision).toEqual({
       "d-tiny": { real: 0, reconstructed: 0, synthetic: 0, total: 0 },
+      "d-badminton": { real: 0, reconstructed: 0, synthetic: 0, total: 0 },
     });
   });
 });
@@ -298,6 +313,61 @@ describe("validatePack — _tiny.json, the shared fixture", () => {
 // ===========================================================================
 // Regression — deliberately corrupted streams
 // ===========================================================================
+
+describe("validatePack — a league stage NOTHING binds to (B03 T8)", () => {
+  /** `_tiny` with every badminton stream removed, and the `expected` rows that
+   *  depended on them. What is left is a declared league stage with entrants,
+   *  legs, and no stream bound to it at all. */
+  function tinyWithBadmintonUnbound(): unknown {
+    const raw = structuredClone(tiny()) as {
+      streams: { divisionRef: string }[];
+      expected: { matches: { divisionRef: string }[]; tables?: { divisionRef: string }[] };
+    };
+    raw.streams = raw.streams.filter((x) => x.divisionRef !== "d-badminton");
+    raw.expected.matches = raw.expected.matches.filter((m) => m.divisionRef !== "d-badminton");
+    raw.expected.tables = (raw.expected.tables ?? []).filter((t) => t.divisionRef !== "d-badminton");
+    return raw;
+  }
+
+  it("warns naming the stage, the implied count and its arithmetic", () => {
+    const result = validatePack(tinyWithBadmintonUnbound(), TINY);
+    const none = warnings(result.findings).filter((f) => f.code === "streams.none_bound");
+    expect(none).toHaveLength(1);
+    // The count is DERIVED (2 entrants over 1 leg), so an edit to the pack
+    // moves this with it rather than leaving a stale literal behind.
+    expect(none[0]?.message).toContain("implies 1 fixture(s)");
+    expect(none[0]?.message).toContain("2 entrants");
+    expect(none[0]?.where).toContain("s-badminton-league");
+  });
+
+  it("WARNS rather than refusing — a partial pack must stay authorable", () => {
+    // A pack covering part of a real tournament may legitimately declare a
+    // stage it carries no streams for. Refusing would make that unauthorable.
+    const result = validatePack(tinyWithBadmintonUnbound(), TINY);
+    expect(result.findings.filter((f) => f.severity === "error")).toEqual([]);
+  });
+
+  it("this state was previously SILENT, which is why the warning exists", () => {
+    // The skip it replaces read "an unplayed or unbindable stage is already
+    // reported elsewhere". "Elsewhere" was `standings.row_count`, which only
+    // fires when the pack declares a standings table for that stage — so the
+    // claim held exactly when the mismatch was smallest, and failed when it was
+    // total. This pins the distinction: with the expected.tables entry KEPT,
+    // the other check does fire; with it removed, nothing but this one does.
+    const withTable = structuredClone(tiny()) as {
+      streams: { divisionRef: string }[];
+      expected: { matches: { divisionRef: string }[] };
+    };
+    withTable.streams = withTable.streams.filter((x) => x.divisionRef !== "d-badminton");
+    withTable.expected.matches = withTable.expected.matches.filter((m) => m.divisionRef !== "d-badminton");
+    const stillCaught = validatePack(withTable, TINY);
+    expect(stillCaught.findings.some((f) => f.code === "standings.row_count")).toBe(true);
+
+    const codes = validatePack(tinyWithBadmintonUnbound(), TINY).findings.map((f) => f.code);
+    expect(codes).not.toContain("standings.row_count");
+    expect(codes).toContain("streams.none_bound");
+  });
+});
 
 describe("validatePack — corrupted streams die naming the stream and the divergence", () => {
   it("a WRONG SCORER (the entrant credited with the points) reds the fold", () => {
@@ -483,11 +553,14 @@ describe("validatePack — provenance", () => {
     (pack.streams[1] as TinyStream).provenance = "synthetic";
     const result = validatePack(pack, TINY);
     expectClean(result, TINY_NOT_DERIVED);
+    // d-tiny's two `real` streams, the mutated `synthetic` one, and
+    // d-badminton's own `reconstructed` stream (B03 T5) — untouched by this
+    // mutation, since it targets `pack.streams[1]`, d-tiny's own.
     expect(result.provenance.overall).toEqual({
       real: 2,
-      reconstructed: 0,
+      reconstructed: 1,
       synthetic: 1,
-      total: 3,
+      total: 4,
     });
   });
 

@@ -974,8 +974,48 @@ export function validatePack(raw: unknown, opts: ValidatePackOptions): PackValid
       const bound = streamsOf(division.ref).filter(
         (st) => stageOfStream.get(fixtureKey(st.divisionRef, st.fixtureExtKey))?.ref === stage.ref,
       );
-      if (bound.length === 0) continue; // an unplayed or unbindable stage is already reported elsewhere
       const implied = roundRobinFixtureCount(entrants, legs ?? 1);
+      if (bound.length === 0) {
+        // This used to `continue`, on the comment "an unplayed or unbindable
+        // stage is already reported elsewhere". That is FALSE in the general
+        // case, and was verified false rather than argued: strip every stream
+        // for a league stage AND its `expected.tables` entry, and the pack
+        // validates ok=true with zero errors and only the two permanent
+        // `*.not_derived` warnings, which are about something else entirely.
+        // "Elsewhere" is `standings.row_count`, which only fires when the pack
+        // happens to declare a standings table for that stage — so the skip
+        // held exactly when the mismatch was smallest and vanished when it was
+        // total.
+        //
+        // Warning, not error: a pack covering part of a real tournament may
+        // legitimately declare a stage it carries no streams for, and refusing
+        // that would make honest partial packs unauthorable. Its own code
+        // rather than `streams.count_mismatch`, because the diagnosis differs —
+        // "some streams are missing" is an arithmetic error in the pack, "none
+        // are bound" is usually a divisionRef/ext_key that never matched.
+        // No `implied > 0` guard here, and its absence is deliberate. The first
+        // cut had one; a mutation sweep showed it SURVIVED being deleted, which
+        // sent me looking for the case it protects. There is none: `entrants`
+        // is division-wide (`entrantsOfDivision(...).length`), the schema
+        // refuses a division with fewer than two entrants ("a division needs at
+        // least two entrants"), and `legs` is already narrowed to 1..8 above —
+        // so `implied` is >= 1 for every pack that can reach this line. An
+        // unreachable guard is not defence, it is a branch no test can ever
+        // kill, and this file would rather carry the reasoning than the code.
+        {
+          add(
+            "warning",
+            "streams.none_bound",
+            `divisions[ref=${division.ref}].stages[ref=${stage.ref}]`,
+            `league stage "${stage.ref}" implies ${implied} fixture(s) — ${entrants} entrants over ` +
+              `${legs ?? 1} leg(s) — and NO stream in the pack binds to it. The seeded run still mints ` +
+              `those fixtures from the entrants and the legs, so the stage will exist and be entirely ` +
+              `unplayed. If that is deliberate, the stage is fine; if it is not, the usual cause is a ` +
+              `divisionRef or fixtureExtKey that matches nothing`,
+          );
+        }
+        continue;
+      }
       if (bound.length === implied) continue;
       add(
         "warning",

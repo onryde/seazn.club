@@ -16,6 +16,9 @@ import { createRealPreflightProbes, runPreflight, type PreflightResult } from ".
 import { log, suiteLogger } from "./lib/log.ts";
 import { gateOf, resolveRunId, writeReport, type BenchReport, type SuiteReport } from "./lib/report.ts";
 import { runTinySuite } from "./lib/suites/tiny.ts";
+import { createRealPlanSql, type PlanSql } from "./lib/plan.ts";
+import type { SeedTransport } from "./lib/seed.ts";
+import type { ProbeTransport } from "./lib/dls-gate.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -60,7 +63,7 @@ export function parseCliArgs(argv: string[]): BenchConfig {
     strict: true,
   });
 
-  const engine = values.engine as string;
+  const engine = values.engine;
   if (!(ENGINES as readonly string[]).includes(engine)) {
     throw new Error(`--engine must be one of ${ENGINES.join("|")}, got "${engine}"`);
   }
@@ -68,7 +71,7 @@ export function parseCliArgs(argv: string[]): BenchConfig {
     throw new Error("--keep and --wipe are mutually exclusive");
   }
 
-  const suites = values.suite as string[];
+  const suites = values.suite;
   const unknown = suites.filter((s) => !(KNOWN_SUITES as readonly string[]).includes(s));
   if (unknown.length > 0) {
     // Validated up front, not inside the run loop: a typo in one of several
@@ -95,9 +98,9 @@ export function parseCliArgs(argv: string[]): BenchConfig {
     suites,
     engine: engine as Engine,
     keep: !values.wipe,
-    reportDir: values["report-dir"] as string,
+    reportDir: values["report-dir"],
     base,
-    runId: values["run-id"] as string | undefined,
+    runId: values["run-id"],
   };
 }
 
@@ -106,9 +109,37 @@ async function gitSha(): Promise<string> {
   return stdout.trim();
 }
 
-async function runSuite(key: string, config: BenchConfig): Promise<SuiteReport> {
+/**
+ * `sql` is REQUIRED here (never defaulted inside this function), mirroring
+ * `runPreflight(base, probes)`'s own "the DI param is mandatory, the CALLER
+ * decides real-vs-fake" idiom rather than `runTinySuite`'s OWN "optional,
+ * defaults to real" one for `transport` — `main()` below is the ONE
+ * production caller and it always constructs the real thing
+ * (`createRealPlanSql`), so a live `_tiny` run always drives B03 T7's
+ * plan-provisioning + DLS-gate probe; `lib/__tests__/bench-cli.test.ts`
+ * proves this specific forwarding line exists by injecting a fake `sql` (and
+ * a fake `transport`) and asserting `runTinySuite` actually receives them —
+ * removing either the `sql:` or the `transport:` forward below reds that
+ * test, independent of `lib/__tests__/tiny-suite-plan.test.ts`'s own
+ * coverage of what `runTinySuite` DOES once it has one.
+ */
+export async function runSuite(
+  key: string,
+  config: BenchConfig,
+  sql: PlanSql,
+  transport?: SeedTransport,
+  probeTransport?: ProbeTransport,
+): Promise<SuiteReport> {
   if (key === "_tiny") {
-    return runTinySuite({ base: config.base, engine: config.engine, keep: config.keep, log: suiteLogger("_tiny") });
+    return runTinySuite({
+      base: config.base,
+      engine: config.engine,
+      keep: config.keep,
+      log: suiteLogger("_tiny"),
+      sql,
+      ...(transport === undefined ? {} : { transport }),
+      ...(probeTransport === undefined ? {} : { probeTransport }),
+    });
   }
   throw new Error(`unknown suite "${key}" — only "_tiny" exists until B02+ lands real packs`);
 }
@@ -146,11 +177,21 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   }
   log.info({ placement: preflight.placement }, "preflight_passed");
 
+  // B03 T7: the plan/entitlement-provisioning SQL seam, constructed once
+  // per run and disposed after every suite is done with it — same
+  // construct/dispose shape as `createRealPreflightProbes` above. Always
+  // wired (never behind a flag): a real `_tiny` run always drives the
+  // DLS-gate probe and `officials.auto` derivation from here on.
+  const { sql: planSql, dispose: disposePlanSql } = createRealPlanSql();
   const suites: SuiteReport[] = [];
-  for (const key of config.suites) {
-    const result = await runSuite(key, config);
-    suites.push(result);
-    log.info({ suite: key, gate: result.gate }, "suite_completed");
+  try {
+    for (const key of config.suites) {
+      const result = await runSuite(key, config, planSql);
+      suites.push(result);
+      log.info({ suite: key, gate: result.gate }, "suite_completed");
+    }
+  } finally {
+    await disposePlanSql();
   }
 
   const preflightReport = { ok: true, refusals: [], placement: preflight.placement };

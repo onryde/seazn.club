@@ -184,8 +184,13 @@ export async function runPreflight(base: string, probes: PreflightProbes): Promi
 export interface RealProbesHandle {
   probes: PreflightProbes;
   /** Closes the DB connection this factory opened. Call once, after the
-   *  pre-flight (and any other DB-touching check) is done with it. */
-  dispose(): Promise<void>;
+   *  pre-flight (and any other DB-touching check) is done with it.
+   *
+   *  A property with a function type, NOT a method shorthand: callers
+   *  destructure it (`const { probes, dispose } = ...`), and a method
+   *  separated from its object loses `this` — which `unbound-method` flags and
+   *  which would be a real bug the day this stops being a closure. */
+  dispose: () => Promise<void>;
 }
 
 /**

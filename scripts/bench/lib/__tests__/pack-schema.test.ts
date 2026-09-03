@@ -1996,22 +1996,37 @@ describe("packs/_tiny.json", () => {
     ).toBe(true);
   });
 
-  it("is one division, two entrants, three streams, exactly one reconstructed", () => {
+  it("is two divisions, four entrants, four streams, exactly two reconstructed", () => {
+    // B03 T5 added `d-badminton` alongside `d-tiny` — the pack's first real
+    // exercise of the multi-division generalisation `tinyPlan`'s
+    // `divisions.length !== 1` refusal used to block (deleted in T4).
     const p = parsed(raw);
-    expect(p.divisions).toHaveLength(1);
-    expect(p.entrants).toHaveLength(2);
-    expect(p.streams).toHaveLength(3);
-    expect(p.streams.filter((s) => s.provenance === "reconstructed")).toHaveLength(1);
+    expect(p.divisions).toHaveLength(2);
+    expect(p.entrants).toHaveLength(4);
+    expect(p.streams).toHaveLength(4);
+    expect(p.streams.filter((s) => s.provenance === "reconstructed")).toHaveLength(2);
   });
 
-  it("its fixture ext_keys are the ones the real round-robin generator emits", () => {
+  it("its fixture ext_keys are the ones the real round-robin generator emits, per division", () => {
     // packages/engine/src/scheduling/roundrobin.ts:140 — `rr-r{round}-c{court}`,
-    // three rounds because the stage config asks for three legs
+    // three rounds because d-tiny's stage config asks for three legs
     // (usecases/stages.ts:755-758). If this drifts, B03 will seed fixtures the
-    // streams cannot bind to.
+    // streams cannot bind to. d-badminton declares one leg (2 entrants), hence
+    // ONE fixture — "rr-r1-c1" again, the SAME text as d-tiny's first fixture,
+    // because the generator's id is `rr-r{round}-c{court}` regardless of
+    // sport; it is legal here only because an ext_key is unique per DIVISION,
+    // never globally (pack-schema.ts's own `checkStreams` comment).
     const p = parsed(raw);
-    expect(p.streams.map((s) => s.fixtureExtKey)).toEqual(["rr-r1-c1", "rr-r2-c1", "rr-r3-c1"]);
-    expect(p.divisions[0]?.stages[0]?.config).toEqual({ legs: 3 });
+    const tinyDivision = p.divisions.find((d) => d.ref === "d-tiny");
+    const badmintonDivision = p.divisions.find((d) => d.ref === "d-badminton");
+    expect(
+      p.streams.filter((s) => s.divisionRef === "d-tiny").map((s) => s.fixtureExtKey),
+    ).toEqual(["rr-r1-c1", "rr-r2-c1", "rr-r3-c1"]);
+    expect(tinyDivision?.stages[0]?.config).toEqual({ legs: 3 });
+    expect(
+      p.streams.filter((s) => s.divisionRef === "d-badminton").map((s) => s.fixtureExtKey),
+    ).toEqual(["rr-r1-c1"]);
+    expect(badmintonDivision?.stages[0]?.config).toEqual({ legs: 1 });
   });
 });
 
