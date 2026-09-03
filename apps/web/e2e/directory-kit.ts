@@ -23,9 +23,28 @@ import { TAG, apiJson, loginUi, setEntitlementOverrideSql } from "./helpers";
 
 /** A per-run token. `TAG` is per-PROCESS (helpers.ts), and these specs share
  *  an org with every other spec in the leg, so the random tail is what makes
- *  two concurrent workers unable to collide on the same (org, name). */
+ *  two concurrent workers unable to collide on the same (org, name).
+ *
+ *  Eight base36 characters, not four. Four is 36^4 = 1.68M values, which
+ *  sounds ample and is not: 200 draws hit a birthday collision 1.235% of the
+ *  time (measured, 20k trials), so this function's own "200 calls, 200
+ *  distinct values" test reddened about one run in 81 — a spurious red on
+ *  somebody's unrelated PR. Eight is 2.8e12; the same 20k trials now collide
+ *  zero times, as does a flat 2M-draw sample. The four characters this costs
+ *  in a name buy the collision guarantee the paragraph above actually claims;
+ *  nothing asserts on a name's length, and `findContainer` matches exact
+ *  `inputValue()`, so length is irrelevant to it. Do not trim this back to
+ *  make a name prettier.
+ *
+ *  "Eight" is the ceiling, not a guarantee: `Math.random().toString(36)`
+ *  returns a SHORT expansion for an exact binary fraction (0.5 -> "0.i", so
+ *  the tail is one character), and 23 of 5,000,000 measured tails came back
+ *  under eight, the shortest being six. That is a 4.6e-6 event leaving a
+ *  still-ample 2.2e9 space, so it is a footnote rather than a flaw — but the
+ *  slice length is an upper bound, and anything that ever needs a
+ *  FIXED-WIDTH id must pad rather than assume this returns eight. */
 export function stamp(): string {
-  return `${TAG}-${Math.random().toString(36).slice(2, 6)}`;
+  return `${TAG}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 /** `stamp()` behind a human-readable label. Delegates rather than repeating
