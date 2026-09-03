@@ -10,6 +10,7 @@
 // this repo's apps/web vitest environment:"node" (no jsdom); scorebug.tsx
 // itself stays untested by a DOM harness per the original task-5-brief.
 import { describe, it, expect } from "vitest";
+import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { propsOf, renderIsland, walk } from "@/components/__tests__/_hook-harness";
 import { whoNames, Scorebug } from "../scorebug";
@@ -290,7 +291,18 @@ function enclosingClasses(html: string, needle: string): string[] {
 }
 
 describe("the scorebug who-line with a long unbroken name (R3/F)", () => {
-  const html = () => renderToStaticMarkup(Scorebug({ spec: specWithWho(LONG_NAME), t }) as never);
+  // `createElement(Scorebug, ...)`, not `Scorebug({...})` called bare: the
+  // meta-strip a11y fix (CI run 33747095481) gave `Scorebug` its first hook
+  // (`useIsPhone`, a `useSyncExternalStore` subscription), and a hook called
+  // outside an active React render throws — "Cannot read properties of null
+  // (reading 'useSyncExternalStore')" / "resolveDispatcher(...).
+  // useSyncExternalStore is not a function", exactly what this file's bare
+  // calls produced in CI (this suite has no jsdom, but `renderToStaticMarkup`
+  // still needs to be the one DOING the render — `createElement` builds the
+  // element, `renderToStaticMarkup` renders it and provides the dispatcher
+  // hooks read from; a bare function call has neither). Every other call site
+  // below carries the same fix, for the same reason.
+  const html = () => renderToStaticMarkup(createElement(Scorebug, { spec: specWithWho(LONG_NAME), t }));
 
   it("lets each HALF shrink below its content — a grid item's default min-width is the widest word", () => {
     // Selected by `py-3 text-center`, which only the two half cells carry —
@@ -371,7 +383,7 @@ function renderHalfToString(half: Partial<ScorebugHalf> & Pick<ScorebugHalf, "wh
     halves: [{ ...half }, { who: [{ name: "Other" }], big: "0" }],
     strip: [],
   };
-  return renderToStaticMarkup(Scorebug({ spec, t }) as never);
+  return renderToStaticMarkup(createElement(Scorebug, { spec, t }));
 }
 
 describe("ScorebugHalf.sub — the decider's second figure (R3.5/D)", () => {
@@ -422,7 +434,7 @@ function renderStripToString(strip: StripItem[]): string {
     ],
     strip,
   };
-  return renderToStaticMarkup(Scorebug({ spec, t }) as never);
+  return renderToStaticMarkup(createElement(Scorebug, { spec, t }));
 }
 
 /** The full, BALANCED `<span>` subtree of the element carrying `marker` —
