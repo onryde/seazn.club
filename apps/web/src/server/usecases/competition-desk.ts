@@ -53,7 +53,12 @@ export interface DeskDivision {
 }
 
 export interface CompetitionDesk {
-  org_tz: string;
+  // `org_tz` used to sit here. Deleted in fix round F (minor 1): it had ZERO
+  // production consumers, and a dormant SECOND zone authority on the very type
+  // whose two-zone bug H1 had just removed is an invitation to re-derive that
+  // bug. Every division already carries `display_tz` — the one zone its row is
+  // both bucketed and printed in — and that is the only zone this type owes
+  // anyone. Same argument round E used to delete `court_label`.
   in_play: number;
   divisions: Map<string, DeskDivision>;
   /** Same instant every division's phase was resolved against (SSR-stable).
@@ -315,7 +320,7 @@ export async function getCompetitionDesk(
     },
     "competition_desk_built",
   );
-  return { org_tz: orgTz, in_play: inPlayTotal, divisions: out, now: nowIso };
+  return { in_play: inPlayTotal, divisions: out, now: nowIso };
 }
 
 /** The competition-level pill's phase: either a ranked/counted state, or a
@@ -386,8 +391,13 @@ export function competitionPhase(desk: CompetitionDesk): CompetitionPillPhase {
   // is Mon 7 Sep in the org zone and Sun 6 Sep at the venue. Formatting this in
   // `org_tz` put "Next Mon 7 Sep" directly above a row reading "Next Sun 6 Sep
   // 19:00" — the same fixture, two days, one screen. A printed instant is
-  // formatted entirely in the DISPLAY zone of whoever owns it; the org zone
-  // governs day-bucketing, never a label.
+  // formatted entirely in the DISPLAY zone of whoever owns it. (This comment
+  // used to end "the org zone governs day-bucketing, never a label" — a ruling
+  // RETIRED by H1 and corrected here in fix round F, minor 2. The rule now is
+  // ONE zone per fixture: a fixture's day is its VENUE's day, the display
+  // zone, for BOTH bucketing and printing. The org zone is the FALLBACK
+  // `resolveVenueTz` reaches for when a division has no venue zone of its own
+  // — never a second authority.)
   const dated = divisions
     .map((d) => {
       const at = nextFutureAt(d.next, desk.now);

@@ -147,7 +147,29 @@ export function resolvePhase(input: PhaseInput): DivisionPhase {
   const openStageOwesWork = !!open && (!open.hasFixtures || open.needsProposal);
   const TERMINAL = new Set(["decided", "finalized", "abandoned", "forfeited", "cancelled"]);
   const allPlayed = fixtures.length > 0 && fixtures.every((f) => TERMINAL.has(f.status));
-  if (!openStageOwesWork && (everyStageComplete || (noOpenStage && noLiveFixture) || (allPlayed && noLiveFixture))) {
+  // J2 fix (fix round F, Critical): `noLiveFixture` was factored out of only
+  // TWO of the three disjuncts, so `everyStageComplete` on its own declared a
+  // division finished no matter what its fixtures were still doing — a fact
+  // about STAGES answering a question about FIXTURES, the same vacuous shape
+  // rules 1 and 1b guard one level up. Reachable, and driven end to end
+  // through the real API (fix-round-f-report.md): a knockout with a
+  // third-place playoff completes on its FINAL alone (isBracketStageComplete,
+  // packages/engine/src/competition/stage.ts:134, requires only the `isFinal`
+  // fixtures), so `POST /stages/{id}/complete` marks the stage complete and
+  // the division `completed` while the playoff is still `scheduled` and dated.
+  // The desk then read "3 of 4 played · complete · Finished" directly beside a
+  // red "result missing … Enter result" for that very fixture — the wave's
+  // signature defect, a row contradicting itself, for the eighth time.
+  //
+  // The pill was the wrong half, not the attention: scoring stays OPEN on a
+  // `completed` division (scoring.ts gates `setup`/`scheduled` only), so
+  // "Enter result" is a live door, and entering the result takes the row to
+  // "4 of 4 played · complete · Finished" with no attention at all. So a
+  // division is never finished while a fixture is still LIVE — `scheduled` or
+  // `in_play`. Terminal-but-unplayed fixtures (cancelled/abandoned/forfeited/
+  // void) are NOT live and still read finished, which is the direction the
+  // "remaining fixtures are terminal, not live" test pins.
+  if (!openStageOwesWork && noLiveFixture && (everyStageComplete || noOpenStage || allPlayed)) {
     return "finished";
   }
   // 3. match_day

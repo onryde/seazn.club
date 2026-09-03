@@ -16,11 +16,16 @@ was wrong).
   fixed severity, and a red attention **outranks the phase** on a pill. A row
   may be `finished` with no attention, or `scheduled` with a red one; the two
   never contradict each other and must never be collapsed into one enum.
-- **The governing clock is the ORG zone** — `resolveVenueTz(null,
-  organizations.timezone)`. `schedule_settings.tz` is the DISPLAY zone and
-  formats HH:mm only. Every date-key computation (what counts as "today") uses
-  the org zone. Getting this backwards moves a fixture between days for
-  everyone in a different timezone from the venue.
+- **The governing clock is the VENUE zone** — `resolveVenueTz(divisionTz,
+  organizations.timezone)`, i.e. the division's own `schedule_settings.tz`
+  when it has one and the ORG's timezone only as a fallback. Every date-key
+  computation (what counts as "today") uses it, and so does every printed
+  label: see "One zone per fixture" below, which is the same ruling stated
+  once more. This bullet used to read "the governing clock is the ORG zone …
+  every date-key computation uses the org zone" — RETIRED by H1 (round E) and
+  corrected here in fix round F, minor 2. It is left in place, corrected
+  rather than deleted, because it is what the next session would otherwise
+  re-derive: the org zone as a SECOND authority is the bug, three times over.
 - **A phase rule set whose tests are all "does the set contain X" needs an
   explicit empty case, stated FIRST.** The empty set answers no to every
   question and lands on whatever the default is. This wave shipped THREE

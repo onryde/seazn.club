@@ -22,13 +22,13 @@ const div = (o: Partial<TestDivision> = {}): TestDivision => ({
 });
 const desk = (d: TestDivision, inPlay = 0, now = "2026-09-05T09:00:00Z"): CompetitionDesk => {
   const { division_id, ...rest } = d;
-  return { org_tz: "Europe/London", in_play: inPlay, divisions: new Map([[division_id, rest]]), now };
+  return { in_play: inPlay, divisions: new Map([[division_id, rest]]), now };
 };
 /** competitionPhase's own ladder needs more than one division to prove the
  *  "earliest across divisions" and "match_day beats a dated fixture
  *  elsewhere" steps — `desk()` above only ever seeds one. */
 const deskOf = (divisions: TestDivision[], inPlay = 0, now = "2026-09-05T09:00:00Z"): CompetitionDesk => ({
-  org_tz: "Europe/London", in_play: inPlay,
+  in_play: inPlay,
   divisions: new Map(divisions.map(({ division_id, ...rest }) => [division_id, rest])), now,
 });
 const names = [{ id: "d1", name: "Premier Division", slug: "premier-division" }];

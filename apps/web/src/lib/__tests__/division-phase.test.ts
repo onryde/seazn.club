@@ -44,6 +44,74 @@ describe("resolvePhase — rule order", () => {
   it("1 finished: every stage complete", () => {
     expect(resolvePhase(input({ stages: [stage({ status: "complete" })], fixtures: [fx({ status: "decided" })] }))).toBe("finished");
   });
+  // J2 (fix round F, Critical — the eighth instance of this wave's signature
+  // defect, a row contradicting itself). Rule 2 had THREE disjuncts and only
+  // two of them checked `noLiveFixture`: `everyStageComplete` alone declared a
+  // division finished no matter what its fixtures were still doing. That is
+  // the same vacuous shape amendment 2/3 keep catching one level down — a
+  // fact about STAGES answering a question about FIXTURES.
+  //
+  // Reachable in production, and driven end to end through the real API
+  // before this fix (fix-round-f-report.md): a knockout carrying a
+  // third-place playoff (`config.thirdPlace`, stages.ts:772) completes on its
+  // FINAL alone — `isBracketStageComplete` (packages/engine, stage.ts:134)
+  // only requires the `isFinal` fixtures — so `POST /stages/{id}/complete`
+  // returns 200 with `division_completed: true` while the playoff is still
+  // `scheduled` and dated. The desk then rendered "Cup · 3 of 4 played ·
+  // complete · Finished" directly beside a red "result missing for Seed4 v
+  // Seed2 · The match window has passed with no result · Enter result".
+  //
+  // Which half was the lie was settled by driving it, not by argument: the
+  // "Enter result" prompt is live on a `completed` division (scoring.ts gates
+  // only `setup`/`scheduled`), the POST returns 201, and the row then reads
+  // "4 of 4 played · complete · Finished" with no Needs-you at all. The
+  // attention was right; the pill was wrong.
+  it("2 NOT finished: every stage complete but a dated fixture is still unplayed (J2)", () => {
+    const stages = [stage({ status: "complete" })];
+    const fixtures = [
+      fx({ id: "final", status: "decided" }),
+      // The third-place playoff: still `scheduled`, and its window has passed.
+      fx({ id: "3p", status: "scheduled", scheduledAt: "2026-09-04T09:00:00Z" }),
+    ];
+    expect(resolvePhase(input({ divisionStatus: "completed", stages, fixtures }))).not.toBe("finished");
+    // Pin the RUNG, not just "not finished": with the playoff on a past date
+    // rule 3 (match_day) does not match either, so this is rule 5 — and rule
+    // 5 is the answer only because rules 3 and 4 were asked first and said no.
+    expect(resolvePhase(input({ divisionStatus: "completed", stages, fixtures }))).toBe("scheduled");
+    // …and the row states the outstanding work rather than swallowing it.
+    expect(resolveAttention(input({ divisionStatus: "completed", stages, fixtures })).map((a) => a.kind))
+      .toContain("result_missing");
+  });
+  it("2 NOT finished: every stage complete but a fixture is dated TODAY — match_day wins (J2, order)", () => {
+    // Same shape one rung higher: the unplayed playoff is dated today, so the
+    // ladder must reach rule 3. A test that only asserted `!== "finished"`
+    // could not tell rule 3 from rule 5, and the two disagree here.
+    const stages = [stage({ status: "complete" })];
+    const fixtures = [
+      fx({ id: "final", status: "decided" }),
+      fx({ id: "3p", status: "scheduled", scheduledAt: "2026-09-05T18:00:00Z" }),
+    ];
+    expect(resolvePhase(input({ divisionStatus: "completed", stages, fixtures }))).toBe("match_day");
+  });
+  it("2 NOT finished: every stage complete but a fixture is IN PLAY", () => {
+    // The worse version of the same row: "Finished" beside "1 in play".
+    const stages = [stage({ status: "complete" })];
+    const fixtures = [fx({ id: "a", status: "decided" }), fx({ id: "b", status: "in_play" })];
+    expect(resolvePhase(input({ divisionStatus: "completed", stages, fixtures }))).toBe("match_day");
+  });
+  it("2 finished: every stage complete and the remaining fixtures are terminal, not live", () => {
+    // The other direction of J2's guard — a fixture that will never be played
+    // is TERMINAL (cancelled/abandoned/forfeited/void), not `scheduled`, and
+    // must still read finished. Without this, the fix could have been written
+    // as "any non-decided fixture blocks finished" and nothing would say so.
+    const stages = [stage({ status: "complete" })];
+    const fixtures = [
+      fx({ id: "a", status: "decided" }),
+      fx({ id: "b", status: "cancelled", scheduledAt: "2026-09-04T09:00:00Z" }),
+      fx({ id: "c", status: "abandoned" }),
+    ];
+    expect(resolvePhase(input({ divisionStatus: "completed", stages, fixtures }))).toBe("finished");
+  });
   // 1b (final review, "the open question" — a 4th vacuous "Finished"): with
   // ONLY `stages: []` and no divisionStatus === "setup" guard to save it,
   // rule 2's "no pending/active stage AND no live fixture" is vacuously true
@@ -65,10 +133,21 @@ describe("resolvePhase — rule order", () => {
       resolvePhase(input({ divisionStatus: "active", stages: [], fixtures: [fx({ status: "decided" })] })),
     ).toBe("setting_up");
   });
-  it("1 finished: every stage complete wins even with a fixture still scheduled", () => {
-    // isolates the everyStageComplete arm: noLiveFixture is false here
+  // REVERSED by J2 (fix round F, Critical). This test used to assert
+  // `"finished"` for exactly this input, under the comment "isolates the
+  // everyStageComplete arm: noLiveFixture is false here" — a structural
+  // isolation of a disjunct, with no defect, ruling or live observation
+  // behind it, which is how it came to freeze a live bug as its expected
+  // value. Driven through the real API, this input is a knockout whose
+  // third-place playoff is still unplayed, and the desk rendered "3 of 4
+  // played · complete · Finished" beside a red "result missing … Enter
+  // result" for that fixture. The arm still needs isolating, so the test
+  // stays — with the expectation the product actually owes.
+  it("2 everyStageComplete does NOT win over a live fixture: it is gated by noLiveFixture too (J2)", () => {
     const stages = [stage({ status: "complete" })];
-    expect(resolvePhase(input({ stages, fixtures: [fx({ scheduledAt: "2026-09-05T18:00:00Z" })] }))).toBe("finished");
+    // 18:00 on NOW's own day, so this lands on rule 3 and not merely "not
+    // finished" — the rung is part of the claim.
+    expect(resolvePhase(input({ stages, fixtures: [fx({ scheduledAt: "2026-09-05T18:00:00Z" })] }))).toBe("match_day");
   });
   it("2 finished: all fixtures played even though the stage is still active (V1 fix)", () => {
     // The organiser never clicked "Complete stage" on the League — with every
@@ -102,26 +181,27 @@ describe("resolvePhase — rule order", () => {
     expect(resolvePhase(input({ fixtures: [fx({ scheduledAt: "2026-09-04T23:30:00Z" })] }))).toBe("match_day");
     expect(resolvePhase(input({ tz: "UTC", fixtures: [fx({ scheduledAt: "2026-09-04T23:30:00Z" })] }))).toBe("scheduled");
   });
-  // H1 fix (final review round 3, Critical — corrected ruling): `resolvePhase`
-  // itself has no opinion about org vs venue — it just buckets by whatever
-  // `tz` it is given. The bug was the CALLER (competition-desk.ts) passing
-  // the bare org zone instead of `resolveVenueTz(divisionTz, orgTz)`; this
-  // pins WHY that choice matters, with a same-instant-different-days case a
-  // single-zone test cannot witness (a same-zone case is vacuously
-  // consistent — see the class-of-bug note in AGENTS.md). NOW and the
-  // fixture's `scheduledAt` are two DIFFERENT instants (2026-09-02T20:00Z
-  // and 2026-09-02T23:30Z) chosen so the venue zone (Kolkata, UTC+5:30)
-  // reads both as the SAME calendar day (Sep 3) while the org zone (London,
-  // BST, UTC+1) reads them as DIFFERENT days (Sep 2 vs Sep 3) — live,
-  // exactly this shape hid match day for a division whose venue was ahead
-  // of its org.
-  it("3 match_day: one zone per fixture — the SAME instant reads match_day in the venue zone and NOT in the org zone", () => {
-    const now = "2026-09-02T20:00:00Z";
-    const scheduledAt = "2026-09-02T23:30:00Z";
-    const fixtures = [fx({ scheduledAt })];
-    expect(resolvePhase(input({ now, tz: "Asia/Kolkata", fixtures }))).toBe("match_day");
-    expect(resolvePhase(input({ now, tz: "Europe/London", fixtures }))).toBe("scheduled");
-  });
+  // H1 (final review round 3, Critical) has NO unit test here, deliberately —
+  // fix round F, minor 4. There used to be one, titled "one zone per fixture —
+  // the SAME instant reads match_day in the venue zone and NOT in the org
+  // zone". It was a tautology dressed as the rule: `resolvePhase` has no
+  // opinion about org vs venue, it buckets by whatever `tz` it is handed, so
+  // the test could only ever restate its own argument. It survived the
+  // reviewer's M1 mutant (`tz: displayTz` -> `orgTz` in competition-desk.ts),
+  // which is the actual H1 bug, and the case it did pin — two zones disagreeing
+  // about one instant — is already pinned one test up ("00:30 local today
+  // counts as today, 23:30 UTC yesterday does not in UTC"), which kills the
+  // same "ignores its tz argument" mutant.
+  //
+  // The rule H1 states is a CALLER's rule: pass `resolveVenueTz(divisionTz,
+  // orgTz)`, never the bare org zone. No test of a pure resolver can witness
+  // which variable its caller passed. The two that do:
+  //   - competition-desk.test.ts:501 "H1: match_day is bucketed in the
+  //     division's own venue zone, not the org's" — a DB test seeding a
+  //     Kolkata division inside a London org; kills M1.
+  //   - competition-desk.spec.ts "match day is decided by the venue's calendar
+  //     day, not the org's" — the same shape driven through the browser.
+  // A green test that pins nothing is worse than an absence with a signpost.
   it("4 setting_up: lowest non-complete stage has no fixtures", () => {
     expect(resolvePhase(input({ stages: [stage({ hasFixtures: false })], fixtures: [] }))).toBe("setting_up");
   });

@@ -12,12 +12,16 @@ export interface StatusLineInput {
   next: { scheduledAt: string | null; home: string | null; away: string | null } | null;
   needsDrawStageName: string | null;
   locale: Locale;
-  /** Display zone (schedule_settings.tz resolved) — the ONLY zone a rendered
-   *  instant is formatted in (G2 fix, fix round D, corrected ruling: see
-   *  `whenLabel` below). `orgTz` governs day-BUCKETING elsewhere
-   *  (division-phase.ts's `localDateKey`) but never a printed label, so
-   *  there is deliberately no `orgTz` field here any more — see G2's report
-   *  for why that used to be two zones. */
+  /** Display zone (`schedule_settings.tz` resolved through `resolveVenueTz`)
+   *  — the venue's zone, and the ONE zone this row uses for everything (G2
+   *  fix, fix round D; corrected again by H1, round E).
+   *
+   *  There is deliberately no `orgTz` field here. Two zones in one row IS the
+   *  bug, wherever the seam is drawn: a fixture's day is its VENUE's day, for
+   *  BOTH day-bucketing (division-phase.ts's `localDateKey`, which callers
+   *  feed this same resolved zone) and printing (`whenLabel` below). The org
+   *  zone is only what `resolveVenueTz` falls back to when a division has no
+   *  venue zone at all — never a second authority. */
   displayTz: string;
   /** G1 fix (fix round D, Critical): this field did not exist at all before
    *  — the `scheduled` arm below had no way to ask "is this kick-off still
@@ -47,9 +51,17 @@ export interface StatusLineInput {
  * one hour of offset near midnight is enough to flip the day in one zone
  * without flipping it in the other. A rendered instant names ONE reality;
  * splitting it across two zones can name a reality that never happened in
- * either. The org zone still governs day-BUCKETING (division-phase.ts's
- * `localDateKey` — "what counts as today, which day group a fixture falls
- * in") — never half of a printed label.
+ * either.
+ *
+ * H1 (round E) then corrected the OTHER half of that sentence. This comment
+ * used to end "the org zone still governs day-BUCKETING (division-phase.ts's
+ * `localDateKey`) — never half of a printed label", and that ruling is
+ * RETIRED (fix round F, minor 2): bucketing reads the VENUE zone too. One
+ * zone per fixture, for the day group and the printed label alike; the org
+ * zone is `resolveVenueTz`'s fallback for a division with no venue zone,
+ * never a second authority. Splitting a row across two zones was the bug
+ * twice over — first date-from-org/clock-from-display, then
+ * bucket-in-org/print-in-display.
  */
 export function whenLabel(iso: string, locale: string, tz: string): string {
   const at = new Date(iso);

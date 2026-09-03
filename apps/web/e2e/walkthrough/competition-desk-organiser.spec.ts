@@ -2,7 +2,9 @@ import { expect, test } from "@playwright/test";
 import {
   activeOrg, apiJson, TAG, createCompetitionViaUi, createDivisionViaUi, addEntrantsViaApi,
   scoreFixture, setFixtureStatusSql, setStageStatusSql, screenshotAtWidths, expectNoHorizontalScroll,
+  orgTimezoneSql,
 } from "../helpers";
+import { zoneDateKey } from "../zone-split";
 
 test.describe.configure({ mode: "serial" });
 
@@ -112,7 +114,26 @@ test("an organiser watches the desk go Setting up → Scheduled → Match day �
   await shot("03c-past-kickoff-no-result");
 
   // 4. Reach: kick-off today (API PATCH). Read: Match day.
-  const today = new Date(); today.setUTCHours(18, 0, 0, 0);
+  //
+  // J1 class (fix round F): this used to be `new Date()` with
+  // `setUTCHours(18, 0, 0, 0)` — "today at 18:00 UTC". `match_day` is bucketed
+  // in the division's OWN zone (H1: the venue zone, which with no
+  // schedule_settings.tz falls back to the org's), and 18:00Z is only "today"
+  // there while that zone's offset keeps it on the same date. The shared Pro
+  // org's `timezone` is null (= UTC) most of the time, which is why this
+  // passed — but it is the very column `competition-desk.spec.ts`'s zone tests
+  // and `org-management.spec.ts` both write, and a leak leaves it on
+  // Europe/London, at which point this step is dead from 23:00Z to midnight
+  // (and from 18:30Z on an Asia/Kolkata org). A fixture whose construction
+  // depends on the wall clock is a scheduled outage, so it is derived from
+  // `now` in the org's real zone instead: an hour ahead when that is still the
+  // same local day, and `now` itself otherwise — which is today in every zone
+  // by definition. Total, with no window.
+  const bucketTz = (await orgTimezoneSql(org.id)) ?? "UTC";
+  const anHourOut = new Date(Date.now() + 3600_000);
+  const today = zoneDateKey(anHourOut, bucketTz) === zoneDateKey(new Date(), bucketTz)
+    ? anHourOut
+    : new Date();
   await apiJson(request, `/api/v1/fixtures/${ids[0]}`, "PATCH", { scheduled_at: today.toISOString() });
   await page.goto(compPath);
   await expect(row).toHaveAttribute("data-phase", "match_day");
