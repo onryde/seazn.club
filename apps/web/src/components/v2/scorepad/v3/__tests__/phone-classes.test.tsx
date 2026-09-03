@@ -70,18 +70,34 @@ describe("scorebug phone classes", () => {
   });
   // CI e2e run 33735186301, `parallel 2/2`: the rail above tripped axe's
   // `scrollable-region-focusable` at SERIOUS impact in
-  // `scorepad-skins.spec.ts`'s `expectPadA11yClean`, on the tennis skin. A
-  // scrolling region has to be keyboard-reachable, and every child of this one
-  // is static text so the rule's "has focusable content" escape does not apply.
-  // Asserted on the SAME element as the rail test above (matched by its own
-  // `max-md:overflow-x-auto`), not on any div — a tabindex that lands on the
-  // wrapper instead would satisfy a loose probe and leave axe still red.
-  it("the rail is keyboard-reachable and names itself (axe scrollable-region-focusable)", () => {
+  // `scorepad-skins.spec.ts`'s `expectPadA11yClean` (a file that forces a
+  // 375px viewport for every test — S11/#420's own header — so the rail is
+  // genuinely scrolling there, not a false positive from a desktop project
+  // label). The fix is `useIsPhone()` (this file, above the component): a
+  // media-query-backed `useState`, because `tabIndex` is an HTML ATTRIBUTE a
+  // stylesheet cannot condition, and making it unconditional instead broke
+  // this repo's OWN 44px hit-target floor at desktop (`scorepad-a11y-kit.ts`'s
+  // `INTERACTIVE_SELECTOR` counts any `[tabindex]:not([tabindex="-1"])` as
+  // operable, and the row is not 44px tall at 1280 either).
+  //
+  // `renderToStaticMarkup` runs NO effects, so this suite (`environment:
+  // "node"`, no DOM at all) can only ever observe `useIsPhone()`'s initial,
+  // pre-effect value — `false` — never the post-mount, real-viewport one.
+  // That is not a gap this file can close; asserting `tabindex="0"` here
+  // would just be asserting dead code, the AGENTS.md "tests that lie in
+  // their names" class. What THIS render CAN prove, and must, is that the
+  // SERVER markup carries no a11y attributes at all — if it did, hydration
+  // would immediately have two conflicting trees for this node. The rail
+  // actually becoming a keyboard-reachable, named tab stop on a phone is
+  // proven in a real browser instead: `scorepad-skins.spec.ts`'s
+  // `expectPadA11yClean` (axe, forced 375px) and `mobile.spec.ts`'s
+  // `expectScorebugNotClipped`, which asserts every scrolling box inside the
+  // scorebug carries the `tabindex="0"` axe demanded, at all seven widths.
+  it("the rail carries no a11y attributes on the server render (no hydration mismatch)", () => {
     const rail = html.match(/<div class="[^"]*\bmax-md:overflow-x-auto\b[^"]*"[^>]*>/);
     expect(rail, "no overflow-x-auto rail found").not.toBeNull();
-    expect(rail![0], "rail is not a tab stop — axe scrollable-region-focusable").toMatch(/\stabindex="0"/);
-    expect(rail![0], "a bare focusable div announces as nothing").toMatch(/\srole="group"/);
-    expect(rail![0], "the tab stop has no accessible name").toMatch(/\saria-label="pad\.scorebug\.strip\.label"/);
+    expect(rail![0], "server render must not pre-empt useIsPhone()'s post-mount value").not.toMatch(/\stabindex=/);
+    expect(rail![0], "server render must not pre-empt useIsPhone()'s post-mount value").not.toMatch(/\srole=/);
   });
   it("the plain strip item refuses to shrink and stays single-line", () => {
     const item = html.match(/<span[^>]*data-strip-item-id="games"[^>]*>/);
@@ -317,7 +333,6 @@ describe("fixture console phone classes — the empty scoring section hides itse
     roles: [],
     lineupSize: 11,
     benchMax: 5,
-    fidelityTiers: football.fidelityTiers as SportInfo["fidelityTiers"],
   };
   const side = (id: string, name: string): SideInfo => ({ id, name, members: [], lineup: [] });
 
@@ -345,7 +360,6 @@ describe("fixture console phone classes — the empty scoring section hides itse
           resolvedConfig: CFG,
           initialEvents: [],
           entitlements: {},
-          band: 3,
           identity: { recordedBy: "user-1", deviceLinkId: null },
         }}
       />,

@@ -68,7 +68,6 @@ function consoleHtml(sportKey: string): string {
         roles: catalog.roles ?? [],
         lineupSize: catalog.lineup.size,
         benchMax: catalog.lineup.benchMax ?? 0,
-        fidelityTiers: [],
       }}
       home={side("e1", "Home")}
       away={side("e2", "Away")}

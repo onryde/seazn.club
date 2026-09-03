@@ -29,10 +29,52 @@
 // Token pairs + the WCAG contrast math backing this file's color choices
 // live in ./tokens.ts / __tests__/contrast.test.ts — read that file's
 // header before changing any color class here.
+import { useSyncExternalStore } from "react";
 import type { ScorebugHalf, ScorebugSpec, TapEvent, WhoLine } from "./types";
 import { padLabel } from "@/lib/scoring-vocab";
 import type { MsgFn } from "./ribbon";
 import { NIGHT_TILE_CLASSES, SCORE_TEXT_SIZE_CLASS } from "./tokens";
+
+/** The SAME condition Tailwind's `max-md:` variant compiles to (`@media not
+ *  all and (min-width: 48rem)` — verified against this repo's own build
+ *  output, `.next/static/chunks/*.css`), so this stays in sync with the class
+ *  the meta strip's `overflow-x` itself is gated on below. */
+const PHONE_QUERY = "not all and (min-width: 48rem)";
+
+/** Why this exists at all: `useIsPhone` below decides whether the strip
+ *  should be `tabIndex`-focusable, and `tabIndex` is an HTML ATTRIBUTE — it
+ *  cannot be conditioned by a CSS media query the way a class can. Making it
+ *  a plain `true` at every width (this file's first attempt) satisfied axe's
+ *  `scrollable-region-focusable` but then failed the repo's OWN 44px
+ *  hit-target floor at DESKTOP too — `scorepad-a11y-kit.ts`'s
+ *  `INTERACTIVE_SELECTOR` counts any `[tabindex]:not([tabindex="-1"])` as an
+ *  "operable" target, and this row is not 44px tall at 1280 either. A strip
+ *  that only SCROLLS below `md` should only need a keyboard tab stop below
+ *  `md`; at `md` and up `flex-wrap` shows every item with nothing to scroll,
+ *  so there is nothing there to make reachable.
+ *
+ *  `useSyncExternalStore`, not `useState`+`useEffect` — this file's first cut
+ *  called `setIsPhone` from inside the effect body to pick up the current
+ *  match on mount, which is exactly the "cascading render" shape
+ *  `react-hooks/set-state-in-effect` warns against. `matchMedia` IS an
+ *  external store in React's own sense of the term (the browser owns the
+ *  value, components only read it), which is what this hook is for: no
+ *  extra render, and the tearing-safe read. `getServerSnapshot` returns
+ *  `false` — matches the server render, so hydration never mismatches. */
+function subscribeToPhoneQuery(onChange: () => void): () => void {
+  const mql = window.matchMedia(PHONE_QUERY);
+  mql.addEventListener("change", onChange);
+  return () => mql.removeEventListener("change", onChange);
+}
+function readPhoneQuery(): boolean {
+  return window.matchMedia(PHONE_QUERY).matches;
+}
+function readPhoneQueryOnServer(): boolean {
+  return false;
+}
+function useIsPhone(): boolean {
+  return useSyncExternalStore(subscribeToPhoneQuery, readPhoneQuery, readPhoneQueryOnServer);
+}
 
 export interface ScorebugProps {
   spec: ScorebugSpec;
@@ -254,6 +296,7 @@ const STRIP_SIZER_CLASS =
  * unfocusable <div>), the context line, and the stat strip.
  */
 export function Scorebug({ spec, t, onTap, onOpenSheet }: ScorebugProps) {
+  const isPhone = useIsPhone();
   return (
     <div
       className={`overflow-hidden rounded-2xl border-t-2 ${NIGHT_TILE_CLASSES.ledEdge} ${NIGHT_TILE_CLASSES.tileBg} shadow-lg`}
@@ -347,21 +390,26 @@ export function Scorebug({ spec, t, onTap, onOpenSheet }: ScorebugProps) {
               resulting tab stop mean something instead of announcing as a bare
               empty group.
 
-              Unconditional, not `max-md`-scoped: there is no way to vary
-              `tabindex` by media query, and the alternatives (measuring
-              `scrollWidth`, a width listener) would hydrate differently on the
-              server and the client. One extra tab stop on the status band at
-              every width, which now also announces itself to a screen reader —
-              a net gain at desktop, not a regression.
+              GATED ON `useIsPhone()`, not unconditional — a first attempt made
+              it unconditional (reasoning "tabindex can't vary by media query")
+              and that broke the repo's OWN 44px hit-target floor at DESKTOP:
+              `scorepad-a11y-kit.ts`'s `INTERACTIVE_SELECTOR` counts any
+              `[tabindex]:not([tabindex="-1"])` as an operable target needing
+              44px, and this row is not 44px tall at 1280 either — the fix
+              cannot make every width's floor scan fail to fix one width's axe
+              scan. `useIsPhone()` is JS state (mirrors `max-md:`'s own media
+              query exactly, verified against the compiled CSS), not a class,
+              so it CAN gate an attribute a stylesheet cannot reach — the
+              premise above was simply wrong. At `md` and up `flex-wrap` shows
+              every item with nothing to scroll, so there is nothing there to
+              make keyboard-reachable in the first place.
 
               `className` stays the FIRST prop: `phone-classes.test.tsx` anchors
               on `<div class="…` immediately after `<div class="relative">`, and
               React emits attributes in JSX order. */}
           <div
             className={`flex flex-wrap items-center justify-center gap-x-4 gap-y-1 ${NIGHT_TILE_CLASSES.bandBg} px-3 py-1.5 max-md:flex-nowrap max-md:justify-start max-md:gap-x-3 max-md:overflow-x-auto max-md:[scrollbar-width:none]`}
-            role="group"
-            tabIndex={0}
-            aria-label={t("pad.scorebug.strip.label")}
+            {...(isPhone ? { role: "group", tabIndex: 0, "aria-label": t("pad.scorebug.strip.label") } : {})}
           >
           {spec.strip.map((item, i) => {
             // R3/B4 (owner ruling R3-6, the per-sport signature): a strip item

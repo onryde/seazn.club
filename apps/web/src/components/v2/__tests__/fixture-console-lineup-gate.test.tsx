@@ -246,7 +246,6 @@ describe("a fixture with no lineup to pick still shows the roster's availability
           roles: catalog.roles ?? [],
           lineupSize: catalog.lineup.size,
           benchMax: catalog.lineup.benchMax ?? 0,
-          fidelityTiers: [],
         }}
         home={emptySide("e1", "Home")}
         away={emptySide("e2", "Away")}
