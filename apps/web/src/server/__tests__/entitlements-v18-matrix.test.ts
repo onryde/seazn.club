@@ -154,32 +154,6 @@ function parseMatrixSection(doc: string): MatrixRow[] {
 
 const PARSED = parseMatrixSection(designDocText());
 
-/**
- * ONE known, narrow gap between §2's printed table and the live
- * implementation, found while building this pin test — predates V391 (not
- * introduced by this migration) and is deliberately NOT "fixed" here.
- *
- * `standings.carry_over` prints T on both pass columns, but its own "why"
- * cell reads "keep (multi-phase leagues are Pro-sized)" — which argues the
- * opposite — and no plan_entitlements row for event_pass/event_pass_l has
- * ever existed for this key (verified: absent both before and after
- * V391). Since community's own value is F (§2 marks it unchanged, and
- * V391's audited delta list — cross-checked cell-by-cell against the live
- * DB before writing the migration — does not touch it), a Free org holding
- * either pass rung has never actually had carry-over, contradicting the
- * printed T. This is a genuine premise-check finding for the wave owner,
- * not something T1's closed, pre-audited insert list authorizes fixing by
- * adding a new row, and not a design-doc edit this task owns either.
- *
- * Pinned at today's ACTUAL effective value (false) rather than silently
- * dropped, so the assertion still moves if this regresses further or is
- * intentionally fixed later — see the "every live matrix cell..." test.
- */
-const KNOWN_DOC_GAPS: Partial<Record<string, boolean>> = {
-  "standings.carry_over/event_pass": false,
-  "standings.carry_over/event_pass_l": false,
-};
-
 // Anti-vacuity floors: a parser that silently matches nothing (a header
 // regex that stops matching after a doc edit, a table syntax change) must
 // not pass. §2 carries 60 feature-key rows at the time this test was
@@ -248,7 +222,7 @@ describe.skipIf(!HAS_DB)("V391 entitlements v18 matrix — pinned against design
           // does).
           if (cell.kind === "bool") {
             const effective = dbRow?.bool_value === true || communityRow?.bool_value === true;
-            const expected = KNOWN_DOC_GAPS[`${key}/${plan}`] ?? cell.value;
+            const expected = cell.value;
             if (effective !== expected) {
               failures.push(
                 `${key}/${plan}: expected EFFECTIVE bool=${expected} (pass row ?? community fallthrough), got ${effective} — pass row=${JSON.stringify(dbRow ?? null)}, community row=${JSON.stringify(communityRow ?? null)}`,

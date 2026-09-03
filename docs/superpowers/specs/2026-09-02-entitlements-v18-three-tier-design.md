@@ -168,7 +168,7 @@ Rationale is one line per changed row; unchanged rows say "keep".
 | `formats.double_elim` | **T** | T | T | T | T | growth: double-elim is the club-night format for racquet sports; gating it makes Free feel broken on night one |
 | `standings.custom_points` | **T** | T | T | T | T | correctness: bonus and forfeit points are how rugby and cricket tables are *right* |
 | `tiebreakers.custom` | **T** | T | T | T | T | correctness: wrong tiebreak order = wrong table |
-| `standings.carry_over` | F | T | T | T | T | keep (multi-phase leagues are Pro-sized) |
+| `standings.carry_over` | F | T | – | – | T | keep (multi-phase leagues are Pro-sized). **Pass cells corrected 2026-09-03**: they read T, but no pass row has ever existed and Free is F, so a passed competition has never had carry-over — the row's own "Pro-sized" rationale and the §3 Event Pass card (which never lists it) both agree. Separately: nothing in the product emits `carry` at all, so this is a SOLD Pro feature with no control — F6 / issue #625, not this programme |
 | `discipline.enforced` (suspensions) | F | T | **T** | **T** | T | owner asked. Automation = leverage, stays paid; a weekend cup with cards needs it, so the pass gets it |
 
 ### Scheduling & officials
