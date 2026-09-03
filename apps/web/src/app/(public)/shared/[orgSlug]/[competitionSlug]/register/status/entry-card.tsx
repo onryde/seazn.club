@@ -273,6 +273,8 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
             <p className="truncate font-display text-lg font-semibold text-ink">{headingName}</p>
           </div>
           <span
+            data-testid="reg-status-outcome"
+            data-status={entry.status}
             className={`shrink-0 rounded-full border px-2.5 py-1 text-xs font-semibold tracking-wide uppercase ${tone.badge}`}
           >
             {t(ui, STATUS_KEY[entry.status])}

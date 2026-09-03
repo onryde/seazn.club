@@ -1865,4 +1865,27 @@ describe("step 5 — submit", () => {
       `/shared/${ORG_SLUG}/${COMPETITION_SLUG}/register/status?rid=g2&token=tok789`,
     );
   });
+
+  // Bench hook (B03r) — the public stepper has no other selector-free way to
+  // find this button (its label is a translated string, "Enter the
+  // competition"/"Continue to payment" depending on the fee). Asserted on
+  // the PROP value itself, not a truthiness check — propsOf reads the real
+  // element props (no renderToStaticMarkup string here), so there is no
+  // "$undefined" ambiguity to guard against, but pinning the exact string
+  // still catches a testid typo a bare "is present" check would miss.
+  it("carries data-testid=\"reg-submit\" on the review step's submit button — the bench's only selector-free hook into it", async () => {
+    apiV1Mock.impl.mockResolvedValueOnce({
+      group_id: "g3",
+      ref_code: "SZ-TEST-04",
+      access_token: "tok999",
+      currency: "gbp",
+      amount_cents: 0,
+      checkout_url: null,
+      entries: [],
+    });
+    const { island } = await reachReview();
+    const btn = island.tree().find((e) => e.type === "button" && textOf(e) === "Enter the competition");
+    expect(btn, "submit button not found").toBeTruthy();
+    expect(propsOf(btn!)["data-testid"]).toBe("reg-submit");
+  });
 });

@@ -69,6 +69,7 @@ export function StepConsent({
         <label className="flex cursor-pointer items-start gap-3">
           <input
             id="reg-consent-privacy"
+            data-testid="reg-consent-grant"
             type="checkbox"
             className="mt-0.5 h-4 w-4 shrink-0 accent-accent"
             checked={consent.privacy_consent}

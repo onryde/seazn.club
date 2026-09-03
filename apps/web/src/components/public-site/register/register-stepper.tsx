@@ -516,7 +516,13 @@ export function RegisterStepper({
           {t("register.nav.back")}
         </button>
         {currentStep === "review" ? (
-          <button type="button" onClick={handleSubmit} disabled={submitting} className={BTN_PRIMARY}>
+          <button
+            type="button"
+            data-testid="reg-submit"
+            onClick={handleSubmit}
+            disabled={submitting}
+            className={BTN_PRIMARY}
+          >
             {submitLabel}
           </button>
         ) : (

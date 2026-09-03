@@ -257,7 +257,13 @@ export function JoinForm({
       )}
 
       <div className="flex justify-end">
-        <button type="button" onClick={submit} disabled={submitting} className={BTN_PRIMARY}>
+        <button
+          type="button"
+          data-testid="reg-join-submit"
+          onClick={submit}
+          disabled={submitting}
+          className={BTN_PRIMARY}
+        >
           {submitting ? t("register.join.submit.busy") : t("register.join.submit.cta")}
         </button>
       </div>

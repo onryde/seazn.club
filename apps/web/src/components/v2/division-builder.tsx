@@ -651,7 +651,7 @@ export function DivisionBuilder({
             />
           </label>
         </div>
-        <fieldset>
+        <fieldset data-testid="division-builder-category">
           <legend className="label">{msg("reg.hub.config.category")}</legend>
           <div className="flex flex-wrap gap-2">
             {CATEGORIES.map((c) => (
@@ -666,6 +666,7 @@ export function DivisionBuilder({
                 <input
                   type="radio"
                   name="division-category"
+                  data-category={c.key}
                   checked={category === c.key}
                   onChange={() => setCategory(c.key)}
                   className="sr-only"
