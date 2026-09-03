@@ -62,9 +62,12 @@ const PLANS = ADMIN_PLAN_KEYS;
 function render(cell: AdminEntRow | undefined): string {
   if (!cell) return "—";
   if (cell.bool_value !== null) {
-    // Dual-value keys (import.bulk carries a bool AND an int cap) show both.
-    // No number here on purpose — the caps live in `plan_entitlements` and
-    // differ per plan; the "20" this comment used to name had already moved.
+    // Dual-value keys (import.bulk carries a bool AND a row cap) show both.
+    // The figure is deliberately not named here: it moved to 50 in V319 and this
+    // comment carried the old 20 for a year, alongside two further copies of it
+    // that W2 T12 had to correct — and main removed the same number
+    // independently while that was happening. The caps live in
+    // `plan_entitlements`, differ per plan, and belong nowhere else.
     if (cell.bool_value && cell.int_value !== null) return `true (${cell.int_value})`;
     return cell.bool_value ? "true" : "false";
   }
