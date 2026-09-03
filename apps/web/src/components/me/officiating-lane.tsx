@@ -299,6 +299,7 @@ function AssignmentCard({ a }: { a: MyOfficiatingAssignment }) {
               <span className="text-xs text-amber-600">{msg("me.off.pending")}</span>
               <button
                 type="button"
+                data-testid="me-official-accept"
                 className="btn btn-primary py-1.5 text-sm"
                 disabled={busy}
                 onClick={() => void respond("accepted")}
@@ -307,6 +308,7 @@ function AssignmentCard({ a }: { a: MyOfficiatingAssignment }) {
               </button>
               <button
                 type="button"
+                data-testid="me-official-decline"
                 className="btn btn-ghost py-1.5 text-sm"
                 disabled={busy}
                 onClick={() => setDeclining(true)}
@@ -324,6 +326,7 @@ function AssignmentCard({ a }: { a: MyOfficiatingAssignment }) {
               {!matchdayPassed && (
                 <button
                   type="button"
+                  data-testid="me-official-accept"
                   className="btn btn-ghost py-1.5 text-sm"
                   disabled={busy}
                   onClick={() => void respond("accepted")}
@@ -350,6 +353,7 @@ function AssignmentCard({ a }: { a: MyOfficiatingAssignment }) {
           />
           <button
             type="button"
+            data-testid="me-official-decline-confirm"
             className="btn btn-primary py-1.5 text-sm"
             disabled={busy}
             onClick={() => void respond("declined")}
@@ -456,6 +460,7 @@ function BlackoutEditor({ blackouts }: { blackouts: MyBlackout[] }) {
       <div className="flex flex-wrap items-center gap-2">
         <input
           type="date"
+          data-testid="official-blackout-date"
           // Same override as the reason/note inputs below (S13/#422 W11):
           // `.input`'s own padding loses to `py-1.5 text-sm`. `min-h-11` survives it.
           className="input min-h-11 py-1.5 text-sm"
@@ -470,7 +475,7 @@ function BlackoutEditor({ blackouts }: { blackouts: MyBlackout[] }) {
           placeholder={msg("me.off.blackoutNotePlaceholder")}
           aria-label={msg("me.off.blackoutNotePlaceholder")}
         />
-        <button type="button" className="btn btn-ghost py-1.5 text-sm" disabled={busy || !date} onClick={() => void add()}>
+        <button type="button" data-testid="official-blackout-add" className="btn btn-ghost py-1.5 text-sm" disabled={busy || !date} onClick={() => void add()}>
           {msg("me.off.blackoutAdd")}
         </button>
       </div>
