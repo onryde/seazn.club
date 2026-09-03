@@ -186,7 +186,10 @@ import {
   type PackExpectedMatch,
   type PackExpectedTable,
   type PackLineupSlot,
+  type PackPerson,
   type PackProvenance,
+  type PackRegistrationBlock,
+  type PackRegistrationEntry,
   type PackStage,
   type PackStream,
 } from "./pack-schema.ts";
@@ -546,6 +549,171 @@ export function resolveStatePath(root: unknown, path: string): { found: boolean;
 }
 
 // ---------------------------------------------------------------------------
+// Stage 1.5 — the registration funnel (B03r, design §4)
+// ---------------------------------------------------------------------------
+//
+// Five offline checks over `pack.registration` alone — no engine, no
+// streams, so they run even for a division with no fixtures at all. Each is
+// its OWN function (same discipline as pack-schema.ts's cross-field rules:
+// "a reviewer can read one rule at a time, and a mutation sweep can delete
+// exactly one and watch exactly one test red"), and every finding names the
+// offending entry's `extKey` in its message.
+//
+// Two of the five (rule 1's per-person checks) are hand mirrors of
+// `apps/web/src/lib/registration-rules.ts`'s pure predicates
+// (`categoryEligibilityIssues`/`ageBandEligibilityIssues`/
+// `rosterCompositionIssues`) — the SAME "cannot import apps/web" constraint
+// `STAGE_DECIDER_KEYS` above lives under (GLOBAL.md: `@/` aliases do not
+// resolve here and most of that tree is `server-only`). Mirrored rather than
+// skipped: a `rejected_eligibility` entry never checked against the real
+// rule is exactly the "pack lies" failure design §4 exists to catch.
+//
+// KNOWN GAP, recorded for the task report rather than approximated
+// silently: neither `PackDivision` nor `PackRegistrationBlock` carries
+// `age_cutoff_month`/`age_cutoff_day` (V364/V380) — no B03r reservation
+// declared one. The product's own `ageBandEligibilityIssues` defaults an
+// absent cutoff to 1 January of the season-start year
+// (registration-rules.ts:271-272), so this mirror does too — a pack simply
+// CANNOT express a division whose real eligibility cutoff is anything other
+// than 1 January.
+
+type EligibilityPersonLike = Pick<PackPerson, "dob" | "gender">;
+
+/** Mirrors `categoryEligibilityIssues` (registration-rules.ts:188-206):
+ *  `mens`/`womens` requires the matching gender; `open`/`mixed`/null
+ *  constrain nothing here (`mixed` is roster-wide, see
+ *  `mixedCompositionViolation` below). A MISSING gender is also a
+ *  violation — the product's public submit path blocks on it too
+ *  (`registration-eligibility.ts` header, "the exact same two codes as
+ *  BLOCKING"), so a pack cannot claim a rejection is eligibility-driven by
+ *  simply omitting the field.
+ *
+ *  The product's own predicate also exempts gender `"x"` ("x never blocks",
+ *  registration-rules.ts:177-178) — `PackPerson.gender` (pack-schema.ts) is
+ *  `z.enum(["m","f"]).optional()` with no `"x"` member, so that exemption is
+ *  a further KNOWN GAP: a pack cannot express a non-binary person at all,
+ *  and therefore cannot represent the one case that predicate treats
+ *  specially. Recorded for the task report. */
+function categoryViolation(category: string, person: EligibilityPersonLike): boolean {
+  if (category !== "mens" && category !== "womens") return false;
+  const needed = category === "mens" ? "m" : "f";
+  if (!person.gender) return true;
+  return person.gender !== needed;
+}
+
+/** Mirrors `ageBandEligibilityIssues` (registration-rules.ts:252-326) at a
+ *  1-January-of-`seasonStartYear` cutoff — see the KNOWN GAP note above. A
+ *  missing dob is also a violation, same reasoning as `categoryViolation`. */
+function ageBandViolation(
+  ageMin: number | undefined,
+  ageMax: number | undefined,
+  person: EligibilityPersonLike,
+  seasonStartYear: number,
+): boolean {
+  if (ageMin === undefined && ageMax === undefined) return false;
+  if (!person.dob) return true;
+  const cutoff = new Date(Date.UTC(seasonStartYear, 0, 1));
+  const dob = new Date(`${person.dob}T00:00:00Z`);
+  let age = cutoff.getUTCFullYear() - dob.getUTCFullYear();
+  const beforeBirthday =
+    cutoff.getUTCMonth() < dob.getUTCMonth() ||
+    (cutoff.getUTCMonth() === dob.getUTCMonth() && cutoff.getUTCDate() < dob.getUTCDate());
+  if (beforeBirthday) age -= 1;
+  if (ageMax !== undefined && age > ageMax) return true;
+  if (ageMin !== undefined && age < ageMin) return true;
+  return false;
+}
+
+/** Mirrors `rosterCompositionIssues` (registration-rules.ts:397-410):
+ *  `mixed` needs at least one `m` AND one `f` among the roster; `x`/null
+ *  count toward neither side. An empty roster is NOT vacuously satisfied. */
+function mixedCompositionViolation(category: string, persons: readonly EligibilityPersonLike[]): boolean {
+  if (category !== "mixed") return false;
+  let hasM = false;
+  let hasF = false;
+  for (const person of persons) {
+    if (person.gender === "m") hasM = true;
+    if (person.gender === "f") hasF = true;
+  }
+  return !(hasM && hasF);
+}
+
+/** Mirrors `seasonStartYearFrom` (registration-rules.ts:351-355).
+ *  `pack.competition.startsOn` is OPTIONAL (pack-schema.ts) — absent, the
+ *  product (and this mirror) falls back to THIS YEAR, which makes a
+ *  registration-carrying pack's age-band checks depend on wall-clock time.
+ *  Recorded as a finding for the task report; every pack that declares an
+ *  age-restricted division should set `startsOn` for that reason. */
+function seasonStartYearOf(pack: Pack): number {
+  return pack.competition.startsOn
+    ? new Date(`${pack.competition.startsOn}T00:00:00Z`).getUTCFullYear()
+    : new Date().getUTCFullYear();
+}
+
+/** The declared entering persons for one entry — captain plus roster,
+ *  deduplicated by ref. `PackSchema` already cross-checks both against
+ *  `pack.persons` (Task 1), so every ref resolves for a parsed pack; a ref
+ *  that somehow does not is silently dropped rather than asserted; there is
+ *  nothing a stage-0 rule about ELIGIBILITY can usefully say about a dangling
+ *  ref that stage 1 would have already refused. */
+function enteringPersons(
+  entry: PackRegistrationEntry,
+  personsByRef: ReadonlyMap<string, PackPerson>,
+): PackPerson[] {
+  const refs = [entry.captain, ...entry.roster];
+  const seen = new Set<string>();
+  const persons: PackPerson[] = [];
+  for (const ref of refs) {
+    if (seen.has(ref)) continue;
+    seen.add(ref);
+    const person = personsByRef.get(ref);
+    if (person !== undefined) persons.push(person);
+  }
+  return persons;
+}
+
+function registrationEntryLabel(divisionRef: string, entry: PackRegistrationEntry, i: number): string {
+  return `registration.byDivision[${divisionRef}].entries[${i}] (${entry.extKey})`;
+}
+
+/** Design §4 check 1: every `rejected_eligibility` entry must actually
+ *  violate its division's restriction, given the entering persons' declared
+ *  `dob`/`gender` — else the pack is claiming a rejection reality would not
+ *  produce ("the pack lies"). */
+function checkRejectedEligibilityOffenders(
+  divisionRef: string,
+  block: PackRegistrationBlock,
+  personsByRef: ReadonlyMap<string, PackPerson>,
+  seasonStartYear: number,
+): PackFinding[] {
+  const findings: PackFinding[] = [];
+  block.entries.forEach((entry, i) => {
+    if (entry.expect !== "rejected_eligibility") return;
+    const persons = enteringPersons(entry, personsByRef);
+    const violates =
+      persons.some(
+        (p) =>
+          categoryViolation(block.category, p) ||
+          ageBandViolation(block.ageMin, block.ageMax, p, seasonStartYear),
+      ) || mixedCompositionViolation(block.category, persons);
+    if (!violates) {
+      findings.push({
+        code: "registration.rejected_not_violating",
+        severity: "error",
+        where: registrationEntryLabel(divisionRef, entry, i),
+        message:
+          `entry "${entry.extKey}" declares expect:"rejected_eligibility" against division ` +
+          `"${divisionRef}" (category:${block.category}` +
+          `${block.ageMin !== undefined ? ` ageMin:${block.ageMin}` : ""}` +
+          `${block.ageMax !== undefined ? ` ageMax:${block.ageMax}` : ""}) but none of its entering ` +
+          `persons actually violate that restriction — the pack lies`,
+      });
+    }
+  });
+  return findings;
+}
+
+// ---------------------------------------------------------------------------
 // Stage 2 — the per-stream fold
 // ---------------------------------------------------------------------------
 
@@ -683,6 +851,21 @@ export function validatePack(raw: unknown, opts: ValidatePackOptions): PackValid
     if (e.seed !== undefined) seedByEntrant.set(sigil(e.ref), e.seed);
   }
   const registryHandle = bootRegistry();
+
+  // -- Stage 1.5: registration funnel (design §4, B03r) --------------------
+  // Pure — runs independently of streams/engine, so it executes even for a
+  // registration division with none yet.
+  if (pack.registration !== undefined) {
+    const personsByRef = new Map(pack.persons.map((p) => [p.ref, p]));
+    const seasonStartYear = seasonStartYearOf(pack);
+    for (const division of pack.divisions) {
+      const block = pack.registration.byDivision[division.ref];
+      if (block === undefined) continue;
+      findings.push(
+        ...checkRejectedEligibilityOffenders(division.ref, block, personsByRef, seasonStartYear),
+      );
+    }
+  }
 
   // WHICH STAGE each stream folds under — resolved ONCE, so the fold, the
   // overlay warning and the standings derivation cannot answer it three ways.

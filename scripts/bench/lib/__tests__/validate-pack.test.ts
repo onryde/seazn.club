@@ -2226,3 +2226,130 @@ describe("packLineupPair", () => {
     ]);
   });
 });
+
+// ===========================================================================
+// Registration funnel — stage-0 offline checks (B03r, design §4)
+// ===========================================================================
+//
+// These checks read `pack.persons` / `pack.divisions` / `pack.registration`
+// only — never streams — so a minimal `genericPack()` (one division, two
+// entrants, one stream, all otherwise irrelevant here) is layered with a
+// registration block on top. `competition.startsOn` is set explicitly:
+// `seasonStartYearFrom` (mirrored from
+// `apps/web/src/lib/registration-rules.ts:351-355`) falls back to THIS YEAR
+// when it is absent, which would make an age-band assertion wall-clock
+// dependent — every fixture below pins it instead.
+
+interface RegPerson {
+  readonly ref: string;
+  readonly fullName: string;
+  readonly lane: string;
+  readonly dob?: string;
+  readonly gender?: "m" | "f";
+}
+
+function registrationPack(opts: {
+  readonly division?: Record<string, unknown>;
+  readonly persons?: readonly RegPerson[];
+  readonly org?: Record<string, unknown>;
+  readonly block: Record<string, unknown>;
+}): Record<string, unknown> {
+  const base = genericPack() as Record<string, unknown>;
+  const divisions = base.divisions as Record<string, unknown>[];
+  return {
+    ...base,
+    org: opts.org ?? base.org,
+    competition: { ...(base.competition as Record<string, unknown>), startsOn: "2024-01-01" },
+    divisions: [{ ...divisions[0], entry: "admin", ...(opts.division ?? {}) }],
+    persons: [...(base.persons as unknown[]), ...(opts.persons ?? [])],
+    registration: { byDivision: { d1: opts.block } },
+  };
+}
+
+/** A division base with no restriction at all — entries tagged
+ *  `rejected_eligibility` must never appear against it (nothing can
+ *  violate an unrestricted division), so rules other than #1 use this. */
+const OPEN_DIVISION = { category: "open" } as const;
+
+function baseExpect(overrides: Partial<Record<"entrants" | "waitlisted" | "rejected" | "paidCents", number>> = {}) {
+  return { entrants: 0, waitlisted: 0, rejected: 0, paidCents: 0, ...overrides };
+}
+
+// ---------------------------------------------------------------------------
+// Rule 1 — a `rejected_eligibility` entry must ACTUALLY violate (design §4
+// check 1: "else the pack lies").
+//
+// One division (`category:"womens"`, `ageMax:18`) drives all three cases so
+// a mutant that drops either half of the check (category or age band) is
+// witnessed by the OTHER case, not just by its own: a captain who violates
+// only on gender (age legal) and one who violates only on age (gender
+// legal) are both declared `rejected_eligibility` and must NOT red; a third,
+// who violates NEITHER, must.
+// ---------------------------------------------------------------------------
+
+describe("registration funnel — rule 1: rejected_eligibility must actually violate", () => {
+  // The restriction lives on the BLOCK (`category`/`ageMax` are
+  // PackRegistrationBlock fields, not PackDivision ones) — each test below
+  // sets it inline. `LEGAL_DOB`/`ILLEGAL_DOB` are ages relative to the
+  // 2024-01-01 cutoff (`competition.startsOn`, `registrationPack` above).
+  const LEGAL_DOB = "2010-06-15"; // age 13 at 2024-01-01 cutoff — within ageMax 18
+  const ILLEGAL_DOB = "2000-06-15"; // age 23 at 2024-01-01 cutoff — over ageMax 18
+
+  it("an offender that violates on GENDER only (age legal) does not red", () => {
+    const pack = registrationPack({
+      persons: [{ ref: "p-gender-only", fullName: "Gender Only", lane: "player", dob: LEGAL_DOB, gender: "m" }],
+      block: {
+        category: "womens",
+        ageMax: 18,
+        entrantKind: "individual",
+        feeCents: 0,
+        approval: "auto",
+        entries: [
+          { extKey: "e-gender", captain: "p-gender-only", roster: [], pay: false, expect: "rejected_eligibility" },
+        ],
+        expect: baseExpect({ rejected: 1 }),
+      },
+    });
+    const result = validatePack(pack, UNIT);
+    expect(errors(result.findings).filter((f) => f.code === "registration.rejected_not_violating")).toEqual([]);
+  });
+
+  it("an offender that violates on AGE only (gender legal) does not red", () => {
+    const pack = registrationPack({
+      persons: [{ ref: "p-age-only", fullName: "Age Only", lane: "player", dob: ILLEGAL_DOB, gender: "f" }],
+      block: {
+        category: "womens",
+        ageMax: 18,
+        entrantKind: "individual",
+        feeCents: 0,
+        approval: "auto",
+        entries: [
+          { extKey: "e-age", captain: "p-age-only", roster: [], pay: false, expect: "rejected_eligibility" },
+        ],
+        expect: baseExpect({ rejected: 1 }),
+      },
+    });
+    const result = validatePack(pack, UNIT);
+    expect(errors(result.findings).filter((f) => f.code === "registration.rejected_not_violating")).toEqual([]);
+  });
+
+  it("THE PACK LIES: an offender who violates NEITHER reds, naming the entry's extKey", () => {
+    const pack = registrationPack({
+      persons: [{ ref: "p-eligible", fullName: "Actually Eligible", lane: "player", dob: LEGAL_DOB, gender: "f" }],
+      block: {
+        category: "womens",
+        ageMax: 18,
+        entrantKind: "individual",
+        feeCents: 0,
+        approval: "auto",
+        entries: [
+          { extKey: "e-lies", captain: "p-eligible", roster: [], pay: false, expect: "rejected_eligibility" },
+        ],
+        expect: baseExpect({ rejected: 1 }),
+      },
+    });
+    const finding = onlyError(validatePack(pack, UNIT).findings);
+    expect(finding.code).toBe("registration.rejected_not_violating");
+    expect(finding.message).toContain("e-lies");
+  });
+});
