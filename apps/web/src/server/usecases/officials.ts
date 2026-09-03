@@ -107,6 +107,40 @@ export async function listOfficialBlackouts(auth: AuthCtx): Promise<OfficialBlac
   return withTenant(auth.orgId, (tx) => loadOfficialBlackouts(tx));
 }
 
+/** Org-side counterpart to me-officiating.ts's setMyBlackout/deleteMyBlackout
+ *  (G2, bench B03 product-gaps 2026-09-02): before this, an organiser told
+ *  "I can't do the 14th" by an official had no way to record it — every
+ *  write to official_availability required the official's own /me session
+ *  (superuser connection, fans the date out to every org linked to that
+ *  person). This writes ONLY this org's officials row: `withTenant`'s RLS
+ *  scoping (V391 grants app_user the write here) is what keeps it that way,
+ *  not an application check. `requireResourceAuth("official", ...)` at the
+ *  route already confirmed `officialId` belongs to `auth.orgId` before this
+ *  runs. */
+export async function setOfficialBlackout(
+  auth: AuthCtx,
+  officialId: string,
+  date: string,
+  note?: string | null,
+): Promise<Pick<OfficialBlackoutRow, "date" | "note">> {
+  const trimmed = note?.trim() || null;
+  await withTenant(auth.orgId, (tx) => tx`
+    insert into official_availability (org_id, official_id, date, note)
+    values (${auth.orgId}, ${officialId}, ${date}, ${trimmed})
+    on conflict (official_id, date) do update set note = excluded.note`);
+  return { date, note: trimmed };
+}
+
+/** Clear a blackout date for this org's officials row (idempotent). */
+export async function deleteOfficialBlackout(
+  auth: AuthCtx,
+  officialId: string,
+  date: string,
+): Promise<void> {
+  await withTenant(auth.orgId, (tx) => tx`
+    delete from official_availability where official_id = ${officialId} and date = ${date}`);
+}
+
 export interface OfficialBusyRow {
   /** MY org's officials.id — never the other org's official/person id. */
   official_id: string;
