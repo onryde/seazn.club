@@ -206,20 +206,40 @@ rather than break them — which is the entire reason §2 chose that.
 This design adds **no migration**; if one is ever needed, that branch occupies
 V392–V396 and `main` took V391, so take **V397 or later**.
 
-### 3.7 Org isolation — the constraint that shapes two of the four specs
+### 3.7 Org isolation — ALL FOUR specs mint their own org
 
 `playwright.config.ts:29` sets `AUTH_STATE = "e2e/.auth/pro.json"`, and the
 `walkthrough` project uses it. **Every walkthrough spec therefore runs as the
 seeded PRO org**, at `fullyParallel: true` with `workers: CI ? 2 : 4`.
 
-Two consequences the first draft of this design got wrong:
+Three consequences, the third of which defeats the mitigation the first draft
+of this design proposed:
 
 - §4.2 cannot prove the free-plan role swap on the default state, because
   `officials.roles_multi` is already allowed there.
 - §4.4 cannot flip the shared org's plan, because §4.2 would be running beside
   it and would silently see the flipped value.
+- **§4.1 cannot see its own people at all.** `page.tsx:106` calls
+  `listPersons(auth, { cursor: null, limit: 200 })` and `listPersons` orders by
+  `created_at`, so the Players tab renders the **oldest 200** rows. The shared
+  org accumulates hundreds of persons across a run, so a person created late is
+  not merely hard to find — it is **not on the page**. `person-merge.spec.ts`'s
+  own header records this and is why that spec already uses a fresh org.
 
-The repair is to mint an org of this spec's own:
+  This is what kills "scope every assertion to a unique token". Token-scoping a
+  list that never contained your row returns a confident zero, and the spec then
+  reports "no duplicate was suggested" — which is the exact assertion §4.1 exists
+  to make, passing for the wrong reason.
+
+So **every one of the four specs mints its own org**, following
+`person-merge.spec.ts` verbatim: `test.use({ storageState: { cookies: [], origins: [] } })`
+at file scope, then `loginUi` and `POST /api/orgs`. Uniform, and it buys three
+things at once — an empty roster whose counts are assertable, no interference
+with or from any other spec, and the **community** plan for free, because
+`createOrgForUser` inserts `plan_key 'community'`. §4.2's free-plan half
+therefore needs no `setOrgPlanBySql` call at all; only its Pro half does.
+
+The recipe:
 
 ```
 const orgId = await apiJson(page.request, "/api/orgs", "POST", {...})  // fresh + activated
@@ -461,11 +481,26 @@ Six rules the specs follow to earn that:
 Per `docs/superpowers/RULES.md`, all four types:
 
 - **E2E** — the four specs above; this is the deliverable.
-- **Unit** — `e2e-ci-wiring.test.ts` must be extended to prove the `walkthrough`
-  project selects the four new files. A project nothing dispatches is
-  indistinguishable from a passing one.
-- **Smoke** — a `scripts/smoke.ts` check that `/directory` renders all four tabs
-  and `/import` renders its file input.
+- **Unit** — vitest over `directory-kit.ts`'s pure helpers: the CSV builder and
+  the unique-name stamp. Real logic with real edge cases (quoting, row counts,
+  collision resistance), and it runs in milliseconds.
+
+  **Explicitly NOT a new assertion in `e2e-ci-wiring.test.ts`.** An earlier draft
+  of this design called for one. That was wrong: selection is by directory regex
+  (`WALKTHROUGH`, `playwright.config.ts:119`), and the guard at
+  `e2e-ci-wiring.test.ts:180` already asserts the walkthrough project selects
+  more than zero files and that every one lives under `walkthrough/`. Four new
+  files in that directory are therefore covered **by construction**. Its only
+  numeric bounds are a total-spec floor of 50 (which rises safely), the heavy
+  carve-out's own list, and a count of `ref:` lines in `e2e.yml` — none counts
+  walkthrough files, deliberately. Adding a count or a membership list would be
+  the first such guard in the file and would need editing on every future spec
+  addition, for no signal these four files do not already have.
+- **Smoke** — new `scripts/smoke.ts` checks. This is genuinely uncovered ground:
+  `/directory` has exactly one existing check (`:12550`, which asserts a French
+  nav string and nothing about directory content) and **`/import` has none at
+  all**. Add checks that `/directory` serves each of the four tabs and that
+  `/import` renders its file input.
 - **Regression** — each spec's negative assertion is its regression test: the
   suppressed duplicate, the swapped role chip, the unchanged club count after a
   refused commit, the dead claim link.
