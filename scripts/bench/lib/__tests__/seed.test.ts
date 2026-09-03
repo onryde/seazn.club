@@ -24,9 +24,12 @@ import { fixtureKey, type PackStream, type PackVenue } from "../pack-schema.ts";
 import type { SeedPlan, SeedPlanClaimInvite, SeedPlanOfficial } from "../seed-plan.ts";
 import {
   bindStreamFixtures,
+  officialInviteEmail,
+  runOfficialsAutoAssign,
   seedOfficialsAndClaims,
   seedSuite,
   type GeneratedFixtureRef,
+  type RunOfficialsAutoAssignInput,
   type SeedOfficialsAndClaimsInput,
   type SeedSuiteInput,
   type SeedTransport,
@@ -505,6 +508,14 @@ interface OfficialsFakeConfig {
   autoProposals?: Record<string, { assignments: { fixtureId: string; officialId: string; roleKey: string; locked?: boolean }[] }>;
   validateResponses?: Record<string, { conflicts: { fixture_id: string; code: string; blocking: boolean }[] }>;
   claimReads?: Record<string, ClaimRead>;
+  /** B03 T6b — officials' OWN claim invites (`POST /officials/{id}/invite`).
+   *  Keyed by the MINTED person id this fake hands back — same "distinct
+   *  GET, never the write's echo" precedent as `claimReads` above. Every
+   *  minted person id defaults to `invited-${officialId}` (no config
+   *  needed) with a matching default read, so existing tests written before
+   *  this task keep passing unmodified; a test that cares about the invite
+   *  itself overrides via `officialInviteReads`. */
+  officialInviteReads?: Record<string, ClaimRead>;
 }
 
 /** A recording fake covering exactly the surface `seedOfficialsAndClaims`
@@ -575,15 +586,63 @@ function fakeOfficialsTransport(config: OfficialsFakeConfig): { transport: SeedT
         } as T;
       }
       if (method === "GET" && claimMatch) {
-        const read = config.claimReads?.[claimMatch[1]!];
-        if (read === undefined) throw new Error(`fake: no scripted GET /persons/${claimMatch[1]}/claim-invites response`);
-        return read as T;
+        const personId = claimMatch[1]!;
+        const scripted = config.claimReads?.[personId] ?? config.officialInviteReads?.[personId];
+        if (scripted !== undefined) return scripted as T;
+        // Default for an officials-invite-minted person id (see the POST
+        // handler below) that no test bothered to script explicitly.
+        if (personId.startsWith("invited-")) {
+          return {
+            id: `claim-${personId}`,
+            person_id: personId,
+            email: "official-invite-default@example.com",
+            expires_at: "2099-01-01T00:00:00Z",
+            claimed_at: null,
+            revoked_at: null,
+          } as T;
+        }
+        throw new Error(`fake: no scripted GET /persons/${personId}/claim-invites response`);
+      }
+      const inviteMatch = /^\/api\/v1\/officials\/([^/]+)\/invite$/.exec(path);
+      if (method === "POST" && inviteMatch) {
+        const officialId = inviteMatch[1]!;
+        const personId = `invited-${officialId}`;
+        return {
+          id: "WRITE-ECHO-OFFICIAL-INVITE",
+          person_id: personId,
+          email: (body as { email: string }).email,
+          expires_at: "2099-01-01T00:00:00Z",
+          claimed_at: null,
+          revoked_at: null,
+          claim_url: "https://bench.example/claim/official",
+          email_sent: true,
+        } as T;
       }
       throw new Error(`fake officials transport: unhandled ${method} ${path}`);
     },
   };
   return { transport, calls };
 }
+
+describe("officialInviteEmail", () => {
+  it("derives a stable email from the official's ref and the run tag — never a bare literal", () => {
+    expect(officialInviteEmail("off-dee", "abc123")).toBe("bench-official-off-dee-abc123@example.com");
+  });
+
+  it("two different officials in the same run never collide", () => {
+    expect(officialInviteEmail("off-dee", "abc")).not.toBe(officialInviteEmail("off-eli", "abc"));
+  });
+
+  it("the same official across two runs never collides either", () => {
+    expect(officialInviteEmail("off-dee", "run1")).not.toBe(officialInviteEmail("off-dee", "run2"));
+  });
+
+  it("sanitizes a ref character that is legal in a PackRef but not in an email local-part", () => {
+    // ":" is legal per PackRef's own regex (pack-schema.ts:176-180) but not
+    // a valid unquoted email local-part character.
+    expect(officialInviteEmail("off:dee", "abc")).toBe("bench-official-off-dee-abc@example.com");
+  });
+});
 
 describe("seedOfficialsAndClaims", () => {
   // Mirrors the shape B03 T6 gave `_tiny.json`: off-dee is MANUAL (a named
@@ -622,6 +681,7 @@ describe("seedOfficialsAndClaims", () => {
       personIdByRef,
       primaryDivisionId: "div-tiny",
       email: "bench-tiny-abc@example.com",
+      runTag: "abc",
       transport,
       ...overrides,
     };
@@ -632,15 +692,18 @@ describe("seedOfficialsAndClaims", () => {
       "fixture-r1": [
         { official_id: "official-dee-duarte", name: "Dee Duarte", role: "referee", locked: true, response: "pending", decline_reason: null },
       ],
-      "fixture-auto": [
-        { official_id: "official-eli-ostrander", name: "Eli Ostrander", role: "linesman", locked: false, response: "pending", decline_reason: null },
-      ],
     },
-    autoProposals: {
-      "div-tiny": { assignments: [{ fixtureId: "fixture-auto", officialId: "official-eli-ostrander", roleKey: "linesman" }] },
-    },
+    // B03 review F3: `seedOfficialsAndClaims` calls `schedule/validate`
+    // BEFORE any scheduling exists (it runs from `seedSuite`, which
+    // completes before `runTinySuite`'s own scheduling walk) — the real
+    // route's `warn.official_unavailable` only fires once the target fixture
+    // is actually SCHEDULED onto the blackout date (this file's own header
+    // comment, "the blackout read-back finding"), which at THIS call site
+    // has not happened. Empty conflicts is the only response the product can
+    // actually give here; a non-empty one would be exactly the impossible
+    // fake the review found.
     validateResponses: {
-      "div-tiny": { conflicts: [{ fixture_id: "fixture-r1", code: "warn.official_unavailable", blocking: false }] },
+      "div-tiny": { conflicts: [] },
     },
     claimReads: {
       "person-ana": {
@@ -731,39 +794,6 @@ describe("seedOfficialsAndClaims", () => {
     expect(patchCall?.body).toEqual({ set: [{ official_id: "official-dee-duarte", role_key: "referee", locked: true }] });
   });
 
-  it("proposes then applies the auto-needing officials against primaryDivisionId, with roles = union of their role_keys", async () => {
-    const { transport, calls } = fakeOfficialsTransport(HAPPY_CONFIG);
-    // `autoAssign: true` — the auto pass is opt-in, because it is the only
-    // entitlement-gated step here (`requireFeature(orgId, "officials.auto")`).
-    // `seedSuite` drives every other step with the flag OFF.
-    await seedOfficialsAndClaims({ ...baseInput(transport), autoAssign: true });
-
-    const proposeCall = calls.find((c) => c.method === "POST" && c.path === "/api/v1/divisions/div-tiny/officials/auto");
-    expect(proposeCall?.body).toEqual({ policy: { roles: ["linesman"] } });
-
-    const applyCall = calls.find((c) => c.method === "POST" && c.path === "/api/v1/divisions/div-tiny/officials/apply");
-    expect(applyCall?.body).toEqual({
-      assignments: [{ fixture_id: "fixture-auto", official_id: "official-eli-ostrander", role_key: "linesman", locked: false }],
-    });
-  });
-
-  it("skips the apply call entirely when the auto proposal comes back empty", async () => {
-    const { transport, calls } = fakeOfficialsTransport({
-      ...HAPPY_CONFIG,
-      autoProposals: { "div-tiny": { assignments: [] } },
-      fixtureReads: { "fixture-r1": HAPPY_CONFIG.fixtureReads!["fixture-r1"]! },
-    });
-    await seedOfficialsAndClaims(baseInput(transport));
-    expect(calls.some((c) => c.path === "/api/v1/divisions/div-tiny/officials/apply")).toBe(false);
-  });
-
-  it("throws naming the count when auto-needing officials exist but no primaryDivisionId is given", async () => {
-    const { transport } = fakeOfficialsTransport(HAPPY_CONFIG);
-    await expect(
-      seedOfficialsAndClaims({ ...baseInput(transport), primaryDivisionId: undefined, autoAssign: true }),
-    ).rejects.toThrow(/1 official.*no primaryDivisionId/s);
-  });
-
   it("throws naming the official and the fixture when a manual assignment matches no generated fixture", async () => {
     const bad: SeedPlanOfficial = { ...officials[0]!, assignments: [{ divisionRef: "d-tiny", fixtureExtKey: "missing-key" }] };
     const { transport } = fakeOfficialsTransport(HAPPY_CONFIG);
@@ -772,15 +802,12 @@ describe("seedOfficialsAndClaims", () => {
     ).rejects.toThrow(/off-dee.*missing-key/s);
   });
 
-  it("reads back EVERY touched fixture through GET /fixtures/{id} — never the PATCH/apply write's own (stale) body", async () => {
+  it("reads back EVERY manually-touched fixture through GET /fixtures/{id} — never the PATCH write's own (stale) body", async () => {
     const { transport } = fakeOfficialsTransport(HAPPY_CONFIG);
-    const result = await seedOfficialsAndClaims({ ...baseInput(transport), autoAssign: true });
+    const result = await seedOfficialsAndClaims(baseInput(transport));
 
     expect(result.fixtureOfficialsById.get("fixture-r1")).toEqual([
       { official_id: "official-dee-duarte", name: "Dee Duarte", role: "referee", locked: true, response: "pending", decline_reason: null },
-    ]);
-    expect(result.fixtureOfficialsById.get("fixture-auto")).toEqual([
-      { official_id: "official-eli-ostrander", name: "Eli Ostrander", role: "linesman", locked: false, response: "pending", decline_reason: null },
     ]);
     // The STALE PATCH echo never leaks into the result — proves the GET
     // call, not the write, is what the driver trusts.
@@ -789,14 +816,17 @@ describe("seedOfficialsAndClaims", () => {
     }
   });
 
-  it("reads the blackout's effect back through schedule/validate — pinned to the assignment's own fixture and official", async () => {
+  // B03 review F3: the OLD version of this test scripted a non-empty
+  // `warn.official_unavailable` response here — impossible at THIS call
+  // site (see the comment on `HAPPY_CONFIG.validateResponses` above). The
+  // call itself is still real and still proven; what it can honestly read
+  // back, pre-scheduling, is empty.
+  it("calls schedule/validate for the blackout's own division, and reads back exactly what the (honestly empty, pre-scheduling) response carries", async () => {
     const { transport, calls } = fakeOfficialsTransport(HAPPY_CONFIG);
     const result = await seedOfficialsAndClaims(baseInput(transport));
 
     expect(calls.some((c) => c.method === "POST" && c.path === "/api/v1/divisions/div-tiny/schedule/validate")).toBe(true);
-    expect(result.scheduleConflicts).toEqual([
-      { fixture_id: "fixture-r1", code: "warn.official_unavailable", blocking: false },
-    ]);
+    expect(result.scheduleConflicts).toEqual([]);
   });
 
   it("never calls schedule/validate when the plan declares no blackout at all", async () => {
@@ -833,5 +863,152 @@ describe("seedOfficialsAndClaims", () => {
     await expect(
       seedOfficialsAndClaims({ ...baseInput(transport), claimInvites: [{ personRef: "p-ghost", email: "ghost@example.com" }] }),
     ).rejects.toThrow(/p-ghost/);
+  });
+
+  // -------------------------------------------------------------------------
+  // B03 T6b — officials' OWN claim invites (POST /officials/{id}/invite)
+  // -------------------------------------------------------------------------
+
+  it("mints EVERY official's own claim invite, with the derived email — never a bare display_name or literal", async () => {
+    const { transport, calls } = fakeOfficialsTransport(HAPPY_CONFIG);
+    await seedOfficialsAndClaims(baseInput(transport));
+
+    const inviteCalls = calls.filter((c) => c.method === "POST" && /\/api\/v1\/officials\/[^/]+\/invite$/.test(c.path));
+    expect(inviteCalls).toHaveLength(2);
+    const deeInvite = inviteCalls.find((c) => c.path === "/api/v1/officials/official-dee-duarte/invite");
+    expect(deeInvite?.body).toEqual({ email: officialInviteEmail("off-dee", "abc") });
+    const eliInvite = inviteCalls.find((c) => c.path === "/api/v1/officials/official-eli-ostrander/invite");
+    expect(eliInvite?.body).toEqual({ email: officialInviteEmail("off-eli", "abc") });
+  });
+
+  it("reads each official's invite back through a DISTINCT GET call, keyed by the OFFICIAL's own ref — claimed_at null is the proof nothing here accepted it", async () => {
+    const { transport, calls } = fakeOfficialsTransport(HAPPY_CONFIG);
+    const result = await seedOfficialsAndClaims(baseInput(transport));
+
+    expect(calls.some((c) => c.method === "GET" && c.path === "/api/v1/persons/invited-official-dee-duarte/claim-invites")).toBe(
+      true,
+    );
+    const read = result.officialClaimInviteByRef.get("off-dee");
+    expect(read?.person_id).toBe("invited-official-dee-duarte");
+    expect(read?.claimed_at).toBeNull();
+    // The write's own echo is a distinct sentinel id — must not be what the
+    // result holds, same "not merely 201" precedent as every read-back above.
+    expect(read?.id).not.toBe("WRITE-ECHO-OFFICIAL-INVITE");
+  });
+
+  it("the minted person is NOT the pack's own PackOfficial.person ref — personIdByRef never resolved it, and the invite mints a brand-new id", async () => {
+    // `personIdByRef` in this fixture (like a real SeedPlan's — see
+    // seed-plan.ts's own header comment) carries NO entry for "p-dee"/
+    // "p-eli" at all: official-lane persons are excluded from `plan.persons`
+    // entirely, because `POST /persons` cannot create one (`PersonLane`
+    // admits only player/coach/staff). This test is the finding, made
+    // concrete: there is no pack-declared id to compare against, and the
+    // invite's own minted id is a fresh one this driver never resolved
+    // "p-dee"/"p-eli" to.
+    expect(personIdByRef.has("p-dee")).toBe(false);
+    expect(personIdByRef.has("p-eli")).toBe(false);
+
+    const { transport } = fakeOfficialsTransport(HAPPY_CONFIG);
+    const result = await seedOfficialsAndClaims(baseInput(transport));
+
+    const deeInvite = result.officialClaimInviteByRef.get("off-dee");
+    expect(deeInvite?.person_id).toBe("invited-official-dee-duarte");
+    // Not equal to ANY id this driver resolved for a pack person ref.
+    expect([...personIdByRef.values()]).not.toContain(deeInvite?.person_id);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runOfficialsAutoAssign — B03 review F1(b): the auto pass, split OUT of
+// seedOfficialsAndClaims because it is only ever meaningful AFTER scheduling
+// exists (officials/auto's own engineInput filters on scheduled_at). Every
+// fake below models a fixture that IS already scheduled — that is exactly
+// what makes a non-empty `/officials/auto` proposal legitimate to script
+// HERE (B03 review F3: it was NOT legitimate at seedOfficialsAndClaims's own
+// pre-scheduling call site, which is why that fake moved rather than merely
+// being copied).
+// ---------------------------------------------------------------------------
+
+describe("runOfficialsAutoAssign", () => {
+  const autoOfficials: SeedPlanOfficial[] = [
+    {
+      ref: "off-eli",
+      personRef: "p-eli",
+      display_name: "Eli Ostrander",
+      role_keys: ["linesman"],
+      unavailable: [],
+      assignments: [],
+    },
+  ];
+
+  function baseInput(
+    transport: SeedTransport,
+    overrides: Partial<RunOfficialsAutoAssignInput> = {},
+  ): RunOfficialsAutoAssignInput {
+    return {
+      base: "http://bench.example",
+      email: "bench-tiny-abc@example.com",
+      primaryDivisionId: "div-tiny",
+      autoOfficials,
+      transport,
+      ...overrides,
+    };
+  }
+
+  const NON_EMPTY_PROPOSAL: OfficialsFakeConfig = {
+    autoProposals: {
+      "div-tiny": {
+        assignments: [{ fixtureId: "fixture-auto", officialId: "official-eli-ostrander", roleKey: "linesman" }],
+      },
+    },
+    fixtureReads: {
+      "fixture-auto": [
+        { official_id: "official-eli-ostrander", name: "Eli Ostrander", role: "linesman", locked: false, response: "pending", decline_reason: null },
+      ],
+    },
+  };
+
+  it("signs in, proposes, then applies against primaryDivisionId, with roles = union of the auto officials' own role_keys", async () => {
+    const { transport, calls } = fakeOfficialsTransport(NON_EMPTY_PROPOSAL);
+    await runOfficialsAutoAssign(baseInput(transport));
+
+    expect(calls.some((c) => c.method === "SIGNIN")).toBe(true);
+
+    const proposeCall = calls.find((c) => c.method === "POST" && c.path === "/api/v1/divisions/div-tiny/officials/auto");
+    expect(proposeCall?.body).toEqual({ policy: { roles: ["linesman"] } });
+
+    const applyCall = calls.find((c) => c.method === "POST" && c.path === "/api/v1/divisions/div-tiny/officials/apply");
+    expect(applyCall?.body).toEqual({
+      assignments: [{ fixture_id: "fixture-auto", official_id: "official-eli-ostrander", role_key: "linesman", locked: false }],
+    });
+  });
+
+  it("reads back every fixture the apply call touched through GET /fixtures/{id} — never the apply write's own echo", async () => {
+    const { transport } = fakeOfficialsTransport(NON_EMPTY_PROPOSAL);
+    const result = await runOfficialsAutoAssign(baseInput(transport));
+
+    expect(result.proposedCount).toBe(1);
+    expect(result.appliedCount).toBe(1);
+    expect(result.fixtureOfficialsById.get("fixture-auto")).toEqual([
+      { official_id: "official-eli-ostrander", name: "Eli Ostrander", role: "linesman", locked: false, response: "pending", decline_reason: null },
+    ]);
+  });
+
+  it("skips the apply call entirely, and returns zero applied, when the proposal comes back empty — a legitimate post-scheduling response (e.g. no free slot)", async () => {
+    const { transport, calls } = fakeOfficialsTransport({ autoProposals: { "div-tiny": { assignments: [] } } });
+    const result = await runOfficialsAutoAssign(baseInput(transport));
+
+    expect(calls.some((c) => c.path === "/api/v1/divisions/div-tiny/officials/apply")).toBe(false);
+    expect(result.proposedCount).toBe(0);
+    expect(result.appliedCount).toBe(0);
+    expect(result.fixtureOfficialsById.size).toBe(0);
+  });
+
+  it("makes NO http calls at all, not even sign-in, when there are no auto-needing officials", async () => {
+    const { transport, calls } = fakeOfficialsTransport({});
+    const result = await runOfficialsAutoAssign({ ...baseInput(transport), autoOfficials: [] });
+
+    expect(calls).toHaveLength(0);
+    expect(result).toEqual({ proposedCount: 0, appliedCount: 0, fixtureOfficialsById: new Map() });
   });
 });

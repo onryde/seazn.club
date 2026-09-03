@@ -132,6 +132,97 @@ export function planGrants(rows: readonly PlanEntitlementRow[], planKey: string)
 }
 
 // ---------------------------------------------------------------------------
+// Multi-capability selection (B03 review F1(a))
+// ---------------------------------------------------------------------------
+// `chooseGrantingPlan` above optimises for exactly one feature and stops —
+// which is how this got broken the first time: `runDlsGateProbe` called it
+// with only `cricket.dls`'s rows, got back "pro" (the lexicographically
+// first of {pro, pro_plus} on the live catalog), and then separately asked
+// whether "pro" ALSO happened to grant `officials.auto`. It does not — only
+// `pro_plus` does — so `autoAssign` was false on every real run despite a
+// plan genuinely existing (`pro_plus`) that grants BOTH. The derivation was
+// honest; the PLAN CHOICE optimised for one feature and hoped.
+//
+// `chooseGrantingPlanForCapabilities` below fixes the CHOICE, not the read:
+// it is handed every capability the run actually needs and picks a plan
+// satisfying all of them when one exists.
+
+/** One capability this run needs, plus the `plan_entitlements` rows for its
+ *  own feature key (an `entitlementRows(featureKey)` read, already made by
+ *  the caller — this function issues no I/O itself). */
+export interface CapabilityRequirement {
+  readonly featureKey: string;
+  readonly rows: readonly PlanEntitlementRow[];
+}
+
+export interface CapabilityPlanChoice {
+  readonly plan: string;
+  /** Feature keys among `requirements` (never including `requirements[0]`'s
+   *  own — that one is a hard requirement, not a candidate for this list)
+   *  that the CHOSEN plan does not grant. Empty when one plan grants every
+   *  capability requested. Non-empty is a legitimate outcome, not a bug:
+   *  callers must REPORT it (log it, surface it in the bench report) rather
+   *  than silently treat the chosen plan as granting everything — that
+   *  silent treatment is exactly the bug this function replaces. */
+  readonly unsatisfied: readonly string[];
+}
+
+function grantingPlanSet(rows: readonly PlanEntitlementRow[]): Set<string> {
+  return new Set(rows.filter((r) => r.bool_value === true).map((r) => r.plan_key));
+}
+
+/**
+ * Chooses one `plan_key` that grants every capability in `requirements`,
+ * when such a plan exists — never a hardcoded key, same "derive, never
+ * hardcode" precedent as `chooseGrantingPlan` (this file's header comment).
+ *
+ * `requirements[0]` is the run's REQUIRED capability — the one nothing here
+ * can be provisioned without (for the DLS-gate probe, `cricket.dls`: the
+ * whole trip exists to clear that gate). Exactly like `chooseGrantingPlan`,
+ * this throws if NO plan grants it at all — reusing that function's own
+ * throw for the identical message rather than duplicating it; its return
+ * value is otherwise discarded here, because the picture this function needs
+ * is the FULL set of plans granting the primary feature, not merely the
+ * lexicographically-first one.
+ *
+ * Every requirement AFTER the first is DESIRED, not required: among the
+ * plans that grant the primary feature, this picks the one that ALSO grants
+ * the most of the rest (lexicographically-first plan_key breaks a tie, same
+ * determinism precedent as `chooseGrantingPlan`), preferring a plan that
+ * grants every one of them. When no single plan does, `unsatisfied` names
+ * exactly which desired feature(s) the chosen plan lacks — reported, never
+ * silently dropped (see `CapabilityPlanChoice.unsatisfied`'s own doc
+ * comment). This is a legitimate outcome on a catalog where no plan happens
+ * to bundle every capability a bench run wants; it is not this function's
+ * job to invent one.
+ */
+export function chooseGrantingPlanForCapabilities(
+  requirements: readonly CapabilityRequirement[],
+): CapabilityPlanChoice {
+  if (requirements.length === 0) {
+    throw new Error("chooseGrantingPlanForCapabilities: no capability requirements given — nothing to provision");
+  }
+  const [primary, ...rest] = requirements;
+  // Throws "no plan_entitlements row grants this feature" when nothing
+  // grants the REQUIRED capability — same message as chooseGrantingPlan's
+  // own single-feature callers see, deliberately not duplicated here.
+  chooseGrantingPlan(primary!.rows);
+
+  const primaryGrantors = grantingPlanSet(primary!.rows);
+  const desired = rest.map((r) => ({ featureKey: r.featureKey, plans: grantingPlanSet(r.rows) }));
+
+  let best: { plan: string; unsatisfied: string[] } | undefined;
+  for (const plan of [...primaryGrantors].sort()) {
+    const unsatisfied = desired.filter((d) => !d.plans.has(plan)).map((d) => d.featureKey);
+    if (best === undefined || unsatisfied.length < best.unsatisfied.length) {
+      best = { plan, unsatisfied };
+      if (unsatisfied.length === 0) break; // nothing beats satisfying every requirement
+    }
+  }
+  return best!;
+}
+
+// ---------------------------------------------------------------------------
 // Provisioning
 // ---------------------------------------------------------------------------
 

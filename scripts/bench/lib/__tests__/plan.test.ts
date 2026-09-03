@@ -9,6 +9,7 @@ import type { SeedTransport } from "../seed.ts";
 import {
   bustOrgEntitlements,
   chooseGrantingPlan,
+  chooseGrantingPlanForCapabilities,
   planGrants,
   provisionPlan,
   type PlanEntitlementRow,
@@ -54,6 +55,121 @@ describe("chooseGrantingPlan", () => {
       { plan_key: "pro", bool_value: true },
     ];
     expect(chooseGrantingPlan(rows)).toBe("pro");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// chooseGrantingPlanForCapabilities — the B03 review F1(a) fix: choose a
+// plan that grants EVERY capability the run needs, never one feature and a
+// hope.
+// ---------------------------------------------------------------------------
+
+describe("chooseGrantingPlanForCapabilities", () => {
+  it("picks the plan that grants BOTH the required and every desired capability, when one exists — the real production shape", () => {
+    // Mirrors the live catalog the B03 review quoted: cricket.dls is granted
+    // by pro AND pro_plus; officials.auto is granted ONLY by pro_plus. The
+    // OLD single-feature choice (chooseGrantingPlan on cricket.dls rows
+    // alone) landed on "pro" — the lexicographically first cricket.dls
+    // grantor — which does NOT grant officials.auto. This function must land
+    // on "pro_plus" instead, because that is the plan that grants both.
+    const cricketDls: PlanEntitlementRow[] = [
+      { plan_key: "community", bool_value: false },
+      { plan_key: "pro", bool_value: true },
+      { plan_key: "pro_plus", bool_value: true },
+    ];
+    const officialsAuto: PlanEntitlementRow[] = [
+      { plan_key: "community", bool_value: false },
+      { plan_key: "pro", bool_value: false },
+      { plan_key: "pro_plus", bool_value: true },
+    ];
+    const result = chooseGrantingPlanForCapabilities([
+      { featureKey: "cricket.dls", rows: cricketDls },
+      { featureKey: "officials.auto", rows: officialsAuto },
+    ]);
+    expect(result.plan).toBe("pro_plus");
+    expect(result.unsatisfied).toEqual([]);
+  });
+
+  it("reports which capability forced the gap, never silently downgrading, when NO single plan grants everything", () => {
+    // No plan on this catalog grants both — cricket.dls only "pro", officials
+    // .auto only "pro_plus". The REQUIRED capability (requirements[0]) still
+    // has to be honoured, so the chosen plan is the one that grants it; the
+    // gap is named, not hidden.
+    const cricketDls: PlanEntitlementRow[] = [
+      { plan_key: "community", bool_value: false },
+      { plan_key: "pro", bool_value: true },
+    ];
+    const officialsAuto: PlanEntitlementRow[] = [
+      { plan_key: "community", bool_value: false },
+      { plan_key: "pro_plus", bool_value: true },
+    ];
+    const result = chooseGrantingPlanForCapabilities([
+      { featureKey: "cricket.dls", rows: cricketDls },
+      { featureKey: "officials.auto", rows: officialsAuto },
+    ]);
+    expect(result.plan).toBe("pro");
+    expect(result.unsatisfied).toEqual(["officials.auto"]);
+  });
+
+  it("among several candidates for the required feature, prefers the one satisfying the MOST desired capabilities", () => {
+    const primary: PlanEntitlementRow[] = [
+      { plan_key: "alpha", bool_value: true },
+      { plan_key: "beta", bool_value: true },
+      { plan_key: "gamma", bool_value: true },
+    ];
+    // "alpha" grants neither desired feature; "beta" grants one; "gamma"
+    // grants both. Only "gamma" should win, even though "alpha" sorts first.
+    const desired1: PlanEntitlementRow[] = [
+      { plan_key: "beta", bool_value: true },
+      { plan_key: "gamma", bool_value: true },
+    ];
+    const desired2: PlanEntitlementRow[] = [{ plan_key: "gamma", bool_value: true }];
+    const result = chooseGrantingPlanForCapabilities([
+      { featureKey: "required", rows: primary },
+      { featureKey: "desired1", rows: desired1 },
+      { featureKey: "desired2", rows: desired2 },
+    ]);
+    expect(result.plan).toBe("gamma");
+    expect(result.unsatisfied).toEqual([]);
+  });
+
+  it("breaks a tie between equally-good candidates lexicographically, same determinism precedent as chooseGrantingPlan", () => {
+    const primary: PlanEntitlementRow[] = [
+      { plan_key: "zzz_only_grantor", bool_value: true },
+      { plan_key: "aaa_also_grants", bool_value: true },
+    ];
+    // Neither candidate grants the desired feature at all — both tie at one
+    // unsatisfied capability, so the lexicographically-first wins.
+    const desired: PlanEntitlementRow[] = [{ plan_key: "some_other_plan", bool_value: true }];
+    const result = chooseGrantingPlanForCapabilities([
+      { featureKey: "required", rows: primary },
+      { featureKey: "desired", rows: desired },
+    ]);
+    expect(result.plan).toBe("aaa_also_grants");
+    expect(result.unsatisfied).toEqual(["desired"]);
+  });
+
+  it("throws, naming the required feature, when NO plan grants it — same message chooseGrantingPlan itself throws", () => {
+    expect(() =>
+      chooseGrantingPlanForCapabilities([
+        { featureKey: "cricket.dls", rows: [{ plan_key: "community", bool_value: false }] },
+        { featureKey: "officials.auto", rows: [{ plan_key: "pro_plus", bool_value: true }] },
+      ]),
+    ).toThrow(/no plan_entitlements row grants/);
+  });
+
+  it("degenerates to a single-feature choice with an empty unsatisfied list when only one requirement is given", () => {
+    const rows: PlanEntitlementRow[] = [
+      { plan_key: "community", bool_value: false },
+      { plan_key: "pro", bool_value: true },
+    ];
+    const result = chooseGrantingPlanForCapabilities([{ featureKey: "cricket.dls", rows }]);
+    expect(result.plan).toBe("pro");
+    expect(result.unsatisfied).toEqual([]);
+  });
+
+  it("throws on an empty requirements list — nothing to provision", () => {
+    expect(() => chooseGrantingPlanForCapabilities([])).toThrow(/no capability requirements given/);
   });
 });
 

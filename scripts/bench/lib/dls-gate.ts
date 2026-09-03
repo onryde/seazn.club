@@ -65,7 +65,7 @@
 // `officials.auto` derivation `lib/suites/tiny.ts` consumes.
 import { newSession, raw, type RawResult, type Session } from "./http.ts";
 import { defaultTransport, type SeedTransport } from "./seed.ts";
-import { chooseGrantingPlan, planGrants, provisionPlan, type PlanSql } from "./plan.ts";
+import { chooseGrantingPlanForCapabilities, provisionPlan, type PlanSql } from "./plan.ts";
 
 export interface ProbeTransport extends SeedTransport {
   raw(base: string, s: Session, path: string, method?: string, body?: unknown): Promise<RawResult>;
@@ -253,17 +253,28 @@ export interface DlsGateProbeInput {
 
 export interface DlsGateProbeResult {
   readonly orgId: string;
-  /** The plan_key `chooseGrantingPlan` picked and `provisionPlan` flipped
-   *  the org onto, for `cricket.dls` — derived at call time, never a
+  /** The plan_key `chooseGrantingPlanForCapabilities` picked and
+   *  `provisionPlan` flipped the org onto — derived at call time, never a
    *  constant (see plan.ts's header comment on why a hardcoded key goes
-   *  stale). */
+   *  stale), and chosen to grant EVERY capability this probe asked for
+   *  (`cricket.dls`, required; `officials.auto`, desired), not `cricket.dls`
+   *  alone (B03 review F1(a): picking a plan for one feature and then hoping
+   *  it happens to grant another is exactly the bug this fixes — the old
+   *  single-feature choice landed on "pro", which does not grant
+   *  `officials.auto` on the live catalog; only "pro_plus" grants both). */
   readonly provisionedPlan: string;
-  /** Whether THAT SAME provisioned plan also grants `officials.auto` —
-   *  derived from a fresh `plan_entitlements` read, never assumed from
-   *  "some plan got provisioned, so surely auto-assign works now" (the T7
-   *  brief's own language: "derived, not assumed"). `lib/suites/tiny.ts`
-   *  threads this straight into `seedSuite`'s `autoAssign`. */
+  /** Whether `provisionedPlan` grants `officials.auto` — derived from
+   *  `unsatisfiedCapabilities` below, never assumed from "some plan got
+   *  provisioned, so surely auto-assign works now" (the T7 brief's own
+   *  language: "derived, not assumed"). `lib/suites/tiny.ts` threads this
+   *  straight into the post-scheduling auto-assign call. */
   readonly officialsAutoGranted: boolean;
+  /** Capabilities this probe wanted, beyond the required `cricket.dls`, that
+   *  `provisionedPlan` does NOT grant — empty when one plan grants
+   *  everything asked for. Non-empty is a legitimate, REPORTED outcome (see
+   *  `plan.ts#chooseGrantingPlanForCapabilities`'s own doc comment) — never
+   *  silently downgraded to "granted". */
+  readonly unsatisfiedCapabilities: readonly string[];
   readonly cells: readonly DlsGateCellOutcome[];
 }
 
@@ -276,10 +287,14 @@ export interface DlsGateProbeResult {
  *   2. one throwaway competition, two cricket divisions (dls on / dls off),
  *      each force-activated via SQL (see `PlanSql.setDivisionActive`)
  *   3. four cells against the UNENTITLED (fresh/community) org
- *   4. derive + provision the plan that grants `cricket.dls`
+ *   4. read `plan_entitlements` for BOTH `cricket.dls` (required) and
+ *      `officials.auto` (desired) and derive + provision the plan that
+ *      grants both when one exists (B03 review F1(a) —
+ *      `chooseGrantingPlanForCapabilities`, never `cricket.dls` alone)
  *   5. replay cell 1's exact call (its fixture's `expected_seq` is still 0 —
  *      nothing was ever appended by a 402) — now expected to clear
- *   6. derive whether that SAME plan also grants `officials.auto`
+ *   6. report whether the CHOSEN plan grants `officials.auto`, and name it
+ *      when it does not (`unsatisfiedCapabilities`)
  */
 export async function runDlsGateProbe(input: DlsGateProbeInput): Promise<DlsGateProbeResult> {
   const { base, email, runTag, sql } = input;
@@ -338,8 +353,17 @@ export async function runDlsGateProbe(input: DlsGateProbeInput): Promise<DlsGate
   cells.push(classifyDlsGateCell("other_event_unentitled", false, await send(fixtureOtherEvent, "cricket.ball", {})));
 
   // ---- the cleared direction ----
+  // Both reads happen BEFORE the choice, not after: B03 review F1(a)'s bug
+  // was choosing a plan for `cricket.dls` alone and only THEN asking whether
+  // it happened to also grant `officials.auto` — a plan that satisfies one
+  // feature and hopes. `chooseGrantingPlanForCapabilities` needs both rows
+  // up front to pick a plan that grants everything this run asked for.
   const dlsRows = await sql.entitlementRows("cricket.dls");
-  const provisionedPlan = chooseGrantingPlan(dlsRows);
+  const autoRows = await sql.entitlementRows("officials.auto");
+  const { plan: provisionedPlan, unsatisfied: unsatisfiedCapabilities } = chooseGrantingPlanForCapabilities([
+    { featureKey: "cricket.dls", rows: dlsRows },
+    { featureKey: "officials.auto", rows: autoRows },
+  ]);
   await provisionPlan({ base, orgId, plan: provisionedPlan, ownerSession: s, sql, transport: t });
 
   // Same fixture, same body, as `revise_no_target_unentitled` above — its
@@ -348,8 +372,7 @@ export async function runDlsGateProbe(input: DlsGateProbeInput): Promise<DlsGate
     classifyDlsGateCell("revise_no_target_entitled", false, await send(fixtureRefuse, "cricket.revise", {})),
   );
 
-  const autoRows = await sql.entitlementRows("officials.auto");
-  const officialsAutoGranted = planGrants(autoRows, provisionedPlan);
+  const officialsAutoGranted = !unsatisfiedCapabilities.includes("officials.auto");
 
-  return { orgId, provisionedPlan, officialsAutoGranted, cells };
+  return { orgId, provisionedPlan, officialsAutoGranted, unsatisfiedCapabilities, cells };
 }

@@ -621,6 +621,17 @@ function makeFakeServer(opts: { sameOrgForAll?: boolean } = {}): {
       if (method === "POST" && /^\/api\/v1\/officials\/[^/]+\/availability$/.test(routePath)) {
         return { date: (body as { date: string }).date } as T;
       }
+      // B03 T6b — the official's OWN claim invite, same shared claim-invite
+      // map as the pack's player invites below (a distinct GET, never this
+      // POST's own echo, is what the driver trusts either way).
+      const officialInviteMatch = /^\/api\/v1\/officials\/([^/]+)\/invite$/.exec(routePath);
+      if (method === "POST" && officialInviteMatch) {
+        const officialId = officialInviteMatch[1]!;
+        const personId = `invited-${officialId}`;
+        const row = { id: personId, person_id: personId, claimed_at: null, revoked_at: null };
+        claimInvites.set(personId, row);
+        return { person_id: personId } as T;
+      }
       if (method === "PATCH" && /^\/api\/v1\/fixtures\/[^/]+\/officials$/.test(routePath)) {
         const fixtureId = routePath.split("/")[4]!;
         fixtureOfficials.set(fixtureId, (body as { set: unknown[] }).set);

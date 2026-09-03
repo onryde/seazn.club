@@ -61,34 +61,43 @@
 // this file invented would be product code no route exists to receive).
 //
 // ---------------------------------------------------------------------------
-// Officials + claim invites (B03 T6) — `seedOfficialsAndClaims`, deliberately
-// NOT called from `seedSuite`
+// Officials + claim invites (B03 T6/T7, split per the B03 review 2026-09-03,
+// finding F1(b)) — `seedOfficialsAndClaims` IS called from `seedSuite`;
+// `runOfficialsAutoAssign` is NOT
 // ---------------------------------------------------------------------------
-// `seedSuite` runs BEFORE any scheduling exists (`lib/suites/tiny.ts`'s
-// `runTinySuite` calls it, then PUTs schedule-settings and drives
-// schedule/auto -> schedule/apply itself, afterward). Two consequences that
-// make baking officials into `seedSuite` the wrong move right now:
+// `seedOfficialsAndClaims` creates every official, sets every blackout,
+// PATCHes every MANUAL assignment, mints every claim invite (the pack's own
+// player invites and each official's own `/invite`) — none of that depends
+// on scheduling or on an entitlement (every one of those routes is free on
+// every plan; see `SeedOfficialsAndClaimsInput`'s own doc comments), so it
+// runs from `seedSuite`, before scheduling exists, same as everything else
+// `seedSuite` drives.
 //
-//   1. `POST /divisions/{id}/officials/auto` only considers fixtures with
-//      `scheduled_at` set (`usecases/officials.ts`'s `engineInput`) — called
-//      before scheduling, it always proposes zero. Auto-assignment is
-//      therefore only MEANINGFUL once a caller sequences it after
-//      scheduling, which `seedSuite` does not do and is not chartered to
-//      (scheduling is `runTinySuite`'s own walk today, B04's more generally).
-//   2. `officials.auto`/`officials.apply` are gated behind the `officials.auto`
-//      Pro feature (`requireFeature`, `usecases/officials.ts:429,468`), and
-//      B03's plan-provisioning task (`bench-prompts/B03-seeding-layer.md`
-//      item 3, "setPlan-by-SQL precedent") has not landed in this tree yet
-//      (checked: no `setPlan` call anywhere under `scripts/bench`). Folding
-//      an unconditional officials/auto call into `seedSuite` today would make
-//      today's GREEN `npm run bench:scheduler -- --suite _tiny` start 402'ing
-//      the moment `_tiny.json` declares an auto-needing official.
+// The AUTO pass does not, and a previous cut of this file got that wrong by
+// folding it in here too, gated on a flag: `POST /divisions/{id}/officials/
+// auto`'s own `engineInput` filters `where scheduled_at is not null`
+// (`usecases/officials.ts:386`) — called from inside `seedSuite`, which
+// completes before `runTinySuite`'s own scheduling walk (schedule-settings ->
+// schedule/auto -> schedule/apply) even starts, it always proposed zero.
+// Structurally dead, not merely untested: no ordering of `autoAssign: true`
+// against `seedSuite`'s own internals could ever have reached a scheduled
+// fixture. `_tiny.json`'s "off-eli" official (empty `assignments`, the one
+// this pack declares specifically to exercise this path) could never be
+// reached by any real run — see
+// `docs/superpowers/specs/bench-product-value/B03-review-findings-2026-09-03.md`,
+// F1(b).
 //
-// So this capability is a separate, independently unit-tested export instead
-// — real, driven end-to-end through the same `SeedTransport` DI shape
-// `seedSuite` uses, but wiring it into `runTinySuite`'s live walk is left to
-// whichever task lands plan-provisioning AND sequences it after scheduling.
-// Recorded as a finding in the task report, not silently worked around.
+// So the auto pass is `runOfficialsAutoAssign` below: a separate export,
+// independently unit-tested, that `runTinySuite` calls AFTER its own
+// `schedule/apply` succeeds — the only point at which the fixtures the pack's
+// auto-needing officials could be proposed onto actually carry a
+// `scheduled_at`. It is also the one entitlement-gated step in this whole
+// file (`requireFeature(orgId, "officials.auto")`,
+// `usecases/officials.ts:429,468`) — `runTinySuite` only calls it once B03
+// T7's plan-provisioning probe has derived that the org's provisioned plan
+// actually grants `officials.auto` (`lib/plan.ts#chooseGrantingPlanForCapabilities`,
+// itself a review fix: the plan choice used to optimise for `cricket.dls`
+// alone and hope, F1(a)).
 //
 // ---------------------------------------------------------------------------
 // The blackout "read-back" finding
@@ -199,16 +208,23 @@ export interface SeedSuiteInput {
    */
   readonly competitionBranding?: Record<string, unknown>;
   /**
-   * B03 T7: forwarded verbatim to `seedOfficialsAndClaims`'s own `autoAssign`
-   * — see that field's doc comment for what it gates and why it defaults to
-   * `false`. `seedSuite` itself derives nothing here; the CALLER (`lib/
-   * suites/tiny.ts`'s `runTinySuite`, once it has provisioned a plan and
-   * asked `lib/plan.ts#planGrants` whether that plan grants `officials.auto`)
-   * decides. Omitted (server default `false`) when absent — every existing
-   * caller of `seedSuite` is unaffected, matching `competitionBranding`'s own
-   * precedent just above.
+   * B03 T6b EXTENSION, same shape as `competitionBranding` just above: extra
+   * `CreateCompetition.visibility` (`schemas.ts:94`, `Visibility.default
+   * ("private")`) merged into the competition create-call body. Not
+   * something `SeedPlan`/`PackSchema` can carry — visibility is bench-
+   * RUNTIME config (whether THIS run wants its public read-model reachable),
+   * not pack content, matching `competitionBranding`'s own reasoning. Needed
+   * because `GET /api/v1/public/orgs/{orgSlug}/competitions/{slug}/
+   * divisions/{divisionSlug}/stats` (`publicDivisionStats`,
+   * `usecases/player-stats.ts:525-546`) 404s on ANY competition whose
+   * `visibility` is not `'public'`/`'unlisted'` — and every `seedSuite`
+   * caller before this task left it at the server default (`'private'`),
+   * which the public-stats baseline (`lib/stats.ts`) needs cleared before it
+   * can even reach the division lookup, independent of consent or scoring.
+   * Omitted (server default `'private'`) when absent — every existing
+   * caller of `seedSuite` is unaffected.
    */
-  readonly autoAssign?: boolean;
+  readonly competitionVisibility?: "public" | "unlisted";
 }
 
 interface IdOut {
@@ -491,7 +507,7 @@ async function seedEntrants(
  *      ext_key
  */
 export async function seedSuite(input: SeedSuiteInput): Promise<SeededSuite> {
-  const { base, plan, streams, runTag, competitionBranding, autoAssign } = input;
+  const { base, plan, streams, runTag, competitionBranding, competitionVisibility } = input;
   const venues = input.venues ?? [];
   const t = input.transport ?? defaultTransport;
   const s = newSession();
@@ -513,6 +529,7 @@ export async function seedSuite(input: SeedSuiteInput): Promise<SeededSuite> {
       ends_on: plan.competition.endsOn,
       ...(plan.competition.description === undefined ? {} : { description: plan.competition.description }),
       ...(competitionBranding === undefined ? {} : { branding: competitionBranding }),
+      ...(competitionVisibility === undefined ? {} : { visibility: competitionVisibility }),
     },
   });
 
@@ -605,8 +622,9 @@ export async function seedSuite(input: SeedSuiteInput): Promise<SeededSuite> {
   // ---- officials, their blackouts, their named assignments, and the pack's
   // claim invites. Driven HERE, by the real producer, rather than left for a
   // caller to remember: a seeding step nothing calls is not a seeding step.
-  // `autoAssign` is B03 T7's own passthrough — see `SeedSuiteInput.
-  // autoAssign`'s doc comment for who decides it and why it defaults off. ----
+  // The AUTO pass is NOT part of this call — see this file's header comment
+  // (B03 review F1(b)) and `runOfficialsAutoAssign` below; `runTinySuite`
+  // drives that one separately, after ITS OWN scheduling walk. ----
   const officialsAndClaims =
     plan.officials.length > 0 || plan.claimInvites.length > 0
       ? await seedOfficialsAndClaims({
@@ -616,13 +634,13 @@ export async function seedSuite(input: SeedSuiteInput): Promise<SeededSuite> {
           fixtureIdByKey,
           personIdByRef,
           // The first division is the only one this suite schedules
-          // (`suites/tiny.ts`), so it is the only one an auto pass or a
-          // `schedule/validate` read-back could speak about.
+          // (`suites/tiny.ts`), so it is the only one a `schedule/validate`
+          // read-back could speak about.
           ...(plan.divisions[0] === undefined
             ? {}
             : { primaryDivisionId: divisionIdByRef.get(plan.divisions[0].ref) }),
           email,
-          ...(autoAssign === undefined ? {} : { autoAssign }),
+          runTag,
           ...(input.transport === undefined ? {} : { transport: input.transport }),
         })
       : undefined;
@@ -705,51 +723,36 @@ export interface SeedOfficialsAndClaimsInput {
    *  to the real `person_id` `POST /persons/{id}/claim-invites` targets. */
   readonly personIdByRef: ReadonlyMap<string, string>;
   /**
-   * The division `POST .../officials/auto` proposes/applies auto-needing
-   * officials against, and `POST .../schedule/validate` reads the blackout
-   * back from — see this file's header comment on why the PACK itself
-   * carries no division for either (an auto-needing official declares no
-   * `assignments`, so nothing in `pack.officials[]` names one). Required
-   * when the plan declares at least one auto-needing official (empty
-   * `assignments`) or at least one blackout; a caller with neither may omit
-   * it, and the two steps that would need it are skipped rather than
-   * throwing on an absent id nothing asked for.
+   * The division `POST .../schedule/validate` reads the blackout's effect
+   * back from — see this file's header comment ("the blackout read-back
+   * finding") on why the PACK itself carries no division for it. Required
+   * when the plan declares at least one blackout; a caller with none may
+   * omit it, and the step that would need it is skipped rather than throwing
+   * on an absent id nothing asked for. NOT used for auto-assignment anymore
+   * — see `RunOfficialsAutoAssignInput.primaryDivisionId` below, which takes
+   * its own (required) division id, resolved by the caller AFTER scheduling.
    */
   readonly primaryDivisionId?: string;
-  /**
-   * Run the auto-assignment pass. **Default false**, and the default is the
-   * point.
-   *
-   * Everything else this function does is free on every plan — `POST
-   * /officials`, `POST /officials/{id}/availability`, `PATCH
-   * /fixtures/{id}/officials` (its route says so in as many words: "Single-role
-   * manual assignment is free on every plan") and `POST
-   * /persons/{id}/claim-invites` carry no `requireFeature` at all. Auto-assign
-   * is the exception: `requireFeature(orgId, "officials.auto")` guards
-   * `usecases/officials.ts:429` and `:468`, so an unprovisioned org 402s.
-   *
-   * That single gated step is why this whole function was first left unwired
-   * from `seedSuite`. It should not have been: deferring one Pro-gated call
-   * cost the other four their only real producer, which is this repo's
-   * recurring "inert seam" — code typed, unit-green, and never driven by
-   * anything in production. The flag defers the one call that needs a plan,
-   * and B03 T7 (plan provisioning) is what lets a caller pass `true`.
-   */
-  readonly autoAssign?: boolean;
   /** Same identity `seedSuite` signed in with for this run — this function
    *  signs in AGAIN with it (its own session), the same self-contained
    *  precedent `seedSuite` itself follows (this file's header comment on
    *  "a second magic-link round trip, accepted as the cost of keeping
    *  seedSuite self-contained"). */
   readonly email: string;
+  /** `seedSuite`'s own run tag — needed here ONLY to derive a stable,
+   *  collision-free email for `POST /officials/{id}/invite` (see
+   *  `officialInviteEmail` below). Never used to mint identity the way
+   *  `email` above does. */
+  readonly runTag: string;
   readonly transport?: SeedTransport;
 }
 
 export interface SeededOfficialsAndClaims {
   readonly officialIdByRef: ReadonlyMap<string, string>;
   /** Real `GET /fixtures/{id}` reads, keyed by fixture id — every fixture
-   *  this driver assigned an official onto, manually or through the auto
-   *  apply. */
+   *  this driver assigned an official onto MANUALLY. The auto pass reads its
+   *  own touched fixtures back separately — see
+   *  `OfficialsAutoAssignResult.fixtureOfficialsById`. */
   readonly fixtureOfficialsById: ReadonlyMap<string, readonly FixtureOfficialRow[]>;
   /** `schedule/validate`'s own conflicts for `primaryDivisionId` — empty
    *  when no blackout was declared, or `primaryDivisionId` was omitted. See
@@ -759,6 +762,49 @@ export interface SeededOfficialsAndClaims {
    *  person ref (never the write calls' own echoed bodies — see
    *  `ClaimInviteReadBack`'s header comment). */
   readonly claimInviteByPersonRef: ReadonlyMap<string, ClaimInviteReadBack>;
+  /**
+   * B03 T6b: `POST /officials/{id}/invite` minted and read back, keyed by
+   * the OFFICIAL's own ref — never `PackOfficial.person` (`personRef`),
+   * because the invite's `person_id` is NOT that ref's real id. See
+   * `mintOfficialInvites`'s own header comment for why `PackOfficial.person`
+   * stays unresolvable even after this call fires: `POST /persons` cannot
+   * create a lane="official" row at all (`PersonLane` admits only
+   * `"player"|"coach"|"staff"`, `api-v1/schemas.ts:370`), so the pack's own
+   * `p-dee`/`p-eli` were never real rows to begin with — the invite mints a
+   * BRAND NEW person (`full_name = official.display_name`), disconnected
+   * from whichever pack person the author intended. Read back through a
+   * DISTINCT `GET /persons/{person_id}/claim-invites` call, same
+   * "never the write's own echo" precedent as `claimInviteByPersonRef`
+   * above. `claimed_at` staying null on that read is the proof nothing here
+   * accepted it (B03 §5: seeding only mints invites). */
+  readonly officialClaimInviteByRef: ReadonlyMap<string, ClaimInviteReadBack>;
+}
+
+/**
+ * The email `POST /officials/{id}/invite` sends its `CreateClaimInvite`
+ * body — `PackOfficial` (pack-schema.ts:768-769) carries no email field at
+ * all, and pack-schema.ts is off-limits to this task (B03 §T6b brief). Two
+ * alternatives were considered and rejected:
+ *
+ *   - Reusing `PackClaimInvite.email` (`pack.claimInvites[]`): that array is
+ *     keyed by a DIFFERENT person ref (`p-ana`/`p-cho` in `_tiny.json`,
+ *     both player-lane) — nothing ties an official's ref to an entry there,
+ *     and `checkReservations` never requires one to exist.
+ *   - Fabricating a "realistic" address from the official's `display_name`:
+ *     indistinguishable from real user data and not derived from anything
+ *     the pack actually declares.
+ *
+ * So this derives one the same way `seedSuite`'s own sign-in identity is
+ * derived (this file's header comment: "the existing precedent is that
+ * [the run tag] is not this layer's parameter at all, it is the HTTP
+ * driver's") — from the official's own ref plus the run tag, scoped so two
+ * officials in one run, or the same official across two concurrent runs,
+ * never collide. `ref` is sanitized because `PackRef`'s alphabet
+ * (`[A-Za-z0-9_.:-]`, pack-schema.ts:176-180) admits `:`, which is not a
+ * valid email local-part character. */
+export function officialInviteEmail(ref: string, runTag: string): string {
+  const safeRef = ref.replace(/[^A-Za-z0-9_.-]/g, "-");
+  return `bench-official-${safeRef}-${runTag}@example.com`;
 }
 
 /** Resolves an official's ref to its real id, or throws naming the ref —
@@ -777,20 +823,21 @@ function requireOfficialId(officialIdByRef: ReadonlyMap<string, string>, ref: st
 
 /**
  * Drives `plan.officials`/`plan.claimInvites` over the real REST API. See
- * this file's header comment for why this is not folded into `seedSuite`.
+ * this file's header comment for why the AUTO pass is NOT part of this
+ * function (B03 review F1(b)) — that is `runOfficialsAutoAssign`, below,
+ * called separately by `runTinySuite` after ITS OWN scheduling walk.
  *
  * Order: create every official -> set every blackout -> manual assignments
  * (grouped per fixture — `PATCH .../officials` REPLACES a fixture's whole
  * officials set, so two manual officials sharing a fixture need ONE call,
- * not two racing writes) -> auto-assignment (propose, then apply, for every
- * official the pack leaves unnamed) -> read back every touched fixture and
- * the blackout's effect -> mint (never accept) every claim invite and read
- * it back.
+ * not two racing writes) -> read back every manually-touched fixture and the
+ * blackout's effect -> mint (never accept) every claim invite and read it
+ * back.
  */
 export async function seedOfficialsAndClaims(
   input: SeedOfficialsAndClaimsInput,
 ): Promise<SeededOfficialsAndClaims> {
-  const { base, officials, claimInvites, fixtureIdByKey, personIdByRef, primaryDivisionId, email } = input;
+  const { base, officials, claimInvites, fixtureIdByKey, personIdByRef, primaryDivisionId, email, runTag } = input;
   const t = input.transport ?? defaultTransport;
   const s = newSession();
   await t.signIn(base, s, email);
@@ -827,7 +874,6 @@ export async function seedOfficialsAndClaims(
 
   // ---- manual assignments, grouped per fixture ----
   const manualOfficials = officials.filter((o) => o.assignments.length > 0);
-  const autoOfficials = officials.filter((o) => o.assignments.length === 0);
 
   const manualByFixture = new Map<string, { official_id: string; role_key: string; locked: boolean }[]>();
   for (const o of manualOfficials) {
@@ -865,46 +911,13 @@ export async function seedOfficialsAndClaims(
     ),
   );
 
-  // ---- auto-assignment: propose, then apply, for every official the pack
-  // leaves unnamed (pack-schema.ts:768-769's own rule). OPT-IN — see
-  // `autoAssign`; this is the only entitlement-gated step here. ----
-  const autoTouchedFixtureIds = new Set<string>();
-  if (input.autoAssign === true && autoOfficials.length > 0) {
-    if (primaryDivisionId === undefined) {
-      throw new Error(
-        `${autoOfficials.length} official(s) declare no named assignment (left to auto-assign, per the pack's ` +
-          `own rule) but no primaryDivisionId was given to propose them against`,
-      );
-    }
-    const roles = [...new Set(autoOfficials.flatMap((o) => o.role_keys))];
-    const proposal = await t.request<{
-      assignments: readonly { fixtureId: string; officialId: string; roleKey: string; locked?: boolean }[];
-    }>(base, s, `/api/v1/divisions/${primaryDivisionId}/officials/auto`, {
-      method: "POST",
-      body: { policy: { roles } },
-    });
-    if (proposal.assignments.length > 0) {
-      await t.request(base, s, `/api/v1/divisions/${primaryDivisionId}/officials/apply`, {
-        method: "POST",
-        body: {
-          assignments: proposal.assignments.map((a) => ({
-            fixture_id: a.fixtureId,
-            official_id: a.officialId,
-            role_key: a.roleKey,
-            locked: a.locked ?? false,
-          })),
-        },
-      });
-      for (const a of proposal.assignments) autoTouchedFixtureIds.add(a.fixtureId);
-    }
-  }
-
-  // ---- read-back: assignment. A real `GET /fixtures/{id}` per touched
-  // fixture — never the write calls' own echoed bodies. ----
-  const touchedFixtureIds = new Set<string>([...manualByFixture.keys(), ...autoTouchedFixtureIds]);
+  // ---- read-back: manual assignment. A real `GET /fixtures/{id}` per
+  // MANUALLY-touched fixture — never the write calls' own echoed bodies. The
+  // auto pass (moved out — see this file's header comment, B03 review
+  // F1(b)) reads its own touched fixtures back separately. ----
   const fixtureOfficialsById = new Map<string, readonly FixtureOfficialRow[]>();
   await Promise.all(
-    [...touchedFixtureIds].map(async (fixtureId) => {
+    [...manualByFixture.keys()].map(async (fixtureId) => {
       const fixture = await t.request<FixtureOfficialsOut>(base, s, `/api/v1/fixtures/${fixtureId}`);
       fixtureOfficialsById.set(fixtureId, fixture.officials);
     }),
@@ -925,9 +938,9 @@ export async function seedOfficialsAndClaims(
     scheduleConflicts = validated.conflicts;
   }
 
-  // ---- claim invites: mint, never accept, and read back (`claimed_at`
-  // staying null on the READ is the proof, not just the absence of an
-  // accept call in this file). ----
+  // ---- claim invites (player-lane, `pack.claimInvites[]`): mint, never
+  // accept, and read back (`claimed_at` staying null on the READ is the
+  // proof, not just the absence of an accept call in this file). ----
   const claimInviteByPersonRef = new Map<string, ClaimInviteReadBack>();
   await Promise.all(
     claimInvites.map(async (c) => {
@@ -944,5 +957,145 @@ export async function seedOfficialsAndClaims(
     }),
   );
 
-  return { officialIdByRef, fixtureOfficialsById, scheduleConflicts, claimInviteByPersonRef };
+  // ---- B03 T6b: officials' OWN claim invites, `POST
+  // /officials/{id}/invite` — the SAME shared person-claim rail as the
+  // block above, pointed at the official rather than a pack person (see
+  // `officialInviteEmail`'s and `SeededOfficialsAndClaims.
+  // officialClaimInviteByRef`'s header comments for why the email is
+  // synthesized and why `PackOfficial.person` still cannot be resolved even
+  // once this fires). Ungated on every plan (`inviteOfficial`,
+  // `usecases/officials.ts:196-230`, carries no `requireFeature` call) —
+  // unlike the auto-assign pass (`runOfficialsAutoAssign`, below), this runs
+  // for EVERY official the pack declares, unconditionally, matching the
+  // player claim-invite block's own unconditional precedent just above.
+  // Mint only: never follows `claim_url`, never calls an accept route. ----
+  const officialClaimInviteByRef = new Map<string, ClaimInviteReadBack>();
+  await Promise.all(
+    officials.map(async (o) => {
+      const officialId = requireOfficialId(officialIdByRef, o.ref);
+      const minted = await t.request<{ person_id: string }>(base, s, `/api/v1/officials/${officialId}/invite`, {
+        method: "POST",
+        body: { email: officialInviteEmail(o.ref, runTag) },
+      });
+      // Distinct GET, never the POST's own echoed body — same "not merely
+      // 201" precedent as every other read-back in this file.
+      const read = await t.request<ClaimInviteReadBack>(
+        base,
+        s,
+        `/api/v1/persons/${minted.person_id}/claim-invites`,
+      );
+      officialClaimInviteByRef.set(o.ref, read);
+    }),
+  );
+
+  return {
+    officialIdByRef,
+    fixtureOfficialsById,
+    scheduleConflicts,
+    claimInviteByPersonRef,
+    officialClaimInviteByRef,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Officials auto-assignment (B03 T7 / review F1(b)) — a SEPARATE export,
+// driven by `runTinySuite` AFTER its own scheduling walk
+// ---------------------------------------------------------------------------
+// `POST /divisions/{id}/officials/auto`'s own `engineInput` filters `where
+// scheduled_at is not null` (`usecases/officials.ts:386`) — this call is only
+// ever meaningful once fixtures are actually scheduled, which is exactly why
+// it cannot live inside `seedOfficialsAndClaims`/`seedSuite` (both of which
+// run BEFORE `runTinySuite`'s own schedule-settings -> schedule/auto ->
+// schedule/apply walk). It is also the one entitlement-gated step in this
+// whole file (`requireFeature(orgId, "officials.auto")`,
+// `usecases/officials.ts:429,468`) — the caller decides whether to invoke
+// this at all (`RunOfficialsAutoAssignInput` carries no opt-in flag of its
+// own; an empty `autoOfficials` list is this function's own no-op guard, see
+// below).
+
+export interface RunOfficialsAutoAssignInput {
+  readonly base: string;
+  /** Same identity `seedSuite`/`seedOfficialsAndClaims` signed in with for
+   *  this run — this function signs in AGAIN with it (its own session), same
+   *  self-contained precedent as `seedOfficialsAndClaims` itself. */
+  readonly email: string;
+  /** The division to propose/apply auto-needing officials against. REQUIRED
+   *  (unlike `seedOfficialsAndClaims`'s own `primaryDivisionId`, which may be
+   *  omitted): a caller only reaches this function once its own scheduling
+   *  walk has already resolved a real division id, so there is no legitimate
+   *  case for calling this without one. */
+  readonly primaryDivisionId: string;
+  /** `plan.officials` filtered to those with EMPTY `assignments`
+   *  (pack-schema.ts:768-769's own rule: an official with a named assignment
+   *  is manual, locked by `seedOfficialsAndClaims`, and never routed around
+   *  by this pass) — the caller filters, not this function, so a caller that
+   *  already has the full plan does not need a second copy of that
+   *  predicate here. An empty list is a legitimate no-op: no HTTP call is
+   *  made at all, not even sign-in. */
+  readonly autoOfficials: readonly SeedPlanOfficial[];
+  readonly transport?: SeedTransport;
+}
+
+export interface OfficialsAutoAssignResult {
+  readonly proposedCount: number;
+  readonly appliedCount: number;
+  /** Real `GET /fixtures/{id}` reads, keyed by fixture id — every fixture
+   *  THIS pass assigned an official onto (empty when the proposal itself was
+   *  empty). Never the apply call's own echoed body — same "not merely a
+   *  successful write" precedent as every other read-back in this file. */
+  readonly fixtureOfficialsById: ReadonlyMap<string, readonly FixtureOfficialRow[]>;
+}
+
+/**
+ * Proposes, then applies, auto-assignment for every official the pack leaves
+ * unnamed. Call this AFTER scheduling exists for `primaryDivisionId` — see
+ * this section's header comment for why an earlier call always proposes
+ * zero, structurally, regardless of what officials the plan declares.
+ */
+export async function runOfficialsAutoAssign(
+  input: RunOfficialsAutoAssignInput,
+): Promise<OfficialsAutoAssignResult> {
+  const { base, email, primaryDivisionId, autoOfficials } = input;
+  if (autoOfficials.length === 0) {
+    return { proposedCount: 0, appliedCount: 0, fixtureOfficialsById: new Map() };
+  }
+  const t = input.transport ?? defaultTransport;
+  const s = newSession();
+  await t.signIn(base, s, email);
+
+  const roles = [...new Set(autoOfficials.flatMap((o) => o.role_keys))];
+  const proposal = await t.request<{
+    assignments: readonly { fixtureId: string; officialId: string; roleKey: string; locked?: boolean }[];
+  }>(base, s, `/api/v1/divisions/${primaryDivisionId}/officials/auto`, {
+    method: "POST",
+    body: { policy: { roles } },
+  });
+
+  let appliedCount = 0;
+  const touchedFixtureIds = new Set<string>();
+  if (proposal.assignments.length > 0) {
+    await t.request(base, s, `/api/v1/divisions/${primaryDivisionId}/officials/apply`, {
+      method: "POST",
+      body: {
+        assignments: proposal.assignments.map((a) => ({
+          fixture_id: a.fixtureId,
+          official_id: a.officialId,
+          role_key: a.roleKey,
+          locked: a.locked ?? false,
+        })),
+      },
+    });
+    appliedCount = proposal.assignments.length;
+    for (const a of proposal.assignments) touchedFixtureIds.add(a.fixtureId);
+  }
+
+  const fixtureOfficialsById = new Map<string, readonly FixtureOfficialRow[]>();
+  await Promise.all(
+    [...touchedFixtureIds].map(async (fixtureId) => {
+      const fixture = await t.request<FixtureOfficialsOut>(base, s, `/api/v1/fixtures/${fixtureId}`);
+      fixtureOfficialsById.set(fixtureId, fixture.officials);
+    }),
+  );
+
+  return { proposedCount: proposal.assignments.length, appliedCount, fixtureOfficialsById };
 }

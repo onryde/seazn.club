@@ -116,9 +116,16 @@ import { formatFinding, loadPackFile } from "../pack-io.ts";
 import { hashPack } from "../pack-hash.ts";
 import type { Pack } from "../pack-schema.ts";
 import { buildSeedPlan, type SeedPlan, type SeedPlanExpectedFixtureCount } from "../seed-plan.ts";
-import { defaultTransport, seedSuite, type SeededSuite, type SeedTransport } from "../seed.ts";
+import {
+  defaultTransport,
+  runOfficialsAutoAssign,
+  seedSuite,
+  type SeededSuite,
+  type SeedTransport,
+} from "../seed.ts";
 import { runDlsGateProbe, type ProbeTransport } from "../dls-gate.ts";
-import type { PlanSql } from "../plan.ts";
+import { planGrants, type PlanSql } from "../plan.ts";
+import { readPlayerStatsBaseline, playerStatsBaselineIssues, type RosterMemberRef } from "../stats.ts";
 import type { OracleResult, SuiteReport } from "../report.ts";
 
 /** The committed micro-pack, resolved from THIS module rather than from the
@@ -162,27 +169,31 @@ export interface TinySuiteInput {
   transport?: SeedTransport;
   /**
    * B03 T7: the plan/entitlement-provisioning SQL seam (`lib/plan.ts`).
-   * **Optional, and the absence is deliberate** — matching `seedOfficialsAndClaims`'s
-   * own `autoAssign` precedent ("default false, and the default is the
-   * point"): every EXISTING caller of `runTinySuite` (this file's own test
-   * suite included) that does not know about plan provisioning gets today's
-   * behavior unchanged — no DLS-gate probe, `autoAssign` stays off. `bench.ts`
-   * is the one caller that always supplies the real thing
-   * (`lib/plan.ts#createRealPlanSql`), so a real `_tiny` run always exercises
-   * the probe — see `lib/__tests__/bench-cli.test.ts` for the test proving
-   * THAT wiring specifically (removing it there reds a test at the bench.ts
-   * layer, independent of this file's own coverage of what happens once
-   * `sql` is supplied).
+   * **Optional, and the absence is deliberate**: every EXISTING caller of
+   * `runTinySuite` (this file's own test suite included) that does not know
+   * about plan provisioning gets today's behavior unchanged — no DLS-gate
+   * probe, auto-assign stays off. `bench.ts` is the one caller that always
+   * supplies the real thing (`lib/plan.ts#createRealPlanSql`), so a real
+   * `_tiny` run always exercises the probe — see
+   * `lib/__tests__/bench-cli.test.ts` for the test proving THAT wiring
+   * specifically (removing it there reds a test at the bench.ts layer,
+   * independent of this file's own coverage of what happens once `sql` is
+   * supplied).
    *
    * When present, this run: (1) drives `runDlsGateProbe` — the cricket.dls
    * entitlement-gate 2x2-plus-clear proof (see dls-gate.ts's header comment)
    * — reporting every cell as an `oracle` and reddening the gate on any cell
-   * that fails its own expectation; (2) derives `autoAssign` from whether the
-   * plan the probe just provisioned ALSO grants `officials.auto`
-   * (`lib/plan.ts#planGrants` — "derived, not assumed", never assumed true
-   * merely because SOME plan got provisioned) and threads it into
-   * `seedSuite`, which is what finally drives `seedOfficialsAndClaims`'s
-   * auto-assign pass for real.
+   * that fails its own expectation, choosing a plan that grants EVERY
+   * capability this run needs (`lib/plan.ts#chooseGrantingPlanForCapabilities`
+   * — B03 review F1(a): the old choice optimised for `cricket.dls` alone and
+   * hoped it also granted `officials.auto`, which on the live catalog it did
+   * not); (2) derives `autoAssign` from whether that SAME provisioned plan
+   * ALSO grants `officials.auto` (`probe.officialsAutoGranted` — "derived,
+   * not assumed", never assumed true merely because SOME plan got
+   * provisioned) and, once THIS suite's own scheduling walk below has
+   * completed, drives `runOfficialsAutoAssign` for real (B03 review F1(b) —
+   * calling it any earlier always proposes zero, since `officials/auto`
+   * only considers already-scheduled fixtures).
    */
   sql?: PlanSql;
   /** Overridable so a test can drive the DLS-gate probe's OWN HTTP surface
@@ -501,15 +512,23 @@ export async function runTinySuite(input: TinySuiteInput): Promise<SuiteReport> 
 
     // B03 T7 — plan/entitlement provisioning + the cricket.dls entitlement-
     // gate probe. Runs BEFORE `seedSuite` (never after): `autoAssign` below
-    // is a PARAMETER seedSuite forwards to `seedOfficialsAndClaims`, so
-    // whether officials.auto is granted has to be known before that call is
-    // built, not derived from anything seedSuite itself creates. The probe
-    // owns its OWN throwaway competition/divisions (dls-gate.ts's header
-    // comment) — it never touches `_tiny`'s own competition/division/stage,
-    // so this ordering costs nothing else in this function. Skipped
-    // entirely when `input.sql` is absent (see `TinySuiteInput.sql`'s own
-    // doc comment on why that is the deliberate default).
+    // has to be known before this suite's own scheduling walk decides
+    // whether to drive `runOfficialsAutoAssign` afterward (B03 review
+    // F1(b) — that call itself happens much later, AFTER schedule/apply,
+    // see below). The probe owns its OWN throwaway competition/divisions
+    // (dls-gate.ts's header comment) — it never touches `_tiny`'s own
+    // competition/division/stage, so this ordering costs nothing else in
+    // this function. Skipped entirely when `input.sql` is absent (see
+    // `TinySuiteInput.sql`'s own doc comment on why that is the deliberate
+    // default).
     let autoAssign: boolean | undefined;
+    // B03 T6b: whether the plan the DLS-gate probe just provisioned ALSO
+    // grants `stats.player` — derived the same way `autoAssign` is derived
+    // just below (a fresh `plan_entitlements` read + `planGrants`, never
+    // assumed from "some plan got provisioned"). Gates the org-authenticated
+    // half of the player-stats baseline (`lib/stats.ts`); the public route
+    // needs no entitlement at all, only `competitionVisibility` below.
+    let statsPlayerGranted = false;
     if (input.sql !== undefined) {
       log.info({}, "tiny: running the cricket.dls entitlement-gate probe (B03 T7)");
       const probe = await runDlsGateProbe({
@@ -526,8 +545,26 @@ export async function runTinySuite(input: TinySuiteInput): Promise<SuiteReport> 
         }
       }
       autoAssign = probe.officialsAutoGranted;
+      // B03 review F1(a): the chosen plan is not guaranteed to grant every
+      // capability this run wants (`chooseGrantingPlanForCapabilities` picks
+      // the best available candidate, never invents one) — reported here,
+      // never silently swallowed, when it does not.
+      if (probe.unsatisfiedCapabilities.length > 0) {
+        warnings.push(
+          `tiny: plan "${probe.provisionedPlan}" (chosen because it grants cricket.dls) does not also grant ` +
+            `${probe.unsatisfiedCapabilities.join(", ")} — no single plan on this catalog grants every ` +
+            `capability this run wants`,
+        );
+      }
+      const statsRows = await input.sql.entitlementRows("stats.player");
+      statsPlayerGranted = planGrants(statsRows, probe.provisionedPlan);
       log.info(
-        { provisionedPlan: probe.provisionedPlan, officialsAutoGranted: probe.officialsAutoGranted },
+        {
+          provisionedPlan: probe.provisionedPlan,
+          officialsAutoGranted: probe.officialsAutoGranted,
+          unsatisfiedCapabilities: probe.unsatisfiedCapabilities,
+          statsPlayerGranted,
+        },
         "tiny: entitlement-gate probe complete",
       );
     }
@@ -548,7 +585,13 @@ export async function runTinySuite(input: TinySuiteInput): Promise<SuiteReport> 
       runTag,
       transport: t,
       competitionBranding: { [KEEP_BRANDING_KEY]: packHash },
-      ...(autoAssign === undefined ? {} : { autoAssign }),
+      // B03 T6b: only when a plan has been provisioned (`input.sql`
+      // present) — the public stats route needs the competition's
+      // visibility off its `'private'` default (see `lib/stats.ts`'s
+      // header comment), and there is no reason to change it for a caller
+      // that never asked for the stats baseline at all (unit tests
+      // included — `input.sql` absent there too).
+      ...(input.sql === undefined ? {} : { competitionVisibility: "unlisted" as const }),
     });
     const venuePromise = (async () => {
       const venue = await t.request<IdOut>(base, s, `/api/v1/orgs/${orgId}/venues`, {
@@ -572,6 +615,29 @@ export async function runTinySuite(input: TinySuiteInput): Promise<SuiteReport> 
     const stageId = seeded.stageIdByRef.get(stage0.ref);
     if (divisionId === undefined || stageId === undefined) {
       throw new Error(`tiny: seedSuite resolved no id for division "${division0.ref}" / stage "${stage0.ref}"`);
+    }
+
+    // B03 T6b: every official's claim invite `seedOfficialsAndClaims` just
+    // minted — a real oracle, not merely that the seeding step ran.
+    // `claimed_at === null` is the proof nothing here accepted it (B03 §5:
+    // seeding only mints invites). Runs unconditionally — the invite call
+    // is ungated on every plan, matching the pack's own player claim
+    // invites just above it in seed.ts.
+    const officialInvites = seeded.officialsAndClaims?.officialClaimInviteByRef;
+    if (officialInvites !== undefined) {
+      for (const [ref, claim] of officialInvites) {
+        const passed = claim.claimed_at === null;
+        oracles.push({
+          name: `officials: claim invite unclaimed (${ref})`,
+          passed,
+          detail: passed
+            ? `claim ${claim.id} for person ${claim.person_id} is minted and unclaimed`
+            : `claim ${claim.id} shows claimed_at=${claim.claimed_at} — seeding must never accept`,
+        });
+        if (!passed) {
+          errors.push(`official "${ref}"'s claim invite shows claimed_at != null — seeding must never accept`);
+        }
+      }
     }
 
     // DERIVED from the pack (entrants choose two, times its declared legs) —
@@ -633,6 +699,47 @@ export async function runTinySuite(input: TinySuiteInput): Promise<SuiteReport> 
       },
     });
 
+    // B03 review F1(b): officials auto-assign runs HERE, strictly AFTER
+    // schedule/apply — never inside `seedSuite`, which completes before this
+    // suite's own scheduling walk even starts. `officials/auto`'s own
+    // `engineInput` only considers fixtures whose `scheduled_at` is set
+    // (`usecases/officials.ts:386`), so calling it any earlier always
+    // proposes zero regardless of what the pack declares. `plan.officials`
+    // with EMPTY `assignments` are the auto-needing ones (pack-schema.ts:
+    // 768-769's own rule) — `_tiny.json`'s "off-eli" is exactly one, and
+    // this is the only place a live run can actually reach it. Gated on
+    // `autoAssign` (derived above from the DLS-gate probe's own plan
+    // choice) — calling `/officials/auto` without the entitlement 402s.
+    const autoOfficials = plan.officials.filter((o) => o.assignments.length === 0);
+    if (autoAssign === true && autoOfficials.length > 0) {
+      log.info(
+        { autoOfficials: autoOfficials.length },
+        "tiny: running officials auto-assign (B03 review F1(b) — after schedule/apply)",
+      );
+      const autoResult = await runOfficialsAutoAssign({
+        base,
+        email,
+        primaryDivisionId: divisionId,
+        autoOfficials,
+        transport: t,
+      });
+      const autoPassed = autoResult.appliedCount > 0;
+      oracles.push({
+        name: "officials: auto-assign reaches the auto-needing official(s) after scheduling",
+        passed: autoPassed,
+        detail: autoPassed
+          ? `${autoResult.proposedCount} proposed, ${autoResult.appliedCount} applied across ` +
+            `${autoResult.fixtureOfficialsById.size} fixture(s)`
+          : `officials/auto proposed 0 assignments for ${autoOfficials.length} auto-needing official(s) ` +
+            `(e.g. "${autoOfficials[0]!.ref}") even after scheduling`,
+      });
+      if (!autoPassed) {
+        errors.push(
+          `officials auto-assign: 0 assignment(s) applied for ${autoOfficials.length} auto-needing official(s)`,
+        );
+      }
+    }
+
     const validated = await t.request<ValidateOut>(base, s, `/api/v1/divisions/${divisionId}/schedule/validate`, {
       method: "POST",
     });
@@ -642,6 +749,61 @@ export async function runTinySuite(input: TinySuiteInput): Promise<SuiteReport> 
       errors.push(`${blocking.length} blocking conflict(s) after schedule/apply: ${blocking.map((c) => c.code).join(", ")}`);
     }
     timings.scheduleMs = Math.round(performance.now() - scheduleStart);
+
+    // B03 T6b: the player-stats baseline. Gated on `input.sql` — it needs
+    // the org-authenticated routes' `stats.player` entitlement (derived
+    // above from the SAME provisioned-plan read the DLS-gate probe made)
+    // and `competitionVisibility` (threaded into `seedSuite` above, only
+    // under this same condition). See `lib/stats.ts`'s header comment for
+    // exactly what this can and cannot prove against an unscored division.
+    if (input.sql !== undefined) {
+      const personsByRef = new Map(plan.persons.map((p) => [p.ref, p]));
+      const roster: RosterMemberRef[] = [];
+      const seenPersonRefs = new Set<string>();
+      for (const e of plan.entrants) {
+        if (e.divisionRef !== division0.ref) continue;
+        for (const m of e.members) {
+          if (seenPersonRefs.has(m.personRef)) continue;
+          const person = personsByRef.get(m.personRef);
+          // Player-lane only — "player stats" is what these three routes
+          // answer; a rostered coach/staff member (S3 ruling 3) earns no
+          // leaderboard row even once a fold exists.
+          if (person === undefined || person.lane !== "player") continue;
+          const personId = seeded.personIdByRef.get(m.personRef);
+          if (personId === undefined) continue;
+          seenPersonRefs.add(m.personRef);
+          roster.push({ personRef: m.personRef, personId, full_name: person.full_name });
+        }
+      }
+      if (!statsPlayerGranted) {
+        warnings.push(
+          "tiny: player-stats baseline skipped — the entitlement-gate probe's own plan does not grant stats.player",
+        );
+      } else {
+        log.info({ roster: roster.length }, "tiny: reading the player-stats baseline (B03 T6b)");
+        const baseline = await readPlayerStatsBaseline({
+          base,
+          email,
+          orgId,
+          divisionId,
+          roster,
+          ...(plan.competition.slug === undefined ? {} : { competitionSlug: plan.competition.slug }),
+          transport: t,
+        });
+        const issues = playerStatsBaselineIssues(baseline, roster);
+        oracles.push({
+          name: "player-stats: baseline",
+          passed: issues.length === 0,
+          detail:
+            issues.length === 0
+              ? `${roster.length} roster read(s), ${baseline.divisionStats.rows.length} division row(s), ` +
+                `${baseline.publicDivisionStats?.rows.length ?? 0} public row(s) — empty rows is the correct ` +
+                `baseline (B03 folds no score events; see lib/stats.ts's header comment)`
+              : issues.join("; "),
+        });
+        for (const issue of issues) errors.push(`player-stats baseline: ${issue}`);
+      }
+    }
   } catch (err) {
     errors.push(err instanceof Error ? err.message : String(err));
   }

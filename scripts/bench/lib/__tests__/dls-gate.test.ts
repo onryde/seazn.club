@@ -125,10 +125,17 @@ function fakePlanSql(overrides: Partial<PlanSql> = {}): { sql: PlanSql; calls: s
   const sql: PlanSql = {
     async entitlementRows(featureKey) {
       calls.push(`entitlementRows(${featureKey})`);
+      // The REAL live catalog the B03 review quoted: cricket.dls is granted
+      // by BOTH pro and pro_plus; officials.auto is granted ONLY by
+      // pro_plus. `chooseGrantingPlanForCapabilities` must land on
+      // "pro_plus" — the one plan that grants everything this probe wants —
+      // never "pro" (the old single-feature choice's answer, which does not
+      // grant officials.auto).
       if (featureKey === "cricket.dls") {
         return [
           { plan_key: "community", bool_value: false },
           { plan_key: "pro", bool_value: true },
+          { plan_key: "pro_plus", bool_value: true },
         ];
       }
       if (featureKey === "officials.auto") {
@@ -249,7 +256,7 @@ function fakeServer(): { transport: ProbeTransport; calls: RecordedHttpCall[] } 
 }
 
 describe("runDlsGateProbe", () => {
-  it("drives all 5 cells, provisions the DERIVED plan, and derives officialsAutoGranted from THAT plan", async () => {
+  it("drives all 5 cells, chooses a plan granting EVERY capability this probe needs, and derives officialsAutoGranted from IT", async () => {
     const { sql, calls: sqlCalls } = fakePlanSql();
     const { transport, calls: httpCalls } = fakeServer();
 
@@ -274,19 +281,27 @@ describe("runDlsGateProbe", () => {
     expect(result.cells[0]!.status).toBe(402);
     expect(result.cells[4]!.status).toBe(201);
 
-    // Derived, never hardcoded: the fake's cricket.dls rows make "pro" the
-    // only granting plan.
-    expect(result.provisionedPlan).toBe("pro");
-    // The fake's officials.auto rows make "pro" a NON-grantor (only
-    // pro_plus grants it) — both directions are exercised by the sibling
-    // test below with a different fake.
-    expect(result.officialsAutoGranted).toBe(false);
+    // B03 review F1(a): the fake's rows (both `pro` and `pro_plus` grant
+    // cricket.dls; only `pro_plus` grants officials.auto) are the REAL live
+    // catalog shape quoted in the review. The OLD single-feature choice
+    // (`chooseGrantingPlan` on cricket.dls rows alone) landed on "pro" — the
+    // lexicographically-first cricket.dls grantor — and never even looked at
+    // officials.auto until after provisioning it, by which point the wrong
+    // plan was already chosen. `chooseGrantingPlanForCapabilities` must land
+    // on "pro_plus" instead: the one plan that grants EVERYTHING this probe
+    // asked for.
+    expect(result.provisionedPlan).toBe("pro_plus");
+    expect(result.officialsAutoGranted).toBe(true);
+    expect(result.unsatisfiedCapabilities).toEqual([]);
 
-    // The plan derivation queried BOTH feature keys, and provisioned via the
-    // seam, never a hardcoded plan string.
+    // The plan derivation queried BOTH feature keys BEFORE provisioning
+    // anything, and provisioned via the seam, never a hardcoded plan string.
     expect(sqlCalls).toContain("entitlementRows(cricket.dls)");
     expect(sqlCalls).toContain("entitlementRows(officials.auto)");
-    expect(sqlCalls.some((c) => c.includes("pro"))).toBe(true);
+    expect(sqlCalls.indexOf("entitlementRows(officials.auto)")).toBeLessThan(
+      sqlCalls.findIndex((c) => c.startsWith("updateSubscriptionPlan") || c.startsWith("createSubscriptionForOrg")),
+    );
+    expect(sqlCalls.some((c) => c.includes("pro_plus"))).toBe(true);
 
     // One fixture per "must not be refused" cell — never a shared one (see
     // dls-gate.ts header comment). 3 fixtures on the dls-on division + 1 on
@@ -298,7 +313,11 @@ describe("runDlsGateProbe", () => {
     expect(new Set(fixtureIds).size).toBe(4);
   });
 
-  it("officialsAutoGranted flips to true when the PROVISIONED plan actually grants officials.auto", async () => {
+  it("no single plan grants BOTH capabilities: still provisions the required one (cricket.dls) and REPORTS the gap, never silently drops it", async () => {
+    // A catalog where the two features have NO plan in common — cricket.dls
+    // only "pro", officials.auto only "pro_plus". A legitimate outcome (B03
+    // review F1(a)'s fix text: "must be reported honestly ... not silently
+    // downgraded"), not a bug in the chooser.
     const { sql } = fakePlanSql({
       async entitlementRows(featureKey) {
         if (featureKey === "cricket.dls") {
@@ -308,10 +327,9 @@ describe("runDlsGateProbe", () => {
           ];
         }
         if (featureKey === "officials.auto") {
-          // This time "pro" itself grants it.
           return [
             { plan_key: "community", bool_value: false },
-            { plan_key: "pro", bool_value: true },
+            { plan_key: "pro_plus", bool_value: true },
           ];
         }
         return [];
@@ -327,8 +345,12 @@ describe("runDlsGateProbe", () => {
       transport,
     });
 
+    // cricket.dls is REQUIRED — the probe cannot function without a plan
+    // granting it — so "pro" is still chosen even though it grants nothing
+    // else this probe wanted.
     expect(result.provisionedPlan).toBe("pro");
-    expect(result.officialsAutoGranted).toBe(true);
+    expect(result.officialsAutoGranted).toBe(false);
+    expect(result.unsatisfiedCapabilities).toEqual(["officials.auto"]);
   });
 
   it("force-activates BOTH divisions via the SQL seam before probing — a division left in setup would WRONG_PHASE every cell", async () => {
