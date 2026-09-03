@@ -2370,6 +2370,9 @@ describe("registration funnel — rule 2: expect arithmetic", () => {
         entrantKind: "individual",
         feeCents: 0,
         approval: "auto",
+        // capacity:2 makes the (2 entrant + 1 waitlisted) admitted set
+        // consistent with rule 3 too, so this test stays isolated to rule 2.
+        capacity: 2,
         entries: [
           { extKey: "e-1", captain: "p1", roster: [], pay: false, expect: "entrant" },
           { extKey: "e-2", captain: "p2", roster: [], pay: false, expect: "entrant" },
@@ -2393,6 +2396,7 @@ describe("registration funnel — rule 2: expect arithmetic", () => {
         entrantKind: "individual",
         feeCents: 0,
         approval: "auto",
+        capacity: 2,
         entries: [
           { extKey: "e-1", captain: "p1", roster: [], pay: false, expect: "entrant" },
           { extKey: "e-2", captain: "p2", roster: [], pay: false, expect: "entrant" },
@@ -2400,6 +2404,94 @@ describe("registration funnel — rule 2: expect arithmetic", () => {
           { extKey: "e-4", captain: "p2", roster: [], pay: false, expect: "waitlisted" },
         ],
         expect: baseExpect({ entrants: 2, waitlisted: 1, rejected: 1 }),
+      },
+    });
+    expect(errors(validatePack(pack, UNIT).findings)).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Rule 3 — capacity vs admitted (`entrant` + `waitlisted` tagged) entries
+// produces EXACTLY the declared `expect.waitlisted` (design §4 check 3).
+// ---------------------------------------------------------------------------
+
+describe("registration funnel — rule 3: capacity vs waitlist", () => {
+  it("capacity(2) against 3 admitted entries wants waitlisted:1 — a wrong 0 reds", () => {
+    const pack = registrationPack({
+      block: {
+        ...OPEN_RESTRICTION,
+        entrantKind: "individual",
+        feeCents: 0,
+        approval: "auto",
+        capacity: 2,
+        entries: [
+          { extKey: "e-1", captain: "p1", roster: [], pay: false, expect: "entrant" },
+          { extKey: "e-2", captain: "p2", roster: [], pay: false, expect: "entrant" },
+          { extKey: "e-3", captain: "p1", roster: [], pay: false, expect: "entrant" },
+        ],
+        // Wrong on purpose: 3 admitted against capacity 2 wants waitlisted:1.
+        expect: baseExpect({ entrants: 3, waitlisted: 0 }),
+      },
+    });
+    const finding = onlyError(validatePack(pack, UNIT).findings);
+    expect(finding.code).toBe("registration.waitlist_mismatch");
+  });
+
+  it("an UNSET capacity wants waitlisted:0 — a declared 1 reds", () => {
+    const pack = registrationPack({
+      block: {
+        ...OPEN_RESTRICTION,
+        entrantKind: "individual",
+        feeCents: 0,
+        approval: "auto",
+        entries: [
+          { extKey: "e-1", captain: "p1", roster: [], pay: false, expect: "entrant" },
+          { extKey: "e-2", captain: "p2", roster: [], pay: false, expect: "waitlisted" },
+        ],
+        // Wrong on purpose: no capacity means nothing forces a waitlist.
+        expect: baseExpect({ entrants: 1, waitlisted: 1 }),
+      },
+    });
+    const finding = onlyError(validatePack(pack, UNIT).findings);
+    expect(finding.code).toBe("registration.waitlist_mismatch");
+  });
+
+  it("an UNSET capacity with 2 admitted entries correctly declaring waitlisted:0 does not red", () => {
+    // Distinguishes "capacity unset ⇒ 0" from a mutant that instead falls
+    // back to `admitted.length` for an unset capacity: that mutant produces
+    // the SAME red as the test above (2 admitted vs declared 1 still
+    // mismatches), but only THIS case — a correct waitlisted:0 against 2
+    // admitted — tells the two formulas apart.
+    const pack = registrationPack({
+      block: {
+        ...OPEN_RESTRICTION,
+        entrantKind: "individual",
+        feeCents: 0,
+        approval: "auto",
+        entries: [
+          { extKey: "e-1", captain: "p1", roster: [], pay: false, expect: "entrant" },
+          { extKey: "e-2", captain: "p2", roster: [], pay: false, expect: "entrant" },
+        ],
+        expect: baseExpect({ entrants: 2, waitlisted: 0 }),
+      },
+    });
+    expect(errors(validatePack(pack, UNIT).findings)).toEqual([]);
+  });
+
+  it("capacity(2) against 3 admitted (2 entrant + 1 waitlisted) matches — does not red", () => {
+    const pack = registrationPack({
+      block: {
+        ...OPEN_RESTRICTION,
+        entrantKind: "individual",
+        feeCents: 0,
+        approval: "auto",
+        capacity: 2,
+        entries: [
+          { extKey: "e-1", captain: "p1", roster: [], pay: false, expect: "entrant" },
+          { extKey: "e-2", captain: "p2", roster: [], pay: false, expect: "entrant" },
+          { extKey: "e-3", captain: "p1", roster: [], pay: false, expect: "waitlisted" },
+        ],
+        expect: baseExpect({ entrants: 2, waitlisted: 1 }),
       },
     });
     expect(errors(validatePack(pack, UNIT).findings)).toEqual([]);

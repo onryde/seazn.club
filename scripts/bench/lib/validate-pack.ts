@@ -740,6 +740,29 @@ function checkExpectArithmetic(divisionRef: string, block: PackRegistrationBlock
   ];
 }
 
+/** Design §4 check 3: `capacity` vs ADMITTED entries (tagged `entrant` or
+ *  `waitlisted` — i.e. not rejected) produces exactly the declared
+ *  `expect.waitlisted`. An unset `capacity` means nothing forces a
+ *  waitlist, so the expected count is 0 either way admitted count is
+ *  ignored in that branch. */
+function checkCapacityWaitlist(divisionRef: string, block: PackRegistrationBlock): PackFinding[] {
+  const admitted = block.entries.filter((e) => e.expect === "entrant" || e.expect === "waitlisted");
+  const expectedWaitlisted =
+    block.capacity === undefined ? 0 : Math.max(0, admitted.length - block.capacity);
+  if (block.expect.waitlisted === expectedWaitlisted) return [];
+  return [
+    {
+      code: "registration.waitlist_mismatch",
+      severity: "error",
+      where: `registration.byDivision[${divisionRef}].expect.waitlisted`,
+      message:
+        `division "${divisionRef}" declares expect.waitlisted:${block.expect.waitlisted} but capacity` +
+        `${block.capacity === undefined ? " is unset" : `:${block.capacity}`} against ${admitted.length} ` +
+        `admitted entries [${admitted.map((e) => e.extKey).join(", ")}] produces ${expectedWaitlisted}`,
+    },
+  ];
+}
+
 // ---------------------------------------------------------------------------
 // Stage 2 — the per-stream fold
 // ---------------------------------------------------------------------------
@@ -891,6 +914,7 @@ export function validatePack(raw: unknown, opts: ValidatePackOptions): PackValid
       findings.push(
         ...checkRejectedEligibilityOffenders(division.ref, block, personsByRef, seasonStartYear),
         ...checkExpectArithmetic(division.ref, block),
+        ...checkCapacityWaitlist(division.ref, block),
       );
     }
   }
