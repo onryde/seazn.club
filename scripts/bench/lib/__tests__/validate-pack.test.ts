@@ -314,6 +314,61 @@ describe("validatePack — _tiny.json, the shared fixture", () => {
 // Regression — deliberately corrupted streams
 // ===========================================================================
 
+describe("validatePack — a league stage NOTHING binds to (B03 T8)", () => {
+  /** `_tiny` with every badminton stream removed, and the `expected` rows that
+   *  depended on them. What is left is a declared league stage with entrants,
+   *  legs, and no stream bound to it at all. */
+  function tinyWithBadmintonUnbound(): unknown {
+    const raw = structuredClone(tiny()) as {
+      streams: { divisionRef: string }[];
+      expected: { matches: { divisionRef: string }[]; tables?: { divisionRef: string }[] };
+    };
+    raw.streams = raw.streams.filter((x) => x.divisionRef !== "d-badminton");
+    raw.expected.matches = raw.expected.matches.filter((m) => m.divisionRef !== "d-badminton");
+    raw.expected.tables = (raw.expected.tables ?? []).filter((t) => t.divisionRef !== "d-badminton");
+    return raw;
+  }
+
+  it("warns naming the stage, the implied count and its arithmetic", () => {
+    const result = validatePack(tinyWithBadmintonUnbound(), TINY);
+    const none = warnings(result.findings).filter((f) => f.code === "streams.none_bound");
+    expect(none).toHaveLength(1);
+    // The count is DERIVED (2 entrants over 1 leg), so an edit to the pack
+    // moves this with it rather than leaving a stale literal behind.
+    expect(none[0]?.message).toContain("implies 1 fixture(s)");
+    expect(none[0]?.message).toContain("2 entrants");
+    expect(none[0]?.where).toContain("s-badminton-league");
+  });
+
+  it("WARNS rather than refusing — a partial pack must stay authorable", () => {
+    // A pack covering part of a real tournament may legitimately declare a
+    // stage it carries no streams for. Refusing would make that unauthorable.
+    const result = validatePack(tinyWithBadmintonUnbound(), TINY);
+    expect(result.findings.filter((f) => f.severity === "error")).toEqual([]);
+  });
+
+  it("this state was previously SILENT, which is why the warning exists", () => {
+    // The skip it replaces read "an unplayed or unbindable stage is already
+    // reported elsewhere". "Elsewhere" was `standings.row_count`, which only
+    // fires when the pack declares a standings table for that stage — so the
+    // claim held exactly when the mismatch was smallest, and failed when it was
+    // total. This pins the distinction: with the expected.tables entry KEPT,
+    // the other check does fire; with it removed, nothing but this one does.
+    const withTable = structuredClone(tiny()) as {
+      streams: { divisionRef: string }[];
+      expected: { matches: { divisionRef: string }[] };
+    };
+    withTable.streams = withTable.streams.filter((x) => x.divisionRef !== "d-badminton");
+    withTable.expected.matches = withTable.expected.matches.filter((m) => m.divisionRef !== "d-badminton");
+    const stillCaught = validatePack(withTable, TINY);
+    expect(stillCaught.findings.some((f) => f.code === "standings.row_count")).toBe(true);
+
+    const codes = validatePack(tinyWithBadmintonUnbound(), TINY).findings.map((f) => f.code);
+    expect(codes).not.toContain("standings.row_count");
+    expect(codes).toContain("streams.none_bound");
+  });
+});
+
 describe("validatePack — corrupted streams die naming the stream and the divergence", () => {
   it("a WRONG SCORER (the entrant credited with the points) reds the fold", () => {
     const pack = tiny();
