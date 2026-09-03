@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { participantCsv, uniqueName } from "../../e2e/directory-kit";
+import { participantCsv, stamp, uniqueName } from "../../e2e/directory-kit";
+// The real TAG, not a shape typed into this file: a change to how helpers.ts
+// derives it moves this test with it instead of leaving it asserting
+// yesterday's format. Importing helpers.ts here is safe — its only top-level
+// import is `@playwright/test` (fine inside a vitest process, measured), and
+// every DB path is behind a lazy `await import("postgres")` inside withDb, so
+// nothing opens a connection at module load.
+import { TAG } from "../../e2e/helpers";
 
 // The kit under test lives at `e2e/directory-kit.ts`; this test does NOT.
 //
@@ -50,6 +57,21 @@ describe("participantCsv", () => {
   it("escapes an embedded double quote by doubling it", () => {
     const csv = participantCsv([{ club: 'The "Reds"', team: "T", player: "P" }]);
     expect(csv.split("\n")[1]).toBe('"The ""Reds""",T,P');
+  });
+});
+
+describe("stamp", () => {
+  // Both properties, deliberately. Either assertion ALONE leaves a live mutant:
+  // `return TAG` keeps the prefix and kills only the uniqueness case, while a
+  // body that dropped TAG for pure randomness stays unique and kills only the
+  // prefix case.
+  it("carries the run's shared TAG as a prefix, so a name is attributable to its run", () => {
+    expect(stamp().startsWith(`${TAG}-`)).toBe(true);
+  });
+
+  it("does not repeat across calls", () => {
+    const seen = new Set(Array.from({ length: 200 }, () => stamp()));
+    expect(seen.size).toBe(200);
   });
 });
 

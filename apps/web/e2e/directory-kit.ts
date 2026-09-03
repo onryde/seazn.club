@@ -15,6 +15,11 @@ import { TAG, apiJson, loginUi, setEntitlementOverrideSql } from "./helpers";
 // vitest.config.ts excludes `e2e/**` outright, and a `*.test.ts` under
 // `testDir: "./e2e"` is picked up by the Playwright `parallel` project's
 // default testMatch — measured, both of them. See that test's header.
+//
+// The venue/court locators below are lifted verbatim from
+// venues.spec.ts:26-98 (which keeps its own private copies). The ONE
+// exception is `uniqueName`, which now delegates to `stamp()` — see its
+// docblock for why the duplicated expression had to go.
 
 /** A per-run token. `TAG` is per-PROCESS (helpers.ts), and these specs share
  *  an org with every other spec in the leg, so the random tail is what makes
@@ -23,8 +28,14 @@ export function stamp(): string {
   return `${TAG}-${Math.random().toString(36).slice(2, 6)}`;
 }
 
+/** `stamp()` behind a human-readable label. Delegates rather than repeating
+ *  the expression: while the two computed it independently, no test of
+ *  `uniqueName` could witness a change to `stamp` — replacing `stamp`'s body
+ *  with `return TAG` left the whole suite green, because the only caller that
+ *  the unit tests reach was not a caller at all. This is the one line of the
+ *  block below that is NOT verbatim from venues.spec.ts. */
 export function uniqueName(label: string): string {
-  return `${label} ${TAG}-${Math.random().toString(36).slice(2, 6)}`;
+  return `${label} ${stamp()}`;
 }
 
 /**
