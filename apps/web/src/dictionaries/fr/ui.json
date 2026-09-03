@@ -4940,5 +4940,21 @@
   "confirm.cancelEntry.label": "Annuler l'inscription",
   "reg.hub.registrants.table.soloSignUp": "Inscription individuelle",
   "reg.hub.registrants.table.soloWaiting": "En attente d'une équipe",
-  "reg.hub.registrants.table.soloAssigned": "Dans {team}"
+  "reg.hub.registrants.table.soloAssigned": "Dans {team}",
+  "runsheet.filter.today": "Aujourd'hui",
+  "runsheet.filter.needsResult": "Résultat manquant",
+  "runsheet.filter.unscheduled": "Non programmé",
+  "runsheet.filter.all": "Tous",
+  "runsheet.day.fixtures.one": "{count} match",
+  "runsheet.day.fixtures.other": "{count} matchs",
+  "runsheet.unscheduled.title": "Pas encore programmé",
+  "runsheet.now": "MAINTENANT",
+  "runsheet.action.openPad": "Ouvrir le marqueur",
+  "runsheet.action.assignScorer": "Assigner un marqueur",
+  "runsheet.action.score": "Marquer",
+  "runsheet.action.result": "Voir le résultat",
+  "runsheet.action.setTime": "Fixer l'heure",
+  "runsheet.action.view": "Afficher",
+  "runsheet.sub.noScorer": "Pas encore de marqueur",
+  "runsheet.sub.awaitingDraw": "En attente du tirage"
 }

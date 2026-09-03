@@ -89,7 +89,12 @@ test("knockout: semi winners advance into the final and decide the cup", async (
   expect(["decided", "finalized"]).toContain(decidedFinal.status);
 
   await page.goto(await divisionPath(page.request, divisionId, "?tab=fixtures"));
-  await expect(page.getByRole("link", { name: /^(Score|View)/ })).toHaveCount(3, {
+  // Competition Desk W2 (Task 4): the fixtures tab's run sheet gives each row
+  // ONE action from `fixtureRowAction`'s ladder (Task 2), which labels a
+  // decided/finalized fixture "Result" — not "View", the label the retired
+  // `FixtureLine` used for the same state. All 3 bracket fixtures here are
+  // decided, so all 3 show "Result".
+  await expect(page.getByRole("link", { name: /^(Score|Result|View)/ })).toHaveCount(3, {
     timeout: 20_000,
   });
 });

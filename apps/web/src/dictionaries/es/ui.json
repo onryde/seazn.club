@@ -4940,5 +4940,21 @@
   "confirm.cancelEntry.label": "Cancelar inscripción",
   "reg.hub.registrants.table.soloSignUp": "Inscripción individual",
   "reg.hub.registrants.table.soloWaiting": "Esperando equipo",
-  "reg.hub.registrants.table.soloAssigned": "En {team}"
+  "reg.hub.registrants.table.soloAssigned": "En {team}",
+  "runsheet.filter.today": "Hoy",
+  "runsheet.filter.needsResult": "Falta resultado",
+  "runsheet.filter.unscheduled": "Sin programar",
+  "runsheet.filter.all": "Todos",
+  "runsheet.day.fixtures.one": "{count} partido",
+  "runsheet.day.fixtures.other": "{count} partidos",
+  "runsheet.unscheduled.title": "Aún sin programar",
+  "runsheet.now": "AHORA",
+  "runsheet.action.openPad": "Abrir marcador",
+  "runsheet.action.assignScorer": "Asignar anotador",
+  "runsheet.action.score": "Puntuar",
+  "runsheet.action.result": "Ver resultado",
+  "runsheet.action.setTime": "Fijar hora",
+  "runsheet.action.view": "Ver",
+  "runsheet.sub.noScorer": "Aún sin anotador",
+  "runsheet.sub.awaitingDraw": "Pendiente del sorteo"
 }

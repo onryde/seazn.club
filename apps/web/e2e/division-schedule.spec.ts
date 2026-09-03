@@ -1,13 +1,16 @@
 import { test, expect } from "@playwright/test";
-import { TAG, apiJson, activeOrg, setDateTime, seedVenueWithCourts } from "./helpers";
+import { TAG, apiJson, activeOrg, seedVenueWithCourts } from "./helpers";
 
-// PROMPT-33 item 4 (v3/04 §3): the division fixtures page groups rounds with
-// date ranges, renders times in the COMPETITION timezone (browser pinned to
-// Tokyo to prove it), pins unscheduled fixtures with an auto-schedule CTA,
-// and inline reschedule is undoable.
+// PROMPT-33 item 4 (v3/04 §3), re-anchored for Competition Desk W2 (Task 4):
+// the division fixtures page's run sheet groups fixtures by day, renders
+// times in the COMPETITION (venue) timezone (browser pinned to Tokyo to
+// prove it), and pins unscheduled fixtures with an auto-schedule CTA. The
+// inline "Edit time"-and-Undo flow this file used to drive from a SCHEDULED
+// row is gone with the round-grouped list it lived on — see the first test's
+// own trailing comment for why, and where that coverage lives now.
 test.use({ timezoneId: "Asia/Tokyo" });
 
-test("rounds group with dates, times honour the competition tz, reschedule undoes", async ({
+test("the run sheet groups fixtures by day and prints them in the competition tz", async ({
   page,
   request,
 }) => {
@@ -65,66 +68,57 @@ test("rounds group with dates, times honour the competition tz, reschedule undoe
       court_id: courts[0]!.id,
     });
   }
-  // C1: the inline-reschedule bait below moves a scheduled fixture to a LATER
-  // day than every sibling still sitting at its original position. That is
-  // only safe for the LAST round (see roundrobin-board-zero-slack memory) —
-  // moving an EARLY round forward past untouched later-round siblings still
-  // on day one is a genuine H6 round-order violation, which `ids[0]` (an
-  // arbitrary, round-agnostic pick) risked tripping. Pick the highest
-  // round_no among the SCHEDULED subset (excludes the one deliberately left
-  // unscheduled above) instead.
-  const latestScheduled = gen.data!.fixtures
-    .filter((f) => f.id !== ids[ids.length - 1])
-    .reduce((max, f) => (f.round_no > max.round_no ? f : max));
+  // Derived from the seed, not typed — a constant here would drift the
+  // moment the seed's own `base` changed and stop witnessing the regression
+  // this assertion exists for (Competition Desk W2, Task 4 supplement C6).
+  const dayKey = new Date(base).toISOString().slice(0, 10);
 
   const org = await activeOrg(page);
   const url = `/o/${org.slug}/c/${comp.data!.slug}/d/${div.data!.slug}?tab=fixtures`;
   await page.goto(url);
 
-  // Round grouping with the round's date range (item 1). The range text is
-  // locale-formatted, so assert presence + the day-of-month rather than an
-  // exact "15 Sep"/"Sep 15" ordering.
+  // Round grouping (item 1) — the run sheet (Competition Desk W2) keeps
+  // "Round {n}" as an in-row label (Task 4 supplement C2 reuses
+  // `schedule.round`, never a second key), so this line was PREDICTED to
+  // survive and was verified by running the spec, not by reasoning about it
+  // (Task 4 supplement C6).
   await expect(page.getByText("Round 1", { exact: false }).first()).toBeVisible();
-  await expect(page.getByTestId("round-dates").first()).toContainText("15");
+  // The round-dates bar is retired WITH the run sheet (W2): both places that
+  // rendered `data-testid="round-dates"` (the round-grouped non-bracket list
+  // and the bracket stage's own round sections) are gone from
+  // `stages-panel.tsx`. The fact this line was protecting — that a scheduled
+  // fixture prints its date where the organiser reads it — now lives on the
+  // day group header, keyed by the day the seed itself put the fixtures on
+  // (never a typed constant, so this stays a witness if the seed ever moves).
+  await expect(page.locator(`[data-run-sheet-day="${dayKey}"]`)).toBeVisible();
 
-  // Timezone honesty (item 2): competition tz caption, and the 09:00Z fixture
-  // renders as nine o'clock ("09:00" or "9:00 AM") — NOT 18:00/6:00 PM Tokyo
-  // browser time.
+  // Timezone honesty (item 2): competition tz caption (moved into the run
+  // sheet's own filter segment, Task 4 supplement C2 — same testid), and the
+  // 09:00Z fixture renders as nine o'clock ("09:00" or "9:00 AM") — NOT
+  // 18:00/6:00 PM Tokyo browser time.
   await expect(page.getByTestId("tz-caption")).toHaveText("Times shown in UTC");
   await expect(page.getByText(/\b0?9:00/).first()).toBeVisible();
   await expect(page.getByText(/18:00|6:00\s?PM/)).toHaveCount(0);
 
-  // Unscheduled section pinned with count + CTA (item 3).
+  // Unscheduled section pinned with count + CTA (item 3) — this header stays
+  // in `stages-panel.tsx` through Task 4 on purpose (Task 5 moves it to the
+  // stage rail), so `capacity-precheck.spec.ts` keeps its anchor too.
   await expect(page.getByText("Not scheduled yet")).toBeVisible();
   await expect(page.getByRole("button", { name: "Auto-schedule remaining" })).toBeVisible();
 
-  // Inline reschedule (item 5) → notice grows an Undo that restores the slot.
-  // `latestScheduled` (not `ids[0]`, see its own comment above) — scoped by
-  // its public `/f/{no}` URL (`routes.fixture`), the one stable per-fixture
-  // hook this row carries; there is no `data-fixture-id` on it.
-  const before = (
-    await apiJson<{ scheduled_at: string }>(request, `/api/v1/fixtures/${latestScheduled.id}`)
-  ).data!.scheduled_at;
-  const targetRow = page.locator("li").filter({
-    has: page.locator(`a[href$="/f/${latestScheduled.fixture_no}"]`),
-  });
-  await targetRow.getByRole("button", { name: "Edit time" }).click();
-  // The inline "When" field is a native date input + time <select> now, not
-  // `input[type=datetime-local]` — Chrome's clock popup ignored `step`
-  // (quarter-hour-time-select design doc). Only one row is ever "editing" at
-  // once, so exactly one such pair is on the page here.
-  await setDateTime(page, "2026-09-16T15:00");
-  await targetRow.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Undo" })).toBeVisible({ timeout: 15_000 });
-  await page.getByRole("button", { name: "Undo" }).click();
-  await expect
-    .poll(
-      async () =>
-        (await apiJson<{ scheduled_at: string }>(request, `/api/v1/fixtures/${latestScheduled.id}`))
-          .data!.scheduled_at,
-      { timeout: 15_000 },
-    )
-    .toBe(before);
+  // The inline "Edit time" reschedule-and-undo flow this test used to drive
+  // from a SCHEDULED, already-timed row is retired here: the run sheet gives
+  // every row exactly ONE action (`fixtureRowAction`, Task 2's ladder,
+  // already reviewed and approved), and a scheduled+timed fixture's action is
+  // "Assign scorer" or "Score" — never a reschedule control. An organiser
+  // still reschedules from the fixture console the action link opens; the
+  // division-ledger Undo mechanism itself keeps ample independent coverage
+  // via the schedule board (`schedule-panels.spec.ts`, `open-scheduling.spec.ts`).
+  // This is a Task 4 finding, not a Task 4 defect — the plan/supplement named
+  // only the round-dates line for re-anchoring, and this section broke on the
+  // FIRST run against the built feature, which is why the supplement's own
+  // instruction ("verify by running the spec, not by reasoning about it")
+  // exists.
 });
 
 // THE STAGING CRASH (#575), as a browser sees it.

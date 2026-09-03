@@ -9,7 +9,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "@/components/ui/console-link";
 import { useRouter } from "next/navigation";
 import { routes } from "@/lib/routes";
-import { ClientDateRange, ClientTime } from "@/components/client-time";
+import { ClientTime } from "@/components/client-time";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { useConfirm } from "@/components/ui/confirm-provider";
@@ -58,6 +58,13 @@ import {
   type CapacityRequest,
   type UseCapacityReportResult,
 } from "@/lib/use-capacity-report";
+// Competition Desk W2 (Task 4) — the run sheet's grouping builder + the
+// component that renders it. `isBye` (and, inside `buildRunSheet` itself,
+// `BRACKET_STAGE_KINDS`) are the SINGLE authorities now (R2a/R10,
+// docs/superpowers/specs/2026-09-02-competition-desk-prompts/_INDEX.md) —
+// this file's own former copies are deleted below.
+import { buildRunSheet, isBye, type RunSheetFixture } from "@/lib/run-sheet-groups";
+import { RunSheet, type RunSheetFilter } from "@/components/v2/desk/run-sheet";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
 
@@ -97,6 +104,18 @@ interface FixtureRow {
   /** DERIVED display name for `court_id` — never render `court_id` itself
    *  (a raw uuid). Falls back to `court_label` via `courtDisplayName`. */
   court_name: string | null;
+  /** Competition Desk W2 (Task 4) — venue-qualified display name, mirrors
+   *  `FixtureRow.venue_name` (usecases/stages.ts). Optional for the same
+   *  reason `ext_key` etc. below are: pre-existing hand-built test props in
+   *  this panel's own `__tests__` predate the field. Feeds the run sheet's
+   *  day-header venue clause and `RunSheetRow`'s `courtLabel` fallback. */
+  venue_name?: string | null;
+  /** Competition Desk W2 (Task 4) — any officials recorded on the fixture,
+   *  mirrors `FixtureRow.officials` (usecases/stages.ts). Optional, same
+   *  reason as `venue_name` above. `fixtureRowAction`'s "no scorer" input is
+   *  `officials.length > 0`, derived at ITS call site (`RunSheetRow`), never
+   *  here. */
+  officials?: unknown[];
   status: string;
   outcome: unknown;
   /** F1 (2026-08-17) — the engine's bracket-position role, persisted on
@@ -110,6 +129,24 @@ interface FixtureRow {
   is_final?: boolean;
   third_place?: boolean;
   conditional?: boolean;
+}
+
+/** Adapts this panel's hand-declared `FixtureRow` to `RunSheetFixture`
+ *  (run-sheet-groups.ts, a `Pick` of the SHARED `@/server/usecases/stages`
+ *  type) — needed only because `home_slot_label`/`away_slot_label`/
+ *  `venue_name`/`officials` are OPTIONAL here (pre-existing hand-built test
+ *  props predate them) but REQUIRED on the shared wire type `RunSheetFixture`
+ *  picks from. The real page always sends every field (`listDivisionFixtures`
+ *  selects them all); this only normalises the gap for TypeScript and for any
+ *  hand-built test fixture that omits one. */
+function toRunSheetFixture(f: FixtureRow): RunSheetFixture {
+  return {
+    ...f,
+    home_slot_label: f.home_slot_label ?? null,
+    away_slot_label: f.away_slot_label ?? null,
+    venue_name: f.venue_name ?? null,
+    officials: f.officials ?? [],
+  };
 }
 
 /** F3 Task 5 (5a) — getStageRosterDrift's wire shape (usecases/stages.ts),
@@ -499,6 +536,13 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
   // pre-existing tests that locate it by testid).
   const capacityByStage = useCapacityReportsByStage(divisionId, capacityRequestByStage);
 
+  // Competition Desk W2 (Task 4) — the run sheet's own filter segment. Its
+  // DEFAULT is spec: "Today" on a match day, else "All" — read once at
+  // mount, same as every other `useState` initializer here; Task 7 replaces
+  // this local state with the `?filter=` URL param without touching
+  // `<RunSheet>`'s own `filter`/`onFilter` props.
+  const [filter, setFilter] = useState<RunSheetFilter>(phase === "match_day" ? "today" : "all");
+
   async function undoLast() {
     setError(null);
     // The strip describes a board. Undo puts a DIFFERENT board back, so every
@@ -718,6 +762,10 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
   }
 
   const nowPlaying = fixtures.filter((f) => f.status === "in_play");
+  // Competition Desk W2 (Task 4/C5) — computed HERE, in the render body,
+  // never at module scope: a module-scope `Date.now()` freezes at first
+  // import and the run sheet's NOW rule would stick to deploy time forever.
+  const nowMs = Date.now();
 
   return (
     <div className="space-y-6">
@@ -765,11 +813,13 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
         <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>
       )}
 
-      {/* Timezone honesty (v3/04 §3 item 2) + print (item 8). */}
+      {/* Print (item 8). The tz caption that used to sit beside this moved
+          into `<RunSheet>`, under its filter segment (Competition Desk W2,
+          Task 4/C2) — same `data-testid="tz-caption"`, so nothing that
+          locates it by testid needs to change. `DocumentsMenu` itself is
+          UNCHANGED here for now: it moves to the stage rail in Task 5, which
+          does not exist yet. */}
       <div className="flex flex-wrap items-center gap-3">
-        <p className="text-xs text-slate-500" data-testid="tz-caption">
-          {msg("schedule.tz.caption", { tz })}
-        </p>
         <div className="flex-1" />
         {canExport && <DocumentsMenu divisionId={divisionId} competitionId={competitionId} />}
       </div>
@@ -828,36 +878,12 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
         .sort((a, b) => a.seq - b.seq)
         .map((stage) => {
         const stageFixtures = fixtures.filter((f) => f.stage_id === stage.id);
-        const rounds = [...new Set(stageFixtures.map((f) => f.round_no))].sort((a, b) => a - b);
-        // Pinned unscheduled section (v3/04 §3 item 3): timetable-less rows
-        // come out of the round lists; byes stay in place as ghosts.
+        // Pinned unscheduled section (v3/04 §3 item 3): count + CTA stay here
+        // until Task 5 moves them to the rail; the row LIST itself now
+        // renders once, division-wide, in the `<RunSheet>` mounted below.
         const unscheduled = stageFixtures.filter(
-          (f) => f.scheduled_at === null && f.status === "scheduled" && !isBye(f),
+          (f) => f.scheduled_at === null && f.status === "scheduled" && !isBye(toRunSheetFixture(f)),
         );
-        const roundDates = (round: number): { from: string | null; to: string | null } => {
-          const times = stageFixtures
-            .filter((f) => f.round_no === round && f.scheduled_at !== null)
-            .map((f) => f.scheduled_at as string)
-            .sort();
-          return { from: times[0] ?? null, to: times[times.length - 1] ?? null };
-        };
-        // League/group rounds display in ACTUAL earliest-kickoff order, not
-        // generation order (round_no) — auto-scheduling (parallel courts) or a
-        // manual reschedule can leave a later-numbered round with an earlier
-        // kickoff than one before it, which would mislead an organiser reading
-        // the round list for "what's next" (design/fix-ui/03 §"rounds out of
-        // order"). Rounds with no scheduled fixture yet have no time to sort
-        // by, so they fall back to round_no order after every dated round.
-        // Bracket stages (splitRounds below) are structural, not chronological
-        // (Quarter → Semi → Final), so they keep round_no order untouched.
-        const orderedRounds = [...rounds].sort((a, b) => {
-          const da = roundDates(a).from;
-          const db = roundDates(b).from;
-          if (da !== null && db !== null) return da < db ? -1 : da > db ? 1 : a - b;
-          if (da !== null) return -1;
-          if (db !== null) return 1;
-          return a - b;
-        });
         // Mirrors the server guard (deleteStage) EXACTLY: only the last stage
         // in the graph, and only when it owns no played fixtures. No "keep one
         // stage" rule — the server deletes the sole stage of a pure League too,
@@ -865,9 +891,6 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
         const deletable =
           stage.seq === Math.max(...stages.map((s) => s.seq)) &&
           !stageFixtures.some((f) => ["in_play", "decided", "finalized"].includes(f.status));
-        // Bracket stages: one card per named round (Quarter-finals, Semi-finals,
-        // Final / Rung N) instead of one long card with anonymous round breaks.
-        const splitRounds = BRACKET_KINDS.has(stage.kind) && rounds.length > 0;
         // F3 Task 5 (5a) — only ever non-empty for the one stage
         // getStageRosterDrift finds eligible (usecases/stages.ts); every
         // other stage's entry is absent or both arrays empty, so this is a
@@ -1067,72 +1090,25 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
                     {msg("schedule.capacity.blockedReason")}
                   </p>
                 )}
-                <ul className="mt-2 divide-y divide-slate-100">
-                  {unscheduled.map((f) => (
-                    <FixtureLine
-                      key={f.id}
-                      fixture={f}
-                      href={routes.fixture(orgSlug, compSlug, divSlug, f.fixture_no)}
-                      entrantNames={entrantNames}
-                      canEdit={canEdit}
-                      tz={tz}
-                      boardSlotOptions={boardSlotOptions}
-                      venues={venues}
-                      courtNames={courtNamesById}
-                      onRescheduled={() => {
-                        setNotice(msg("schedule.rescheduled"));
-                        setUndoable(true);
-                      }}
-                    />
-                  ))}
-                </ul>
+                {/* The row LIST that used to render here (FixtureLine per
+                    fixture) is gone — the run sheet's own "Not yet
+                    scheduled" group, mounted once below, division-wide,
+                    shows every one of these rows with a "Set time" action.
+                    This header keeps only the count + CTA + capacity reason
+                    until Task 5 moves them to the stage rail. */}
               </div>
             )}
 
-            {stageFixtures.length === 0 ? (
+            {/* Every fixture list that used to render here — the round-
+                grouped non-bracket list AND the bracket stage's own
+                round-sectioned sibling sections — is gone. Both now render
+                ONCE, division-wide, in the `<RunSheet>` mounted below the
+                stage loop (Competition Desk W2, Task 4, steps 5+6). This
+                card keeps only the "no fixtures generated yet" message. */}
+            {stageFixtures.length === 0 && (
               <p className="px-4 py-4 text-sm text-slate-500">
                 {canEdit ? msg("schedule.noFixtures.can") : msg("schedule.noFixtures.view")}
               </p>
-            ) : splitRounds ? null : (
-              <div className="divide-y divide-slate-100">
-                {orderedRounds.map((round) => {
-                  const dates = roundDates(round);
-                  return (
-                  <div key={round}>
-                    {/* Sticky round header (items 1 + 7): label + date range. */}
-                    <p className="sticky top-0 z-10 flex items-baseline gap-2 border-y border-slate-300 bg-slate-200 px-4 py-1.5 text-xs font-semibold uppercase tracking-wide text-slate-600">
-                      {msg("schedule.round", { n: round })}
-                      {dates.from && (
-                        <span data-testid="round-dates" className="font-medium normal-case text-slate-500">
-                          <ClientDateRange from={dates.from} to={dates.to} tz={tz} />
-                        </span>
-                      )}
-                    </p>
-                    <ul className="divide-y divide-slate-50">
-                      {stageFixtures
-                        .filter((f) => f.round_no === round && (f.scheduled_at !== null || isBye(f) || f.status !== "scheduled"))
-                        .map((f) => (
-                          <FixtureLine
-                            key={f.id}
-                            fixture={f}
-                            href={routes.fixture(orgSlug, compSlug, divSlug, f.fixture_no)}
-                            entrantNames={entrantNames}
-                            canEdit={canEdit}
-                            tz={tz}
-                            boardSlotOptions={boardSlotOptions}
-                            venues={venues}
-                            courtNames={courtNamesById}
-                            onRescheduled={() => {
-                              setNotice(msg("schedule.rescheduled"));
-                              setUndoable(true);
-                            }}
-                          />
-                        ))}
-                    </ul>
-                  </div>
-                  );
-                })}
-              </div>
             )}
 
             {/* #622 — sits with the stage's other settings, last in the card so
@@ -1144,49 +1120,35 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
               msg={msg}
             />
           </section>
-
-          {splitRounds &&
-            rounds.map((round) => {
-              const dates = roundDates(round);
-              return (
-              <section key={round} className="card overflow-hidden">
-                <header className="sticky top-0 z-10 border-b border-slate-100 bg-slate-50 px-4 py-2">
-                  <h4 className="flex items-baseline gap-2 text-xs font-medium uppercase tracking-wide text-slate-500">
-                    {stage.name} — {bracketRoundLabel(msg, stage.kind, round, stageFixtures)}
-                    {dates.from && (
-                      <span data-testid="round-dates" className="normal-case text-slate-500">
-                        <ClientDateRange from={dates.from} to={dates.to} tz={tz} />
-                      </span>
-                    )}
-                  </h4>
-                </header>
-                <ul className="divide-y divide-slate-50">
-                  {stageFixtures
-                    .filter((f) => f.round_no === round && (f.scheduled_at !== null || isBye(f) || f.status !== "scheduled"))
-                    .map((f) => (
-                      <FixtureLine
-                        key={f.id}
-                        fixture={f}
-                        href={routes.fixture(orgSlug, compSlug, divSlug, f.fixture_no)}
-                        entrantNames={entrantNames}
-                        canEdit={canEdit}
-                        tz={tz}
-                        boardSlotOptions={boardSlotOptions}
-                        venues={venues}
-                        courtNames={courtNamesById}
-                        onRescheduled={() => {
-                          setNotice(msg("schedule.rescheduled"));
-                          setUndoable(true);
-                        }}
-                      />
-                    ))}
-                </ul>
-              </section>
-              );
-            })}
           </div>
         );
       })}
+
+      {/* Competition Desk W2 (Task 4) — the run sheet, mounted ONCE, outside
+          the stage loop above: a division-wide list on a time spine, fed by
+          `buildRunSheet` over EVERY stage's fixtures (day groups merged
+          across every non-bracket stage, one bracket block per bracket
+          stage, one "Not yet scheduled" group last — owner rulings A2/3).
+          `nowMs` is computed HERE, in the render body, never at module scope
+          (C5) — a module-scope `Date.now()` freezes at first import and the
+          NOW rule would stick to deploy time. */}
+      <RunSheet
+        blocks={buildRunSheet({ fixtures: fixtures.map(toRunSheetFixture), stages, tz, nowMs })}
+        stages={stages}
+        tz={tz}
+        nowMs={nowMs}
+        entrantNames={entrantNames}
+        courtNames={courtNamesById}
+        canEdit={canEdit}
+        hrefFor={(f) => routes.fixture(orgSlug, compSlug, divSlug, f.fixture_no)}
+        filter={filter}
+        onFilter={setFilter}
+        boardSlotOptions={boardSlotOptions}
+        onRescheduled={() => {
+          setNotice(msg("schedule.rescheduled"));
+          setUndoable(true);
+        }}
+      />
 
       {canEdit && (
         <AddStageForm
@@ -1342,8 +1304,6 @@ export function AddStageForm({
   );
 }
 
-const BRACKET_KINDS = new Set(["knockout", "double_elim", "stepladder", "page_playoff"]);
-
 /**
  * F3 Task 5 (5b) — the rebuild-click classifier, mirroring
  * generatePreconditionMessage's shape just below (same pure/exported-for-
@@ -1490,14 +1450,10 @@ export function generatePreconditionMessage(err: unknown, msg: Msg): string | nu
   return null;
 }
 
-/** A bye: one side empty with an auto-advance award outcome (v3/04 §3 item 6). */
-function isBye(f: FixtureRow): boolean {
-  const o = f.outcome as { kind?: string } | null;
-  return o?.kind === "award" && (f.home_entrant_id === null || f.away_entrant_id === null);
-}
-
-/** Voided fixtures render struck through with the reason (item 6). */
-const VOID_STATUSES = new Set(["cancelled", "abandoned", "forfeited"]);
+/** Voided fixtures render struck through with the reason (item 6). EXPORTED
+ *  (Competition Desk W2, Task 4/R13-style) — `run-sheet-row.tsx` reuses this
+ *  SAME set for the run sheet's rows rather than a second copy. */
+export const VOID_STATUSES = new Set(["cancelled", "abandoned", "forfeited"]);
 
 // F1 Task 4: named bracket rounds by POSITION (roundRole), never by match
 // count or a stage-wide max — a double-elim's losers bracket has more
@@ -1513,7 +1469,19 @@ const VOID_STATUSES = new Set(["cancelled", "abandoned", "forfeited"]);
 // case keeps its existing merged "Qualifiers" header; round 2 (Qualifier 2)
 // and the Final each hold exactly one fixture and resolve through the same
 // roundRole() as every other bracket kind.
-function bracketRoundLabel(msg: Msg, kind: string, roundNo: number, stageFixtures: readonly FixtureRow[]): string {
+// EXPORTED (Competition Desk W2, Task 4/R13) — `run-sheet.tsx` calls this
+// same function for a bracket block's round sub-headers rather than writing
+// a second labeller. `stageFixtures`' type is narrowed to just the six
+// fields this function reads: the run sheet passes `RunSheetFixture[]`
+// (run-sheet-groups.ts), which does not carry every field this file's own
+// `FixtureRow` does, and a `Pick` lets BOTH shapes satisfy the parameter
+// without a hand-rolled second type.
+export function bracketRoundLabel(
+  msg: Msg,
+  kind: string,
+  roundNo: number,
+  stageFixtures: readonly Pick<FixtureRow, "round_no" | "lane" | "is_final" | "third_place" | "conditional" | "ext_key">[],
+): string {
   if (kind === "page_playoff" && roundNo === 1) return msg("bracket.qualifiers");
   const first = stageFixtures.find((f) => f.round_no === roundNo);
   if (!first) return msg("schedule.round", { n: roundNo });
@@ -1556,7 +1524,9 @@ function fixtureStatusLabel(msg: Msg, status: string): string {
   return label === key ? status.replace("_", " ") : label;
 }
 
-function outcomeText(msg: Msg, outcome: unknown, entrantNames: Record<string, string>): string | null {
+// EXPORTED (Competition Desk W2, Task 4/R13) — `run-sheet-row.tsx` reuses
+// this same derivation rather than a second copy.
+export function outcomeText(msg: Msg, outcome: unknown, entrantNames: Record<string, string>): string | null {
   const o = outcome as { kind?: string; winner?: string } | null;
   if (!o?.kind) return null;
   const winner = entrantNames[o.winner ?? ""] ?? "?";
@@ -1638,7 +1608,7 @@ export function FixtureLine({
   const decided = outcomeText(msg, fixture.outcome, entrantNames);
 
   // Bye ghost row (item 6): structural, not schedulable, no actions.
-  if (isBye(fixture)) {
+  if (isBye(toRunSheetFixture(fixture))) {
     const who = fixture.home_entrant_id ?? fixture.away_entrant_id;
     return (
       <li className="px-4 py-2 text-sm text-slate-500 italic">

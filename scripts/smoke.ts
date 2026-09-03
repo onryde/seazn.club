@@ -14163,6 +14163,34 @@ async function schedRegV3Suite(
   );
   check("division fixtures page renders (free)", fFixtures.status === 200);
 
+  // Competition Desk W2 (Task 4): the fixtures tab renders as a run sheet — a
+  // day group only appears once at least one fixture is SCHEDULED
+  // (`buildRunSheet` drops an empty/all-unscheduled division's sheet
+  // entirely, spec "Error and empty states"), so this generates + times one
+  // fixture on the SAME free-path division the check above already used.
+  await v1(
+    free,
+    `/api/v1/divisions/${fDiv.id}/entrants`,
+    "POST",
+    ["Alpha", "Bravo"].map((n, i) => ({ kind: "individual", display_name: n, seed: i + 1 })),
+  );
+  const fStage = v1data<{ id: string }>(
+    await v1(free, `/api/v1/divisions/${fDiv.id}/stages`, "POST", { seq: 1, kind: "league", name: "League" }),
+  );
+  const fGen = v1data<{ fixtures: { id: string }[] }>(
+    await v1(free, `/api/v1/stages/${fStage.id}/generate`, "POST", {}),
+  );
+  await v1(free, `/api/v1/fixtures/${fGen.fixtures[0]!.id}`, "PATCH", {
+    scheduled_at: new Date(Date.now() + 24 * 60 * 60_000).toISOString(),
+  });
+  const runSheet = await html(free, `/o/${freeOrg.slug}/c/${fComp.slug}/d/${fDiv.slug}?tab=fixtures`);
+  // Anchor on `="` — React serialises an omitted prop as `"$undefined"`, so a
+  // bare `data-run-sheet-day` probe would pass in both states.
+  check(
+    "p56: fixtures tab renders the run sheet with a day group",
+    runSheet.status === 200 && runSheet.body.includes('data-run-sheet-day="'),
+  );
+
   // Dual payments on community: offline fees were always plan-free, and since
   // V310 (registration.paid on every plan) the CARD method is free too — the
   // platform monetises it through the higher community fee (8% vs pro's 2%),

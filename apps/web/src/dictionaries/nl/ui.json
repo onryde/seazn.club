@@ -4940,5 +4940,21 @@
   "confirm.cancelEntry.label": "Inschrijving annuleren",
   "reg.hub.registrants.table.soloSignUp": "Individuele inschrijving",
   "reg.hub.registrants.table.soloWaiting": "Wacht op een team",
-  "reg.hub.registrants.table.soloAssigned": "In {team}"
+  "reg.hub.registrants.table.soloAssigned": "In {team}",
+  "runsheet.filter.today": "Vandaag",
+  "runsheet.filter.needsResult": "Uitslag ontbreekt",
+  "runsheet.filter.unscheduled": "Niet ingepland",
+  "runsheet.filter.all": "Alle",
+  "runsheet.day.fixtures.one": "{count} wedstrijd",
+  "runsheet.day.fixtures.other": "{count} wedstrijden",
+  "runsheet.unscheduled.title": "Nog niet ingepland",
+  "runsheet.now": "NU",
+  "runsheet.action.openPad": "Scorebord openen",
+  "runsheet.action.assignScorer": "Scorer toewijzen",
+  "runsheet.action.score": "Scoren",
+  "runsheet.action.result": "Uitslag bekijken",
+  "runsheet.action.setTime": "Tijd instellen",
+  "runsheet.action.view": "Bekijken",
+  "runsheet.sub.noScorer": "Nog geen scorer",
+  "runsheet.sub.awaitingDraw": "Wacht op loting"
 }

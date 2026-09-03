@@ -150,8 +150,24 @@ export function buildRunSheet(input: RunSheetInput): RunSheetBlock[] {
     }
     if (f.scheduled_at === null) {
       // Only OPEN work belongs in the unscheduled pile. A decided match with
-      // no recorded time is a result nobody needs to schedule.
-      if (OPEN.has(f.status)) unscheduled.push(f);
+      // no recorded time is a result nobody needs to schedule — finding 3.
+      if (OPEN.has(f.status)) {
+        unscheduled.push(f);
+      } else if (bracketStageIds.has(f.stage_id)) {
+        // Task 4 fix (found driving this seam through a real knockout e2e,
+        // `knockout.spec.ts`): a settled BRACKET fixture that was never
+        // explicitly timed — an entirely normal shape; nothing in this
+        // product requires scheduling a knockout round before playing it —
+        // still belongs in its own round section. Dropping it here (as the
+        // non-bracket branch below does) does not just remove a stale
+        // "Unscheduled" label, it erases a played match's result from its
+        // bracket outright, which is a worse defect than the one finding 3
+        // fixed. A non-bracket stage has no day to bucket an untimed row
+        // into, so THAT drop stays.
+        const list = bracketed.get(f.stage_id) ?? [];
+        list.push(f);
+        bracketed.set(f.stage_id, list);
+      }
       continue;
     }
     if (bracketStageIds.has(f.stage_id)) {

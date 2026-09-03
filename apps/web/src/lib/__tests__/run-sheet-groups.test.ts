@@ -220,6 +220,36 @@ describe("buildRunSheet — bracket stages keep round sections (owner ruling A2)
     expect(out.filter((b) => b.kind === "bracket").map((b) => b.kind === "bracket" && b.stageId))
       .toEqual(["s2", "s9"]);
   });
+
+  // Task 4 fix, found driving this seam through a real knockout e2e
+  // (`knockout.spec.ts`): nothing in this product requires a knockout round
+  // to carry an explicit kickoff time before it can be played — the ORIGINAL
+  // finding-3 fix dropped a settled, untimed fixture unconditionally, which
+  // for a bracket stage meant a PLAYED, DECIDED match vanished from its own
+  // bracket entirely, not merely lost a stale "Unscheduled" label. This is a
+  // strictly worse defect than the one finding 3 fixed, and the case above
+  // ("a DECIDED fixture with no time is a result, not unscheduled") never
+  // exercised a bracket stage, so nothing caught it until a real browser did.
+  it("a decided bracket fixture with no recorded time stays in its round section — it is not dropped (Task 4 fix)", () => {
+    const out = buildRunSheet(
+      input({
+        stages: [CUP],
+        fixtures: [fx({ id: "sf", stage_id: "s2", round_no: 1, status: "decided", scheduled_at: null })],
+      }),
+    );
+    expect(out.some((b) => b.kind === "unscheduled")).toBe(false);
+    const bracket = out.find((b) => b.kind === "bracket");
+    expect(bracket?.kind === "bracket" && bracket.rounds.flatMap((r) => r.fixtures.map((f) => f.id))).toEqual([
+      "sf",
+    ]);
+  });
+
+  it("the SAME decided-and-untimed fixture on a NON-bracket stage is still dropped — finding 3 holds there", () => {
+    const out = buildRunSheet(
+      input({ fixtures: [fx({ id: "lg", stage_id: "s1", status: "decided", scheduled_at: null })] }),
+    );
+    expect(out).toEqual([]);
+  });
 });
 
 describe("buildRunSheet — block ORDER (kills a reorder mutant)", () => {

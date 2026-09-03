@@ -4940,5 +4940,21 @@
   "confirm.cancelEntry.label": "Cancel entry",
   "reg.hub.registrants.table.soloSignUp": "Solo sign-up",
   "reg.hub.registrants.table.soloWaiting": "Waiting for a team",
-  "reg.hub.registrants.table.soloAssigned": "On {team}"
+  "reg.hub.registrants.table.soloAssigned": "On {team}",
+  "runsheet.filter.today": "Today",
+  "runsheet.filter.needsResult": "Needs result",
+  "runsheet.filter.unscheduled": "Unscheduled",
+  "runsheet.filter.all": "All",
+  "runsheet.day.fixtures.one": "{count} fixture",
+  "runsheet.day.fixtures.other": "{count} fixtures",
+  "runsheet.unscheduled.title": "Not yet scheduled",
+  "runsheet.now": "NOW",
+  "runsheet.action.openPad": "Open pad",
+  "runsheet.action.assignScorer": "Assign scorer",
+  "runsheet.action.score": "Score",
+  "runsheet.action.result": "Result",
+  "runsheet.action.setTime": "Set time",
+  "runsheet.action.view": "View",
+  "runsheet.sub.noScorer": "No scorer yet",
+  "runsheet.sub.awaitingDraw": "Awaiting draw"
 }
