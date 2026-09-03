@@ -68,6 +68,21 @@ describe("scorebug phone classes", () => {
   it("the meta strip is a non-wrapping rail on phones", () => {
     expect(html).toMatch(/class="[^"]*\bflex-wrap\b[^"]*\bmax-md:flex-nowrap\b[^"]*\bmax-md:overflow-x-auto\b/);
   });
+  // CI e2e run 33735186301, `parallel 2/2`: the rail above tripped axe's
+  // `scrollable-region-focusable` at SERIOUS impact in
+  // `scorepad-skins.spec.ts`'s `expectPadA11yClean`, on the tennis skin. A
+  // scrolling region has to be keyboard-reachable, and every child of this one
+  // is static text so the rule's "has focusable content" escape does not apply.
+  // Asserted on the SAME element as the rail test above (matched by its own
+  // `max-md:overflow-x-auto`), not on any div — a tabindex that lands on the
+  // wrapper instead would satisfy a loose probe and leave axe still red.
+  it("the rail is keyboard-reachable and names itself (axe scrollable-region-focusable)", () => {
+    const rail = html.match(/<div class="[^"]*\bmax-md:overflow-x-auto\b[^"]*"[^>]*>/);
+    expect(rail, "no overflow-x-auto rail found").not.toBeNull();
+    expect(rail![0], "rail is not a tab stop — axe scrollable-region-focusable").toMatch(/\stabindex="0"/);
+    expect(rail![0], "a bare focusable div announces as nothing").toMatch(/\srole="group"/);
+    expect(rail![0], "the tab stop has no accessible name").toMatch(/\saria-label="pad\.scorebug\.strip\.label"/);
+  });
   it("the plain strip item refuses to shrink and stays single-line", () => {
     const item = html.match(/<span[^>]*data-strip-item-id="games"[^>]*>/);
     expect(item).not.toBeNull();

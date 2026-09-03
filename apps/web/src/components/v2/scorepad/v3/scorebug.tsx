@@ -337,7 +337,32 @@ export function Scorebug({ spec, t, onTap, onOpenSheet }: ScorebugProps) {
         // against that div's full scrollable width and sit off-screen past
         // whatever is currently scrolled out of view.
         <div className="relative">
-          <div className={`flex flex-wrap items-center justify-center gap-x-4 gap-y-1 ${NIGHT_TILE_CLASSES.bandBg} px-3 py-1.5 max-md:flex-nowrap max-md:justify-start max-md:gap-x-3 max-md:overflow-x-auto max-md:[scrollbar-width:none]`}>
+          {/* CI e2e finding (run 33735186301, `parallel 2/2`): making this band
+              a scrolling rail on phones tripped axe's `scrollable-region-
+              focusable` at SERIOUS impact — `scorepad-skins.spec.ts`'s
+              `expectPadA11yClean`. A region that scrolls must be reachable by
+              keyboard, and every child here is static text, so the rule's
+              "focusable content" escape does not apply either. `tabIndex={0}`
+              alone silences axe; `role="group"` + a name is what makes the
+              resulting tab stop mean something instead of announcing as a bare
+              empty group.
+
+              Unconditional, not `max-md`-scoped: there is no way to vary
+              `tabindex` by media query, and the alternatives (measuring
+              `scrollWidth`, a width listener) would hydrate differently on the
+              server and the client. One extra tab stop on the status band at
+              every width, which now also announces itself to a screen reader —
+              a net gain at desktop, not a regression.
+
+              `className` stays the FIRST prop: `phone-classes.test.tsx` anchors
+              on `<div class="…` immediately after `<div class="relative">`, and
+              React emits attributes in JSX order. */}
+          <div
+            className={`flex flex-wrap items-center justify-center gap-x-4 gap-y-1 ${NIGHT_TILE_CLASSES.bandBg} px-3 py-1.5 max-md:flex-nowrap max-md:justify-start max-md:gap-x-3 max-md:overflow-x-auto max-md:[scrollbar-width:none]`}
+            role="group"
+            tabIndex={0}
+            aria-label={t("pad.scorebug.strip.label")}
+          >
           {spec.strip.map((item, i) => {
             // R3/B4 (owner ruling R3-6, the per-sport signature): a strip item
             // may ask for the LED-panel treatment — the fourth official's

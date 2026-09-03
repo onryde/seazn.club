@@ -43,6 +43,69 @@ const projectViewport = (): { width: number; height: number } | null =>
   (test.info().project.use as { viewport?: { width: number; height: number } })
     .viewport ?? null;
 
+/** Split every box inside `rootSelector` whose content is wider than its box
+ *  into the two cases this file used to conflate.
+ *
+ *  A box wider than its content is CLIPPED only when the extra content cannot
+ *  be reached. The v3 scorebug's meta strip is a deliberate swipeable rail
+ *  below `md` (`max-md:overflow-x-auto`, scorebug.tsx — spec
+ *  2026-09-02-scorepad-v3-phone-composition §3.4), so on a phone it reports
+ *  `scrollWidth > clientWidth` BY DESIGN, and the scorebug scans below failed
+ *  at all five phone widths reading it as a clipped name. The distinction is
+ *  the computed `overflow-x`: `auto`/`scroll` means the reader can bring the
+ *  rest into view; `hidden`/`visible` means it is gone. Only the second is a
+ *  defect. The scorebug ROOT is `overflow-hidden` and so stays in scope —
+ *  that is the clipped-name case these scans were written for, and it is not
+ *  weakened by this split.
+ *
+ *  `scrollable` is returned rather than silently dropped so the caller can
+ *  hold it to something: an exemption nothing checks would let any future
+ *  overflow hide behind an `overflow-x-auto`. See `expectScorebugNotClipped`. */
+async function overflowingIn(
+  page: Page,
+  rootSelector: string,
+  childSelector: string,
+  absentMessage: string,
+): Promise<{ clipped: string[]; scrollable: string[] }> {
+  return page.evaluate(
+    ({ rootSel, childSel, absent }) => {
+      const root = document.querySelector<HTMLElement>(rootSel);
+      if (!root) return { clipped: [absent], scrollable: [] };
+      const suspects: HTMLElement[] = [root, ...Array.from(root.querySelectorAll<HTMLElement>(childSel))];
+      const over = suspects.filter((el) => el.scrollWidth - el.clientWidth > 1);
+      const describe = (el: HTMLElement) =>
+        `${el.tagName.toLowerCase()} ${el.scrollWidth}px content in ${el.clientWidth}px` +
+        `${el.hasAttribute("tabindex") ? ` tabindex=${el.getAttribute("tabindex")}` : ""}`;
+      const reachable = (el: HTMLElement) => /^(auto|scroll)$/.test(getComputedStyle(el).overflowX);
+      return {
+        clipped: over.filter((el) => !reachable(el)).map(describe),
+        scrollable: over.filter(reachable).map(describe),
+      };
+    },
+    { rootSel: rootSelector, childSel: childSelector, absent: absentMessage },
+  );
+}
+
+/** The scorebug's own clipping gate. Nothing inside it may be clipped, and the
+ *  one thing allowed to overflow — the phone meta rail — must be keyboard-
+ *  reachable, which is the same `tabindex` axe's `scrollable-region-focusable`
+ *  demanded of it (CI e2e run 33735186301, `parallel 2/2`). Asserting the
+ *  exemption pays for itself: a rail that lost its tab stop, or a NEW
+ *  `overflow-x-auto` box appearing in the scorebug without one, reddens here
+ *  instead of quietly widening the exemption. */
+async function expectScorebugNotClipped(page: Page, label: string): Promise<void> {
+  const { clipped, scrollable } = await overflowingIn(
+    page,
+    '[data-role="v3-scorebug"]',
+    "button,div,span",
+    "the scorebug was not in the DOM",
+  );
+  expect(clipped, `${label} is clipped at this width`).toEqual([]);
+  for (const box of scrollable) {
+    expect(box, `${label}: a scrolling box inside the scorebug is not keyboard-reachable`).toMatch(/tabindex=0$/);
+  }
+}
+
 /** Phone composition (spec 2026-09-02-scorepad-v3-phone-composition-design.md §6.2).
  *  Prints the visible control list so a reviewer can diff phone vs desktop by
  *  eye, then asserts the composition — not the box sizes — at this project's
@@ -1221,7 +1284,36 @@ test("lineup editor role/pair-order selects hold at phone width", async ({ page,
   await page.goto(await fixturePath(page.request, fx.fixtureId), { waitUntil: "load" });
 
   const roleSelects = page.getByTestId("lineup-role-select");
-  await expect(roleSelects.first(), "no role select rendered").toBeVisible({ timeout: 30_000 });
+  // Below `md` each lineup card sits inside a `PhoneDisclosure`
+  // (`fixture-console.tsx`, one per side) whose body is `max-md:hidden` until
+  // the row is tapped — spec 2026-09-02-scorepad-v3-phone-composition §3.10.
+  // So at five of this file's seven width projects the selects are present in
+  // the DOM but UNPAINTED: `boundingBox()` returns null and `toBeVisible()`
+  // never resolves. The fold is the approved design, so the fix is to open the
+  // disclosure, NOT to weaken what this test asserts — the 44px floor still
+  // has to hold in the state a scorer actually reaches these controls in, and
+  // `expectNoHorizontalScroll` at the foot now runs with the body open, which
+  // is the state that shipped a 106px overflow at 320px during this wave.
+  //
+  // Wait ATTACHED first (the editor is client-rendered) — visibility is
+  // exactly what the fold denies, so it cannot be the wait condition here.
+  await expect(roleSelects.first(), "no role select rendered").toBeAttached({ timeout: 30_000 });
+  // BOTH sides, not the first: each side mounts its own disclosure, so opening
+  // one leaves the other's selects boxless and the loop below fails on them.
+  // Gated on the toggle being VISIBLE rather than on a width literal — at
+  // `tablet-768`/`tablet-834` the toggle is `md:hidden` and the body is
+  // already open, and clicking a hidden control would throw.
+  const lineupDisclosures = page.locator('[data-role="phone-disclosure"]:has([data-testid="lineup-role-select"])');
+  expect(await lineupDisclosures.count(), "lineup editor is not inside a PhoneDisclosure").toBeGreaterThan(0);
+  for (const wrapper of await lineupDisclosures.all()) {
+    const toggle = wrapper.locator('[data-role="phone-disclosure-toggle"]');
+    if (!(await toggle.isVisible())) continue;
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  }
+  await expect(roleSelects.first(), "role select still folded after its disclosure was opened").toBeVisible({
+    timeout: 30_000,
+  });
   for (const select of await roleSelects.all()) {
     const box = await select.boundingBox();
     expect(box, "role select has no box").not.toBeNull();
@@ -1541,15 +1633,7 @@ test("tennis v3 pad (singles): the scoreboard half holds the 44px floor, live an
   // The scorebug card is `overflow-hidden`, so a clipped name would not
   // necessarily show up as page-level horizontal scroll — checked here as
   // its own signal, not folded into `expectNoHorizontalScroll` below.
-  const clippedBeforeTap = await page.evaluate(() => {
-    const root = document.querySelector<HTMLElement>('[data-role="v3-scorebug"]');
-    if (!root) return ["the scorebug was not in the DOM"];
-    const suspects: HTMLElement[] = [root, ...Array.from(root.querySelectorAll<HTMLElement>("button,div,span"))];
-    return suspects
-      .filter((el) => el.scrollWidth - el.clientWidth > 1)
-      .map((el) => `${el.tagName.toLowerCase()} ${el.scrollWidth}px content in ${el.clientWidth}px`);
-  });
-  expect(clippedBeforeTap, "scorebug content is clipped at this width").toEqual([]);
+  await expectScorebugNotClipped(page, "scorebug content (before tap)");
   await expectNoHorizontalScroll(page);
 
   // Prove the target is not just big enough but a REAL, wired control:
@@ -1652,15 +1736,7 @@ test("tennis v3 pad (doubles): both partners' names hold the 44px floor and fit 
   await expect(awayHalf, "away half must show BOTH partners").toContainText(away1);
   await expect(awayHalf, "away half must show BOTH partners").toContainText(away2);
 
-  const clipped = await page.evaluate(() => {
-    const root = document.querySelector<HTMLElement>('[data-role="v3-scorebug"]');
-    if (!root) return ["the scorebug was not in the DOM"];
-    const suspects: HTMLElement[] = [root, ...Array.from(root.querySelectorAll<HTMLElement>("button,div,span"))];
-    return suspects
-      .filter((el) => el.scrollWidth - el.clientWidth > 1)
-      .map((el) => `${el.tagName.toLowerCase()} ${el.scrollWidth}px content in ${el.clientWidth}px`);
-  });
-  expect(clipped, "doubles scoreboard content is clipped at this width").toEqual([]);
+  await expectScorebugNotClipped(page, "doubles scoreboard content");
 
   await expectNoHorizontalScroll(page);
 });

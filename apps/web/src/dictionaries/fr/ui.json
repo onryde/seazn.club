@@ -2741,6 +2741,7 @@
   "pad.ribbon.core.lineup.entry": "Entrée de joueur enregistrée",
   "pad.host.moreTitle": "Plus d'actions",
   "pad.host.moreEmpty": "Rien d'autre à enregistrer ici pour l'instant.",
+  "pad.scorebug.strip.label": "État du match",
   "pad.sheet.back": "Retour",
   "pad.sheet.cancel": "Annuler",
   "pad.sheet.person.none": "Personne — le fautif la purge",

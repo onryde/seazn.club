@@ -3194,6 +3194,7 @@ export type DictionaryKey =
   | "pad.ribbon.fallback"
   | "pad.ribbon.takeBack"
   | "pad.ribbon.withDetail"
+  | "pad.scorebug.strip.label"
   | "pad.sheet.back"
   | "pad.sheet.cancel"
   | "pad.sheet.decrease"
