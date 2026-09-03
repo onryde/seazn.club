@@ -26,6 +26,7 @@ import {
 } from "../pass-ladder";
 import { PASS_LOCK_REASONS } from "@/lib/entitlements";
 import { PASS_KEYS, SUPPORTED_CURRENCIES, passPrice } from "@/lib/currency";
+import { PASS_CREDIT_GRANT } from "@/lib/pricing-cards";
 import uiEn from "@/dictionaries/en/ui.json";
 
 const CAPS = {
@@ -41,13 +42,13 @@ describe("passLadderOptions", () => {
       amountMinor: 1500,
       entrants: 128,
       divisions: 10,
-      credits: 25,
+      credits: PASS_CREDIT_GRANT.event_pass,
     });
     expect(options[1]).toMatchObject({
       amountMinor: 3900,
       entrants: null,
       divisions: 20,
-      credits: 25,
+      credits: PASS_CREDIT_GRANT.event_pass_l,
     });
   });
 
@@ -68,12 +69,20 @@ describe("passLadderOptions", () => {
     expect(same.join(", ")).toBe("");
   });
 
-  it("carries the SAME credit grant on both rungs", () => {
-    // PASS_CREDIT_GRANT is flat by decision (v17 #294): L buys a bigger
-    // competition, not more credits. A rung-scaled grant would have to be a
-    // deliberate product change, not a helper that quietly multiplied.
+  it("carries EACH RUNG'S OWN credit grant, not one rung's twice", () => {
+    // Entitlements v18 W2 T5 (design R9, owner ruling 2026-09-03): the grant is
+    // sized by rung — 25 on M, 50 on L. This test asserted the OPPOSITE ("the
+    // SAME credit grant on both rungs", flat by v17 #294), so it is the witness
+    // for the product change as well as for the helper.
+    //
+    // The failure it exists for is the card advertising M's number beside L's
+    // price: `credits: PASS_CREDIT_GRANT` (unindexed) type-checks nowhere now,
+    // but `PASS_CREDIT_GRANT.event_pass` for both rungs would, and that is the
+    // mistake this catches. Both figures are read from the declaration.
     const [m, l] = passLadderOptions("usd", CAPS);
-    expect(l!.credits).toBe(m!.credits);
+    expect(m!.credits).toBe(PASS_CREDIT_GRANT.event_pass);
+    expect(l!.credits).toBe(PASS_CREDIT_GRANT.event_pass_l);
+    expect(l!.credits).not.toBe(m!.credits);
   });
 });
 

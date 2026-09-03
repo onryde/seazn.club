@@ -14,7 +14,7 @@ It comes in two sizes, **M** and **L**. They differ in exactly one respect — h
 |---|---|---|
 | Entrants per division | 128 | Unlimited |
 | Divisions in the competition | Up to 10 | Up to 20 |
-| AI credits | +25, one-time | +25, one-time |
+| AI credits | +25, one-time | +50, one-time |
 | Platform fee on entry fees | 5% | 5% |
 | Everything else below | Same | Same |
 
@@ -33,7 +33,7 @@ For the competition it covers, and every division inside it — at **either** si
 - **Sponsor tiers and paid packages** — Title / Gold / Silver / Partner grouping, per-competition placement, and selling priced sponsorship by card ([sponsors](/help/sharing/sponsors)).
 - **The realtime scoreboard and slideshow** — live scores turn over on the venue screen *and* on the competition's public spectator pages, so your audience follows along live, not just your own noticeboard.
 - **Advanced formats**, including double elimination.
-- **+25 AI credits**, once, added to your organisation's wallet when the pass is bought — the same top-up at either size ([AI Schedule](/help/scheduling/ai-scheduling)).
+- **AI credits**, once, added to your organisation's wallet when the pass is bought — **+25 AI credits** on M and **+50 AI credits** on L, because the bigger event is the one with more scheduling to do ([AI Schedule](/help/scheduling/ai-scheduling)).
 
 ## What it doesn't include
 

@@ -179,6 +179,11 @@ const FAQ_EXEMPT: Record<string, string> = {
 
 /** The one pass string that quantifies the credit grant. */
 const PASS_CREDIT_VALUES = across("marketing", "pricing.faq.eventPass.a");
+// W2 T5: the grant is per rung, so the figures come off the declaration rather
+// than being typed here — a repricing moves these proofs with it.
+const M_GRANT = PASS_CREDIT_GRANT.event_pass;
+const L_GRANT = PASS_CREDIT_GRANT.event_pass_l;
+const GRANTS: readonly number[] = Object.values(PASS_CREDIT_GRANT);
 
 /** The Pro Plus FAQ answer — a different claim family, deliberately NOT scanned
  *  for pass permanence. Pro Plus is a subscription: "for as long as you pay" is
@@ -1989,7 +1994,7 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
   });
 
   it("quotes the one-time credit grant at its live size, not as a recurring one", () => {
-    expect(localeCreditGrantFaults(PASS_CREDIT_VALUES, PASS_CREDIT_GRANT)).toEqual([]);
+    expect(localeCreditGrantFaults(PASS_CREDIT_VALUES, GRANTS)).toEqual([]);
   });
 
   // The extra-organisation rate. The CLAIM comes from four dictionaries and the
@@ -2714,24 +2719,36 @@ describe("the dictionary guards survive a rewording, in every locale", () => {
   });
 
   it("catches a drifted, missing or recurring credit grant, in each language", () => {
+    const both = `+${M_GRANT} AI credits con M, +${L_GRANT} con L`;
     for (const locale of DICTIONARY_LOCALES) {
-      expect(
-        localeCreditGrantFaults(v(locale, `los mismos +${PASS_CREDIT_GRANT} AI credits`), PASS_CREDIT_GRANT),
-        locale,
-      ).toEqual([]);
+      expect(localeCreditGrantFaults(v(locale, both), GRANTS), locale).toEqual([]);
     }
-    // A rung-keyed grant is the drift this guards against: the grant is FLAT,
-    // and never reads the pass key.
-    expect(localeCreditGrantFaults(v("en", "the same one-time +50 AI credits"), PASS_CREDIT_GRANT)).toEqual(
-      [
-        `en k: does not state the one-time +${PASS_CREDIT_GRANT} AI credit grant`,
-        `en k: quotes +50, but the pass grants +${PASS_CREDIT_GRANT}`,
-      ],
+    // ENTITLEMENTS V18 W2 T5. This answer covers BOTH rungs in one sentence, so
+    // the rule reads the declared SET — and the case that matters is the half
+    // update: an editor who moves M's figure and leaves L's behind, or the
+    // reverse. Each is now a fault; under the flat rule the first was the
+    // required wording and the second was invisible.
+    expect(localeCreditGrantFaults(v("en", `a one-time +${M_GRANT} AI credits`), GRANTS)).toEqual([
+      `en k: does not state the one-time +${L_GRANT} AI credit grant`,
+    ]);
+    expect(localeCreditGrantFaults(v("en", `a one-time +${L_GRANT} AI credits`), GRANTS)).toEqual([
+      `en k: does not state the one-time +${M_GRANT} AI credit grant`,
+    ]);
+    // A figure that is NEITHER rung's is still drift.
+    expect(localeCreditGrantFaults(v("en", `${both} +40`), GRANTS).join(" ")).toContain(
+      "quotes +40",
     );
     // Deletion.
     expect(
-      localeCreditGrantFaults(v("en", "advanced formats, exports and realtime"), PASS_CREDIT_GRANT),
-    ).toEqual([`en k: does not state the one-time +${PASS_CREDIT_GRANT} AI credit grant`]);
+      localeCreditGrantFaults(v("en", "advanced formats, exports and realtime"), GRANTS),
+    ).toEqual([
+      `en k: does not state the one-time +${M_GRANT} AI credit grant`,
+      `en k: does not state the one-time +${L_GRANT} AI credit grant`,
+    ]);
+    // ...and an empty grant set would examine nothing.
+    expect(localeCreditGrantFaults(v("en", "anything"), [])).toEqual([
+      "credit-grant set is empty — this rule would examine nothing",
+    ]);
     // The inverse claim — right number, wrong cadence — in each language.
     for (const [locale, recurring] of [
       ["en", "+25 AI credits every month"],
@@ -2740,7 +2757,7 @@ describe("the dictionary guards survive a rewording, in every locale", () => {
       ["nl", "+25 AI-credits per maand"],
     ] as Array<[DictionaryLocale, string]>) {
       expect(
-        localeCreditGrantFaults(v(locale, recurring), PASS_CREDIT_GRANT).join(" "),
+        localeCreditGrantFaults(v(locale, recurring), GRANTS).join(" "),
         `${locale}: ${recurring}`,
       ).toContain("sells the one-time grant as recurring");
     }
@@ -2768,7 +2785,7 @@ describe("the dictionary guards survive a rewording, in every locale", () => {
       ["nl", "Bij elke verlenging +25 AI-credits."],
     ] as Array<[DictionaryLocale, string]>) {
       expect(
-        localeCreditGrantFaults(v(locale, recurring), PASS_CREDIT_GRANT).join(" "),
+        localeCreditGrantFaults(v(locale, recurring), GRANTS).join(" "),
         `${locale}: ${recurring}`,
       ).toContain("sells the one-time grant as recurring");
     }

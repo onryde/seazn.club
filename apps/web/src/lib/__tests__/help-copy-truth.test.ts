@@ -810,14 +810,17 @@ describe.skipIf(!HAS_DB)("billing help articles quote the numbers the matrix enf
       const live = await capFor("ai.credits.monthly", key);
       expect(plans, `${key}'s monthly grant`).toContain(`${live} AI credits a month`);
     }
-    // …and the pass's grant is the one-time constant, not a monthly row.
-    for (const key of ["event_pass", "event_pass_l"]) {
+    // …and each rung's grant is its own one-time constant, not a monthly row.
+    // The article must quote BOTH, because the two are no longer the same
+    // number (entitlements v18 W2 T5) and it describes both sizes.
+    for (const key of ["event_pass", "event_pass_l"] as const) {
       const [row] = await sql<{ int_value: number | null }[]>`
         select int_value from plan_entitlements
         where plan_key = ${key} and feature_key = 'ai.credits.monthly'`;
       expect(row, `${key} must have no monthly credit row`).toBeUndefined();
+      expect(plans, `${key}'s one-time grant`).toContain(`+${PASS_CREDIT_GRANT[key]} AI credits`);
     }
-    expect(PASS_CREDIT_GRANT).toBe(25);
+    expect(PASS_CREDIT_GRANT.event_pass_l).not.toBe(PASS_CREDIT_GRANT.event_pass);
   });
 });
 
@@ -1123,28 +1126,50 @@ describe("the help-prose guards survive a rewording, not just a revert", () => {
   });
 
   it("catches a drifted, missing or recurring credit grant in prose", () => {
-    const honest = "- A one-time top-up of 25 AI credits, added to your wallet when you buy.";
-    expect(passCreditProseFaults("x", honest)).toEqual([]);
-    // The table form, where the number sits on the other side of the noun.
-    expect(passCreditProseFaults("x", "| AI credits | +25, one-time | +25, one-time |")).toEqual([]);
+    // Entitlements v18 W2 T5 (design R9): the grant is per rung — M grants
+    // `mGrant`, L grants `lGrant` — and this article describes both rungs in one
+    // body of prose, so the rule reads the declared SET. Every figure below is
+    // derived from the declaration; a repricing moves these proofs with it.
+    const mGrant = PASS_CREDIT_GRANT.event_pass;
+    const lGrant = PASS_CREDIT_GRANT.event_pass_l;
+    expect(lGrant, "the two rungs must differ or none of this witnesses anything").not.toBe(mGrant);
 
+    const honest =
+      `- A one-time top-up of ${mGrant} AI credits on M, and ${lGrant} AI credits on L, ` +
+      "added to your wallet when you buy.";
+    expect(passCreditProseFaults("x", honest)).toEqual([]);
+    // The table form, where the number sits on the other side of the noun — and
+    // it is the two-column table, so each rung's own figure is in its own cell.
+    expect(
+      passCreditProseFaults("x", `| AI credits | +${mGrant}, one-time | +${lGrant}, one-time |`),
+    ).toEqual([]);
+
+    // THE HALF UPDATE — the defect this wave makes possible, and the one a flat
+    // rule could not express: an editor moves M's figure and leaves L's, or
+    // states only one of them. Each rung's absence is now its own fault.
+    expect(
+      passCreditProseFaults("x", `| AI credits | +${mGrant}, one-time | +${mGrant}, one-time |`),
+    ).toEqual([`x: never states the one-time +${lGrant} AI credit grant`]);
+    expect(passCreditProseFaults("x", `- A one-time top-up of ${lGrant} AI credits.`)).toEqual([
+      `x: never states the one-time +${mGrant} AI credit grant`,
+    ]);
+
+    // A figure that is NEITHER rung's is still drift.
     expect(passCreditProseFaults("x", "- A one-time top-up of 40 AI credits.").join(" ")).toContain(
-      `quotes 40 AI credits, but the pass grants ${PASS_CREDIT_GRANT}`,
-    );
-    expect(passCreditProseFaults("x", "| AI credits | +50, one-time |").join(" ")).toContain(
-      "quotes 50 AI credits",
+      `quotes 40 AI credits, but the pass grants ${mGrant} / ${lGrant}`,
     );
     // The inverse claim: right number, wrong cadence.
-    expect(passCreditProseFaults("x", "- 25 AI credits a month, once you buy.").join(" ")).toContain(
-      "sells the one-time grant as recurring",
-    );
+    expect(
+      passCreditProseFaults("x", `- ${mGrant} AI credits a month, once you buy.`).join(" "),
+    ).toContain("sells the one-time grant as recurring");
     // Right number, no cadence at all — a reader cannot tell it does not repeat.
-    expect(passCreditProseFaults("x", "- The pass adds 25 AI credits.").join(" ")).toContain(
+    expect(passCreditProseFaults("x", `- The pass adds ${mGrant} AI credits.`).join(" ")).toContain(
       "without saying it is one-time",
     );
-    // Deletion.
+    // Deletion — BOTH grants go unstated, so both are named.
     expect(passCreditProseFaults("x", "- Branded exports and sponsor tiers.")).toEqual([
-      `x: never states the one-time +${PASS_CREDIT_GRANT} AI credit grant`,
+      `x: never states the one-time +${mGrant} AI credit grant`,
+      `x: never states the one-time +${lGrant} AI credit grant`,
     ]);
   });
 

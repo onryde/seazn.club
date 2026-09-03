@@ -546,13 +546,114 @@ describe.skipIf(!HAS_DB)("Event Pass mint refuses a rung/price desync (v17 gap #
 
       expect(await reconcilePassCheckout(orgId, session.id)).toBe(true);
       expect(await passKeyHeld(compId)).toBe("event_pass_l");
-      expect(await balance(await walletIdFor(orgId))).toBe(PASS_CREDIT_GRANT);
+      expect(await balance(await walletIdFor(orgId))).toBe(PASS_CREDIT_GRANT.event_pass_l);
       expect(await refusalFor(compId)).toBeNull();
       expect(emailMock.sendPassRungMismatchAlertEmail).not.toHaveBeenCalled();
       expect(errors).not.toHaveBeenCalled();
     } finally {
       errors.mockRestore();
       restoreAlertAddress();
+    }
+  });
+
+  // ── entitlements v18 W2 T5: the grant is PER RUNG ──────────────────────────
+  //
+  // Design R9 prices the credit top-up by size — M grants 25, L grants 50 — and
+  // the owner's ruling makes it a one-time top-up that stays in the wallet.
+  //
+  // Every number below is READ from `PASS_CREDIT_GRANT`, never typed here, so a
+  // repricing moves the test with the declaration instead of leaving it
+  // asserting yesterday's figure. The two rungs are asserted DISTINCT first,
+  // because a flat grant satisfies every remaining assertion in this block: the
+  // test can only witness the regression it exists for while they differ.
+  it("credits each rung its OWN grant, and the two are not the same number", async () => {
+    expect(PASS_CREDIT_GRANT.event_pass_l).not.toBe(PASS_CREDIT_GRANT.event_pass);
+    await priceBothRungs();
+
+    // Two orgs, so each DELTA is read against that wallet's own opening
+    // balance. Asserting a total would pass on a wallet that was already warm.
+    const m = await seedMintBuyer();
+    const mWallet = await walletIdFor(m.orgId);
+    const mBefore = await balance(mWallet);
+    const mSession = paidSession(m.orgId, m.compId, "event_pass", {
+      lineItems: [lineItem("price_test_pass")],
+    });
+    stripeMock.retrieve.mockResolvedValue(mSession);
+    expect(await reconcilePassCheckout(m.orgId, mSession.id)).toBe(true);
+    expect((await balance(mWallet)) - mBefore).toBe(PASS_CREDIT_GRANT.event_pass);
+
+    const l = await seedMintBuyer();
+    const lWallet = await walletIdFor(l.orgId);
+    const lBefore = await balance(lWallet);
+    const lSession = paidSession(l.orgId, l.compId, "event_pass_l", {
+      lineItems: [lineItem("price_test_pass_l")],
+    });
+    stripeMock.retrieve.mockResolvedValue(lSession);
+    expect(await reconcilePassCheckout(l.orgId, lSession.id)).toBe(true);
+    expect((await balance(lWallet)) - lBefore).toBe(PASS_CREDIT_GRANT.event_pass_l);
+  });
+
+  // Idempotency in BOTH directions. `if (already) return` has shipped here
+  // before as a guard that also swallowed a legitimate new arrival, so the
+  // absence of a double grant is only half the claim worth making.
+  it("replays grant once, while a genuine second purchase grants again at ITS rung", async () => {
+    await priceBothRungs();
+    const { orgId, compId } = await seedMintBuyer();
+    const wallet = await walletIdFor(orgId);
+
+    const first = paidSession(orgId, compId, "event_pass", {
+      lineItems: [lineItem("price_test_pass")],
+    });
+    stripeMock.retrieve.mockResolvedValue(first);
+    expect(await reconcilePassCheckout(orgId, first.id)).toBe(true);
+    const afterFirst = await balance(wallet);
+    expect(afterFirst).toBe(PASS_CREDIT_GRANT.event_pass);
+
+    // The same sale, redelivered on both paths: the bookmarkable
+    // `?checkout=success&session_id=` URL re-rendering, and the webhook
+    // arriving late (Stripe retries at-least-once). Neither may top up again.
+    builtOn("price_test_pass");
+    expect(await reconcilePassCheckout(orgId, first.id)).toBe(true);
+    await processStripeEvent(passEvent(first));
+    await processStripeEvent(passEvent(first));
+    expect(await balance(wallet)).toBe(afterFirst);
+
+    // ...and a REAL second purchase — same org, a different competition, the
+    // other rung — must still land, at its own size.
+    const [{ id: comp2 }] = await sql<{ id: string }[]>`
+      insert into competitions (org_id, name, slug)
+      values (${orgId}, ${"Mint Cup 2 " + randomUUID().slice(0, 8)},
+              ${"mint-cup-2-" + randomUUID().slice(0, 8)}) returning id`;
+    const second = paidSession(orgId, comp2, "event_pass_l", {
+      lineItems: [lineItem("price_test_pass_l")],
+    });
+    stripeMock.retrieve.mockResolvedValue(second);
+    expect(await reconcilePassCheckout(orgId, second.id)).toBe(true);
+    expect(await balance(wallet)).toBe(
+      PASS_CREDIT_GRANT.event_pass + PASS_CREDIT_GRANT.event_pass_l,
+    );
+  });
+
+  // The rung guard, stated as a REFUSAL rather than as an absence of a crash:
+  // a session whose metadata claims L while its price is M's grants NOTHING,
+  // not even M's smaller top-up. (The sibling test below pins the whole refusal
+  // — no pass row, a recorded reason, a staff alert; this one pins the money.)
+  it("grants nothing at all when the session's rung and its price disagree", async () => {
+    const { orgId, compId } = await seedMintBuyer();
+    await priceBothRungs();
+    const wallet = await walletIdFor(orgId);
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const session = paidSession(orgId, compId, "event_pass_l", {
+        lineItems: [lineItem("price_test_pass")], // M's price, L's metadata
+      });
+      stripeMock.retrieve.mockResolvedValue(session);
+      expect(await reconcilePassCheckout(orgId, session.id)).toBe(false);
+      expect(await balance(wallet)).toBe(0);
+      expect(await balance(wallet)).not.toBe(PASS_CREDIT_GRANT.event_pass);
+      expect(await balance(wallet)).not.toBe(PASS_CREDIT_GRANT.event_pass_l);
+    } finally {
+      errors.mockRestore();
     }
   });
 

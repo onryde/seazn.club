@@ -26,7 +26,10 @@ export interface PassRungOption {
   /** null = unlimited — `plan_entitlements`' own convention for "no ceiling". */
   entrants: number | null;
   divisions: number | null;
-  /** AI credits granted on purchase. Flat across rungs by decision (#294). */
+  /** AI credits granted on purchase. PER RUNG since entitlements v18 W2 T5
+   *  (design R9): M grants 25, L grants 50. It was flat, and while it was, this
+   *  card advertised M's 25 beside L's price — the number a buyer reads on the
+   *  rung they are about to pick. */
   credits: number;
 }
 
@@ -47,7 +50,7 @@ export function passLadderOptions(currency: Currency, caps: PassRungCaps): PassR
     amountMinor: passPrice(currency, key),
     entrants: caps[key].entrants,
     divisions: caps[key].divisions,
-    credits: PASS_CREDIT_GRANT,
+    credits: PASS_CREDIT_GRANT[key],
   }));
 }
 

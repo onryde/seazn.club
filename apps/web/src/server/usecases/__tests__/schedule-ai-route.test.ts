@@ -490,7 +490,7 @@ describe.skipIf(!HAS_DB)("aiPlanForDivision gates (v4/00 §5, credit-metered v17
   // behavior left to assert — credit exhaustion (the two tests above) is the
   // only spend limit now, so the cap/override-lift cases are gone, not rewritten.
 
-  it("an Event Pass grants PASS_CREDIT_GRANT one-time AI credits; once drained the org 402s again", async () => {
+  it("an Event Pass grants its rung's one-time AI credits; once drained the org 402s again", async () => {
     const { auth } = await seedOrg("community");
     const { divisionId, fixtureIds, courts } = await seedPlannable(auth);
     const [{ competition_id }] = await sql<{ competition_id: string }[]>`
@@ -510,7 +510,7 @@ describe.skipIf(!HAS_DB)("aiPlanForDivision gates (v4/00 §5, credit-metered v17
       paymentIntent: `pi_pass_${randomUUID()}`,
     });
     expect(res.recorded).toBe(true);
-    expect(await balance(walletId)).toBe(PASS_CREDIT_GRANT);
+    expect(await balance(walletId)).toBe(PASS_CREDIT_GRANT.event_pass);
     // The granted credits are spendable: a real run succeeds and debits one.
     parse.mockResolvedValue(planResponse(legalPlan(fixtureIds, courts)));
     const out = await aiPlanForDivision(auth, divisionId, {
@@ -518,10 +518,10 @@ describe.skipIf(!HAS_DB)("aiPlanForDivision gates (v4/00 §5, credit-metered v17
       mode: "generate",
     });
     expect(out.proposal).toHaveLength(fixtureIds.length);
-    expect(await balance(walletId)).toBe(PASS_CREDIT_GRANT - 1);
+    expect(await balance(walletId)).toBe(PASS_CREDIT_GRANT.event_pass - 1);
     // Drain the rest — a pass is a finite top-up, not an unlimited lift: once the
     // wallet empties the next run 402s at the reserve, before the LLM.
-    await reserve(walletId, auth.orgId, PASS_CREDIT_GRANT - 1);
+    await reserve(walletId, auth.orgId, PASS_CREDIT_GRANT.event_pass - 1);
     expect(await balance(walletId)).toBe(0);
     await expect(
       aiPlanForDivision(auth, divisionId, {

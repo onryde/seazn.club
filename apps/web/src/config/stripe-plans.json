@@ -53,7 +53,7 @@
       }
     }
   ],
-  "$comment_passes": "Event Pass rungs (v17 #294): TWO one-time price points for the same single-competition upgrade, told apart ONLY by size — M ($15) is 10 divisions / 128 entrants per division, L ($39) is 20 divisions / 512 entrants. Everything else (features, and the one-time AI credit grant — PASS_CREDIT_GRANT) is identical. `key` matches the `plans` row of the same name (M's key is literally `event_pass`, not `event_pass_m`), and the caps themselves live in plan_entitlements (V341 derives L's whole matrix from M's), never here — this file only owns the price. The rungs are bounded by the annual plan on both sides (3 × L >= annual keeps a third pass a nudge toward subscribing; 2 × L < annual keeps a two-tournament organiser out of one), which is what stripe-plans-ladder.test.ts pins. stripe-sync loops this array by key and writes each price id into plans.stripe_price_id_onetime, so adding a rung needs no sync-script change; lib/currency.ts passPrice(currency, passKey) is the single reader.",
+  "$comment_passes": "Event Pass rungs (v17 #294): TWO one-time price points for the same single-competition upgrade, told apart ONLY by size — M ($15) is 10 divisions / 128 entrants per division, L ($39) is 20 divisions / 512 entrants. Everything else (features) is identical; the one-time AI credit grant is sized with the rung (PASS_CREDIT_GRANT: 25 on M, 50 on L, entitlements v18 W2 T5). `key` matches the `plans` row of the same name (M's key is literally `event_pass`, not `event_pass_m`), and the caps themselves live in plan_entitlements (V341 derives L's whole matrix from M's), never here — this file only owns the price. The rungs are bounded by the annual plan on both sides (3 × L >= annual keeps a third pass a nudge toward subscribing; 2 × L < annual keeps a two-tournament organiser out of one), which is what stripe-plans-ladder.test.ts pins. stripe-sync loops this array by key and writes each price id into plans.stripe_price_id_onetime, so adding a rung needs no sync-script change; lib/currency.ts passPrice(currency, passKey) is the single reader.",
   "passes": [
     {
       "key": "event_pass",
@@ -71,7 +71,7 @@
       "key": "event_pass_l",
       "product": {
         "name": "Seazn Club Event Pass L",
-        "description": "One-time upgrade for a single competition, while it's active: 20 divisions, unlimited entrants per division, advanced formats, a 5% entry-fee rate instead of 8%, branded exports, public player profiles, sponsor tiers and paid packages, realtime scoreboard, and a one-time +25 AI credits added to your wallet."
+        "description": "One-time upgrade for a single competition, while it's active: 20 divisions, unlimited entrants per division, advanced formats, a 5% entry-fee rate instead of 8%, branded exports, public player profiles, sponsor tiers and paid packages, realtime scoreboard, and a one-time +50 AI credits added to your wallet."
       },
       "price": {
         "lookup_key": "seazn_event_pass_l",

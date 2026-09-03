@@ -148,14 +148,23 @@ export default async function PricingPage({
   // v17 AI credit wallet (SPEC-6 A1): each plan's monthly grant is the live
   // `ai.credits.monthly` value — the same single source the wallet meters
   // against — so the marketing number cannot drift. The Event Pass adds a
-  // one-time top-up (PASS_CREDIT_GRANT); it has no monthly matrix row.
+  // one-time top-up (PASS_CREDIT_GRANT, per rung); it has no monthly matrix row.
   const creditsMonthly = (plan: string): number | null =>
     matrix["ai.credits.monthly"]?.[plan]?.int_value ?? null;
   const communityCredits = creditsMonthly("community");
   const proCredits = creditsMonthly("pro");
   const communityCreditsLine =
     communityCredits != null ? t(d, "pricing.credits.perMonth", { count: communityCredits }) : null;
-  const passCreditsLine = t(d, "pricing.credits.passGrant", { count: PASS_CREDIT_GRANT });
+  // W2 T5 (design R9): the top-up is sized by rung, so this chip names both.
+  // It is rendered UNCONDITIONALLY — unlike the ladder below it, which is
+  // suppressed when `loadMatrix` fails soft — so a single `{count}` here would
+  // be the one credit figure a buyer sees, and it advertised M's 25 beside L's
+  // price. Both numbers are interpolated from `PASS_CREDIT_GRANT`, so a
+  // repricing moves the copy with the declaration.
+  const passCreditsLine = t(d, "pricing.credits.passGrant", {
+    m: PASS_CREDIT_GRANT.event_pass,
+    l: PASS_CREDIT_GRANT.event_pass_l,
+  });
   const proCreditsLine =
     proCredits != null ? t(d, "pricing.credits.perMonth", { count: proCredits }) : null;
 

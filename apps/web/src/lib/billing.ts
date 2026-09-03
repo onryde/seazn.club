@@ -864,7 +864,7 @@ export async function syncSubscriptionForGroup(
  * only in the second case, so callers can send it straight back (P0-3b).
  *
  * v17 (SPEC-1 fn3 / SPEC-2 §5, SPEC-6 §A7): a recorded pass also tops the org's
- * wallet up by `PASS_CREDIT_GRANT` one-time credits — the "+25 AI credits" the
+ * wallet up by `PASS_CREDIT_GRANT[passKey]` one-time credits — the grant the
  * /pricing card advertises. This is the ONE authoritative grant point: it is the
  * only production insert of a `competition_passes` row, so both the webhook and
  * the reconcile-on-return path funnel through here, and `recordPassGrant`'s
@@ -878,9 +878,14 @@ export async function syncSubscriptionForGroup(
  * `pass_key` entirely while V271 declares the column `not null default
  * 'event_pass'`, so an L purchase would have been stored as M — no FK error, no
  * exception, no failing test, just a $59 sale filed as the $29 product and an
- * L-sized competition capped at M's 10 divisions / 128 entrants. The grant
- * itself is flat across rungs by design (L buys a bigger competition, not more
- * credits), so `PASS_CREDIT_GRANT` is deliberately NOT keyed by `passKey`.
+ * L-sized competition capped at M's 10 divisions / 128 entrants.
+ *
+ * Entitlements v18 / W2 T5 (design R9): the grant is now sized BY that rung —
+ * `PASS_CREDIT_GRANT[passKey]`, 25 on M and 50 on L. So `passKey` is no longer
+ * only what the row records; it is what the buyer is credited, and the bug above
+ * would now short an L buyer 25 credits as well as capping their competition at
+ * M's size. Read straight off the required argument, with no default: a rung
+ * this map does not know is a compile error rather than a quiet 25.
  */
 export async function recordPassPurchase(args: {
   orgId: string;
@@ -898,7 +903,7 @@ export async function recordPassPurchase(args: {
   const { passKey } = args;
   const grantPassCredits = () =>
     walletIdFor(args.orgId).then((walletId) =>
-      recordPassGrant(walletId, PASS_CREDIT_GRANT, args.competitionId, args.paymentIntent),
+      recordPassGrant(walletId, PASS_CREDIT_GRANT[passKey], args.competitionId, args.paymentIntent),
     );
 
   const [inserted] = await sql<{ competition_id: string }[]>`

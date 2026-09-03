@@ -473,29 +473,54 @@ export function passDurationFaults(rungs: Rung[]): string[] {
   return faults;
 }
 
+/** The grant declared for a rung key, or `undefined` for a key `PASS_CREDIT_GRANT`
+ *  does not know. Deliberately NOT defaulted: an unrecognised rung must be a
+ *  fault in its own right, because the alternative — judging it against some
+ *  other rung's number — is how a third rung would ship advertising M's grant. */
+const grantForRung = (key: string): number | undefined =>
+  (PASS_CREDIT_GRANT as Record<string, number | undefined>)[key];
+
+/** Every grant this product declares, for the surfaces that describe BOTH rungs
+ *  in one body of copy and so cannot be judged against a single number. */
+const DECLARED_GRANTS: readonly number[] = Object.values(PASS_CREDIT_GRANT);
+
 /**
- * The pass's CREDIT claim. This is also the POSITIVE PAIRING for the retired
- * AI-run-cap scan: that scan is absence-shaped, so alone it proves only that we
- * stopped quoting a dead cap — never that we replaced it with the mechanism
- * that is actually live. Requiring the grant to be STATED closes it.
+ * The pass's CREDIT claim, PER RUNG. This is also the POSITIVE PAIRING for the
+ * retired AI-run-cap scan: that scan is absence-shaped, so alone it proves only
+ * that we stopped quoting a dead cap — never that we replaced it with the
+ * mechanism that is actually live. Requiring the grant to be STATED closes it.
  *
- * Three ways to be wrong, all covered: not mentioned; a DIFFERENT number
- * (drift, or a rung-keyed grant — the grant is flat and never reads `pass_key`);
- * or sold as recurring (the inverse claim).
+ * Four ways to be wrong, all covered: not mentioned; a DIFFERENT number (drift);
+ * THE OTHER RUNG'S number — which is a plain drift check only while the grant is
+ * flat, and becomes the likeliest real defect the moment it is not (M's copy was
+ * copied to make L's, and 25 read as correct on both); or sold as recurring.
+ *
+ * Entitlements v18 / W2 T5: this used to read one flat `PASS_CREDIT_GRANT` and
+ * its own comment asserted the grant "is flat and never reads `pass_key`". Both
+ * halves now key off the rung, so quoting 25 on L is a fault and quoting 50 on M
+ * is a fault — where before, one of those two was the required wording and the
+ * other was invisible.
  */
 export function passCreditGrantFaults(rungs: Rung[]): string[] {
   const faults: string[] = [];
   for (const rung of rungs) {
     const { key, description } = rung;
     const text = rungText(rung);
+    const grant = grantForRung(key);
+    if (grant === undefined) {
+      // Anti-vacuity: with no declared grant every check below would pass on
+      // silence, so an unknown rung would be the ONE product this rule exempts.
+      faults.push(`${key}: no credit grant is declared for this rung`);
+      continue;
+    }
     // POSITIVE half: only the description has room to state the grant.
-    if (!description.includes(`+${PASS_CREDIT_GRANT} AI credits`)) {
-      faults.push(`${key}: does not state the +${PASS_CREDIT_GRANT} AI credit grant`);
+    if (!description.includes(`+${grant} AI credits`)) {
+      faults.push(`${key}: does not state the +${grant} AI credit grant`);
     }
     // NEGATIVE halves over name AND description.
     for (const match of text.matchAll(/(\d+)\s*AI\s+credits?/gi)) {
-      if (Number(match[1]) !== PASS_CREDIT_GRANT) {
-        faults.push(`${key}: quotes ${match[1]} AI credits, but the grant is ${PASS_CREDIT_GRANT}`);
+      if (Number(match[1]) !== grant) {
+        faults.push(`${key}: quotes ${match[1]} AI credits, but the grant is ${grant}`);
       }
     }
     for (const pattern of RECURRING_GRANT_PATTERNS) {
@@ -1838,19 +1863,26 @@ export function passBoundProseFaults(label: string, passProse: string): string[]
  * Every AI-credit figure in the pass's own copy, against `PASS_CREDIT_GRANT`.
  *
  * Two directions, because a table writes the figure on the other side of the
- * noun ("| AI credits | +25, one-time |") and a sentence writes it in front
- * ("a one-time top-up of 25 AI credits"). A guard that only read one of them
- * would leave the comparison table — the first thing a buyer looks at —
+ * noun ("| AI credits | +25, one-time | +50, one-time |") and a sentence writes
+ * it in front ("a one-time top-up of 25 AI credits"). A guard that only read one
+ * of them would leave the comparison table — the first thing a buyer looks at —
  * unchecked.
  *
- * Paired with the positive: SOME block must actually state the grant, and every
- * block that states it must say it is one-time. The recurring vocabulary is the
- * inverse claim, and a block that quotes the right number monthly is worse than
- * one that quotes nothing.
+ * Paired with the positive: EVERY declared grant must actually be stated, and
+ * every block that states one must say it is one-time. The recurring vocabulary
+ * is the inverse claim, and a block that quotes the right number monthly is
+ * worse than one that quotes nothing.
+ *
+ * Entitlements v18 / W2 T5: these articles describe BOTH rungs in one body of
+ * prose — a two-column table, a "both sizes" sentence — so there is no rung in
+ * scope to judge a figure against, and this reads the declared SET instead. That
+ * makes the positive half strictly stronger than the flat version it replaces:
+ * it was satisfied by any single mention of the grant, and now L's 50 cannot be
+ * dropped by an editor who only updated the sentence about M.
  */
 export function passCreditProseFaults(label: string, passProse: string): string[] {
   const faults: string[] = [];
-  let stated = 0;
+  const stated = new Set<number>();
   for (const block of claimTexts(passProse)) {
     const figures = [
       ...block.matchAll(/(?:\+\s*)?(\d[\d,]*)\s+AI\s+credits?\b/gi),
@@ -1859,21 +1891,31 @@ export function passCreditProseFaults(label: string, passProse: string): string[
       // as a claim of 5 AI credits (measured). A table cell or a colon is what
       // actually puts a figure after the label.
       ...block.matchAll(/\bAI\s+credits?\b\s*[:|]\s*\+?\s*(\d[\d,]*)\b/gi),
-    ].map((m) => Number(m[1].replace(/,/g, "")));
+      // ...and EVERY FURTHER COLUMN of the same row. The form above stops at the
+      // first cell after the label, which was harmless while both rungs granted
+      // the same number and is a hole the moment they do not: in
+      // "| AI credits | +25, one-time | +50, one-time |" the L column was never
+      // read, so L's figure could be anything at all (measured — the two-rung
+      // table passed with L's cell still saying +25). Both the pipe AND the `+`
+      // are required, which is what keeps this off the "5% platform fee" a few
+      // characters further along the same row; that false positive is the reason
+      // the form above needs a separator in the first place.
+      ...(/\bAI\s+credits?\b\s*[:|]/i.test(block) ? block.matchAll(/\|\s*\+(\d[\d,]*)\b/g) : []),
+    ].map((m) => Number(m[1]!.replace(/,/g, "")));
     if (figures.length === 0) continue;
 
     const snippet = block.slice(0, 48);
     for (const figure of figures) {
-      if (figure !== PASS_CREDIT_GRANT) {
+      if (!DECLARED_GRANTS.includes(figure)) {
         faults.push(
-          `${label}: "${snippet}…" quotes ${figure} AI credits, but the pass grants ${PASS_CREDIT_GRANT}`,
+          `${label}: "${snippet}…" quotes ${figure} AI credits, but the pass grants ${DECLARED_GRANTS.join(" / ")}`,
         );
       }
     }
     if (!/\b(one[-\s]time|once|single\s+top[-\s]?up)\b/i.test(block)) {
       faults.push(`${label}: "${snippet}…" states the credit grant without saying it is one-time`);
-    } else if (figures.includes(PASS_CREDIT_GRANT)) {
-      stated += 1;
+    } else {
+      for (const figure of figures) if (DECLARED_GRANTS.includes(figure)) stated.add(figure);
     }
     for (const pattern of RECURRING_GRANT_PATTERNS) {
       if (pattern.test(block)) {
@@ -1881,8 +1923,10 @@ export function passCreditProseFaults(label: string, passProse: string): string[
       }
     }
   }
-  if (stated === 0) {
-    faults.push(`${label}: never states the one-time +${PASS_CREDIT_GRANT} AI credit grant`);
+  for (const grant of DECLARED_GRANTS) {
+    if (!stated.has(grant)) {
+      faults.push(`${label}: never states the one-time +${grant} AI credit grant`);
+    }
   }
   return faults;
 }
@@ -2527,17 +2571,31 @@ export function retiredClaimFaults(values: LocalisedValue[], retired: string[]):
 /** The one-time credit grant, in a language-independent way: the FIGURE. Digits
  *  are the same in all four locales, which is what makes this checkable without
  *  a fourth vocabulary — and it is paired with the recurring-cadence negative so
- *  "+25 AI credits every month" cannot satisfy it. */
-export function localeCreditGrantFaults(values: LocalisedValue[], grant: number): string[] {
+ *  "+25 AI credits every month" cannot satisfy it.
+ *
+ *  Entitlements v18 / W2 T5: `grants` is the SET the pass declares (25 on M, 50
+ *  on L), because the string this is pointed at — the /pricing FAQ answer — is
+ *  one sentence covering both rungs. Every declared grant must appear, so an
+ *  answer that quotes M's and forgets L's is a fault; and any OTHER `+N` is
+ *  still drift. An empty set would examine nothing, so it is a fault too. */
+export function localeCreditGrantFaults(
+  values: LocalisedValue[],
+  grants: readonly number[],
+): string[] {
   const faults: string[] = [];
+  if (grants.length === 0) return ["credit-grant set is empty — this rule would examine nothing"];
   for (const { locale, key, value } of values) {
-    if (!value.includes(`+${grant}`)) {
-      faults.push(`${locale} ${key}: does not state the one-time +${grant} AI credit grant`);
+    for (const grant of grants) {
+      if (!value.includes(`+${grant}`)) {
+        faults.push(`${locale} ${key}: does not state the one-time +${grant} AI credit grant`);
+      }
     }
     for (const match of value.matchAll(/\+(\d[\d,]*)\b/g)) {
       const figure = Number(match[1]!.replace(/,/g, ""));
-      if (figure !== grant) {
-        faults.push(`${locale} ${key}: quotes +${figure}, but the pass grants +${grant}`);
+      if (!grants.includes(figure)) {
+        faults.push(
+          `${locale} ${key}: quotes +${figure}, but the pass grants +${grants.join(" / +")}`,
+        );
       }
     }
     for (const pattern of LOCALE_CLAIMS[locale].recurring) {

@@ -1,4 +1,4 @@
-import { formatMinor, proPrice, type Currency } from "@/lib/currency";
+import { formatMinor, proPrice, type Currency, type PassKey } from "@/lib/currency";
 // Mutually referential with pass-ladder (it reads PASS_CREDIT_GRANT from here).
 // Safe and deliberate: neither side touches the other at module scope — both
 // references sit inside function bodies — so there is no initialisation order
@@ -55,10 +55,29 @@ export const PASS_FEATURES = [
 
 // v17 AI credit wallet (SPEC-6 A1 / A7): the Event Pass tops the org wallet up
 // by a one-time grant when a competition is upgraded. Unlike the monthly plan
-// grants (community/pro/pro_plus), the pass has NO `ai.credits.monthly` row in
+// grants (community/pro), the pass has NO `ai.credits.monthly` row in
 // plan_entitlements — it is a one-off top-up, so this is the single source for
 // the number the pricing card quotes. Pinned by pricing-cards.test.ts.
-export const PASS_CREDIT_GRANT = 25;
+//
+// ENTITLEMENTS V18 / W2 T5 (design R9, owner ruling 2026-09-03): the grant is
+// now PER RUNG — M grants 25, L grants 50. It was flat, and the reason recorded
+// for that (`L buys a bigger competition, not more credits`) was reversed: a
+// bigger competition is exactly the one that needs more AI scheduling.
+//
+// A `Record` keyed by `PassKey`, not two constants and not a lookup with a
+// default: `tsc` then enumerates every reader the day a third rung is added,
+// which is the same discipline `recordPassPurchase`'s required `passKey` and
+// `PASS_RUNG_MARKETING_KEY` already apply. There is deliberately NO fallback
+// anywhere — a `?? 25` would restore the flat grant silently for a new rung.
+//
+// The credits are a ONE-TIME TOP-UP and they STAY: no expiry, no clawback on
+// downgrade, no cap (`recordPassGrant` writes the never-expiring `pack` bucket).
+// The only thing that pulls them back is a refund of the pass itself
+// (`recordPassRefund`), which is money returned rather than a grant expiring.
+export const PASS_CREDIT_GRANT: Record<PassKey, number> = {
+  event_pass: 25,
+  event_pass_l: 50,
+};
 
 export const PRO_FEATURES = [
   "Unlimited competitions & divisions",

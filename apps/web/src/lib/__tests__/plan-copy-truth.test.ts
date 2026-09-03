@@ -164,7 +164,7 @@ describe("stripe-plans.json names no retired feature and no false pass permanenc
     expect(passDurationFaults(passRungs)).toEqual([]);
   });
 
-  it("every Event Pass rung states the flat one-time credit grant, and only that", () => {
+  it("every Event Pass rung states ITS OWN one-time credit grant, and only that", () => {
     expect(passCreditGrantFaults(passRungs)).toEqual([]);
   });
 
@@ -175,7 +175,12 @@ describe("stripe-plans.json names no retired feature and no false pass permanenc
     const shape = passRungs.map(({ description }) =>
       description
         .replace(/\b\d+\s+(entrants|divisions)\b/gi, "N $1")
-        .replace(/\bunlimited\s+/gi, "N "),
+        .replace(/\bunlimited\s+/gi, "N ")
+        // W2 T5: the credit top-up is now a SIZE too — it is priced by rung —
+        // so it is normalised alongside the caps. Without this the rule would
+        // read two honest per-rung figures as "the copy diverged"; with it, a
+        // difference in the WORDS around the number is still caught.
+        .replace(/\+\d+\s+AI\s+credits\b/gi, "+N AI credits"),
     );
     expect(new Set(shape).size, `rung copy diverged:\n${shape.join("\n")}`).toBe(1);
   });
@@ -218,7 +223,11 @@ describe.skipIf(!HAS_DB)("stripe-plans.json quotes the numbers the matrix enforc
   // that copy rather than a stylistic one, and PASS_CREDIT_GRANT its single
   // source.
   it("neither rung carries a monthly credit allowance in the matrix", async () => {
-    expect(PASS_CREDIT_GRANT).toBe(25);
+    // W2 T5: the one-time grant is per rung (25 on M, 50 on L). "One-time" is
+    // still what makes "monthly" a false word here, and the absence of a
+    // `ai.credits.monthly` row is still what makes PASS_CREDIT_GRANT its single
+    // source — what moved is that there are now two sources, one per rung.
+    expect(PASS_CREDIT_GRANT).toEqual({ event_pass: 25, event_pass_l: 50 });
     for (const { key } of passRungs) {
       const [row] = await sql<{ int_value: number | null }[]>`
         select int_value from plan_entitlements
@@ -410,21 +419,40 @@ describe("the guards survive a rewording, not just a revert", () => {
     }
   });
 
-  it("catches a missing, drifted, or recurring credit grant", () => {
-    const honest = "…and a one-time +25 AI credits added to your wallet.";
+  it("catches a missing, drifted, other-rung's, or recurring credit grant", () => {
+    const mGrant = PASS_CREDIT_GRANT.event_pass;
+    const lGrant = PASS_CREDIT_GRANT.event_pass_l;
+    const honest = `…and a one-time +${mGrant} AI credits added to your wallet.`;
     expect(passCreditGrantFaults([{ key: M, description: honest }])).toEqual([]);
 
     expect(passCreditGrantFaults([{ key: M, description: "…realtime scoreboard." }])).toEqual([
-      `${M}: does not state the +25 AI credit grant`,
+      `${M}: does not state the +${mGrant} AI credit grant`,
     ]);
-    // Drift, and the rung-keyed grant PASS_CREDIT_GRANT must never become.
+    // THE OTHER RUNG'S NUMBER. This case used to read "the rung-keyed grant
+    // PASS_CREDIT_GRANT must never become" — W2 T5 made it exactly that, so the
+    // same fixture now proves the opposite rule: M's copy quoting L's figure is
+    // the likeliest real defect, because L's description was written by copying
+    // M's.
     expect(
-      passCreditGrantFaults([{ key: M, description: "…and a one-time +50 AI credits." }]).join(" "),
-    ).toContain("quotes 50 AI credits");
+      passCreditGrantFaults([
+        { key: M, description: `…and a one-time +${lGrant} AI credits.` },
+      ]).join(" "),
+    ).toContain(`quotes ${lGrant} AI credits, but the grant is ${mGrant}`);
+    // …and its mirror, which the flat rule could not express at all.
+    expect(
+      passCreditGrantFaults([
+        { key: "event_pass_l", description: `…and a one-time +${mGrant} AI credits.` },
+      ]).join(" "),
+    ).toContain(`quotes ${mGrant} AI credits, but the grant is ${lGrant}`);
+    // A rung with no declared grant is a fault in its own right — otherwise it
+    // would be the one product this rule exempts.
+    expect(
+      passCreditGrantFaults([{ key: "event_pass_xl", description: honest }]).join(" "),
+    ).toContain("no credit grant is declared for this rung");
     // The inverse claim: right number, wrong cadence.
     expect(
       passCreditGrantFaults([
-        { key: M, description: "…and +25 AI credits every month while it runs." },
+        { key: M, description: `…and +${mGrant} AI credits every month while it runs.` },
       ]).join(" "),
     ).toContain("recurring");
   });
@@ -463,7 +491,7 @@ describe("the guards survive a rewording, not just a revert", () => {
   });
 
   it("catches a credit grant misquoted in a NAME", () => {
-    const honest = "…and a one-time +25 AI credits added to your wallet.";
+    const honest = `…and a one-time +${PASS_CREDIT_GRANT.event_pass} AI credits added to your wallet.`;
     expect(
       passCreditGrantFaults([
         { key: M, name: "Seazn Club Event Pass — 250 AI credits", description: honest },
