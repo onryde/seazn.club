@@ -217,6 +217,35 @@ the brief is a **stale measured comment** at `dictionary-copy-truth.test.ts:3402
 actual enforced floor is a single literal `50`, identical for every locale and both
 axes. Widen the word lists and raise each floor to its own measured value.
 
+### T8b — the copy V391 has ALREADY falsified
+
+The brief sends the four locale dictionaries to W3. That ruling's stated reason is
+that two waves must never edit one tree at the same time — and W3 has not started,
+so the reason does not bind here. What does bind is the standing rule that a
+migration changing rows a copy surface quotes is ONE unit of work with the fix to
+that copy. V391 has already made these false; shipping the wave without them tells
+customers a 512-entrant cap is unlimited.
+
+| surface | claim | truth after V391 |
+|---|---|---|
+| `pricing.pass.ladder.capsUnlimited` | "unlimited entrants" (L) | 512 |
+| `upgrade.ladder.entrantsUnlimited` | "Unlimited entrants" | 512 |
+| `upgrade.ladder.divisionsUnlimited` | "Unlimited divisions" | Pro is 20 |
+| `billing.pro.f1` | "Unlimited competitions & divisions" | divisions 20 |
+| `upgrade.owned.nextBody` | "Pro … with unlimited divisions" | 20 |
+| `tips.billing.event-pass.body` | "an L pass gives it unlimited entrants" | 512 |
+| `pricing.meta.description` | "from $29 … Pro at $19/month" | $15 / $12 |
+| `lib/pricing-cards.ts:43` | "20 & unlimited on L" | 512 |
+| `lib/pricing-cards.ts:64` | "Unlimited competitions & divisions" | competitions yes, divisions 20 |
+
+Seven dictionary keys in four locales, two code lines, and `config/tips.ts` (the
+source the en dictionary mirrors). Prices elsewhere are interpolated — only two
+hardcoded money lines per locale — so the price half of this is small.
+
+**Scope discipline: W2 fixes ONLY the strings its own rows falsified.** Rebuilding
+the cards from the dictionaries, and every "Pro Plus" string, stay W3's. Regenerate
+`lib/i18n-keys.ts` rather than hand-merging it.
+
 ### T9 — sweep and gates
 Delete the two dead e2e specs. Rerun the 34 files that assert against
 `plan_entitlements` and the 8 copy-truth importers (4 need a live DB). Unit, e2e,
