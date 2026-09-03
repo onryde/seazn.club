@@ -117,11 +117,19 @@ describe.skipIf(!HAS_DB)("an Event Pass under a paid plan (#327/#337)", () => {
   });
 
   it("does not let the pass switch off a feature the plan grants", async () => {
-    // `dashboard.branding` is true on Pro and false on both rungs. Before #327
-    // the pass arm never ran under a paid plan so this could not arise; now it
-    // does, and a coalesce that took the pass's `false` first would strip a
-    // Pro-only feature from exactly the competition the org paid extra for.
-    await setPlan(orgId, "pro");
+    // `dashboard.branding` is true on ENTERPRISE and false on both rungs.
+    // Before #327 the pass arm never ran under a paid plan so this could not
+    // arise; now it does, and a coalesce that took the pass's `false` first
+    // would strip a paid feature from exactly the competition the org paid
+    // extra for.
+    //
+    // The plan under test is `enterprise` because V395 (W2 T15) moved badge
+    // removal off Pro, and this key is now the ONLY plan-true / both-rungs-
+    // false shape left in the whole matrix — a query for another candidate
+    // returns nothing. So this case has to follow the key rather than stay on
+    // Pro; the invariant it guards is unchanged, and it is asserted at the one
+    // place the matrix still expresses it.
+    await setPlan(orgId, "enterprise");
     await grantPass(orgId, compId, "event_pass_l");
     expect(await hasFeature(orgId, "dashboard.branding", compId)).toBe(true);
     expect(await sqlHasFeature(orgId, "dashboard.branding", compId)).toBe(true);

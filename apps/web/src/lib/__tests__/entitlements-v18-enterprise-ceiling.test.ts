@@ -86,14 +86,20 @@ describe.skipIf(!HAS_DB)("featurePlan names the cheapest unlocking plan (entitle
 
   it("a Pro cap that is UNLIMITED still reads as pro — the exact regression this file was rewritten for", async () => {
     // The case where the right answer differs from the wrong answer's
-    // constant. Both keys resolve unlimited on Pro (int_value IS NULL), which
-    // the retired rule read as "enterprise". A Community org hits both of
-    // these on the ordinary create path, so they must offer a PRICE.
+    // constant. This key resolves unlimited on Pro (int_value IS NULL), which
+    // the retired rule read as "enterprise". A Community org hits it on the
+    // ordinary create path, so it must offer a PRICE.
+    //
+    // `dashboard.public.max` used to be the second key here and is gone from
+    // this list: V395 (W2 T15) capped it at 10 on Pro, so it is no longer an
+    // unlimited-on-Pro case and could not witness the regression this test
+    // exists for. It is still a `featurePlan` = "pro" key, which the
+    // matrix-derived case above covers on its own.
     const rows = await sql<Row[]>`
       select feature_key, plan_key, bool_value, int_value from plan_entitlements
       where plan_key = 'pro'
-        and feature_key in ('competitions.max_active', 'dashboard.public.max')`;
-    expect(rows).toHaveLength(2);
+        and feature_key in ('competitions.max_active')`;
+    expect(rows).toHaveLength(1);
     for (const r of rows) {
       expect(r.int_value, `${r.feature_key} is expected to be unlimited on Pro`).toBeNull();
       expect(featurePlan(r.feature_key), `${r.feature_key} must sell Pro, not Contact us`).toBe(

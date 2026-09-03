@@ -249,11 +249,20 @@ describe.skipIf(!HAS_DB)("entitlement split (doc 09 §4, doc 10)", () => {
     for (let i = 1; i <= pub; i++) {
       await createCompetition(auth, { ends_on: "2030-12-31", name: `Public ${i}`, visibility: "public", branding: {} });
     }
-    await expect(
-      createCompetition(auth, { ends_on: "2030-12-31", name: "One too many", visibility: "public", branding: {} }),
-    ).rejects.toThrow(PaymentRequiredError);
+    // V395 (W2 T15/F, owner ruling 2026-09-03): a CREATE over the cap no
+    // longer throws — it creates the competition PRIVATE and says so through
+    // the row it returns. The boundary is still here, and this asserts it in
+    // the shape the product now has: the competition exists and is not public.
+    const overCap = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "One too many",
+      visibility: "public",
+      branding: {},
+    });
+    expect(overCap.visibility).toBe("private");
 
-    // Unlisted/private don't count; flipping one to public re-checks the quota.
+    // Unlisted/private don't count; flipping one to public re-checks the quota
+    // — and PATCH is the path that still 402s.
     const unlisted = await createCompetition(auth, {
       ends_on: "2030-12-31",
       name: "Third",

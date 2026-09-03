@@ -82,7 +82,10 @@ export const FEATURE_REASONS: Record<string, string> = {
   // the fallback for a caller with no limit to hand (the /admin reason column,
   // <UpgradeGate>'s key-only lookup).
   "dashboard.public.max": "Your plan's public dashboards are all in use — archive a finished one, or upgrade.",
-  "dashboard.branding": "Custom dashboard branding is a Pro feature.",
+  // V395 made badge removal enterprise-only, so this must not say "Pro" — a
+  // Pro subscriber reading it would be told to buy what they already have.
+  // `featurePlan` sends the gate to Contact-us via ENTERPRISE_FEATURES below.
+  "dashboard.branding": "Removing the seazn.club badge is an Enterprise feature (Contact us) — your own club logo and colours work on every plan.",
   "dashboard.player_profiles": "Public player profiles are a Pro feature.",
   realtime: "Live push updates are a Pro feature.",
   // Platform
@@ -269,7 +272,15 @@ export function publicDashboardsReason(limit: number | null): string {
 // is still "pro" for a Community org — `featurePlan` answers per KEY, not per
 // caller's current plan, so a plan-aware answer needs a different function,
 // not a bigger set.
-const ENTERPRISE_FEATURES = new Set(["api.write"]);
+//
+// V395 (entitlements v18 W2 T15, owner ruling 2026-09-03) adds the SECOND key.
+// `dashboard.branding` — removing the "Powered by seazn.club" badge — moved to
+// false on Pro, so no self-serve plan grants it any more and it satisfies the
+// rule above exactly as `api.write` does. Leaving it out would have pointed a
+// Pro subscriber at a "Go Pro" upgrade for something Pro no longer includes,
+// which `entitlements-v18-enterprise-ceiling.test.ts` catches by deriving the
+// set from the live matrix rather than from this list.
+const ENTERPRISE_FEATURES = new Set(["api.write", "dashboard.branding"]);
 
 export type PaidPlan = "pro" | "enterprise";
 

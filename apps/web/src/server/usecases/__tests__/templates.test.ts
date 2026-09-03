@@ -309,6 +309,28 @@ describe.skipIf(!HAS_DB)("createFromTemplate — activation funnel events (P4 re
     vi.mocked(captureServer).mockClear();
   });
 
+  it("an omitted visibility instantiates a PUBLIC competition (V395)", async () => {
+    // The two create paths must not disagree about what an omitted visibility
+    // means: `CreateFromTemplate` and `CreateCompetition` both default to
+    // public in the schema, and `createFromTemplate` coalesces the same way so
+    // a direct usecase call cannot land on a different answer than a request.
+    await seedTemplateSportCatalog();
+    const { auth } = await seedOrg("pro");
+    const template: CompetitionTemplate = {
+      key: "test-default-visibility",
+      version: 1,
+      i18n: { nameKey: "templates.slam128.name", descriptionKey: "templates.slam128.desc" },
+      divisions: [makeDivision("tennis", "grand-slam")],
+    };
+    const result = await instantiateTemplate(auth, template, {
+      name: `Default vis ${randomUUID().slice(0, 6)}`,
+      ends_on: "2030-12-31",
+    });
+    const [row] = await sql<{ visibility: string }[]>`
+      select visibility from competitions where id = ${result.competitionId}`;
+    expect(row!.visibility).toBe("public");
+  });
+
   it("fires COMPETITION_CREATED once and DIVISION_CREATED once per division", async () => {
     await seedTemplateSportCatalog();
     const { auth } = await seedOrg("pro");
@@ -318,9 +340,18 @@ describe.skipIf(!HAS_DB)("createFromTemplate — activation funnel events (P4 re
       i18n: { nameKey: "templates.slam128.name", descriptionKey: "templates.slam128.desc" },
       divisions: [makeDivision("tennis", "grand-slam"), makeDivision("boardgame", "classical")],
     };
+    // `visibility` is PASSED here, and explicitly private. It used to be
+    // omitted, and the omission used to mean private — V395 (W2 T15/F, owner
+    // ruling 2026-09-03) made an omitted visibility PUBLIC, on both create
+    // paths and in the zod schema alike. Stating it keeps this case testing
+    // what its own assertions below are about (a private instantiation does
+    // not complete the made-public milestone) instead of silently becoming a
+    // second public-path test. The default itself is pinned separately, right
+    // below.
     const result = await instantiateTemplate(auth, twoDivisions, {
       name: `Funnel ${randomUUID().slice(0, 6)}`,
       ends_on: "2030-12-31",
+      visibility: "private",
     });
 
     const calls = vi.mocked(captureServer).mock.calls.map(([args]) => args);

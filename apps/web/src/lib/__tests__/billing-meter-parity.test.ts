@@ -23,20 +23,48 @@ const SRC = path.resolve(__dirname, "../..");
 
 const BILLING_PAGE = path.join(SRC, "app/o/[orgSlug]/settings/billing/page.tsx");
 const QUOTA_USECASE = path.join(SRC, "server/usecases/competitions.ts");
+// V395 (W2 T15/E) moved the clause out of `assertActiveQuota`'s own body and
+// into `liveUnpassedCompetition`, a shared SQL fragment in
+// `usecases/entitlement-freeze.ts` — precisely so a fourth quota site could
+// not be written without it. The invariant this file guards did not change,
+// so the guard follows the predicate to its new home rather than being
+// relaxed: the quota must still USE the fragment, and the fragment must still
+// CARRY the exclusion. Splitting it that way is what stops a fragment gutted
+// to `c.status in (...)` from passing because its name still appears.
+const PREDICATE_SOURCE = path.join(SRC, "server/usecases/entitlement-freeze.ts");
 
 /** The clause that takes passed competitions out of the active tally. */
 const EXCLUSION = /not exists\s*\(\s*select 1 from competition_passes/i;
+/** The shared fragment both quota sites compose it in through. */
+const PREDICATE_CALL = /liveUnpassedCompetition\(/;
 
 describe("active-competition count: meter and enforcement agree", () => {
   it("the write-side quota excludes Event-Passed competitions", () => {
     const src = readFileSync(QUOTA_USECASE, "utf8");
     // Anchor on the function so a match elsewhere in the file cannot satisfy this.
-    const fn = src.slice(src.indexOf("async function assertActiveQuota"));
+    const at = src.indexOf("async function assertActiveQuota");
+    expect(at, "assertActiveQuota was not found in the quota usecase").toBeGreaterThan(-1);
+    const fn = src.slice(at, src.indexOf("\n}", at));
     expect(fn).not.toBe("");
     expect(
-      EXCLUSION.test(fn),
-      "assertActiveQuota no longer excludes passed competitions — if that is " +
+      PREDICATE_CALL.test(fn),
+      "assertActiveQuota no longer composes liveUnpassedCompetition — if that is " +
         "intentional, the billing meter must change with it",
+    ).toBe(true);
+  });
+
+  it("the shared predicate still carries the exclusion", () => {
+    // The other half: a `liveUnpassedCompetition` gutted to the status filter
+    // alone would satisfy the call-site check above while silently putting
+    // every passed competition back into the tally, on all four sites at once.
+    const src = readFileSync(PREDICATE_SOURCE, "utf8");
+    const at = src.indexOf("export function liveUnpassedCompetition");
+    expect(at, "liveUnpassedCompetition was not found").toBeGreaterThan(-1);
+    const fn = src.slice(at, src.indexOf("\n}", at));
+    expect(
+      EXCLUSION.test(fn),
+      "liveUnpassedCompetition no longer excludes passed competitions — every quota " +
+        "that composes it just started counting them",
     ).toBe(true);
   });
 

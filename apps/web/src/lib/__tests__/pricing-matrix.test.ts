@@ -123,11 +123,11 @@ const DATA: MatrixData = {
     event_pass_l: cell(null, true),
     pro: cell(null, true),
   },
-  // V392 grants the public player card on COMMUNITY. It used to be the
-  // headline thing an Event Pass lifted; it is now free on every column, which
-  // is why `lib/pass-comparison.ts` no longer lists it as a pass reason.
+  // V392 granted the public player card on COMMUNITY; V395 (W2 T15, owner
+  // ruling 2026-09-03) took it back — it is one of the three share loops that
+  // went paid — so it is once again the headline thing an Event Pass lifts.
   "dashboard.player_profiles": {
-    community: cell(null, true),
+    community: cell(null, false),
     event_pass: cell(null, true),
     event_pass_l: cell(null, true),
     pro: cell(null, true),
@@ -345,13 +345,13 @@ describe("buildPricingSections — the /pricing pivot", () => {
   // BOTH halves of this pair inverted in V392, in opposite directions, and the
   // case is kept rather than deleted because the pair is the story: which of
   // the two adjacent scoring rows a pass buys is exactly what /pricing has to
-  // get right. Profiles went FREE (community ✓) — so the row no longer sells
-  // the pass, which is why `lib/pass-comparison.ts` dropped it from the pass
-  // comparison. Player stats went the other way: §2 grants them on both rungs,
-  // where they used to fall through to community's false.
-  it("renders profiles as free on every column, and player stats as pass-lifted", () => {
+  // get right. V395 (W2 T15) then inverted profiles BACK — the share loops
+  // went paid — so the two rows now read identically and both sell the pass,
+  // which is the third state this case has held and the reason it is written
+  // as two explicit expectations rather than a shared one.
+  it("renders profiles and player stats both as pass-lifted", () => {
     expect(cells("pricing.matrix.dashboard.player_profiles")).toMatchObject({
-      community: "✓",
+      community: "—",
       event_pass: "✓",
       event_pass_l: "✓",
       pro: "✓",
@@ -431,13 +431,16 @@ describe.skipIf(!HAS_DB)("V310 packaging: logos + paid entry for everyone", () =
     expect(get("community")!.int_value!).toBeGreaterThan(0);
   });
 
-  // Deliberate: logos are table stakes, the org THEME COLOUR is not. This is
-  // the visible Pro differentiator and the PLG badge trigger (D7).
-  it("leaves dashboard.branding denied to community AND to the Event Pass", async () => {
+  // Deliberate: logos are table stakes, removing OUR badge is not. V395 (W2
+  // T15, owner ruling 2026-09-03) moved it off Pro as well — the badge is
+  // shown on every self-serve plan now, so this is an enterprise-only row and
+  // no longer the Pro differentiator D7 called it.
+  it("leaves dashboard.branding denied to every self-serve plan — enterprise only", async () => {
     const get = await load("dashboard.branding");
     expect(get("community")?.bool_value).toBe(false);
     expect(get("event_pass")?.bool_value).toBe(false);
-    expect(get("pro")?.bool_value).toBe(true);
+    expect(get("event_pass_l")?.bool_value).toBe(false);
+    expect(get("pro")?.bool_value).toBe(false);
     expect(get("enterprise")?.bool_value).toBe(true);
   });
 
