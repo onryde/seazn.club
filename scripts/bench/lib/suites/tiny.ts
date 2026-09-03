@@ -649,13 +649,48 @@ export async function runTinySuite(input: TinySuiteInput): Promise<SuiteReport> 
     if (countIssue !== null) errors.push(countIssue);
     timings.seedMs = Math.round(performance.now() - seedStart);
 
+    // B03 prompt's acceptance line: `pino: suite_seeded (org, persons,
+    // entrants, fixtures, ms)`. Every count is read off what the run actually
+    // CREATED — `seeded.*` maps returned by `seedSuite` — never off the plan it
+    // intended to create, so a partial seed reports the smaller number rather
+    // than the hoped-for one.
+    log.info(
+      {
+        org: seeded.orgId,
+        competition: seeded.competitionId,
+        persons: seeded.personIdByRef.size,
+        entrants: seeded.entrantIdByRef.size,
+        divisions: seeded.divisionIdByRef.size,
+        stages: seeded.stageIdByRef.size,
+        fixtures: seeded.fixtureIdByKey.size,
+        officials: seeded.officialsAndClaims?.officialIdByRef.size ?? 0,
+        ms: timings.seedMs,
+      },
+      "suite_seeded",
+    );
+
     const scheduleStart = performance.now();
-    // A day out from "now" — real wall-clock time, not a determinism
-    // concern (contrast report.ts's run-id, which must never use
-    // Date.now(); this is a real future calendar slot the schedule
-    // settings need, and there is no other sanctioned source of "now" for
-    // a script outside packages/engine/src's boundary).
-    const startAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    // Derived from the PACK's own competition window, not from the wall clock.
+    //
+    // This was `Date.now() + 24h`, justified as "a real future calendar slot",
+    // and it 422'd on the first live run this suite ever had:
+    // `SCHEDULE_OUTSIDE_COMPETITION` — "this division's schedule starts before
+    // the competition opens on 2099-01-01". `usecases/schedule.ts:305-319`
+    // requires a division's schedule to sit INSIDE its competition's dates, and
+    // `_tiny` declares 2099-01-01..2099-01-03, so tomorrow is years too early.
+    //
+    // Nothing offline could catch it: the unit suite's fake transport accepts
+    // any `schedule-settings` PUT, which is the fourth time in this wave a
+    // fixture has accepted what the product refuses. The rule the rest of this
+    // module already follows — derive every value from the pack rather than
+    // inventing one — is exactly what was missing here.
+    //
+    // A pack that declares no `startsOn` has no window to respect, so the
+    // wall-clock slot remains correct for it.
+    const startAt =
+      plan.competition.startsOn === undefined
+        ? new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+        : `${plan.competition.startsOn}T09:00:00.000Z`;
     await t.request(base, s, `/api/v1/divisions/${divisionId}/schedule-settings`, {
       method: "PUT",
       body: {

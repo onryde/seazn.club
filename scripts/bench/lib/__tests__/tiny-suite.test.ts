@@ -751,6 +751,44 @@ describe("runTinySuite — --keep idempotence (T4)", () => {
     rmSync(dirB, { recursive: true, force: true });
   });
 
+  it("schedules INSIDE the pack's own competition window — not a wall-clock slot", async () => {
+    // Found by the first live run, not by this suite. `startAt` was
+    // `Date.now() + 24h` and the real API answered 422
+    // SCHEDULE_OUTSIDE_COMPETITION: `usecases/schedule.ts` requires a
+    // division's schedule to sit inside its competition's dates, and `_tiny`
+    // declares 2099. The fake transport accepts any schedule-settings PUT, so
+    // offline there was nothing to fail — the fourth fixture in this wave to
+    // accept what the product refuses.
+    const server = makeFakeServer();
+    const { packPath, dir } = writeTinyPack(TINY_TEXT);
+
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "greedy",
+      keep: false,
+      log: silent,
+      packPath,
+      transport: server.transport,
+    });
+    expect(report.gate).toBe("green");
+
+    const put = server.calls.find(
+      (c) => c.method === "PUT" && /\/schedule-settings$/.test(c.path.split("?")[0]!),
+    );
+    expect(put, "the suite must PUT schedule-settings").toBeDefined();
+    const startAt = (put?.body as { config?: { startAt?: string } } | undefined)?.config?.startAt;
+    expect(startAt, "schedule-settings must carry a startAt").toBeDefined();
+
+    // Bounds DERIVED from the pack, so editing its dates moves this with them
+    // rather than leaving a literal behind that agrees with nothing.
+    const comp = tinyPack().competition;
+    expect(comp.startsOn, "fixture guard: the pack must declare a window to test").toBeDefined();
+    expect(startAt! >= `${comp.startsOn}T00:00:00.000Z`).toBe(true);
+    expect(startAt! <= `${comp.endsOn}T23:59:59.999Z`).toBe(true);
+
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   it("a real run DRIVES the officials/claims seam — not merely defines it", async () => {
     // AGENTS.md recurring failure class 1, the inert seam: code declared,
     // typed and unit-green that nothing in production ever calls. It has
