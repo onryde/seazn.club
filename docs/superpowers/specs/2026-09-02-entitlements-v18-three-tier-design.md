@@ -503,14 +503,39 @@ dictionaries, help and `copy-truth.ts`, so no parallel lanes.
    `featurePlan`, labels, add-on sets, credits math, per-rung pass grant,
    officials competition id, `stripe-plans.json`, unit pins, copy-truth
    guards.
+   **Carried from W1 (2026-09-03):** widen `copy-truth.ts`'s per-locale
+   paywall vocabulary. W1 built it from strings lifted out of shipped copy
+   by a non-native speaker, held by a liveness floor per locale (es 148 /
+   fr 115 / nl 133) so an emptied list cannot pass — but the word lists
+   themselves want a native speaker. The mechanism is sound and bounded;
+   it is the coverage that is thin.
 3. **W3 — surfaces:** pricing page **redesigned** (owner 2026-09-02:
    "redesign price page as well, with admin ticket theme pricing card" —
    ticket-styled offer cards, the Event Pass literally a ticket stub;
    `frontend-design` first, two layout options to the owner before build,
    sign-off on screenshots at 1280/768/320), billing settings, gates,
    dictionaries ×4, emails, help, e2e replacements.
+   **Carried from W1's visual pass (2026-09-03), all three seen in captures:**
+   (a) the three non-Plus pricing cards are HARDCODED-ENGLISH arrays
+   (`pricing/page.tsx`, grep the bullet arrays), so every bullet reaches
+   fr/es/nl in English — the redesign must build them FROM THE DICTIONARIES,
+   or it ships the same debt in better clothes;
+   (b) at 320 the pricing MATRIX is shrunk, not composed — a 6-column desktop
+   table in a horizontal scroller showing only feature + Community, so the
+   width sign-off must cover the matrix and not just the cards;
+   (c) at 320 the division tab rail scrolls the ACTIVE tab off-screen with no
+   indicator (evidence `w1vis-upgradegate-320.png`); the billing settings rail
+   solves this correctly, so copy that pattern rather than inventing one.
 4. **W4 — proofs & walkthrough:** pass and Free proof e2es, full product
    walkthrough on a prod build, Stripe archive ops step.
+   **Carried from W1 (2026-09-03):** sweep the nine anonymous e2e contexts
+   that share the cookie-banner race W1 fixed in one spec. The banner mounts
+   from a `useEffect` and is absent from SSR, so `page.goto` resolves BEFORE
+   it exists and `dismissCookieBanner`'s `count()===0` early return is a
+   silent no-op exactly under load (measured: banner up at 1x/6x CPU, mounting
+   296–575ms late at 20x). W1's fix seeds the consent keys so the banner never
+   mounts; the other nine still race, and they fail loudly rather than
+   silently, which is why they were recorded rather than swept mid-wave.
 
 ## 10. Out of scope (recorded so nobody re-derives them)
 

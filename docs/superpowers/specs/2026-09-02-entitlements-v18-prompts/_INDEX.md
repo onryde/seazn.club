@@ -333,3 +333,35 @@ Each needs a task and an owner. Nothing here is fixed by W1.
   reviewer found the gap by reverting the call site. A test that claims to pin
   a call site must FAIL when that call site is reverted, and the only way to
   know is to revert it.
+
+## Findings routed out of W1 (2026-09-03)
+
+W1's visual pass and its reviews turned up seven things W1 did not cause and did
+not fix. Four now have a wave; three have nobody, and that is a decision waiting
+rather than an oversight. Each is written with its evidence so the wave that
+picks it up inherits a finding rather than a rumour.
+
+**Routed, with the wave that will run them:**
+
+| Finding | Wave | Why there |
+|---|---|---|
+| `copy-truth.ts`'s per-locale paywall vocabulary is thin — built by a non-native speaker from shipped strings, held by a per-locale liveness floor | **W2** | W2's scope already names copy-truth guards |
+| The three non-Plus pricing cards are hardcoded-English arrays, so every bullet reaches fr/es/nl in English | **W3** | W3 rebuilds those cards; build them from the dictionaries or the debt ships again |
+| At 320 the pricing matrix is a 6-column desktop table in a scroller — shrunk, not composed | **W3** | W3 carries the 1280/768/320 sign-off; apply it to the matrix, not only the cards |
+| At 320 the division tab rail scrolls the ACTIVE tab off-screen with no indicator | **W3** | A surface fix, and the billing settings rail already solves it — copy that pattern |
+| Nine anonymous e2e contexts share the cookie-banner race W1 fixed in one spec | **W4** | W4 is proofs and walkthrough; they fail loudly, so they were recorded not swept |
+
+**Unowned, and outside this programme — they need a decision, not a wave:**
+
+- **The setbased kernel registers event schemas for types no shipped preset
+  accepts** — 63 recordable against 68 registered (badminton timeout/sub/expedite,
+  tabletennis sub, volleyball expedite). R8 added ribbon copy as a floor under the
+  leak; the types still exist. Deliberately kept out of a close wave: narrowing a
+  schema registration moves golden corpora. Small and well understood as its own task.
+- **~20 route handlers parse the request body BEFORE authenticating.** Repo-wide
+  pattern, not one route — a rule to decide rather than a patch to apply.
+- **No test names the invariant that `http.ts`'s dedicated 402 branch precedes the
+  generic `HttpError` branch.** Reordering them would keep the status and silently
+  drop `feature_key`, taking every contextual paywall generic. Guarded indirectly
+  today (smoke and two e2e specs assert the body), but nothing pins the order. Raised
+  by the bench session, routed to its owner.
