@@ -781,6 +781,48 @@ function checkPayRequiresFee(divisionRef: string, block: PackRegistrationBlock):
   return findings;
 }
 
+/** Design §4 check 5: `divisions[].entry: "registration-api"|"registration-
+ *  ui"` with an age band OR a non-`open` category requires `dob`/`gender`
+ *  on EVERY entering person — an admin-seeded division (`entry:"admin"`,
+ *  the default) never needs this, because nothing collects it through a
+ *  public form for that division. */
+function checkRegistrationRequiresDobGender(
+  division: PackDivision,
+  block: PackRegistrationBlock,
+  personsByRef: ReadonlyMap<string, PackPerson>,
+): PackFinding[] {
+  if (division.entry === "admin") return [];
+  const needsDob = block.ageMin !== undefined || block.ageMax !== undefined;
+  const needsGender = block.category !== "open";
+  if (!needsDob && !needsGender) return [];
+  const findings: PackFinding[] = [];
+  block.entries.forEach((entry, i) => {
+    for (const person of enteringPersons(entry, personsByRef)) {
+      if (needsDob && person.dob === undefined) {
+        findings.push({
+          code: "registration.missing_dob",
+          severity: "error",
+          where: registrationEntryLabel(division.ref, entry, i),
+          message:
+            `entry "${entry.extKey}" enters division "${division.ref}" (entry:"${division.entry}", ` +
+            `age band declared) through person "${person.ref}" with no dob`,
+        });
+      }
+      if (needsGender && person.gender === undefined) {
+        findings.push({
+          code: "registration.missing_gender",
+          severity: "error",
+          where: registrationEntryLabel(division.ref, entry, i),
+          message:
+            `entry "${entry.extKey}" enters division "${division.ref}" (entry:"${division.entry}", ` +
+            `category:"${block.category}") through person "${person.ref}" with no gender`,
+        });
+      }
+    }
+  });
+  return findings;
+}
+
 // ---------------------------------------------------------------------------
 // Stage 2 — the per-stream fold
 // ---------------------------------------------------------------------------
@@ -934,6 +976,7 @@ export function validatePack(raw: unknown, opts: ValidatePackOptions): PackValid
         ...checkExpectArithmetic(division.ref, block),
         ...checkCapacityWaitlist(division.ref, block),
         ...checkPayRequiresFee(division.ref, block),
+        ...checkRegistrationRequiresDobGender(division, block, personsByRef),
       );
     }
   }

@@ -2549,3 +2549,100 @@ describe("registration funnel — rule 4: pay requires a fee", () => {
     expect(errors(validatePack(pack, UNIT).findings)).toEqual([]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Rule 5 — `divisions[].entry: "registration-api"|"registration-ui"` with an
+// age band OR a non-`open` category requires `dob`/`gender` on EVERY
+// entering person (design §4 check 5). `p1`/`p2` (`genericPack`'s base
+// persons) carry neither field, which is exactly what these tests need for
+// the RED cases — no extra fixture person required.
+// ---------------------------------------------------------------------------
+
+describe("registration funnel — rule 5: registration-api/ui needs dob/gender", () => {
+  it("an age band with entry:registration-api and a captain with no dob reds", () => {
+    const pack = registrationPack({
+      division: { entry: "registration-api" },
+      block: {
+        category: "open",
+        ageMax: 18,
+        entrantKind: "individual",
+        feeCents: 0,
+        approval: "auto",
+        entries: [{ extKey: "e-nodob", captain: "p1", roster: [], pay: false, expect: "entrant" }],
+        expect: baseExpect({ entrants: 1 }),
+      },
+    });
+    const finding = onlyError(validatePack(pack, UNIT).findings);
+    expect(finding.code).toBe("registration.missing_dob");
+    expect(finding.message).toContain("e-nodob");
+  });
+
+  it("a non-open category with entry:registration-api and a captain with no gender reds", () => {
+    const pack = registrationPack({
+      division: { entry: "registration-api" },
+      block: {
+        category: "womens",
+        entrantKind: "individual",
+        feeCents: 0,
+        approval: "auto",
+        entries: [{ extKey: "e-nogender", captain: "p1", roster: [], pay: false, expect: "entrant" }],
+        expect: baseExpect({ entrants: 1 }),
+      },
+    });
+    const finding = onlyError(validatePack(pack, UNIT).findings);
+    expect(finding.code).toBe("registration.missing_gender");
+    expect(finding.message).toContain("e-nogender");
+  });
+
+  it("a ROSTER member with no gender reds too — not just the captain", () => {
+    const pack = registrationPack({
+      division: { entry: "registration-api" },
+      persons: [{ ref: "p-captain-ok", fullName: "Captain OK", lane: "player", gender: "m" }],
+      block: {
+        category: "mixed",
+        entrantKind: "team",
+        feeCents: 0,
+        approval: "auto",
+        entries: [
+          { extKey: "e-roster-gap", captain: "p-captain-ok", roster: ["p1"], pay: false, expect: "entrant" },
+        ],
+        expect: baseExpect({ entrants: 1 }),
+      },
+    });
+    const finding = onlyError(validatePack(pack, UNIT).findings);
+    expect(finding.code).toBe("registration.missing_gender");
+    expect(finding.message).toContain("e-roster-gap");
+  });
+
+  it("the SAME restriction with entry:admin (the default) does not red", () => {
+    const pack = registrationPack({
+      block: {
+        category: "womens",
+        ageMax: 18,
+        entrantKind: "individual",
+        feeCents: 0,
+        approval: "auto",
+        entries: [{ extKey: "e-admin-seeded", captain: "p1", roster: [], pay: false, expect: "entrant" }],
+        expect: baseExpect({ entrants: 1 }),
+      },
+    });
+    expect(errors(validatePack(pack, UNIT).findings)).toEqual([]);
+  });
+
+  it("entry:registration-ui with dob/gender present on every entering person does not red", () => {
+    const pack = registrationPack({
+      division: { entry: "registration-ui" },
+      persons: [{ ref: "p-complete", fullName: "Complete Person", lane: "player", dob: "2010-06-15", gender: "f" }],
+      block: {
+        category: "womens",
+        ageMax: 18,
+        entrantKind: "individual",
+        feeCents: 0,
+        approval: "auto",
+        entries: [{ extKey: "e-complete", captain: "p-complete", roster: [], pay: false, expect: "entrant" }],
+        expect: baseExpect({ entrants: 1 }),
+      },
+    });
+    expect(errors(validatePack(pack, UNIT).findings)).toEqual([]);
+  });
+});
