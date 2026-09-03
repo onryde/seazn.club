@@ -2646,3 +2646,57 @@ describe("registration funnel — rule 5: registration-api/ui needs dob/gender",
     expect(errors(validatePack(pack, UNIT).findings)).toEqual([]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Job 1's currency move (pack-schema.ts) owes this stage-0 consequence:
+// `org.currency` is required wherever a division prices a fee — the B03r
+// dispatch's own Job 1 text, "required whenever any division declares
+// feeCents > 0, which is a stage-0 rule (Job 2), not a shape rule."
+// ---------------------------------------------------------------------------
+
+describe("registration funnel — org.currency required when a division prices a fee", () => {
+  it("feeCents:1000 with no org.currency reds", () => {
+    const pack = registrationPack({
+      block: {
+        ...OPEN_RESTRICTION,
+        entrantKind: "individual",
+        feeCents: 1000,
+        approval: "auto",
+        entries: [{ extKey: "e-paid", captain: "p1", roster: [], pay: true, expect: "entrant" }],
+        expect: baseExpect({ entrants: 1, paidCents: 1000 }),
+      },
+    });
+    expect((pack as { org: Record<string, unknown> }).org.currency).toBeUndefined();
+    const finding = onlyError(validatePack(pack, UNIT).findings);
+    expect(finding.code).toBe("registration.currency_required");
+  });
+
+  it("feeCents:1000 WITH org.currency does not red", () => {
+    const pack = registrationPack({
+      org: { name: "Unit Org", slug: "unit-org", timezone: "UTC", currency: "usd" },
+      block: {
+        ...OPEN_RESTRICTION,
+        entrantKind: "individual",
+        feeCents: 1000,
+        approval: "auto",
+        entries: [{ extKey: "e-paid", captain: "p1", roster: [], pay: true, expect: "entrant" }],
+        expect: baseExpect({ entrants: 1, paidCents: 1000 }),
+      },
+    });
+    expect(errors(validatePack(pack, UNIT).findings)).toEqual([]);
+  });
+
+  it("feeCents:0 with no org.currency does not red — nothing is priced", () => {
+    const pack = registrationPack({
+      block: {
+        ...OPEN_RESTRICTION,
+        entrantKind: "individual",
+        feeCents: 0,
+        approval: "auto",
+        entries: [{ extKey: "e-free", captain: "p1", roster: [], pay: false, expect: "entrant" }],
+        expect: baseExpect({ entrants: 1 }),
+      },
+    });
+    expect(errors(validatePack(pack, UNIT).findings)).toEqual([]);
+  });
+});

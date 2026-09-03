@@ -823,6 +823,29 @@ function checkRegistrationRequiresDobGender(
   return findings;
 }
 
+/** The stage-0 consequence of Job 1's currency move (`PackOrg.currency`'s
+ *  own doc comment): a division that prices a fee needs a currency to price
+ *  it in, and `org.currency` has no `.default()` on purpose (the "silent
+ *  'gbp'" gap that comment forbids) — so a pack pricing a fee with no
+ *  org.currency declared is stuck exactly where a real org would be. */
+function checkCurrencyRequiredForFee(
+  divisionRef: string,
+  block: PackRegistrationBlock,
+  orgCurrency: string | undefined,
+): PackFinding[] {
+  if (block.feeCents <= 0 || orgCurrency !== undefined) return [];
+  return [
+    {
+      code: "registration.currency_required",
+      severity: "error",
+      where: "org.currency",
+      message:
+        `division "${divisionRef}" prices a fee (feeCents:${block.feeCents}) but org.currency is unset — ` +
+        `currency moved to the org (V365__org_currency.sql) and is required wherever a fee is priced`,
+    },
+  ];
+}
+
 // ---------------------------------------------------------------------------
 // Stage 2 — the per-stream fold
 // ---------------------------------------------------------------------------
@@ -977,6 +1000,7 @@ export function validatePack(raw: unknown, opts: ValidatePackOptions): PackValid
         ...checkCapacityWaitlist(division.ref, block),
         ...checkPayRequiresFee(division.ref, block),
         ...checkRegistrationRequiresDobGender(division, block, personsByRef),
+        ...checkCurrencyRequiredForFee(division.ref, block, pack.org.currency),
       );
     }
   }
