@@ -2050,8 +2050,8 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
       select fee_percent from competitions where id = ${competition.id}`;
     expect(before.fee_percent).toBeNull();
 
-    // Organiser corrects the plan up to Pro Plus (1%) before anyone pays.
-    await setOrgPlan(orgId, "pro_plus");
+    // Organiser corrects the plan up to Enterprise (1%) before anyone pays.
+    await setOrgPlan(orgId, "enterprise");
     stripeMock.checkoutCreate.mockClear();
 
     const paid = await seedRegistration(competition.id, division.id, settings, {

@@ -43,10 +43,11 @@ describe("compareCell", () => {
   });
 
   it("reads a missing numeric row as unlimited, not as nothing", () => {
-    // Pro carries NO `divisions.per_competition.max` row: getLimit reads the
-    // absence as "no ceiling configured", which is why Pro grants unlimited
-    // divisions. Rendering a blank would tell a buyer Pro offers least in the
-    // one row where it offers most.
+    // `getLimit` reads a null int_value (and, for this renderer, an absent row)
+    // as "no ceiling configured". Rendering a blank would tell a buyer the plan
+    // offers least in a row where it offers most. Enterprise is where the
+    // unlimited caps live after V391; no cell this table renders is unlimited
+    // any more, which is why the branch is pinned here rather than from the DB.
     expect(compareCell("number", undefined)).toEqual({ type: "unlimited" });
     expect(compareCell("number", { bool: null, int: null })).toEqual({ type: "unlimited" });
   });
@@ -107,18 +108,23 @@ describe.skipIf(!HAS_DB)("the table's rows against the live matrix", () => {
     }
   });
 
-  it("carries Pro's unlimited divisions as a NULL cap, and renders it as such", async () => {
-    // Pro's `divisions.per_competition.max` row exists with a null int_value —
-    // "present, no ceiling" — which is how getLimit reads unlimited. A cell
-    // renderer that only special-cased a MISSING row would print nothing here
-    // and tell a buyer Pro offers least in the row where it offers most.
+  it("renders every numeric cell from the row the matrix actually holds", async () => {
+    // Until V391 Pro's `divisions.per_competition.max` was a present-but-null
+    // "no ceiling" row and this case pinned the unlimited branch from the DB.
+    // V391 gave Pro a finite 20, so no cell this table renders is unlimited any
+    // more — the branch is pinned by the pure `compareCell` case above, and
+    // what the live matrix can still prove is that each numeric cell prints the
+    // number the row holds rather than a blank.
     const seen = await cells();
-    const cap = seen.get("pro|divisions.per_competition.max");
-    expect(cap).toBeDefined();
-    expect(cap!.int_value).toBeNull();
-    expect(compareCell("number", { bool: cap!.bool_value, int: cap!.int_value })).toEqual({
-      type: "unlimited",
-    });
+    for (const plan of ["community", "event_pass", "pro"]) {
+      const cap = seen.get(`${plan}|divisions.per_competition.max`);
+      expect(cap, `${plan} divisions row`).toBeDefined();
+      expect(cap!.int_value, `${plan} divisions must be a finite ceiling`).toBeTypeOf("number");
+      expect(compareCell("number", { bool: cap!.bool_value, int: cap!.int_value })).toEqual({
+        type: "value",
+        text: String(cap!.int_value),
+      });
+    }
   });
 
   it("only claims the pass improves on Community where the matrix says so", async () => {

@@ -155,9 +155,23 @@ describe.skipIf(!HAS_DB)("weekly digest (P3 / D7)", () => {
     expect(listed.filter((p) => p.kind === "weekly_digest")).toHaveLength(1);
   });
 
-  it("requires news.auto — 402s on a community org", async () => {
+  it("requires news.auto — 402s when the org is denied the key", async () => {
+    // V391 (entitlements v18 §2) granted `news.auto` to Community, so no plan
+    // withholds it any more. `requireFeature` is still the door, and a DENY
+    // override is what proves it shuts — the same lever a staff suspension or
+    // a bespoke arrangement would pull in production.
     const ctx = await seedOrg("community");
+    await sql`
+      insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason)
+      values (${ctx.orgId}, 'news.auto', false, 'test')`;
+    await invalidateOrgEntitlements(ctx.orgId);
     await expect(generateWeeklyDigest(ctx.auth, ctx.orgId)).rejects.toMatchObject({ status: 402 });
+  });
+
+  it("a plain community org may now generate one — news.auto is free (V391)", async () => {
+    const ctx = await seedOrg("community");
+    const post = await generateWeeklyDigest(ctx.auth, ctx.orgId);
+    expect(post.kind).toBe("weekly_digest");
   });
 
   it("two consecutive presses create two independent, non-deduped drafts", async () => {

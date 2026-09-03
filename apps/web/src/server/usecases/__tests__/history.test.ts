@@ -47,7 +47,7 @@ const GENERIC_CONFIG = {
   progressScore: false,
 };
 
-async function seedOrg(plan: "community" | "pro" | "pro_plus" = "pro"): Promise<{ auth: AuthCtx }> {
+async function seedOrg(plan: "community" | "pro" | "enterprise" = "pro"): Promise<{ auth: AuthCtx }> {
   const suffix = randomUUID().slice(0, 8);
   const [{ id: orgId }] = await sql<{ id: string }[]>`
     insert into organizations (name, slug) values (${"His " + suffix}, ${"his-" + suffix})
@@ -749,17 +749,28 @@ describe.skipIf(!HAS_DB)("schedule undo & versioning (Jul3/03)", () => {
     expect(manual.map((r) => r.label)).toEqual(["another", "my second save point"]);
   });
 
-  it("pro with 3 manual save points keeps its remaining 2 after AI runs", async () => {
+  it("pro's AI anchors do not consume its manual save-point window", async () => {
+    // The cap is read from the matrix (V319 5 -> V391 10), so the boundary
+    // this test walks up to moves with the plan rather than going slack.
+    const [proRow] = await sql<{ int_value: number | null }[]>`
+      select int_value from plan_entitlements
+       where plan_key = 'pro' and feature_key = 'schedule.checkpoints.max'`;
+    const cap = proRow?.int_value;
+    expect(cap, "pro must carry a finite save-point cap").toBeTypeOf("number");
+
     const { auth } = await seedOrg("pro");
     const { division } = await seedDivision(auth);
     for (let i = 1; i <= 3; i++) await createCheckpoint(auth, division.id, `manual ${i}`, "manual");
     await createCheckpoint(auth, division.id, "Before AI · run 1", "ai");
     await createCheckpoint(auth, division.id, "Before AI · run 2", "ai");
-    // 3 manual of 5 used → two more evict nothing; the sixth rolls. The AI rows
-    // do not count towards either.
-    expect((await createCheckpoint(auth, division.id, "manual 4")).evicted).toBeUndefined();
-    expect((await createCheckpoint(auth, division.id, "manual 5")).evicted).toBeUndefined();
-    expect((await createCheckpoint(auth, division.id, "manual 6")).evicted?.label).toBe("manual 1");
+    // 3 manual of `cap` used → the rest of the window evicts nothing; one past
+    // it rolls. The AI rows do not count towards either.
+    for (let i = 4; i <= cap!; i++) {
+      expect((await createCheckpoint(auth, division.id, `manual ${i}`)).evicted).toBeUndefined();
+    }
+    expect(
+      (await createCheckpoint(auth, division.id, `manual ${cap! + 1}`)).evicted?.label,
+    ).toBe("manual 1");
   });
 
   it("only the newest AI anchor is live; older ones are superseded but still listed", async () => {
@@ -815,23 +826,36 @@ describe.skipIf(!HAS_DB)("schedule undo & versioning (Jul3/03)", () => {
     ).rejects.toMatchObject({ status: 404 });
   });
 
-  it("checkpoints window ladder: pro holds 5 then rolls; pro_plus unlimited", async () => {
+  it("checkpoints window ladder: pro holds its cap then rolls; enterprise unlimited", async () => {
+    // The cap is READ from the live matrix, never typed here, so a re-tune
+    // (V319 5 -> V391 10) moves this test instead of quietly stopping it
+    // testing the boundary.
+    const [proRow] = await sql<{ int_value: number | null }[]>`
+      select int_value from plan_entitlements
+       where plan_key = 'pro' and feature_key = 'schedule.checkpoints.max'`;
+    const proCap = proRow?.int_value;
+    expect(proCap, "pro must carry a finite save-point cap for this test to mean anything")
+      .toBeTypeOf("number");
+
     const { auth: proAuth } = await seedOrg("pro");
     const { division: proDiv } = await seedDivision(proAuth);
-    for (let i = 1; i <= 5; i++) {
+    for (let i = 1; i <= proCap!; i++) {
       expect((await createCheckpoint(proAuth, proDiv.id, `cp${i}`)).evicted).toBeUndefined();
     }
-    // The sixth rolls the window rather than 402ing (#382).
-    expect((await createCheckpoint(proAuth, proDiv.id, "cp6")).evicted?.label).toBe("cp1");
+    // One past the cap rolls the window rather than 402ing (#382).
+    expect(
+      (await createCheckpoint(proAuth, proDiv.id, `cp${proCap! + 1}`)).evicted?.label,
+    ).toBe("cp1");
     const proManual = (await listCheckpoints(proAuth, proDiv.id)).filter(
       (r) => r.kind === "manual",
     );
-    expect(proManual).toHaveLength(5);
+    expect(proManual).toHaveLength(proCap!);
 
-    const { auth: plusAuth } = await seedOrg("pro_plus");
-    const { division: plusDiv } = await seedDivision(plusAuth);
-    for (let i = 1; i <= 6; i++) {
-      expect((await createCheckpoint(plusAuth, plusDiv.id, `cp${i}`)).evicted).toBeUndefined();
+    // Enterprise is null (unlimited): one past Pro's cap must NOT evict.
+    const { auth: entAuth } = await seedOrg("enterprise");
+    const { division: entDiv } = await seedDivision(entAuth);
+    for (let i = 1; i <= proCap! + 1; i++) {
+      expect((await createCheckpoint(entAuth, entDiv.id, `cp${i}`)).evicted).toBeUndefined();
     }
   });
 
@@ -884,8 +908,8 @@ describe.skipIf(!HAS_DB)("schedule undo & versioning (Jul3/03)", () => {
     expect(second.evicted).toBeUndefined();
   });
 
-  it("pro_plus has a null limit and never evicts", async () => {
-    const { auth } = await seedOrg("pro_plus");
+  it("enterprise has a null limit and never evicts", async () => {
+    const { auth } = await seedOrg("enterprise");
     const { division } = await seedDivision(auth);
     for (let i = 0; i < 8; i++) {
       expect((await createCheckpoint(auth, division.id, `cp${i}`)).evicted).toBeUndefined();

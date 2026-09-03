@@ -124,7 +124,11 @@ describe("PATCH /api/admin/entitlements", () => {
   });
 
   it("400s on an unknown plan_key before any write", async () => {
-    const res = await patch({ plan_key: "enterprise", feature_key: "clubs.max", int_value: 5 });
+    // `pro_plus` was a real plan until V391 deleted it — the strongest probe
+    // available, because a resolver that still knew the retired key would let
+    // an admin write rows against a plan nothing can resolve. (`enterprise`
+    // used to sit here and is now a VALID key, asserted editable just above.)
+    const res = await patch({ plan_key: "pro_plus", feature_key: "clubs.max", int_value: 5 });
     expect(res.status).toBe(400);
     expect(sqlMock).not.toHaveBeenCalled();
     expect(cacheDelPatternMock).not.toHaveBeenCalled();

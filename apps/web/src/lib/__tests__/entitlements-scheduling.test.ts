@@ -1,4 +1,5 @@
-// #382 — division scheduling is open to every plan; multi-division stays paid.
+// #382 — division scheduling is open to every plan. V391 (entitlements v18)
+// opened multi-division too, so no scheduling key is paid on any plan.
 //
 // `hasFeature` returns `row?.bool_value === true` (entitlements.ts), so a
 // MISSING row is false. Event Pass carried no row at all for board, constraints
@@ -22,7 +23,7 @@ import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 const HAS_DB = !!process.env.DATABASE_URL;
 
 /** Every plan key the matrix carries. */
-const PLANS = ["community", "pro", "pro_plus", "event_pass", "event_pass_l"] as const;
+const PLANS = ["community", "pro", "enterprise", "event_pass", "event_pass_l"] as const;
 
 async function seedOrg(): Promise<string> {
   const suffix = randomUUID().slice(0, 8);
@@ -85,29 +86,38 @@ describe.skipIf(!HAS_DB)("scheduling entitlements after V353 (#382)", () => {
     }
   });
 
-  it("keeps multi-division as the only scheduling paywall", async () => {
-    expect(await hasFeature(await seedOrgOnPlan("community"), "scheduling.multi_division")).toBe(
-      false,
-    );
-    for (const plan of ["pro", "pro_plus", "event_pass", "event_pass_l"]) {
-      expect(
-        await hasFeature(await seedOrgOnPlan(plan), "scheduling.multi_division"),
-        plan,
-      ).toBe(true);
+  // V391 (entitlements v18 §2) opened the LAST scheduling paywall: community
+  // now carries `scheduling.multi_division` = true. There is no scheduling key
+  // left that any plan denies, and that is the fact worth pinning — a re-tune
+  // that quietly re-gates one of the four reds here.
+  it("leaves NO scheduling paywall — every plan grants all four keys", async () => {
+    const keys = [
+      "scheduling.ai",
+      "scheduling.board",
+      "scheduling.constraints",
+      "scheduling.multi_division",
+    ] as const;
+    for (const plan of PLANS) {
+      const orgId = await seedOrgOnPlan(plan);
+      for (const key of keys) {
+        expect(await hasFeature(orgId, key), `${plan} ${key}`).toBe(true);
+      }
     }
   });
 
-  it("an Event Pass lifts multi-division on the competition it covers", async () => {
+  // The competition-scoped overlay is still a distinct read, and it still has
+  // to be provable — but multi_division can no longer witness it now that
+  // community grants it outright. `officials.auto` is the surviving key the
+  // pass lifts and the community base denies, so it is the vehicle.
+  it("an Event Pass lifts a key ON its competition and NOT org-wide", async () => {
     for (const passKey of ["event_pass", "event_pass_l"]) {
       const { orgId, competitionId } = await seedOrgWithPass(passKey);
       expect(
-        await hasFeature(orgId, "scheduling.multi_division", competitionId),
+        await hasFeature(orgId, "officials.auto", competitionId),
         passKey,
       ).toBe(true);
       // …and NOT org-wide: the community base still denies it off the pass.
-      expect(await hasFeature(orgId, "scheduling.multi_division"), `${passKey} org-wide`).toBe(
-        false,
-      );
+      expect(await hasFeature(orgId, "officials.auto"), `${passKey} org-wide`).toBe(false);
     }
   });
 

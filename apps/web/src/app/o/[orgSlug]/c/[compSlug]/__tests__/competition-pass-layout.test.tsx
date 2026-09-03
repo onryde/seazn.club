@@ -165,12 +165,12 @@ describe.skipIf(!HAS_DB)("competition layout provides Event Pass state", () => {
     expect(html).toContain("state:none");
   });
 
-  it("offers NOTHING to Pro Plus, which really is a superset", async () => {
-    // The case the four below were always about, now that Pro is not it: Pro
-    // Plus caps nothing either rung lifts, so no pass is for sale and the gate
+  it("offers NOTHING to Enterprise, which really is a superset", async () => {
+    // The case the four below were always about, now that Pro is not it:
+    // Enterprise caps nothing either rung lifts, so no pass is for sale and the gate
     // goes quiet exactly as it did before #327.
     const rig = await seed();
-    await sql`update subscriptions set plan_key = 'pro_plus', status = 'active'
+    await sql`update subscriptions set plan_key = 'enterprise', status = 'active'
               where id = (select subscription_id from organizations where id = ${rig.orgId})`;
     const html = await renderLayout(rig.orgSlug, rig.compSlug);
     expect(html).toContain("sellable:none");
@@ -239,7 +239,7 @@ describe.skipIf(!HAS_DB)("competition layout provides Event Pass state", () => {
     const rig = await seed();
     await sql`insert into competition_passes (competition_id, org_id)
               values (${rig.compId}, ${rig.orgId})`;
-    await sql`update subscriptions set plan_key = 'pro_plus', status = 'active'
+    await sql`update subscriptions set plan_key = 'enterprise', status = 'active'
               where id = (select subscription_id from organizations where id = ${rig.orgId})`;
     const html = await renderLayout(rig.orgSlug, rig.compSlug);
     // The row is still reported honestly; the gate state is not.
@@ -394,11 +394,11 @@ describe.skipIf(!HAS_DB)("competition layout provides Event Pass state", () => {
   });
 
   it("prefers 'paid_plan' over a closed competition with no pass", async () => {
-    // The plan still wins over everything: a Pro Plus org's gate was closed by
+    // The plan still wins over everything: an Enterprise org's gate was closed by
     // its PLAN's ceiling, and `closed` would name the wrong limit.
     const rig = await seed();
     await sql`update competitions set status = 'completed' where id = ${rig.compId}`;
-    await sql`update subscriptions set plan_key = 'pro_plus', status = 'active'
+    await sql`update subscriptions set plan_key = 'enterprise', status = 'active'
               where id = (select subscription_id from organizations where id = ${rig.orgId})`;
     const html = await renderLayout(rig.orgSlug, rig.compSlug);
     expect(html).toContain("pass:false");

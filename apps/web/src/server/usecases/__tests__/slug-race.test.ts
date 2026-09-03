@@ -30,14 +30,16 @@ const GENERIC_CONFIG = {
   progressScore: false,
 };
 
-// `pro_plus` throughout: `clubs.hierarchy` is gated to that plan, and a
-// PaymentRequiredError from a lower one would look like the race failing.
+// A paid (`pro`) plan throughout: the caps this suite races against
+// (`clubs.max`, `teams.max`) must have room, and a PaymentRequiredError from a
+// tighter plan would look like the race failing. V391 opened
+// `clubs.hierarchy` to every plan, so it is no longer what picks the plan here.
 async function seedOrg(): Promise<{ auth: AuthCtx }> {
   const suffix = randomUUID().slice(0, 8);
   const [{ id: orgId }] = await sql<{ id: string }[]>`
     insert into organizations (name, slug) values (${"Race " + suffix}, ${"race-" + suffix})
     returning id`;
-  await setOrgPlan(orgId, "pro_plus");
+  await setOrgPlan(orgId, "pro");
   await invalidateOrgEntitlements(orgId);
   await sql`
     insert into sports (key, name, module_version, position_catalog)

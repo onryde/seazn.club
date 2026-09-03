@@ -9,7 +9,7 @@
 //   3. Fold-in: a re-buy (synced sub id DIFFERS from stored) clears any stale
 //      disputed_at/dispute_id so an old dispute's late loss can't downgrade the
 //      fresh sub; a renewal (same id) leaves the flags intact.
-// Non-community plans are generic — pro AND pro_plus must behave identically.
+// Non-community plans are generic — pro AND enterprise must behave identically.
 // Real Postgres required; skipped without DATABASE_URL. Seeds are run-unique.
 import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
@@ -136,14 +136,14 @@ describe.skipIf(!HAS_DB)("handleSubscriptionDeleted — stale-event guard (P1-5)
     expect(s.status).toBe("active");
   });
 
-  it("ignores a stale delete for a pro_plus org just the same", async () => {
+  it("ignores a stale delete for an enterprise org just the same", async () => {
     const orgId = await seedOrg({
-      plan: "pro_plus",
+      plan: "enterprise",
       subId: "sub_new_" + uniq(),
     });
     await processStripeEvent(deletedEvent(orgId, "sub_old_" + uniq()));
     const s = await readSub(orgId);
-    expect(s.plan_key).toBe("pro_plus");
+    expect(s.plan_key).toBe("enterprise");
     expect(s.status).toBe("active");
   });
 
@@ -186,12 +186,12 @@ describe.skipIf(!HAS_DB)("syncSubscription — unknown-price guard (P1-5)", () =
     expect(s.status).toBe("active"); // status still synced
   });
 
-  it("preserves a pro_plus org's plan on an unknown price too", async () => {
+  it("preserves an enterprise org’s plan on an unknown price too", async () => {
     const subId = "sub_" + uniq();
-    const orgId = await seedOrg({ plan: "pro_plus", subId });
+    const orgId = await seedOrg({ plan: "enterprise", subId });
     await syncSubscription(orgId, stripeSub({ id: subId, priceId: "price_unknown_" + uniq() }));
     const s = await readSub(orgId);
-    expect(s.plan_key).toBe("pro_plus");
+    expect(s.plan_key).toBe("enterprise");
   });
 
   // V314: an org ALWAYS has a group (createOrgForUser mints one, the migration

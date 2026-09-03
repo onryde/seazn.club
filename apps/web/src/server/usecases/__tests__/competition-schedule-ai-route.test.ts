@@ -321,10 +321,11 @@ function planResponse(p: unknown, usage: unknown = { input_tokens: 1200, output_
   return { parsed_output: p, stop_reason: "end_turn", usage, content: [] };
 }
 
-/** pro_plus (scheduling.ai + scheduling.multi_division) with a funded wallet. */
-async function seedPlusOrg(): Promise<AuthCtx> {
+/** A paid (pro) org with a funded wallet. V391 opened every scheduling key on
+ *  every plan, so `pro` is simply a real purchasable plan here. */
+async function seedPaidOrg(): Promise<AuthCtx> {
   const { auth } = await seedOrg("community");
-  await setOrgPlan(auth.orgId, "pro_plus");
+  await setOrgPlan(auth.orgId, "pro");
   await invalidateOrgEntitlements(auth.orgId);
   await recordPackPurchase(await walletIdFor(auth.orgId), 100, `seed-${randomUUID()}`);
   return auth;
@@ -449,7 +450,7 @@ describe.skipIf(!HAS_DB)("aiPlanForCompetition gates (#350 Task 4)", () => {
   });
 
   it("a single division id → 400 AI_PLAN_SINGLE_DIVISION, and no credit is spent", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const walletId = await walletIdFor(auth.orgId);
     const before = await balance(walletId);
     const { competitionId, divisions } = await seedCompetition(auth, "Single", [
@@ -465,7 +466,7 @@ describe.skipIf(!HAS_DB)("aiPlanForCompetition gates (#350 Task 4)", () => {
   });
 
   it("the same division id twice is still one division → 400, no spend", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const walletId = await walletIdFor(auth.orgId);
     const before = await balance(walletId);
     const { competitionId, divisions } = await seedCompetition(auth, "Dupe", [
@@ -479,7 +480,7 @@ describe.skipIf(!HAS_DB)("aiPlanForCompetition gates (#350 Task 4)", () => {
   });
 
   it("an unknown competition → 404, no spend", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const walletId = await walletIdFor(auth.orgId);
     const before = await balance(walletId);
     const { divisions } = await seedCompetition(auth, "Ghost", [
@@ -498,7 +499,7 @@ describe.skipIf(!HAS_DB)("aiPlanForCompetition gates (#350 Task 4)", () => {
     // charge up to N credits for a proposal that can never be applied — the
     // identical argument the schedule_locked 409 makes, and the joint charge is
     // N times larger.
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const walletId = await walletIdFor(auth.orgId);
     const { competitionId, divisions } = await seedCompetition(auth, "Chilled", [
       { name: "Alpha" },
@@ -515,7 +516,7 @@ describe.skipIf(!HAS_DB)("aiPlanForCompetition gates (#350 Task 4)", () => {
   });
 
   it("a division id from another competition → 404 naming it, before any spend", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const walletId = await walletIdFor(auth.orgId);
     const before = await balance(walletId);
     const { competitionId, divisions } = await seedCompetition(auth, "Mine", [
@@ -530,7 +531,7 @@ describe.skipIf(!HAS_DB)("aiPlanForCompetition gates (#350 Task 4)", () => {
   });
 
   it("a frozen division → 409 SCHEDULE_LOCKED naming it, before any spend", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const walletId = await walletIdFor(auth.orgId);
     const before = await balance(walletId);
     const { competitionId, divisions } = await seedCompetition(auth, "Frozen", [
@@ -547,7 +548,7 @@ describe.skipIf(!HAS_DB)("aiPlanForCompetition gates (#350 Task 4)", () => {
   });
 
   it("a division with zero courts → 422 naming it, before any spend", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const walletId = await walletIdFor(auth.orgId);
     const before = await balance(walletId);
     const { competitionId, divisions } = await seedCompetition(auth, "NoCourts", [
@@ -575,7 +576,7 @@ describe.skipIf(!HAS_DB)("aiPlanForCompetition gates (#350 Task 4)", () => {
   it("a division whose settings do not parse at all → 422 naming it, not a 500", async () => {
     // The generic arm of the same gate. Without it a hand-edited config reaches
     // ScheduleConfig.parse inside the pack builder and surfaces as a ZodError.
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const walletId = await walletIdFor(auth.orgId);
     const before = await balance(walletId);
     const { competitionId, divisions } = await seedCompetition(auth, "BadSettings", [
@@ -609,7 +610,7 @@ describe.skipIf(!HAS_DB)("aiPlanForCompetition gates (#350 Task 4)", () => {
     // nothing writes it into Bravo's own (nonexistent) settings row. Refusing
     // this division outright would 422 half the product — every board before
     // its first settings PUT.
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const { competitionId, divisions } = await seedCompetition(auth, "Defaulted", [
       { name: "Alpha", courts: ["Court 3", "Court 4"] },
       { name: "Bravo", courts: ["Court 1"], noSettings: true },
@@ -627,7 +628,7 @@ describe.skipIf(!HAS_DB)("aiPlanForCompetition gates (#350 Task 4)", () => {
   });
 
   it("501 summed movable fixtures → 409 AI_PLAN_TOO_LARGE, wallet untouched", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const walletId = await walletIdFor(auth.orgId);
     const before = await balance(walletId);
     const comp = await createCompetition(auth, {
@@ -647,7 +648,7 @@ describe.skipIf(!HAS_DB)("aiPlanForCompetition gates (#350 Task 4)", () => {
   });
 
   it("4th joint call in the hour → 429, and the refused call spends nothing", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const walletId = await walletIdFor(auth.orgId);
     const { competitionId, divisions } = await seedCompetition(auth, "Limited", [
       { name: "Alpha" },
@@ -671,7 +672,7 @@ describe.skipIf(!HAS_DB)("aiPlanForCompetition gates (#350 Task 4)", () => {
     // different transactions, so a concurrent unschedule can empty one in
     // between. Simulated here by making the builder raise exactly what it
     // raises in that case.
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const walletId = await walletIdFor(auth.orgId);
     const before = await balance(walletId);
     const { competitionId, divisions } = await seedCompetition(auth, "Raced", [
@@ -689,7 +690,7 @@ describe.skipIf(!HAS_DB)("aiPlanForCompetition gates (#350 Task 4)", () => {
   });
 
   it("a joint run does not consume the per-division 5/hr bucket", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const { competitionId, divisions } = await seedCompetition(auth, "Buckets", [
       { name: "Alpha" },
       { name: "Bravo", courts: ["Court 3", "Court 4"] },
@@ -711,7 +712,7 @@ describe.skipIf(!HAS_DB)("aiPlanForCompetition gates (#350 Task 4)", () => {
 
 describe.skipIf(!HAS_DB)("aiPlanForCompetition pricing + events (#350 Task 4)", () => {
   it("charges max(1, Σ rungs − 1) — two rung-1 divisions cost 1 credit", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const walletId = await walletIdFor(auth.orgId);
     const before = await balance(walletId);
     const { competitionId, divisions } = await seedCompetition(auth, "Priced", [
@@ -732,7 +733,7 @@ describe.skipIf(!HAS_DB)("aiPlanForCompetition pricing + events (#350 Task 4)", 
   });
 
   it("sizes the budget from the UNDISCOUNTED rung total", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const { competitionId, divisions } = await seedCompetition(auth, "Budgeted", [
       { name: "Alpha" },
       { name: "Bravo", courts: ["Court 3", "Court 4"] },
@@ -759,7 +760,7 @@ describe.skipIf(!HAS_DB)("aiPlanForCompetition pricing + events (#350 Task 4)", 
     // per-round reserve ≤ 64K) and runs to MAX_REPAIR_ROUNDS; a 32K budget —
     // what the 1 credit charged would buy — cannot, and stops on budget after
     // one round.
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const { competitionId, divisions } = await seedCompetition(auth, "Metered", [
       { name: "Alpha", courts: ["Court 1", "Court 2"] },
       { name: "Bravo", courts: ["Court 1", "Court 2"] },
@@ -777,7 +778,7 @@ describe.skipIf(!HAS_DB)("aiPlanForCompetition pricing + events (#350 Task 4)", 
   });
 
   it("writes schedule.ai_generated_multi with the per-division breakdown", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const { competitionId, divisions } = await seedCompetition(auth, "Evented", [
       { name: "Alpha" },
       { name: "Bravo", courts: ["Court 3", "Court 4"] },
@@ -817,7 +818,7 @@ describe.skipIf(!HAS_DB)("aiPlanForCompetition pricing + events (#350 Task 4)", 
   });
 
   it("honours a per-division rung override, and prices from the override", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const walletId = await walletIdFor(auth.orgId);
     const before = await balance(walletId);
     const { competitionId, divisions } = await seedCompetition(auth, "Overridden", [
@@ -836,7 +837,7 @@ describe.skipIf(!HAS_DB)("aiPlanForCompetition pricing + events (#350 Task 4)", 
   });
 
   it("a failed run releases the hold, charges nothing, and writes schedule.ai_failed_multi", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const walletId = await walletIdFor(auth.orgId);
     const before = await balance(walletId);
     const { competitionId, divisions } = await seedCompetition(auth, "Failing", [
@@ -870,7 +871,7 @@ describe.skipIf(!HAS_DB)("aiPlanForCompetition pricing + events (#350 Task 4)", 
   // row — a billing lapse took AI scheduling down silently. The joint path is a
   // hand-copy of that logic, so it needs its own proof.
   it("a provider APIError → 503, metered as provider_error, message not leaked, nothing charged", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const walletId = await walletIdFor(auth.orgId);
     const before = await balance(walletId);
     const { competitionId, divisions } = await seedCompetition(auth, "Outage", [
@@ -909,7 +910,7 @@ describe.skipIf(!HAS_DB)("aiPlanForCompetition pricing + events (#350 Task 4)", 
     // The `true` arm of stopped_on_budget, and the branch where the meter cuts
     // a run short but a best-so-far exists: 63K of a 64K budget leaves less
     // than the per-round reserve, so round 2 never starts.
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const walletId = await walletIdFor(auth.orgId);
     const before = await balance(walletId);
     const { competitionId, divisions } = await seedCompetition(auth, "Starved", [
@@ -934,7 +935,7 @@ describe.skipIf(!HAS_DB)("aiPlanForCompetition pricing + events (#350 Task 4)", 
   });
 
   it("budget exhausted with NOTHING usable → 422, no charge, failure row stamped stopped_on_budget", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const walletId = await walletIdFor(auth.orgId);
     const before = await balance(walletId);
     const { competitionId, divisions } = await seedCompetition(auth, "Starved2", [
@@ -963,7 +964,7 @@ describe.skipIf(!HAS_DB)("aiPlanForCompetition pricing + events (#350 Task 4)", 
 
   it("an empty wallet → 402 ai.credits before the model is called", async () => {
     const { auth } = await seedOrg("community");
-    await setOrgPlan(auth.orgId, "pro_plus");
+    await setOrgPlan(auth.orgId, "pro");
     await invalidateOrgEntitlements(auth.orgId);
     const { competitionId, divisions } = await seedCompetition(auth, "Broke", [
       { name: "Alpha" },
@@ -980,7 +981,7 @@ describe.skipIf(!HAS_DB)("aiPlanForCompetition pricing + events (#350 Task 4)", 
 
 describe.skipIf(!HAS_DB)("aiPlanForCompetition results (#350 Task 4)", () => {
   it("returns the joint proposal with every fixture tagged with its division", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const { competitionId, divisions } = await seedCompetition(auth, "Result", [
       { name: "Alpha" },
       { name: "Bravo", courts: ["Court 3", "Court 4"] },
@@ -1005,7 +1006,7 @@ describe.skipIf(!HAS_DB)("aiPlanForCompetition results (#350 Task 4)", () => {
     // renders them to ISO in ITS division's timezone. A joint run has no single
     // zone (R8), so the field is dropped rather than answered wrongly — and
     // "dropped" has to mean absent, not passed through unconverted.
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const { competitionId, divisions } = await seedCompetition(auth, "Suggested", [
       { name: "Alpha" },
       { name: "Bravo", courts: ["Court 3", "Court 4"] },
@@ -1028,7 +1029,7 @@ describe.skipIf(!HAS_DB)("aiPlanForCompetition results (#350 Task 4)", () => {
   });
 
   it("reports divergent courts so the board can warn on them", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const { competitionId, divisions } = await seedCompetition(auth, "Divergent", [
       { name: "Alpha", courts: ["Court 1", "Court 2"] },
       { name: "Bravo", courts: ["Court 2", "Court 3"] },
@@ -1047,7 +1048,7 @@ describe.skipIf(!HAS_DB)("aiPlanForCompetition results (#350 Task 4)", () => {
     // violation fires no repair round and no automated gate downstream ever
     // sees it. The response is the last line of defence: the board cannot
     // render what the orchestrator does not return.
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const walletId = await walletIdFor(auth.orgId);
     const before = await balance(walletId);
     const { competitionId, divisions } = await seedCompetition(auth, "Warned", [
@@ -1072,7 +1073,7 @@ describe.skipIf(!HAS_DB)("aiPlanForCompetition results (#350 Task 4)", () => {
 
 describe.skipIf(!HAS_DB)("aiPlanForCompetition drops zero-movable divisions (R6)", () => {
   it("drops a fully-scheduled division from the run, never charges for it, and reports it", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const walletId = await walletIdFor(auth.orgId);
     const before = await balance(walletId);
     const { competitionId, divisions } = await seedCompetition(auth, "Dropped", [
@@ -1106,7 +1107,7 @@ describe.skipIf(!HAS_DB)("aiPlanForCompetition drops zero-movable divisions (R6)
   });
 
   it("fewer than 2 divisions left after the drop → the single-division 400, no spend", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const walletId = await walletIdFor(auth.orgId);
     const before = await balance(walletId);
     const { competitionId, divisions } = await seedCompetition(auth, "AllButOne", [
@@ -1125,7 +1126,7 @@ describe.skipIf(!HAS_DB)("aiPlanForCompetition drops zero-movable divisions (R6)
     // buildSchedulePack 422s AI_PLAN_EMPTY_SCOPE for a repair over a division
     // with nothing movable. Refusing a five-division joint repair because one
     // division is already done is exactly what R6 forbids.
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const { competitionId, divisions } = await seedCompetition(auth, "Repairing", [
       { name: "Alpha" },
       { name: "Bravo", courts: ["Court 3", "Court 4"] },
@@ -1146,7 +1147,7 @@ describe.skipIf(!HAS_DB)("aiPlanForCompetition refine + bad input (R14)", () => 
     // dropped prior), and an id outside the run is filtered rather than
     // reaching toJointEngineAssignments, whose AI_PLAN_INVALID_ASSIGNMENT is
     // deliberately outside isRecoverable and would surface as a 500.
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const { competitionId, divisions } = await seedCompetition(auth, "Refined", [
       { name: "Alpha" },
       { name: "Bravo", courts: ["Court 3", "Court 4"] },
@@ -1205,7 +1206,7 @@ describe.skipIf(!HAS_DB)("joint runs are visible to the admin cost/margin surfac
     // filtered by AI_RUN_EVENT_TYPES. A run class missing from that list books
     // revenue against zero cost and reads as pure margin — silently, and on the
     // most expensive runs on the platform.
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const name = await orgName(auth.orgId);
     const { competitionId, divisions } = await seedCompetition(auth, "Booked", [
       { name: "Alpha" },

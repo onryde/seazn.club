@@ -25,7 +25,7 @@ import { platformFeeDefault } from "@/lib/platform-settings";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
-type Plan = "community" | "pro" | "pro_plus";
+type Plan = "community" | "pro" | "enterprise";
 
 const GENERIC_CONFIG = {
   resultMode: "score",
@@ -146,7 +146,11 @@ const MATRIX: { feature: string; plan: Plan; allowed: boolean }[] = [
   { feature: "stages.per_division.max",       plan: "pro",       allowed: true },
   { feature: "entrants.per_division.max",     plan: "community", allowed: false },
   { feature: "entrants.per_division.max",     plan: "pro",       allowed: true },
-  { feature: "formats.double_elim",           plan: "community", allowed: false },
+  // V391 (entitlements v18 §2): double elimination and cricket DLS are free on
+  // every plan now — the rows still EXIST in plan_entitlements (unlike
+  // scoring.match_timeline below, which was deleted), so the community arm is
+  // still a real assertion: it says the boundary was opened, not removed.
+  { feature: "formats.double_elim",           plan: "community", allowed: true },
   { feature: "formats.double_elim",           plan: "pro",       allowed: true },
   // W1 (entitlements v18, 2026-09-02): `scoring.match_timeline` formerly sat
   // here as community=false/pro=true — deleted, not flipped to true/true,
@@ -156,14 +160,14 @@ const MATRIX: { feature: string; plan: Plan; allowed: boolean }[] = [
   // to assert here. "coarse scoring never needs a plan" below (football.goal)
   // and this file's own `scoring-free.test.ts` sibling now prove the same
   // fact for the general case, across every shipped sport.
-  { feature: "cricket.dls",                   plan: "community", allowed: false },
+  { feature: "cricket.dls",                   plan: "community", allowed: true },
   { feature: "cricket.dls",                   plan: "pro",       allowed: true },
   { feature: "api.access",                    plan: "community", allowed: false },
   { feature: "api.access",                    plan: "pro",       allowed: true },
-  // V290 re-arms api.write above Pro: score/manage keys need Pro Plus (a
+  // V391 (entitlements v18) re-homes api.write above Pro on Enterprise: score/manage keys need it (a
   // community org's write-key attempt still 402s on api.access first, above).
   { feature: "api.write",                     plan: "pro",       allowed: false },
-  { feature: "api.write",                     plan: "pro_plus",  allowed: true },
+  { feature: "api.write",                     plan: "enterprise", allowed: true },
 ];
 
 async function probe(feature: string, auth: AuthCtx): Promise<() => Promise<unknown>> {
@@ -175,20 +179,31 @@ async function probe(feature: string, auth: AuthCtx): Promise<() => Promise<unkn
       return () => makeCompetition(auth, "C over"); // one past the cap
     }
     case "dashboard.public.max": {
-      // The v3 active-comp cap (community: 1) would fire first; lift it via
-      // override so this probe isolates the public-dashboard quota.
+      // The active-comp cap would fire first; lift it via override so this
+      // probe isolates the public-dashboard quota. Fill to the COMMUNITY cap,
+      // read from the matrix rather than typed (V391 moved it 1 -> 3), so the
+      // community arm sits exactly at its limit and pro (unlimited) has room.
+      const [{ int_value: pub }] = await sql<{ int_value: number }[]>`
+        select int_value from plan_entitlements
+        where plan_key = 'community' and feature_key = 'dashboard.public.max'`;
       await sql`
         insert into org_entitlement_overrides (org_id, feature_key, int_value, reason)
-        values (${auth.orgId}, 'competitions.max_active', 10, 'test probe')`;
+        values (${auth.orgId}, 'competitions.max_active', ${pub + 1}, 'test probe')`;
       await invalidateOrgEntitlements(auth.orgId);
-      await makeCompetition(auth, "P1", "public");
-      return () => makeCompetition(auth, "P2", "public"); // 2nd public
+      for (let i = 1; i <= pub; i++) await makeCompetition(auth, `P${i}`, "public");
+      return () => makeCompetition(auth, `P${pub + 1}`, "public"); // one past the cap
     }
     case "divisions.per_competition.max": {
-      // Fill to the plan's cap (v3: community 2, pro unlimited), one more.
+      // Fill to the COMMUNITY cap, read from the matrix. That one number does
+      // both arms: community sits exactly at its limit and must 402, while pro
+      // (V391: 20, no longer unlimited) still has room and must succeed.
+      // Filling to the ORG's own cap made the pro arm 402 the moment pro
+      // stopped being unlimited.
       const comp = await makeCompetition(auth, "D");
-      const limit = (await getLimit(auth.orgId, "divisions.per_competition.max")) ?? 2;
-      for (let i = 1; i <= limit; i++) await makeDivision(auth, comp.id, "generic", GENERIC_CONFIG);
+      const [{ int_value: fill }] = await sql<{ int_value: number }[]>`
+        select int_value from plan_entitlements
+        where plan_key = 'community' and feature_key = 'divisions.per_competition.max'`;
+      for (let i = 1; i <= fill; i++) await makeDivision(auth, comp.id, "generic", GENERIC_CONFIG);
       return () => makeDivision(auth, comp.id, "generic", GENERIC_CONFIG); // one past the cap
     }
     case "stages.per_division.max": {
@@ -364,10 +379,17 @@ describe.skipIf(!HAS_DB)("downgrade simulation (doc 10 §2.4)", () => {
 
     await setPlan(auth.orgId, "community");
 
-    // Nothing deleted; the ten most recently active survive the community cap
-    // (V319: 10) — the two least recently active freeze.
+    // Nothing deleted; the most recently active survive the community cap
+    // (V319 10 -> V391 3) and the rest freeze. The cap is READ, so a re-tune
+    // moves this test instead of quietly freezing nothing.
+    const [{ int_value: commCap }] = await sql<{ int_value: number }[]>`
+      select int_value from plan_entitlements
+      where plan_key = 'community' and feature_key = 'competitions.max_active'`;
+    expect(commCap, "community must cap active competitions below the 12 seeded here")
+      .toBeLessThan(12);
     const { items } = await listCompetitions(auth, { cursor: null, limit: 50 });
     expect(items).toHaveLength(12);
+    expect(items.filter((c) => c.frozen)).toHaveLength(12 - commCap);
     const byId = new Map(items.map((c) => [c.id, c]));
     expect(byId.get(compA.id)?.frozen).toBe(true);
     expect(byId.get(compB.id)?.frozen).toBe(false);
@@ -398,9 +420,11 @@ describe.skipIf(!HAS_DB)("downgrade simulation (doc 10 §2.4)", () => {
     });
     expect(newCard.seq).toBe(2);
 
-    // Retiring frozen competitions is the sanctioned way back under quota.
-    await patchCompetition(auth, compA.id, { status: "archived" });
-    await patchCompetition(auth, compC.id, { status: "archived" });
+    // Retiring frozen competitions is the sanctioned way back under quota:
+    // archiving every frozen one leaves the survivors inside the cap.
+    for (const c of items.filter((x) => x.frozen)) {
+      await patchCompetition(auth, c.id, { status: "archived" });
+    }
     const after = await listCompetitions(auth, { cursor: null, limit: 50 });
     expect(after.items.every((c) => !c.frozen)).toBe(true);
   });

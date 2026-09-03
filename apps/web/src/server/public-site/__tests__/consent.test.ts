@@ -79,14 +79,14 @@ async function seedPublicScene(
   opts: { playerProfiles?: boolean } = {},
 ): Promise<PublicScene> {
   const { auth, orgId } = await seedOrg();
-  // Consent is the variable under test here; grant the Pro read feature
-  // (doc 10 §1 dashboard.player_profiles, PROMPT-13) unless a test is
-  // explicitly probing the entitlement split.
-  if (opts.playerProfiles !== false) {
-    await sql`
-      insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason)
-      values (${orgId}, 'dashboard.player_profiles', true, 'test')`;
-  }
+  // Consent is the variable under test here, so `dashboard.player_profiles` is
+  // STATED either way rather than inherited. V391 granted the key to Community,
+  // so the false arm now has to DENY explicitly — leaving the override out
+  // would silently give every scene the feature and stop the entitlement split
+  // being probed at all.
+  await sql`
+    insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason)
+    values (${orgId}, 'dashboard.player_profiles', ${opts.playerProfiles !== false}, 'test')`;
   const alice = await seedPerson(orgId, "Alice Wonder", {
     public_name: true,
     public_photo: true,
@@ -234,16 +234,23 @@ describe.skipIf(!HAS_DB)("entitlement split (doc 09 §4, doc 10)", () => {
     expect(ids).not.toContain(scene.bob); // unconsented — still invisible, plan or no plan
   });
 
-  it("community orgs hold at most one public competition (dashboard.public.max)", async () => {
+  it("community orgs hold at most dashboard.public.max public competitions", async () => {
     const { auth } = await seedOrg();
-    // The v3 active-comp cap (1) would fire first — lift it via override so
-    // this test isolates the public-dashboard quota.
+    // The active-comp cap would fire first — lift it via override so this test
+    // isolates the public-dashboard quota. The quota itself is READ from the
+    // matrix (V319 1 -> V391 3), so a re-tune moves the boundary this test
+    // walks up to instead of leaving it asserting nothing.
+    const [{ int_value: pub }] = await sql<{ int_value: number }[]>`
+      select int_value from plan_entitlements
+       where plan_key = 'community' and feature_key = 'dashboard.public.max'`;
     await sql`
       insert into org_entitlement_overrides (org_id, feature_key, int_value, reason)
-      values (${auth.orgId}, 'competitions.max_active', 10, 'test probe')`;
-    await createCompetition(auth, { ends_on: "2030-12-31", name: "First", visibility: "public", branding: {} });
+      values (${auth.orgId}, 'competitions.max_active', ${pub + 2}, 'test probe')`;
+    for (let i = 1; i <= pub; i++) {
+      await createCompetition(auth, { ends_on: "2030-12-31", name: `Public ${i}`, visibility: "public", branding: {} });
+    }
     await expect(
-      createCompetition(auth, { ends_on: "2030-12-31", name: "Second", visibility: "public", branding: {} }),
+      createCompetition(auth, { ends_on: "2030-12-31", name: "One too many", visibility: "public", branding: {} }),
     ).rejects.toThrow(PaymentRequiredError);
 
     // Unlisted/private don't count; flipping one to public re-checks the quota.

@@ -1,9 +1,13 @@
-// Embed door (v3/10 #4): private divisions 404, link-only render, free orgs
-// are not_entitled, Pro orgs pass. Real Postgres.
+// Embed door (v3/10 #4): private divisions 404, link-only render, Pro orgs
+// pass. V391 (entitlements v18) granted `embeds.enabled` on Community too, so
+// no PLAN denies it any more — the not_entitled arm is proven through the
+// override, which is the only remaining way an org can lose the key and is
+// what keeps the gate site itself under test. Real Postgres.
 import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { embedDivisionData, type EmbedPayload } from "@/server/embed-data";
+import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { createEntrants } from "@/server/usecases/entrants";
 import type { AuthCtx } from "@/server/api-v1/auth";
 
@@ -52,8 +56,20 @@ describe.skipIf(!HAS_DB)("embedDivisionData", () => {
     expect(res.ok).toBe(true);
   });
 
-  it("public division on Community → not_entitled", async () => {
+  it("public division on Community → ok (V391 made embeds free)", async () => {
     const { divId } = await seed("public", "community");
+    const res = await embedDivisionData(divId);
+    expect(res.ok).toBe(true);
+  });
+
+  it("an org denied embeds.enabled → not_entitled", async () => {
+    // The gate site is still live code; an override is the only thing left
+    // that can take the key away, so it is what proves the door still shuts.
+    const { orgId, divId } = await seed("public", "community");
+    await sql`
+      insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason)
+      values (${orgId}, 'embeds.enabled', false, 'test')`;
+    await invalidateOrgEntitlements(orgId);
     expect(await embedDivisionData(divId)).toEqual({
       ok: false,
       reason: "not_entitled",

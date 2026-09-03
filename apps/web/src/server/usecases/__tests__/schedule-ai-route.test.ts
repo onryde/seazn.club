@@ -138,14 +138,14 @@ async function setSettings(auth: AuthCtx, divisionId: string): Promise<string[]>
   return courts;
 }
 
-/** community org promoted to pro_plus directly (seedOrg only knows pro/community).
+/** community org promoted to a paid plan directly.
  *  AI runs are wallet-metered on every tier now (v17 SPEC-2 §5.2), and seedOrg
  *  never runs the org-creation bootstrap grant, so fund the wallet with a pack
  *  well above any test's run count — otherwise every "should-run" test would
  *  402 ai.credits at the reserve before reaching the mocked provider. */
-async function seedPlusOrg(): Promise<AuthCtx> {
+async function seedPaidOrg(): Promise<AuthCtx> {
   const { auth } = await seedOrg("community");
-  await setOrgPlan(auth.orgId, "pro_plus");
+  await setOrgPlan(auth.orgId, "pro");
   await invalidateOrgEntitlements(auth.orgId);
   await recordPackPurchase(await walletIdFor(auth.orgId), 100, `seed-${randomUUID()}`);
   return auth;
@@ -366,7 +366,7 @@ describe.skipIf(!HAS_DB)("aiPlanForDivision gates (v4/00 §5, credit-metered v17
   });
 
   it("run ledger carries model/usage/cost; failures land as schedule.ai_failed and never record a generation", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const { divisionId, fixtureIds, courts } = await seedPlannable(auth);
 
     // Success: audit payload + capture both stamp model, usage and cost_usd.
@@ -413,7 +413,7 @@ describe.skipIf(!HAS_DB)("aiPlanForDivision gates (v4/00 §5, credit-metered v17
   });
 
   it("records pack_units alongside cost, and calls the expensive-run alert check with the run's numbers (v17 gap #295)", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const { divisionId, fixtureIds, courts } = await seedPlannable(auth);
     parse.mockResolvedValueOnce(planResponse(legalPlan(fixtureIds, courts)));
 
@@ -535,8 +535,8 @@ describe.skipIf(!HAS_DB)("aiPlanForDivision gates (v4/00 §5, credit-metered v17
     expect(parse).toHaveBeenCalledTimes(1); // only the funded run reached the LLM
   });
 
-  it("override bool_value=false kills a pro_plus org → 402", async () => {
-    const auth = await seedPlusOrg();
+  it("override bool_value=false kills a paid org → 402", async () => {
+    const auth = await seedPaidOrg();
     const { divisionId } = await seedPlannable(auth);
     await sql`
       insert into org_entitlement_overrides (org_id, feature_key, bool_value)
@@ -553,7 +553,7 @@ describe.skipIf(!HAS_DB)("aiPlanForDivision gates (v4/00 §5, credit-metered v17
 
   it("kill-switch off → 403 FEATURE_DISABLED (before the paid gate)", async () => {
     isServerFeatureEnabled.mockResolvedValueOnce(false);
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const { divisionId } = await seedPlannable(auth);
     await expect(
       aiPlanForDivision(auth, divisionId, {
@@ -569,7 +569,7 @@ describe.skipIf(!HAS_DB)("aiPlanForDivision gates (v4/00 §5, credit-metered v17
   // using — and that block landed at Apply, minutes and one paid generation
   // later. The guard belongs ahead of the quota and spend gates.
   it("frozen division → 409 SCHEDULE_LOCKED, before any spend", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const { divisionId, fixtureIds, courts } = await seedPlannable(auth);
     await sql`update divisions set schedule_locked = true where id = ${divisionId}`;
 
@@ -616,7 +616,7 @@ describe.skipIf(!HAS_DB)("aiPlanForDivision gates (v4/00 §5, credit-metered v17
       // (an acceptable plan is kept) from the warning threshold, which the
       // sibling tests exercise.
       process.env.SCHEDULING_AI_ESCALATE_WARN_RATIO = "999";
-      const auth = await seedPlusOrg();
+      const auth = await seedPaidOrg();
       const { divisionId, fixtureIds, courts } = await seedPlannable(auth);
       parse.mockResolvedValueOnce(planResponse(legalPlan(fixtureIds, courts)));
 
@@ -635,7 +635,7 @@ describe.skipIf(!HAS_DB)("aiPlanForDivision gates (v4/00 §5, credit-metered v17
     // making. Its spent tokens still ride on the escalated run's bill.
     it("escalates when the cheap model fails outright, and still bills its tokens", async () => {
       process.env.SCHEDULING_AI_CHEAP_MODEL = "claude-haiku-4-5";
-      const auth = await seedPlusOrg();
+      const auth = await seedPaidOrg();
       const { divisionId, fixtureIds, courts } = await seedPlannable(auth);
 
       // Refusal → runAiPlan throws 422 AI_PLAN_FAILED carrying usage.
@@ -680,7 +680,7 @@ describe.skipIf(!HAS_DB)("aiPlanForDivision gates (v4/00 §5, credit-metered v17
 
     it("escalates on blocking conflicts, and bills BOTH attempts", async () => {
       process.env.SCHEDULING_AI_CHEAP_MODEL = "claude-haiku-4-5";
-      const auth = await seedPlusOrg();
+      const auth = await seedPaidOrg();
       const { divisionId, fixtureIds, courts } = await seedPlannable(auth);
 
       // Otherwise-legal plan with ONE court double-booking: fixture[1] is moved
@@ -746,7 +746,7 @@ describe.skipIf(!HAS_DB)("aiPlanForDivision gates (v4/00 §5, credit-metered v17
     });
 
     it("unset cheap model → single call on the primary (default behaviour)", async () => {
-      const auth = await seedPlusOrg();
+      const auth = await seedPaidOrg();
       const { divisionId, fixtureIds, courts } = await seedPlannable(auth);
       parse.mockResolvedValueOnce(planResponse(legalPlan(fixtureIds, courts)));
 
@@ -761,7 +761,7 @@ describe.skipIf(!HAS_DB)("aiPlanForDivision gates (v4/00 §5, credit-metered v17
   });
 
   it("6th call in the hour → 429", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const { divisionId, fixtureIds, courts } = await seedPlannable(auth);
     parse.mockResolvedValue(planResponse(legalPlan(fixtureIds, courts)));
     for (let i = 0; i < 5; i++) {
@@ -779,7 +779,7 @@ describe.skipIf(!HAS_DB)("aiPlanForDivision gates (v4/00 §5, credit-metered v17
   });
 
   it("501 movable → 422; unknown scope court → 400", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
 
     // The flexible-division 409 used to be asserted here. That mode was never
     // selectable — no screen read the column — so it is gone, and with it the
@@ -808,7 +808,7 @@ describe.skipIf(!HAS_DB)("aiPlanForDivision gates (v4/00 §5, credit-metered v17
 
 describe.skipIf(!HAS_DB)("aiPlanForDivision coverage + telemetry (v4/03 §2, 00 §5)", () => {
   it("officials_policy present → officials_coverage populated; absent → null", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const { divisionId, fixtureIds, courts } = await seedPlannable(auth, {
       officials: true,
     });
@@ -834,7 +834,7 @@ describe.skipIf(!HAS_DB)("aiPlanForDivision coverage + telemetry (v4/03 §2, 00 
   });
 
   it("constraint_suggestions startWindows round-trip: epoch-ms → ISO in the division tz", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const { divisionId, fixtureIds, courts } = await seedPlannable(auth);
     // The model returns the engine constraint family: startWindow bounds in epoch ms.
     const notBeforeMs = Date.parse("2026-08-01T14:00:00+01:00");
@@ -861,7 +861,7 @@ describe.skipIf(!HAS_DB)("aiPlanForDivision coverage + telemetry (v4/03 §2, 00 
   });
 
   it("telemetry: ai_plan_run fires on success with usage + blocking count", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const { divisionId, fixtureIds, courts } = await seedPlannable(auth);
     parse.mockResolvedValueOnce(
       planResponse(legalPlan(fixtureIds, courts), {
@@ -892,7 +892,7 @@ describe.skipIf(!HAS_DB)("aiPlanForDivision coverage + telemetry (v4/03 §2, 00 
   });
 
   it("telemetry: a 422 AI_PLAN_FAILED still meters the spent tokens", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const { divisionId } = await seedPlannable(auth);
     // Refusal → runAiPlan throws 422 AI_PLAN_FAILED with usage on the extra.
     parse.mockResolvedValueOnce({
@@ -930,7 +930,7 @@ describe.skipIf(!HAS_DB)("aiPlanForDivision coverage + telemetry (v4/03 §2, 00 
   // lapse took AI scheduling down silently. It must now be a 503 with its own
   // outcome, and the provider's message must never reach the tenant.
   it("a provider APIError → 503 AI_PROVIDER_UNAVAILABLE, metered, message not leaked", async () => {
-    const auth = await seedPlusOrg();
+    const auth = await seedPaidOrg();
     const { divisionId } = await seedPlannable(auth);
     const providerMessage = "Your credit balance is too low to access the Anthropic API.";
     parse.mockRejectedValueOnce(new MockAPIError(400, providerMessage));

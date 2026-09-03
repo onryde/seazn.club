@@ -470,12 +470,27 @@ describe.skipIf(!HAS_DB)("org-posts auto-drafts", () => {
     expect(untouched.autoSource?.stale).toBe(false);
   });
 
-  it("does not draft for a community org even if the toggle reads true", async () => {
+  it("does not draft for an org DENIED news.auto, even if the toggle reads true", async () => {
+    // V391 granted `news.auto` to Community, so the plan is no longer what
+    // withholds it. The auto-draft probe still reads the live key, and a DENY
+    // override is what proves the probe is honoured.
     const ctx = await seedOrg("community");
+    await sql`
+      insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason)
+      values (${ctx.orgId}, 'news.auto', false, 'test')`;
+    await invalidateOrgEntitlements(ctx.orgId);
     const div = await seedDivision(ctx, { autoPosts: true });
     const fx = await seedDecidedFixture(ctx, div);
     await draft(ctx, fx);
     expect(await listPosts(ctx.auth, ctx.orgId)).toEqual([]);
+  });
+
+  it("DOES draft for a plain community org — news.auto is free (V391)", async () => {
+    const ctx = await seedOrg("community");
+    const div = await seedDivision(ctx, { autoPosts: true });
+    const fx = await seedDecidedFixture(ctx, div);
+    await draft(ctx, fx);
+    expect(await listPosts(ctx.auth, ctx.orgId)).not.toEqual([]);
   });
 
   it("drafts a round recap when the last fixture of a round is decided", async () => {

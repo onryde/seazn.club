@@ -1,6 +1,15 @@
 // Task 4 — the `dashboard.player_profiles` gate moved OUT of public_players_v
 // (V307) and INTO getPublicPlayer, the view's only consumer.
 //
+// V391 (entitlements v18 §2) GRANTED `dashboard.player_profiles` to Community.
+// The key is therefore no longer competition-scoped in practice: a community
+// org holds it org-wide, so a pass cannot be what separates two competitions on
+// this key any more, and the "unpassed competition stays dark" case it used to
+// prove has no state left that produces it. What still matters, and is what
+// this file now proves, is WHERE the gate is evaluated — outside the memoised
+// closure — driven through an org entitlement override, the one remaining way
+// an org loses the key.
+//
 // The view could not take the competition as a parameter: its gate sat over
 // `from persons p`, and a person plays in many competitions — the only
 // competition reference is inside the correlated exists() BELOW the gate.
@@ -80,15 +89,16 @@ interface Scene {
  */
 async function seedScene(): Promise<Scene> {
   // Unstated precondition, stated. Everything below assumes the SHIPPED matrix
-  // grants this feature to event_pass (V308). Read it, never write it — if the
-  // matrix is ever flipped, this line says so instead of leaving a bare
-  // "expected null not to be null" under a test named for competition scoping.
+  // grants this feature to a plain COMMUNITY org (V391 — it used to be the pass
+  // that granted it, V308). Read it, never write it — if the matrix is ever
+  // flipped, this line says so instead of leaving a bare "expected null not to
+  // be null" under a test named for where the gate is evaluated.
   const [grant] = await sql<{ bool_value: boolean | null }[]>`
     select bool_value from plan_entitlements
-    where plan_key = 'event_pass' and feature_key = 'dashboard.player_profiles'`;
+    where plan_key = 'community' and feature_key = 'dashboard.player_profiles'`;
   expect(
     grant?.bool_value,
-    "precondition: plan_entitlements('event_pass','dashboard.player_profiles') must be true (V308)",
+    "precondition: plan_entitlements('community','dashboard.player_profiles') must be true (V391)",
   ).toBe(true);
 
   const suffix = randomUUID().slice(0, 8);
@@ -185,7 +195,7 @@ afterAll(async () => {
   await client?.end();
 });
 
-describe.skipIf(!HAS_DB)("getPublicPlayer — player-profile gate is competition-scoped", () => {
+describe.skipIf(!HAS_DB)("getPublicPlayer — the player-profile gate sits outside the cache", () => {
   // The first two tests only READ, so they share one scene: every seedScene()
   // writes an org, two competitions and two entrants into the shared dev DB,
   // and three of them per run widened a known cross-suite race for no extra
@@ -210,13 +220,17 @@ describe.skipIf(!HAS_DB)("getPublicPlayer — player-profile gate is competition
     expect(data!.player.name).toBe(shared.personName);
   });
 
-  it("404s the SAME person on an unpassed competition in the SAME org", async () => {
-    // The leak this task exists to prevent: one Event Pass must not light up
-    // every other competition in the org. A one-sided test would not see it.
+  it("serves it on the UNPASSED competition too — V391 made profiles free", async () => {
+    // Until V391 this asserted a 404: one Event Pass must not light up every
+    // other competition in the org. Community now holds
+    // `dashboard.player_profiles` outright, so both sides render and the
+    // scoping this pair used to prove is not a property of this key any more.
+    // Pinned in both directions rather than deleted, so a re-gating of the key
+    // shows up here as a failure instead of as silence.
     const passed = await getPublicPlayer(shared.orgSlug, shared.passedSlug, shared.personId);
     expect(passed).not.toBeNull();
     const unpassed = await getPublicPlayer(shared.orgSlug, shared.unpassedSlug, shared.personId);
-    expect(unpassed).toBeNull();
+    expect(unpassed).not.toBeNull();
   });
 
   it("denies within the same cache window when the entitlement goes away", async () => {
@@ -225,8 +239,14 @@ describe.skipIf(!HAS_DB)("getPublicPlayer — player-profile gate is competition
 
     // Entitlement changes do not bust `competition:{id}`, so the cached closure
     // above is still warm and still holds the player row. Only a gate evaluated
-    // OUTSIDE that closure can deny here.
-    await sql`delete from competition_passes where competition_id = ${scene.passedId}`;
+    // OUTSIDE that closure can deny here. An org-level DENY override is what
+    // takes the key away now that no plan withholds it — the override beats
+    // both the pass and the plan (`resolve`'s precedence), which is exactly
+    // what makes it the right lever for this test.
+    await sql`
+      insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason)
+      values (${scene.orgId}, 'dashboard.player_profiles', false, 'test')
+      on conflict (org_id, feature_key) do update set bool_value = false`;
     await invalidateOrgEntitlements(scene.orgId);
 
     expect(await getPublicPlayer(scene.orgSlug, scene.passedSlug, scene.personId)).toBeNull();

@@ -279,13 +279,13 @@ describe.skipIf(!HAS_DB)("pass-checkout eligibility uses the resolver, not raw p
     expect(stripeMock.checkoutCreate).not.toHaveBeenCalled();
   });
 
-  it("refuses PRO PLUS even the L rung — that plan really is a superset", async () => {
-    // Pro Plus carries no entrant ceiling at all, so L adds nothing to it. This
+  it("refuses ENTERPRISE even the L rung — that plan really is a superset", async () => {
+    // Enterprise carries no entrant ceiling at all, so L adds nothing to it. This
     // is what stops #327 from becoming "paid orgs may buy passes": the gate is
     // computed from plan_entitlements, one plan at a time.
     const { orgId, compId } = await seedOrgWithComp();
     await giveLPrice("price_test_pass_l");
-    await seedPaid(orgId, "pro_plus");
+    await seedPaid(orgId, "enterprise");
     authState.orgId = orgId;
 
     const res = await passCheckoutPOST(req(compId, { pass_key: "event_pass_l" }));

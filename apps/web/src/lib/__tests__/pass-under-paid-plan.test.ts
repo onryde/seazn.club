@@ -84,23 +84,25 @@ describe.skipIf(!HAS_DB)("an Event Pass under a paid plan (#327/#337)", () => {
     compId = await seedCompetition(orgId);
   });
 
-  it("keeps the pass's unlimited entrants when the org upgrades to Pro", async () => {
-    // #337 itself. Community + L = unlimited; the upgrade to Pro must not put a
-    // 256 ceiling back on a competition the org already paid to unlock.
+  it("keeps the pass's HIGHER entrant ceiling when the org upgrades to Pro", async () => {
+    // #337 itself. L lifts entrants to 512 (V391 closed the formerly-unlimited
+    // cap); the upgrade to Pro must not put its own 256 ceiling back on a
+    // competition the org already paid to unlock.
     await grantPass(orgId, compId, "event_pass_l");
-    expect(await getLimit(orgId, "entrants.per_division.max", compId)).toBeNull();
+    expect(await getLimit(orgId, "entrants.per_division.max", compId)).toBe(512);
 
     await setPlan(orgId, "pro");
-    expect(await getLimit(orgId, "entrants.per_division.max", compId)).toBeNull();
+    expect(await getLimit(orgId, "entrants.per_division.max", compId)).toBe(512);
   });
 
-  it("keeps the PLAN's unlimited divisions rather than the pass's 20", async () => {
-    // The other direction, and the one a naive "pass wins" overlay gets wrong:
-    // L caps divisions at 20 and Pro does not cap them at all, so taking the
-    // pass wholesale would make the purchase a downgrade on that axis.
+  it("keeps the PLAN's higher division ceiling rather than an M pass's lower one", async () => {
+    // The other direction, and the one a naive "pass wins" overlay gets wrong.
+    // It used to be argued with L (20) against Pro's unlimited; V391 gave Pro
+    // 20 as well, so L can no longer witness it — an M pass (10) against Pro's
+    // 20 is the pair that still discriminates, and it is the same rule.
     await setPlan(orgId, "pro");
-    await grantPass(orgId, compId, "event_pass_l");
-    expect(await getLimit(orgId, "divisions.per_competition.max", compId)).toBeNull();
+    await grantPass(orgId, compId, "event_pass");
+    expect(await getLimit(orgId, "divisions.per_competition.max", compId)).toBe(20);
   });
 
   it("charges the PLAN's lower entry-fee percentage, not the pass's higher one", async () => {

@@ -293,26 +293,41 @@ describe.skipIf(!HAS_DB)("scorer role (doc 13, PROMPT-18)", () => {
     });
   });
 
-  it("quotas: 6th member and 2nd scorer → 402 with the feature key (doc 13 §5)", async () => {
-    const { orgId } = await seedOrg(); // community: members.max 5 (V319), scorers.max 1
+  it("quotas: one member and one scorer past the cap → 402 with the feature key (doc 13 §5)", async () => {
+    const { orgId } = await seedOrg();
+    // Both caps are READ from the matrix, never typed: they have moved twice
+    // (V319 members 5 / scorers 1, V391 members 3 / scorers 2) and a stale
+    // literal makes every "expect 402" pass as an accept without failing.
+    const cap = async (key: string): Promise<number> => {
+      const [row] = await sql<{ int_value: number | null }[]>`
+        select int_value from plan_entitlements
+         where plan_key = 'community' and feature_key = ${key}`;
+      expect(row?.int_value, `${key} must be a finite community cap`).toBeTypeOf("number");
+      return row!.int_value!;
+    };
+    const members = await cap("members.max");
+    const scorers = await cap("scorers.max");
 
-    // Members pool: owner occupies 1 seat; four more accepts fit; the 6th is 402.
-    for (let i = 0; i < 4; i++) {
+    // Members pool: the owner occupies one seat, so `members - 1` more accepts
+    // fit and the next one is 402.
+    for (let i = 0; i < members - 1; i++) {
       const t = await makeInvite(orgId, "viewer");
       await grantInvite((await loadInvite(t))!, await makeUser(`v${i}`));
     }
-    const sixth = await makeInvite(orgId, "viewer");
+    const overflow = await makeInvite(orgId, "viewer");
     await expect(
-      grantInvite((await loadInvite(sixth))!, await makeUser("v5")),
+      grantInvite((await loadInvite(overflow))!, await makeUser("v-over")),
     ).rejects.toMatchObject({ featureKey: "members.max" });
 
-    // Scorer pool is separate: one scorer still fits at 5/5 members…
-    const s1 = await makeInvite(orgId, "scorer");
-    await grantInvite((await loadInvite(s1))!, await makeUser("s1"));
-    // …the second scorer seat is 402.
-    const s2 = await makeInvite(orgId, "scorer");
+    // Scorer pool is separate: scorers still fit at a full member pool…
+    for (let i = 0; i < scorers; i++) {
+      const t = await makeInvite(orgId, "scorer");
+      await grantInvite((await loadInvite(t))!, await makeUser(`s${i}`));
+    }
+    // …the seat past the scorer cap is 402.
+    const sOver = await makeInvite(orgId, "scorer");
     await expect(
-      grantInvite((await loadInvite(s2))!, await makeUser("s2")),
+      grantInvite((await loadInvite(sOver))!, await makeUser("s-over")),
     ).rejects.toMatchObject({ featureKey: "scorers.max" });
   });
 
@@ -330,15 +345,22 @@ describe.skipIf(!HAS_DB)("scorer role (doc 13, PROMPT-18)", () => {
 
   it("downgrade freeze (doc 10 §2.4): over-quota member seats go read-only, owner exempt", async () => {
     const { orgId, ownerId } = await seedOrg();
-    // Force an over-quota state (as a pro→community downgrade would): 5 admins
-    // + owner = 6 non-scorer seats against members.max 5 (V319). Explicit
-    // created_at offsets — the freeze selector keeps the most recently joined.
+    // Force an over-quota state (as a pro→community downgrade would): exactly
+    // `members.max` admins + owner = one seat too many, so precisely one seat
+    // freezes. The cap is READ (V319 5 -> V391 3); seeding a fixed 5 against a
+    // cap of 3 froze three and the "exactly one" assertion stopped meaning
+    // "the oldest, and only the oldest".
+    const [memberRow] = await sql<{ int_value: number | null }[]>`
+      select int_value from plan_entitlements
+       where plan_key = 'community' and feature_key = 'members.max'`;
+    const memberCap = memberRow?.int_value;
+    expect(memberCap, "members.max must be a finite community cap").toBeTypeOf("number");
     const admins: string[] = [];
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < memberCap!; i++) {
       const userId = await makeUser("admin");
       await sql`
         insert into org_members (org_id, user_id, role, created_at)
-        values (${orgId}, ${userId}, 'admin', now() - make_interval(hours => ${5 - i}))`;
+        values (${orgId}, ${userId}, 'admin', now() - make_interval(hours => ${memberCap! - i}))`;
       admins.push(userId);
     }
 

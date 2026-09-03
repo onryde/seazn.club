@@ -54,7 +54,13 @@ export const PASS_COMPARE_ROWS: readonly CompareRow[] = [
   },
   { labelKey: "upgrade.limit.realtime", features: ["realtime"], kind: "flag" },
   { labelKey: "upgrade.limit.exports", features: ["exports.branded"], kind: "flag" },
-  { labelKey: "upgrade.limit.profiles", features: ["dashboard.player_profiles"], kind: "flag" },
+  // The public-player-profiles row was retired here by entitlements v18
+  // (V391): `dashboard.player_profiles` is now true on Community, so the row
+  // showed the same tick on both sides — padding on a page whose whole job is
+  // to justify the pass's price. `pass-comparison.test.ts`'s "only claims the
+  // pass improves on Community where the matrix says so" is what caught it.
+  // Its `upgrade.limit.profiles` label is left in the four dictionaries for
+  // W3's copy pass rather than deleted from a tree this wave does not own.
   {
     labelKey: "upgrade.limit.sponsors",
     features: ["sponsors.tiers", "sponsors.monetize"],

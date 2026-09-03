@@ -11,7 +11,7 @@
 //
 // Real Postgres required; skipped without DATABASE_URL. Run against the
 // fresh v17 schema: DATABASE_URL=$(cat /tmp/v17_base_url) DB_SCHEMA=seazn_club_v17.
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { balance, grantBalance, grantMonthly, grantTrial, packBalance } from "@/lib/credits";
@@ -34,6 +34,25 @@ async function seedLedgerRow(
 const HAS_DB = !!process.env.DATABASE_URL;
 const uniq = () => randomUUID().slice(0, 8);
 
+/** `ai.credits.monthly` per plan, READ from the live matrix rather than typed
+ *  here — the ladder has already moved twice (V320 community 10 / pro 60,
+ *  V391 community 5 / pro 35 / enterprise 500) and a typed number stops
+ *  testing the arithmetic the moment it drifts. */
+const rate: Record<string, number> = {};
+
+beforeAll(async () => {
+  if (!HAS_DB) return;
+  const rows = await sql<{ plan_key: string; int_value: number | null }[]>`
+    select plan_key, int_value from plan_entitlements
+     where feature_key = 'ai.credits.monthly'`;
+  for (const r of rows) if (r.int_value !== null) rate[r.plan_key] = r.int_value;
+  // Anti-vacuity: these tests multiply and compare the two rungs, so both must
+  // exist and they must DIFFER, or every assertion below is satisfied by zero.
+  expect(rate.pro, "no pro ai.credits.monthly row").toBeGreaterThan(0);
+  expect(rate.enterprise, "no enterprise ai.credits.monthly row").toBeGreaterThan(0);
+  expect(rate.enterprise).not.toBe(rate.pro);
+});
+
 async function seedOrg(): Promise<string> {
   const [org] = await sql<{ id: string }[]>`
     insert into organizations (name, slug)
@@ -47,18 +66,18 @@ describe.skipIf(!HAS_DB)("ai credit wallet — grants", () => {
     it("grants ai.credits.monthly(plan) * quantityPaid", async () => {
       const walletId = randomUUID();
       const granted = await grantMonthly(walletId, "pro", 3);
-      expect(granted).toBe(60 * 3);
-      expect(await balance(walletId)).toBe(180);
+      expect(granted).toBe(rate.pro! * 3);
+      expect(await balance(walletId)).toBe(rate.pro! * 3);
     });
 
     it("is a no-op on a second call in the same period", async () => {
       const walletId = randomUUID();
-      await grantMonthly(walletId, "pro_plus", 2);
-      expect(await balance(walletId)).toBe(400);
+      await grantMonthly(walletId, "enterprise", 2);
+      expect(await balance(walletId)).toBe(rate.enterprise! * 2);
 
-      const secondGrant = await grantMonthly(walletId, "pro_plus", 2);
+      const secondGrant = await grantMonthly(walletId, "enterprise", 2);
       expect(secondGrant).toBe(0);
-      expect(await balance(walletId)).toBe(400);
+      expect(await balance(walletId)).toBe(rate.enterprise! * 2);
     });
 
     it("grants nothing for a plan with no ai.credits.monthly row", async () => {
@@ -76,11 +95,11 @@ describe.skipIf(!HAS_DB)("ai credit wallet — grants", () => {
 
       const granted = await grantMonthly(walletId, "pro", 1);
 
-      expect(granted).toBe(60);
-      // Not 25 + 60 banked — the leftover 25 was expired, the grant bucket
-      // holds exactly this period's fresh amount.
-      expect(await grantBalance(walletId)).toBe(60);
-      expect(await balance(walletId)).toBe(60);
+      expect(granted).toBe(rate.pro!);
+      // Not 25 + the grant banked — the leftover 25 was expired, the grant
+      // bucket holds exactly this period's fresh amount.
+      expect(await grantBalance(walletId)).toBe(rate.pro!);
+      expect(await balance(walletId)).toBe(rate.pro!);
 
       const [expiry] = await sql<{ delta: number; bucket: string }[]>`
         select delta, bucket from ai_credit_ledger
@@ -97,9 +116,9 @@ describe.skipIf(!HAS_DB)("ai credit wallet — grants", () => {
 
       await grantMonthly(walletId, "pro", 1);
 
-      expect(await grantBalance(walletId)).toBe(60);
+      expect(await grantBalance(walletId)).toBe(rate.pro!);
       expect(await packBalance(walletId)).toBe(40);
-      expect(await balance(walletId)).toBe(100);
+      expect(await balance(walletId)).toBe(rate.pro! + 40);
     });
 
     it("reset + grant is idempotent — a second call the same period does not re-expire or double-grant", async () => {
@@ -107,16 +126,16 @@ describe.skipIf(!HAS_DB)("ai credit wallet — grants", () => {
       await seedLedgerRow(walletId, 25, "grant");
 
       const first = await grantMonthly(walletId, "pro", 1);
-      expect(first).toBe(60);
-      expect(await grantBalance(walletId)).toBe(60);
+      expect(first).toBe(rate.pro!);
+      expect(await grantBalance(walletId)).toBe(rate.pro!);
 
       const second = await grantMonthly(walletId, "pro", 1);
       expect(second).toBe(0);
       // Still exactly this period's amount — the second call's leftover
-      // check saw the first call's own grant (60) but must NOT treat it as
+      // check saw the first call's own grant but must NOT treat it as
       // "leftover to expire" since the period was already granted.
-      expect(await grantBalance(walletId)).toBe(60);
-      expect(await balance(walletId)).toBe(60);
+      expect(await grantBalance(walletId)).toBe(rate.pro!);
+      expect(await balance(walletId)).toBe(rate.pro!);
 
       const expiryRows = await sql<{ id: string }[]>`
         select id from ai_credit_ledger where wallet_id = ${walletId} and source = 'expiry'`;
@@ -131,7 +150,7 @@ describe.skipIf(!HAS_DB)("ai credit wallet — grants", () => {
       const expiryRows = await sql<{ id: string }[]>`
         select id from ai_credit_ledger where wallet_id = ${walletId} and source = 'expiry'`;
       expect(expiryRows).toHaveLength(0);
-      expect(await grantBalance(walletId)).toBe(60);
+      expect(await grantBalance(walletId)).toBe(rate.pro!);
     });
   });
 
@@ -147,7 +166,7 @@ describe.skipIf(!HAS_DB)("ai credit wallet — grants", () => {
 
     it("is a no-op on a second call for the same org", async () => {
       const orgId = await seedOrg();
-      const subId = await setOrgPlan(orgId, "pro_plus");
+      const subId = await setOrgPlan(orgId, "enterprise");
 
       await grantTrial(orgId);
       expect(await balance(subId)).toBe(20);

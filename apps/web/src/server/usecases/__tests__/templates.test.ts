@@ -30,6 +30,18 @@ vi.mock("@/lib/posthog-server", () => ({ captureServer: vi.fn().mockResolvedValu
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
+/** V391 (entitlements v18 §2) granted several formerly-Pro keys to Community,
+ *  so a plan alone no longer withholds them. The gate sites are still live
+ *  code; a DENY override is the one remaining lever that takes a key away, and
+ *  it beats both the pass and the plan — so it is what proves a gate shuts. */
+async function denyFeature(orgId: string, featureKey: string): Promise<void> {
+  await sql`
+    insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason)
+    values (${orgId}, ${featureKey}, false, 'test')
+    on conflict (org_id, feature_key) do update set bool_value = false`;
+  await invalidateOrgEntitlements(orgId);
+}
+
 async function seedOrg(plan: "community" | "pro" = "pro"): Promise<{ auth: AuthCtx }> {
   const suffix = randomUUID().slice(0, 8);
   const [{ id: orgId }] = await sql<{ id: string }[]>`
@@ -214,10 +226,11 @@ describe.skipIf(!HAS_DB)("createFromTemplate (D1a, P4)", () => {
   });
 
   it.each(["double_elim", "page_playoff"] as const)(
-    "regression: a synthetic %s stage on an org without formats.double_elim is refused by CODE, leaving nothing behind",
+    "regression: a synthetic %s stage on an org denied formats.double_elim is refused by CODE, leaving nothing behind",
     async (kind) => {
       await seedTemplateSportCatalog();
       const { auth } = await seedOrg("community");
+      await denyFeature(auth.orgId, "formats.double_elim");
       const before = await competitionCount(auth.orgId);
       await expect(
         instantiateTemplate(auth, SLAM_STAGE_TEMPLATE({ kind }), {
