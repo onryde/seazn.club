@@ -15,6 +15,44 @@ something that then has to work for someone else. The scorepad specs came
 first because that is where the defects were found first, not because the
 folder is about sport.
 
+## Owed journeys (2026-09-03, owner-requested)
+
+Two journeys the product depends on and no walkthrough drives. Both were asked
+for explicitly as **UI, not API** — which is the whole distinction this folder
+exists on, so they belong here rather than in the scheduler bench (that
+programme drives the real API from OUTSIDE the product by charter; its only
+browser-touching prompt is B03r, and that one is registration-specific).
+
+**W-OFF — the organiser seats an official.** Create an official, invite them,
+and assign them to a fixture, by hand, start to finish. Nothing covers this
+today: `competition-desk-organiser.spec.ts` never mentions officials, and the
+`invite` hits in the `rs007`/`rs010` specs are REGISTRATION invites, not
+official ones. `officials-directory.spec.ts` and `official-marks-reports.spec.ts`
+exist but are slices — both make more `request`/`api/v1` calls than `page.goto`
+navigations, so they assert the routes, not the journey.
+
+This is squarely what the README below calls "an organiser configuring
+something that then has to work for someone else": the assignment has to show
+up for the official, and a claim invite has to be openable by the person who
+receives it.
+
+**W-PLAYER — the player reads their own record.** Claim a player profile and
+verify the stats shown are the real ones. Same situation:
+`player-accounts.spec.ts` and `me-career.spec.ts` are route-level slices
+(`request` calls run 2-3x their `goto` count).
+
+Two specs, not one: they are two different actors, and this folder's point is
+that one person gets to the end of one task.
+
+**Where the data comes from.** The stats W-PLAYER reads are produced by the
+scheduler bench — `pc_` claim invites are minted by B03 §5 and accepted by B05,
+and bench design §9 P2 is exactly "claimed profile shows the real stats". So
+the bench makes the record and the walkthrough checks a human can see it. Do
+not rebuild seeding here; do not verify UI there.
+
+**Bar:** desktop 1280, 320 and 768, no horizontal page scroll at any of them,
+per the standing UI rule.
+
 ## Why this folder exists
 
 Cricket and football each shipped a **broken decider** through two signed-off

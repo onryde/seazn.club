@@ -229,6 +229,21 @@ fall back from, is live — no B-prompt needs its fallback path.
     so do not read a green `_tiny` run as evidence that anything schedules
     two divisions. B04 owns closing this.
 
+  **NOT bench scope, recorded so it is not absorbed (2026-09-03, owner-asked):**
+  verifying the officials journey (create -> invite -> assign to a fixture) and
+  the claimed player profile's stats **through the UI**. The bench drives the
+  real API from outside the product; the only browser-touching prompt in this
+  programme is B03r, and it is registration-specific. Those two journeys are
+  owed on the **walkthrough leg** instead (`apps/web/e2e/walkthrough/`, its own
+  Playwright project) and are written up in that folder's README as W-OFF and
+  W-PLAYER.
+
+  The split that matters: the bench MAKES the record (B03 §5 mints `pc_` claim
+  invites, B05 accepts them, design §9 P2 is "claimed profile shows the real
+  stats") and the walkthrough checks a human can SEE it. An API-driven suite
+  cannot see what the UI renders, which is the same reason the pad has its own
+  walkthroughs.
+
   Forward note for B06+ pack authoring. **[Corrected 2026-09-03 — the number
   this entry first carried was wrong, and the correction is the more useful
   fact.]** This originally read "**63 recordable against 68 registered**",
