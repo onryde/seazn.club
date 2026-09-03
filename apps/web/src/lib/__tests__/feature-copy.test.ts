@@ -15,13 +15,19 @@ const PRICES_THE_RIDER =
 
 describe("feature-copy V290", () => {
   it("maps Enterprise (Contact-us) features to \"enterprise\" (entitlements v18)", () => {
-    // ENTERPRISE_FEATURES is api.write plus every int key whose Pro value is
-    // the ceiling (design §4) — post-V391 that is exactly these two. See
-    // `entitlements-v18-enterprise-ceiling.test.ts` for the DB-derived proof
-    // that this list can't silently drift from the live matrix.
-    for (const k of ["api.write", "competitions.max_active", "dashboard.public.max"]) {
-      expect(featurePlan(k)).toBe("enterprise");
-    }
+    // ENTERPRISE_FEATURES is api.write and NOTHING else: a key belongs there
+    // only when no self-serve plan grants it at all. See
+    // `entitlements-v18-enterprise-ceiling.test.ts` for the DB-derived proof.
+    expect(featurePlan("api.write")).toBe("enterprise");
+    // These two were briefly in that set, on the rule "every int key whose
+    // Pro value is the ceiling" (design §4 states it that way and is WRONG).
+    // If Pro is already unlimited, Pro is the cheapest plan that unlocks the
+    // key. Sending them to enterprise showed a Community organiser hitting
+    // the 3-competition cap a Contact-us mailto with the priced "Go Pro" link
+    // suppressed — no self-serve way out of the highest-volume Free→Pro gate
+    // in the product. They must offer a PRICE.
+    expect(featurePlan("competitions.max_active")).toBe("pro");
+    expect(featurePlan("dashboard.public.max")).toBe("pro");
     // pro_plus is retired (V391). officials.auto and scorers.max were its
     // above-Pro keys; entitlements v18 moves both to plain Pro (design §2/§4)
     // — a paywall for either must no longer point at Contact-us.

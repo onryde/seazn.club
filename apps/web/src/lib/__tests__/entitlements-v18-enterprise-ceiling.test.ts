@@ -1,89 +1,125 @@
-// `featurePlan()`'s ENTERPRISE_FEATURES set (feature-copy.ts) hand-types
-// which int-quota keys are "the ceiling on Pro" — api.write plus every int
-// key whose Pro row resolves unlimited. A hand-typed list drifts silently:
-// a later repricing that lifts (or lowers) a Pro cap changes which keys
-// SHOULD read as enterprise-only without touching feature-copy.ts at all.
+// `featurePlan()` answers ONE question: what is the CHEAPEST plan that
+// unlocks this feature key? (`feature-copy.ts`.) The paywall UI turns that
+// answer into either a priced "Go Pro" link or a "Contact us" mailto, so
+// getting it wrong does not fail loudly — it quietly removes the customer's
+// self-serve route out of a paywall.
 //
-// This test is the guard against that drift. It derives the expected
-// membership straight from the live `plan_entitlements` table — never a
-// table typed into the test — per AGENTS.md's standing rule #19: derive the
-// expected value from the engine/DB's own declarations, not a constant
-// copied at write time.
+// THIS TEST EXISTS BECAUSE ITS PREVIOUS VERSION PINNED THE BUG.
+// The first cut derived "every int key whose Pro row is unlimited
+// (`int_value IS NULL`) must read as enterprise" — which is backwards, and
+// the design doc states it in the same backwards form. If Pro is already
+// unlimited then Pro IS the cheapest plan that unlocks the key. Deriving an
+// expectation from the database does not help when the DERIVATION RULE is
+// wrong: the test agreed with the code, both were wrong together, and a
+// Community organiser hitting the 3-competition cap was shown an
+// `Enterprise ◆` badge with no price. Found by review, not by this file.
 //
-// Resolver semantics this is written against (entitlements.ts, `getLimit`):
-// for an int key, only `int_value` is read; `int_value = NULL` means
-// unlimited. A "pure int" key — the kind `getLimit` is ever called on — has
-// no `bool_value` on its row (a dual-value key like `import.bulk` carries
-// both and is read through `hasFeature`, not `getLimit`, for its gate); this
-// test uses that same `bool_value IS NULL` predicate to select the pure-int
-// keys, matching `entitlement-admin.ts`'s own bool/int classification.
+// The rule asserted here instead:
+//   enterprise  ⟺  no self-serve plan grants it at all
+// A finite Pro cap is still an unlock (Free 3 → Pro unlimited is exactly the
+// upgrade the gate should sell), so every int key is "pro". Only a key that
+// community AND pro both refuse, and enterprise grants, is "enterprise".
 //
-// Real Postgres required; skipped without DATABASE_URL (CI sets it).
+// Derived live from `plan_entitlements` per AGENTS.md #19, never a table
+// typed in here — but note the lesson above: derivation is only as good as
+// the rule being derived. Real Postgres required; skipped without DATABASE_URL.
 import { describe, expect, it } from "vitest";
 import { sql } from "@/lib/db";
 import { featurePlan } from "@/lib/feature-copy";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
-describe.skipIf(!HAS_DB)(
-  "featurePlan's enterprise ceiling matches the live matrix (entitlements v18, V391)",
-  () => {
-    it("api.write is enterprise-only (never granted to a self-serve plan)", async () => {
-      const [row] = await sql<{ bool_value: boolean | null }[]>`
-        select bool_value from plan_entitlements
-        where plan_key = 'pro' and feature_key = 'api.write'`;
-      // Pro must NOT carry api.write — it is the one bool exception in
-      // ENTERPRISE_FEATURES, asserted here so the int-only sweep below
-      // doesn't accidentally read as the whole story.
-      expect(row?.bool_value).not.toBe(true);
-      expect(featurePlan("api.write")).toBe("enterprise");
-    });
+interface Row {
+  feature_key: string;
+  plan_key: string;
+  bool_value: boolean | null;
+  int_value: number | null;
+}
 
-    it("derives the int ceiling set from the live matrix and matches featurePlan for every one", async () => {
-      // Every PURE int-quota key's Pro row: bool_value IS NULL selects "this
-      // row is read via int_value, not hasFeature" — the same distinction
-      // entitlement-admin.ts's `groupForAdmin` draws (`sample.bool_value !==
-      // null ? "bool" : "int"`). A dual-value key (bool_value AND int_value
-      // both set, e.g. import.bulk/clubs.max) is excluded on purpose: its
-      // gate is the bool half, so it can never be "the ceiling" in the sense
-      // ENTERPRISE_FEATURES means.
-      const rows = await sql<{ feature_key: string; int_value: number | null }[]>`
-        select feature_key, int_value from plan_entitlements
-        where plan_key = 'pro' and bool_value is null`;
+describe.skipIf(!HAS_DB)("featurePlan names the cheapest unlocking plan (entitlements v18)", () => {
+  it("every key a self-serve plan grants reads as pro, and only the rest read as enterprise", async () => {
+    const rows = await sql<Row[]>`
+      select feature_key, plan_key, bool_value, int_value from plan_entitlements
+      where plan_key in ('community', 'pro', 'enterprise')`;
 
-      // Anti-vacuity floor: a query that silently matched nothing must not
-      // pass this test by default.
-      expect(rows.length).toBeGreaterThan(5);
+    // Anti-vacuity floor: a query that silently matched nothing, or a schema
+    // change that renamed a column, must not pass this test by default.
+    expect(rows.length).toBeGreaterThan(100);
 
-      const ceilingKeys = rows.filter((r) => r.int_value === null).map((r) => r.feature_key);
-      const nonCeilingKeys = rows.filter((r) => r.int_value !== null).map((r) => r.feature_key);
+    const byKey = new Map<string, Map<string, Row>>();
+    for (const r of rows) {
+      if (!byKey.has(r.feature_key)) byKey.set(r.feature_key, new Map());
+      byKey.get(r.feature_key)!.set(r.plan_key, r);
+    }
 
-      // A case where the right answer differs from the wrong (hand-typed
-      // constant's) answer on BOTH sides, so this test can actually witness
-      // a regression rather than just re-confirm a list nobody would change.
-      expect(ceilingKeys.length).toBeGreaterThan(0);
-      expect(nonCeilingKeys.length).toBeGreaterThan(0);
+    // "Pro grants it" means: a bool Pro actually carries (=== true, matching
+    // `hasFeature`'s strict check), or ANY int row — a finite Pro cap is
+    // still the cheapest paid unlock relative to Free's smaller one.
+    const proGrants = (k: string): boolean => {
+      const pro = byKey.get(k)?.get("pro");
+      if (!pro) return false;
+      return pro.bool_value === true || pro.int_value !== null || pro.bool_value === null;
+    };
 
-      for (const key of ceilingKeys) {
-        expect(featurePlan(key), `${key}: pro.int_value IS NULL, expected "enterprise"`).toBe(
-          "enterprise",
-        );
+    const expectedEnterprise: string[] = [];
+    const expectedPro: string[] = [];
+    for (const key of byKey.keys()) (proGrants(key) ? expectedPro : expectedEnterprise).push(key);
+
+    // Both sides must be non-empty, or one branch of the ladder is never
+    // exercised and a reorder/emptying mutant survives.
+    expect(expectedEnterprise.length).toBeGreaterThan(0);
+    expect(expectedPro.length).toBeGreaterThan(10);
+
+    const wrong: string[] = [];
+    for (const key of expectedPro) {
+      if (featurePlan(key) !== "pro") wrong.push(`${key}: pro grants it, expected "pro"`);
+    }
+    for (const key of expectedEnterprise) {
+      if (featurePlan(key) !== "enterprise") {
+        wrong.push(`${key}: no self-serve plan grants it, expected "enterprise"`);
       }
-      for (const key of nonCeilingKeys) {
-        expect(featurePlan(key), `${key}: pro.int_value is finite, expected "pro"`).toBe("pro");
-      }
-    });
+    }
+    expect(wrong, `featurePlan disagrees with the live matrix:\n  ${wrong.join("\n  ")}`).toEqual(
+      [],
+    );
+  });
 
-    it("matches the design doc's named ceiling set exactly (competitions.max_active, dashboard.public.max)", async () => {
-      // Not a substitute for the derived sweep above — a named-set pin so a
-      // reader sees at a glance which two keys are load-bearing today,
-      // per the W2 brief and design §4.
-      const rows = await sql<{ feature_key: string; int_value: number | null }[]>`
-        select feature_key, int_value from plan_entitlements
-        where plan_key = 'pro' and bool_value is null
-          and feature_key in ('competitions.max_active', 'dashboard.public.max')`;
-      expect(rows).toHaveLength(2);
-      for (const r of rows) expect(r.int_value).toBeNull();
-    });
-  },
-);
+  it("a Pro cap that is UNLIMITED still reads as pro — the exact regression this file was rewritten for", async () => {
+    // The case where the right answer differs from the wrong answer's
+    // constant. Both keys resolve unlimited on Pro (int_value IS NULL), which
+    // the retired rule read as "enterprise". A Community org hits both of
+    // these on the ordinary create path, so they must offer a PRICE.
+    const rows = await sql<Row[]>`
+      select feature_key, plan_key, bool_value, int_value from plan_entitlements
+      where plan_key = 'pro'
+        and feature_key in ('competitions.max_active', 'dashboard.public.max')`;
+    expect(rows).toHaveLength(2);
+    for (const r of rows) {
+      expect(r.int_value, `${r.feature_key} is expected to be unlimited on Pro`).toBeNull();
+      expect(featurePlan(r.feature_key), `${r.feature_key} must sell Pro, not Contact us`).toBe(
+        "pro",
+      );
+    }
+  });
+
+  it("api.write is the enterprise key, and it is enterprise because NO self-serve plan carries it", async () => {
+    const rows = await sql<Row[]>`
+      select feature_key, plan_key, bool_value, int_value from plan_entitlements
+      where feature_key = 'api.write'`;
+    const by = new Map(rows.map((r) => [r.plan_key, r]));
+    // The REASON, not just the answer: assert the premise that makes
+    // "enterprise" correct, so if a later wave grants api.write to Pro this
+    // test fails rather than silently continuing to send people to a mailto.
+    expect(by.get("community")?.bool_value).not.toBe(true);
+    expect(by.get("pro")?.bool_value).not.toBe(true);
+    expect(by.get("enterprise")?.bool_value).toBe(true);
+    expect(featurePlan("api.write")).toBe("enterprise");
+  });
+
+  it("an unknown key falls to pro, the deliberate default of a contains-ladder", () => {
+    // The empty/unknown case stated explicitly: a contains-ladder answers
+    // "no" to every rung for a key it has never heard of, and that default
+    // must be the safe one — offer a price, never a dead-end mailto.
+    expect(featurePlan("not.a.real.feature.key")).toBe("pro");
+  });
+});

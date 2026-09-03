@@ -317,9 +317,28 @@ org falls 53% against today; the bet is volume plus the badge network.
   (`server/usecases/admin-plan.ts`) and per-org overrides
   (`org_entitlement_overrides`). Billing for such deals is off-platform or a
   bespoke Stripe subscription mapped by `planKeyForPrice`; out of scope here.
-- `featurePlan()` becomes three-valued: `ENTERPRISE_FEATURES = {api.write}`
-  plus any int whose Pro value is the ceiling → `"enterprise"`; everything
-  else → `"pro"`. `scorers.max` and `officials.auto` leave the set.
+- `featurePlan()` becomes three-valued: `ENTERPRISE_FEATURES = {api.write}`,
+  and **nothing else**; everything else → `"pro"`. `scorers.max` and
+  `officials.auto` leave the set.
+
+  **CORRECTION 2026-09-03 (W2).** This bullet used to read "plus any int whose
+  Pro value is the ceiling → `enterprise`". That rule is BACKWARDS and it
+  shipped a regression before review caught it. `featurePlan` answers "the
+  CHEAPEST plan that unlocks this key" — so if Pro is already unlimited, Pro is
+  the answer. Sending `competitions.max_active` and `dashboard.public.max` to
+  `enterprise` meant a Community organiser hitting the 3-competition cap saw an
+  `Enterprise ◆` badge and a `mailto:` button, with the priced "Go Pro" link
+  suppressed (`upgrade-gate.tsx` renders a price only for `kind: "priced"`) —
+  no self-serve route out of the product's highest-volume Free→Pro gate. A key
+  belongs in `ENTERPRISE_FEATURES` only when **no self-serve plan grants it at
+  all**, which today is `api.write` alone (false on community, false on pro,
+  true on enterprise).
+
+  If an above-Pro int upsell is ever wanted, the correct predicate is the
+  INVERSE: Pro finite and enterprise unlimited (`members.max` is pro 10,
+  enterprise NULL). Even then, such a key is still `"pro"` for a Community org
+  — `featurePlan` answers per KEY, not per caller's plan, so a plan-aware
+  answer needs a different function, not a longer set.
 - `upgrade-gate.tsx` `paidPlan()` and `plan-badge.tsx` render a **"Contact
   us"** CTA (mailto `hello@seazn.club`, subject prefilled with the feature's
   human label) when the target is `enterprise`, a price otherwise. No contact

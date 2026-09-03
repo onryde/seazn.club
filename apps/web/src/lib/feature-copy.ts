@@ -181,22 +181,39 @@ export function doubleElimFormatReason(stageKind: string): string {
 //
 // Entitlements v18 (V391): `pro_plus` is retired and its above-Pro
 // conversations move to a non-public, Contact-us-only `enterprise` plan.
-// `ENTERPRISE_FEATURES` is deliberately short — `api.write` (never granted
-// to a self-serve plan) plus every INT-quota key whose Pro value is already
-// the ceiling (`int_value IS NULL`, i.e. unlimited — nothing above it to
-// sell). `officials.auto` and `scorers.max` leave this set: post-V391 both
-// are plain, finite Pro caps, not above-Pro ceilings. `domains.custom` and
-// `support.priority` leave it too, for an unrelated reason — T1 deleted
-// both keys from `plan_entitlements` outright, so nothing gates on them any
-// more and their old membership here would be dead weight.
+// `ENTERPRISE_FEATURES` holds ONE key, and the reason it holds exactly one
+// is worth stating, because the first version of this list held three and
+// broke the product's main conversion path.
 //
-// A hand-typed list, but not an unchecked one:
-// `entitlements-v18-enterprise-ceiling.test.ts` derives the ceiling half
-// live from `plan_entitlements` (for every int feature key, `pro.int_value
-// IS NULL` iff `featurePlan(key) === "enterprise"`), so a repricing that
-// lifts or lowers a Pro cap fails that test instead of leaving this list
-// quietly stale.
-const ENTERPRISE_FEATURES = new Set(["api.write", "competitions.max_active", "dashboard.public.max"]);
+// A key belongs here only when NO SELF-SERVE PLAN GRANTS IT AT ALL.
+// `api.write` qualifies: false on community, false on pro, true only on
+// enterprise (V391), so "contact us" really is the cheapest way to get it.
+//
+// It briefly also held `competitions.max_active` and `dashboard.public.max`,
+// on the rule "every INT key whose Pro value is already the ceiling
+// (`int_value IS NULL`, unlimited)". That rule is BACKWARDS, and design §4
+// states it in the same backwards form — see the correction recorded there.
+// If Pro is already unlimited then Pro is precisely the cheapest plan that
+// unlocks the key, so the answer is "pro". Sending it to "enterprise" meant a
+// Community organiser hitting the 3-competition cap saw an `Enterprise ◆`
+// badge and a mailto button, with the priced "Go Pro" link suppressed
+// (`upgrade-gate.tsx` renders a price only for `kind: "priced"`) — no
+// self-serve route out of the paywall on the highest-volume Free→Pro gate
+// in the product. Found in review, not by a test: the test that was supposed
+// to guard this DERIVED the same backwards rule and pinned it.
+//
+// `officials.auto` and `scorers.max` also left this set at v18: post-V391
+// both are plain, finite Pro caps. `domains.custom` and `support.priority`
+// left for an unrelated reason — T1 deleted both keys from
+// `plan_entitlements` outright, so nothing gates on them at all.
+//
+// If an above-Pro int upsell is ever wanted, the correct predicate is the
+// INVERSE of the one that broke: a key where Pro is FINITE and enterprise is
+// unlimited (`members.max` is pro 10, enterprise NULL). Note that such a key
+// is still "pro" for a Community org — `featurePlan` answers per KEY, not per
+// caller's current plan, so a plan-aware answer needs a different function,
+// not a bigger set.
+const ENTERPRISE_FEATURES = new Set(["api.write"]);
 
 export type PaidPlan = "pro" | "enterprise";
 
