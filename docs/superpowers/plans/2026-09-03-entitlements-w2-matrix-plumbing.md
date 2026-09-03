@@ -382,6 +382,31 @@ locale is denominated in USD.
 
 Queued behind T5, which is editing `billing.ts` right now.
 
+### T12 — `scorers.max` is enforced but invisible (found 2026-09-03)
+
+V391 turned `scorers.max` from a dormant 1/1 into a real differentiator (Free **2**,
+Pro **10**), and design §3's Pro card sells "10 staff + 10 scorer seats". The cap IS
+enforced — `app/api/orgs/[id]/members/[userId]/role/route.ts:22` on a role change to
+scorer, and `lib/invites.ts:67` on a scorer invite acceptance, against a pool separate
+from `members.max`.
+
+But both surfaces that would SHOW it were deliberately removed while it was dormant,
+and neither decision was revisited by this wave:
+- `entitlement-domains.ts:8` — "scorers.max is deliberately absent (#244): the seat is
+  dormant legacy" → absent from `/admin` entitlements.
+- `pricing-matrix.ts:117` — "scorers.max retired from the comparison (#244)" → not a row
+  on the public pricing table.
+
+Those calls were right at 1/1: a cap identical on both plans differentiates nothing.
+They are wrong at 2/10 — we would advertise a seat count the comparison table does not
+list. Restore the row in both, or the Pro card sells something the matrix page denies.
+
+Two smoke checks also still assert the retired numbers and must be rewritten, not
+deleted: `scripts/smoke.ts:1761` ("scorers.max = 1 on community, so exactly one fits")
+and `:15421,15430` ("scorers.max (Pro = 1): a second scorer can't take a seat",
+asserting 402). The second's NAME states the old rule, which is the shape this repo has
+been bitten by before — read what it asserts, then move it to Free 2 / Pro 10.
+
 ### T9 — sweep and gates
 Delete the two dead e2e specs. Rerun the 34 files that assert against
 `plan_entitlements` and the 8 copy-truth importers (4 need a live DB). Unit, e2e,
