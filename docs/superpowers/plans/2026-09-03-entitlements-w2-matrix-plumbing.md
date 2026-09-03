@@ -703,6 +703,42 @@ additive implements what both the UI and the help already promise.
 3. The same stale list in `registration/open-registration.md:19` and
    `getting-started/create-your-organisation.md:21`.
 
+### T17 — V396: the public accent colour gets its own key (owner ruling 2026-09-03)
+
+**`dashboard.branding` was overloaded and nobody knew.** It gates badge removal AND the
+public accent/theme colour, in one SQL expression — `server/public-site/data.ts:361-363`:
+
+    org_has_feature(o.id, 'dashboard.branding') as branded,
+    case when org_has_feature(o.id, 'dashboard.branding')
+         then o.branding else '{}'::jsonb end as branding,   -- accent/theme
+    case when org_has_feature(o.id, 'branding') then o.logo_url end as logo_url
+
+So the split was already HALF done: the logo rides `branding` (free), while colour and
+badge share one key. The badge ruling turned that key off for Pro, and took Pro's brand
+colour off its public pages with it — a visible downgrade a paying customer did not ask
+for. Four smoke checks caught it and were left RED on purpose; silencing them would have
+frozen a live regression as expected behaviour.
+
+**Ruling: a NEW key for the colour, Pro and above.** Rejected: letting colour ride
+`branding` (would give it to Free — the owner chose to keep it as a paid visual
+differentiator).
+
+- New key (suggest `dashboard.theme`): community **false**, pro **true**, enterprise
+  **true**, and **no pass rows** — it is ORG-level, so a pass could never lift it and a row
+  would be inert. Add it to design §2 or the pin test reds.
+- `public-site/data.ts` — the `o.branding` jsonb case moves onto the new key.
+  `dashboard.branding` keeps ONLY the `branded` badge flag.
+- The four smoke checks then describe the truth again; do not edit them to match a defect.
+
+**Smoke fallout this wave still owes** (from V395's partial run — 159 passed / 6 failed,
+then `ERROR: fetch failed` aborted at check 165, so that is a FLOOR, not a green smoke):
+- `billing-group: quotas are per org…` asserts `members.max === 15`; V392 made Pro **10**.
+- `jul3 officials auto is Pro Plus only`; V392 gave `officials.auto` to **Pro**.
+- `smoke.ts:2460` and `:2702` assert `dashboard.player_profiles` is free on Community —
+  V395 made it **false**; unreached in that run, so unobserved and WILL fail.
+- `smoke.ts:4797`/`:4801` assert the free `news.auto` toggle and a digest 402 — now true
+  again; will pass, but re-read them rather than assuming.
+
 ### T9 — sweep and gates
 Delete the two dead e2e specs. Rerun the 34 files that assert against
 `plan_entitlements` and the 8 copy-truth importers (4 need a live DB). Unit, e2e,
