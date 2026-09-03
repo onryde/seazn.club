@@ -89,7 +89,6 @@ import {
   PACK_FOLD_OPTIONS,
   packEnvelope,
   packLineupPair,
-  sigil,
   stageScopedFoldCfg,
 } from "./validate-pack.ts";
 
@@ -107,7 +106,7 @@ function initState(sportModule: AnySportModule, cfg: unknown, lineups: LineupPai
   return sportModule.init(cfg, lineups) as unknown;
 }
 function outcomeOf(sportModule: AnySportModule, state: unknown): unknown {
-  return sportModule.outcome(state) as unknown;
+  return sportModule.outcome(state);
 }
 
 const CORE_START: PackEvent = { type: "core.start", payload: {} };
@@ -577,8 +576,12 @@ export function foldMatchLedgerIssue(
   fixtureId: string,
 ): string | null {
   const envelopes = events.map((event, i) => packEnvelope(fixtureId, event, i));
-  const { state } = foldMatchWithStoppage(sportModule, cfg, lineups, envelopes, PACK_FOLD_OPTIONS);
-  const ledger = setLedger(sportModule, state);
+  // Property access rather than destructuring: the engine's fold returns its
+  // state loosely typed, and destructuring binds that straight into a fresh
+  // `any` (`no-unsafe-assignment`). `validate-pack.ts`'s own call site reads
+  // `result.state` into a declared variable for the same reason.
+  const folded = foldMatchWithStoppage(sportModule, cfg, lineups, envelopes, PACK_FOLD_OPTIONS);
+  const ledger = setLedger(sportModule, folded.state);
   // Both sides through `scoreText`, never one inline template and one call: a
   // comparison whose two halves format the same fact in two places diverges the
   // first time either moves, and reds on the formatting rather than the data.
@@ -851,7 +854,7 @@ export function fillPeriodMarkers(input: FillPeriodMarkersInput): PackEvent[] {
           `inventing the sheet rather than completing it`,
       );
     }
-    return accepted[0] as PackEvent;
+    return accepted[0];
   };
 
   segments.forEach((segment, i) => {

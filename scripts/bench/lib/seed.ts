@@ -486,7 +486,7 @@ async function seedEntrants(
           `division "${divisionRef}": POST .../entrants returned ${rows.length} row(s) for ${list.length} requested entrant(s)`,
         );
       }
-      rows.forEach((row, i) => entrantIdByRef.set(list[i]!.ref, row.id));
+      rows.forEach((row, i) => entrantIdByRef.set(list[i].ref, row.id));
     }),
   );
   return entrantIdByRef;
@@ -586,7 +586,7 @@ export async function seedSuite(input: SeedSuiteInput): Promise<SeededSuite> {
           `division "${d.ref}": POST .../stages returned ${stages.length} row(s) for ${d.stages.length} requested stage(s)`,
         );
       }
-      stages.forEach((row, i) => stageIdByRef.set(d.stages[i]!.ref, row.id));
+      stages.forEach((row, i) => stageIdByRef.set(d.stages[i].ref, row.id));
       stageRefsByDivisionRef.set(
         d.ref,
         d.stages.map((st) => st.ref),

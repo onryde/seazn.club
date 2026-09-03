@@ -206,9 +206,9 @@ export function chooseGrantingPlanForCapabilities(
   // Throws "no plan_entitlements row grants this feature" when nothing
   // grants the REQUIRED capability — same message as chooseGrantingPlan's
   // own single-feature callers see, deliberately not duplicated here.
-  chooseGrantingPlan(primary!.rows);
+  chooseGrantingPlan(primary.rows);
 
-  const primaryGrantors = grantingPlanSet(primary!.rows);
+  const primaryGrantors = grantingPlanSet(primary.rows);
   const desired = rest.map((r) => ({ featureKey: r.featureKey, plans: grantingPlanSet(r.rows) }));
 
   let best: { plan: string; unsatisfied: string[] } | undefined;
@@ -325,8 +325,11 @@ export interface RealPlanSqlHandle {
   sql: PlanSql;
   /** Closes the DB connection this factory opened. Call once, after every
    *  plan-provisioning call (and the DLS-gate probe, which shares this same
-   *  seam) is done with it. */
-  dispose(): Promise<void>;
+   *  seam) is done with it.
+   *
+   *  A property with a function type, not a method shorthand — same reason as
+   *  `RealProbesHandle.dispose`: this is destructured at its call site. */
+  dispose: () => Promise<void>;
 }
 
 export function createRealPlanSql(): RealPlanSqlHandle {

@@ -63,7 +63,7 @@ export function parseCliArgs(argv: string[]): BenchConfig {
     strict: true,
   });
 
-  const engine = values.engine as string;
+  const engine = values.engine;
   if (!(ENGINES as readonly string[]).includes(engine)) {
     throw new Error(`--engine must be one of ${ENGINES.join("|")}, got "${engine}"`);
   }
@@ -71,7 +71,7 @@ export function parseCliArgs(argv: string[]): BenchConfig {
     throw new Error("--keep and --wipe are mutually exclusive");
   }
 
-  const suites = values.suite as string[];
+  const suites = values.suite;
   const unknown = suites.filter((s) => !(KNOWN_SUITES as readonly string[]).includes(s));
   if (unknown.length > 0) {
     // Validated up front, not inside the run loop: a typo in one of several
@@ -98,9 +98,9 @@ export function parseCliArgs(argv: string[]): BenchConfig {
     suites,
     engine: engine as Engine,
     keep: !values.wipe,
-    reportDir: values["report-dir"] as string,
+    reportDir: values["report-dir"],
     base,
-    runId: values["run-id"] as string | undefined,
+    runId: values["run-id"],
   };
 }
 

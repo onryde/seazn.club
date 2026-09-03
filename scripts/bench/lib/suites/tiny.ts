@@ -253,7 +253,13 @@ function describeExpectedCount(entry: SeedPlanExpectedFixtureCount, plan: SeedPl
   const division = plan.divisions.find((d) => d.ref === entry.divisionRef);
   const stage = division?.stages.find((s) => s.ref === entry.stageRef);
   const entrantCount = plan.entrants.filter((e) => e.divisionRef === entry.divisionRef).length;
-  const legs = stage?.config["legs"] ?? 1;
+  // `config` is `PackJsonValue`, so `legs` can be an object or an array as far
+  // as the type is concerned, and interpolating one renders "[object Object]"
+  // into a message whose whole job is to let a reader trace the count back to
+  // the pack. Narrowed rather than asserted: a non-numeric `legs` falls back to
+  // the same 1 the arithmetic uses.
+  const declaredLegs = stage?.config["legs"];
+  const legs = typeof declaredLegs === "number" ? declaredLegs : 1;
   return `${entry.count} fixture(s) from the pack's ${entrantCount}-entrant league over ${legs} leg(s)`;
 }
 
@@ -301,7 +307,7 @@ export function fixtureCountIssue(actual: number, plan: SeedPlan): string | null
   const expectedTotal = plan.expectedFixtureCounts.reduce((sum, entry) => sum + entry.count, 0);
   if (actual === expectedTotal) return null;
   if (plan.expectedFixtureCounts.length === 1) {
-    return `expected ${describeExpectedCount(plan.expectedFixtureCounts[0]!, plan)}, got ${actual}`;
+    return `expected ${describeExpectedCount(plan.expectedFixtureCounts[0], plan)}, got ${actual}`;
   }
   const perDivision = plan.expectedFixtureCounts
     .map((entry) => `"${entry.divisionRef}": ${describeExpectedCount(entry, plan)}`)
@@ -768,7 +774,7 @@ export async function runTinySuite(input: TinySuiteInput): Promise<SuiteReport> 
           ? `${autoResult.proposedCount} proposed, ${autoResult.appliedCount} applied across ` +
             `${autoResult.fixtureOfficialsById.size} fixture(s)`
           : `officials/auto proposed 0 assignments for ${autoOfficials.length} auto-needing official(s) ` +
-            `(e.g. "${autoOfficials[0]!.ref}") even after scheduling`,
+            `(e.g. "${autoOfficials[0].ref}") even after scheduling`,
       });
       if (!autoPassed) {
         errors.push(
