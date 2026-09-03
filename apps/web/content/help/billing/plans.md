@@ -15,7 +15,7 @@ One-time upgrade for a single competition, while that competition is still runni
 - **M — $15**: **128 entrants** per division, up to **10 divisions**.
 - **L — $39**: **unlimited entrants**, up to **20 divisions**.
 
-Both sizes carry the same features: branded exports, public player cards, sponsor tiers and paid packages, the realtime scoreboard and slideshow, advanced formats including double elimination, and a **5% platform fee** on entry fees instead of 8%. The one-time AI credit top-up is sized with the pass — a one-time **+25 AI credits** on M, **+50 AI credits** on L. Pick the size at checkout — a competition holds one pass and keeps it.
+Both sizes carry the same features: branded exports, public player cards, sponsor tiers and paid packages, the realtime scoreboard and slideshow, advanced formats including double elimination, and a **5% platform fee** on entry fees instead of 8%. The one-time AI credit top-up is sized with the pass — a one-time **+25 AI credits** on M, **+35 AI credits** on L. Pick the size at checkout — a competition holds one pass and keeps it.
 
 Your brand **colour** is not part of either size — that stays Pro. A passed competition doesn't count against your active-competition limit. Right for the tournament that comes round rarely enough that a running subscription doesn't pay for itself. It doesn't carry to the next edition. [What the pass buys, in full](/help/billing/event-pass).
 

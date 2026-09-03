@@ -1863,7 +1863,7 @@ export function passBoundProseFaults(label: string, passProse: string): string[]
  * Every AI-credit figure in the pass's own copy, against `PASS_CREDIT_GRANT`.
  *
  * Two directions, because a table writes the figure on the other side of the
- * noun ("| AI credits | +25, one-time | +50, one-time |") and a sentence writes
+ * noun ("| AI credits | +25, one-time | +35, one-time |") and a sentence writes
  * it in front ("a one-time top-up of 25 AI credits"). A guard that only read one
  * of them would leave the comparison table — the first thing a buyer looks at —
  * unchecked.
@@ -1894,7 +1894,7 @@ export function passCreditProseFaults(label: string, passProse: string): string[
       // ...and EVERY FURTHER COLUMN of the same row. The form above stops at the
       // first cell after the label, which was harmless while both rungs granted
       // the same number and is a hole the moment they do not: in
-      // "| AI credits | +25, one-time | +50, one-time |" the L column was never
+      // "| AI credits | +25, one-time | +35, one-time |" the L column was never
       // read, so L's figure could be anything at all (measured — the two-rung
       // table passed with L's cell still saying +25). Both the pipe AND the `+`
       // are required, which is what keeps this off the "5% platform fee" a few

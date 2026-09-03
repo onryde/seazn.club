@@ -1,7 +1,8 @@
 // THE EVENT PASS CREDIT GRANT IS PER RUNG (entitlements v18 W2 T5, design R9,
 // owner ruling 2026-09-03).
 //
-// M grants 25 one-time AI credits, L grants 50. The grant is a ONE-TIME TOP-UP
+// M grants 25 one-time AI credits, L grants 35 (W2 T12 re-cut it from 50 with
+// the monthly grants, owner ruling 2026-09-03). The grant is a ONE-TIME TOP-UP
 // that stays in the wallet: no expiry, no clawback on downgrade, no cap. A
 // customer keeps what they paid for. (The one thing that takes it back is a
 // refund of the pass itself — money returned, not a grant expiring; that path
@@ -42,7 +43,12 @@ describe("the declaration", () => {
     // someone equalises them the whole suite must red here rather than pass
     // everywhere.
     expect(PASS_CREDIT_GRANT.event_pass_l).not.toBe(PASS_CREDIT_GRANT.event_pass);
-    expect(PASS_CREDIT_GRANT).toEqual({ event_pass: 25, event_pass_l: 50 });
+    // The literal pin is the ONE thing in this file not derived from the
+    // constant, and that is deliberate: every other assertion here (and every
+    // wallet-delta assertion in billing-pass-financial-trace.test.ts) reads
+    // PASS_CREDIT_GRANT, so all of them move silently with a wrong edit. This
+    // line is what actually witnesses a change to the numbers themselves.
+    expect(PASS_CREDIT_GRANT).toEqual({ event_pass: 25, event_pass_l: 35 });
     // No rung falls through to a default, because there is no default: a rung
     // added to PASS_KEYS without a grant is a compile error, and this is the
     // runtime half of that same claim.

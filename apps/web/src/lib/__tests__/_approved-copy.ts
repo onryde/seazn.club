@@ -95,7 +95,7 @@ export const APPROVED_EVENT_PASS_INVENTORY: string[] = [
   "57618eb0b22ecf4c",
   "c568f8fe6e21cf2a",
   "ca5e9f43ca10e67f",
-  "a6d1628ddb00f671",
+  "0bd529e8836c444c",
   "ff0840ec5e1d5748",
   "293db3d817dc1664",
   "d30d9ef9b7e39dcd",
@@ -109,7 +109,7 @@ export const APPROVED_EVENT_PASS_INVENTORY: string[] = [
   "fcd1bcb9b15230dd",
   "9cdc77f8e4467e2c",
   "4ebceeab83e6a5bf",
-  "3674b4963211562a",
+  "abbb6aa9b961bdbd",
   "219ccaea5a3878ae",
   "6feca5577c55cf2b",
   "170d10914abdbfe5",
@@ -308,7 +308,7 @@ export const APPROVED_PLANS_INVENTORY: string[] = [
   "4d5875384bf155e4",
   "8ec8fabaf41d206e",
   "6a1f456e0a759472",
-  "97a90058d0b14e64",
+  "a7a7e3995090eda5",
   // Re-approved 2026-08-06 (cadence-neutral pass link). Two clauses in the
   // Event Pass pitch: "Right for the annual tournament that doesn't justify a
   // year of Pro" → "the tournament that comes round rarely enough that a

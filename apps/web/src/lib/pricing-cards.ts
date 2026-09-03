@@ -60,9 +60,17 @@ export const PASS_FEATURES = [
 // the number the pricing card quotes. Pinned by pricing-cards.test.ts.
 //
 // ENTITLEMENTS V18 / W2 T5 (design R9, owner ruling 2026-09-03): the grant is
-// now PER RUNG — M grants 25, L grants 50. It was flat, and the reason recorded
+// now PER RUNG — M grants 25, L grants 35. It was flat, and the reason recorded
 // for that (`L buys a bigger competition, not more credits`) was reversed: a
 // bigger competition is exactly the one that needs more AI scheduling.
+//
+// W2 T12 (owner ruling 2026-09-03) re-cut L from 50 to 35, in the same pass
+// that took Pro's monthly grant 35 -> 25 and its trial 20 -> 15 (V393). The
+// rungs still differ — that is the whole point of pricing the grant — but L is
+// no longer double M. Every figure in the copy that quotes it moved with this
+// line; `passCreditGrantFaults` / `passCreditProseFaults` /
+// `localeCreditGrantFaults` (lib/copy-truth.ts) read the constant, so a half
+// update reds rather than shipping.
 //
 // A `Record` keyed by `PassKey`, not two constants and not a lookup with a
 // default: `tsc` then enumerates every reader the day a third rung is added,
@@ -76,7 +84,7 @@ export const PASS_FEATURES = [
 // (`recordPassRefund`), which is money returned rather than a grant expiring.
 export const PASS_CREDIT_GRANT: Record<PassKey, number> = {
   event_pass: 25,
-  event_pass_l: 50,
+  event_pass_l: 35,
 };
 
 export const PRO_FEATURES = [

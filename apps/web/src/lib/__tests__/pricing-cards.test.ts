@@ -125,12 +125,13 @@ describe("pricing cards", () => {
   // row in plan_entitlements, so pricing-cards is its single source. Pin it so
   // the card copy and the wallet grant can't silently diverge.
   //
-  // Entitlements v18 W2 T5 (design R9): PER RUNG — 25 on M, 50 on L. The pin is
-  // both figures AND their inequality: a Record whose two values were equal
-  // would satisfy every rung-keyed read in the codebase while restoring exactly
-  // the flat grant this wave retired.
-  it("the Event Pass card quotes a one-time credit grant per rung — 25 on M, 50 on L", () => {
-    expect(PASS_CREDIT_GRANT).toEqual({ event_pass: 25, event_pass_l: 50 });
+  // Entitlements v18 W2 T5 (design R9): PER RUNG — 25 on M, 35 on L (W2 T12
+  // re-cut L from 50 alongside Pro's monthly grant, owner ruling 2026-09-03).
+  // The pin is both figures AND their inequality: a Record whose two values
+  // were equal would satisfy every rung-keyed read in the codebase while
+  // restoring exactly the flat grant this wave retired.
+  it("the Event Pass card quotes a one-time credit grant per rung — 25 on M, 35 on L", () => {
+    expect(PASS_CREDIT_GRANT).toEqual({ event_pass: 25, event_pass_l: 35 });
     expect(PASS_CREDIT_GRANT.event_pass_l).toBeGreaterThan(PASS_CREDIT_GRANT.event_pass);
     // Every rung the product can sell has a grant — no rung falls through to a
     // default, because there is deliberately no default to fall through to.

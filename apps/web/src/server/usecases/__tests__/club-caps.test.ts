@@ -68,8 +68,9 @@ describe.skipIf(!HAS_DB)("club/team caps", () => {
    * produces (23) is deliberately NOT the retired constant (20), so the test
    * can witness the regression it exists for.
    */
-  const matchdaySquad = (m: { positions: { lineup: { size: number; benchMax: number } } }): number =>
-    m.positions.lineup.size + m.positions.lineup.benchMax;
+  const matchdaySquad = (m: {
+    positions: { lineup: { size: number; benchMax?: number } };
+  }): number => m.positions.lineup.size + (m.positions.lineup.benchMax ?? 0);
   const ENGINE_MAX_MATCHDAY_SQUAD = Math.max(matchdaySquad(football), matchdaySquad(icehockey));
 
   async function squadOf(auth: AuthCtx, n: number) {
