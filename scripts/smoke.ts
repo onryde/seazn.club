@@ -2571,6 +2571,77 @@ async function passGrantsSuite(): Promise<void> {
     plainSource.status === 402 && featureKey(plainSource) === "officials.auto",
   );
 
+  // === stats.player — community false, pass true (V391) ====================
+  // W2 T13. This and the two blocks below are the rest of what V391 handed the
+  // pass, and every enforcement site for them used to resolve ORG-WIDE — so the
+  // pass was invisible and the passed competition 402'd on a feature the org
+  // had just paid for. Both directions on the SAME org throughout: a one-sided
+  // check stays green if the grant leaks org-wide, the same $29 hole in the
+  // other direction.
+  const passStats = await v1(s, `/api/v1/divisions/${board.pass.divId}/stats/players`);
+  const plainStats = await v1(s, `/api/v1/divisions/${board.plain.divId}/stats/players`);
+  check(
+    "pass grants/stats: the passed competition's player leaderboard reads (200)",
+    passStats.status === 200,
+  );
+  check(
+    "pass grants/stats: the sibling's leaderboard is refused (402 stats.player) — no leak",
+    plainStats.status === 402 && featureKey(plainStats) === "stats.player",
+  );
+
+  // === scoring.device_links — community false, pass true (V391) ============
+  // Minted against the board fixtures generated above; both are still
+  // scheduled, so the only difference between the two calls is the pass.
+  const passLink = await v1(s, `/api/v1/fixtures/${board.pass.fixtureId}/device-links`, "POST", {
+    label: "Pitch 1",
+  });
+  const plainLink = await v1(s, `/api/v1/fixtures/${board.plain.fixtureId}/device-links`, "POST", {
+    label: "Pitch 1",
+  });
+  check(
+    "pass grants/device links: a day-of scoring device mints on the passed competition (201)",
+    passLink.status === 201,
+  );
+  check(
+    "pass grants/device links: the sibling refuses it (402 scoring.device_links) — no leak",
+    plainLink.status === 402 && featureKey(plainLink) === "scoring.device_links",
+  );
+
+  // === stages.per_division.max — community 2, pass 4 (V391) ================
+  // Run on the ENTRANT-CAP divisions, which carry NO stages at all — the board
+  // divisions already hold one and both competitions are at their division
+  // ceiling, so there is no fresh division to take instead. Counting from ZERO
+  // is load-bearing: an earlier draft started at seq 2 and the sibling's third
+  // create was only its SECOND stage, so it landed 201 and the check passed
+  // while proving nothing.
+  const addStage = (divisionId: string, seq: number) =>
+    v1(s, `/api/v1/divisions/${divisionId}/stages`, "POST", {
+      seq,
+      kind: "league",
+      name: `Cap Stage ${seq}`,
+    });
+  const passStages = [
+    await addStage(passCap.id, 1),
+    await addStage(passCap.id, 2),
+    await addStage(passCap.id, 3),
+  ];
+  const plainStages = [
+    await addStage(plainCap.id, 1),
+    await addStage(plainCap.id, 2),
+    await addStage(plainCap.id, 3),
+  ];
+  check(
+    "pass grants/stages: the passed competition takes a 3rd stage — past community's 2",
+    passStages.every((r) => r.status === 201),
+  );
+  check(
+    "pass grants/stages: the sibling takes 2 and is refused a 3rd (402 stages.per_division.max)",
+    plainStages[0]!.status === 201 &&
+      plainStages[1]!.status === 201 &&
+      plainStages[2]!.status === 402 &&
+      featureKey(plainStages[2]!) === "stages.per_division.max",
+  );
+
   // === registration.fee_percent — community 8, pass 5 =====================
   // Stated plainly, because this one is weaker than the rest and the reason
   // matters: the rate has NO competition-scoped read surface. `feePercentFor`
@@ -2617,11 +2688,18 @@ async function passGrantsSuite(): Promise<void> {
   // assertion below, because a key that silently stopped being reported at all
   // would otherwise vanish from this scope check without a sound.
   check(
-    "pass grants/scope: every boolean grant stays OFF org-wide (realtime, exports.branded, sponsors)",
+    "pass grants/scope: every boolean grant stays OFF org-wide (realtime, exports.branded, sponsors, and the V391 keys)",
     flagOff("realtime") &&
       flagOff("exports.branded") &&
       flagOff("sponsors.tiers") &&
-      flagOff("sponsors.monetize"),
+      flagOff("sponsors.monetize") &&
+      // W2 T13 — the leak half. Threading a competition id into these gates
+      // must not turn a competition-scoped grant into an org-wide one: they
+      // read TRUE on the passed competition above and FALSE for the org here.
+      flagOff("stats.player") &&
+      flagOff("scoring.device_links") &&
+      flagOff("discipline.enforced") &&
+      flagOff("officials.auto"),
   );
   check(
     "pass grants/scope: dashboard.player_profiles is ON org-wide — free since V391, not pass-scoped",
@@ -2633,6 +2711,11 @@ async function passGrantsSuite(): Promise<void> {
       ent.entitlements["divisions.per_competition.max"]?.limit === 4 &&
       ent.entitlements["ai.credits.monthly"]?.limit === 5 &&
       ent.entitlements["registration.fee_percent"]?.limit === 8,
+  );
+  check(
+    "pass grants/scope: the two V391 caps stay at the community figure org-wide (2 stages, 2 save points)",
+    ent.entitlements["stages.per_division.max"]?.limit === 2 &&
+      ent.entitlements["schedule.checkpoints.max"]?.limit === 2,
   );
 
   // === lock (archived) — a pass stops lifting once its competition is
