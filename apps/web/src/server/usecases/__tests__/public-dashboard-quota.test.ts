@@ -130,6 +130,43 @@ describe.skipIf(!HAS_DB)("assertPublicQuota counts LIVE public dashboards", () =
     expect(next.visibility).toBe("public");
   });
 
+  it("a create at the cap is NEVER refused — it degrades to private", async () => {
+    // T15/F, owner ruling 2026-09-03. Free is 3 active competitions against 2
+    // public dashboards and competitions are public BY DEFAULT, so without
+    // this the third create would fail by default on the plan whose one-line
+    // sell is "run a club night". The competition must exist, and the caller
+    // must be able to tell from the row it gets back that it is not public.
+    const auth = await seedOrg("community");
+    const cap = await publicCap(auth);
+    for (let i = 1; i <= cap; i += 1) await make(auth, `Live ${i}`);
+    const degraded = await make(auth, "One over the cap");
+    expect(degraded.id).toBeTruthy();
+    expect(degraded.visibility).toBe("private");
+  });
+
+  it("the degrade drops the showcase opt-in with the visibility", async () => {
+    // `discoverable` is hard-coupled to public visibility everywhere else in
+    // this file (a 422 on the PATCH path, and on create for a caller that asks
+    // for private + showcase). A degraded competition is a private one, so it
+    // must not be left showcased on seazn.club.
+    const auth = await seedOrg("community");
+    await sql`
+      insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason)
+      values (${auth.orgId}, 'discovery.listed', true, 'public-quota test')`;
+    await invalidateOrgEntitlements(auth.orgId);
+    const cap = await publicCap(auth);
+    for (let i = 1; i <= cap; i += 1) await make(auth, `Live ${i}`);
+    const degraded = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "Showcased over the cap",
+      visibility: "public",
+      discoverable: true,
+      branding: {},
+    });
+    expect(degraded.visibility).toBe("private");
+    expect(degraded.discoverable).toBe(false);
+  });
+
   it("Pro's cap is finite and larger than Free's (V395 retired 'unlimited public dashboards')", async () => {
     // Read from the matrix on both sides — the point is the ORDERING and the
     // finiteness, which is what the Pro card's old "unlimited" claim broke.

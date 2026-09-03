@@ -44,7 +44,7 @@ import type { CreateFromTemplate, FromTemplateResult } from "@/server/api-v1/sch
 import { slugify, withUniqueSlug, SLUG_CONSTRAINT } from "./slugs";
 import {
   assertActiveQuota,
-  assertPublicQuota,
+  withinPublicQuota,
   fireCompetitionCreated,
   fireCompetitionMadePublic,
   shouldFireMadePublic,
@@ -179,7 +179,13 @@ export async function instantiateTemplate(
   // itself runs — a template-created competition is a competition for quota
   // purposes.
   await assertActiveQuota(auth);
-  if (input.visibility === "public") await assertPublicQuota(auth);
+  // Degrades rather than refuses, exactly as createCompetition does (T15/F,
+  // owner ruling 2026-09-03) — a template instantiation is a create, and a
+  // create is never blocked by the public-dashboard cap. Resolved here,
+  // BEFORE the transaction, for the same pooled-read reason as the quota
+  // checks above it.
+  const quotaMet = input.visibility === "public" && !(await withinPublicQuota(auth)).ok;
+  const visibility = quotaMet ? "private" : (input.visibility ?? "public");
 
   const dict = await getDictionary("en", "ui");
 
@@ -198,7 +204,7 @@ export async function instantiateTemplate(
         await q`
           insert into competitions (id, org_id, name, slug, visibility, branding, created_by,
                                      ends_on, starts_on, template_key, template_version)
-          values (${competitionId}, ${auth.orgId}, ${input.name}, ${candidate}, ${input.visibility ?? "private"},
+          values (${competitionId}, ${auth.orgId}, ${input.name}, ${candidate}, ${visibility},
                   '{}', ${auth.userId}, ${input.ends_on}, ${input.starts_on ?? null},
                   ${template.key}, ${template.version})`;
         return candidate;
@@ -379,7 +385,7 @@ export async function instantiateTemplate(
   // own placement (never inside the tx: analytics must not count a write
   // that could still roll back). P4 review finding 1 — an earlier draft
   // called neither emitter, so this path was invisible to the funnel.
-  await fireCompetitionCreated(auth, input.visibility ?? "private");
+  await fireCompetitionCreated(auth, visibility);
   // P4 review follow-up (2026-08-13): finding 1's first fix stopped at
   // COMPETITION_CREATED and missed that createCompetition ALSO fires
   // COMPETITION_MADE_PUBLIC when a competition is created directly public
@@ -388,7 +394,7 @@ export async function instantiateTemplate(
   // CreateCompetition's does, so a template instantiated public must
   // complete the SAME milestone. Reuses the exact predicate + emitter
   // createCompetition calls, imported, not restated.
-  if (shouldFireMadePublic(undefined, input.visibility ?? "private")) {
+  if (shouldFireMadePublic(undefined, visibility)) {
     await fireCompetitionMadePublic(auth, competitionId);
   }
   for (const templateDivision of template.divisions) {

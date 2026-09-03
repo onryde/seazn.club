@@ -181,17 +181,28 @@ async function probe(feature: string, auth: AuthCtx): Promise<() => Promise<unkn
     case "dashboard.public.max": {
       // The active-comp cap would fire first; lift it via override so this
       // probe isolates the public-dashboard quota. Fill to the COMMUNITY cap,
-      // read from the matrix rather than typed (V392 moved it 1 -> 3), so the
-      // community arm sits exactly at its limit and pro (unlimited) has room.
+      // read from the matrix rather than typed (it has moved 1 -> 3 -> 2), so
+      // the community arm sits exactly at its limit and pro (10 since V395)
+      // still has room.
+      //
+      // THE PROBE IS A PATCH, NOT A CREATE, since V395 (T15/F, owner ruling
+      // 2026-09-03): a create over this cap no longer 402s, it creates the
+      // competition PRIVATE and says so, so a create could never satisfy the
+      // `allowed: false` arm again. Switching an existing competition to
+      // public is the deliberate act that still gets a refusal, and it raises
+      // the same 402 with the same feature_key — which is what this matrix
+      // row is about. The degrade itself is pinned in
+      // `public-dashboard-quota.test.ts`.
       const [{ int_value: pub }] = await sql<{ int_value: number }[]>`
         select int_value from plan_entitlements
         where plan_key = 'community' and feature_key = 'dashboard.public.max'`;
       await sql`
         insert into org_entitlement_overrides (org_id, feature_key, int_value, reason)
-        values (${auth.orgId}, 'competitions.max_active', ${pub + 1}, 'test probe')`;
+        values (${auth.orgId}, 'competitions.max_active', ${pub + 2}, 'test probe')`;
       await invalidateOrgEntitlements(auth.orgId);
       for (let i = 1; i <= pub; i++) await makeCompetition(auth, `P${i}`, "public");
-      return () => makeCompetition(auth, `P${pub + 1}`, "public"); // one past the cap
+      const spare = await makeCompetition(auth, `P${pub + 1}`, "private");
+      return () => patchCompetition(auth, spare.id, { visibility: "public" } as never);
     }
     case "divisions.per_competition.max": {
       // Fill to the COMMUNITY cap, read from the matrix. That one number does

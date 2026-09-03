@@ -17,12 +17,21 @@ export function CompetitionWizard({ orgSlug }: { orgSlug: string }) {
   const router = useRouter();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [visibility, setVisibility] = useState<string>("private");
+  // PUBLIC BY DEFAULT (entitlements v18 W2 T15/F, owner ruling 2026-09-03). A
+  // competition nobody can see does not grow the product, and the organiser who
+  // wants private says so. Safe as a default only because the server DEGRADES
+  // over the public-dashboard cap instead of refusing — see `degraded` below.
+  const [visibility, setVisibility] = useState<string>("public");
   const [discoverable, setDiscoverable] = useState(false);
   const [startsOn, setStartsOn] = useState("");
   const [endsOn, setEndsOn] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [paywall, setPaywall] = useState<{ feature: string; reason?: string } | null>(null);
+  // Set when the org asked for a public competition and the server created a
+  // private one because its public dashboards are all in use. NOT an error —
+  // the competition exists — so it replaces the redirect with a note and a way
+  // onward, rather than an error banner over a form that already succeeded.
+  const [degraded, setDegraded] = useState<{ name: string; slug: string } | null>(null);
   const [busy, setBusy] = useState(false);
 
   async function submit(e: React.FormEvent) {
@@ -44,7 +53,7 @@ export function CompetitionWizard({ orgSlug }: { orgSlug: string }) {
     }
     setBusy(true);
     try {
-      const created = await apiV1<{ id: string; slug: string }>("/api/v1/competitions", {
+      const created = await apiV1<{ id: string; slug: string; visibility: string }>("/api/v1/competitions", {
         method: "POST",
         json: {
           name,
@@ -58,6 +67,13 @@ export function CompetitionWizard({ orgSlug }: { orgSlug: string }) {
           branding: {},
         },
       });
+      // The server is the authority on what was actually created. Asking for
+      // public and getting private back is the degrade, and it is the ONLY
+      // signal — there is no extra response field to drift from the row.
+      if (visibility === "public" && created.visibility !== "public") {
+        setDegraded({ name: name.trim(), slug: created.slug });
+        return;
+      }
       router.push(routes.competition(orgSlug, created.slug));
     } catch (err) {
       if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") {
@@ -71,6 +87,32 @@ export function CompetitionWizard({ orgSlug }: { orgSlug: string }) {
     } finally {
       setBusy(false);
     }
+  }
+
+  // The create SUCCEEDED — this replaces the form rather than sitting under it,
+  // because leaving an armed "Create competition" button under a competition
+  // that already exists is how the same night gets created twice.
+  if (degraded) {
+    return (
+      <div className="card space-y-4 p-6" data-testid="public-quota-degraded">
+        <h2 className="text-lg font-semibold text-slate-800">
+          {msg("comp.wizard.publicDegraded.title")}
+        </h2>
+        <p className="text-sm leading-relaxed text-slate-600">
+          {msg("comp.wizard.publicDegraded.body", { name: degraded.name })}
+        </p>
+        <UpgradeGate feature="dashboard.public.max" />
+        <div className="flex justify-end">
+          <button
+            type="button"
+            onClick={() => router.push(routes.competition(orgSlug, degraded.slug))}
+            className="btn btn-primary"
+          >
+            {msg("comp.wizard.publicDegraded.continue")}
+          </button>
+        </div>
+      </div>
+    );
   }
 
   return (

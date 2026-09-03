@@ -124,3 +124,21 @@ update plan_entitlements
 update plan_entitlements
    set int_value = 10
  where plan_key = 'pro' and feature_key = 'dashboard.public.max';
+
+-- ---------------------------------------------------------------------------
+-- Step 5 (T15/F): competitions are PUBLIC by default (owner ruling
+-- 2026-09-03).
+--
+-- The column has defaulted to 'private' since V207. Every insert the
+-- application makes passes an explicit value, so on its own this default is
+-- decorative — the real lever is the zod default on `CreateCompetition` /
+-- `CreateFromTemplate`, which moves in the same commit. It is changed anyway
+-- so a hand-written insert, a fixture or a future code path cannot quietly
+-- disagree with the product rule.
+--
+-- Safe to flip only BECAUSE the create path degrades instead of refusing:
+-- Free is 3 active competitions against 2 public dashboards (step 4), so a
+-- default of 'public' plus the old `assertPublicQuota` throw would have made
+-- the THIRD create fail by default on the plan whose one-line sell is "run a
+-- club night". `createCompetition` now creates it PRIVATE and says so.
+alter table competitions alter column visibility set default 'public';

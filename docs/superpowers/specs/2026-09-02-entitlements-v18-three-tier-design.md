@@ -240,12 +240,15 @@ Cards are dictionary-driven (`pricing.community.*`, `pricing.pass.*`,
 re-derived from the matrix and guarded by `lib/copy-truth.ts`. Target copy
 (English; all four locales follow):
 
-- **Free — "Run a club night."** 1 organisation · 3 staff + 2 scorer seats ·
-  3 live competitions, each public · 4 divisions, 64 entrants each · every
-  sport, every scoring detail · right tables (tiebreakers, bonus points, DLS)
-  · double-elimination · joint scheduling · player profiles, embeds and
-  auto-drafted posts (badge on) · online registration (8% fee) · 5 AI credits
-  a month.
+- **Free — "Run a club night."** 1 organisation · 3 staff seats ·
+  3 live competitions, **2 of them with a public dashboard** · 4 divisions, 64
+  entrants each · every sport, every scoring detail · right tables
+  (tiebreakers, bonus points, DLS) · double-elimination · joint scheduling ·
+  your own club logo · online registration (8% fee) · 5 AI credits a month.
+  Amended W2 (owner rulings 2026-09-03): the scorer seats went with the
+  `scorers.max` key (T12), and **player profiles, embeds and auto-drafted
+  posts are no longer free** (T15) — they are Pro or Event Pass. The badge is
+  on, and now stays on for Pro too.
 - **Event Pass — "One tournament, fully powered."** Per competition, no
   subscription. M: 10 divisions × 128 entrants, +25 credits. L: 20 × 512,
   +50 credits. Live scoreboard · hand-over scoring devices · auto officials ·
@@ -253,10 +256,16 @@ re-derived from the matrix and guarded by `lib/copy-truth.ts`. Target copy
   · sponsors · 5 restore points · 5% fee · counts toward Pro if you subscribe
   within 30 days. Nudge: three L passes ($87) cost more than Pro annual
   ($79).
-- **Pro — "Your whole season."** Unlimited competitions · 100 teams · squads
-  of 40 · 25 clubs · 10 staff + 10 scorer seats · 5 organisations on one bill
-  · everything the pass has, all season · badge removed · API (read) · 35 AI
-  credits a month · 2% fee · annual ≈ 8.8 months, "over three months free".
+- **Pro — "Your whole season."** Unlimited competitions · **10 public
+  dashboards** · 100 teams · squads of 40 · 25 clubs · 10 staff seats · 5
+  organisations on one bill · everything the pass has, all season · player
+  profiles, embeds and auto-drafted posts · API (read) · 25 AI credits a month
+  · 2% fee · annual ≈ 8.8 months, "over three months free".
+  Amended W2 (owner rulings 2026-09-03): "unlimited public dashboards" is
+  withdrawn — the cap is 10 (T15) — the scorer seats went with the key (T12),
+  the credit grant was re-cut 35 → 25 (T12), and **"badge removed" is gone
+  from this card**: badge removal is enterprise-only now (T15). What Pro gains
+  in exchange is the three share loops.
 
 ### 3a. Prices (R12) — every amount is a SET point per currency
 
@@ -296,9 +305,14 @@ org falls 53% against today; the bet is volume plus the badge network.
 
 ### Why this attracts more customers without giving the product away
 
-- **Three share loops go free**: player profiles, embeds, auto posts. Each
-  one puts the badge in front of people who are not yet customers. None of
-  them has meaningful marginal cost.
+- ~~**Three share loops go free**: player profiles, embeds, auto posts.~~
+  **WITHDRAWN by the owner, 2026-09-03 (W2 T15).** The counter-argument in
+  this bullet was put and overruled: value capture over the loop. All three
+  are Pro or Event Pass now. The acquisition loop survives, and runs through
+  **public dashboards** instead — every self-serve plan carries the badge,
+  Pro included, so a Pro club's public dashboard is now an ad where before it
+  was not. Struck through rather than deleted, because the reversal is the
+  part a later reader needs to see.
 - **Free is never wrong**: DLS, tiebreakers, bonus points, joint scheduling,
   double-elim. A club that gets a wrong table on night one does not come back
   to pay; a club that gets a right table on night one tells the league.
@@ -306,8 +320,10 @@ org falls 53% against today; the bet is volume plus the badge network.
   organiser has no reason to look elsewhere for a weekend — and every pass
   buyer is 30 days from a Pro redemption.
 - **Pro's reasons are unambiguous**: more people (seats), more teams, more
-  season (unlimited competitions, restore points), the badge off, the API,
-  and the 2% fee. Nothing on Pro is something Free needs to be correct.
+  season (unlimited competitions, restore points), the share loops (player
+  profiles, embeds, auto posts), the API, and the 2% fee. Nothing on Pro is
+  something Free needs to be correct. ("The badge off" was in this list and is
+  not any more — W2 T15 made badge removal enterprise-only.)
 - **What stays paid has marginal cost or is leverage**: realtime, pads, AI
   credits, auto officials, suspension automation, branded exports, sponsors.
 

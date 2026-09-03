@@ -91,7 +91,14 @@ export const CreateCompetition = z
      *  `competitions.max_active` slot for good. Required here, and non-nullable
      *  on PATCH — a nullable patch would reopen the same door. */
     ends_on: z.iso.date(),
-    visibility: Visibility.default("private"),
+    /** PUBLIC BY DEFAULT (entitlements v18 W2 T15/F, owner ruling
+     *  2026-09-03). A competition nobody can see is a competition that does
+     *  not grow the product, and the organiser who wanted private says so.
+     *  The public-dashboard cap does NOT refuse a create over this default —
+     *  `createCompetition` degrades to private instead (see its comment), so
+     *  flipping the default cannot start 402ing callers who never asked for a
+     *  public one. */
+    visibility: Visibility.default("public"),
     branding: z.record(z.string(), z.unknown()).default({}),
     /** Doc 15 §1 "Showcase on seazn.club" — opt-in at create time; requires
      *  public visibility, same rule as PATCH. Omitted = false. */
@@ -939,7 +946,10 @@ export const CreateFromTemplate = z
     name: z.string().min(1).max(200),
     starts_on: z.iso.date().nullish(),
     ends_on: z.iso.date(),
-    visibility: Visibility.default("private"),
+    /** Public by default, same ruling and same degrade as CreateCompetition —
+     *  the two create paths must not disagree about what an omitted
+     *  visibility means. */
+    visibility: Visibility.default("public"),
   })
   .superRefine(checkDateOrder);
 export type CreateFromTemplate = z.infer<typeof CreateFromTemplate>;

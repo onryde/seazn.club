@@ -215,15 +215,32 @@ export async function createCompetition(
   input: CreateCompetition,
 ): Promise<CompetitionRow> {
   await assertActiveQuota(auth);
-  if (input.visibility === "public") await assertPublicQuota(auth);
+  // NEVER BLOCK A CREATE on the public-dashboard cap (T15/F, owner ruling
+  // 2026-09-03). Competitions are public BY DEFAULT now, and Free is 3 active
+  // competitions against 2 public dashboards — so under the old
+  // `assertPublicQuota` throw the THIRD create on the plan whose one-line sell
+  // is "run a club night" would have 402'd by default, with no wrong choice
+  // made by the organiser. It degrades instead: the competition is created
+  // PRIVATE, and the caller learns that from the row it gets back (the
+  // requested visibility went in, a different one came out) rather than from
+  // an error. The PATCH path still 402s — switching an existing competition to
+  // public is a deliberate act with a wrong answer available, so it gets one.
+  const quotaMet = input.visibility === "public" && !(await withinPublicQuota(auth)).ok;
+  const visibility = quotaMet ? "private" : input.visibility;
   // Showcase at create time follows the exact PATCH rules (doc 15 §1):
-  // gate key server-side, and never let a non-public competition opt in.
+  // gate key server-side, and never let a non-public competition opt in. Both
+  // checks read the CALLER'S OWN input, not the degraded value: a caller that
+  // asked for private + showcase is contradicting itself and must still get
+  // the 422, and one that asked for public + showcase must still be told about
+  // the entitlement. The degrade then drops the opt-in below, because a
+  // private competition can never be showcased.
   if (input.discoverable === true) {
     await requireFeature(auth.orgId, "discovery.listed");
     if (input.visibility !== "public") {
       throw new HttpError(422, "Only public competitions can be showcased on seazn.club");
     }
   }
+  const discoverable = !quotaMet && input.discoverable === true;
   const row = await withTenant(auth.orgId, async (tx) => {
     // The insert is shared by both slug paths so the generated one can be
     // RETRIED against the unique index — `q` is the savepoint the retry rolls
@@ -233,8 +250,8 @@ export async function createCompetition(
         insert into competitions (org_id, name, slug, description, starts_on, ends_on,
                                   visibility, branding, discoverable, created_by)
         values (${auth.orgId}, ${input.name}, ${slug}, ${input.description ?? null},
-                ${input.starts_on ?? null}, ${input.ends_on ?? null}, ${input.visibility},
-                ${q.json(input.branding as never)}, ${input.discoverable === true},
+                ${input.starts_on ?? null}, ${input.ends_on ?? null}, ${visibility},
+                ${q.json(input.branding as never)}, ${discoverable},
                 ${auth.userId})
         returning ${q(COLS)}`;
       return row!;
@@ -277,9 +294,12 @@ export async function createCompetition(
     fireDiscoveryRevalidate();
   }
   // Activation event (feature 1) — first competition is the "aha" moment.
-  await fireCompetitionCreated(auth, input.visibility);
+  // The visibility it was CREATED with, not the one that was asked for: a
+  // degraded competition is a private one and the funnel must not read it as a
+  // public launch.
+  await fireCompetitionCreated(auth, visibility);
   // Activation funnel completion — created directly public (no prior state).
-  if (shouldFireMadePublic(undefined, input.visibility)) {
+  if (shouldFireMadePublic(undefined, visibility)) {
     await fireCompetitionMadePublic(auth, row.id);
   }
   return row;
