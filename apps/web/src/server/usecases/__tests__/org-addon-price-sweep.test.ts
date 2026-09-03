@@ -1,7 +1,10 @@
-// v17 gap #332: the extra-organisation rider is sold at two rates ($9/mo on
-// pro, $19/mo on pro_plus) and `convergeOrgAddonPrices` deliberately NEVER
-// THROWS, so every one of its failure paths leaves a group billing the wrong
-// rate with nothing scheduled to try again. Convergence only runs when Stripe
+// v17 gap #332: `convergeOrgAddonPrices` deliberately NEVER THROWS, so every
+// one of its failure paths leaves a group billing the wrong rate with nothing
+// scheduled to try again. (It was written when the extra-organisation rider
+// was sold at two rates, $9/mo on pro and $19/mo on pro_plus; entitlements
+// v18 retired `pro_plus`, and the sweep matters just as much with ONE rate —
+// a reprice archives the old Stripe price and mints a new id, so a rider left
+// on the superseded id is the same stale-billing shape with the same cause.) Convergence only runs when Stripe
 // emits a `customer.subscription.created`/`.updated` for that group, so "a
 // later plan change re-converges it" is worth nothing for a group that never
 // changes plan again.
@@ -58,10 +61,27 @@ const HAS_DB = !!process.env.DATABASE_URL;
 const uniq = () => randomUUID().slice(0, 8);
 
 /** The live price id this suite pretends `stripe:sync` produced for a plan.
- *  Derived from the lookup key so pro and pro_plus can never collide. */
+ *  Derived from the lookup key so two entries can never collide. */
 const proEntry = ORG_ADDONS.find((e) => e.planKey === "pro")!;
-const proPlusEntry = ORG_ADDONS.find((e) => e.planKey === "pro_plus")!;
 const livePriceFor = (lookupKey: string) => `price_live_${lookupKey}`;
+
+/**
+ * A price id that is NOT the one the catalog resolves for `pro` — the stale
+ * side of every mismatch case below.
+ *
+ * These cases used to drive the mismatch with the OTHER TIER's price
+ * (`pro_plus` billed on the `pro` SKU: the arbitrage the two rates existed to
+ * close). Entitlements v18 leaves one priced tier, so there is no second rate
+ * to confuse with — but the sweep's own subject never depended on there being
+ * one. It compares an item's ACTUAL Stripe price id against the id the catalog
+ * resolves NOW, and the way a rider strands on a dead id in a one-rate world
+ * is a REPRICE: Stripe amounts are immutable, so changing one archives the old
+ * price and mints a new id (`scripts/stripe-sync.ts:410-415`). Any rider that
+ * misses the convergence keeps billing the archived price for ever.
+ *
+ * W2 repriced this very SKU, so this is the live shape, not a hypothetical.
+ */
+const SUPERSEDED_PRICE_ID = `price_live_${proEntry.lookupKey}_archived_v17`;
 
 /** Every item id this file mints carries this prefix, which is how each
  *  assertion narrows the sweep's whole-database result to its own rows. */
@@ -71,7 +91,7 @@ const mine = <T extends { itemId: string }>(rows: T[]) =>
 
 /** A billed group on `planKey` carrying one ACTIVE extra-org rider row. */
 async function seedRider(
-  planKey: "pro" | "pro_plus" | "community",
+  planKey: "pro" | "community",
   qty = 1,
 ): Promise<{ groupId: string; orgId: string; stripeSubId: string; itemId: string }> {
   const [user] = await sql<{ id: string }[]>`
@@ -148,13 +168,17 @@ afterAll(async () => {
 });
 
 describe.skipIf(!HAS_DB)("sweepStaleOrgAddonPrices (#332)", () => {
-  it("reports a Pro Plus group whose rider is still on the Pro price", async () => {
-    const { groupId, stripeSubId, itemId } = await seedRider("pro_plus", 3);
-    // The exact #332 shape: convergence failed, so the $19 group still rides
-    // the $9 SKU — the arbitrage the two rates exist to close.
+  it("reports a group whose rider is stranded on a superseded price id", async () => {
+    const { groupId, stripeSubId, itemId } = await seedRider("pro", 3);
+    // The exact #332 shape: convergence failed, so the group still rides a
+    // price id the catalog no longer resolves — it keeps billing whatever that
+    // archived price charged, for ever, with nothing scheduled to retry.
     itemRetrieveSpy.mockImplementation(async (id: string) =>
-      itemOn(id, id === itemId ? livePriceFor(proEntry.lookupKey) : livePriceFor(proPlusEntry.lookupKey)),
+      itemOn(id, id === itemId ? SUPERSEDED_PRICE_ID : livePriceFor(proEntry.lookupKey)),
     );
+    // Anti-vacuity: the two ids must actually differ, or "mismatch" is not
+    // what is being detected.
+    expect(SUPERSEDED_PRICE_ID).not.toBe(livePriceFor(proEntry.lookupKey));
 
     const res = await sweepStaleOrgAddonPrices();
 
@@ -163,11 +187,11 @@ describe.skipIf(!HAS_DB)("sweepStaleOrgAddonPrices (#332)", () => {
     expect(found[0]).toMatchObject({
       subscriptionId: groupId,
       stripeSubscriptionId: stripeSubId,
-      planKey: "pro_plus",
+      planKey: "pro",
       itemId,
       qty: 3,
-      currentPriceId: livePriceFor(proEntry.lookupKey),
-      expectedPriceId: livePriceFor(proPlusEntry.lookupKey),
+      currentPriceId: SUPERSEDED_PRICE_ID,
+      expectedPriceId: livePriceFor(proEntry.lookupKey),
     });
     expect(res.mismatched).toBeGreaterThanOrEqual(1);
     expect(res.alerted).toBeGreaterThanOrEqual(1);
@@ -317,9 +341,9 @@ describe.skipIf(!HAS_DB)("sweepStaleOrgAddonPrices (#332)", () => {
   });
 
   it("never re-prices: the sweep reports and mutates nothing", async () => {
-    const { itemId } = await seedRider("pro_plus");
+    const { itemId } = await seedRider("pro");
     itemRetrieveSpy.mockImplementation(async (id: string) =>
-      itemOn(id, id === itemId ? livePriceFor(proEntry.lookupKey) : livePriceFor(proPlusEntry.lookupKey)),
+      itemOn(id, id === itemId ? SUPERSEDED_PRICE_ID : livePriceFor(proEntry.lookupKey)),
     );
 
     await sweepStaleOrgAddonPrices();
@@ -333,9 +357,9 @@ describe.skipIf(!HAS_DB)("sweepStaleOrgAddonPrices (#332)", () => {
 
   it("reports without alerting when STAFF_ALERT_EMAIL is unset", async () => {
     vi.stubEnv("STAFF_ALERT_EMAIL", "");
-    const { itemId } = await seedRider("pro_plus");
+    const { itemId } = await seedRider("pro");
     itemRetrieveSpy.mockImplementation(async (id: string) =>
-      itemOn(id, id === itemId ? livePriceFor(proEntry.lookupKey) : livePriceFor(proPlusEntry.lookupKey)),
+      itemOn(id, id === itemId ? SUPERSEDED_PRICE_ID : livePriceFor(proEntry.lookupKey)),
     );
 
     const res = await sweepStaleOrgAddonPrices();
@@ -347,7 +371,7 @@ describe.skipIf(!HAS_DB)("sweepStaleOrgAddonPrices (#332)", () => {
 
   it("does nothing at all without a Stripe key", async () => {
     vi.stubEnv("STRIPE_SECRET_KEY", "");
-    await seedRider("pro_plus");
+    await seedRider("pro");
 
     const res = await sweepStaleOrgAddonPrices();
 

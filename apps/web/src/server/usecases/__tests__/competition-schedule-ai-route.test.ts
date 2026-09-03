@@ -400,10 +400,11 @@ afterAll(() => {
 
 describe.skipIf(!HAS_DB)("aiPlanForCompetition gates (#350 Task 4)", () => {
   it("kill switch → 403 FEATURE_DISABLED before BOTH paid gates", async () => {
-    // Community lacks scheduling.multi_division but HOLDS scheduling.ai (true
-    // on every plan since V302), so the switch must also be pinned ahead of the
-    // FIRST paid gate — deny scheduling.ai as well, and the 403 is then only
-    // reachable if the kill switch is asked before either requireFeature.
+    // Community HOLDS scheduling.ai (true on every plan since V302) and, since
+    // V391, scheduling.multi_division too — so neither paid gate fires from the
+    // plan any more and the kill switch must be pinned ahead of the FIRST of
+    // them by an explicit deny. The 403 is then only reachable if the kill
+    // switch is asked before either requireFeature.
     const { auth } = await seedOrg("community");
     await denyFeature(auth.orgId, "scheduling.ai");
     const { competitionId, divisions } = await seedCompetition(auth, "Killed", [
@@ -435,10 +436,20 @@ describe.skipIf(!HAS_DB)("aiPlanForCompetition gates (#350 Task 4)", () => {
 
   it("scheduling.ai but no scheduling.multi_division → 402, ahead of the single-division 400", async () => {
     // The FIRST server-side enforcement of scheduling.multi_division anywhere.
-    // Community holds scheduling.ai (true on every plan) and not
-    // multi_division. One division id is sent, so the 400 would also fire —
-    // the 402 winning is what pins the order.
+    // One division id is sent, so the 400 would also fire — the 402 winning is
+    // what pins the order.
+    //
+    // The DENY is now explicit. This case used to lean on Community simply not
+    // having the key, and V391 granted `scheduling.multi_division` on EVERY
+    // plan — at which point the plan could no longer shut the gate and the
+    // test read the 400 instead. The gate itself is NOT dead: an
+    // `org_entitlement_overrides` deny still switches the key off for one org,
+    // exactly as `feature-copy.ts` says of `scheduling.board` and
+    // `scheduling.constraints` after V353 opened those two the same way. So
+    // the ordering this case exists to pin is still real, and driving it
+    // through the override is the only way left to reach it.
     const { auth } = await seedOrg("community");
+    await denyFeature(auth.orgId, "scheduling.multi_division");
     const { competitionId, divisions } = await seedCompetition(auth, "NoMulti", [
       { name: "Alpha" },
       { name: "Bravo", courts: ["Court 3", "Court 4"] },
