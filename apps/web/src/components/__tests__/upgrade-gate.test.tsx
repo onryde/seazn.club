@@ -57,14 +57,21 @@ const FLOOR_GBP = formatMinor(lowestPassRung("gbp").amountMinor, "gbp"); // "£2
 
 /** A key the pass lifts, and one it can never lift.
  *
- *  `NOT_LIFTABLE` was `scheduling.multi_division` until V353 (#382) put that
- *  key on the Event Pass column — which turned every "the pass never covered
- *  this" assertion below into a claim about a key the pass now DOES cover.
- *  `officials.auto` is an above-Pro (Pro Plus) key with no `event_pass` row at
- *  all, so no pass can ever lift it. `upgrade-gate-pass-features.test.ts`
- *  derives the real lifted set from the live matrix and reds if this drifts. */
+ *  `NOT_LIFTABLE` has now rotted TWICE, both times the same way — the matrix
+ *  moved and a key chosen as "the pass never covers this" became one the pass
+ *  covers, turning every assertion below into a claim about the opposite case:
+ *
+ *    `scheduling.multi_division`  until V353 (#382) put it on the pass column
+ *    `officials.auto`             until V391 (v18 W2) did the same
+ *
+ *  `api.access` is a Pro key with NO `event_pass` row at all, so no pass overlay
+ *  can reach it. The `expect` below is the alarm rather than a comment: if a
+ *  future matrix lifts it too, this file says so in one line instead of three
+ *  cases each failing on a copy string. `upgrade-gate-pass-features.test.ts`
+ *  derives the real lifted set from the live matrix and reds if PASS_FEATURES
+ *  itself drifts. */
 const LIFTABLE = "divisions.per_competition.max";
-const NOT_LIFTABLE = "officials.auto";
+const NOT_LIFTABLE = "api.access";
 
 // The CTA carries `?feature=<key>`: the upgrade page keys its ceiling state off
 // that param, the gate is the only place that knows which key was refused, and
@@ -263,6 +270,12 @@ describe("UpgradeGate — pass held (D1: never re-sell a pass the org holds)", (
       </DictProvider>,
     );
     expect(html).toContain(expected);
+  });
+
+  it("still has an exemplar the pass genuinely cannot lift", () => {
+    // Guards the two constants above, which have rotted twice (V353, V391).
+    expect(PASS_FEATURES.has(LIFTABLE)).toBe(true);
+    expect(PASS_FEATURES.has(NOT_LIFTABLE)).toBe(false);
   });
 
   it("says the feature is not on the pass when the pass could never lift it", () => {

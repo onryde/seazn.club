@@ -28,17 +28,33 @@ export const PASS_FEATURES = new Set([
   "divisions.per_competition.max",
   "entrants.per_division.max",
   "formats.advanced",
-  "formats.double_elim",
   "realtime",
-  "dashboard.player_profiles",
   "exports.branded",
   "sponsors.tiers",
   "sponsors.monetize",
-  // V353 (#382): the pass now lifts the competition-wide board. Community is
-  // still denied it, so this is a real paywall — and without the key here that
-  // paywall would show the Pro-only card to someone a $29 pass would clear.
-  "scheduling.multi_division",
-  // scheduling.ai.runs_per_division.max retired (v17 Phase 2 Task 5, V322) —
-  // the AI credit wallet meters runs on every tier now, so it no longer has a
-  // plan_entitlements row for the pass to lift.
+  // V391 (entitlements v18 W2): the pass rungs became the Community org's route
+  // to the whole match-day layer, so seven more keys now beat the community row
+  // and every one of them can throw at a real paywall.
+  //
+  // These land AFTER the enforcement sites learned to resolve them against the
+  // competition (usecases/device-links, history, match-reports, player-stats,
+  // stages, templates — W2 T6 and T13), and that order is load-bearing: offering
+  // the pass for a key whose gate still refuses it takes $29 and leaves the user
+  // exactly as blocked, which is strictly worse than never offering it.
+  "officials.auto",
+  "stats.player",
+  "discipline.enforced",
+  "scoring.device_links",
+  "scoring.audit_export",
+  "stages.per_division.max",
+  "schedule.checkpoints.max",
+  // Three keys LEFT this set at V391, and not because the pass stopped lifting
+  // them — because `community` caught up: `formats.double_elim`,
+  // `dashboard.player_profiles` and `scheduling.multi_division` are now TRUE on
+  // every plan key including community, so no paywall can ever render for them
+  // and a pass CTA offering them would promise something already free.
+  //
+  // scheduling.ai.runs_per_division.max retired earlier (v17 Phase 2 Task 5,
+  // V322) — the AI credit wallet meters runs on every tier now, so it no longer
+  // has a plan_entitlements row for the pass to lift.
 ]);
