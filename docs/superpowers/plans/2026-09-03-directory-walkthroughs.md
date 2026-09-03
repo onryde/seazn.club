@@ -827,16 +827,49 @@ test("a court's restricted hours reach the scheduler and raise an advisory confl
   }
 
   // SETUP, via the API deliberately: fixtures on these courts are the state
-  // this journey needs to REACH, not the thing under test.
-  // Seed a division whose fixtures land on court 2, scheduled inside the hours
-  // the calendar below will close. Read seedRosteredFixture's signature in
-  // helpers.ts:1428 and pass the venue/court through it; if it cannot pin a
-  // court, place the fixture with the scheduling API and assert the court_id.
-  // The assertion at the end depends on at least one fixture sitting on court 2.
+  // this journey needs to REACH, not the thing under test. This is the real
+  // sequence from court-tags-scheduling.spec.ts:604-687 — the auto+apply step
+  // is load-bearing, because moveFixture's MOVABLE_STATUS gate refuses a PATCH
+  // timetable move on a fixture that was never placed at all.
+  const seeded = await seedRosteredFixture(page.request, {
+    label: `Riverside ${s}`,
+    sportKey: "badminton",
+    variantKey: "singles",
+    home: [{ name: `Home ${s}` }],
+    away: [{ name: `Away ${s}` }],
+    entrantKind: "individual",
+  });
+  const courtIds = await apiJson<{ id: string; name: string }[]>(
+    page.request,
+    `/api/v1/orgs/${orgId}/venues`,
+    "GET",
+  );
+  // Resolve court 2's id from the venue read, then pin the fixture onto it at a
+  // time INSIDE the window the calendar below will close.
+  // PatchFixture (schemas.ts:964) is .strict() — court_id and scheduled_at only.
+  await apiJson(page.request, `/api/v1/fixtures/${seeded.fixtureId}`, "PATCH", {
+    court_id: court2Id,
+    scheduled_at: wednesdayAt("10:00"),
+  });
 
   // --- restrict court 2 -------------------------------------------------
   const courtRow = await waitForCourtRow(page, venueName, courtNames[1]);
   await courtRow.getByRole("button", { name: "Hours", exact: true }).click();
+
+  // ONE Wednesday range closes the whole rest of the week. court-windows.ts:165
+  // `baseFor`: hours.length === 0 means the full civil day (open all day); but
+  // once ANY row exists, :170-173 filters by weekday and every day without a
+  // row is CLOSED. So adding 18:00-20:00 on Wednesday both narrows Wednesday
+  // and shuts the other six days — which is what strands the 10:00 fixture.
+  const WEDNESDAY = 3; // Sun = 0
+  await courtRow.getByRole("button", { name: "Add a time range" }).nth(WEDNESDAY).click();
+  // A new range defaults to 09:00-17:00 (venues-panel.tsx:973). The time fields
+  // are <select>s whose option values are "HH:MM" strings
+  // (datetime-field.tsx:176-206; steppedTimes gives 96 quarter-hours).
+  // Their labels are sr-only, so getByLabel finds NOTHING — use the role.
+  const wednesday = courtRow.getByRole("button", { name: "Add a time range" }).nth(WEDNESDAY);
+  await courtRow.getByRole("combobox", { name: "Open" }).last().selectOption("18:00");
+  await courtRow.getByRole("combobox", { name: "Close" }).last().selectOption("20:00");
 
   // Capture the PUT the Save button fires — the response carries the proof.
   const savePromise = page.waitForResponse(
@@ -857,17 +890,49 @@ test("a court's restricted hours reach the scheduler and raise an advisory confl
   await page.reload();
   const reopened = await waitForCourtRow(page, venueName, courtNames[1]);
   await reopened.getByRole("button", { name: "Hours", exact: true }).click();
-  await expect(reopened.getByRole("textbox", { name: "Exception date" }).first()).toHaveValue(
-    /\d{4}-\d{2}-\d{2}/,
-  );
+  await expect(reopened.getByRole("combobox", { name: "Open" }).last()).toHaveValue("18:00");
+  await expect(reopened.getByRole("combobox", { name: "Close" }).last()).toHaveValue("20:00");
 
-  // --- the conflict is raised, and is ADVISORY --------------------------
-  // outside_court_hours is deliberately excluded from isBlockingConflict
-  // (calendar.ts:330) — assert it is surfaced AND that the fixture stands.
+  // --- the conflict is raised, and it is ADVISORY -----------------------
+  // Asserted through the validate API, NOT the board: the board's copy for this
+  // conflict is already pinned by court-tags-scheduling.spec.ts:697-706, and
+  // re-asserting it here would duplicate that coverage while proving less.
+  // ScheduleConflict (schemas.ts:1548-1592) carries `blocking` — so the API can
+  // state the advisory property DIRECTLY, which no board assertion can.
+  const validated = await apiJson<{ conflicts: { fixture_id: string; code: string; blocking: boolean }[] }>(
+    page.request,
+    `/api/v1/divisions/${seeded.divisionId}/schedule/validate`,
+    "POST",
+    {},
+  );
+  const courtConflicts = (validated.data?.conflicts ?? []).filter(
+    (c) => c.fixture_id === seeded.fixtureId && c.code.includes("court"),
+  );
+  expect(courtConflicts.length, "no court conflict was raised for the stranded fixture").toBeGreaterThan(0);
+  expect(
+    courtConflicts.every((c) => c.blocking === false),
+    "outside_court_hours is advisory by design (calendar.ts:330) — a blocking one is a behaviour change",
+  ).toBe(true);
 });
 ```
 
-**This test is deliberately left with two blanks the implementer must fill from the tree**, because guessing them would be worse than naming them: (a) the weekday-hours edits that actually close the window the seeded fixture sits in, and (b) the board assertion for `outside_court_hours`. Both need the seeded fixture's real scheduled time. Read `seedRosteredFixture` (`helpers.ts:1428`) and `conflict-detail-format.ts:200-204` and write them against what is there. **Do not** assert a conflict string you have not seen rendered.
+Two things the implementer must resolve from the tree, both small and both
+checkable — do NOT guess either:
+
+- `court2Id`: read it from `GET /api/v1/orgs/{orgId}/venues` (the venues read
+  nests its courts — `listVenues` returns `courts` per venue) and match on
+  `courtNames[1]`. Confirm the response shape before destructuring it.
+- `wednesdayAt("10:00")`: a helper returning an ISO-8601 string **with offset**
+  (`PatchFixture` uses `z.iso.datetime({ offset: true })`) for the next
+  Wednesday at 10:00 UTC. Write it in the spec file; keep it pure so it is
+  obvious.
+
+Also confirm `seedRosteredFixture`'s returned `divisionId` is the one
+`/schedule/validate` wants, and that the fixture reached a status
+`moveFixture` will accept — `court-tags-scheduling.spec.ts:604-687` runs
+`schedule-settings` → `schedule/auto` → `schedule/apply` before its PATCH for
+exactly that reason. If the bare PATCH 4xxs, add those three calls rather than
+weakening the assertion.
 
 - [ ] **Step 2: Run and verify it fails.** Command as Task 4 Step 2, with `directory-venues-courts`.
 
