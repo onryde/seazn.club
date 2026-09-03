@@ -107,6 +107,19 @@ export async function listOfficialBlackouts(auth: AuthCtx): Promise<OfficialBlac
   return withTenant(auth.orgId, (tx) => loadOfficialBlackouts(tx));
 }
 
+/** Single-official blackout read (G9, bench B03 product-gaps): G2 shipped
+ *  POST/DELETE on this row with no GET — an organiser could write a blackout
+ *  and never read it back. Scoped to one officialId, unlike the console-wide
+ *  listOfficialBlackouts above. */
+export async function listOfficialBlackout(
+  auth: AuthCtx,
+  officialId: string,
+): Promise<Pick<OfficialBlackoutRow, "date" | "note">[]> {
+  return withTenant(auth.orgId, (tx) => tx`
+    select date::text as date, note from official_availability
+    where official_id = ${officialId} order by date`);
+}
+
 /** Org-side counterpart to me-officiating.ts's setMyBlackout/deleteMyBlackout
  *  (G2, bench B03 product-gaps 2026-09-02): before this, an organiser told
  *  "I can't do the 14th" by an official had no way to record it — every

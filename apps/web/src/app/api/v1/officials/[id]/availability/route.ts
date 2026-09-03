@@ -2,9 +2,24 @@ import { v1, parseBody, reply } from "@/server/api-v1/http";
 import { requireResourceAuth } from "@/server/api-v1/auth";
 import { OfficiatingBlackoutInput } from "@/server/api-v1/schemas";
 import { HttpError } from "@/lib/errors";
-import { deleteOfficialBlackout, setOfficialBlackout } from "@/server/usecases/officials";
+import {
+  deleteOfficialBlackout,
+  listOfficialBlackout,
+  setOfficialBlackout,
+} from "@/server/usecases/officials";
 
 type Ctx = { params: Promise<{ id: string }> };
+
+/** Read back this official's blackout dates (G9, bench B03 product-gaps):
+ *  G2 shipped the write with no read — an organiser could set a blackout and
+ *  never see it again short of the console-wide listOfficialBlackouts. */
+export async function GET(req: Request, { params }: Ctx) {
+  return v1(async () => {
+    const { id } = await params;
+    const auth = await requireResourceAuth(req, "official", id, "read");
+    return listOfficialBlackout(auth, id);
+  });
+}
 
 /** Org-side blackout write (G2, bench B03 product-gaps): the organiser's
  *  counterpart to POST /me/availability/officiating. Scoped to this one
