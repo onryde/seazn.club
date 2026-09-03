@@ -851,6 +851,28 @@ The digest scoping is proven by entrant-name presence/absence rather than a bool
 assertions removed against fifty-eight added, every removal read and replaced with the new
 truth; no `.only`, no `xit`; the three added `skipIf` are the standard DB gate.
 
+**The §2 pin is ONE-WAY, and three places claim it is not.**
+`server/__tests__/entitlements-v18-matrix.test.ts` has five cases and every one iterates
+rows PARSED OUT OF THE DESIGN DOC, asserting the database matches. Nothing goes the other
+direction: nothing enumerates `plan_entitlements` and asks whether each key appears in §2.
+The sibling `retired-matrix-keys.test.ts:30-87` is absence-only against a hardcoded list
+and pins the `plans` table, not feature keys.
+
+V395's header (`:3-5`), V396's header (`:3-4`) and this plan's T14 all rest on the sentence
+"a row in the database that §2 does not name is drift by construction". **That guarantee
+does not exist.** I wrote it, and it was repeated into two migration headers.
+
+No live defect — `import.events` and `dashboard.theme` were both added to §2 in the same
+commits, which is exactly the discipline those headers describe. The exposure is the NEXT
+migration that forgets, whose author will have been told three times that it cannot happen.
+A false guarantee is worse than no guarantee: it manufactures confidence where a reader
+would otherwise check. Same shape as `passCreditProseFaults` reading only the first table
+cell and believing it had scanned the row.
+
+**Fix — one test case:** `select distinct feature_key from plan_entitlements`, subtract the
+keys parsed from §2 and the known-deleted set, assert the remainder is empty. Then the
+three headers become true instead of aspirational.
+
 **Nobody has a green smoke on this branch** — the last run aborted at check 165.
 
 ### T9 — sweep and gates
