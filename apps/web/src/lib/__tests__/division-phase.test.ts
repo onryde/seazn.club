@@ -14,12 +14,28 @@ const NOW = "2026-09-05T09:42:00Z"; // Sat 10:42 Europe/London (BST)
 const TZ = "Europe/London";
 
 const stage = (o: Partial<PhaseStage> = {}): PhaseStage => ({
-  id: "st1", name: "League", seq: 1, status: "active", hasFixtures: true, needsProposal: false, ...o,
+  id: "st1", name: "League", seq: 1, status: "active", hasFixtures: true,
+  timing: null, sourceReady: false, proposal: "none", ...o,
 });
 const fx = (o: Partial<PhaseFixture> = {}): PhaseFixture => ({
   id: "f1", status: "scheduled", scheduledAt: "2026-09-12T09:00:00Z", eventCount: 0, matchMinutes: 90,
-  hasScorer: false, ...o,
+  hasScorer: false, stageId: "st1", tbd: false, ...o,
 });
+/**
+ * M1 (fix round I): a stage that owes its DRAW — the only shape that raises
+ * `needs_draw` now, and every conjunct of it is load-bearing (each one is
+ * mutated on its own below). It is deliberately built as a stage PLUS the
+ * TBD fixture that belongs to it: "has this bracket been drawn?" is a
+ * question about a stage that only its fixtures can answer, so a stage
+ * literal on its own can no longer claim it.
+ */
+const drawable = (o: Partial<PhaseStage> = {}): PhaseStage =>
+  // `active`, not `pending`: generating the TBD bracket — the step that
+  // makes a draw computable at all — moves the stage to `active`.
+  stage({ id: "fin", name: "Finals", seq: 2, status: "active", hasFixtures: true,
+          timing: "setup", sourceReady: true, proposal: "none", ...o });
+const tbdFx = (stageId: string, o: Partial<PhaseFixture> = {}): PhaseFixture =>
+  fx({ id: `${stageId}-tbd`, stageId, tbd: true, status: "scheduled", scheduledAt: null, ...o });
 const input = (o: Partial<PhaseInput> = {}): PhaseInput => ({
   divisionStatus: "active", stages: [stage()], fixtures: [fx()], now: NOW, tz: TZ, awaitingRegistrations: 0, ...o,
 });
@@ -165,7 +181,7 @@ describe("resolvePhase — rule order", () => {
     // stage would wrongly read "finished".
     const stages = [
       stage({ id: "lg", seq: 1, status: "complete" }),
-      stage({ id: "fin", name: "Finals", seq: 2, status: "pending", hasFixtures: false, needsProposal: true }),
+      stage({ id: "fin", name: "Finals", seq: 2, status: "pending", hasFixtures: false, timing: "setup", sourceReady: true }),
     ];
     const fixtures = [fx({ id: "a", status: "decided" }), fx({ id: "b", status: "finalized" })];
     expect(resolvePhase(input({ stages, fixtures }))).toBe("setting_up");
@@ -185,7 +201,7 @@ describe("resolvePhase — rule order", () => {
   it("2 NOT finished: a LATER open stage with zero fixtures blocks it, even when the lowest open stage owes nothing", () => {
     const stages = [
       stage({ id: "lg", seq: 1, status: "active", hasFixtures: true }),
-      stage({ id: "fin", name: "Finals", seq: 2, status: "pending", hasFixtures: false, needsProposal: false }),
+      stage({ id: "fin", name: "Finals", seq: 2, status: "pending", hasFixtures: false }),
     ];
     const fixtures = [fx({ id: "a", status: "decided" }), fx({ id: "b", status: "finalized" })];
     expect(resolvePhase(input({ stages, fixtures }))).toBe("scheduled");
@@ -193,7 +209,7 @@ describe("resolvePhase — rule order", () => {
   it("2 NOT finished: the sibling shape — lowest stage COMPLETE, later stage pending with zero fixtures", () => {
     const stages = [
       stage({ id: "lg", seq: 1, status: "complete", hasFixtures: true }),
-      stage({ id: "fin", name: "Finals", seq: 2, status: "pending", hasFixtures: false, needsProposal: false }),
+      stage({ id: "fin", name: "Finals", seq: 2, status: "pending", hasFixtures: false }),
     ];
     const fixtures = [fx({ id: "a", status: "decided" }), fx({ id: "b", status: "finalized" })];
     expect(resolvePhase(input({ stages, fixtures }))).toBe("setting_up");
@@ -238,14 +254,20 @@ describe("resolvePhase — rule order", () => {
   it("4 setting_up: U16 shape — league complete, finals pending needs proposal", () => {
     const stages = [
       stage({ id: "lg", seq: 1, status: "complete" }),
-      stage({ id: "fin", name: "Finals", seq: 2, status: "pending", hasFixtures: false, needsProposal: true }),
+      stage({ id: "fin", name: "Finals", seq: 2, status: "pending", hasFixtures: false, timing: "setup", sourceReady: true }),
     ];
     expect(resolvePhase(input({ stages, fixtures: [fx({ status: "decided" })] }))).toBe("setting_up");
   });
   it("4 setting_up: a pending stage with fixtures generated but its draw still owed", () => {
-    // isolates needsProposal from hasFixtures: the other OR operand is false here
-    const stages = [stage({ id: "fin", name: "Finals", seq: 1, status: "pending", hasFixtures: true, needsProposal: true })];
-    expect(resolvePhase(input({ stages, fixtures: [fx({ scheduledAt: "2026-09-12T09:00:00Z" })] }))).toBe("setting_up");
+    // Isolates `stageOwesDraw` from `!hasFixtures`: the other operand of
+    // `stageOwesWork`'s OR is false here, so only the draw clause can
+    // produce this answer.
+    const stages = [drawable({ seq: 1 })];
+    expect(resolvePhase(input({ stages, fixtures: [tbdFx("fin")] }))).toBe("setting_up");
+    // M1 (fix round I): and the SAME stage with its bracket drawn is not
+    // setting up — the one fact that separates the two is the fixture.
+    expect(resolvePhase(input({ stages, fixtures: [tbdFx("fin", { tbd: false, scheduledAt: "2026-09-12T09:00:00Z" })] })))
+      .toBe("scheduled");
   });
   // K1's fix must NOT over-apply to rule 4. Rule 2 asks "is there anything
   // left at all?" of EVERY open stage; rule 4 asks "is the thing that is next
@@ -258,7 +280,7 @@ describe("resolvePhase — rule order", () => {
   it("4 does NOT fire for a later empty stage while the current stage is still playable", () => {
     const stages = [
       stage({ id: "lg", seq: 1, status: "active", hasFixtures: true }),
-      stage({ id: "fin", name: "Finals", seq: 2, status: "pending", hasFixtures: false, needsProposal: false }),
+      stage({ id: "fin", name: "Finals", seq: 2, status: "pending", hasFixtures: false }),
     ];
     const fixtures = [fx({ id: "a", status: "decided" }), fx({ id: "b", status: "scheduled", scheduledAt: "2026-09-12T09:00:00Z" })];
     expect(resolvePhase(input({ stages, fixtures }))).toBe("scheduled");
@@ -316,9 +338,54 @@ describe("resolvePhase — rule order", () => {
 });
 
 describe("resolveAttention", () => {
-  it("needs_draw for a pending stage awaiting its proposal", () => {
-    const stages = [stage({ id: "fin", name: "Finals", seq: 2, status: "pending", hasFixtures: false, needsProposal: true })];
-    expect(resolveAttention(input({ stages }))).toContainEqual({ kind: "needs_draw", stageId: "fin", stageName: "Finals" });
+  // M1 (fix round I, Critical — instance TWELVE). Each of the four conjuncts
+  // of `stageOwesDraw` is mutated on its own below: drop any one and the row
+  // must become `needs_fixtures` (or nothing), because in that state the
+  // panel's draw button is either absent or, as the live click at 11:39Z on
+  // 2026-09-03 showed, present and inoperable.
+  it("needs_draw ONLY when the panel's draw door is both rendered and operable", () => {
+    const stages = [drawable()];
+    const fixtures = [tbdFx("fin")];
+    expect(resolveAttention(input({ stages, fixtures }))).toContainEqual({
+      kind: "needs_draw", stageName: "Finals", door: "compute",
+    });
+  });
+  it.each([
+    // conjunct, the shape with it broken, what the row must become instead
+    ["no generated fixtures at all (computeSeedProposal 422s SEEDING_RULES_MISSING)",
+      { st: { hasFixtures: false }, fx: [] as PhaseFixture[] }, "needs_fixtures"],
+    ["the bracket is already drawn (confirming filled every slot)",
+      { st: {}, fx: [tbdFx("fin", { tbd: false })] }, undefined],
+    ["a source stage is not complete (progression-panel.tsx returns null)",
+      { st: { sourceReady: false }, fx: [tbdFx("fin")] }, undefined],
+    ["the stage auto-seeds instead (timing on_complete never goes through propose/confirm)",
+      { st: { timing: "on_complete" }, fx: [tbdFx("fin")] }, undefined],
+    ["the stage is complete",
+      { st: { status: "complete" }, fx: [tbdFx("fin")] }, undefined],
+  ])("needs_draw is NOT raised when %s", (_why, shape, becomes) => {
+    const out = resolveAttention(input({ stages: [drawable(shape.st)], fixtures: shape.fx }));
+    expect(out.some((a) => a.kind === "needs_draw")).toBe(false);
+    if (becomes) expect(out.some((a) => a.kind === becomes)).toBe(true);
+  });
+  // The action LABEL is the panel's own door, not a fixed word: a fixed
+  // "Compute proposal" is wrong in two of the three states the panel can be
+  // in for exactly this row.
+  it.each([
+    ["none", "compute"],
+    ["draft", "confirm"],
+    ["stale", "recompute"],
+  ] as const)("a %s proposal makes the action point at the panel's %s door", (proposal, door) => {
+    const out = resolveAttention(input({ stages: [drawable({ proposal })], fixtures: [tbdFx("fin")] }));
+    expect(out).toContainEqual({ kind: "needs_draw", stageName: "Finals", door });
+  });
+  it("resolvePhase never reads `proposal` — the field is the action label only", () => {
+    const phases = (["none", "draft", "stale", "confirmed"] as const).map((proposal) =>
+      resolvePhase(input({ stages: [drawable({ proposal })], fixtures: [tbdFx("fin")] })),
+    );
+    // All four identical: `d/[divSlug]/page.tsx` hardcodes "none" (it has no
+    // organiser-only proposal read), so if the phase ever depended on this
+    // field the desk and the division page would disagree about one division.
+    expect(new Set(phases).size).toBe(1);
   });
   // K1 (fix round G, Critical — instance NINE), the attention half: the
   // unseeded stage the finding names had NO row of any kind, so nothing on
@@ -326,15 +393,15 @@ describe("resolveAttention", () => {
   it("needs_fixtures names a LATER open stage with nothing to play, once nothing is live", () => {
     const stages = [
       stage({ id: "lg", seq: 1, status: "active", hasFixtures: true }),
-      stage({ id: "fin", name: "Finals", seq: 2, status: "pending", hasFixtures: false, needsProposal: false }),
+      stage({ id: "fin", name: "Finals", seq: 2, status: "pending", hasFixtures: false }),
     ];
     const fixtures = [fx({ id: "a", status: "decided" }), fx({ id: "b", status: "finalized" })];
     expect(resolveAttention(input({ stages, fixtures }))).toContainEqual({
-      kind: "needs_fixtures", stageId: "fin", stageName: "Finals",
+      kind: "needs_fixtures", stageName: "Finals",
     });
   });
   it("needs_fixtures, not needs_draw, for a stage that owes no proposal — the two rows point at different controls", () => {
-    const stages = [stage({ id: "fin", name: "Finals", seq: 1, status: "pending", hasFixtures: false, needsProposal: false })];
+    const stages = [stage({ id: "fin", name: "Finals", seq: 1, status: "pending", hasFixtures: false })];
     const out = resolveAttention(input({ stages, fixtures: [] }));
     expect(out.map((a) => a.kind)).toEqual(["needs_fixtures"]);
   });
@@ -345,7 +412,7 @@ describe("resolveAttention", () => {
   it("a later empty stage raises NOTHING while a fixture is still live", () => {
     const stages = [
       stage({ id: "lg", seq: 1, status: "active", hasFixtures: true }),
-      stage({ id: "fin", name: "Finals", seq: 2, status: "pending", hasFixtures: false, needsProposal: false }),
+      stage({ id: "fin", name: "Finals", seq: 2, status: "pending", hasFixtures: false }),
     ];
     const fixtures = [fx({ id: "a", status: "decided" }), fx({ id: "b", status: "scheduled", scheduledAt: "2026-09-12T09:00:00Z" })];
     expect(resolveAttention(input({ stages, fixtures })).some((a) => a.kind === "needs_fixtures")).toBe(false);
@@ -356,13 +423,13 @@ describe("resolveAttention", () => {
     // every division the moment it is made, pointing at a Generate button
     // that cannot succeed yet. `needs_draw` stays ungated (H2's ruling, one
     // test below) — the two are deliberately different.
-    const stages = [stage({ id: "lg", name: "League", seq: 1, status: "pending", hasFixtures: false, needsProposal: false })];
+    const stages = [stage({ id: "lg", name: "League", seq: 1, status: "pending", hasFixtures: false })];
     expect(resolveAttention(input({ divisionStatus: "setup", stages, fixtures: [] }))).toEqual([]);
     // And the other direction, or the gate could be "never fires":
     expect(resolveAttention(input({ divisionStatus: "scheduled", stages, fixtures: [] })).map((a) => a.kind)).toEqual(["needs_fixtures"]);
   });
   it("needs_fixtures is red, and sorts with needs_draw ahead of amber and slate", () => {
-    const stages = [stage({ id: "fin", name: "Finals", seq: 1, status: "pending", hasFixtures: false, needsProposal: false })];
+    const stages = [stage({ id: "fin", name: "Finals", seq: 1, status: "pending", hasFixtures: false })];
     const fixtures = [fx({ id: "u", status: "scheduled", scheduledAt: null })];
     const kinds = resolveAttention(input({ stages, fixtures, awaitingRegistrations: 1 })).map((a) => a.kind);
     expect(kinds).toEqual(["needs_fixtures", "unscheduled", "registrations_waiting"]);
@@ -459,8 +526,8 @@ describe("resolveAttention", () => {
     expect(resolveAttention(input({ awaitingRegistrations: 0 })).some((a) => a.kind === "registrations_waiting")).toBe(false);
   });
   it("orders red before amber before slate", () => {
-    const stages = [stage({ id: "fin", name: "Finals", seq: 2, status: "pending", hasFixtures: false, needsProposal: true })];
-    const fixtures = [fx({ id: "u", scheduledAt: null })];
+    const stages = [drawable()];
+    const fixtures = [tbdFx("fin"), fx({ id: "u", scheduledAt: null })];
     const kinds = resolveAttention(input({ stages, fixtures, awaitingRegistrations: 1 })).map((a) => a.kind);
     expect(kinds).toEqual(["needs_draw", "unscheduled", "registrations_waiting"]);
   });
@@ -513,8 +580,8 @@ describe("resolveAttention", () => {
       expect(out.some((a) => a.kind === "no_scorer")).toBe(false);
     });
     it("needs_draw, unscheduled and registrations_waiting are NOT gated by divisionStatus — every one legitimately applies before Start", () => {
-      const stages = [stage({ id: "fin", name: "Finals", seq: 1, status: "pending", hasFixtures: false, needsProposal: true })];
-      const fixtures = [fx({ id: "u", status: "scheduled", scheduledAt: null })];
+      const stages = [drawable({ seq: 1 })];
+      const fixtures = [tbdFx("fin"), fx({ id: "u", status: "scheduled", scheduledAt: null })];
       const out = resolveAttention(input({ divisionStatus: "setup", stages, fixtures, awaitingRegistrations: 2 }));
       expect(out.map((a) => a.kind).sort()).toEqual(["needs_draw", "registrations_waiting", "unscheduled"]);
     });
@@ -548,8 +615,8 @@ describe("openStages is the ordering authority — Minor 1 (fix round H)", () =>
     input({
       divisionStatus: "active",
       stages: [
-        stage({ id: "s2", name: "Finals", seq: 2, status: "pending", hasFixtures: false, needsProposal: false }),
-        stage({ id: "s1", name: "League", seq: 1, status: "active", hasFixtures: true, needsProposal: false }),
+        stage({ id: "s2", name: "Finals", seq: 2, status: "pending", hasFixtures: false }),
+        stage({ id: "s1", name: "League", seq: 1, status: "active", hasFixtures: true }),
       ],
       fixtures: [fx({ id: "f1", status: "scheduled", scheduledAt: "2026-09-12T09:00:00Z" })],
     });
@@ -595,7 +662,7 @@ describe("hasPlayedFixture", () => {
  * ORDER on top of it.
  */
 describe("ledgerRank — red outranks the phase", () => {
-  const red = { kind: "needs_draw", stageId: "s", stageName: "Finals" } as const;
+  const red = { kind: "needs_draw", stageName: "Finals", door: "compute" } as const;
   const amber = { kind: "unscheduled", count: 2 } as const;
 
   it("ranks the four phases in ledger order", () => {

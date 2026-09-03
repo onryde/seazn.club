@@ -1410,7 +1410,6 @@ export type DictionaryKey =
   | "desk.masthead.divisions.one"
   | "desk.masthead.divisions.other"
   | "desk.needsYou.needs_draw"
-  | "desk.needsYou.needs_draw.action"
   | "desk.needsYou.needs_draw.sub"
   | "desk.needsYou.needs_fixtures"
   | "desk.needsYou.needs_fixtures.action"

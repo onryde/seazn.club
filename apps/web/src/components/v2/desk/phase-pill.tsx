@@ -3,12 +3,28 @@ import type { Dict } from "@/lib/i18n-constants";
 import type { DictionaryKey } from "@/lib/i18n-keys";
 import { ATTENTION_SEVERITY, type Attention, type DivisionPhase } from "@/lib/division-phase";
 
-/** The pill word for a RED attention, per kind. K1 (fix round G) replaced a
- *  TERNARY here — `red.kind === "needs_draw" ? … : "desk.pill.no_scorer"` —
- *  which silently labelled any red kind that was not `needs_draw` "No
- *  scorer". A full `Record` over every kind (amber/slate ones map to `null`)
- *  makes adding a kind a COMPILE error instead of a mislabelled pill. */
-const RED_PILL_KEY: Record<Attention["kind"], DictionaryKey | null> = {
+/**
+ * The pill word for a RED attention, per kind. K1 (fix round G) replaced a
+ * TERNARY here — `red.kind === "needs_draw" ? … : "desk.pill.no_scorer"` —
+ * which silently labelled any red kind that was not `needs_draw` "No
+ * scorer". A full `Record` over every kind (amber/slate ones map to `null`)
+ * makes adding a kind a COMPILE error instead of a mislabelled pill.
+ *
+ * Fix round I, minor: this map and the severity filter below were two guards
+ * covering for each other — mutate either ALONE and the suite stayed green,
+ * because a broken filter still landed on a `null` here and a broken `null`
+ * here was still filtered out there. They cannot be collapsed into one (the
+ * ONE authority for which kinds are red is `ATTENTION_SEVERITY`, and
+ * restating it here would be a second one), so each is given a test that
+ * dies on its own instead:
+ *   - the filter: an UNSORTED attention list whose first member is amber and
+ *     whose second is red — only the filter can reach the red one;
+ *   - this map's red entries: the pill WORD asserted per kind;
+ *   - this map's null entries: pinned against `ATTENTION_SEVERITY` itself,
+ *     so a null becoming a key contradicts the severity table it must agree
+ *     with. All three live in desk-ssr.test.tsx.
+ */
+export const RED_PILL_KEY: Record<Attention["kind"], DictionaryKey | null> = {
   needs_draw: "desk.pill.needs_draw",
   needs_fixtures: "desk.pill.needs_fixtures",
   no_scorer: "desk.pill.no_scorer",

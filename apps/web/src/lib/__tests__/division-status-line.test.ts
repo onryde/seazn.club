@@ -24,6 +24,29 @@ describe("statusLine", () => {
     const s = statusLine(en, { ...base, phase: "setting_up", played: 28, total: 28, needsDrawStageName: "Finals", next: null });
     expect(s).toBe("28 of 28 played · Finals not drawn");
   });
+  /**
+   * M1 minor (fix round I): the stage name used to print in the `setting_up`
+   * arm ALONE — so the LESS informative sentence landed on exactly the shape
+   * instance TWELVE was found in. A division whose league is played out but
+   * not completed reads `scheduled` (rule 4 asks the NEXT open stage, and
+   * the league is not it), and that row printed a bare "6 of 6 played" next
+   * to a red pill saying "Needs draw" and naming nothing. Observed live at
+   * 11:33Z on 2026-09-03: row text "Cup | 6 of 6 played | Needs draw".
+   */
+  it("a pending draw names the stage in EVERY phase, not just setting_up", () => {
+    for (const phase of ["scheduled", "match_day", "setting_up"] as const) {
+      expect(statusLine(en, { ...base, phase, played: 6, total: 6, needsDrawStageName: "Finals", next: null }))
+        .toBe("6 of 6 played · Finals not drawn");
+    }
+  });
+  it("a LIVE match outranks a pending draw — what is happening now wins", () => {
+    expect(statusLine(en, { ...base, phase: "match_day", played: 6, total: 9, inPlay: 2, needsDrawStageName: "Finals", next: null }))
+      .toBe("6 of 9 played · 2 in play");
+  });
+  it("the unscheduled suffix still rides on the needs-draw sentence", () => {
+    expect(statusLine(en, { ...base, phase: "scheduled", played: 6, total: 9, unscheduled: 3, needsDrawStageName: "Finals", next: null }))
+      .toBe("6 of 9 played · Finals not drawn · 3 unscheduled");
+  });
   it("setting up without a draw counts entrants", () => {
     expect(statusLine(en, { ...base, phase: "setting_up", played: 0, total: 0, next: null })).toBe("Setting up · 6 entrants");
   });

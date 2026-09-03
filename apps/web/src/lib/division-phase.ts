@@ -5,13 +5,33 @@
 export type DivisionStatus = "setup" | "scheduled" | "active" | "completed";
 export type DivisionPhase = "setting_up" | "scheduled" | "match_day" | "finished";
 
+/** The latest `stage_seed_proposals` row's status for a stage, mirroring
+ *  `getSeedProposal` (stages.ts — "latest by created_at desc, id desc, ANY
+ *  status"), with `"none"` for a stage that has never had one.
+ *
+ *  M1 (fix round I, Critical — instance TWELVE). Read for exactly ONE thing:
+ *  WHICH control the seed-proposal panel is currently showing, so the
+ *  `needs_draw` row's action can name it instead of guessing. It is never
+ *  read by `resolvePhase` — pinned by a test — because the phase must be the
+ *  same for every viewer and a proposal read is organiser-only. */
+export type SeedProposalState = "none" | "draft" | "stale" | "confirmed";
+
 export interface PhaseStage {
   id: string;
   name: string;
   seq: number;
   status: string; // pending | active | complete
   hasFixtures: boolean;
-  needsProposal: boolean;
+  /** `progression ->> 'timing'` — `"setup"` is the propose/confirm draw,
+   *  `"on_complete"` is auto-seeding, `null` is a stage with no progression
+   *  at all (its fixtures are generated, never seeded). */
+  timing: string | null;
+  /** `seedingSourceReady` (lib/seeding-source-ready.ts) — every source stage
+   *  this one draws standings from has status `complete`. Resolved by the
+   *  caller from the same in-memory stage list, so this module stays pure. */
+  sourceReady: boolean;
+  /** @see SeedProposalState — the action LABEL only, never the phase. */
+  proposal: SeedProposalState;
 }
 
 export interface PhaseFixture {
@@ -26,6 +46,16 @@ export interface PhaseFixture {
    *  per the finding's own wording). Resolved by the caller so this module
    *  stays pure and DB-free. */
   hasScorer: boolean;
+  /** Which stage this fixture belongs to. M1 (fix round I): "has this
+   *  bracket been drawn yet?" is a question about a STAGE answered by ITS
+   *  fixtures, so the two have to be relatable here. */
+  stageId: string;
+  /** Either side still unfilled — a generated bracket slot waiting on the
+   *  draw. This is the DRAWN/NOT-DRAWN fact, deliberately derived from the
+   *  entrants on the fixtures themselves rather than from a proposal row:
+   *  it is pure, identical for every viewer, and it is what the organiser
+   *  actually sees on the fixtures tab ("TBD v TBD"). */
+  tbd: boolean;
 }
 
 export interface PhaseInput {
@@ -48,19 +78,47 @@ export interface PhaseInput {
   awaitingRegistrations: number;
 }
 
+/** WHICH control the seed-proposal panel is showing for a stage that owes
+ *  its draw — `progression-panel.tsx`'s four branches, one for one:
+ *  no proposal ⇒ "Compute proposal", a draft ⇒ "Confirm proposal", a stale
+ *  one ⇒ "Recompute". The `needs_draw` row's action carries this so it can
+ *  render the panel's OWN dictionary key instead of a hand-copied name — the
+ *  label and the button it points at then cannot drift apart. */
+export type DrawDoor = "compute" | "confirm" | "recompute";
+
+/** `SeedProposalState` -> the door the panel offers for it. A `Record`, not a
+ *  ternary, so adding a proposal status is a COMPILE error rather than a
+ *  silently mislabelled action (phase-pill.tsx's `RED_PILL_KEY` precedent).
+ *  `confirmed` maps to `compute` and is unreachable in a `needs_draw` row:
+ *  confirming FILLS every slot, so no fixture of that stage is `tbd` any
+ *  more and `stageOwesDraw` below is false. */
+const DOOR_FOR_PROPOSAL: Record<SeedProposalState, DrawDoor> = {
+  none: "compute",
+  draft: "confirm",
+  stale: "recompute",
+  confirmed: "compute",
+};
+
 export type Attention =
-  | { kind: "needs_draw"; stageId: string; stageName: string }
+  // M1 (fix round I): `stageId` used to ride along here and reached exactly
+  // one consumer, `competition-desk.ts`'s `needs_draw_stage.id`, which
+  // nothing read either — deleted with it, same class as the `org_tz` and
+  // `court_label` deletions this wave already made.
+  | { kind: "needs_draw"; stageName: string; door: DrawDoor }
   // K1 fix (fix round G, Critical — instance NINE). `needs_draw`'s sibling,
   // for a stage that has nothing to play and no PROPOSAL to compute: an
   // `on_complete` stage waiting to be seeded by the stage before it, or a
   // stage whose fixtures were never generated at all. It is deliberately NOT
-  // `needs_draw`: the "Compute proposal" panel it points at
-  // (d/[divSlug]/page.tsx's `seedingStages`) is rendered only for a
-  // `timing: "setup"` stage, so re-using that row would send an organiser to
-  // a control that does not exist on their screen. Both of this row's real
-  // doors — "Complete stage" on the stage before it, and "Generate fixtures"
-  // — live on the division's fixtures tab, which is where its action goes.
-  | { kind: "needs_fixtures"; stageId: string; stageName: string }
+  // `needs_draw`: the "Compute proposal" panel that row points at is hidden
+  // for a non-`setup` stage AND, per M1 (fix round I), refuses to compute
+  // anything at all until the stage's TBD fixtures exist — so re-using that
+  // row would send an organiser to a control that is either absent or dead.
+  // Both of THIS row's real doors — "Complete stage" on the stage before it,
+  // and "Generate fixtures" — live on the division's fixtures tab, which is
+  // where its action goes; both were counted on that screen at 11:39Z on
+  // 2026-09-03 and are pinned by the action-label sweep
+  // (`competition-desk-actions.spec.ts`).
+  | { kind: "needs_fixtures"; stageName: string }
   | { kind: "unscheduled"; count: number }
   // F3 fix (final review, Important): used to be one row PER FIXTURE — a
   // division with 6 overdue fixtures produced 6 identical "Needs you" rows.
@@ -164,7 +222,7 @@ const PLAYED_STATUSES = new Set(["decided", "finalized"]);
  * (stages-panel.tsx) — and the third was still asking the phase word alone
  * after the first two were fixed. The predicate lives here, once, rather than
  * being written out a fourth time: a hand-copied predicate is a recorded
- * drift class in this wave (see `stageNeedsProposal`, K3).
+ * drift class in this wave (see `stageOwesDraw`, K3/M1).
  *
  * Derived from the SAME `PLAYED_STATUSES` set the desk's own played/total
  * count comes from, so an answer here can never disagree with the number the
@@ -183,37 +241,80 @@ function openStages(stages: PhaseStage[]): PhaseStage[] {
   return [...stages].filter((s) => s.status !== "complete").sort((a, b) => a.seq - b.seq);
 }
 
-/** "This stage cannot be played yet": it has no fixtures, or it has them and
- *  still owes its draw. */
-function stageOwesWork(s: PhaseStage): boolean {
-  return !s.hasFixtures || s.needsProposal;
+/** "This stage cannot be played yet": it has no fixtures at all, or it has
+ *  its generated TBD bracket and still owes the draw that fills it. */
+function stageOwesWork(s: PhaseStage, fixtures: readonly PhaseFixture[]): boolean {
+  return !s.hasFixtures || stageOwesDraw(s, fixtures);
 }
 
 /**
- * K3 (fix round G): the ONE derivation of `PhaseStage.needsProposal` — "this
- * stage owes a propose/confirm DRAW before anything can be generated for it".
+ * M1 (fix round I, Critical — instance TWELVE), replacing K3's
+ * `stageNeedsProposal`: the ONE derivation of "this stage owes a
+ * propose/confirm DRAW **that the organiser can actually go and do right
+ * now**".
  *
- * It used to be an expression written out TWICE — once in
- * competition-desk.ts's stage mapper and once, hand-copied, in
- * `o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx` — and it was untested at
- * every layer: mutating either copy to a constant left the whole desk suite
- * (137/137) green, even though `needs_draw`, the "Needs draw" pill, the
- * "Compute proposal" action and resolvePhase's rule 4 ALL reach production
- * only through it. A hand-copied predicate is a recorded drift class in this
- * repo, so both call sites now share this function and it is pinned where it
- * is DERIVED, against a real database: competition-desk.test.ts's
- * "K3: needsProposal is derived from the stage's own progression timing".
+ * K3's predicate was `status === "pending" && timing === "setup" &&
+ * !hasFixtures`, and every conjunct of that is right except the last, which
+ * is the exact OPPOSITE of the truth. `computeSeedProposal`
+ * (server/usecases/stages.ts) resolves the proposal against the stage's
+ * GENERATED TBD fixtures and 422s `SEEDING_RULES_MISSING` — "this stage has
+ * no generated TBD fixtures yet — generate its fixtures first" — when there
+ * are none. So `needs_draw` was raised in exactly, and only, the states
+ * where its "Compute proposal" action could not succeed.
  *
- * `timing` is `progression ->> 'timing'` — `null`/`undefined` for a stage
- * carrying no progression at all, which is NOT a draw it owes (its fixtures
- * are generated, not seeded).
+ * Driven live at 11:39-11:40Z on 2026-09-03 against HEAD's own bundle, in
+ * the shape the sixth review used as its healthy CONTROL (league complete,
+ * finals `{timing:"setup"}`, no fixtures generated): the desk raised red
+ * "Needs draw · Compute proposal", the landing `?tab=fixtures` DID render a
+ * "Compute proposal" button, and CLICKING it returned the panel's error
+ * banner — "This stage has no seeding rules, or its generated fixtures no
+ * longer match them." — with the panel still in its `empty` state. Presence
+ * was never the question.
+ *
+ * The four conjuncts are the union of the panel's own visibility gate and
+ * the API's own preconditions, each one traceable to a line that refuses:
+ *   - `status !== "complete"`     — a finished stage owes nothing. NOT
+ *                                   `=== "pending"`, which K3 used and which
+ *                                   is unreachable here: generating a
+ *                                   stage's TBD bracket moves it to
+ *                                   `active`, so the very act this row asks
+ *                                   for takes the stage out of `pending`
+ *                                   (read off a live division at 11:39Z:
+ *                                   Finals seq 2, status `active`, timing
+ *                                   `setup`, 3 fixtures, 0 filled);
+ *   - `timing === "setup"`        — `on_complete` stages auto-seed and never
+ *                                   go through propose/confirm (Decision 3);
+ *   - `hasFixtures` + a `tbd` one — `computeSeedProposal`'s
+ *                                   `destinationSlotsBySeed` 422 above, and
+ *                                   the "already drawn" case: confirming
+ *                                   FILLS every slot, so a drawn bracket has
+ *                                   no `tbd` fixture left;
+ *   - `sourceReady`               — `progression-panel.tsx:304`
+ *                                   (`if (!sourceReady) return null`) and
+ *                                   `sourcesToTables`' 409
+ *                                   SEEDING_SOURCE_INCOMPLETE.
+ *
+ * Everything it excludes falls through to `needs_fixtures`, whose two doors
+ * ("Complete stage", "Generate fixtures") are on that same screen — the
+ * ruling of the sixth review, reached here by the wider gate its own control
+ * run disproved.
+ *
+ * Pure and DB-free on purpose: `sourceReady` is `seedingSourceReady` over
+ * the caller's own in-memory stage list, and "is this bracket still TBD?" is
+ * read off the fixtures' entrants rather than a `stage_seed_proposals` row,
+ * so BOTH callers (the desk and `d/[divSlug]/page.tsx`, which computes the
+ * phase for the start-locks tip) can answer it identically without a
+ * viewer-gated read. Two authorities disagreeing about one division is this
+ * wave's other recurring defect.
  */
-export function stageNeedsProposal(stage: {
-  status: string;
-  timing: string | null | undefined;
-  hasFixtures: boolean;
-}): boolean {
-  return stage.status === "pending" && stage.timing === "setup" && !stage.hasFixtures;
+export function stageOwesDraw(stage: PhaseStage, fixtures: readonly PhaseFixture[]): boolean {
+  return (
+    stage.status !== "complete" &&
+    stage.timing === "setup" &&
+    stage.hasFixtures &&
+    stage.sourceReady &&
+    fixtures.some((f) => f.stageId === stage.id && f.tbd)
+  );
 }
 
 export function resolvePhase(input: PhaseInput): DivisionPhase {
@@ -266,7 +367,7 @@ export function resolvePhase(input: PhaseInput): DivisionPhase {
   // Pressing "Complete stage" seeds the finals and the row corrects itself,
   // so the product was fine — the desk simply never asked.
   const open = openStages(stages);
-  const anyOpenStageOwesWork = open.some(stageOwesWork);
+  const anyOpenStageOwesWork = open.some((st) => stageOwesWork(st, fixtures));
   const TERMINAL = new Set(["decided", "finalized", "abandoned", "forfeited", "cancelled"]);
   const allPlayed = fixtures.length > 0 && fixtures.every((f) => TERMINAL.has(f.status));
   // J2 fix (fix round F, Critical): `noLiveFixture` was factored out of only
@@ -315,7 +416,7 @@ export function resolvePhase(input: PhaseInput): DivisionPhase {
   // fix. Rule 2 asks "is there anything left at all?"; rule 4 asks "is the
   // thing that is next up playable?".
   const nextOpenStage = open[0];
-  if (nextOpenStage && stageOwesWork(nextOpenStage)) return "setting_up";
+  if (nextOpenStage && stageOwesWork(nextOpenStage, fixtures)) return "setting_up";
   // 5. scheduled — a live (non-terminal, i.e. status "scheduled"; "in_play"
   // always won rule 3 above) fixture actually carries a time.
   // F1 fix (final review, Critical): the old rule 5 was a bare "otherwise",
@@ -365,9 +466,17 @@ export function resolveAttention(input: PhaseInput): Attention[] {
   // the condition is unchanged from before this fix, deliberately: that arm
   // never consulted the fixtures and must keep not consulting them.
   const noLive = !input.fixtures.some((f) => LIVE.has(f.status));
-  const blocked = openStages(input.stages).find((s, i) => stageOwesWork(s) && (i === 0 || noLive));
-  if (blocked?.needsProposal) {
-    out.push({ kind: "needs_draw", stageId: blocked.id, stageName: blocked.name });
+  const blocked = openStages(input.stages).find(
+    (s, i) => stageOwesWork(s, input.fixtures) && (i === 0 || noLive),
+  );
+  // M1 (fix round I, Critical — instance TWELVE): `needs_draw` is raised
+  // only when the panel's draw door is BOTH rendered and operable — see
+  // `stageOwesDraw` above for the four conjuncts and the live click that
+  // disproved the sixth review's control run. `door` names which of the
+  // panel's three buttons is on screen, so the row can print that button's
+  // own dictionary key rather than a hand-copied name.
+  if (blocked && stageOwesDraw(blocked, input.fixtures)) {
+    out.push({ kind: "needs_draw", stageName: blocked.name, door: DOOR_FOR_PROPOSAL[blocked.proposal] });
   } else if (blocked && input.divisionStatus !== "setup") {
     // `needs_fixtures` is gated on the division being REAL, and `needs_draw`
     // deliberately is not (H2's ruling: a draw is owed the moment the stage
@@ -381,7 +490,7 @@ export function resolveAttention(input: PhaseInput): Attention[] {
     // Every shape this fix exists for is `scheduled`/`active`/`completed` —
     // fixtures cannot have been played otherwise — so the gate cannot hide
     // one.
-    out.push({ kind: "needs_fixtures", stageId: blocked.id, stageName: blocked.name });
+    out.push({ kind: "needs_fixtures", stageName: blocked.name });
   }
   const unscheduled = input.fixtures.filter((f) => f.status === "scheduled" && f.scheduledAt === null).length;
   if (unscheduled > 0) out.push({ kind: "unscheduled", count: unscheduled });

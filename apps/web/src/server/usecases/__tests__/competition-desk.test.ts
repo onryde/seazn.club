@@ -631,7 +631,7 @@ describe.skipIf(!HAS_DB)("getCompetitionDesk", () => {
     }
 
     it("K1: an unseeded on_complete stage blocks 'finished' and raises needs_fixtures naming it", async () => {
-      const { auth, competitionId, divisionId, finalsId } = await twoStages("on_complete");
+      const { auth, competitionId, divisionId } = await twoStages("on_complete");
       const desk = await getCompetitionDesk(auth, competitionId);
       const d = desk.divisions.get(divisionId)!;
       // Print the asserted CONTENT beside the verdict: without these the row
@@ -640,7 +640,7 @@ describe.skipIf(!HAS_DB)("getCompetitionDesk", () => {
       expect(d.total).toBe(6);
       expect(d.phase).not.toBe("finished");
       expect(d.phase).toBe("scheduled");
-      expect(d.attention).toContainEqual({ kind: "needs_fixtures", stageId: finalsId, stageName: "Finals" });
+      expect(d.attention).toContainEqual({ kind: "needs_fixtures", stageName: "Finals" });
       // NOT needs_draw: an on_complete stage has no proposal to compute, and
       // the panel that action points at is never rendered for one.
       expect(d.attention.some((a) => a.kind === "needs_draw")).toBe(false);
@@ -650,26 +650,93 @@ describe.skipIf(!HAS_DB)("getCompetitionDesk", () => {
     });
 
     it("K1 sibling: the same with stage 1 COMPLETE — setting_up, still with the needs_fixtures row", async () => {
-      const { auth, competitionId, divisionId, leagueId, finalsId } = await twoStages("on_complete");
+      const { auth, competitionId, divisionId, leagueId } = await twoStages("on_complete");
       await sql`update stages set status = 'complete' where id = ${leagueId}`;
       const desk = await getCompetitionDesk(auth, competitionId);
       const d = desk.divisions.get(divisionId)!;
       expect(d.played).toBe(6);
       expect(d.phase).toBe("setting_up");
-      expect(d.attention).toContainEqual({ kind: "needs_fixtures", stageId: finalsId, stageName: "Finals" });
+      expect(d.attention).toContainEqual({ kind: "needs_fixtures", stageName: "Finals" });
       // K2 again, on the shape whose row word IS "setting_up": the masthead
       // still must not agree with it, because 6 fixtures have been played.
       expect(competitionPhase(desk)).toEqual({ kind: "scheduled" });
     });
 
-    it("K3: needsProposal is DERIVED from the stage's own progression timing — 'setup' owes a draw", async () => {
-      const { auth, competitionId, divisionId, leagueId, finalsId } = await twoStages("setup");
+    /**
+     * M1 (fix round I, Critical — INSTANCE TWELVE), the shape the sixth
+     * review drove: the organiser never pressed "Complete stage", so the
+     * league is still `active` while all six of its fixtures are terminal.
+     * The desk used to show red "Needs draw · Compute proposal" here and the
+     * landing `?tab=fixtures` had ZERO compute-proposal controls (counted
+     * live at 11:33Z on 2026-09-03; control run with the league complete: 1).
+     */
+    it("M1: a setup-timing stage whose source is NOT complete asks for FIXTURES, never a draw", async () => {
+      const { auth, competitionId, divisionId } = await twoStages("setup");
+      const desk = await getCompetitionDesk(auth, competitionId);
+      const d = desk.divisions.get(divisionId)!;
+      expect(d.attention.some((a) => a.kind === "needs_draw")).toBe(false);
+      expect(d.needs_draw_stage).toBeNull();
+      expect(d.attention).toContainEqual({ kind: "needs_fixtures", stageName: "Finals" });
+    });
+
+    /**
+     * M1, the other half — and the shape the sixth review used as its
+     * healthy CONTROL, which was ALSO wrong. With the league complete but
+     * the finals bracket never generated, the panel DOES render a "Compute
+     * proposal" button, and clicking it (live, 11:39Z on 2026-09-03) returns
+     * the panel's error banner: `computeSeedProposal` 422s
+     * SEEDING_RULES_MISSING — "this stage has no generated TBD fixtures yet
+     * — generate its fixtures first". Presence was never the question, so
+     * this row must be `needs_fixtures` too, whose "Generate fixtures" door
+     * is on that same screen and works.
+     */
+    it("M1 control: a complete source is NOT enough — with no TBD bracket the compute door 422s, so it is still needs_fixtures", async () => {
+      const { auth, competitionId, divisionId, leagueId } = await twoStages("setup");
       await sql`update stages set status = 'complete' where id = ${leagueId}`;
       const desk = await getCompetitionDesk(auth, competitionId);
       const d = desk.divisions.get(divisionId)!;
-      expect(d.attention).toContainEqual({ kind: "needs_draw", stageId: finalsId, stageName: "Finals" });
-      expect(d.needs_draw_stage).toEqual({ id: finalsId, name: "Finals" });
+      expect(d.attention.some((a) => a.kind === "needs_draw")).toBe(false);
+      expect(d.attention).toContainEqual({ kind: "needs_fixtures", stageName: "Finals" });
+    });
+
+    it("K3/M1: needs_draw once the bracket IS generated and its source complete — the only state where the panel's door works", async () => {
+      const { auth, competitionId, divisionId, leagueId, finalsId } = await twoStages("setup");
+      // The order the API itself demands: generate the TBD bracket FIRST
+      // (computeSeedProposal resolves the proposal against those very
+      // fixtures), then complete the source.
+      await generateStageFixtures(auth, finalsId);
+      await sql`update stages set status = 'complete' where id = ${leagueId}`;
+      const desk = await getCompetitionDesk(auth, competitionId);
+      const d = desk.divisions.get(divisionId)!;
+      expect(d.attention).toContainEqual({ kind: "needs_draw", stageName: "Finals", door: "compute" });
+      expect(d.needs_draw_stage).toEqual({ name: "Finals" });
       expect(d.attention.some((a) => a.kind === "needs_fixtures")).toBe(false);
+    });
+
+    it("K3/M1: the action names the panel's OWN door — a draft proposal makes it 'confirm', not 'compute'", async () => {
+      const { auth, competitionId, divisionId, leagueId, finalsId } = await twoStages("setup");
+      await generateStageFixtures(auth, finalsId);
+      await sql`update stages set status = 'complete' where id = ${leagueId}`;
+      await sql`insert into stage_seed_proposals (org_id, stage_id, computed, status)
+                select org_id, ${finalsId}, '{}'::jsonb, 'draft' from stages where id = ${finalsId}`;
+      const desk = await getCompetitionDesk(auth, competitionId);
+      const d = desk.divisions.get(divisionId)!;
+      expect(d.attention).toContainEqual({ kind: "needs_draw", stageName: "Finals", door: "confirm" });
+    });
+
+    it("K3/M1: a CONFIRMED draw is not owed at all — the panel shows no button, so the row is gone", async () => {
+      const { auth, competitionId, divisionId, leagueId, finalsId } = await twoStages("setup");
+      await generateStageFixtures(auth, finalsId);
+      await sql`update stages set status = 'complete' where id = ${leagueId}`;
+      // Confirming FILLS the slots; that, not the proposal row, is what the
+      // desk reads — so seed the fill the way a confirm would.
+      await sql`update fixtures set home_entrant_id = (select id from entrants where division_id = ${divisionId} limit 1),
+                                    away_entrant_id = (select id from entrants where division_id = ${divisionId} offset 1 limit 1)
+                 where stage_id = ${finalsId}`;
+      const desk = await getCompetitionDesk(auth, competitionId);
+      const d = desk.divisions.get(divisionId)!;
+      expect(d.attention.some((a) => a.kind === "needs_draw")).toBe(false);
+      expect(d.needs_draw_stage).toBeNull();
     });
 
     it("K3 contrast: 'on_complete' at the same position owes NO draw — the two timings must not collapse", async () => {

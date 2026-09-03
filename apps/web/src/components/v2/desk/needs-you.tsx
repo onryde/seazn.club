@@ -2,7 +2,8 @@ import Link from "@/components/ui/console-link";
 import { t, plural } from "@/lib/i18n";
 import type { Dict, Locale } from "@/lib/i18n-constants";
 import { routes } from "@/lib/routes";
-import { ATTENTION_SEVERITY, type Attention, type Severity } from "@/lib/division-phase";
+import { ATTENTION_SEVERITY, type Attention, type DrawDoor, type Severity } from "@/lib/division-phase";
+import type { DictionaryKey } from "@/lib/i18n-keys";
 import type { CompetitionDesk } from "@/server/usecases/competition-desk";
 
 export interface NeedsYouItem {
@@ -13,6 +14,31 @@ export interface NeedsYouItem {
   sub: string;
   action: { label: string; href: string };
 }
+
+/**
+ * M1 (fix round I, Critical — instance TWELVE): the `needs_draw` action
+ * renders the PANEL'S OWN dictionary key, never a copy of its words.
+ *
+ * There used to be a `desk.needsYou.needs_draw.action` key reading "Compute
+ * proposal" in all four locales, hand-copied from `progression.computeCta`.
+ * Two things were wrong with that and only one of them was the copy. The
+ * copy meant the row could name a button the panel was not showing — the
+ * panel offers "Confirm proposal" for a draft and "Recompute" for a stale
+ * one, and a fixed label is wrong in two of its three states. And a hand-
+ * copied name drifts silently: nothing at any layer compares the two
+ * strings. Pointing at the key the button itself renders removes both
+ * failure modes by construction, and the dead key was deleted from the four
+ * dictionaries.
+ *
+ * A `Record` over every door, not a ternary, so adding one is a COMPILE
+ * error rather than a mislabelled action (phase-pill.tsx's `RED_PILL_KEY`
+ * precedent, and the K1 defect that established it).
+ */
+export const DRAW_DOOR_KEY: Record<DrawDoor, DictionaryKey> = {
+  compute: "progression.computeCta",
+  confirm: "progression.confirmCta",
+  recompute: "progression.recompute",
+};
 
 const SEV_ORDER: Severity[] = ["red", "amber", "slate"];
 const DOT: Record<Severity, string> = { red: "bg-red-600", amber: "bg-amber-600", slate: "bg-slate-500" };
@@ -38,7 +64,7 @@ export function needsYouItems(
             key: `${d.id}:needs_draw`, severity: sev, kind: a.kind,
             title: t(dict, "desk.needsYou.needs_draw", { division: d.name, stage: a.stageName }),
             sub: t(dict, "desk.needsYou.needs_draw.sub"),
-            action: { label: t(dict, "desk.needsYou.needs_draw.action"), href: routes.division(org, comp, d.slug, "fixtures") },
+            action: { label: t(dict, DRAW_DOOR_KEY[a.door]), href: routes.division(org, comp, d.slug, "fixtures") },
           });
           break;
         // K1 (fix round G, Critical — instance NINE): the row that did not

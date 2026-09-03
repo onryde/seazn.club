@@ -92,13 +92,33 @@ export function nextDateLabel(iso: string, locale: string, tz: string): string {
 export function statusLine(dict: Dict, i: StatusLineInput): string {
   const base = { played: i.played, total: i.total };
   let line: string;
-  switch (i.phase) {
+  // M1 minor (fix round I): the stage name used to print in the `setting_up`
+  // arm ALONE, so the less informative sentence landed on exactly the shape
+  // instance TWELVE was found in. A division whose league is played out but
+  // whose next stage still owes its draw reads `scheduled` (rule 4 asks the
+  // NEXT open stage, and the league is not it), and that row printed a bare
+  // "6 of 6 played" while the red pill beside it said "Needs draw" and named
+  // nothing. `needs_draw` is raised for exactly one stage at a time
+  // (resolveAttention's `blocked`), so there is always precisely one name to
+  // print, whatever the phase word happens to be.
+  //
+  // The one thing that outranks it is a LIVE match: `inPlay > 0` is
+  // happening now and a pending draw is not, so `match_day`'s own sentence
+  // keeps that arm. (`finished` cannot reach here at all — a stage owing its
+  // draw is an open stage owing work, which rule 2 refuses to call finished
+  // — so it needs no exclusion of its own.)
+  const drawLine =
+    i.needsDrawStageName !== null && i.inPlay === 0
+      ? t(dict, "desk.status.needsDraw", { ...base, stage: i.needsDrawStageName })
+      : null;
+  if (drawLine !== null) line = drawLine;
+  else switch (i.phase) {
     case "finished":
       line = t(dict, "desk.status.finished", base);
       break;
     case "setting_up":
-      line = i.needsDrawStageName
-        ? t(dict, "desk.status.needsDraw", { ...base, stage: i.needsDrawStageName })
+      // The needs-draw sentence is handled once, above, for every phase.
+      line =
         // F1 fix (final review, Critical): `setting_up` is now reachable
         // for a division that already HAS fixtures (rule 5's fallback —
         // fixtures exist but none carry a time yet), not only a brand-new
@@ -107,7 +127,7 @@ export function statusLine(dict: Dict, i: StatusLineInput): string {
         // `card.progress.played`) is the fact this row owes; the entrant
         // count is only ever the right answer once there is nothing else
         // to report.
-        : i.total > 0
+        i.total > 0
           ? t(dict, "card.progress.played", base)
           // `{count} entrants` read "1 entrants" for the first entrant an
           // organiser adds — the count strings go through `plural()` so the

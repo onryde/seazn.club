@@ -8,6 +8,7 @@ import { whenLabel } from "@/lib/division-status-line";
 import type { Attention } from "@/lib/division-phase";
 import type { DeskDivision } from "@/server/usecases/competition-desk";
 import { PhasePill } from "./phase-pill";
+import { DRAW_DOOR_KEY } from "./needs-you";
 
 export interface LedgerRow {
   id: string;
@@ -81,7 +82,11 @@ function redAction(dict: Dict, d: DeskDivision, org: string, comp: string, slug:
   );
   if (!a) return null;
   if (a.kind === "needs_draw") {
-    return { label: t(dict, "desk.needsYou.needs_draw.action"), href: routes.division(org, comp, slug, "fixtures") };
+    // M1 (fix round I): the panel's OWN key for whichever door it is showing
+    // — see needs-you.tsx's `DRAW_DOOR_KEY`. This row and the Needs-you row
+    // above it are the same promise made twice, so they read the same map;
+    // they used to read the same hand-copied string instead.
+    return { label: t(dict, DRAW_DOOR_KEY[a.door]), href: routes.division(org, comp, slug, "fixtures") };
   }
   if (a.kind === "needs_fixtures") {
     return { label: t(dict, "desk.needsYou.needs_fixtures.action"), href: routes.division(org, comp, slug, "fixtures") };

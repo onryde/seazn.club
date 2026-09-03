@@ -53,11 +53,12 @@ describe("StagesPanel phase gating", () => {
   const playedOutInput = (): PhaseInput => ({
     divisionStatus: "active",
     stages: [
-      { id: "s1", name: "League", seq: 1, status: "complete", hasFixtures: true, needsProposal: false },
-      { id: "s2", name: "Finals", seq: 2, status: "pending", hasFixtures: false, needsProposal: false },
+      { id: "s1", name: "League", seq: 1, status: "complete", hasFixtures: true, timing: null, sourceReady: false, proposal: "none" as const },
+      { id: "s2", name: "Finals", seq: 2, status: "pending", hasFixtures: false, timing: null, sourceReady: false, proposal: "none" as const },
     ],
     fixtures: [1, 2, 3, 4, 5, 6].map((n) => ({
       id: `f${n}`, status: "decided", scheduledAt: null, eventCount: 0, matchMinutes: 30, hasScorer: true,
+      stageId: "s1", tbd: false,
     })),
     now: "2026-03-01T12:00:00Z",
     tz: "UTC",

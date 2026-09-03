@@ -28,7 +28,7 @@ import { getScheduleSettings } from "@/server/usecases/schedule";
 // picker excludes archived courts either way via `courtGroups`).
 import { listVenues } from "@/server/usecases/venues";
 import { resolveVenueTz } from "@/lib/tz";
-import { resolvePhase, stageNeedsProposal, type DivisionStatus } from "@/lib/division-phase";
+import { resolvePhase, type DivisionStatus } from "@/lib/division-phase";
 import { defaultMatchMinutes } from "@/server/usecases/competition-desk";
 import { hasFeature } from "@/lib/entitlements";
 import { listEntrantLogoUrls } from "@/server/usecases/teams";
@@ -144,33 +144,53 @@ export default async function DivisionPage({
   // at 0 rather than fetched here.
   const phase = resolvePhase({
     divisionStatus: division.status as DivisionStatus,
-    // K3 (fix round G, coverage): `needsProposal` used to be a HAND-COPIED
-    // twin of competition-desk.ts's own expression — the same predicate
-    // written out in two files, drifting independently, and untested at
-    // every layer (mutating either copy to a constant left 137/137 green).
-    // The predicate now lives ONCE, in division-phase.ts's
-    // `stageNeedsProposal`, and is pinned against a real database in
-    // competition-desk.test.ts. `hasFixtures` is computed once here too — it
-    // was evaluated twice per stage, once for each field.
+    // K3 (fix round G) / M1 (fix round I): the "does this stage owe a draw"
+    // predicate used to be a HAND-COPIED twin of competition-desk.ts's own
+    // expression — written out in two files, drifting independently, and
+    // untested at every layer (mutating either copy to a constant left
+    // 137/137 green). This page now ships only the raw FACTS and the
+    // predicate lives once, in division-phase.ts's `stageOwesDraw`, pinned
+    // against a real database in competition-desk.test.ts. `hasFixtures` is
+    // computed once here too — it was evaluated twice per stage.
     stages: stages.map((s) => {
       const hasFixtures = fixtures.some((f) => f.stage_id === s.id);
+      const timing = (s.progression as { timing?: string } | null)?.timing ?? null;
       return {
         id: s.id,
         name: s.name,
         seq: s.seq,
         status: s.status,
         hasFixtures,
-        needsProposal: stageNeedsProposal({
-          status: s.status,
-          timing: (s.progression as { timing?: string } | null)?.timing ?? null,
-          hasFixtures,
-        }),
+        timing,
+        // M1 (fix round I, Critical — instance TWELVE). `stageOwesDraw` now
+        // asks the panel's OWN visibility gate, so this page has to answer
+        // it too or the two authorities disagree about one division: the
+        // desk would read `setting_up` (a bracket generated and never drawn)
+        // where this page read `scheduled`, and the start-locks tip is gated
+        // on exactly that word. It is the same `seedingSourceReady` this
+        // file already imports for the ProgressionPanel below, over the same
+        // in-memory `stages` — no extra query, no second expression.
+        sourceReady:
+          timing === "setup" && s.progression !== null
+            ? seedingSourceReady(stages, s, s.progression as unknown as Pick<ProgressionSpec, "sources">)
+            : false,
+        // Unread by `resolvePhase` — it feeds only the `needs_draw` row's
+        // action LABEL, and ATTENTION is the competition page's job (see the
+        // `eventCount`/`hasScorer` stubs below for the same reason). Pinned:
+        // division-phase.test.ts's "resolvePhase never reads `proposal`"
+        // mutates all four states and gets the same phase, so this constant
+        // cannot silently become load-bearing.
+        proposal: "none" as const,
       };
     }),
     fixtures: fixtures.map((f) => ({
       id: f.id,
       status: f.status,
       scheduledAt: f.scheduled_at,
+      stageId: f.stage_id,
+      // M1: the draw fact, read off the fixture's own entrants — the same
+      // question the desk answers from its own `left join entrants`.
+      tbd: f.home_entrant_id === null || f.away_entrant_id === null,
       eventCount: 0,
       // Final review minor fix: was a bare `?? 60`, retyping a number that
       // had already drifted from the desk's own schema-derived default (30).

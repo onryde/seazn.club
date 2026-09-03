@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import en from "@/dictionaries/en/ui.json";
 import { plural } from "@/lib/i18n";
-import { PhasePill } from "@/components/v2/desk/phase-pill";
+import { PhasePill, RED_PILL_KEY } from "@/components/v2/desk/phase-pill";
 import { NeedsYou, needsYouItems } from "@/components/v2/desk/needs-you";
 import { DivisionLedger } from "@/components/v2/desk/division-ledger";
-import { resolvePhase, resolveAttention, type PhaseInput } from "@/lib/division-phase";
+import { resolvePhase, resolveAttention, ATTENTION_SEVERITY, type Attention, type PhaseInput } from "@/lib/division-phase";
 import { statusLine } from "@/lib/division-status-line";
 import { competitionPhase, type CompetitionDesk, type DeskDivision } from "@/server/usecases/competition-desk";
 
@@ -41,7 +41,7 @@ describe("PhasePill", () => {
   });
   it("red attention beats the phase", () => {
     const html = renderToStaticMarkup(
-      <PhasePill dict={en} phase="setting_up" attention={[{ kind: "needs_draw", stageId: "s", stageName: "Finals" }]} />,
+      <PhasePill dict={en} phase="setting_up" attention={[{ kind: "needs_draw", door: "compute" as const, stageName: "Finals" }]} />,
     );
     expect(html).toContain('data-phase="setting_up"');
     expect(html).toContain('data-pill="needs_draw"');
@@ -54,7 +54,7 @@ describe("PhasePill", () => {
   // pins the third one against exactly that mutant.
   it("K1: a needs_fixtures attention renders its OWN pill word, never 'No scorer'", () => {
     const html = renderToStaticMarkup(
-      <PhasePill dict={en} phase="scheduled" attention={[{ kind: "needs_fixtures", stageId: "fin", stageName: "Finals" }]} />,
+      <PhasePill dict={en} phase="scheduled" attention={[{ kind: "needs_fixtures", stageName: "Finals" }]} />,
     );
     expect(html).toContain('data-pill="needs_fixtures"');
     expect(html).toContain("Needs fixtures");
@@ -65,6 +65,44 @@ describe("PhasePill", () => {
     const html = renderToStaticMarkup(<PhasePill dict={en} phase="scheduled" attention={[{ kind: "unscheduled", count: 3 }]} />);
     expect(html).toContain("Scheduled");
     expect(html).not.toContain('data-pill="unscheduled"');
+  });
+  /**
+   * Fix round I, minor: `phase-pill.tsx`'s severity FILTER and its
+   * `RED_PILL_KEY` map were two guards covering for each other — the review
+   * mutated each alone and the file stayed green. The three tests below
+   * isolate them; each one dies under exactly one of the two mutations.
+   */
+  it("the severity filter, alone: an UNSORTED list still finds the RED member", () => {
+    // `resolveAttention` sorts red first, so a sorted list cannot tell the
+    // filter apart from `attention[0]`. This prop is handed in unsorted on
+    // purpose: without the filter the amber row wins, maps to `null`, and
+    // the pill falls back to the phase word.
+    const html = renderToStaticMarkup(
+      <PhasePill dict={en} phase="scheduled"
+        attention={[{ kind: "unscheduled", count: 3 }, { kind: "no_scorer", count: 1, fixtureIds: ["f"], minutesSinceKickoff: 4 }]} />,
+    );
+    expect(html).toContain('data-pill="no_scorer"');
+    expect(html).toContain("No scorer");
+    expect(html).not.toContain("Scheduled");
+  });
+  it.each([
+    ["needs_draw", "Needs draw", { kind: "needs_draw", stageName: "Finals", door: "compute" }],
+    ["needs_fixtures", "Needs fixtures", { kind: "needs_fixtures", stageName: "Finals" }],
+    ["no_scorer", "No scorer", { kind: "no_scorer", count: 1, fixtureIds: ["f"], minutesSinceKickoff: 4 }],
+  ] as const)("RED_PILL_KEY, alone: %s prints its own word", (kind, word, attention) => {
+    const html = renderToStaticMarkup(<PhasePill dict={en} phase="scheduled" attention={[attention as Attention]} />);
+    expect(html).toContain(`data-pill="${kind}"`);
+    expect(html).toContain(word);
+  });
+  it("RED_PILL_KEY's nulls, alone: they agree with ATTENTION_SEVERITY, the ONE authority for which kinds are red", () => {
+    // Derived from the severity table rather than typed out, so this moves
+    // when the source of truth moves. It is the only test that dies when a
+    // `null` entry becomes a key while the filter is left intact: the filter
+    // would never reach that kind, but the two tables would now disagree.
+    for (const kind of Object.keys(ATTENTION_SEVERITY) as Attention["kind"][]) {
+      const red = ATTENTION_SEVERITY[kind] === "red";
+      expect(RED_PILL_KEY[kind] === null, `${kind}: severity ${ATTENTION_SEVERITY[kind]}`).toBe(!red);
+    }
   });
   it("in_play carries the count", () => {
     expect(renderToStaticMarkup(<PhasePill dict={en} phase="in_play" inPlay={2} />)).toContain("2 in play");
@@ -194,7 +232,14 @@ describe("NeedsYou", () => {
     const html = renderToStaticMarkup(<NeedsYou dict={en} items={items} />);
     expect(html).toContain('data-attention="no_scorer"');
     expect(html).toContain('data-severity="red"');
-    expect(html).toContain("Assign scorer");
+    // M2 (fix round I, Important): this row used to read "Assign scorer",
+    // an action nobody can take — `createAssignment` (scorers.ts) has zero
+    // production callers and `scorer_assignments` is written only by
+    // accepting a scoped INVITE, which no UI creates. The landing fixture
+    // console had 0 such controls (counted live, 11:39Z on 2026-09-03).
+    // The row now asks for the thing that IS on that screen: the pad.
+    expect(html).toContain("Open scoring");
+    expect(html).not.toContain("Assign scorer");
   });
   // F3 fix (final review, Important): used to be one row PER FIXTURE — a
   // division with 6 overdue fixtures produced 6 identical rows. Now ONE row,
@@ -262,7 +307,7 @@ describe("desk.* copy (review round 3 — pluralization and subject-verb agreeme
     expect(item?.title).toBe("1 registration waiting for approval");
   });
   it("K1: needs_fixtures builds a row naming the stage, with the fixtures-tab action", () => {
-    const d = div({ attention: [{ kind: "needs_fixtures", stageId: "fin", stageName: "Finals" }] });
+    const d = div({ attention: [{ kind: "needs_fixtures", stageName: "Finals" }] });
     const items = needsYouItems(en, desk(d), names, "org", "comp", "en");
     const item = items.find((i) => i.kind === "needs_fixtures");
     expect(item?.severity).toBe("red");
@@ -276,7 +321,7 @@ describe("desk.* copy (review round 3 — pluralization and subject-verb agreeme
     expect(plural(en, "desk.masthead.divisions", 2, "en")).toBe("2 divisions");
   });
   it("C1: a plural-looking stage name does not trigger subject-verb agreement on the title", () => {
-    const d = div({ attention: [{ kind: "needs_draw", stageId: "fin", stageName: "Finals" }] });
+    const d = div({ attention: [{ kind: "needs_draw", door: "compute" as const, stageName: "Finals" }] });
     const items = needsYouItems(en, desk(d), names, "org", "comp", "en");
     const item = items.find((i) => i.kind === "needs_draw");
     expect(item?.title).not.toContain("Finals has");
@@ -319,9 +364,10 @@ describe("DivisionLedger", () => {
   it("F1: a started division with generated-but-unscheduled fixtures renders setting_up with its played/unscheduled counts", () => {
     const phaseInput: PhaseInput = {
       divisionStatus: "active",
-      stages: [{ id: "s1", name: "League", seq: 1, status: "active", hasFixtures: true, needsProposal: false }],
+      stages: [{ id: "s1", name: "League", seq: 1, status: "active", hasFixtures: true, timing: null, sourceReady: false, proposal: "none" as const }],
       fixtures: Array.from({ length: 6 }, (_, i) => ({
         id: `f${i}`, status: "scheduled", scheduledAt: null, eventCount: 0, matchMinutes: 90, hasScorer: false,
+        stageId: "s1", tbd: false,
       })),
       now: "2026-09-05T09:00:00Z",
       tz: "Europe/London",
@@ -364,7 +410,7 @@ describe("DivisionLedger", () => {
   it("mobile composition (review round 1, owner ruling): the pill and the full status line render in the SAME block as the name, and the two compositions stay each other's mutually-exclusive siblings", () => {
     const d = div({
       phase: "setting_up", played: 28, total: 28,
-      attention: [{ kind: "needs_draw", stageId: "fin", stageName: "Finals" }],
+      attention: [{ kind: "needs_draw", door: "compute" as const, stageName: "Finals" }],
     });
     const html = renderToStaticMarkup(
       <DivisionLedger dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z"
@@ -395,7 +441,7 @@ describe("DivisionLedger", () => {
     expect(htmlNone).not.toContain("Compute proposal");
     expect(htmlNone).not.toContain("btn-primary");
 
-    const needsDraw = div({ phase: "setting_up", attention: [{ kind: "needs_draw", stageId: "fin", stageName: "Finals" }] });
+    const needsDraw = div({ phase: "setting_up", attention: [{ kind: "needs_draw", door: "compute" as const, stageName: "Finals" }] });
     const htmlAction = renderToStaticMarkup(
       <DivisionLedger dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z"
         rows={[{ id: "d1", name: "U16 Cup", slug: "u16-cup", sportKey: "football", logoUrl: null, desk: needsDraw, statusLine: "s" }]} />,
@@ -404,7 +450,7 @@ describe("DivisionLedger", () => {
     expect(htmlAction).toContain('href="/o/org/c/comp/d/u16-cup?tab=fixtures"');
   });
   it("K1: mobile action button for needs_fixtures — the row carries the action, not just the pill", () => {
-    const d = div({ phase: "scheduled", played: 6, total: 6, attention: [{ kind: "needs_fixtures", stageId: "fin", stageName: "Finals" }] });
+    const d = div({ phase: "scheduled", played: 6, total: 6, attention: [{ kind: "needs_fixtures", stageName: "Finals" }] });
     const html = renderToStaticMarkup(
       <DivisionLedger dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z"
         rows={[{ id: "d1", name: "U16 Cup", slug: "u16-cup", sportKey: "football", logoUrl: null, desk: d, statusLine: "6 of 6 played" }]} />,
@@ -426,7 +472,7 @@ describe("DivisionLedger", () => {
       <DivisionLedger dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z"
         rows={[{ id: "d1", name: "Premier Division", slug: "premier-division", sportKey: "football", logoUrl: null, desk: oneScorerless, statusLine: "s" }]} />,
     );
-    expect(htmlOne).toContain("Assign scorer");
+    expect(htmlOne).toContain("Open scoring");
     expect(htmlOne).toContain('href="/o/org/c/comp/d/premier-division/f/9"');
 
     const manyScorerless = div({
@@ -437,7 +483,7 @@ describe("DivisionLedger", () => {
       <DivisionLedger dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z"
         rows={[{ id: "d1", name: "Premier Division", slug: "premier-division", sportKey: "football", logoUrl: null, desk: manyScorerless, statusLine: "s" }]} />,
     );
-    expect(htmlMany).toContain("Assign scorer");
+    expect(htmlMany).toContain("Open scoring");
     expect(htmlMany).toContain('href="/o/org/c/comp/d/premier-division?tab=fixtures"');
   });
   it("fix round 2: the desktop next column is dropped ledger-wide when no row has a next fixture — no reserved track, no empty cell", () => {

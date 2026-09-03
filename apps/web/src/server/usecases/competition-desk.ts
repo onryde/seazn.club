@@ -13,13 +13,15 @@ import { resolveVenueTz } from "@/lib/tz";
 import {
   resolveAttention,
   resolvePhase,
-  stageNeedsProposal,
   type Attention,
+  type SeedProposalState,
   type DivisionPhase,
   type DivisionStatus,
   type PhaseFixture,
   type PhaseStage,
 } from "@/lib/division-phase";
+import { seedingSourceReady } from "@/lib/seeding-source-ready";
+import type { ProgressionSpec } from "@seazn/engine/competition";
 import { listDivisionCardStats, type NextFixture } from "./card-stats";
 import { listDivisions } from "./divisions";
 
@@ -47,7 +49,7 @@ export interface DeskDivision {
   // compile, instead of silently reading a value that is wrong the day a
   // real court label exists and this type kept claiming there wasn't one.
   next: DeskNextFixture | null;
-  needs_draw_stage: { id: string; name: string } | null;
+  needs_draw_stage: { name: string } | null;
   /** For attention rows that name a fixture. */
   fixture_names: Record<string, { home: string | null; away: string | null; fixture_no: number }>;
   display_tz: string;
@@ -102,7 +104,9 @@ type StageRaw = {
   seq: number;
   status: string;
   timing: string | null;
+  progression: unknown;
   has_fixtures: boolean;
+  proposal_status: SeedProposalState | null;
 };
 type FixtureRaw = {
   id: string;
@@ -110,6 +114,7 @@ type FixtureRaw = {
   status: string;
   scheduled_at: string | null;
   fixture_no: number;
+  stage_id: string;
   home: string | null;
   away: string | null;
   event_count: number;
@@ -185,7 +190,21 @@ export async function getCompetitionDesk(
       ? await tx<StageRaw[]>`
           select s.id, s.division_id, s.name, s.seq, s.status,
                  s.progression ->> 'timing' as timing,
-                 exists (select 1 from fixtures f where f.stage_id = s.id) as has_fixtures
+                 s.progression,
+                 exists (select 1 from fixtures f where f.stage_id = s.id) as has_fixtures,
+                 -- M1 (fix round I, Critical): which control the seed-proposal
+                 -- panel is showing, so the needs_draw row's action can name
+                 -- THAT button instead of a hand-copied guess. Mirrors
+                 -- getSeedProposal (stages.ts) field for field: the latest row
+                 -- by created_at desc, id desc, ANY status, because that
+                 -- function IS what the panel renders from. A different
+                 -- ordering here would label the row from a different
+                 -- proposal than the one on screen. One indexed lookup per
+                 -- stage on stage_seed_proposals_stage_idx, inside this same
+                 -- single query, never an N+1.
+                 (select p.status from stage_seed_proposals p
+                   where p.stage_id = s.id
+                   order by p.created_at desc, p.id desc limit 1) as proposal_status
             from stages s where s.division_id = any(${ids})`
       : [];
     // F2 fix (final review, Important): the old score-event subquery had NO
@@ -202,7 +221,7 @@ export async function getCompetitionDesk(
     // table; EXPLAIN ANALYZE before/after in fix-round-b-report.md.
     const fixtures = ids.length
       ? await tx<FixtureRaw[]>`
-          select f.id, f.division_id, f.status, f.scheduled_at, f.fixture_no,
+          select f.id, f.division_id, f.status, f.scheduled_at, f.fixture_no, f.stage_id,
                  h.display_name as home, a.display_name as away,
                  coalesce(e.n, 0)::int as event_count
             from fixtures f
@@ -262,24 +281,35 @@ export async function getCompetitionDesk(
     // in division-phase.ts's caller passing the bare org zone instead of
     // this resolved value.
     const displayTz = resolveVenueTz(st?.tz, orgTz);
-    const phaseStages: PhaseStage[] = stages
-      .filter((x) => x.division_id === d.id)
+    // `seedingSourceReady` resolves `{stage: "previous"}` by seq within the
+    // SAME division and refuses any explicit source outside it, so scoping
+    // the list here is exactly what it expects and keeps a sibling
+    // division's stages out of the answer.
+    const divisionStages = stages.filter((x) => x.division_id === d.id);
+    const phaseStages: PhaseStage[] = divisionStages
       .map((x) => ({
         id: x.id,
         name: x.name,
         seq: x.seq,
         status: x.status,
         hasFixtures: x.has_fixtures,
-        // A pending seeding stage with nothing generated is waiting on its
-        // draw. K3 (fix round G): the predicate itself lives in
-        // division-phase.ts's `stageNeedsProposal` — it used to be written
-        // out here AND hand-copied into d/[divSlug]/page.tsx, and mutating
-        // either copy to a constant left 137/137 green.
-        needsProposal: stageNeedsProposal({
-          status: x.status,
-          timing: x.timing,
-          hasFixtures: x.has_fixtures,
-        }),
+        timing: x.timing,
+        // M1 (fix round I, Critical — instance TWELVE): the panel's own
+        // visibility gate, from the ONE definition
+        // (lib/seeding-source-ready.ts) both this file and
+        // d/[divSlug]/page.tsx already share — never re-expressed here. A
+        // stage with no progression at all names no sources, and
+        // `[].every(...)` is vacuously true, so it is filtered out by
+        // `timing` above rather than by a second reading of the JSON.
+        sourceReady:
+          x.timing === "setup" && x.progression !== null
+            ? seedingSourceReady(
+                divisionStages,
+                x,
+                x.progression as unknown as Pick<ProgressionSpec, "sources">,
+              )
+            : false,
+        proposal: (x.proposal_status ?? "none") as SeedProposalState,
       }));
     const rows = fixtures.filter((x) => x.division_id === d.id);
     const phaseFixtures: PhaseFixture[] = rows.map((x) => ({
@@ -289,6 +319,13 @@ export async function getCompetitionDesk(
       eventCount: x.event_count,
       matchMinutes,
       hasScorer: fixturesWithScorer.has(x.id) || divisionsWithScorer.has(d.id),
+      stageId: x.stage_id,
+      // M1 (fix round I): "has this bracket been drawn?" — the same
+      // `left join entrants` this query already does for the row's own
+      // "Rank 1 v Rank 4" labels. A generated-but-unseeded knockout slot has
+      // no entrant on that side; confirming a seed proposal fills every one
+      // of them, so `tbd` going false IS the draw completing.
+      tbd: x.home === null || x.away === null,
     }));
     const input = {
       divisionStatus: d.status as DivisionStatus,
@@ -313,8 +350,11 @@ export async function getCompetitionDesk(
       in_play: inPlay,
       entrants: s?.entrants ?? 0,
       next: resolveDivisionNext(rows, nowIso),
-      needs_draw_stage:
-        needsDraw && needsDraw.kind === "needs_draw" ? { id: needsDraw.stageId, name: needsDraw.stageName } : null,
+      // M1 (fix round I, minor 3): `id` used to ride along here and nothing
+      // ever read it — deleted, same class as this wave's `org_tz` and
+      // `court_label` deletions. Only the NAME reaches a screen
+      // (division-status-line.ts's `desk.status.needsDraw`).
+      needs_draw_stage: needsDraw && needsDraw.kind === "needs_draw" ? { name: needsDraw.stageName } : null,
       fixture_names,
       display_tz: displayTz,
     });
