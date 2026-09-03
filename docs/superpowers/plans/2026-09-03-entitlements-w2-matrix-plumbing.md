@@ -13,7 +13,9 @@ surface work — that is W3.
 1. **Pro monthly base is USD 12, not 9**, and the whole set-point table re-anchors on
    it (the other four currencies are set points anchored on USD, not FX — leaving them
    at §3a would put AUD 12 = USD 12 and break the stated "AUD reads against a 15–20
-   norm" rationale).
+   norm" rationale). AUD was removed outright later the same day (T10), so that
+   rationale is now historical — the re-anchoring of EUR/GBP/INR still stands on its
+   own, since each is a set point against a local norm rather than an FX conversion.
 2. **Tier 2+ stays at §3a's rule — half the base**, rounded down to a whole major
    unit (INR to the nearest x99). A 60% rate ($7 extra org) was chosen and then
    REVERTED by the owner once its true cost was measured: `extraOrgPrice()`'s own
@@ -46,35 +48,37 @@ surface work — that is W3.
 
 ### The price table as it will be written (major units; the seed stores minor)
 
-| | USD | EUR | GBP | AUD | INR |
-|---|---|---|---|---|---|
-| Pro monthly tier 1 | 12 | 10 | 9 | 16 | 499 |
-| Pro monthly tier 2+ / extra org add-on | 6 | 5 | 4 | 8 | 199 |
-| Pro annual tier 1 | 99 | 89 | 79 | 139 | 3,999 |
-| Pro annual tier 2+ | 49 | 44 | 39 | 69 | 1,999 |
-| Event Pass M | 15 | 14 | 12 | 19 | 599 |
-| Event Pass L | 39 | 35 | 29 | 55 | 1,599 |
-| Extra seat / month (hidden, R13) | 2 | 2 | 2 | 3 | 99 |
-| Size pack +32 | 5 | 5 | 4 | 7 | 199 |
-| AI credit packs | unchanged | | | | |
+| | USD | EUR | GBP | INR |
+|---|---|---|---|---|
+| Pro monthly tier 1 | 12 | 10 | 9 | 499 |
+| Pro monthly tier 2+ / extra org add-on | 6 | 5 | 4 | 199 |
+| Pro annual tier 1 | 99 | 89 | 79 | 3,999 |
+| Pro annual tier 2+ | 49 | 44 | 39 | 1,999 |
+| Event Pass M | 15 | 14 | 12 | 599 |
+| Event Pass L | 39 | 35 | 29 | 1,599 |
+| Extra seat / month (hidden, R13) | 2 | 2 | 2 | 99 |
+| Size pack +32 | 5 | 5 | 4 | 199 |
+| AI credit packs | unchanged | | | |
+
+**AUD is GONE** (ruling below, T10) — four currencies, not five. Its amounts are
+struck from every row above; do not reinstate them from an earlier draft.
 
 In minor units, as the seed stores them (USD rides `unit_amount`; `currency_options`
-carries only `eur/gbp/inr/aud`):
+carries only `eur/gbp/inr`):
 
-| | usd | eur | gbp | aud | inr |
-|---|---|---|---|---|---|
-| pro monthly tier 1 / tier 2+ | 1200 / 600 | 1000 / 500 | 900 / 400 | 1600 / 800 | 49900 / 19900 |
-| pro annual tier 1 / tier 2+ | 9900 / 4900 | 8900 / 4400 | 7900 / 3900 | 13900 / 6900 | 399900 / 199900 |
-| event_pass / event_pass_l | 1500 / 3900 | 1400 / 3500 | 1200 / 2900 | 1900 / 5500 | 59900 / 159900 |
-| extra_org_pro | 600 | 500 | 400 | 800 | 19900 |
-| extra_seat | 200 | 200 | 200 | 300 | 9900 |
-| size_pack_32 | 500 | 500 | 400 | 700 | 19900 |
+| | usd | eur | gbp | inr |
+|---|---|---|---|---|
+| pro monthly tier 1 / tier 2+ | 1200 / 600 | 1000 / 500 | 900 / 400 | 49900 / 19900 |
+| pro annual tier 1 / tier 2+ | 9900 / 4900 | 8900 / 4400 | 7900 / 3900 | 399900 / 199900 |
+| event_pass / event_pass_l | 1500 / 3900 | 1400 / 3500 | 1200 / 2900 | 59900 / 159900 |
+| extra_org_pro | 600 | 500 | 400 | 19900 |
+| extra_seat | 200 | 200 | 200 | 9900 |
+| size_pack_32 | 500 | 500 | 400 | 19900 |
 
-Rules, verified in all five currencies: annual ÷ monthly ∈ 8–9 (8.25 / 8.90 / 8.78 /
-8.69 / 8.01); tier 2+ ≤ half the base (6≤6, 5≤5, 4≤4.5, 8≤8, 199≤249.5 monthly;
-49≤49.5, 44≤44.5, 39≤39.5, 69≤69.5, 1999≤1999.5 annual); M < L < annual;
-3 × L ≥ annual (117≥99, 105≥89, 87≥79, 165≥139, 4797≥3999); 2 × L < annual
-(78<99, 70<89, 58<79, 110<139, 3198<3999).
+Rules, verified in all four currencies: annual ÷ monthly ∈ 8–9 (8.25 / 8.90 / 8.78 /
+8.01); tier 2+ ≤ half the base (6≤6, 5≤5, 4≤4.5, 199≤249.5 monthly; 49≤49.5,
+44≤44.5, 39≤39.5, 1999≤1999.5 annual); M < L < annual; 3 × L ≥ annual (117≥99,
+105≥89, 87≥79, 4797≥3999); 2 × L < annual (78<99, 70<89, 58<79, 3198<3999).
 
 Consequences to carry into W3: the design's "revenue per Pro org falls 53%" is now
 ~37%, and the approved mockups print the old $9/$15 pair. Both are W3's to amend.
@@ -280,13 +284,22 @@ header agrees: "Only a real test-mode account settles whether Stripe bills a sec
 seat at half rate." It is used by ZERO e2e specs today — only by vitest unit tests —
 so every `*.spec.ts` already resolves to real Stripe or to a dummy key.
 
+**There is NO Stripe LIVE-mode catalogue** — owner, 2026-09-03: plans and prices exist
+in the SANDBOX only. That bounds every risk below to test mode, and it means a
+reprice cannot hurt a paying customer. It does not make the guards optional: the
+sandbox is the only place the seed's shape is ever validated at all.
+
 **Finding A — `stripe:sync` never prunes.** `scripts/stripe-sync.ts` iterates only the
 seed's own collections and exits. It archives a price ONLY when a still-named
-`lookup_key`'s amount has drifted. So removing `pro_plus` and `extra_org_pro_plus`
-from the seed leaves both LIVE AND PURCHASABLE in the account, and `planKeyForPrice`
-would resolve a real price id to a `plans` row this wave deleted. Design §5 already
-calls archival a manual ops step; that is now confirmed as necessary rather than
-tidy-up. W2 must at minimum prove the mapper FAILS SAFE for an orphaned price id.
+`lookup_key`'s amount has drifted (`:410-415`, `prices.update(p.id, {active:false})`),
+which is exactly the reprice path this wave needs and is the reason the reprice works
+at all — Stripe amounts are immutable, so a changed amount means a NEW price plus an
+archived old one. But a seed entry that DISAPPEARS is never visited, so removing
+`pro_plus` and `extra_org_pro_plus` leaves both active and purchasable in the sandbox,
+where `planKeyForPrice` would resolve a real price id to a `plans` row this wave
+deleted. No customer can reach it, so this is cleanup rather than an incident — but
+W2 must still prove the mapper FAILS SAFE for an orphaned price id, because that is
+the behaviour that would matter the day a live catalogue exists.
 
 **Finding B — nothing checks the seed against live Stripe.** `stripe-plans.test.ts`
 is seed-internal (unique lookup keys, currencies present, M < L). The one live sync
@@ -300,7 +313,10 @@ against the seed, gated on `BILLING_LIVE=1` and an `sk_test_` key like its neigh
 consumer, never a fixture:
 1. `stripe:sync` against test mode, then the read-back guard above — this is the only
    thing that settles whether the new graduated tiers and four-currency options are
-   accepted.
+   accepted. Watch specifically whether REMOVING `aud` from an existing price's
+   `currency_options` is honoured, or whether Stripe requires a new price for it;
+   with no live catalogue, recreating under a transferred `lookup_key` is a free
+   option if it is not.
 2. The per-rung pass grant, end to end: real hosted Checkout with `4242…`, real
    `checkout.session.completed` returned by `stripe listen --forward-to`, wallet
    asserted at +25 for M and +50 for L. The path is
