@@ -808,6 +808,51 @@ starts refusing, so it needs an e2e through the real HTTP door, not a usecase ca
 **Greenfield, so no caller is broken today** — but it IS a behaviour change to a shipped
 route, and the commit message should say so plainly.
 
+### T20 — reviewer pass 3 findings (1 critical, 4 important)
+
+**CRITICAL — the degrade note ships on the MINORITY create path.** V395 made competitions
+public by default and degrade to private at the cap instead of 402ing. `createCompetition`
+returns the full row so the wizard can diff requested-vs-created and render
+`public-quota-degraded`. `instantiateTemplate` performs the identical degrade, but
+`FromTemplateResult` (`server/api-v1/schemas.ts:945-953`) **carries no `visibility`**, so
+the client has nothing to diff, and `components/v2/template-gallery.tsx:297` redirects
+unconditionally. **The gallery is the DEFAULT path** — `/competitions/new` opens on it and
+"start blank" is a button inside it (`e2e/helpers.ts:1622`). A Free org at its cap creates
+from a template, gets a SILENTLY private competition, shares the link, and fans get a
+private page. The e2e proved the wizard, which is the path fewer people take.
+
+**IMPORTANT:**
+1. `usecases/org-posts.ts:1590` vs the sweep at `:1655` — the digest 402 has a hole at
+   `total === 0`, and a comment five lines above claims the two cannot differ. They do: a
+   Free org with no competitions still mints a `weekly_digest`. Read what the code does,
+   not what the comment promises.
+2. `newsAutoCompetitionScope:1136-1143` is an N+1 resolver loop **inside the weekly cron**.
+   `org_has_feature`'s 3-arg form does it in one query.
+3. `templates.ts:187-188` keys the guard on `=== "public"` but the value on `?? "public"` —
+   an omitted visibility skips the quota check entirely while still creating a public
+   competition.
+
+**C4 is bigger than the brief says — correct it before dispatching T18.** All seven
+`smoke.ts` line numbers are STALE (the smoke rewrite `45180182a` shifted them 4-20 lines),
+and **two sites were missing**: `scripts/repro-ai-bracket-frozen-feeder.ts:206` and a
+SECOND union at `e2e/payments-hardening.spec.ts:137`. So it is **13 sites, not 11**. Re-pin
+every one by grep before editing.
+
+**C3:** every pass-1 "unlimited" site survives in the committed range, plus a new one —
+`content/help/billing/plans.md:9`'s "1 public dashboard".
+
+**Came back CLEAN, and worth recording so it is not re-litigated:** `assertPublicQuota` is
+genuinely FACTORED, not copy-pasted — the predicate is `liveUnpassedCompetition`
+(`entitlement-freeze.ts:16-45`), four call sites, no fourth copy, and
+`billing-meter-parity.test.ts` guards the call site AND the fragment body separately. All
+eight pass-lift offenders are really fixed, each resolver call carrying a competition id.
+The digest scoping is proven by entrant-name presence/absence rather than a boolean.
+`import.events` has two live readers, so the grant is not inert. Guard integrity: five
+assertions removed against fifty-eight added, every removal read and replaced with the new
+truth; no `.only`, no `xit`; the three added `skipIf` are the standard DB gate.
+
+**Nobody has a green smoke on this branch** — the last run aborted at check 165.
+
 ### T9 — sweep and gates
 Delete the two dead e2e specs. Rerun the 34 files that assert against
 `plan_entitlements` and the 8 copy-truth importers (4 need a live DB). Unit, e2e,
