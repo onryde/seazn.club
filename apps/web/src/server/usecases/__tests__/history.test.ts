@@ -393,6 +393,41 @@ describe.skipIf(!HAS_DB)("schedule undo & versioning (Jul3/03)", () => {
     expect(after!.a_scheduled).toBeGreaterThan(1);
   });
 
+  it("scoped clear refuses a frozen division, and still clears an unfrozen one", async () => {
+    const { auth } = await seedOrg();
+    const { division, fixtures } = await seedDivision(auth, { kind: "group", pools: { count: 2 } });
+    const { courtA } = await seedCourts(auth);
+    for (let i = 0; i < fixtures.length; i++) {
+      await patchFixture(auth, fixtures[i]!.id, { scheduled_at: at(9 + i), court_id: courtA });
+    }
+
+    // The unfrozen control case runs FIRST, so a guard that refuses everything
+    // cannot pass this test by refusing both halves.
+    const before = await clearScheduleScoped(auth, {
+      division_id: division.id,
+      scope: { excludeLocked: true },
+      confirm: true,
+    });
+    expect(before.cleared).toBeGreaterThan(0);
+    await undoDivision(auth, division.id);
+
+    await setDivisionLocks(auth, division.id, { schedule_locked: true });
+
+    await expect(
+      clearScheduleScoped(auth, {
+        division_id: division.id,
+        scope: { excludeLocked: true },
+        confirm: true,
+      }),
+    ).rejects.toMatchObject({ status: 422 });
+
+    // The refusal must not have wiped anything on its way out.
+    const [after] = await sql<{ scheduled: number }[]>`
+      select count(*) filter (where scheduled_at is not null)::int as scheduled
+      from fixtures where division_id = ${division.id}`;
+    expect(after!.scheduled).toBeGreaterThan(0);
+  });
+
   it("clear-entrants keeps the pool, blocks after a result; two-site scope lock blocks edits", async () => {
     const { auth } = await seedOrg();
     const { division, fixtures } = await seedDivision(auth, {

@@ -10653,11 +10653,39 @@ async function autoScheduleSuite(): Promise<void> {
   // Empty every UNLOCKED slot. Over an already-legal board the repair solver is
   // entitled to return `clean` and move nothing, so "the pin held" would pass on
   // a mode that never ran at all; five cards with no time cannot.
-  await v1(s, "/api/v1/schedule/clear", "POST", {
+  const clearOpen = await v1(s, "/api/v1/schedule/clear", "POST", {
     division_id: div.id,
     scope: { excludeLocked: true },
     confirm: true,
   });
+  check(
+    // The control half of the freeze pair below. This call was previously
+    // unchecked, which left the frozen refusal unable to distinguish "the
+    // freeze stopped it" from "clear refuses this division either way".
+    `clear: an UNFROZEN division clears its unlocked slots (status=${clearOpen.status})`,
+    clearOpen.status === 200 &&
+      ((clearOpen.json.data as { cleared?: number } | undefined)?.cleared ?? 0) > 0,
+  );
+
+  // The whole-division freeze bites on the DESTRUCTIVE control too. Apply,
+  // fixture move, AI plan and joint apply all refuse a frozen division on
+  // these exact terms; clear was the one write path that did not, so a frozen
+  // board could be wiped by the one button whose entire point is that it
+  // wipes. Status AND message are a contract the board's own copy reads.
+  await v1(s, `/api/v1/divisions/${div.id}/locks`, "PATCH", { schedule_locked: true });
+  const clearFrozen = await v1(s, "/api/v1/schedule/clear", "POST", {
+    division_id: div.id,
+    scope: { excludeLocked: true },
+    confirm: true,
+  });
+  await v1(s, `/api/v1/divisions/${div.id}/locks`, "PATCH", { schedule_locked: false });
+  check(
+    `clear: a FROZEN division refuses the scoped clear 422 with the unlock copy ` +
+      `(status=${clearFrozen.status}, message=${clearFrozen.json.error?.message ?? "-"})`,
+    clearFrozen.status === 422 &&
+      clearFrozen.json.error?.message === "the division schedule is locked — unlock it to edit",
+  );
+
   const reflow = await auto({ only_unlocked: true });
   check(
     // C4: no longer the repair solver's empty ladder (see the docblock above)

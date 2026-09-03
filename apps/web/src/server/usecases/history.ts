@@ -29,6 +29,7 @@ import { log } from "@/server/logger";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { CourtId, VenueId } from "@/server/api-v1/schemas";
 import { generateStageFixtures } from "./stages";
+import { divisionLockState } from "./schedule";
 
 type Tx = postgres.TransactionSql;
 
@@ -665,6 +666,15 @@ export async function clearScheduleScoped(
     await tx`select pg_advisory_xact_lock(hashtext(${"division:" + divisionId}))`;
     const [division] = await tx`select 1 from divisions where id = ${divisionId}`;
     if (!division) throw new HttpError(404, "division not found");
+    // The freeze applies to every division write path — apply
+    // (schedule.ts:2524), fixture move (:2901), AI plan (schedule-ai.ts:912)
+    // and joint apply (competition-schedule-apply.ts:419) all refuse on these
+    // exact terms. Clear was the one that did not, so a frozen board could be
+    // wiped by the one control whose whole point is that it is destructive.
+    const lockState = await divisionLockState(tx, divisionId);
+    if (lockState.frozen) {
+      throw new HttpError(422, "the division schedule is locked — unlock it to edit");
+    }
     const fixtures = await clearableFixtures(tx, divisionId);
     const { event, cleared, skipped } = engineClearSchedule(fixtures, input.scope);
     if (cleared.length === 0) {
