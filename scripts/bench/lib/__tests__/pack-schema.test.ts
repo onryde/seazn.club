@@ -1252,7 +1252,6 @@ describe("PackSchema — the registration block (declared for B03r, unpopulated 
         category: "open",
         entrantKind: "team",
         feeCents: 0,
-        currency: "GBP",
         approval: "manual",
         entries: [
           { extKey: "entry-1", captain: "p-cap", roster: ["p-ana"], pay: false, expect: "entrant" },
@@ -1272,6 +1271,50 @@ describe("PackSchema — the registration block (declared for B03r, unpopulated 
     expect(p.registration?.byDivision["d-main"]?.entries[0]?.expect).toBe("entrant");
   });
 
+  // Job 1 (B03r): currency moved OFF the division block and onto the org,
+  // because V365__org_currency.sql dropped `registration_settings.currency`
+  // outright — see `PackOrg.currency`'s and `PackRegistrationBlock`'s own
+  // doc comments for the full "why". Two witnesses below: the new home
+  // parses, and the OLD shape (currency back on the division block) is now
+  // a `strictObject` rejection — without this second test the move is
+  // unwitnessed (a currency key silently vanishing would parse just as
+  // cleanly as one silently accepted).
+  it("currency lives on org, lower-case ISO-4217, and defaults to absent", () => {
+    const p = parsed(withRegistration(() => {}));
+    expect(p.org.currency).toBeUndefined();
+    const withCurrency = pack((draft) => {
+      (draft.org as Record<string, unknown>).currency = "usd";
+    });
+    expect(parsed(withCurrency).org.currency).toBe("usd");
+  });
+
+  it("an upper-case or non-3-letter org currency is rejected", () => {
+    expectIssue(
+      pack((draft) => {
+        (draft.org as Record<string, unknown>).currency = "USD";
+      }),
+      ["org", "currency"],
+      /lower-case ISO-4217/i,
+    );
+    expectIssue(
+      pack((draft) => {
+        (draft.org as Record<string, unknown>).currency = "usdollar";
+      }),
+      ["org", "currency"],
+      /lower-case ISO-4217/i,
+    );
+  });
+
+  it("the OLD per-division currency shape is now rejected — the move is witnessed", () => {
+    expectIssue(
+      withRegistration((b) => {
+        b.currency = "gbp";
+      }),
+      ["registration", "byDivision", "d-main"],
+      /Unrecognized key.*currency/i,
+    );
+  });
+
   it("byDivision is keyed by a DECLARED division ref", () => {
     const bad = pack((p) => {
       (p.persons as unknown[]).push({ ref: "p-cap", fullName: "Cap Tain", lane: "player" });
@@ -1281,7 +1324,6 @@ describe("PackSchema — the registration block (declared for B03r, unpopulated 
             category: "open",
             entrantKind: "team",
             feeCents: 0,
-            currency: "GBP",
             approval: "auto",
             expect: { entrants: 0, waitlisted: 0, rejected: 0, paidCents: 0 },
           },

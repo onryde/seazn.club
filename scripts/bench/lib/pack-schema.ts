@@ -384,6 +384,28 @@ export const PackOrg = z.strictObject({
    *  silently shifts by hours. A `.default("UTC")` here would have been that
    *  assumption wearing the comment that forbids it (review round 1, I3). */
   timezone: z.string().min(1).max(60),
+  /** ISO-4217, lower-case — matches what `organizations.currency` actually
+   *  stores: `db/migration/deltas/V365__org_currency.sql:70-71` adds it as
+   *  `text not null default 'gbp'` with an allowlist CHECK
+   *  (`usd|eur|gbp|inr|aud`, = `SUPPORTED_CURRENCIES`,
+   *  `apps/web/src/lib/currency.ts:6`). Lives on the ORG, not the division —
+   *  see `PackRegistrationBlock`'s doc comment for why (V365, "RS001b": one
+   *  Stripe checkout session per cart, one currency per session).
+   *
+   *  OPTIONAL, deliberately with NO `.default()` — the same reasoning as
+   *  `timezone` above, whose own comment calls a hidden default "an
+   *  assumption wearing the comment that forbids it": the DB column defaults
+   *  to 'gbp' for orgs that never set one, but a pack records a REAL
+   *  tournament's real org, and silently assuming every unstated org is
+   *  British is exactly that wrong-assumption shape. Required only where it
+   *  actually matters — any division pricing a fee — and that conditional
+   *  requirement is a stage-0 funnel rule (`validate-pack.ts`,
+   *  `registration.currency_required`), not a shape rule, the same split
+   *  `dob`/`gender` use above `PackPerson`. */
+  currency: z
+    .string()
+    .regex(/^[a-z]{3}$/, "currency is a lower-case ISO-4217 code, matching organizations.currency")
+    .optional(),
 });
 export type PackOrg = z.infer<typeof PackOrg>;
 
@@ -1196,6 +1218,7 @@ export const PackRegistrationEntry = z.strictObject({
   pay: z.boolean().default(false),
   expect: z.enum(["entrant", "rejected_eligibility", "waitlisted", "rejected_manual"]),
 });
+export type PackRegistrationEntry = z.infer<typeof PackRegistrationEntry>;
 
 export const PackRegistrationJoin = z.strictObject({
   /** `extKey` of the entry being joined. */
@@ -1210,13 +1233,26 @@ export const PackRegistrationOrganiserAction = z.strictObject({
   target: z.string().min(1).max(200),
 });
 
+/** NO `currency` field here — moved to `PackOrg.currency` (see its doc
+ *  comment). Design §4's sketch
+ *  (`designs/2026-08-27-bench-customer-journey-design.md`) lists
+ *  `divisions[].registration.currency: string` per division; that line is
+ *  now STALE and needs the same correction, because
+ *  `db/migration/deltas/V365__org_currency.sql:70-71` DROPPED
+ *  `registration_settings.currency` outright — the redesign mints one
+ *  Stripe checkout session per CART, a session has ONE currency, and a cart
+ *  can span divisions, so currency became a single ORG-level fact
+ *  (V365 header, "RS001b"). A pack field that maps onto a column the
+ *  product no longer has is exactly the "field that later reads as a real
+ *  capability" failure class this repo keeps shipping — corrected here
+ *  ahead of the B06 freeze rather than left for a later session to
+ *  discover the hard way. */
 export const PackRegistrationBlock = z.strictObject({
   category: z.enum(["open", "mens", "womens", "mixed"]),
   ageMin: z.number().int().min(0).max(120).optional(),
   ageMax: z.number().int().min(0).max(120).optional(),
   entrantKind: PackEntrantKind,
   feeCents: z.number().int().nonnegative(),
-  currency: z.string().length(3),
   approval: z.enum(["auto", "manual"]),
   capacity: z.number().int().positive().optional(),
   entries: z.array(PackRegistrationEntry).default([]),
