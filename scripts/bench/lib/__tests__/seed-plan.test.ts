@@ -548,6 +548,179 @@ describe("buildSeedPlan — persons carry their pack lane", () => {
 // purity
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// officials + claim invites (B03 T6)
+// ---------------------------------------------------------------------------
+//
+// A dedicated, minimal pack rather than an extension of `rawPack()` above:
+// an official's `assignments` need at least one declared stream to resolve
+// against (`checkReservations`, pack-schema.ts:2093-2107), and adding one to
+// the shared fixture would ripple into every other describe block in this
+// file. off-ref1 is MANUAL (a named assignment onto fx-1, and a roleKey that
+// deliberately differs from its OWN role_keys[0] — "linesman" vs declared
+// ["referee","linesman"] — so a bug that silently defaulted the assignment's
+// role instead of carrying the pack's own choice would be visible). off-ref2
+// is AUTO (no assignments at all, and no `roleKeys` declared either, to pin
+// the schema default `["referee"]` survives the pack -> plan hop).
+function officialsRawPack(): unknown {
+  return {
+    schemaVersion: 1,
+    suite: "_officials-fixture",
+    org: { name: "Bayview Sports Club", slug: "bayview-sc", timezone: "UTC" },
+    competition: { name: "Bayview Series", endsOn: "2027-09-01" },
+    divisions: [
+      {
+        ref: "d-main",
+        name: "Main",
+        sportKey: "generic",
+        variantKey: "score",
+        moduleVersion: "1.0.0",
+        cfgOverrides: {},
+        stages: [
+          { ref: "s-league", seq: 1, kind: "league", name: "League", config: { legs: 1 }, seeding: ["e-a", "e-b"] },
+        ],
+      },
+    ],
+    persons: [
+      { ref: "p-a", fullName: "Ada Lin", lane: "player" },
+      { ref: "p-b", fullName: "Bela Novak", lane: "player" },
+      { ref: "p-ref1", fullName: "Robin Ferreira", lane: "official" },
+      { ref: "p-ref2", fullName: "Sasha Weller", lane: "official" },
+    ],
+    entrants: [
+      {
+        ref: "e-a",
+        divisionRef: "d-main",
+        kind: "individual",
+        displayName: "Ada Lin",
+        roster: [{ person: "p-a", captain: true }],
+      },
+      {
+        ref: "e-b",
+        divisionRef: "d-main",
+        kind: "individual",
+        displayName: "Bela Novak",
+        roster: [{ person: "p-b", captain: true }],
+      },
+    ],
+    streams: [
+      {
+        divisionRef: "d-main",
+        fixtureExtKey: "fx-1",
+        home: "e-a",
+        away: "e-b",
+        provenance: "real",
+        events: [
+          { type: "core.start" },
+          { type: "generic.result", payload: { p1Score: 1, p2Score: 0 } },
+        ],
+      },
+    ],
+    officials: [
+      {
+        ref: "off-ref1",
+        person: "p-ref1",
+        displayName: "Robin Ferreira",
+        roleKeys: ["referee", "linesman"],
+        maxPerDay: 2,
+        unavailable: [
+          { date: "2027-08-20", note: "on leave" },
+          { date: "2027-08-21" },
+        ],
+        assignments: [{ divisionRef: "d-main", fixtureExtKey: "fx-1", roleKey: "linesman" }],
+      },
+      {
+        ref: "off-ref2",
+        person: "p-ref2",
+        displayName: "Sasha Weller",
+        assignments: [],
+      },
+    ],
+    claimInvites: [{ person: "p-a", email: "ada.claim@example.com" }],
+    expected: {
+      matches: [
+        {
+          divisionRef: "d-main",
+          fixtureExtKey: "fx-1",
+          outcome: { kind: "win", winner: "e-a", loser: "e-b", method: "regulation" },
+          perSide: [
+            { entrant: "e-a", line: "1" },
+            { entrant: "e-b", line: "0" },
+          ],
+        },
+      ],
+    },
+    meta: { synthetic: true },
+  };
+}
+
+function officialsPack(): Pack {
+  return PackSchema.parse(officialsRawPack());
+}
+
+describe("buildSeedPlan — officials", () => {
+  it("resolves display_name/role_keys/max_per_day/unavailable/assignments field-for-field", () => {
+    const plan = buildSeedPlan(officialsPack());
+    const ref1 = plan.officials.find((o) => o.ref === "off-ref1");
+    expect(ref1).toEqual({
+      ref: "off-ref1",
+      personRef: "p-ref1",
+      display_name: "Robin Ferreira",
+      role_keys: ["referee", "linesman"],
+      max_per_day: 2,
+      unavailable: [
+        { date: "2027-08-20", note: "on leave" },
+        { date: "2027-08-21" },
+      ],
+      assignments: [{ divisionRef: "d-main", fixtureExtKey: "fx-1", roleKey: "linesman" }],
+    });
+  });
+
+  it("defaults role_keys to ['referee'] when the pack omits roleKeys — the schema default survives the hop", () => {
+    const plan = buildSeedPlan(officialsPack());
+    const ref2 = plan.officials.find((o) => o.ref === "off-ref2");
+    expect(ref2?.role_keys).toEqual(["referee"]);
+    expect(ref2?.max_per_day).toBeUndefined();
+    expect(ref2 && "max_per_day" in ref2).toBe(false);
+  });
+
+  it("carries personRef through WITHOUT resolving it — PackOfficial.person cannot be honoured by this plan (see the header comment)", () => {
+    const plan = buildSeedPlan(officialsPack());
+    // Both officials keep their pack person ref, verbatim — this plan has no
+    // way to turn either into a real `person_id` (no writer pre-creates a
+    // lane="official" persons row; the only one that does, inviteOfficial,
+    // needs an email PackOfficial does not declare).
+    expect(plan.officials.map((o) => o.personRef).sort()).toEqual(["p-ref1", "p-ref2"]);
+  });
+
+  it("the assignment/no-assignment split IS the manual/auto distinction — no separate flag exists on the plan", () => {
+    const plan = buildSeedPlan(officialsPack());
+    const manual = plan.officials.filter((o) => o.assignments.length > 0);
+    const auto = plan.officials.filter((o) => o.assignments.length === 0);
+    expect(manual.map((o) => o.ref)).toEqual(["off-ref1"]);
+    expect(auto.map((o) => o.ref)).toEqual(["off-ref2"]);
+  });
+
+  it("resolves claimInvites[] to {personRef, email}", () => {
+    const plan = buildSeedPlan(officialsPack());
+    expect(plan.claimInvites).toEqual([{ personRef: "p-a", email: "ada.claim@example.com" }]);
+  });
+
+  it("refuses a claim invite naming an official-lane person, naming the person", () => {
+    const raw = officialsRawPack() as { claimInvites: unknown[] };
+    raw.claimInvites.push({ person: "p-ref1", email: "robin.claim@example.com" });
+    const bad = PackSchema.parse(raw); // schema-legal: checkReservations only checks the ref is KNOWN
+    expect(() => buildSeedPlan(bad)).toThrow(/p-ref1/);
+    expect(() => buildSeedPlan(bad)).toThrow(/lane is "official"/);
+  });
+
+  it("a pack that declares no officials/claimInvites resolves to empty arrays, not undefined", () => {
+    const plan = buildSeedPlan(pack()); // the shared org/competition fixture — no officials block at all
+    expect(plan.officials).toEqual([]);
+    expect(plan.claimInvites).toEqual([]);
+  });
+});
+
 describe("buildSeedPlan — purity", () => {
   it("is deterministic: the same pack produces a deep-equal plan on every call", () => {
     const p = pack();

@@ -54,9 +54,11 @@
 //   - "official" -> NOT an entrant-roster person at all. `CreateOfficial`
 //     (`schemas.ts:3069-3077`) takes `person_id` as OPTIONAL, so an official
 //     needs no `persons` row from this plan either — excluded from `persons`
-//     entirely and surfaced only as a ref in `officialPersonRefs`, for
-//     whichever later task drives `POST /officials` (that task also owns
-//     `pack.officials[]`, which this module does not touch).
+//     entirely and surfaced only as a ref in `officialPersonRefs`.
+//     `pack.officials[]` itself IS resolved by this module as of B03 T6 (see
+//     `SeedPlanOfficial` below) — but resolving an official's ROW is not the
+//     same as resolving its `person` field to a real id: see that type's own
+//     header comment for why `PackOfficial.person` stays informational only.
 //
 // `checkRosters` (`pack-schema.ts:1497`) does not forbid an official-lane
 // person from appearing in `entrants[].roster[]` — it only counts
@@ -102,7 +104,13 @@
 // here imports from `apps/web` — every product field name below is a hand
 // mirror, verified against the cited schemas.ts lines, never an import.
 import { expectedFixtureCount } from "./pack-io.ts";
-import type { Pack, PackJsonValue, PackPersonLane, PackRosterMember } from "./pack-schema.ts";
+import type {
+  Pack,
+  PackClaimInvite,
+  PackJsonValue,
+  PackPersonLane,
+  PackRosterMember,
+} from "./pack-schema.ts";
 
 // ---------------------------------------------------------------------------
 // The plan
@@ -241,6 +249,66 @@ export interface SeedPlanExpectedFixtureCount {
   readonly count: number;
 }
 
+// ---------------------------------------------------------------------------
+// Officials + claim invites (B03 T6)
+// ---------------------------------------------------------------------------
+// `PackOfficial.person` — THE FINDING, recorded here rather than papered
+// over: it CANNOT be resolved to a real `person_id` by this plan (or by the
+// HTTP driver that consumes it). `POST /officials` takes `person_id` as
+// OPTIONAL (pack-schema.ts's own doc on `PackOfficial`), and the only writer
+// that ever mints a `persons` row for an official is `POST /officials/{id}/
+// invite` (`inviteOfficial`, usecases/officials.ts:183) — which requires an
+// EMAIL `PackOfficial` does not declare, and which mints an (unrequested)
+// claim invite as a side effect the moment it is called. There is no way to
+// honour "this official IS person p-dee" without either fabricating an email
+// the pack never authored or silently inviting a claim nobody asked for —
+// both worse than the alternative. So `SeedPlanOfficial.personRef` below is
+// carried through for TRACEABILITY ONLY (so a report can say which pack
+// person an official's row was meant to represent); the HTTP driver never
+// sends it as `person_id`, and `POST /officials` is always called with that
+// field omitted. `checkReservations` (pack-schema.ts:2093-2099) still
+// requires the ref to resolve to a lane="official" person — that rule stays
+// meaningful as pack-authoring hygiene (an official-shaped person is
+// declared, even though this layer cannot yet wire the two together), it
+// just is not a rule this module or `seed.ts` can act on.
+export interface SeedPlanOfficialBlackout {
+  readonly date: string;
+  readonly note?: string;
+}
+
+/** `PackOfficialAssignment`, resolved to nothing more than the plan can
+ *  offer offline — `fixtureExtKey`/`divisionRef` still need a real fixture
+ *  id, which only the HTTP driver has (post-`/generate`). */
+export interface SeedPlanOfficialAssignment {
+  readonly divisionRef: string;
+  readonly fixtureExtKey: string;
+  readonly roleKey?: string;
+}
+
+/** `POST /officials` body fields (`CreateOfficial`), plus the pack's own
+ *  blackouts/assignments carried through verbatim. An official with a
+ *  non-empty `assignments` is MANUAL (the driver PATCHes it onto its named
+ *  fixture); one with none is left to `autoAssignOfficials` — the pack's own
+ *  rule (pack-schema.ts:768-769), not a switch this plan invents. */
+export interface SeedPlanOfficial {
+  readonly ref: string;
+  /** See the header comment above — informational only, never sent as
+   *  `person_id`. */
+  readonly personRef: string;
+  readonly display_name: string;
+  readonly role_keys: readonly string[];
+  readonly max_per_day?: number;
+  readonly unavailable: readonly SeedPlanOfficialBlackout[];
+  readonly assignments: readonly SeedPlanOfficialAssignment[];
+}
+
+/** `POST /persons/{id}/claim-invites` body is just `{email}` — `personRef`
+ *  is what the HTTP driver resolves to the real `person_id` in the path. */
+export interface SeedPlanClaimInvite {
+  readonly personRef: string;
+  readonly email: string;
+}
+
 export interface SeedPlan {
   readonly org: SeedPlanOrg;
   readonly competition: SeedPlanCompetition;
@@ -251,6 +319,11 @@ export interface SeedPlan {
    *  task cross-references `pack.persons`/`pack.officials` by ref itself;
    *  this plan does not restate either. */
   readonly officialPersonRefs: readonly string[];
+  /** `pack.officials`, resolved. Empty when the pack declares none —
+   *  `PackSchema.officials` is `.optional()`. */
+  readonly officials: readonly SeedPlanOfficial[];
+  /** `pack.claimInvites`, resolved. Empty when the pack declares none. */
+  readonly claimInvites: readonly SeedPlanClaimInvite[];
   /** One entry per LEAGUE stage only — `expectedFixtureCount`
    *  (`pack-io.ts:154`) itself refuses a non-league stage rather than
    *  answer a number it cannot derive, so a bracket/group/swiss/etc. stage
@@ -293,6 +366,32 @@ function buildRosterMember(
     // travels as the lane and this carries only what the pack declared.
     roles: m.roles,
   };
+}
+
+/** Mirrors `buildRosterMember`'s own official-lane guard: `checkReservations`
+ *  (pack-schema.ts:2107-2123) does not forbid a claim invite naming an
+ *  official-lane person — it only checks the ref is known — so a
+ *  schema-legal pack could still author that mistake. An official-lane
+ *  person gets no `persons` row from THIS plan (the header comment above),
+ *  so there is no `person_id` for `POST /persons/{id}/claim-invites` to
+ *  target; refused here rather than handed to the HTTP driver as a
+ *  `personRef` with nothing in `plan.persons` to resolve it against. */
+function buildClaimInvite(
+  c: PackClaimInvite,
+  laneByRef: ReadonlyMap<string, PackPersonLane>,
+): SeedPlanClaimInvite {
+  const lane = laneByRef.get(c.person);
+  if (lane === undefined) {
+    throw new Error(`claim invite references unknown person ref "${c.person}"`);
+  }
+  if (lane === "official") {
+    throw new Error(
+      `claim invite references person "${c.person}", whose lane is "official" — an official-lane person gets ` +
+        `no "persons" row from this plan (see SeedPlanOfficial's header comment), so there is no person_id for ` +
+        `POST /persons/{id}/claim-invites to target`,
+    );
+  }
+  return { personRef: c.person, email: c.email };
 }
 
 /**
@@ -375,5 +474,39 @@ export function buildSeedPlan(pack: Pack): SeedPlan {
     }
   }
 
-  return { org, competition, divisions, persons, entrants, officialPersonRefs, expectedFixtureCounts };
+  // `pack.officials`/`pack.claimInvites` are `.optional()` on `PackSchema`
+  // (the pre-freeze reservations) — `?? []` is the "declares none" case,
+  // matching every other optional pack block this module resolves.
+  const officials: SeedPlanOfficial[] = (pack.officials ?? []).map((o) => ({
+    ref: o.ref,
+    personRef: o.person,
+    display_name: o.displayName,
+    role_keys: o.roleKeys,
+    ...(o.maxPerDay === undefined ? {} : { max_per_day: o.maxPerDay }),
+    unavailable: o.unavailable.map((u) => ({
+      date: u.date,
+      ...(u.note === undefined ? {} : { note: u.note }),
+    })),
+    assignments: o.assignments.map((a) => ({
+      divisionRef: a.divisionRef,
+      fixtureExtKey: a.fixtureExtKey,
+      ...(a.roleKey === undefined ? {} : { roleKey: a.roleKey }),
+    })),
+  }));
+
+  const claimInvites: SeedPlanClaimInvite[] = (pack.claimInvites ?? []).map((c) =>
+    buildClaimInvite(c, laneByRef),
+  );
+
+  return {
+    org,
+    competition,
+    divisions,
+    persons,
+    entrants,
+    officialPersonRefs,
+    officials,
+    claimInvites,
+    expectedFixtureCounts,
+  };
 }

@@ -71,6 +71,11 @@ interface TinyShape {
   persons: { ref: string; fullName: string; lane: string }[];
   entrants: { ref: string }[];
   streams: TinyStream[];
+  // B03 T6 — loose, like every other field here: an official's `assignments`
+  // name a (divisionRef, fixtureExtKey) that must resolve against `streams`,
+  // so a test that empties `streams` has to empty this too or the pack
+  // fails to validate for a reason unrelated to what that test is proving.
+  officials?: { ref: string; assignments?: { divisionRef: string; fixtureExtKey: string }[] }[];
   expected: {
     matches: {
       divisionRef: string;
@@ -289,6 +294,11 @@ describe("validatePack — _tiny.json, the shared fixture", () => {
     pack.expected.matches = [];
     pack.expected.tables = [];
     pack.expected.specials = [];
+    // officials[].assignments name a (divisionRef, fixtureExtKey) that must
+    // resolve against `streams` — emptied above, so this has to empty too,
+    // or `checkReservations` reds the pack for a reason this test is not
+    // about (an unrelated "no stream declares fixture ..." error).
+    pack.officials = [];
     const result = validatePack(pack, TINY);
     // An absent key and a zero count are different facts: a report that cannot
     // tell them apart hides a division nothing replayed. Both declared

@@ -100,6 +100,11 @@
       "lane": "official"
     },
     {
+      "ref": "p-eli",
+      "fullName": "Eli Ostrander",
+      "lane": "official"
+    },
+    {
       "ref": "p-cho",
       "fullName": "Cho Min-jun",
       "lane": "player",
@@ -717,6 +722,49 @@
       ]
     }
   ],
+  "officials": [
+    {
+      "ref": "off-dee",
+      "person": "p-dee",
+      "displayName": "Dee Duarte",
+      "roleKeys": [
+        "referee"
+      ],
+      "unavailable": [
+        {
+          "date": "2099-01-02",
+          "note": "family commitment"
+        }
+      ],
+      "assignments": [
+        {
+          "divisionRef": "d-tiny",
+          "fixtureExtKey": "rr-r1-c1",
+          "roleKey": "referee"
+        }
+      ]
+    },
+    {
+      "ref": "off-eli",
+      "person": "p-eli",
+      "displayName": "Eli Ostrander",
+      "roleKeys": [
+        "referee"
+      ],
+      "unavailable": [],
+      "assignments": []
+    }
+  ],
+  "claimInvites": [
+    {
+      "person": "p-ana",
+      "email": "ana.alvarez.claim@example.com"
+    },
+    {
+      "person": "p-cho",
+      "email": "cho.minjun.claim@example.com"
+    }
+  ],
   "expected": {
     "matches": [
       {
@@ -957,6 +1005,16 @@
         "what": "This whole file is now a GENERATED artefact — see build-packs/_tiny.ts. It is committed anyway (as openapi/v1.json is) so a pack consumer never needs to run the generator to read it, and so drift between the generator and the committed bytes is a mechanical, testable fact rather than an assertion.",
         "why": "build-packs/_tiny.ts is modelled on scripts/openapi-gen.ts's generator/committed-output/drift-test pattern. B03's charter does not include a CI step for it (unlike the OpenAPI gate at .github/workflows/ci.yml:94-98); the determinism test under build-packs/__tests__ is the gate for now.",
         "where": "the whole file"
+      },
+      {
+        "what": "officials[] declares TWO officials against d-tiny only: off-dee (a named assignment onto rr-r1-c1 — MANUAL) and off-eli (no assignments at all — left to autoAssignOfficials). p-eli is a NEW official-lane person added alongside the already-declared, previously-unused p-dee — B03 T6 closes that dangling ref by giving it an official row at last.",
+        "why": "pack-schema.ts's own comment on PackOfficial (\"an official with named assignments is manual, one without is left to autoAssignOfficials\") names both paths; one official can only ever prove one of them. d-badminton was deliberately left out — this addition is orthogonal to T5's, and mixing the two would make a failure here harder to attribute.",
+        "where": "officials[]"
+      },
+      {
+        "what": "claimInvites[] carries two entries, one per division's own star (p-ana from d-tiny, p-cho from d-badminton) — minted, never accepted (B03 §5: \"the accept flow is B05's, seeding only mints invites\").",
+        "why": "Bench design §9 P2: \"pc_ claim invites for ~3 stars/suite\". Two is enough for _tiny to prove the mapping generalises across divisions without inflating a fixture whose whole point is staying small.",
+        "where": "claimInvites[]"
       }
     ]
   }

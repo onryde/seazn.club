@@ -373,6 +373,8 @@ const LOOKUP_PLAN: SeedPlan = {
   persons: [],
   entrants: [],
   officialPersonRefs: [],
+  officials: [],
+  claimInvites: [],
   expectedFixtureCounts: [],
 };
 
@@ -492,6 +494,8 @@ function makeFakeServer(opts: { sameOrgForAll?: boolean } = {}): {
 } {
   const calls: RecordedCall[] = [];
   const competitions: FakeCompetitionRow[] = [];
+  const fixtureOfficials = new Map<string, unknown[]>();
+  const claimInvites = new Map<string, unknown>();
   const orgByEmail = new Map<string, string>();
   const orgBySession = new WeakMap<Session, string>();
   let orgCounter = 0;
@@ -605,6 +609,38 @@ function makeFakeServer(opts: { sameOrgForAll?: boolean } = {}): {
       if (method === "POST" && /^\/api\/v1\/divisions\/[^/]+\/schedule\/validate$/.test(routePath)) {
         return { conflicts: [] } as unknown as T;
       }
+      // ---- officials + claim invites (B03 T6). These exist here because
+      // wiring `seedOfficialsAndClaims` into `seedSuite` made `_tiny`'s own
+      // officials reach this fake for the first time. That is the point of
+      // the wiring: an unwired step cannot change what a real run does, and
+      // two tests in this file went red the moment it could.
+      if (method === "POST" && routePath === "/api/v1/officials") {
+        const b = body as { display_name: string };
+        return { id: `official-${slug(b.display_name)}` } as T;
+      }
+      if (method === "POST" && /^\/api\/v1\/officials\/[^/]+\/availability$/.test(routePath)) {
+        return { date: (body as { date: string }).date } as T;
+      }
+      if (method === "PATCH" && /^\/api\/v1\/fixtures\/[^/]+\/officials$/.test(routePath)) {
+        const fixtureId = routePath.split("/")[4]!;
+        fixtureOfficials.set(fixtureId, (body as { set: unknown[] }).set);
+        return { ok: true } as T;
+      }
+      if (method === "GET" && /^\/api\/v1\/fixtures\/[^/]+$/.test(routePath)) {
+        const fixtureId = routePath.split("/")[4]!;
+        return { id: fixtureId, officials: fixtureOfficials.get(fixtureId) ?? [] } as T;
+      }
+      if (method === "POST" && /^\/api\/v1\/persons\/[^/]+\/claim-invites$/.test(routePath)) {
+        const personId = routePath.split("/")[4]!;
+        const row = { person_id: personId, token: `pc_${personId}`, claimed_at: null, revoked_at: null };
+        claimInvites.set(personId, row);
+        return row as T;
+      }
+      if (method === "GET" && /^\/api\/v1\/persons\/[^/]+\/claim-invites$/.test(routePath)) {
+        const personId = routePath.split("/")[4]!;
+        return (claimInvites.get(personId) ?? null) as T;
+      }
+
       throw new Error(`fake server: unhandled ${method} ${routePath}`);
     },
   };
@@ -702,6 +738,66 @@ describe("runTinySuite — --keep idempotence (T4)", () => {
 
     rmSync(dirA, { recursive: true, force: true });
     rmSync(dirB, { recursive: true, force: true });
+  });
+
+  it("a real run DRIVES the officials/claims seam — not merely defines it", async () => {
+    // AGENTS.md recurring failure class 1, the inert seam: code declared,
+    // typed and unit-green that nothing in production ever calls. It has
+    // shipped six times in this repo, and `seedOfficialsAndClaims` was the
+    // seventh — fully tested against its own fake and wired into nothing,
+    // deferred because ONE of its five steps (auto-assign) is Pro-gated.
+    //
+    // Its own unit tests cannot see this: they call the function directly, so
+    // they pass identically whether or not `seedSuite` ever invokes it. Only a
+    // test that drives the REAL producer can tell the difference, which is
+    // what this one does.
+    const server = makeFakeServer();
+    const { packPath, dir } = writeTinyPack(TINY_TEXT);
+
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "greedy",
+      keep: false,
+      log: silent,
+      packPath,
+      transport: server.transport,
+    });
+    expect(report.gate).toBe("green");
+
+    const hit = (method: string, re: RegExp) =>
+      server.calls.filter((c) => c.method === method && re.test(c.path.split("?")[0]!));
+
+    // `_tiny` declares two officials and one claim invite (T6). Every count
+    // below is derived from the pack rather than typed in, so editing the
+    // pack moves the expectation with it instead of leaving a stale literal.
+    const pack = tinyPack();
+    const officials = pack.officials ?? [];
+    const invites = pack.claimInvites ?? [];
+    const blackouts = officials.flatMap((o) => o.unavailable);
+    const manual = officials.filter((o) => o.assignments.length > 0);
+    expect(officials.length, "fixture guard: the pack must declare officials").toBeGreaterThan(0);
+    expect(blackouts.length, "fixture guard: at least one blackout").toBeGreaterThan(0);
+    expect(manual.length, "fixture guard: at least one NAMED assignment").toBeGreaterThan(0);
+    expect(invites.length, "fixture guard: at least one claim invite").toBeGreaterThan(0);
+
+    expect(hit("POST", /^\/api\/v1\/officials$/)).toHaveLength(officials.length);
+    expect(hit("POST", /^\/api\/v1\/officials\/[^/]+\/availability$/)).toHaveLength(blackouts.length);
+    expect(hit("PATCH", /^\/api\/v1\/fixtures\/[^/]+\/officials$/).length).toBeGreaterThan(0);
+    expect(hit("POST", /^\/api\/v1\/persons\/[^/]+\/claim-invites$/)).toHaveLength(invites.length);
+
+    // The blackout's DATE, not merely that a blackout call happened — a
+    // reachability assertion is satisfied by ANY value.
+    const sentDates = hit("POST", /^\/api\/v1\/officials\/[^/]+\/availability$/)
+      .map((c) => (c.body as { date: string }).date)
+      .sort();
+    expect(sentDates).toEqual(blackouts.map((u) => u.date).sort());
+
+    // And auto-assign must NOT have run: it is the one Pro-gated step, and
+    // `seedSuite` leaves it off until plan provisioning exists (B03 T7).
+    expect(hit("POST", /^\/api\/v1\/divisions\/[^/]+\/officials\/auto$/)).toHaveLength(0);
+    expect(hit("POST", /^\/api\/v1\/divisions\/[^/]+\/officials\/apply$/)).toHaveLength(0);
+
+    rmSync(dir, { recursive: true, force: true });
   });
 
   it("a --wipe run never even ATTEMPTS the reuse lookup, even when a matching competition already exists", async () => {

@@ -84,6 +84,11 @@ const TINY_PERSONS: NonNullable<PackInput["persons"]> = [
   { ref: "p-ana", fullName: "Ana Alvarez", lane: "player", shortName: "A. Alvarez" },
   { ref: "p-bo", fullName: "Bo Baptiste", lane: "player", shortName: "B. Baptiste" },
   { ref: "p-dee", fullName: "Dee Duarte", lane: "official" },
+  // B03 T6: the SECOND official-lane person — Dee is the MANUAL official
+  // below (a named `assignments` entry), Eli is left to `autoAssignOfficials`
+  // (no `assignments` at all). One of each closes both `officials[]`
+  // assignment paths pack-schema.ts:768-769 distinguishes.
+  { ref: "p-eli", fullName: "Eli Ostrander", lane: "official" },
 ];
 
 const TINY_ENTRANTS: PackInput["entrants"] = [
@@ -225,6 +230,44 @@ const TINY_SPECIALS: NonNullable<PackInput["expected"]["specials"]> = [
   },
 ];
 
+// ---------------------------------------------------------------------------
+// Officials + claim invites (B03 T6, bench design §9 P1/P2). Both target
+// d-tiny — the division `runTinySuite` already knows how to drive to real
+// fixtures — never d-badminton, which keeps this addition orthogonal to T5's.
+// ---------------------------------------------------------------------------
+
+const TINY_OFFICIALS: NonNullable<PackInput["officials"]> = [
+  {
+    ref: "off-dee",
+    person: "p-dee",
+    displayName: "Dee Duarte",
+    roleKeys: ["referee"],
+    unavailable: [{ date: "2099-01-02", note: "family commitment" }],
+    // MANUAL: a named assignment, so `seedOfficialsAndClaims` PATCHes her
+    // onto rr-r1-c1 directly rather than leaving her to auto-assign
+    // (pack-schema.ts:768-769's own rule).
+    assignments: [{ divisionRef: "d-tiny", fixtureExtKey: "rr-r1-c1", roleKey: "referee" }],
+  },
+  {
+    ref: "off-eli",
+    person: "p-eli",
+    displayName: "Eli Ostrander",
+    roleKeys: ["referee"],
+    // AUTO: no named assignment — left to `autoAssignOfficials`, the pack's
+    // OTHER assignment path.
+    unavailable: [],
+    assignments: [],
+  },
+];
+
+const TINY_CLAIM_INVITES: NonNullable<PackInput["claimInvites"]> = [
+  // One star per division — proves the seeding layer's claim-invite mapping
+  // generalises past a single division, the same reason T5 added d-badminton
+  // to buildSeedPlan's own coverage.
+  { person: "p-ana", email: "ana.alvarez.claim@example.com" },
+  { person: "p-cho", email: "cho.minjun.claim@example.com" },
+];
+
 const TINY_ADAPTATIONS: PackInput["meta"]["adaptations"] = [
   {
     what: "The whole pack is invented. There is no historical tournament behind it, which is why meta.synthetic is true and meta.sources is empty.",
@@ -260,6 +303,16 @@ const TINY_ADAPTATIONS: PackInput["meta"]["adaptations"] = [
     what: "This whole file is now a GENERATED artefact — see build-packs/_tiny.ts. It is committed anyway (as openapi/v1.json is) so a pack consumer never needs to run the generator to read it, and so drift between the generator and the committed bytes is a mechanical, testable fact rather than an assertion.",
     why: "build-packs/_tiny.ts is modelled on scripts/openapi-gen.ts's generator/committed-output/drift-test pattern. B03's charter does not include a CI step for it (unlike the OpenAPI gate at .github/workflows/ci.yml:94-98); the determinism test under build-packs/__tests__ is the gate for now.",
     where: "the whole file",
+  },
+  {
+    what: "officials[] declares TWO officials against d-tiny only: off-dee (a named assignment onto rr-r1-c1 — MANUAL) and off-eli (no assignments at all — left to autoAssignOfficials). p-eli is a NEW official-lane person added alongside the already-declared, previously-unused p-dee — B03 T6 closes that dangling ref by giving it an official row at last.",
+    why: "pack-schema.ts's own comment on PackOfficial (\"an official with named assignments is manual, one without is left to autoAssignOfficials\") names both paths; one official can only ever prove one of them. d-badminton was deliberately left out — this addition is orthogonal to T5's, and mixing the two would make a failure here harder to attribute.",
+    where: "officials[]",
+  },
+  {
+    what: "claimInvites[] carries two entries, one per division's own star (p-ana from d-tiny, p-cho from d-badminton) — minted, never accepted (B03 §5: \"the accept flow is B05's, seeding only mints invites\").",
+    why: "Bench design §9 P2: \"pc_ claim invites for ~3 stars/suite\". Two is enough for _tiny to prove the mapping generalises across divisions without inflating a fixture whose whole point is staying small.",
+    where: "claimInvites[]",
   },
 ];
 
@@ -444,6 +497,8 @@ export function buildTinyPack(): PackInput {
     persons: [...TINY_PERSONS, ...BADMINTON_PERSONS],
     entrants: [...TINY_ENTRANTS, ...BADMINTON_ENTRANTS],
     streams: [...TINY_STREAMS, BADMINTON_STREAM],
+    officials: TINY_OFFICIALS,
+    claimInvites: TINY_CLAIM_INVITES,
     expected: {
       matches: [...TINY_MATCHES, BADMINTON_MATCH],
       tables: [...TINY_TABLES, BADMINTON_TABLE],

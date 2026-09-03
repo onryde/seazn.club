@@ -135,9 +135,9 @@ describe("buildSeedPlan — the T4 generalisation, exercised on a REAL two-divis
     expect(tinyEntrants.map((e) => e.ref).sort()).toEqual(["e-alpha", "e-bravo"]);
 
     // Every player-lane person, from BOTH divisions, becomes a `persons` row;
-    // Dee Duarte (d-tiny's official) does not.
+    // Dee Duarte and Eli Ostrander (d-tiny's officials) do not.
     expect(plan.persons.map((p) => p.ref).sort()).toEqual(["p-ana", "p-bo", "p-cho", "p-dahl"]);
-    expect(plan.officialPersonRefs).toEqual(["p-dee"]);
+    expect(plan.officialPersonRefs).toEqual(["p-dee", "p-eli"]);
 
     // ONE entry per league stage, per division — the fixture-count
     // generalisation `expectedFixtureCount` (pack-io.ts:154) exists for.
@@ -146,6 +146,33 @@ describe("buildSeedPlan — the T4 generalisation, exercised on a REAL two-divis
     expect(plan.expectedFixtureCounts).toEqual([
       { divisionRef: "d-tiny", stageRef: "s-league", count: 3 },
       { divisionRef: "d-badminton", stageRef: "s-badminton-league", count: 1 },
+    ]);
+  });
+
+  it("B03 T6 — resolves BOTH officials[] entries, MANUAL and AUTO, and both claimInvites[]", () => {
+    const pack = PackSchema.parse(JSON.parse(readFileSync(TINY_JSON_PATH, "utf8")));
+    const plan = buildSeedPlan(pack);
+
+    expect(plan.officials.map((o) => o.ref)).toEqual(["off-dee", "off-eli"]);
+
+    const dee = plan.officials.find((o) => o.ref === "off-dee")!;
+    // MANUAL — a named assignment onto rr-r1-c1, carried through verbatim.
+    expect(dee.personRef).toBe("p-dee");
+    expect(dee.role_keys).toEqual(["referee"]);
+    expect(dee.unavailable).toEqual([{ date: "2099-01-02", note: "family commitment" }]);
+    expect(dee.assignments).toEqual([
+      { divisionRef: "d-tiny", fixtureExtKey: "rr-r1-c1", roleKey: "referee" },
+    ]);
+
+    const eli = plan.officials.find((o) => o.ref === "off-eli")!;
+    // AUTO — no named assignment at all; left to autoAssignOfficials.
+    expect(eli.personRef).toBe("p-eli");
+    expect(eli.unavailable).toEqual([]);
+    expect(eli.assignments).toEqual([]);
+
+    expect(plan.claimInvites).toEqual([
+      { personRef: "p-ana", email: "ana.alvarez.claim@example.com" },
+      { personRef: "p-cho", email: "cho.minjun.claim@example.com" },
     ]);
   });
 });

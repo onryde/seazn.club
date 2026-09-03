@@ -5,7 +5,7 @@ B03's own prompt forbids touching product code, so none of these were fixed
 there. Every one was found by trying to drive the product's real API from
 outside it, which is what the bench is for.
 
-> ## STATUS 2026-09-03 — six of eight are FIXED and merged (PR #706)
+> ## STATUS 2026-09-03 — six of nine are FIXED and merged (PR #706); G9 is new
 >
 > | gap | state |
 > |---|---|
@@ -17,6 +17,7 @@ outside it, which is what the bench is for.
 > | G8 drift gate ignored the published spec | **FIXED** — `ci.yml` diffs `v1.public.json` too |
 > | G4 `import.events` granted by no plan | **OPEN**, gated on entitlements W2 |
 > | G7 `business` seeded by a migration, absent live | **OPEN**, same W2 gate |
+> | G9 blackouts are write-only over the API | **OPEN**, new — found while CONSUMING G2's own fix |
 >
 > Each fix was verified present in the tree, not taken from the PR
 > description. **Read the six closed sections as history, not as work.** They
@@ -493,6 +494,52 @@ current gate stay green on a deliberately stale public spec.
 `v1.json`, it cannot drift independently and the second diff is dead weight.
 Check that before writing the line — if it IS a pure projection, the honest fix
 may be to stop committing it at all.
+
+---
+
+## G9 — G2's blackout route can be WRITTEN but not READ
+
+**Found 2026-09-03 by B03 T6, while consuming G2's fix. Not a criticism of that
+fix — it is the gap its shape leaves behind, and it was only visible from a
+client trying to use it.**
+
+**Evidence (READ, exhaustive):** `apps/web/src/app/api/v1/officials/[id]/availability/route.ts`
+exports exactly two handlers, `POST` (`:13`) and `DELETE` (`:23`). There is no
+`GET`. The reader that exists, `listOfficialBlackouts` (`usecases/officials.ts:106`),
+has ONE non-test caller in the whole tree — an RSC page,
+`app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/schedule/page.tsx:134` — and nothing
+under `app/api/**` references `official_availability` outside that route's own
+test file.
+
+**Customer impact:** an organiser can record an official's blackout over the API
+and has no way to read back what they recorded. Write-only is worse than absent
+for an integrator: nothing to reconcile against, nothing to show the user, and
+no way to make a write idempotent except by writing again.
+
+**How it was found, which is the useful part:** B03's acceptance line is
+"Officials assigned + blackout visible via **API read-back**", and that line
+cannot be satisfied directly. The bench proves the blackout through
+`POST /divisions/{id}/schedule/validate`, whose `warn.official_unavailable`
+finding is a genuine, side-effect-free consequence of the row existing. That
+works, and it is a WORSE test than reading the row: it proves the scheduler
+noticed something, not that the value stored is the value sent.
+
+**Recommendation:** add `GET /api/v1/officials/{id}/availability` returning that
+official's rows. `listOfficialBlackouts` is org-wide; this wants the
+per-official slice, guarded by the same
+`requireResourceAuth(req, "official", id, ...)` the writes already use, with
+`"read"` instead of `"write"`.
+
+**Strongest argument against:** nobody has asked, and G3's counter applies —
+every public route is a permanent compatibility obligation. Counter: unlike G3
+this is not a new capability, it is the read half of a write that shipped hours
+ago, and the asymmetry is the kind a client discovers only after building
+against it.
+
+**Same shape as G3.** That one was "the API can create fixtures but not list
+them"; this is "the API can write blackouts but not read them". Two instances in
+one wave suggests the write-first habit is worth a checklist line rather than
+two separate fixes.
 
 ---
 

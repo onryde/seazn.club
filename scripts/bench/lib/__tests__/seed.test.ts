@@ -21,11 +21,13 @@
 import { describe, expect, it } from "vitest";
 import type { RequestOptions, Session } from "../http.ts";
 import { fixtureKey, type PackStream, type PackVenue } from "../pack-schema.ts";
-import type { SeedPlan } from "../seed-plan.ts";
+import type { SeedPlan, SeedPlanClaimInvite, SeedPlanOfficial } from "../seed-plan.ts";
 import {
   bindStreamFixtures,
+  seedOfficialsAndClaims,
   seedSuite,
   type GeneratedFixtureRef,
+  type SeedOfficialsAndClaimsInput,
   type SeedSuiteInput,
   type SeedTransport,
 } from "../seed.ts";
@@ -218,6 +220,8 @@ describe("seedSuite — single division, no venues (the _tiny shape)", () => {
       { ref: "e2", divisionRef: "d1", kind: "team", display_name: "Team Beta", members: [] },
     ],
     officialPersonRefs: [],
+    officials: [],
+    claimInvites: [],
     expectedFixtureCounts: [],
   };
 
@@ -389,6 +393,8 @@ describe("seedSuite — two divisions, venues+courts, and a SHARED ext_key acros
       { ref: "e4", divisionRef: "d2", kind: "team", display_name: "Beta Two", members: [] },
     ],
     officialPersonRefs: [],
+    officials: [],
+    claimInvites: [],
     expectedFixtureCounts: [],
   };
 
@@ -469,5 +475,363 @@ describe("seedSuite — two divisions, venues+courts, and a SHARED ext_key acros
 
     const st2Call = calls.find((c) => c.path === "/api/v1/divisions/div-division-two/stages");
     expect(st2Call?.body).toEqual([{ seq: 1, kind: "league", name: "League B", config: { legs: 1 } }]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// seedOfficialsAndClaims — officials + claim invites (B03 T6)
+// ---------------------------------------------------------------------------
+
+interface FixtureOfficialsRead {
+  official_id: string;
+  name: string;
+  role: string;
+  locked: boolean;
+  response: string;
+  decline_reason: string | null;
+}
+
+interface ClaimRead {
+  id: string;
+  person_id: string;
+  email: string;
+  expires_at: string;
+  claimed_at: string | null;
+  revoked_at: string | null;
+}
+
+interface OfficialsFakeConfig {
+  fixtureReads?: Record<string, FixtureOfficialsRead[]>;
+  autoProposals?: Record<string, { assignments: { fixtureId: string; officialId: string; roleKey: string; locked?: boolean }[] }>;
+  validateResponses?: Record<string, { conflicts: { fixture_id: string; code: string; blocking: boolean }[] }>;
+  claimReads?: Record<string, ClaimRead>;
+}
+
+/** A recording fake covering exactly the surface `seedOfficialsAndClaims`
+ *  calls. The PATCH .../officials response is deliberately a STALE, wrong
+ *  echo — real `patchFixtureOfficials` does return the fresh cache, but this
+ *  fake's whole job is proving the driver reads back through its OWN,
+ *  distinct `GET /fixtures/{id}` call rather than trusting what a write
+ *  returned (this file's own header comment on "not merely 201"). Same for
+ *  the claim-invite POST vs its GET: two different shapes, so a test
+ *  asserting the read-back result cannot accidentally pass by reusing the
+ *  write's response. */
+function fakeOfficialsTransport(config: OfficialsFakeConfig): { transport: SeedTransport; calls: RecordedCall[] } {
+  const calls: RecordedCall[] = [];
+  const transport: SeedTransport = {
+    async signIn(_base: string, _s: Session, email: string) {
+      calls.push({ method: "SIGNIN", path: email, body: undefined });
+      return { has_org: true, org_id: "org-1", redirect: "/dashboard" };
+    },
+    async request<T>(_base: string, _s: Session, path: string, opts?: RequestOptions): Promise<T> {
+      const method = opts?.method ?? "GET";
+      const body = opts?.body;
+      calls.push({ method, path, body });
+
+      if (method === "POST" && path === "/api/v1/officials") {
+        return { id: `official-${slug((body as { display_name: string }).display_name)}` } as T;
+      }
+      if (method === "POST" && /^\/api\/v1\/officials\/[^/]+\/availability$/.test(path)) {
+        return { date: (body as { date: string }).date, note: (body as { note?: string }).note ?? null } as T;
+      }
+      if (method === "PATCH" && /^\/api\/v1\/fixtures\/[^/]+\/officials$/.test(path)) {
+        return {
+          officials: [
+            { official_id: "STALE", name: "STALE", role: "STALE", locked: false, response: "pending", decline_reason: null },
+          ],
+        } as T;
+      }
+      const getFixtureMatch = /^\/api\/v1\/fixtures\/([^/]+)$/.exec(path);
+      if (method === "GET" && getFixtureMatch) {
+        const fixtureId = getFixtureMatch[1]!;
+        const officials = config.fixtureReads?.[fixtureId];
+        if (officials === undefined) throw new Error(`fake: no scripted GET /fixtures/${fixtureId} response`);
+        return { officials } as T;
+      }
+      const autoMatch = /^\/api\/v1\/divisions\/([^/]+)\/officials\/auto$/.exec(path);
+      if (method === "POST" && autoMatch) {
+        const proposal = config.autoProposals?.[autoMatch[1]!];
+        if (proposal === undefined) throw new Error(`fake: no scripted /officials/auto response for division "${autoMatch[1]}"`);
+        return proposal as T;
+      }
+      if (method === "POST" && /^\/api\/v1\/divisions\/[^/]+\/officials\/apply$/.test(path)) {
+        return { applied: (body as { assignments: unknown[] }).assignments.length } as T;
+      }
+      const validateMatch = /^\/api\/v1\/divisions\/([^/]+)\/schedule\/validate$/.exec(path);
+      if (method === "POST" && validateMatch) {
+        return (config.validateResponses?.[validateMatch[1]!] ?? { conflicts: [] }) as T;
+      }
+      const claimMatch = /^\/api\/v1\/persons\/([^/]+)\/claim-invites$/.exec(path);
+      if (method === "POST" && claimMatch) {
+        return {
+          id: "WRITE-ECHO",
+          person_id: claimMatch[1],
+          email: (body as { email: string }).email,
+          expires_at: "2099-01-01T00:00:00Z",
+          claimed_at: null,
+          revoked_at: null,
+          claim_url: "https://bench.example/claim/x",
+          email_sent: true,
+        } as T;
+      }
+      if (method === "GET" && claimMatch) {
+        const read = config.claimReads?.[claimMatch[1]!];
+        if (read === undefined) throw new Error(`fake: no scripted GET /persons/${claimMatch[1]}/claim-invites response`);
+        return read as T;
+      }
+      throw new Error(`fake officials transport: unhandled ${method} ${path}`);
+    },
+  };
+  return { transport, calls };
+}
+
+describe("seedOfficialsAndClaims", () => {
+  // Mirrors the shape B03 T6 gave `_tiny.json`: off-dee is MANUAL (a named
+  // assignment onto rr-r1-c1, a declared blackout), off-eli is AUTO (no
+  // assignments at all). One claim invite. `role_keys`/`unavailable` values
+  // are chosen so a hand-typed constant in the driver could never agree with
+  // them by accident (never "referee" alone, never a round date).
+  const officials: SeedPlanOfficial[] = [
+    {
+      ref: "off-dee",
+      personRef: "p-dee",
+      display_name: "Dee Duarte",
+      role_keys: ["referee"],
+      unavailable: [{ date: "2099-01-02", note: "family commitment" }],
+      assignments: [{ divisionRef: "d-tiny", fixtureExtKey: "rr-r1-c1", roleKey: "referee" }],
+    },
+    {
+      ref: "off-eli",
+      personRef: "p-eli",
+      display_name: "Eli Ostrander",
+      role_keys: ["linesman"],
+      unavailable: [],
+      assignments: [],
+    },
+  ];
+  const claimInvites: SeedPlanClaimInvite[] = [{ personRef: "p-ana", email: "ana.alvarez.claim@example.com" }];
+  const fixtureIdByKey = new Map([[fixtureKey("d-tiny", "rr-r1-c1"), "fixture-r1"]]);
+  const personIdByRef = new Map([["p-ana", "person-ana"]]);
+
+  function baseInput(transport: SeedTransport, overrides: Partial<SeedOfficialsAndClaimsInput> = {}): SeedOfficialsAndClaimsInput {
+    return {
+      base: "http://bench.example",
+      officials,
+      claimInvites,
+      fixtureIdByKey,
+      personIdByRef,
+      primaryDivisionId: "div-tiny",
+      email: "bench-tiny-abc@example.com",
+      transport,
+      ...overrides,
+    };
+  }
+
+  const HAPPY_CONFIG: OfficialsFakeConfig = {
+    fixtureReads: {
+      "fixture-r1": [
+        { official_id: "official-dee-duarte", name: "Dee Duarte", role: "referee", locked: true, response: "pending", decline_reason: null },
+      ],
+      "fixture-auto": [
+        { official_id: "official-eli-ostrander", name: "Eli Ostrander", role: "linesman", locked: false, response: "pending", decline_reason: null },
+      ],
+    },
+    autoProposals: {
+      "div-tiny": { assignments: [{ fixtureId: "fixture-auto", officialId: "official-eli-ostrander", roleKey: "linesman" }] },
+    },
+    validateResponses: {
+      "div-tiny": { conflicts: [{ fixture_id: "fixture-r1", code: "warn.official_unavailable", blocking: false }] },
+    },
+    claimReads: {
+      "person-ana": {
+        id: "claim-1",
+        person_id: "person-ana",
+        email: "ana.alvarez.claim@example.com",
+        expires_at: "2099-01-15T00:00:00Z",
+        claimed_at: null,
+        revoked_at: null,
+      },
+    },
+  };
+
+  it("creates every official with person_id OMITTED — display_name/role_keys/max_per_day only", async () => {
+    const { transport, calls } = fakeOfficialsTransport(HAPPY_CONFIG);
+    await seedOfficialsAndClaims(baseInput(transport));
+
+    const created = calls.filter((c) => c.method === "POST" && c.path === "/api/v1/officials");
+    expect(created).toHaveLength(2);
+    const deeCall = created.find((c) => (c.body as { display_name: string }).display_name === "Dee Duarte");
+    expect(deeCall?.body).toEqual({ display_name: "Dee Duarte", role_keys: ["referee"] });
+    expect(deeCall?.body && "person_id" in (deeCall.body as object)).toBe(false);
+    expect(deeCall?.body && "max_per_day" in (deeCall.body as object)).toBe(false);
+  });
+
+  it("sends max_per_day only when the plan carries one", async () => {
+    const { transport, calls } = fakeOfficialsTransport(HAPPY_CONFIG);
+    const withCap: SeedPlanOfficial[] = [{ ...officials[0]!, max_per_day: 3 }];
+    await seedOfficialsAndClaims({ ...baseInput(transport), officials: withCap, claimInvites: [] });
+    const created = calls.find((c) => c.method === "POST" && c.path === "/api/v1/officials");
+    expect(created?.body).toEqual({ display_name: "Dee Duarte", role_keys: ["referee"], max_per_day: 3 });
+  });
+
+  it("sets the blackout with the plan's own date and note", async () => {
+    const { transport, calls } = fakeOfficialsTransport(HAPPY_CONFIG);
+    await seedOfficialsAndClaims(baseInput(transport));
+
+    const blackoutCall = calls.find((c) => c.method === "POST" && /\/availability$/.test(c.path));
+    expect(blackoutCall?.path).toBe("/api/v1/officials/official-dee-duarte/availability");
+    expect(blackoutCall?.body).toEqual({ date: "2099-01-02", note: "family commitment" });
+  });
+
+  it("PATCHes a manual assignment onto its named fixture, locked, with the pack's own role — never the official's default role", async () => {
+    const { transport, calls } = fakeOfficialsTransport(HAPPY_CONFIG);
+    await seedOfficialsAndClaims(baseInput(transport));
+
+    const patchCall = calls.find((c) => c.method === "PATCH" && c.path === "/api/v1/fixtures/fixture-r1/officials");
+    expect(patchCall?.body).toEqual({
+      set: [{ official_id: "official-dee-duarte", role_key: "referee", locked: true }],
+    });
+  });
+
+  it("groups TWO manual officials sharing one fixture into ONE PATCH call, not two racing writes", async () => {
+    const second: SeedPlanOfficial = {
+      ref: "off-quinn",
+      personRef: "p-quinn",
+      display_name: "Quinn Osei",
+      role_keys: ["linesman"],
+      unavailable: [],
+      assignments: [{ divisionRef: "d-tiny", fixtureExtKey: "rr-r1-c1", roleKey: "linesman" }],
+    };
+    const { transport, calls } = fakeOfficialsTransport({
+      fixtureReads: { "fixture-r1": [] },
+      claimReads: {},
+    });
+    await seedOfficialsAndClaims({
+      ...baseInput(transport),
+      officials: [officials[0]!, second],
+      claimInvites: [],
+    });
+
+    const patchCalls = calls.filter((c) => c.method === "PATCH" && c.path === "/api/v1/fixtures/fixture-r1/officials");
+    expect(patchCalls).toHaveLength(1);
+    expect(patchCalls[0]?.body).toEqual({
+      set: [
+        { official_id: "official-dee-duarte", role_key: "referee", locked: true },
+        { official_id: "official-quinn-osei", role_key: "linesman", locked: true },
+      ],
+    });
+  });
+
+  it("defaults an unnamed assignment's role to the official's OWN first role_keys entry", async () => {
+    const unnamed: SeedPlanOfficial = { ...officials[0]!, assignments: [{ divisionRef: "d-tiny", fixtureExtKey: "rr-r1-c1" }] };
+    const { transport, calls } = fakeOfficialsTransport({ fixtureReads: { "fixture-r1": [] }, claimReads: {} });
+    await seedOfficialsAndClaims({ ...baseInput(transport), officials: [unnamed], claimInvites: [] });
+
+    const patchCall = calls.find((c) => c.method === "PATCH");
+    expect(patchCall?.body).toEqual({ set: [{ official_id: "official-dee-duarte", role_key: "referee", locked: true }] });
+  });
+
+  it("proposes then applies the auto-needing officials against primaryDivisionId, with roles = union of their role_keys", async () => {
+    const { transport, calls } = fakeOfficialsTransport(HAPPY_CONFIG);
+    // `autoAssign: true` — the auto pass is opt-in, because it is the only
+    // entitlement-gated step here (`requireFeature(orgId, "officials.auto")`).
+    // `seedSuite` drives every other step with the flag OFF.
+    await seedOfficialsAndClaims({ ...baseInput(transport), autoAssign: true });
+
+    const proposeCall = calls.find((c) => c.method === "POST" && c.path === "/api/v1/divisions/div-tiny/officials/auto");
+    expect(proposeCall?.body).toEqual({ policy: { roles: ["linesman"] } });
+
+    const applyCall = calls.find((c) => c.method === "POST" && c.path === "/api/v1/divisions/div-tiny/officials/apply");
+    expect(applyCall?.body).toEqual({
+      assignments: [{ fixture_id: "fixture-auto", official_id: "official-eli-ostrander", role_key: "linesman", locked: false }],
+    });
+  });
+
+  it("skips the apply call entirely when the auto proposal comes back empty", async () => {
+    const { transport, calls } = fakeOfficialsTransport({
+      ...HAPPY_CONFIG,
+      autoProposals: { "div-tiny": { assignments: [] } },
+      fixtureReads: { "fixture-r1": HAPPY_CONFIG.fixtureReads!["fixture-r1"]! },
+    });
+    await seedOfficialsAndClaims(baseInput(transport));
+    expect(calls.some((c) => c.path === "/api/v1/divisions/div-tiny/officials/apply")).toBe(false);
+  });
+
+  it("throws naming the count when auto-needing officials exist but no primaryDivisionId is given", async () => {
+    const { transport } = fakeOfficialsTransport(HAPPY_CONFIG);
+    await expect(
+      seedOfficialsAndClaims({ ...baseInput(transport), primaryDivisionId: undefined, autoAssign: true }),
+    ).rejects.toThrow(/1 official.*no primaryDivisionId/s);
+  });
+
+  it("throws naming the official and the fixture when a manual assignment matches no generated fixture", async () => {
+    const bad: SeedPlanOfficial = { ...officials[0]!, assignments: [{ divisionRef: "d-tiny", fixtureExtKey: "missing-key" }] };
+    const { transport } = fakeOfficialsTransport(HAPPY_CONFIG);
+    await expect(
+      seedOfficialsAndClaims({ ...baseInput(transport), officials: [bad], claimInvites: [] }),
+    ).rejects.toThrow(/off-dee.*missing-key/s);
+  });
+
+  it("reads back EVERY touched fixture through GET /fixtures/{id} — never the PATCH/apply write's own (stale) body", async () => {
+    const { transport } = fakeOfficialsTransport(HAPPY_CONFIG);
+    const result = await seedOfficialsAndClaims({ ...baseInput(transport), autoAssign: true });
+
+    expect(result.fixtureOfficialsById.get("fixture-r1")).toEqual([
+      { official_id: "official-dee-duarte", name: "Dee Duarte", role: "referee", locked: true, response: "pending", decline_reason: null },
+    ]);
+    expect(result.fixtureOfficialsById.get("fixture-auto")).toEqual([
+      { official_id: "official-eli-ostrander", name: "Eli Ostrander", role: "linesman", locked: false, response: "pending", decline_reason: null },
+    ]);
+    // The STALE PATCH echo never leaks into the result — proves the GET
+    // call, not the write, is what the driver trusts.
+    for (const rows of result.fixtureOfficialsById.values()) {
+      expect(rows.some((r) => r.official_id === "STALE")).toBe(false);
+    }
+  });
+
+  it("reads the blackout's effect back through schedule/validate — pinned to the assignment's own fixture and official", async () => {
+    const { transport, calls } = fakeOfficialsTransport(HAPPY_CONFIG);
+    const result = await seedOfficialsAndClaims(baseInput(transport));
+
+    expect(calls.some((c) => c.method === "POST" && c.path === "/api/v1/divisions/div-tiny/schedule/validate")).toBe(true);
+    expect(result.scheduleConflicts).toEqual([
+      { fixture_id: "fixture-r1", code: "warn.official_unavailable", blocking: false },
+    ]);
+  });
+
+  it("never calls schedule/validate when the plan declares no blackout at all", async () => {
+    const noBlackout = officials.map((o) => ({ ...o, unavailable: [] }));
+    const { transport, calls } = fakeOfficialsTransport(HAPPY_CONFIG);
+    await seedOfficialsAndClaims({ ...baseInput(transport), officials: noBlackout });
+    expect(calls.some((c) => /\/schedule\/validate$/.test(c.path))).toBe(false);
+  });
+
+  it("mints a claim invite with the pack's own email, and reads it back through a DISTINCT GET call — claimed_at null is the proof nothing here accepted it", async () => {
+    const { transport, calls } = fakeOfficialsTransport(HAPPY_CONFIG);
+    const result = await seedOfficialsAndClaims(baseInput(transport));
+
+    const mintCall = calls.find((c) => c.method === "POST" && c.path === "/api/v1/persons/person-ana/claim-invites");
+    expect(mintCall?.body).toEqual({ email: "ana.alvarez.claim@example.com" });
+    expect(calls.some((c) => c.method === "GET" && c.path === "/api/v1/persons/person-ana/claim-invites")).toBe(true);
+
+    const read = result.claimInviteByPersonRef.get("p-ana");
+    expect(read).toEqual({
+      id: "claim-1",
+      person_id: "person-ana",
+      email: "ana.alvarez.claim@example.com",
+      expires_at: "2099-01-15T00:00:00Z",
+      claimed_at: null,
+      revoked_at: null,
+    });
+    // The write's own echo carries a different id ("WRITE-ECHO") — this
+    // must NOT be what the result holds.
+    expect(read?.id).not.toBe("WRITE-ECHO");
+  });
+
+  it("throws naming the ref when a claim invite targets a person with no resolved id", async () => {
+    const { transport } = fakeOfficialsTransport(HAPPY_CONFIG);
+    await expect(
+      seedOfficialsAndClaims({ ...baseInput(transport), claimInvites: [{ personRef: "p-ghost", email: "ghost@example.com" }] }),
+    ).rejects.toThrow(/p-ghost/);
   });
 });
