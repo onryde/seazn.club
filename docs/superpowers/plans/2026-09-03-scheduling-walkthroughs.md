@@ -6,7 +6,7 @@
 day and the officials handoff by hand, plus the freeze guard, copy and testids
 they need.
 
-**Architecture:** Six tasks in dependency order — the server guard and its copy
+**Architecture:** Seven tasks in dependency order — a hand-driven pass first (Task 0), because a defect found on screen must be recorded as a finding rather than frozen into a spec as expected behaviour; then — the server guard and its copy
 first (the walkthrough asserts them), then the testids the specs select on, then
 the two specs, then a measured performance gate. Production changes are additive
 only: one 422 guard, one disabled state, three dictionary keys, and testids.
@@ -49,6 +49,67 @@ code), Playwright, vitest, postgres via `@/lib/db`, `@seazn/engine`.
     `main` and returns a false green.
   - `grep` reports files here as `Binary file … matches`. Always `-a`.
   - Run whole Playwright spec files, never a `-g` slice.
+
+---
+
+### Task 0: Drive both journeys by hand, before a line of spec is written
+
+Owner's ruling 2026-09-03: hand-drive first, then codify. This task exists so
+that a defect found on screen is recorded as a finding rather than frozen into
+a spec as expected behaviour. It writes no test code.
+
+**Files:**
+- Create: `docs/superpowers/specs/2026-09-03-scheduling-walkthrough-findings.md`
+
+- [ ] **Step 1: Stand the environment up**
+
+Follow the `seazn-local-env` skill (`~/.claude/skills/seazn-local-env/SKILL.md`
+— machine-local, invoke with the Skill tool). Two traps it names that cost the
+most here: `db:apply` alone is NOT a fresh schema (it needs `sync:sports`), and
+a `pg_ctl` that fails with "Address already in use" is followed by a `createdb`
+that SUCCEEDS against another session's server — confirm `show data_directory`
+is yours.
+
+Bring the **placement service** up as well. Without it the solve silently takes
+the greedy path, which places differently; a hand-drive against greedy is not
+the journey CI runs.
+
+- [ ] **Step 2: Drive the organiser day**
+
+Prod build, real browser. Every step of Task 4's journey, in order, at 1280.
+Do not read code to decide whether something works — use it. A claim about what
+a person SEES is settled only by driving the product.
+
+Write down what you saw, never what must be true.
+
+- [ ] **Step 3: Drive the officials handoff**
+
+Every step of Task 5's journey, both people, in two browser profiles. Follow
+the claim link by clicking it.
+
+- [ ] **Step 4: Repeat both at 768 and 320**
+
+At phone width compare the visible control SET — membership, order, repeat
+count — against 1280, not box sizes. Six tabs of dense organiser tooling is
+exactly where a groomed shrink hides. Equal sets at every width means escalate
+to the design owner, not auto-fail.
+
+Check the no-horizontal-scroll bar at each width, and remember that gate passes
+happily on squashed and overlapping content — read what renders.
+
+- [ ] **Step 5: Confirm or refute F1 live**
+
+Freeze a division, then press Clear. Record exactly what happens: whether the
+button is live, whether the board is wiped, and what the organiser is told.
+F1 is confirmed in code but a read is not a run.
+
+- [ ] **Step 6: Write the findings doc and STOP**
+
+One section per finding: what a customer gains or loses, blast radius,
+recommendation, and the strongest argument against it. Include screenshots.
+
+Report back before starting Task 1 — findings may change what the later tasks
+should assert, and that is the entire point of doing this first.
 
 ---
 
@@ -915,7 +976,7 @@ is already the e2e workflow's floor.
 **Files:**
 - Modify: `apps/web/e2e/walkthrough/README.md` (the "What is here" table and
   the measured-cost paragraph)
-- Create: `docs/superpowers/specs/2026-09-03-scheduling-walkthrough-findings.md`
+- Modify: `docs/superpowers/specs/2026-09-03-scheduling-walkthrough-findings.md` (created in Task 0)
 
 - [ ] **Step 1: Measure the leg, not the file**
 
