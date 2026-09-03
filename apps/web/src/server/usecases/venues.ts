@@ -20,7 +20,13 @@ import { usableWindows, type CourtCalendar, type Window } from "@seazn/engine/sc
 import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { resolveVenueTz } from "@/lib/tz";
-import { ScheduleConfig } from "@/server/api-v1/schemas";
+import {
+  CreateCourt,
+  CreateVenue,
+  PatchCourt,
+  PatchVenue,
+  ScheduleConfig,
+} from "@/server/api-v1/schemas";
 import { log } from "@/server/logger";
 import type { AuthCtx } from "@/server/api-v1/auth";
 
@@ -103,24 +109,24 @@ export interface VenueWithCourts extends VenueRow {
 // Input schemas
 // ---------------------------------------------------------------------------
 
-export const CreateVenueInput = z.object({
-  name: z.string().min(1).max(200),
-  address: z.string().max(500).nullish(),
-  sort: z.number().int().default(0),
-});
+// G6 (bench B03 product-gaps, 2026-09-02): these used to be their own
+// z.objects, field-for-field identical to schemas.ts's Create/Patch Venue
+// and Court but maintained separately — openapi.ts published one, this
+// route validated with the other, so they could silently drift. Import the
+// same objects instead of a second copy. (The reverse direction —
+// openapi.ts importing this file — doesn't work: usecases/*.ts import
+// "server-only", which scripts/openapi-gen.ts can't resolve outside Next's
+// bundler.)
+export const CreateVenueInput = CreateVenue;
 export type CreateVenueInput = z.infer<typeof CreateVenueInput>;
 
-export const PatchVenueInput = CreateVenueInput.partial();
+export const PatchVenueInput = PatchVenue;
 export type PatchVenueInput = z.infer<typeof PatchVenueInput>;
 
-export const CreateCourtInput = z.object({
-  name: z.string().min(1).max(200),
-  sort: z.number().int().default(0),
-  tags: z.array(z.string().min(1).max(40)).max(50).default([]),
-});
+export const CreateCourtInput = CreateCourt;
 export type CreateCourtInput = z.infer<typeof CreateCourtInput>;
 
-export const PatchCourtInput = CreateCourtInput.partial();
+export const PatchCourtInput = PatchCourt;
 export type PatchCourtInput = z.infer<typeof PatchCourtInput>;
 
 const CourtHourRangeInput = z

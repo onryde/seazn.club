@@ -19,7 +19,7 @@ import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { requireFeature } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import { AiApplyMeta } from "@/server/api-v1/schemas";
+import { AiApplyMeta, CreateOfficial, PatchOfficial } from "@/server/api-v1/schemas";
 import { sendOfficialAssignedEmail } from "@/lib/email";
 import { toLocale } from "@/lib/i18n-constants";
 import { msgFor } from "@/lib/messages-i18n";
@@ -48,18 +48,17 @@ const COLS = [
   "home_pool_id", "max_per_day", "created_at",
 ] as const;
 
-export const CreateOfficialInput = z.object({
-  display_name: z.string().min(1).max(200),
-  person_id: z.string().uuid().optional(),
-  entrant_id: z.string().uuid().optional(),
-  email: z.email().max(200).nullable().optional(),
-  role_keys: z.array(z.string().min(1)).min(1).default(["referee"]),
-  home_pool_id: z.string().uuid().nullable().optional(),
-  max_per_day: z.number().int().positive().nullable().optional(),
-});
+// G6 (bench B03 product-gaps, 2026-09-02): this used to be its own z.object,
+// field-for-field identical to schemas.ts's CreateOfficial/PatchOfficial but
+// maintained separately — openapi.ts published one, this route validated
+// with the other, so they could silently drift. Import the same object
+// instead of a second copy. (The reverse direction — openapi.ts importing
+// this file — doesn't work: usecases/*.ts import "server-only", which
+// scripts/openapi-gen.ts can't resolve outside Next's bundler.)
+export const CreateOfficialInput = CreateOfficial;
 export type CreateOfficialInput = z.infer<typeof CreateOfficialInput>;
 
-export const PatchOfficialInput = CreateOfficialInput.partial();
+export const PatchOfficialInput = PatchOfficial;
 export type PatchOfficialInput = z.infer<typeof PatchOfficialInput>;
 
 export async function listOfficials(auth: AuthCtx): Promise<OfficialRow[]> {
