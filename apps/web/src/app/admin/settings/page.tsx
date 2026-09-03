@@ -1,13 +1,15 @@
 import Link from "@/components/ui/console-link";
 import { platformFeeDefault } from "@/lib/platform-settings";
+import { requireStaff } from "@/lib/admin";
 import { AdminPlatformSettings } from "@/components/admin-platform-settings";
 
 export const dynamic = "force-dynamic";
 
 /** Platform settings (spec §5) — layout enforces staff; the API re-checks
- *  superadmin on write. */
+ *  superadmin on write, so the form must express that same split or a support
+ *  user is handed a Save that can only 401. */
 export default async function AdminSettingsPage() {
-  const fee = await platformFeeDefault();
+  const [fee, staff] = await Promise.all([platformFeeDefault(), requireStaff()]);
   return (
     <div className="space-y-6">
       <div>
@@ -17,7 +19,10 @@ export default async function AdminSettingsPage() {
           default → PLATFORM_FEE_PERCENT env → 5.
         </p>
       </div>
-      <AdminPlatformSettings initialFeePercent={fee} />
+      <AdminPlatformSettings
+        initialFeePercent={fee}
+        canWrite={staff.staff_role === "superadmin"}
+      />
       <p className="text-xs text-slate-500">
         See what the cut has earned →{" "}
         <Link href="/admin/revenue" className="text-purple-300 hover:text-white">

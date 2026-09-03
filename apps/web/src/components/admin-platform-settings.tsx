@@ -1,10 +1,19 @@
 "use client";
 
 // Platform-wide knobs (spec §5). One card per setting; today that's the
-// entry-fee default. Writes /api/admin/settings, superadmin-only server-side.
+// entry-fee default. Writes /api/admin/settings, superadmin-only server-side —
+// and `canWrite` is the form expressing that same split, because the page is
+// only gated on requireStaff() and a support user handed a live Save can only
+// ever collect a 401.
 import { useState } from "react";
 
-export function AdminPlatformSettings({ initialFeePercent }: { initialFeePercent: number }) {
+export function AdminPlatformSettings({
+  initialFeePercent,
+  canWrite,
+}: {
+  initialFeePercent: number;
+  canWrite: boolean;
+}) {
   const [fee, setFee] = useState(String(initialFeePercent));
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -56,12 +65,13 @@ export function AdminPlatformSettings({ initialFeePercent }: { initialFeePercent
             setSaved(false);
           }}
           aria-label="Platform fee percent"
-          className="w-24 rounded bg-slate-900 border border-slate-700 px-2 py-1.5 text-sm text-white"
+          disabled={!canWrite}
+          className="w-24 rounded bg-slate-900 border border-slate-700 px-2 py-1.5 text-sm text-white disabled:opacity-50"
         />
         <span className="text-sm text-slate-400">%</span>
         <button
           type="button"
-          disabled={busy || !valid}
+          disabled={!canWrite || busy || !valid}
           onClick={save}
           className="rounded bg-purple-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-purple-600 disabled:opacity-50"
         >
@@ -70,6 +80,7 @@ export function AdminPlatformSettings({ initialFeePercent }: { initialFeePercent
         {saved && <span className="text-xs text-emerald-400">Saved.</span>}
         {error && <span className="text-xs text-red-400">{error}</span>}
         {!valid && <span className="text-xs text-amber-400">0–100 only</span>}
+        {!canWrite && <span className="text-xs text-slate-400">Superadmin only.</span>}
       </div>
     </div>
   );
