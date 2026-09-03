@@ -307,39 +307,73 @@ changes each; smoke demo script updated in W2.
   missing; no run sheet header.
 - Unknown `filter` param → treated as All.
 
-## W1 sign-off — per-screen verdicts (2026-09-02)
+## W1 sign-off — per-screen verdicts (2026-09-03, RE-DRIVEN)
 
-Driven on a standalone prod build at commit `6adb4d3b5`, four phases x three
-widths. All twelve images exist and have twelve DISTINCT hashes — the capture
-harness in this repo has previously errored before taking a single screenshot,
-and shared states have come out pixel-identical because nothing opened, so
-"the images differ" is part of the verdict, not an assumption.
+RE-DRIVEN in fix round I. The previous table was driven at `6adb4d3b5`, which
+is **not an ancestor of this branch** (a pre-rebase twin of `12c669518`), with
+seven rendering commits since, and its needs-draw row recorded a masthead
+reading "Setting up" that the product no longer produces. Anything driven at a
+commit that is not an ancestor is a picture of a branch nobody is shipping.
+
+Driven at `a8e30bdb8` — a real ancestor, and the build actually being served —
+against the running production server at **12:40:02–12:41:28Z on 2026-09-03**,
+five screens x three widths. All fifteen images exist and have **fifteen
+DISTINCT sha256 hashes**; the capture harness in this repo has previously
+errored before taking a single screenshot, and shared states have come out
+pixel-identical because nothing opened, so "the images differ" is part of the
+verdict, not an assumption. Every screen's masthead text, ledger row text and
+Needs-you text were printed BESIDE its picture and are quoted below — a green
+width gate cannot tell you it measured the wrong page STATE.
 
 | Screen | 1280 | 768 | 320 | Verdict |
 | --- | --- | --- | --- | --- |
-| Empty competition (no divisions) | "Setting up", empty state | same | same | PASS — amendment 3; read "Finished · 0 divisions" before the fix |
-| Needs draw (U16 28/28, finals undrawn; Premier complete) | row "Needs draw" over "28 of 28 played · Finals not drawn"; Premier "Finished · complete" | same | card: name + pill, bar, wrapped status, one full-width action | PASS |
-| Scheduled, nothing dated (1 of 6 played) | "Scheduled" / "1 of 6 played · 5 unscheduled" | same | same, restacked | PASS — read "Setting up" (round C) and before that "nothing scheduled" (F1) |
-| Match day, one live (assigned scorer) | masthead "1 in play"; row "0 of 6 played · 1 in play · Now: Riverside FC v Harbour CC" | same | card omits the "Now:" line | PASS with a note, below |
+| Empty competition (no divisions) | masthead "Setting up", empty state, no ledger rows | same | same | PASS — amendment 3; read "Finished · 0 divisions" before the fix |
+| Setup-timing finals, bracket never generated (U16, 6 of 6 played, league complete) | masthead "Scheduled"; row red "Needs draw" over "6 of 6 played · Finals not drawn"; action "Compute proposal" | same | card: name + pill, bar, status line, one full-width "Compute proposal" — the card's only action | **FAIL — instance TWELVE, photographed.** The landing `?tab=fixtures` has no working compute door in this state (`computeSeedProposal` 422s until the TBD bracket exists). Fixed on this branch: the row becomes "Needs fixtures". Owes a re-drive after a rebuild. |
+| Unseeded next stage, nothing generated (Cup, 6 of 6 played, league still active) | masthead "Scheduled"; row red "Needs fixtures" over "6 of 6 played"; action "Open fixtures" | same | card restacked, one full-width "Open fixtures" | PASS — the state the row above becomes on this branch. Needs-you reads "Cup · no fixtures yet in Finals / Seed it from the stage before, or generate its fixtures." and both named doors are on the landing page. |
+| Scheduled, nothing dated (Premier, 1 of 6 played) | masthead "Scheduled"; row "Scheduled" / "1 of 6 played · 5 unscheduled" | same | same, restacked | PASS — read "Setting up" (round C) and before that "nothing scheduled" (F1) |
+| Match day, one live and nobody recording (Premier) | masthead "1 in play"; row red "No scorer" / "0 of 6 played · 1 in play" / "Now: Seed1 v Seed4" | same | card omits the "Now:" line | PASS with two notes, below |
 
-No horizontal scroll at any of the twelve. Masthead and rows agree on every
-screen. Tap targets hit-tested with `elementFromPoint` at their centres rather
-than measured: needs-you action 254x46, ledger card link 254x78, both resolving
-to themselves.
+No horizontal scroll at any of the fifteen (`scrollWidth > clientWidth + 1`
+measured at each width, false everywhere). Masthead and rows agree on every
+screen. The row's control set at 320 versus 1280 — the "designed, not shrunk"
+ruling, which a screenshot cannot express — is pinned in `e2e/mobile.spec.ts`
+rather than here.
 
-Two OBSERVATIONS, recorded rather than fixed — both are product questions for
-W2/W3, not defects against this spec:
+**Owed after the controller's next rebuild.** The server on :3365 was
+`a8e30bdb8`'s bundle throughout, so three of this round's changes are not in
+these pictures and their rows must be re-driven: the needs-draw screen (row 2,
+which becomes "Needs fixtures"), the no-scorer action label ("Assign scorer" ->
+"Open scoring"), and the registrations action's landing tab.
+`e2e/competition-desk-actions.spec.ts` is red on exactly those three rows
+against this bundle and green on the other four, which is the same evidence in
+executable form.
 
-1. **The masthead ignores attention while the rows honour it.** On the needs-
-   draw screen the pill reads "Setting up" (true of the phase — the finals
-   stage is being set up) directly above a row whose pill reads "Needs draw".
-   Not a contradiction of fact, but the summary at the top of the page is less
-   informative than the row beneath it, and the ladder in this spec has no
-   attention step. Recommend the masthead surface a red attention the way a row
-   does.
+Three OBSERVATIONS, recorded rather than fixed:
+
+1. **The masthead still ignores attention while the rows honour it.** On the
+   needs-draw and needs-fixtures screens the pill reads "Scheduled" directly
+   above a row whose pill reads "Needs draw" / "Needs fixtures". Not a
+   contradiction of fact — round G's K2 fix made the masthead stop saying
+   "Setting up" over a played-out row — but the summary at the top of the page
+   is still less informative than the row beneath it, and the ladder in this
+   spec has no attention step. (This is the same recommendation the 2026-09-02
+   table made; it is unactioned, not resolved. The word it prints has changed
+   from "Setting up" to "Scheduled", which is why the old table read stale.)
 2. **The phone drops the live match name.** At 320 the card omits the "Now:
    home v away" line the desktop row carries, so the width most likely to be
    held at the venue is the one that does not name the match in play.
+3. **`needs_fixtures` does not name its stage in the status line.** The row
+   reads "6 of 6 played" where its needs-draw sibling reads "6 of 6 played ·
+   Finals not drawn"; the stage name is in the Needs-you row above but not on
+   the ledger row itself. `StatusLineInput` carries only
+   `needsDrawStageName`. A one-field symmetry question for W2, not a defect.
+
+A fourth note, on the previous table: its row 4 was "Match day, one live
+(**assigned scorer**)". That state cannot be built through the product at all —
+`createAssignment` has no production caller and `scorer_assignments` is written
+only by accepting a scoped invite, which no UI creates (fix round I, M2). It
+is reachable by SQL alone, so the row has been re-driven in the state an
+organiser can actually reach: live, and nobody recording.
 
 ## Out of scope
 
