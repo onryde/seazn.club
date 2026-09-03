@@ -2700,3 +2700,42 @@ describe("registration funnel — org.currency required when a division prices a
     expect(errors(validatePack(pack, UNIT).findings)).toEqual([]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// The GREEN fixture — all five design §4 rules, plus the currency
+// consequence, satisfied AT ONCE by one division. Mirrors the shape of
+// design §5's own table rows (a paid entrant, a capacity waitlist, and an
+// eligibility offender coexisting in one division).
+// ---------------------------------------------------------------------------
+
+describe("registration funnel — the green fixture: all five rules satisfied at once", () => {
+  it("passes clean end to end", () => {
+    const LEGAL_DOB = "2010-06-15"; // age 13 at the 2024-01-01 cutoff — within ageMax 18
+    const pack = registrationPack({
+      division: { entry: "registration-api" },
+      org: { name: "Unit Org", slug: "unit-org", timezone: "UTC", currency: "usd" },
+      persons: [
+        { ref: "p-paid", fullName: "Paid Entrant", lane: "player", dob: LEGAL_DOB, gender: "f" },
+        { ref: "p-waits", fullName: "Waitlisted Entrant", lane: "player", dob: LEGAL_DOB, gender: "f" },
+        // Violates on GENDER (age is legal) — rule 1's offender.
+        { ref: "p-rejected", fullName: "Rejected Offender", lane: "player", dob: LEGAL_DOB, gender: "m" },
+      ],
+      block: {
+        category: "womens",
+        ageMax: 18,
+        entrantKind: "individual",
+        feeCents: 1500,
+        approval: "manual",
+        capacity: 1, // 2 admitted (paid + waitlisted) against capacity 1 -> 1 waitlisted
+        entries: [
+          { extKey: "e-paid", captain: "p-paid", roster: [], pay: true, expect: "entrant" },
+          { extKey: "e-waits", captain: "p-waits", roster: [], pay: false, expect: "waitlisted" },
+          { extKey: "e-rejected", captain: "p-rejected", roster: [], pay: false, expect: "rejected_eligibility" },
+        ],
+        // entries(3) − rejected(1) − waitlisted(1) = 1 entrant (rule 2).
+        expect: baseExpect({ entrants: 1, waitlisted: 1, rejected: 1, paidCents: 1500 }),
+      },
+    });
+    expect(errors(validatePack(pack, UNIT).findings)).toEqual([]);
+  });
+});
