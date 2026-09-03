@@ -44,55 +44,81 @@ const projectViewport = (): { width: number; height: number } | null =>
     .viewport ?? null;
 
 /** Split every box inside `rootSelector` whose content is wider than its box
- *  into the two cases this file used to conflate.
+ *  into the three cases this file used to conflate into one.
  *
- *  A box wider than its content is CLIPPED only when the extra content cannot
- *  be reached. The v3 scorebug's meta strip is a deliberate swipeable rail
- *  below `md` (`max-md:overflow-x-auto`, scorebug.tsx — spec
- *  2026-09-02-scorepad-v3-phone-composition §3.4), so on a phone it reports
- *  `scrollWidth > clientWidth` BY DESIGN, and the scorebug scans below failed
- *  at all five phone widths reading it as a clipped name. The distinction is
- *  the computed `overflow-x`: `auto`/`scroll` means the reader can bring the
- *  rest into view; `hidden`/`visible` means it is gone. Only the second is a
- *  defect. The scorebug ROOT is `overflow-hidden` and so stays in scope —
- *  that is the clipped-name case these scans were written for, and it is not
- *  weakened by this split.
+ *  A box wider than its content is CLIPPED only when the extra content is
+ *  both unreachable AND unsignalled. Two designed exceptions:
  *
- *  `scrollable` is returned rather than silently dropped so the caller can
- *  hold it to something: an exemption nothing checks would let any future
- *  overflow hide behind an `overflow-x-auto`. See `expectScorebugNotClipped`. */
+ *  1. The v3 scorebug's meta strip is a deliberate swipeable rail below `md`
+ *     (`max-md:overflow-x-auto`, scorebug.tsx — spec
+ *     2026-09-02-scorepad-v3-phone-composition §3.4), so on a phone it
+ *     reports `scrollWidth > clientWidth` BY DESIGN. The distinction is the
+ *     computed `overflow-x`: `auto`/`scroll` means the reader can bring the
+ *     rest into view.
+ *  2. `HalfContent`'s hint span is `max-md:truncate` (scorebug.tsx) — a
+ *     deliberate ellipsis when a hint like "Tap to award the point" does not
+ *     fit at phone widths, not silent unsignalled clipping. Found live: CI's
+ *     Linux font metrics measure this text ~12px wider than this repo's own
+ *     macOS dev machines, which was enough to cross the ellipsis threshold
+ *     there and nowhere else — this file's OWN blind spot, not a product
+ *     regression (run 33747095481, `phones-small`/`phones-large`, after the
+ *     `parallel 2/2` strip-geometry fix had already landed clean). The
+ *     signal that separates "designed" from "silent" is `text-overflow:
+ *     ellipsis`: an ellipsis tells the reader there is more, exactly the cue
+ *     a bare `overflow: hidden` clip does not give. The full hint text is
+ *     still in the tappable half's own `aria-label` either way (this file's
+ *     own `whoNames`+hint join, scorebug.tsx) — visually shortened, never
+ *     lost to a screen reader.
+ *
+ *  `hidden`/`visible` overflow with NO ellipsis is what remains a defect —
+ *  that is the clipped-name case these scans were written for
+ *  (`scorepad-v3-strip-geometry.spec.ts`'s own long-surname test), and
+ *  neither exception weakens it: a name that clips WITHOUT an ellipsis cue
+ *  still reddens here.
+ *
+ *  `scrollable`/`ellipsized` are returned rather than silently dropped so
+ *  the caller can hold each to something: an exemption nothing checks would
+ *  let any future overflow hide behind either mechanism. See
+ *  `expectScorebugNotClipped`. */
 async function overflowingIn(
   page: Page,
   rootSelector: string,
   childSelector: string,
   absentMessage: string,
-): Promise<{ clipped: string[]; scrollable: string[] }> {
+): Promise<{ clipped: string[]; scrollable: string[]; ellipsized: string[] }> {
   return page.evaluate(
     ({ rootSel, childSel, absent }) => {
       const root = document.querySelector<HTMLElement>(rootSel);
-      if (!root) return { clipped: [absent], scrollable: [] };
+      if (!root) return { clipped: [absent], scrollable: [], ellipsized: [] };
       const suspects: HTMLElement[] = [root, ...Array.from(root.querySelectorAll<HTMLElement>(childSel))];
       const over = suspects.filter((el) => el.scrollWidth - el.clientWidth > 1);
       const describe = (el: HTMLElement) =>
         `${el.tagName.toLowerCase()} ${el.scrollWidth}px content in ${el.clientWidth}px` +
         `${el.hasAttribute("tabindex") ? ` tabindex=${el.getAttribute("tabindex")}` : ""}`;
       const reachable = (el: HTMLElement) => /^(auto|scroll)$/.test(getComputedStyle(el).overflowX);
+      const ellipsis = (el: HTMLElement) => getComputedStyle(el).textOverflow === "ellipsis";
+      const rest = over.filter((el) => !reachable(el));
       return {
-        clipped: over.filter((el) => !reachable(el)).map(describe),
+        clipped: rest.filter((el) => !ellipsis(el)).map(describe),
         scrollable: over.filter(reachable).map(describe),
+        ellipsized: rest.filter(ellipsis).map(describe),
       };
     },
     { rootSel: rootSelector, childSel: childSelector, absent: absentMessage },
   );
 }
 
-/** The scorebug's own clipping gate. Nothing inside it may be clipped, and the
- *  one thing allowed to overflow — the phone meta rail — must be keyboard-
- *  reachable, which is the same `tabindex` axe's `scrollable-region-focusable`
- *  demanded of it (CI e2e run 33735186301, `parallel 2/2`). Asserting the
- *  exemption pays for itself: a rail that lost its tab stop, or a NEW
- *  `overflow-x-auto` box appearing in the scorebug without one, reddens here
- *  instead of quietly widening the exemption. */
+/** The scorebug's own clipping gate. Nothing inside it may be silently
+ *  clipped. Two things are allowed to overflow, each held to its own
+ *  invariant: the phone meta rail must be keyboard-reachable, which is the
+ *  same `tabindex` axe's `scrollable-region-focusable` demanded of it (CI
+ *  e2e run 33735186301, `parallel 2/2`); a `max-md:truncate` hint must carry
+ *  `text-overflow: ellipsis` — not merely `overflow: hidden` — as its own
+ *  signal that content was shortened on purpose. Asserting both exemptions
+ *  pays for itself: a rail that lost its tab stop, a hint that lost its
+ *  ellipsis, or a NEW `overflow-x-auto`/`truncate` box appearing in the
+ *  scorebug without the property that earns its exemption, reddens here
+ *  instead of quietly widening either one. */
 async function expectScorebugNotClipped(page: Page, label: string): Promise<void> {
   const { clipped, scrollable } = await overflowingIn(
     page,
