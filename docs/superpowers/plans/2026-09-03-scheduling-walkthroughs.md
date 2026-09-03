@@ -694,6 +694,13 @@ test("the organiser sets up, schedules, saves, clears, restores, freezes and pub
   await page.getByTestId("court-option").first().click();
   await page.getByTestId("settings-match-minutes").fill("45");
   await page.getByTestId("settings-gap-minutes").fill("15");
+  // TRAP (found reviewing Task 3): `settings-day-start` / `settings-day-end`
+  // live in the ELSE branch of `customWindows ? <p> : …`
+  // (`board/settings-panel.tsx:539`). A division whose stored sessionWindows
+  // are non-uniform renders a read-only "custom windows" paragraph and NEITHER
+  // field. The seed must therefore leave sessionWindows uniform or empty, or
+  // these two fills throw on an element that correctly does not exist.
+  await expect(page.getByTestId("settings-day-start")).toBeAttached();
   await page.getByRole("button", { name: /save/i }).click();
   await expect.poll(async () => {
     const { data } = await apiJson<{ config: { matchMinutes: number } }>(
