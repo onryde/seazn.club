@@ -219,28 +219,47 @@ Two consequences the first draft of this design got wrong:
 - §4.4 cannot flip the shared org's plan, because §4.2 would be running beside
   it and would silently see the flipped value.
 
-And the obvious repair — "make a fresh org and set its plan" — has a trap of its
-own. `POST /api/orgs` does create and activate a fresh org (`billing.spec.ts:31`
-uses exactly this), but **a new org joins its creator's EXISTING billing group**
-(`lib/auth.ts createOrgForUser`, documented at `helpers.ts:1069`). And
-`setOrgPlanBySql` updates `subscriptions` **by group id** (`helpers.ts:441-449`).
-So setting a "fresh" org's plan to community would move the **shared Pro org**
-to community too, and redden every other spec in the leg for a reason nothing in
-their own diff explains.
-
-The recipe, therefore, is three steps and not one:
+The repair is to mint an org of this spec's own:
 
 ```
 const orgId = await apiJson(page.request, "/api/orgs", "POST", {...})  // fresh + activated
-await splitOrgIntoOwnGroupSql(orgId)                                    // its OWN group
-await setOrgPlanBySql({ orgId }, "community")                           // now safe
+await setOrgPlanBySql({ orgId }, "community")
 // ... journey ...
 await apiJson(page.request, "/api/orgs/active", "POST", { org_id: original })
 ```
 
-`splitOrgIntoOwnGroupSql` (`helpers.ts:1078`) exists for exactly this and returns
-the new group id. Skipping it is the single most expensive mistake available in
-this programme, because its damage lands in **other people's specs**.
+**A `splitOrgIntoOwnGroupSql` call is NOT needed here, and an earlier draft of
+this document was wrong to require one.** The reasoning is worth keeping,
+because the wrong version is the one the codebase's own comments will tell you:
+
+- `setOrgPlanBySql` really is **group-scoped** — `helpers.ts:441-449` resolves
+  `requireGroupId(sql, orgId)` and updates `subscriptions ... where id = groupId`.
+  That much is true, and it matters for any orgs that genuinely DO share a group.
+- But **a new org does not join its creator's existing group.**
+  `POST /api/orgs` (`app/api/orgs/route.ts:28`) calls `createOrgForUser`
+  (`lib/auth.ts:303`), whose transaction does
+  `insert into subscriptions (owner_user_id, plan_key, ...) values (..., 'community', ...)
+  returning id` and stamps that NEW id onto the org it then inserts. Its own
+  race-condition comment says so out loud: two concurrent creates "each minted
+  an org **+ a Community group**". Three orgs minted by one e2e user are three
+  groups, not one bill.
+- The doc comment on `splitOrgIntoOwnGroupSql` (`helpers.ts:1066-1073`) asserts
+  the opposite — "a new org joins its creator's EXISTING group (`lib/auth.ts
+  createOrgForUser`)". It **contradicts the function it cites**. It references a
+  fixture "V309 made necessary", so it was presumably true once and the
+  behaviour changed underneath it. The only writers that attach an org to an
+  existing group today are the explicit attach/detach usecases at
+  `server/usecases/billing-groups.ts:975` and `:1260`.
+
+So cross-contamination is reachable only by a spec that has **deliberately**
+joined orgs into one group. None here do.
+
+The methodological point, since this document partly exists to stop the next
+session repeating it: that comment read as authoritative and was cited as
+evidence for a claim about a function nobody had opened. **A comment citing a
+function is a hypothesis about that function, not evidence of it.** Caught by a
+peer session opening `lib/auth.ts`; it is the fourth stale comment found in this
+area in one day.
 
 `setEntitlementOverrideSql(orgId, featureKey, intValue)` (`helpers.ts:473`)
 writes `org_entitlement_overrides` and is org-scoped, not group-scoped — so it is
