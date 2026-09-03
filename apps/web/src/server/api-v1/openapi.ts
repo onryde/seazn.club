@@ -297,6 +297,7 @@ export const ROUTES: RouteSpec[] = [
   { path: "/officials/{id}", method: "get", summary: "Get an official", tag: "officials", response: S.Official },
   { path: "/officials/{id}", method: "patch", summary: "Update an official", tag: "officials", request: S.PatchOfficial, response: S.Official, errors: [402] },
   { path: "/officials/{id}", method: "delete", summary: "Delete an official", tag: "officials" },
+  { path: "/officials/{id}/availability", method: "get", summary: "List this official's blackout dates (G9 — G2 shipped the write with no read)", tag: "officials", response: z.array(S.OfficiatingBlackout) },
   { path: "/officials/{id}/availability", method: "post", summary: "Record a blackout date for this org's officials row (G2 — organiser-side counterpart to POST /me/availability/officiating, which is self-service only and fans out across every org linked to the official)", tag: "officials", request: S.OfficiatingBlackoutInput, response: S.OfficiatingBlackout, status: 201 },
   { path: "/officials/{id}/availability", method: "delete", summary: "Clear a blackout date (idempotent)", tag: "officials", query: { date: { schema: { type: "string", format: "date" }, description: "The date to clear (YYYY-MM-DD)" } } },
   { path: "/officials/import", method: "post", summary: "Bulk CSV/XLSX import (multipart `file`: Name, Roles, MaxPerDay)", tag: "officials", status: 201, errors: [422] },
