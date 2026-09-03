@@ -337,7 +337,16 @@ export async function refreshNews(auth: AuthCtx, fixtureId: string): Promise<voi
     // read, and asking for it inside `withTenant` is the pool self-deadlock
     // (lib/db.ts). It is resolved unconditionally — one cached lookup on a path
     // that is about to open a transaction anyway.
-    const newsAuto = await hasFeature(auth.orgId, "news.auto");
+    //
+    // WITH the competition id, which costs the pooled lookup right above it.
+    // V395 made `news.auto` false on Free and left it granted on both Event
+    // Pass rungs, so an org-wide resolve falls through to the community row and
+    // a pass holder's decided fixture silently drafts nothing on the
+    // competition they paid for (`pass-scoping-guard.test.ts`).
+    const [scope] = await sql<{ competition_id: string }[]>`
+      select d.competition_id from fixtures f join divisions d on d.id = f.division_id
+      where f.id = ${fixtureId}`;
+    const newsAuto = await hasFeature(auth.orgId, "news.auto", scope?.competition_id);
     await withTenant(auth.orgId, async (tx) => {
       const [row] = await tx<{ auto_posts: boolean }[]>`
         select d.auto_posts from fixtures f join divisions d on d.id = f.division_id

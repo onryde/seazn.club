@@ -30,7 +30,7 @@ begin
   select count(*) into stranded from organizations where currency = 'aud';
   if stranded > 0 then
     raise exception
-      'V392 refuses to drop AUD: % organizations still have currency = ''aud''. '
+      'V393 refuses to drop AUD: % organizations still have currency = ''aud''. '
       'Decide what each one charges entry fees in and update it first — this '
       'migration will not silently repoint a club''s settlement currency.',
       stranded;

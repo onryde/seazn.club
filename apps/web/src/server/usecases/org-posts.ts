@@ -14,9 +14,9 @@ import { aggregatePlayerStats, type PlayerStatRow } from "@seazn/engine/stats";
 import type { EventEnvelope } from "@seazn/engine/core";
 import { hhmmInTz } from "@seazn/engine/scheduling/tz";
 import { sql, withTenant } from "@/lib/db";
-import { HttpError } from "@/lib/errors";
+import { HttpError, PaymentRequiredError } from "@/lib/errors";
 import { firePostRevalidate } from "@/server/public-site/revalidate";
-import { hasFeature, requireFeature } from "@/lib/entitlements";
+import { hasFeature } from "@/lib/entitlements";
 import { captureServer } from "@/lib/posthog-server";
 import { EVENTS } from "@/lib/analytics-events";
 import { toLocale, type Locale } from "@/lib/i18n-constants";
@@ -1095,24 +1095,88 @@ export interface ActiveTableStage {
 
 const DECIDED_STATUSES = ["decided", "finalized", "forfeited"] as const;
 
+/**
+ * The competitions this org may auto-publish for — the digest's entitlement
+ * scope, resolved PER COMPETITION and never org-wide.
+ *
+ * V395 (entitlements v18 W2 T15) made `news.auto` false on Free and left it
+ * granted on both Event Pass rungs, which makes it a pass-lifted key: the
+ * resolver only consults `competition_passes` when the caller hands it a
+ * competition id, so `hasFeature(orgId, "news.auto")` would fall straight
+ * through to the community row and an Event Pass holder would never get a
+ * digest at all. `hasFeatureOnAnyPass` is the other wrong answer, and
+ * `pass-scoping-guard.test.ts` flags it here by name: an org-wide yes would
+ * let one $29 pass draft posts about every OTHER competition in the org.
+ *
+ * So the honest answer is the one T13 reached for the two person-stats
+ * readers: resolve the key against each competition and report the set that
+ * passes. A Pro/Enterprise org gets every competition back (its plan row says
+ * yes for all of them); a Free org with one pass gets exactly that one; a
+ * plain Free org gets an empty set, which is the 402.
+ *
+ * MUST run on the pooled proxy, OUTSIDE `withTenant` — `hasFeature` is a
+ * pooled read and issuing one inside a tenant transaction is the pool
+ * self-deadlock (lib/db.ts). Both callers resolve it before they open theirs.
+ *
+ * Returns BOTH numbers, because "no competitions I may publish about" and "no
+ * competitions" are different answers and collapsing them broke a stated
+ * acceptance criterion the first time this was written: an org with no
+ * activity at all still gets a draft from the button, and it SAYS so instead
+ * of being blank (`org-posts-digest.test.ts`). A refusal means the org OWNS
+ * competitions and holds the key for none of them; with `total === 0` there is
+ * nothing to refuse and the digest that comes out is provably empty. That does
+ * let a Free org with zero competitions press the button for a contentless
+ * draft — a deliberate, recorded edge, and the cheapest one available: the
+ * only other way to answer it is the org-wide question, which for a
+ * pass-lifted key is exactly what `pass-scoping-guard.test.ts` forbids here.
+ */
+export async function newsAutoCompetitionScope(
+  orgId: string,
+): Promise<{ total: number; allowed: string[] }> {
+  const rows = await superuser<{ id: string }[]>`
+    select id from competitions where org_id = ${orgId}`;
+  const allowed: string[] = [];
+  for (const { id } of rows) {
+    if (await hasFeature(orgId, "news.auto", id)) allowed.push(id);
+  }
+  return { total: rows.length, allowed };
+}
+
 /** Divisions with >=1 fixture the fold last touched inside the window
  *  (`match_states.updated_at`, not `scheduled_at` — a late-recorded result
  *  still counts as "happened this week", the same recompute-on-read
- *  discipline the rest of this file uses). */
-async function activeDivisionsInWindow(tx: Tx, orgId: string, window: DigestWindow): Promise<ActiveDivision[]> {
+ *  discipline the rest of this file uses).
+ *
+ *  `competitionIds` is the entitlement scope from
+ *  `newsAutoCompetitionScope` — required, not optional, so a caller cannot
+ *  quietly widen the digest back to the whole org. */
+async function activeDivisionsInWindow(
+  tx: Tx,
+  orgId: string,
+  window: DigestWindow,
+  competitionIds: readonly string[],
+): Promise<ActiveDivision[]> {
+  if (competitionIds.length === 0) return [];
   return tx<ActiveDivision[]>`
     select distinct d.id as division_id, d.name as division_name, d.sport_key, d.module_version
     from fixtures f
     join match_states m on m.fixture_id = f.id
     join divisions d on d.id = f.division_id
     where f.org_id = ${orgId} and f.status in ${tx(DECIDED_STATUSES as unknown as string[])}
+      and d.competition_id = any(${[...competitionIds]})
       and m.updated_at >= ${window.start}::timestamptz and m.updated_at < ${window.end}::timestamptz`;
 }
 
 /** Same window probe, scoped to TABLE_KINDS stages only (standings movement
  *  makes sense only where there is a table — mirrors org-posts.ts's own
  *  TABLE_KINDS gate on the round-recap trigger). */
-async function activeTableStagesInWindow(tx: Tx, orgId: string, window: DigestWindow): Promise<ActiveTableStage[]> {
+async function activeTableStagesInWindow(
+  tx: Tx,
+  orgId: string,
+  window: DigestWindow,
+  competitionIds: readonly string[],
+): Promise<ActiveTableStage[]> {
+  if (competitionIds.length === 0) return [];
   return tx<ActiveTableStage[]>`
     select distinct s.id as stage_id, d.name as division_name
     from fixtures f
@@ -1120,6 +1184,7 @@ async function activeTableStagesInWindow(tx: Tx, orgId: string, window: DigestWi
     join stages s on s.id = f.stage_id
     join divisions d on d.id = f.division_id
     where f.org_id = ${orgId} and f.status in ${tx(DECIDED_STATUSES as unknown as string[])}
+      and d.competition_id = any(${[...competitionIds]})
       and s.kind in ${tx([...TABLE_KINDS])}
       and m.updated_at >= ${window.start}::timestamptz and m.updated_at < ${window.end}::timestamptz`;
 }
@@ -1346,8 +1411,14 @@ export async function assembleDigestUpcoming(
   // through rather than re-queried. Defaults to 'en' for direct callers
   // (existing digestUpcoming tests) that predate this param.
   locale: Locale = "en",
+  // The digest's entitlement scope (`newsAutoCompetitionScope`). Defaulted to
+  // `null` = unfiltered ONLY for the direct-test callers that predate V395;
+  // `digestForOrg` always passes a real set, and an empty set means "this org
+  // may auto-publish for nothing", which is not the same as null.
+  competitionIds: readonly string[] | null = null,
 ): Promise<{ upcoming: DigestUpcomingDay[]; overflow: number }> {
   const EMPTY = { upcoming: [] as DigestUpcomingDay[], overflow: 0 };
+  if (competitionIds !== null && competitionIds.length === 0) return EMPTY;
   const lookup = (k: Parameters<typeof msgFor>[1], v?: Record<string, string | number>) =>
     msgFor(locale, k, v);
   try {
@@ -1376,6 +1447,7 @@ export async function assembleDigestUpcoming(
         left join entrants h on h.id = f.home_entrant_id
         left join entrants a on a.id = f.away_entrant_id
         where f.org_id = ${orgId} and f.status = 'scheduled'
+          ${competitionIds === null ? sp`` : sp`and c.id = any(${[...competitionIds]})`}
           and f.scheduled_at >= ${nowIso}::timestamptz and f.scheduled_at < ${endIso}::timestamptz
         order by f.scheduled_at`;
       const fixtures: UpcomingFixture[] = rows.map((r) => ({
@@ -1416,6 +1488,11 @@ async function digestForOrg(
   tx: Tx,
   orgId: string,
   nowMs: number,
+  // The competitions this digest may report on — `newsAutoCompetitionScope`'s
+  // answer, resolved by the caller BEFORE it opened this transaction. Required
+  // rather than defaulted: a digest that quietly covered the whole org would
+  // be a $29 pass publishing about competitions it never paid for.
+  competitionIds: readonly string[],
   opts: { skipIfEmpty?: boolean } = {},
 ): Promise<OrgPost | null> {
   const [org] = await tx<{ name: string; timezone: string | null; default_locale: string | null }[]>`
@@ -1425,8 +1502,8 @@ async function digestForOrg(
   const locale = toLocale(org.default_locale);
   const window = digestWindow(nowMs, orgTz);
 
-  const divisions = await activeDivisionsInWindow(tx, orgId, window);
-  const stages = await activeTableStagesInWindow(tx, orgId, window);
+  const divisions = await activeDivisionsInWindow(tx, orgId, window, competitionIds);
+  const stages = await activeTableStagesInWindow(tx, orgId, window, competitionIds);
   const headlines = await loadDivisionHeadlines(tx, divisions);
 
   let standings: DigestStandingsSection[] = [];
@@ -1446,7 +1523,7 @@ async function digestForOrg(
   let upcoming: DigestUpcomingDay[] = [];
   let upcomingOverflow = 0;
   try {
-    const res = await assembleDigestUpcoming(tx, orgId, nowMs, orgTz, locale);
+    const res = await assembleDigestUpcoming(tx, orgId, nowMs, orgTz, locale, competitionIds);
     upcoming = res.upcoming;
     upcomingOverflow = res.overflow;
   } catch (err) {
@@ -1505,8 +1582,15 @@ async function digestForOrg(
  *  the V295 migration draws between manual (free) and generated (Pro). */
 export async function generateWeeklyDigest(auth: AuthCtx, orgId: string): Promise<OrgPost> {
   void orgId; // RLS scopes to auth.orgId; the route proved auth against this org.
-  await requireFeature(auth.orgId, "news.auto");
-  const post = await withTenant(auth.orgId, (tx) => digestForOrg(tx, auth.orgId, Date.now()));
+  // V395: `news.auto` is pass-lifted, so the entitlement question is per
+  // competition and the answer is a SET, not a boolean — see
+  // `newsAutoCompetitionScope`. Empty set = nothing this org may auto-publish
+  // for = the same 402 `requireFeature` used to raise, with the same key.
+  const scope = await newsAutoCompetitionScope(auth.orgId);
+  if (scope.total > 0 && scope.allowed.length === 0) throw new PaymentRequiredError("news.auto");
+  const post = await withTenant(auth.orgId, (tx) =>
+    digestForOrg(tx, auth.orgId, Date.now(), scope.allowed),
+  );
   // skipIfEmpty is not set above, so digestForOrg cannot return null here.
   if (!post) throw new HttpError(500, "digest generation failed unexpectedly");
   return post;
@@ -1561,9 +1645,18 @@ export async function sweepWeeklyDigests(
 
   let digestsCreated = 0;
   for (const orgId of candidates) {
-    if (!(await hasFeature(orgId, "news.auto"))) continue;
+    // Per competition, never org-wide (V395 made the key pass-lifted) — the
+    // sweep asks the same question the button path asks, through the same
+    // resolver, so the two cannot answer differently.
+    // The sweep's candidates all HAVE fixtures, so `total` is never 0 here in
+    // practice; the check is written the same way as the button path's so the
+    // two cannot answer differently, and `skipIfEmpty` covers the rest.
+    const scope = await newsAutoCompetitionScope(orgId);
+    if (scope.allowed.length === 0) continue;
     try {
-      const post = await withTenant(orgId, (tx) => digestForOrg(tx, orgId, nowMs, { skipIfEmpty: true }));
+      const post = await withTenant(orgId, (tx) =>
+        digestForOrg(tx, orgId, nowMs, scope.allowed, { skipIfEmpty: true }),
+      );
       if (post) digestsCreated += 1;
     } catch (err) {
       log.warn({ orgId, err: String(err) }, "weekly digest sweep: org failed, continuing with the rest");

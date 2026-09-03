@@ -88,18 +88,20 @@ interface Scene {
  * (dashboard.public.max), and unlisted is equally visible to public_players_v.
  */
 async function seedScene(): Promise<Scene> {
-  // Unstated precondition, stated. Everything below assumes the SHIPPED matrix
-  // grants this feature to a plain COMMUNITY org (V392 — it used to be the pass
-  // that granted it, V308). Read it, never write it — if the matrix is ever
-  // flipped, this line says so instead of leaving a bare "expected null not to
-  // be null" under a test named for where the gate is evaluated.
+  // Unstated precondition, stated. V392 granted this feature to a plain
+  // COMMUNITY org; V395 (entitlements v18 W2 T15, owner ruling 2026-09-03)
+  // took it back — the three share loops became paid on Free and the PASS is
+  // once again what separates the two competitions below, exactly as it was
+  // before V392 (V308). Read it, never write it — if the matrix flips again,
+  // this line says so instead of leaving a bare "expected null to be null"
+  // under a test named for where the gate is evaluated.
   const [grant] = await sql<{ bool_value: boolean | null }[]>`
     select bool_value from plan_entitlements
     where plan_key = 'community' and feature_key = 'dashboard.player_profiles'`;
   expect(
     grant?.bool_value,
-    "precondition: plan_entitlements('community','dashboard.player_profiles') must be true (V392)",
-  ).toBe(true);
+    "precondition: plan_entitlements('community','dashboard.player_profiles') must be FALSE (V395)",
+  ).toBe(false);
 
   const suffix = randomUUID().slice(0, 8);
   const [{ id: orgId, slug: orgSlug }] = await sql<{ id: string; slug: string }[]>`
@@ -220,17 +222,17 @@ describe.skipIf(!HAS_DB)("getPublicPlayer — the player-profile gate sits outsi
     expect(data!.player.name).toBe(shared.personName);
   });
 
-  it("serves it on the UNPASSED competition too — V392 made profiles free", async () => {
-    // Until V392 this asserted a 404: one Event Pass must not light up every
-    // other competition in the org. Community now holds
-    // `dashboard.player_profiles` outright, so both sides render and the
-    // scoping this pair used to prove is not a property of this key any more.
-    // Pinned in both directions rather than deleted, so a re-gating of the key
-    // shows up here as a failure instead of as silence.
+  it("stays DARK on the unpassed competition — one $29 pass lights one competition", async () => {
+    // The scoping assertion this pair exists for, restored. It asserted a 404
+    // until V392 made profiles free on Community (both sides rendered, and the
+    // pair proved nothing); V395 re-gated the key, so the pass is once again
+    // the only thing separating these two competitions in the SAME org on the
+    // SAME plan. Both directions are pinned, so a re-freeing of the key shows
+    // up here as a failure rather than as silence.
     const passed = await getPublicPlayer(shared.orgSlug, shared.passedSlug, shared.personId);
     expect(passed).not.toBeNull();
     const unpassed = await getPublicPlayer(shared.orgSlug, shared.unpassedSlug, shared.personId);
-    expect(unpassed).not.toBeNull();
+    expect(unpassed).toBeNull();
   });
 
   it("denies within the same cache window when the entitlement goes away", async () => {
@@ -239,10 +241,10 @@ describe.skipIf(!HAS_DB)("getPublicPlayer — the player-profile gate sits outsi
 
     // Entitlement changes do not bust `competition:{id}`, so the cached closure
     // above is still warm and still holds the player row. Only a gate evaluated
-    // OUTSIDE that closure can deny here. An org-level DENY override is what
-    // takes the key away now that no plan withholds it — the override beats
-    // both the pass and the plan (`resolve`'s precedence), which is exactly
-    // what makes it the right lever for this test.
+    // OUTSIDE that closure can deny here. An org-level DENY override is the
+    // lever: it beats both the pass and the plan (`resolve`'s precedence), so
+    // it takes the key away on the PASSED competition too — which deleting the
+    // pass row would also do, but far less directly.
     await sql`
       insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason)
       values (${scene.orgId}, 'dashboard.player_profiles', false, 'test')

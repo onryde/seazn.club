@@ -792,12 +792,16 @@ export default async function DivisionPage({
             divisionPathPrefix={`/o/${orgSlug}/c/${compSlug}/d/`}
             fixturesHref={routes.division(orgSlug, compSlug, divSlug, "fixtures")}
             autoPosts={division.auto_posts}
-            canAutoPost={await hasFeature(auth.orgId, "news.auto")}
+            // Both gates below carry the competition id: V395 made `news.auto`
+            // and `embeds.enabled` false on Free and left them granted on both
+            // Event Pass rungs, so an org-wide resolve would show a pass holder
+            // a locked control on the competition they paid for.
+            canAutoPost={await hasFeature(auth.orgId, "news.auto", competition.id)}
             embed={
               competition.visibility !== "private" ? (
                 <EmbedSnippet
                   divisionId={id}
-                  entitled={await hasFeature(auth.orgId, "embeds.enabled")}
+                  entitled={await hasFeature(auth.orgId, "embeds.enabled", competition.id)}
                 />
               ) : (
                 <p className="text-xs text-slate-500">

@@ -126,7 +126,7 @@ export async function listOfficialBlackout(
  *  write to official_availability required the official's own /me session
  *  (superuser connection, fans the date out to every org linked to that
  *  person). This writes ONLY this org's officials row: `withTenant`'s RLS
- *  scoping (V392 grants app_user the write here) is what keeps it that way,
+ *  scoping (V391 grants app_user the write here) is what keeps it that way,
  *  not an application check. `requireResourceAuth("official", ...)` at the
  *  route already confirmed `officialId` belongs to `auth.orgId` before this
  *  runs. */

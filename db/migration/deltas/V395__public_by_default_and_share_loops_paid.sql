@@ -42,3 +42,36 @@ values ('community',    'import.events', true),
        ('event_pass',   'import.events', true),
        ('event_pass_l', 'import.events', true)
 on conflict (plan_key, feature_key) do update set bool_value = true;
+
+-- ---------------------------------------------------------------------------
+-- Step 2 (T15): the three share loops become PAID on Free.
+--
+-- This REVERSES four cells V392 set the previous day, and reverses §2's own
+-- growth thesis ("Three share loops go free… each one puts the badge in front
+-- of people who are not yet customers"). Owner ruling 2026-09-03, taken with
+-- that counter-argument put and overruled: value capture over the loop. A
+-- reader who finds V392 and V395 disagreeing is not looking at a mistake — do
+-- not "restore" these to Free on the strength of the design doc, which is now
+-- the older decision.
+--
+-- `branding` (the org's own logo) is deliberately NOT in this list and stays
+-- TRUE on Free. An earlier draft flipped it; the owner WITHDREW that — a free
+-- club uploads its own logo. What is sold is the removal of OUR badge, which
+-- step 3 makes enterprise-only.
+update plan_entitlements
+   set bool_value = false
+ where plan_key = 'community'
+   and feature_key in ('dashboard.player_profiles', 'embeds.enabled', 'news.auto');
+
+-- THE TRAP, stated because getting it wrong is silent. `embeds.enabled` had NO
+-- pass rows: it did not need any while community granted it, because the pass
+-- overlay only ADDS to what the plan row already says and a key with no pass
+-- row falls straight through to the plan. Flip community to false without
+-- these two inserts and an Event Pass holder SILENTLY LOSES embeds on the
+-- competition they paid for. `dashboard.player_profiles` and `news.auto`
+-- already carry their pass rows (V308 / V112), which is why only this key
+-- needs them written.
+insert into plan_entitlements (plan_key, feature_key, bool_value)
+values ('event_pass',   'embeds.enabled', true),
+       ('event_pass_l', 'embeds.enabled', true)
+on conflict (plan_key, feature_key) do update set bool_value = true;

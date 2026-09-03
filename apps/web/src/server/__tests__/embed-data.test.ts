@@ -1,8 +1,9 @@
 // Embed door (v3/10 #4): private divisions 404, link-only render, Pro orgs
-// pass. V392 (entitlements v18) granted `embeds.enabled` on Community too, so
-// no PLAN denies it any more — the not_entitled arm is proven through the
-// override, which is the only remaining way an org can lose the key and is
-// what keeps the gate site itself under test. Real Postgres.
+// pass. V392 granted `embeds.enabled` on Community; V395 (entitlements v18 W2
+// T15, owner ruling 2026-09-03) took it back — embedding is one of the three
+// share loops that became paid on Free — and inserted the two Event Pass rows
+// the key had never carried. So the PLAN denies it again on Community, and the
+// pass lifts it for the one competition it paid for. Real Postgres.
 import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
@@ -30,7 +31,7 @@ async function seed(visibility: string, plan: string) {
   const [{ id: divId }] = await sql<{ id: string }[]>`
     insert into divisions (org_id, competition_id, name, slug, sport_key, variant_key, config, module_version)
     values (${orgId}, ${compId}, 'Div', 'div', 'generic', 'score', '{}', '1.0.0') returning id`;
-  return { orgId, divId };
+  return { orgId, compId, divId };
 }
 
 afterAll(async () => {
@@ -56,10 +57,50 @@ describe.skipIf(!HAS_DB)("embedDivisionData", () => {
     expect(res.ok).toBe(true);
   });
 
-  it("public division on Community → ok (V392 made embeds free)", async () => {
+  it("public division on Community → not_entitled (V395 made embeds paid again)", async () => {
     const { divId } = await seed("public", "community");
+    expect(await embedDivisionData(divId)).toEqual({
+      ok: false,
+      reason: "not_entitled",
+    });
+  });
+
+  // THE TRAP V395's step 2 exists to avoid, driven end to end. `embeds.enabled`
+  // had no pass rows at all while Community granted it; flipping Community to
+  // false without inserting them would leave an Event Pass holder falling
+  // through to the community row and losing embeds on the competition they
+  // paid to unlock. Two things have to be right for this to pass and only one
+  // of them is the migration: the gate at `embed-data.ts` must also resolve
+  // WITH the competition id, or the pass row is invisible to it.
+  it("public division on Community WITH an Event Pass on its competition → ok", async () => {
+    const { orgId, compId, divId } = await seed("public", "community");
+    await sql`
+      insert into competition_passes (competition_id, org_id, pass_key)
+      values (${compId}, ${orgId}, 'event_pass')`;
+    await invalidateOrgEntitlements(orgId);
     const res = await embedDivisionData(divId);
     expect(res.ok).toBe(true);
+  });
+
+  // The other half of the same trap: the pass lifts ONE competition, not the
+  // org. A second competition in the same org stays dark.
+  it("a SECOND competition in the passed org stays not_entitled", async () => {
+    const { orgId, compId, divId } = await seed("public", "community");
+    await sql`
+      insert into competition_passes (competition_id, org_id, pass_key)
+      values (${compId}, ${orgId}, 'event_pass')`;
+    await invalidateOrgEntitlements(orgId);
+    const s2 = Math.random().toString(36).slice(2, 10);
+    const [{ id: comp2 }] = await sql<{ id: string }[]>`
+      insert into competitions (org_id, name, slug, visibility)
+      values (${orgId}, ${"Comp2 " + s2}, ${"comp2-" + s2}, 'public') returning id`;
+    const [{ id: div2 }] = await sql<{ id: string }[]>`
+      insert into divisions (org_id, competition_id, name, slug, sport_key, variant_key, config, module_version)
+      values (${orgId}, ${comp2}, 'Div', ${"div-" + s2}, 'generic', 'score', '{}', '1.0.0') returning id`;
+    expect(await embedDivisionData(div2)).toEqual({
+      ok: false,
+      reason: "not_entitled",
+    });
   });
 
   it("an org denied embeds.enabled → not_entitled", async () => {

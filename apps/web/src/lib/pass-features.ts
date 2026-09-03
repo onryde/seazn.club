@@ -48,11 +48,26 @@ export const PASS_FEATURES = new Set([
   "scoring.audit_export",
   "stages.per_division.max",
   "schedule.checkpoints.max",
-  // Three keys LEFT this set at V392, and not because the pass stopped lifting
-  // them — because `community` caught up: `formats.double_elim`,
-  // `dashboard.player_profiles` and `scheduling.multi_division` are now TRUE on
-  // every plan key including community, so no paywall can ever render for them
-  // and a pass CTA offering them would promise something already free.
+  // V395 (entitlements v18 W2 T15, owner ruling 2026-09-03): the three share
+  // loops became paid on Free while both pass rungs kept them, so all three
+  // beat the community row again and each can throw at a real paywall.
+  // `dashboard.player_profiles` RE-ENTERS this set for that reason — it left at
+  // V392 when community caught up, and the catch-up has been reversed.
+  //
+  // Same ordering rule as the V392 block above, and it was followed: the
+  // enforcement sites learned the competition first (embed-data, the division
+  // console page, usecases/divisions, usecases/scoring, and the weekly digest's
+  // own per-competition scope in usecases/org-posts), and only then does the
+  // paywall start offering a pass for them.
+  "dashboard.player_profiles",
+  "embeds.enabled",
+  "news.auto",
+  // Two keys LEFT this set at V392, and not because the pass stopped lifting
+  // them — because `community` caught up: `formats.double_elim` and
+  // `scheduling.multi_division` are TRUE on every plan key including community,
+  // so no paywall can ever render for them and a pass CTA offering them would
+  // promise something already free. (`dashboard.player_profiles` was the third
+  // and is back above — V395 re-gated it.)
   //
   // scheduling.ai.runs_per_division.max retired earlier (v17 Phase 2 Task 5,
   // V322) — the AI credit wallet meters runs on every tier now, so it no longer

@@ -198,23 +198,23 @@ Rationale is one line per changed row; unchanged rows say "keep".
 | `scoring.audit_export` (signed audit trail) | F | T | **T** | **T** | T | tournament disputes are where the signed trail is wanted |
 | `cricket.dls` | **T** | T | T | T | T | correctness: a rain-rule result is the result. Manual target "still works" is exactly the correctness paywall R9 forbids |
 | `stats.player` | F | T | **T** | **T** | T | keep Pro (reach + data value); pass gets top-scorer tables for the weekend |
-| `dashboard.player_profiles` | **T** | T | T | T | T | growth: a player sharing their own profile page is the cheapest acquisition loop the product has; badge on. Risk: removes a Pro bullet — accepted, Pro sells scale |
+| `dashboard.player_profiles` | **F** | T | T | T | T | W2 T15, owner ruling 2026-09-03: one of the three share loops that go PAID. Reverses V392's growth cell, with the acquisition-loop argument put and overruled — value capture over the loop. The pass rows (V308) are what separate one competition from the next again, so `public-players-gate.test.ts` is back to asserting a dark unpassed competition |
 | `realtime` (live scoreboard) | F | T | T | T | T | keep paid: it has marginal cost and it is THE pass trigger ("live scores on the big screen") |
 
 ### Reach & brand
 
 | key | Free | Pro | Pass M | Pass L | Ent | why |
 |---|---|---|---|---|---|---|
-| `branding` (org logo) | T | T | T | T | T | keep |
+| `branding` (org logo) | T | T | T | T | T | keep. An early W2 T15 draft flipped this to F on Free and the owner WITHDREW it: a free club uploads its own logo. What is sold is the removal of OUR badge — see `dashboard.branding` below |
 | `dashboard.branding` (badge off) | F | T | F | F | T | D7, never moves |
 | `exports` | T | T | T | T | T | keep |
 | `exports.branded` | F | T | T | T | T | keep |
 | `logos.bulk` | F | T | – | – | T | keep (convenience) |
-| `embeds.enabled` | **T** | T | T | T | T | growth: an embed on a club website is the badge on someone else's site |
+| `embeds.enabled` | **F** | T | **T** | **T** | T | W2 T15, owner ruling 2026-09-03: paid on Free. The pass cells are the TRAP this row exists to record — the key had NO pass rows, because it did not need any while community granted it, so flipping Free without inserting them would have silently taken embeds off the competition an Event Pass paid for. V395 inserts both |
 | `discovery.listed` | T | T | T | T | T | keep |
 | `discovery.featured` | F | T | – | – | T | keep |
 | `discovery.branding` | F | T | – | – | T | keep |
-| `news.auto` (auto posts + weekly digest) | **T** | T | T | T | T | owner asked. No AI spend, cheap rows, and every auto post is shareable content with the badge on. Free |
+| `news.auto` (auto posts + weekly digest) | **F** | T | T | T | T | W2 T15, owner ruling 2026-09-03: paid on Free, reversing V392's own "owner asked" free cell. The pass rows stay, which makes this key pass-lifted — so the weekly digest, an ORG-level artefact, resolves its scope per competition (`newsAutoCompetitionScope`) instead of asking the org-wide question a pass cannot honestly answer |
 | `clubs.hierarchy` | T | T | T | T | T | keep |
 
 ### Platform & credits

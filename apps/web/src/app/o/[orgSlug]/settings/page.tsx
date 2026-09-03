@@ -184,7 +184,14 @@ export default async function SettingsPage({
       select id, name from competitions
       where org_id = ${active.id}
       order by created_at desc limit 100`;
-    hasNewsAuto = await hasFeature(active.id, "news.auto");
+    // ORG-LEVEL AFFORDANCE, so the org-wide question is the honest one and
+    // `hasFeatureOnAnyPass` is what asks it. V395 made `news.auto` false on
+    // Free while both Event Pass rungs keep it, so a plain `hasFeature` here
+    // would hide the whole news tab from an org that holds a pass — and
+    // passing one competition's id would be a lie about the other. The write
+    // paths behind this tab re-resolve per competition; a page only decides
+    // what to draw, which is the split `pass-scoping-guard.test.ts` draws.
+    hasNewsAuto = await hasFeatureOnAnyPass(active.id, "news.auto");
   }
 
   // Platform API tab: api.access = Pro. Scope choice (read/score/manage) is
