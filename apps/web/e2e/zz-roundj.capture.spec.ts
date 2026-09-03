@@ -59,6 +59,10 @@ test("round J: capture the desk at three widths", async ({ page, request }) => {
       await expect(more).toBeVisible();
       await more.click();
       await expect(more).toHaveAttribute("aria-expanded", "true");
+      // The chevron animates for 150ms; a screenshot taken inside that window
+      // catches it mid-rotation and looks like a broken glyph in the sign-off
+      // page. Photograph the RESTING state.
+      await page.waitForTimeout(400);
       await page.screenshot({ path: `${OUT}/desk-${label}-more-open.png`, fullPage: true });
     }
   }

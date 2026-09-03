@@ -277,7 +277,19 @@ export default async function CompetitionPage({
               href={routes.competitionSchedule(orgSlug, compSlug)}
               aria-label={t(dict, "aria.scheduleBoard")}
               data-testid="desk-tool-schedule"
-              className="btn btn-ghost gap-1.5 max-sm:order-1 max-sm:min-h-11 max-sm:w-full max-sm:justify-center max-sm:border-purple-600 max-sm:bg-purple-600 max-sm:text-white"
+              // `max-sm:hover:*` is not decoration: `btn-ghost` carries
+              // `hover:bg-purple-50 hover:text-purple-700`, and a `hover:`
+              // utility outranks a plain one — so on a phone, touching the
+              // primary turned it pale lavender with purple text, i.e. it
+              // stopped looking primary at the exact moment it was pressed.
+              // Found by the owner photographing it, not by any gate: no
+              // assertion in this repo reads a hover state.
+              //
+              // `justify-start`, matching Registration and More: three stacked
+              // full-width controls with one of them centred read as three
+              // unrelated things. The fill is what marks the primary now, not
+              // a different alignment.
+              className="btn btn-ghost gap-1.5 max-sm:order-1 max-sm:min-h-11 max-sm:w-full max-sm:justify-start max-sm:border-purple-600 max-sm:bg-purple-600 max-sm:px-4 max-sm:text-white max-sm:hover:border-purple-700 max-sm:hover:bg-purple-700 max-sm:hover:text-white"
             >
               <CalendarRange className="h-4 w-4" strokeWidth={1.75} />
               <span className="sm:inline">{t(dict, "action.scheduleBoard")}</span>

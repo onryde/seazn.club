@@ -165,7 +165,9 @@ export function DivisionLedger({
                   (Schedule, Slideshow) already live on the division page. */}
               <div className="p-4 md:hidden">
                 <Link href={href} className="block rounded-lg focus-visible:outline-offset-4">
-                  <div className="flex items-center gap-2">
+                  {/* `flex-wrap`, so the pill can take its own line below `md`
+                      — see the wrapper below for why. */}
+                  <div className="flex flex-wrap items-center gap-2">
                     {tile("text-2xl")}
                     {/* Round J, from looking at 320: `truncate` cut
                         "Championship Cup" to "Champions…" beside its pill —
@@ -174,7 +176,25 @@ export function DivisionLedger({
                         indistinguishable. Two lines below `md`, unchanged
                         single-line truncation above it. */}
                     <span className="line-clamp-2 min-w-0 flex-1 text-sm font-semibold text-slate-900 md:truncate">{r.name}</span>
-                    {d && <PhasePill dict={dict} phase={d.phase} attention={d.attention} className="shrink-0" />}
+                    {/* The pill gets its OWN LINE on a phone. Sharing one with
+                        the name left about 110px for the name at 320, which
+                        wrapped "Championship Cup" mid-word to "Championshi /
+                        Cup" — the same defect the pad's own rule names (a
+                        person or entrant chip gets its own row, because a name
+                        squeezed into a shared cell stops being readable).
+                        The wrapper is what takes `basis-full`, not the badge:
+                        a full-width flex item would stretch the badge's own
+                        background across the card. */}
+                    {/* `pl-10`, never `ml-10`: a full-basis flex item plus a
+                        left MARGIN is 100% + 40px, which put 7px of horizontal
+                        scroll on the page at 320 (the no-h-scroll gate caught
+                        it). Padding sits inside the border box and indents
+                        without widening. */}
+                    {d && (
+                      <div className="shrink-0 max-md:order-3 max-md:basis-full max-md:pl-10">
+                        <PhasePill dict={dict} phase={d.phase} attention={d.attention} />
+                      </div>
+                    )}
                   </div>
                   <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-purple-100">
                     <i className={`block h-full rounded-full ${d ? BAR[d.phase] : "bg-purple-300"}`} style={{ width: `${pct}%` }} />

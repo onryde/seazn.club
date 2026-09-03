@@ -869,6 +869,27 @@ test("competition desk: the tool row is a phone composition below sm, not the de
     expect(box!.height, "a phone action must clear the 44px touch floor").toBeGreaterThanOrEqual(HIT_TARGET_FLOOR_PX);
     expect(box!.width, "the phone primary is full-width, not an inline tile").toBeGreaterThan(width * 0.7);
 
+    // 1b. And it stays primary while it is being PRESSED. `btn-ghost` carries
+    //     `hover:bg-purple-50 hover:text-purple-700`, and a `hover:` utility
+    //     outranks a plain one — so the filled phone primary turned pale
+    //     lavender with purple text the moment a finger or cursor was on it.
+    //     The owner found that by looking at it; nothing in this suite read a
+    //     hover state, so nothing could have caught it. Compare the two
+    //     computed colours rather than pinning a hex: the ONE thing that must
+    //     hold is that pressing it does not turn it into the ghost buttons
+    //     underneath it.
+    const bgOf = (l: typeof schedule) => l.evaluate((el) => getComputedStyle(el).backgroundColor);
+    const restBg = await bgOf(schedule);
+    await schedule.hover();
+    const hoverBg = await bgOf(schedule);
+    const ghostBg = await bgOf(page.getByTestId("desk-tools-more-toggle"));
+    expect(hoverBg, `pressed primary must not fall back to the ghost fill (rest ${restBg})`).not.toBe(ghostBg);
+    expect(
+      await schedule.evaluate((el) => getComputedStyle(el).color),
+      "a pressed primary must keep its own text colour, not the ghost's purple",
+    ).toBe(await schedule.evaluate((el) => getComputedStyle(el).color));
+    await expect(schedule).toHaveCSS("color", "rgb(255, 255, 255)");
+
     // 2. Registration keeps its label AND its count on screen: it is the one
     //    tool that reports status, and status behind a fold is status nobody
     //    sees.

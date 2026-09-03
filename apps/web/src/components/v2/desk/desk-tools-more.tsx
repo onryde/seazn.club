@@ -63,7 +63,7 @@ export function DeskToolsMore({
         aria-expanded={open}
         aria-controls={panelId}
         onClick={() => setOpen((v) => !v)}
-        className="btn btn-ghost flex min-h-11 w-full items-center justify-between gap-1.5 text-sm"
+        className="btn btn-ghost flex min-h-11 w-full items-center justify-between gap-1.5 px-4 text-sm"
       >
         <span>{label}</span>
         <ChevronDown

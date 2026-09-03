@@ -62,7 +62,7 @@ export function RegistrationHubNavEntry({
       <Link
         href={href}
         aria-label={ariaLabel}
-        className="btn btn-ghost gap-1.5 max-sm:min-h-11 max-sm:w-full max-sm:justify-start"
+        className="btn btn-ghost gap-1.5 max-sm:min-h-11 max-sm:w-full max-sm:justify-start max-sm:px-4"
         data-registration-hub-entry
       >
         <UserPlus className="h-4 w-4" strokeWidth={1.75} aria-hidden />

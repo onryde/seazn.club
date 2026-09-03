@@ -162,7 +162,20 @@ test("an organiser watches the desk go Setting up → Scheduled → Match day �
   // fix registration-hub.spec.ts's statusLocator uses for the identical
   // dual-DOM shape.
   await expect(row.locator('[data-pill="no_scorer"]:visible')).toBeVisible();
-  await expect(page.locator('[data-phase="in_play"]').first()).toContainText("1 in play");
+  // F4 (round J) changed what the organiser reads here, on purpose. This step
+  // used to assert the masthead printed "1 in play" while the row underneath
+  // it said "No scorer" — the calm summary above the alarmed row that this
+  // whole wave exists to remove. The masthead now obeys the same model rule
+  // the rows always have (a RED attention outranks the phase), so at this
+  // moment in the journey the top of the page says "No scorer" too.
+  //
+  // The phase itself is unchanged and still asserted: the competition IS in
+  // play, and a change to the phase ladder would still be caught here. What
+  // moved is only which of the two facts gets the words.
+  const masthead = page.getByTestId("desk-masthead-pill");
+  await expect(masthead).toHaveAttribute("data-phase", "in_play");
+  await expect(masthead).toHaveAttribute("data-pill", "no_scorer");
+  await expect(masthead).not.toContainText("in play");
   await shot("05-no-scorer");
   // M2 (fix round I): the action used to read "Assign scorer" — a control
   // that exists nowhere in the product (`createAssignment` has no production
