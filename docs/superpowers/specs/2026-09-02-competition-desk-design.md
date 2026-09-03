@@ -72,7 +72,14 @@ type PhaseInput = {
   stages: { seq: number; status: "pending" | "active" | "complete" | string; hasFixtures: boolean; needsProposal: boolean }[];
   fixtures: { status: string; scheduledAt: string | null }[]; // API status set: scheduled|in_play|decided|finalized|abandoned|forfeited|cancelled
   now: string;            // ISO
-  tz: string;             // the GOVERNING clock: ScheduleSettingsOut.orgTz, never settings.tz (display lane) — memory reference_settings_tz_vs_orgtz_trap
+  tz: string;             // the GOVERNING clock: scheduleSettings.tz, i.e.
+                          // resolveVenueTz(divisionTz, orgTz) — the VENUE zone
+                          // (amendment 4). This comment used to read "the
+                          // GOVERNING clock: ScheduleSettingsOut.orgTz, never
+                          // settings.tz (display lane)" — RETIRED, left corrected
+                          // rather than deleted because the org zone as a SECOND
+                          // authority is the bug, three times over.
+                          // — memory reference_settings_tz_vs_orgtz_trap
 };
 type DivisionPhase = "setting_up" | "scheduled" | "match_day" | "finished";
 ```
@@ -201,10 +208,16 @@ Left — the sheet:
 - Filter segment: Today · Needs result (n) · Unscheduled (n) · All. Default = Today
   when phase is `match_day`, else All. URL param `?tab=fixtures&filter=…` so it is
   linkable from "Needs you".
-- Groups by calendar day in the org clock (`settings.orgTz`, the governing zone; `settings.tz` is display-only and formats the HH:mm), ascending; header
-  "Saturday 5 September · venue · n fixtures". A final group "Not yet scheduled"
-  lists rows with `scheduled_at` null, ordered by stage seq, round, seq_in_round.
-  Round is shown INSIDE the row (small label under the court), never as a bar.
+- Groups by calendar day in the **venue clock** (`scheduleSettings.tz`, i.e.
+  `resolveVenueTz(divisionTz, orgTz)`) — the same single value the division page
+  already passes to `resolvePhase` and to `StagesPanel`'s `tz` prop — ascending;
+  header "Saturday 5 September · venue · n fixtures". This line used to read
+  "in the org clock (`settings.orgTz`, the governing zone; `settings.tz` is
+  display-only)" — RETIRED by amendment 4, and left corrected rather than deleted
+  because the org zone as a SECOND authority is the bug, three times over. A
+  final group "Not yet scheduled" lists rows with `scheduled_at` null, ordered by
+  stage seq, round, seq_in_round. Round is shown INSIDE the row (small label
+  under the court), never as a bar.
 - Time spine: left column = `HH:mm` mono; a NOW rule (lime, label "NOW") inserted
   once, between the last row whose time ≤ now and the first > now, only on a day
   group whose date is today. Rows whose status is `in_play` get the amber dot
