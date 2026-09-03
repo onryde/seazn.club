@@ -73,6 +73,49 @@ satisfied by any value. Every drive spec pins the opened-at value as well as
 the post-change value; where possible it picks a case whose correct answer
 differs from the wrong answer's constant.
 
+### Identity and plan isolation — three traps that reshape the matrix
+
+The `parallel`, `walkthrough` and `serial` projects all use the same
+`storageState` (`e2e/.auth/pro.json`), so **every spec in every project runs
+as one shared, seeded Pro org**. `auth.setup.ts` provisions a Community state
+too, but nothing wires it into those projects. Three consequences, all of them
+silent:
+
+1. **A free-plan assertion is vacuous by default.** "On the free plan this
+   control is gated" passes for the wrong reason on an org where the
+   entitlement is already allowed, and mutating the guard would not redden it.
+   Register cases 7, 8 and 9 are precisely this shape and, written naively,
+   would have been decoration.
+2. **Any count counts the whole run.** Owned orgs, clubs, persons and
+   registrations accumulate across every project — `auth.setup.ts` says so
+   itself. A bare "exactly one" assertion passes or fails on who else ran
+   first: red on a clean branch, green on the retry. Every count in this
+   programme is scoped to a per-spec `TAG`, never to a global total.
+3. **`setOrgPlanBySql` is group-scoped, not org-scoped**, and `POST /api/orgs`
+   creates an org that joins its creator's **existing** billing group. So the
+   obvious isolation recipe — mint a fresh org, set its plan — silently moves
+   the shared Pro org onto that plan. Every other spec in the leg then runs on
+   the wrong plan and nothing in their diffs explains it. The damage lands in
+   other people's specs, which is what makes it expensive.
+
+In order of preference, therefore:
+
+- **Prefer `setEntitlementOverrideSql(orgId, featureKey, intValue)`.** It is
+  org-scoped, parallel-safe, and the same grandfathering mechanism a real
+  over-cap owner gets. It is also the right tool for this matrix, which needs
+  per-feature gating — `dashboard.branding`, `sponsors.tiers`,
+  `sponsors.monetize`, `api.access`, `news.auto`, `discoveryBranding`,
+  `scheduling.constraints`, `themeBranding` — rather than whole-plan flips.
+- **Where a genuine plan transition is the thing under test** (case 7's
+  Pro→Free downgrade, case 9's switch into an org without the entitlement),
+  split the group first: `POST /api/orgs` → `splitOrgIntoOwnGroupSql(orgId)`
+  → `setOrgPlanBySql`, then restore the active org afterwards.
+- **Never flip a plan without the split.**
+
+This constrains W4 as well: the billing-group panel and the Pro Plus operator
+console are themselves about billing groups, so a spec that splits a group to
+isolate a plan must not run concurrently with one driving those panels.
+
 ## 4. Waves
 
 Ordered so the smallest surface carrying the one confirmed defect lands
@@ -80,7 +123,7 @@ first and proves the pattern before the large surfaces adopt it.
 
 | Wave | Surface | Specs | Notes |
 |---|---|---|---|
-| W0 | Foundations — `e2e/settings-support.ts`, seeding, budget harness | 0 | measures the baseline leg time |
+| W0 | Foundations — `e2e/settings-support.ts`, seeding, budget harness | 0 | `pnpm install` in the worktree; measures the baseline leg time |
 | W1 | `/admin/settings` + 4 legacy redirects | 1 | contains the confirmed dead-Save defect |
 | W2 | `/o/{org}/settings` 7 tabs — drive+persist | 2 | sponsors **CRUD half** only |
 | W3 | `/o/{org}/settings` 7 tabs — gating matrix | 1 | + first mutation sweep |
@@ -197,12 +240,12 @@ evidence that settles it.
 
 ### Class 2 — entitlement transitions
 
-| # | Case | Wave |
-|---|---|---|
-| 7 | Pro→Free downgrade with a brand colour already set: still rendered? still saveable? | W3 |
-| 8 | `?tab=api` on a Free org — upsell, or blank? | W3 |
-| 9 | Org-switch while on `?tab=api`/`?tab=sponsors` into an org without that entitlement | W3 |
-| 10 | `discoverable` is server-forced false when not public. Set public+discoverable, flip to private — is it cleared, or does a stale `true` read back? | W5 |
+| # | Case | Wave | Isolation (see §3) |
+|---|---|---|---|
+| 7 | Pro→Free downgrade with a brand colour already set: still rendered? still saveable? | W3 | *needs a real plan flip → split the group first (§3)* |
+| 8 | `?tab=api` on a Free org — upsell, or blank? | W3 | *entitlement override on `api.access`, not a plan flip* |
+| 9 | Org-switch while on `?tab=api`/`?tab=sponsors` into an org without that entitlement | W3 | *needs a second org genuinely lacking it (§3)* |
+| 10 | `discoverable` is server-forced false when not public. Set public+discoverable, flip to private — is it cleared, or does a stale `true` read back? | W5 | none needed |
 
 ### Class 3 — ownership and last-actor
 
@@ -246,8 +289,10 @@ page loads and reloads. Rules, baked into the specs:
 
 1. **One org per test, seeded via API** → `mode: "parallel"` is safe.
    Shared-org writes are the only reason these would have to run serially,
-   and serial is what makes a leg slow. (W4's Connect leg is the documented
-   exception — see §6.)
+   and serial is what makes a leg slow. Two documented exceptions: W4's
+   Connect leg (§6), and any spec that splits a billing group to isolate a
+   plan (§3). A fresh org is *not* automatically isolated — it inherits its
+   creator's billing group, so read §3 before seeding one.
 2. **At most one `page.reload()` per tab.** Fill every field on a tab, save,
    reload once, assert all values — not reload-per-field.
 3. **Split the question.** "Did it persist?" is an API read. "Does the page
@@ -325,6 +370,10 @@ they are found, not held until the end.
   be re-measured at merge time, not trusted from the start of the programme.
 - **The Connect fixture account is a shared, unreleased resource.** Local
   runs contend with smoke. §6's release path is mandatory.
+- **The shared Pro storageState makes negative assertions the default
+  failure mode here.** Every "this is gated" case in §7 must be shown to
+  redden when its guard is mutated, or it is proving nothing. This is the
+  single most likely way for the programme to ship green and worthless.
 - **The brief is a hypothesis.** Every line number and capability claim in
   this document came from a read, not a run. The edge cases in §7 are
   candidates: each is a question to settle by driving the product, and a case
