@@ -382,11 +382,37 @@ locale is denominated in USD.
 
 Queued behind T5, which is editing `billing.ts` right now.
 
-### T12 — V393: delete `scorers.max`, and raise Free's squad cap to 23
+### T12 — V393: credits re-cut, squad cap raised, scorer seat deleted
 
-Two cells in one migration. Both owner-ruled 2026-09-03.
+Four changes in one migration plus their code and copy. All owner-ruled 2026-09-03.
 
-**(a) Free `teams.squad_max` 20 → 23.** Design §2 justifies Free's squad cap as "Free =
+**(0) The AI credit re-cut.** `ai.credits.monthly` pro **35 → 25**; `ai.credits.trial`
+pro **20 → 15**; the pass grant becomes M **25** (unchanged) / L **50 → 35**. Free stays
+**5** — the owner settled that separately: "AI Credit is fine, that's the selling point."
+Enterprise `ai.credits.monthly` stays 500 and enterprise `ai.credits.trial` stays 20,
+neither being mentioned in the ruling; flag if that asymmetry (enterprise trial now above
+Pro's) is unintended.
+
+**This is rework of T5, not a fresh change.** T5 shipped the per-rung grant at 25/50 with
+copy in four locales, and L's number is quoted in: the seed's `event_pass_l` product
+description ("+50 AI credits"), three marketing keys and one ui key × 4 locales,
+`config/tips.ts`, two English help articles, and two re-approved digest gates. Every one
+moves to 35. Prefer interpolating from `PASS_CREDIT_GRANT` over writing a third literal.
+
+Recorded consequence, raised and accepted: Pro's monthly grant (25) is now BELOW the
+cheapest credit pack (40 credits for $10), so a customer whose only unmet need is AI is
+better off buying a pack than upgrading. Coherent with the design's "credits are compute,
+not packaging"; incoherent if credits are meant to pull people to Pro. The owner chose the
+numbers with this stated.
+
+Also check `localeCreditLeadershipFaults` (`copy-truth.ts:2782`) — it guards the claim
+"the largest monthly AI credit grant" and still names `pro_plus` in its failure message,
+a plan V391 deleted. It has to learn the new ordering (enterprise 500 > pro 25 >
+community 5) as part of the copy sweep.
+
+**(1) Free `teams.squad_max` 20 → 23.**
+
+Design §2 justifies Free's squad cap as "Free =
 one matchday squad". Measured against the engine's own declarations, it is not:
 `football.ts` is `lineup: { size: 11, benchMax: 12 }` = **23**, and `icehockey.ts` is
 `{ size: 6, benchMax: 17 }` = **23**. Cricket is 15 and volleyball 14, so those fit — but
@@ -400,7 +426,17 @@ Derive nothing here from the design doc — it says "cricket 15, football 23, ru
 and RUGBY IS NOT IN THE ENGINE CATALOGUE. The sports that exist are football, cricket,
 volleyball, badminton, tabletennis, icehockey and carrom. Use the engine's numbers.
 
-**(b) DELETE the `scorers.max` cap; keep the scorer role.**
+**(2) DELETE the `scorers.max` cap; keep the scorer role.**
+
+**(3) Fix the import-cap paywall message — it quotes a number that has never been right.**
+`feature-copy.ts:82` says "Files over 20 rows need a Pro plan" and the comment at
+`imports.ts:121` says "Community capped at 20 rows/file". The cap is **50** (per FILE,
+checked as `withinLimit(orgId, "import.bulk", rows.length)` at preview time — unlimited
+files, capped rows in each). A Free user refused at 60 rows is told the limit is 20 and
+splits into three files when two would do. Predates W2, but it is a false customer-facing
+claim in a file this wave already edits. Quote the cap from the entitlement rather than
+hardcoding a third literal — a second hardcoded number is exactly how this one drifted.
+The cap itself STAYS 50; the defect is the message.
 
 #### Why the cap goes (owner ruling 2026-09-03)
 
