@@ -5,7 +5,7 @@
 //   * a NON-OWNER got the full priced card with a sentence under it, which is a
 //     price nobody will let them pay;
 //   * the OWNED state was a dead-end green box — it confirmed the purchase and
-//     offered nothing next: no receipt for the $29, and no way to Pro, on the
+//     offered nothing next: no receipt for the money taken, and no way to Pro, on the
 //     one page a converting customer is already standing on;
 //   * a buyer sent back here by the pass's OWN ceiling got that same "you're
 //     all set" box while still blocked, with no explanation and no action;
@@ -19,6 +19,30 @@
 // controls exist, so the real `en` strings have to be in play.
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
+import stripePlans from "@/config/stripe-plans.json";
+
+/**
+ * The two rung prices the picker actually renders, READ from the same seed it
+ * reads rather than typed here.
+ *
+ * They used to be the literals `$29` and `$59`, and W2's reprice (M 29 -> 15,
+ * L 59 -> 39) broke them in a way worth remembering: the four POSITIVE
+ * assertions failed loudly, but the two NEGATIVE ones — "must not price
+ * anything once a pass is held" — went silently VACUOUS. `not.toContain("$29")`
+ * passes trivially on a page that has never heard of $29, so the guard against
+ * advertising an uncompletable M->L upgrade stopped guarding anything while
+ * still reporting green. A derived value cannot fail that way in either
+ * direction.
+ */
+const rungPrice = (key: "event_pass" | "event_pass_l"): string => {
+  const rung = stripePlans.passes.find((r) => r.key === key);
+  if (!rung) throw new Error(`stripe-plans.json has no ${key} rung to price`);
+  const { unit_amount: minor } = rung.price;
+  if (minor % 100 !== 0) throw new Error(`${key} is ${minor} minor units — this helper assumes whole dollars`);
+  return `$${minor / 100}`;
+};
+const M_PRICE = rungPrice("event_pass");
+const L_PRICE = rungPrice("event_pass_l");
 
 const h = vi.hoisted(() => ({
   role: "owner" as string,
@@ -167,7 +191,7 @@ vi.mock("@/server/usecases/billing-manage", () => ({ getPassPurchases: async () 
 // The picker is NOT mocked. Since v17 #294 it owns both prices, the buy
 // button and the owner-only sentence, so a stand-in stub would make every
 // assertion in this file about those things vacuous — the page would "contain
-// $29" only because the stub was told to say so. Only Stripe.js is mocked
+// the rung price" only because the stub was told to say so. Only Stripe.js is mocked
 // (same two modules as pass-checkout-parity.test.tsx), which is all the real
 // component actually needs a browser for.
 vi.mock("@stripe/react-stripe-js", () => ({
@@ -246,7 +270,7 @@ describe("not owned — the owner", () => {
   it("offers the pass at its price, with a way to buy it", async () => {
     const html = await render();
     expect(html).toContain("data-pass-ticket");
-    expect(html).toContain("$29");
+    expect(html).toContain(M_PRICE);
     expect(html).toContain("data-pass-buy");
     expect(html).toContain("Buy the pass");
   });
@@ -256,8 +280,11 @@ describe("not owned — the owner", () => {
     // [data-pass-buy] straight through to Stripe without touching the picker,
     // so whatever is pre-selected here is what that real-money suite buys.
     const html = await render();
-    expect(html).toContain("$29");
-    expect(html).toContain("$59");
+    expect(html).toContain(M_PRICE);
+    expect(html).toContain(L_PRICE);
+    // The two rungs must be priced DIFFERENTLY, or every assertion in this
+    // file that distinguishes them is satisfied by one number appearing twice.
+    expect(M_PRICE).not.toBe(L_PRICE);
     expect(html).toContain('checked="" value="event_pass"');
     expect(html).not.toContain('checked="" value="event_pass_l"');
     expect(html).toContain("Buy the pass — M");
@@ -303,7 +330,7 @@ describe("not owned — a non-owner", () => {
     // next move is to take a number to whoever can spend it.
     h.role = "admin";
     const html = await render();
-    expect(html).toContain("$29");
+    expect(html).toContain(M_PRICE);
     expect(html).toContain("Entrants per division");
   });
 });
@@ -319,7 +346,7 @@ describe("owned", () => {
   });
 
   it("names the rung that was actually bought", async () => {
-    // A $59 buyer must not be shown the $29 product's name (v17 #294).
+    // An L buyer must not be shown the M product's name (v17 #294).
     heldPass({ passKey: "event_pass_l" });
     const html = await render();
     expect(html).toContain("Event Pass L");
@@ -347,8 +374,8 @@ describe("owned", () => {
     const html = await render();
     expect(html).toContain("Event Pass M");
     expect(html).not.toContain("Event Pass L");
-    expect(html).not.toContain("$29");
-    expect(html).not.toContain("$59");
+    expect(html).not.toContain(M_PRICE);
+    expect(html).not.toContain(L_PRICE);
   });
 
   it("links the receipt for the money that was taken", async () => {
@@ -372,7 +399,7 @@ describe("owned", () => {
     heldPass();
     const html = await render();
     expect(html).not.toContain("data-pass-buy");
-    expect(html).not.toContain("$29");
+    expect(html).not.toContain(M_PRICE);
   });
 
   it("promises the credit only while pass-credit.ts would actually pay it", async () => {
@@ -400,7 +427,7 @@ describe("owned", () => {
 
   it("says nothing about a credit for a pass nobody paid for", async () => {
     // A staff grant has a null `stripe_payment_intent` and returns
-    // `unpaid_pass`. Promising it a refund of $29 that was never charged is a
+    // `unpaid_pass`. Promising it a refund of money that was never charged is a
     // support ticket the copy created.
     heldPass({ intent: null });
     const html = await render();
@@ -444,7 +471,7 @@ describe("owned, at the pass's ceiling", () => {
     heldPass();
     const html = await render({ feature: "entrants.per_division.max" });
     expect(html).not.toContain("data-pass-buy");
-    expect(html).not.toContain("$29");
+    expect(html).not.toContain(M_PRICE);
     expect(html).toContain("comes off your first Pro invoice in full");
   });
 });
@@ -465,7 +492,7 @@ describe("already on a paid plan", () => {
     expect(html).not.toContain("data-pass-buy");
     expect(html).not.toContain("data-pass-cta");
     expect(html).not.toContain("data-pass-ticket");
-    expect(html).not.toContain("$29");
+    expect(html).not.toContain(M_PRICE);
   });
 
   it("compares against the plan the org actually has", async () => {
@@ -494,7 +521,7 @@ describe("already on a paid plan", () => {
 
   it("keeps a pass the org bought before it upgraded", async () => {
     // U15 — the pass is bought outright and survives a downgrade. Silence here
-    // would read as if the $29 had been absorbed by the subscription.
+    // would read as if the pass price had been absorbed by the subscription.
     h.planKey = "pro";
     heldPass();
     const html = await render();
@@ -539,7 +566,7 @@ describe("already on a paid plan", () => {
     const html = await render();
     expect(html).not.toContain(`data-compare-col="event_pass"`);
     expect(html).toContain(`data-compare-col="event_pass_l"`);
-    expect(html).not.toContain("$29");
+    expect(html).not.toContain(M_PRICE);
   });
 
   it("does not push a Pro org toward Pro", async () => {
@@ -701,7 +728,7 @@ describe("ended — the pass is on the record but has stopped applying", () => {
     expect(html).toContain("data-pass-ended");
     expect(html).not.toContain("data-pass-active");
     expect(html).not.toContain("data-pass-buy");
-    expect(html).not.toContain("$29");
+    expect(html).not.toContain(M_PRICE);
     expect(html).not.toContain("Event Pass active");
   });
 
@@ -824,8 +851,8 @@ describe("closed — past the pass line, and nothing was ever bought (#376)", ()
     expect(html).toContain('data-pass-closed-panel="');
     expect(html).not.toContain("data-pass-buy");
     expect(html).not.toContain("data-pass-ticket");
-    expect(html).not.toContain("$29");
-    expect(html).not.toContain("$59");
+    expect(html).not.toContain(M_PRICE);
+    expect(html).not.toContain(L_PRICE);
   });
 
   it("invents no purchase — no rung, no bought-on date, no receipt", async () => {
@@ -877,7 +904,7 @@ describe("closed — past the pass line, and nothing was ever bought (#376)", ()
 
   it("drops both pass columns from the comparison table", async () => {
     // The table is the page's SECOND offer surface. A closed competition that
-    // still advertised a $29 and a $59 column would be recommending, in
+    // still advertised an M and an L column would be recommending, in
     // figures, the purchase the panel above it has just refused.
     closedComp();
     const html = await render();
@@ -899,7 +926,7 @@ describe("closed — past the pass line, and nothing was ever bought (#376)", ()
     const html = await render();
     expect(html).not.toContain("data-pass-closed-panel");
     expect(html).toContain("data-pass-buy");
-    expect(html).toContain("$29");
+    expect(html).toContain(M_PRICE);
   });
 
   it("shows the panel to a non-owner too, without the action they cannot take", async () => {

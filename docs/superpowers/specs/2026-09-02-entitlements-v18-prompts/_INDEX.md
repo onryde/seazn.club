@@ -410,6 +410,57 @@ Each needs a task and an owner. Nothing here is fixed by W1.
    collect is repaired; the copy fault it exposes is real and belongs to the
    copy sweep (`stripe-plans.json` product descriptions + `capClaimFaults`).
 
+10. **V391 SOLD FIVE FEATURES ON THE EVENT PASS THAT A PASS HOLDER CANNOT
+    REACH.** This is a live product defect, not a test to retire, and it is the
+    highest-value thing the T7/T9 sweep found. `pass-scoping-guard.test.ts`
+    ("Event Pass grants are resolved with a competition in scope") is RED with
+    eight offenders:
+
+    ```
+    src/server/usecases/device-links.ts:105   requireFeature("scoring.device_links")
+    src/server/usecases/history.ts:420        getLimit("schedule.checkpoints.max")
+    src/server/usecases/match-reports.ts:270  hasFeature("discipline.enforced")
+    src/server/usecases/player-stats.ts:296   requireFeature("stats.player")
+    src/server/usecases/player-stats.ts:359   requireFeature("stats.player")
+    src/server/usecases/player-stats.ts:481   requireFeature("stats.player")
+    src/server/usecases/stages.ts:288         getLimit("stages.per_division.max")
+    src/server/usecases/templates.ts:171      getLimit("stages.per_division.max")
+    ```
+
+    **Why it is new.** That guard computes the pass-lifted key set from the
+    LIVE matrix — `event_pass` rows whose value `is distinct from` community's
+    — and then scans production source for enforcement sites that resolve the
+    key WITHOUT a competition id. It was green before V391 because none of
+    these five keys was lifted. V391 lifted all five: `stats.player` and
+    `scoring.audit_export` granted on the pass, `discipline.enforced` granted,
+    `scoring.device_links` granted, `stages.per_division.max` 2 -> 4, and
+    `schedule.checkpoints.max` given its own pass row (5) where it used to fall
+    through to community's 2.
+
+    **What a customer sees.** An org on Community buys an Event Pass for a
+    competition. Design §2 says that pass includes player stats, discipline
+    enforcement, device-link scoring, four stages per division and five save
+    points. At every site above the code asks the ORG-WIDE question, which for
+    a Community org resolves to the community value — so the buyer is refused,
+    or capped at Free's number, on features they have paid for. Money taken,
+    feature withheld, no error anywhere.
+
+    **This is exactly the class T6 fixed for officials** (`requireFeature`
+    already accepts a competition id at `entitlements.ts:666-672`; the three
+    officials call sites simply never passed it). The same one-argument change
+    is owed at these eight sites, plus a test per site proving the pass lifts
+    it on the passed competition and does NOT lift it on a sibling — T6's
+    mutation check (drop the id from one call, the test must red) is the model.
+
+    **The guard's own header says "DO NOT WEAKEN THIS ASSERTION AND DO NOT ADD
+    A SUPPRESSION LIST."** It was not weakened. It is left RED on purpose so
+    the next wave cannot miss it, and it will go green on its own once the ids
+    are threaded — no test edit is owed, only production code.
+
+    Note `divisions.per_competition.max` and `entrants.per_division.max` are in
+    the lifted set too and are NOT offenders: those call sites already scope to
+    a competition. So the guard is discriminating, not blanket.
+
 ### Closed by W1, recorded so nobody re-opens them
 
 - **The device-link 403's zero automated coverage.** Task 6 gave it a shared
