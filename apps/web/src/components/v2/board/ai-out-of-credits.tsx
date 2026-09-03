@@ -38,12 +38,29 @@ export function AiOutOfCredits({ currency }: { currency: Currency }) {
           sm up — no horizontal scroll on mobile. */}
       <div className="mt-3 flex flex-col items-stretch gap-2 sm:flex-row sm:flex-wrap sm:items-center">
         <BuyCredits packs={packs} currency={currency} dict={dict} locale={locale} />
+        {/* WAS "Upgrade to Pro Plus", data-upgrade="pro_plus" — a plan V392
+            deleted from `plans` outright, so the CTA pointed at a tier nobody
+            can buy. Owner steer (2026-09-03): a Free org should be offered Pro;
+            a Pro org is already at the top of self-serve and its offer is a
+            CREDIT PACK, which is the `<BuyCredits>` button rendered FIRST above
+            — already present for every org, already the recovery this block
+            leads with.
+
+            NOT plan-aware, and that is a deliberate limit rather than an
+            oversight: this is a client component with no org plan in scope, and
+            there is no plan context anywhere in the tree (`usePlan`,
+            `PlanProvider` and friends return nothing). Hiding this link for a
+            Pro org means threading a plan key through `ai-console.tsx`,
+            `ai-competition-console.tsx` and `ai-officials-review.tsx`, which is
+            a redesign rather than the false-string fix this is. A Pro org that
+            follows it lands on Settings → Billing and sees the plan it already
+            has: redundant, not false. Recorded as owed. */}
         <ConsoleLink
           href="/settings/billing"
           className="btn btn-ghost justify-center text-xs"
-          data-upgrade="pro_plus"
+          data-upgrade="pro"
         >
-          {msg("board.ai.error.upgradeToProPlus")}
+          {msg("board.ai.error.upgradeToPro")}
         </ConsoleLink>
         {/* Auto-topup (D1) is a fast-follow — render it, disabled, so the recovery
             path is discoverable before it is wired. */}

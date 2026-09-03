@@ -452,7 +452,7 @@ export type DictionaryKey =
   | "board.ai.error.tooLarge"
   | "board.ai.error.unavailable"
   | "board.ai.error.upgrade"
-  | "board.ai.error.upgradeToProPlus"
+  | "board.ai.error.upgradeToPro"
   | "board.ai.errorGeneric"
   | "board.ai.errorLabel"
   | "board.ai.flagged"

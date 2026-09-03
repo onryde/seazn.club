@@ -352,6 +352,13 @@ const RETIRED_CLAIMS = [
   // string per language is not a vocabulary.
   "voor het hele verloop",
   "voor altijd",
+  // RESTORED. This entry was deleted by mistake while pruning the corpus of
+  // fixtures whose patterns went with `plusClaims` — the same literal appeared
+  // in BOTH lists, and a line-based sweep took both copies. They are not the
+  // same thing: the corpus proves a pattern fires, this list is the retired
+  // wording itself, and the nl half of "holds the card's retired AI-scheduling
+  // wording, in all four locales" is what caught the loss.
+  "AI-ondersteunde planning",
   "organisatie voor de helft van het basistarief",
   // Fix round 1 — `pricing.faq.upgraded.a`. Two claims per locale: the
   // permanence one, and the "Pro covers everything the pass does" over-claim,
@@ -3298,7 +3305,10 @@ describe("no dictionary string sells scoring detail (W1: it is free on every pla
     // or above", which is a recording level, not a price).
     const ANCHORS: Array<[key: string, half: "planName" | "paidVerb"]> = [
       ["board.ai.error.upgrade", "paidVerb"],
-      ["board.ai.error.upgradeToProPlus", "planName"],
+      // Renamed in W2: the key was `…upgradeToProPlus` and named a plan V392
+      // deleted. Still a `planName` anchor — "Pro" is untranslated in all four
+      // locales, which is exactly what makes it the right half to test here.
+      ["board.ai.error.upgradeToPro", "planName"],
       ["addOns.extraOrg.error.planCannot", "planName"],
       ["billing.planChange.toPro", "planName"],
     ];

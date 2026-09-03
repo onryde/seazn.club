@@ -116,7 +116,7 @@ export const TIPS = {
     // the pass's, and wrong by half since V319 raised the pass to 128. Both
     // rungs' numbers are pinned against plan_entitlements by
     // lib/__tests__/pricing-cards.test.ts, in all four locales.
-    body: "For this competition only: an M pass gives it 128 entrants per division and up to 10 divisions; an L pass gives it unlimited entrants and up to 20 divisions. Both sizes add branded exports, public player cards, sponsor packages, the realtime scoreboard and a 5% platform fee instead of 8%; the one-time AI credit top-up is sized with the pass — more on L than on M. It is not Pro — your brand colour, player stats, officials, discipline, embeds and API access all stay Pro. A passed competition stops counting against your active-competition limit; the pass doesn't carry to next season's edition.",
+    body: "For this competition only: an M pass gives it 128 entrants per division and up to 10 divisions; an L pass gives it 512 entrants per division and up to 20 divisions. Both sizes add branded exports, public player cards, player stats, auto officials assignment, discipline tracking, embeds, sponsor packages, the realtime scoreboard and a 5% platform fee instead of 8%; the one-time AI credit top-up is sized with the pass — more on L than on M. It is not Pro — your brand colour on public pages, API access and your organisation's own limits all stay Pro. A passed competition stops counting against your active-competition limit; the pass doesn't carry to next season's edition.",
     helpSlug: "billing/event-pass",
   },
   "registration.platform-fee": {
