@@ -156,7 +156,9 @@ export function HistoryPanel({
         {/* Tip sits OUTSIDE the h2 — inside it would pollute the heading's
             accessible name ("History About: …"). */}
         <div className="flex items-center gap-1.5">
-          <h2 className="text-lg font-semibold tracking-tight text-slate-900">History</h2>
+          <h2 className="text-lg font-semibold tracking-tight text-slate-900">
+            {msg("history.title")}
+          </h2>
           <Tip id="schedule.undo-watermark" />
         </div>
         {canEdit && (
@@ -181,7 +183,7 @@ export function HistoryPanel({
                   )
                 }
               />
-              Freeze whole schedule
+              {msg("history.freezeAll")}
             </label>
           </>
         )}
@@ -192,9 +194,9 @@ export function HistoryPanel({
 
       <div className="grid gap-4 lg:grid-cols-2">
         <div className="card p-4">
-          <h3 className="mb-2 text-sm font-semibold text-slate-900">Recent edits</h3>
+          <h3 className="mb-2 text-sm font-semibold text-slate-900">{msg("history.recent.title")}</h3>
           {!history || history.events.length === 0 ? (
-            <p className="text-sm text-slate-500">Nothing yet.</p>
+            <p className="text-sm text-slate-500">{msg("history.recent.empty")}</p>
           ) : (
             <ol className="space-y-1 text-sm">
               {history.events.slice(0, 12).map((e) => (
@@ -217,7 +219,7 @@ export function HistoryPanel({
         <div className="card space-y-2 p-4">
           {/* Tip beside, not inside, the heading (accessible-name hygiene). */}
           <div className="flex items-center gap-1.5">
-            <h3 className="text-sm font-semibold text-slate-900">Save points</h3>
+            <h3 className="text-sm font-semibold text-slate-900">{msg("history.savePoints.title")}</h3>
             <Tip id="schedule.save-points" />
           </div>
           {canEdit && (
@@ -251,6 +253,7 @@ export function HistoryPanel({
                 // sizing test above (history-panel-save-button.test.tsx)
                 // still checks for.
                 className="input min-h-11 py-1.5 text-xs"
+                data-testid="savepoint-label"
                 placeholder="e.g. before rain reshuffle"
                 value={label}
                 onChange={(e) => setLabel(e.target.value)}
@@ -258,10 +261,11 @@ export function HistoryPanel({
               />
               <button
                 type="submit"
+                data-testid="savepoint-create"
                 className="btn btn-ghost shrink-0 whitespace-nowrap px-2.5 py-1.5 text-xs"
                 disabled={busy}
               >
-                Save point
+                {msg("history.savePoints.create")}
               </button>
             </form>
           )}
@@ -340,6 +344,8 @@ export function HistoryPanel({
                           return (
                             <li
                               key={cp.id}
+                              data-testid="checkpoint-row"
+                              data-checkpoint-id={cp.id}
                               className={`relative flex items-center gap-2 py-[5px] before:absolute before:left-[-18px] before:top-[11px] before:h-[9px] before:w-[9px] before:rounded-full before:border-[1.5px] before:content-[''] ${
                                 live
                                   ? "before:border-purple-600 before:bg-purple-600"
@@ -366,6 +372,7 @@ export function HistoryPanel({
                               {canEdit && (
                                 <button
                                   type="button"
+                                  data-testid="checkpoint-restore"
                                   className={`text-[10.5px] hover:underline ${cp.superseded ? "text-slate-600" : "text-purple-600"}`}
                                   disabled={busy}
                                   onClick={async () => {
@@ -437,19 +444,31 @@ export function HistoryPanel({
 
       {canEdit && (
         <div className="card border-red-100 p-4">
-          <h3 className="text-sm font-semibold text-red-700">Danger zone</h3>
-          <p className="mt-1 text-xs text-slate-500">
-            Clears timetable slots only — locked and decided fixtures always survive, and
-            the action is undoable above.
-          </p>
+          <h3 className="text-sm font-semibold text-red-700">{msg("history.danger.title")}</h3>
+          <p className="mt-1 text-xs text-slate-500">{msg("history.danger.body")}</p>
+          {/* The freeze is a REASON, not a disappearance: the control stays on
+              the page and explains itself, because a vanished button reads as a
+              missing feature. `scheduleLocked` is the prop the page already
+              hands down (`division.schedule_locked`) — deliberately NOT
+              anything derived from `canEdit`, whose value at the mount site is
+              `canEdit && !billingFrozen`, the org's BILLING freeze. Gating on
+              that would make this guard silently unreachable on a frozen
+              division, which is the exact defect this closes: the server's 422
+              was the only thing saying no. */}
+          {scheduleLocked && (
+            <p className="mt-1 text-xs text-slate-500" data-testid="schedule-clear-reason">
+              {msg("history.danger.frozen")}
+            </p>
+          )}
           {/* btn-danger, not hand-rolled: `border-red-200` sets a border colour
               but no width, so this painted no border and no background — a
               destructive action that read as bare red text, its .btn padding
               showing only as a stray indent. */}
           <button
             type="button"
+            data-testid="schedule-clear"
             className="btn btn-danger mt-2"
-            disabled={busy}
+            disabled={busy || scheduleLocked}
             onClick={async () => {
               const ok = await confirmDialog({
                 title: msg("confirm.clearSlots.title"),
@@ -466,7 +485,7 @@ export function HistoryPanel({
               );
             }}
           >
-            Clear schedule…
+            {msg("history.danger.clear")}
           </button>
         </div>
       )}

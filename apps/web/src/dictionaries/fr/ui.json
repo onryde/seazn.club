@@ -4945,5 +4945,15 @@
   "confirm.cancelEntry.label": "Annuler l'inscription",
   "reg.hub.registrants.table.soloSignUp": "Inscription individuelle",
   "reg.hub.registrants.table.soloWaiting": "En attente d'une équipe",
-  "reg.hub.registrants.table.soloAssigned": "Dans {team}"
+  "reg.hub.registrants.table.soloAssigned": "Dans {team}",
+  "history.title": "Historique",
+  "history.freezeAll": "Verrouiller tout le calendrier",
+  "history.recent.title": "Modifications récentes",
+  "history.recent.empty": "Rien pour l'instant.",
+  "history.savePoints.title": "Points de sauvegarde",
+  "history.savePoints.create": "Enregistrer un point",
+  "history.danger.title": "Zone sensible",
+  "history.danger.body": "Efface uniquement les créneaux de l'horaire — les rencontres verrouillées et déjà décidées sont toujours conservées, et l'action est annulable ci-dessus.",
+  "history.danger.clear": "Effacer le calendrier…",
+  "history.danger.frozen": "Le calendrier est verrouillé. Déverrouillez-le sur le tableau pour effacer les créneaux."
 }

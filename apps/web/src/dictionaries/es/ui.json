@@ -4945,5 +4945,15 @@
   "confirm.cancelEntry.label": "Cancelar inscripción",
   "reg.hub.registrants.table.soloSignUp": "Inscripción individual",
   "reg.hub.registrants.table.soloWaiting": "Esperando equipo",
-  "reg.hub.registrants.table.soloAssigned": "En {team}"
+  "reg.hub.registrants.table.soloAssigned": "En {team}",
+  "history.title": "Historial",
+  "history.freezeAll": "Congelar todo el calendario",
+  "history.recent.title": "Ediciones recientes",
+  "history.recent.empty": "Todavía nada.",
+  "history.savePoints.title": "Puntos de guardado",
+  "history.savePoints.create": "Guardar punto",
+  "history.danger.title": "Zona de peligro",
+  "history.danger.body": "Solo vacía las franjas horarias: los partidos bloqueados y los ya decididos siempre se mantienen, y la acción se puede deshacer arriba.",
+  "history.danger.clear": "Vaciar el calendario…",
+  "history.danger.frozen": "El calendario está congelado. Descongélalo en el tablero para vaciar las franjas."
 }

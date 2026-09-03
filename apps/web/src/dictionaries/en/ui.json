@@ -4945,5 +4945,15 @@
   "confirm.cancelEntry.label": "Cancel entry",
   "reg.hub.registrants.table.soloSignUp": "Solo sign-up",
   "reg.hub.registrants.table.soloWaiting": "Waiting for a team",
-  "reg.hub.registrants.table.soloAssigned": "On {team}"
+  "reg.hub.registrants.table.soloAssigned": "On {team}",
+  "history.title": "History",
+  "history.freezeAll": "Freeze whole schedule",
+  "history.recent.title": "Recent edits",
+  "history.recent.empty": "Nothing yet.",
+  "history.savePoints.title": "Save points",
+  "history.savePoints.create": "Save point",
+  "history.danger.title": "Danger zone",
+  "history.danger.body": "Clears timetable slots only — locked and decided fixtures always survive, and the action is undoable above.",
+  "history.danger.clear": "Clear schedule…",
+  "history.danger.frozen": "The schedule is frozen. Unfreeze it on the board to clear slots."
 }

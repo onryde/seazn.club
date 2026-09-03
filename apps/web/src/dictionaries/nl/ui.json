@@ -4945,5 +4945,15 @@
   "confirm.cancelEntry.label": "Inschrijving annuleren",
   "reg.hub.registrants.table.soloSignUp": "Individuele inschrijving",
   "reg.hub.registrants.table.soloWaiting": "Wacht op een team",
-  "reg.hub.registrants.table.soloAssigned": "In {team}"
+  "reg.hub.registrants.table.soloAssigned": "In {team}",
+  "history.title": "Geschiedenis",
+  "history.freezeAll": "Hele schema vergrendelen",
+  "history.recent.title": "Recente wijzigingen",
+  "history.recent.empty": "Nog niets.",
+  "history.savePoints.title": "Opslagpunten",
+  "history.savePoints.create": "Punt opslaan",
+  "history.danger.title": "Gevarenzone",
+  "history.danger.body": "Wist alleen de tijdschema-slots — vergrendelde en al besliste wedstrijden blijven altijd behouden, en de actie is hierboven ongedaan te maken.",
+  "history.danger.clear": "Schema wissen…",
+  "history.danger.frozen": "Het schema is vergrendeld. Ontgrendel het op het bord om slots te wissen."
 }
