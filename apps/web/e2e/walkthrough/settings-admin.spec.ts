@@ -42,15 +42,52 @@ async function peekFee(request: APIRequestContext): Promise<{ status: number; va
   return { status: res.status, value: res.data?.platform_fee_percent };
 }
 
-/** Read the current global default as superadmin. Asserts the 200, so call it
- *  from the test BODY only — never from a `finally`. */
+/** Read the current global default as superadmin. Asserts the 200 AND that a
+ *  number actually came back, so call it from the test BODY only — never from a
+ *  `finally`.
+ *
+ *  The definedness assertion is not belt-and-braces, it is the money guard.
+ *  `apiJson` swallows a body-parse failure (`helpers.ts`:
+ *  `.catch(() => ({ ok: false }))`) and hands back `data: undefined`, so a 200
+ *  carrying a malformed or envelope-less body yields `undefined` rather than
+ *  throwing. Without this line `original` goes undefined, the closing
+ *  "the refused write must not have landed" degrades to
+ *  `expect(undefined).toBe(undefined)`, and the one assertion this test exists
+ *  for passes vacuously. `value!` is erased at runtime and saves nothing.
+ *  Verified: with the read forced to a 200 that carries no
+ *  `platform_fee_percent`, the suite was GREEN without this assertion and RED
+ *  with it. */
 async function readFee(request: APIRequestContext): Promise<number> {
   const { status, value } = await peekFee(request);
   expect(status, "GET /api/admin/settings as superadmin").toBe(200);
+  expect(value, "GET /api/admin/settings must carry platform_fee_percent").toBeDefined();
   return value!;
 }
 
 test.describe("admin platform settings", () => {
+  /**
+   * Timeout-independent cleanup, and the reason it exists is not theoretical.
+   *
+   * VERIFIED on Playwright 1.61.1: when a test TIMES OUT, Playwright does not
+   * unwind the test function, so NEITHER `finally` below runs — a probe that
+   * timed out while the grant was held left the shared Pro user
+   * `is_staff=t, staff_role=superadmin` in the database. `afterEach` DOES run,
+   * and its awaits complete. So the try/finally is the ordinary-failure path
+   * (it also has to restore superadmin mid-test to re-read the fee), and this
+   * hook is the backstop for the one failure mode a `finally` cannot cover.
+   *
+   * Every test in this block inherits it — which is the point, because T3-T5
+   * append here. Set `borrowedOrgId` BEFORE the first grant, never after.
+   */
+  let borrowedOrgId: string | null = null;
+
+  test.afterEach(async () => {
+    if (!borrowedOrgId) return;
+    const orgId = borrowedOrgId;
+    borrowedOrgId = null;
+    await setOwnerStaffRoleSql(orgId, null);
+  });
+
   test("a support-role staff member gets no live Save, and the route refuses the write", async ({
     page,
   }) => {
@@ -64,6 +101,8 @@ test.describe("admin platform settings", () => {
     // the SHARED Pro user, and a leaked `superadmin` does not fail here — it
     // fails in some other spec in the leg, whose diff explains nothing.
     try {
+      // Arm the afterEach backstop BEFORE the grant exists to leak.
+      borrowedOrgId = org.id;
       await setOwnerStaffRoleSql(org.id, "superadmin");
       original = await readFee(page.request);
 
