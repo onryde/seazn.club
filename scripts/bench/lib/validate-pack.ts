@@ -763,6 +763,24 @@ function checkCapacityWaitlist(divisionRef: string, block: PackRegistrationBlock
   ];
 }
 
+/** Design §4 check 4: `pay: true` requires the division's `feeCents > 0` —
+ *  a free division has nothing for an entrant to pay. */
+function checkPayRequiresFee(divisionRef: string, block: PackRegistrationBlock): PackFinding[] {
+  const findings: PackFinding[] = [];
+  block.entries.forEach((entry, i) => {
+    if (!entry.pay || block.feeCents > 0) return;
+    findings.push({
+      code: "registration.pay_requires_fee",
+      severity: "error",
+      where: registrationEntryLabel(divisionRef, entry, i),
+      message:
+        `entry "${entry.extKey}" declares pay:true but division "${divisionRef}" feeCents is ` +
+        `${block.feeCents} — nothing to pay`,
+    });
+  });
+  return findings;
+}
+
 // ---------------------------------------------------------------------------
 // Stage 2 — the per-stream fold
 // ---------------------------------------------------------------------------
@@ -915,6 +933,7 @@ export function validatePack(raw: unknown, opts: ValidatePackOptions): PackValid
         ...checkRejectedEligibilityOffenders(division.ref, block, personsByRef, seasonStartYear),
         ...checkExpectArithmetic(division.ref, block),
         ...checkCapacityWaitlist(division.ref, block),
+        ...checkPayRequiresFee(division.ref, block),
       );
     }
   }

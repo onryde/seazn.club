@@ -2497,3 +2497,55 @@ describe("registration funnel — rule 3: capacity vs waitlist", () => {
     expect(errors(validatePack(pack, UNIT).findings)).toEqual([]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Rule 4 — `pay: true` requires the division's `feeCents > 0` (design §4
+// check 4).
+// ---------------------------------------------------------------------------
+
+describe("registration funnel — rule 4: pay requires a fee", () => {
+  it("pay:true against feeCents:0 reds, naming the entry's extKey", () => {
+    const pack = registrationPack({
+      block: {
+        ...OPEN_RESTRICTION,
+        entrantKind: "individual",
+        feeCents: 0,
+        approval: "auto",
+        entries: [{ extKey: "e-free-pay", captain: "p1", roster: [], pay: true, expect: "entrant" }],
+        expect: baseExpect({ entrants: 1 }),
+      },
+    });
+    const finding = onlyError(validatePack(pack, UNIT).findings);
+    expect(finding.code).toBe("registration.pay_requires_fee");
+    expect(finding.message).toContain("e-free-pay");
+  });
+
+  it("pay:true against feeCents:1000 does not red", () => {
+    const pack = registrationPack({
+      org: { name: "Unit Org", slug: "unit-org", timezone: "UTC", currency: "usd" },
+      block: {
+        ...OPEN_RESTRICTION,
+        entrantKind: "individual",
+        feeCents: 1000,
+        approval: "auto",
+        entries: [{ extKey: "e-paid", captain: "p1", roster: [], pay: true, expect: "entrant" }],
+        expect: baseExpect({ entrants: 1, paidCents: 1000 }),
+      },
+    });
+    expect(errors(validatePack(pack, UNIT).findings)).toEqual([]);
+  });
+
+  it("pay:false against feeCents:0 does not red — a free entry never has to pay", () => {
+    const pack = registrationPack({
+      block: {
+        ...OPEN_RESTRICTION,
+        entrantKind: "individual",
+        feeCents: 0,
+        approval: "auto",
+        entries: [{ extKey: "e-free", captain: "p1", roster: [], pay: false, expect: "entrant" }],
+        expect: baseExpect({ entrants: 1 }),
+      },
+    });
+    expect(errors(validatePack(pack, UNIT).findings)).toEqual([]);
+  });
+});
