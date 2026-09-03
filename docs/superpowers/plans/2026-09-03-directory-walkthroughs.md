@@ -37,6 +37,13 @@ Copied verbatim from the spec and from `docs/superpowers/RULES.md`. Every task's
 - **Re-run the whole `walkthrough` project at every task boundary**, not just at
   the end — the four new specs share a server with the existing nineteen, and a
   `-g` slice is a filename sweep wearing a costume.
+- **A subagent runs only the tests covering the files it changed.** The full
+  vitest suite, the full typecheck/lint gate, and the whole `walkthrough`
+  Playwright project are run by the CONTROLLER at each task boundary, never
+  delegated. `AGENTS.md`: "Never accept 'done, tests pass' without the raw
+  counts pasted back. Rerun the gate yourself at the wave boundary." A
+  delegated full-suite run costs a subagent's whole context and returns a
+  number the controller must re-verify anyway.
 - Local env label: `dirw`. `eval "$(~/.claude/skills/seazn-local-env/scripts/seazn-env.sh env --label dirw)"` exports `DATABASE_URL` / `SMOKE_BASE` / `PLACEMENT_SERVICE_*`.
 
 ---
@@ -1177,7 +1184,7 @@ Expected: `0 failed`, and the five new labels present. A pre-existing unrelated 
 
 Add four rows to the "What is here" table in `apps/web/e2e/walkthrough/README.md`, matching the existing one-line style.
 
-- [ ] **Step 4: THE SPEED GATE — measure, do not assert**
+- [ ] **Step 4: THE SPEED GATE — CONTROLLER RUNS THIS. Measure, do not assert**
 
 The owner's requirement is that these be fast. The leg's wall clock is `max(longest single test, total ÷ workers)`. **The config's cost comment is stale** — it describes 3 specs totalling ~245s and the folder now holds 19 specs / ~40 tests — so do not reuse its arithmetic.
 
@@ -1204,7 +1211,7 @@ Better: measure the baseline **before** Task 1 lands, on a detached checkout of 
 
 Record both numbers in the commit message. "Fast" asserted without a measurement is exactly the claim this repo's rules exist to stop.
 
-- [ ] **Step 5: Full-file e2e sweep, not a `-g` slice**
+- [ ] **Step 5: Full-file e2e sweep — CONTROLLER RUNS THIS, not the implementer**
 
 A `-g` filter is a filename sweep wearing a costume. Run the whole project:
 
@@ -1217,7 +1224,7 @@ npx playwright test --project=walkthrough --workers=2 --reporter=list \
 
 Every walkthrough spec must still pass — the four new files share a server with them.
 
-- [ ] **Step 6: Unit + typecheck + lint**
+- [ ] **Step 6: Unit + typecheck + lint — CONTROLLER RUNS THIS, not the implementer**
 
 ```bash
 cd /Users/ashokhein/github/seazn.club/.claude/worktrees/dir-walkthrough && \
