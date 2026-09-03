@@ -94,8 +94,8 @@ jobs:
       - name: OpenAPI spec drift gate (PROMPT-11)
         run: |
           npm run openapi:gen
-          git diff --exit-code openapi/v1.json || {
-            echo "openapi/v1.json is stale — run 'npm run openapi:gen' and commit."; exit 1; }
+          git diff --exit-code openapi/v1.json openapi/v1.public.json || {
+            echo "openapi specs are stale — run 'npm run openapi:gen' and commit."; exit 1; }
       # i18n gates (v17 gap W8 review). NEITHER of these ran in CI before, and
       # gen-keys.ts's own header claimed one of them did — so the two failure
       # modes below were both invisible on a PR:
