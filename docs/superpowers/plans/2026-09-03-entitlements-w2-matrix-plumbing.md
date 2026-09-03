@@ -579,9 +579,14 @@ union, and the live catalogue is now pinned against design §2 by a test.
 thesis. Recorded in full because a reader finding V391 and V394 disagreeing will otherwise
 assume one is a mistake.
 
+**Three loops move, not four.** An earlier draft also flipped `branding` (the org's own
+logo) to false on Free. WITHDRAWN by the owner: a free club uploads its own logo. What we
+sell is the removal of OUR badge, which is now enterprise-only — so Free keeps its identity
+and loses only the amplification.
+
 | key | Free | Pro | Pass M/L | note |
 |---|---|---|---|---|
-| `branding` (org logo) | true → **false** | true | true | pass rows exist |
+| `branding` (org logo) | **true — UNCHANGED** | true | true | flip WITHDRAWN, owner 2026-09-03: a free club uploads its own logo |
 | `dashboard.player_profiles` | true → **false** | true | true | pass rows exist |
 | `embeds.enabled` | true → **false** | true | **no row → INSERT true** | see trap below |
 | `news.auto` | true → **false** | true | true | pass rows exist |
