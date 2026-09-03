@@ -372,7 +372,7 @@ function pointsText(halfPoints: number): string {
 // S6/#416 (W5) — padSpec. Pure function of resolved cfg. Board games have the
 // smallest event surface in the engine — one terminal result, one pairing
 // card — so this stays proportionally small; chess.md §6 already made the
-// same call for `fidelityTiers` ("no coarse/fine split").
+// same call for the fidelity band ("no coarse/fine split").
 // ---------------------------------------------------------------------------
 
 export const BOARDGAME_EVENT_SCHEMAS: Readonly<Record<string, z.ZodTypeAny>> = {
@@ -480,15 +480,12 @@ export function padSpec(cfg: BoardgameCfg): PadSpec {
   return stampAttributionRequired(
     {
       panels,
-      // Modelled on boardgame's OWN existing (untouched) `fidelityTiers`
-      // (below): tier 0 is the result alone, tier 1 adds the pairing card.
-      // Neither entry carries an entitlement — board games ship free at every
-      // band they currently declare.
+      // Band 0 is the result alone, band 1 adds the pairing card. Board
+      // games declare nothing above band 1 today.
       fidelity: {
         "boardgame.result": 0,
         "boardgame.pairing": 1,
       },
-      fidelityEntitlements: {},
     },
     BOARDGAME_EVENT_SCHEMAS,
   );
@@ -739,13 +736,6 @@ export const boardgame: SportModule<BoardgameCfg, BoardgameEv, BoardgameState> =
     ];
   },
 
-  // chess.md §6 — single-event sport: no coarse/fine split (Pro depth is PGN
-  // upload + exports, not extra event granularity).
-  fidelityTiers: [
-    { tier: 0, eventTypes: ["boardgame.result"] },
-    // W4: tier 1 adds the arbiter's pairing card (colours, players, board no.).
-    { tier: 1, eventTypes: ["boardgame.result", "boardgame.pairing"] },
-  ],
   officialLabel: { scorer: "Arbiter" }, // doc 13 §1
 
   // W4 — person credit. `games` fires once per named player on the pairing

@@ -295,7 +295,6 @@ describe("stampAttributionRequired", () => {
       },
     ],
     fidelity: { "x.toss": 0, "x.review": 0 },
-    fidelityEntitlements: {},
   };
 
   it("stamps required:true on a schema-required attribution item and required:false on an optional one", () => {

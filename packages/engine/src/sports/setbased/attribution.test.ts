@@ -343,28 +343,39 @@ describe("set-based playerStats", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Fidelity ladder — a type absent from every tier is unreachable by the pad.
+// Pad reachability — a type absent from every panel is unreachable by the pad.
 // ---------------------------------------------------------------------------
-describe("set-based fidelity tiers reach the new event types", () => {
+describe("set-based pad reachability is cfg-gated; fidelity band is universal", () => {
   const expected: Array<[Mod, string[]]> = [
     [volleyball, ["volleyball.timeout", "volleyball.sanction", "volleyball.sub"]],
     [badminton, ["badminton.sanction"]],
     [tabletennis, ["tabletennis.timeout", "tabletennis.sanction"]],
   ];
   for (const [mod, types] of expected) {
-    it(`${mod.key}: tier 3 names ${types.join(", ")}`, () => {
-      const tier3 = mod.fidelityTiers.find((t) => t.tier === 3)!;
-      for (const type of types) expect(tier3.eventTypes, type).toContain(type);
-      // Coarse tiers stay a bare final score.
-      const tier0 = mod.fidelityTiers.find((t) => t.tier === 0)!;
-      for (const type of types) expect(tier0.eventTypes).not.toContain(type);
+    // W1: formerly asserted these types were named in the module's removed
+    // per-tier eventTypes array's tier 3, and absent from tier 0 (the OLD
+    // cfg-gated `extensionTypes`
+    // model). `padSpec.fidelity` now names every one of the kernel's 6
+    // canonical event types for EVERY setbased sport at a fixed band,
+    // regardless of cfg (kernel.ts's "One band per REGISTERED type... not
+    // merely the ones this cfg happens to build an action for") — so band
+    // membership can no longer distinguish "this sport's scoresheet" from
+    // "the kernel's shared schema". Pad REACHABILITY is still cfg-gated, in
+    // `padSpec.panels` (built only `...(cfg.records.X ? [panel] : [])`),
+    // which is what these two tests now pin instead — same fact ("can a
+    // scorer actually reach this on the pad"), different PadSpec field.
+    it(`${mod.key}: ${types.join(", ")} reach a live panel action`, () => {
+      const spec = mod.padSpec!(mod.configSchema.parse({}));
+      const reachable = new Set(spec.panels.flatMap((p) => p.actions.map((a) => a.type)));
+      for (const type of types) expect(reachable, type).toContain(type);
     });
-    it(`${mod.key}: refuses the extension events its scoresheet does not carry`, () => {
+    it(`${mod.key}: refuses a panel for the extension events its scoresheet does not carry`, () => {
+      const spec = mod.padSpec!(mod.configSchema.parse({}));
+      const reachable = new Set(spec.panels.flatMap((p) => p.actions.map((a) => a.type)));
       const all = ["timeout", "sanction", "sub"].map((s) => `${mod.key}.${s}`);
-      const tier3 = mod.fidelityTiers.find((t) => t.tier === 3)!;
       for (const type of all) {
         if (types.includes(type)) continue;
-        expect(tier3.eventTypes, type).not.toContain(type);
+        expect(reachable, type).not.toContain(type);
       }
     });
   }

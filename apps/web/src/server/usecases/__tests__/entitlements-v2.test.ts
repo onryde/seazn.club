@@ -148,8 +148,14 @@ const MATRIX: { feature: string; plan: Plan; allowed: boolean }[] = [
   { feature: "entrants.per_division.max",     plan: "pro",       allowed: true },
   { feature: "formats.double_elim",           plan: "community", allowed: false },
   { feature: "formats.double_elim",           plan: "pro",       allowed: true },
-  { feature: "scoring.match_timeline",        plan: "community", allowed: false },
-  { feature: "scoring.match_timeline",        plan: "pro",       allowed: true },
+  // W1 (entitlements v18, 2026-09-02): `scoring.match_timeline` formerly sat
+  // here as community=false/pro=true — deleted, not flipped to true/true,
+  // because it is no longer a PLAN-gated feature key at all (V390 drops it
+  // from `plan_entitlements` entirely; `scoreEvent` never calls `hasFeature`
+  // for it). A matrix row asserts a feature/plan boundary; there is none left
+  // to assert here. "coarse scoring never needs a plan" below (football.goal)
+  // and this file's own `scoring-free.test.ts` sibling now prove the same
+  // fact for the general case, across every shipped sport.
   { feature: "cricket.dls",                   plan: "community", allowed: false },
   { feature: "cricket.dls",                   plan: "pro",       allowed: true },
   { feature: "api.access",                    plan: "community", allowed: false },
@@ -225,16 +231,6 @@ async function probe(feature: string, auth: AuthCtx): Promise<() => Promise<unkn
       return () =>
         createStages(auth, division.id, { seq: 1, kind: "double_elim", name: "DE", config: {} } as never);
     }
-    case "scoring.match_timeline": {
-      const comp = await makeCompetition(auth, "F");
-      const { entrants, fixtureId } = await makeFixture(auth, comp.id, "football", {});
-      return () => // Tier-2 attributed event (a card, valid pre-kickoff)
-        scoreEvent(auth, fixtureId, {
-          expected_seq: 0,
-          type: "football.card",
-          payload: { by: entrants[0].id, color: "yellow" },
-        });
-    }
     case "cricket.dls": {
       const comp = await makeCompetition(auth, "CR");
       const { fixtureId } = await makeFixture(auth, comp.id, "cricket", {
@@ -302,16 +298,16 @@ describe.skipIf(!HAS_DB)("entitlements v2 matrix (doc 10 §1/§2)", () => {
     expect(out.seq).toBe(2);
   });
 
-  // R6 fix pass 4, finding E (owner ruling, 2026-08-30). At `scoreEvent` — the
-  // EXACT function `POST /api/v1/fixtures/[id]/events` calls — against REAL
-  // Postgres (RLS, triggers), not the pure `requiredFeatureForEvent` unit
-  // above alone. The brief's own "verify through the real HTTP door" could
-  // not be driven over an actual socket without rebuilding the prod server
-  // this worktree runs (explicitly out of scope for this task); this is the
-  // closest real-Postgres, real-usecase substitute available without one —
-  // see the task's own final report for the direct-HTTP attempt against the
-  // (stale-built) running server and why it still shows the pre-fix 402.
-  it("community appends an icehockey suspension.start free (owner ruling); the set piece on the SAME fixture stays Pro-gated", async () => {
+  // R6 fix pass 4, finding E (owner ruling, 2026-08-30) freed
+  // `icehockey.suspension.start` alone, leaving `icehockey.set_piece` on the
+  // SAME fixture Pro-gated — a narrow, sport-specific carve-out that predates
+  // this wave. W1 (entitlements v18, owner ruling 2026-08-30) supersedes it:
+  // scoring detail is free on every plan, full stop, so the set piece is now
+  // free too — formerly asserted 402 + `featureKey: "scoring.match_timeline"`
+  // here; that refusal no longer exists. At `scoreEvent` — the EXACT function
+  // `POST /api/v1/fixtures/[id]/events` calls — against REAL Postgres (RLS,
+  // triggers), not a pure unit.
+  it("community appends an icehockey suspension.start AND its set piece free — both fine events, same fixture", async () => {
     const { auth } = await seedOrg("community");
     const comp = await makeCompetition(auth, "IH");
     const { entrants, fixtureId } = await makeFixture(auth, comp.id, "icehockey", {});
@@ -322,15 +318,12 @@ describe.skipIf(!HAS_DB)("entitlements v2 matrix (doc 10 §1/§2)", () => {
       payload: { by: entrants[0].id, class: "minor", at: { period: "P1", elapsed: 100 } },
     });
     expect(out.seq).toBe(2);
-    // The narrowness of the ruling, on the SAME community org and fixture:
-    // the set piece was never freed.
-    await expect(
-      scoreEvent(auth, fixtureId, {
-        expected_seq: 2,
-        type: "icehockey.set_piece",
-        payload: { by: entrants[0].id, kind: "ps" },
-      }),
-    ).rejects.toMatchObject({ status: 402, featureKey: "scoring.match_timeline" });
+    const setPiece = await scoreEvent(auth, fixtureId, {
+      expected_seq: 2,
+      type: "icehockey.set_piece",
+      payload: { by: entrants[0].id, kind: "ps" },
+    });
+    expect(setPiece.seq).toBe(3);
   });
 });
 
@@ -395,14 +388,15 @@ describe.skipIf(!HAS_DB)("downgrade simulation (doc 10 §2.4)", () => {
       type: "generic.result",
       payload: { p1Score: 2, p2Score: 1 },
     });
-    // …while NEW fine events are rejected (history stays in the ledger).
-    await expect(
-      scoreEvent(auth, rigFootball.fixtureId, {
-        expected_seq: 1,
-        type: "football.card",
-        payload: { by: rigFootball.entrants[1].id, color: "yellow" },
-      }),
-    ).rejects.toMatchObject({ status: 402, featureKey: "scoring.match_timeline" });
+    // …and NEW fine events keep working too (W1: formerly asserted 402
+    // `scoring.match_timeline` here — scoring detail is free on every plan
+    // since R9, so a downgrade cannot take fine-grained recording away).
+    const newCard = await scoreEvent(auth, rigFootball.fixtureId, {
+      expected_seq: 1,
+      type: "football.card",
+      payload: { by: rigFootball.entrants[1].id, color: "yellow" },
+    });
+    expect(newCard.seq).toBe(2);
 
     // Retiring frozen competitions is the sanctioned way back under quota.
     await patchCompetition(auth, compA.id, { status: "archived" });
@@ -469,6 +463,23 @@ describe.skipIf(!HAS_DB)("event pass (v3/07 §3)", () => {
     ).rejects.toMatchObject({ status: 402, featureKey: "entrants.per_division.max" });
   });
 
+  // W1 (entitlements v18, 2026-09-02): this used to prove the pass's own
+  // fallthrough rule ("keys missing from the pass matrix fall through to the
+  // community plan") with `football.card`/`scoring.match_timeline` as the
+  // still-Pro-only example — that key is deleted (scoring detail is free on
+  // every plan since R9), so it can no longer witness the rule.
+  //
+  // Fix round 1, M-3: a first swap landed on `cricket.dls`, which the wave
+  // plan itself says W2 changes — a witness that would need moving again one
+  // wave later, and would then share a single point of failure with
+  // `scoring-dls-gate.test.ts` and the `MATRIX`'s own two `cricket.dls` rows.
+  // Swapped again, to `api.access` — confirmed absent from BOTH `event_pass`
+  // and `event_pass_l` (`plan_entitlements` query against the wave DB: zero
+  // rows), and out of scope for this entire programme (no task in this wave
+  // touches API keys), so this witness survives W2 untouched. `api.access`
+  // is also already the MATRIX's own established Pro-only probe two rows
+  // above (`case "api.access"`), so this reuses a pattern rather than
+  // inventing a new one.
   it("unlocks advanced formats on the passed comp; Pro-only features stay Pro", async () => {
     const { auth } = await seedOrg("community");
     const comp = await makeCompetition(auth, "PF");
@@ -481,15 +492,10 @@ describe.skipIf(!HAS_DB)("event pass (v3/07 §3)", () => {
     ).resolves.toBeDefined();
 
     // Keys missing from the pass matrix fall through to the community plan:
-    // fine-grained scoring remains a Pro upsell even on a passed comp.
-    const rig = await makeFixture(auth, comp.id, "football", {});
+    // `api.access` remains a Pro upsell even on a passed comp.
     await expect(
-      scoreEvent(auth, rig.fixtureId, {
-        expected_seq: 0,
-        type: "football.card",
-        payload: { by: rig.entrants[0].id, color: "yellow" },
-      }),
-    ).rejects.toMatchObject({ status: 402, featureKey: "scoring.match_timeline" });
+      createApiKey(auth, { name: "k", scopes: ["read"] }),
+    ).rejects.toMatchObject({ status: 402, featureKey: "api.access" });
   });
 
   it("is moot under Pro and revives after a downgrade", async () => {

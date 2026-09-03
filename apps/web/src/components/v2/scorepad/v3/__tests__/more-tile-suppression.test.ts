@@ -49,7 +49,7 @@ import {
   refusedEventTypes as footballRefused,
   resolvePhase as resolveFootballPhase,
 } from "../skins/football";
-import { dedicatedEventTypes, entitledBandsFrom, filterTilesByBand, moreActions, suppressEmptyMoreTile } from "../pad-host";
+import { dedicatedEventTypes, filterTilesByBand, moreActions, suppressEmptyMoreTile } from "../pad-host";
 import { MORE_SHEET_KEY, type PadHostView, type TileSpec } from "../types";
 import { footballCfg, foldFootball } from "./_football-fold";
 
@@ -144,14 +144,10 @@ function cricketView(band: 0 | 1 | 2 | 3, state: Record<string, unknown>): PadHo
     // phase "done"/"final" to PadPhase "post", everything else to "live".
     phase: state.phase === "done" || state.phase === "final" ? "post" : "live",
     band,
-    // Empty entitlements — this suite is about a genuinely LOW-band org
-    // (nothing bought above band 1), not the "grant every entitlement the
-    // spec references" convention `cricket-dispatch-totality.test.ts` uses
-    // for its own, different purpose (measuring whether the WHOLE engine
-    // vocabulary is reachable by SOME org). `entitledBandsFrom` only
-    // withholds a band that NEEDS an entitlement the org lacks — bands 0/1
-    // need none (`fidelityEntitlements: {2: ..., 3: ...}`), so this is
-    // exactly what a band-0/1 cricket org's real entitlement map looks like.
+    // Empty: no chassis entitlement is in play here (W1 deleted the fidelity
+    // ones outright, and this suite's subject is the LOW-BAND pad — a scorer
+    // who picked band 0/1 on the Recording chip, which is the `band` field
+    // above and nothing to do with what an org holds).
     entitlements: {},
     personNames: { h1: "H1", h2: "H2", h3: "H3", a1: "A1", a2: "A2", a3: "A3" },
     squads: cricketSquads(),
@@ -163,15 +159,14 @@ function cricketView(band: 0 | 1 | 2 | 3, state: Record<string, unknown>): PadHo
 function cricketPipeline(view: PadHostView): PipelineResult {
   const spec: PadSpec = cricketPadSpec(view.cfg as CricketCfg);
   const sheets = cricketSheets(view, t);
-  const entitledBands = entitledBandsFrom(spec.fidelityEntitlements, view.entitlements);
   const allTiles = cricketTiles(view, t);
-  const tiles = filterTilesByBand(allTiles, sheets, [], spec.fidelity, entitledBands);
+  const tiles = filterTilesByBand(allTiles, sheets, [], spec.fidelity, view.band);
   const scorebug = cricketScorebug(view, t);
   const dedicated = dedicatedEventTypes(tiles, sheets, [], scorebug);
   const refused = new Set(cricketRefused(view));
   const moreList = moreActions(
     spec,
-    { state: view.state, summary: view.summary, phase: view.phase, band: view.band, entitlements: view.entitlements },
+    { state: view.state, summary: view.summary, phase: view.phase, band: view.band },
     dedicated,
     refused,
   );
@@ -220,15 +215,14 @@ function footballPipeline(view: PadHostView): PipelineResult {
   const spec: PadSpec = footballPadSpec(view.cfg as FootballCfg);
   const sheets = footballSheets(view, t);
   const slots = footballSwap(view, t);
-  const entitledBands = entitledBandsFrom(spec.fidelityEntitlements, view.entitlements);
   const allTiles = footballTiles(view);
-  const tiles = filterTilesByBand(allTiles, sheets, slots, spec.fidelity, entitledBands);
+  const tiles = filterTilesByBand(allTiles, sheets, slots, spec.fidelity, view.band);
   const scorebug = footballScorebug(view, t);
   const dedicated = dedicatedEventTypes(tiles, sheets, slots, scorebug);
   const refused = new Set(footballRefused(view));
   const moreList = moreActions(
     spec,
-    { state: view.state, summary: view.summary, phase: view.phase, band: view.band, entitlements: view.entitlements },
+    { state: view.state, summary: view.summary, phase: view.phase, band: view.band },
     dedicated,
     refused,
   );

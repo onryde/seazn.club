@@ -16,9 +16,9 @@ A penalty corner or penalty stroke gets its own **Set piece awarded** entry as i
 
 ## Cards and team strength
 
-Tap **Card** to record a green, yellow or red card. The sheet asks which card first; from the **Timeline** [recording level](/help/scoring/fidelity) up it then asks what the card was for, from FIH's own offence list.
+Tap **Card** to record a green, yellow or red card. The sheet asks which card first; from the **Full timeline** [recording level](/help/scoring/fidelity) up it then asks what the card was for, from FIH's own offence list.
 
-Next comes **Minutes**, which opens at that card's own declared duration for the format the division runs. On the FIH formats a green is two minutes and a yellow five. On Youth a green is one minute and a yellow three. Change it when the umpire gave more than the nominal — an FIH yellow is a minimum, and ten minutes is common. A red card is for the rest of the match, so it has no duration and that step is skipped. Last, again from Timeline up, is who serves the card when that isn't the player it was shown to; who was carded is asked straight after the tap, while the entry is still held.
+Next comes **Minutes**, which opens at that card's own declared duration for the format the division runs. On the FIH formats a green is two minutes and a yellow five. On Youth a green is one minute and a yellow three. Change it when the umpire gave more than the nominal — an FIH yellow is a minimum, and ten minutes is common. A red card is for the rest of the match, so it has no duration and that step is skipped. Last, again from Full timeline up, is who serves the card when that isn't the player it was shown to; who was carded is asked straight after the tap, while the entry is still held.
 
 The team plays short on **every** FIH card, whatever its colour, which is the main way field hockey's discipline differs from football's. While a card runs, the pad and the public scoreboard show the strength chip, home side first: one card against the home side reads `10v11` on FIH formats and `6v7` on Youth. It's hidden while both sides are at full strength.
 

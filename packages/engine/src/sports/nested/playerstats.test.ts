@@ -258,7 +258,6 @@ describe("kernel-default playerStats: merge + collisions (S8/#417)", () => {
       positions: { groups: [], lineup: { size: 1, benchMax: 1 } },
       defaultTiebreakers: ["points"],
       officialLabel: { scorer: "Umpire" },
-      rallyEntitlement: "scoring.rally_by_rally",
       playerStats: {
         metrics: [
           {
@@ -309,7 +308,6 @@ describe("kernel-default playerStats: merge + collisions (S8/#417)", () => {
       positions: { groups: [], lineup: { size: 1, benchMax: 1 } },
       defaultTiebreakers: ["points"],
       officialLabel: { scorer: "Umpire" },
-      rallyEntitlement: "scoring.rally_by_rally",
       playerStats: {
         metrics: [],
         folded: {

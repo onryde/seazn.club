@@ -33,7 +33,7 @@ Games and the match settle themselves as boards land: reach the target or lead o
 
 ## Recording level
 
-Boards are the level carrom records, and they work at every level. The toss and umpire adjustments — and the per-player credits in the held panel — need **Card** or above. See [choosing a detail level](/help/scoring/fidelity).
+Boards are the level carrom records, and they work at every level. The toss and umpire adjustments — and the per-player credits in the held panel — need **Key moments** or above. See [choosing a detail level](/help/scoring/fidelity).
 
 ## Common questions
 

@@ -365,10 +365,10 @@ test("icehockey: penalties drive the strength chip (5v4 → 5v3 → release), OT
 
   // R6 cutover — v2's per-team `div.rounded-xl` cards, and its later
   // ambiguous "Card" button (colliding with the fidelity band strip's own
-  // band-1 button), are both gone: v3 has no interactive band picker at all
-  // (`pad-host.tsx`'s own `PadHostV3Props` doc — `RecordingChip` replaced it
-  // with a worded display/upsell), and the suspension action is a per-side
-  // TILE (`suspension-away`, Kings) addressed by `data-tile-id`, never by
+  // band-1 button), are both gone: v3's band picker is the Recording chip's
+  // sheet (W1 / Task 4), whose rows are `[data-band]` inside a dialog and are
+  // never labelled "Card", and the suspension action is a per-side TILE
+  // (`suspension-away`, Kings) addressed by `data-tile-id`, never by
   // accessible name.
   //
   // `makeDivision`'s entrants carry NO roster/lineup at all

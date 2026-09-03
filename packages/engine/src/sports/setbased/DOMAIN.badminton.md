@@ -63,10 +63,10 @@ Asserted against the table itself by `src/testkit/dossiers.test.ts`.
   follows. W8 renders `scoring.position.<key>` and falls back to `label`. The `points` segment carries no label.
   Deliberately NOT written by this task, which touches no dictionary.
 
-- **New event type** `badminton.sanction`, reachable at fidelity tiers 2 and 3
-  under the existing `scoring.rally_by_rally` entitlement. Badminton
-  deliberately gains **no** timeout or substitution event — the kernel rejects
-  both, so a generic pad built from `fidelityTiers` will not offer them.
+- **New event type** `badminton.sanction`, at fidelity band 1 (the same
+  admin/incident band as timeout/sub). Badminton deliberately gains **no**
+  timeout or substitution event — the kernel rejects both, so a generic pad
+  built from `padSpec.panels` will not offer them.
 - **New enum** `SetBasedSanctionLevel`. The BWF card colours do not appear in
   the engine; the yellow/red/black → warning/penalty/disqualification mapping
   above is the one a pad and the web vocab must render.

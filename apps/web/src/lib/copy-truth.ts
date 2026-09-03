@@ -507,6 +507,162 @@ export function passCreditGrantFaults(rungs: Rung[]): string[] {
   return faults;
 }
 
+/**
+ * ── SCORING DETAIL IS NEVER FOR SALE (entitlements v18 / W1, owner ruling
+ * 2026-08-30) ───────────────────────────────────────────────────────────────
+ *
+ * `scoring.ball_by_ball`, `scoring.rally_by_rally` and `scoring.match_timeline`
+ * were deleted from `plan_entitlements` by V390 and their server gate was
+ * deleted from `scoreEvent` and the batch importer. How much detail a scorer
+ * records is now a UX choice (`PadSpec.fidelity`), not a price boundary.
+ *
+ * Copy is the half that does not move on its own. A string that still tells a
+ * customer that ball-by-ball, rally-by-rally, a match timeline or a recording
+ * detail level costs money is the worst of the two possible errors: a free org
+ * either pays for something it already has, or never tries the feature at all.
+ * Free in the product and paid on the page is strictly worse than paid in both.
+ *
+ * SHAPE: the caller supplies `[id, text]` pairs — one dictionary key and its
+ * value, or one help-article SENTENCE and its article slug. A sentence, not a
+ * whole article: "every plan can charge entry fees" and "cricket scores ball by
+ * ball" are two true claims that share a page, and a window that crossed the
+ * full stop between them would read them as one false one.
+ *
+ * It is deliberately a PAIR test. Naming the capability is fine (the help tree
+ * has to, to explain it) and naming a plan is fine (the billing articles have
+ * to). Only the two TOGETHER assert a price, and only that is a fault.
+ */
+export const SCORING_DETAIL =
+  /\b(ball[- ]by[- ]ball|rally[- ]by[- ]rally|match[- ]timelines?|recording detail|scoring detail|detail levels?)\b/i;
+
+/** The plan NAMES, case-sensitive on purpose: they are proper nouns, and
+ *  matching them case-insensitively would read "a pro scorer" and "the
+ *  community pitch" as pricing claims. `Pro`/`Pro Plus`/`Event Pass` are
+ *  untranslated in every locale (`pricing.table.pro` is "Pro" in all four), so
+ *  this half is shared; only `Community` has a localised form, added per
+ *  locale below. */
+export const PAID_PLAN_NAME = /\b(Pro Plus|Pro|Event Pass|Community)\b/;
+
+/** The price VERBS, case-insensitive — these are ordinary words wherever they
+ *  appear, and a sentence-initial "Upgrade" must read the same as an inline
+ *  one. */
+export const PAID_VERB = /\b(upgrades?|upgrading|upgraded|paid plan|entitled|entitlement|unlocks?|plans?)\b/i;
+
+/** The AFFIRMATION, and the reason this rule is not simply "never say `plan`
+ *  near `detail`". The truthful sentence the help tree now has to be able to
+ *  write — "every level is available on every plan" — names a detail level AND
+ *  a plan, and would otherwise be the one string the rule most wants to allow.
+ *  A text that says the thing is free is exempt, whatever else it says. */
+export const SCORING_FREE_AFFIRMATION =
+  /\b(on every plan|on all plans|on any plan|whatever your plan|no matter (?:your|which) plan|at no extra cost|costs nothing|free on every plan|never a paid feature|is never for sale)\b/i;
+
+/**
+ * ── ONE LANGUAGE'S WORTH OF THE RULE ────────────────────────────────────────
+ *
+ * FIX ROUND 3. The first three versions of this guard were ENGLISH ONLY while
+ * its dictionary consumer scanned all four locales, so every Spanish, French
+ * and Dutch value was measured against vocabulary that cannot occur in it and
+ * could say anything at all. Eleven realistic localised paywall strings passed
+ * silently; only the English control fired.
+ *
+ * NOT NATIVE-SPEAKER AUDITED — and deliberately not invented either. Every
+ * non-English term below is lifted from copy this product already ships
+ * (`board.ai.error.upgrade`, `settings.upgrade.brandColor`,
+ * `addOns.extraOrg.error.planCannot`, `billing.planChange.toPro` in each
+ * locale), and `dictionary-copy-truth.test.ts` asserts each locale's
+ * vocabulary still matches those live strings — so this is evidence, not my
+ * translation, and it reds if the product's own upsell wording moves away from
+ * it. A native speaker should still WIDEN these lists; the report says so.
+ */
+export interface ScoringFreeVocabulary {
+  /** Phrases naming scoring DEPTH, beyond the band labels passed in by the
+   *  caller (those are read from the dictionary, never typed here). */
+  detail: RegExp;
+  /** Plan names — case-SENSITIVE, proper nouns. */
+  planName: RegExp;
+  /** Price verbs — case-insensitive. */
+  paidVerb: RegExp;
+  /** Ways of saying "this costs nothing", which exempt the text. */
+  affirmation: RegExp;
+}
+
+export const SCORING_FREE_VOCABULARY: Readonly<Record<string, ScoringFreeVocabulary>> = {
+  en: {
+    detail: SCORING_DETAIL,
+    planName: PAID_PLAN_NAME,
+    paidVerb: PAID_VERB,
+    affirmation: SCORING_FREE_AFFIRMATION,
+  },
+  es: {
+    detail: /\b(bola a bola|punto a punto|cronolog[íi]a del partido|nivel de detalle|detalle de (?:grabaci[óo]n|registro))\b/i,
+    planName: /\b(Pro Plus|Pro|Pase de Evento|Community|Comunidad)\b/,
+    paidVerb: /\b(planes?|mejora[rs]?|actualiza[rs]?|requiere[ns]?|necesita[ns]?|de pago|desbloquea[rns]?|suscripci[óo]n|cambia[rs]? a|pasar a)\b/i,
+    affirmation: /\b(en todos los planes|en cualquier plan|en cada plan|sin coste adicional|sin costo adicional|es gratis|gratuito en todos)\b/i,
+  },
+  fr: {
+    detail: /\b(balle par balle|[ée]change par [ée]change|chronologie du match|niveau de d[ée]tail|d[ée]tail d'enregistrement)\b/i,
+    planName: /\b(Pro Plus|Pro|Pass [ÉE]v[ée]nement|Community|Communaut[ée])\b/,
+    paidVerb: /\b(forfaits?|plans?|mise à niveau|n[ée]cessite|requiert|payante?s?|d[ée]bloque[rz]?|abonnement|passer à|passez à)\b/i,
+    affirmation: /\b(sur tous les forfaits|sur tous les plans|sur n'importe quel forfait|sur chaque forfait|sans frais suppl[ée]mentaires|est gratuit|gratuit sur tous)\b/i,
+  },
+  nl: {
+    detail: /\b(bal[- ]voor[- ]bal|rally[- ]voor[- ]rally|wedstrijdtijdlijn|detailniveau|opnamedetail)\b/i,
+    planName: /\b(Pro Plus|Pro|Event Pass|Community)\b/,
+    paidVerb: /\b(abonnementen?|plannen?|plan|upgrades?|upgraden|vereist|betaalde?|ontgrendel[tn]?|overstappen naar|stap over op)\b/i,
+    affirmation: /\b(op elk abonnement|op alle abonnementen|op elk plan|op alle plannen|zonder extra kosten|is gratis|gratis op elk)\b/i,
+  },
+};
+
+/** Literal text → a regex-safe fragment. The band labels come from the
+ *  dictionary, so they can contain anything a translator writes. */
+function literalAlternation(terms: readonly string[]): RegExp | null {
+  const cleaned = terms.map((t) => t.trim()).filter((t) => t.length > 0);
+  if (cleaned.length === 0) return null;
+  const escaped = cleaned.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  return new RegExp(`(?:${escaped.join("|")})`, "i");
+}
+
+export interface ScoringFreeOptions {
+  /** Which language `strings` are written in. Defaults to English — the help
+   *  tree is English-only by standing rule. An unknown locale is a FAULT, not
+   *  a silent skip: a locale with no vocabulary is a locale nothing scans. */
+  locale?: string;
+  /**
+   * The band labels a customer actually reads, e.g. the four values of
+   * `pad.recording.band.0-3` for this locale.
+   *
+   * PASSED IN, NEVER TYPED HERE (fix round 3). The guard's own vocabulary said
+   * "match timeline" while the product renders "Full timeline" — so the three
+   * labels this wave shipped were invisible to the one rule that exists to
+   * stop them being sold. Reading them from the dictionary means a future
+   * rename moves the guard with the label instead of leaving it behind, and it
+   * is the only way the non-English locales get them at all ("Cronología
+   * completa", "Chronologie complète", "Volledige tijdlijn").
+   */
+  bandLabels?: readonly string[];
+}
+
+export function scoringFreeClaimFaults(
+  strings: ReadonlyArray<readonly [id: string, text: string]>,
+  options: ScoringFreeOptions = {},
+): string[] {
+  const locale = options.locale ?? "en";
+  const vocabulary = SCORING_FREE_VOCABULARY[locale];
+  if (!vocabulary) {
+    return [`${locale}: no scoring-free vocabulary — every string in this locale is unscanned`];
+  }
+  const bandLabels = literalAlternation(options.bandLabels ?? []);
+  const faults: string[] = [];
+  for (const [id, text] of strings) {
+    if (vocabulary.affirmation.test(text)) continue;
+    const namesDetail = vocabulary.detail.test(text) || (bandLabels?.test(text) ?? false);
+    if (namesDetail && (vocabulary.planName.test(text) || vocabulary.paidVerb.test(text))) {
+      faults.push(`${id}: presents scoring detail as paid: "${text.slice(0, 120)}"`);
+    }
+  }
+  return faults;
+}
+
 /** A rung's live caps, as the matrix holds them. `null` means unlimited. */
 export interface RungCaps {
   key: string;

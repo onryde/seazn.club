@@ -245,10 +245,14 @@ export async function requireFixtureActor(
   // the scoring use-case; per-link rate limiting at the door.
   const dlToken = deviceLinkToken(req);
   if (dlToken) {
-    const { resolveDeviceLinkToken } = await import("@/server/usecases/device-links");
+    const { resolveDeviceLinkToken, deviceLinkCoversFixture } = await import(
+      "@/server/usecases/device-links"
+    );
     const link = await resolveDeviceLinkToken(dlToken);
     assertUuid(fixtureId, "fixture");
-    if (link.fixture_id !== fixtureId) {
+    // Ownership lives in ONE predicate (device-links.ts) — the realtime-token
+    // route asks the same question and must get the same answer.
+    if (!deviceLinkCoversFixture(link, fixtureId)) {
       throw new HttpError(403, "This device link is for a different fixture");
     }
     // Scoring cadence per link (doc 08 §6): same 10/s budget as a scorer.

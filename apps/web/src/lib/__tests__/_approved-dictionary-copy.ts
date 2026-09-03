@@ -520,12 +520,12 @@ export const APPROVED_DICTIONARY_COPY: ApprovedValue[] = [
   {
     file: "ui",
     key: "billing.pro.f4",
-    why: "ball-by-ball and rally scoring, ✓ row. Source of truth: plan_entitlements scoring.ball_by_ball and scoring.rally_by_rally, both true on pro.",
+    why: "player stats and scorecard entry, ✓ row. Source of truth: plan_entitlements stats.player, true on pro and false on community. Was \"Ball-by-ball & rally scoring\" until W1 (entitlements v18, owner ruling 2026-08-30): V390 deleted scoring.ball_by_ball and scoring.rally_by_rally outright, so that bullet stood in a ✓ column pinned to no row at all — and sold Community a capability it now has in full.",
     text: {
-      en: "Ball-by-ball & rally scoring",
-      es: "Puntuación bola a bola y por punto",
-      fr: "Score balle par balle et par échange",
-      nl: "Bal-voor-bal & rally-scoring",
+      en: "Player stats & scorecards",
+      es: "Estadísticas de jugadores y planillas",
+      fr: "Statistiques des joueurs et feuilles de match",
+      nl: "Spelersstatistieken & scorekaarten",
     },
   },
   {

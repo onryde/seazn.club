@@ -33,6 +33,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import stripePlans from "@/config/stripe-plans.json";
 import { sql } from "@/lib/db";
 import { PASS_CREDIT_GRANT } from "@/lib/pricing-cards";
+import { FEATURE_REASONS } from "@/lib/feature-copy";
 import { passPrice, proPrice } from "@/lib/currency";
 import { TIPS } from "@/config/tips";
 import * as copyTruth from "@/lib/copy-truth";
@@ -52,6 +53,9 @@ import {
   controlCharacterFaults,
   inertPatternFaults,
   riderRateFaults,
+  scoringFreeClaimFaults,
+  SCORING_FREE_VOCABULARY,
+  sentences,
   localeCoverageFaults,
   localeCreditGrantFaults,
   localeCreditLeadershipFaults,
@@ -631,6 +635,29 @@ const KNOWN_POSITIVES: string[] = [
   "The console sends one request per division when you undo.",
   "Undo makes a separate restore for each division.",
   "Undo rewinds each division in turn.",
+  // ── Scoring detail sold as paid (entitlements v18 / W1) ──
+  //    One fixture per alternation of SCORING_DETAIL, and one each for the two
+  //    halves of the price vocabulary, so a mangled escape in any of the three
+  //    reds `inertPatternFaults` instead of silently matching nothing.
+  "Ball-by-ball scoring is a Pro feature.",
+  "Rally-by-rally is the finest level and needs a plan that includes it.",
+  "Timeline and Detail need a plan that includes match-timeline scoring.",
+  "Match timelines (scorers, cards, minutes) are a Pro feature.",
+  "The recording detail you want is on Pro.",
+  "One of the events needs a scoring detail your organisation isn't entitled to.",
+  "Needs a detail level this plan doesn't include — upgrade to record it.",
+  "Recording detail beyond Card is not included on Community.",
+  "Every recording level is available on every plan.",
+  // …and the same claim in the three languages the dictionaries are written in.
+  //    One fixture per non-English `detail` and `affirmation` pattern — the
+  //    `planName`/`paidVerb` halves already fire on the English lines above,
+  //    because plan names are untranslated and "plan" is a Spanish/Dutch word.
+  "La puntuación bola a bola requiere un plan Pro.",
+  "Cada nivel de detalle está disponible en todos los planes.",
+  "Le score balle par balle nécessite un forfait Pro.",
+  "Chaque niveau de détail est disponible sur tous les forfaits.",
+  "Bal-voor-bal scoren vereist een Pro-abonnement.",
+  "Elk detailniveau is beschikbaar op elk abonnement.",
   // ── Task 3's APPROVED FORMS (the help-tree allowlist) ──
   // These are positives in the opposite sense to everything else here: they are
   // the shapes the help copy is ALLOWED to use, so each one is a real sentence
@@ -1425,7 +1452,11 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
     { key: "billing.community.f5", plan: "community", polarity: "denied", features: ["exports.branded", "dashboard.player_profiles"] },
     { key: "billing.community.f6", plan: "community", polarity: "denied", features: ["dashboard.branding"] },
     { key: "billing.community.f7", plan: "community", polarity: "denied", features: ["realtime"] },
-    { key: "billing.pro.f4", plan: "pro", polarity: "granted", features: ["scoring.ball_by_ball", "scoring.rally_by_rally"] },
+    // W1 (entitlements v18): was `["scoring.ball_by_ball", "scoring.rally_by_rally"]`
+    // until V390 deleted both rows. The bullet is now the third capability that
+    // sentence used to name — `stats.player` — which is the one of the three
+    // that is still Pro-only.
+    { key: "billing.pro.f4", plan: "pro", polarity: "granted", features: ["stats.player"] },
     { key: "billing.pro.f5", plan: "pro", polarity: "granted", features: ["dashboard.branding"] },
     { key: "billing.pro.f6", plan: "pro", polarity: "granted", features: ["exports"] },
     { key: "billing.pro.f7", plan: "pro", polarity: "granted", features: ["realtime"] },
@@ -3194,5 +3225,329 @@ describe("the ended-pass next-edition link (cadence-neutral)", () => {
       );
     });
     expect(faults).toEqual([]);
+  });
+});
+
+/**
+ * ── NOTHING IN ANY DICTIONARY SELLS SCORING DETAIL (entitlements v18 / W1) ───
+ *
+ * V390 deleted `scoring.ball_by_ball`, `scoring.rally_by_rally` and
+ * `scoring.match_timeline` from `plan_entitlements`, and the same wave deleted
+ * their gate from `scoreEvent` and the batch importer. Every band of recording
+ * detail is now free on every plan.
+ *
+ * The three tests this wave inherited already fail when a BULLET is pinned to a
+ * row that no longer exists. None of them can see a sentence — an upsell reason,
+ * a help paragraph, an error message — that names the capability and a price in
+ * the same breath while pointing at no entitlement row at all. That is the
+ * shape that survives a row deletion, and it is the one a customer reads.
+ *
+ * Scanned across ALL EIGHT dictionary files, not the two this file's other
+ * rules read: `errors.json` and `emails.json` are where an upsell reason ends
+ * up when it is not on the pricing page.
+ */
+describe("no dictionary string sells scoring detail (W1: it is free on every plan)", () => {
+  const DICT_FILES = readdirSync("src/dictionaries/en")
+    .filter((f) => f.endsWith(".json"))
+    .map((f) => f.replace(/\.json$/, ""))
+    .sort();
+
+  /**
+   * SENTENCE-scoped, exactly like the help consumer in `help-copy-truth.test.ts`
+   * (review M-3). `scoringFreeClaimFaults` exempts a text that affirms the thing
+   * is free, and that exemption is whole-text: feeding a multi-sentence value in
+   * one piece would let "…on every plan." in sentence one excuse a paid claim in
+   * sentence two. Splitting first makes the exemption cover only the sentence
+   * that earns it. `tips.*` and the `emails.*` bodies are paragraphs, so this is
+   * not hypothetical.
+   */
+  const valuesFor = (locale: DictionaryLocale): Array<readonly [string, string]> =>
+    DICT_FILES.flatMap((file) =>
+      Object.entries(
+        JSON.parse(readFileSync(`src/dictionaries/${locale}/${file}.json`, "utf8")) as Record<
+          string,
+          unknown
+        >,
+      )
+        .filter((entry): entry is [string, string] => typeof entry[1] === "string")
+        .flatMap(([key, value]) =>
+          sentences(value).map((s) => [`${locale}/${file}.json ${key}`, s] as const),
+        ),
+    );
+
+  const everyValue = (): Array<readonly [string, string]> =>
+    DICTIONARY_LOCALES.flatMap((locale) => valuesFor(locale));
+
+  /**
+   * The four band labels a customer READS, for one locale — `Result only /
+   * Key moments / Full timeline / Every detail` in English, and the
+   * translator's own words in the other three ("Cronología completa",
+   * "Chronologie complète", "Volledige tijdlijn").
+   *
+   * READ FROM THE DICTIONARY, never typed into the guard (final review I-1):
+   * the guard's own vocabulary said "match timeline" while the product renders
+   * "Full timeline", so three of the four labels this wave shipped were
+   * invisible to the rule that exists to stop them being sold. Deriving them
+   * means a rename moves the guard with the label.
+   */
+  const bandLabelsFor = (locale: DictionaryLocale): string[] => {
+    const ui = JSON.parse(readFileSync(`src/dictionaries/${locale}/ui.json`, "utf8")) as Record<
+      string,
+      string
+    >;
+    return [0, 1, 2, 3].map((band) => ui[`pad.recording.band.${band}`] ?? "");
+  };
+
+  /** Every locale scanned against ITS OWN vocabulary and ITS OWN band labels. */
+  const scoringFreeFaults = (): string[] =>
+    DICTIONARY_LOCALES.flatMap((locale) =>
+      scoringFreeClaimFaults(valuesFor(locale), {
+        locale,
+        bandLabels: bandLabelsFor(locale),
+      }),
+    );
+
+  it("scans every file, in every locale — not a subset", () => {
+    expect(DICT_FILES, "a dictionary file appeared or vanished").toContain("ui");
+    expect(DICT_FILES).toContain("marketing");
+    expect(DICT_FILES).toContain("errors");
+    expect(DICT_FILES.length).toBeGreaterThanOrEqual(7);
+    expect(everyValue().length, "the scan resolved almost nothing").toBeGreaterThan(4000);
+  });
+
+  it("names no plan beside a scoring-detail phrase or a shipped band label, in any locale", () => {
+    const faults = scoringFreeFaults();
+    // The message argument carries the offending key into a CI JSON report —
+    // `failureMessages` otherwise says only "expected [ Array(1) ] to deeply
+    // equal []" and the locale/key/sentence lives in the terminal diff alone.
+    expect(faults, faults.join(" | ")).toEqual([]);
+  });
+
+  /**
+   * ── THE GUARD CAN SEE THE LABELS THIS WAVE SHIPPED (final review I-1) ──────
+   *
+   * Measured before this existed: setting `pad.recording.band.2` to
+   * "Full timeline (Pro)" reddened NOTHING on the branch. The guard's
+   * vocabulary said "match timeline"; the product says "Full timeline". Three
+   * of the four labels a customer reads were invisible to the one rule that
+   * exists to stop them being priced — and the two neighbouring tests that
+   * look like they would catch it do not (`recording-chip.test.tsx` scans the
+   * KEY, because its `t` echoes keys; `gallery.capture.ts` uses
+   * `toContainText`).
+   *
+   * Driven per locale through the REAL producer, so a rename in any of the
+   * four dictionaries moves this with it.
+   */
+  it("catches a plan name pinned to a band label, in every locale", () => {
+    for (const locale of DICTIONARY_LOCALES) {
+      const labels = bandLabelsFor(locale);
+      expect(labels.filter((l) => l.length > 0), `${locale} band labels`).toHaveLength(4);
+      for (const [band, label] of labels.entries()) {
+        const faults = scoringFreeClaimFaults([[`${locale} band.${band}`, `${label} (Pro)`]], {
+          locale,
+          bandLabels: labels,
+        });
+        expect(faults, `${locale} band.${band} "${label} (Pro)" is not seen as a price`).toHaveLength(1);
+      }
+    }
+  });
+
+  /**
+   * ── AND IT SPEAKS ALL FOUR LANGUAGES (final review I-1, second half) ───────
+   *
+   * `everyValue()` reads es/fr/nl; until this round the vocabulary was English
+   * only, so those three locales were measured against words that cannot occur
+   * in them and could say anything at all.
+   *
+   * NOT a translation I invented: each locale's vocabulary is asserted against
+   * copy this product ALREADY SHIPS, read out of that locale's own dictionary
+   * at run time. If the product's upsell wording drifts away from the words
+   * this guard knows, this reds — which is the only honest way to hold a
+   * vocabulary I cannot audit as a native speaker.
+   */
+  it("each locale's price vocabulary matches that locale's own live upsell copy", () => {
+    // Each anchor names WHICH half it exercises. The verb anchor is the one
+    // that matters — plan names are untranslated, so a `planName` match proves
+    // nothing about the language. "Brand color requires" was an anchor here
+    // for one run and is deliberately NOT: it is a sentence FRAGMENT whose
+    // plan is named by the adjacent link, so English failed it while es/fr
+    // passed on a coincidence of their verb lists. A bad anchor teaches the
+    // vocabulary the wrong lesson — the fix was a better anchor, not a wider
+    // English regex (`requires`/`needs` would flag "the toss needs Key moments
+    // or above", which is a recording level, not a price).
+    const ANCHORS: Array<[key: string, half: "planName" | "paidVerb"]> = [
+      ["board.ai.error.upgrade", "paidVerb"],
+      ["board.ai.error.upgradeToProPlus", "planName"],
+      ["addOns.extraOrg.error.planCannot", "planName"],
+      ["billing.planChange.toPro", "planName"],
+    ];
+    const misses: string[] = [];
+    for (const locale of DICTIONARY_LOCALES) {
+      const ui = JSON.parse(readFileSync(`src/dictionaries/${locale}/ui.json`, "utf8")) as Record<
+        string,
+        string
+      >;
+      const vocabulary = SCORING_FREE_VOCABULARY[locale];
+      expect(vocabulary, `${locale} has no scoring-free vocabulary at all`).toBeDefined();
+      for (const [key, half] of ANCHORS) {
+        const value = ui[key];
+        expect(value, `${locale} ${key} is missing — pick another anchor`).toBeTruthy();
+        if (!vocabulary![half].test(value!)) {
+          misses.push(`${locale} ${key} (${half}): "${value}" reads as no price at all`);
+        }
+      }
+
+      // …and the vocabulary is LIVE in this language, not just able to pass
+      // four hand-picked strings: it must fire across that locale's own
+      // dictionary. Measured today — es 148 / fr 115 / nl 133 verb hits, and
+      // 97 / 91 / 126 plan-name hits — so a floor of 50 is a real signal and
+      // still far from the live numbers.
+      const own = valuesFor(locale);
+      const verbHits = own.filter(([, text]) => vocabulary!.paidVerb.test(text)).length;
+      const nameHits = own.filter(([, text]) => vocabulary!.planName.test(text)).length;
+      expect(verbHits, `${locale}: the price verbs fire on almost nothing in its own dictionary`).toBeGreaterThan(50);
+      expect(nameHits, `${locale}: the plan names fire on almost nothing in its own dictionary`).toBeGreaterThan(50);
+    }
+    expect(misses, misses.join(" | ")).toEqual([]);
+
+    // …and an unknown locale is a FAULT, never a silent skip: a locale with no
+    // vocabulary is a locale nothing scans, which is the defect this fixes.
+    expect(
+      scoringFreeClaimFaults([["x", "Ball-by-ball scoring is a Pro feature."]], { locale: "de" }),
+    ).toEqual(["de: no scoring-free vocabulary — every string in this locale is unscanned"]);
+  });
+
+  /**
+   * ── AND THE MAP THAT HELD ALL THREE OF THEM (review I-1) ───────────────────
+   *
+   * `FEATURE_REASONS` is not a dictionary — it is hardcoded English in
+   * `lib/feature-copy.ts` — so the file scan above cannot see it, and it is the
+   * single most customer-visible surface this task cleaned: `featureReason()`
+   * is what `<UpgradeGate>` renders as the paywall body (upgrade-gate.tsx:168)
+   * and what `/admin/entitlements` prints. It is also where all three retired
+   * upsell sentences LIVED, which makes it the likeliest place a future wave
+   * puts one back.
+   *
+   * Measured before this test existed: re-adding
+   * `"scoring.ball_by_ball": "Ball-by-ball scoring is a Pro feature."` to the
+   * map left 249/249 copy tests green. The map is scanned WHOLE — every entry,
+   * not a hand-kept key list, which is the shape that missed four help articles.
+   */
+  it("no entitlement upsell reason sells scoring detail either", () => {
+    const reasons = Object.entries(FEATURE_REASONS).flatMap(([key, text]) =>
+      sentences(text).map((s) => [`FEATURE_REASONS ${key}`, s] as const),
+    );
+    expect(reasons.length, "FEATURE_REASONS resolved almost nothing").toBeGreaterThan(30);
+    const faults = scoringFreeClaimFaults(reasons);
+    expect(faults, faults.join(" | ")).toEqual([]);
+
+    // …and it is a check, not a restatement: the exact sentence V390 retired.
+    expect(
+      scoringFreeClaimFaults([
+        ["FEATURE_REASONS scoring.ball_by_ball", "Ball-by-ball scoring is a Pro feature."],
+      ]),
+    ).toHaveLength(1);
+  });
+
+  /**
+   * …and the rule fires. Each of these is a string that shipped in this repo
+   * before W1, or the exact shape of one; a rule that returned `[]` for all of
+   * them would be decoration. The last two are the NEGATIVE controls: naming
+   * the capability alone, or the plan alone, is not a fault — the help tree and
+   * the billing articles have to do both.
+   */
+  it("is a check, not a restatement", () => {
+    const faults = scoringFreeClaimFaults([
+      ["feature-copy", "Ball-by-ball scoring is a Pro feature."],
+      ["feature-copy", "Match timelines (scorers, cards, minutes) are a Pro feature."],
+      ["help/badminton", "Rally-by-rally is the finest level and needs a plan that includes it."],
+      ["help/batch-import", "Needs a detail level this plan doesn't include."],
+      ["help/fidelity", "Timeline and Detail need a plan that includes match-timeline scoring."],
+      ["discipline", "Ball-by-ball attribution is itself a Pro feature."],
+    ]);
+    expect(faults).toHaveLength(6);
+    expect(faults[0]).toContain("presents scoring detail as paid");
+
+    expect(
+      scoringFreeClaimFaults([
+        ["ok/capability-only", "Cricket divisions score ball by ball: one tap per delivery."],
+        ["ok/plan-only", "Custom branding and the API are Pro features."],
+        ["ok/affirmation", "Every detail level is available on every plan."],
+      ]),
+      "naming the capability, or the plan, or saying it is free, is not a fault",
+    ).toEqual([]);
+  });
+
+  /**
+   * ── `everyValue()` REALLY SPLITS, MEASURED ON THE REAL DICTIONARIES ────────
+   *
+   * WHY THE SPLIT MATTERS (review M-3). `scoringFreeClaimFaults`'s affirmation
+   * exemption is whole-TEXT by design — it has to be, or "every level is
+   * available on every plan" could not be written at all. That makes splitting
+   * the CALLER's job: a value fed in one piece lets an affirmation in sentence
+   * one excuse a price claim in sentence two.
+   *
+   * WHY THIS TEST IS SHAPED THE WAY IT IS (re-review, fix round 2). My first
+   * attempt at pinning this called `scoringFreeClaimFaults` on a synthetic
+   * two-sentence string. The re-reviewer reverted `everyValue()`'s `.flatMap`
+   * back to whole-text and ALL FIVE tests in this block stayed green: that test
+   * pinned the SCANNER, which was never at risk, while the call site — the one
+   * `.flatMap` this is actually about — went unexercised. A fixture on both
+   * ends proves the fixture.
+   *
+   * So this drives the REAL producer over the REAL dictionaries, three ways,
+   * each of which fails on its own if the split is reverted:
+   *   1. the scan must yield strictly MORE entries than there are values —
+   *      equality is exactly what whole-text produces;
+   *   2. every entry it yields must BE one sentence, and a violation names the
+   *      locale, file and key that slipped through;
+   *   3. one real, stable multi-sentence key must appear as several entries,
+   *      so the rule is not satisfied by dictionaries that happen to be
+   *      one-sentence throughout.
+   */
+  it("splits real dictionary values into sentences at the call site, not just in principle", () => {
+    // Counted independently of `everyValue`, by re-reading the files: a count
+    // derived from the thing under test would move with it and prove nothing.
+    let rawValues = 0;
+    for (const locale of DICTIONARY_LOCALES) {
+      for (const file of DICT_FILES) {
+        const parsed = JSON.parse(
+          readFileSync(`src/dictionaries/${locale}/${file}.json`, "utf8"),
+        ) as Record<string, unknown>;
+        rawValues += Object.values(parsed).filter((v) => typeof v === "string").length;
+      }
+    }
+    const scanned = everyValue();
+    expect(rawValues, "the independent count resolved almost nothing").toBeGreaterThan(4000);
+    expect(
+      scanned.length,
+      `the scan yielded ${scanned.length} entries for ${rawValues} values — that is whole-text, not sentences`,
+    ).toBeGreaterThan(rawValues);
+
+    // 2. Nothing the scan hands to the guard may be more than one sentence.
+    const unsplit = scanned
+      .filter(([, text]) => sentences(text).length > 1)
+      .map(([id, text]) => `${id}: ${sentences(text).length} sentences — "${text.slice(0, 60)}…"`);
+    expect(unsplit, unsplit.slice(0, 3).join(" | ")).toEqual([]);
+
+    // 3. …and it is not vacuous: a real value that IS several sentences, in
+    //    every locale, must arrive as several entries. `cookie.message` is the
+    //    stable one — three sentences in en/es/fr/nl.
+    for (const locale of DICTIONARY_LOCALES) {
+      const id = `${locale}/common.json cookie.message`;
+      expect(
+        scanned.filter(([entryId]) => entryId === id).length,
+        `${id} must arrive split, or this rule is satisfied by a one-sentence dictionary`,
+      ).toBeGreaterThan(1);
+    }
+
+    // …and the reason the split is load-bearing, stated against the scanner
+    // itself: whole-text, the affirmation excuses the paid sentence beside it.
+    const twoClaims =
+      "Every detail level is available on every plan. Ball-by-ball scoring is a Pro feature.";
+    expect(scoringFreeClaimFaults([["whole", twoClaims]])).toEqual([]);
+    expect(
+      scoringFreeClaimFaults(sentences(twoClaims).map((part) => ["split", part] as const)),
+    ).toHaveLength(1);
   });
 });

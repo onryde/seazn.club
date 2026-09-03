@@ -748,7 +748,6 @@ describe("S8/#417 W6 — shotTracking gates `<key>.shot` per preset", () => {
     defaultTiebreakers: ["points"],
     officialLabel: { scorer: "Referee" },
     shootoutLabel: "SO",
-    timelineEntitlement: "scoring.match_timeline",
   });
 
   it("refuses a shot outright when the preset has not opted in", () => {

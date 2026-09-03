@@ -34,7 +34,7 @@ Draws are always allowed here, in every kind of stage, including knockouts — a
 
 ## Recording level
 
-The result records at every level. The pairing card needs **Card** or above. See [choosing a detail level](/help/scoring/fidelity).
+The result records at every level. The pairing card needs **Key moments** or above. See [choosing a detail level](/help/scoring/fidelity).
 
 ## Common questions
 

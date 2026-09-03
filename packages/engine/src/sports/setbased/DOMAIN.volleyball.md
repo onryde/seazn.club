@@ -1,5 +1,15 @@
 # Volleyball — domain audit (W4, #407)
 
+> **`scoring.rally_by_rally` IS RETIRED — 2026-09-02, entitlements v18 / W1
+> (owner ruling 2026-08-30).** This document mentions it below as the
+> entitlement some event types sit "under". `V390__scoring_free.sql` deleted
+> every `plan_entitlements` row for it (and for `scoring.ball_by_ball` /
+> `scoring.match_timeline`), and the same wave deleted their gate from
+> `scoreEvent` and the batch importer. **No plan row for it exists.** The
+> FIDELITY BANDS those lines quote are unchanged and still correct — a band is
+> a UX filter the scorer picks on the pad's Recording chip, never a price
+> boundary. Read every entitlement clause below as history, not as a live gate.
+
 **Module** `volleyball@1.0.0`, built on the shared set-based kernel
 (`setbased/kernel.ts`). **Variants:** `indoor` (default — best of 5, sets to 25,
 deciding set to 15, win by 2, no cap) and `beach` (best of 3, sets to 21,

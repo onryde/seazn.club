@@ -27,16 +27,13 @@ import { makeEnvelope } from "@seazn/engine/testkit";
 import { tabletennis } from "@seazn/engine/sports/setbased";
 import { EngineError } from "@seazn/engine/core";
 import { foldClient } from "../../../module-client";
-import { assertDisabledTilesExplained } from "../../tile-grid";
 import { assertScorebugSpec, type PadHostView, type TileSpec } from "../../types";
-import { dedicatedEventTypes, filterTilesByBand, moreActions } from "../../pad-host";
+import { dedicatedEventTypes, moreActions } from "../../pad-host";
 import {
   EVENT_BAND,
   EXPEDITE_RETURNS_THRESHOLD,
   EXPEDITE_START_TILE_ID,
   EXPEDITE_TYPE,
-  RALLY_ENTITLEMENT,
-  RALLY_LOCKED_TILE_ID,
   RALLY_TYPE,
   SANCTION_LEVELS,
   SANCTION_TYPE,
@@ -45,7 +42,6 @@ import {
   SUB_TYPE,
   SUMMARY_TYPE,
   TIMEOUT_TYPE,
-  buildContextStrip,
   buildDock,
   buildScorebug,
   buildSheets,
@@ -169,7 +165,7 @@ function view(opts: ViewOpts = {}): PadHostView {
     summary: {},
     phase: "live",
     band: opts.band ?? 3,
-    entitlements: opts.entitlements ?? { [RALLY_ENTITLEMENT]: true },
+    entitlements: opts.entitlements ?? {},
     personNames: NAMES,
     squads: initSquads(lineups),
     events,
@@ -210,9 +206,6 @@ describe("the constants this skin restates cannot drift from the engine's own", 
     expect(EVENT_BAND).toEqual(spec.fidelity);
   });
 
-  it("RALLY_ENTITLEMENT is the feature key padSpec gates band 3 behind", () => {
-    expect(spec.fidelityEntitlements[3]).toBe(RALLY_ENTITLEMENT);
-  });
 
   it("SANCTION_LEVELS is the ladder padSpec itself offers, in padSpec's own order", () => {
     // The ITTF umpire has yellow and red only — offering the FIVB's four
@@ -517,7 +510,7 @@ describe("scorebug", () => {
 
 describe("tiles()", () => {
   it("declares the sanction pair FIRST, then the timeout pair, home column 0 / away column 2 throughout", () => {
-    const tiles = buildTiles(view(), t);
+    const tiles = buildTiles(view());
     let col = 0;
     const columns = new Map<string, number>();
     for (const tile of tiles) {
@@ -540,17 +533,17 @@ describe("tiles()", () => {
   });
 
   it("withholds the Set score tile while the current game is being scored rally by rally (D-16)", () => {
-    expect(tileById(buildTiles(view(), t), SET_SCORE_TILE_ID)).toBeDefined();
+    expect(tileById(buildTiles(view()), SET_SCORE_TILE_ID)).toBeDefined();
     const midGame = view({ events: stream(anchor("H", "A")) });
-    expect(tileById(buildTiles(midGame, t), SET_SCORE_TILE_ID)).toBeUndefined();
+    expect(tileById(buildTiles(midGame), SET_SCORE_TILE_ID)).toBeUndefined();
     const betweenGames = view({ events: stream(summary(11, 7)) });
-    expect(tileById(buildTiles(betweenGames, t), SET_SCORE_TILE_ID)).toBeDefined();
+    expect(tileById(buildTiles(betweenGames), SET_SCORE_TILE_ID)).toBeDefined();
   });
 
   it("offers Start expedite until introduced, then withdraws it", () => {
-    expect(tileById(buildTiles(view(), t), EXPEDITE_START_TILE_ID)).toBeDefined();
+    expect(tileById(buildTiles(view()), EXPEDITE_START_TILE_ID)).toBeDefined();
     const started = view({ events: stream(expedite()) });
-    expect(tileById(buildTiles(started, t), EXPEDITE_START_TILE_ID)).toBeUndefined();
+    expect(tileById(buildTiles(started), EXPEDITE_START_TILE_ID)).toBeUndefined();
   });
 
   // R5 review finding 3 — ITTF 2.15.1's OWN second clause, which the gate did
@@ -561,16 +554,16 @@ describe("tiles()", () => {
   it("withdraws Start expedite once BOTH sides have reached 9 — ITTF 2.15.1's own floor", () => {
     const eight = [...Array<number>(8)].flatMap(() => [rally("H"), rally("A")]);
     const eightAll = view({ events: stream(...eight) });
-    expect(tileById(buildTiles(eightAll, t), EXPEDITE_START_TILE_ID), "8-8: still introducible").toBeDefined();
+    expect(tileById(buildTiles(eightAll), EXPEDITE_START_TILE_ID), "8-8: still introducible").toBeDefined();
 
     const nine = [...Array<number>(9)].flatMap(() => [rally("H"), rally("A")]);
     const nineAll = view({ events: stream(...nine) });
-    expect(tileById(buildTiles(nineAll, t), EXPEDITE_START_TILE_ID), "9-9: the law says no").toBeUndefined();
+    expect(tileById(buildTiles(nineAll), EXPEDITE_START_TILE_ID), "9-9: the law says no").toBeUndefined();
 
     // ONE SIDE at 9 is not the floor — the law needs BOTH, and a 9-3 game is
     // exactly the stuck one expedite exists for.
     const lopsided = view({ events: stream(...[...Array<number>(9)].map(() => rally("H"))) });
-    expect(tileById(buildTiles(lopsided, t), EXPEDITE_START_TILE_ID), "9-0: still introducible").toBeDefined();
+    expect(tileById(buildTiles(lopsided), EXPEDITE_START_TILE_ID), "9-0: still introducible").toBeDefined();
   });
 
   it("refuses the same action in the More sheet at 9-all — hiding the tile alone would just move it", () => {
@@ -583,11 +576,11 @@ describe("tiles()", () => {
   });
 
   it("offers the serve anchor exactly while the reader cannot say, and never once it can", () => {
-    expect(tileById(buildTiles(view(), t), SERVE_ANCHOR_TILE_ID), "undeclared — offer it").toBeDefined();
+    expect(tileById(buildTiles(view()), SERVE_ANCHOR_TILE_ID), "undeclared — offer it").toBeDefined();
     const resolved = view({ events: stream(anchor("H", "A")) });
-    expect(tileById(buildTiles(resolved, t), SERVE_ANCHOR_TILE_ID), "resolved — gone").toBeUndefined();
+    expect(tileById(buildTiles(resolved), SERVE_ANCHOR_TILE_ID), "resolved — gone").toBeUndefined();
     // Below band 3 the rally family is unreachable at all, anchor included.
-    expect(tileById(buildTiles(view({ band: 2 }), t), SERVE_ANCHOR_TILE_ID)).toBeUndefined();
+    expect(tileById(buildTiles(view({ band: 2 })), SERVE_ANCHOR_TILE_ID)).toBeUndefined();
   });
 
   // R5/C2 review finding 2 — `needsServeAnchor`'s TWO `unknownBecause`
@@ -605,7 +598,7 @@ describe("tiles()", () => {
     const disputed = view({ events: stream(anchor("H", "H"), rally("H", { serving: "A" })) });
     expect(stripItem(disputed, "server"), "the reader must not name a server mid-dispute").toBeUndefined();
     expect(
-      tileById(buildTiles(disputed, t), SERVE_ANCHOR_TILE_ID),
+      tileById(buildTiles(disputed), SERVE_ANCHOR_TILE_ID),
       "a disputed chain is not an undeclared one — the anchor must stay withheld",
     ).toBeUndefined();
   });
@@ -617,12 +610,12 @@ describe("tiles()", () => {
     const events = stream(anchor("H", "H"), rally("A"), rally("H"));
     const mismatched = { ...view({ events }), events: events.slice(0, 2) };
     expect(stripItem(mismatched, "server")).toBeUndefined();
-    expect(tileById(buildTiles(mismatched, t), SERVE_ANCHOR_TILE_ID)).toBeUndefined();
+    expect(tileById(buildTiles(mismatched), SERVE_ANCHOR_TILE_ID)).toBeUndefined();
   });
 
   it("declares no tiles outside `live` — every tile names the live phase only", () => {
-    for (const tile of buildTiles(view(), t)) expect(tile.phases).toEqual(["live"]);
-    expect(buildTiles(view({ events: [] }), t).filter((tile) => tile.phases.includes("pre"))).toEqual([]);
+    for (const tile of buildTiles(view())) expect(tile.phases).toEqual(["live"]);
+    expect(buildTiles(view({ events: [] })).filter((tile) => tile.phases.includes("pre"))).toEqual([]);
   });
 
   it("honours THIS FIXTURE's records flag, not the preset's default", () => {
@@ -633,9 +626,9 @@ describe("tiles()", () => {
       records: { timeouts: false, sanctions: false, substitutions: false, expedite: false },
     });
     const v = view({ cfg: noneRecorded });
-    expect(tileById(buildTiles(v, t), sanctionSheetKey("home"))).toBeUndefined();
-    expect(tileById(buildTiles(v, t), timeoutTileId("home"))).toBeUndefined();
-    expect(tileById(buildTiles(v, t), EXPEDITE_START_TILE_ID)).toBeUndefined();
+    expect(tileById(buildTiles(v), sanctionSheetKey("home"))).toBeUndefined();
+    expect(tileById(buildTiles(v), timeoutTileId("home"))).toBeUndefined();
+    expect(tileById(buildTiles(v), EXPEDITE_START_TILE_ID)).toBeUndefined();
     // ...and the inverse: a custom cfg that turns substitutions ON (never
     // shipped, but legal) is honoured too — the tile family this skin does
     // not build one for stays absent regardless, since `SUB_TYPE` has no
@@ -643,7 +636,7 @@ describe("tiles()", () => {
   });
 
   it("fires the Timeout tile as a direct event naming the SIDE, no sheet, no `technical` field", () => {
-    const tile = tileById(buildTiles(view(), t), timeoutTileId("away"))!;
+    const tile = tileById(buildTiles(view()), timeoutTileId("away"))!;
     expect(tile.action).toEqual({ event: { type: TIMEOUT_TYPE, payload: { by: "A" } } });
   });
 });
@@ -655,57 +648,20 @@ describe("tiles()", () => {
 // beside Set score, not badminton's one.
 // ---------------------------------------------------------------------------
 
-describe("D-7 — below band 3 the pad SAYS SO, in table tennis's own words", () => {
-  const limited = () => view({ band: 2, entitlements: {} });
-
-  it("renders a visible, disabled rally tile instead of nothing at all", () => {
-    const tile = tileById(buildTiles(limited(), t), RALLY_LOCKED_TILE_ID)!;
-    expect(tile.disabled).toBe(true);
-    expect(tile.span).toBe(4);
-    expect(tile.labelText).toBe("pad.tabletennis.tile.rallyLocked");
-    expect(tile.sublabelText).toBe("pad.tabletennis.tile.rallyLocked.sublabel");
-  });
-
-  it("keeps Set score AND the sanctions/timeouts/expedite drawers — band 1 is entirely ungated on this kernel", () => {
-    const tiles = buildTiles(limited(), t);
-    expect(tileById(tiles, SET_SCORE_TILE_ID)).toBeDefined();
-    expect(tileById(tiles, sanctionSheetKey("home"))).toBeDefined();
-    expect(tileById(tiles, timeoutTileId("home"))).toBeDefined();
-    expect(tileById(tiles, EXPEDITE_START_TILE_ID)).toBeDefined();
-    // The serve anchor is part of the RALLY family (band 3) — gone too.
-    expect(tileById(tiles, SERVE_ANCHOR_TILE_ID)).toBeUndefined();
-  });
-
-  it("survives the chassis's own band filter — the gate it exists to explain must not eat it", () => {
-    const v = limited();
-    const tiles = buildTiles(v, t);
-    const sheets = buildSheets(v, t);
-    const kept = filterTilesByBand(tiles, sheets, [], tabletennis.padSpec!(ITTF_CFG).fidelity, new Set([0, 1, 2]));
-    expect(kept.map((tile) => tile.id)).toContain(RALLY_LOCKED_TILE_ID);
-  });
-
-  it("carries the REASON on a context slot, naming the plan through the shared table", () => {
-    const spec = buildContextStrip(limited(), t)!;
-    expect(spec.slots).toHaveLength(1);
-    const slot = spec.slots[0]!;
-    expect(slot.readOnly).toBe(true);
-    expect(slot.message).toContain("pad.tabletennis.context.recording.locked");
-    expect(slot.message).toContain('"plan":"Pro"');
-  });
-
-  it("pairs the disabled tile with that message — the chassis's own rule for a disabled tile", () => {
-    const v = limited();
-    expect(assertDisabledTilesExplained(buildTiles(v, t), buildContextStrip(v, t))).toEqual([]);
-  });
-
-  it("says nothing at all at band 3, or once the match is over", () => {
-    expect(tileById(buildTiles(view(), t), RALLY_LOCKED_TILE_ID)).toBeUndefined();
-    expect(buildContextStrip(view(), t)).toBeNull();
-    const done = view({ cfg: SHORT_CFG, band: 2, events: stream(summary(3, 1), summary(3, 0)) });
-    expect(buildContextStrip(done, t)).toBeNull();
-    expect(tileById(buildTiles(done, t), RALLY_LOCKED_TILE_ID)).toBeUndefined();
-  });
-});
+// ---------------------------------------------------------------------------
+// W1 / Task 4 (entitlements v18) — the D-7 block that stood here is DELETED.
+//
+// It covered a disabled "Rally by rally is locked" tile and a context slot
+// naming the plan that would unlock it. Neither exists: a band is the
+// scorer's own pick on the Recording chip now, so there is no lock to word
+// and nothing for a skin to explain. The keys those two fed
+// (`pad.{sport}.context.recording[.locked]`, `pad.{sport}.tile.rallyLocked
+// [.sublabel]`) are gone from all four dictionaries with them.
+//
+// What replaced the coverage: `v3/__tests__/recording-chip.test.tsx` (the
+// picker, and that it never renders a lock, an upsell or a plan name) and
+// `e2e/scoring-free.spec.ts` (a free org picking a band on a real pad).
+// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // refusedEventTypes()
@@ -743,7 +699,7 @@ describe("refusedEventTypes()", () => {
 
   it("keeps the More sheet free of every dead end — the two exclusion sets, together", () => {
     const v = view({ events: stream(anchor("H", "A")) });
-    const tiles = buildTiles(v, t);
+    const tiles = buildTiles(v);
     const sheets = buildSheets(v, t);
     const scorebug = buildScorebug(v, t);
     const dedicated = dedicatedEventTypes(tiles, sheets, [], scorebug);
@@ -751,7 +707,7 @@ describe("refusedEventTypes()", () => {
     expect(dedicated).toContain(TIMEOUT_TYPE);
     const actions = moreActions(
       tabletennis.padSpec!(ITTF_CFG),
-      { state: v.state, summary: v.summary, phase: "live", band: 3, entitlements: v.entitlements },
+      { state: v.state, summary: v.summary, phase: "live", band: 3 },
       dedicated,
       new Set(refusedEventTypes(v)),
     );
@@ -832,7 +788,7 @@ describe("sheets()", () => {
     for (const band of [0, 1, 2, 3] as const) {
       const v = view({ band });
       const sheets = buildSheets(v, t);
-      for (const tile of buildTiles(v, t)) {
+      for (const tile of buildTiles(v)) {
         if (!("sheet" in tile.action)) continue;
         if (tile.action.sheet.startsWith("__pad-host/")) continue;
         expect(Object.keys(sheets), `tile ${tile.id}`).toContain(tile.action.sheet);
@@ -1095,11 +1051,6 @@ describe("factory wiring — every builder is threaded the REAL translator", () 
     expect(serving!.servingLabel!.startsWith("XLATED:")).toBe(true);
   });
 
-  it("threads it into the tiles' pre-localised text", () => {
-    const tile = skin.tiles(view({ band: 2 })).find((entry) => entry.id === RALLY_LOCKED_TILE_ID)!;
-    expect(tile.labelText!.startsWith("XLATED:")).toBe(true);
-    expect(tile.sublabelText!.startsWith("XLATED:")).toBe(true);
-  });
 
   // R7 follow-ups item 3 (`TileSpec.label`/`SheetChoiceStep.title` typed
   // `MessageKey`) found the OPPOSITE bug to the one this block's header
@@ -1127,10 +1078,6 @@ describe("factory wiring — every builder is threaded the REAL translator", () 
     expect(dock.title.startsWith("XLATED:")).toBe(true);
   });
 
-  it("threads it into the context strip's message", () => {
-    const spec = skin.context!(view({ band: 2 }))!;
-    expect(spec.slots[0]!.message!.startsWith("XLATED:")).toBe(true);
-  });
 
   it("declares no swap() and no contextSelect()", () => {
     expect(skin.swap).toBeUndefined();
@@ -1149,16 +1096,12 @@ describe("copy truth", () => {
       "pad.tabletennis.context.line",
       "pad.tabletennis.context.deuce",
       "pad.tabletennis.context.goldenPoint",
-      "pad.tabletennis.context.recording",
-      "pad.tabletennis.context.recording.locked",
       "pad.tabletennis.scorebug.serving",
       "pad.tabletennis.scorebug.strip.games",
       "pad.tabletennis.scorebug.strip.server",
       "pad.tabletennis.scorebug.strip.serve.first",
       "pad.tabletennis.scorebug.strip.serve.second",
       "pad.tabletennis.scorebug.strip.expedite",
-      "pad.tabletennis.tile.rallyLocked",
-      "pad.tabletennis.tile.rallyLocked.sublabel",
       "pad.tabletennis.dock.rally.scorer.title",
       "pad.tabletennis.dock.rally.expedite.title",
       "pad.tabletennis.dock.rally.expedite.unchecked.title",
@@ -1177,7 +1120,7 @@ describe("copy truth", () => {
     ];
     for (const { band, events, lineups } of sweep) {
       const v = view({ band, events, lineups });
-      for (const tile of buildTiles(v, t)) {
+      for (const tile of buildTiles(v)) {
         keys.add(tile.label);
         if (tile.sublabel !== undefined) keys.add(tile.sublabel);
       }
@@ -1193,8 +1136,6 @@ describe("copy truth", () => {
         if (half.hintKey !== undefined) keys.add(half.hintKey);
         for (const who of half.who) if (who.servingLabel !== undefined) keys.add(who.servingLabel);
       }
-      const strip = buildContextStrip(v, t);
-      for (const slot of strip?.slots ?? []) keys.add(slot.label);
       const dock = buildDock(RALLY_TYPE, v, t, { wonBy: "H" });
       for (const chip of dock?.chips ?? []) keys.add(chip.label);
       const dockExpedite = buildDock(RALLY_TYPE, v, t, { wonBy: "H", scorer: "H1" });

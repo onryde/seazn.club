@@ -36,7 +36,10 @@ import { t } from "@/lib/i18n-runtime";
 export { PASS_FEATURES } from "@/lib/pass-features";
 
 interface Props {
-  /** Entitlement feature key, e.g. "scoring.ball_by_ball" (doc 10 §1). */
+  /** Entitlement feature key, e.g. "stats.player" (doc 10 §1). The example
+   *  used to be "scoring.ball_by_ball" — V390 deleted that row, and every
+   *  scoring fidelity key with it, so it is no longer a key this gate can be
+   *  pointed at. */
   feature: string;
   /**
    * Where the paywall sends the user. Defaults to billing; pass a

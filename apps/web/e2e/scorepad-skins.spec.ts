@@ -673,11 +673,11 @@ test("period skin (icehockey): a suspension with a reason selected (PeriodSuspen
 
   const offender = fx.personIds[`Skins IH Offender ${TAG}`]!;
 
-  // R6 cutover — v3 has no interactive band picker at all (pad-host.tsx's
-  // own `PadHostV3Props` doc: `RecordingChip` replaces it with a worded
-  // display/upsell, never an editable control), so the v2 "Card" button's
-  // ambiguity with the fidelity band strip's own same-named button does not
-  // exist here: the suspension is a per-side TILE, addressed by
+  // R6 cutover — v3's band picker is the Recording chip's own sheet (W1 /
+  // Task 4), whose controls are `[data-band]` rows inside a dialog and never
+  // a bare "Card"-labelled button, so the v2 "Card" button's ambiguity with
+  // the fidelity band strip's own same-named button does not exist here: the
+  // suspension is a per-side TILE, addressed by
   // `data-tile-id`, never by accessible name. class/reason/minutes/servedBy
   // are all steps of ONE guided sheet (`suspensionSheet`, period-shared.ts).
   await v3Tile(page, "suspension-home").click();

@@ -213,7 +213,6 @@ export const hockey = makePeriodModule({
   officialLabel: { scorer: "Umpire" },
   suspensionReasons: HOCKEY_SUSPENSION_REASONS,
   shootoutLabel: "SO",
-  timelineEntitlement: "scoring.match_timeline",
   playerStats,
   // SPEC-1 — FIH card grades the discipline rules editor may accumulate/ban on.
   disciplineColors: [

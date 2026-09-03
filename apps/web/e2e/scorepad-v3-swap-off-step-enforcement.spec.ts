@@ -32,7 +32,7 @@ import {
 // scorepad-v3-football.spec.ts's own pinned OFF-step assertions run against.
 // Mutating it here would flip those assertions out from under that file
 // without touching a line of it — the same isolation reason
-// scorepad-v3-football.spec.ts's own band-gated test mints a fresh org
+// e2e/scoring-free.spec.ts also mints a fresh org
 // rather than flipping the shared one's plan.
 test.describe.configure({ mode: "parallel" });
 
@@ -125,13 +125,12 @@ test("football v3: opting in to scoring.swap_off_step_enforcement makes the OFF 
   // band-gated test documents).
   await page.goto("/dashboard", { waitUntil: "load" });
   const org = await activeOrg(page);
-  // A fresh org defaults to a plan without `scoring.match_timeline` (band-2
-  // events, including football.sub itself, 402 without it) — Pro is what
-  // scorepad-v3-football.spec.ts's own maxSubs test gets for free from the
-  // shared account this spec deliberately does NOT use. Upgrade first, then
-  // layer the ONE new override on top: `scoring.swap_off_step_enforcement`
-  // is not wired into any plan's entitlement set (owner ruling — it is
-  // reachable only via override, never a default-on Pro feature).
+  // W1 (entitlements v18): scoring DEPTH is free now, so `football.sub` needs
+  // no plan at all — the Pro upgrade below is retained only because this org
+  // is otherwise fresh and the spec is about a chassis flag, not a plan. Layer
+  // the ONE override on top: `scoring.swap_off_step_enforcement` is not wired
+  // into any plan's entitlement set (owner ruling — it is reachable only via
+  // override, never a default-on Pro feature).
   await setOrgPlanBySql({ orgId: org.id }, "pro");
   await setBoolEntitlementOverrideSql(org.id, "scoring.swap_off_step_enforcement", true);
   await invalidateOrgEntitlements(page.request, org.id);

@@ -20,7 +20,9 @@ pre ──core.start──▶ H1 ─period(HT)─▶ HT ─▶ H2 ─period(FT)�
 ```
 State: `{ phase, goals: {home[], away[]}, cards[], subs[], shootout?: {kicks[]} }`.
 Minutes optional on every event — coarse mode = bare `goal {by}` events; timeline
-(minutes, scorers) is the Pro `scoring.match_timeline` tier. Same fold either way.
+(minutes, scorers) is fidelity band 2. Same fold either way. It read "the Pro
+`scoring.match_timeline` tier" until entitlements v18 / W1 (2026-09-02): V390
+deleted that row, and every band is free on every plan.
 
 ## 3. Event vocabulary
 | event | payload | rules |

@@ -37,7 +37,6 @@ import type { PositionCatalog } from "../../sport/catalog.ts";
 import { stampAttributionRequired } from "../../sport/module.ts";
 import type {
   FidelityBand,
-  FidelityTier,
   ModuleEvent,
   PadAction,
   PadGate,
@@ -1430,7 +1429,6 @@ export interface NestedPreset {
   positions: PositionCatalog;
   defaultTiebreakers: TiebreakerKey[];
   officialLabel: { scorer: string };
-  rallyEntitlement: string; // FeatureKey for tier-2/3 point-by-point scoring
   entrantModel?: EntrantModel;
   playerStats?: PlayerStatsModel; // Jul3/07 §3 — unlocked by person attribution
   /**
@@ -1697,12 +1695,10 @@ function nestedPadSpec(preset: NestedPreset, cfg: NestedCfg): PadSpec {
     // SCORE-MOVING facts at the kernel's maximum granularity — a game award
     // is one level up from a point ("the game a code violation concedes"),
     // not a discipline record like sanction/interruption — so both sit at
-    // band 3, matching `rallyEntitlement`'s name
-    // ("scoring.rally_by_rally", tennis's own `scoring.ball_by_ball`
-    // sibling). Band 2 is unoccupied — same honest gap as the set-based
-    // kernel's (no player-line/box-score analogue here either); S2/#430
-    // parked this kernel's own T3 addition (1st-vs-2nd serve, rally length)
-    // as future work, not this session's.
+    // band 3, the kernel's maximum granularity. Band 2 is unoccupied — same
+    // honest gap as the set-based kernel's (no player-line/box-score
+    // analogue here either); S2/#430 parked this kernel's own T3 addition
+    // (1st-vs-2nd serve, rally length) as future work, not this session's.
     fidelity: {
       [summaryType]: 0,
       [sanctionType]: 1,
@@ -1710,7 +1706,6 @@ function nestedPadSpec(preset: NestedPreset, cfg: NestedCfg): PadSpec {
       [pointType]: 3,
       [gameAwardType]: 3,
     } satisfies Record<string, FidelityBand>,
-    fidelityEntitlements: { 3: preset.rallyEntitlement },
   };
 }
 
@@ -2035,23 +2030,6 @@ export function makeNestedModule(
     },
   };
 
-  // Tiers 0/1 stay a bare set score; the attributed timeline (who served, who
-  // won the point, code violations) rides with point scoring at tiers 2/3.
-  const fidelityTiers: FidelityTier[] = [
-    { tier: 0, eventTypes: [summaryType] },
-    { tier: 1, eventTypes: [summaryType] },
-    {
-      tier: 2,
-      eventTypes: [pointType, sanctionType, interruptionType, gameAwardType],
-      entitlement: preset.rallyEntitlement,
-    },
-    {
-      tier: 3,
-      eventTypes: [pointType, sanctionType, interruptionType, gameAwardType],
-      entitlement: preset.rallyEntitlement,
-    },
-  ];
-
   const sideMetrics = (state: NestedState, side: Side): Record<string, number> => {
     const opp = opponent(side);
     const gamesOf = (s: Side): number =>
@@ -2244,7 +2222,6 @@ export function makeNestedModule(
       return [cfg.points.win + cfg.points.loss];
     },
 
-    fidelityTiers,
     officialLabel: preset.officialLabel,
     ...(preset.entrantModel === undefined ? {} : { entrantModel: preset.entrantModel }),
     // S8/#417 — always populated: the kernel default (`points_won` +

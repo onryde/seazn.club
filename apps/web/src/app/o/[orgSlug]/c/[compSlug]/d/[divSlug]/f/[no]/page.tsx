@@ -170,7 +170,6 @@ export default async function FixturePage({
             roles: lineupCatalog.roles ?? [],
             lineupSize: lineupCatalog.lineup.size,
             benchMax: lineupCatalog.lineup.benchMax ?? 0,
-            fidelityTiers: sportModule.fidelityTiers,
           }}
           home={home}
           away={away}

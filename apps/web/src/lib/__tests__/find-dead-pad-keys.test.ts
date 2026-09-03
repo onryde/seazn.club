@@ -25,6 +25,26 @@ describe("dead pad.* dictionary-key detector (R8 sweep)", () => {
     expect(dead, `dead pad.* key(s) found: ${dead.join(", ")}`).toEqual([]);
   });
 
+  // W1 (entitlements v18) — a pluralised key is never written out in full:
+  // `plural("pad.x.y", n)` resolves to `pad.x.y.one` / `pad.x.y.other` at
+  // runtime, so the source carries the BASE and the dictionary carries the
+  // CATEGORIES. Without this the detector calls every pluralised pad key dead
+  // — which it did, for the band picker's own "N actions on the pad".
+  it("a plural() call keeps its CLDR category keys live, and only its own", () => {
+    const { patterns } = extractSignals('plural("pad.recording.actions", n, { count: n });');
+    const live = (k: string) => patterns.some((p) => p.test(k));
+    expect(live("pad.recording.actions.one")).toBe(true);
+    expect(live("pad.recording.actions.other")).toBe(true);
+    // a locale added later must not need a source change to stay live
+    expect(live("pad.recording.actions.few")).toBe(true);
+    // ...but the admission is scoped: a neighbouring key is NOT swept in,
+    // or the fix would trade a false positive for a blind detector.
+    expect(live("pad.recording.actions")).toBe(false);
+    expect(live("pad.recording.actionsX.one")).toBe(false);
+    expect(live("pad.recording.close")).toBe(false);
+    expect(live("pad.cricket.action.ball.one")).toBe(false);
+  });
+
   // Mutation guard for the DECISION function itself (no filesystem involved)
   // — proves the matching logic reds on a key reachable by neither signal,
   // the same shape as manually adding `pad.zzz.dead` to en/ui.json (+ the 3

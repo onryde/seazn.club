@@ -97,7 +97,6 @@ export const volleyball = makeSetBasedModule({
   defaultTiebreakers: ["points", "wins", "set_ratio", "point_ratio", "h2h_points"],
   officialLabel: { scorer: "Referee" }, // doc 13 §1
   coarseEventType: "set.summary",
-  rallyEntitlement: "scoring.rally_by_rally", // doc 10 / volleyball.md §3
   // S7/#427 — the FIVB ladder verbatim; the kernel enum IS volleyball's own
   // vocabulary (DOMAIN.volleyball.md:38), so all four steps are on the pad.
   sanctionLevels: ["warning", "penalty", "expulsion", "disqualification"],

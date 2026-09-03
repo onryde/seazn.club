@@ -33,7 +33,6 @@ describe("buildPadView — phase scoping", () => {
     summary: generic.summary(state),
     phase: "live",
     band: 3,
-    entitlements: {},
   };
 
   it("only returns panels declared at the requested phase", () => {
@@ -81,7 +80,7 @@ describe("generic in \"pre\" phase — the pad must not offer what the engine re
   const spec = generic.padSpec!(cfg);
   const lineups = defaultLineupPair(generic.positions);
   const state = generic.init(cfg, lineups); // phase: "pre" — no core.start folded yet
-  const preCtx: PadViewCtx = { state, summary: generic.summary(state), phase: "pre", band: 3, entitlements: {} };
+  const preCtx: PadViewCtx = { state, summary: generic.summary(state), phase: "pre", band: 3 };
 
   it("generic.score (the running tally) dispatches before Start match, matching what applyScore accepts", async () => {
     const view = buildPadView(spec, preCtx);
@@ -106,7 +105,7 @@ describe("buildPadView — gate evaluation is delegated to the engine's evalPadG
 
   it("hides the gated panel before any score event (state.running is unset)", () => {
     const state = generic.init(cfg, lineups);
-    const view = buildPadView(spec, { state, summary: generic.summary(state), phase: "live", band: 3, entitlements: {} });
+    const view = buildPadView(spec, { state, summary: generic.summary(state), phase: "live", band: 3 });
     expect(view.panels.some((p) => p.labelKey.key === "pad.generic.panel.settle")).toBe(false);
   });
 
@@ -116,7 +115,7 @@ describe("buildPadView — gate evaluation is delegated to the engine's evalPadG
       makeEnvelope(1, { type: "generic.score", payload: { by: "H", points: 3 } }),
     ];
     const state = foldClient(generic, cfg, lineups, events);
-    const view = buildPadView(spec, { state, summary: generic.summary(state), phase: "live", band: 3, entitlements: {} });
+    const view = buildPadView(spec, { state, summary: generic.summary(state), phase: "live", band: 3 });
     expect(view.panels.some((p) => p.labelKey.key === "pad.generic.panel.settle")).toBe(true);
   });
 
@@ -133,7 +132,6 @@ describe("buildPadView — gate evaluation is delegated to the engine's evalPadG
       summary: tennis.summary(state),
       phase: "live",
       band: 3,
-      entitlements: {},
     });
     expect(view.panels.some((p) => p.labelKey.key === "pad.tennis.panel.gameAward")).toBe(true);
   });
@@ -158,74 +156,54 @@ describe("buildPadView — gate evaluation is delegated to the engine's evalPadG
       summary: tennis.summary(state),
       phase: "live",
       band: 3,
-      entitlements: {},
     });
     expect(view.panels.some((p) => p.labelKey.key === "pad.tennis.panel.gameAward")).toBe(false);
   });
 });
 
-describe("buildPadView — fidelity band filtering (cricket: band0/1 free, band2 needs stats.player, band3 needs scoring.ball_by_ball)", () => {
+describe("buildPadView — fidelity band filtering (W1: a band is a UX filter, never a price)", () => {
   const lineups = defaultLineupPair(resolvePositions(cricket, cricket.configSchema.parse({})));
 
-  function viewAt(band: 0 | 1 | 2 | 3, entitlements: Record<string, boolean>) {
+  function viewAt(band: 0 | 1 | 2 | 3) {
     const cfg = cricket.configSchema.parse({});
     const spec = cricket.padSpec!(cfg);
     const state = cricket.init(cfg, lineups);
-    return buildPadView(spec, { state, summary: cricket.summary(state), phase: "live", band, entitlements });
+    return buildPadView(spec, { state, summary: cricket.summary(state), phase: "live", band });
   }
 
   function actionTypes(view: ReturnType<typeof viewAt>): string[] {
     return view.panels.flatMap((p) => p.actions.map((a) => a.type));
   }
 
-  it("an action banded above the fixture's own band is ABSENT, not merely disabled", () => {
-    const view = viewAt(1, {});
-    // cricket.ball is band 3 — must not appear at all when the fixture is band 1.
+  it("an action banded above the chosen band is ABSENT, not merely disabled", () => {
+    const view = viewAt(1);
+    // cricket.ball is band 3 — must not appear at all at band 1.
     expect(actionTypes(view)).not.toContain("cricket.ball");
-    // cricket.toss (pre-phase, skip) / a band-1 live action IS present: cricket.powerplay.
+    // ...and a band-1 live action IS present, or "absent" would be satisfied
+    // by a view that resolved nothing at all.
     expect(actionTypes(view)).toContain("cricket.powerplay");
   });
 
-  // cricket.player.line sits in the POST-phase "Scorecard" panel — band/
-  // entitlement filtering is phase-independent by design (module header),
-  // so these use `allActionViews` rather than a phase-scoped `buildPadView`
-  // call, which is the right tool precisely because it does NOT also assert
-  // anything about phase.
-  it("an action within band but needing a MISSING entitlement is PRESENT and locked, with a reason", () => {
-    // band 3, but the org lacks stats.player (band 2's requirement) while
-    // holding scoring.ball_by_ball (band 3's requirement) — proves the two
-    // bands are gated independently, not as an all-or-nothing ceiling.
-    const cfg = cricket.configSchema.parse({});
-    const spec = cricket.padSpec!(cfg);
-    const actions = allActionViews(spec, { band: 3, entitlements: { "scoring.ball_by_ball": true } });
-    const action = actions.find((a) => a.type === "cricket.player.line");
-    expect(action, "cricket.player.line must be PRESENT (band <= fixture band)").toBeDefined();
-    expect(action!.availability.kind).toBe("locked");
-    if (action!.availability.kind === "locked") {
-      expect(typeof action!.availability.reason.key).toBe("string");
-      expect(action!.availability.reason.label.length).toBeGreaterThan(0);
-    }
-    // cricket.ball (band 3) IS entitled here — available, not locked.
-    const ballAction = actions.find((a) => a.type === "cricket.ball");
-    expect(ballAction?.availability.kind).toBe("available");
+  it("raising the band to the top brings that same action back — nothing else changed", () => {
+    expect(actionTypes(viewAt(3))).toContain("cricket.ball");
   });
 
-  it("granting the entitlement unlocks the same action (no other input changed)", () => {
+  // W1 / Task 4 replaced three cases here that asserted an in-band action
+  // could still be LOCKED for want of an entitlement, with a worded reason
+  // (`scorepad.locked.reason`). Tasks 1-3 deleted that model from the engine
+  // and this task deleted `ActionAvailability` with it: within the band an
+  // action is resolved, above it there is nothing. There is no third state
+  // left to assert, so the assertions are gone rather than weakened into
+  // always-true ones.
+  it("every action within the chosen band resolves — there is no paid tier left to withhold one", () => {
+    // `allActionViews` is phase-independent by design, which is what makes it
+    // the right tool here: this says nothing about phase, only that band 3
+    // holds nothing back.
     const cfg = cricket.configSchema.parse({});
     const spec = cricket.padSpec!(cfg);
-    const actions = allActionViews(spec, {
-      band: 3,
-      entitlements: { "stats.player": true, "scoring.ball_by_ball": true },
-    });
-    const action = actions.find((a) => a.type === "cricket.player.line");
-    expect(action?.availability.kind).toBe("available");
-  });
-
-  it("bands 0/1 never lock, even with zero entitlements granted (never keyed in fidelityEntitlements)", () => {
-    const view = viewAt(1, {});
-    for (const action of view.panels.flatMap((p) => p.actions)) {
-      expect(action.availability.kind).toBe("available");
-    }
+    const actions = allActionViews(spec, { band: 3 });
+    const declared = spec.panels.flatMap((panel) => panel.actions.map((a) => a.type));
+    expect(new Set(actions.map((a) => a.type))).toEqual(new Set(declared));
   });
 });
 
@@ -287,7 +265,7 @@ describe("checkActionValidity — required fields", () => {
 describe("checkActionValidity — required attribution (R8/WS-B2)", () => {
   const cricketCfg = cricket.configSchema.parse({});
   const cricketSpec = cricket.padSpec!(cricketCfg);
-  const tossAction = allActionViews(cricketSpec, { band: 3, entitlements: {} }).find(
+  const tossAction = allActionViews(cricketSpec, { band: 3 }).find(
     (a) => a.type === "cricket.toss",
   )!;
   const wonByItem = tossAction.attribution.find((item) => item.path === "wonBy")!;
@@ -309,7 +287,7 @@ describe("checkActionValidity — required attribution (R8/WS-B2)", () => {
   });
 
   it("an OPTIONAL attribution item left unfilled does not block validity", () => {
-    const reviewAction = allActionViews(cricketSpec, { band: 3, entitlements: {} }).find(
+    const reviewAction = allActionViews(cricketSpec, { band: 3 }).find(
       (a) => a.type === "cricket.review",
     )!;
     // cricket.review's two fields (kind/outcome) plus its required `by` item

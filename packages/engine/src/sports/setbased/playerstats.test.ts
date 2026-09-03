@@ -301,7 +301,6 @@ describe("kernel-default playerStats: merge + collisions (S8/#417)", () => {
       defaultTiebreakers: ["points"],
       officialLabel: { scorer: "Umpire" },
       coarseEventType: "set.summary",
-      rallyEntitlement: "scoring.rally_by_rally",
       sanctionLevels: ["warning"],
       playerStats: {
         metrics: [
@@ -362,7 +361,6 @@ describe("kernel-default playerStats: merge + collisions (S8/#417)", () => {
       defaultTiebreakers: ["points"],
       officialLabel: { scorer: "Umpire" },
       coarseEventType: "set.summary",
-      rallyEntitlement: "scoring.rally_by_rally",
       sanctionLevels: ["warning"],
       playerStats: {
         metrics: [],

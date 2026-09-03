@@ -39,7 +39,7 @@ In doubles the entry is held for a moment and asks **Which player won it?** with
 
 ## Recording level
 
-Rally-by-rally is the finest level badminton records, and it needs a plan that includes it. Below that level the halves stop being tappable, and the pad says so rather than going quiet. A note names the plan that unlocks it and adds *"Record each game's final score instead."*; the rally tile itself is greyed out, reading **Rally by rally is locked** and captioned *"Record each game's final score"*. Set score works at every level; sanctions from **Card** upwards. See [choosing a detail level](/help/scoring/fidelity).
+Rally by rally is the finest level badminton records, and it is available on every plan — a badminton pad opens there. Drop to a lower level on the **Recording** chip and the halves stop being tappable, because a rally is no longer something this pad records; use **Set score** for each game's final score instead. Set score works at every level; sanctions from **Key moments** upwards. See [choosing a detail level](/help/scoring/fidelity).
 
 ## Common questions
 

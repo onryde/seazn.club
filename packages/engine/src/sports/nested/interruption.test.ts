@@ -585,16 +585,21 @@ describe("interruption allowances (§5.4)", () => {
 // ---------------------------------------------------------------------------
 
 describe("tennis.interruption is wired everywhere a new type must be (§5.6)", () => {
-  it("appears in the fidelity tiers that carry attributed play", () => {
-    const tiers = Object.fromEntries(
-      tennis.fidelityTiers.map((tier) => [tier.tier, tier.eventTypes]),
-    );
-    expect(tiers[2]).toContain("tennis.interruption");
-    expect(tiers[3]).toContain("tennis.interruption");
-    // Tiers 0/1 are a bare set score; the chair's break record rides with
-    // point scoring, exactly as the sanction does.
-    expect(tiers[0]).not.toContain("tennis.interruption");
-    expect(tiers[1]).not.toContain("tennis.interruption");
+  it("appears in padSpec.fidelity at the same band as the sanction", () => {
+    // W1: formerly asserted the type was named in tiers 2 AND 3's arrays and
+    // absent from tiers 0/1 (the old cumulative-list model lumped
+    // administrative records — sanction, interruption — in with the
+    // attributed-scoring tiers). padSpec.fidelity separates them: both
+    // sanction and interruption are band-1 admin/incident records, never
+    // band 0 (the bare score) or band 3 (point-by-point, the kernel's own
+    // max-detail level) — see kernel.ts's "code violations and
+    // interruptions are administrative records that never move the score,
+    // band 1" note.
+    const spec = tennis.padSpec!(cfgFor());
+    expect(spec.fidelity["tennis.interruption"]).toBe(1);
+    expect(spec.fidelity["tennis.interruption"]).toBe(spec.fidelity["tennis.sanction"]);
+    expect(spec.fidelity["tennis.interruption"]).not.toBe(0);
+    expect(spec.fidelity["tennis.interruption"]).not.toBe(3);
   });
 
   it("is reachable from arbitraryEvent, so a generated stream exercises it", () => {

@@ -342,7 +342,10 @@ describe("hockey padSpec — shoot-out panel: cfg gates existence, a runtime gat
 });
 
 // ---------------------------------------------------------------------------
-// No second tier vocabulary — the numeric FidelityTier.tier scale only.
+// No second band vocabulary — the numeric FidelityBand scale only.
+// (Said "the numeric FidelityTier.tier scale" until entitlements v18 / W1
+// deleted `FidelityTier` and `fidelityTiers` outright; the closed 0-3
+// `FidelityBand` in `sport/module.ts` is the whole scale that remains.)
 // ---------------------------------------------------------------------------
 
 describe("period padSpec — fidelity is the closed numeric 0-3 scale, no second vocabulary", () => {

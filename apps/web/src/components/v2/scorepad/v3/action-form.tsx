@@ -24,7 +24,7 @@
 // `PadActionView[]` pad-host.tsx hands it (that list itself is computed
 // generically there too — see its own `moreActions` builder), and
 // `renderActionRow` below renders ANY action from its own declared
-// fields/attribution/availability alone.
+// fields and attribution alone.
 //
 // ONE STATEFUL COMPONENT, NOT N (repo-wide `_hook-harness` constraint —
 // same reasoning context-strip.tsx's/swap-sheet.tsx's own header gives for
@@ -306,9 +306,14 @@ function renderAttributionRow(
  * tap target naming the action; tapping it either submits immediately
  * (`onTap`, for a zero-field/zero-attribution action — the decision itself
  * lives in `ActionFormList`, this function only ever RENDERS whichever
- * state it is handed) or expands into the field editor. A locked action
- * (`availability.kind === "locked"`) renders the worded reason instead of
- * any tappable control at all — never a bare disabled tile.
+ * state it is handed) or expands into the field editor.
+ *
+ * W1 / Task 4: the locked arm is GONE. It rendered `scorepad.locked.reason`
+ * for an action inside the band whose ENTITLEMENT was missing — a state that
+ * cannot occur now that bands are not sold (`view-model.ts` has no
+ * `ActionAvailability` left to raise it). An action is rendered or it is
+ * absent; a third, unreachable rendering is how a dead branch survives a
+ * review.
  */
 function renderActionRow(params: {
   action: PadActionView;
@@ -326,15 +331,6 @@ function renderActionRow(params: {
 }): ReactNode {
   const { action, t, expanded, values, submitting, squads, lineups, personNames, onTap, onChange, onConfirm, onCancel } = params;
   const label = padLabel(action.labelKey.key, t, action.labelKey.label);
-
-  if (action.availability.kind === "locked") {
-    return (
-      <div key={action.type} className="rounded-xl border border-dashed border-slate-300 bg-transparent px-4 py-2.5">
-        <p className="break-words text-sm font-medium text-slate-500">{label}</p>
-        <p className="mt-0.5 break-words text-xs font-medium text-amber-700">{t(action.availability.reason.key)}</p>
-      </div>
-    );
-  }
 
   if (!expanded) {
     return (

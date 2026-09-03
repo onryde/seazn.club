@@ -329,7 +329,6 @@ export function DeviceScorePad({
               auth={{ kind: "device_link", token }}
               identity={scorePadV2.identity}
               entitlements={scorePadV2.entitlements}
-              band={scorePadV2.band}
               onEvents={handlePadEvents}
             />
           </ScoringErrorBoundary>

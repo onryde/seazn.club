@@ -63,12 +63,10 @@ import {
 } from "../skins/football";
 import {
   dedicatedEventTypes,
-  entitledBandsFrom,
   filterTilesByBand,
   moreActions,
 } from "../pad-host";
 import type { PadHostView, PadPhase, TileSpec } from "../types";
-import { grantAllEntitlements } from "../../__tests__/_cfg-space";
 import { foldedPhases, phaseVerdict, probePayload, type FoldedPhase } from "./_football-fold";
 
 const footballModule = (builtinModules as readonly AnySportModule[]).find((m) => m.key === "football");
@@ -141,17 +139,16 @@ interface Reach {
 function reachIn(s: Situation): Reach {
   const view = viewFor(s);
   const spec = padSpecFor(s.cfg);
-  const entitlements = grantAllEntitlements(spec);
   const padPhase: PadPhase = view.phase;
 
   const sheets = buildSheets(view, t);
   const slots = buildSwap(view, t);
   const allTiles = buildTiles(view);
   // Exactly the host's own order of operations (pad-host.tsx): band-filter the
-  // tiles against the ENTITLED bands, then derive `dedicated` from THAT list —
-  // never from a union across phases, which is what this file used to do.
-  const entitledBands = entitledBandsFrom(spec.fidelityEntitlements, entitlements);
-  const tiles = filterTilesByBand(allTiles, sheets, slots, spec.fidelity, entitledBands);
+  // tiles against the band the SCORER picked, then derive `dedicated` from
+  // THAT list — never from a union across phases, which is what this file used
+  // to do.
+  const tiles = filterTilesByBand(allTiles, sheets, slots, spec.fidelity, view.band);
   // R4/tennis widened this with the SCOREBUG, because tap model S makes a
   // half a real entry point. Football's own scorebug is passed rather than a
   // fixture: it is a tapModel-T readout that declares no `tappable` half, so
@@ -181,7 +178,7 @@ function reachIn(s: Situation): Reach {
   const viaMore = new Set(
     moreActions(
       spec,
-      { state: s.state, summary: {}, phase: padPhase, band: s.band, entitlements },
+      { state: s.state, summary: {}, phase: padPhase, band: s.band },
       dedicated,
       // The SKIN's own refusal set, exactly as `PadHostV3` passes it — not a
       // set this test computes, or the sweep would be measuring itself.

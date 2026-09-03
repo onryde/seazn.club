@@ -29,8 +29,6 @@ import { dedicatedEventTypes, filterTilesByBand, moreActions } from "../../pad-h
 import {
   EVENT_BAND,
   EXPEDITE_TYPE,
-  RALLY_ENTITLEMENT,
-  RALLY_LOCKED_TILE_ID,
   RALLY_TYPE,
   SANCTION_LEVELS,
   SANCTION_TYPE,
@@ -40,7 +38,6 @@ import {
   TIMEOUT_TYPE,
   badmintonDetail,
   badmintonSkinV3,
-  buildContextStrip,
   buildDock,
   buildScorebug,
   buildSheets,
@@ -143,7 +140,7 @@ function view(opts: ViewOpts = {}): PadHostView {
     summary: {},
     phase: "live",
     band: opts.band ?? 3,
-    entitlements: opts.entitlements ?? { [RALLY_ENTITLEMENT]: true },
+    entitlements: opts.entitlements ?? {},
     personNames: NAMES,
     squads: initSquads(lineups),
     events,
@@ -184,11 +181,6 @@ describe("the constants this skin restates cannot drift from the engine's own", 
     expect(EVENT_BAND).toEqual(spec.fidelity);
   });
 
-  it("RALLY_ENTITLEMENT is the feature key padSpec gates band 3 behind", () => {
-    // Named wrong, the D-7 notice upsells a plan that would not unlock
-    // anything — a worse outcome than the silence it replaces.
-    expect(spec.fidelityEntitlements[3]).toBe(RALLY_ENTITLEMENT);
-  });
 
   it("SANCTION_LEVELS is the ladder padSpec itself offers, in padSpec's own order", () => {
     // BWF has THREE cards and the black one is why this list is per sport:
@@ -586,7 +578,7 @@ describe("tiles()", () => {
     // nothing — football's R3/B2 put Home's second yellow bodily inside the
     // AWAY lane with 65 green assertions. Modelled here the way CSS
     // auto-placement actually works, so array order is pinned as ROW order.
-    const tiles = buildTiles(view(), t);
+    const tiles = buildTiles(view());
     let col = 0;
     const columns = new Map<string, number>();
     for (const tile of tiles) {
@@ -605,31 +597,31 @@ describe("tiles()", () => {
   });
 
   it("every side-owned tile spans exactly 2, and no side-less tile is squeezed between the pair", () => {
-    const tiles = buildTiles(view(), t);
+    const tiles = buildTiles(view());
     const sided = tiles.filter((tile) => tile.sublabel !== undefined);
     for (const tile of sided) expect(tile.span).toBe(2);
     expect(tiles.slice(0, sided.length).map((tile) => tile.id)).toEqual(sided.map((tile) => tile.id));
   });
 
   it("withholds the Set score tile while the current game is being scored rally by rally (D-16)", () => {
-    expect(tileById(buildTiles(view(), t), SET_SCORE_TILE_ID)).toBeDefined();
+    expect(tileById(buildTiles(view()), SET_SCORE_TILE_ID)).toBeDefined();
     const midGame = view({ events: stream(rally("H")) });
-    expect(tileById(buildTiles(midGame, t), SET_SCORE_TILE_ID)).toBeUndefined();
+    expect(tileById(buildTiles(midGame), SET_SCORE_TILE_ID)).toBeUndefined();
     // ...and it comes back the moment the game closes, because the NEXT game
     // has no points yet.
     const betweenGames = view({ events: stream(summary(21, 15)) });
-    expect(tileById(buildTiles(betweenGames, t), SET_SCORE_TILE_ID)).toBeDefined();
+    expect(tileById(buildTiles(betweenGames), SET_SCORE_TILE_ID)).toBeDefined();
   });
 
   it("drops the sanction pair below band 1 and keeps Set score at band 0", () => {
-    const tiles = buildTiles(view({ band: 0 }), t);
+    const tiles = buildTiles(view({ band: 0 }));
     expect(tileById(tiles, sanctionSheetKey("home"))).toBeUndefined();
     expect(tileById(tiles, SET_SCORE_TILE_ID)).toBeDefined();
   });
 
   it("declares no tiles outside `live` — every tile names the live phase only", () => {
-    for (const tile of buildTiles(view(), t)) expect(tile.phases).toEqual(["live"]);
-    expect(buildTiles(view({ events: [] }), t).filter((tile) => tile.phases.includes("pre"))).toEqual([]);
+    for (const tile of buildTiles(view())) expect(tile.phases).toEqual(["live"]);
+    expect(buildTiles(view({ events: [] })).filter((tile) => tile.phases.includes("pre"))).toEqual([]);
   });
 
   it("honours THIS FIXTURE's records flag, not the preset's default", () => {
@@ -637,59 +629,24 @@ describe("tiles()", () => {
       records: { timeouts: false, sanctions: false, substitutions: false, expedite: false },
     });
     const v = view({ cfg: noSanctions });
-    expect(tileById(buildTiles(v, t), sanctionSheetKey("home"))).toBeUndefined();
+    expect(tileById(buildTiles(v), sanctionSheetKey("home"))).toBeUndefined();
   });
 });
 
 // ---------------------------------------------------------------------------
-// D-7 — the band-limited screen, which used to be silence
+// W1 / Task 4 (entitlements v18) — the D-7 block that stood here is DELETED.
+//
+// It covered a disabled "Rally by rally is locked" tile and a context slot
+// naming the plan that would unlock it. Neither exists: a band is the
+// scorer's own pick on the Recording chip now, so there is no lock to word
+// and nothing for a skin to explain. The keys those two fed
+// (`pad.{sport}.context.recording[.locked]`, `pad.{sport}.tile.rallyLocked
+// [.sublabel]`) are gone from all four dictionaries with them.
+//
+// What replaced the coverage: `v3/__tests__/recording-chip.test.tsx` (the
+// picker, and that it never renders a lock, an upsell or a plan name) and
+// `e2e/scoring-free.spec.ts` (a free org picking a band on a real pad).
 // ---------------------------------------------------------------------------
-
-describe("D-7 — below band 3 the pad SAYS SO, in badminton's own words", () => {
-  const limited = () => view({ band: 2, entitlements: {} });
-
-  it("renders a visible, disabled rally tile instead of nothing at all", () => {
-    const tile = tileById(buildTiles(limited(), t), RALLY_LOCKED_TILE_ID)!;
-    expect(tile.disabled).toBe(true);
-    expect(tile.span).toBe(4);
-    expect(tile.labelText).toBe("pad.badminton.tile.rallyLocked");
-    expect(tile.sublabelText).toBe("pad.badminton.tile.rallyLocked.sublabel");
-  });
-
-  it("survives the chassis's own band filter — the gate it exists to explain must not eat it", () => {
-    // The trap this guards: a tile pointing at `badminton.rally` in ANY form
-    // is dropped by `filterTilesByBand` for exactly the org this tile is for.
-    const v = limited();
-    const tiles = buildTiles(v, t);
-    const sheets = buildSheets(v, t);
-    const kept = filterTilesByBand(tiles, sheets, [], badminton.padSpec!(BWF_CFG).fidelity, new Set([0, 1, 2]));
-    expect(kept.map((tile) => tile.id)).toContain(RALLY_LOCKED_TILE_ID);
-  });
-
-  it("carries the REASON on a context slot, naming the plan through the shared table", () => {
-    const spec = buildContextStrip(limited(), t)!;
-    expect(spec.slots).toHaveLength(1);
-    const slot = spec.slots[0]!;
-    expect(slot.readOnly).toBe(true);
-    expect(slot.message).toContain("pad.badminton.context.recording.locked");
-    // The plan is interpolated, and it is the plan the SAME `featurePlan()`
-    // table the recording chip uses resolves — never a literal typed here.
-    expect(slot.message).toContain('"plan":"Pro"');
-  });
-
-  it("pairs the disabled tile with that message — the chassis's own rule for a disabled tile", () => {
-    const v = limited();
-    expect(assertDisabledTilesExplained(buildTiles(v, t), buildContextStrip(v, t))).toEqual([]);
-  });
-
-  it("says nothing at all at band 3, or once the match is over", () => {
-    expect(tileById(buildTiles(view(), t), RALLY_LOCKED_TILE_ID)).toBeUndefined();
-    expect(buildContextStrip(view(), t)).toBeNull();
-    const done = view({ cfg: SHORT_CFG, band: 2, events: stream(summary(3, 1), summary(3, 0)) });
-    expect(buildContextStrip(done, t)).toBeNull();
-    expect(tileById(buildTiles(done, t), RALLY_LOCKED_TILE_ID)).toBeUndefined();
-  });
-});
 
 // ---------------------------------------------------------------------------
 // refusedEventTypes()
@@ -726,14 +683,14 @@ describe("refusedEventTypes()", () => {
     // Rally is DEDICATED (tap model S — the halves' own tapEvent), summary is
     // REFUSED mid-game, and the three unrecordable types never build a panel.
     const v = view({ events: stream(rally("H")) });
-    const tiles = buildTiles(v, t);
+    const tiles = buildTiles(v);
     const sheets = buildSheets(v, t);
     const scorebug = buildScorebug(v, t);
     const dedicated = dedicatedEventTypes(tiles, sheets, [], scorebug);
     expect(dedicated).toContain(RALLY_TYPE);
     const actions = moreActions(
       badminton.padSpec!(BWF_CFG),
-      { state: v.state, summary: v.summary, phase: "live", band: 3, entitlements: v.entitlements },
+      { state: v.state, summary: v.summary, phase: "live", band: 3 },
       dedicated,
       new Set(refusedEventTypes(v)),
     );
@@ -800,7 +757,7 @@ describe("sheets()", () => {
     for (const band of [0, 1, 2, 3] as const) {
       const v = view({ band });
       const sheets = buildSheets(v, t);
-      for (const tile of buildTiles(v, t)) {
+      for (const tile of buildTiles(v)) {
         if (!("sheet" in tile.action)) continue;
         if (tile.action.sheet.startsWith("__pad-host/")) continue;
         expect(Object.keys(sheets), `tile ${tile.id}`).toContain(tile.action.sheet);
@@ -963,11 +920,6 @@ describe("factory wiring — every builder is threaded the REAL translator", () 
     expect(serving!.servingLabel!.startsWith("XLATED:")).toBe(true);
   });
 
-  it("threads it into the tiles' pre-localised text", () => {
-    const tile = skin.tiles(view({ band: 2 })).find((entry) => entry.id === RALLY_LOCKED_TILE_ID)!;
-    expect(tile.labelText!.startsWith("XLATED:")).toBe(true);
-    expect(tile.sublabelText!.startsWith("XLATED:")).toBe(true);
-  });
 
   // R7 follow-ups item 3 (`TileSpec.label`/`SheetChoiceStep.title` typed
   // `MessageKey`) found the OPPOSITE bug to the one this block's header
@@ -995,10 +947,6 @@ describe("factory wiring — every builder is threaded the REAL translator", () 
     expect(dock.title.startsWith("XLATED:")).toBe(true);
   });
 
-  it("threads it into the context strip's message", () => {
-    const spec = skin.context!(view({ band: 2 }))!;
-    expect(spec.slots[0]!.message!.startsWith("XLATED:")).toBe(true);
-  });
 
   it("declares no swap() and no contextSelect() — BWF Law 16, and a readOnly slot", () => {
     expect(skin.swap).toBeUndefined();
@@ -1026,8 +974,6 @@ describe("copy truth", () => {
       "pad.badminton.context.line",
       "pad.badminton.context.setting",
       "pad.badminton.context.goldenPoint",
-      "pad.badminton.context.recording",
-      "pad.badminton.context.recording.locked",
       "pad.badminton.scorebug.serving",
       "pad.badminton.scorebug.strip.games",
       "pad.badminton.scorebug.strip.server",
@@ -1035,8 +981,6 @@ describe("copy truth", () => {
       "pad.badminton.scorebug.strip.intervalNow",
       "pad.badminton.scorebug.strip.court.left",
       "pad.badminton.scorebug.strip.court.right",
-      "pad.badminton.tile.rallyLocked",
-      "pad.badminton.tile.rallyLocked.sublabel",
       "pad.badminton.dock.rally.scorer.title",
       "pad.badminton.dock.person",
       "pad.badminton.ribbon.partial",
@@ -1051,7 +995,7 @@ describe("copy truth", () => {
     ];
     for (const { band, events, lineups } of sweep) {
       const v = view({ band, events, lineups });
-      for (const tile of buildTiles(v, t)) {
+      for (const tile of buildTiles(v)) {
         keys.add(tile.label);
         if (tile.sublabel !== undefined) keys.add(tile.sublabel);
       }
@@ -1067,8 +1011,6 @@ describe("copy truth", () => {
         if (half.hintKey !== undefined) keys.add(half.hintKey);
         for (const who of half.who) if (who.servingLabel !== undefined) keys.add(who.servingLabel);
       }
-      const strip = buildContextStrip(v, t);
-      for (const slot of strip?.slots ?? []) keys.add(slot.label);
       const dock = buildDock(RALLY_TYPE, v, t, { wonBy: "H" });
       for (const chip of dock?.chips ?? []) keys.add(chip.label);
     }

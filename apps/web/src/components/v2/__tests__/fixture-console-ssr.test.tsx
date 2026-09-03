@@ -33,7 +33,6 @@ describe("FixtureConsole SSR determinism", () => {
           roles: [],
           lineupSize: 0,
           benchMax: 0,
-          fidelityTiers: [],
         }}
         home={{ id: "e1", name: "Riverside FC", members: [], lineup: [] }}
         away={{ id: "e2", name: "Summit Athletic", members: [], lineup: [] }}

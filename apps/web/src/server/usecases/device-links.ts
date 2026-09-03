@@ -180,6 +180,42 @@ export interface ResolvedDeviceLink {
 }
 
 /**
+ * THE device-link fixture-ownership predicate (doc 13 §7) — one copy, two
+ * askers. `requireFixtureActor` turns a false into 403 "This device link is
+ * for a different fixture"; the public realtime-token route turns it into
+ * "this caller is not an official of this fixture". Both used to spell it out
+ * for themselves, so a change to one was not a change to the other.
+ */
+export function deviceLinkCoversFixture(
+  link: Pick<ResolvedDeviceLink, "fixture_id">,
+  fixtureId: string,
+): boolean {
+  return link.fixture_id === fixtureId;
+}
+
+/**
+ * Request-level form of {@link deviceLinkCoversFixture} for the caller that
+ * needs a boolean and must NOT throw: the public realtime-token route, where
+ * an absent/expired/foreign link just means "not eligible this way" and the
+ * request falls through to the plan check. Never let it widen — a `true` here
+ * mints a subscriber token for a fixture that may be in a private
+ * competition.
+ */
+export async function requestDeviceLinkCoversFixture(
+  req: Request,
+  fixtureId: string,
+): Promise<boolean> {
+  const header = req.headers.get("authorization");
+  if (!header?.startsWith(`Bearer ${DEVICE_LINK_PREFIX}`)) return false;
+  try {
+    const link = await resolveDeviceLinkToken(header.slice("Bearer ".length).trim());
+    return deviceLinkCoversFixture(link, fixtureId);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Resolve a dl_ bearer token. Expired/revoked → 401 with a DISTINCT code the
  * pad renders as "link expired, ask the organiser" (doc 13 §7).
  */

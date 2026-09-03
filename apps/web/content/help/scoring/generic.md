@@ -37,7 +37,7 @@ There's no tally and no correction — tapping a half records that side as the w
 
 ## Recording level
 
-A result records at every level, so a **Win Loss** fixture is fully scoreable even at **Result only**. The running tally needs **Card** or above: below that, a score fixture records one final card and nothing else, so its halves aren't tappable and **Enter final score** is the whole pad. See [choosing a detail level](/help/scoring/fidelity).
+A result records at every level, so a **Win Loss** fixture is fully scoreable even at **Result only**. The running tally needs **Key moments** or above: below that, a score fixture records one final card and nothing else, so its halves aren't tappable and **Enter final score** is the whole pad. See [choosing a detail level](/help/scoring/fidelity).
 
 ## Common questions
 

@@ -190,8 +190,8 @@ export const REPLAY_LINEUP_POLICY: LineupPolicy = {
 
 // SIBLING TYPES, not one type with a discriminated `kind`. Every consumer in
 // the system keys on the exact envelope `type` string — `CORE_EVENT_SCHEMAS`,
-// `DURING_STOPPAGE`, `postDecisionTypes`, `fidelityTiers[].eventTypes`, the
-// entitlement gate, the pad's type filters, `EVENT_KEY` — and a `kind` nested
+// `DURING_STOPPAGE`, `postDecisionTypes`, a module's `padSpec.fidelity`
+// keys, the pad's type filters, `EVENT_KEY` — and a `kind` nested
 // inside one payload is invisible to all of them, so a sport could not offer
 // substitutions at one fidelity tier and position changes at another. It would
 // also force a `z.union`, whose first-match-wins silently swallows a sibling

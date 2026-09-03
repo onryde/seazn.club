@@ -386,15 +386,11 @@ export function padSpec(cfg: GenericCfg): PadSpec {
   return stampAttributionRequired(
     {
       panels,
-      // Modelled on generic's OWN existing (untouched) `fidelityTiers` (below):
-      // tier 0 is the terminal card alone, tier 1 adds the running tally.
-      // Neither entry carries an entitlement — the fallback ships free at
-      // every band it currently declares.
+      // Band 0 is the terminal card alone, band 1 adds the running tally.
       fidelity: {
         "generic.result": 0,
         "generic.score": 1,
       },
-      fidelityEntitlements: {},
     },
     GENERIC_EVENT_SCHEMAS,
   );
@@ -663,12 +659,6 @@ export const generic: SportModule<GenericCfg, GenericEv, GenericState> = {
     return [...new Set([cfg.points.w + cfg.points.l, cfg.points.d * 2])];
   },
 
-  // doc 14 §2 — generic tops out at Tier 1; W4 puts the running tally there
-  // (tier 0 stays "one final card, nothing else").
-  fidelityTiers: [
-    { tier: 0, eventTypes: ["generic.result"] },
-    { tier: 1, eventTypes: ["generic.result", "generic.score"] },
-  ],
   officialLabel: { scorer: "Scorer" }, // doc 13 §1
 
   // W4 — the only person credit the fallback offers: who performed a scoring

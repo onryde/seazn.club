@@ -1,0 +1,331 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Option B &mdash; the compact chip</title>
+<style>
+:root{
+  color-scheme: light;
+  --canvas:#fdfcf8; --surface:#ffffff; --ink:#1e1b2e; --ink-2:#475569; --ink-3:#64748b;
+  --line:#e2e8f0; --line-soft:#f1f5f9; --line-2:#cbd5e1;
+  --violet:#7c3aed; --violet-700:#6d28d9; --violet-50:#f5f3ff; --violet-100:#ede9fe;
+  --violet-200:#ddd6fe; --violet-800:#5b21b6; --violet-900:#4c1d95;
+  --night:#150b36; --night-2:#1d1145; --cream:#f5f0e8; --lime:#a3e635; --live:#ef4444;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:
+    linear-gradient(115deg, rgba(124,58,237,.06) 0%, transparent 30%),
+    linear-gradient(245deg, rgba(124,58,237,.05) 0%, transparent 28%),
+    var(--canvas);
+  color:var(--ink);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+
+/* ---- deliverable chrome (not product) ---- */
+.head{padding:20px 12px 4px;max-width:720px;margin:0 auto}
+.head h1{font-size:19px;line-height:1.2;letter-spacing:-.015em;margin:0 0 6px;font-weight:650}
+.head p{margin:0;font-size:13px;line-height:1.5;color:var(--ink-2);max-width:62ch}
+.head .rule{height:2px;width:34px;background:var(--violet);border-radius:2px;margin:14px 0 0}
+.frames{display:grid;grid-template-columns:1fr;gap:0;margin:8px 0 40px}
+.cap{margin:0;padding:20px 12px 8px;font-size:12px;color:var(--ink-3)}
+.cap b{color:var(--ink);font-weight:600}
+@media (min-width:700px){
+  .head{padding:26px 16px 6px}
+  .frames{grid-template-columns:repeat(2,minmax(0,348px));gap:8px 20px;justify-content:center;padding:0 16px}
+}
+
+/* ---- the pad ---- */
+.pad{background:var(--surface);border:1px solid var(--line);border-top-width:1px;padding:12px;display:flex;flex-direction:column;gap:10px;min-width:0}
+@media (min-width:700px){.pad{border-radius:18px}}
+
+/* scorebug (night tile) */
+.bug{border-radius:14px;overflow:hidden;background:var(--night);border-top:2px solid rgba(163,230,53,.55);box-shadow:0 6px 18px rgba(21,11,54,.18)}
+.bug-band{display:flex;align-items:center;justify-content:center;gap:7px;background:var(--night-2);padding:6px 10px;font-size:11px;letter-spacing:.04em;color:rgba(245,240,232,.72)}
+.bug-band .dot{width:8px;height:8px;border-radius:50%;background:var(--live)}
+.bug-halves{display:grid;grid-template-columns:1fr 1fr}
+.bug-halves > div{padding:12px 10px;text-align:center;min-width:0}
+.bug-halves > div + div{border-left:1px solid rgba(245,240,232,.14)}
+.team{display:block;font-size:12px;font-weight:600;letter-spacing:.02em;color:var(--cream);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.score{display:block;font-size:34px;font-weight:800;line-height:1;letter-spacing:-.02em;color:var(--lime);margin-top:4px}
+
+/* ribbon */
+.ribbon{display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:999px;padding:5px 6px 5px 14px;min-width:0}
+.ribbon span{flex:1;min-width:0;font-size:13px;color:#334155;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ribbon button{flex:none;min-height:44px;padding:0 12px;border:0;background:transparent;border-radius:999px;font:inherit;font-size:13px;font-weight:600;color:var(--violet-700);cursor:pointer}
+
+/* tiles */
+.tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.tile{min-height:56px;min-width:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;
+  border:2px solid var(--line);border-radius:12px;background:#fff;padding:6px 4px;
+  font:inherit;font-size:12px;font-weight:500;color:#334155;text-align:center;cursor:pointer;overflow-wrap:break-word}
+.tile.primary{grid-column:span 2;min-height:68px;border-color:transparent;background:var(--violet);color:#fff;font-weight:650;font-size:14px;box-shadow:0 1px 2px rgba(76,29,149,.25)}
+.tile.primary .sub{font-size:11px;font-weight:500;color:rgba(255,255,255,.9)}
+.tile.minor{border-style:dashed;border-color:var(--line-2);background:transparent;color:var(--ink-3);font-size:11px;min-height:48px}
+
+/* caption under the control */
+.count{margin:0;padding:0 2px;font-size:12px;color:var(--ink-3)}
+.count b{color:#334155;font-weight:600}
+
+
+/* --- Option B: compact chip + sheet --- */
+.chip{display:flex;align-items:center;gap:9px;width:100%;min-width:0;min-height:44px;
+  border:1px solid var(--line);border-radius:999px;background:#fff;padding:0 12px 0 13px;
+  font:inherit;text-align:left;cursor:pointer}
+.chip:focus-visible{outline:2px solid var(--violet);outline-offset:2px}
+.chip .lead{flex:none;font-size:12px;color:var(--ink-3)}
+.chip .val{flex:1;min-width:0;font-size:13px;font-weight:650;color:var(--ink);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chip .chev{flex:none;width:14px;height:14px;color:#94a3b8}
+/* the meter: four rungs, filled up to the chosen band. fill, not hue, carries it */
+.meter{flex:none;display:flex;align-items:flex-end;gap:2px;height:14px}
+.meter i{display:block;width:3px;border-radius:1px;border:1px solid var(--violet-200);background:transparent}
+.meter i.f{background:var(--violet);border-color:var(--violet)}
+.meter i:nth-child(1){height:5px}.meter i:nth-child(2){height:8px}
+.meter i:nth-child(3){height:11px}.meter i:nth-child(4){height:14px}
+.meter.on-dark i{border-color:rgba(124,58,237,.45)}
+
+/* the sheet */
+.screen{position:relative;height:558px;overflow:hidden}
+@media (min-width:700px){.screen{border-radius:18px}}
+.scrim{position:absolute;inset:0;background:rgba(21,11,54,.42)}
+.sheet{position:absolute;left:0;right:0;bottom:0;background:#fff;border-radius:20px 20px 0 0;
+  padding:8px 12px 14px;box-shadow:0 -8px 30px rgba(21,11,54,.22)}
+.grip{width:36px;height:4px;border-radius:2px;background:var(--line-2);margin:0 auto 10px}
+.sheet h2{margin:0 0 8px;padding:0 2px;font-size:14px;font-weight:650;letter-spacing:-.01em}
+.row{display:flex;align-items:center;gap:11px;width:100%;min-width:0;min-height:60px;
+  padding:8px 8px 8px 10px;border:0;border-radius:12px;background:transparent;font:inherit;
+  text-align:left;cursor:pointer}
+.row + .row{border-top:1px solid var(--line-soft)}
+.row.on,.row.on + .row{border-top-color:transparent}
+.row .txt{flex:1;min-width:0}
+.row .lab{display:block;font-size:14px;font-weight:500;color:#334155;line-height:1.25}
+.row .sub{display:block;font-size:11px;color:var(--ink-3);margin-top:2px}
+.row .tick{flex:none;width:20px;text-align:center;font-size:14px;font-weight:700;color:var(--violet)}
+.row.on{background:var(--violet-50)}
+.row.on .lab{font-weight:650;color:var(--violet-900)}
+.row:focus-visible{outline:2px solid var(--violet);outline-offset:-2px}
+
+</style>
+</head>
+<body>
+  <header class="head">
+    <h1>Option B &mdash; the compact chip</h1>
+    <p>One 44px pill states the band you are on and nothing else, so the pad above the tiles stays a single quiet line. Tapping it raises a sheet with the four bands full-width, one line each. The four rungs on the pill are the same ladder Option A draws across the row, folded into a glyph. All four states below, plus the open sheet.</p>
+    <div class="rule"></div>
+  </header>
+  <main class="frames">
+    <section>
+      <p class="cap">State 1 of 4 &mdash; <b>Result only</b></p>
+      <div class="pad">
+        <div class="bug">
+          <div class="bug-band"><span class="dot"></span>Second half &nbsp;67&#8242;</div>
+          <div class="bug-halves">
+            <div><span class="team">Riverside</span><span class="score">2</span></div>
+            <div><span class="team">Ashfield</span><span class="score">1</span></div>
+          </div>
+        </div>
+        <div class="ribbon">
+          <span>Goal &mdash; Priya Raman 61&#8242;</span>
+          <button type="button">Take back</button>
+        </div>
+        <div>
+          <button type="button" class="chip" aria-haspopup="dialog" aria-expanded="false">
+            <span class="meter" aria-hidden="true"><i class="f"></i><i class=""></i><i class=""></i><i class=""></i></span>
+            <span class="lead">Recording</span>
+            <span class="val">Result only</span>
+            <svg class="chev" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.75"
+                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg>
+          </button>
+          <p class="count" style="margin-top:7px;padding-left:14px"><b>4</b> actions on the pad</p>
+        </div>
+        <div class="tiles">
+        <button type="button" class="tile primary">Goal<span class="sub">Home</span></button>
+        <button type="button" class="tile primary">Goal<span class="sub">Away</span></button>
+        <button type="button" class="tile minor">Half-time</button>
+        <button type="button" class="tile minor">Full-time</button>
+        </div>
+      </div>
+    </section>
+    <section>
+      <p class="cap">State 2 of 4 &mdash; <b>Cards &amp; key moments</b></p>
+      <div class="pad">
+        <div class="bug">
+          <div class="bug-band"><span class="dot"></span>Second half &nbsp;67&#8242;</div>
+          <div class="bug-halves">
+            <div><span class="team">Riverside</span><span class="score">2</span></div>
+            <div><span class="team">Ashfield</span><span class="score">1</span></div>
+          </div>
+        </div>
+        <div class="ribbon">
+          <span>Goal &mdash; Priya Raman 61&#8242;</span>
+          <button type="button">Take back</button>
+        </div>
+        <div>
+          <button type="button" class="chip" aria-haspopup="dialog" aria-expanded="false">
+            <span class="meter" aria-hidden="true"><i class="f"></i><i class="f"></i><i class=""></i><i class=""></i></span>
+            <span class="lead">Recording</span>
+            <span class="val">Cards &amp; key moments</span>
+            <svg class="chev" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.75"
+                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg>
+          </button>
+          <p class="count" style="margin-top:7px;padding-left:14px"><b>8</b> actions on the pad</p>
+        </div>
+        <div class="tiles">
+        <button type="button" class="tile primary">Goal<span class="sub">Home</span></button>
+        <button type="button" class="tile primary">Goal<span class="sub">Away</span></button>
+        <button type="button" class="tile minor">Half-time</button>
+        <button type="button" class="tile minor">Full-time</button>
+        <button type="button" class="tile">Yellow card</button>
+        <button type="button" class="tile">Red card</button>
+        <button type="button" class="tile">Sub</button>
+        <button type="button" class="tile">Penalty</button>
+        </div>
+      </div>
+    </section>
+    <section>
+      <p class="cap">State 3 of 4 &mdash; <b>Full timeline</b></p>
+      <div class="pad">
+        <div class="bug">
+          <div class="bug-band"><span class="dot"></span>Second half &nbsp;67&#8242;</div>
+          <div class="bug-halves">
+            <div><span class="team">Riverside</span><span class="score">2</span></div>
+            <div><span class="team">Ashfield</span><span class="score">1</span></div>
+          </div>
+        </div>
+        <div class="ribbon">
+          <span>Goal &mdash; Priya Raman 61&#8242;</span>
+          <button type="button">Take back</button>
+        </div>
+        <div>
+          <button type="button" class="chip" aria-haspopup="dialog" aria-expanded="false">
+            <span class="meter" aria-hidden="true"><i class="f"></i><i class="f"></i><i class="f"></i><i class=""></i></span>
+            <span class="lead">Recording</span>
+            <span class="val">Full timeline</span>
+            <svg class="chev" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.75"
+                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg>
+          </button>
+          <p class="count" style="margin-top:7px;padding-left:14px"><b>14</b> actions on the pad</p>
+        </div>
+        <div class="tiles">
+        <button type="button" class="tile primary">Goal<span class="sub">Home</span></button>
+        <button type="button" class="tile primary">Goal<span class="sub">Away</span></button>
+        <button type="button" class="tile minor">Half-time</button>
+        <button type="button" class="tile minor">Full-time</button>
+        <button type="button" class="tile">Yellow card</button>
+        <button type="button" class="tile">Red card</button>
+        <button type="button" class="tile">Sub</button>
+        <button type="button" class="tile">Penalty</button>
+        <button type="button" class="tile">Shot on</button>
+        <button type="button" class="tile">Shot off</button>
+        <button type="button" class="tile">Corner</button>
+        <button type="button" class="tile">Free kick</button>
+        <button type="button" class="tile">Save</button>
+        <button type="button" class="tile">Assist</button>
+        </div>
+      </div>
+    </section>
+    <section>
+      <p class="cap">State 4 of 4 &mdash; <b>Every detail</b></p>
+      <div class="pad">
+        <div class="bug">
+          <div class="bug-band"><span class="dot"></span>Second half &nbsp;67&#8242;</div>
+          <div class="bug-halves">
+            <div><span class="team">Riverside</span><span class="score">2</span></div>
+            <div><span class="team">Ashfield</span><span class="score">1</span></div>
+          </div>
+        </div>
+        <div class="ribbon">
+          <span>Goal &mdash; Priya Raman 61&#8242;</span>
+          <button type="button">Take back</button>
+        </div>
+        <div>
+          <button type="button" class="chip" aria-haspopup="dialog" aria-expanded="false">
+            <span class="meter" aria-hidden="true"><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i></span>
+            <span class="lead">Recording</span>
+            <span class="val">Every detail</span>
+            <svg class="chev" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.75"
+                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg>
+          </button>
+          <p class="count" style="margin-top:7px;padding-left:14px"><b>20</b> actions on the pad</p>
+        </div>
+        <div class="tiles">
+        <button type="button" class="tile primary">Goal<span class="sub">Home</span></button>
+        <button type="button" class="tile primary">Goal<span class="sub">Away</span></button>
+        <button type="button" class="tile minor">Half-time</button>
+        <button type="button" class="tile minor">Full-time</button>
+        <button type="button" class="tile">Yellow card</button>
+        <button type="button" class="tile">Red card</button>
+        <button type="button" class="tile">Sub</button>
+        <button type="button" class="tile">Penalty</button>
+        <button type="button" class="tile">Shot on</button>
+        <button type="button" class="tile">Shot off</button>
+        <button type="button" class="tile">Corner</button>
+        <button type="button" class="tile">Free kick</button>
+        <button type="button" class="tile">Save</button>
+        <button type="button" class="tile">Assist</button>
+        <button type="button" class="tile">Offside</button>
+        <button type="button" class="tile">Throw-in</button>
+        <button type="button" class="tile">Foul</button>
+        <button type="button" class="tile">Cross</button>
+        <button type="button" class="tile">Tackle</button>
+        <button type="button" class="tile minor">Injury</button>
+        </div>
+      </div>
+    </section>
+    <section>
+      <p class="cap">Tapping the chip &mdash; <b>the sheet, open on Full timeline</b></p>
+      <div class="pad screen">
+        <div class="bug">
+          <div class="bug-band"><span class="dot"></span>Second half &nbsp;67&#8242;</div>
+          <div class="bug-halves">
+            <div><span class="team">Riverside</span><span class="score">2</span></div>
+            <div><span class="team">Ashfield</span><span class="score">1</span></div>
+          </div>
+        </div>
+        <div class="ribbon">
+          <span>Goal &mdash; Priya Raman 61&#8242;</span>
+          <button type="button">Take back</button>
+        </div>
+        <div>
+          <button type="button" class="chip" aria-haspopup="dialog" aria-expanded="true">
+            <span class="meter" aria-hidden="true"><i class="f"></i><i class="f"></i><i class="f"></i><i class=""></i></span>
+            <span class="lead">Recording</span>
+            <span class="val">Full timeline</span>
+            <svg class="chev" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.75"
+                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg>
+          </button>
+          <p class="count" style="margin-top:7px;padding-left:14px"><b>14</b> actions on the pad</p>
+        </div>
+        <div class="tiles">
+        <button type="button" class="tile primary">Goal<span class="sub">Home</span></button>
+        <button type="button" class="tile primary">Goal<span class="sub">Away</span></button>
+        <button type="button" class="tile minor">Half-time</button>
+        <button type="button" class="tile minor">Full-time</button>
+        <button type="button" class="tile">Yellow card</button>
+        <button type="button" class="tile">Red card</button>
+        <button type="button" class="tile">Sub</button>
+        <button type="button" class="tile">Penalty</button>
+        <button type="button" class="tile">Shot on</button>
+        <button type="button" class="tile">Shot off</button>
+        <button type="button" class="tile">Corner</button>
+        <button type="button" class="tile">Free kick</button>
+        <button type="button" class="tile">Save</button>
+        <button type="button" class="tile">Assist</button>
+        </div>
+        <div class="scrim"></div>
+        <div class="sheet" role="dialog" aria-modal="true" aria-label="Recording detail">
+          <div class="grip"></div>
+          <h2>How much detail are you recording?</h2>
+          <div role="radiogroup" aria-label="Recording detail">
+            <button type="button" role="radio" aria-checked="false" class="row"><span class="meter" aria-hidden="true"><i class="f"></i><i class=""></i><i class=""></i><i class=""></i></span><span class="txt"><span class="lab">Result only</span><span class="sub">4 actions on the pad</span></span><span class="tick" aria-hidden="true"></span></button><button type="button" role="radio" aria-checked="false" class="row"><span class="meter" aria-hidden="true"><i class="f"></i><i class="f"></i><i class=""></i><i class=""></i></span><span class="txt"><span class="lab">Cards &amp; key moments</span><span class="sub">8 actions on the pad</span></span><span class="tick" aria-hidden="true"></span></button><button type="button" role="radio" aria-checked="true" class="row on"><span class="meter" aria-hidden="true"><i class="f"></i><i class="f"></i><i class="f"></i><i class=""></i></span><span class="txt"><span class="lab">Full timeline</span><span class="sub">14 actions on the pad</span></span><span class="tick" aria-hidden="true">&#10003;</span></button><button type="button" role="radio" aria-checked="false" class="row"><span class="meter" aria-hidden="true"><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i></span><span class="txt"><span class="lab">Every detail</span><span class="sub">20 actions on the pad</span></span><span class="tick" aria-hidden="true"></span></button>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

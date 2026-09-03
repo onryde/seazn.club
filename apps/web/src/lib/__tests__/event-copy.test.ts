@@ -34,7 +34,9 @@ const echo: MsgFn = (k) => `«${k}»`;
 
 interface TieredModule {
   key: string;
-  fidelityTiers?: readonly { eventTypes: readonly string[] }[];
+  configSchema: { parse: (cfg: unknown) => unknown };
+  padSpec?: (cfg: unknown) => { fidelity: Record<string, unknown> };
+  variants: Record<string, unknown>;
 }
 
 /** Every event type any shipped module declares — read from the engine, not
@@ -46,11 +48,31 @@ interface TieredModule {
  *  from every loop below, and reded nothing. The gate could not fail for the
  *  one case it was written to catch. `core.suspend`/`core.resume` (W4a) have
  *  copy only because someone remembered. Seeded from `CORE_EVENT_SCHEMAS` now,
- *  which is the registration the fold itself dispatches on. */
+ *  which is the registration the fold itself dispatches on.
+ *
+ *  Task 3b (entitlements W1): the per-module half used to walk
+ *  `fidelityTiers`, retired in favour of `padSpec(cfg).fidelity` — see
+ *  `scoring-vocab.test.ts`'s `declaredEventTypes()` for the full rationale
+ *  (cfg-independence probe, `generic`'s bare-`{}` throw). */
 function declaredEventTypes(): string[] {
   const out = new Set<string>(Object.keys(CORE_EVENT_SCHEMAS));
   for (const m of builtinModules as unknown as TieredModule[]) {
-    for (const tier of m.fidelityTiers ?? []) for (const t of tier.eventTypes) out.add(t);
+    const candidates = [{}, ...Object.values(m.variants ?? {})];
+    let cfg: unknown;
+    let parsed = false;
+    for (const c of candidates) {
+      try {
+        cfg = m.configSchema.parse(c);
+        parsed = true;
+        break;
+      } catch {
+        continue;
+      }
+    }
+    if (!parsed) throw new Error(`${m.key}: no cfg (bare or variant) parses`);
+    const spec = m.padSpec?.(cfg);
+    if (!spec) throw new Error(`${m.key}: no padSpec`);
+    for (const t of Object.keys(spec.fidelity)) out.add(t);
   }
   return [...out].sort();
 }
@@ -137,6 +159,27 @@ describe("the activity feed authors no English of its own", () => {
     // The structural pin: with an echoing translator NO badge may survive as
     // prose. A reintroduced string literal reds here on the type that carries
     // it, whether or not anyone remembered to translate it.
+    //
+    // ── THE FIVE-TYPE WAIVER IS GONE, AND IT WAS ALREADY STALE ───────────────
+    //
+    // Task 3b (entitlements W1) exempted `badminton.expedite.start`,
+    // `badminton.sub`, `badminton.timeout`, `tabletennis.sub` and
+    // `volleyball.expedite.start` with a `continue`: banded by
+    // `padSpec(cfg).fidelity` but unrecordable under every shipped preset, so
+    // `EVENT_KEY` had no entry and `eventLabel` fell through to a bare
+    // prettified string. The comment said "R8 lands their copy; this waiver
+    // expires with it" — and nothing MEASURED that expiry, so when R8 landed
+    // the copy the waiver silently went on carrying five types out of this
+    // coverage gate, which is a `.skip` nobody revisits by another name.
+    //
+    // The final review asked for a staleness assertion. Writing one showed the
+    // waiver was already dead: all five types resolve a key today, so the
+    // honest fix is to delete the list rather than gate it. Measured
+    // 2026-09-03 — the assertion named all five before it came out.
+    //
+    // The loop is now unconditional, which is also what
+    // `scoring-vocab.test.ts`'s sibling "labels every event type the engine
+    // declares" already does.
     for (const type of declaredEventTypes()) {
       const d = describeEvent(type, sample(type), NAMES, echo);
       expect(d.label, `${type} badge is not keyed`).toMatch(/^«[a-z]/);

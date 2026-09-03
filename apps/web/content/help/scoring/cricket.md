@@ -42,7 +42,7 @@ Still level after that? Your division's still-tied rule decides what happens nex
 
 ## Recording level
 
-Ball-by-ball scoring is the finest level a cricket match records, and it needs a plan that includes it. Below that, the pad records innings totals instead — a correct score and correct standings, with fewer details behind them. The chip in the pad header always says which level you're on, in words. See [choosing a detail level](/help/scoring/fidelity).
+Ball by ball is the finest level a cricket match records, and it is available on every plan — a cricket pad opens there. Drop to a lower level on the **Recording** chip and the pad records innings totals instead: a correct score and correct standings, with fewer details behind them. The chip always says which level you're on, in words. See [choosing a detail level](/help/scoring/fidelity).
 
 ## Over-by-over or ball-by-ball
 

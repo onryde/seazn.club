@@ -6,7 +6,7 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
-import { HttpError, PaymentRequiredError } from "@/lib/errors";
+import { PaymentRequiredError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { requireFixtureActor, requireOrgAuth } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
@@ -17,6 +17,7 @@ import { startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
 import {
   createDeviceLink,
+  requestDeviceLinkCoversFixture,
   revokeDeviceLink,
   getActiveDeviceLink,
   resolveDeviceLinkToken,
@@ -151,13 +152,26 @@ describe.skipIf(!HAS_DB)("device links (doc 13 §7, PROMPT-21)", () => {
     expect(deviceAuth.via).toBe("device_link");
     expect(deviceAuth.userId).toBe(ownerId); // recorded_by = issued_by
     expect(deviceAuth.deviceLinkId).toBe(link.id);
+    // Pinned, not merely "an HttpError": a regression to 401/404/500, or a
+    // refusal thrown for some unrelated reason, has to fail here. 403 + this
+    // message are what api-v1/http.ts puts on the wire verbatim.
     await expect(
       requireFixtureActor(dlRequest(link.secret), otherFixture.id, "score"),
-    ).rejects.toThrowError(HttpError);
+    ).rejects.toMatchObject({ status: 403 });
+    await expect(
+      requireFixtureActor(dlRequest(link.secret), otherFixture.id, "score"),
+    ).rejects.toThrowError("This device link is for a different fixture");
 
-    // Every other auth surface: 403.
+    // Every other auth surface: 403 — and pinned, because
+    // `PaymentRequiredError extends HttpError` (lib/errors.ts), so a bare
+    // `toThrowError(HttpError)` cannot tell an ownership refusal from a 402.
+    // In the wave that removes payment refusals from this path, that is the
+    // one distinction these assertions exist to make.
+    await expect(requireOrgAuth(dlRequest(link.secret), orgId, "read")).rejects.toMatchObject({
+      status: 403,
+    });
     await expect(requireOrgAuth(dlRequest(link.secret), orgId, "read")).rejects.toThrowError(
-      HttpError,
+      "Device links can only access their fixture's scoring surface",
     );
 
     // Score winner without any session.
@@ -207,22 +221,28 @@ describe.skipIf(!HAS_DB)("device links (doc 13 §7, PROMPT-21)", () => {
     const [{ id: ownerEventId }] = await sql<{ id: string }[]>`
       select id from score_events
       where fixture_id = ${fixture.id} and seq = ${ownerScored.seq}`;
-    await expect(
+    const voidOthers = () =>
       scoreEvent(deviceAuth, fixture.id, {
         expected_seq: ownerScored.seq,
         type: "core.void",
         payload: { event_id: ownerEventId },
-      }),
-    ).rejects.toThrowError(HttpError);
+      });
+    await expect(voidOthers()).rejects.toMatchObject({ status: 403 });
+    await expect(voidOthers()).rejects.toThrowError("A device link can only undo its own events");
 
-    // Finalize via link → 403 ("finalizing needs a human with a name").
-    await expect(
+    // Finalize via link → 403 ("finalizing needs a human with a name") — a
+    // CAPABILITY refusal, not a payment one, which is exactly what the status
+    // and message pins here are for.
+    const finalizeViaLink = () =>
       scoreEvent(deviceAuth, fixture.id, {
         expected_seq: ownerScored.seq,
         type: "core.finalize",
         payload: {},
-      }),
-    ).rejects.toThrowError(HttpError);
+      });
+    await expect(finalizeViaLink()).rejects.toMatchObject({ status: 403 });
+    await expect(finalizeViaLink()).rejects.toThrowError(
+      "Finalizing needs an organiser or scorer account",
+    );
 
     // Hash chain stays clean across device-link + hand-recorded events.
     const [{ bad }] = await sql<{ bad: string | null }[]>`
@@ -235,6 +255,53 @@ describe.skipIf(!HAS_DB)("device links (doc 13 §7, PROMPT-21)", () => {
       status: 401,
       code: "LINK_REVOKED",
     });
+  });
+
+  // The ownership guard is what separates "scoring detail is free" from
+  // "any device link can score any fixture". Drive the SAME two steps the
+  // route drives (requireFixtureActor → scoreEvent on the same id) and prove
+  // the door is shut, not merely that a helper threw: scoreEvent carries no
+  // fixture-ownership check of its own (AuthCtx has no fixtureId), so if the
+  // door ever stopped refusing, the write WOULD land.
+  it("cross-fixture: the door refuses 403 and NO event reaches the other fixture", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { fixtures } = await rig(owner);
+    const [fixture, otherFixture] = fixtures;
+    const link = await createDeviceLink(owner, fixture.id, "Court 3 phone");
+
+    // Verbatim the body of POST /api/v1/fixtures/[id]/events.
+    const post = (fixtureId: string) =>
+      requireFixtureActor(dlRequest(link.secret), fixtureId, "score").then((auth) =>
+        scoreEvent(auth, fixtureId, { expected_seq: 0, type: "core.start", payload: {} }),
+      );
+
+    await expect(post(otherFixture.id)).rejects.toMatchObject({ status: 403 });
+    await expect(post(otherFixture.id)).rejects.toThrowError(
+      "This device link is for a different fixture",
+    );
+    const [{ n: leaked }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from score_events where fixture_id = ${otherFixture.id}`;
+    expect(leaked).toBe(0);
+
+    // Control: the same token writes to its OWN fixture, so the 403 above is
+    // about ownership — not an invalid token, an unstarted division, or a
+    // rejection scoreEvent would have raised for any caller.
+    const ok = await post(fixture.id);
+    expect(ok.seq).toBe(1);
+    const [{ n: own }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from score_events where fixture_id = ${fixture.id}`;
+    expect(own).toBe(1);
+
+    // Same question, second asker: the public realtime-token route decides
+    // fixture ownership for a dl_ token too. It must decide it with the SAME
+    // predicate — pinned here so a change to one is a change to both.
+    await expect(requestDeviceLinkCoversFixture(dlRequest(link.secret), fixture.id)).resolves.toBe(
+      true,
+    );
+    await expect(
+      requestDeviceLinkCoversFixture(dlRequest(link.secret), otherFixture.id),
+    ).resolves.toBe(false);
   });
 
   it("expiry (clock injected) → 401 LINK_EXPIRED; re-mint revokes the old link", async () => {

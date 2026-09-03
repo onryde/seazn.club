@@ -19,7 +19,6 @@ import { EngineError, foldMatch, type EventEnvelope } from "@seazn/engine/core";
 import { resolveModule, resolveFixtureCfg } from "@/server/engine-db";
 import { loadLineupPair } from "@/server/engine-db/lineups";
 import { appendEventInTx, type AppendResult, type FirstResult } from "@/server/engine-db/append-event";
-import { requiredFeatureForEvent } from "./fidelity";
 import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
 import {
   invalidatePublicCache,
@@ -240,19 +239,17 @@ async function runStream(
   }
 
   // 5. Entitlement per distinct event type, still on the pooled proxy.
+  // W1 (entitlements v18, owner ruling 2026-08-30): scoring detail is free on
+  // every plan — the fidelity-band gate `requiredFeatureForEvent` used to
+  // apply here is deleted. `scoreEvent`'s SECOND, non-fidelity gate
+  // (scoring.ts's `requiresDlsEntitlement`) still applies: a `cricket.revise`
+  // with no manual umpire target under a DLS-enabled division computes a DLS
+  // target, which is Pro only. Shared predicate, not a copy, so the two paths
+  // cannot drift; `division.config` is the same division-level config
+  // `assertEntitledToScore` reads (owner ruling R-B).
   const sportModule = resolveModule(division.sportKey, division.moduleVersion);
   const requiredFeatures = new Set<string>();
   for (const ev of stream.events) {
-    const feature = requiredFeatureForEvent(sportModule, ev.type);
-    if (feature) requiredFeatures.add(feature);
-    // The second, non-fidelity gate `scoreEvent` applies (scoring.ts's
-    // `requiresDlsEntitlement`): a `cricket.revise` with no manual umpire
-    // target under a DLS-enabled division computes a DLS target, which is Pro
-    // only. `cricket.revise` is fidelity TIER 1, so the loop above returns null
-    // for it and would otherwise wave it straight through — a non-entitled org
-    // buying a DLS target by importing instead of scoring. Shared predicate,
-    // not a copy, so the two paths cannot drift; `division.config` is the same
-    // division-level config `assertEntitledToScore` reads (owner ruling R-B).
     if (requiresDlsEntitlement(ev.type, division.config, ev.payload)) {
       requiredFeatures.add("cricket.dls");
     }

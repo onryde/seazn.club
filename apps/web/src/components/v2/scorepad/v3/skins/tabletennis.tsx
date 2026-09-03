@@ -56,10 +56,10 @@
 //     (`setbased/tabletennis.ts`) — S3/W4b (#426) ruling 2, the ITTF has no
 //     substitute, the pair named on the sheet plays the match. No in-play
 //     swap for this sport to declare, same stance badminton takes.
-//   - `contextSelect()`. The one context slot this skin declares is
-//     `readOnly` (D-7's recording notice), and a readOnly slot's picker can
-//     never open (context-strip.tsx), so there is no selection for this
-//     method to turn into an event.
+//   - `contextSelect()`. This skin declares no context strip at all (W1 /
+//     Task 4 deleted its one slot — D-7's recording notice, which named a
+//     plan), so there is no selection for this method to turn into an
+//     event.
 "use client";
 import type { SquadState } from "@seazn/engine/core";
 import type { FidelityBand } from "@seazn/engine/sport";
@@ -71,12 +71,9 @@ import {
 } from "@seazn/engine/sports/setbased";
 import type { MessageKey } from "@/lib/messages";
 import { ENUM_VOCAB } from "@/lib/scoring-vocab";
-import { featurePlan } from "@/lib/feature-copy";
-import { planLabel } from "@/lib/plan-label";
 import {
   MORE_SHEET_KEY,
   type ActivityDetailContext,
-  type ContextStripSpec,
   type DockChip,
   type DockSpec,
   type GuidedSheetSpec,
@@ -114,14 +111,6 @@ const SIDE_LABEL: Record<Side, MessageKey> = {
   away: "scorepad.attribution.away",
 };
 
-/** The feature key table tennis's band 3 is gated behind —
- *  `setbased/tabletennis.ts`'s own `rallyEntitlement`, which the kernel
- *  publishes as `padSpec(cfg).fidelityEntitlements[3]`. RESTATED here rather
- *  than read off a live `padSpec` call, and
- *  `__tests__/tabletennis.test.ts` pins this constant EQUAL to the module's
- *  own value — badminton's identical pattern, and by design the identical
- *  STRING (both dossiers cite "doc 10" for tier-2/3 rally scoring). */
-export const RALLY_ENTITLEMENT = "scoring.rally_by_rally";
 
 /**
  * S7/#427 — the ITTF umpire's card ladder, in the order the sheet climbs it.
@@ -160,7 +149,7 @@ function toneFor(level: string): readonly SportTone[] {
  * fold: a rally crediting the SERVING side their 13th-return win throws
  * `EXPEDITE_WRONG_WINNER` at this exact threshold and not one short of it —
  * the same "restate, then prove equal to the source of truth" posture
- * `RALLY_ENTITLEMENT`/`SANCTION_LEVELS` already take for a value this file
+ * `SANCTION_LEVELS` already takes for a value this file
  * cannot import directly.
  */
 export const EXPEDITE_RETURNS_THRESHOLD = 13;
@@ -735,35 +724,23 @@ export function buildScorebug(view: PadHostView, t: TFn): ScorebugSpec {
 }
 
 // ---------------------------------------------------------------------------
-// context() — D-7's explanation, badminton's exact mechanism. The chassis
-// has no locked-tile path for a band GAP, so the explanation has to be
-// authored; see badminton.tsx's own header for the full reasoning this file
-// does not repeat.
+// W1 / Task 4 (entitlements v18) — D-7's explainer is GONE, and that is the
+// fix, not a loss.
+//
+// This skin used to declare a context strip and a big disabled "Rally by
+// rally is locked" tile for exactly one reason: below band 3 the rally
+// affordance vanished, the scorer had no way to change that, and nothing on
+// screen said why. Both halves named a PLAN ("Rally-by-rally scoring needs
+// {plan}"), because a band was something an org bought.
+//
+// A band is now the scorer's own pick, stated on the Recording chip two
+// controls up and changed from it in two taps. So there is no lock to word,
+// no plan to name, and a slab reading "Rally by rally is locked" over a
+// setting the reader chose would be the pad lying to them. The chip is both
+// the statement and the control; `pad.{sport}.context.recording[.locked]` and
+// `pad.{sport}.tile.rallyLocked[.sublabel]` are deleted from all four
+// dictionaries with it.
 // ---------------------------------------------------------------------------
-
-function rallyOutOfBand(view: PadHostView): boolean {
-  return view.band < 3;
-}
-
-export function buildContextStrip(view: PadHostView, t: TFn): ContextStripSpec | null {
-  if (resolvePhase(view) !== "live" || !rallyOutOfBand(view)) return null;
-  return {
-    slots: [
-      {
-        id: "recording",
-        label: "pad.tabletennis.context.recording",
-        pool: "onfield",
-        required: false,
-        readOnly: true,
-        message: t("pad.tabletennis.context.recording.locked", {
-          plan: planLabel(featurePlan(RALLY_ENTITLEMENT)),
-        }),
-        messageTone: "info",
-        candidates: [],
-      },
-    ],
-  };
-}
 
 // ---------------------------------------------------------------------------
 // tiles()
@@ -776,7 +753,6 @@ export function timeoutTileId(side: Side): string {
   return `timeout-${side}`;
 }
 
-export const RALLY_LOCKED_TILE_ID = "rallyLocked";
 export const SET_SCORE_TILE_ID = "setScore";
 export const EXPEDITE_START_TILE_ID = "expediteStart";
 export const SERVE_ANCHOR_TILE_ID = "serveAnchor";
@@ -804,7 +780,7 @@ function needsServeAnchor(view: PadHostView, state: TableTennisStateShape): bool
   return ctx.unknownBecause !== "recorded-disagrees" && ctx.unknownBecause !== "ledger-mismatch";
 }
 
-export function buildTiles(view: PadHostView, t: TFn): TileSpec[] {
+export function buildTiles(view: PadHostView): TileSpec[] {
   const state = asState(view.state);
   const live = resolvePhase(view) === "live";
   const band = view.band;
@@ -919,30 +895,6 @@ export function buildTiles(view: PadHostView, t: TFn): TileSpec[] {
     });
   }
 
-  // D-7 — THE SILENCE, GIVEN A FACE. Badminton's exact mechanism: VISIBLE,
-  // disabled, span-4, paired with the context slot above which carries the
-  // sentence (`assertDisabledTilesExplained`, tile-grid.tsx).
-  //
-  // THE ACTION IS `MORE_SHEET_KEY` FOR A STRUCTURAL REASON. `filterTilesByBand`
-  // resolves a tile's event type and drops the tile when that type's band
-  // exceeds the org's — so a tile pointing at `tabletennis.rally` in ANY
-  // form would be filtered out by the very gate it exists to explain.
-  // `MORE_SHEET_KEY` is the one action value `tileEventType` resolves to
-  // `null` BY NAME (pad-host.tsx), the "unclassifiable, therefore kept"
-  // branch. `disabled: true` makes the tap inert regardless.
-  if (live && rallyOutOfBand(view)) {
-    tiles.push({
-      id: RALLY_LOCKED_TILE_ID,
-      label: "pad.tabletennis.action.rally",
-      labelText: t("pad.tabletennis.tile.rallyLocked"),
-      sublabelText: t("pad.tabletennis.tile.rallyLocked.sublabel"),
-      kind: "minor",
-      span: 4,
-      phases: ["live"],
-      disabled: true,
-      action: { sheet: MORE_SHEET_KEY },
-    });
-  }
 
   tiles.push({
     id: "more",
@@ -1359,10 +1311,9 @@ export function tabletennisSkinV3(t: TFn): SkinDefV3<PadHostView> {
     tapModel: "S",
     phase: resolvePhase,
     scorebug: (view) => buildScorebug(view, t),
-    tiles: (view) => buildTiles(view, t),
+    tiles: buildTiles,
     dock: (eventType, view, payload) => buildDock(eventType, view, t, payload),
     sheets: (view) => buildSheets(view, t),
-    context: (view) => buildContextStrip(view, t),
     refusedEventTypes,
     activityDetail: tabletennisDetail,
     // No swap()/contextSelect() — see this file's header.

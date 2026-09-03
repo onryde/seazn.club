@@ -178,9 +178,9 @@ if (corpusWriteRefusal !== null) {
 
       // W4 review item 3 — `types.length > 2` was the whole coverage claim, and
       // it was nowhere near what the gate advertised: football recorded 4 of
-      // its 7 declared tier types, cricket 3 of 15, so adding a required field
+      // its 7 declared event types, cricket 3 of 15, so adding a required field
       // to the PRE-EXISTING FootballSub left all 45 golden tests green. A
-      // module's `fidelityTiers` is its own claim about what a scorer can
+      // module's `padSpec.fidelity` is its own claim about what a scorer can
       // record; every one of those types has to be in the corpus or the
       // back-compat tripwire simply does not cover it.
       //
@@ -196,9 +196,10 @@ if (corpusWriteRefusal !== null) {
       // second dimension (W4a T10); read a green HERE as "every type appears".
       it("records every event type the module declares in a fidelity tier", () => {
         const missing = uncoveredTierTypes(module, corpus);
+        const cfg = corpus.configs[corpus.streams[0]!.config];
         expect(
           missing,
-          `${module.key} declares ${tierEventTypes(module).length} tier event types and its ` +
+          `${module.key} declares ${tierEventTypes(module, cfg).length} tier event types and its ` +
             `corpus never exercises ${missing.length} of them, so a tightening of those ` +
             `branches would not red anything. Extend the corpus: ` +
             `EXTEND_GOLDEN=1 npx vitest run src/testkit/golden.test.ts`,

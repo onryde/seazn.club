@@ -72,11 +72,17 @@ describe("scoring-vocab label helpers", () => {
 // an enum member in packages/engine and this suite reds until a label lands in
 // all four dictionaries.
 
-/** Every event type any shipped module declares in its fidelity tiers. */
+/** Every event type any shipped module declares.
+ *
+ *  W1 (entitlements v18, "scoring goes free") RETIRED `fidelityTiers`, so the
+ *  union R8/WS-R round 2 describes below now has one arm: `eventSchemas`. The
+ *  reasoning for preferring it is unchanged and is why the deletion cost this
+ *  gate nothing — tiers were a fidelity BANDING of a subset (63 types), never
+ *  the module's declaration of what it accepts (68). The five it under-reported
+ *  are still named below; they are the reason this gate widened. */
 function declaredEventTypes(): string[] {
   const out = new Set<string>();
   for (const m of builtinModules as unknown as EngineModule[]) {
-    for (const tier of m.fidelityTiers ?? []) for (const t of tier.eventTypes) out.add(t);
     for (const t of Object.keys(m.eventSchemas ?? {})) out.add(t);
   }
   return [...out].sort();
@@ -86,8 +92,9 @@ function declaredEventTypes(): string[] {
  * Every event type the engine will actually ACCEPT — the union of every
  * module's registered payload schemas.
  *
- * R8/WS-R round 2: `fidelityTiers` alone is the WRONG source, and it was the
- * one `declaredEventTypes()` used. Tiers are a fidelity BANDING of a subset,
+ * R8/WS-R round 2: `fidelityTiers` alone was the WRONG source, and it was the
+ * one `declaredEventTypes()` used. W1 has since deleted that model outright;
+ * the argument is kept because it is why this gate reads `eventSchemas`. Tiers are a fidelity BANDING of a subset,
  * not a module's declaration of what it accepts, and for three sports they
  * under-report — `setbased/kernel.ts:1816` builds a fixed six-key action map
  * (summary, timeout, sanction, sub, expedite, rally) for EVERY preset and
@@ -101,10 +108,10 @@ function declaredEventTypes(): string[] {
  * naming it, which is its own evidence that tiers are not the declaration.)
  *
  * `eventSchemas` is what the engine accepts, which is the right bar for "no
- * raw internal type ever reaches a scorer". `declaredEventTypes()` takes the
- * UNION of both rather than swapping one source for the other, because the
- * field is OPTIONAL on `SportModule` (module.ts:501) and a module that omits
- * it must still be swept rather than vanish.
+ * raw internal type ever reaches a scorer". It is OPTIONAL on `SportModule`
+ * (grep `eventSchemas?:` in module.ts), so a module omitting it contributes
+ * nothing here — see the next paragraph for what that actually does, which is
+ * red rather than degrade.
  *
  * What that omission actually does (corrected round 3 — this comment used to
  * say such a module would "degrade to its tiers", which undersells it): its
@@ -126,7 +133,6 @@ function engineAcceptedEventTypes(): string[] {
 
 interface EngineModule {
   key: string;
-  fidelityTiers?: readonly { eventTypes: readonly string[] }[];
   /** The union of the sport's event PAYLOADS (module.ts:481, required on
    *  SportModule) — what `declaredEnumMembers()` walks for enum options. */
   eventSchema?: unknown;

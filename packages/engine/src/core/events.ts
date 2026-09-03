@@ -98,10 +98,10 @@ export const CORE_EVENT_SCHEMAS = {
   // FIVE SIBLING TYPES rather than one type with a discriminated `kind`,
   // because every consumer in the system keys on the exact type string —
   // this map, DURING_STOPPAGE below, `postDecisionTypes`, a module's
-  // `fidelityTiers[].eventTypes`, the entitlement gate, the pad's filters —
-  // and a `kind` nested in one payload is invisible to all of them. The full
-  // argument, and the cross-parse proof that no sibling swallows another, are
-  // in `core/lineup.ts` and `core/lineup.events.test.ts`.
+  // `padSpec.fidelity` keys, the pad's filters — and a `kind` nested in one
+  // payload is invisible to all of them. The full argument, and the
+  // cross-parse proof that no sibling swallows another, are in
+  // `core/lineup.ts` and `core/lineup.events.test.ts`.
   "core.lineup.substitution": LineupSubstitution,
   "core.lineup.replacement": LineupReplacement,
   "core.lineup.position": LineupPositionChange,

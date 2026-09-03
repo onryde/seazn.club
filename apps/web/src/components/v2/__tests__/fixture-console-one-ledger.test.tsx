@@ -41,7 +41,6 @@ const sport: SportInfo = {
   roles: [],
   lineupSize: 11,
   benchMax: 5,
-  fidelityTiers: football.fidelityTiers as SportInfo["fidelityTiers"],
 };
 
 const side = (id: string, name: string): SideInfo => ({ id, name, members: [], lineup: [] });
@@ -115,7 +114,6 @@ function consoleHtml(over: {
         resolvedConfig: CFG,
         initialEvents: ENVELOPES,
         entitlements: {},
-        band: 3,
         identity: { recordedBy: "user-1", deviceLinkId: null },
       }}
     />,

@@ -188,11 +188,13 @@ const coinflip: SportModule<CoinCfg, CoinEv, CoinState> = {
   defaultTiebreakers: ["points", "diff", "lots"],
   supportsDraws: (_cfg, stage) => stage === "league" || stage === "group" || stage === "swiss",
   declaredPointsSets: () => [2],
-  fidelityTiers: [
-    { tier: 0, eventTypes: ["coin.stop"] },
-    { tier: 1, eventTypes: ["coin.summary"] },
-    { tier: 3, eventTypes: ["coin.flip"] },
-  ],
+  // W1 (scoring free) ruling: every SportModule the conformance identity
+  // check runs against needs a padSpec now, including this pre-PadSpec toy
+  // module.
+  padSpec: () => ({
+    panels: [],
+    fidelity: { "coin.stop": 0, "coin.summary": 1, "coin.flip": 3 },
+  }),
   officialLabel: { scorer: "Scorer" },
 
   arbitraryEvent(state, rng): ModuleEvent<CoinEv> | null {

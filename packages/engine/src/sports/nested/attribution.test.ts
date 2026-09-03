@@ -267,11 +267,16 @@ describe("tennis playerStats", () => {
     ]);
   });
 
-  it("tier 3 reaches the sanction event; tier 0 stays a bare set score", () => {
-    const tier3 = tennis.fidelityTiers.find((t) => t.tier === 3)!;
-    const tier0 = tennis.fidelityTiers.find((t) => t.tier === 0)!;
-    expect(tier3.eventTypes).toContain("tennis.sanction");
-    expect(tier3.eventTypes).toContain("tennis.point");
-    expect(tier0.eventTypes).not.toContain("tennis.sanction");
+  it("the point sits at the max-detail band; the sanction sits at the admin band, never the bare score", () => {
+    // W1: formerly asserted BOTH types were named in tier 3's array (the old
+    // cumulative-list model lumped the admin-level sanction in with the
+    // attributed-scoring tiers) and sanction was absent from tier 0.
+    // padSpec.fidelity separates them: sanction is a band-1 admin record
+    // (same band as interruption), point is band 3 (the kernel's max
+    // detail) — see kernel.ts's own note. Neither is ever band 0.
+    const spec = tennis.padSpec!(tennis.configSchema.parse({}));
+    expect(spec.fidelity["tennis.point"]).toBe(3);
+    expect(spec.fidelity["tennis.sanction"]).toBe(1);
+    expect(spec.fidelity["tennis.sanction"]).not.toBe(0);
   });
 });

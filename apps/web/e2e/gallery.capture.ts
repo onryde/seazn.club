@@ -626,25 +626,23 @@ interface GallerySport {
 //    the engine cannot name the receiver from what it stores"). Photographed
 //    by `11-servingplaceholder`, on all three sports.
 //
-//  * D-7 — BELOW BAND 3 THE PAD SAYS NOTHING. The kernel keys only band 3
-//    (`fidelityEntitlements: { 3: preset.rallyEntitlement }`, i.e.
-//    "scoring.rally_by_rally"), and `view-model.ts` DROPS an action above the
-//    org's band rather than locking it (`if (band === undefined || band >
-//    ctx.band) return null`) — so an org without that entitlement gets a live
-//    scoring pad with no rally control and no reason on screen. The
-//    register's own BAD-03 evidence line, never photographed. `12-bandlimited`,
-//    badminton only (BAD-03's own sport; the kernel is shared, so the same
-//    screen is reachable on the other two).
+//  * D-7 — BELOW BAND 3 THE PAD SAYS NOTHING. `{sport}.rally` is band 3 and
+//    `view-model.ts` DROPS an action above the active band rather than locking
+//    it (`if (band === undefined || band > ctx.band) return null`) — so a pad
+//    below band 3 had no rally control and no reason on screen. The register's
+//    own BAD-03 evidence line, never photographed. `12-bandlimited`, badminton
+//    only (BAD-03's own sport; the kernel is shared, so the same screen is
+//    reachable on the other two).
 //
-//    NAMED `bandlimited`, NOT `bandzero`, and the difference is a real
-//    finding: the defect register calls this "a free / band-0 org", but a
-//    community org actually resolves to band TWO here. `resolveFidelityBand`
-//    walks 0..3 and only breaks on a band that NAMES an entitlement the org
-//    lacks; this kernel keys band 3 alone, so bands 0, 1 and 2 are all free.
-//    What the free org therefore loses is the rally action only — the band-1
-//    interruptions (sanctions, and on the other two sports timeouts/subs)
-//    survive, so the screen is a Set score panel AND a Sanctions drawer, not
-//    the "lone Set score button" the register describes.
+//    W1 / TASK 4 CHANGED WHAT PUTS THE PAD THERE, and the capture with it.
+//    The band used to be resolved from the ORG'S PLAN (the kernel keyed band 3
+//    behind "scoring.rally_by_rally", and a community org resolved to band TWO
+//    — never band 0, which is why this state is named `bandlimited` and not
+//    `bandzero`). Scoring depth is not sold any more: the band is a choice the
+//    SCORER makes on the Recording chip, and this capture makes it, on camera,
+//    the way a volunteer would. The screen is still a Set score panel plus a
+//    Sanctions drawer — what changed is that the chip above them now says so
+//    and offers the way back.
 //
 //  * D-13 — TABLE TENNIS HAS NEVER BEEN DRIVEN IN A BROWSER beyond this
 //    harness's single `scoreOne` tap (see this file's own tabletennis note:
@@ -879,23 +877,22 @@ async function captureRacquetServing(
 }
 
 /**
- * `12-bandlimited` (D-7) — the same live badminton pad, for an org that does not
- * hold `scoring.rally_by_rally`.
+ * `12-bandlimited` (D-7, REWRITTEN BY W1 / TASK 4) — the same live badminton
+ * pad, for a scorer who has CHOSEN to record game scores rather than rallies.
  *
- * The lever is the org's PLAN, flipped to community and restored in a
- * `finally`: that is literally the org the defect is about, and it exercises
- * the real plan matrix rather than a staff-deny override. It is restored
- * before this hook returns because the shared body mints a device link
- * afterwards and device links are Pro-only.
+ * The lever used to be the org's PLAN: flip to community, and
+ * `resolveFidelityBand` resolved band 2 because the kernel keyed band 3 behind
+ * `scoring.rally_by_rally`. Scoring depth is not sold any more (owner ruling
+ * 2026-08-30), so there is no plan to flip and nothing to photograph a lock
+ * on. The lever is now the Recording chip itself — the harness OPENS it and
+ * PICKS band 2, which is exactly what a volunteer does, and the pick is
+ * remembered per fixture in `localStorage` so it survives the reload each
+ * captured width performs.
  *
- * NO cache invalidation on purpose. `invalidateOrgEntitlements` exists for
- * Redis-backed targets, and it works by flipping the org OWNER to superadmin
- * and back — a side effect on the very account the next four captures are
- * taken as. Local and CI have no Redis (`cache.ts`'s `client()` returns null,
- * so `cacheGet` is inert), which is where the runbook already says to run
- * this harness; against a Redis-backed target this state's probe FAILS,
- * loudly and by name, rather than photographing a band-3 board and calling it
- * band-limited. A loud wrong-environment failure is the honest outcome here.
+ * What this state is FOR is unchanged and still worth a picture: the pad below
+ * band 3 used to be silence — a board whose halves did nothing, with no reason
+ * anywhere on screen. It is no longer silent, and the thing that speaks is the
+ * chip, one line above the tiles, stating the level and offering to change it.
  */
 async function captureRacquetBandLimited(
   page: Page,
@@ -904,8 +901,6 @@ async function captureRacquetBandLimited(
   measurements: Measurement320[],
 ): Promise<ExtraGalleryState> {
   const bzTag = `${tag}bz`;
-  // Seeded (and started) while the org is still Pro: a community org has
-  // lower creation caps, and none of that is what this state is about.
   const fx = await seedRosteredFixture(page.request, {
     label: `Gallery Badminton BandLimited ${bzTag}`,
     sportKey: "badminton",
@@ -915,105 +910,52 @@ async function captureRacquetBandLimited(
     away: [{ fullName: `Gallery Badminton BZ Away ${bzTag}` }],
     emitCoreStart: true,
   });
-  const org = await activeOrg(page);
-  try {
-    await setOrgPlanBySql({ orgId: org.id }, "community");
-    await page.goto(await fixturePath(page.request, fx.fixtureId));
-    await expect(pad(page), "gallery(badminton): 12-bandlimited must render a pad").toBeVisible({
-      timeout: 20_000,
-    });
+  await page.goto(await fixturePath(page.request, fx.fixtureId));
+  await expect(pad(page), "gallery(badminton): 12-bandlimited must render a pad").toBeVisible({
+    timeout: 20_000,
+  });
 
-    // R5 — RE-POINTED AT THE v3 DOM, and INVERTED. Badminton renders
-    // `v3/skins/badminton.tsx` now, so every locator below moved: the v2 lane's
-    // panel HEADINGS became tiles carrying `data-tile-id`, and the amber
-    // `renderLockedTile` path (skins/shared.tsx) does not exist in v3 at all —
-    // `filterTilesByBand` DROPS an above-band tile rather than locking it, so
-    // the skin itself has to author the notice. What each assertion means is
-    // unchanged; only where it looks, and which way round it reads.
-    //
-    // The rally affordance, band-limited: the skin's own disabled tile
-    // (`RALLY_LOCKED_TILE_ID`). At band 3 this tile does not exist and the two
-    // scoreboard halves are real buttons instead.
-    const rallyGroup = pad(page).locator('[data-tile-id="rallyLocked"]');
-    const setScoreGroup = pad(page).locator('[data-tile-id="setScore"]');
-    // THE ENTITLEMENT PRECONDITION, RE-POINTED (R5). The v2 lane proved this
-    // with the FidelitySwitcher's own `[data-band="3"]` chip being disabled —
-    // but `RecordingChip` REPLACES that four-button picker the moment a sport
-    // converts (recording-chip.tsx's own doc), so on a v3 pad `[data-band]`
-    // does not exist at all and the old locator silently found nothing.
-    //
-    // The chip's equivalent, and it is a tighter statement rather than a
-    // looser one: the collapsed pill states the ACTIVE band in words ("Full
-    // timeline" — band 2, which is what a community org actually resolves to
-    // on this kernel, NOT band 0: `resolveFidelityBand` breaks only on a band
-    // that NAMES a missing entitlement and this kernel keys band 3 alone), and
-    // it carries `aria-expanded` ONLY when a next tier exists AND is genuinely
-    // locked. So the attribute's mere presence IS "this org lacks
-    // scoring.rally_by_rally", read off the control the scorer can actually
-    // see. Deliberately not clicked open: `probe()` re-runs once per captured
-    // width, and a toggle would close what the previous width opened.
-    const recordingChip = pad(page).getByRole("button", { name: "Full timeline", exact: true });
-    // The skin's own worded reason, on the context strip
-    // (`ContextSlot.message`, rendered verbatim by context-strip.tsx with a
-    // stable `data-role`). This REPLACES the v2 lane's `scorepad.locked.reason`
-    // string, which was never reachable for a band gap in the first place.
-    const lockedReason = pad(page).locator('[data-role="context-slot-message"][data-slot-id="recording"]');
-    const probe: StateProbe = async () => {
-      // PRECONDITIONS, not the defect. Neither flips.
-      //  (a) The band-0 summary action survives, so this is a real, rendered,
-      //      LIVE pad and not a blank or failed page.
-      //  (b) The band-3 chip is locked — which is what makes the rally
-      //      affordance below attributable to the ENTITLEMENT. Without it this
-      //      probe would pass just as happily against a pad that rendered its
-      //      rally control for some entirely unrelated reason, and would
-      //      photograph that instead while claiming D-7.
-      await expect(
-        setScoreGroup,
-        "gallery(badminton): 12-bandlimited must still be a live pad — the band-0 summary survives",
-      ).toBeVisible({ timeout: 20_000 });
-      await expect(
-        recordingChip,
-        "gallery(badminton): 12-bandlimited needs the org to actually LACK scoring.rally_by_rally",
-      ).toHaveAttribute("aria-expanded", "false", { timeout: 20_000 });
-      // ===== D-7, INVERTED (R5). The BEFORE run pinned this screen as
-      // SILENCE: `toHaveCount(0)` on both — no rally affordance anywhere, and
-      // no sentence explaining why, with the only signal a hover-only `title`
-      // on a DIFFERENT control (the fidelity chip's
-      // `scorepad.fidelity.locked`, unreachable on the phone this pad is built
-      // for). Both lines are inverted here rather than deleted: a deleted
-      // probe stops the capture failing and does nothing to stop the silence
-      // coming back.
-      //
-      // The rally tile is present AND still genuinely untappable — asserting
-      // presence alone would pass against a pad that had simply been handed
-      // the entitlement, which is not the fix.
-      await expect(
-        rallyGroup,
-        "gallery(badminton): D-7 — below band 3 the rally affordance must be VISIBLE, not silently absent",
-      ).toHaveCount(1, { timeout: 20_000 });
-      await expect(
-        rallyGroup,
-        "gallery(badminton): D-7 — visible, but never tappable: the org still lacks the entitlement",
-      ).toBeDisabled({ timeout: 20_000 });
-      await expect(
-        lockedReason,
-        "gallery(badminton): D-7 — and a VISIBLE sentence must now explain why",
-      ).toBeVisible({ timeout: 20_000 });
-      // Worded in badminton's own vocabulary and naming a real plan — not a
-      // padlock glyph, and not a band number a scorer has no use for.
-      await expect(
-        lockedReason,
-        "gallery(badminton): D-7 — the sentence must name the plan that unlocks it",
-      ).toContainText("Pro", { timeout: 20_000 });
-    };
+  // THE PICK, made once. `[data-band]` rows live inside the chip's own sheet,
+  // and the choice is persisted per fixture, so every width captured below
+  // reloads into band 2 without this hook running again.
+  const chip = pad(page).locator('[data-role="v3-recording-chip"]');
+  await expect(chip, "gallery(badminton): the Recording chip must be on the pad").toBeVisible({ timeout: 20_000 });
+  await chip.click();
+  await page.locator('[data-band="2"]').click();
+  await expect(chip).toHaveAttribute("aria-expanded", "false", { timeout: 20_000 });
 
-    await captureState(page, dir, "12-bandlimited", "badminton", measurements, probe);
-    return "12-bandlimited";
-  } finally {
-    // Device links (05-devicelink, minted by the shared body right after this
-    // hook returns) are Pro-only.
-    await setOrgPlanBySql({ orgId: org.id }, "pro");
-  }
+  const setScoreGroup = pad(page).locator('[data-tile-id="setScore"]');
+  const probe: StateProbe = async () => {
+    // PRECONDITION, not the defect: the band-0 summary action survives, so
+    // this is a real, rendered, LIVE pad and not a blank or failed page.
+    await expect(
+      setScoreGroup,
+      "gallery(badminton): 12-bandlimited must still be a live pad — the band-0 summary survives",
+    ).toBeVisible({ timeout: 20_000 });
+    // ===== D-7, INVERTED TWICE. The BEFORE run pinned this screen as SILENCE
+    // (`toHaveCount(0)` on any rally affordance AND on any explanation). R5
+    // inverted it to "a disabled rally tile plus a worded plan sentence". W1
+    // inverts the second half again: there is no plan, so the pad must carry
+    // NO lock, NO upsell and NO plan name anywhere — and the chip must state
+    // the chosen level in words, which is the whole of the explanation now.
+    await expect(
+      chip,
+      "gallery(badminton): the chip must state the CHOSEN level in words, not a band number",
+    ).toContainText("Full timeline", { timeout: 20_000 });
+    await expect(
+      pad(page).getByText(/available on|is locked|upgrade/i),
+      "gallery(badminton): W1 — nothing on this pad is for sale any more",
+    ).toHaveCount(0, { timeout: 20_000 });
+    // ...and the chip is a CONTROL, not a readout: the escape route out of
+    // band 2 has to be visible without opening anything.
+    await expect(
+      chip,
+      "gallery(badminton): the chip must advertise that it opens something",
+    ).toHaveAttribute("aria-haspopup", "dialog", { timeout: 20_000 });
+  };
+
+  await captureState(page, dir, "12-bandlimited", "badminton", measurements, probe);
+  return "12-bandlimited";
 }
 
 // ---------------------------------------------------------------------------
@@ -2564,7 +2506,7 @@ const SPORTS: GallerySport[] = [
     },
     // R5 — D-17 and D-7. Badminton is the sport BAD-03 names, so it carries
     // the band-limited capture as well as the serving one. Order matters:
-    // 11 runs at Pro (its three rally taps only exist at band 3), 12 flips
+    // 11 needs band 3 (its three rally taps only exist there), 12 picks
     // the plan and restores it before this hook returns.
     captureExtra: async (page, dir, tag, measurements) => [
       await captureRacquetServing(page, dir, tag, measurements, {

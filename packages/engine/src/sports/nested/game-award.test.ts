@@ -280,14 +280,14 @@ describe("NestedEv union — tennis.game.award (§8 convention)", () => {
 // ---------------------------------------------------------------------------
 
 describe("tennis.game.award is wired everywhere a new type must be", () => {
-  it("appears in the fidelity tiers that carry attributed play (2/3), not 0/1", () => {
-    const tiers = Object.fromEntries(
-      tennis.fidelityTiers.map((tier) => [tier.tier, tier.eventTypes]),
-    );
-    expect(tiers[2]).toContain("tennis.game.award");
-    expect(tiers[3]).toContain("tennis.game.award");
-    expect(tiers[0]).not.toContain("tennis.game.award");
-    expect(tiers[1]).not.toContain("tennis.game.award");
+  it("sits at the attributed-play band (3), not the bare-score or admin bands", () => {
+    // W1: formerly asserted the type was named in both tier 2's AND tier 3's
+    // arrays (the old cumulative-list model's duplicate) and absent from
+    // 0/1. padSpec.fidelity keys the type once, at band 3 — the kernel's
+    // max-detail level, matching a point.
+    const spec = tennis.padSpec!(cfgFor());
+    expect(spec.fidelity["tennis.game.award"]).toBe(3);
+    expect(spec.fidelity["tennis.game.award"]).toBe(spec.fidelity["tennis.point"]);
   });
 
   it("is reachable from arbitraryEvent, so a generated stream exercises it", () => {
