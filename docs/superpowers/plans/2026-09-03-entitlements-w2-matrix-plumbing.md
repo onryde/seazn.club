@@ -351,6 +351,37 @@ consumer, never a fixture:
 There is no runbook for pointing a local run at the sandbox — `docs/runbooks/e2e-local.md`
 documents only the CI dummies. Write one as part of this work.
 
+### T11 — no FX fallback, ever (owner ruling 2026-09-03)
+
+**"We must not fall back currency."** Two layers, and only one of them was covered.
+
+**Covered already.** `stripe-sync.ts`'s `assertCurrencyCoverage` THROWS at sync time if
+any price lacks a set point for a required currency, and its comment states the reason
+exactly: "a hole does NOT fail at sync time — Stripe accepts the price and falls back to
+ADAPTIVE PRICING, an FX-converted amount decided at render time from the buyer's IP …
+Refusing to sync is the cheap failure; a silently FX-priced SKU in production is not."
+`REQUIRED_CURRENCIES` is pinned to `SUPPORTED_CURRENCIES` by `stripe-sync.test.ts`, so
+the four we sell in cannot develop a hole.
+
+**NOT covered.** Stripe Checkout's Adaptive Pricing is an ACCOUNT-level default that
+applies regardless of our seed. The SDK is explicit: `adaptive_pricing.enabled`
+"Defaults to your dashboard setting". Nothing in this repo sets it, asserts it, or
+mentions it. So a buyer in an unsupported currency — which, after T10, means every
+Australian buyer — can be shown a Stripe-converted local amount we never set.
+
+**The fix goes in code, not the Dashboard**, because a Dashboard toggle is an authority
+nobody here owns and anyone can flip: pass `adaptive_pricing: { enabled: false }` on
+BOTH Checkout Session creations (`billing.ts:186` subscription, `:329` pass). Both
+already pass an explicit `currency: args.currency ?? "usd"`, so the session currency is
+ours; this stops Stripe re-presenting it.
+
+Tests: assert the param is sent on both paths; assert a created session comes back with
+the currency we asked for, not a localised one. Mutation: drop the param and the test
+must red. The sandbox run should then confirm a real session created for a non-supported
+locale is denominated in USD.
+
+Queued behind T5, which is editing `billing.ts` right now.
+
 ### T9 — sweep and gates
 Delete the two dead e2e specs. Rerun the 34 files that assert against
 `plan_entitlements` and the 8 copy-truth importers (4 need a live DB). Unit, e2e,
