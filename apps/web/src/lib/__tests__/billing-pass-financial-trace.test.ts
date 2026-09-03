@@ -582,6 +582,13 @@ describe.skipIf(!HAS_DB)("Event Pass L rung (v17 #294) — same money machinery 
     // The discriminator: without it, a grant left flat at M's 25 would satisfy
     // the line above on the day the two numbers were made equal again.
     expect(await balance(walletId)).not.toBe(PASS_CREDIT_GRANT.event_pass);
+    // …and the SECOND discriminator, W2 T12: every assertion above is derived
+    // from `PASS_CREDIT_GRANT`, so all of them move silently with the constant
+    // and none can witness a change to the number itself. 50 is what T5 shipped
+    // and what the owner re-cut to 35 on 2026-09-03; a revert of that edit
+    // reaches the wallet, and this is the line that sees it. Deliberately a
+    // literal — the retired value has no live declaration left to read.
+    expect(await balance(walletId), "W2 T12 re-cut L's grant from 50 to 35").not.toBe(50);
     expect(await recordedRung(compId)).toBe("event_pass_l");
   });
 

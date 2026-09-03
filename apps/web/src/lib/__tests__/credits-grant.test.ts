@@ -35,10 +35,14 @@ const HAS_DB = !!process.env.DATABASE_URL;
 const uniq = () => randomUUID().slice(0, 8);
 
 /** `ai.credits.monthly` per plan, READ from the live matrix rather than typed
- *  here — the ladder has already moved twice (V320 community 10 / pro 60,
- *  V391 community 5 / pro 35 / enterprise 500) and a typed number stops
- *  testing the arithmetic the moment it drifts. */
+ *  here — the ladder has already moved three times (V320 community 10 / pro 60,
+ *  V391 community 5 / pro 35 / enterprise 500, V393 pro 25) and a typed number
+ *  stops testing the arithmetic the moment it drifts. */
 const rate: Record<string, number> = {};
+/** Same rule for the one-time trial grant, which V393 moved to 15 on PRO ONLY
+ *  — enterprise keeps 20, deliberately (its numbers are set per deal), so the
+ *  two rungs must be read separately and never assumed equal. */
+const trial: Record<string, number> = {};
 
 beforeAll(async () => {
   if (!HAS_DB) return;
@@ -46,6 +50,12 @@ beforeAll(async () => {
     select plan_key, int_value from plan_entitlements
      where feature_key = 'ai.credits.monthly'`;
   for (const r of rows) if (r.int_value !== null) rate[r.plan_key] = r.int_value;
+  const trialRows = await sql<{ plan_key: string; int_value: number | null }[]>`
+    select plan_key, int_value from plan_entitlements
+     where feature_key = 'ai.credits.trial'`;
+  for (const r of trialRows) if (r.int_value !== null) trial[r.plan_key] = r.int_value;
+  expect(trial.pro, "no pro ai.credits.trial row").toBeGreaterThan(0);
+  expect(trial.enterprise, "no enterprise ai.credits.trial row").toBeGreaterThan(0);
   // Anti-vacuity: these tests multiply and compare the two rungs, so both must
   // exist and they must DIFFER, or every assertion below is satisfied by zero.
   expect(rate.pro, "no pro ai.credits.monthly row").toBeGreaterThan(0);
@@ -155,13 +165,18 @@ describe.skipIf(!HAS_DB)("ai credit wallet — grants", () => {
   });
 
   describe("grantTrial", () => {
-    it("grants ai.credits.trial once for a pro org", async () => {
+    it("grants ai.credits.trial once for a pro org, at PRO's own figure", async () => {
       const orgId = await seedOrg();
       const subId = await setOrgPlan(orgId, "pro");
 
       const granted = await grantTrial(orgId);
-      expect(granted).toBe(20);
-      expect(await balance(subId)).toBe(20);
+      expect(granted).toBe(trial.pro);
+      expect(await balance(subId)).toBe(trial.pro);
+      // V393 (W2 T12) cut PRO's trial to 15 and left enterprise at 20 — an
+      // asymmetry the owner confirmed deliberately, because enterprise numbers
+      // are set per deal. Pinned so a later wave "tidying" the two back into
+      // one number reds here instead of shipping.
+      expect(trial.pro).toBeLessThan(trial.enterprise!);
     });
 
     it("is a no-op on a second call for the same org", async () => {
@@ -169,11 +184,11 @@ describe.skipIf(!HAS_DB)("ai credit wallet — grants", () => {
       const subId = await setOrgPlan(orgId, "enterprise");
 
       await grantTrial(orgId);
-      expect(await balance(subId)).toBe(20);
+      expect(await balance(subId)).toBe(trial.enterprise);
 
       const secondGrant = await grantTrial(orgId);
       expect(secondGrant).toBe(0);
-      expect(await balance(subId)).toBe(20);
+      expect(await balance(subId)).toBe(trial.enterprise);
     });
 
     it("is a no-op when trial_used_at is already set (trial used another way)", async () => {

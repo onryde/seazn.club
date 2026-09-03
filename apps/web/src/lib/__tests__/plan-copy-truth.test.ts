@@ -251,11 +251,12 @@ describe.skipIf(!HAS_DB)("stripe-plans.json quotes the numbers the matrix enforc
   // that copy rather than a stylistic one, and PASS_CREDIT_GRANT its single
   // source.
   it("neither rung carries a monthly credit allowance in the matrix", async () => {
-    // W2 T5: the one-time grant is per rung (25 on M, 50 on L). "One-time" is
-    // still what makes "monthly" a false word here, and the absence of a
-    // `ai.credits.monthly` row is still what makes PASS_CREDIT_GRANT its single
-    // source — what moved is that there are now two sources, one per rung.
-    expect(PASS_CREDIT_GRANT).toEqual({ event_pass: 25, event_pass_l: 50 });
+    // W2 T5: the one-time grant is per rung (25 on M, 35 on L — W2 T12 re-cut L
+    // from 50). "One-time" is still what makes "monthly" a false word here, and
+    // the absence of a `ai.credits.monthly` row is still what makes
+    // PASS_CREDIT_GRANT its single source — what moved is that there are now
+    // two sources, one per rung.
+    expect(PASS_CREDIT_GRANT).toEqual({ event_pass: 25, event_pass_l: 35 });
     for (const { key } of passRungs) {
       const [row] = await sql<{ int_value: number | null }[]>`
         select int_value from plan_entitlements

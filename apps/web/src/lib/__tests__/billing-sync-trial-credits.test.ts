@@ -18,6 +18,18 @@ const HAS_DB = !!process.env.DATABASE_URL;
 const uniq = () => randomUUID().slice(0, 8);
 const tempPlanKeys: string[] = [];
 
+/** Pro's own `ai.credits.trial`, READ from the matrix rather than typed. The
+ *  figure has moved (V393 cut PRO from 20 to 15 and deliberately left
+ *  enterprise at 20), and a literal here would assert yesterday's number while
+ *  still looking like it was testing the ordering this file is about. */
+async function proTrialCredits(): Promise<number> {
+  const [row] = await sql<{ int_value: number | null }[]>`
+    select int_value from plan_entitlements
+     where plan_key = 'pro' and feature_key = 'ai.credits.trial'`;
+  expect(row?.int_value, "pro must carry a finite ai.credits.trial row").toBeTypeOf("number");
+  return row!.int_value!;
+}
+
 /** A temp plan with a known Stripe price AND its own `ai.credits.trial` row —
  *  proves syncSubscriptionForGroup grants against the PRICE-RESOLVED plan
  *  (what this sync is about to set), not whatever plan_key is still stored
@@ -106,7 +118,7 @@ describe.skipIf(!HAS_DB)("trial credit grant wiring (syncSubscriptionForGroup)",
     // The grant WON the ordering: credits landed on the very sync that also
     // stamped trial_used_at, not "never" (which is what calling grantTrial
     // after the stamp would silently produce).
-    expect(await balance(subId)).toBe(20);
+    expect(await balance(subId)).toBe(await proTrialCredits());
     const [after] = await sql<{ trial_used_at: string | null }[]>`
       select trial_used_at from subscriptions where id = ${subId}`;
     expect(after.trial_used_at).not.toBeNull();
@@ -116,12 +128,13 @@ describe.skipIf(!HAS_DB)("trial credit grant wiring (syncSubscriptionForGroup)",
     const orgId = await seedOrg();
     const subId = await setOrgPlan(orgId, "pro");
 
+    const proTrial = await proTrialCredits();
     await syncSubscription(orgId, stripeSub({ id: "sub_first", status: "active" }));
-    expect(await balance(subId)).toBe(20);
+    expect(await balance(subId)).toBe(proTrial);
 
     // A later sync (plan change, renewal) must not re-grant the trial.
     await syncSubscription(orgId, stripeSub({ id: "sub_first", status: "active" }));
-    expect(await balance(subId)).toBe(20);
+    expect(await balance(subId)).toBe(proTrial);
   });
 
   it("grants nothing for a community org, but still stamps trial_used_at", async () => {

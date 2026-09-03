@@ -147,8 +147,9 @@ const DATA: MatrixData = {
   "teams.squad_max": {
     // V391 DROPPED the pass rows here — they were 20, identical to community,
     // so they lifted nothing (design §2: "Pass rows (20 = Free) were no-ops
-    // and are dropped").
-    community: cell(20, true),
+    // and are dropped"). V393 then raised community 20 -> 23, the engine's own
+    // largest matchday squad (football 11 + 12 bench, icehockey 6 + 17).
+    community: cell(23, true),
     pro: cell(40, true),
   },
 };
@@ -254,9 +255,9 @@ describe("buildPricingSections — the /pricing pivot", () => {
       pro: "100",
     });
     expect(cells("pricing.matrix.teams.squad_max")).toMatchObject({
-      community: "20",
-      event_pass: "20",
-      event_pass_l: "20",
+      community: "23",
+      event_pass: "23",
+      event_pass_l: "23",
       pro: "40",
     });
   });

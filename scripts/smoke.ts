@@ -1762,8 +1762,9 @@ async function smokePlanMatrix(): Promise<void> {
     check(`matrix/${key}: the accepted official records a result`, offScore.status === 201);
 
     // --- User 3 (member/scorer): a division-scoped scorer invite seats a
-    // member (scorers.max = 1 on community, so exactly one fits) who scores a
-    // DIFFERENT fixture via the assignment path (scoresViaAssignment).
+    // member who scores a DIFFERENT fixture via the assignment path
+    // (scoresViaAssignment). V393 deleted `scorers.max`; the seat is charged
+    // against `members.max` now, which on community is 3 — so one still fits.
     const scorerEmail = `scorer_${key}_${tag}@example.com`;
     const scorerSession = newSession();
     await signIn(scorerSession, scorerEmail);
@@ -1953,8 +1954,8 @@ async function smokePlanMatrix(): Promise<void> {
     proEnt.entitlements["scheduling.ai"]?.enabled === true,
   );
   check(
-    "matrix/pro: ai.credits.monthly resolves 35 (V391)",
-    proEnt.entitlements["ai.credits.monthly"]?.limit === 35,
+    "matrix/pro: ai.credits.monthly resolves 25 (V393 re-cut it from V391's 35)",
+    proEnt.entitlements["ai.credits.monthly"]?.limit === 25,
   );
   // V391 DELETED `officials.per_fixture.max` — it resolved to ∞ on every plan
   // and nothing read it. The check is INVERTED rather than dropped, because
@@ -15758,7 +15759,16 @@ async function gapSuite(admin: Session, org1Id: string, proOrgId: string): Promi
     "gap scorer sees assigned fixtures",
     assigned.status === 200 && v1data<unknown[]>(assigned).length > 0,
   );
-  // scorers.max (Pro = 1): a second scorer can't take a seat.
+  // V393 (entitlements v18 W2 T12) DELETED `scorers.max`. This check asserted
+  // 402 on the second scorer against a Pro cap of 1, and its own NAME stated
+  // that rule — so it is INVERTED rather than dropped, the same way the V391
+  // `officials.per_fixture.max` check above was: the interesting fact is now
+  // that the seat is FREE to take, and a check that quietly disappeared would
+  // leave the deletion's most likely failure (a key with no row resolving to 0,
+  // refusing every scorer) with nothing watching it end to end.
+  //
+  // The seat is charged against `members.max` now, which is 10 on Pro, so the
+  // second scorer fits — where a leftover `scorers.max` read would 402.
   const scorerInvite2 = (await call(admin, `/api/orgs/${proOrgId}/invites`, "POST", {
     role: "scorer",
     max_uses: 1,
@@ -15766,13 +15776,16 @@ async function gapSuite(admin: Session, org1Id: string, proOrgId: string): Promi
   })) as { token: string };
   const scorer2 = newSession();
   await signIn(scorer2, `scorer2_${tag}@example.com`);
-  const seatFull = await raw(scorer2, `/api/invites/${scorerInvite2.token}/accept`, "POST", {});
-  check("gap second scorer seat blocked (scorers.max)", seatFull.status === 402);
+  const secondSeat = await raw(scorer2, `/api/invites/${scorerInvite2.token}/accept`, "POST", {});
+  check(
+    "gap second scorer seat is free to take (V393 deleted scorers.max)",
+    secondSeat.status === 200,
+  );
 
   // --- Additive invites: accepting never changes an existing role. An
   // editor's own test scan is a no-op that doesn't burn the link; a viewer
-  // accepting the same link keeps viewer and gains the assignment — even
-  // with the scorer seat pool full (no seat is charged) ---
+  // accepting the same link keeps viewer and gains the assignment — and no
+  // seat is charged for it, because they already hold one ---
   const gapViewerInvite = (await call(admin, `/api/orgs/${proOrgId}/invites`, "POST", {
     role: "viewer",
     max_uses: 1,
