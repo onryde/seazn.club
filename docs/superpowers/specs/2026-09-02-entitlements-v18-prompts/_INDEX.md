@@ -365,3 +365,41 @@ picks it up inherits a finding rather than a rumour.
   drop `feature_key`, taking every contextual paywall generic. Guarded indirectly
   today (smoke and two e2e specs assert the body), but nothing pins the order. Raised
   by the bench session, routed to its owner.
+
+## Runbook: querying the live `plan_entitlements` catalog (G7, bench B03 product-gaps)
+
+**No single migration is the catalog.** Entitlement rows are spread across a
+long tail of deltas (V024, V112, V240, V269, V290, V302, V306, V311, V319,
+V341, V353, V390, …) that insert, update and delete each other's rows —
+`V112__entitlements_v2.sql` seeds `community`, `pro` and `business`, but
+`business` is absent from a live database today because a later delta removed
+it, while `pro_plus`, `event_pass` and `event_pass_l` — none seeded by V112 —
+are present. Grepping any one migration for "what plans exist" or "what a plan
+grants" is a snapshot of a moment in that history, not the catalog.
+
+Deliberately not committing a table of today's plans/counts here: this
+document already generated one (2026-09-02, from a v389 database) and it read
+wrong by the next day — once from `V390__scoring_free.sql` deleting three
+scoring rows outright, and again the day after that from W2 retiring
+`pro_plus` for `enterprise`. A checked-in table goes stale between being
+written and being re-read; a query does not. If W2's
+`entitlements-v18-matrix.test.ts` has landed, prefer it — it pins the live
+catalog against the design doc in CI, which is strictly better than running
+this by hand.
+
+Query the live catalog directly instead:
+
+```sql
+-- schema is seazn_club, not public: PGOPTIONS='-c search_path=seazn_club'
+select plan_key,
+       count(*) filter (where bool_value)                            as granted_bool,
+       count(*) filter (where int_value is not null)                 as granted_limit,
+       count(*) filter (where bool_value is true
+                           or int_value is not null)                 as granted_any,
+       count(*)                                                      as rows
+  from plan_entitlements group by 1 order by 1;
+```
+
+`granted_bool` alone undercounts — a plan's numeric limits (`ai.credits.monthly
+= 10`, and others) are grants too, and `granted_bool` scores every one of them
+as ungranted. Read `granted_any` as "features this plan grants".
