@@ -27,7 +27,6 @@ import {
   currencyFromAcceptLanguage,
   formatMinor,
   passPrice,
-  proPlusPrice,
   proPrice,
   type Currency,
   PASS_KEYS,
@@ -392,26 +391,16 @@ describe("currency price points (v3/07 §4)", () => {
   });
 });
 
-describe("Pro Plus price points", () => {
-  it("reads SET price points from stripe-plans.json", () => {
-    expect(proPlusPrice("monthly", "usd")).toBe(3900);
-    expect(proPlusPrice("monthly", "eur")).toBe(3700);
-    expect(proPlusPrice("monthly", "gbp")).toBe(3300);
-    expect(proPlusPrice("monthly", "inr")).toBe(299900);
-    expect(proPlusPrice("monthly", "aud")).toBe(5900);
-    expect(proPlusPrice("annual", "usd")).toBe(32700);
-  });
-
-  it("annual gives at least a 30% discount vs 12x monthly, Pro + Pro Plus, every currency", () => {
-    for (const price of [proPrice, proPlusPrice]) {
-      for (const currency of SUPPORTED_CURRENCIES as readonly Currency[]) {
-        const monthly = price("monthly", currency);
-        const annual = price("annual", currency);
-        // ≥30% off: a year of annual costs no more than 70% of 12 monthly bills.
-        expect(annual, `${price.name} annual ${currency}`).toBeLessThanOrEqual(
-          monthly * 12 * 0.7,
-        );
-      }
+// "Pro Plus price points" describe block removed — pro_plus is retired
+// (entitlements v18, V391) and `proPlusPrice()` no longer exists
+// (lib/currency.ts). Pro's own annual-discount shape is still covered below.
+describe("Pro price points", () => {
+  it("annual gives at least a 30% discount vs 12x monthly, every currency", () => {
+    for (const currency of SUPPORTED_CURRENCIES as readonly Currency[]) {
+      const monthly = proPrice("monthly", currency);
+      const annual = proPrice("annual", currency);
+      // ≥30% off: a year of annual costs no more than 70% of 12 monthly bills.
+      expect(annual, `pro annual ${currency}`).toBeLessThanOrEqual(monthly * 12 * 0.7);
     }
   });
 });
@@ -523,12 +512,20 @@ describe("assertCheckoutAllowed past_due", () => {
 });
 
 describe("checkoutSchema plan_key", () => {
-  it("accepts pro and pro_plus", () => {
+  it("accepts pro", () => {
     expect(checkoutSchema.safeParse({ plan_key: "pro", interval: "monthly" }).success).toBe(true);
-    expect(checkoutSchema.safeParse({ plan_key: "pro_plus", interval: "annual" }).success).toBe(true);
   });
 
-  it("rejects an unknown plan_key like business", () => {
+  // pro_plus is retired (entitlements v18, V391); enterprise is never
+  // self-serve (design §4 — Contact-us/comped only) — both must now be
+  // refused the same as any other unknown plan_key.
+  it("rejects pro_plus, enterprise, and an unknown plan_key like business", () => {
+    expect(checkoutSchema.safeParse({ plan_key: "pro_plus", interval: "annual" }).success).toBe(
+      false,
+    );
+    expect(checkoutSchema.safeParse({ plan_key: "enterprise", interval: "monthly" }).success).toBe(
+      false,
+    );
     expect(checkoutSchema.safeParse({ plan_key: "business", interval: "monthly" }).success).toBe(false);
   });
 });

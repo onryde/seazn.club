@@ -289,12 +289,14 @@ describe.skipIf(!HAS_DB)("admin plan tools", () => {
   });
 
   it("does not demote an org already comped above Pro", async () => {
+    // pro_plus is retired (entitlements v18, V391); "above Pro" is now the
+    // non-public `enterprise` plan.
     const { orgId, actorId } = await seedOrg();
-    await sql`update subscriptions set plan_key = 'pro_plus' where id = (select subscription_id from organizations where id = ${orgId})`;
-    await extendTrial(actorId, orgId, 7, "keep the plus");
+    await sql`update subscriptions set plan_key = 'enterprise' where id = (select subscription_id from organizations where id = ${orgId})`;
+    await extendTrial(actorId, orgId, 7, "keep enterprise");
     const [row] = await sql<{ plan_key: string }[]>`
       select plan_key from subscriptions where id = (select subscription_id from organizations where id = ${orgId})`;
-    expect(row.plan_key).toBe("pro_plus");
+    expect(row.plan_key).toBe("enterprise");
   });
 
   // A cancelled subscription keeps its id. Without the liveness test this org

@@ -28,7 +28,7 @@ export const FEATURE_REASONS: Record<string, string> = {
   // reads it from the rider SKU; this sentence names only the CADENCE, which is
   // true on every plan and in every currency.
   "orgs.max_owned":
-    "Your current plan covers the most organisations it allows (Community 1, Pro 5, Pro Plus 10). On Pro or Pro Plus, buy an extra organisation from Settings → Add-ons; it's billed monthly on top of your current bill. Community upgrades to Pro first.",
+    "Your current plan covers the most organisations it allows (Community 1, Pro 5). On Pro, buy an extra organisation from Settings → Add-ons; it's billed monthly on top of your current bill. Community upgrades to Pro first.",
   "members.max": "You've reached your plan's team-member seats.",
   "scorers.max": "You've reached your plan's scorer seats.",
   "competitions.max_active": "Your plan's active-competition limit is reached.",
@@ -64,7 +64,7 @@ export const FEATURE_REASONS: Record<string, string> = {
   realtime: "Live push updates are a Pro feature.",
   // Platform
   "api.access": "API keys are a Pro feature.",
-  "api.write": "Write access via the API is a Pro Plus feature — read keys work on Pro.",
+  "api.write": "Write access via the API is an Enterprise feature (Contact us) — read keys work on Pro.",
   exports: "CSV/PDF exports are a Pro feature.",
   "exports.branded": "Branded print templates (club colours, sponsor logos) are a Pro feature.",
   // Clubs & bulk import (Jul3/01 §7)
@@ -95,7 +95,7 @@ export const FEATURE_REASONS: Record<string, string> = {
   // competition, which is why the key is in `PASS_FEATURES`.
   "scheduling.multi_division":
     "The competition-wide schedule board is a Pro feature — or an Event Pass, for one competition.",
-  "officials.auto": "Auto-assigning officials (solver, phased sourcing) is a Pro Plus feature — manual assignment still works.",
+  "officials.auto": "Auto-assigning officials (solver, phased sourcing) is a Pro feature — manual assignment still works.",
   "officials.roles_multi": "Multiple official roles per fixture (judge + referee) are a Pro feature.",
   "officials.per_fixture.max": "Community includes one official per fixture — more need Pro.",
   "officials.marks": "Rating your match officials is a Pro feature.",
@@ -166,21 +166,44 @@ export function doubleElimFormatReason(stageKind: string): string {
 }
 
 // Cheapest plan that unlocks each feature (mirrors plan_entitlements,
-// V112 + V240 + V290 + V291 + V302). Everything not listed unlocks on Pro —
-// only the above-Pro (Pro Plus) exceptions need rows. (The AI run cap that
-// used to be a graded quota here — V302: 5/10/20/50 — was retired in v17
-// Phase 2 Task 5, V322: the credit wallet meters runs on every tier now.)
-const PLUS_FEATURES = new Set([
-  "api.write",
-  "scorers.max",
-  "officials.auto",
-  "domains.custom",
-  "support.priority",
-]);
+// V112 + V240 + V391). Everything not listed unlocks on Pro — only the
+// above-Pro (Contact-us `enterprise`) exceptions need rows. (The AI run cap
+// that used to be a graded quota here — V302: 5/10/20/50 — was retired in
+// v17 Phase 2 Task 5, V322: the credit wallet meters runs on every tier now.)
+//
+// Entitlements v18 (V391): `pro_plus` is retired and its above-Pro
+// conversations move to a non-public, Contact-us-only `enterprise` plan.
+// `ENTERPRISE_FEATURES` is deliberately short — `api.write` (never granted
+// to a self-serve plan) plus every INT-quota key whose Pro value is already
+// the ceiling (`int_value IS NULL`, i.e. unlimited — nothing above it to
+// sell). `officials.auto` and `scorers.max` leave this set: post-V391 both
+// are plain, finite Pro caps, not above-Pro ceilings. `domains.custom` and
+// `support.priority` leave it too, for an unrelated reason — T1 deleted
+// both keys from `plan_entitlements` outright, so nothing gates on them any
+// more and their old membership here would be dead weight.
+//
+// A hand-typed list, but not an unchecked one:
+// `entitlements-v18-enterprise-ceiling.test.ts` derives the ceiling half
+// live from `plan_entitlements` (for every int feature key, `pro.int_value
+// IS NULL` iff `featurePlan(key) === "enterprise"`), so a repricing that
+// lifts or lowers a Pro cap fails that test instead of leaving this list
+// quietly stale.
+const ENTERPRISE_FEATURES = new Set(["api.write", "competitions.max_active", "dashboard.public.max"]);
 
-export type PaidPlan = "pro" | "pro_plus";
+export type PaidPlan = "pro" | "enterprise";
 
-/** Cheapest plan that unlocks a feature key. Never throws. */
+/**
+ * Cheapest plan that unlocks a feature key. Never throws.
+ *
+ * A contains-ladder with exactly one rung: is this key in
+ * `ENTERPRISE_FEATURES`? The "no" branch is the DEFAULT, and it is
+ * deliberate, not incidental — it covers both an ordinary Pro-gated key
+ * (the overwhelming majority) AND a key this map has never heard of (a typo,
+ * a key retired from the matrix, a future addition nobody wired here yet).
+ * Answering "pro" — the cheaper, more permissive plan — for an unrecognised
+ * key is the safe default: the worse failure mode is quoting Contact-us for
+ * something a self-serve upgrade already covers.
+ */
 export function featurePlan(featureKey: string): PaidPlan {
-  return PLUS_FEATURES.has(featureKey) ? "pro_plus" : "pro";
+  return ENTERPRISE_FEATURES.has(featureKey) ? "enterprise" : "pro";
 }

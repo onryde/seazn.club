@@ -52,19 +52,16 @@ describe("extra-organisation add-on catalog (v17 gap #293)", () => {
 
   it("prices each tier at EXACTLY what extraOrgPrice() advertises — same as tier-2, #293", () => {
     const proSpec = stripePlans.org_addons!.find((o) => o.plan_key === "pro")!;
-    const proPlusSpec = stripePlans.org_addons!.find((o) => o.plan_key === "pro_plus")!;
     for (const currency of SUPPORTED_CURRENCIES) {
       const proAmount =
         currency === "usd" ? proSpec.price.unit_amount : proSpec.price.currency_options[currency];
-      const proPlusAmount =
-        currency === "usd"
-          ? proPlusSpec.price.unit_amount
-          : proPlusSpec.price.currency_options[currency];
       expect(proAmount, `pro ${currency}`).toBe(extraOrgPrice("pro", "monthly", currency));
-      expect(proPlusAmount, `pro_plus ${currency}`).toBe(
-        extraOrgPrice("pro_plus", "monthly", currency),
-      );
     }
+    // The pro_plus half of this parity check is dropped: `extraOrgPrice()`
+    // is retired down to `PurchasablePlanKey` ("pro" only — entitlements
+    // v18, V391), so it can no longer price that tier at all. The
+    // `org_addons[1]` (`extra_org_pro_plus`) JSON row itself is still live
+    // in stripe-plans.json pending T4's deletion — untouched here.
   });
 
   it("is a RECURRING monthly price — rides the subscription like extra-seat, never one-time", () => {

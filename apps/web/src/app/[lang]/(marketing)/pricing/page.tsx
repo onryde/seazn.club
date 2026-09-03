@@ -18,8 +18,6 @@ import {
   FREE_FEATURES,
   PASS_FEATURES,
   PRO_FEATURES,
-  PLUS_CARD_FEATURES,
-  PLUS_COMING_SOON,
   PASS_CREDIT_GRANT,
 } from "@/lib/pricing-cards";
 import {
@@ -27,7 +25,6 @@ import {
   lowestCreditPackAmount,
   passPrice,
   proPrice,
-  proPlusPrice,
   type Currency,
 } from "@/lib/currency";
 import { preferredCurrency } from "@/lib/currency-server";
@@ -51,9 +48,13 @@ const CELL_TONE: Record<PricingPlanKey, string> = {
   event_pass: "text-[#4d7c0f]",
   event_pass_l: "text-[#4d7c0f]",
   pro: "font-medium text-purple-700",
-  pro_plus: "font-medium text-indigo-700",
 };
 
+// "proPlus" removed (entitlements v18 — the plan is retired, and its
+// {plus}/{plusAnnual}-interpolated answer went with it). The page already
+// carries a Contact-us strip under the table (`pricing.enterprise.*`) for
+// the above-Pro conversation; a proper FAQ entry for it is W3's redesign,
+// not restored here as a stopgap.
 const FAQ_KEYS = [
   "card",
   "eventPass",
@@ -64,7 +65,6 @@ const FAQ_KEYS = [
   "currencies",
   "annual",
   "cancel",
-  "proPlus",
 ] as const;
 
 // `pricing.meta.description` quotes USD amounts deliberately, unlike the page
@@ -153,14 +153,11 @@ export default async function PricingPage({
     matrix["ai.credits.monthly"]?.[plan]?.int_value ?? null;
   const communityCredits = creditsMonthly("community");
   const proCredits = creditsMonthly("pro");
-  const plusCredits = creditsMonthly("pro_plus");
   const communityCreditsLine =
     communityCredits != null ? t(d, "pricing.credits.perMonth", { count: communityCredits }) : null;
   const passCreditsLine = t(d, "pricing.credits.passGrant", { count: PASS_CREDIT_GRANT });
   const proCreditsLine =
     proCredits != null ? t(d, "pricing.credits.perMonth", { count: proCredits }) : null;
-  const plusCreditsLine =
-    plusCredits != null ? t(d, "pricing.credits.perMonthOperator", { count: plusCredits }) : null;
 
   const passLabel = formatMinor(passPrice(currency, "event_pass"), currency);
   const passLLabel = formatMinor(passPrice(currency, "event_pass_l"), currency);
@@ -200,19 +197,17 @@ export default async function PricingPage({
   // the session or the plan read is unavailable.
   const passCta = await passColumnCta().catch(() => "signup" as const);
   const proMonthly = formatMinor(proPrice("monthly", currency), currency);
-  const plusMonthly = formatMinor(proPlusPrice("monthly", currency), currency);
 
   // The FAQ used to hardcode "$19/mo" while the cards above it honoured the
   // currency switcher — a GBP visitor saw £ and $ on one page. Every answer is
   // interpolated with the same switched amounts instead; `t()` leaves an answer
   // without placeholders untouched, so only the ones that quote a price change.
+  // `plus`/`plusAnnual` dropped with the Pro Plus card (entitlements v18).
   const faqVars = {
     pass: passLabel,
     passL: passLLabel,
     pro: proMonthly,
     proAnnual: formatMinor(proPrice("annual", currency), currency),
-    plus: plusMonthly,
-    plusAnnual: formatMinor(proPlusPrice("annual", currency), currency),
   };
 
   // Most matrix cells are locale-free literals (numbers, ∞, ✓, —); only the
@@ -236,12 +231,17 @@ export default async function PricingPage({
             </div>
           </section>
 
-          {/* Four offers — v17 ladder (SPEC-6 A1): Community / Event Pass / Pro
-              / Pro Plus, each carrying the two v17 differentiators (fee % + the
-              credit line). Stacks on mobile, 2-up on tablet, 4-up on desktop —
-              no horizontal scroll at 375px. */}
+          {/* Three offers — entitlements v18: Community / Event Pass / Pro.
+              The Pro Plus card that used to sit here is retired along with
+              the plan (V391); the above-Pro conversation is now the
+              Contact-us strip under the comparison table below, per design
+              §4 — a redesigned ticket-styled layout is W3's, this interim
+              grid just stops rendering a fourth card for a plan that no
+              longer exists. Each card still carries the two v17
+              differentiators (fee % + the credit line). Stacks on mobile,
+              3-up on desktop — no horizontal scroll at 375px. */}
           <section className="mx-auto max-w-6xl px-4 pb-20">
-            <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-4">
+            <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
               {/* Community */}
               <div className="card flex flex-col p-8">
                 <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-slate-400">
@@ -373,69 +373,6 @@ export default async function PricingPage({
                 creditsLine={proCreditsLine ?? undefined}
                 ctaLabel={t(d, "pricing.plus.cta")}
               />
-
-              {/* Pro Plus — v17 (SPEC-6 A1): promoted from the old progressive
-                  disclosure to a full fourth card, the visual hero (Popular
-                  badge + subtle glow via the existing shadow pattern). Carries
-                  its Live features AND the badged, non-clickable "Coming soon"
-                  roadmap (SPEC-1 §6 ethics: never gates money). */}
-              <div
-                data-plus-card
-                className="card relative flex flex-col border-indigo-400 bg-indigo-50 p-8 shadow-[0_0_34px_rgba(99,102,241,0.22)]"
-              >
-                <span className="mk-display absolute -top-3 right-6 rounded-full bg-indigo-600 px-3 py-1 text-xs font-semibold tracking-wider text-white">
-                  {t(d, "pricing.plus.popular")}
-                </span>
-                <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-indigo-500">
-                  {t(d, "pricing.plus.name")}
-                </p>
-                <p className="mb-1 text-4xl font-bold text-indigo-900">
-                  {plusMonthly}
-                  <span className="text-lg font-normal text-slate-500">
-                    {t(d, "pricing.plus.per")}
-                  </span>
-                </p>
-                <p className="mb-4 text-sm text-slate-500">{t(d, "pricing.plus.note")}</p>
-                {plusCreditsLine && (
-                  <p className="mb-4 flex items-center gap-1.5 rounded-lg bg-indigo-100 px-3 py-2 text-sm font-semibold text-indigo-800">
-                    <span aria-hidden>⚡</span>
-                    {plusCreditsLine}
-                  </p>
-                )}
-                <ul className="mb-6 flex-1 space-y-2.5 text-sm text-slate-600">
-                  {/* PLUS_CARD_FEATURES pins the count/order (matches Task 8's
-                      billing.plus.f1-f5); the text itself is fully localized,
-                      unlike the other three cards' hardcoded-English arrays. */}
-                  {PLUS_CARD_FEATURES.map((_, i) => (
-                    <li key={i} className="flex items-start gap-2">
-                      <span className="mt-0.5 text-indigo-500">✓</span>
-                      {t(d, `pricing.plus.f${i + 1}`)}
-                    </li>
-                  ))}
-                </ul>
-                {/* Roadmap (SPEC-1 §6): badged "coming soon", NOT purchasable —
-                    plain non-interactive text, never buttons/links. Muted so the
-                    tier's ceiling reads as ambition rather than a paywall. */}
-                <div className="mb-8 rounded-xl border border-indigo-100 bg-white/60 p-4">
-                  <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-indigo-400">
-                    {t(d, "pricing.plus.soonLabel")}
-                  </p>
-                  <ul className="space-y-1.5 text-sm text-slate-500">
-                    {PLUS_COMING_SOON.map((_, i) => (
-                      <li key={i} className="flex items-start gap-2">
-                        <span className="mt-0.5 text-indigo-300">◦</span>
-                        {t(d, `pricing.plus.soon${i + 1}`)}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-                <Link
-                  href="/login?tab=signup"
-                  className="btn w-full justify-center bg-indigo-600 py-3 text-white hover:bg-indigo-700"
-                >
-                  {t(d, "pricing.plus.cta")}
-                </Link>
-              </div>
             </div>
 
             {/* Add-ons strip (SPEC-6 A1): the recurring + one-time extras sit

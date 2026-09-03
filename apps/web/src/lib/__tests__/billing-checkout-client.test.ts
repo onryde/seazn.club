@@ -50,14 +50,18 @@ describe("fetchCheckoutClientSecret", () => {
     expect(r.ok).toBe(false);
   });
 
-  it("posts plan_key \"pro_plus\" when told to check out into Pro Plus", async () => {
+  // "posts plan_key pro_plus when told to check out into Pro Plus" removed —
+  // pro_plus is retired (entitlements v18, V391); `fetchCheckoutClientSecret`
+  // now takes `PurchasablePlanKey` ("pro" only), so this call is a compile
+  // error, not just an untested path.
+  it("posts plan_key \"pro\" faithfully (annual)", async () => {
     const fetchFn = vi.fn().mockResolvedValue(
-      jsonResponse({ ok: true, data: { client_secret: "cs_test_plus" } }),
+      jsonResponse({ ok: true, data: { client_secret: "cs_test_pro_annual" } }),
     );
-    const r = await fetchCheckoutClientSecret("pro_plus", "annual", fetchFn as unknown as typeof fetch);
-    expect(r).toEqual({ ok: true, clientSecret: "cs_test_plus" });
+    const r = await fetchCheckoutClientSecret("pro", "annual", fetchFn as unknown as typeof fetch);
+    expect(r).toEqual({ ok: true, clientSecret: "cs_test_pro_annual" });
     const [, init] = fetchFn.mock.calls[0];
-    expect(JSON.parse(init.body)).toEqual({ plan_key: "pro_plus", interval: "annual" });
+    expect(JSON.parse(init.body)).toEqual({ plan_key: "pro", interval: "annual" });
   });
 });
 

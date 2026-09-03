@@ -2,6 +2,7 @@
 // (server), the currency switcher (client) and the checkout routes all read
 // the same stripe-plans.json price points — SET amounts, never FX conversions.
 import stripePlans from "@/config/stripe-plans.json";
+import type { PlanKey, PurchasablePlanKey } from "@/lib/types";
 
 export const SUPPORTED_CURRENCIES = ["usd", "eur", "gbp", "inr", "aud"] as const;
 export type Currency = (typeof SUPPORTED_CURRENCIES)[number];
@@ -80,13 +81,6 @@ export function proPrice(interval: "monthly" | "annual", currency: Currency): nu
   return amountFor(pro.prices[interval], currency);
 }
 
-/** Pro Plus price in minor units for a currency, from stripe-plans.json. */
-export function proPlusPrice(interval: "monthly" | "annual", currency: Currency): number {
-  const plus = stripePlans.plans.find((p) => p.key === "pro_plus");
-  if (!plus) throw new Error("stripe-plans.json is missing the pro_plus plan");
-  return amountFor(plus.prices[interval], currency);
-}
-
 /**
  * What ONE more organisation in the billing group costs, in minor units.
  *
@@ -99,9 +93,14 @@ export function proPlusPrice(interval: "monthly" | "annual", currency: Currency)
  * locales. `extra-org-price-parity.test.ts` fails if that stops being true, and
  * names the strings to rewrite — so the price can be changed, it just cannot be
  * changed quietly.
+ *
+ * `plan` is `PurchasablePlanKey` (entitlements v18: "pro" only) rather than a
+ * bare `"pro"` literal, so this stays visibly the same set `checkoutSchema`
+ * validates rather than an independent literal that happens to match it —
+ * the org add-on is only ever sold alongside a self-serve subscription.
  */
 export function extraOrgPrice(
-  plan: "pro" | "pro_plus",
+  plan: PurchasablePlanKey,
   interval: "monthly" | "annual",
   currency: Currency,
 ): number {
@@ -126,6 +125,38 @@ export type PassKey = (typeof PASS_KEYS)[number];
 export function isPassKey(value: unknown): value is PassKey {
   return typeof value === "string" && (PASS_KEYS as readonly string[]).includes(value);
 }
+
+/** Union of every `plans.key` value: the subscription plans plus the pass
+ *  rungs, which are also `plans` rows (`ALL_PLAN_KEYS` below is the ordered
+ *  list; this is just the type). */
+export type AnyPlanKey = PlanKey | PassKey;
+
+/**
+ * Every `plans.key` row in the database, in ONE canonical price-ascending
+ * column order — the union `PRICING_PLAN_KEYS` (`lib/pricing-matrix.ts`, the
+ * four purchasable columns) and `ADMIN_PLAN_KEYS` (`lib/entitlement-admin.ts`,
+ * all five — `/admin/entitlements` shows staff every plan, `enterprise`
+ * included) both derive from by filtering/aliasing this, rather than each
+ * hand-typing its own copy (the bug this replaces: adding the L rung once
+ * meant a plan could land in one list and not the other).
+ *
+ * A `Record<AnyPlanKey, true>` object literal, not a hand-typed array,
+ * decides membership: TypeScript refuses to compile this file if `PlanKey`
+ * or `PassKey` ever gains a member missing here, or if a key here isn't one
+ * of them. `Object.keys` then reads the column ORDER straight back out —
+ * plain string keys preserve insertion order, so the object's field order
+ * above is the only place that order is chosen.
+ */
+const ALL_PLAN_KEYS_ORDER: Record<AnyPlanKey, true> = {
+  community: true,
+  event_pass: true,
+  event_pass_l: true,
+  pro: true,
+  enterprise: true,
+};
+export const ALL_PLAN_KEYS: readonly AnyPlanKey[] = Object.keys(
+  ALL_PLAN_KEYS_ORDER,
+) as AnyPlanKey[];
 
 /**
  * What one Event Pass rung COSTS TO ADVERTISE, in minor units, straight from

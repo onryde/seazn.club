@@ -5607,6 +5607,7 @@ export type DictionaryKey =
   | "upgrade.compare.thisComp"
   | "upgrade.compare.title"
   | "upgrade.compare.unlimited"
+  | "upgrade.contactUs"
   | "upgrade.credit"
   | "upgrade.eventPass"
   | "upgrade.intro"

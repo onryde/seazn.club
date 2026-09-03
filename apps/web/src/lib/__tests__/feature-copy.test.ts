@@ -8,16 +8,32 @@ import { doubleElimFormatReason, featurePlan, featureReason } from "@/lib/featur
  * phrasings cannot express.
  *
  * Deliberately NOT a no-digits rule: the sentence's job is to state the caps
- * ("Community 1, Pro 5, Pro Plus 10"), so digits are the thing it must keep.
+ * ("Community 1, Pro 5"), so digits are the thing it must keep.
  */
 const PRICES_THE_RIDER =
   /[$£€]|\b(rates?|prices?|priced|pricing|costs?|fees?|half|double|cheaper|discount)\b/i;
 
 describe("feature-copy V290", () => {
-  it("maps Plus features to pro_plus", () => {
-    for (const k of ["api.write", "scorers.max", "officials.auto", "domains.custom", "support.priority"]) {
-      expect(featurePlan(k)).toBe("pro_plus");
+  it("maps Enterprise (Contact-us) features to \"enterprise\" (entitlements v18)", () => {
+    // ENTERPRISE_FEATURES is api.write plus every int key whose Pro value is
+    // the ceiling (design §4) — post-V391 that is exactly these two. See
+    // `entitlements-v18-enterprise-ceiling.test.ts` for the DB-derived proof
+    // that this list can't silently drift from the live matrix.
+    for (const k of ["api.write", "competitions.max_active", "dashboard.public.max"]) {
+      expect(featurePlan(k)).toBe("enterprise");
     }
+    // pro_plus is retired (V391). officials.auto and scorers.max were its
+    // above-Pro keys; entitlements v18 moves both to plain Pro (design §2/§4)
+    // — a paywall for either must no longer point at Contact-us.
+    expect(featurePlan("officials.auto")).toBe("pro");
+    expect(featurePlan("scorers.max")).toBe("pro");
+    // domains.custom / support.priority: T1 deleted both keys from
+    // plan_entitlements entirely (inert-key removal). Nothing gates on them
+    // any more, so where featurePlan lands them is moot — the ladder's
+    // documented default (unknown/absent key → "pro") applies, same as any
+    // other key nobody asks about.
+    expect(featurePlan("domains.custom")).toBe("pro");
+    expect(featurePlan("support.priority")).toBe("pro");
     expect(featurePlan("scheduling.board")).toBe("pro");
     expect(featurePlan("officials.roles_multi")).toBe("pro");
     // V302 (owner 2026-07-19): AI scheduling exists on every tier; Pro is the
@@ -113,7 +129,9 @@ describe("feature-copy V290", () => {
     // A no-digits rule would have been WRONG for exactly this reason — the
     // caps themselves are what the refusal is about.
     expect(featureReason("orgs.max_owned")).not.toMatch(PRICES_THE_RIDER);
-    expect("Community 1, Pro 5, Pro Plus 10").not.toMatch(PRICES_THE_RIDER);
+    // "Pro Plus 10" dropped from this literal with the plan (V391) — the cap
+    // list is Community/Pro only now, not a third tier's ceiling.
+    expect("Community 1, Pro 5").not.toMatch(PRICES_THE_RIDER);
     expect("it's billed monthly on top of your current bill").not.toMatch(PRICES_THE_RIDER);
   });
   it("has copy for the v16 league-ops entitlements (V293/V294/V295, T84)", () => {

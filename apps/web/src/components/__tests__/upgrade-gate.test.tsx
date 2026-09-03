@@ -298,15 +298,20 @@ describe("UpgradeGate — pass held (D1: never re-sell a pass the org holds)", (
     }
   });
 
-  it("names the plan that actually unlocks the key, not always Pro", () => {
-    // A pass holder can hit a Pro PLUS gate inside the competition they paid
-    // for (auto-assigning officials, write API keys, custom domains). The
-    // card carries a PRO PLUS badge, so a "Go Pro" button underneath it would
-    // send them to buy the wrong plan.
+  it("offers Contact-us, not a price, for a key above Pro", () => {
+    // A pass holder can hit an ENTERPRISE gate inside the competition they
+    // paid for — write API keys (entitlements v18: officials.auto moved to
+    // plain Pro, so api.write is the above-Pro example now). The card
+    // carries an ENTERPRISE badge, so a priced "Go Pro" button underneath it
+    // would send them to buy the wrong (nonexistent) thing — it must be the
+    // Contact-us mailto instead.
     pathname = "/o/riverside/c/summer-league/d/main";
-    const html = render(<UpgradeGate feature="officials.auto" />, { passKey: "event_pass" });
-    expect(html).toContain("Go Pro Plus");
+    const dict = uiEn as unknown as Dict;
+    const html = render(<UpgradeGate feature="api.write" />, { passKey: "event_pass" });
+    expect(html).toContain(`mailto:hello@seazn.club?subject=`);
+    expect(html).toContain(t(dict, "upgrade.contactUs"));
     expect(html).not.toMatch(/Go Pro —/);
+    expect(html).not.toContain("Go Pro Plus");
   });
 
   it("sends the compact pill to billing, not to a second checkout", () => {

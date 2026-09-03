@@ -9,6 +9,7 @@ import { orgScopeHeaders } from "@/lib/org-scope";
 import { useConfirm } from "@/components/ui/confirm-provider";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { Modal } from "@/components/modal";
+import type { PurchasablePlanKey } from "@/lib/types";
 
 /** In-page upgrade via Stripe Embedded Checkout — reveals the checkout inline
  *  (no redirect out) and only returns to the billing page on completion. We
@@ -25,8 +26,9 @@ export function UpgradeButton({
   label: string;
   /** Secondary styling when the button is the non-default interval. */
   ghost?: boolean;
-  /** Which paid plan to check out into — defaults to Pro. */
-  plan?: "pro" | "pro_plus";
+  /** Which paid plan to check out into — defaults to Pro. `pro_plus` is
+   *  retired (entitlements v18); the only purchasable plan left is Pro. */
+  plan?: PurchasablePlanKey;
 }) {
   const [clientSecret, setClientSecret] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);

@@ -199,17 +199,33 @@ export const deleteAccountSchema = z.object({
 
 // ---- billing request schemas -------------------------------------------------
 
+/**
+ * The plan keys a self-serve `POST /api/billing/checkout` — and a plan
+ * SWITCH via `/api/billing/plan` + its `preview` sibling, which validate a
+ * different request shape but draw from the same purchasable set — may
+ * name. Narrower than `PlanKey` below: `enterprise` is never self-serve
+ * (design §4 — comped only, through `admin-plan.ts` or a bespoke Stripe
+ * subscription mapped by `planKeyForPrice`) and `community` is never
+ * something checkout buys, only a state you leave. One named constant so
+ * the three `z.enum` sites that used to hand-type this list independently
+ * can't drift from each other or silently reopen a path to a retired plan.
+ */
+export const PURCHASABLE_PLAN_KEYS = ["pro"] as const;
+export type PurchasablePlanKey = (typeof PURCHASABLE_PLAN_KEYS)[number];
+
 export const checkoutSchema = z.object({
-  plan_key: z.enum(["pro", "pro_plus"]),
+  plan_key: z.enum(PURCHASABLE_PLAN_KEYS),
   interval: z.enum(["monthly", "annual"]),
 }).strict();
 
 // ---- billing types -----------------------------------------------------------
 
-// V290 added pro_plus above pro (Task 1) — Subscription.plan_key can hold it,
-// but this list was never updated (Task 6 only touched checkoutSchema), which
-// left every `sub.plan_key === "pro_plus"` comparison a TS2367 no-overlap error.
-export const PLAN_KEYS = ["community", "pro", "pro_plus"] as const;
+// Entitlements v18 (V391): `pro_plus` is retired. Its rows moved to a new,
+// non-public `enterprise` plan reached only through Contact-us / staff comp —
+// never a wider self-serve Pro — so `PlanKey` gains `enterprise`, not a
+// bigger `pro_plus`. It stays deliberately wider than what checkout can buy;
+// see `PURCHASABLE_PLAN_KEYS` above for that narrower set.
+export const PLAN_KEYS = ["community", "pro", "enterprise"] as const;
 export const SUBSCRIPTION_STATUSES = [
   "trialing",
   "active",

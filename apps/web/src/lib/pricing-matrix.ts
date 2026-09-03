@@ -4,6 +4,7 @@
 // them through here, grouped by ENTITLEMENT_DOMAINS so /pricing and
 // /admin/entitlements tell the same story.
 import { ENTITLEMENT_DOMAINS } from "@/lib/entitlement-domains";
+import { ALL_PLAN_KEYS, type AnyPlanKey } from "@/lib/currency";
 
 export interface MatrixCell {
   bool_value: boolean | null;
@@ -25,14 +26,17 @@ export type MatrixData = Record<string, Record<string, MatrixCell>>;
  * page means quoting M's 128-entrant ceiling to someone paying to remove it.
  * Deriving the query, the row shape and the headings from this tuple makes
  * that class of gap a type error instead.
+ *
+ * Entitlements v18: derived from `lib/currency.ts`'s `ALL_PLAN_KEYS` — every
+ * plan in the database — filtered down to the four PURCHASABLE columns.
+ * `enterprise` is never a `/pricing` column (design §4: it's the Contact-us
+ * strip below the table, not a priced offer); `lib/entitlement-admin.ts`'s
+ * `ADMIN_PLAN_KEYS` derives from the same list unfiltered, so a plan added to
+ * one can't be forgotten on the other.
  */
-export const PRICING_PLAN_KEYS = [
-  "community",
-  "event_pass",
-  "event_pass_l",
-  "pro",
-  "pro_plus",
-] as const;
+export const PRICING_PLAN_KEYS = ALL_PLAN_KEYS.filter(
+  (k): k is Exclude<AnyPlanKey, "enterprise"> => k !== "enterprise",
+);
 
 export type PricingPlanKey = (typeof PRICING_PLAN_KEYS)[number];
 
@@ -43,7 +47,6 @@ export const PRICING_COLUMN_LABEL_KEY: Record<PricingPlanKey, string> = {
   event_pass: "pricing.table.pass",
   event_pass_l: "pricing.table.passL",
   pro: "pricing.table.pro",
-  pro_plus: "pricing.table.proPlus",
 };
 
 /** The rungs of the Event Pass ladder — the columns that fall through to

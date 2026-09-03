@@ -12,10 +12,13 @@
 // drift apart.
 import { describe, expect, it } from "vitest";
 import stripePlans from "@/config/stripe-plans.json";
-import { extraOrgPrice, proPrice, proPlusPrice, SUPPORTED_CURRENCIES } from "@/lib/currency";
+import { extraOrgPrice, proPrice, SUPPORTED_CURRENCIES } from "@/lib/currency";
 import { APPROVED_DICTIONARY_COPY } from "./_approved-dictionary-copy";
 
-const PLANS = ["pro", "pro_plus"] as const;
+// pro_plus retired (entitlements v18, V391) — extraOrgPrice narrows to "pro"
+// (lib/currency.ts), so this tuple drops to the one plan that still sells an
+// extra-organisation add-on.
+const PLANS = ["pro"] as const;
 const INTERVALS = ["monthly", "annual"] as const;
 
 /**
@@ -88,7 +91,7 @@ describe("extra-organisation price", () => {
     for (const plan of PLANS) {
       for (const interval of INTERVALS) {
         for (const currency of SUPPORTED_CURRENCIES) {
-          const base = plan === "pro" ? proPrice(interval, currency) : proPlusPrice(interval, currency);
+          const base = proPrice(interval, currency);
           const extra = extraOrgPrice(plan, interval, currency);
           // Rounded DOWN to a whole major unit (INR to the nearest x99), so
           // exact halves are not required — but the customer must never be
@@ -115,22 +118,14 @@ describe("extra-organisation price", () => {
     for (const plan of PLANS) {
       for (const interval of INTERVALS) {
         for (const currency of SUPPORTED_CURRENCIES) {
-          const base = plan === "pro" ? proPrice(interval, currency) : proPlusPrice(interval, currency);
+          const base = proPrice(interval, currency);
           expect(extraOrgPrice(plan, interval, currency)).toBeLessThanOrEqual(base);
         }
       }
     }
   });
 
-  it("charges less for a Pro extra organisation than Pro Plus does", () => {
-    // Pins the ladder itself: the tiers are independent numbers in JSON, so
-    // nothing but this stops a Pro extra org being priced above a Pro Plus one.
-    for (const interval of INTERVALS) {
-      for (const currency of SUPPORTED_CURRENCIES) {
-        expect(extraOrgPrice("pro", interval, currency)).toBeLessThan(
-          extraOrgPrice("pro_plus", interval, currency),
-        );
-      }
-    }
-  });
+  // "charges less for a Pro extra organisation than Pro Plus does" removed —
+  // pro_plus is retired (entitlements v18, V391) and `extraOrgPrice` no
+  // longer accepts it; there is only one rung left to compare against itself.
 });
