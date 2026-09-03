@@ -17,11 +17,13 @@ folder is about sport.
 
 ## Owed journeys (2026-09-03, owner-requested)
 
-Two journeys the product depends on and no walkthrough drives. Both were asked
-for explicitly as **UI, not API** — which is the whole distinction this folder
-exists on, so they belong here rather than in the scheduler bench (that
-programme drives the real API from OUTSIDE the product by charter; its only
-browser-touching prompt is B03r, and that one is registration-specific).
+Two journeys no walkthrough drives. **Both are OPTIONAL here** — corrected
+2026-09-03: the owner's ask was for them driven from the scheduler bench, and
+both are fully reachable over the API (`POST /officials/{id}/invite`,
+`GET /persons/{id}/stats`, `GET /divisions/{id}/stats/players`), so the bench
+owns the functional assertions. What a walkthrough would add on top is the only
+thing the bench structurally cannot see: that a person can actually get through
+these screens. Worth having, not owed, and not a substitute for the bench work.
 
 **W-OFF — the organiser seats an official.** Create an official, invite them,
 and assign them to a fixture, by hand, start to finish. Nothing covers this

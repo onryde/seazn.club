@@ -229,20 +229,40 @@ fall back from, is live — no B-prompt needs its fallback path.
     so do not read a green `_tiny` run as evidence that anything schedules
     two divisions. B04 owns closing this.
 
-  **NOT bench scope, recorded so it is not absorbed (2026-09-03, owner-asked):**
-  verifying the officials journey (create -> invite -> assign to a fixture) and
-  the claimed player profile's stats **through the UI**. The bench drives the
-  real API from outside the product; the only browser-touching prompt in this
-  programme is B03r, and it is registration-specific. Those two journeys are
-  owed on the **walkthrough leg** instead (`apps/web/e2e/walkthrough/`, its own
-  Playwright project) and are written up in that folder's README as W-OFF and
-  W-PLAYER.
+  **Officials end-to-end and player stats are BENCH scope (owner, 2026-09-03).**
+  An earlier version of this entry sent both to the walkthrough leg on the
+  reasoning that they are UI journeys. That was wrong: both are fully reachable
+  over the API, so the bench can drive and assert them itself, and a bench that
+  hands its own subject matter to a browser suite has given up the thing it is
+  for.
 
-  The split that matters: the bench MAKES the record (B03 §5 mints `pc_` claim
-  invites, B05 accepts them, design §9 P2 is "claimed profile shows the real
-  stats") and the walkthrough checks a human can SEE it. An API-driven suite
-  cannot see what the UI renders, which is the same reason the pad has its own
-  walkthroughs.
+  What the API actually offers, checked rather than assumed:
+
+  - `POST /api/v1/officials/{id}/invite` — body `CreateClaimInvite` (`{ email }`),
+    returns the claim row plus `claim_url` and `email_sent`. It runs the SAME
+    shared person-claim rail as a player `pc_` invite, pointed at the official's
+    person (created on demand by that route — which is the only writer of a
+    `lane:"official"` persons row, and therefore the answer to why
+    `PackOfficial.person` cannot be honoured at `POST /officials`).
+  - `GET /api/v1/persons/{id}/stats` — one person's record.
+  - `GET /api/v1/divisions/{id}/stats/players` — the division's player table.
+  - `GET /api/v1/public/orgs/{orgSlug}/competitions/{slug}/divisions/{divisionSlug}/stats`
+    — the public projection, which is the one gated on opt-IN consent
+    (`public_players_v`), so it is where a seed that omitted
+    `consent.public_name` shows up as an empty table rather than an error.
+
+  **Where each half lands.** Minting the official's invite is B03 §5's own
+  sentence ("seeding only mints invites; the accept flow is B05's"), so it
+  belongs in THIS wave alongside T6's create/blackout/assign. Asserting real
+  player stats needs a folded match, which B05 produces — so B03 can pin the
+  BASELINE (the endpoints answer, the seeded roster is present, the public
+  projection reflects the consent the seed actually wrote) and B05 pins the
+  values once there are events behind them. Design §9 P2 — "claimed profile
+  shows the real stats" — is the B05 oracle.
+
+  A UI walkthrough of the same ground may still be worth having later, but it
+  is a COMPLEMENT and not where this work lives; `apps/web/e2e/walkthrough/`'s
+  README carries it as optional.
 
   Forward note for B06+ pack authoring. **[Corrected 2026-09-03 — the number
   this entry first carried was wrong, and the correction is the more useful
