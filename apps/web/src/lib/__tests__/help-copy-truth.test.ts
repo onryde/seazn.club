@@ -2837,7 +2837,17 @@ const scoringFreeFaultsAcrossTree = (
   };
   for (const article of allHelpArticles().values()) push(article.slug, helpArticleBySlug(article.slug));
   for (const e of extra) push(e.slug, e.text);
-  return { faults: scoringFreeClaimFaults(pairs), scanned: pairs.length };
+  // English, and English only, by standing rule: `content/help/**` is one tree
+  // with no translations. The band labels come from the dictionary rather than
+  // this file, so a rename moves the guard with the label — the articles quote
+  // "Key moments" / "Full timeline" / "Every detail" verbatim (final review
+  // I-1: the guard's own vocabulary knew "match timeline" and none of these).
+  const ui = JSON.parse(readFileSync("src/dictionaries/en/ui.json", "utf8")) as Record<string, string>;
+  const bandLabels = [0, 1, 2, 3].map((band) => ui[`pad.recording.band.${band}`] ?? "");
+  return {
+    faults: scoringFreeClaimFaults(pairs, { locale: "en", bandLabels }),
+    scanned: pairs.length,
+  };
 };
 
 describe("no help article anywhere prices scoring detail (W1: it is free on every plan)", () => {

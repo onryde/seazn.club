@@ -483,7 +483,13 @@ describe("ContextStrip rendering — slot message (R2b bowler-eligibility block)
     expect(String(propsOf(el).className)).not.toContain("text-amber-700");
   });
 
-  it('a slot declaring messageTone: "info" renders the tier register instead, not rejection red', () => {
+  // W1 (entitlements v18): the fixture message was "Rally-by-rally scoring
+  // needs Pro." and the test name said "the tier register" — both from the
+  // retired paid-band model. No skin can build that sentence any more (the
+  // Recording chip is a picker with no plan to name), so the fixture is now an
+  // info-tone message a skin really does produce. The TONE is what this test
+  // is about; the words only have to be a plausible one.
+  it('a slot declaring messageTone: "info" renders the info register instead, not rejection red', () => {
     const island = renderIsland(ContextStrip, {
       spec: {
         slots: [
@@ -493,7 +499,7 @@ describe("ContextStrip rendering — slot message (R2b bowler-eligibility block)
             pool: "onfield",
             required: false,
             readOnly: true,
-            message: "Rally-by-rally scoring needs Pro.",
+            message: "Set score is offered while this game has no rally in it.",
             messageTone: "info",
           },
         ],
@@ -508,7 +514,7 @@ describe("ContextStrip rendering — slot message (R2b bowler-eligibility block)
     expect(String(propsOf(el).className)).toContain("text-amber-700");
     expect(String(propsOf(el).className)).not.toContain("text-red-600");
     // Still real visible text, which is the rule the whole block exists for.
-    expect(island.text()).toContain("Rally-by-rally scoring needs Pro.");
+    expect(island.text()).toContain("Set score is offered while this game has no rally in it.");
   });
 
   it("a slot with no message renders no message element for that slot", () => {

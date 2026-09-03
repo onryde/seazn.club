@@ -45,12 +45,16 @@ describe("refusalText", () => {
   // The defect in one assertion: whatever the server says, the scorer must
   // never read it. Swept over every code this pad can be handed.
   it("never returns the server's message for ANY code, engine or wire or unknown", () => {
-    const prose = "Plan upgrade required: scoring.match_timeline";
+    // W1 (entitlements v18): was `scoring.match_timeline`, a slug the server
+    // can no longer put in this field — V390 deleted the row and the same wave
+    // deleted its gate. `cricket.dls` is the one feature the scoring door still
+    // refuses on, so the fixture is a refusal production can actually produce.
+    const prose = "Plan upgrade required: cricket.dls";
     const codes = [...Object.keys(ENGINE_ERROR_KEY), ...Object.keys(REFUSAL_KEY), "UNKNOWN", "INTERNAL", ""];
     for (const code of codes) {
       const text = refusalText({ code, message: prose }, identityMsg);
       expect(text, `code ${code} leaked the server's prose`).not.toBe(prose);
-      expect(text, `code ${code} leaked a feature slug`).not.toContain("scoring.match_timeline");
+      expect(text, `code ${code} leaked a feature slug`).not.toContain("cricket.dls");
     }
   });
 });

@@ -54,6 +54,7 @@ import {
   inertPatternFaults,
   riderRateFaults,
   scoringFreeClaimFaults,
+  SCORING_FREE_VOCABULARY,
   sentences,
   localeCoverageFaults,
   localeCreditGrantFaults,
@@ -647,6 +648,16 @@ const KNOWN_POSITIVES: string[] = [
   "Needs a detail level this plan doesn't include — upgrade to record it.",
   "Recording detail beyond Card is not included on Community.",
   "Every recording level is available on every plan.",
+  // …and the same claim in the three languages the dictionaries are written in.
+  //    One fixture per non-English `detail` and `affirmation` pattern — the
+  //    `planName`/`paidVerb` halves already fire on the English lines above,
+  //    because plan names are untranslated and "plan" is a Spanish/Dutch word.
+  "La puntuación bola a bola requiere un plan Pro.",
+  "Cada nivel de detalle está disponible en todos los planes.",
+  "Le score balle par balle nécessite un forfait Pro.",
+  "Chaque niveau de détail est disponible sur tous les forfaits.",
+  "Bal-voor-bal scoren vereist een Pro-abonnement.",
+  "Elk detailniveau is beschikbaar op elk abonnement.",
   // ── Task 3's APPROVED FORMS (the help-tree allowlist) ──
   // These are positives in the opposite sense to everything else here: they are
   // the shapes the help copy is ALLOWED to use, so each one is a real sentence
@@ -3250,20 +3261,50 @@ describe("no dictionary string sells scoring detail (W1: it is free on every pla
    * that earns it. `tips.*` and the `emails.*` bodies are paragraphs, so this is
    * not hypothetical.
    */
+  const valuesFor = (locale: DictionaryLocale): Array<readonly [string, string]> =>
+    DICT_FILES.flatMap((file) =>
+      Object.entries(
+        JSON.parse(readFileSync(`src/dictionaries/${locale}/${file}.json`, "utf8")) as Record<
+          string,
+          unknown
+        >,
+      )
+        .filter((entry): entry is [string, string] => typeof entry[1] === "string")
+        .flatMap(([key, value]) =>
+          sentences(value).map((s) => [`${locale}/${file}.json ${key}`, s] as const),
+        ),
+    );
+
   const everyValue = (): Array<readonly [string, string]> =>
+    DICTIONARY_LOCALES.flatMap((locale) => valuesFor(locale));
+
+  /**
+   * The four band labels a customer READS, for one locale — `Result only /
+   * Key moments / Full timeline / Every detail` in English, and the
+   * translator's own words in the other three ("Cronología completa",
+   * "Chronologie complète", "Volledige tijdlijn").
+   *
+   * READ FROM THE DICTIONARY, never typed into the guard (final review I-1):
+   * the guard's own vocabulary said "match timeline" while the product renders
+   * "Full timeline", so three of the four labels this wave shipped were
+   * invisible to the rule that exists to stop them being sold. Deriving them
+   * means a rename moves the guard with the label.
+   */
+  const bandLabelsFor = (locale: DictionaryLocale): string[] => {
+    const ui = JSON.parse(readFileSync(`src/dictionaries/${locale}/ui.json`, "utf8")) as Record<
+      string,
+      string
+    >;
+    return [0, 1, 2, 3].map((band) => ui[`pad.recording.band.${band}`] ?? "");
+  };
+
+  /** Every locale scanned against ITS OWN vocabulary and ITS OWN band labels. */
+  const scoringFreeFaults = (): string[] =>
     DICTIONARY_LOCALES.flatMap((locale) =>
-      DICT_FILES.flatMap((file) =>
-        Object.entries(
-          JSON.parse(readFileSync(`src/dictionaries/${locale}/${file}.json`, "utf8")) as Record<
-            string,
-            unknown
-          >,
-        )
-          .filter((entry): entry is [string, string] => typeof entry[1] === "string")
-          .flatMap(([key, value]) =>
-            sentences(value).map((s) => [`${locale}/${file}.json ${key}`, s] as const),
-          ),
-      ),
+      scoringFreeClaimFaults(valuesFor(locale), {
+        locale,
+        bandLabels: bandLabelsFor(locale),
+      }),
     );
 
   it("scans every file, in every locale — not a subset", () => {
@@ -3274,12 +3315,106 @@ describe("no dictionary string sells scoring detail (W1: it is free on every pla
     expect(everyValue().length, "the scan resolved almost nothing").toBeGreaterThan(4000);
   });
 
-  it("names no plan beside ball-by-ball, rally-by-rally, a match timeline or a detail level", () => {
-    const faults = scoringFreeClaimFaults(everyValue());
+  it("names no plan beside a scoring-detail phrase or a shipped band label, in any locale", () => {
+    const faults = scoringFreeFaults();
     // The message argument carries the offending key into a CI JSON report —
     // `failureMessages` otherwise says only "expected [ Array(1) ] to deeply
     // equal []" and the locale/key/sentence lives in the terminal diff alone.
     expect(faults, faults.join(" | ")).toEqual([]);
+  });
+
+  /**
+   * ── THE GUARD CAN SEE THE LABELS THIS WAVE SHIPPED (final review I-1) ──────
+   *
+   * Measured before this existed: setting `pad.recording.band.2` to
+   * "Full timeline (Pro)" reddened NOTHING on the branch. The guard's
+   * vocabulary said "match timeline"; the product says "Full timeline". Three
+   * of the four labels a customer reads were invisible to the one rule that
+   * exists to stop them being priced — and the two neighbouring tests that
+   * look like they would catch it do not (`recording-chip.test.tsx` scans the
+   * KEY, because its `t` echoes keys; `gallery.capture.ts` uses
+   * `toContainText`).
+   *
+   * Driven per locale through the REAL producer, so a rename in any of the
+   * four dictionaries moves this with it.
+   */
+  it("catches a plan name pinned to a band label, in every locale", () => {
+    for (const locale of DICTIONARY_LOCALES) {
+      const labels = bandLabelsFor(locale);
+      expect(labels.filter((l) => l.length > 0), `${locale} band labels`).toHaveLength(4);
+      for (const [band, label] of labels.entries()) {
+        const faults = scoringFreeClaimFaults([[`${locale} band.${band}`, `${label} (Pro)`]], {
+          locale,
+          bandLabels: labels,
+        });
+        expect(faults, `${locale} band.${band} "${label} (Pro)" is not seen as a price`).toHaveLength(1);
+      }
+    }
+  });
+
+  /**
+   * ── AND IT SPEAKS ALL FOUR LANGUAGES (final review I-1, second half) ───────
+   *
+   * `everyValue()` reads es/fr/nl; until this round the vocabulary was English
+   * only, so those three locales were measured against words that cannot occur
+   * in them and could say anything at all.
+   *
+   * NOT a translation I invented: each locale's vocabulary is asserted against
+   * copy this product ALREADY SHIPS, read out of that locale's own dictionary
+   * at run time. If the product's upsell wording drifts away from the words
+   * this guard knows, this reds — which is the only honest way to hold a
+   * vocabulary I cannot audit as a native speaker.
+   */
+  it("each locale's price vocabulary matches that locale's own live upsell copy", () => {
+    // Each anchor names WHICH half it exercises. The verb anchor is the one
+    // that matters — plan names are untranslated, so a `planName` match proves
+    // nothing about the language. "Brand color requires" was an anchor here
+    // for one run and is deliberately NOT: it is a sentence FRAGMENT whose
+    // plan is named by the adjacent link, so English failed it while es/fr
+    // passed on a coincidence of their verb lists. A bad anchor teaches the
+    // vocabulary the wrong lesson — the fix was a better anchor, not a wider
+    // English regex (`requires`/`needs` would flag "the toss needs Key moments
+    // or above", which is a recording level, not a price).
+    const ANCHORS: Array<[key: string, half: "planName" | "paidVerb"]> = [
+      ["board.ai.error.upgrade", "paidVerb"],
+      ["board.ai.error.upgradeToProPlus", "planName"],
+      ["addOns.extraOrg.error.planCannot", "planName"],
+      ["billing.planChange.toPro", "planName"],
+    ];
+    const misses: string[] = [];
+    for (const locale of DICTIONARY_LOCALES) {
+      const ui = JSON.parse(readFileSync(`src/dictionaries/${locale}/ui.json`, "utf8")) as Record<
+        string,
+        string
+      >;
+      const vocabulary = SCORING_FREE_VOCABULARY[locale];
+      expect(vocabulary, `${locale} has no scoring-free vocabulary at all`).toBeDefined();
+      for (const [key, half] of ANCHORS) {
+        const value = ui[key];
+        expect(value, `${locale} ${key} is missing — pick another anchor`).toBeTruthy();
+        if (!vocabulary![half].test(value!)) {
+          misses.push(`${locale} ${key} (${half}): "${value}" reads as no price at all`);
+        }
+      }
+
+      // …and the vocabulary is LIVE in this language, not just able to pass
+      // four hand-picked strings: it must fire across that locale's own
+      // dictionary. Measured today — es 148 / fr 115 / nl 133 verb hits, and
+      // 97 / 91 / 126 plan-name hits — so a floor of 50 is a real signal and
+      // still far from the live numbers.
+      const own = valuesFor(locale);
+      const verbHits = own.filter(([, text]) => vocabulary!.paidVerb.test(text)).length;
+      const nameHits = own.filter(([, text]) => vocabulary!.planName.test(text)).length;
+      expect(verbHits, `${locale}: the price verbs fire on almost nothing in its own dictionary`).toBeGreaterThan(50);
+      expect(nameHits, `${locale}: the plan names fire on almost nothing in its own dictionary`).toBeGreaterThan(50);
+    }
+    expect(misses, misses.join(" | ")).toEqual([]);
+
+    // …and an unknown locale is a FAULT, never a silent skip: a locale with no
+    // vocabulary is a locale nothing scans, which is the defect this fixes.
+    expect(
+      scoringFreeClaimFaults([["x", "Ball-by-ball scoring is a Pro feature."]], { locale: "de" }),
+    ).toEqual(["de: no scoring-free vocabulary — every string in this locale is unscanned"]);
   });
 
   /**

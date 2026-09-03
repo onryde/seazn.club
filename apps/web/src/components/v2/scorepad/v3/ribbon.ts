@@ -18,7 +18,10 @@
 //   - SPORT events: every type all eleven modules register in
 //     `module.eventSchemas` has four-locale copy, so no sport event reaches
 //     the fallback. Gated by `scoring-vocab.test.ts`, derived from
-//     `eventSchemas` (NOT `fidelityTiers`, which under-reports by five).
+//     `eventSchemas` — which is now the ONLY derivation available:
+//     `fidelityTiers` (the map this line used to warn against, because it
+//     under-reported by five) was deleted with the rest of the paid-band
+//     model in entitlements v18 / W1.
 //   - `core.*` events: these never reach the per-sport lookup at all. They
 //     resolve through `CORE_RIBBON_KEY` below, a map maintained BY HAND, and
 //     they are structurally outside the sport sweep — `declaredEventTypes()`

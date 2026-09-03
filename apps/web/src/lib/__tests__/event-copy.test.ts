@@ -160,19 +160,27 @@ describe("the activity feed authors no English of its own", () => {
     // prose. A reintroduced string literal reds here on the type that carries
     // it, whether or not anyone remembered to translate it.
     //
-    // Task 3b (entitlements W1): the same waiver as `scoring-vocab.test.ts`'s
-    // "labels every event type" loop, and for the same reason — these 5 types
-    // are banded by `padSpec(cfg).fidelity` but unrecordable under every
-    // shipped preset (setbased kernel gate, `cfg.records.*` all false; see
-    // that file's comment for the full citation), so `EVENT_KEY` has no entry
-    // and `eventLabel` falls through to a bare prettified string instead of
-    // an echoed key. R8 lands their copy; this waiver expires with it.
-    const unrecordableUnderEveryPreset = [
-      "badminton.expedite.start", "badminton.sub", "badminton.timeout",
-      "tabletennis.sub", "volleyball.expedite.start",
-    ];
+    // ── THE FIVE-TYPE WAIVER IS GONE, AND IT WAS ALREADY STALE ───────────────
+    //
+    // Task 3b (entitlements W1) exempted `badminton.expedite.start`,
+    // `badminton.sub`, `badminton.timeout`, `tabletennis.sub` and
+    // `volleyball.expedite.start` with a `continue`: banded by
+    // `padSpec(cfg).fidelity` but unrecordable under every shipped preset, so
+    // `EVENT_KEY` had no entry and `eventLabel` fell through to a bare
+    // prettified string. The comment said "R8 lands their copy; this waiver
+    // expires with it" — and nothing MEASURED that expiry, so when R8 landed
+    // the copy the waiver silently went on carrying five types out of this
+    // coverage gate, which is a `.skip` nobody revisits by another name.
+    //
+    // The final review asked for a staleness assertion. Writing one showed the
+    // waiver was already dead: all five types resolve a key today, so the
+    // honest fix is to delete the list rather than gate it. Measured
+    // 2026-09-03 — the assertion named all five before it came out.
+    //
+    // The loop is now unconditional, which is also what
+    // `scoring-vocab.test.ts`'s sibling "labels every event type the engine
+    // declares" already does.
     for (const type of declaredEventTypes()) {
-      if (unrecordableUnderEveryPreset.includes(type)) continue;
       const d = describeEvent(type, sample(type), NAMES, echo);
       expect(d.label, `${type} badge is not keyed`).toMatch(/^«[a-z]/);
     }

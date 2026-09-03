@@ -214,10 +214,15 @@ describe.skipIf(!HAS_DB)("scoring is free on every plan (R9)", () => {
       // silently passing.
       const declaredMax = Math.max(...Object.values(sportModule.padSpec!(cfg).fidelity), 0);
       if (declaredMax >= 2) {
+        // Final review: this said "AT that ceiling" and asserted `>= 2`, which
+        // is a different, weaker claim — a module declaring band 3 passed on a
+        // band-2 pick. Assert the ceiling the sentence promises. Derived from
+        // the module's own `padSpec`, never a table typed here, so a module
+        // that moves its ceiling moves this with it (house rule 19).
         expect(
           picked!.band,
           `${sportModule.key}: picked event should reach the module's declared ceiling (band ${declaredMax})`,
-        ).toBeGreaterThanOrEqual(2);
+        ).toBe(declaredMax);
       }
       await expect(recordTopBand(rig, sportModule, picked!)).resolves.toBeDefined();
     });

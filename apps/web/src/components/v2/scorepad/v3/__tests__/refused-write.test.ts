@@ -58,18 +58,26 @@ const settle = async () => {
   for (let i = 0; i < 12; i++) await tick();
 };
 
-/** VERBATIM from the running server, `report-band1.json` — the exact envelope
- *  the pad was handed when it lied. Not a hand-written approximation: the
- *  `message` is the ID-bearing English prose this pad must never show, and
- *  `reason` is the machine-slug-adjacent marketing line beside it. */
+/** The exact 402 ENVELOPE the pad was handed when it lied, captured verbatim
+ *  from the running server (`report-band1.json`). Its SHAPE is what this file
+ *  is about: an ID-bearing English `message` the pad must never show, and the
+ *  marketing `reason` beside it.
+ *
+ *  W1 (entitlements v18, 2026-09-02) — the FEATURE moved, the shape did not.
+ *  The capture named `scoring.match_timeline`; V390 deleted that row and Task
+ *  3 deleted its gate, so `scoreEvent` can no longer answer 402 for it at all
+ *  and a fixture naming it would prove this pad against a refusal production
+ *  cannot produce. `cricket.dls` is the ONE feature the scoring door still
+ *  refuses on (`requiresDlsEntitlement`, scoring.ts), and its `reason` is the
+ *  live `FEATURE_REASONS` sentence, so the envelope stays a real one. */
 const PAYMENT_REQUIRED_BODY = {
   ok: false,
   error: {
     code: "PAYMENT_REQUIRED",
-    message: "Plan upgrade required: scoring.match_timeline",
-    feature: "scoring.match_timeline",
-    feature_key: "scoring.match_timeline",
-    reason: "Match timelines (scorers, cards, minutes) are a Pro feature.",
+    message: "Plan upgrade required: cricket.dls",
+    feature: "cricket.dls",
+    feature_key: "cricket.dls",
+    reason: "DLS revised targets are a Pro feature — a manual umpire target still works.",
   },
   requestId: "e17a1a99-8fcf-4631-a75c-b0929991c19b",
 };
@@ -265,7 +273,7 @@ describe("a refused write is never rendered as recorded (R6 fix pass 3, gap 1)",
     expect(banner).not.toBeNull();
     // …and it is a message key this pad owns, not the server's prose.
     expect(banner).not.toBe(RAW_402_PROSE);
-    expect(banner).not.toContain("scoring.match_timeline");
+    expect(banner).not.toContain("cricket.dls");
     expect(banner).toMatch(/^scorepad\./);
   });
 
