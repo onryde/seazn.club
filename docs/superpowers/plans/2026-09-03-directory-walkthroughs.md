@@ -294,8 +294,12 @@ git commit -m "test(directory): shared kit for the directory walkthroughs"
 - Create: `apps/web/e2e/walkthrough/directory-player-identity.spec.ts`
 
 **Interfaces:**
-- Consumes: `freshOrg`, `stamp` (Task 1); `apiJson`, `failOnNativeDialog` from `./helpers`.
-- Produces: nothing later tasks rely on.
+- Consumes: `freshOrg`, `stamp` (Task 1); `failOnNativeDialog` from `../helpers`.
+- Produces, for Task 3 in the SAME file: `roster(page)`, `queue(page)`,
+  `addPerson(page, {name, dob?}) => Promise<string>` (returns the person id),
+  `escapeRe(s)`. Task 3 must reuse these, never redeclare them.
+- **Import `loginUi` only in Task 3**, which is the first user of it. Adding it
+  here leaves an unused import and fails lint at this task's own commit.
 
 Two tests in one file. They are split because neither fits the 60s default `timeout` together, and a task that needs `test.setTimeout` has failed the speed budget.
 
@@ -325,7 +329,7 @@ Two tests in one file. They are split because neither fits the 60s default `time
 
 ```ts
 import { test, expect, type Page } from "@playwright/test";
-import { failOnNativeDialog, loginUi } from "../helpers";
+import { failOnNativeDialog } from "../helpers";
 import { freshOrg, stamp } from "../directory-kit";
 
 /**
@@ -467,7 +471,8 @@ git commit -m "test(directory): walkthrough — the duplicate queue in both dire
 - Modify: `apps/web/e2e/walkthrough/directory-player-identity.spec.ts` (add the second test)
 
 **Interfaces:**
-- Consumes: everything Task 2 defined in the same file (`roster`, `addPerson`, `escapeRe`, `stamp`, `freshOrg`).
+- Consumes: everything Task 2 defined in the same file (`roster`, `queue`, `addPerson`, `escapeRe`, `stamp`, `freshOrg`) — reuse them, do not redeclare.
+- **Widen Task 2's import line to `import { failOnNativeDialog, loginUi } from "../helpers";`** — this task is `loginUi`'s first user.
 
 **Selectors:**
 
