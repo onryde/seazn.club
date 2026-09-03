@@ -1,7 +1,9 @@
 // Domain grouping for entitlement keys — shared by /pricing and
 // /admin/entitlements so the two surfaces tell the same story (V290).
-// Keys NOT listed here are deliberately unadvertised (vestigial D9 keys +
-// domains.custom until Spec 2 ships) — /admin still shows them under "other".
+// Keys NOT listed here are deliberately unadvertised (vestigial D9 keys) —
+// /admin still shows them under "other". `domains.custom` used to be named
+// here as "unadvertised until Spec 2 ships"; V391 deleted the key entirely, so
+// there is no longer a row to advertise later.
 export const ENTITLEMENT_DOMAINS: { slug: string; features: string[] }[] = [
   // scorers.max is deliberately absent (#244): the seat is dormant legacy and
   // retired from the pricing comparison; /admin still surfaces it under "other".
@@ -52,7 +54,15 @@ export const ENTITLEMENT_DOMAINS: { slug: string; features: string[] }[] = [
     "discovery.listed", "discovery.featured", "discovery.branding",
     "exports", "exports.branded", "news.auto",
   ]},
+  // support.priority left this list in W2 (entitlements v18): V391 deleted the
+  // key from `plan_entitlements`, and a comparison row for a key with no rows
+  // renders "—" in every column — a paywall tick for something no plan grants.
+  // Priority support is now a Contact-us conversation (design §4), not a matrix
+  // row. The `pricing.matrix.support.priority` label stays in the four
+  // dictionaries as an unused key: `lib/i18n-keys.ts` is generated from the en
+  // dictionaries and NOT from this list, so nothing here orphans it, and the
+  // dictionary tree is W3's to prune.
   { slug: "platform", features: [
-    "clubs.hierarchy", "logos.bulk", "api.access", "api.write", "support.priority",
+    "clubs.hierarchy", "logos.bulk", "api.access", "api.write",
   ]},
 ];

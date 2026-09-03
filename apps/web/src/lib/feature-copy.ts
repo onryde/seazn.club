@@ -48,11 +48,22 @@ export const FEATURE_REASONS: Record<string, string> = {
   // one error worse than paywalling something, because a free org reads it and
   // stops. `featureReason` falls back to the generic line for any key not
   // listed, so their removal cannot crash a caller.
+  //
+  // W2 (entitlements v18, V391): four more keys leave this map for the same
+  // reason — `stats.club_championship`, `officials.per_fixture.max`,
+  // `domains.custom` and `support.priority`. V391 deleted all four from
+  // `plan_entitlements` outright, so no gate can raise a 402 for any of them
+  // and a reason here would be an upsell nothing can reach. The last two
+  // additionally named "Pro Plus", a plan that no longer exists.
+  //
+  // NOT removed, and deliberately: `schedule.checkpoints.max` still says
+  // "Pro includes five, Pro Plus unlimited". Its KEY is live (§2 keeps it),
+  // so only the sentence is stale — and every surviving "Pro Plus" string is
+  // W3's copy pass, not this wave's. Recorded in the v18 _INDEX.md.
   "cricket.dls": "DLS revised targets are a Pro feature — a manual umpire target still works.",
   "stats.player": "Player stats and scorecard entry are a Pro feature.",
   "scoring.audit_export": "The signed match audit trail download is a Pro feature.",
   "discipline.enforced": "Automatic suspension tracking is a Pro feature.",
-  "stats.club_championship": "Club championship tables are a Pro feature.",
   "tiebreakers.custom": "Custom tiebreaker order is a Pro feature.",
   "standings.custom_points": "Bonus-point rules and forfeit points are a Pro feature — plain win/draw/loss points work on every plan.",
   "standings.carry_over": "Carrying Phase-1 standings into Phase 2 is a Pro feature.",
@@ -97,7 +108,6 @@ export const FEATURE_REASONS: Record<string, string> = {
     "The competition-wide schedule board is a Pro feature — or an Event Pass, for one competition.",
   "officials.auto": "Auto-assigning officials (solver, phased sourcing) is a Pro feature — manual assignment still works.",
   "officials.roles_multi": "Multiple official roles per fixture (judge + referee) are a Pro feature.",
-  "officials.per_fixture.max": "Community includes one official per fixture — more need Pro.",
   "officials.marks": "Rating your match officials is a Pro feature.",
   "scheduling.ai": "AI Schedule (plan, refine and repair your schedule from plain-language instructions) is not available on this plan.",
   // scheduling.ai.runs_per_division.max retired (v17 Phase 2 Task 5, V322):
@@ -111,8 +121,6 @@ export const FEATURE_REASONS: Record<string, string> = {
     "You're out of AI credits for this billing period. Top up a credit pack or upgrade your plan to keep using AI Schedule and AI Officials.",
   "schedule.versioning": "Multi-site scope locks are a Pro feature — undo/redo always works.",
   "schedule.checkpoints.max": "You've reached your plan's save points — Pro includes five, Pro Plus unlimited. Undo/redo always works.",
-  "domains.custom": "Serving your public pages on your own domain is a Pro Plus feature.",
-  "support.priority": "Priority support is included with Pro Plus.",
   "scoring.device_links":
     "Hand-this-device-over scoring links are a Pro feature — your scorer seat still works.",
   // Registration & entry fees (doc 16 §1.1)

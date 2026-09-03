@@ -1857,21 +1857,27 @@ async function smokePlanMatrix(): Promise<void> {
   );
   // V302: the AI Schedule Architect is granted on EVERY plan; the graded axis
   // is no longer a per-division run count (retired V322) but the monthly AI
-  // credit wallet allowance (community 10, V320).
+  // credit wallet allowance. V391 (entitlements v18) cut it from 10 to 5.
+  //
+  // The literal is deliberate here, and stays a literal. This script reads the
+  // number back out of the live API, which reads it out of `plan_entitlements`
+  // — deriving the expected value from the same table would make the whole
+  // check a tautology. 5 is the independent oracle: design doc §2, pinned
+  // cell-for-cell by `src/server/__tests__/entitlements-v18-matrix.test.ts`.
   check(
     "matrix/community: scheduling.ai is granted on every plan (V302)",
     commEnt.entitlements["scheduling.ai"]?.enabled === true,
   );
   check(
-    "matrix/community: ai.credits.monthly resolves 10 (V320)",
-    commEnt.entitlements["ai.credits.monthly"]?.limit === 10,
+    "matrix/community: ai.credits.monthly resolves 5 (V391)",
+    commEnt.entitlements["ai.credits.monthly"]?.limit === 5,
   );
   // The bootstrap grant (createOrgForUser) synchronously seeds this period's
   // allowance at org creation, so a brand-new Community org's wallet already
   // holds it — no up-to-24h wait on the daily billing-grant cron.
   check(
-    "matrix/community: a freshly-created org's AI credit wallet is bootstrap-granted 10 credits",
-    (await walletBalance(commOrg)) === 10,
+    "matrix/community: a freshly-created org's AI credit wallet is bootstrap-granted 5 credits",
+    (await walletBalance(commOrg)) === 5,
   );
 
   // A scored-through division so a real export renders.
@@ -1947,12 +1953,20 @@ async function smokePlanMatrix(): Promise<void> {
     proEnt.entitlements["scheduling.ai"]?.enabled === true,
   );
   check(
-    "matrix/pro: ai.credits.monthly resolves 60 (V320)",
-    proEnt.entitlements["ai.credits.monthly"]?.limit === 60,
+    "matrix/pro: ai.credits.monthly resolves 35 (V391)",
+    proEnt.entitlements["ai.credits.monthly"]?.limit === 35,
   );
+  // V391 DELETED `officials.per_fixture.max` — it resolved to ∞ on every plan
+  // and nothing read it. The check is INVERTED rather than dropped, because
+  // "absent" and "unlimited" are different answers that this endpoint reports
+  // differently, and the old assertion would now read `undefined === null` and
+  // FAIL rather than quietly pass. A deleted int key is a DENIAL in the
+  // resolver (`const base = row ? row.int_value : 0`), so the thing worth
+  // proving is that the key is not being served at all — if it reappeared with
+  // a row, every plan would silently gain a finite officials cap.
   check(
-    "matrix/pro: officials.per_fixture.max is unlimited (null)",
-    proEnt.entitlements["officials.per_fixture.max"]?.limit === null,
+    "matrix/pro: officials.per_fixture.max is not served at all (V391 deleted the key)",
+    proEnt.entitlements["officials.per_fixture.max"] === undefined,
   );
 
   // Behavioural proof of the wallet gate: setPlan is a raw plan_key flip (it
@@ -2446,9 +2460,21 @@ async function passGrantsSuite(): Promise<void> {
     plainExport.length > 1 && !plainExport.includes(org.name),
   );
 
-  // === dashboard.player_profiles — community false, pass true =============
-  // Same person, same consent, same entrant membership on both sides: the only
-  // difference between a 200 and a 404 here is the pass.
+  // === dashboard.player_profiles — FREE ON EVERY PLAN since V391 ==========
+  //
+  // This block used to read "community false, pass true", and asserted that
+  // the ONLY difference between a 200 and a 404 was the pass. V391
+  // (entitlements v18) grants `dashboard.player_profiles` on Community, so the
+  // sibling competition now renders too and the old 404 assertion is false.
+  //
+  // The checks are KEPT and inverted rather than deleted, because the pair is
+  // now proving something a single check cannot: the card renders on BOTH
+  // sides. A silent regression that re-gated profiles behind the pass would
+  // turn the sibling back into a 404 and be caught here — and, unlike a
+  // one-sided check, a total outage of the card route reds this too.
+  //
+  // `lib/pass-comparison.ts` dropped its public-profiles row for the same
+  // reason: it showed the same tick on both sides of the comparison.
   const passCard = await fetch(`${BASE}/shared/${org.slug}/${passComp.slug}/players/${person.id}`);
   const plainCard = await fetch(`${BASE}/shared/${org.slug}/${plainComp.slug}/players/${person.id}`);
   check(
@@ -2456,8 +2482,8 @@ async function passGrantsSuite(): Promise<void> {
     passCard.status === 200,
   );
   check(
-    "pass grants/profiles: the same person has no card on the sibling (404) — no leak",
-    plainCard.status === 404,
+    "pass grants/profiles: it renders on the UNPASSED sibling too — V391 made profiles free",
+    plainCard.status === 200,
   );
 
   // === sponsors.tiers + sponsors.monetize — community false, pass true ====
@@ -2585,19 +2611,27 @@ async function passGrantsSuite(): Promise<void> {
     "pass grants/scope: the org still resolves the community plan",
     ent.plan_key === "community",
   );
+  // `dashboard.player_profiles` LEFT this list in V391 — it is granted on
+  // Community now, so asserting it stays OFF org-wide would assert a paywall
+  // that no longer exists. It is not simply dropped: it moves to the positive
+  // assertion below, because a key that silently stopped being reported at all
+  // would otherwise vanish from this scope check without a sound.
   check(
-    "pass grants/scope: every boolean grant stays OFF org-wide (realtime, exports.branded, profiles, sponsors)",
+    "pass grants/scope: every boolean grant stays OFF org-wide (realtime, exports.branded, sponsors)",
     flagOff("realtime") &&
       flagOff("exports.branded") &&
-      flagOff("dashboard.player_profiles") &&
       flagOff("sponsors.tiers") &&
       flagOff("sponsors.monetize"),
   );
   check(
-    "pass grants/scope: every quota stays at the community figure org-wide (64/4/10 entrants/divisions/AI credits, fee 8%)",
+    "pass grants/scope: dashboard.player_profiles is ON org-wide — free since V391, not pass-scoped",
+    ent.entitlements["dashboard.player_profiles"]?.enabled === true,
+  );
+  check(
+    "pass grants/scope: every quota stays at the community figure org-wide (64/4/5 entrants/divisions/AI credits, fee 8%)",
     ent.entitlements["entrants.per_division.max"]?.limit === 64 &&
       ent.entitlements["divisions.per_competition.max"]?.limit === 4 &&
-      ent.entitlements["ai.credits.monthly"]?.limit === 10 &&
+      ent.entitlements["ai.credits.monthly"]?.limit === 5 &&
       ent.entitlements["registration.fee_percent"]?.limit === 8,
   );
 

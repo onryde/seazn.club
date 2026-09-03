@@ -283,6 +283,133 @@ Each needs a task and an owner. Nothing here is fixed by W1.
    `storageState: await consentedAnonymousState()` from
    `e2e/scorepad-a11y-kit.ts`; each needs its own spec re-run to be honest.
 
+6. **W2 deleted `pro-plus-tier.spec.ts` (505 lines, 10 tests) and
+   `pricing-pro-plus.spec.ts` (49 lines, 2 tests), and the replacements are
+   owed to W3** — `pricing-v18.spec.ts` and `enterprise-gate.spec.ts` (owner
+   ruling 2026-09-03, W2 plan decision 6). Both files were deleted whole and
+   nothing outside themselves referenced them. This is the inventory of what
+   the tree no longer proves in a browser, so W3 rebuilds coverage rather than
+   guessing at it. Five of the ten cases were about the retired tier and are
+   simply gone; the other five tested a LIVE mechanism through a `pro_plus`
+   vehicle and are the real debt:
+
+   - **Save points roll a WINDOW; they do not 402.** Two cases
+     (`Community: the 3rd save point rolls the window rather than 402ing
+     (limit 2)`, `Pro: 5 save points are silent, the 6th rolls (limit 5)`)
+     drove `schedule.checkpoints.max` to its ceiling and asserted the oldest
+     checkpoint is discarded instead of the request being refused. That is
+     unusual for a cap in this codebase — every other quota raises a
+     `PaymentRequiredError` — and it is now proven nowhere in a browser.
+     **The numbers moved too**: V391 sets community 2 (unchanged), pro 5 -> 10,
+     and gave BOTH pass rungs their own row at 5 where they used to fall
+     through to community. A replacement must read the cap from the matrix,
+     not retype it — the old spec hardcoded 2 and 5.
+   - **`officials.auto` and `api.write` gating, end to end, including that a
+     read-only API key still mints when the write scope is refused.** Both
+     keys changed side in V391: `officials.auto` is now granted on Pro AND on
+     both pass rungs (so W2 T6's competition-scoped resolution is what makes
+     the pass grant safe, and that scoping has no browser test), and
+     `api.write` is the only bool in `ENTERPRISE_FEATURES` — the sole
+     self-serve-unreachable feature in the product. `enterprise-gate.spec.ts`
+     is the natural home for both.
+   - **The billing surface's two states**: a Community org seeing the paid
+     upsell with a price rendered, and a paid org having the upgrade grid
+     HIDDEN. The second is the one that matters — an org that already pays
+     being shown an upgrade grid is a visible defect, and after V391 the paid
+     state to assert is `pro`, with `enterprise` reaching the Contact-us CTA
+     W2 T3 added rather than a priced card.
+   - **`/admin/entitlements` renders a column per plan.** The old case asserted
+     the Pro Plus column existed. `ADMIN_PLAN_KEYS` now derives from
+     `ALL_PLAN_KEYS` unfiltered, so the replacement should assert the column
+     SET matches that list — including `enterprise`, which is the one column
+     `/pricing` deliberately does not show.
+   - **`/pricing` renders a card per purchasable plan, with its price, and a
+     comparison column to match, with no click needed.** `pricing-v18.spec.ts`
+     owns this. Two V391 facts make it more than a rename: `PRICING_PLAN_KEYS`
+     is four wide (enterprise is a Contact-us strip, not a column), and the
+     locale matters — `/pricing` reads the `[lang]` PATH, not the cookie.
+
+7. **An unrecognised org-addon rider is a SILENT BILLING PATH, and W2 deleted
+   the two tests that named it** (owner ruling 2026-09-03, W2 plan decision 8;
+   the tests were `a pro_plus org-addon item prices/lifts independently of
+   pro's` and `resolves the PRO PLUS price for a pro_plus group, not pro's` in
+   `server/usecases/__tests__/extra-org-addon.test.ts`). The mechanism:
+   `isOrgAddonItem` (`lib/org-addons.ts`) matches a subscription item's
+   `lookup_key` against the CATALOG's own set, and `scripts/stripe-sync.ts`
+   never prunes — it iterates only the entries the seed still names. So a seed
+   entry that DISAPPEARS leaves its Stripe price active and purchasable, and a
+   subscription still carrying `seazn_extra_org_pro_plus_monthly` is
+   unrecognised end to end: never re-priced, never synced into `org_addons`,
+   never alerted on — and still billing the customer every month.
+
+   Bounded to test mode ONLY because there is no live Stripe catalogue (owner,
+   2026-09-03), which is why the owner ruled it not worth code that outlives
+   Pro Plus. **It must be closed before a live catalogue exists.** The shape of
+   the fix is a reconciliation that walks the subscription's items rather than
+   the seed's — anything on a `seazn_*` lookup key the catalog cannot name is
+   an alert, not a silent skip. Note the same asymmetry protects nothing else:
+   `planKeyForPrice` would likewise resolve an orphaned price id to a `plans`
+   row this wave deleted.
+
+8. **`scripts/smoke.ts` still seeds a `pro_plus` subscription at EIGHT sites,
+   and no typecheck can see it.** `tsc -p tsconfig.scripts.json` exits 0 with
+   all eight present, because `setPlan`'s plan argument is a plain `string`,
+   not `PlanKey` — so V391 left this entirely to a runtime FK violation
+   (`subscriptions_plan_key_fkey`). The first one aborts the run, and every
+   check after it never executes, which is the shape that reads as "smoke is
+   broken" rather than as eight specific stale assertions.
+
+   The write sites, as of this commit: `smoke.ts:1997` (the `PERSONA 3 —
+   pro_plus` block, ~140 lines through :2210, including the `#448` timezone /
+   maxPerDay cases and a feed seed), `:3354`, `:3610`
+   (`seedGroup("churn", "pro_plus")`), `:11362`, `:11867`, `:12031`, `:12359`.
+
+   Repointing them onto `enterprise` is mechanical for the plan key but NOT for
+   the assertions around them, and three of the surrounding premises have
+   changed sides:
+   - `ai.credits.monthly` on the above-Pro tier is **500**, not 200.
+   - `officials.auto` and `scorers.max` are **plain Pro** keys now, so a
+     persona proving "the tier above Pro unlocks officials.auto" proves nothing
+     — `api.write` is the ONLY bool left that Pro cannot reach.
+   - `orgs.max_owned` on `enterprise` is **NULL (unlimited)**, where `pro_plus`
+     was a finite 10. Any group-cap or rider assertion seeded on the above-Pro
+     tier therefore has no threshold to cross and needs `pro` as its vehicle
+     instead. `smoke.ts:3296`'s own comment ("V314: community 1 / pro 5 /
+     pro_plus 10. The two rider RATES…") is stale for the same reason, and
+     there is no `enterprise` rider SKU in `stripe-plans.json` at all.
+
+   **This was deliberately NOT swept in the T7/T9 sweep**, and the reason is
+   the standing rule that a read is not a run: smoke cannot be verified without
+   a prod build and a live server, and eight blind edits to an 18,700-line
+   script that only a real smoke run can judge is how a wrong assertion gets
+   frozen in and later "fixed" by weakening it. It needs its own task, with a
+   full `npm run test:smoke` as the acceptance gate — not a typecheck, which
+   already passes and always did.
+
+   Already fixed in that file by the sweep (these were named, bounded, and
+   independently checkable against the live matrix): community
+   `ai.credits.monthly` 10 -> 5 and its bootstrap wallet grant, Pro 60 -> 35,
+   the deleted `officials.per_fixture.max` cap check (inverted to assert the
+   key is not served at all, since `undefined === null` would now fail), and
+   the `dashboard.player_profiles` pair — V391 grants profiles on Community, so
+   the unpassed sibling renders 200 where the old check demanded a 404.
+
+9. **The Stripe seed's `event_pass_l` description tells buyers the entrant cap
+   is "unlimited". It is 512.** `capClaimFaults` catches it, and the fault is
+   live right now: `plan-copy-truth.test.ts` fails with `event_pass_l: does not
+   quote its live entrant cap (512)`.
+
+   The reason it was not caught when V391 landed is worth keeping. That whole
+   test file **failed to COLLECT** — W2 T4 deleted `pro_plus` from
+   `stripe-plans.json` while the file's module scope still did
+   `stripePlans.plans.find(p => p.key === "pro_plus")!.product.description`,
+   which threw before a single test registered. The JSON reporter reports a
+   non-collecting suite as **0 tests and 0 FAILURES**, so the suite looked
+   clean, and the file is the only caller of `passCreditGrantFaults` — the
+   per-rung pass-credit change shipped with no running witness at all. The
+   collect is repaired; the copy fault it exposes is real and belongs to the
+   copy sweep (`stripe-plans.json` product descriptions + `capClaimFaults`).
+
 ### Closed by W1, recorded so nobody re-opens them
 
 - **The device-link 403's zero automated coverage.** Task 6 gave it a shared

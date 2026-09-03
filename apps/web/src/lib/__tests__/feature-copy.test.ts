@@ -69,11 +69,8 @@ describe("feature-copy V290", () => {
   });
 
   it("has reasons for the new keys and none for the dead one", () => {
-    expect(featureReason("officials.per_fixture.max")).toMatch(/one official per fixture/i);
     expect(featureReason("schedule.checkpoints.max")).toMatch(/save.point/i);
     expect(featureReason("scheduling.ai")).toMatch(/AI Schedule/);
-    expect(featureReason("domains.custom")).toMatch(/domain/i);
-    expect(featureReason("support.priority")).toMatch(/priority/i);
     // scheduling.ai.runs_per_division.max retired (v17 Phase 2 Task 5, V322):
     // the graded per-division cap copy is gone — falls back to the generic
     // line, same as any other deleted key.
@@ -82,6 +79,29 @@ describe("feature-copy V290", () => {
     );
     // officials.assignment was deleted (D5) — falls back to the generic line.
     expect(featureReason("officials.assignment")).toBe("This feature needs a plan upgrade.");
+  });
+
+  // V391 (entitlements v18) deleted four inert keys from `plan_entitlements`.
+  // Three of them used to be asserted in the case above as having reasons.
+  // They moved here rather than being dropped, because the assertion that
+  // matters INVERTED: a reason for a key no gate can raise is an upsell the
+  // customer can never act on, and `domains.custom` / `support.priority` said
+  // "Pro Plus" — a plan that no longer exists. The generic fallback is the
+  // correct answer, and pinning it is what stops a reason drifting back in.
+  it("has NO reason for any key V391 deleted — they fall back to the generic line", () => {
+    for (const key of [
+      "officials.per_fixture.max",
+      "domains.custom",
+      "support.priority",
+      "stats.club_championship",
+    ]) {
+      expect(featureReason(key), key).toBe("This feature needs a plan upgrade.");
+    }
+    // Anti-vacuity: the generic line is what EVERY unknown string returns, so
+    // the loop above would pass against a FEATURE_REASONS that had been
+    // emptied entirely. A live key still carrying its own sentence is the
+    // floor that says the map is intact.
+    expect(featureReason("api.write")).not.toBe("This feature needs a plan upgrade.");
   });
   it("orgs.max_owned names the same remedy the 402's machine hint does (v17 gap #293)", () => {
     // The refusal ships TWO halves of one message: `{ offer: "extra_org" }` in
