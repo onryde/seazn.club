@@ -74,6 +74,23 @@ test("the run sheet groups by venue day and prints the day, the time and the pit
   await setFixtureScheduledAtSql(fixtureIds[1]!, new Date(now - beforeNearMin * 60_000).toISOString());
   await setFixtureScheduledAtSql(fixtureIds[2]!, new Date(now + afterMin * 60_000).toISOString());
 
+  // Derived from the seed, never typed — the exact expected day key (fix
+  // round 1, IMPORTANT 5a): the division's venue zone is pinned to UTC
+  // (`seedRunSheetDivision`), so the day all three seeded instants land on is
+  // simply the UTC calendar date of "now".
+  const expectedDayKey = new Date(now).toISOString().slice(0, 10);
+  // The exact fixture_no values the day block must show, IN CHRONOLOGICAL
+  // ORDER (fix round 1, IMPORTANT 5b) — a sheet that merely contains "at
+  // least 3 rows somewhere" passes even when it bucketed into the WRONG day
+  // or duplicated a row; `toEqual` on the real fixture numbers, fetched from
+  // the API rather than assumed, does not.
+  const expectedFixtureNos = await Promise.all(
+    [fixtureIds[0]!, fixtureIds[1]!, fixtureIds[2]!].map(async (id) => {
+      const info = await apiJson<{ fixture_no: number }>(request, `/api/v1/fixtures/${id}`);
+      return info.data!.fixture_no;
+    }),
+  );
+
   await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
   const sheet = page.getByTestId("run-sheet");
   await expect(sheet).toBeVisible();
@@ -85,25 +102,38 @@ test("the run sheet groups by venue day and prints the day, the time and the pit
   const dayKeys = await sheet
     .locator("[data-run-sheet-day]")
     .evaluateAll((els) => els.map((el) => el.getAttribute("data-run-sheet-day")));
-  console.log("run sheet day keys:", dayKeys);
+  console.log("run sheet day keys:", dayKeys, "expected:", expectedDayKey);
   expect(dayKeys, `expected one day group, saw ${JSON.stringify(dayKeys)}`).toHaveLength(1);
+  expect(dayKeys[0], `sheet bucketed into the WRONG day`).toBe(expectedDayKey);
 
-  // The three fixtures are printed on the sheet — the pitch is the venue
-  // clause (suppressed here, since no venue/court is set — "an empty cell is
-  // not information"), the time is the spine cell. Assert the row count and
-  // that the fixture numbers we seeded are present (`data-fixture-no`), not
-  // just that SOME rows rendered.
-  const fixtureNos = await sheet
+  // The three fixtures are printed on the sheet, in the DAY BLOCK
+  // specifically — the pitch is the venue clause (suppressed here, since no
+  // venue/court is set — "an empty cell is not information"), the time is
+  // the spine cell. `sheet` also contains the other 3 generated-but-never-
+  // scheduled fixtures, in the unscheduled block — scoping to the day
+  // block (found via the day header it contains) is what makes this
+  // assertion mean "these three, in this order", not "at least 3 rows
+  // somewhere on the page".
+  const dayBlock = page.locator("section", { has: page.locator("[data-run-sheet-day]") });
+  const fixtureNos = await dayBlock
     .locator("[data-fixture-no]")
     .evaluateAll((els) => els.map((el) => el.getAttribute("data-fixture-no")));
-  console.log("run sheet fixture-no attributes:", fixtureNos);
-  expect(fixtureNos.length, `expected at least 3 rows, saw ${JSON.stringify(fixtureNos)}`).toBeGreaterThanOrEqual(3);
+  console.log("run sheet day-block fixture-no attributes:", fixtureNos, "expected:", expectedFixtureNos);
+  expect(fixtureNos).toEqual(expectedFixtureNos.map(String));
 
   // The NOW rule sits between the 30-minutes-ago row and the 90-minutes-
-  // hence row: exactly one rule, present at most once in the whole sheet.
-  const nowRuleCount = await sheet.getByTestId("run-sheet-now").count();
-  console.log("run sheet NOW rule count:", nowRuleCount);
+  // hence row: exactly one rule, present at most once in the whole sheet,
+  // AND at the right POSITION — a `nowIndex` pinned to 0 (every row read as
+  // "in the future") would still pass a bare `toHaveCount(1)` (fix round 1,
+  // IMPORTANT 5c). The row immediately after the rule in DOM order must be
+  // the FUTURE fixture.
   await expect(sheet.getByTestId("run-sheet-now")).toHaveCount(1);
+  const afterNowFixtureNo = await sheet
+    .getByTestId("run-sheet-now")
+    .locator("xpath=following-sibling::*[1]")
+    .getAttribute("data-fixture-no");
+  console.log("run sheet row immediately after NOW:", afterNowFixtureNo, "expected:", expectedFixtureNos[2]);
+  expect(afterNowFixtureNo).toBe(String(expectedFixtureNos[2]));
 });
 
 // Regression (finding 3, competition-desk-design.md "Error and empty
@@ -112,11 +142,14 @@ test("the run sheet groups by venue day and prints the day, the time and the pit
 // round list (`scheduled_at !== null || isBye(f) || f.status !== "scheduled"`
 // — a decided match's status alone satisfied the third clause) and rendered
 // its "Unscheduled" timetable chip on an already-played match. The run sheet
-// fixes this a level up, not just by dropping the chip: `buildRunSheet`'s
-// null-`scheduled_at` branch only keeps OPEN work (`scheduled`/`in_play`,
-// run-sheet-groups.ts's `OPEN` set) — a settled fixture with no time is
-// simply never placed on the sheet at all, so it cannot carry a stale
-// "Unscheduled" label anywhere a reader could see one.
+// fixes this a level up, not just by dropping the chip:
+// `buildRunSheet`'s null-`scheduled_at` branch only keeps OPEN work
+// (`scheduled`/`in_play`, run-sheet-groups.ts's `OPEN` set) in the
+// unscheduled pile — a settled fixture with no time is never "open
+// scheduling work". Fix round 1 (controller ruling) corrected WHERE it goes
+// from there: dropping it off the sheet entirely was itself a regression
+// (W1's round list kept these rows) — it now lands in its own terminal
+// "settled" block, with a "Result" action, never a stale "Unscheduled" one.
 test("regression (finding 3): a decided fixture with no recorded time never reads as unscheduled", async ({
   page,
   request,
@@ -135,20 +168,76 @@ test("regression (finding 3): a decided fixture with no recorded time never read
 
   await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
   const sheet = page.getByTestId("run-sheet");
-  // Scoped to the "Not yet scheduled" BLOCK, not the whole sheet — the
-  // filter segment has its own, entirely legitimate "Unscheduled" button
-  // label (`runsheet.filter.unscheduled`) that a page-wide text search would
-  // collide with and misreport as this finding.
-  const unscheduledBlock = sheet.locator('[data-run-sheet-block="unscheduled"]');
+  // IMPORTANT 5d (fix round 1): assert the sheet actually rendered BEFORE
+  // asserting an absence inside it — a blank or 500'd page also satisfies
+  // "the fixture does not appear inside the unscheduled block", which is
+  // exactly the "reachable" bar this whole regression class exists to clear.
+  await expect(sheet).toBeVisible();
 
-  // PRINT WHAT WAS SEEN — the unscheduled block's own text, so a failure
-  // shows exactly what an organiser would have read instead of a bare
-  // boolean.
-  const blockText = (await unscheduledBlock.textContent().catch(() => null)) ?? "(no unscheduled block rendered)";
-  console.log(`regression finding-3 fixture_no=${fixtureNo}, unscheduled block text:`, blockText);
+  const unscheduledBlock = sheet.locator('[data-run-sheet-block="unscheduled"]');
+  const settledBlock = sheet.locator('[data-run-sheet-block="settled"]');
+
+  // PRINT WHAT WAS SEEN — both blocks' own text, so a failure shows exactly
+  // what an organiser would have read instead of a bare boolean.
+  const unscheduledText = (await unscheduledBlock.textContent().catch(() => null)) ?? "(no unscheduled block)";
+  const settledText = (await settledBlock.textContent().catch(() => null)) ?? "(no settled block)";
+  console.log(
+    `regression finding-3 fixture_no=${fixtureNo}, unscheduled block:`,
+    unscheduledText,
+    "| settled block:",
+    settledText,
+  );
 
   // The decided fixture must not appear inside the "Not yet scheduled"
-  // group (or anywhere else — it has no time to bucket into a day, and it
-  // is settled, so it is not "open work" either way).
-  await expect(page.locator(`[data-fixture-no="${fixtureNo}"]`)).toHaveCount(0);
+  // group — it is not open work.
+  await expect(unscheduledBlock.locator(`[data-fixture-no="${fixtureNo}"]`)).toHaveCount(0);
+  // It DOES appear, in the settled tail, with the "Result" action — never
+  // "Set time" (the fix round 1 ruling: visible, not dropped, and never
+  // under a heading that implies scheduling is still owed).
+  const settledRow = settledBlock.locator(`[data-fixture-no="${fixtureNo}"]`);
+  await expect(settledRow).toHaveCount(1);
+  await expect(settledRow.locator('[data-row-action="result"]')).toHaveCount(1);
+  await expect(settledRow.locator('[data-row-action="set_time"]')).toHaveCount(0);
+});
+
+// CRITICAL 1 (fix round 1): the run sheet had no empty-filter state. The
+// default filter is "today" on a match day; a division whose real fixtures
+// exist but none land on today's venue-zone day rendered a filter bar, a tz
+// caption, and NOTHING below it — the flagship surface reading as broken on
+// the one day it exists for. The same vacuous shape amendment 3 already paid
+// for one level up: the empty set answers no to every question and lands on
+// whatever the default is. Driven live rather than asserted from
+// `buildRunSheet`'s own output, since the whole point is what an organiser
+// SEES, not that the builder returns an empty array (it always did — the gap
+// was the component never rendering anything for that case).
+test("empty-filter state: switching to a filter with no matching rows shows a message and a way back to All", async ({
+  page,
+  request,
+}) => {
+  const { divisionId, fixtureIds } = await seedRunSheetDivision(request);
+  expect(fixtureIds.length, "seed produced no fixtures — setup failed, not the sheet").toBeGreaterThanOrEqual(1);
+  // Far in the future — never "today" no matter when this suite runs.
+  await setFixtureScheduledAtSql(fixtureIds[0]!, "2030-06-15T09:00:00.000Z");
+
+  await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+  const sheet = page.getByTestId("run-sheet");
+  await expect(sheet).toBeVisible();
+  await expect(sheet.getByTestId("run-sheet-filter")).toBeVisible();
+
+  await sheet.locator('[data-filter="today"]').click();
+  const empty = sheet.getByTestId("run-sheet-empty");
+  await expect(empty).toBeVisible({ timeout: 10_000 });
+  const emptyText = await empty.textContent();
+  console.log("run sheet empty-filter state text:", emptyText);
+  expect(emptyText, "empty-filter copy must exist and say something").toBeTruthy();
+  // The filter bar and tz caption stay up — only the body goes empty, so the
+  // organiser can still see and change the active filter.
+  await expect(sheet.getByTestId("run-sheet-filter")).toBeVisible();
+  await expect(sheet.getByTestId("tz-caption")).toBeVisible();
+
+  // The affordance back to All actually recovers the sheet — not just
+  // present, but functional.
+  await sheet.getByTestId("run-sheet-empty-show-all").click();
+  await expect(empty).toHaveCount(0);
+  await expect(sheet.locator("[data-run-sheet-day]")).toHaveCount(1);
 });

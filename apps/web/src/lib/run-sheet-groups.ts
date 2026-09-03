@@ -83,7 +83,21 @@ export type RunSheetBracketBlock = {
 
 export type RunSheetUnscheduledBlock = { kind: "unscheduled"; fixtures: RunSheetFixture[] };
 
-export type RunSheetBlock = RunSheetDayBlock | RunSheetBracketBlock | RunSheetUnscheduledBlock;
+/** A settled (decided/finalized/voided) NON-bracket fixture with no recorded
+ *  `scheduled_at`. Fix round 1 (controller ruling): the original finding-3
+ *  fix dropped these rows entirely — W1's round list kept them
+ *  (`f.status !== "scheduled"` was the third clause of its filter) — which
+ *  is a real regression, not a scoped omission: an organiser who scores a
+ *  whole league without ever timing it loses every result from the tab.
+ *  Kept in its OWN terminal block, after "unscheduled", so a played match
+ *  never reads as work still to schedule. */
+export type RunSheetSettledBlock = { kind: "settled"; fixtures: RunSheetFixture[] };
+
+export type RunSheetBlock =
+  | RunSheetDayBlock
+  | RunSheetBracketBlock
+  | RunSheetUnscheduledBlock
+  | RunSheetSettledBlock;
 
 /** Stage kinds that render as a bracket. Single authority — copied verbatim
  *  from `stages-panel.tsx`'s own `BRACKET_KINDS` (Task 4 deletes that copy and
@@ -131,6 +145,7 @@ export function buildRunSheet(input: RunSheetInput): RunSheetBlock[] {
   };
 
   const unscheduled: RunSheetFixture[] = [];
+  const settledUntimed: RunSheetFixture[] = [];
   const dayed: RunSheetFixture[] = [];
   const bracketed = new Map<string, RunSheetFixture[]>();
 
@@ -150,7 +165,7 @@ export function buildRunSheet(input: RunSheetInput): RunSheetBlock[] {
     }
     if (f.scheduled_at === null) {
       // Only OPEN work belongs in the unscheduled pile. A decided match with
-      // no recorded time is a result nobody needs to schedule — finding 3.
+      // no recorded time is a result, not open scheduling work — finding 3.
       if (OPEN.has(f.status)) {
         unscheduled.push(f);
       } else if (bracketStageIds.has(f.stage_id)) {
@@ -158,15 +173,23 @@ export function buildRunSheet(input: RunSheetInput): RunSheetBlock[] {
         // `knockout.spec.ts`): a settled BRACKET fixture that was never
         // explicitly timed — an entirely normal shape; nothing in this
         // product requires scheduling a knockout round before playing it —
-        // still belongs in its own round section. Dropping it here (as the
-        // non-bracket branch below does) does not just remove a stale
-        // "Unscheduled" label, it erases a played match's result from its
-        // bracket outright, which is a worse defect than the one finding 3
-        // fixed. A non-bracket stage has no day to bucket an untimed row
-        // into, so THAT drop stays.
+        // still belongs in its own round section. Dropping it here would not
+        // just remove a stale "Unscheduled" label, it would erase a played
+        // match's result from its bracket outright, which is a worse defect
+        // than the one finding 3 fixed.
         const list = bracketed.get(f.stage_id) ?? [];
         list.push(f);
         bracketed.set(f.stage_id, list);
+      } else {
+        // Fix round 1 (controller ruling): a NON-bracket stage has no day to
+        // bucket an untimed row into, but dropping it OUTRIGHT is the
+        // regression finding-3 itself was meant to fix, one level up — W1's
+        // round list kept these rows (its filter's third clause was
+        // `f.status !== "scheduled"`), so a fully-played, never-timed league
+        // used to show every result and W2 showed nothing at all. Kept here
+        // in its own terminal pile instead, rendered as a block AFTER
+        // "unscheduled" so a played match never reads as work still to do.
+        settledUntimed.push(f);
       }
       continue;
     }
@@ -240,10 +263,16 @@ export function buildRunSheet(input: RunSheetInput): RunSheetBlock[] {
   blocks.sort((a, b) => a.at - b.at || a.seq - b.seq);
   const out: RunSheetBlock[] = blocks.map((b) => b.block);
 
-  // The unscheduled group is ALWAYS last, whatever its stage seq.
+  // The unscheduled group is ALWAYS last, whatever its stage seq — and the
+  // settled-untimed tail is last of all, so a played match never sits above
+  // (and never reads as) work still to schedule.
   if (unscheduled.length > 0) {
     unscheduled.sort(byRank);
     out.push({ kind: "unscheduled", fixtures: unscheduled });
+  }
+  if (settledUntimed.length > 0) {
+    settledUntimed.sort(byRank);
+    out.push({ kind: "settled", fixtures: settledUntimed });
   }
   return out;
 }

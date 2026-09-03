@@ -4956,5 +4956,7 @@
   "runsheet.action.setTime": "Fixer l'heure",
   "runsheet.action.view": "Afficher",
   "runsheet.sub.noScorer": "Pas encore de marqueur",
-  "runsheet.sub.awaitingDraw": "En attente du tirage"
+  "runsheet.sub.awaitingDraw": "En attente du tirage",
+  "runsheet.emptyFilter.message": "Aucun match ne correspond à « {filter} » pour le moment.",
+  "runsheet.settled.title": "Joué, non programmé"
 }

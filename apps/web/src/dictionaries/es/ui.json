@@ -4956,5 +4956,7 @@
   "runsheet.action.setTime": "Fijar hora",
   "runsheet.action.view": "Ver",
   "runsheet.sub.noScorer": "Aún sin anotador",
-  "runsheet.sub.awaitingDraw": "Pendiente del sorteo"
+  "runsheet.sub.awaitingDraw": "Pendiente del sorteo",
+  "runsheet.emptyFilter.message": "Ningún partido coincide con «{filter}» ahora mismo.",
+  "runsheet.settled.title": "Jugado, sin programar"
 }

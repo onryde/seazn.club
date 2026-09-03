@@ -1,13 +1,20 @@
 import { test, expect } from "@playwright/test";
-import { TAG, apiJson, activeOrg, seedVenueWithCourts } from "./helpers";
+import { TAG, apiJson, activeOrg, seedVenueWithCourts, setDateTime } from "./helpers";
 
 // PROMPT-33 item 4 (v3/04 §3), re-anchored for Competition Desk W2 (Task 4):
 // the division fixtures page's run sheet groups fixtures by day, renders
 // times in the COMPETITION (venue) timezone (browser pinned to Tokyo to
-// prove it), and pins unscheduled fixtures with an auto-schedule CTA. The
-// inline "Edit time"-and-Undo flow this file used to drive from a SCHEDULED
-// row is gone with the round-grouped list it lived on — see the first test's
-// own trailing comment for why, and where that coverage lives now.
+// prove it), pins unscheduled fixtures with an auto-schedule CTA, and an
+// inline "Set time" save still grows the same notice+Undo affordance. The
+// OLD "Edit time"-and-Undo flow this file used to drive from an
+// ALREADY-SCHEDULED row is gone with the round-grouped list it lived on
+// (Task 2's ladder gives a scheduled+timed row "Assign scorer"/"Score", never
+// a reschedule control) — fix round 1 re-aims the same coverage at an
+// UNSCHEDULED row's "Set time" instead of leaving it deleted: the mechanism
+// (`RunSheetRow` -> `onRescheduled` -> `setUndoable(true)` -> `undoLast()`)
+// survived the redesign untouched, and nothing else in the suite drove it as
+// an INLINE reschedule (schedule-panels.spec.ts/open-scheduling.spec.ts cover
+// the BOARD's Undo; ai-architect.spec.ts covers the AI-apply path).
 test.use({ timezoneId: "Asia/Tokyo" });
 
 test("the run sheet groups fixtures by day and prints them in the competition tz", async ({
@@ -106,19 +113,30 @@ test("the run sheet groups fixtures by day and prints them in the competition tz
   await expect(page.getByText("Not scheduled yet")).toBeVisible();
   await expect(page.getByRole("button", { name: "Auto-schedule remaining" })).toBeVisible();
 
-  // The inline "Edit time" reschedule-and-undo flow this test used to drive
-  // from a SCHEDULED, already-timed row is retired here: the run sheet gives
-  // every row exactly ONE action (`fixtureRowAction`, Task 2's ladder,
-  // already reviewed and approved), and a scheduled+timed fixture's action is
-  // "Assign scorer" or "Score" — never a reschedule control. An organiser
-  // still reschedules from the fixture console the action link opens; the
-  // division-ledger Undo mechanism itself keeps ample independent coverage
-  // via the schedule board (`schedule-panels.spec.ts`, `open-scheduling.spec.ts`).
-  // This is a Task 4 finding, not a Task 4 defect — the plan/supplement named
-  // only the round-dates line for re-anchoring, and this section broke on the
-  // FIRST run against the built feature, which is why the supplement's own
-  // instruction ("verify by running the spec, not by reasoning about it")
-  // exists.
+  // Inline "Set time" (item 5, re-aimed — fix round 1) -> notice grows an
+  // Undo that restores the slot. The ONLY unscheduled fixture is the one
+  // deliberately left untimed above (`ids[ids.length - 1]`) — its row is
+  // scoped by `data-fixture-no`, the same stable per-fixture hook every other
+  // spec in this file already keys off.
+  const unscheduledFixture = gen.data!.fixtures.find((f) => f.id === ids[ids.length - 1]!)!;
+  const targetRow = page.locator(`[data-fixture-no="${unscheduledFixture.fixture_no}"]`);
+  await targetRow.getByRole("button", { name: "Set time", exact: true }).click();
+  // The inline "When" field is a native date input + time <select> now, not
+  // `input[type=datetime-local]` — Chrome's clock popup ignored `step`
+  // (quarter-hour-time-select design doc). Only one row is ever "editing" at
+  // once, so exactly one such pair is on the page here.
+  await setDateTime(page, "2026-09-16T15:00");
+  await targetRow.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByTestId("schedule-undo")).toBeVisible({ timeout: 15_000 });
+  await page.getByTestId("schedule-undo").click();
+  await expect
+    .poll(
+      async () =>
+        (await apiJson<{ scheduled_at: string | null }>(request, `/api/v1/fixtures/${unscheduledFixture.id}`))
+          .data!.scheduled_at,
+      { timeout: 15_000 },
+    )
+    .toBe(null);
 });
 
 // THE STAGING CRASH (#575), as a browser sees it.

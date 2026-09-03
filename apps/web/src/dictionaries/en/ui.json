@@ -4956,5 +4956,7 @@
   "runsheet.action.setTime": "Set time",
   "runsheet.action.view": "View",
   "runsheet.sub.noScorer": "No scorer yet",
-  "runsheet.sub.awaitingDraw": "Awaiting draw"
+  "runsheet.sub.awaitingDraw": "Awaiting draw",
+  "runsheet.emptyFilter.message": "No fixtures match “{filter}” right now.",
+  "runsheet.settled.title": "Played, not scheduled"
 }

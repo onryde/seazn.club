@@ -109,6 +109,150 @@ export function RunSheet({
     { value: "all", label: msg("runsheet.filter.all") },
   ];
 
+  function renderBlock(block: RunSheetBlock): React.ReactElement | null {
+    if (block.kind === "day") {
+      const rows = block.fixtures.filter(keep);
+      if (rows.length === 0) return null;
+      const venueNames = new Set(rows.map((f) => f.venue_name).filter((v): v is string => v !== null));
+      const venueLabel = venueNames.size === 1 ? [...venueNames][0] : null;
+      const nowIndex = filteredNowIndex(block, rows, nowMs);
+      return (
+        <section key={block.dayKey}>
+          <h3
+            data-run-sheet-day={block.dayKey}
+            className="sticky top-0 z-10 border-y border-slate-300 bg-slate-200 px-4 py-1.5 text-xs font-semibold uppercase tracking-wide text-slate-600"
+          >
+            <DayHeading dayKey={block.dayKey} venueLabel={venueLabel} count={rows.length} msgPlural={msgPlural} />
+          </h3>
+          <ul className="divide-y divide-slate-100">
+            {rows.map((f, i) => (
+              <RowWithNow
+                key={f.id}
+                fixture={f}
+                showNow={nowIndex === i}
+                msg={msg}
+                hrefFor={hrefFor}
+                tz={tz}
+                nowMs={nowMs}
+                canEdit={canEdit}
+                entrantNames={entrantNames}
+                courtNames={courtNames}
+                boardSlotOptions={boardSlotOptions}
+                onRescheduled={onRescheduled}
+              />
+            ))}
+            {nowIndex === rows.length && <NowRule msg={msg} />}
+          </ul>
+        </section>
+      );
+    }
+
+    if (block.kind === "bracket") {
+      const stage = stageById.get(block.stageId);
+      const allStageFixtures = block.rounds.flatMap((r) => r.fixtures);
+      const roundsWithRows = block.rounds
+        .map((r) => ({ round: r.round, fixtures: r.fixtures.filter(keep) }))
+        .filter((r) => r.fixtures.length > 0);
+      if (roundsWithRows.length === 0) return null;
+      return (
+        <section key={block.stageId} data-run-sheet-block="bracket" className="card overflow-hidden">
+          {roundsWithRows.map((r) => (
+            <div key={r.round}>
+              <header className="sticky top-0 z-10 border-b border-slate-100 bg-slate-50 px-4 py-2">
+                <h4 className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                  {stage ? `${stage.name} — ` : ""}
+                  {bracketRoundLabel(msg, stage?.kind ?? "knockout", r.round, allStageFixtures)}
+                </h4>
+              </header>
+              <ul className="divide-y divide-slate-50">
+                {r.fixtures.map((f) => (
+                  <RunSheetRow
+                    key={f.id}
+                    fixture={f}
+                    href={hrefFor(f)}
+                    tz={tz}
+                    nowMs={nowMs}
+                    canEdit={canEdit}
+                    entrantNames={entrantNames}
+                    courtNames={courtNames}
+                    boardSlotOptions={boardSlotOptions}
+                    onRescheduled={onRescheduled}
+                  />
+                ))}
+              </ul>
+            </div>
+          ))}
+        </section>
+      );
+    }
+
+    if (block.kind === "unscheduled") {
+      // Display-only (owner ruling B1): the auto-schedule CTA and its
+      // capacity-blocked reason live on the rail (Task 5), not here.
+      const rows = block.fixtures.filter(keep);
+      if (rows.length === 0) return null;
+      return (
+        <section key="unscheduled" data-run-sheet-block="unscheduled">
+          <h3 className="border-y border-slate-300 bg-slate-200 px-4 py-1.5 text-xs font-semibold uppercase tracking-wide text-slate-600">
+            {msg("runsheet.unscheduled.title")}
+          </h3>
+          <ul className="divide-y divide-slate-100">
+            {rows.map((f) => (
+              <RunSheetRow
+                key={f.id}
+                fixture={f}
+                href={hrefFor(f)}
+                tz={tz}
+                nowMs={nowMs}
+                canEdit={canEdit}
+                entrantNames={entrantNames}
+                courtNames={courtNames}
+                boardSlotOptions={boardSlotOptions}
+                onRescheduled={onRescheduled}
+              />
+            ))}
+          </ul>
+        </section>
+      );
+    }
+
+    // block.kind === "settled" — a decided/finalized/voided NON-bracket
+    // fixture with no recorded time (fix round 1, controller ruling): kept
+    // visible, terminal, ordered after "unscheduled" so a played match never
+    // reads as work still to do. Each row's own action is already "Result"
+    // (`fixtureRowAction`'s SETTLED branch fires regardless of
+    // `scheduled_at`) and its sub-line already carries the score
+    // (`outcomeText`) — `RunSheetRow` needs no change to render this
+    // correctly, only a home to render it IN.
+    const rows = block.fixtures.filter(keep);
+    if (rows.length === 0) return null;
+    return (
+      <section key="settled" data-run-sheet-block="settled">
+        <h3 className="border-y border-slate-300 bg-slate-200 px-4 py-1.5 text-xs font-semibold uppercase tracking-wide text-slate-600">
+          {msg("runsheet.settled.title")}
+        </h3>
+        <ul className="divide-y divide-slate-100">
+          {rows.map((f) => (
+            <RunSheetRow
+              key={f.id}
+              fixture={f}
+              href={hrefFor(f)}
+              tz={tz}
+              nowMs={nowMs}
+              canEdit={canEdit}
+              entrantNames={entrantNames}
+              courtNames={courtNames}
+              boardSlotOptions={boardSlotOptions}
+              onRescheduled={onRescheduled}
+            />
+          ))}
+        </ul>
+      </section>
+    );
+  }
+
+  const renderedBlocks = blocks.map(renderBlock).filter((node): node is React.ReactElement => node !== null);
+
   return (
     <div data-testid="run-sheet" className="card overflow-hidden">
       <div className="flex flex-wrap items-center gap-3 border-b border-slate-100 px-4 py-3">
@@ -135,112 +279,40 @@ export function RunSheet({
         </p>
       </div>
 
-      {blocks.map((block) => {
-        if (block.kind === "day") {
-          const rows = block.fixtures.filter(keep);
-          if (rows.length === 0) return null;
-          const venueNames = new Set(rows.map((f) => f.venue_name).filter((v): v is string => v !== null));
-          const venueLabel = venueNames.size === 1 ? [...venueNames][0] : null;
-          const nowIndex = filteredNowIndex(block, rows, nowMs);
-          return (
-            <section key={block.dayKey}>
-              <h3
-                data-run-sheet-day={block.dayKey}
-                className="sticky top-0 z-10 border-y border-slate-300 bg-slate-200 px-4 py-1.5 text-xs font-semibold uppercase tracking-wide text-slate-600"
-              >
-                <DayHeading dayKey={block.dayKey} venueLabel={venueLabel} count={rows.length} msgPlural={msgPlural} />
-              </h3>
-              <ul className="divide-y divide-slate-100">
-                {rows.map((f, i) => (
-                  <RowWithNow
-                    key={f.id}
-                    fixture={f}
-                    showNow={nowIndex === i}
-                    msg={msg}
-                    hrefFor={hrefFor}
-                    tz={tz}
-                    nowMs={nowMs}
-                    canEdit={canEdit}
-                    entrantNames={entrantNames}
-                    courtNames={courtNames}
-                    boardSlotOptions={boardSlotOptions}
-                    onRescheduled={onRescheduled}
-                  />
-                ))}
-                {nowIndex === rows.length && <NowRule msg={msg} />}
-              </ul>
-            </section>
-          );
-        }
-
-        if (block.kind === "bracket") {
-          const stage = stageById.get(block.stageId);
-          const allStageFixtures = block.rounds.flatMap((r) => r.fixtures);
-          const roundsWithRows = block.rounds
-            .map((r) => ({ round: r.round, fixtures: r.fixtures.filter(keep) }))
-            .filter((r) => r.fixtures.length > 0);
-          if (roundsWithRows.length === 0) return null;
-          return (
-            <section key={block.stageId} data-run-sheet-block="bracket" className="card overflow-hidden">
-              {roundsWithRows.map((r) => (
-                <div key={r.round}>
-                  <header className="sticky top-0 z-10 border-b border-slate-100 bg-slate-50 px-4 py-2">
-                    <h4 className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                      {stage ? `${stage.name} — ` : ""}
-                      {bracketRoundLabel(msg, stage?.kind ?? "knockout", r.round, allStageFixtures)}
-                    </h4>
-                  </header>
-                  <ul className="divide-y divide-slate-50">
-                    {r.fixtures.map((f) => (
-                      <RunSheetRow
-                        key={f.id}
-                        fixture={f}
-                        href={hrefFor(f)}
-                        tz={tz}
-                        nowMs={nowMs}
-                        canEdit={canEdit}
-                        entrantNames={entrantNames}
-                        courtNames={courtNames}
-                        boardSlotOptions={boardSlotOptions}
-                        onRescheduled={onRescheduled}
-                      />
-                    ))}
-                  </ul>
-                </div>
-              ))}
-            </section>
-          );
-        }
-
-        // block.kind === "unscheduled" — display-only (owner ruling B1): the
-        // auto-schedule CTA and its capacity-blocked reason live on the rail
-        // (Task 5), not here.
-        const rows = block.fixtures.filter(keep);
-        if (rows.length === 0) return null;
-        return (
-          <section key="unscheduled" data-run-sheet-block="unscheduled">
-            <h3 className="border-y border-slate-300 bg-slate-200 px-4 py-1.5 text-xs font-semibold uppercase tracking-wide text-slate-600">
-              {msg("runsheet.unscheduled.title")}
-            </h3>
-            <ul className="divide-y divide-slate-100">
-              {rows.map((f) => (
-                <RunSheetRow
-                  key={f.id}
-                  fixture={f}
-                  href={hrefFor(f)}
-                  tz={tz}
-                  nowMs={nowMs}
-                  canEdit={canEdit}
-                  entrantNames={entrantNames}
-                  courtNames={courtNames}
-                  boardSlotOptions={boardSlotOptions}
-                  onRescheduled={onRescheduled}
-                />
-              ))}
-            </ul>
-          </section>
-        );
-      })}
+      {renderedBlocks.length > 0 ? (
+        renderedBlocks
+      ) : (
+        // Fix round 1, CRITICAL 1: every block existed but the ACTIVE FILTER
+        // reduced every one of them to zero rows — the same vacuous shape
+        // amendment 3 already paid for one level up ("the empty set answers
+        // no to every question and lands on whatever the default is"). The
+        // default filter is "today" on a match day, so an organiser opening
+        // the desk before any of today's fixtures exist (or after they've
+        // all been filtered away) got a filter bar, a tz caption, and a
+        // blank page below it — the flagship surface reading as broken on
+        // the one day it exists for. `blocks.length === 0` (the whole
+        // division has no fixtures at all) is the SEPARATE early return
+        // above this function and never reaches here — that case renders
+        // nothing at all, by spec ("the stage rail alone... no run sheet
+        // header").
+        <div data-testid="run-sheet-empty" className="px-4 py-10 text-center">
+          <p className="text-sm text-slate-500">
+            {msg("runsheet.emptyFilter.message", {
+              filter: filters.find((f) => f.value === filter)?.label ?? filter,
+            })}
+          </p>
+          {filter !== "all" && (
+            <button
+              type="button"
+              data-testid="run-sheet-empty-show-all"
+              onClick={() => onFilter("all")}
+              className="btn btn-ghost mt-3 min-h-11 px-3 text-xs"
+            >
+              {msg("runsheet.filter.all")}
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

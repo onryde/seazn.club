@@ -93,8 +93,10 @@ test("knockout: semi winners advance into the final and decide the cup", async (
   // ONE action from `fixtureRowAction`'s ladder (Task 2), which labels a
   // decided/finalized fixture "Result" — not "View", the label the retired
   // `FixtureLine` used for the same state. All 3 bracket fixtures here are
-  // decided, so all 3 show "Result".
-  await expect(page.getByRole("link", { name: /^(Score|Result|View)/ })).toHaveCount(3, {
+  // decided, so all 3 show "Result". Pinned exactly (fix round 1 — a widened
+  // `/^(Score|Result|View)/` would survive a regression that sent every
+  // decided bracket row back to "Score").
+  await expect(page.getByRole("link", { name: /^Result/ })).toHaveCount(3, {
     timeout: 20_000,
   });
 });

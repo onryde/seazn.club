@@ -244,11 +244,44 @@ describe("buildRunSheet — bracket stages keep round sections (owner ruling A2)
     ]);
   });
 
-  it("the SAME decided-and-untimed fixture on a NON-bracket stage is still dropped — finding 3 holds there", () => {
+  // Fix round 1 (controller ruling): the SAME decided-and-untimed fixture on
+  // a NON-bracket stage used to be dropped outright — the exact regression
+  // finding 3 itself was meant to fix, one level up. W1's round list kept
+  // these rows (its filter's third clause was `f.status !== "scheduled"`),
+  // so a fully-played, never-timed league showed every result; W2 showed
+  // nothing at all. Now kept in its own terminal "settled" block instead.
+  it("the SAME decided-and-untimed fixture on a NON-bracket stage lands in a terminal 'settled' block, not dropped", () => {
     const out = buildRunSheet(
       input({ fixtures: [fx({ id: "lg", stage_id: "s1", status: "decided", scheduled_at: null })] }),
     );
-    expect(out).toEqual([]);
+    expect(out.some((b) => b.kind === "unscheduled")).toBe(false);
+    const settled = out.find((b) => b.kind === "settled");
+    expect(settled?.kind === "settled" && settled.fixtures.map((f) => f.id)).toEqual(["lg"]);
+  });
+
+  it("the settled block sorts AFTER the unscheduled block when both are present", () => {
+    const out = buildRunSheet(
+      input({
+        fixtures: [
+          fx({ id: "open", stage_id: "s1", status: "scheduled", scheduled_at: null }),
+          fx({ id: "done", stage_id: "s1", status: "decided", scheduled_at: null }),
+        ],
+      }),
+    );
+    expect(out.map((b) => b.kind)).toEqual(["unscheduled", "settled"]);
+  });
+
+  it("a settled-untimed row is still absent from the unscheduled group's own fixture list", () => {
+    const out = buildRunSheet(
+      input({
+        fixtures: [
+          fx({ id: "open", stage_id: "s1", status: "scheduled", scheduled_at: null }),
+          fx({ id: "done", stage_id: "s1", status: "decided", scheduled_at: null }),
+        ],
+      }),
+    );
+    const unscheduled = out.find((b) => b.kind === "unscheduled");
+    expect(unscheduled?.kind === "unscheduled" && unscheduled.fixtures.map((f) => f.id)).toEqual(["open"]);
   });
 });
 

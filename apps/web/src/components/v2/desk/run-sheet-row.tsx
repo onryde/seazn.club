@@ -22,6 +22,7 @@ import { fixtureRowAction, type RowAction } from "@/lib/fixture-row-action";
 import { isBye, type RunSheetFixture } from "@/lib/run-sheet-groups";
 import { outcomeText, VOID_STATUSES } from "@/components/v2/stages-panel";
 import type { PatchFixture } from "@/server/api-v1/schemas";
+import { zonedDateTimeInput, isoFromZonedDateTime } from "@/lib/zoned-datetime";
 
 export function RunSheetRow({
   fixture,
@@ -53,7 +54,13 @@ export function RunSheetRow({
   const msg = useMsg();
   const router = useRouter();
   const [editing, setEditing] = useState(false);
-  const [when, setWhen] = useState(fixture.scheduled_at ? toLocalInput(fixture.scheduled_at) : "");
+  // ELEVATED (fix round 1): the VENUE zone (`tz`, amendment 4), never the
+  // browser's — `new Date(iso)`/`new Date(when)` read/write local wall-clock
+  // in whatever zone the BROWSER happens to be in, so a Tokyo browser on a
+  // UTC venue wrote the wrong instant. Inherited verbatim from the retired
+  // `FixtureLine`, but this is now the ONLY inline set-time path on the
+  // sheet, so the bug is no longer merely dormant.
+  const [when, setWhen] = useState(fixture.scheduled_at ? zonedDateTimeInput(fixture.scheduled_at, tz) : "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -163,13 +170,19 @@ export function RunSheetRow({
               {courtLabel ? `${courtLabel} · ` : ""}
               {msg("schedule.round", { n: fixture.round_no })}
             </p>
-            <p
-              className={`min-w-0 truncate text-sm font-medium ${voided ? "text-slate-500 line-through" : "text-slate-800"}`}
+            {/* IMPORTANT 2 (fix round 1): the ONE-action rule governs the
+                action CONTROL, not the row's own identity link — `FixtureLine`
+                had both. An unscheduled row's single action is "Set time" (a
+                `<button>`, not a navigation), which otherwise left it with NO
+                route to its own fixture console at all. */}
+            <Link
+              href={href}
+              className={`block min-w-0 truncate text-sm font-medium hover:text-purple-700 ${voided ? "text-slate-500 line-through" : "text-slate-800"}`}
             >
               {home}
               <span className="mx-1.5 text-slate-400">{msg("schedule.vs")}</span>
               {away}
-            </p>
+            </Link>
             {((decided && !voided) || subLine) && (
               <p className="min-w-0 truncate text-xs text-slate-500">{voided ? subLine : (decided ?? subLine)}</p>
             )}
@@ -212,7 +225,19 @@ export function RunSheetRow({
           <button
             type="button"
             disabled={busy || when === ""}
-            onClick={() => void patchSchedule({ scheduled_at: new Date(when).toISOString() })}
+            onClick={() => {
+              // ELEVATED (fix round 1): `when` is a bare "YYYY-MM-DDTHH:MM"
+              // wall clock with no zone of its own — resolve it in the VENUE
+              // zone (`tz`, amendment 4), never `new Date(when)`'s implicit
+              // browser zone, or a Tokyo browser on a UTC venue writes the
+              // wrong instant.
+              const iso = isoFromZonedDateTime(when, tz);
+              if (iso === null) {
+                setError(msg("schedule.error.failed"));
+                return;
+              }
+              void patchSchedule({ scheduled_at: iso });
+            }}
             className="btn btn-primary min-h-11 px-3 py-1.5 text-xs"
           >
             {busy ? msg("schedule.saving") : msg("schedule.save")}
@@ -229,10 +254,4 @@ export function RunSheetRow({
       )}
     </li>
   );
-}
-
-function toLocalInput(iso: string): string {
-  const d = new Date(iso);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
