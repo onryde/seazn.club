@@ -362,6 +362,14 @@ export type EligibilityOverride = z.infer<typeof EligibilityOverride>;
 // Entrants
 // ---------------------------------------------------------------------------
 
+// G1 (bench B03 product-gaps, 2026-09-02): V356 widened persons.lane's CHECK
+// to 'coach'/'staff' (mirroring LineupSlot.role) but no writer followed —
+// this is that writer's request-side half. 'official' excluded on purpose:
+// officials.ts has its own dedicated creation path, and this is additive to
+// what a generic /persons POST could already do, not a replacement for it.
+export const PersonLane = z.enum(["player", "coach", "staff"]);
+export type PersonLane = z.infer<typeof PersonLane>;
+
 export const EntrantMemberInput = z.object({
   person_id: Uuid,
   squad_number: z.number().int().min(0).nullish(),
@@ -384,6 +392,9 @@ export const NewPersonMemberInput = z.object({
     full_name: z.string().min(1).max(200),
     dob: z.iso.date().nullish(),
     gender: z.enum(["m", "f", "x"]).nullish(),
+    // G1: registering a coach/staff member AS PART OF THE SQUAD — the exact
+    // scenario V356's own comment names ("a team official is IN the squad").
+    lane: PersonLane.optional(),
   }),
   squad_number: z.number().int().min(0).nullish(),
   default_position_key: z.string().nullish(),
@@ -491,6 +502,7 @@ export const CreatePerson = z.object({
   gender: z.enum(["m", "f", "x"]).nullish(),
   consent: Consent,
   external_ref: z.string().max(200).nullish(),
+  lane: PersonLane.optional(),
 });
 export type CreatePerson = z.infer<typeof CreatePerson>;
 
@@ -539,6 +551,10 @@ export const Person = z.object({
   gender: z.enum(["m", "f", "x"]).nullable(),
   consent: z.record(z.string(), z.unknown()),
   external_ref: z.string().nullable(),
+  // G1: full four-value set on the READ side (unlike CreatePerson/
+  // NewPersonMemberInput's lane, which exclude 'official' — a row created
+  // through officials.ts's own path still reads back its true lane here).
+  lane: z.enum(["player", "official", "coach", "staff"]),
   /** Set once a player has claimed this row (PROMPT-53). */
   user_id: Uuid.nullable(),
   created_at: z.string(),

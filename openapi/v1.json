@@ -7303,6 +7303,14 @@
                                           "type": "null"
                                         }
                                       ]
+                                    },
+                                    "lane": {
+                                      "type": "string",
+                                      "enum": [
+                                        "player",
+                                        "coach",
+                                        "staff"
+                                      ]
                                     }
                                   },
                                   "required": [
@@ -7534,6 +7542,14 @@
                                           {
                                             "type": "null"
                                           }
+                                        ]
+                                      },
+                                      "lane": {
+                                        "type": "string",
+                                        "enum": [
+                                          "player",
+                                          "coach",
+                                          "staff"
                                         ]
                                       }
                                     },
@@ -9678,6 +9694,15 @@
                                   }
                                 ]
                               },
+                              "lane": {
+                                "type": "string",
+                                "enum": [
+                                  "player",
+                                  "official",
+                                  "coach",
+                                  "staff"
+                                ]
+                              },
                               "user_id": {
                                 "anyOf": [
                                   {
@@ -9704,6 +9729,7 @@
                               "gender",
                               "consent",
                               "external_ref",
+                              "lane",
                               "user_id",
                               "created_at"
                             ],
@@ -9744,6 +9770,7 @@
                         "gender": "m",
                         "consent": {},
                         "external_ref": "example",
+                        "lane": "player",
                         "user_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                         "created_at": "example"
                       }
@@ -9966,6 +9993,14 @@
                         "type": "null"
                       }
                     ]
+                  },
+                  "lane": {
+                    "type": "string",
+                    "enum": [
+                      "player",
+                      "coach",
+                      "staff"
+                    ]
                   }
                 },
                 "required": [
@@ -10055,6 +10090,15 @@
                             }
                           ]
                         },
+                        "lane": {
+                          "type": "string",
+                          "enum": [
+                            "player",
+                            "official",
+                            "coach",
+                            "staff"
+                          ]
+                        },
                         "user_id": {
                           "anyOf": [
                             {
@@ -10081,6 +10125,7 @@
                         "gender",
                         "consent",
                         "external_ref",
+                        "lane",
                         "user_id",
                         "created_at"
                       ],
@@ -10101,6 +10146,7 @@
                     "gender": "m",
                     "consent": {},
                     "external_ref": "example",
+                    "lane": "player",
                     "user_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                     "created_at": "example"
                   },
@@ -10339,6 +10385,15 @@
                             }
                           ]
                         },
+                        "lane": {
+                          "type": "string",
+                          "enum": [
+                            "player",
+                            "official",
+                            "coach",
+                            "staff"
+                          ]
+                        },
                         "user_id": {
                           "anyOf": [
                             {
@@ -10365,6 +10420,7 @@
                         "gender",
                         "consent",
                         "external_ref",
+                        "lane",
                         "user_id",
                         "created_at"
                       ],
@@ -10385,6 +10441,7 @@
                     "gender": "m",
                     "consent": {},
                     "external_ref": "example",
+                    "lane": "player",
                     "user_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                     "created_at": "example"
                   },
@@ -10698,6 +10755,15 @@
                             }
                           ]
                         },
+                        "lane": {
+                          "type": "string",
+                          "enum": [
+                            "player",
+                            "official",
+                            "coach",
+                            "staff"
+                          ]
+                        },
                         "user_id": {
                           "anyOf": [
                             {
@@ -10724,6 +10790,7 @@
                         "gender",
                         "consent",
                         "external_ref",
+                        "lane",
                         "user_id",
                         "created_at"
                       ],
@@ -10744,6 +10811,7 @@
                     "gender": "m",
                     "consent": {},
                     "external_ref": "example",
+                    "lane": "player",
                     "user_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                     "created_at": "example"
                   },
@@ -10992,6 +11060,15 @@
                                       }
                                     ]
                                   },
+                                  "lane": {
+                                    "type": "string",
+                                    "enum": [
+                                      "player",
+                                      "official",
+                                      "coach",
+                                      "staff"
+                                    ]
+                                  },
                                   "user_id": {
                                     "anyOf": [
                                       {
@@ -11018,6 +11095,7 @@
                                   "gender",
                                   "consent",
                                   "external_ref",
+                                  "lane",
                                   "user_id",
                                   "created_at"
                                 ],
@@ -11076,6 +11154,15 @@
                                       }
                                     ]
                                   },
+                                  "lane": {
+                                    "type": "string",
+                                    "enum": [
+                                      "player",
+                                      "official",
+                                      "coach",
+                                      "staff"
+                                    ]
+                                  },
                                   "user_id": {
                                     "anyOf": [
                                       {
@@ -11102,6 +11189,7 @@
                                   "gender",
                                   "consent",
                                   "external_ref",
+                                  "lane",
                                   "user_id",
                                   "created_at"
                                 ],
@@ -11168,6 +11256,7 @@
                           "gender": "m",
                           "consent": {},
                           "external_ref": "example",
+                          "lane": "player",
                           "user_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                           "created_at": "example"
                         },
@@ -11178,6 +11267,7 @@
                           "gender": "m",
                           "consent": {},
                           "external_ref": "example",
+                          "lane": "player",
                           "user_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                           "created_at": "example"
                         },
@@ -11468,6 +11558,15 @@
                                 }
                               ]
                             },
+                            "lane": {
+                              "type": "string",
+                              "enum": [
+                                "player",
+                                "official",
+                                "coach",
+                                "staff"
+                              ]
+                            },
                             "user_id": {
                               "anyOf": [
                                 {
@@ -11494,6 +11593,7 @@
                             "gender",
                             "consent",
                             "external_ref",
+                            "lane",
                             "user_id",
                             "created_at"
                           ],
@@ -11701,6 +11801,7 @@
                       "gender": "m",
                       "consent": {},
                       "external_ref": "example",
+                      "lane": "player",
                       "user_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                       "created_at": "example"
                     },
@@ -12720,6 +12821,15 @@
                             }
                           ]
                         },
+                        "lane": {
+                          "type": "string",
+                          "enum": [
+                            "player",
+                            "official",
+                            "coach",
+                            "staff"
+                          ]
+                        },
                         "user_id": {
                           "anyOf": [
                             {
@@ -12746,6 +12856,7 @@
                         "gender",
                         "consent",
                         "external_ref",
+                        "lane",
                         "user_id",
                         "created_at"
                       ],
@@ -12766,6 +12877,7 @@
                     "gender": "m",
                     "consent": {},
                     "external_ref": "example",
+                    "lane": "player",
                     "user_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                     "created_at": "example"
                   },

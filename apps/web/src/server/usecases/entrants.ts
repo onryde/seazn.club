@@ -47,10 +47,14 @@ async function resolveInlineMembers(
   const out: MemberInput[] = [];
   for (const m of members) {
     if ("new_person" in m) {
+      // G1 (bench B03 product-gaps): registering a coach/staff member AS
+      // PART OF THE SQUAD — V356's own motivating scenario ("a team official
+      // is IN the squad so a card can be shown to him, but never in a
+      // playing projection").
       const [person] = await tx<{ id: string }[]>`
-        insert into persons (org_id, full_name, dob, gender, consent)
+        insert into persons (org_id, full_name, dob, gender, consent, lane)
         values (${orgId}, ${m.new_person.full_name}, ${m.new_person.dob ?? null},
-                ${m.new_person.gender ?? null}, ${tx.json({} as never)})
+                ${m.new_person.gender ?? null}, ${tx.json({} as never)}, ${m.new_person.lane ?? "player"})
         returning id`;
       out.push({
         person_id: person!.id,

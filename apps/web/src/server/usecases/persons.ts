@@ -21,11 +21,15 @@ export interface PersonRow {
   /** Set once a player has claimed this row (PROMPT-53). */
   user_id: string | null;
   created_at: string;
+  /** G1 (bench B03 product-gaps): 'player' | 'official' | 'coach' | 'staff'
+   *  (persons_lane_check, V348/V356) — a person-registration fact, distinct
+   *  from the per-fixture LineupSlot.role a coach is also named with. */
+  lane: string;
   /** listPersons only: an open, unexpired claim invite exists. */
   claim_pending?: boolean;
 }
 
-const COLS = ["id", "full_name", "dob", "gender", "consent", "external_ref", "photo_path", "user_id", "created_at"] as const;
+const COLS = ["id", "full_name", "dob", "gender", "consent", "external_ref", "photo_path", "user_id", "created_at", "lane"] as const;
 
 // #404: `merged_into is null` on every read below is load-bearing, not defensive.
 // An absorbed person is TOMBSTONED rather than deleted (six dependent tables are
@@ -72,9 +76,9 @@ export async function listPersons(auth: AuthCtx, query: ListQuery): Promise<Page
 export async function createPerson(auth: AuthCtx, input: CreatePerson): Promise<PersonRow> {
   return withTenant(auth.orgId, async (tx) => {
     const [row] = await tx<PersonRow[]>`
-      insert into persons (org_id, full_name, dob, gender, consent, external_ref)
+      insert into persons (org_id, full_name, dob, gender, consent, external_ref, lane)
       values (${auth.orgId}, ${input.full_name}, ${input.dob ?? null}, ${input.gender ?? null},
-              ${tx.json(input.consent as never)}, ${input.external_ref ?? null})
+              ${tx.json(input.consent as never)}, ${input.external_ref ?? null}, ${input.lane ?? "player"})
       returning ${tx(COLS)}`;
     return row;
   });

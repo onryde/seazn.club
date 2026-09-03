@@ -6,9 +6,21 @@
 //
 // Real Postgres required: this exercises the actual CHECK constraint and the
 // actual partial unique index, not a mock of either.
+//
+// G1 (bench B03 product-gaps, 2026-09-02): the CHECK above shipped 18 months
+// before any application writer could produce 'coach'/'staff' — CreatePerson
+// had no `lane` field at all, and neither did the entrant-registration inline
+// `new_person` path. The describe block below is that writer's own test: it
+// goes through the real `createPerson`/`createEntrants` usecases (not a raw
+// insert like the block above), because a usecase test is the only thing that
+// can see whether the REQUEST SCHEMA actually threads the value through —
+// the CHECK passing was never in doubt.
 import { describe, expect, it } from "vitest";
 import { sql } from "@/lib/db";
-import { makeUser, seedOrg } from "./_seed";
+import { createDivision } from "../divisions";
+import { createEntrants } from "../entrants";
+import { createPerson, getPerson } from "../persons";
+import { makeUser, seedOrg, GENERIC_CONFIG } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -60,5 +72,64 @@ describe.skipIf(!HAS_DB)("persons.lane — coach/staff (V356, S4/#428)", () => {
     await expect(insertPerson(auth.orgId, "Player A (dup)", "player", user.id)).rejects.toThrow(
       /persons_org_user_lane_uq/,
     );
+  });
+});
+
+describe.skipIf(!HAS_DB)("persons.lane writer (G1, bench B03 product-gaps)", () => {
+  it("POST /persons' usecase (createPerson) writes and round-trips lane='coach'", async () => {
+    const { auth } = await seedOrg();
+    const created = await createPerson(auth, {
+      full_name: "Coach Via API",
+      consent: {},
+      dob: null,
+      gender: null,
+      external_ref: null,
+      lane: "coach",
+    });
+    expect(created.lane).toBe("coach");
+    const fetched = await getPerson(auth, created.id);
+    expect(fetched.lane).toBe("coach");
+  });
+
+  it("omitting lane still defaults to 'player' — the pre-existing behavior is unchanged", async () => {
+    const { auth } = await seedOrg();
+    const created = await createPerson(auth, {
+      full_name: "No Lane Given",
+      consent: {},
+      dob: null,
+      gender: null,
+      external_ref: null,
+    });
+    expect(created.lane).toBe("player");
+  });
+
+  it("registering a coach AS AN INLINE SQUAD MEMBER (V356's own motivating scenario) writes lane='staff'", async () => {
+    const { auth } = await seedOrg();
+    const [{ id: competitionId }] = await sql<{ id: string }[]>`
+      insert into competitions (org_id, name, slug, ends_on, visibility, branding)
+      values (${auth.orgId}, 'G1 Cup', ${"g1-cup-" + auth.orgId.slice(0, 8)}, '2030-12-31', 'private', '{}')
+      returning id`;
+    const division = await createDivision(auth, competitionId, {
+      name: "Open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: GENERIC_CONFIG,
+    });
+    const [entrant] = await createEntrants(auth, division.id, [
+      {
+        kind: "team" as const,
+        display_name: "Squad",
+        seed: 1,
+        members: [
+          { new_person: { full_name: "Team Physio", lane: "staff" }, is_captain: false, roles: [] },
+        ],
+      } as never,
+    ]);
+    expect(entrant).toBeTruthy();
+    const rows = await sql<{ lane: string }[]>`
+      select p.lane from entrant_members em
+      join persons p on p.id = em.person_id
+      where em.entrant_id = ${entrant!.id}`;
+    expect(rows).toEqual([{ lane: "staff" }]);
   });
 });
