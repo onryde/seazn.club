@@ -305,6 +305,10 @@ describe("desk.* copy (review round 3 — pluralization and subject-verb agreeme
     const items = needsYouItems(en, desk(d), names, "org", "comp", "en");
     const item = items.find((i) => i.kind === "registrations_waiting");
     expect(item?.title).toBe("1 registration waiting for approval");
+    // M1 enumeration (fix round I): "Review" must land on the tab that HOLDS
+    // the pending registration. The hub's default tab is `settings`; the
+    // registrants table (and its approve control) is on `registrants`.
+    expect(item?.action.href).toBe("/o/org/c/comp/registration?tab=registrants");
   });
   it("K1: needs_fixtures builds a row naming the stage, with the fixtures-tab action", () => {
     const d = div({ attention: [{ kind: "needs_fixtures", stageName: "Finals" }] });

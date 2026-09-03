@@ -153,7 +153,17 @@ export function needsYouItems(
       // approval` — "1 registrations waiting for approval".
       title: plural(dict, "desk.needsYou.registrations_waiting", waiting, locale),
       sub: t(dict, "desk.needsYou.registrations_waiting.sub"),
-      action: { label: t(dict, "desk.needsYou.registrations_waiting.action"), href: routes.competitionRegistration(org, comp) },
+      // M1 enumeration (fix round I): the tab was MISSING — the hub's two
+      // tabs are `settings` (its default) and `registrants`
+      // (components/registration-hub-tab.ts), and the pending registration
+      // this row is about is only on the second. "Review" landed on the
+      // settings tab, one click short of the work, which is the same class
+      // as instance twelve one surface over. Found by sweeping all six
+      // action labels to their landing controls, not by a report.
+      action: {
+        label: t(dict, "desk.needsYou.registrations_waiting.action"),
+        href: routes.competitionRegistration(org, comp, "registrants"),
+      },
     });
   }
   return items.sort((a, b) => SEV_ORDER.indexOf(a.severity) - SEV_ORDER.indexOf(b.severity));

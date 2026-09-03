@@ -724,6 +724,21 @@ describe.skipIf(!HAS_DB)("getCompetitionDesk", () => {
       expect(d.attention).toContainEqual({ kind: "needs_draw", stageName: "Finals", door: "confirm" });
     });
 
+    it("K3/M1: a STALE proposal makes the action point at the panel's 'recompute' door", async () => {
+      const { auth, competitionId, divisionId, leagueId, finalsId } = await twoStages("setup");
+      await generateStageFixtures(auth, finalsId);
+      await sql`update stages set status = 'complete' where id = ${leagueId}`;
+      // Reachable in production: confirmSeedProposal re-derives the
+      // standings hash and marks the row stale (stages.ts:2956) when the
+      // source standings moved under a draft, and the dependent-stage sweep
+      // (stages.ts:3143) does the same. The panel then renders "Recompute".
+      await sql`insert into stage_seed_proposals (org_id, stage_id, computed, status)
+                select org_id, ${finalsId}, '{}'::jsonb, 'stale' from stages where id = ${finalsId}`;
+      const desk = await getCompetitionDesk(auth, competitionId);
+      const d = desk.divisions.get(divisionId)!;
+      expect(d.attention).toContainEqual({ kind: "needs_draw", stageName: "Finals", door: "recompute" });
+    });
+
     it("K3/M1: a CONFIRMED draw is not owed at all — the panel shows no button, so the row is gone", async () => {
       const { auth, competitionId, divisionId, leagueId, finalsId } = await twoStages("setup");
       await generateStageFixtures(auth, finalsId);

@@ -3,7 +3,12 @@
 // answer renders on server and client and the matrix is unit-testable.
 
 export type DivisionStatus = "setup" | "scheduled" | "active" | "completed";
-export type DivisionPhase = "setting_up" | "scheduled" | "match_day" | "finished";
+/** Every phase, as a VALUE, so an enumeration test can cross-product over
+ *  the domain instead of hand-typing it — add one here and the five-rendering
+ *  agreement sweep (`desk-renderings-agree.test.tsx`) fails until the new
+ *  phase is either covered or declared unreachable with a reason. */
+export const DIVISION_PHASES = ["setting_up", "scheduled", "match_day", "finished"] as const;
+export type DivisionPhase = (typeof DIVISION_PHASES)[number];
 
 /** The latest `stage_seed_proposals` row's status for a stage, mirroring
  *  `getSeedProposal` (stages.ts — "latest by created_at desc, id desc, ANY
@@ -84,7 +89,8 @@ export interface PhaseInput {
  *  one ⇒ "Recompute". The `needs_draw` row's action carries this so it can
  *  render the panel's OWN dictionary key instead of a hand-copied name — the
  *  label and the button it points at then cannot drift apart. */
-export type DrawDoor = "compute" | "confirm" | "recompute";
+export const DRAW_DOORS = ["compute", "confirm", "recompute"] as const;
+export type DrawDoor = (typeof DRAW_DOORS)[number];
 
 /** `SeedProposalState` -> the door the panel offers for it. A `Record`, not a
  *  ternary, so adding a proposal status is a COMPILE error rather than a
