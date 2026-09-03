@@ -156,7 +156,7 @@ describe.skipIf(!HAS_DB)("weekly digest (P3 / D7)", () => {
   });
 
   it("requires news.auto — 402s when the org is denied the key", async () => {
-    // V391 (entitlements v18 §2) granted `news.auto` to Community, so no plan
+    // V392 (entitlements v18 §2) granted `news.auto` to Community, so no plan
     // withholds it any more. `requireFeature` is still the door, and a DENY
     // override is what proves it shuts — the same lever a staff suspension or
     // a bespoke arrangement would pull in production.
@@ -168,7 +168,7 @@ describe.skipIf(!HAS_DB)("weekly digest (P3 / D7)", () => {
     await expect(generateWeeklyDigest(ctx.auth, ctx.orgId)).rejects.toMatchObject({ status: 402 });
   });
 
-  it("a plain community org may now generate one — news.auto is free (V391)", async () => {
+  it("a plain community org may now generate one — news.auto is free (V392)", async () => {
     const ctx = await seedOrg("community");
     const post = await generateWeeklyDigest(ctx.auth, ctx.orgId);
     expect(post.kind).toBe("weekly_digest");

@@ -1,4 +1,4 @@
-// V393 (entitlements v18 W2 T12, owner ruling 2026-09-03): `scorers.max` is
+// V394 (entitlements v18 W2 T12, owner ruling 2026-09-03): `scorers.max` is
 // deleted from `plan_entitlements`, and the two enforcement branches that read
 // it fall back to `members.max`.
 //
@@ -39,7 +39,7 @@ import { POST } from "../route";
 const HAS_DB = !!process.env.DATABASE_URL;
 
 /** The cap, READ from the live matrix — never typed. It has moved three times
- *  (V319 members 5, V391 members 3, V393 deleted the scorer pool's own key),
+ *  (V319 members 5, V392 members 3, V394 deleted the scorer pool's own key),
  *  and a stale literal turns every "expect 402" into an accept. */
 async function communityCap(key: string): Promise<number> {
   const [row] = await sql<{ int_value: number | null }[]>`
@@ -95,11 +95,11 @@ async function setRole(
   return { status: res.status, body: (await res.json()) as Body };
 }
 
-describe.skipIf(!HAS_DB)("V393: the scorer seat draws on members.max", () => {
+describe.skipIf(!HAS_DB)("V394: the scorer seat draws on members.max", () => {
   it("`scorers.max` has no row on any plan, so getLimit would resolve it to 0", async () => {
     const rows = await sql<{ plan_key: string }[]>`
       select plan_key from plan_entitlements where feature_key = 'scorers.max'`;
-    expect(rows, "V393 deletes the key; a surviving row means the deletion regressed").toEqual([]);
+    expect(rows, "V394 deletes the key; a surviving row means the deletion regressed").toEqual([]);
     const overrides = await sql<{ org_id: string }[]>`
       select org_id from org_entitlement_overrides where feature_key = 'scorers.max'`;
     expect(overrides).toEqual([]);

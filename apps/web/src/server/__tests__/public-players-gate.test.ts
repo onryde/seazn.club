@@ -1,7 +1,7 @@
 // Task 4 — the `dashboard.player_profiles` gate moved OUT of public_players_v
 // (V307) and INTO getPublicPlayer, the view's only consumer.
 //
-// V391 (entitlements v18 §2) GRANTED `dashboard.player_profiles` to Community.
+// V392 (entitlements v18 §2) GRANTED `dashboard.player_profiles` to Community.
 // The key is therefore no longer competition-scoped in practice: a community
 // org holds it org-wide, so a pass cannot be what separates two competitions on
 // this key any more, and the "unpassed competition stays dark" case it used to
@@ -89,7 +89,7 @@ interface Scene {
  */
 async function seedScene(): Promise<Scene> {
   // Unstated precondition, stated. Everything below assumes the SHIPPED matrix
-  // grants this feature to a plain COMMUNITY org (V391 — it used to be the pass
+  // grants this feature to a plain COMMUNITY org (V392 — it used to be the pass
   // that granted it, V308). Read it, never write it — if the matrix is ever
   // flipped, this line says so instead of leaving a bare "expected null not to
   // be null" under a test named for where the gate is evaluated.
@@ -98,7 +98,7 @@ async function seedScene(): Promise<Scene> {
     where plan_key = 'community' and feature_key = 'dashboard.player_profiles'`;
   expect(
     grant?.bool_value,
-    "precondition: plan_entitlements('community','dashboard.player_profiles') must be true (V391)",
+    "precondition: plan_entitlements('community','dashboard.player_profiles') must be true (V392)",
   ).toBe(true);
 
   const suffix = randomUUID().slice(0, 8);
@@ -220,8 +220,8 @@ describe.skipIf(!HAS_DB)("getPublicPlayer — the player-profile gate sits outsi
     expect(data!.player.name).toBe(shared.personName);
   });
 
-  it("serves it on the UNPASSED competition too — V391 made profiles free", async () => {
-    // Until V391 this asserted a 404: one Event Pass must not light up every
+  it("serves it on the UNPASSED competition too — V392 made profiles free", async () => {
+    // Until V392 this asserted a 404: one Event Pass must not light up every
     // other competition in the org. Community now holds
     // `dashboard.player_profiles` outright, so both sides render and the
     // scoping this pair used to prove is not a property of this key any more.

@@ -52,7 +52,7 @@ import { featureReason } from "@/lib/feature-copy";
 const HAS_DB = !!process.env.DATABASE_URL;
 
 /** `members.max` per plan, READ from the live matrix. It has moved twice
- *  (V319 community 5 / pro 15, V391 community 3 / pro 10); a typed number here
+ *  (V319 community 5 / pro 15, V392 community 3 / pro 10); a typed number here
  *  stops the degrade assertions distinguishing the two matrices at all. */
 let COMMUNITY_MEMBERS: number | null = null;
 let PRO_MEMBERS: number | null = null;
@@ -279,7 +279,7 @@ describe.skipIf(!HAS_DB)("the group cap counts orgs in the GROUP", () => {
 
   it("never refuses an Enterprise group — its orgs.max_owned is unlimited", async () => {
     // Pro Plus used to sit here with a finite 10. Enterprise replaced it with a
-    // NULL cap (V391), which is a different property worth its own case: the
+    // NULL cap (V392), which is a different property worth its own case: the
     // guard must read null as "no ceiling" rather than as zero, which is what a
     // missing row would resolve to.
     const [row] = await sql<{ int_value: number | null }[]>`

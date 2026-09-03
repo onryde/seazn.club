@@ -471,7 +471,7 @@ describe.skipIf(!HAS_DB)("org-posts auto-drafts", () => {
   });
 
   it("does not draft for an org DENIED news.auto, even if the toggle reads true", async () => {
-    // V391 granted `news.auto` to Community, so the plan is no longer what
+    // V392 granted `news.auto` to Community, so the plan is no longer what
     // withholds it. The auto-draft probe still reads the live key, and a DENY
     // override is what proves the probe is honoured.
     const ctx = await seedOrg("community");
@@ -485,7 +485,7 @@ describe.skipIf(!HAS_DB)("org-posts auto-drafts", () => {
     expect(await listPosts(ctx.auth, ctx.orgId)).toEqual([]);
   });
 
-  it("DOES draft for a plain community org — news.auto is free (V391)", async () => {
+  it("DOES draft for a plain community org — news.auto is free (V392)", async () => {
     const ctx = await seedOrg("community");
     const div = await seedDivision(ctx, { autoPosts: true });
     const fx = await seedDecidedFixture(ctx, div);

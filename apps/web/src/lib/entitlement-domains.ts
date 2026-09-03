@@ -2,10 +2,10 @@
 // /admin/entitlements so the two surfaces tell the same story (V290).
 // Keys NOT listed here are deliberately unadvertised (vestigial D9 keys) —
 // /admin still shows them under "other". `domains.custom` used to be named
-// here as "unadvertised until Spec 2 ships"; V391 deleted the key entirely, so
+// here as "unadvertised until Spec 2 ships"; V392 deleted the key entirely, so
 // there is no longer a row to advertise later.
 export const ENTITLEMENT_DOMAINS: { slug: string; features: string[] }[] = [
-  // scorers.max is not listed here because the KEY no longer exists: V393
+  // scorers.max is not listed here because the KEY no longer exists: V394
   // (entitlements v18 W2 T12, owner ruling 2026-09-03) deleted it from
   // plan_entitlements outright, and both enforcement branches now draw on
   // members.max. It used to be described here as "deliberately absent (#244) —
@@ -58,7 +58,7 @@ export const ENTITLEMENT_DOMAINS: { slug: string; features: string[] }[] = [
     "discovery.listed", "discovery.featured", "discovery.branding",
     "exports", "exports.branded", "news.auto",
   ]},
-  // support.priority left this list in W2 (entitlements v18): V391 deleted the
+  // support.priority left this list in W2 (entitlements v18): V392 deleted the
   // key from `plan_entitlements`, and a comparison row for a key with no rows
   // renders "—" in every column — a paywall tick for something no plan grants.
   // Priority support is now a Contact-us conversation (design §4), not a matrix

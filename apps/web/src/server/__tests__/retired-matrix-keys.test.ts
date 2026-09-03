@@ -1,7 +1,7 @@
 // The retirement guards that outlived their original test files.
 //
 // `pro-plus-matrix.test.ts` (V290) and `v17-phase1-matrix.test.ts` (V319) were
-// deleted by entitlements v18 (W2 T7): every value they pinned is a V391 value
+// deleted by entitlements v18 (W2 T7): every value they pinned is a V392 value
 // now, and `entitlements-v18-matrix.test.ts` pins the whole live matrix
 // cell-for-cell against the design doc's own §2 markdown — including a literal
 // "expected NO ROW" for every "–" cell on every plan, which is what used to
@@ -42,8 +42,8 @@ const RETIRED_FEATURE_KEYS: readonly { key: string; retiredBy: string }[] = [
  * own retirement, and `entitlements-v18-matrix.test.ts` owns it.
  */
 const RETIRED_PLAN_KEYS: readonly { key: string; retiredBy: string }[] = [
-  { key: "business", retiredBy: "V290 — folded into pro_plus, itself retired by V391" },
-  { key: "pro_plus", retiredBy: "V391 (entitlements v18) — replaced by enterprise" },
+  { key: "business", retiredBy: "V290 — folded into pro_plus, itself retired by V392" },
+  { key: "pro_plus", retiredBy: "V392 (entitlements v18) — replaced by enterprise" },
 ];
 
 describe.skipIf(!HAS_DB)("retired entitlement keys and plans stay retired", () => {
@@ -71,7 +71,7 @@ describe.skipIf(!HAS_DB)("retired entitlement keys and plans stay retired", () =
       select count(*)::int as n from plan_entitlements where plan_key = ${key}`;
     expect(plan!.n, `the ${key} plan row is back`).toBe(0);
     // The FK on plan_entitlements would normally make this redundant. It is
-    // asserted anyway because the two deletes are separate statements in V391
+    // asserted anyway because the two deletes are separate statements in V392
     // and a partial run is the failure this guard exists to name.
     expect(ents!.n, `${key} entitlement rows are back`).toBe(0);
   });

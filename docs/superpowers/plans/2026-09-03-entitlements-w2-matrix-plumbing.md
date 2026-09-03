@@ -244,16 +244,16 @@ the brief is a **stale measured comment** at `dictionary-copy-truth.test.ts:3402
 actual enforced floor is a single literal `50`, identical for every locale and both
 axes. Widen the word lists and raise each floor to its own measured value.
 
-### T8b — the copy V391 has ALREADY falsified
+### T8b — the copy V392 has ALREADY falsified
 
 The brief sends the four locale dictionaries to W3. That ruling's stated reason is
 that two waves must never edit one tree at the same time — and W3 has not started,
 so the reason does not bind here. What does bind is the standing rule that a
 migration changing rows a copy surface quotes is ONE unit of work with the fix to
-that copy. V391 has already made these false; shipping the wave without them tells
+that copy. V392 has already made these false; shipping the wave without them tells
 customers a 512-entrant cap is unlimited.
 
-| surface | claim | truth after V391 |
+| surface | claim | truth after V392 |
 |---|---|---|
 | `pricing.pass.ladder.capsUnlimited` | "unlimited entrants" (L) | 512 |
 | `upgrade.ladder.entrantsUnlimited` | "Unlimited entrants" | 512 |
@@ -281,7 +281,7 @@ ability to collect entry fees in AUD.** AUD does two jobs here and this takes bo
 - `SUPPORTED_CURRENCIES` in `lib/currency.ts` drops to four. `REGISTRATION_CURRENCIES`
   is DERIVED from it (one authority, explicit exclusions) so it follows automatically —
   do not add a second list.
-- **Migration `V392`**: `organizations.currency` carries
+- **Migration `V393`**: `organizations.currency` carries
   `CHECK (currency = ANY (ARRAY['usd','eur','gbp','inr','aud']))`. Alter it to drop
   `aud`. `org-currency.test.ts` fails if code and constraint disagree, which is the
   guard that makes this safe — do not weaken it. Greenfield, so no rows need
@@ -382,7 +382,7 @@ locale is denominated in USD.
 
 Queued behind T5, which is editing `billing.ts` right now.
 
-### T12 — V393: credits re-cut, squad cap raised, scorer seat deleted
+### T12 — V394: credits re-cut, squad cap raised, scorer seat deleted
 
 Four changes in one migration plus their code and copy. All owner-ruled 2026-09-03.
 
@@ -409,7 +409,7 @@ numbers with this stated.
 
 Also check `localeCreditLeadershipFaults` (`copy-truth.ts:2782`) — it guards the claim
 "the largest monthly AI credit grant" and still names `pro_plus` in its failure message,
-a plan V391 deleted. It has to learn the new ordering (enterprise 500 > pro 25 >
+a plan V392 deleted. It has to learn the new ordering (enterprise 500 > pro 25 >
 community 5) as part of the copy sweep.
 
 **(1) Free `teams.squad_max` 20 → 23.**
@@ -480,7 +480,7 @@ So the cap is the part that is actually wrong, and it goes:
 - Deleting the key removes T12's original visibility problem at the root rather than
   restoring a row to two surfaces to describe something half-built.
 
-Scope: migration **V393** deleting `scorers.max` from `plan_entitlements` (and any
+Scope: migration **V394** deleting `scorers.max` from `plan_entitlements` (and any
 `org_entitlement_overrides`), the two enforcement branches that read it
 (`app/api/orgs/[id]/members/[userId]/role/route.ts` and `lib/invites.ts` — each falls
 back to the `members.max` pool, which is the honest answer once the seat is not
@@ -509,7 +509,7 @@ and a decision on what an org with live scorers sees the day it lands.
 
 ### T12-orig — the visibility finding this superseded (kept for the record)
 
-V391 turned `scorers.max` from a dormant 1/1 into a real differentiator (Free **2**,
+V392 turned `scorers.max` from a dormant 1/1 into a real differentiator (Free **2**,
 Pro **10**), and design §3's Pro card sells "10 staff + 10 scorer seats". The cap IS
 enforced — `app/api/orgs/[id]/members/[userId]/role/route.ts:22` on a role change to
 scorer, and `lib/invites.ts:67` on a scorer invite acceptance, against a pool separate
@@ -563,7 +563,7 @@ Scope:
 - `feature-copy.ts` reason string: with every plan granting it the 402 becomes unreachable
   for any org on a plan. Decide whether the reason stays for the no-plan case or goes.
 
-Sequenced AFTER T12 (V393) because that task is in flight; do not send a mid-task
+Sequenced AFTER T12 (V394) because that task is in flight; do not send a mid-task
 correction — this repo has had a subagent reject one as prompt injection.
 
 **For the bench session:** this unblocks their G4 once W2 merges. Their G7 (`business`
@@ -575,8 +575,8 @@ union, and the live catalogue is now pinned against design §2 by a test.
 
 ### T15 — V394 part B: the three share loops become paid (owner ruling 2026-09-03)
 
-**This REVERSES four cells V391 set eight hours ago**, and reverses design §2's growth
-thesis. Recorded in full because a reader finding V391 and V394 disagreeing will otherwise
+**This REVERSES four cells V392 set eight hours ago**, and reverses design §2's growth
+thesis. Recorded in full because a reader finding V392 and V394 disagreeing will otherwise
 assume one is a mistake.
 
 **Three loops move, not four.** An earlier draft also flipped `branding` (the org's own

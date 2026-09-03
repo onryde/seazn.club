@@ -95,7 +95,7 @@ function requireSessionEditor(auth: AuthCtx): void {
 /** The competition an Event-Pass-lifted gate must be resolved against.
  *
  *  lib/entitlements.ts only consults `competition_passes` when a competition is
- *  in scope, so a gate on a key V391 lifts (`scoring.device_links`) that omits it makes the
+ *  in scope, so a gate on a key V392 lifts (`scoring.device_links`) that omits it makes the
  *  pass INVISIBLE — the org pays $29 and is refused on the competition it
  *  bought. Same shape as usecases/officials.ts's `competitionForDivision` (T6).
  *
@@ -105,7 +105,7 @@ function requireSessionEditor(auth: AuthCtx): void {
  *  still held — the self-deadlock lib/db.ts guards against.
  *
  *  A missing row yields `undefined`, which resolves the gate org-wide (the
- *  pre-V391 behaviour) and the 404 is raised inside the transaction as before. */
+ *  pre-V392 behaviour) and the 404 is raised inside the transaction as before. */
 async function competitionForFixture(fixtureId: string): Promise<string | undefined> {
   const [row] = await sql<{ competition_id: string }[]>`
     select d.competition_id from fixtures f

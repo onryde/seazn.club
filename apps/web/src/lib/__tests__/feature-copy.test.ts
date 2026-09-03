@@ -18,7 +18,7 @@ import {
 const PRICES_THE_RIDER =
   /[$£€]|\b(rates?|prices?|priced|pricing|costs?|fees?|half|double|cheaper|discount)\b/i;
 
-describe("V393 (entitlements v18 W2 T12) — the two reason strings that moved", () => {
+describe("V394 (entitlements v18 W2 T12) — the two reason strings that moved", () => {
   it("no longer sells a scorer seat: scorers.max falls back to the generic line", () => {
     // The key is deleted from plan_entitlements and both enforcement branches
     // read members.max, so nothing can raise a 402 for it. A reason here would
@@ -63,9 +63,9 @@ describe("feature-copy V290", () => {
     // in the product. They must offer a PRICE.
     expect(featurePlan("competitions.max_active")).toBe("pro");
     expect(featurePlan("dashboard.public.max")).toBe("pro");
-    // pro_plus is retired (V391). officials.auto and scorers.max were its
+    // pro_plus is retired (V392). officials.auto and scorers.max were its
     // above-Pro keys; entitlements v18 moves both to plain Pro (design §2/§4)
-    // — a paywall for either must no longer point at Contact-us. V393 then
+    // — a paywall for either must no longer point at Contact-us. V394 then
     // deleted `scorers.max` from plan_entitlements entirely, so it is now in
     // the same position as domains.custom below: nothing gates on it, and the
     // ladder's documented default (unknown key → "pro") is the answer.
@@ -125,14 +125,14 @@ describe("feature-copy V290", () => {
     expect(featureReason("officials.assignment")).toBe("This feature needs a plan upgrade.");
   });
 
-  // V391 (entitlements v18) deleted four inert keys from `plan_entitlements`.
+  // V392 (entitlements v18) deleted four inert keys from `plan_entitlements`.
   // Three of them used to be asserted in the case above as having reasons.
   // They moved here rather than being dropped, because the assertion that
   // matters INVERTED: a reason for a key no gate can raise is an upsell the
   // customer can never act on, and `domains.custom` / `support.priority` said
   // "Pro Plus" — a plan that no longer exists. The generic fallback is the
   // correct answer, and pinning it is what stops a reason drifting back in.
-  it("has NO reason for any key V391 deleted — they fall back to the generic line", () => {
+  it("has NO reason for any key V392 deleted — they fall back to the generic line", () => {
     for (const key of [
       "officials.per_fixture.max",
       "domains.custom",
@@ -193,7 +193,7 @@ describe("feature-copy V290", () => {
     // A no-digits rule would have been WRONG for exactly this reason — the
     // caps themselves are what the refusal is about.
     expect(featureReason("orgs.max_owned")).not.toMatch(PRICES_THE_RIDER);
-    // "Pro Plus 10" dropped from this literal with the plan (V391) — the cap
+    // "Pro Plus 10" dropped from this literal with the plan (V392) — the cap
     // list is Community/Pro only now, not a third tier's ceiling.
     expect("Community 1, Pro 5").not.toMatch(PRICES_THE_RIDER);
     expect("it's billed monthly on top of your current bill").not.toMatch(PRICES_THE_RIDER);

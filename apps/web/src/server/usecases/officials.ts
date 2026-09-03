@@ -126,7 +126,7 @@ export async function listOfficialBlackout(
  *  write to official_availability required the official's own /me session
  *  (superuser connection, fans the date out to every org linked to that
  *  person). This writes ONLY this org's officials row: `withTenant`'s RLS
- *  scoping (V391 grants app_user the write here) is what keeps it that way,
+ *  scoping (V392 grants app_user the write here) is what keeps it that way,
  *  not an application check. `requireResourceAuth("official", ...)` at the
  *  route already confirmed `officialId` belongs to `auth.orgId` before this
  *  runs. */
@@ -435,7 +435,7 @@ export type AutoAssignInput = z.infer<typeof AutoAssignInput>;
 
 /** The competition an `officials.auto` gate must be resolved against.
  *
- *  V391 turns `officials.auto` TRUE on `event_pass`/`event_pass_l` and FALSE on
+ *  V392 turns `officials.auto` TRUE on `event_pass`/`event_pass_l` and FALSE on
  *  `community`, and the Event Pass overlay in lib/entitlements.ts is
  *  competition-scoped — it only consults `competition_passes` when a competition
  *  is in scope. Gating org-wide would therefore sell a Free org auto-officials
@@ -449,7 +449,7 @@ export type AutoAssignInput = z.infer<typeof AutoAssignInput>;
  *  `createStages`' `divComp` lookup in usecases/stages.ts.
  *
  *  A missing row yields `undefined`, which resolves the gate org-wide — the
- *  pre-V391 behaviour — and the 404 for the vanished division/stage is then
+ *  pre-V392 behaviour — and the 404 for the vanished division/stage is then
  *  raised inside the transaction as before.
  */
 async function competitionForDivision(divisionId: string): Promise<string | undefined> {

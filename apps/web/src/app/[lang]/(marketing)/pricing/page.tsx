@@ -242,7 +242,7 @@ export default async function PricingPage({
 
           {/* Three offers — entitlements v18: Community / Event Pass / Pro.
               The Pro Plus card that used to sit here is retired along with
-              the plan (V391); the above-Pro conversation is now the
+              the plan (V392); the above-Pro conversation is now the
               Contact-us strip under the comparison table below, per design
               §4 — a redesigned ticket-styled layout is W3's, this interim
               grid just stops rendering a fourth card for a plan that no

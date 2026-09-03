@@ -85,7 +85,7 @@ describe.skipIf(!HAS_DB)("an Event Pass under a paid plan (#327/#337)", () => {
   });
 
   it("keeps the pass's HIGHER entrant ceiling when the org upgrades to Pro", async () => {
-    // #337 itself. L lifts entrants to 512 (V391 closed the formerly-unlimited
+    // #337 itself. L lifts entrants to 512 (V392 closed the formerly-unlimited
     // cap); the upgrade to Pro must not put its own 256 ceiling back on a
     // competition the org already paid to unlock.
     await grantPass(orgId, compId, "event_pass_l");
@@ -97,7 +97,7 @@ describe.skipIf(!HAS_DB)("an Event Pass under a paid plan (#327/#337)", () => {
 
   it("keeps the PLAN's higher division ceiling rather than an M pass's lower one", async () => {
     // The other direction, and the one a naive "pass wins" overlay gets wrong.
-    // It used to be argued with L (20) against Pro's unlimited; V391 gave Pro
+    // It used to be argued with L (20) against Pro's unlimited; V392 gave Pro
     // 20 as well, so L can no longer witness it — an M pass (10) against Pro's
     // 20 is the pair that still discriminates, and it is the same rule.
     await setPlan(orgId, "pro");

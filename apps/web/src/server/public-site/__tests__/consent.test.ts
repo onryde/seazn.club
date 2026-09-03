@@ -80,7 +80,7 @@ async function seedPublicScene(
 ): Promise<PublicScene> {
   const { auth, orgId } = await seedOrg();
   // Consent is the variable under test here, so `dashboard.player_profiles` is
-  // STATED either way rather than inherited. V391 granted the key to Community,
+  // STATED either way rather than inherited. V392 granted the key to Community,
   // so the false arm now has to DENY explicitly — leaving the override out
   // would silently give every scene the feature and stop the entitlement split
   // being probed at all.
@@ -238,7 +238,7 @@ describe.skipIf(!HAS_DB)("entitlement split (doc 09 §4, doc 10)", () => {
     const { auth } = await seedOrg();
     // The active-comp cap would fire first — lift it via override so this test
     // isolates the public-dashboard quota. The quota itself is READ from the
-    // matrix (V319 1 -> V391 3), so a re-tune moves the boundary this test
+    // matrix (V319 1 -> V392 3), so a re-tune moves the boundary this test
     // walks up to instead of leaving it asserting nothing.
     const [{ int_value: pub }] = await sql<{ int_value: number }[]>`
       select int_value from plan_entitlements

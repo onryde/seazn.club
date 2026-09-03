@@ -2,7 +2,7 @@
 // tier before they click (doc 10 §3). Server- and client-safe (no hooks).
 import { featurePlan, type PaidPlan } from "@/lib/feature-copy";
 
-// Entitlements v18: `pro_plus` retired (V391); the above-Pro badge now reads
+// Entitlements v18: `pro_plus` retired (V392); the above-Pro badge now reads
 // "Enterprise" for the Contact-us conversation (design §4). Both are
 // `Record<PaidPlan, …>`, so a third `PaidPlan` member with no style/label
 // here is a compile error rather than a silently blank pill.

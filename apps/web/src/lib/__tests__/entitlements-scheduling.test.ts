@@ -1,4 +1,4 @@
-// #382 — division scheduling is open to every plan. V391 (entitlements v18)
+// #382 — division scheduling is open to every plan. V392 (entitlements v18)
 // opened multi-division too, so no scheduling key is paid on any plan.
 //
 // `hasFeature` returns `row?.bool_value === true` (entitlements.ts), so a
@@ -86,7 +86,7 @@ describe.skipIf(!HAS_DB)("scheduling entitlements after V353 (#382)", () => {
     }
   });
 
-  // V391 (entitlements v18 §2) opened the LAST scheduling paywall: community
+  // V392 (entitlements v18 §2) opened the LAST scheduling paywall: community
   // now carries `scheduling.multi_division` = true. There is no scheduling key
   // left that any plan denies, and that is the fact worth pinning — a re-tune
   // that quietly re-gates one of the four reds here.

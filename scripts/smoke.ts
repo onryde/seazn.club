@@ -1763,7 +1763,7 @@ async function smokePlanMatrix(): Promise<void> {
 
     // --- User 3 (member/scorer): a division-scoped scorer invite seats a
     // member who scores a DIFFERENT fixture via the assignment path
-    // (scoresViaAssignment). V393 deleted `scorers.max`; the seat is charged
+    // (scoresViaAssignment). V394 deleted `scorers.max`; the seat is charged
     // against `members.max` now, which on community is 3 — so one still fits.
     const scorerEmail = `scorer_${key}_${tag}@example.com`;
     const scorerSession = newSession();
@@ -1858,7 +1858,7 @@ async function smokePlanMatrix(): Promise<void> {
   );
   // V302: the AI Schedule Architect is granted on EVERY plan; the graded axis
   // is no longer a per-division run count (retired V322) but the monthly AI
-  // credit wallet allowance. V391 (entitlements v18) cut it from 10 to 5.
+  // credit wallet allowance. V392 (entitlements v18) cut it from 10 to 5.
   //
   // The literal is deliberate here, and stays a literal. This script reads the
   // number back out of the live API, which reads it out of `plan_entitlements`
@@ -1870,7 +1870,7 @@ async function smokePlanMatrix(): Promise<void> {
     commEnt.entitlements["scheduling.ai"]?.enabled === true,
   );
   check(
-    "matrix/community: ai.credits.monthly resolves 5 (V391)",
+    "matrix/community: ai.credits.monthly resolves 5 (V392)",
     commEnt.entitlements["ai.credits.monthly"]?.limit === 5,
   );
   // The bootstrap grant (createOrgForUser) synchronously seeds this period's
@@ -1954,10 +1954,10 @@ async function smokePlanMatrix(): Promise<void> {
     proEnt.entitlements["scheduling.ai"]?.enabled === true,
   );
   check(
-    "matrix/pro: ai.credits.monthly resolves 25 (V393 re-cut it from V391's 35)",
+    "matrix/pro: ai.credits.monthly resolves 25 (V394 re-cut it from V392's 35)",
     proEnt.entitlements["ai.credits.monthly"]?.limit === 25,
   );
-  // V391 DELETED `officials.per_fixture.max` — it resolved to ∞ on every plan
+  // V392 DELETED `officials.per_fixture.max` — it resolved to ∞ on every plan
   // and nothing read it. The check is INVERTED rather than dropped, because
   // "absent" and "unlimited" are different answers that this endpoint reports
   // differently, and the old assertion would now read `undefined === null` and
@@ -1966,7 +1966,7 @@ async function smokePlanMatrix(): Promise<void> {
   // proving is that the key is not being served at all — if it reappeared with
   // a row, every plan would silently gain a finite officials cap.
   check(
-    "matrix/pro: officials.per_fixture.max is not served at all (V391 deleted the key)",
+    "matrix/pro: officials.per_fixture.max is not served at all (V392 deleted the key)",
     proEnt.entitlements["officials.per_fixture.max"] === undefined,
   );
 
@@ -2461,10 +2461,10 @@ async function passGrantsSuite(): Promise<void> {
     plainExport.length > 1 && !plainExport.includes(org.name),
   );
 
-  // === dashboard.player_profiles — FREE ON EVERY PLAN since V391 ==========
+  // === dashboard.player_profiles — FREE ON EVERY PLAN since V392 ==========
   //
   // This block used to read "community false, pass true", and asserted that
-  // the ONLY difference between a 200 and a 404 was the pass. V391
+  // the ONLY difference between a 200 and a 404 was the pass. V392
   // (entitlements v18) grants `dashboard.player_profiles` on Community, so the
   // sibling competition now renders too and the old 404 assertion is false.
   //
@@ -2483,7 +2483,7 @@ async function passGrantsSuite(): Promise<void> {
     passCard.status === 200,
   );
   check(
-    "pass grants/profiles: it renders on the UNPASSED sibling too — V391 made profiles free",
+    "pass grants/profiles: it renders on the UNPASSED sibling too — V392 made profiles free",
     plainCard.status === 200,
   );
 
@@ -2523,7 +2523,7 @@ async function passGrantsSuite(): Promise<void> {
     plainPackage.status === 402 && featureKey(plainPackage) === "sponsors.monetize",
   );
 
-  // === officials.auto — community false, pass true (V391) =================
+  // === officials.auto — community false, pass true (V392) =================
   // Auto-officials became a pass grant in v18. All THREE gates are probed,
   // because they resolve the competition by different routes: the two division
   // gates read `divisions.competition_id`, and `/stages/{id}/officials/source`
@@ -2572,8 +2572,8 @@ async function passGrantsSuite(): Promise<void> {
     plainSource.status === 402 && featureKey(plainSource) === "officials.auto",
   );
 
-  // === stats.player — community false, pass true (V391) ====================
-  // W2 T13. This and the two blocks below are the rest of what V391 handed the
+  // === stats.player — community false, pass true (V392) ====================
+  // W2 T13. This and the two blocks below are the rest of what V392 handed the
   // pass, and every enforcement site for them used to resolve ORG-WIDE — so the
   // pass was invisible and the passed competition 402'd on a feature the org
   // had just paid for. Both directions on the SAME org throughout: a one-sided
@@ -2590,7 +2590,7 @@ async function passGrantsSuite(): Promise<void> {
     plainStats.status === 402 && featureKey(plainStats) === "stats.player",
   );
 
-  // === scoring.device_links — community false, pass true (V391) ============
+  // === scoring.device_links — community false, pass true (V392) ============
   // Minted against the board fixtures generated above; both are still
   // scheduled, so the only difference between the two calls is the pass.
   const passLink = await v1(s, `/api/v1/fixtures/${board.pass.fixtureId}/device-links`, "POST", {
@@ -2608,7 +2608,7 @@ async function passGrantsSuite(): Promise<void> {
     plainLink.status === 402 && featureKey(plainLink) === "scoring.device_links",
   );
 
-  // === stages.per_division.max — community 2, pass 4 (V391) ================
+  // === stages.per_division.max — community 2, pass 4 (V392) ================
   // Run on the ENTRANT-CAP divisions, which carry NO stages at all — the board
   // divisions already hold one and both competitions are at their division
   // ceiling, so there is no fresh division to take instead. Counting from ZERO
@@ -2683,13 +2683,13 @@ async function passGrantsSuite(): Promise<void> {
     "pass grants/scope: the org still resolves the community plan",
     ent.plan_key === "community",
   );
-  // `dashboard.player_profiles` LEFT this list in V391 — it is granted on
+  // `dashboard.player_profiles` LEFT this list in V392 — it is granted on
   // Community now, so asserting it stays OFF org-wide would assert a paywall
   // that no longer exists. It is not simply dropped: it moves to the positive
   // assertion below, because a key that silently stopped being reported at all
   // would otherwise vanish from this scope check without a sound.
   check(
-    "pass grants/scope: every boolean grant stays OFF org-wide (realtime, exports.branded, sponsors, and the V391 keys)",
+    "pass grants/scope: every boolean grant stays OFF org-wide (realtime, exports.branded, sponsors, and the V392 keys)",
     flagOff("realtime") &&
       flagOff("exports.branded") &&
       flagOff("sponsors.tiers") &&
@@ -2703,7 +2703,7 @@ async function passGrantsSuite(): Promise<void> {
       flagOff("officials.auto"),
   );
   check(
-    "pass grants/scope: dashboard.player_profiles is ON org-wide — free since V391, not pass-scoped",
+    "pass grants/scope: dashboard.player_profiles is ON org-wide — free since V392, not pass-scoped",
     ent.entitlements["dashboard.player_profiles"]?.enabled === true,
   );
   check(
@@ -2714,7 +2714,7 @@ async function passGrantsSuite(): Promise<void> {
       ent.entitlements["registration.fee_percent"]?.limit === 8,
   );
   check(
-    "pass grants/scope: the two V391 caps stay at the community figure org-wide (2 stages, 2 save points)",
+    "pass grants/scope: the two V392 caps stay at the community figure org-wide (2 stages, 2 save points)",
     ent.entitlements["stages.per_division.max"]?.limit === 2 &&
       ent.entitlements["schedule.checkpoints.max"]?.limit === 2,
   );
@@ -15759,9 +15759,9 @@ async function gapSuite(admin: Session, org1Id: string, proOrgId: string): Promi
     "gap scorer sees assigned fixtures",
     assigned.status === 200 && v1data<unknown[]>(assigned).length > 0,
   );
-  // V393 (entitlements v18 W2 T12) DELETED `scorers.max`. This check asserted
+  // V394 (entitlements v18 W2 T12) DELETED `scorers.max`. This check asserted
   // 402 on the second scorer against a Pro cap of 1, and its own NAME stated
-  // that rule — so it is INVERTED rather than dropped, the same way the V391
+  // that rule — so it is INVERTED rather than dropped, the same way the V392
   // `officials.per_fixture.max` check above was: the interesting fact is now
   // that the seat is FREE to take, and a check that quietly disappeared would
   // leave the deletion's most likely failure (a key with no row resolving to 0,
@@ -15778,7 +15778,7 @@ async function gapSuite(admin: Session, org1Id: string, proOrgId: string): Promi
   await signIn(scorer2, `scorer2_${tag}@example.com`);
   const secondSeat = await raw(scorer2, `/api/invites/${scorerInvite2.token}/accept`, "POST", {});
   check(
-    "gap second scorer seat is free to take (V393 deleted scorers.max)",
+    "gap second scorer seat is free to take (V394 deleted scorers.max)",
     secondSeat.status === 200,
   );
 

@@ -559,7 +559,7 @@ export async function grantMonthlyForAllWallets(
 
 /**
  * The one-time trial grant (SPEC-2 §5.4): `ai.credits.trial`, read from the
- * matrix — pro (15 since V393; it was 20) and enterprise (still 20, set per
+ * matrix — pro (15 since V394; it was 20) and enterprise (still 20, set per
  * deal) only. Community and event_pass carry no row for this key, so they
  * simply grant nothing, and no figure is written into this file. **Once per
  * org**, guarded by the

@@ -750,7 +750,7 @@ describe.skipIf(!HAS_DB)("schedule undo & versioning (Jul3/03)", () => {
   });
 
   it("pro's AI anchors do not consume its manual save-point window", async () => {
-    // The cap is read from the matrix (V319 5 -> V391 10), so the boundary
+    // The cap is read from the matrix (V319 5 -> V392 10), so the boundary
     // this test walks up to moves with the plan rather than going slack.
     const [proRow] = await sql<{ int_value: number | null }[]>`
       select int_value from plan_entitlements
@@ -828,7 +828,7 @@ describe.skipIf(!HAS_DB)("schedule undo & versioning (Jul3/03)", () => {
 
   it("checkpoints window ladder: pro holds its cap then rolls; enterprise unlimited", async () => {
     // The cap is READ from the live matrix, never typed here, so a re-tune
-    // (V319 5 -> V391 10) moves this test instead of quietly stopping it
+    // (V319 5 -> V392 10) moves this test instead of quietly stopping it
     // testing the boundary.
     const [proRow] = await sql<{ int_value: number | null }[]>`
       select int_value from plan_entitlements

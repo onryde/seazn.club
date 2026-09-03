@@ -35,7 +35,7 @@ const HAS_DB = !!process.env.DATABASE_URL;
 const uniq = () => randomUUID().slice(0, 8);
 
 /** Community's `ai.credits.monthly`, READ from the live matrix — the bootstrap
- *  grant is whatever the matrix says, and a typed number (V320 10 -> V391 5)
+ *  grant is whatever the matrix says, and a typed number (V320 10 -> V392 5)
  *  turns this suite red for the wrong reason on every re-tune. */
 async function communityRate(): Promise<number> {
   const [row] = await sql<{ int_value: number | null }[]>`

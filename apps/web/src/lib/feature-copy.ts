@@ -29,7 +29,7 @@ export const FEATURE_REASONS: Record<string, string> = {
   // true on every plan and in every currency.
   "orgs.max_owned":
     "Your current plan covers the most organisations it allows (Community 1, Pro 5). On Pro, buy an extra organisation from Settings → Add-ons; it's billed monthly on top of your current bill. Community upgrades to Pro first.",
-  // `scorers.max` used to sit here. V393 (entitlements v18 W2 T12) deleted the
+  // `scorers.max` used to sit here. V394 (entitlements v18 W2 T12) deleted the
   // key from `plan_entitlements` outright and repointed both enforcement
   // branches at `members.max`, so nothing can raise a 402 for it any more —
   // same reasoning as the W1/W2 removals noted further down. A refusal on a
@@ -54,9 +54,9 @@ export const FEATURE_REASONS: Record<string, string> = {
   // stops. `featureReason` falls back to the generic line for any key not
   // listed, so their removal cannot crash a caller.
   //
-  // W2 (entitlements v18, V391): four more keys leave this map for the same
+  // W2 (entitlements v18, V392): four more keys leave this map for the same
   // reason — `stats.club_championship`, `officials.per_fixture.max`,
-  // `domains.custom` and `support.priority`. V391 deleted all four from
+  // `domains.custom` and `support.priority`. V392 deleted all four from
   // `plan_entitlements` outright, so no gate can raise a 402 for any of them
   // and a reason here would be an upsell nothing can reach. The last two
   // additionally named "Pro Plus", a plan that no longer exists.
@@ -206,12 +206,12 @@ export function bulkImportRowsReason(limit: number | null): string {
 }
 
 // Cheapest plan that unlocks each feature (mirrors plan_entitlements,
-// V112 + V240 + V391). Everything not listed unlocks on Pro — only the
+// V112 + V240 + V392). Everything not listed unlocks on Pro — only the
 // above-Pro (Contact-us `enterprise`) exceptions need rows. (The AI run cap
 // that used to be a graded quota here — V302: 5/10/20/50 — was retired in
 // v17 Phase 2 Task 5, V322: the credit wallet meters runs on every tier now.)
 //
-// Entitlements v18 (V391): `pro_plus` is retired and its above-Pro
+// Entitlements v18 (V392): `pro_plus` is retired and its above-Pro
 // conversations move to a non-public, Contact-us-only `enterprise` plan.
 // `ENTERPRISE_FEATURES` holds ONE key, and the reason it holds exactly one
 // is worth stating, because the first version of this list held three and
@@ -219,7 +219,7 @@ export function bulkImportRowsReason(limit: number | null): string {
 //
 // A key belongs here only when NO SELF-SERVE PLAN GRANTS IT AT ALL.
 // `api.write` qualifies: false on community, false on pro, true only on
-// enterprise (V391), so "contact us" really is the cheapest way to get it.
+// enterprise (V392), so "contact us" really is the cheapest way to get it.
 //
 // It briefly also held `competitions.max_active` and `dashboard.public.max`,
 // on the rule "every INT key whose Pro value is already the ceiling
@@ -234,8 +234,8 @@ export function bulkImportRowsReason(limit: number | null): string {
 // in the product. Found in review, not by a test: the test that was supposed
 // to guard this DERIVED the same backwards rule and pinned it.
 //
-// `officials.auto` and `scorers.max` also left this set at v18: post-V391
-// both were plain, finite Pro caps (and V393 then deleted `scorers.max`
+// `officials.auto` and `scorers.max` also left this set at v18: post-V392
+// both were plain, finite Pro caps (and V394 then deleted `scorers.max`
 // entirely, so where the ladder lands it is moot — the documented default
 // applies). `domains.custom` and `support.priority` left for an unrelated
 // reason — T1 deleted both keys from `plan_entitlements` outright, so nothing

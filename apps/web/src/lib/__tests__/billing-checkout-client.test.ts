@@ -51,7 +51,7 @@ describe("fetchCheckoutClientSecret", () => {
   });
 
   // "posts plan_key pro_plus when told to check out into Pro Plus" removed —
-  // pro_plus is retired (entitlements v18, V391); `fetchCheckoutClientSecret`
+  // pro_plus is retired (entitlements v18, V392); `fetchCheckoutClientSecret`
   // now takes `PurchasablePlanKey` ("pro" only), so this call is a compile
   // error, not just an untested path.
   it("posts plan_key \"pro\" faithfully (annual)", async () => {

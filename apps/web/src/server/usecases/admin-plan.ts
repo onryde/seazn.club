@@ -131,7 +131,7 @@ export async function planPanel(orgId: string): Promise<PlanPanel> {
   // ever, and that org's plan is no longer sourced from Stripe.
   // Any PAID plan without a live subscription is a comp — an org comped at
   // enterprise is just as comped as one at pro. (pro_plus retired,
-  // entitlements v18 V391 — enterprise is its above-Pro successor, and is
+  // entitlements v18 V392 — enterprise is its above-Pro successor, and is
   // ALWAYS comped: design §4 says it is granted only through this admin
   // path or a bespoke Stripe subscription, never self-serve checkout.)
   const source = hasLiveSubscription(sub)

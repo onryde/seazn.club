@@ -36,10 +36,10 @@ const uniq = () => randomUUID().slice(0, 8);
 
 /** `ai.credits.monthly` per plan, READ from the live matrix rather than typed
  *  here — the ladder has already moved three times (V320 community 10 / pro 60,
- *  V391 community 5 / pro 35 / enterprise 500, V393 pro 25) and a typed number
+ *  V392 community 5 / pro 35 / enterprise 500, V394 pro 25) and a typed number
  *  stops testing the arithmetic the moment it drifts. */
 const rate: Record<string, number> = {};
-/** Same rule for the one-time trial grant, which V393 moved to 15 on PRO ONLY
+/** Same rule for the one-time trial grant, which V394 moved to 15 on PRO ONLY
  *  — enterprise keeps 20, deliberately (its numbers are set per deal), so the
  *  two rungs must be read separately and never assumed equal. */
 const trial: Record<string, number> = {};
@@ -172,7 +172,7 @@ describe.skipIf(!HAS_DB)("ai credit wallet — grants", () => {
       const granted = await grantTrial(orgId);
       expect(granted).toBe(trial.pro);
       expect(await balance(subId)).toBe(trial.pro);
-      // V393 (W2 T12) cut PRO's trial to 15 and left enterprise at 20 — an
+      // V394 (W2 T12) cut PRO's trial to 15 and left enterprise at 20 — an
       // asymmetry the owner confirmed deliberately, because enterprise numbers
       // are set per deal. Pinned so a later wave "tidying" the two back into
       // one number reds here instead of shipping.

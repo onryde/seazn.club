@@ -32,7 +32,7 @@ export const PASS_FEATURES = new Set([
   "exports.branded",
   "sponsors.tiers",
   "sponsors.monetize",
-  // V391 (entitlements v18 W2): the pass rungs became the Community org's route
+  // V392 (entitlements v18 W2): the pass rungs became the Community org's route
   // to the whole match-day layer, so seven more keys now beat the community row
   // and every one of them can throw at a real paywall.
   //
@@ -48,7 +48,7 @@ export const PASS_FEATURES = new Set([
   "scoring.audit_export",
   "stages.per_division.max",
   "schedule.checkpoints.max",
-  // Three keys LEFT this set at V391, and not because the pass stopped lifting
+  // Three keys LEFT this set at V392, and not because the pass stopped lifting
   // them — because `community` caught up: `formats.double_elim`,
   // `dashboard.player_profiles` and `scheduling.multi_division` are now TRUE on
   // every plan key including community, so no paywall can ever render for them

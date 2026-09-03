@@ -1,5 +1,5 @@
 // Embed door (v3/10 #4): private divisions 404, link-only render, Pro orgs
-// pass. V391 (entitlements v18) granted `embeds.enabled` on Community too, so
+// pass. V392 (entitlements v18) granted `embeds.enabled` on Community too, so
 // no PLAN denies it any more — the not_entitled arm is proven through the
 // override, which is the only remaining way an org can lose the key and is
 // what keeps the gate site itself under test. Real Postgres.
@@ -56,7 +56,7 @@ describe.skipIf(!HAS_DB)("embedDivisionData", () => {
     expect(res.ok).toBe(true);
   });
 
-  it("public division on Community → ok (V391 made embeds free)", async () => {
+  it("public division on Community → ok (V392 made embeds free)", async () => {
     const { divId } = await seed("public", "community");
     const res = await embedDivisionData(divId);
     expect(res.ok).toBe(true);

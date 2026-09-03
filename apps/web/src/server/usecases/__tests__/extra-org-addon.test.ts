@@ -7,7 +7,7 @@
 // Task 3 adds the other half: the PURCHASE usecase (setExtraOrgs), which
 // mutates Stripe ONLY, plus the >= 25 total-allowance staff alert.
 //
-// Entitlements v18 (V391) deleted the `pro_plus` plan from both `plans` and
+// Entitlements v18 (V392) deleted the `pro_plus` plan from both `plans` and
 // `plan_entitlements` — `PlanKey` is now community|pro|enterprise, and
 // `enterprise` has no entry in stripe-plans.json and no Stripe price (staff
 // comp only, never self-serve). `pro` is therefore the ONLY priced org-addon
@@ -264,7 +264,7 @@ function staleOrgAddonItem(
 
 beforeAll(async () => {
   if (!HAS_DB) return;
-  // Plan bases are READ, never hard-coded (V314 seeded pro 5; V391 dropped
+  // Plan bases are READ, never hard-coded (V314 seeded pro 5; V392 dropped
   // pro_plus from the catalog entirely).
   const rows = await sql<{ plan_key: string; int_value: number | null }[]>`
     select plan_key, int_value from plan_entitlements

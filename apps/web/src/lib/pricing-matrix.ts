@@ -116,9 +116,9 @@ const INT_FEATURES = new Set([
   "members.max",
   // scorers.max is not here because the KEY is gone: retired from the
   // comparison by #244 while it was dormant, then deleted from
-  // plan_entitlements outright by V393 (entitlements v18 W2 T12) once the seat
+  // plan_entitlements outright by V394 (entitlements v18 W2 T12) once the seat
   // stopped being sold separately. officials.per_fixture.max dropped because
-  // V319 made it ∞ on every plan — an all-∞ row tells no story — and V391 then
+  // V319 made it ∞ on every plan — an all-∞ row tells no story — and V392 then
   // deleted that key too.
   "clubs.max",
   "teams.max",

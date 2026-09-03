@@ -3,7 +3,7 @@
 // fall-through), and the folded entry-fee cell, across every PRICING_PLAN_KEYS
 // column + the ENTITLEMENT_DOMAINS sections.
 //
-// Entitlements v18 (V391): the `pro_plus` column is GONE. `PRICING_PLAN_KEYS`
+// Entitlements v18 (V392): the `pro_plus` column is GONE. `PRICING_PLAN_KEYS`
 // is four wide now (community / event_pass / event_pass_l / pro) — `enterprise`
 // is deliberately not a column (design §4: it is the Contact-us strip below the
 // table, not a priced offer), so nothing here should grow a fifth.
@@ -33,11 +33,11 @@ const cell = (int: number | null = null, bool: boolean | null = null) => ({
 });
 
 /**
- * Mirrors the real local-DB values for the rows under test, post-V391.
+ * Mirrors the real local-DB values for the rows under test, post-V392.
  *
  * A hand-typed fixture is right for this file — it is a test of the RENDERER
  * (formatting, fall-through, folding), and a fixture lets it run without a
- * database. But "mirrors the real values" was only ever a COMMENT, and V391
+ * database. But "mirrors the real values" was only ever a COMMENT, and V392
  * proved what that is worth: the fixture sat on V319's numbers, the renderer
  * tests stayed green, and every figure in them described a matrix that no
  * longer existed. `FIXTURE_MIRRORS_THE_LIVE_MATRIX` at the foot of this file
@@ -45,7 +45,7 @@ const cell = (int: number | null = null, bool: boolean | null = null) => ({
  */
 const DATA: MatrixData = {
   "competitions.max_active": {
-    // V391 (R6): community 10 -> 3. Still no pass row — a passed competition
+    // V392 (R6): community 10 -> 3. Still no pass row — a passed competition
     // leaves the ACTIVE COUNT (server/usecases/competitions.ts) instead of
     // raising the org-wide cap, which is why §2 writes the pass cells as "+1"
     // and the table renders prose there rather than a number.
@@ -55,7 +55,7 @@ const DATA: MatrixData = {
   "divisions.per_competition.max": {
     community: cell(4),
     event_pass: cell(10),
-    // V341: L lifts the division headroom to 20. V391 brought PRO down to the
+    // V341: L lifts the division headroom to 20. V392 brought PRO down to the
     // same 20 (R2: "bounded; 20 is a federation"), so L and Pro now agree here
     // and the L column's job is to beat M, not to beat Pro.
     event_pass_l: cell(20),
@@ -64,13 +64,13 @@ const DATA: MatrixData = {
   "entrants.per_division.max": {
     community: cell(64),
     event_pass: cell(128),
-    // V391: L's ∞ becomes a FINITE 512. This is the cap the pass ladder copy
+    // V392: L's ∞ becomes a FINITE 512. This is the cap the pass ladder copy
     // used to call "unlimited" — see the v18 plan's T8b table.
     event_pass_l: cell(512),
     pro: cell(256),
   },
   "schedule.checkpoints.max": {
-    // V391 gave BOTH pass rungs their own row (5), where they used to fall
+    // V392 gave BOTH pass rungs their own row (5), where they used to fall
     // through to community. Pro rose 5 -> 10.
     community: cell(2),
     event_pass: cell(5),
@@ -78,14 +78,14 @@ const DATA: MatrixData = {
     pro: cell(10),
   },
   // V319 ungate (#253): manual officials are included on every plan.
-  // officials.per_fixture.max is not rendered — V391 deleted the key outright.
+  // officials.per_fixture.max is not rendered — V392 deleted the key outright.
   "officials.roles_multi": {
     community: cell(null, true),
     event_pass: cell(null, true),
     event_pass_l: cell(null, true),
     pro: cell(null, true),
   },
-  // V391: AI officials are GRANTED on both pass rungs. They used to be the
+  // V392: AI officials are GRANTED on both pass rungs. They used to be the
   // "honest differentiator" this file asserted the passes did NOT buy; the
   // pass is competition-scoped, so granting it there is scoped too (W2 T6
   // makes the officials gates resolve against the competition).
@@ -116,14 +116,14 @@ const DATA: MatrixData = {
     event_pass_l: cell(5),
     pro: cell(2),
   },
-  // V391: the pass now lifts player stats too. Community stays denied.
+  // V392: the pass now lifts player stats too. Community stays denied.
   "stats.player": {
     community: cell(null, false),
     event_pass: cell(null, true),
     event_pass_l: cell(null, true),
     pro: cell(null, true),
   },
-  // V391 grants the public player card on COMMUNITY. It used to be the
+  // V392 grants the public player card on COMMUNITY. It used to be the
   // headline thing an Event Pass lifted; it is now free on every column, which
   // is why `lib/pass-comparison.ts` no longer lists it as a pass reason.
   "dashboard.player_profiles": {
@@ -133,7 +133,7 @@ const DATA: MatrixData = {
     pro: cell(null, true),
   },
   // Register caps render as NUMBERS, ∞ for unlimited — never a bare ✓/—.
-  // V391: pro clubs 20 -> 25, teams 40 -> 100, squad ∞ -> 40. No pass rows on
+  // V392: pro clubs 20 -> 25, teams 40 -> 100, squad ∞ -> 40. No pass rows on
   // any of the three (org-wide caps a competition-scoped pass can never lift),
   // so all three exercise the pass columns' fall-through to community.
   "clubs.max": {
@@ -145,9 +145,9 @@ const DATA: MatrixData = {
     pro: cell(100, true),
   },
   "teams.squad_max": {
-    // V391 DROPPED the pass rows here — they were 20, identical to community,
+    // V392 DROPPED the pass rows here — they were 20, identical to community,
     // so they lifted nothing (design §2: "Pass rows (20 = Free) were no-ops
-    // and are dropped"). V393 then raised community 20 -> 23, the engine's own
+    // and are dropped"). V394 then raised community 20 -> 23, the engine's own
     // largest matchday squad (football 11 + 12 bench, icehockey 6 + 17).
     community: cell(23, true),
     pro: cell(40, true),
@@ -198,7 +198,7 @@ describe("buildPricingSections — the /pricing pivot", () => {
   });
 
   it("renders the prose quota row for competitions.max_active", () => {
-    // V391 (R6): the free tier drops to 3 active competitions. BOTH rungs read
+    // V392 (R6): the free tier drops to 3 active competitions. BOTH rungs read
     // the prose cell: a pass IS one competition, at either size.
     expect(cells("pricing.matrix.competitions.max_active")).toMatchObject({
       community: "3",
@@ -209,7 +209,7 @@ describe("buildPricingSections — the /pricing pivot", () => {
   });
 
   it("renders ∞ for unlimited ints, never the word Unlimited", () => {
-    // The ∞ WITNESS. V391 made every other int cap in this fixture finite —
+    // The ∞ WITNESS. V392 made every other int cap in this fixture finite —
     // Pro divisions 20, entrants 256, clubs 25, teams 100, squad 40, save
     // points 10 — so competitions.max_active is the only row left that renders
     // an infinity at all. Without this assertion the case would keep its name
@@ -220,7 +220,7 @@ describe("buildPricingSections — the /pricing pivot", () => {
     expect(rendered).toContain("∞");
   });
 
-  it("renders the scale ladders as numbers — V391 made Pro finite on both", () => {
+  it("renders the scale ladders as numbers — V392 made Pro finite on both", () => {
     // Pro's ∞ on these two rows is what the design bought back: R2 bounds
     // divisions at 20 (a federation) and entrants at 256. L reaching 512 is
     // the only place a PASS column beats Pro, and it is finite too — the pass
@@ -241,7 +241,7 @@ describe("buildPricingSections — the /pricing pivot", () => {
 
   it("renders the clubs/teams/squad caps as numbers, never a bare tick", () => {
     // No pass row on any of the three, so BOTH pass columns fall through to
-    // community. V391: pro clubs 20 -> 25, teams 40 -> 100, squad ∞ -> 40.
+    // community. V392: pro clubs 20 -> 25, teams 40 -> 100, squad ∞ -> 40.
     expect(cells("pricing.matrix.clubs.max")).toMatchObject({
       community: "5",
       event_pass: "5",
@@ -264,7 +264,7 @@ describe("buildPricingSections — the /pricing pivot", () => {
 
   it("falls BOTH pass columns through to community when neither rung has a row", () => {
     // ANTI-VACUITY FIRST. This case used to ride on schedule.checkpoints.max,
-    // and V391 gave that key its own pass rows (5) — at which point the
+    // and V392 gave that key its own pass rows (5) — at which point the
     // assertion was reading a real pass value and no longer testing
     // fall-through at all, while still passing and still called this. The
     // vehicle now has to PROVE it has no pass row before the fall-through
@@ -295,7 +295,7 @@ describe("buildPricingSections — the /pricing pivot", () => {
     const tick = { community: "✓", event_pass: "✓", event_pass_l: "✓", pro: "✓" };
     expect(cells("pricing.matrix.officials.roles_multi")).toMatchObject(tick);
     expect(cells("pricing.matrix.officials.marks")).toMatchObject(tick);
-    // V391 REVERSED this row. AI officials used to be the one officials line a
+    // V392 REVERSED this row. AI officials used to be the one officials line a
     // pass did NOT buy ("L is a bigger event, not a cheaper Pro"); §2 now
     // grants officials.auto on both rungs, and W2 T6 makes the gate resolve
     // against the competition so the grant is scoped to the passed event
@@ -342,7 +342,7 @@ describe("buildPricingSections — the /pricing pivot", () => {
   // it is a live gate, so the matrix has to price it. The AI run cap row that
   // used to sit alongside it was retired in v17 Phase 2 Task 5 (V322): the
   // credit wallet meters spend now, not a plan-graded per-division count.
-  // BOTH halves of this pair inverted in V391, in opposite directions, and the
+  // BOTH halves of this pair inverted in V392, in opposite directions, and the
   // case is kept rather than deleted because the pair is the story: which of
   // the two adjacent scoring rows a pass buys is exactly what /pricing has to
   // get right. Profiles went FREE (community ✓) — so the row no longer sells
@@ -369,7 +369,7 @@ describe("buildPricingSections — the /pricing pivot", () => {
     // not vestigial: server/public-site/data.ts gates the public player card on
     // it, and V308 grants it to the Event Pass — so hiding it from /pricing hid
     // a thing customers pay $29 for. The rest below really are dead keys.
-    // V391 added three more to this list by deleting the keys outright:
+    // V392 added three more to this list by deleting the keys outright:
     // support.priority, officials.per_fixture.max and stats.club_championship
     // (already here). A comparison row for a key with no rows on any plan
     // renders "—" in every column — a paywall tick for something nobody sells.
@@ -424,7 +424,7 @@ describe.skipIf(!HAS_DB)("V310 packaging: logos + paid entry for everyone", () =
     expect(get("community")?.int_value).toBe(8);
     expect(get("event_pass")?.int_value).toBe(5);
     expect(get("pro")?.int_value).toBe(2);
-    // V391 moved the 1% floor from pro_plus onto enterprise. The LADDER is the
+    // V392 moved the 1% floor from pro_plus onto enterprise. The LADDER is the
     // assertion, not the plan name: each step must be strictly cheaper than
     // the one before, or a customer pays more for buying more.
     expect(get("enterprise")?.int_value).toBe(1);
@@ -463,12 +463,12 @@ describe.skipIf(!HAS_DB)("V310 packaging: logos + paid entry for everyone", () =
 // The scale ladder, asserted against the LIVE matrix rather than the fixture
 // above, because a fixture can be edited to say anything and the resolver
 // reads the table. V319 raised the free tier to 64 entrants / 10 competitions;
-// V391 (R6) took the competition cap back to 3 while LEAVING the entrant cap
+// V392 (R6) took the competition cap back to 3 while LEAVING the entrant cap
 // at 64 — the free tier still runs big per competition, it just runs fewer of
 // them. That split is the packaging decision and is what these cases pin.
 //
 // Real Postgres required; skipped without DATABASE_URL (CI sets it).
-describe.skipIf(!HAS_DB)("scale caps: community 64 entrants, 3 competitions (V319 + V391)", () => {
+describe.skipIf(!HAS_DB)("scale caps: community 64 entrants, 3 competitions (V319 + V392)", () => {
   const load = async (key: string) => {
     const rows = await sql<{ plan_key: string; bool_value: boolean | null; int_value: number | null }[]>`
       select plan_key, bool_value, int_value from plan_entitlements where feature_key = ${key}`;
@@ -483,7 +483,7 @@ describe.skipIf(!HAS_DB)("scale caps: community 64 entrants, 3 competitions (V31
     // the pass purchase would buy no extra entrants at all.
     expect(get("event_pass")?.int_value).toBe(128);
     expect(get("pro")?.int_value).toBe(256);
-    // V391: L is a FINITE 512, not the old ∞. It is the one place a pass rung
+    // V392: L is a FINITE 512, not the old ∞. It is the one place a pass rung
     // legitimately outruns Pro, and the number the pass ladder copy has to
     // stop calling "unlimited".
     expect(get("event_pass_l")?.int_value).toBe(512);
@@ -498,7 +498,7 @@ describe.skipIf(!HAS_DB)("scale caps: community 64 entrants, 3 competitions (V31
 
   it("lowers community competitions.max_active to 3; pro/enterprise stay unlimited", async () => {
     const get = await load("competitions.max_active");
-    // V391 R6: 10 -> 3. The row must EXIST and be finite — a deleted row
+    // V392 R6: 10 -> 3. The row must EXIST and be finite — a deleted row
     // resolves to 0 (`const base = row ? row.int_value : 0`), which would bar
     // a free org from running any competition at all rather than three.
     expect(get("community"), "community must keep a row — a missing one denies, it does not free").toBeDefined();
@@ -556,7 +556,7 @@ describe.skipIf(!HAS_DB)("V341 L rung: /pricing renders a fifth column from live
     const rows = await liveRows();
     const cells = (k: string) => rows.find((r) => r.labelKey === k)!.cells;
     expect(cells("pricing.matrix.divisions.per_competition.max").event_pass_l).toBe("20");
-    // V391: 512, not ∞. Rendered as a number, so a buyer reading this column
+    // V392: 512, not ∞. Rendered as a number, so a buyer reading this column
     // sees the ceiling they are actually buying.
     expect(cells("pricing.matrix.entrants.per_division.max").event_pass_l).toBe("512");
     // …and M keeps its own, so the two columns are genuinely different offers.
@@ -588,7 +588,7 @@ describe.skipIf(!HAS_DB)("V341 L rung: /pricing renders a fifth column from live
 //
 // `DATA` at the top of this file has always claimed to "mirror the real
 // local-DB values", and for three migrations that claim was only a comment.
-// V391 moved thirteen of its cells; every renderer case above stayed GREEN
+// V392 moved thirteen of its cells; every renderer case above stayed GREEN
 // while asserting a matrix that no longer existed, because a fixture is
 // perfectly consistent with itself. The renderer tests are still worth having
 // as pure tests (they run without a DB, and they test formatting rather than
@@ -619,7 +619,7 @@ describe.skipIf(!HAS_DB)("the fixture above still mirrors the live matrix", () =
         // and as denied for a bool, and the pricing pivot falls a pass column
         // through to community. So absence is compared, not skipped \u2014 that is
         // what catches a pass row appearing or disappearing under the fixture,
-        // which is exactly what V391 did to schedule.checkpoints.max and
+        // which is exactly what V392 did to schedule.checkpoints.max and
         // teams.squad_max in opposite directions.
         if (!fixture && !db) continue;
         if (!fixture || !db) {

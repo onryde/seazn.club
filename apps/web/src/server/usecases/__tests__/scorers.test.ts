@@ -296,7 +296,7 @@ describe.skipIf(!HAS_DB)("scorer role (doc 13, PROMPT-18)", () => {
   it("quotas: one member and one scorer past the cap → 402 with the feature key (doc 13 §5)", async () => {
     const { orgId } = await seedOrg();
     // The cap is READ from the matrix, never typed: it has moved three times
-    // (V319 members 5 / scorers 1, V391 members 3 / scorers 2, V393 deleted the
+    // (V319 members 5 / scorers 1, V392 members 3 / scorers 2, V394 deleted the
     // scorer key outright) and a stale literal makes every "expect 402" pass as
     // an accept without failing.
     const cap = async (key: string): Promise<number> => {
@@ -307,14 +307,14 @@ describe.skipIf(!HAS_DB)("scorer role (doc 13, PROMPT-18)", () => {
       return row!.int_value!;
     };
     const members = await cap("members.max");
-    // V393 (W2 T12): `scorers.max` is GONE from the matrix. Asserted here and
+    // V394 (W2 T12): `scorers.max` is GONE from the matrix. Asserted here and
     // not merely assumed, because a key with no row resolves to 0 rather than
     // to unlimited — if it came back with a value, every expectation below
     // about which pool is charged would be measuring the wrong thing.
     const [scorerRow] = await sql<{ int_value: number | null }[]>`
       select int_value from plan_entitlements
        where plan_key = 'community' and feature_key = 'scorers.max'`;
-    expect(scorerRow, "V393 deletes scorers.max from every plan").toBeUndefined();
+    expect(scorerRow, "V394 deletes scorers.max from every plan").toBeUndefined();
 
     // Members pool: the owner occupies one seat, so `members - 1` more accepts
     // fit and the next one is 402.
@@ -329,7 +329,7 @@ describe.skipIf(!HAS_DB)("scorer role (doc 13, PROMPT-18)", () => {
 
     // The scorer pool is still COUNTED separately — design §2 lists merging it
     // into the staff seats as the rejected alternative — so scorers still fit
-    // at a full member pool. What V393 changed is the NUMBER it draws on: the
+    // at a full member pool. What V394 changed is the NUMBER it draws on: the
     // same `members.max` figure, because the seat is no longer sold separately.
     for (let i = 0; i < members; i++) {
       const t = await makeInvite(orgId, "scorer");
@@ -359,7 +359,7 @@ describe.skipIf(!HAS_DB)("scorer role (doc 13, PROMPT-18)", () => {
     const { orgId, ownerId } = await seedOrg();
     // Force an over-quota state (as a pro→community downgrade would): exactly
     // `members.max` admins + owner = one seat too many, so precisely one seat
-    // freezes. The cap is READ (V319 5 -> V391 3); seeding a fixed 5 against a
+    // freezes. The cap is READ (V319 5 -> V392 3); seeding a fixed 5 against a
     // cap of 3 froze three and the "exactly one" assertion stopped meaning
     // "the oldest, and only the oldest".
     const [memberRow] = await sql<{ int_value: number | null }[]>`

@@ -65,7 +65,7 @@ export const PASS_FEATURES = [
 // bigger competition is exactly the one that needs more AI scheduling.
 //
 // W2 T12 (owner ruling 2026-09-03) re-cut L from 50 to 35, in the same pass
-// that took Pro's monthly grant 35 -> 25 and its trial 20 -> 15 (V393). The
+// that took Pro's monthly grant 35 -> 25 and its trial 20 -> 15 (V394). The
 // rungs still differ — that is the whole point of pricing the grant — but L is
 // no longer double M. Every figure in the copy that quotes it moved with this
 // line; `passCreditGrantFaults` / `passCreditProseFaults` /

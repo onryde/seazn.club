@@ -17,7 +17,7 @@ import type { PlanKey, PurchasablePlanKey } from "@/lib/types";
  * T10), knowing the cost: it did two jobs, and this took both — our own plan
  * prices AND `organizations.currency`, so Australian clubs can no longer
  * collect registration entry fees in AUD either. `organizations.currency`'s
- * CHECK constraint was narrowed to match in V392; `org-currency.test.ts` parses
+ * CHECK constraint was narrowed to match in V393; `org-currency.test.ts` parses
  * that constraint back out of the catalog and compares it to
  * `REGISTRATION_CURRENCIES`, so this list and the database cannot drift.
  */

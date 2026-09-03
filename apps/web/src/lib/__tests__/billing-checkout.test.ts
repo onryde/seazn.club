@@ -396,7 +396,7 @@ describe("currency price points (v3/07 §4)", () => {
 });
 
 // "Pro Plus price points" describe block removed — pro_plus is retired
-// (entitlements v18, V391) and `proPlusPrice()` no longer exists
+// (entitlements v18, V392) and `proPlusPrice()` no longer exists
 // (lib/currency.ts). Pro's own annual-discount shape is still covered below.
 describe("Pro price points", () => {
   it("prices a year at 8 to 9 monthly bills, every currency", () => {
@@ -535,7 +535,7 @@ describe("checkoutSchema plan_key", () => {
     expect(checkoutSchema.safeParse({ plan_key: "pro", interval: "monthly" }).success).toBe(true);
   });
 
-  // pro_plus is retired (entitlements v18, V391); enterprise is never
+  // pro_plus is retired (entitlements v18, V392); enterprise is never
   // self-serve (design §4 — Contact-us/comped only) — both must now be
   // refused the same as any other unknown plan_key.
   it("rejects pro_plus, enterprise, and an unknown plan_key like business", () => {

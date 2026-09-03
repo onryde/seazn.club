@@ -30,7 +30,7 @@ vi.mock("@/lib/posthog-server", () => ({ captureServer: vi.fn().mockResolvedValu
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
-/** V391 (entitlements v18 §2) granted several formerly-Pro keys to Community,
+/** V392 (entitlements v18 §2) granted several formerly-Pro keys to Community,
  *  so a plan alone no longer withholds them. The gate sites are still live
  *  code; a DENY override is the one remaining lever that takes a key away, and
  *  it beats both the pass and the plan — so it is what proves a gate shuts. */

@@ -265,7 +265,7 @@ describe.skipIf(!HAS_DB)("stripe-plans.json quotes the numbers the matrix enforc
     }
   });
 
-  // THREE TESTS WERE DELETED HERE by W2 (entitlements v18, V391), all three
+  // THREE TESTS WERE DELETED HERE by W2 (entitlements v18, V392), all three
   // reading the retired `pro_plus` product description out of the seed:
   //
   //   • "Pro Plus claims no differentiator that Pro already has"

@@ -1,7 +1,7 @@
-// W2 T13 — the five keys V391 granted the Event Pass are resolved against the
+// W2 T13 — the five keys V392 granted the Event Pass are resolved against the
 // COMPETITION being acted on, at every enforcement site.
 //
-// V391 turns these ON (or lifts the cap) for `event_pass`/`event_pass_l` and
+// V392 turns these ON (or lifts the cap) for `event_pass`/`event_pass_l` and
 // leaves them OFF (or lower) for `community`:
 //
 //   stats.player                true  vs false

@@ -1,5 +1,5 @@
 // Cap enforcement (W1 §4): community grids cap clubs at 5, teams at 8, and the
-// squad at whatever `teams.squad_max` says (V319 set 20; V393 raised it to 23).
+// squad at whatever `teams.squad_max` says (V319 set 20; V394 raised it to 23).
 // createClub/createTeam/setTeamSquad must throw
 // PaymentRequiredError(featureKey) once a create would cross the plan limit.
 // Each test seeds a fresh org (unique orgId → unique entitlement cache key), so
@@ -57,7 +57,7 @@ describe.skipIf(!HAS_DB)("club/team caps", () => {
 
   /**
    * The biggest matchday squad the ENGINE declares, derived from the sport
-   * modules themselves rather than typed here. V393 (entitlements v18 W2 T12)
+   * modules themselves rather than typed here. V394 (entitlements v18 W2 T12)
    * raised Free's `teams.squad_max` from 20 to 23 for exactly this reason:
    * football is `{ size: 11, benchMax: 12 }` and icehockey `{ size: 6,
    * benchMax: 17 }`, both 23, so at 20 a football or ice-hockey club could not
@@ -91,7 +91,7 @@ describe.skipIf(!HAS_DB)("club/team caps", () => {
     return row!.int_value!;
   }
 
-  it("takes a full football matchday squad on community (V393: 11 + 12 bench)", async () => {
+  it("takes a full football matchday squad on community (V394: 11 + 12 bench)", async () => {
     // Anti-vacuity: the two sports the raise was made for really do want 23,
     // and 23 is really more than the cap this replaced. Without this the
     // acceptance below passes at any cap at all.

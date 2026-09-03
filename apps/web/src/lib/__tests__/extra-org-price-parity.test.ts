@@ -15,7 +15,7 @@ import stripePlans from "@/config/stripe-plans.json";
 import { extraOrgPrice, proPrice, SUPPORTED_CURRENCIES } from "@/lib/currency";
 import { APPROVED_DICTIONARY_COPY } from "./_approved-dictionary-copy";
 
-// pro_plus retired (entitlements v18, V391) — extraOrgPrice narrows to "pro"
+// pro_plus retired (entitlements v18, V392) — extraOrgPrice narrows to "pro"
 // (lib/currency.ts), so this tuple drops to the one plan that still sells an
 // extra-organisation add-on.
 const PLANS = ["pro"] as const;
@@ -141,6 +141,6 @@ describe("extra-organisation price", () => {
   });
 
   // "charges less for a Pro extra organisation than Pro Plus does" removed —
-  // pro_plus is retired (entitlements v18, V391) and `extraOrgPrice` no
+  // pro_plus is retired (entitlements v18, V392) and `extraOrgPrice` no
   // longer accepts it; there is only one rung left to compare against itself.
 });

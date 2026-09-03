@@ -1,4 +1,4 @@
-// V391 pin test — pins the LIVE `plan_entitlements` matrix against the
+// V392 pin test — pins the LIVE `plan_entitlements` matrix against the
 // design doc's own §2 markdown table, never a table typed into this file:
 //
 //   docs/superpowers/specs/2026-09-02-entitlements-v18-three-tier-design.md
@@ -17,7 +17,7 @@
 // entitlements.ts:459-460); NULL or no row denies. This test therefore
 // checks int_value for int keys and bool_value for bool keys, and leaves
 // any stray opposite-type value on the same row alone (the migration does
-// too — see V391's header comment).
+// too — see V392's header comment).
 import { describe, expect, it } from "vitest";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -83,7 +83,7 @@ function stripCell(raw: string): string {
 /**
  * Parses one already-stripped table cell into a typed value. `+1` is the
  * `competitions.max_active` pass-column annotation — per the migration
- * brief (V391 header, and
+ * brief (V392 header, and
  * docs/superpowers/plans/2026-09-03-entitlements-w2-matrix-plumbing.md) it
  * is deliberately backed by NO row (the effect is an exclusion in
  * `assertActiveQuota`, not an additive int), so it parses the same as a
@@ -159,7 +159,7 @@ const PARSED = parseMatrixSection(designDocText());
 // not pass. §2 carries 60 feature-key rows at the time this test was
 // written (61 table rows minus the one non-key "pass credit grant" row);
 // 45 is a floor with real slack, not a pin of the exact count.
-describe.skipIf(!HAS_DB)("V391 entitlements v18 matrix — pinned against design doc §2", () => {
+describe.skipIf(!HAS_DB)("V392 entitlements v18 matrix — pinned against design doc §2", () => {
   it("parsed a non-trivial matrix out of the design doc (anti-vacuity floor)", () => {
     expect(PARSED.length).toBeGreaterThanOrEqual(45);
   });

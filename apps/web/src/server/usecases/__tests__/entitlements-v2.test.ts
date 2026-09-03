@@ -146,7 +146,7 @@ const MATRIX: { feature: string; plan: Plan; allowed: boolean }[] = [
   { feature: "stages.per_division.max",       plan: "pro",       allowed: true },
   { feature: "entrants.per_division.max",     plan: "community", allowed: false },
   { feature: "entrants.per_division.max",     plan: "pro",       allowed: true },
-  // V391 (entitlements v18 §2): double elimination and cricket DLS are free on
+  // V392 (entitlements v18 §2): double elimination and cricket DLS are free on
   // every plan now — the rows still EXIST in plan_entitlements (unlike
   // scoring.match_timeline below, which was deleted), so the community arm is
   // still a real assertion: it says the boundary was opened, not removed.
@@ -164,7 +164,7 @@ const MATRIX: { feature: string; plan: Plan; allowed: boolean }[] = [
   { feature: "cricket.dls",                   plan: "pro",       allowed: true },
   { feature: "api.access",                    plan: "community", allowed: false },
   { feature: "api.access",                    plan: "pro",       allowed: true },
-  // V391 (entitlements v18) re-homes api.write above Pro on Enterprise: score/manage keys need it (a
+  // V392 (entitlements v18) re-homes api.write above Pro on Enterprise: score/manage keys need it (a
   // community org's write-key attempt still 402s on api.access first, above).
   { feature: "api.write",                     plan: "pro",       allowed: false },
   { feature: "api.write",                     plan: "enterprise", allowed: true },
@@ -181,7 +181,7 @@ async function probe(feature: string, auth: AuthCtx): Promise<() => Promise<unkn
     case "dashboard.public.max": {
       // The active-comp cap would fire first; lift it via override so this
       // probe isolates the public-dashboard quota. Fill to the COMMUNITY cap,
-      // read from the matrix rather than typed (V391 moved it 1 -> 3), so the
+      // read from the matrix rather than typed (V392 moved it 1 -> 3), so the
       // community arm sits exactly at its limit and pro (unlimited) has room.
       const [{ int_value: pub }] = await sql<{ int_value: number }[]>`
         select int_value from plan_entitlements
@@ -196,7 +196,7 @@ async function probe(feature: string, auth: AuthCtx): Promise<() => Promise<unkn
     case "divisions.per_competition.max": {
       // Fill to the COMMUNITY cap, read from the matrix. That one number does
       // both arms: community sits exactly at its limit and must 402, while pro
-      // (V391: 20, no longer unlimited) still has room and must succeed.
+      // (V392: 20, no longer unlimited) still has room and must succeed.
       // Filling to the ORG's own cap made the pro arm 402 the moment pro
       // stopped being unlimited.
       const comp = await makeCompetition(auth, "D");
@@ -380,7 +380,7 @@ describe.skipIf(!HAS_DB)("downgrade simulation (doc 10 §2.4)", () => {
     await setPlan(auth.orgId, "community");
 
     // Nothing deleted; the most recently active survive the community cap
-    // (V319 10 -> V391 3) and the rest freeze. The cap is READ, so a re-tune
+    // (V319 10 -> V392 3) and the rest freeze. The cap is READ, so a re-tune
     // moves this test instead of quietly freezing nothing.
     const [{ int_value: commCap }] = await sql<{ int_value: number }[]>`
       select int_value from plan_entitlements

@@ -62,7 +62,7 @@ const FLOOR_GBP = formatMinor(lowestPassRung("gbp").amountMinor, "gbp"); // "£2
  *  covers, turning every assertion below into a claim about the opposite case:
  *
  *    `scheduling.multi_division`  until V353 (#382) put it on the pass column
- *    `officials.auto`             until V391 (v18 W2) did the same
+ *    `officials.auto`             until V392 (v18 W2) did the same
  *
  *  `api.access` is a Pro key with NO `event_pass` row at all, so no pass overlay
  *  can reach it. The `expect` below is the alarm rather than a comment: if a
@@ -273,7 +273,7 @@ describe("UpgradeGate — pass held (D1: never re-sell a pass the org holds)", (
   });
 
   it("still has an exemplar the pass genuinely cannot lift", () => {
-    // Guards the two constants above, which have rotted twice (V353, V391).
+    // Guards the two constants above, which have rotted twice (V353, V392).
     expect(PASS_FEATURES.has(LIFTABLE)).toBe(true);
     expect(PASS_FEATURES.has(NOT_LIFTABLE)).toBe(false);
   });

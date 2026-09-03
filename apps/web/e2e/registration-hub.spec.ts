@@ -364,7 +364,7 @@ test.describe("RS004 registration hub", () => {
     // A FRESH, throwaway org (not the shared Pro org). The original reason was
     // seat contention: the shared org's `scorers.max` was 1 and scorer.spec.ts
     // (the SERIAL project) already claimed it, and e2e-parallel / e2e-serial
-    // are independent CI jobs with no `needs:` between them. V393
+    // are independent CI jobs with no `needs:` between them. V394
     // (entitlements v18 W2 T12) deleted `scorers.max` and the seat now draws on
     // `members.max` (3 on community, 10 on Pro), so the pool is no longer a
     // single seat — but a brand-new org still shares NO resource with the
