@@ -223,6 +223,13 @@ function fakeServer(opts: { officialsAutoGranted: boolean }): {
           { plan_key: "pro", bool_value: opts.officialsAutoGranted },
         ] satisfies PlanEntitlementRow[];
       }
+      // `stats.player` deliberately absent, and the omission is load-bearing:
+      // granting it switches the player-stats baseline ON, and this fake
+      // models the scheduling surface, not the three stats routes — so the run
+      // would go red for a reason that has nothing to do with what these tests
+      // assert. Tried it; all three reddened. The consequence is that the
+      // capability gap reported below names `stats.player` as well as
+      // `officials.auto`, which the assertion accounts for rather than hides.
       return [];
     },
     async getOrgSubscriptionId() {
@@ -294,6 +301,19 @@ describe("runTinySuite — B03 T7 plan/entitlement-gate wiring", () => {
 
     expect(report.gate).toBe("green");
     expect(calls.some((c) => c.method === "POST" && /\/officials\/auto$/.test(c.path))).toBe(false);
+
+    // And the run SAYS SO. Second-review finding: the
+    // `unsatisfiedCapabilities -> warnings` wiring in `suites/tiny.ts` had no
+    // end-to-end test, so the gap could stop being reported and every existing
+    // assertion would still pass — the run would simply skip auto-assign in
+    // silence, which is the shape of the F1 defect this whole area exists to
+    // prevent. Pinned on the CONTENT, not merely on a warning existing.
+    const gapWarning = (report.warnings ?? []).find((w) => w.includes("does not also grant"));
+    expect(gapWarning, "the run must report the capability it could not provision").toBeDefined();
+    expect(gapWarning).toContain("officials.auto");
+    // Names the plan it settled on too, so a reader can tell "no plan grants
+    // this" from "the plan we picked for something else does not".
+    expect(gapWarning).toContain("pro");
   });
 
   it("autoAssign ON: the provisioned plan DOES grant officials.auto, so runOfficialsAutoAssign's auto pass is actually called — AFTER schedule/apply, never before", async () => {

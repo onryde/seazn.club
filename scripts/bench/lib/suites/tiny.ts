@@ -124,7 +124,7 @@ import {
   type SeedTransport,
 } from "../seed.ts";
 import { runDlsGateProbe, type ProbeTransport } from "../dls-gate.ts";
-import { planGrants, type PlanSql } from "../plan.ts";
+import { type PlanSql } from "../plan.ts";
 import { readPlayerStatsBaseline, playerStatsBaselineIssues, type RosterMemberRef } from "../stats.ts";
 import type { OracleResult, SuiteReport } from "../report.ts";
 
@@ -523,9 +523,12 @@ export async function runTinySuite(input: TinySuiteInput): Promise<SuiteReport> 
     // default).
     let autoAssign: boolean | undefined;
     // B03 T6b: whether the plan the DLS-gate probe just provisioned ALSO
-    // grants `stats.player` — derived the same way `autoAssign` is derived
-    // just below (a fresh `plan_entitlements` read + `planGrants`, never
-    // assumed from "some plan got provisioned"). Gates the org-authenticated
+    // grants `stats.player` — now genuinely derived the same way `autoAssign`
+    // is, i.e. out of the probe's own capability SELECTION. It previously read
+    // `plan_entitlements` again and tested the already-chosen plan, and this
+    // comment claimed the two were equivalent; they were not, and the
+    // difference is the whole of review finding F1(a) one capability over.
+    // Gates the org-authenticated
     // half of the player-stats baseline (`lib/stats.ts`); the public route
     // needs no entitlement at all, only `competitionVisibility` below.
     let statsPlayerGranted = false;
@@ -556,8 +559,7 @@ export async function runTinySuite(input: TinySuiteInput): Promise<SuiteReport> 
             `capability this run wants`,
         );
       }
-      const statsRows = await input.sql.entitlementRows("stats.player");
-      statsPlayerGranted = planGrants(statsRows, probe.provisionedPlan);
+      statsPlayerGranted = probe.statsPlayerGranted;
       log.info(
         {
           provisionedPlan: probe.provisionedPlan,

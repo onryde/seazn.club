@@ -275,6 +275,9 @@ export interface DlsGateProbeResult {
    *  `plan.ts#chooseGrantingPlanForCapabilities`'s own doc comment) — never
    *  silently downgraded to "granted". */
   readonly unsatisfiedCapabilities: readonly string[];
+  /** Whether the chosen plan grants `stats.player`, from the SAME selection as
+   *  `officialsAutoGranted` — not a second read tested against the winner. */
+  readonly statsPlayerGranted: boolean;
   readonly cells: readonly DlsGateCellOutcome[];
 }
 
@@ -360,9 +363,21 @@ export async function runDlsGateProbe(input: DlsGateProbeInput): Promise<DlsGate
   // up front to pick a plan that grants everything this run asked for.
   const dlsRows = await sql.entitlementRows("cricket.dls");
   const autoRows = await sql.entitlementRows("officials.auto");
+  // `stats.player` belongs in the SELECTION, not in a check afterwards. It was
+  // originally read separately in `suites/tiny.ts` and tested against whatever
+  // plan this function had already chosen — which is F1(a)'s exact shape ("pick
+  // for some features, hope on another"), reintroduced one capability over from
+  // the fix. It was dormant rather than wrong (both `pro` and `pro_plus` grant
+  // it today, so the plan chosen for the other two happened to cover it), and
+  // dormant-by-luck is not a property to rely on: a catalog where the best plan
+  // for {cricket.dls, officials.auto} does not grant `stats.player` would have
+  // dropped the whole stats baseline with no warning, because only
+  // `officials.auto` had reporting.
+  const statsRows = await sql.entitlementRows("stats.player");
   const { plan: provisionedPlan, unsatisfied: unsatisfiedCapabilities } = chooseGrantingPlanForCapabilities([
     { featureKey: "cricket.dls", rows: dlsRows },
     { featureKey: "officials.auto", rows: autoRows },
+    { featureKey: "stats.player", rows: statsRows },
   ]);
   await provisionPlan({ base, orgId, plan: provisionedPlan, ownerSession: s, sql, transport: t });
 
@@ -373,6 +388,14 @@ export async function runDlsGateProbe(input: DlsGateProbeInput): Promise<DlsGate
   );
 
   const officialsAutoGranted = !unsatisfiedCapabilities.includes("officials.auto");
+  const statsPlayerGranted = !unsatisfiedCapabilities.includes("stats.player");
 
-  return { orgId, provisionedPlan, officialsAutoGranted, unsatisfiedCapabilities, cells };
+  return {
+    orgId,
+    provisionedPlan,
+    officialsAutoGranted,
+    statsPlayerGranted,
+    unsatisfiedCapabilities,
+    cells,
+  };
 }

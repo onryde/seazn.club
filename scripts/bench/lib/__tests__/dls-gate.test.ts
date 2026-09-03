@@ -145,6 +145,17 @@ function fakePlanSql(overrides: Partial<PlanSql> = {}): { sql: PlanSql; calls: s
           { plan_key: "pro_plus", bool_value: true },
         ] as PlanEntitlementRow[];
       }
+      // Queried live alongside the other two: `stats.player` is granted by
+      // BOTH pro and pro_plus. It is in the capability SELECTION (second
+      // review) rather than checked against the winner afterwards, so the
+      // fixture has to carry it or the probe honestly reports it unsatisfied.
+      if (featureKey === "stats.player") {
+        return [
+          { plan_key: "community", bool_value: false },
+          { plan_key: "pro", bool_value: true },
+          { plan_key: "pro_plus", bool_value: true },
+        ] as PlanEntitlementRow[];
+      }
       return [];
     },
     async getOrgSubscriptionId() {
@@ -330,6 +341,16 @@ describe("runDlsGateProbe", () => {
           return [
             { plan_key: "community", bool_value: false },
             { plan_key: "pro_plus", bool_value: true },
+          ];
+        }
+        // Granted by the plan this catalog forces (`pro`), so the ONLY
+        // unsatisfied capability stays `officials.auto` — which keeps this
+        // test about the split it was written for rather than about
+        // `stats.player` incidentally going missing too.
+        if (featureKey === "stats.player") {
+          return [
+            { plan_key: "community", bool_value: false },
+            { plan_key: "pro", bool_value: true },
           ];
         }
         return [];
