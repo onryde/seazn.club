@@ -16,8 +16,9 @@ import {
 } from "@seazn/engine/officials";
 import { z } from "zod";
 import { sql, withTenant } from "@/lib/db";
-import { HttpError } from "@/lib/errors";
-import { requireFeature } from "@/lib/entitlements";
+import { HttpError, PaymentRequiredError } from "@/lib/errors";
+import { bulkImportRowsReason } from "@/lib/feature-copy";
+import { requireFeature, withinLimit } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { AiApplyMeta, CreateOfficial, PatchOfficial } from "@/server/api-v1/schemas";
 import { sendOfficialAssignedEmail } from "@/lib/email";
@@ -289,6 +290,25 @@ export async function importOfficials(
   const rolesCol = norm.findIndex((h) => ["roles", "role", "rolekeys"].includes(h));
   const capCol = norm.findIndex((h) => ["maxperday", "cap", "max"].includes(h));
   if (nameCol < 0) throw new HttpError(422, "No Name column found");
+
+  // W2 T19: the same `import.bulk` per-FILE row cap the participants import
+  // enforces (`usecases/imports.ts`). This route shipped with no entitlement
+  // check at all — API-only, no UI — so the free cap was unenforceable
+  // through it. The number is deliberately not written here: it is read from
+  // the entitlement, and `bulkImportRowsReason` builds the customer's
+  // sentence from the limit that actually refused them (both error envelopes
+  // spread `extra` AFTER `reason`, which is what lets it through).
+  //
+  // BEFORE `withTenant`, exactly as the sibling is: `withinLimit` reaches the
+  // POOLED `sql` proxy, and asking the pool for a second connection while
+  // `withTenant` has one pinned is the self-deadlock `lib/db.ts` guards.
+  const quota = await withinLimit(auth.orgId, "import.bulk", data.length);
+  if (!quota.ok) {
+    throw new PaymentRequiredError("import.bulk", {
+      limit: quota.limit,
+      reason: bulkImportRowsReason(quota.limit),
+    });
+  }
 
   return withTenant(auth.orgId, async (tx) => {
     const existing = await tx<{ display_name: string }[]>`select display_name from officials`;
