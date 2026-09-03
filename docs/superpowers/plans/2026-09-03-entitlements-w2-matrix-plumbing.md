@@ -382,7 +382,52 @@ locale is denominated in USD.
 
 Queued behind T5, which is editing `billing.ts` right now.
 
-### T12 — `scorers.max` is enforced but invisible (found 2026-09-03)
+### T12 — DELETE the `scorers.max` cap; keep the scorer role (owner ruling 2026-09-03)
+
+**Ruling: delete the cap, do not deprecate the role in this wave.**
+
+The owner's stated reason for retiring scorers — "we assign matches to officials now,
+not scorers" — rests on a premise that measurement contradicts, and the correction is
+worth keeping because it will be re-derived otherwise: **officials cannot log in.** The
+`officials` table has `person_id`, `display_name`, `email` and NO `user_id`; it is a
+person record with availability and marks. `scorer_assignments` has `user_id`. Assigning
+a fixture to an official gives nobody the ability to record it. The two solve different
+problems and are not substitutes.
+
+What IS true: the scorer feature is half-built. `scorer_assignments` has three
+production writers (`scorers.ts:125`, `invites.ts:86,136`) and **no UI anywhere** creates
+one — grep across `components/` and `app/` returns nothing. The only path is inviting
+somebody as a scorer with a default scope. That is what #244 meant by "dormant legacy".
+
+So the cap is the part that is actually wrong, and it goes:
+- It meters a capability the product gives away — W1 ruled scoring free on every plan.
+- We would advertise "10 scorer seats" for a feature with no assignment UI, on a
+  comparison table that (per #244) does not even carry the row.
+- Deleting the key removes T12's original visibility problem at the root rather than
+  restoring a row to two surfaces to describe something half-built.
+
+Scope: migration **V393** deleting `scorers.max` from `plan_entitlements` (and any
+`org_entitlement_overrides`), the two enforcement branches that read it
+(`app/api/orgs/[id]/members/[userId]/role/route.ts` and `lib/invites.ts` — each falls
+back to the `members.max` pool, which is the honest answer once the seat is not
+separately sold), `feature-copy.ts`'s reason string, and every copy surface selling
+scorer seats (design §3's Pro card says "10 staff + 10 scorer seats" — that claim dies
+with the key, and by this wave's own rule the copy fix ships WITH the row deletion).
+
+**Remember the resolver's edge: a key with NO ROW resolves to 0, not unlimited.** So the
+call sites must stop asking for `scorers.max` entirely — leaving the read in place while
+deleting the row would deny every scorer promotion instead of freeing it. That is the
+single most likely way to get this wrong.
+
+**Deprecating the ROLE is a separate decision, deliberately not taken here.** It is 21
+non-test files (42 with tests), plus `/my-matches`, `scorer_assignments` and six branches
+in `page-auth.ts` — and on Free it is the ONLY way to delegate scoring without granting
+admin, because `scoring.device_links` is false on community and design §2 calls the pass
+version "the strongest Free → Pass trigger". Removing it without freeing device links
+would leave a Free org's owner scoring every match personally. That is a product-strategy
+call, not entitlements plumbing.
+
+### T12-orig — the visibility finding this superseded (kept for the record)
 
 V391 turned `scorers.max` from a dormant 1/1 into a real differentiator (Free **2**,
 Pro **10**), and design §3's Pro card sells "10 staff + 10 scorer seats". The cap IS
