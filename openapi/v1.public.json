@@ -56085,7 +56085,7 @@
     },
     "/api/v1/officials/import": {
       "post": {
-        "summary": "Bulk CSV/XLSX import (multipart `file`: Name, Roles, MaxPerDay)",
+        "summary": "Bulk CSV/XLSX import (multipart `file`: Name, Roles, MaxPerDay). Subject to the same per-FILE row cap as POST /imports (`import.bulk`): over it, 402 quoting the cap that refused the file",
         "tags": [
           "officials"
         ],
@@ -56168,6 +56168,50 @@
           },
           "401": {
             "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Plan upgrade required",
             "content": {
               "application/json": {
                 "schema": {
