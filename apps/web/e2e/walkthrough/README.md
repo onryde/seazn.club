@@ -17,13 +17,21 @@ folder is about sport.
 
 ## Owed journeys (2026-09-03, owner-requested)
 
-Two journeys no walkthrough drives. **Both are OPTIONAL here** — corrected
-2026-09-03: the owner's ask was for them driven from the scheduler bench, and
-both are fully reachable over the API (`POST /officials/{id}/invite`,
-`GET /persons/{id}/stats`, `GET /divisions/{id}/stats/players`), so the bench
-owns the functional assertions. What a walkthrough would add on top is the only
-thing the bench structurally cannot see: that a person can actually get through
-these screens. Worth having, not owed, and not a substitute for the bench work.
+Two journeys no walkthrough drives. **Both are owed, and both are ALSO covered
+over the API by the scheduler bench** — that is not duplication, it is the two
+halves of the same claim. The bench asserts the record is correct
+(`POST /officials/{id}/invite`, `GET /persons/{id}/stats`,
+`GET /divisions/{id}/stats/players`); a walkthrough asserts a person can get
+through the screens, which is the half no API-driven suite can see.
+
+**W-PLAYER's timing is part of the requirement:** the stats must be verified
+AFTER the competition has finished. A stats page read mid-competition proves
+almost nothing. That sequences it behind the bench's own B05, which is what
+folds the events and produces a finished suite to read.
+
+If the bench's browser driver (B03r's `lib/drivers/browser.ts`) lands first,
+prefer driving these there rather than building a second harness — the bench
+index records that decision.
 
 **W-OFF — the organiser seats an official.** Create an official, invite them,
 and assign them to a fixture, by hand, start to finish. Nothing covers this

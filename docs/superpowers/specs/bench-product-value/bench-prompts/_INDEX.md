@@ -264,6 +264,33 @@ fall back from, is live — no B-prompt needs its fallback path.
   is a COMPLEMENT and not where this work lives; `apps/web/e2e/walkthrough/`'s
   README carries it as optional.
 
+  **The BROWSER track owes two more journeys (owner, 2026-09-03).** Distinct
+  from the API coverage above, and both belong on the browser driver B03r
+  builds (`lib/drivers/browser.ts`, plain `playwright`, one `BrowserContext`
+  per person, magic-link session, its own `assert()` because `expect` is a
+  `@playwright/test` export that plain playwright does not have):
+
+  - **The officials journey through the screens** — create, invite, assign to a
+    fixture. The bench asserts the same ground over the API (T6 + T6b); this is
+    the half the API cannot see, which is whether a person can actually get
+    through it.
+  - **Player stats verified AFTER the competition has finished.** The timing is
+    the requirement, not an aside: a stats page mid-competition proves almost
+    nothing, and the interesting assertion is that a completed suite's final
+    record is what the player sees on their own profile. That sequences this
+    **after B05** (which folds the events and accepts the `pc_` claims) —
+    there is no finished competition to read before then.
+
+  Sequencing, not a new number: B03r builds the driver, B05 produces a finished
+  competition, and these two ride on both. Do not schedule them earlier and
+  substitute a half-played suite — "after the competition finished" is the
+  condition being tested.
+
+  Note the driver split B03r already forces: on the http driver `pay()` throws
+  `PaidEntryNeedsBrowser`, so paid registration is structurally browser-only.
+  That is the precedent for putting these two there rather than inventing a
+  second browser harness.
+
   Forward note for B06+ pack authoring. **[Corrected 2026-09-03 — the number
   this entry first carried was wrong, and the correction is the more useful
   fact.]** This originally read "**63 recordable against 68 registered**",
