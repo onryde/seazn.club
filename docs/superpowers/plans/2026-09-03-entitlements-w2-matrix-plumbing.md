@@ -386,13 +386,29 @@ Queued behind T5, which is editing `billing.ts` right now.
 
 **Ruling: delete the cap, do not deprecate the role in this wave.**
 
-The owner's stated reason for retiring scorers — "we assign matches to officials now,
-not scorers" — rests on a premise that measurement contradicts, and the correction is
-worth keeping because it will be re-derived otherwise: **officials cannot log in.** The
-`officials` table has `person_id`, `display_name`, `email` and NO `user_id`; it is a
-person record with availability and marks. `scorer_assignments` has `user_id`. Assigning
-a fixture to an official gives nobody the ability to record it. The two solve different
-problems and are not substitutes.
+**CORRECTED 2026-09-03 — the owner was right and this plan was wrong twice.**
+An earlier version of this entry claimed "officials cannot log in" and that officials
+and scorers are not substitutes. Both are false, and the way they were reached is the
+lesson: the `officials` table has no `user_id`, so the check stopped there — but the
+link runs `officials.person_id → persons.user_id`. Then `/my-matches` was found to read
+only `scorer_assignments`, and "officials have no surface" was concluded from it — but
+`/me` carries a whole `OfficiatingLane` built on `me-officiating.ts`, and its own header
+says "All plans, free included". A capability claim settled by two partial reads instead
+of following the chain to its end.
+
+**What is actually true.** `requireFixtureActor` (`server/api-v1/auth.ts`) grants an
+ACCEPTED official both read AND score on a fixture with NO org role at all:
+
+    if (!role) {
+      // Non-member — the only remaining door is an *accepted* fixture_officials
+      // assignment on this exact fixture. Covers both read and score.
+      if (await acceptedOfficialCovers(user.id, fixtureId)) return ctx;
+
+So a Free org delegates scoring today by adding an official, who claims their account,
+accepts the fixture at `/me`, and scores it — no seat, no admin account, no device link.
+The scorer role IS redundant for the volunteer-scores-a-match case, exactly as the owner
+said. Device links stay Pro/Event-Pass only (owner reconfirmed 2026-09-03); they buy the
+ANONYMOUS hand-over, which is a different product from a named official with a login.
 
 What IS true: the scorer feature is half-built. `scorer_assignments` has three
 production writers (`scorers.ts:125`, `invites.ts:86,136`) and **no UI anywhere** creates
@@ -419,13 +435,19 @@ call sites must stop asking for `scorers.max` entirely — leaving the read in p
 deleting the row would deny every scorer promotion instead of freeing it. That is the
 single most likely way to get this wrong.
 
-**Deprecating the ROLE is a separate decision, deliberately not taken here.** It is 21
-non-test files (42 with tests), plus `/my-matches`, `scorer_assignments` and six branches
-in `page-auth.ts` — and on Free it is the ONLY way to delegate scoring without granting
-admin, because `scoring.device_links` is false on community and design §2 calls the pass
-version "the strongest Free → Pass trigger". Removing it without freeing device links
-would leave a Free org's owner scoring every match personally. That is a product-strategy
-call, not entitlements plumbing.
+**Deprecating the ROLE is now viable and is recommended as its OWN wave, not this one.**
+The blocking objection (Free loses delegated scoring) has dissolved — officials cover it
+free. What remains is scope and risk, not principle: 21 non-test files (42 with tests),
+`/my-matches`, `scorer_assignments`, six branches in `page-auth.ts`, and a live branch of
+`requireFixtureActor` (`scoresViaAssignment` / `requireScorable`). That last one is an
+AUTHORISATION path — the wrong edit there widens who can write score events. W2 is
+already carrying a live pass-scoping defect and a red copy sweep; bolting an auth-path
+deletion onto it is how a wave ships a security regression behind a green suite.
+
+Sequence: delete the CAP here (small, and it removes a false claim), then take the role
+in its own wave with its own review. Anything still creating scorer assignments —
+`invites.ts`'s scorer-with-default-scope path — needs a migration story for existing rows
+and a decision on what an org with live scorers sees the day it lands.
 
 ### T12-orig — the visibility finding this superseded (kept for the record)
 
