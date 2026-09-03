@@ -119,6 +119,7 @@ const RULES: RouteRule[] = [
   // Same scope as create: deleting a save point frees a quota slot and removes
   // a restore target, so it is a manage-level write on the division.
   { method: "DELETE", path: "/divisions/:id/checkpoints/:checkpointId", scope: "manage", pin: "division" },
+  { method: "GET", path: "/divisions/:id/fixtures", scope: "read", pin: "division" },
   { method: "GET", path: "/divisions/:id/entrants", scope: "read", pin: "division" },
   { method: "POST", path: "/divisions/:id/entrants", scope: "manage", pin: "division" },
   { method: "GET", path: "/divisions/:id/exports/:kind", scope: "read", pin: "division" },

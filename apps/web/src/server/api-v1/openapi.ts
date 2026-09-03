@@ -72,6 +72,7 @@ export const ROUTES: RouteSpec[] = [
   { path: "/divisions/{id}/archive", method: "post", summary: "Archive: hidden from console/public/quota, restorable", tag: "divisions", response: S.Division, errors: [409] },
   { path: "/divisions/{id}/archive", method: "delete", summary: "Restore an archived division (quota re-checked)", tag: "divisions", response: S.Division, errors: [402] },
   // Entrants
+  { path: "/divisions/{id}/fixtures", method: "get", summary: "List a division's fixtures in play order (G3 — before this the only way to obtain fixtures over HTTP was the idempotent POST /stages/{id}/generate)", tag: "fixtures", response: z.array(S.Fixture) },
   { path: "/divisions/{id}/entrants", method: "get", summary: "List entrants", tag: "entrants", response: z.array(S.Entrant) },
   { path: "/divisions/{id}/entrants", method: "post", summary: "Register entrant(s) — object or bulk array", tag: "entrants", request: S.CreateEntrants, response: z.union([S.Entrant, z.array(S.Entrant)]), status: 201, errors: [422] },
   { path: "/entrants/{id}", method: "get", summary: "Get an entrant with members", tag: "entrants", response: S.Entrant },
