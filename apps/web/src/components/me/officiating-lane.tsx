@@ -265,7 +265,11 @@ function AssignmentCard({ a }: { a: MyOfficiatingAssignment }) {
   return (
     <li
       data-testid="me-official-card"
-      data-fixture-id={a.fixture_id}
+      // The fixture_officials row surrogate, NOT the fixture id: cards are
+      // keyed `${fixture_id}:${official_id}:${role_key}`, so one official
+      // holding two roles on one fixture renders two cards sharing a fixture
+      // id. `fo.id` is unique per card by construction (me-officiating.ts).
+      data-fixture-official-id={a.fixture_official_id}
       className={`card space-y-2 border-l-4 p-4 ${RAIL[response]}`}
     >
       <div className="flex flex-wrap items-center justify-between gap-2">

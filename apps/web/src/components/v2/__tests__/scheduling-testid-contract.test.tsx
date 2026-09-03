@@ -81,12 +81,20 @@ const OWNED: Record<string, readonly string[]> = {
  * `data-blackout-index` rather than needing a column of their own. The three
  * `me-official-*` response testids are the same shape, scoped through
  * `me-official-card`.
+ *
+ * Review round 2: that card's identity is `data-fixture-official-id`, NOT the
+ * fixture id. `officiating-lane.tsx` keys cards on
+ * `${fixture_id}:${official_id}:${role_key}`, so one official holding two
+ * ROLES on the same fixture renders two cards sharing a fixture id — the same
+ * strict-mode defect one layer in. `fixture_official_id` is the
+ * `fixture_officials` row surrogate (`me-officiating.ts:31`, selected as
+ * `fo.id` by both lane queries), which is unique per card by construction.
  */
 const IDENTITY: Record<string, readonly (readonly [string, string])[]> = {
   "src/components/v2/shared/court-multi-picker.tsx": [["court-option", "data-court-id"]],
   "src/components/v2/officials-panel.tsx": [["officials-assign-select", "data-fixture-id"]],
   "src/components/v2/constraints-panel.tsx": [["blackout-row", "data-blackout-index"]],
-  "src/components/me/officiating-lane.tsx": [["me-official-card", "data-fixture-id"]],
+  "src/components/me/officiating-lane.tsx": [["me-official-card", "data-fixture-official-id"]],
 };
 
 /**
