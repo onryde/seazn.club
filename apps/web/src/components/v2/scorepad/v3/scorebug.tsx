@@ -392,23 +392,34 @@ export function Scorebug({ spec, t, onTap, onOpenSheet }: ScorebugProps) {
 
               GATED ON `useIsPhone()`, not unconditional — a first attempt made
               it unconditional (reasoning "tabindex can't vary by media query")
-              and that broke the repo's OWN 44px hit-target floor at DESKTOP:
-              `scorepad-a11y-kit.ts`'s `INTERACTIVE_SELECTOR` counts any
+              and that broke the repo's OWN 44px hit-target floor at DESKTOP
+              too: `scorepad-a11y-kit.ts`'s `INTERACTIVE_SELECTOR` counts any
               `[tabindex]:not([tabindex="-1"])` as an operable target needing
-              44px, and this row is not 44px tall at 1280 either — the fix
-              cannot make every width's floor scan fail to fix one width's axe
-              scan. `useIsPhone()` is JS state (mirrors `max-md:`'s own media
+              44px. `useIsPhone()` is JS state (mirrors `max-md:`'s own media
               query exactly, verified against the compiled CSS), not a class,
-              so it CAN gate an attribute a stylesheet cannot reach — the
-              premise above was simply wrong. At `md` and up `flex-wrap` shows
-              every item with nothing to scroll, so there is nothing there to
-              make keyboard-reachable in the first place.
+              so it CAN gate an attribute a stylesheet cannot reach. At `md`
+              and up `flex-wrap` shows every item with nothing to scroll, so
+              there is nothing there to make keyboard-reachable in the first
+              place.
+
+              `max-md:min-h-11` (round 2): gating alone was not enough —
+              `scorepad-skins.spec.ts` forces `test.use({ viewport: { width:
+              375 } })` for EVERY test in the file regardless of Playwright
+              project (S11/#420's own header), so its floor scan runs at the
+              SAME width the rail is scrollable at. The two requirements
+              (axe: reachable; this repo: ≥44px) apply simultaneously there,
+              not at two different widths — `useIsPhone()` narrows WHERE the
+              conflict can occur, it cannot remove a conflict that occurs
+              inside its own true branch. `min-h-11` is the same recipe the
+              rest of this chassis already uses for a phone touch target
+              (`phone-disclosure.tsx`'s toggle, the ribbon's Take-back
+              button) — genuinely grow the row on phones, not just excuse it.
 
               `className` stays the FIRST prop: `phone-classes.test.tsx` anchors
               on `<div class="…` immediately after `<div class="relative">`, and
               React emits attributes in JSX order. */}
           <div
-            className={`flex flex-wrap items-center justify-center gap-x-4 gap-y-1 ${NIGHT_TILE_CLASSES.bandBg} px-3 py-1.5 max-md:flex-nowrap max-md:justify-start max-md:gap-x-3 max-md:overflow-x-auto max-md:[scrollbar-width:none]`}
+            className={`flex flex-wrap items-center justify-center gap-x-4 gap-y-1 ${NIGHT_TILE_CLASSES.bandBg} px-3 py-1.5 max-md:min-h-11 max-md:flex-nowrap max-md:justify-start max-md:gap-x-3 max-md:overflow-x-auto max-md:[scrollbar-width:none]`}
             {...(isPhone ? { role: "group", tabIndex: 0, "aria-label": t("pad.scorebug.strip.label") } : {})}
           >
           {spec.strip.map((item, i) => {

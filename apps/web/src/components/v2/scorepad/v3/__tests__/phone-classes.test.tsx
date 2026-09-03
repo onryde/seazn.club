@@ -99,6 +99,16 @@ describe("scorebug phone classes", () => {
     expect(rail![0], "server render must not pre-empt useIsPhone()'s post-mount value").not.toMatch(/\stabindex=/);
     expect(rail![0], "server render must not pre-empt useIsPhone()'s post-mount value").not.toMatch(/\srole=/);
   });
+  // Round 2 of the CI fix above: `scorepad-skins.spec.ts` forces every test to
+  // a 375px viewport (S11/#420's own header), so axe's reachability
+  // requirement and this repo's 44px floor land on the SAME element at the
+  // SAME width — gating the tab stop by width alone cannot separate them.
+  // `min-h-11` is what actually clears the floor once the row is reachable.
+  it("the rail meets the 44px floor once it becomes a phone tab stop", () => {
+    const rail = html.match(/<div class="[^"]*\bmax-md:overflow-x-auto\b[^"]*"[^>]*>/);
+    expect(rail, "no overflow-x-auto rail found").not.toBeNull();
+    expect(rail![0], "rail is scrollable but not held to the 44px floor").toMatch(/\bmax-md:min-h-11\b/);
+  });
   it("the plain strip item refuses to shrink and stays single-line", () => {
     const item = html.match(/<span[^>]*data-strip-item-id="games"[^>]*>/);
     expect(item).not.toBeNull();
