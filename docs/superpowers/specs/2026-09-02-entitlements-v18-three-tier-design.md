@@ -149,6 +149,7 @@ Rationale is one line per changed row; unchanged rows say "keep".
 | `teams.squad_max` | **23** | **40** | – | – | ∞ | Free = one matchday squad, Pro = season roster. 23 is the engine's own largest matchday squad, not a guess: `football.ts` declares `lineup: { size: 11, benchMax: 12 }` and `icehockey.ts` `{ size: 6, benchMax: 17 }`, both 23; cricket is 15 and volleyball 14, so they already fit. At 20 a football or ice-hockey club could not register its first full squad on Free at all (W2 T12; the earlier "rugby 23" rationale cited a sport the engine catalogue does not carry). Pass rows (20 = Free) were no-ops and are dropped |
 | `clubs.max` | 5 | **25** | – | – | ∞ | bounded |
 | `import.bulk` (rows) | 50 | **500** | – | – | ∞ | bounded |
+| `import.events` (batch score import) | **T** | **T** | **T** | **T** | **T** | W2 T14, owner ruling 2026-09-03: LAUNCHED, on every plan. The key had no row at all and a `// 402 during rollout` kill-switch; R9 says scoring detail is never a price boundary and W1 already stripped the fidelity gate off this same importer, so gating it by plan would restore the boundary R9 removed. The house pattern for imports is a volume cap (`import.bulk` above), never a gate — if event-import volume needs bounding, add a CAP key. True everywhere, so it is deliberately NOT a `pricing-matrix.ts` row and not an `ENTITLEMENT_DOMAINS` entry: it differentiates nothing |
 
 ### Money
 

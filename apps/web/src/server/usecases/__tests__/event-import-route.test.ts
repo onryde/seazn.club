@@ -59,13 +59,23 @@ async function organiser(): Promise<AuthCtx> {
 }
 
 /** Grant one boolean feature to an org out-of-plan — the same row
- *  `setBoolEntitlementOverrideSql` writes (apps/web/e2e/helpers.ts:342) and the
- *  only way `import.events` is held during rollout (spec §2.4). */
+ *  `setBoolEntitlementOverrideSql` writes (apps/web/e2e/helpers.ts:342). It was
+ *  the only way `import.events` was held during rollout; since V395 the plan
+ *  row grants it and this only proves the override path still overlays. */
 async function grant(orgId: string, key: string) {
   await sql`
     insert into org_entitlement_overrides (org_id, feature_key, bool_value)
     values (${orgId}, ${key}, true)
     on conflict (org_id, feature_key) do update set bool_value = true`;
+}
+
+/** The same row with `false` — a staff deny, the only refusal V395 leaves
+ *  reachable for this key. */
+async function deny(orgId: string, key: string) {
+  await sql`
+    insert into org_entitlement_overrides (org_id, feature_key, bool_value)
+    values (${orgId}, ${key}, false)
+    on conflict (org_id, feature_key) do update set bool_value = false`;
 }
 
 const call = (divisionId: string, body: unknown, headers: HeadersInit = {}) =>
@@ -87,11 +97,36 @@ afterAll(async () => {
 });
 
 describe.skipIf(!HAS_DB)("POST /divisions/{id}/events/import", () => {
-  it("402s an org without the import.events entitlement", async () => {
+  // V395 (entitlements v18 W2 T14, owner ruling 2026-09-03): the rollout
+  // kill-switch is OPEN — `import.events` is bool true on all five plans, so a
+  // fresh community org with no override at all imports. This case used to
+  // assert the 402 that same org got; the 402 is not reachable from any PLAN
+  // any more (`orgPlanKey` coalesces a planless org to `community`, which now
+  // grants the key), so asserting it here would freeze a refusal the product
+  // no longer makes. R9's reasoning: scoring detail is never a price boundary
+  // and W1 already stripped the fidelity gate off this same importer.
+  it("imports for a fresh community org with no override — the gate is granted on every plan", async () => {
     const auth = await organiser();
     const { divisionId, fixtureId } = await startedDivisionWithFixture(auth);
     const res = await call(divisionId, {
-      import_id: "imp-402",
+      import_id: "imp-launch",
+      streams: [{ fixture: { id: fixtureId }, events: decidingStream() }],
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()).data.totals).toEqual({ imported: 1, skipped: 0, rejected: 0 });
+  });
+
+  // The gate is OPEN, not DELETED. Deleting `requireFeature` from the route
+  // would leave the case above green, so the surviving refusal path — a staff
+  // `org_entitlement_overrides` deny, the one thing that still outranks the
+  // plan row (entitlements.ts: "a live override wins") — is what proves the
+  // call site is still wired.
+  it("402s when a staff override explicitly denies import.events", async () => {
+    const auth = await organiser();
+    await deny(auth.orgId, "import.events");
+    const { divisionId, fixtureId } = await startedDivisionWithFixture(auth);
+    const res = await call(divisionId, {
+      import_id: "imp-denied",
       streams: [{ fixture: { id: fixtureId }, events: decidingStream() }],
     });
     expect(res.status).toBe(402);

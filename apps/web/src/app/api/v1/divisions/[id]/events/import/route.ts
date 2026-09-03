@@ -9,9 +9,12 @@ type Ctx = { params: Promise<{ id: string }> };
 /** POST /api/v1/divisions/{id}/events/import — P11 (D6) batch score-event
  *  import. Returns 200 whenever the CALL executed; per-stream outcomes are
  *  data, not transport errors (design doc §4). Gated behind `import.events`,
- *  an entitlement with no `plan_entitlements` row on any plan during
- *  rollout (R6) — a per-org `org_entitlement_overrides` grant is the only
- *  way in, so an unlisted org gets a 402 here regardless of plan.
+ *  which V395 (entitlements v18 W2 T14, owner ruling 2026-09-03) grants bool
+ *  TRUE on all five plans — the rollout kill-switch is OPEN and this importer
+ *  is a launched feature on Free. The check below STAYS: `orgPlanKey`
+ *  coalesces a planless org to `community`, so no plan can deny the key any
+ *  more, but a staff `org_entitlement_overrides` deny still can and this is
+ *  the site that honours it.
  *
  *  AUTHENTICATE FIRST, THEN ENTITLEMENT, THEN PARSE — same ordering rationale
  *  as `start/route.ts` (#376): a caller with no write permission, or without
@@ -25,7 +28,7 @@ export async function POST(req: Request, { params }: Ctx) {
   return v1(async () => {
     const { id } = await params;
     const auth = await requireResourceAuth(req, "division", id, "write");
-    await requireFeature(auth.orgId, "import.events"); // 402 during rollout
+    await requireFeature(auth.orgId, "import.events"); // granted on every plan (V395); a staff override can still deny
     const body = await parseBody(req, EventImportRequest);
     return reply(200, await importEvents(auth, id, body));
   });
