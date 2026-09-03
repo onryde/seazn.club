@@ -480,8 +480,12 @@ async function main() {
       org2Ent.plan_key === "pro" && org2Ent.entitlements["exports.branded"]?.enabled === true,
     );
     check(
+      // 10, not 15: V392 (entitlements v18) re-cut the seat allowance. The
+      // number is a LITERAL on purpose — this reads back through the live API,
+      // which reads `plan_entitlements`, so deriving it from that table would
+      // make the check a tautology.
       "billing-group: quotas are per org, not shared across the group",
-      org2Ent.entitlements["members.max"]?.limit === 15,
+      org2Ent.entitlements["members.max"]?.limit === 10,
     );
 
     // 5. The listing now shows BOTH orgs on the group, and quantity_paid is
@@ -2211,8 +2215,10 @@ async function smokePlanMatrix(): Promise<void> {
     passEnt.plan_key === "community",
   );
   check(
-    "matrix/event_pass: org-wide members.max resolves the community value (5)",
-    passEnt.entitlements["members.max"]?.limit === 5,
+    // 3, not 5 — V392 re-cut community's seats. Line 267 of this file already
+    // said 3 while this said 5; the two disagreed inside one script.
+    "matrix/event_pass: org-wide members.max resolves the community value (3)",
+    passEnt.entitlements["members.max"]?.limit === 3,
   );
 
   // === Task 20 — populated-competition assertions per plan org ===========
@@ -2249,8 +2255,10 @@ async function smokePlanMatrix(): Promise<void> {
  * ── Two numbers the plan brief got wrong, deliberately not asserted ─────────
  *  • `branding` — V310 made it true on EVERY plan, so "the pass delivers
  *    branding" is a test that cannot fail. Dropped. It is NOT the same key as
- *    `dashboard.branding` (the brand-colour gate), which stays Pro-only and
- *    which the pass does not grant, so neither is substituted for the other.
+ *    `dashboard.theme` (the brand-colour gate since V396 — it was
+ *    `dashboard.branding`, which is now badge removal alone and enterprise
+ *    only), which is Pro and above and which the pass does not grant, so
+ *    neither is substituted for the other.
  *  • "the entrant cap" — V319 raised Community to 64 and the pass to 128.
  *    Asserting 64 asserts what a passless community org already gets.
  * The live matrix (`set search_path = seazn_club`; the `public` schema holds a
@@ -2461,21 +2469,20 @@ async function passGrantsSuite(): Promise<void> {
     plainExport.length > 1 && !plainExport.includes(org.name),
   );
 
-  // === dashboard.player_profiles — FREE ON EVERY PLAN since V392 ==========
+  // === dashboard.player_profiles — community FALSE, pass TRUE again =======
   //
-  // This block used to read "community false, pass true", and asserted that
-  // the ONLY difference between a 200 and a 404 was the pass. V392
-  // (entitlements v18) grants `dashboard.player_profiles` on Community, so the
-  // sibling competition now renders too and the old 404 assertion is false.
+  // This cell has moved twice in one day and the history is why the comment is
+  // this long. It was "community false, pass true" originally; V392
+  // (entitlements v18 W2 T1) granted it on Community as one of design §2's
+  // three "share loops go free" acquisition cells, and this block was inverted
+  // to assert the card renders on BOTH sides. V395 (W2 T15, owner ruling
+  // 2026-09-03) REVERSED that — the owner chose value capture over the loop,
+  // with the acquisition argument put and overruled.
   //
-  // The checks are KEPT and inverted rather than deleted, because the pair is
-  // now proving something a single check cannot: the card renders on BOTH
-  // sides. A silent regression that re-gated profiles behind the pass would
-  // turn the sibling back into a 404 and be caught here — and, unlike a
-  // one-sided check, a total outage of the card route reds this too.
-  //
-  // `lib/pass-comparison.ts` dropped its public-profiles row for the same
-  // reason: it showed the same tick on both sides of the comparison.
+  // So the pair is back to its original shape: the ONLY difference between a
+  // 200 and a 404 is the pass. Do not "restore" the free cell on the strength
+  // of design §2's prose — that prose is now the older decision, and §2's own
+  // table has been amended.
   const passCard = await fetch(`${BASE}/shared/${org.slug}/${passComp.slug}/players/${person.id}`);
   const plainCard = await fetch(`${BASE}/shared/${org.slug}/${plainComp.slug}/players/${person.id}`);
   check(
@@ -2483,8 +2490,8 @@ async function passGrantsSuite(): Promise<void> {
     passCard.status === 200,
   );
   check(
-    "pass grants/profiles: it renders on the UNPASSED sibling too — V392 made profiles free",
-    plainCard.status === 200,
+    "pass grants/profiles: the UNPASSED sibling stays dark (404) — V395 made profiles paid again",
+    plainCard.status === 404,
   );
 
   // === sponsors.tiers + sponsors.monetize — community false, pass true ====
@@ -2683,11 +2690,12 @@ async function passGrantsSuite(): Promise<void> {
     "pass grants/scope: the org still resolves the community plan",
     ent.plan_key === "community",
   );
-  // `dashboard.player_profiles` LEFT this list in V392 — it is granted on
-  // Community now, so asserting it stays OFF org-wide would assert a paywall
-  // that no longer exists. It is not simply dropped: it moves to the positive
-  // assertion below, because a key that silently stopped being reported at all
-  // would otherwise vanish from this scope check without a sound.
+  // `dashboard.player_profiles` left this list in V392, when Community was
+  // granted the key and asserting a paywall would have asserted one that no
+  // longer existed. V395 put the paywall back (owner ruling 2026-09-03), so the
+  // key is pass-lifted again — it is asserted OFF org-wide in its own named
+  // check below rather than folded into this && chain, because a chain this
+  // long reports only "false" and this particular cell has now moved twice.
   check(
     "pass grants/scope: every boolean grant stays OFF org-wide (realtime, exports.branded, sponsors, and the V392 keys)",
     flagOff("realtime") &&
@@ -2703,8 +2711,8 @@ async function passGrantsSuite(): Promise<void> {
       flagOff("officials.auto"),
   );
   check(
-    "pass grants/scope: dashboard.player_profiles is ON org-wide — free since V392, not pass-scoped",
-    ent.entitlements["dashboard.player_profiles"]?.enabled === true,
+    "pass grants/scope: dashboard.player_profiles is OFF org-wide — paid again since V395, and pass-scoped",
+    ent.entitlements["dashboard.player_profiles"]?.enabled === false,
   );
   check(
     "pass grants/scope: every quota stays at the community figure org-wide (64/4/5 entrants/divisions/AI credits, fee 8%)",
@@ -4805,11 +4813,15 @@ async function newsSuite(admin: Session, proOrgId: string, proOrgSlug: string): 
   check("news free (P3): Generate digest gated 402 (Pro news.auto)", freeDigest.status === 402);
 }
 
-/** PLG growth loops (design/plg): the free-tier "Powered by Seazn Club"
- *  footer is an acquisition CTA (attribution-link.tsx) and every public
- *  competition page carries a fan-facing share bar (share-bar.tsx) — pro
- *  orgs keep the share bar but drop the attribution footer (unchanged
- *  org.branded gate). /me carries the player→organiser nudge
+/** PLG growth loops (design/plg): the "Powered by Seazn Club" footer is an
+ *  acquisition CTA (attribution-link.tsx) and every public competition page
+ *  carries a fan-facing share bar (share-bar.tsx). The footer used to be the
+ *  free tier's alone; V395 (entitlements v18 W2 T15, owner ruling 2026-09-03)
+ *  made badge removal ENTERPRISE-only, so a Pro org now carries BOTH — the
+ *  `org.branded` gate is unchanged, the row behind it moved. That is the
+ *  acquisition loop the same ruling took off profiles, embeds and auto posts;
+ *  it runs through public dashboards instead. /me carries the player→organiser
+ *  nudge
  *  (run-your-own-cta.tsx) and /discover always offers the /start CTA. */
 async function plgGrowthSuite(admin: Session, proOrgId: string, proOrgSlug: string): Promise<void> {
   admin.cookies["seazn_org"] = proOrgId;
@@ -4832,8 +4844,16 @@ async function plgGrowthSuite(admin: Session, proOrgId: string, proOrgSlug: stri
     // Key off the attribution CTA's own text, not a bare "Powered by" — the
     // community attribution line itself reads "Powered by Seazn Club", so that
     // substring never isolated the footer that org.branded drops.
-    "plg pro page drops the Seazn attribution footer",
-    !proShared.body.includes("Run your own free"),
+    //
+    // INVERTED by V395, not deleted. This asserted that a Pro page DROPS the
+    // footer, which was true for as long as `dashboard.branding` was true on
+    // Pro (V112 → V394). The owner moved badge removal to enterprise on
+    // 2026-09-03: every self-serve plan carries the badge now, Pro included,
+    // and the assertion has to say so rather than be quietly retired. The
+    // enterprise case has no persona in this script; `entitlements-v18-badge.test.ts`
+    // covers all five plans through `org_has_feature` itself.
+    "plg pro page KEEPS the Seazn attribution footer (V395: badge removal is enterprise-only)",
+    proShared.body.includes("Run your own free"),
   );
 
   // --- RS007: the `/shared/[orgSlug]` segment must MISS with a 404, never a
@@ -15109,7 +15129,9 @@ async function v1Suite(admin: Session, orgId: string, orgSlug: string): Promise<
 
   // Public-page theming, free path (public redesign): the branding write is
   // accepted, but the public view empties it for orgs without
-  // dashboard.branding — the page must NOT carry the --ps-* accent override.
+  // `dashboard.theme` (V396 — the key was `dashboard.branding` until W2 T17
+  // split badge removal off it) — the page must NOT carry the --ps-* accent
+  // override.
   const branded = await v1(admin, `/api/v1/competitions/${compId}`, "PATCH", {
     branding: { colors: { primary: "#0f766e" } },
   });
@@ -15130,7 +15152,7 @@ async function v1Suite(admin: Session, orgId: string, orgSlug: string): Promise<
   check("community slideshow renders", freeBoard.status === 200);
   check("community slideshow keeps default theme", !freeBoardHtml.includes("--ps-accent:#0f766e"));
   // Org-level brand color: the write lands on any plan, but the public org
-  // landing ignores it without dashboard.branding.
+  // landing ignores it without dashboard.theme.
   const orgBrand = await raw(admin, `/api/orgs/${orgId}`, "PATCH", {
     branding: { colors: { primary: "#0f766e" } },
   });
@@ -15219,9 +15241,16 @@ async function jul3Suite(admin: Session, orgId: string, orgSlug: string): Promis
     }),
   );
 
-  // Public-page theming, pro path (public redesign): dashboard.branding lets
+  // Public-page theming, pro path (public redesign): dashboard.theme lets
   // the brand color through the public view and the competition page inlines
   // the --ps-* accent override for its whole subtree.
+  //
+  // These four theme checks went RED under V395 and were left red on purpose:
+  // badge removal became enterprise-only, and the colour rode the same key, so
+  // a paying Pro org lost its palette. V396 gave the colour its own key rather
+  // than editing these to match the defect. If they red again, the two keys
+  // have been re-welded somewhere — start at server/public-site/data.ts,
+  // public_competitions_v and server/slideshow-data.ts.
   await v1(admin, `/api/v1/competitions/${comp.id}`, "PATCH", {
     branding: { colors: { primary: "#0f766e" } },
   });
@@ -15235,8 +15264,8 @@ async function jul3Suite(admin: Session, orgId: string, orgSlug: string): Promis
   });
   const divId = v1data<{ id: string }>(div).id;
 
-  // Slideshow theming, pro path: dashboard.branding tints the noticeboard
-  // with the brand color via the same --ps-* resolver.
+  // Slideshow theming, pro path: dashboard.theme tints the noticeboard
+  // with the brand color via the same --ps-* resolver (orgBoardChrome).
   const proBoard = await fetch(`${BASE}/slideshow/divisions/${divId}`, {
     headers: { cookie: cookieHeader(admin) },
   });
@@ -15318,17 +15347,18 @@ async function jul3Suite(admin: Session, orgId: string, orgSlug: string): Promis
   await v1(admin, `/api/v1/divisions/${divId}/start`, "POST");
 
   const officialId = v1data<{ id: string }[]>(officials)[0]!.id;
-  // V290 moved officials.auto up to Pro Plus (approved hard move, no grandfather).
-  // This suite runs on a plain Pro org, so the auto-propose path now 402s here —
-  // the ALLOWED path moved to smokePlanMatrix's pro_plus persona, so coverage of
-  // the feature lands on the right tier instead of vanishing.
+  // V290 moved officials.auto up to Pro Plus; V392 (entitlements v18 W2 T1)
+  // brought it BACK to Pro when Pro Plus was deleted, and gave it to both pass
+  // rungs as well. This suite runs on a plain Pro org, so the auto-propose path
+  // succeeds here again. Rewritten rather than deleted: a 402 assertion on a
+  // key the plan now grants is a paywall claim for a paywall that is gone, and
+  // deleting it would leave the Pro path with no coverage at all.
   const auto = await v1(admin, `/api/v1/divisions/${divId}/officials/auto`, "POST", {
     policy: { roles: ["referee"] },
   });
   check(
-    "jul3 officials auto is Pro Plus only (402 officials.auto on Pro)",
-    auto.status === 402 &&
-      (auto.json.error as { feature_key?: string } | undefined)?.feature_key === "officials.auto",
+    "jul3 officials auto is allowed on Pro (V392 brought it back off Pro Plus)",
+    auto.status === 200,
   );
   const patchOff = await v1(admin, `/api/v1/fixtures/${fixtures[0]!.id}/officials`, "PATCH", {
     set: [{ official_id: officialId, role_key: "referee", locked: false }],
