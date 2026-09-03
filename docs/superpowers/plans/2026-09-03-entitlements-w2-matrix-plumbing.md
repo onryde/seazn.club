@@ -671,47 +671,37 @@ design doc — the doc is now the older decision.
 - The Free card bullets in all four locale dictionaries.
 - Sweep B's planned `freeClaimFaults` must not treat these as free keys.
 
-### T16 — disclose the fee at the point of consent (owner question, 2026-09-03)
+### T16 — the fee disclosure exists; name the rate and fix the stale one
 
-**We already disclose, but not where it counts, and the disclosure describes a model the
-code does not implement.**
+**CORRECTED after the owner showed the live screen.** An earlier version of this entry
+claimed the Connect page "mentions no fee, no percentage and no terms". That was WRONG. It
+was reached by reading `page.tsx` and its two dictionary keys and never following into
+`<OrgPaymentInstructions>`, which is the component that renders the CTA. Third product-fact
+claim made from a partial read in one session — the other two were "officials cannot log
+in" and "officials have no surface", both also wrong, both also settled by opening one more
+file. A claim about what a PERSON SEES is only settled by driving the product.
 
-`content/help/registration/card-payments.md:23` — "Each payment settles to your connected
-Stripe account, **minus Stripe's processing fee and the platform fee for your plan**" —
-and `:34` — "**Stripe's processing fee is separate, set by Stripe, and taken whichever plan
-you're on.**"
+**What is actually shipped**, in the onboarding card, directly above the "Resume Stripe
+onboarding" button — `pay.stepGoLiveDetail`:
 
-That is the ADDITIVE model. The code is not additive: destination charges with no
-`on_behalf_of` make Seazn merchant of record, so WE absorb Stripe's fee. The published help
-is therefore wrong in the club's favour today. **Making the fee additive implements what we
-already told organisers** — it is not a new cost imposed on them, which is the strongest
-argument for the change and should be recorded as such.
+> "Charges enabled: divisions can take card entry fees, entries confirm on payment, and
+> payouts land in your bank on Stripe's schedule — minus Stripe's processing fee and the
+> platform fee for your plan."
 
-**The gap, pinned exactly.** There is ONE real page — `/settings/connect` is a 19-line
-redirect that forwards to the org-scoped route carrying Stripe's `?connect=return` params,
-so the disclosure has a single home and cannot be added twice:
-`app/o/[orgSlug]/settings/connect/page.tsx`.
+That is disclosure at the point of consent, and it is well placed. Note it again describes
+the ADDITIVE model, which the code does not implement — reinforcing that making the fee
+additive implements what both the UI and the help already promise.
 
-It mentions no fee, no percentage and no terms. Its two strings are
-`payments.desc` (collection methods) and `payments.planNote` — "Plan and subscription live
-under [Plan & Billing]". Neither names money we take. The onboarding CTA lives inside
-`<OrgPaymentInstructions>` in the `<section className="card p-6">`, so the disclosure
-belongs ABOVE that section — a footnote under the card is after the decision, not before it. An organiser completes KYC and hands over bank details having seen nothing about
-what we take. Help is a different surface, reached by a link.
-
-Owed:
-- A one-line fee summary on the Connect page ABOVE the onboarding button, with the
-  percentage READ FROM THE ENTITLEMENT (`registration.fee_percent`) rather than hardcoded —
-  that number has moved twice in one day, and there are already four stale hardcoded fee
-  literals in help. Four locales, then `i18n:gen-keys`.
-- Update the two help articles quoting "1% on Pro Plus" for a deleted plan:
-  `registration/open-registration.md:19` and `getting-started/create-your-organisation.md:21`.
-  Both also need the NEW rates once the fee change lands.
-
-Counter-argument recorded: a fee shown at the connect step will cost some connect
-conversion. Accepted — an organiser discovering it at first payout is a support ticket and
-a trust problem, and the additive change increases what they bear, so that is exactly when
-it belongs in front of them.
+**What is actually owed, and it is smaller:**
+1. **The rate is never shown anywhere near the decision.** `pay.stepGoLiveDetail` says "the
+   platform fee for your plan" without saying what that is, and no `connect.*` string names
+   a percentage. Add the resolved rate, READ FROM `registration.fee_percent`, never
+   hardcoded.
+2. **`tips.registration.platform-fee.body` is a live false claim** — "8% on Community, 5%
+   on a competition with an Event Pass, 2% on Pro, **1% on Pro Plus**". Pro Plus is deleted,
+   and every number changes when the fee goes additive. Four locales.
+3. The same stale list in `registration/open-registration.md:19` and
+   `getting-started/create-your-organisation.md:21`.
 
 ### T9 — sweep and gates
 Delete the two dead e2e specs. Rerun the 34 files that assert against
