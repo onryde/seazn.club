@@ -5,7 +5,7 @@ B03's own prompt forbids touching product code, so none of these were fixed
 there. Every one was found by trying to drive the product's real API from
 outside it, which is what the bench is for.
 
-> ## STATUS 2026-09-03 — six of nine are FIXED and merged (PR #706); G9 is new
+> ## STATUS 2026-09-03 — six of nine FIXED (PR #706); G4 WITHDRAWN; G7 and G9 open
 >
 > | gap | state |
 > |---|---|
@@ -15,8 +15,8 @@ outside it, which is what the bench is for.
 > | G5 catch-order untested | **FIXED** — named test in `api-v1/__tests__/http.test.ts` |
 > | G6 doc publishes a different object than the route enforces | **FIXED** — one schema object per route |
 > | G8 drift gate ignored the published spec | **FIXED** — `ci.yml` diffs `v1.public.json` too |
-> | G4 `import.events` granted by no plan | **OPEN**, gated on entitlements W2 |
-> | G7 `business` seeded by a migration, absent live | **OPEN**, same W2 gate |
+> | G4 `import.events` granted by no plan | **NOT A GAP** — deliberate rollout kill-switch; withdrawn |
+> | G7 `business` seeded by a migration, absent live | **OPEN**, and NOT blocked on W2 |
 > | G9 blackouts are write-only over the API | **OPEN**, new — found while CONSUMING G2's own fix |
 >
 > Each fix was verified present in the tree, not taken from the PR
@@ -217,7 +217,30 @@ Check whether `api.access` holders actually exist before building.
 
 ---
 
-## G4 — `import.events` is granted by no plan, so P11's batch import is dark
+## G4 — ~~`import.events` is granted by no plan~~ **WITHDRAWN 2026-09-03: not a gap**
+
+> **This entry was wrong, and the evidence to see that was already inside it.**
+> The write-up noted that "the route's own comment (`:11-14`) says this is
+> intended rollout state" — and then recommended seeding the `plan_entitlements`
+> rows anyway. Those are opposite conclusions and the observation should have
+> settled it.
+>
+> Corrected by the entitlements owner: **the 402 is a deliberate rollout
+> kill-switch, not a forgotten row.** `import.events` is absent from design §2
+> as well — it was never meant to be in the matrix yet. So granting it would not
+> be closing a plumbing gap, it would be **shipping P11's batch importer to
+> customers**, which is a product launch decision and explicitly not one a
+> plumbing wave takes.
+>
+> Two corrections follow for whoever reads the rest of this file. It is **not**
+> "blocked on W2" — W2 is the wrong instrument entirely, and no entitlements
+> wave should grant this key on its own authority. And zero rows here is the
+> feature working, so **do not re-file this** the next time someone greps
+> `plan_entitlements` and finds nothing.
+>
+> The general lesson is the one this document keeps relearning: an absent row
+> and a suppressed feature look identical from outside, and only the owner of
+> the decision can tell them apart. The original text is kept below unchanged.
 
 **Evidence (QUERIED, live DB at v389):**
 `select plan_key, bool_value from plan_entitlements where feature_key =
@@ -231,11 +254,14 @@ comment (`:11-14`) says this is intended rollout state.
 it. If that is deliberate staging, fine — but nothing in the plan matrix or the
 pricing copy says the feature exists, so there is also no upgrade path to sell.
 
-**Recommendation:** decide whether P11 is launched or staged, then either seed
+~~**Recommendation:** decide whether P11 is launched or staged, then either seed
 the `plan_entitlements` rows for the intended tiers, or record an explicit
 "dark until X" line in the entitlements index so the next session doesn't read
 the missing rows as a bug. **Coordinate with entitlements W1/W2** — that
-programme is rewriting this whole matrix (see G7).
+programme is rewriting this whole matrix (see G7).~~
+**Superseded — see the withdrawal note at the top of G4.** The half of this
+that still stands is the documentation half: a "dark until launched" line
+somewhere durable would stop the next reader filing what I filed.
 
 **Strongest argument against acting now:** W2 rewrites the tier set outright
 (Free / Pro / Event Pass, `pro_plus` deleted). Seeding rows against today's
@@ -427,6 +453,31 @@ V269, V290, V302, V306, V311, V319, V341, V353, …) that insert, update and
 delete each other's rows, so **no single migration is the catalog** and any
 conclusion drawn from grepping one is a snapshot of a moment in its history.
 
+**[2026-09-03 — NOT blocked on W2, and this document said otherwise. Corrected
+by the entitlements owner.]** The finding is independent of that wave: "no
+single migration is the catalog, query the live DB" is true before W2 and after
+it. The banner and the standing-rules section both listed G7 as W2-gated; they
+were wrong and are corrected.
+
+**W2 does not block it — it makes it cheaper, in three ways.** All three are
+facts about W2's own branch, NOT about `main`: as of this writing `origin/main`
+carries no `enterprise`, no `entitlements-v18-matrix.test.ts` and nothing past
+`V391`, so re-pin them against the tree before relying on any of it.
+
+- `pro_plus` is **gone** and `enterprise` is **added**, so any code or note
+  carrying the old five-key list is wrong the moment W2 lands. That includes the
+  table below, which is exactly the failure mode this gap is about.
+- W2's T2 converged the plan-key mirrors onto **one union**, so there is a
+  code-side list to import rather than hand-roll.
+- `entitlements-v18-matrix.test.ts` pins the live catalog against the design
+  doc, so drift **fails a test** instead of surfacing at runtime. That is
+  strictly better than the runbook `select` recommended below, and it is what
+  the recommendation should defer to once it lands.
+
+This exchange is the third time in two days the catalog moved under a written
+claim — v389, then V390, now W2. The recommendation below was already "commit
+the query, not the table"; treat that as confirmed rather than restated.
+
 **Recommendation [sharpened 2026-09-03 by this document going stale on its own
 terms]:** do NOT write a note naming today's plans — that is what the original
 recommendation said, and it would already be wrong twice over (once for V390,
@@ -561,7 +612,10 @@ two separate fixes.
 - G1 and G2 touch the persons/officials area, which has its own live
   programme — check `docs/superpowers/specs/2026-08-16-registration-redesign-prompts/_INDEX.md`
   before changing shapes there.
-- G4 and G7 touch entitlements, which is mid-rewrite. **[updated 2026-09-03:
+- **G4 is withdrawn** (deliberate kill-switch, see its own note) and **G7 is
+  NOT blocked on W2** — an earlier version of this list said both were gated on
+  that wave and both were wrong. What follows is kept for the W2 context only.
+- ~~G4 and G7 touch entitlements, which is mid-rewrite.~~ **[updated 2026-09-03:
   W1 has MERGED (`ae0751682`, bringing `V390__scoring_free.sql`); W2 has a plan
   at `docs/superpowers/plans/2026-09-03-entitlements-w2-matrix-and-plumbing.md`.]**
   Talk to the W2 session before either. Neither is urgent; both get cheaper
