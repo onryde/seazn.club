@@ -687,8 +687,16 @@ is therefore wrong in the club's favour today. **Making the fee additive impleme
 already told organisers** — it is not a new cost imposed on them, which is the strongest
 argument for the change and should be recorded as such.
 
-**The gap:** `app/o/[orgSlug]/settings/connect/page.tsx` mentions no fee, no percentage and
-no terms. An organiser completes KYC and hands over bank details having seen nothing about
+**The gap, pinned exactly.** There is ONE real page — `/settings/connect` is a 19-line
+redirect that forwards to the org-scoped route carrying Stripe's `?connect=return` params,
+so the disclosure has a single home and cannot be added twice:
+`app/o/[orgSlug]/settings/connect/page.tsx`.
+
+It mentions no fee, no percentage and no terms. Its two strings are
+`payments.desc` (collection methods) and `payments.planNote` — "Plan and subscription live
+under [Plan & Billing]". Neither names money we take. The onboarding CTA lives inside
+`<OrgPaymentInstructions>` in the `<section className="card p-6">`, so the disclosure
+belongs ABOVE that section — a footnote under the card is after the decision, not before it. An organiser completes KYC and hands over bank details having seen nothing about
 what we take. Help is a different surface, reached by a link.
 
 Owed:
