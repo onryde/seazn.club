@@ -101,9 +101,12 @@ describe("extra-organisation price", () => {
           // THE FLOOR IS THE ROUNDING RULE'S OWN STEP, not a percentage. It was
           // `half * 0.9` (i.e. at least 45% of base), a bound tuned to the
           // pre-v18 prices where the worst case was 47.4%. The entitlements
-          // v18 reprice put INR monthly at ₹199 against a ₹499 base — 39.9%,
-          // which the owner ruled is the x99 rule working as written, not a
-          // mispricing. A percentage floor cannot express that: rounding down
+          // v18 reprice put INR monthly at ₹199 against a ₹499 base — 39.9%.
+          // OWNER RULING 2026-09-03, put explicitly and chosen with the
+          // alternative on the table: keep ₹499 and re-derive this bound.
+          // ₹599 would have put the rider back at 49.9% and needed no change
+          // here, and was rejected because it costs the volume market 20%.
+          // A percentage floor cannot express that: rounding down
           // to a grid costs a FIXED amount, so it eats a larger FRACTION of a
           // cheaper plan. Expressed as one grid step, the bound still catches a
           // real drift (a rider set to half of half) at every price point,

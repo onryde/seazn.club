@@ -29,8 +29,31 @@ surface work — that is W3.
 
    Note the INR consequence of the x99 rule: ₹499 ÷ 2 = ₹249.50, and the nearest
    x99 below that is **₹199**, so INR tier 2+ is 40% of base rather than 50%. That
-   is the rule working as written (today's ₹1,399 → ₹699 rounds the same way), and
-   it is safe because the parity guard asserts **at-most-half**, not exactly-half.
+   is the rule working as written (today's ₹1,399 → ₹699 rounds the same way).
+
+   **CORRECTION (2026-09-03).** An earlier version of this line claimed the parity
+   guard "asserts at-most-half, not exactly-half". That was wrong, and was written
+   from the test's header comment rather than its assertions — a grep standing in for
+   a read. `extra-org-price-parity.test.ts` ALSO carried a lower bound of 45% of base,
+   which ₹199 of ₹499 (39.9%) fails. The bound was re-derived as one rounding STEP
+   below half (₹100 for INR, one major unit elsewhere), because rounding to a grid
+   costs a fixed amount and so eats a larger fraction of a cheaper plan. It still
+   kills a rider set to half of half.
+
+   **Owner ruling 2026-09-03**, put explicitly with the alternative on the table:
+   keep ₹499 and the re-derived bound. ₹599 would have landed the rider at 49.9%
+   and needed no guard change; rejected because it costs the volume market R12 is
+   courting 20%, and because the rounding error runs in the CUSTOMER's favour —
+   they pay less than half, and no copy claims exactly half.
+
+8. **Orphaned Pro Plus riders: left as-is, both parked tests deleted (owner ruling
+   2026-09-03).** `isOrgAddonItem` matches `lookup_key` against the catalog set and
+   `stripe-sync` never prunes, so a subscription still carrying
+   `seazn_extra_org_pro_plus_monthly` is unrecognised — never re-priced, never
+   synced, never alerted, and still billing. Sandbox-only, no real money, so the
+   owner ruled it not worth code that outlives Pro Plus. **This is a known silent
+   billing path and must be closed before a live Stripe catalogue exists** — it is
+   recorded in `_INDEX.md` as owed, not fixed.
 3. **Event Pass L rises** to 39 USD. Bounded by §3a's own prose on both sides:
    `3 × L ≥ annual` (the nudge) and `2 × L < annual` ("a two-tournament organiser is
    never pushed into a subscription"), which pins USD L to 33–49.
