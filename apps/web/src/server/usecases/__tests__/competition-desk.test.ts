@@ -383,7 +383,13 @@ describe.skipIf(!HAS_DB)("getCompetitionDesk", () => {
   // competition's in_play fixture ids (the plan-shape side is proven by
   // EXPLAIN ANALYZE in fix-round-b-report.md, not reachable from vitest): an
   // in_play fixture that DOES have a recorded event must not raise no_scorer.
-  it("F2 regression: an in_play fixture WITH a recorded event does not raise no_scorer (event-count query still correct after the filter)", async () => {
+  // REWRITTEN by review 7's blocker. This test's "recorded event" WAS
+  // `core.start` — the event that puts a fixture in play — so it asserted that
+  // a live match with nothing recorded and nobody assigned must NOT ask for a
+  // scorer. That is the defect itself, frozen as an expected value and carried
+  // through the whole wave (recurring failure class 4, verbatim). It is the
+  // pair now: a real recorded event clears the row, a bare kick-off does not.
+  it("F2 regression: a REAL recorded event clears no_scorer — and a bare kick-off does not, because kicking off is not recording", async () => {
     const { auth } = await seedOrg();
     const { competitionId, divisionId } = await seedDivision(auth, 4);
     const [stage] = await createStages(auth, divisionId, {
@@ -393,12 +399,27 @@ describe.skipIf(!HAS_DB)("getCompetitionDesk", () => {
     await sql`update divisions set status = 'active' where id = ${divisionId}`;
     const [f] = await sql<{ id: string }[]>`select id from fixtures where division_id = ${divisionId} order by fixture_no limit 1`;
     await sql`update fixtures set status = 'in_play', scheduled_at = now() - interval '12 minutes' where id = ${f!.id}`;
+    // Kick-off only: the fixture is live and NOTHING has been recorded, which
+    // is exactly what the row exists to say.
     await sql`
       insert into score_events (fixture_id, org_id, seq, type, payload)
       values (${f!.id}, ${auth.orgId}, 0, 'core.start', '{}')`;
-    const desk = await getCompetitionDesk(auth, competitionId);
-    const d = desk.divisions.get(divisionId)!;
-    expect(d.attention.some((a) => a.kind === "no_scorer")).toBe(false);
+    const started = await getCompetitionDesk(auth, competitionId);
+    expect(
+      started.divisions.get(divisionId)!.attention.some((a) => a.kind === "no_scorer"),
+      "a live match with only a kick-off, and nobody assigned, must ask for a scorer",
+    ).toBe(true);
+
+    // One real event, and the row clears — which is also what proves the
+    // event-count query still counts anything at all after the filter.
+    await sql`
+      insert into score_events (fixture_id, org_id, seq, type, payload)
+      values (${f!.id}, ${auth.orgId}, 1, 'generic.result', '{"p1Score":1,"p2Score":0}')`;
+    const scored = await getCompetitionDesk(auth, competitionId);
+    expect(
+      scored.divisions.get(divisionId)!.attention.some((a) => a.kind === "no_scorer"),
+      "a recorded event clears the row",
+    ).toBe(false);
   });
 
   // F3 fix (final review, Important): used to be one row PER FIXTURE.
