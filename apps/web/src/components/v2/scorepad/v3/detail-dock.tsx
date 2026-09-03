@@ -205,6 +205,39 @@ export function dockController(spec: DockSpec | null, heldId: string, store: Doc
   };
 }
 
+/**
+ * IDs of "flag"-kind chips (`DockChip.kind`, types.ts) that would otherwise
+ * render as the lone, stranded final chip in a row of the phone dock's
+ * `max-md:grid-cols-2` chip grid — Task 13 finding A. A non-flag chip
+ * always spans the full row on phones (`max-md:col-span-2`, the render
+ * site's own ternary just below) and so resets the grid's column cursor
+ * back to column 1 for whatever chip follows it — a "run" here is a
+ * maximal stretch of CONSECUTIVE flag chips between such resets (or the
+ * chips array's own start/end). A run's own LAST chip needs the same
+ * full-row span, and only when the run's length is odd: an even run
+ * already tiles the 2-up grid cleanly with nothing left over.
+ *
+ * `generic.tsx`'s `DOCK_AMOUNTS` ([2, 3, 5] — three flag chips, one run,
+ * odd) is the one skin that reaches this today; football's goal dock
+ * (`ownGoal`/`penalty`, always exactly two) never does. Derived from the
+ * chip list itself, not a per-skin flag, so a skin that changes its own
+ * flag-chip count is covered automatically.
+ */
+export function strandedFlagChipIds(chips: readonly DockChip[]): ReadonlySet<string> {
+  const out = new Set<string>();
+  let runStart = -1;
+  for (let i = 0; i <= chips.length; i++) {
+    const isFlag = i < chips.length && chips[i]!.kind === "flag";
+    if (isFlag && runStart === -1) runStart = i;
+    if (!isFlag && runStart !== -1) {
+      const runLength = i - runStart;
+      if (runLength % 2 === 1) out.add(chips[i - 1]!.id);
+      runStart = -1;
+    }
+  }
+  return out;
+}
+
 export interface DetailDockProps {
   /** The just-committed event's own dock spec — a skin's `dock(eventType,
    *  view)` (types.ts). `null` renders nothing, mirroring `dockController`'s
@@ -393,6 +426,9 @@ export function DetailDock({ spec, heldId, store, heldUntil, t, now = Date.now }
       ? window.matchMedia("(prefers-reduced-motion: reduce)").matches
       : false;
 
+  // Task 13 finding A — see `strandedFlagChipIds`'s own doc above.
+  const strandedFlagIds = strandedFlagChipIds(controller.chips.map(({ chip }) => chip));
+
   return (
     <div
       ref={rootRef}
@@ -478,9 +514,18 @@ export function DetailDock({ spec, heldId, store, heldUntil, t, now = Date.now }
             // untouched — every one of these is a max-md:* variant, so the
             // unprefixed `rounded-full`/flex-wrap pill stays exactly as
             // before at ≥768.
+            //
+            // Task 13 finding A — an ODD-length run of flag chips (generic's
+            // DOCK_AMOUNTS: "2 points"/"3 points"/"5 points") left its last
+            // chip flush-left in `max-md:grid-cols-2` with a dead half-row
+            // beside it — see `strandedFlagChipIds`'s own doc above. That
+            // one chip gets the SAME `max-md:col-span-2` the non-flag branch
+            // already uses to fill a row, keeping `rounded-lg` (never the
+            // pill radius, which is a flag/non-flag distinction, not a
+            // spanning one).
             className={`inline-flex min-w-0 max-w-full items-center gap-1.5 border px-4 text-sm font-medium transition-colors max-md:justify-center max-md:px-3 ${
               chip.kind === "flag"
-                ? "rounded-lg"
+                ? `rounded-lg${strandedFlagIds.has(chip.id) ? " max-md:col-span-2" : ""}`
                 : "rounded-full max-md:col-span-2 max-md:rounded-xl max-md:justify-start max-md:text-left"
             } ${
               selected

@@ -325,7 +325,19 @@ export function Scorebug({ spec, t, onTap, onOpenSheet }: ScorebugProps) {
       </div>
 
       {spec.strip.length > 0 && (
-        <div className={`flex flex-wrap items-center justify-center gap-x-4 gap-y-1 ${NIGHT_TILE_CLASSES.bandBg} px-3 py-1.5 max-md:flex-nowrap max-md:justify-start max-md:gap-x-3 max-md:overflow-x-auto max-md:[scrollbar-width:none]`}>
+        // Task 13 finding C — the strip is a swipeable rail on phones
+        // (`max-md:overflow-x-auto` above), and a still screenshot of it
+        // reads as clipped text, not "there is more, scroll for it" (this
+        // is an APPROVED affordance the design review flagged as needing a
+        // visual cue, not a defect in the scroll behaviour itself — see the
+        // dispatch's own already-triaged note on the strip). `relative`
+        // here (never on the scrolling div itself) is what lets the fade
+        // below stay pinned to the outer box's visible right edge — an
+        // `absolute` child of the SCROLLING div would instead be positioned
+        // against that div's full scrollable width and sit off-screen past
+        // whatever is currently scrolled out of view.
+        <div className="relative">
+          <div className={`flex flex-wrap items-center justify-center gap-x-4 gap-y-1 ${NIGHT_TILE_CLASSES.bandBg} px-3 py-1.5 max-md:flex-nowrap max-md:justify-start max-md:gap-x-3 max-md:overflow-x-auto max-md:[scrollbar-width:none]`}>
           {spec.strip.map((item, i) => {
             // R3/B4 (owner ruling R3-6, the per-sport signature): a strip item
             // may ask for the LED-panel treatment — the fourth official's
@@ -481,6 +493,24 @@ export function Scorebug({ spec, t, onTap, onOpenSheet }: ScorebugProps) {
               </span>
             );
           })}
+          </div>
+          {/* The fade itself: `pointer-events-none` so it never intercepts a
+              swipe or a tap on the last visible strip item, `aria-hidden`
+              since it is purely decorative (the scrollable region's own
+              content is what a screen reader needs), and `md:hidden` so it
+              is zero-cost/zero-DOM-effect at the width this rail wraps
+              instead of scrolls. `pad-strip-fade` (globals.css) is the
+              SAME custom property `NIGHT_TILE_CLASSES.bandBg` (`pad-board-2`,
+              just above) paints the rail's own background from — a class,
+              not an inline `var(--sport-...)` here, so the fade blends into
+              whichever sport's band colour is live without this file's own
+              source tripping sport-theme.test.ts's ban on any v3 component
+              writing a literal `--sport-` of its own (see that class's own
+              comment in globals.css). */}
+          <div
+            aria-hidden="true"
+            className="pad-strip-fade pointer-events-none absolute inset-y-0 right-0 w-8 md:hidden"
+          />
         </div>
       )}
     </div>

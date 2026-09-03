@@ -483,6 +483,22 @@ export function FixtureConsole({
   // Over, but reversible.
   const decided = live.outcome !== null || live.status === "abandoned";
   const started = live.status !== "scheduled";
+  // Task 13 finding B — the SCORING section's header row hides itself on
+  // phones once `started` (below, "Owner review ... hand-over as an icon"),
+  // and its ScorePad mount is gated on `scorePadV2 && !decided` (below) —
+  // so a fixture that is BOTH started and decided has nothing left to show
+  // inside `<section data-role="console-scoring">` on a phone, yet the
+  // section's own `card p-5 max-md:p-3` wrapper (padding, border, bg-white)
+  // still rendered, an empty white box between the header's "won on ..."
+  // line and the Activity card (found on cricket/football/ice-hockey
+  // decided-screen captures at 320, absent from the pre-branch baseline —
+  // the baseline's header row had no `started`-gated max-md:hidden at all).
+  // `canHandOver && handoverOpen` is the one thing that CAN still put real
+  // content in the section on a phone regardless of `started`/`decided`
+  // (the phone-only header icon, line ~629, opens `DeviceLinkPanel` inside
+  // this section with no `max-md:hidden` of its own) — excluded here so
+  // hiding the section can never hide content a scorer just asked to see.
+  const consoleScoringEmptyOnPhone = started && !(scorePadV2 && !decided) && !(canHandOver && handoverOpen);
 
   const sides = { home, away };
   // R7/C5 (D-6) — what to CALL each side, resolved ONCE here and read by the
@@ -740,7 +756,10 @@ export function FixtureConsole({
           record more", and a section that outlived the pad would answer
           that question wrong. */}
       {scoring && home && away && (
-        <section className="card p-5 max-md:p-3" data-role="console-scoring">
+        <section
+          className={`card p-5 max-md:p-3${consoleScoringEmptyOnPhone ? " max-md:hidden" : ""}`}
+          data-role="console-scoring"
+        >
           <div className={`mb-3 flex flex-wrap items-center justify-between gap-2${started ? " max-md:hidden" : ""}`}>
             <h2 className="text-sm font-semibold text-slate-700 max-md:hidden">{msg("score.scoring")}</h2>
             <div className="flex flex-wrap items-center gap-2">

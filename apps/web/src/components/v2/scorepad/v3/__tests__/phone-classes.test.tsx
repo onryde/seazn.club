@@ -1,10 +1,22 @@
 // Spec §3.2–3.8. Node render only: proves WHICH nodes carry the phone classes.
 // Effect at real widths: e2e/mobile.spec.ts `expectPhoneComposition`.
-import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
+import { builtinModules } from "@seazn/engine/sports";
 import { Scorebug } from "../scorebug";
 import { DetailDock, type DockStore } from "../detail-dock";
 import type { DockSpec, ScorebugSpec } from "../types";
+// Task 13 finding B — the fix lives in fixture-console.tsx (not this
+// directory's own scorepad/v3 components), but the dispatch names THIS
+// file as the one test location for everything Task 13 touches.
+import { FixtureConsole } from "@/components/v2/fixture-console";
+import type { LiveState, SideInfo, SportInfo } from "@/components/v2/fixture-console";
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
+}));
 
 const t = ((key: string) => key) as unknown as Parameters<typeof Scorebug>[0]["t"];
 const spec: ScorebugSpec = {
@@ -67,6 +79,39 @@ describe("scorebug phone classes", () => {
     expect(item).not.toBeNull();
     expect(item![0]).toMatch(/class="[^"]*\bmax-md:shrink-0\b/);
     expect(item![0]).toMatch(/class="[^"]*\bmax-md:whitespace-nowrap\b/);
+  });
+  // Task 13 finding C — design review: the strip scrolls on phones
+  // (`max-md:overflow-x-auto`, above) but a still screenshot reads as
+  // clipped text with no sign it continues. Already-triaged as an approved
+  // affordance needing a visual cue, not a scroll-behaviour defect — fixed
+  // with a phone-only edge-fade overlay pinned inside the rail's own
+  // (now `relative`) wrapper.
+  it("the rail's wrapper is positioned so the fade can pin to its visible edge", () => {
+    // the fade lives inside a `relative` box that is a DIFFERENT element
+    // from the `overflow-x-auto` scrolling div — see scorebug.tsx's own
+    // comment on why an `absolute` child of the scrolling div itself would
+    // sit off-screen instead of at the visible right edge.
+    expect(html).toMatch(/<div class="relative">\s*<div class="[^"]*\bmax-md:overflow-x-auto\b/);
+  });
+  it("the fade is phone-only, non-interactive, and decorative", () => {
+    const fade = html.match(/<div aria-hidden="true" class="[^"]*pad-strip-fade[^"]*"[^>]*><\/div>/);
+    expect(fade, "no pad-strip-fade aria-hidden div found").not.toBeNull();
+    expect(fade![0]).toMatch(/class="[^"]*\bpointer-events-none\b/);
+    expect(fade![0]).toMatch(/class="[^"]*\bmd:hidden\b/);
+    // NOT an inline var(--sport-...) here — sport-theme.test.ts's own
+    // "and nothing else in the chassis or in ANY skin emits a --sport-*
+    // property of its own" bans that literal substring from every v3
+    // component source; the gradient lives in globals.css instead (below).
+    expect(fade![0]).not.toContain("style=");
+  });
+  it("the fade class reads to the SAME custom property the rail's own background paints from", () => {
+    // NIGHT_TILE_CLASSES.bandBg is "pad-board-2", whose only rule
+    // (globals.css) is `background-color: var(--sport-board-2)`.
+    // `pad-strip-fade` (globals.css, right beside it) reuses that same
+    // variable in a gradient rather than a fixed colour, so the fade blends
+    // into whichever sport's theme is live.
+    const css = readFileSync(join(process.cwd(), "src/app/globals.css"), "utf8");
+    expect(css).toMatch(/\.pad-strip-fade\s*\{[^}]*var\(--sport-board-2\)/);
   });
   it("the reserved (width-reservation) strip item refuses to shrink but is NOT forced nowrap", () => {
     // Controller ruling: this branch's sizers hold the widest candidate's
@@ -146,5 +191,173 @@ describe("detail dock phone classes — person chip gets its own row, not a pill
     // the container itself must still be flex flex-wrap at desktop widths,
     // and the phone-only overrides must all be `max-md:`-scoped
     expect(html).toMatch(/class="[^"]*\bflex\b[^"]*\bflex-wrap\b[^"]*\bmax-md:grid\b/);
+  });
+});
+
+// Task 13 finding A — design review, cross-checked against
+// gallery-base/gallery-final: `generic/04-dock` ("5 points") showed the
+// dock's max-md:grid-cols-2 leaving an ODD-length run of "flag"-kind chips'
+// last member flush-left with a dead half-row beside it. Absent from the
+// pre-branch baseline (which used plain `flex flex-wrap`, no grid at all),
+// so this is ours. `strandedFlagChipIds` (detail-dock.tsx) is the fix;
+// these pin its effect on the actually-rendered markup.
+import { strandedFlagChipIds } from "../detail-dock";
+
+describe("detail dock phone classes — an odd run of flag chips doesn't strand its last member", () => {
+  const noopStore: DockStore = {
+    mutateHeld: async () => true,
+    releaseHeld: async () => {},
+  };
+  // generic.tsx's own DOCK_AMOUNTS shape: three flag chips, one run, odd.
+  const oddDockSpec: DockSpec = {
+    title: "Worth more than 1?",
+    chips: [
+      { id: "points:2", label: "pad.generic.dock.points", labelText: "2 points", kind: "flag", mutate: (p) => p },
+      { id: "points:3", label: "pad.generic.dock.points", labelText: "3 points", kind: "flag", mutate: (p) => p },
+      { id: "points:5", label: "pad.generic.dock.points", labelText: "5 points", kind: "flag", mutate: (p) => p },
+    ],
+  };
+  const html = renderToStaticMarkup(
+    <DetailDock
+      spec={oddDockSpec}
+      heldId="h1"
+      store={noopStore}
+      heldUntil={Date.now() + 6000}
+      t={t as unknown as Parameters<typeof DetailDock>[0]["t"]}
+      now={() => Date.now()}
+    />,
+  );
+  const buttons = [...html.matchAll(/<button[^>]*>[\s\S]*?<\/button>/g)].map((m) => m[0]);
+  const first = buttons.find((b) => b.includes("2 points"));
+  const second = buttons.find((b) => b.includes("3 points"));
+  const last = buttons.find((b) => b.includes("5 points"));
+
+  it("renders all three flag chips", () => {
+    expect(first).not.toBeUndefined();
+    expect(second).not.toBeUndefined();
+    expect(last).not.toBeUndefined();
+  });
+
+  it("the first two chips of the odd run stay a two-up rectangle (no span)", () => {
+    expect(first).not.toMatch(/max-md:col-span-2/);
+    expect(second).not.toMatch(/max-md:col-span-2/);
+  });
+
+  it("the run's last chip spans both columns instead of stranding in a dead half-row", () => {
+    expect(last).toMatch(/class="[^"]*\bmax-md:col-span-2\b/);
+    // still a flag chip visually — rounded-lg, never the person pill radius
+    expect(last).toMatch(/class="[^"]*\brounded-lg\b/);
+    expect(last).not.toMatch(/max-md:rounded-xl/);
+  });
+
+  it("pure function: strandedFlagChipIds flags only the last chip of an odd run", () => {
+    const ids = strandedFlagChipIds(oddDockSpec.chips);
+    expect([...ids]).toEqual(["points:5"]);
+  });
+
+  it("pure function: an EVEN run (football's ownGoal/penalty) strands nothing", () => {
+    const evenChips: DockSpec["chips"] = [
+      { id: "ownGoal", label: "pad.football.dock.ownGoal", kind: "flag", mutate: (p) => p },
+      { id: "penalty", label: "pad.football.dock.penalty", kind: "flag", mutate: (p) => p },
+    ];
+    expect(strandedFlagChipIds(evenChips).size).toBe(0);
+  });
+
+  it("pure function: a non-flag (person) chip is never flagged, regardless of position", () => {
+    const mixed: DockSpec["chips"] = [
+      { id: "points:2", label: "pad.generic.dock.points", labelText: "2 points", kind: "flag", mutate: (p) => p },
+      { id: "person:1", label: "pad.generic.dock.person", labelText: "A Player", mutate: (p) => p },
+    ];
+    // the flag run here is length 1 (odd) — it alone is stranded, the
+    // trailing person chip (which already spans the full row on its own,
+    // detail-dock.tsx's non-flag branch) is never in the flag set at all.
+    expect([...strandedFlagChipIds(mixed)]).toEqual(["points:2"]);
+  });
+});
+
+// Task 13 finding B — design review, cross-checked against
+// gallery-base/gallery-final: `cricket/12-superover-decided`,
+// `football/12-shootout-decided`, `icehockey/24-shootoutdecided` (320px)
+// all showed an empty, unlabeled white pill between the "won on ..." line
+// and the Activity card. Absent from all three pre-branch baselines (which
+// showed a visible "Scoring / Hand over device" row instead) — this
+// branch's own `beb0aedb2` ("the fixture header is a match strip on
+// phones") added `${started ? " max-md:hidden" : ""}` to the section's
+// header row without accounting for a fixture that is BOTH started AND
+// decided, where the ScorePad mount (`scorePadV2 && !decided`) is also
+// absent — leaving `<section data-role="console-scoring">`'s own
+// `card p-5 max-md:p-3` wrapper (padding/border/bg-white, no `max-md:hidden`
+// of its own) rendering with nothing inside it on a phone. Fix:
+// `consoleScoringEmptyOnPhone` (fixture-console.tsx).
+describe("fixture console phone classes — the empty scoring section hides itself, decided + started, phone-only", () => {
+  const football = builtinModules.find((m) => m.key === "football")!;
+  const CFG = football.configSchema.parse(
+    (football.variants as Record<string, unknown> | undefined)?.["11-a-side"] ?? {},
+  );
+  const sport: SportInfo = {
+    key: "football",
+    config: {},
+    scorerLabel: "Referee",
+    positionGroups: [],
+    roles: [],
+    lineupSize: 11,
+    benchMax: 5,
+    fidelityTiers: football.fidelityTiers as SportInfo["fidelityTiers"],
+  };
+  const side = (id: string, name: string): SideInfo => ({ id, name, members: [], lineup: [] });
+
+  function consoleHtml(over: { status: string; outcome: unknown }): string {
+    const live: LiveState = {
+      status: over.status,
+      last_seq: 1,
+      summary: { headline: "1 — 1 (4-1 pens)" },
+      state: {},
+      outcome: over.outcome,
+    };
+    return renderToStaticMarkup(
+      <FixtureConsole
+        fixture={{ id: "f1", status: over.status, scheduled_at: null, venue_name: null, court_name: null, round_no: 1 }}
+        sport={sport}
+        home={side("e-home", "Riverside FC")}
+        away={side("e-away", "Summit Athletic")}
+        initialState={live}
+        initialEvents={[]}
+        canEdit
+        recorderNames={{}}
+        audit={null}
+        scorePadV2={{
+          moduleVersion: football.version,
+          resolvedConfig: CFG,
+          initialEvents: [],
+          entitlements: {},
+          band: 3,
+          identity: { recordedBy: "user-1", deviceLinkId: null },
+        }}
+      />,
+    );
+  }
+
+  it("decided + started: the section still RENDERS (audit/void history lives beside it) but is max-md:hidden", () => {
+    const html = consoleHtml({ status: "decided", outcome: { kind: "win", winner: "e-home" } });
+    const section = html.match(/<section class="[^"]*" data-role="console-scoring">/);
+    expect(section, "the section is gone entirely, not just hidden").not.toBeNull();
+    expect(section![0]).toMatch(/class="[^"]*\bmax-md:hidden\b/);
+    // and it is genuinely empty on a phone: no header text, no pad
+    expect(html).not.toContain('data-testid="score-pad"');
+  });
+
+  it("in_play + not decided: the section is visible on phones (the pad itself renders inside it)", () => {
+    const html = consoleHtml({ status: "in_play", outcome: null });
+    const section = html.match(/<section class="[^"]*" data-role="console-scoring">/);
+    expect(section).not.toBeNull();
+    expect(section![0]).not.toMatch(/max-md:hidden/);
+    expect(html).toContain('data-testid="score-pad"');
+  });
+
+  it("scheduled (not started): the section is visible on phones (Start match button)", () => {
+    const html = consoleHtml({ status: "scheduled", outcome: null });
+    const section = html.match(/<section class="[^"]*" data-role="console-scoring">/);
+    expect(section).not.toBeNull();
+    expect(section![0]).not.toMatch(/max-md:hidden/);
   });
 });

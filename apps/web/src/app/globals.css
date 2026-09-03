@@ -1032,6 +1032,19 @@ body {
 .pad-board-2 {
   background-color: var(--sport-board-2);
 }
+/* Task 13 finding C — the scorebug meta strip's phone-only edge fade
+   (scorebug.tsx). Reads the SAME `--sport-board-2` the rail's own
+   `.pad-board-2` background paints from, so the fade blends into whichever
+   sport's theme is live rather than assuming one fixed colour. Lives here,
+   not as an inline `var(--sport-...)` in scorebug.tsx's own source, because
+   `__tests__/sport-theme.test.ts`'s "and nothing else in the chassis or in
+   ANY skin emits a --sport-* property of its own" is a blunt SOURCE-SCAN —
+   it bans the substring "--sport-" from every v3 .tsx file outright, not
+   only an actual property declaration, so even a read-only `var()` inside a
+   scorebug.tsx inline style would trip it. */
+.pad-strip-fade {
+  background-image: linear-gradient(to right, transparent, var(--sport-board-2));
+}
 .pad-ink {
   color: var(--sport-ink);
 }
