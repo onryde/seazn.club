@@ -479,6 +479,7 @@ copy change and breaks under any non-`en` locale.
 | `officials-assign-select` | the per-fixture select, plus `data-fixture-id` |
 | `officials-unavailable-note` | the blackout collision note |
 | `official-blackout-date` / `official-blackout-add` | `/me` blackout editor |
+| `me-official-card` + **`data-fixture-official-id`** | the `/me` assignment card root. NOT `data-fixture-id`: the cards repeat per assignment and an official holding two ROLES on one fixture shares a fixture id, so the identity column is the `fixture_officials` row surrogate (`me-officiating.ts:31`). `officials-panel.tsx` keeps its own `data-fixture-id={f.id}`, which really is a fixture id — the two names mean different things and must not be conflated. |
 | `me-official-accept` / `me-official-decline` | `/me` response buttons |
 
 - [ ] **Step 1: Write the failing contract test**
