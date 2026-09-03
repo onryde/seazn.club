@@ -310,6 +310,11 @@ async function seedPersons(
         method: "POST",
         body: {
           full_name: p.full_name,
+          // Explicit, every lane, `"player"` included — `CreatePerson.lane`
+          // (PR #706, gap G1) is optional and defaults to 'player' server
+          // side, and a bench that relies on that default cannot distinguish
+          // a correct default from a forgotten field.
+          lane: p.lane,
           ...(p.dob === undefined ? {} : { dob: p.dob }),
           ...(p.gender === undefined ? {} : { gender: p.gender }),
           consent: p.consent,

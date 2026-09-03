@@ -156,13 +156,29 @@ fall back from, is live — no B-prompt needs its fallback path.
     `community` — **`business`, which `V112` seeds, is not there at all**.
     W2 then deletes `pro_plus`. A derivation survives all of it; a constant does
     not. Recorded as G7.
-  - **`persons.lane` can never be `'coach'` or `'staff'`.** V356 widened the
-    CHECK for the S3/#426 ruling; all six `insert into persons` sites in
-    non-test `apps/web/src` write `'player'` or `'official'` or omit the column,
-    and `CreatePerson` has no `lane` field. Owner-approved handling: map the
-    lane onto `entrant_members.roles` and `LineupSlotInput.role`
-    (`schemas.ts:1058`), which is the surface the ruling actually governs, and
-    never fabricate the column. Raised to the owner for routing as G1.
+  - **`persons.lane` can never be `'coach'` or `'staff'`. ~~CLOSED 2026-09-03
+    by PR #706 — do NOT implement the workaround below.~~** Kept, struck
+    through rather than deleted, because a session that reads only the
+    conclusion will otherwise rebuild the workaround for a gap that no longer
+    exists.
+
+    What was true: V356 widened the CHECK for the S3/#426 ruling; all six
+    `insert into persons` sites in non-test `apps/web/src` wrote
+    `'player'`/`'official'` or omitted the column, and `CreatePerson` had no
+    `lane` field. The handling was to map the lane onto
+    `entrant_members.roles` and `LineupSlotInput.role` and never fabricate the
+    column. Raised as G1.
+
+    **What is true now:** `PersonLane` is `z.enum(["player","coach","staff"])`,
+    `CreatePerson.lane` is optional, and `createPerson` writes
+    `${input.lane ?? "player"}` — producer and consumer both verified, not a
+    schema-only field. `seed-plan.ts` sends the lane EXPLICITLY for every
+    person including `"player"` (same reasoning as `consent`: a bench that
+    leans on a server default cannot tell a correct default from a forgotten
+    field), and a roster member's `roles` are the pack's declared roles
+    verbatim. `"official"` is still absent from the plan's persons by
+    construction — `PersonLane` has no such value and an official's row is
+    minted by `inviteOfficial`.
 
   Two more that cost nothing now and would have cost B05 a false defect:
 
@@ -230,11 +246,16 @@ fall back from, is live — no B-prompt needs its fallback path.
   B04's seeding. `cricket.revise` being on the list is the proof — B03's own
   entitlement probe posts it deliberately.
 
-  Also: **there is no REST route that lists fixtures** (checked every
-  `route.ts` under `app/api/v1/**`). `POST /stages/{id}/generate` returning
-  `{created, existing, fixtures}` with `ext_key` is the only fixture-identity
-  source over HTTP, which makes it both the binding source and the idempotent
-  re-read. Recorded as G3.
+  Also: **there is no REST route that lists fixtures. ~~CLOSED 2026-09-03 by
+  PR #706~~** — `GET /api/v1/divisions/{id}/fixtures` now exists. What was
+  true: `POST /stages/{id}/generate` returning `{created, existing, fixtures}`
+  with `ext_key` was the ONLY fixture-identity source over HTTP, so it had to
+  serve as both the binding source and the idempotent re-read. Recorded as G3.
+
+  The seeder still binds from `generate`'s own response and should keep doing
+  so — it needs the ids of the fixtures THIS call created, and a separate list
+  request would be a second round trip plus a race. The new route matters to
+  B04/B05, which read fixtures they did not just create.
 
 - 2026-08-13 — prompts authored, gated. S9+C0 merged; C1+S10 in flight.
   B-numbering: B16 intentionally absent (B15 covers suites 8+9).

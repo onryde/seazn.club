@@ -23,7 +23,8 @@ import { PackSchema, roundRobinFixtureCount, type Pack } from "../pack-schema.ts
  * `expectedFixtureCounts` must skip the knockout rather than mis-answer it),
  * and every lane the coach/staff/official ruling has to distinguish:
  *   - p-morgan / p-noor / p-eve / p-farid / p-gia: lane "player"
- *   - p-priya: lane "coach", pack declares NO roles (roles must gain "coach")
+ *   - p-priya: lane "coach", pack declares NO roles (roles stay EMPTY — the
+ *              lane travels in `CreatePerson.lane`, not in `roles`)
  *   - p-sam:   lane "coach", pack ALREADY declares roles ["coach","tactics"]
  *              (must not duplicate)
  *   - p-rio:   lane "staff", pack declares roles ["physio"] (must gain "staff"
@@ -292,26 +293,29 @@ describe("buildSeedPlan — roster members", () => {
     expect(member(lions, "p-noor").is_captain).toBe(false);
   });
 
-  it("a coach-lane member with NO declared roles gains exactly [\"coach\"], and lands off the playing roster shape (roles carries it, not a player slot)", () => {
+  it("a coach-lane member with NO declared roles keeps roles EMPTY — the lane is a person fact, not a roster role", () => {
     const plan = buildSeedPlan(pack());
     const priya = member(entrant(plan, "e-lions"), "p-priya");
-    expect(priya.roles).toEqual(["coach"]);
+    // This asserted `["coach"]` while `persons.lane` had no writer. PR #706
+    // gave it one, so synthesising a role the pack never declared would now
+    // be the bench inventing data. The lane is asserted on the person below.
+    expect(priya.roles).toEqual([]);
     expect(priya.is_captain).toBe(false);
   });
 
-  it("a coach-lane member whose pack roles ALREADY name \"coach\" is not duplicated", () => {
+  it("a coach-lane member's declared roles are passed through exactly as written", () => {
     const plan = buildSeedPlan(pack());
     const sam = member(entrant(plan, "e-tigers"), "p-sam");
     expect(sam.roles).toEqual(["coach", "tactics"]);
   });
 
-  it("a staff-lane member's declared roles gain \"staff\" ALONGSIDE the existing role, not in place of it", () => {
+  it("a staff-lane member's declared roles are passed through verbatim — no lane injected", () => {
     const plan = buildSeedPlan(pack());
     const rio = member(entrant(plan, "e-tigers"), "p-rio");
-    expect(rio.roles).toEqual(["physio", "staff"]);
+    expect(rio.roles).toEqual(["physio"]);
   });
 
-  it("a player-lane member's roles are untouched — no lane is ever injected for a player", () => {
+  it("a player-lane member's roles are untouched too", () => {
     const plan = buildSeedPlan(pack());
     const morgan = member(entrant(plan, "e-lions"), "p-morgan");
     expect(morgan.roles).toEqual([]);
@@ -323,11 +327,19 @@ describe("buildSeedPlan — roster members", () => {
 // ---------------------------------------------------------------------------
 
 describe("buildSeedPlan — the lane ruling on persons/officials", () => {
-  it("creates ordinary persons for player/coach/staff lanes, with no lane field at all (CreatePerson has none)", () => {
+  it("creates a persons row for player/coach/staff lanes, each carrying its own lane", () => {
     const plan = buildSeedPlan(pack());
     const priya = plan.persons.find((p) => p.ref === "p-priya");
-    expect(priya).toEqual({ ref: "p-priya", full_name: "Priya Nair", consent: { public_name: true } });
-    expect(priya && "lane" in priya).toBe(false);
+    expect(priya).toEqual({
+      ref: "p-priya",
+      full_name: "Priya Nair",
+      lane: "coach",
+      consent: { public_name: true },
+    });
+    // Inverted deliberately. This asserted `"lane" in priya === false`,
+    // because `CreatePerson` had no such field; PR #706 (gap G1) added it, so
+    // the field's ABSENCE is now the defect and its presence the contract.
+    expect(priya && "lane" in priya).toBe(true);
   });
 
   it("carries dob/gender only when the pack declares them", () => {
@@ -336,12 +348,18 @@ describe("buildSeedPlan — the lane ruling on persons/officials", () => {
     expect(eve).toEqual({
       ref: "p-eve",
       full_name: "Eve Kowalski",
+      lane: "player",
       dob: "1998-04-12",
       gender: "f",
       consent: { public_name: true },
     });
     const morgan = plan.persons.find((p) => p.ref === "p-morgan");
-    expect(morgan).toEqual({ ref: "p-morgan", full_name: "Morgan Ito", consent: { public_name: true } });
+    expect(morgan).toEqual({
+      ref: "p-morgan",
+      full_name: "Morgan Ito",
+      lane: "player",
+      consent: { public_name: true },
+    });
     expect(morgan && "dob" in morgan).toBe(false);
     expect(morgan && "gender" in morgan).toBe(false);
   });
@@ -495,6 +513,34 @@ describe("buildSeedPlan — person consent", () => {
     const staff = plan.persons.find((p) => p.ref === "p-rio");
     expect(coach?.consent).toEqual({ public_name: true });
     expect(staff?.consent).toEqual({ public_name: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// lane (G1 / PR #706)
+// ---------------------------------------------------------------------------
+
+describe("buildSeedPlan — persons carry their pack lane", () => {
+  it("maps each non-official lane onto CreatePerson.lane, player included", () => {
+    const plan = buildSeedPlan(pack());
+    const laneOf = (ref: string) => plan.persons.find((p) => p.ref === ref)?.lane;
+    // Derived from the fixture's own declarations rather than a table typed
+    // in here, so a fixture edit moves the expectation with it.
+    for (const declared of pack().persons) {
+      if (declared.lane === "official") continue;
+      expect(laneOf(declared.ref), `lane for ${declared.ref}`).toBe(declared.lane);
+    }
+    // And at least one case where the right answer differs from "player",
+    // or the assertion could not witness a blanket default.
+    expect(laneOf("p-priya")).toBe("coach");
+    expect(laneOf("p-rio")).toBe("staff");
+    expect(laneOf("p-morgan")).toBe("player");
+  });
+
+  it("never emits an official lane — officials get no persons row from this plan", () => {
+    const plan = buildSeedPlan(pack());
+    expect(plan.persons.map((p) => p.lane)).not.toContain("official");
+    expect(plan.officialPersonRefs).toContain("p-quinn");
   });
 });
 

@@ -5,6 +5,27 @@ B03's own prompt forbids touching product code, so none of these were fixed
 there. Every one was found by trying to drive the product's real API from
 outside it, which is what the bench is for.
 
+> ## STATUS 2026-09-03 — six of eight are FIXED and merged (PR #706)
+>
+> | gap | state |
+> |---|---|
+> | G1 `persons.lane` had no writer | **FIXED** — `CreatePerson.lane`, persisted |
+> | G2 no org-side official blackout | **FIXED** — `POST`/`DELETE /api/v1/officials/{id}/availability` |
+> | G3 no REST fixtures list | **FIXED** — `GET /api/v1/divisions/{id}/fixtures` |
+> | G5 catch-order untested | **FIXED** — named test in `api-v1/__tests__/http.test.ts` |
+> | G6 doc publishes a different object than the route enforces | **FIXED** — one schema object per route |
+> | G8 drift gate ignored the published spec | **FIXED** — `ci.yml` diffs `v1.public.json` too |
+> | G4 `import.events` granted by no plan | **OPEN**, gated on entitlements W2 |
+> | G7 `business` seeded by a migration, absent live | **OPEN**, same W2 gate |
+>
+> Each fix was verified present in the tree, not taken from the PR
+> description. **Read the six closed sections as history, not as work.** They
+> are kept in full because the reasoning is the reusable part — how each was
+> established, what the counter-argument was, and (for G3, G6 and G7) where
+> this document's own first draft was wrong. Only G4 and G7 are live, and both
+> want the W2 plan read first:
+> `docs/superpowers/plans/2026-09-03-entitlements-w2-matrix-and-plumbing.md`.
+
 Read `docs/superpowers/RULES.md` first, then this file. Written against
 `313af3818`; **re-verified 2026-09-03 against `origin/main` `6f04875e5`** and
 corrected in six places (marked **[re-verified 2026-09-03]**). Still: **re-pin

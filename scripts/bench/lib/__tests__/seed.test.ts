@@ -206,7 +206,7 @@ describe("seedSuite — single division, no venues (the _tiny shape)", () => {
         stages: [{ ref: "st1", seq: 1, kind: "league", name: "League One", config: { legs: 1 } }],
       },
     ],
-    persons: [{ ref: "p1", full_name: "Alice Anders", consent: { public_name: true } }],
+    persons: [{ ref: "p1", full_name: "Alice Anders", lane: "player", consent: { public_name: true } }],
     entrants: [
       {
         ref: "e1",
@@ -290,6 +290,18 @@ describe("seedSuite — single division, no venues (the _tiny shape)", () => {
     expect(stageCall?.body).toEqual([
       { seq: 1, kind: "league", name: "League One", config: { legs: 1 } },
     ]);
+
+    // And the persons body, which nothing asserted either — the same hole the
+    // division body had, on the field added most recently. `lane` is optional
+    // on `CreatePerson` and defaults to 'player' server side, so a driver that
+    // dropped it would look correct for a player and silently seed a coach as
+    // a player. Asserted as a whole-body equality so an omission fails.
+    const personCall = calls.find((c) => c.path === "/api/v1/persons");
+    expect(personCall?.body).toEqual({
+      full_name: "Alice Anders",
+      lane: "player",
+      consent: { public_name: true },
+    });
   });
 
   it("propagates bindStreamFixtures' own error when a stream matches no generated fixture", async () => {
@@ -355,8 +367,8 @@ describe("seedSuite — two divisions, venues+courts, and a SHARED ext_key acros
       },
     ],
     persons: [
-      { ref: "p1", full_name: "Alice Anders", consent: { public_name: true } },
-      { ref: "p2", full_name: "Bob Baker", consent: { public_name: true } },
+      { ref: "p1", full_name: "Alice Anders", lane: "player", consent: { public_name: true } },
+      { ref: "p2", full_name: "Bob Baker", lane: "coach", consent: { public_name: true } },
     ],
     entrants: [
       {
@@ -443,6 +455,18 @@ describe("seedSuite — two divisions, venues+courts, and a SHARED ext_key acros
     // The sibling stage must carry NO `progression` key whatsoever —
     // `CreateStage` is `.strict()`, so `progression: undefined` would be
     // rejected outright rather than ignored.
+    // A coach, whose correct lane differs from the column default — without a
+    // case like this the assertion above cannot witness a driver that hardcodes
+    // "player" or drops the field and lets the server default fill in.
+    const coachCall = calls.find(
+      (c) => c.path === "/api/v1/persons" && (c.body as { full_name?: string } | undefined)?.full_name === "Bob Baker",
+    );
+    expect(coachCall?.body).toEqual({
+      full_name: "Bob Baker",
+      lane: "coach",
+      consent: { public_name: true },
+    });
+
     const st2Call = calls.find((c) => c.path === "/api/v1/divisions/div-division-two/stages");
     expect(st2Call?.body).toEqual([{ seq: 1, kind: "league", name: "League B", config: { legs: 1 } }]);
   });

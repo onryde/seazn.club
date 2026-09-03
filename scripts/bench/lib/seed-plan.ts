@@ -24,25 +24,33 @@
 // The coach/staff/official ruling (owner decision, B03 brief)
 // ---------------------------------------------------------------------------
 // `PackPerson.lane` is `"player" | "official" | "coach" | "staff"`
-// (`pack-schema.ts:195`), but `CreatePerson` (`apps/web/src/server/api-v1/
-// schemas.ts:488-495`) has NO `lane` field at all, and no non-test write path
-// in `apps/web/src` ever inserts a `persons` row with `lane` other than the
-// literal `'player'`/`'official'` two write sites use, or the column's own
-// `'player'` default. So a pack person's lane is mapped onto whichever
-// REACHABLE surface actually carries it, never fabricated as a column:
+// (`pack-schema.ts:195`), and every lane a `persons` row can hold is now sent
+// as itself:
 //
-//   - "player"  -> an ordinary person; an ordinary roster member.
-//   - "coach"/"staff" -> an ordinary person (no `lane` in the CreatePerson
-//     body — there is nowhere to put it), whose ROSTER membership carries the
-//     lane in `roles` (`entrant_members.roles`, jsonb array) alongside
-//     whatever roles the pack already declared, never duplicated if the pack
-//     already named it. This is the S3/#426 ruling's actual reachable
-//     surface for "a card against a coach never enters playing stats" (bench
-//     design §9 P3) at ROSTER level; `LineupSlotInput.role`
-//     (`schemas.ts:1058`) is the PER-FIXTURE lineup-slot surface the same
-//     ruling also governs, and belongs to the event-import driver that reads
-//     `PackStream.lineups` — out of scope here, since streams are not one of
-//     this module's six resolve targets.
+//   - "player"/"coach"/"staff" -> `CreatePerson.lane`, explicitly, always.
+//     `PersonLane` is `z.enum(["player","coach","staff"])` and `createPerson`
+//     writes `${input.lane ?? "player"}`.
+//
+// This module's FIRST cut could not do that, and the note it carried here is
+// worth keeping as history because it is the shape of a mistake this bench
+// exists to prevent. `persons.lane` admitted 'coach'/'staff' from V356 while
+// no write path in `apps/web/src` set either, and `CreatePerson` had no
+// `lane` field at all — so the lane was mapped onto the nearest REACHABLE
+// surface instead: a coach's ROSTER membership gained "coach" in
+// `entrant_members.roles`, appended to whatever the pack declared.
+//
+// That was the right call while the gap was open and it is the wrong one now.
+// It made the bench synthesise a role the pack never declared, which is the
+// bench proving itself rather than the product. The gap was raised as G1 of
+// `docs/superpowers/specs/2026-09-02-product-gaps-from-bench-b03-prompt.md`
+// and closed by PR #706: `CreatePerson.lane` exists, is optional, and is
+// persisted. So the lane goes in the lane column and a roster member's
+// `roles` are now the pack's declared roles VERBATIM.
+//
+// `LineupSlotInput.role` (`schemas.ts`) remains the PER-FIXTURE lineup-slot
+// surface the same S3/#426 ruling governs, and still belongs to the
+// event-import driver that reads `PackStream.lineups` — out of scope here,
+// since streams are not one of this module's six resolve targets.
 //   - "official" -> NOT an entrant-roster person at all. `CreateOfficial`
 //     (`schemas.ts:3069-3077`) takes `person_id` as OPTIONAL, so an official
 //     needs no `persons` row from this plan either — excluded from `persons`
@@ -154,13 +162,24 @@ export interface SeedPlanDivision {
  *  `external_ref` is omitted — nothing in a pack maps onto it (header note 4
  *  on `PackSchema`: a pack ref is stored nowhere). `consent` is NOT omitted,
  *  and the reason is on the field itself: leaving it to the server default is
- *  legal, silent, and wrong for a bench seed. NO `lane` field — see the
- *  header comment above. */
+ *  legal, silent, and wrong for a bench seed. `lane` is set for the same
+ *  reason — see its own doc. */
 export interface SeedPlanPerson {
   readonly ref: string;
   readonly full_name: string;
   readonly dob?: string;
   readonly gender?: "m" | "f";
+  /**
+   * The pack's own lane, sent EXPLICITLY — including `"player"`, which is
+   * also the column default. Same reasoning as `consent` below: relying on a
+   * server default is legal and silent, and a bench that leans on one cannot
+   * tell "the product defaulted correctly" from "the bench forgot to ask".
+   *
+   * `"official"` is absent by construction, not by omission: `PersonLane` is
+   * `z.enum(["player","coach","staff"])` and an official's `persons` row is
+   * minted by `inviteOfficial`, not by this plan — see `officialPersonRefs`.
+   */
+  readonly lane: "player" | "coach" | "staff";
   /**
    * ALWAYS `{ public_name: true }` — seeded deliberately, never omitted.
    *
@@ -243,16 +262,6 @@ export interface SeedPlan {
 // The mapping
 // ---------------------------------------------------------------------------
 
-/** `roles` mapped for one roster member: the pack's own declared roles, plus
- *  the person's lane appended when that lane is "coach"/"staff" and not
- *  already present — never duplicated, never applied to a player. Pulled out
- *  of `buildRosterMember` only because the whole ruling lives on this one
- *  line and deserves to be readable as a unit. */
-function rolesFor(lane: PackPersonLane, declaredRoles: readonly string[]): readonly string[] {
-  if (lane !== "coach" && lane !== "staff") return declaredRoles;
-  return declaredRoles.includes(lane) ? declaredRoles : [...declaredRoles, lane];
-}
-
 function buildRosterMember(
   m: PackRosterMember,
   laneByRef: ReadonlyMap<string, PackPersonLane>,
@@ -279,7 +288,10 @@ function buildRosterMember(
     ...(m.squadNumber === undefined ? {} : { squad_number: m.squadNumber }),
     ...(m.positionKey === undefined ? {} : { default_position_key: m.positionKey }),
     is_captain: m.captain,
-    roles: rolesFor(lane, m.roles),
+    // VERBATIM. A coach's lane used to be appended here because `persons.lane`
+    // had no writer; it does now (`CreatePerson.lane`, PR #706), so the lane
+    // travels as the lane and this carries only what the pack declared.
+    roles: m.roles,
   };
 }
 
@@ -327,10 +339,11 @@ export function buildSeedPlan(pack: Pack): SeedPlan {
   // Every player/coach/staff person becomes a `persons` row; officials do
   // not (see the header comment — `CreateOfficial.person_id` is optional).
   const persons: SeedPlanPerson[] = pack.persons
-    .filter((p) => p.lane !== "official")
+    .filter((p): p is typeof p & { lane: "player" | "coach" | "staff" } => p.lane !== "official")
     .map((p) => ({
       ref: p.ref,
       full_name: p.fullName,
+      lane: p.lane,
       ...(p.dob === undefined ? {} : { dob: p.dob }),
       ...(p.gender === undefined ? {} : { gender: p.gender }),
       // Every lane that gets a `persons` row gets the consent too — a coach
