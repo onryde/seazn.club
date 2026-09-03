@@ -29,8 +29,13 @@ export const FEATURE_REASONS: Record<string, string> = {
   // true on every plan and in every currency.
   "orgs.max_owned":
     "Your current plan covers the most organisations it allows (Community 1, Pro 5). On Pro, buy an extra organisation from Settings → Add-ons; it's billed monthly on top of your current bill. Community upgrades to Pro first.",
+  // `scorers.max` used to sit here. V393 (entitlements v18 W2 T12) deleted the
+  // key from `plan_entitlements` outright and repointed both enforcement
+  // branches at `members.max`, so nothing can raise a 402 for it any more —
+  // same reasoning as the W1/W2 removals noted further down. A refusal on a
+  // scorer seat now reads the team-member line above, which is the honest one:
+  // it is the members.max pool that refused.
   "members.max": "You've reached your plan's team-member seats.",
-  "scorers.max": "You've reached your plan's scorer seats.",
   "competitions.max_active": "Your plan's active-competition limit is reached.",
   "divisions.per_competition.max": "Adding another division needs a bigger plan.",
   "entrants.per_division.max": "This division is at your plan's entrant limit.",
@@ -79,15 +84,22 @@ export const FEATURE_REASONS: Record<string, string> = {
   exports: "CSV/PDF exports are a Pro feature.",
   "exports.branded": "Branded print templates (club colours, sponsor logos) are a Pro feature.",
   // Clubs & bulk import (Jul3/01 §7)
-  // STATES NO NUMBER AND NO PLAN, deliberately. This sentence used to read
-  // "Files over 20 rows need a Pro plan"; the live catalog has since moved
-  // community to 50 (V319), so a community organiser refused at 51 rows was
-  // told the limit was 20 and would split into two 26-row files — each of
-  // which would have imported whole. `import.bulk` is also a DUAL-VALUED key
-  // (bool on Pro, an int cap on community), so "needs a Pro plan" was wrong in
-  // kind as well as in value: a community org has a real, usable allowance.
-  // The cap lives in `plan_entitlements` and nowhere else; copy that restates
-  // it goes stale silently and is then quoted back as truth.
+  // STATES NO NUMBER AND NO PLAN, deliberately, and both sides of a rebase
+  // arrived at that independently — main removed the figure while this wave was
+  // removing it too, which is worth knowing before anyone "restores" one.
+  //
+  // It used to read "Files over 20 rows need a Pro plan". The catalog moved
+  // community to 50 (V319), so an organiser refused at 51 rows was told the
+  // limit was 20 and would split into two 26-row files — each of which would
+  // have imported whole. `import.bulk` is also a DUAL-VALUED key (bool on Pro,
+  // an int cap on community), so "needs a Pro plan" was wrong in kind as well as
+  // in value: a community org has a real, usable allowance.
+  //
+  // Writing 50 here would be the third hardcoded copy of a figure that has
+  // already drifted once. So the cap travels with the refusal instead —
+  // `bulkImportRowsReason` builds the sentence from the limit `withinLimit`
+  // actually resolved. THIS flat form is the fallback for callers with no limit
+  // to hand: the /admin reason column, and `<UpgradeGate>`'s key-only lookup.
   "import.bulk": "This file has more rows than your plan allows — split it into smaller files, or upgrade for a higher limit.",
   "logos.bulk": "Multi-file logo upload is a Pro feature — you can still set logos one at a time.",
   "clubs.hierarchy": "Club hierarchies (parent clubs, group-by-club) — your plan's limits apply.",
@@ -173,6 +185,26 @@ export function doubleElimFormatReason(stageKind: string): string {
     : featureReason("formats.double_elim");
 }
 
+/**
+ * The `import.bulk` refusal, quoting the cap that actually refused the file.
+ *
+ * `FEATURE_REASONS["import.bulk"]` cannot name a number: the cap is a plan
+ * entitlement (Free 50 rows per file, Pro 500) and this module is isomorphic,
+ * read by the client paywall with no database in reach. The previous sentence
+ * DID name one — "Files over 20 rows" — and it had been wrong since V319 raised
+ * the cap to 50, in both directions: it understated Free by more than half and
+ * said nothing true for Pro at all.
+ *
+ * So the caller that already resolved the limit (`withinLimit`'s own answer, in
+ * `usecases/imports.ts`) passes it here and ships the sentence with the 402.
+ * `null` is unlimited, which cannot refuse anything — the flat line is then the
+ * only honest answer.
+ */
+export function bulkImportRowsReason(limit: number | null): string {
+  if (limit === null) return featureReason("import.bulk");
+  return `Files over ${limit} rows need a bigger plan — split the file or upgrade.`;
+}
+
 // Cheapest plan that unlocks each feature (mirrors plan_entitlements,
 // V112 + V240 + V391). Everything not listed unlocks on Pro — only the
 // above-Pro (Contact-us `enterprise`) exceptions need rows. (The AI run cap
@@ -203,9 +235,11 @@ export function doubleElimFormatReason(stageKind: string): string {
 // to guard this DERIVED the same backwards rule and pinned it.
 //
 // `officials.auto` and `scorers.max` also left this set at v18: post-V391
-// both are plain, finite Pro caps. `domains.custom` and `support.priority`
-// left for an unrelated reason — T1 deleted both keys from
-// `plan_entitlements` outright, so nothing gates on them at all.
+// both were plain, finite Pro caps (and V393 then deleted `scorers.max`
+// entirely, so where the ladder lands it is moot — the documented default
+// applies). `domains.custom` and `support.priority` left for an unrelated
+// reason — T1 deleted both keys from `plan_entitlements` outright, so nothing
+// gates on them at all.
 //
 // If an above-Pro int upsell is ever wanted, the correct predicate is the
 // INVERSE of the one that broke: a key where Pro is FINITE and enterprise is

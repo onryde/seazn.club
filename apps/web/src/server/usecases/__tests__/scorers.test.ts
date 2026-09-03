@@ -295,9 +295,10 @@ describe.skipIf(!HAS_DB)("scorer role (doc 13, PROMPT-18)", () => {
 
   it("quotas: one member and one scorer past the cap → 402 with the feature key (doc 13 §5)", async () => {
     const { orgId } = await seedOrg();
-    // Both caps are READ from the matrix, never typed: they have moved twice
-    // (V319 members 5 / scorers 1, V391 members 3 / scorers 2) and a stale
-    // literal makes every "expect 402" pass as an accept without failing.
+    // The cap is READ from the matrix, never typed: it has moved three times
+    // (V319 members 5 / scorers 1, V391 members 3 / scorers 2, V393 deleted the
+    // scorer key outright) and a stale literal makes every "expect 402" pass as
+    // an accept without failing.
     const cap = async (key: string): Promise<number> => {
       const [row] = await sql<{ int_value: number | null }[]>`
         select int_value from plan_entitlements
@@ -306,7 +307,14 @@ describe.skipIf(!HAS_DB)("scorer role (doc 13, PROMPT-18)", () => {
       return row!.int_value!;
     };
     const members = await cap("members.max");
-    const scorers = await cap("scorers.max");
+    // V393 (W2 T12): `scorers.max` is GONE from the matrix. Asserted here and
+    // not merely assumed, because a key with no row resolves to 0 rather than
+    // to unlimited — if it came back with a value, every expectation below
+    // about which pool is charged would be measuring the wrong thing.
+    const [scorerRow] = await sql<{ int_value: number | null }[]>`
+      select int_value from plan_entitlements
+       where plan_key = 'community' and feature_key = 'scorers.max'`;
+    expect(scorerRow, "V393 deletes scorers.max from every plan").toBeUndefined();
 
     // Members pool: the owner occupies one seat, so `members - 1` more accepts
     // fit and the next one is 402.
@@ -319,16 +327,20 @@ describe.skipIf(!HAS_DB)("scorer role (doc 13, PROMPT-18)", () => {
       grantInvite((await loadInvite(overflow))!, await makeUser("v-over")),
     ).rejects.toMatchObject({ featureKey: "members.max" });
 
-    // Scorer pool is separate: scorers still fit at a full member pool…
-    for (let i = 0; i < scorers; i++) {
+    // The scorer pool is still COUNTED separately — design §2 lists merging it
+    // into the staff seats as the rejected alternative — so scorers still fit
+    // at a full member pool. What V393 changed is the NUMBER it draws on: the
+    // same `members.max` figure, because the seat is no longer sold separately.
+    for (let i = 0; i < members; i++) {
       const t = await makeInvite(orgId, "scorer");
       await grantInvite((await loadInvite(t))!, await makeUser(`s${i}`));
     }
-    // …the seat past the scorer cap is 402.
+    // …and the seat past that cap is a 402 naming `members.max`, NOT the
+    // deleted key, and NOT the silent deny-at-zero a leftover read produces.
     const sOver = await makeInvite(orgId, "scorer");
     await expect(
       grantInvite((await loadInvite(sOver))!, await makeUser("s-over")),
-    ).rejects.toMatchObject({ featureKey: "scorers.max" });
+    ).rejects.toMatchObject({ featureKey: "members.max" });
   });
 
   it("orgs.max_owned (decision a): 2nd community org blocked at creation", async () => {
@@ -506,7 +518,7 @@ describe.skipIf(!HAS_DB)("scorer role (doc 13, PROMPT-18)", () => {
   });
 
   it("accept, existing viewer × scorer invite: scope added, role kept, no scorer seat", async () => {
-    const { orgId, ownerId } = await seedOrg(); // community: scorers.max 1
+    const { orgId, ownerId } = await seedOrg(); // community: seats drawn from members.max
     const owner = asRole(orgId, ownerId, "owner");
     const { division, fixtures } = await rig(owner);
 

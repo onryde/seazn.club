@@ -5,8 +5,12 @@
 // here as "unadvertised until Spec 2 ships"; V391 deleted the key entirely, so
 // there is no longer a row to advertise later.
 export const ENTITLEMENT_DOMAINS: { slug: string; features: string[] }[] = [
-  // scorers.max is deliberately absent (#244): the seat is dormant legacy and
-  // retired from the pricing comparison; /admin still surfaces it under "other".
+  // scorers.max is not listed here because the KEY no longer exists: V393
+  // (entitlements v18 W2 T12, owner ruling 2026-09-03) deleted it from
+  // plan_entitlements outright, and both enforcement branches now draw on
+  // members.max. It used to be described here as "deliberately absent (#244) —
+  // dormant legacy, surfaced under /admin's `other`"; there is nothing left for
+  // /admin to surface. The scorer ROLE is untouched (#707).
   { slug: "scale", features: [
     "competitions.max_active", "orgs.max_owned", "divisions.per_competition.max",
     "entrants.per_division.max", "members.max",

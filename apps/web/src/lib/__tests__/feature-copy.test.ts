@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { doubleElimFormatReason, featurePlan, featureReason } from "@/lib/feature-copy";
+import {
+  bulkImportRowsReason,
+  doubleElimFormatReason,
+  featurePlan,
+  featureReason,
+} from "@/lib/feature-copy";
 
 /**
  * The vocabulary a price claim has to reach for. The ruling on the
@@ -12,6 +17,36 @@ import { doubleElimFormatReason, featurePlan, featureReason } from "@/lib/featur
  */
 const PRICES_THE_RIDER =
   /[$£€]|\b(rates?|prices?|priced|pricing|costs?|fees?|half|double|cheaper|discount)\b/i;
+
+describe("V393 (entitlements v18 W2 T12) — the two reason strings that moved", () => {
+  it("no longer sells a scorer seat: scorers.max falls back to the generic line", () => {
+    // The key is deleted from plan_entitlements and both enforcement branches
+    // read members.max, so nothing can raise a 402 for it. A reason here would
+    // be an upsell nothing can reach — the same rule W1 and T1 applied to the
+    // fidelity keys and the four inert ones.
+    expect(featureReason("scorers.max")).toBe("This feature needs a plan upgrade.");
+    // …and the pool that DOES refuse now says so in its own words.
+    expect(featureReason("members.max")).toMatch(/team-member seats/);
+  });
+
+  it("quotes the import cap it was refused by, and hardcodes no number", () => {
+    // The old sentence said "Files over 20 rows need a Pro plan" and had been
+    // wrong since V319 raised the cap to 50 — in both directions, since Pro's
+    // own cap is 500. No figure is written into the map any more.
+    expect(FEATURE_REASONS_IMPORT_BULK).not.toMatch(/\d/);
+    expect(bulkImportRowsReason(50)).toContain("over 50 rows");
+    expect(bulkImportRowsReason(500)).toContain("over 500 rows");
+    // Each rung's sentence names ITS OWN cap, never the other's — the failure
+    // mode a single flat literal cannot express.
+    expect(bulkImportRowsReason(50)).not.toContain("500");
+    expect(bulkImportRowsReason(500)).not.toContain("over 50 rows");
+    // `null` is unlimited and cannot refuse anything, so there is no number to
+    // quote and the flat line is the honest answer.
+    expect(bulkImportRowsReason(null)).toBe(featureReason("import.bulk"));
+  });
+});
+
+const FEATURE_REASONS_IMPORT_BULK = featureReason("import.bulk");
 
 describe("feature-copy V290", () => {
   it("maps Enterprise (Contact-us) features to \"enterprise\" (entitlements v18)", () => {
@@ -30,7 +65,10 @@ describe("feature-copy V290", () => {
     expect(featurePlan("dashboard.public.max")).toBe("pro");
     // pro_plus is retired (V391). officials.auto and scorers.max were its
     // above-Pro keys; entitlements v18 moves both to plain Pro (design §2/§4)
-    // — a paywall for either must no longer point at Contact-us.
+    // — a paywall for either must no longer point at Contact-us. V393 then
+    // deleted `scorers.max` from plan_entitlements entirely, so it is now in
+    // the same position as domains.custom below: nothing gates on it, and the
+    // ladder's documented default (unknown key → "pro") is the answer.
     expect(featurePlan("officials.auto")).toBe("pro");
     expect(featurePlan("scorers.max")).toBe("pro");
     // domains.custom / support.priority: T1 deleted both keys from
