@@ -14,11 +14,21 @@ surface work — that is W3.
    it (the other four currencies are set points anchored on USD, not FX — leaving them
    at §3a would put AUD 12 = USD 12 and break the stated "AUD reads against a 15–20
    norm" rationale).
-2. **Tier 2+ is 60% of the base** — a 40% discount instead of §3a's 50% — rounded
-   down to a whole major unit (INR to the nearest x99). Extra organisations get
-   DEARER, not cheaper: $6 → $7, and a 3-org monthly group goes $24 → $26. The owner
-   was asked which of the two readings of "40%" they meant and chose this one
-   explicitly; do not "restore" the half-the-base rule.
+2. **Tier 2+ stays at §3a's rule — half the base**, rounded down to a whole major
+   unit (INR to the nearest x99). A 60% rate ($7 extra org) was chosen and then
+   REVERTED by the owner once its true cost was measured: `extraOrgPrice()`'s own
+   comment says the prose "half your plan's rate" is repeated across four locales,
+   and `extra-org-price-parity.test.ts` names the surfaces — 6 dictionary keys × 4
+   locales, `config/tips.ts`, both seed product descriptions, 3 help articles and 2
+   e2e specs, ~30 edits. Holding the ratio keeps W2 out of the dictionaries
+   altogether, which is what the Pro Plus split ruling wanted. **The extra
+   organisation is $6, not $7** — do not "restore" the 60% figure from an earlier
+   draft of this file.
+
+   Note the INR consequence of the x99 rule: ₹499 ÷ 2 = ₹249.50, and the nearest
+   x99 below that is **₹199**, so INR tier 2+ is 40% of base rather than 50%. That
+   is the rule working as written (today's ₹1,399 → ₹699 rounds the same way), and
+   it is safe because the parity guard asserts **at-most-half**, not exactly-half.
 3. **Event Pass L rises** to 39 USD. Bounded by §3a's own prose on both sides:
    `3 × L ≥ annual` (the nudge) and `2 × L < annual` ("a two-tournament organiser is
    never pushed into a subscription"), which pins USD L to 33–49.
@@ -39,9 +49,9 @@ surface work — that is W3.
 | | USD | EUR | GBP | AUD | INR |
 |---|---|---|---|---|---|
 | Pro monthly tier 1 | 12 | 10 | 9 | 16 | 499 |
-| Pro monthly tier 2+ / extra org add-on | 7 | 6 | 5 | 9 | 299 |
+| Pro monthly tier 2+ / extra org add-on | 6 | 5 | 4 | 8 | 199 |
 | Pro annual tier 1 | 99 | 89 | 79 | 139 | 3,999 |
-| Pro annual tier 2+ | 59 | 53 | 47 | 83 | 2,399 |
+| Pro annual tier 2+ | 49 | 44 | 39 | 69 | 1,999 |
 | Event Pass M | 15 | 14 | 12 | 19 | 599 |
 | Event Pass L | 39 | 35 | 29 | 55 | 1,599 |
 | Extra seat / month (hidden, R13) | 2 | 2 | 2 | 3 | 99 |
@@ -53,22 +63,24 @@ carries only `eur/gbp/inr/aud`):
 
 | | usd | eur | gbp | aud | inr |
 |---|---|---|---|---|---|
-| pro monthly tier 1 / tier 2+ | 1200 / 700 | 1000 / 600 | 900 / 500 | 1600 / 900 | 49900 / 29900 |
-| pro annual tier 1 / tier 2+ | 9900 / 5900 | 8900 / 5300 | 7900 / 4700 | 13900 / 8300 | 399900 / 239900 |
+| pro monthly tier 1 / tier 2+ | 1200 / 600 | 1000 / 500 | 900 / 400 | 1600 / 800 | 49900 / 19900 |
+| pro annual tier 1 / tier 2+ | 9900 / 4900 | 8900 / 4400 | 7900 / 3900 | 13900 / 6900 | 399900 / 199900 |
 | event_pass / event_pass_l | 1500 / 3900 | 1400 / 3500 | 1200 / 2900 | 1900 / 5500 | 59900 / 159900 |
-| extra_org_pro | 700 | 600 | 500 | 900 | 29900 |
+| extra_org_pro | 600 | 500 | 400 | 800 | 19900 |
 | extra_seat | 200 | 200 | 200 | 300 | 9900 |
 | size_pack_32 | 500 | 500 | 400 | 700 | 19900 |
 
 Rules, verified in all five currencies: annual ÷ monthly ∈ 8–9 (8.25 / 8.90 / 8.78 /
-8.69 / 8.01); tier 2+ = 60% rounded down; M < L < annual; 3 × L ≥ annual (117≥99,
-105≥89, 87≥79, 165≥139, 4797≥3999); 2 × L < annual (78<99, 70<89, 58<79, 110<139,
-3198<3999).
+8.69 / 8.01); tier 2+ ≤ half the base (6≤6, 5≤5, 4≤4.5, 8≤8, 199≤249.5 monthly;
+49≤49.5, 44≤44.5, 39≤39.5, 69≤69.5, 1999≤1999.5 annual); M < L < annual;
+3 × L ≥ annual (117≥99, 105≥89, 87≥79, 165≥139, 4797≥3999); 2 × L < annual
+(78<99, 70<89, 58<79, 110<139, 3198<3999).
 
 Consequences to carry into W3: the design's "revenue per Pro org falls 53%" is now
 ~37%, and the approved mockups print the old $9/$15 pair. Both are W3's to amend.
-§3a's "the graduated tier-2 rate = half the base rounded DOWN" is superseded by the
-60% rule above and must be rewritten, not left to contradict the seed.
+§3a's own price table is superseded by the one above and must be rewritten there too,
+so the spec does not contradict the seed. The "half the base rounded DOWN" RULE in
+§3a survives unchanged.
 
 ## Premises re-pinned against the tree — eight corrections
 
