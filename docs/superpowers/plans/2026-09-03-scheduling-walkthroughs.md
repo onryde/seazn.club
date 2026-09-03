@@ -634,6 +634,20 @@ async function goTab(page: Page, base: string, tab: string): Promise<void> {
   await expect(page.getByRole("main")).toBeVisible();
 }
 
+// The division's stored scheduling config — the record every constraints and
+// settings assertion reads back. One GET, no caching: the panel writes
+// read-modify-write, so a stale copy would hide exactly the races this sweeps.
+async function readConfig(
+  request: APIRequestContext,
+  divisionId: string,
+): Promise<Record<string, any>> {
+  const { data } = await apiJson<{ config: Record<string, any> }>(
+    request,
+    `/api/v1/divisions/${divisionId}/schedule-settings`,
+  );
+  return data?.config ?? {};
+}
+
 // The system's own record of the board, ordered so `toEqual` is meaningful.
 // Restore must return every slot to the same time AND the same court, so the
 // shape carries both — a count-only read cannot see a court swap.
@@ -685,23 +699,82 @@ test("the organiser sets up, schedules, saves, clears, restores, freezes and pub
     return data?.config.matchMinutes;
   }).toBe(45);
 
-  // 3 — the constraint matrix. Pin the VALUE, not merely that the field exists.
+  // 3 — the constraint matrix, swept as a TABLE. Enumerated from the panel on
+  // 2026-09-03; do not substitute the engine's constraint vocabulary here.
+  // Only `max_fixtures_per_day` has a UI writer at all — `rest-min` writes
+  // `constraints.restMin`, which is NOT a hard[] rule — so asserting
+  // `hard[].type === "min_rest_minutes"` after a UI edit can never pass.
+  //
+  // The dimension worth sweeping is COMMIT SEMANTICS, which differ per control
+  // type and which a fill-everything-then-Save pass sails straight past.
   await goTab(page, base, "constraints");
+
+  // 3a — what each control OPENS AT. A reachability assertion is satisfied by
+  // any value; these defaults are what a regression actually moves.
+  await expect(page.getByTestId("constraint-min-rest")).toHaveValue("0");
+  await expect(page.getByTestId("constraint-max-per-day")).toHaveValue("");
+  await expect(page.getByTestId("constraint-field-fairness")).toHaveValue("off");
+  await expect(page.getByTestId("constraint-cross-person-clash")).not.toBeChecked();
+  await expect(page.getByTestId("constraint-no-back-to-back")).not.toBeChecked();
+
+  // 3b — checkboxes and selects commit INSTANTLY on change, no blur.
+  await page.getByTestId("constraint-cross-person-clash").check();
+  await expect.poll(() => readConfig(request, divisionId)
+    .then((c) => c.constraints?.crossPersonClash)).toBe("hard");
+  await page.getByTestId("constraint-no-back-to-back").check();
+  await expect.poll(() => readConfig(request, divisionId)
+    .then((c) => c.constraints?.noBackToBack)).toBe(true);
+  await page.getByTestId("constraint-field-fairness").selectOption("rotate");
+  await expect.poll(() => readConfig(request, divisionId)
+    .then((c) => c.constraints?.fieldFairness)).toBe("rotate");
+
+  // 3c — number fields are draft-then-commit. THIS is the differential case:
+  // typing alone must issue ZERO writes. A test that fills and immediately
+  // polls would pass on a panel that committed on every keystroke, which is
+  // the regression `constraints-panel-commit-semantics` exists to prevent.
+  const beforeTyping = await readConfig(request, divisionId);
   await page.getByTestId("constraint-min-rest").fill("60");
+  expect(await readConfig(request, divisionId)).toEqual(beforeTyping);
+  await page.getByTestId("constraint-min-rest").blur();
+  await expect.poll(() => readConfig(request, divisionId)
+    .then((c) => c.constraints?.restMin)).toBe(60);
+
+  // 3d — the one hard[] rule an organiser can actually express, committed with
+  // Enter rather than blur, and carrying the division scope the panel hard-codes.
   await page.getByTestId("constraint-max-per-day").fill("2");
-  await page.getByRole("button", { name: /save/i }).click();
+  await page.getByTestId("constraint-max-per-day").press("Enter");
   await expect.poll(async () => {
-    const { data } = await apiJson<{ config: { hard?: { type: string; minutes?: number }[] } }>(
-      request, `/api/v1/divisions/${divisionId}/schedule-settings`);
-    return data?.config.hard?.find((h) => h.type === "min_rest_minutes")?.minutes;
-  }).toBe(60);
+    const c = await readConfig(request, divisionId);
+    const rule = c.hard?.find((h) => h.type === "max_fixtures_per_day");
+    return rule ? [rule.count, rule.scope?.kind] : null;
+  }).toEqual([2, "division"]);
+
+  // 3e — the inverse direction. Clearing the field DELETES the rule; a guard
+  // checked in one direction only is half tested.
+  await page.getByTestId("constraint-max-per-day").fill("");
+  await page.getByTestId("constraint-max-per-day").press("Enter");
+  await expect.poll(async () => {
+    const c = await readConfig(request, divisionId);
+    return c.hard?.some((h) => h.type === "max_fixtures_per_day") ?? false;
+  }).toBe(false);
+  // Put it back — later steps schedule against it.
+  await page.getByTestId("constraint-max-per-day").fill("2");
+  await page.getByTestId("constraint-max-per-day").press("Enter");
 
   // 4 — a blackout created THROUGH THE UI. Nothing has ever done this.
+  // Scope is a FLAT court list plus "" meaning everywhere (division-wide).
+  // There is no venue-wide option — "all courts at venue X" is not expressible,
+  // so do not write an assertion that assumes one.
+  // Blackouts are all-or-nothing behind ONE Save, refused while any row is
+  // invalid, and `to <= from` is refused with `errorOrder`.
   await page.getByTestId("blackout-add").click();
   await page.getByTestId("blackout-from").fill(BLACKOUT_FROM);
   await page.getByTestId("blackout-to").fill(BLACKOUT_TO);
-  await page.getByRole("button", { name: /save/i }).click();
+  await expect(page.getByTestId("blackout-court")).toHaveValue(""); // opens at everywhere
+  await page.getByTestId("blackout-save").click();
   await expect(page.getByTestId("blackout-row")).toHaveCount(1);
+  await expect.poll(() => readConfig(request, divisionId)
+    .then((c) => c.blackouts?.length ?? 0)).toBe(1);
 
   // 5 — the wait report names the entrant it claims, not just "a report ran".
   await page.getByTestId("wait-report-check").click();
