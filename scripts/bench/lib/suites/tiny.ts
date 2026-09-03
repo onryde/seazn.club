@@ -21,18 +21,94 @@
 // generate, schedule/auto, schedule/apply, schedule/validate — only where its
 // data comes from has moved.
 //
-// One consequence of that move is visible in a live run and is deliberate: the
-// pack's stage declares `legs: 3`, so the generator now mints THREE fixtures
-// where the inline shape minted one, and the suite schedules all three. The
-// assertion that used to read `!== 1` is derived from the pack instead (see
-// `expectedFixtureCount`), so it moves with the file rather than freezing
-// yesterday's shape — which is what it had already done once.
+// ---------------------------------------------------------------------------
+// T4 — ONTO THE SHARED SEEDING LAYER, PLUS `--keep` IDEMPOTENCE
+// ---------------------------------------------------------------------------
+// This suite used to build its own request bodies via `tinyPlan` (a
+// one-division, one-stage-only reader) and drive its own HTTP for org,
+// competition, division, entrants and stage creation + generation. Both are
+// gone: the plan now comes from `buildSeedPlan` (lib/seed-plan.ts, a pure
+// pack -> plan mapping with no one-division refusal) and the HTTP is driven
+// by `seedSuite` (lib/seed.ts). `runTinySuite` itself still only DRIVES
+// `_tiny.json`'s one division/one stage for the scheduling half below — that
+// assumption did not move, only the seeding half did, which is what
+// `buildSeedPlan`/`seedSuite` were built (B03) to generalise past.
+//
+// `fixtureCountIssue` and the pack stage (`tinyPackStage`) both had to be
+// adapted rather than deleted (T4 brief): `TinySeedPlan` is gone, so both now
+// speak `SeedPlan` — an N-division/N-stage shape — reading only the FIRST
+// `expectedFixtureCounts` entry, which for `_tiny.json` (exactly one league
+// stage) is the only one there is.
+//
+// A `SeedTransport` is threaded through every HTTP call this file makes
+// (`TinySuiteInput.transport`, defaulted to `seed.ts`'s own
+// `defaultTransport`) — the same DI shape `seed.ts` itself uses
+// (`lib/env.ts`'s `runPreflight` is the original precedent) — so the
+// idempotence guard below is unit-testable with a fake, never `global.fetch`.
+//
+// ---------------------------------------------------------------------------
+// `--keep` idempotence — `findExistingSeed`
+// ---------------------------------------------------------------------------
+// There is no `POST /api/v1/orgs` and no `PATCH` either (checked: no
+// `app/api/v1/orgs/route.ts` exists, only `orgs/[id]/...` subresources) — the
+// org a bench run lands in is whatever its sign-in email's FIRST sign-in ever
+// provisioned, and nothing lets this file choose its slug or name. So the
+// marker a later `--keep` run looks for cannot hang off the org; it hangs off
+// the COMPETITION instead: a hash of the pack's own content
+// (`lib/pack-hash.ts`), sent as `CreateCompetition.branding` (jsonb,
+// ungated — schemas.ts:95, written at usecases/competitions.ts:202-209) on
+// the SAME create call that seeds the competition, and read back with
+// `GET /api/v1/competitions`, matched against the pack's own declared
+// competition slug. NOT `description`: that field is markdown rendered on
+// public surfaces, and `--keep` leaves orgs browsable by design — a hash
+// there would be customer-visible litter.
+//
+// For a SECOND process invocation to ever find what a FIRST one seeded, both
+// have to sign in to the SAME org — which means the sign-in email cannot be
+// the random-per-run `randomUUID()` tag this suite used unconditionally
+// before T4. Under `--keep` (the CLI's default: bench.ts's
+// `keep: !values.wipe`) the run tag is now the FIXED literal `"keep"`, so
+// every `--keep` run's email — and therefore its org — is the same. Under
+// `--wipe` the run tag stays the original random one: a fresh org every
+// run, and (since the lookup below is gated on `keep` and never even
+// attempted otherwise) a guarantee it never short-circuits, matching the
+// brief's third required case directly.
+//
+// KNOWN LIMITATION, disclosed rather than solved here: `_tiny.json` declares
+// an explicit competition slug (`"bench-tiny-series"`), sent verbatim by
+// `seedSuite`. If a `--keep` run's pack hash does NOT match (the pack's
+// content changed since the last `--keep` run against the same org), this
+// file still attempts to seed into that SAME deterministic org with that
+// SAME slug — which a real backend will 409 on, since the stale, non-matching
+// competition already holds that slug there (competitions.ts's own explicit-
+// slug path 409s on collision; it does not retry, unlike a server-generated
+// slug). This is an accepted edge case, not a defect this task fixes: it
+// only bites a developer who edits `_tiny.json`'s content while iterating
+// under `--keep`, and the fix in that case is a one-time `--wipe`. Solving it
+// (e.g. dropping the literal slug on a mismatch and letting the server mint a
+// fresh one) is future work if it turns out to bite in practice.
+//
+// On a SHORT CIRCUIT this run does NOT re-derive division/stage/court ids and
+// does NOT re-run scheduling — it returns immediately, reporting the reuse.
+// That is deliberate, not a shortcut this task ran out of time for: `--keep`'s
+// own stated purpose (design doc, bench-prompts/_RULES.md "Keep-data default")
+// is "so players/stats/news are browsable in the app afterwards" — the whole
+// point of a repeat `--keep` run against unchanged content is that there is
+// already a fully seeded (and, from a prior run, already scheduled)
+// competition sitting there to look at, not something this run should touch
+// again. Reconstructing enough state to re-drive scheduling against a REUSED
+// competition (division/stage/court lookups this file does not otherwise
+// need) is a bigger feature than "detect and skip a duplicate seed", and nothing
+// in this task's brief asks for it.
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import type pino from "pino";
-import { newSession, request, signIn, type Session } from "../http.ts";
-import { expectedFixtureCount, formatFinding, loadPackFile } from "../pack-io.ts";
-import { entrantsOfDivision, type Pack, type PackJsonValue } from "../pack-schema.ts";
+import { newSession, type Session } from "../http.ts";
+import { formatFinding, loadPackFile } from "../pack-io.ts";
+import { hashPack } from "../pack-hash.ts";
+import type { Pack } from "../pack-schema.ts";
+import { buildSeedPlan, type SeedPlan } from "../seed-plan.ts";
+import { defaultTransport, seedSuite, type SeededSuite, type SeedTransport } from "../seed.ts";
 import type { SuiteReport } from "../report.ts";
 
 /** The committed micro-pack, resolved from THIS module rather than from the
@@ -40,6 +116,11 @@ import type { SuiteReport } from "../report.ts";
  *  bench:scheduler` and from a worktree root by CI, and a cwd-relative path
  *  would silently read a different file (or none) between the two. */
 export const TINY_PACK_PATH = fileURLToPath(new URL("../../packs/_tiny.json", import.meta.url));
+
+/** The `--keep` idempotence marker's key inside `competitions.branding`
+ *  (jsonb). Exported so a test can construct a matching/mismatching branding
+ *  value without hand-typing the key twice. */
+export const KEEP_BRANDING_KEY = "benchPackHash";
 
 export interface TinySuiteInput {
   base: string;
@@ -49,109 +130,44 @@ export interface TinySuiteInput {
    *  API has no per-request engine field at all). */
   engine: "optimized" | "greedy" | "both";
   /**
-   * Recorded for the report; NOT enforced by this suite. `_tiny`'s own
-   * footprint (one org/competition/division/2 entrants) is left in place
-   * either way — B03 (seeding layer) is the session chartered to own real
-   * seed/teardown primitives shared across every real suite, and a
-   * bespoke one-off deletion path here would risk duplicating or
-   * conflicting with that design. Deliberate B01 scope decision, recorded
-   * in the PR body.
+   * T4: now ENFORCED, not merely recorded. `true` (the CLI's default —
+   * `keep: !values.wipe`) makes this run sign in with a FIXED identity and,
+   * before seeding anything, look for a prior `--keep` run's competition
+   * whose branding carries the SAME pack hash — if found, seeding (and
+   * scheduling) are skipped entirely and this run reports the reuse. `false`
+   * (`--wipe`) never attempts that lookup: a fresh random identity, a fresh
+   * seed, every time. See this file's header comment for the full mechanism
+   * and its one disclosed limitation.
    */
   keep: boolean;
   log: pino.Logger;
   /** Overridable so a test can drive the pack stage against another file.
    *  Defaults to the committed micro-pack; a live run never passes it. */
   packPath?: string;
+  /** Overridable so a test can drive this suite's ENTIRE HTTP surface
+   *  (sign-in, the `--keep` lookup, venue/court, scheduling, and — forwarded
+   *  — `seedSuite`'s own calls) through one fake, never `global.fetch`.
+   *  Defaults to `seed.ts`'s own `defaultTransport`; a live run never passes
+   *  it. */
+  transport?: SeedTransport;
 }
 
 // ---------------------------------------------------------------------------
 // The pack stage — everything this suite decides before it touches the network
 // ---------------------------------------------------------------------------
 
-/** The request bodies this suite will POST, all read off the pack. Named
- *  fields rather than a pack handle so the HTTP half below cannot reach past
- *  what the pack stage actually resolved. */
-export interface TinySeedPlan {
-  readonly competitionName: string;
-  readonly endsOn: string;
-  readonly divisionName: string;
-  readonly sportKey: string;
-  readonly variantKey: string;
-  readonly divisionConfig: Record<string, PackJsonValue>;
-  readonly entrants: readonly { kind: string; display_name: string; seed?: number }[];
-  readonly stage: {
-    readonly seq: number;
-    readonly kind: string;
-    readonly name: string;
-    readonly config: Record<string, PackJsonValue>;
-  };
-  /** Derived from the pack's own entrants and legs — never a constant. */
-  readonly expectedFixtures: number;
-}
-
-/**
- * The pack, as this suite's seed plan.
- *
- * REFUSES anything but the one-division / one-stage shape `_tiny` is: the HTTP
- * flow below creates exactly one of each, and silently seeding the first of
- * several would run a suite nobody declared. B03 owns the general seeding
- * layer; this is the micro-fixture's own reader.
- */
-export function tinyPlan(pack: Pack): TinySeedPlan {
-  if (pack.divisions.length !== 1) {
-    throw new Error(
-      `the _tiny suite drives a pack with exactly one division; "${pack.suite}" declares ${pack.divisions.length}`,
-    );
-  }
-  const division = pack.divisions[0] as Pack["divisions"][number];
-  if (division.stages.length !== 1) {
-    throw new Error(
-      `the _tiny suite drives a pack with exactly one stage; division "${division.ref}" declares ${division.stages.length}`,
-    );
-  }
-  const stage = division.stages[0] as (typeof division.stages)[number];
-  return {
-    competitionName: pack.competition.name,
-    endsOn: pack.competition.endsOn,
-    divisionName: division.name,
-    sportKey: division.sportKey,
-    variantKey: division.variantKey,
-    divisionConfig: division.cfgOverrides,
-    entrants: entrantsOfDivision(pack.entrants, division.ref)
-      .map((e) => ({
-        kind: e.kind,
-        display_name: e.displayName,
-        ...(e.seed === undefined ? {} : { seed: e.seed }),
-      })),
-    stage: { seq: stage.seq, kind: stage.kind, name: stage.name, config: stage.config },
-    expectedFixtures: expectedFixtureCount(pack, division.ref, stage.ref),
-  };
-}
-
-/**
- * ADDENDUM 1's comparison, as a pure function.
- *
- * `null` = the generator minted what the pack implies. A message = what
- * diverged, naming BOTH numbers and the legs that produced the expectation.
- *
- * Extracted from the HTTP path because that is where it was unreachable: the
- * review inverted the operator in situ and the whole suite stayed green. The
- * DERIVATION (`expectedFixtureCount`) was well covered; the line that CONSUMES
- * it was not — and consuming it wrongly is exactly what shipped before, as
- * `!== 1` against a pack declaring three. A silent inversion here reports a
- * GREEN `_tiny` while the product mints the wrong number of fixtures, which is
- * the one failure the addendum exists to prevent.
- */
-export function fixtureCountIssue(actual: number, plan: TinySeedPlan): string | null {
-  if (actual === plan.expectedFixtures) return null;
-  return (
-    `expected ${plan.expectedFixtures} fixture(s) from the pack's ${plan.entrants.length}-entrant ` +
-    `league over ${plan.stage.config["legs"] ?? 1} leg(s), got ${actual}`
-  );
-}
-
 export type TinyPackStage =
-  | { readonly ok: true; readonly plan: TinySeedPlan; readonly warnings: readonly string[] }
+  | {
+      readonly ok: true;
+      readonly pack: Pack;
+      readonly plan: SeedPlan;
+      /** `hashPack(pack)` — computed here (still offline, still pure) so
+       *  every caller of `tinyPackStage` gets ONE value to compare, rather
+       *  than each recomputing it and risking a drift between what was
+       *  staged and what gets stamped/looked-up. */
+      readonly packHash: string;
+      readonly warnings: readonly string[];
+    }
   | { readonly ok: false; readonly errors: readonly string[]; readonly warnings: readonly string[] };
 
 /**
@@ -171,17 +187,138 @@ export async function tinyPackStage(packPath: string): Promise<TinyPackStage> {
   const warnings = load.warnings.map(formatFinding);
   if (!load.ok) return { ok: false, errors: load.errors.map(formatFinding), warnings };
   try {
-    return { ok: true, plan: tinyPlan(load.pack), warnings };
+    const plan = buildSeedPlan(load.pack);
+    const packHash = hashPack(load.pack);
+    return { ok: true, pack: load.pack, plan, packHash, warnings };
   } catch (err) {
     return { ok: false, errors: [err instanceof Error ? err.message : String(err)], warnings };
   }
 }
 
+/**
+ * ADDENDUM 1's comparison, as a pure function.
+ *
+ * `null` = the generator minted what the pack implies. A message = what
+ * diverged, naming BOTH numbers and the legs that produced the expectation.
+ *
+ * Adapted for T4 to `SeedPlan`'s N-division/N-stage shape: `plan` now carries
+ * one `expectedFixtureCounts` entry PER LEAGUE STAGE (seed-plan.ts:235-239).
+ * This suite still only ever drives `_tiny.json`, which declares exactly one
+ * league stage, so the first (only) entry is the one to check — an ABSENT
+ * entry (a pack that stopped declaring a league stage) is itself surfaced
+ * rather than silently skipped.
+ *
+ * Extracted from the HTTP path because that is where it was unreachable: the
+ * review inverted the operator in situ and the whole suite stayed green. The
+ * DERIVATION (`expectedFixtureCount`) was well covered; the line that CONSUMES
+ * it was not — and consuming it wrongly is exactly what shipped before, as
+ * `!== 1` against a pack declaring three. A silent inversion here reports a
+ * GREEN `_tiny` while the product mints the wrong number of fixtures, which is
+ * the one failure the addendum exists to prevent.
+ */
+export function fixtureCountIssue(actual: number, plan: SeedPlan): string | null {
+  const expected = plan.expectedFixtureCounts[0];
+  if (expected === undefined) {
+    return `pack declares no league-stage fixture-count expectation to check the ${actual} generated fixture(s) against`;
+  }
+  if (actual === expected.count) return null;
+  const division = plan.divisions.find((d) => d.ref === expected.divisionRef);
+  const stage = division?.stages.find((s) => s.ref === expected.stageRef);
+  const entrantCount = plan.entrants.filter((e) => e.divisionRef === expected.divisionRef).length;
+  const legs = stage?.config["legs"] ?? 1;
+  return (
+    `expected ${expected.count} fixture(s) from the pack's ${entrantCount}-entrant ` +
+    `league over ${legs} leg(s), got ${actual}`
+  );
+}
+
+// ---------------------------------------------------------------------------
+// `--keep` idempotence — the lookup
+// ---------------------------------------------------------------------------
+
+interface CompetitionListItem {
+  readonly id: string;
+  readonly org_id: string;
+  readonly slug: string;
+  readonly branding: Record<string, unknown>;
+}
+
+interface CompetitionListPage {
+  readonly items: readonly CompetitionListItem[];
+  readonly nextCursor: string | null;
+}
+
+export interface ExistingSeed {
+  readonly orgId: string;
+  readonly competitionId: string;
+}
+
+/**
+ * The three answers the `--keep` lookup can give. `stale` is the one that
+ * matters and the one an earlier cut of this file did not express: it returned
+ * `null` for "no such competition" AND for "the competition is there but the
+ * pack has changed under it", which are opposite situations.
+ *
+ * `competitions_org_id_slug_key` is UNIQUE `(org_id, slug)`, and a `--keep`
+ * run signs in with a deterministic email so it lands in the SAME org every
+ * time. So a stale row cannot be seeded past: the create would collide on that
+ * index and `createCompetition` turns an explicit-slug collision into a 409
+ * (`usecases/competitions.ts` — "Explicit slugs are the caller's choice —
+ * collisions 409"). Reporting `absent` there bought a 409 several HTTP calls
+ * later, with nothing in the message about the real cause. The suite now
+ * refuses up front and says what to do.
+ *
+ * That same uniqueness is why `stale` can be returned the moment the slug
+ * matches without reading further pages — at most one row in this org can hold
+ * the slug, so there is no later page that could still hold a hash match.
+ */
+export type SeedLookup =
+  | { readonly kind: "reuse"; readonly orgId: string; readonly competitionId: string }
+  | { readonly kind: "stale"; readonly competitionId: string; readonly heldHash: unknown }
+  | { readonly kind: "absent" };
+
+/**
+ * Pages through `GET /api/v1/competitions` (tenant-scoped to whatever org `s`
+ * is signed into) looking for a row whose slug matches the pack's own
+ * declared competition slug. Slug match plus hash match is `reuse`; slug match
+ * with any other hash is `stale`. `absent` on no slug match at all — including
+ * when the pack declares no explicit slug, since there is then nothing stable
+ * to match on (the server would mint a slug from the run-tagged name, which
+ * this file cannot predict without asking it).
+ *
+ * `listCompetitions` is paginated and ordered `created_at desc, id desc`
+ * with `limit + 1` (competitions.ts:82-94) — under `--keep`, competitions
+ * accumulate in the deterministic org across every EDITED-then-reseeded pack
+ * generation, so the match this run wants can be pushed off the first page.
+ * This pages through the cursor until found or exhausted rather than
+ * assuming page one.
+ */
+export async function findExistingSeed(
+  base: string,
+  s: Session,
+  t: SeedTransport,
+  plan: SeedPlan,
+  packHash: string,
+): Promise<SeedLookup> {
+  const slug = plan.competition.slug;
+  if (slug === undefined) return { kind: "absent" };
+  let cursor: string | undefined;
+  for (;;) {
+    const qs = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
+    const page = await t.request<CompetitionListPage>(base, s, `/api/v1/competitions${qs}`);
+    for (const row of page.items) {
+      if (row.slug !== slug) continue;
+      const heldHash = row.branding[KEEP_BRANDING_KEY];
+      if (heldHash === packHash) return { kind: "reuse", orgId: row.org_id, competitionId: row.id };
+      return { kind: "stale", competitionId: row.id, heldHash };
+    }
+    if (!page.nextCursor) return { kind: "absent" };
+    cursor = page.nextCursor;
+  }
+}
+
 interface IdOut {
   id: string;
-}
-interface GenerateOut {
-  fixtures: { id: string }[];
 }
 interface AutoScheduleOut {
   assignments: { fixture_id: string; scheduled_at: string; ends_at?: string; court_id: string }[];
@@ -194,9 +331,9 @@ interface ValidateOut {
 
 export async function runTinySuite(input: TinySuiteInput): Promise<SuiteReport> {
   const { base, engine, keep, log } = input;
+  const t = input.transport ?? defaultTransport;
   const errors: string[] = [];
   const warnings: string[] = [];
-  const runTag = randomUUID().slice(0, 8);
   const timings: { seedMs?: number; scheduleMs?: number } = {};
   let conflictCount: number | undefined;
   let solver: AutoScheduleOut["solver"];
@@ -219,72 +356,127 @@ export async function runTinySuite(input: TinySuiteInput): Promise<SuiteReport> 
       ...(warnings.length > 0 ? { warnings } : {}),
     };
   }
-  const plan = staged.plan;
+  const { pack, plan, packHash } = staged;
   if (warnings.length > 0) log.warn({ packPath, warnings }, "tiny: pack validated with warnings");
 
   try {
+    // The identity used to sign in this run — see this file's header comment
+    // on why `--keep` needs a FIXED tag and `--wipe` keeps the original
+    // random one.
+    const runTag = keep ? "keep" : randomUUID().slice(0, 8);
+    const email = `bench-${plan.org.slug}-${runTag}@example.com`;
+
     const s: Session = newSession();
     const seedStart = performance.now();
+    log.info({ email, keep }, "tiny: signing in");
+    const { org_id: orgId } = await t.signIn(base, s, email);
 
-    const email = `bench-tiny-${runTag}@example.com`;
-    log.info({ email }, "tiny: signing in");
-    const { org_id: orgId } = await signIn(base, s, email);
+    const lookup: SeedLookup = keep
+      ? await findExistingSeed(base, s, t, plan, packHash)
+      : { kind: "absent" };
 
-    // Two independent chains (venue->court needs only orgId; competition->
-    // division needs neither venue nor court) run concurrently on the same
-    // session — safe here because nothing past sign-in issues a fresh
-    // Set-Cookie, so there is no cookie-jar write race to worry about, only
-    // ordinary concurrent reads of `s`.
-    const [{ court }, { division }] = await Promise.all([
-      (async () => {
-        const venue = await request<IdOut>(base, s, `/api/v1/orgs/${orgId}/venues`, {
-          method: "POST",
-          body: { name: `Bench Tiny Venue ${runTag}` },
-        });
-        const court = await request<IdOut>(base, s, `/api/v1/orgs/${orgId}/venues/${venue.id}/courts`, {
-          method: "POST",
-          body: { name: "Court 1" },
-        });
-        return { venue, court };
-      })(),
-      (async () => {
-        const comp = await request<IdOut>(base, s, "/api/v1/competitions", {
-          method: "POST",
-          // The run tag stays on the NAME (every bench run mints its own org
-          // and competition), while `ends_on` is the pack's declared date.
-          body: { ends_on: plan.endsOn, name: `${plan.competitionName} ${runTag}` },
-        });
-        const division = await request<IdOut>(base, s, `/api/v1/competitions/${comp.id}/divisions`, {
-          method: "POST",
-          body: {
-            name: plan.divisionName,
-            sport_key: plan.sportKey,
-            variant_key: plan.variantKey,
-            config: plan.divisionConfig,
-          },
-        });
-        return { comp, division };
-      })(),
-    ]);
+    // A changed pack under an unchanged slug: refuse here, with the cause, and
+    // create nothing. See `SeedLookup` above for why seeding on cannot work.
+    if (lookup.kind === "stale") {
+      const message =
+        `tiny: --keep cannot reuse competition "${plan.competition.slug}" (${lookup.competitionId}) — it holds ` +
+        `pack hash ${JSON.stringify(lookup.heldHash)} and this pack hashes to ${packHash}. The pack changed since ` +
+        `the last --keep run, and (org_id, slug) is unique so a fresh seed would 409 on the same slug. ` +
+        `Re-run with --wipe to reseed this suite from scratch.`;
+      log.error(
+        { competitionId: lookup.competitionId, heldHash: lookup.heldHash, packHash },
+        "tiny: --keep refused — pack changed under an existing competition slug",
+      );
+      return {
+        suite: "_tiny",
+        gate: "red",
+        timings: { seedMs: Math.round(performance.now() - seedStart) },
+        keep,
+        solver: { requestedEngine: engine },
+        errors: [message],
+        ...(warnings.length > 0 ? { warnings } : {}),
+      };
+    }
 
-    // Both only need division.id, so these two run concurrently too.
-    const [, stage] = await Promise.all([
-      request(base, s, `/api/v1/divisions/${division.id}/entrants`, {
+    const existing = lookup.kind === "reuse" ? lookup : null;
+    if (existing) {
+      timings.seedMs = Math.round(performance.now() - seedStart);
+      warnings.push(
+        `tiny: --keep reused existing seed (org ${existing.orgId}, competition ${existing.competitionId}) — ` +
+          `pack hash unchanged, seeding and scheduling skipped this run`,
+      );
+      log.info(
+        { orgId: existing.orgId, competitionId: existing.competitionId },
+        "tiny: --keep short-circuited — reusing a prior run's seed",
+      );
+      return {
+        suite: "_tiny",
+        gate: "green",
+        timings,
+        keep,
+        solver: { requestedEngine: engine },
+        ...(warnings.length > 0 ? { warnings } : {}),
+      };
+    }
+
+    // `_tiny.json` declares exactly one division and one (league) stage —
+    // `buildSeedPlan`/`seedSuite` are generalised past that, but this
+    // suite's OWN scheduling walk below still only ever drives the first of
+    // each, matching what `_tiny.json` actually contains. `divisions.min(1)`
+    // on `PackSchema` guarantees at least one; a stage-less division would be
+    // an authoring bug stage 0 does not currently catch, so it is named here
+    // rather than silently producing `undefined.id` downstream.
+    const division0 = plan.divisions[0];
+    const stage0 = division0?.stages[0];
+    if (division0 === undefined || stage0 === undefined) {
+      throw new Error("tiny: the pack's plan has no division/stage to seed and schedule");
+    }
+
+    // Two independent chains, run concurrently on separate sessions: this
+    // suite's OWN venue/court (never part of `SeedPlan` — `_tiny.json`
+    // declares no `venues[]`), and the entire org/competition/division/
+    // entrants/stage/generate tree via `seedSuite`. `seedSuite` signs in
+    // AGAIN internally with the SAME email — a second magic-link round trip,
+    // accepted as the cost of keeping `seedSuite` self-contained (it does not
+    // accept an external session) rather than exposing one just for this
+    // caller.
+    const seedPromise = seedSuite({
+      base,
+      plan,
+      streams: pack.streams,
+      venues: pack.venues,
+      runTag,
+      transport: t,
+      competitionBranding: { [KEEP_BRANDING_KEY]: packHash },
+    });
+    const venuePromise = (async () => {
+      const venue = await t.request<IdOut>(base, s, `/api/v1/orgs/${orgId}/venues`, {
         method: "POST",
-        body: plan.entrants,
-      }),
-      request<IdOut>(base, s, `/api/v1/divisions/${division.id}/stages`, {
+        body: { name: `Bench Tiny Venue ${runTag}` },
+      });
+      return t.request<IdOut>(base, s, `/api/v1/orgs/${orgId}/venues/${venue.id}/courts`, {
         method: "POST",
-        body: plan.stage,
-      }),
-    ]);
-    const generated = await request<GenerateOut>(base, s, `/api/v1/stages/${stage.id}/generate`, { method: "POST" });
+        body: { name: "Court 1" },
+      });
+    })();
+    const [seeded, court]: [SeededSuite, IdOut] = await Promise.all([seedPromise, venuePromise]);
+
+    if (seeded.orgId !== orgId) {
+      throw new Error(
+        `tiny: seedSuite signed into org "${seeded.orgId}" but this suite's own session is on "${orgId}" ` +
+          `— sign-in for "${email}" did not return the same org twice`,
+      );
+    }
+    const divisionId = seeded.divisionIdByRef.get(division0.ref);
+    const stageId = seeded.stageIdByRef.get(stage0.ref);
+    if (divisionId === undefined || stageId === undefined) {
+      throw new Error(`tiny: seedSuite resolved no id for division "${division0.ref}" / stage "${stage0.ref}"`);
+    }
+
     // DERIVED from the pack (entrants choose two, times its declared legs) —
-    // never a constant. This assertion read `!== 1` while the pack declared
-    // three, which is a bound asserting yesterday's numbers. The comparison
-    // itself lives in `fixtureCountIssue` so it sits on the TESTABLE side of
-    // the network boundary; in situ it could be inverted with nothing red.
-    const countIssue = fixtureCountIssue(generated.fixtures.length, plan);
+    // never a constant. See `fixtureCountIssue`'s own doc comment for why
+    // this comparison lives on the testable side of the network boundary.
+    const countIssue = fixtureCountIssue(seeded.fixtureIdByKey.size, plan);
     if (countIssue !== null) errors.push(countIssue);
     timings.seedMs = Math.round(performance.now() - seedStart);
 
@@ -295,7 +487,7 @@ export async function runTinySuite(input: TinySuiteInput): Promise<SuiteReport> 
     // settings need, and there is no other sanctioned source of "now" for
     // a script outside packages/engine/src's boundary).
     const startAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-    await request(base, s, `/api/v1/divisions/${division.id}/schedule-settings`, {
+    await t.request(base, s, `/api/v1/divisions/${divisionId}/schedule-settings`, {
       method: "PUT",
       body: {
         config: {
@@ -323,13 +515,13 @@ export async function runTinySuite(input: TinySuiteInput): Promise<SuiteReport> 
     // rather than either one overwriting the other. Flagged in the PR body
     // as a brief/API-shape finding.
     log.info({ requestedEngine: engine }, "tiny: --engine is not honoured — AutoScheduleRequest has no per-request engine field");
-    const auto = await request<AutoScheduleOut>(base, s, `/api/v1/stages/${stage.id}/schedule/auto`, {
+    const auto = await t.request<AutoScheduleOut>(base, s, `/api/v1/stages/${stageId}/schedule/auto`, {
       method: "POST",
       body: {},
     });
     solver = auto.solver;
 
-    await request(base, s, `/api/v1/stages/${stage.id}/schedule/apply`, {
+    await t.request(base, s, `/api/v1/stages/${stageId}/schedule/apply`, {
       method: "POST",
       body: {
         assignments: auto.assignments.map((a) => ({
@@ -340,7 +532,7 @@ export async function runTinySuite(input: TinySuiteInput): Promise<SuiteReport> 
       },
     });
 
-    const validated = await request<ValidateOut>(base, s, `/api/v1/divisions/${division.id}/schedule/validate`, {
+    const validated = await t.request<ValidateOut>(base, s, `/api/v1/divisions/${divisionId}/schedule/validate`, {
       method: "POST",
     });
     const blocking = validated.conflicts.filter((c) => c.blocking);

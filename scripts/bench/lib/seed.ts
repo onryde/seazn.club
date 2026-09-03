@@ -126,6 +126,21 @@ export interface SeedSuiteInput {
    *  accident. */
   readonly runTag: string;
   readonly transport?: SeedTransport;
+  /**
+   * T4 EXTENSION (declared here rather than redesigned around, per that
+   * task's brief): extra `CreateCompetition.branding` (schemas.ts:95, jsonb,
+   * ungated) merged into the competition create-call body below. Not
+   * something `SeedPlan` can carry — `buildSeedPlan` is a pure pack->plan
+   * mapping and a `--keep` idempotence marker is bench-RUNTIME state, not
+   * pack content (seed-plan.ts's own header comment on what stays out of the
+   * plan). The marker has to land on THIS create call: `lib/suites/tiny.ts`'s
+   * `findExistingSeed` reads it back via `GET /api/v1/competitions`, and the
+   * cited authority for where it is written is the CREATE path
+   * (`usecases/competitions.ts:202-209`), not a follow-up PATCH. Omitted
+   * (server default `{}`) when absent — every existing caller of `seedSuite`
+   * is unaffected.
+   */
+  readonly competitionBranding?: Record<string, unknown>;
 }
 
 interface IdOut {
@@ -403,7 +418,7 @@ async function seedEntrants(
  *      ext_key
  */
 export async function seedSuite(input: SeedSuiteInput): Promise<SeededSuite> {
-  const { base, plan, streams, runTag } = input;
+  const { base, plan, streams, runTag, competitionBranding } = input;
   const venues = input.venues ?? [];
   const t = input.transport ?? defaultTransport;
   const s = newSession();
@@ -424,6 +439,7 @@ export async function seedSuite(input: SeedSuiteInput): Promise<SeededSuite> {
       ...(plan.competition.startsOn === undefined ? {} : { starts_on: plan.competition.startsOn }),
       ends_on: plan.competition.endsOn,
       ...(plan.competition.description === undefined ? {} : { description: plan.competition.description }),
+      ...(competitionBranding === undefined ? {} : { branding: competitionBranding }),
     },
   });
 
