@@ -1,5 +1,11 @@
 import { expect, type Page, type Locator } from "@playwright/test";
-import { TAG, apiJson, loginUi, setEntitlementOverrideSql } from "./helpers";
+import {
+  TAG,
+  apiJson,
+  invalidateOrgEntitlements,
+  loginUi,
+  setEntitlementOverrideSql,
+} from "./helpers";
 
 // Shared kit for the /directory walkthrough specs (e2e/walkthrough/directory-*).
 //
@@ -21,9 +27,19 @@ import { TAG, apiJson, loginUi, setEntitlementOverrideSql } from "./helpers";
 // exception is `uniqueName`, which now delegates to `stamp()` — see its
 // docblock for why the duplicated expression had to go.
 
-/** A per-run token. `TAG` is per-PROCESS (helpers.ts), and these specs share
- *  an org with every other spec in the leg, so the random tail is what makes
- *  two concurrent workers unable to collide on the same (org, name).
+/** A per-call token, used to make a name or an email unique.
+ *
+ *  (The sentence that used to be here — "these specs share an org with every
+ *  other spec in the leg" — came in with the venues.spec.ts lift and is FALSE
+ *  for this kit: `freshOrg` below exists precisely so they do not. It survived
+ *  because it was true of the file the helper came from.)
+ *
+ *  What actually needs the entropy: `TAG` is per-PROCESS (helpers.ts), so it
+ *  separates one Playwright WORKER from another but gives every call inside a
+ *  worker the same value. And the identifiers this seeds are not all org
+ *  scoped — `freshOrg` mints `dir-<label>-<stamp>@example.com`, and an email
+ *  is unique across the whole database, not within an org. So the random tail
+ *  is what keeps two calls in one process, and two specs in one run, apart.
  *
  *  Eight base36 characters, not four. Four is 36^4 = 1.68M values, which
  *  sounds ample and is not: 200 draws hit a birthday collision 1.235% of the
@@ -132,8 +148,11 @@ export async function waitForCourtRow(page: Page, venueName: string, courtName: 
  *
  * Every directory spec needs one. The walkthrough project's storageState is
  * e2e/.auth/pro.json — one PRO org shared with every other spec in the leg —
- * and the Players tab renders only the OLDEST 200 persons (page.tsx:106 passes
- * limit 200; listPersons orders by created_at). So a person created late in a
+ * and the Players tab renders only the OLDEST 200 persons (`PlayersTab` in
+ * src/app/directory/page.tsx calls `listPersons` with `limit: 200`, and
+ * `listPersons` — src/server/usecases/persons.ts — orders by `created_at, id`
+ * ASCENDING). Symbols rather than line numbers on purpose: a line pin goes
+ * stale across branches, and this one already had. So a person created late in a
  * shared org is not merely hard to count, it is not on the page, and a
  * "no duplicate was suggested" assertion passes for the wrong reason.
  *
@@ -144,6 +163,17 @@ export async function waitForCourtRow(page: Page, venueName: string, courtName: 
  *
  * The caller must set `test.use({ storageState: { cookies: [], origins: [] } })`
  * at FILE scope. A bare browser.newContext() inherits the owner session.
+ *
+ * DO NOT DROP THE `"/"` PASSED TO `loginUi`. It reads as a cosmetic default and
+ * is load-bearing: `postAuthLanding` (src/lib/auth.ts) short-circuits on a safe
+ * `next` — it resolves the user's orgs, returns that path, and never reaches
+ * the auto-provisioning branch below it. Without a `next`, a brand-new user is
+ * handed an org called "My organization" on the spot. That org is on the
+ * community plan, where `orgs.max_owned` is 1
+ * (db/migration/deltas/V112__entitlements_v2.sql:23), so the POST /api/orgs on
+ * the next line 402s — on every run, for a reason nothing in this function
+ * names. `loginUi`'s own docblock makes the same point ("a spec that skips it
+ * quietly turns its player into an organiser").
  */
 export async function freshOrg(page: Page, label: string): Promise<{ orgId: string; email: string }> {
   const s = stamp();
@@ -193,17 +223,52 @@ export async function liveLimit(page: Page, orgId: string, key: string): Promise
   return row.limit ?? null;
 }
 
-/** Re-export so a spec sets a deterministic cap without importing two modules.
- *  Org-scoped: org_entitlement_overrides is PRIMARY KEY (org_id, feature_key)
- *  (db/migration/deltas/V101__billing.sql:66-73), so it cannot leak into
- *  another spec's org. */
-export { setEntitlementOverrideSql };
+/**
+ * Set a deterministic cap, and DROP THE CACHED RESOLUTION AFTERWARDS.
+ *
+ * These two are re-exported together because using the first without the
+ * second is a silent, passing-for-the-wrong-reason bug.
+ * `setEntitlementOverrideSql` writes `org_entitlement_overrides` by raw SQL and
+ * invalidates nothing, while `lib/entitlements.ts` caches every resolution for
+ * `ENT_TTL_SECONDS = 300` (:23). So an override is observed only if it is
+ * written BEFORE the key is first resolved for that org, or followed by
+ * `invalidateOrgEntitlements(page.request, orgId)`.
+ *
+ * The trap is that `liveLimit` below IS a first resolution — the entitlements
+ * route runs every value through `getLimit`, which warms the cache. The
+ * sequence a spec reaches for naturally,
+ *
+ *     const cap = await liveLimit(page, orgId, key);   // <- warms the cache
+ *     await setEntitlementOverrideSql(orgId, key, 2);  // <- invalidates nothing
+ *     // ...drive the UI, assert the cap...            // <- still reads `cap`
+ *
+ * asserts the PLAN DEFAULT while appearing to test the override, for up to
+ * five minutes. Either invalidate between lines 2 and 3, or set the override
+ * before ever calling `liveLimit` for that key.
+ *
+ * And it will not fail here. `lib/cache.ts` is fail-open and `REDIS_URL` is
+ * unset locally, so a spec that gets this wrong is green on this machine and
+ * red only on a Redis-backed target. `helpers.ts:486-493` spells the same
+ * obligation out on the sibling `setBoolEntitlementOverrideSql`.
+ *
+ * The write itself is org-scoped and cannot leak: `org_entitlement_overrides`
+ * is PRIMARY KEY (org_id, feature_key)
+ * (db/migration/deltas/V101__billing.sql:66-73).
+ */
+export { setEntitlementOverrideSql, invalidateOrgEntitlements };
 
-/** RFC4180 quoting: a field containing a comma, quote or newline is quoted and
+/** RFC4180 quoting: a field containing a comma, quote, CR or LF is quoted and
  *  its own quotes doubled. Without this a club name with a comma shifts every
- *  later column and the importer plans the wrong entities silently. */
+ *  later column and the importer plans the wrong entities silently.
+ *
+ *  `\r` belongs in the class as much as `\n` does: RFC4180's line break is
+ *  CRLF, so a field carrying one is split by any reader that honours a bare CR
+ *  — and a lone CR would sail through a `\n`-only test unquoted. Both branches
+ *  are covered by the "quotes a field containing an embedded newline" case in
+ *  src/__tests__/directory-kit.test.ts; deleting either character from the
+ *  class reds it. */
 function csvCell(value: string): string {
-  return /[",\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
+  return /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
 }
 
 /** A participant sheet. `Club`/`Team`/`Player` are recognised header aliases

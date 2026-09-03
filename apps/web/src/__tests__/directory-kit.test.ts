@@ -58,6 +58,21 @@ describe("participantCsv", () => {
     const csv = participantCsv([{ club: 'The "Reds"', team: "T", player: "P" }]);
     expect(csv.split("\n")[1]).toBe('"The ""Reds""",T,P');
   });
+
+  // Both halves of the line-break class, in one case. Splitting on "\n" is
+  // meaningless here — the whole point is that the FIELD contains one — so
+  // these assert the emitted string whole.
+  it("quotes a field containing an embedded line break, CR and LF alike", () => {
+    expect(participantCsv([{ club: "Harbour\nWest", team: "T", player: "P" }])).toBe(
+      'Club,Team,Player\n"Harbour\nWest",T,P',
+    );
+    // The lone CR is the half a `\n`-only class misses: RFC4180's break is
+    // CRLF, so a reader that honours a bare CR splits this field in two and
+    // every later column shifts, silently.
+    expect(participantCsv([{ club: "Harbour\rWest", team: "T", player: "P" }])).toBe(
+      'Club,Team,Player\n"Harbour\rWest",T,P',
+    );
+  });
 });
 
 describe("stamp", () => {
