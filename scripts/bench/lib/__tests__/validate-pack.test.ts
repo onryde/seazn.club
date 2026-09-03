@@ -268,15 +268,18 @@ describe("validatePack — _tiny.json, the shared fixture", () => {
 
   it("reports the provenance split per division and overall", () => {
     const result = validatePack(tiny(), TINY);
-    // Two `real` streams and one `reconstructed`, per the committed file.
+    // d-tiny: two `real` streams and one `reconstructed`. d-badminton (B03
+    // T5): one `reconstructed` stream (`reconstructSetBasedStream`, folded
+    // through the real generator). Overall sums both divisions.
     expect(result.provenance.overall).toEqual({
       real: 2,
-      reconstructed: 1,
+      reconstructed: 2,
       synthetic: 0,
-      total: 3,
+      total: 4,
     });
     expect(result.provenance.byDivision).toEqual({
       "d-tiny": { real: 2, reconstructed: 1, synthetic: 0, total: 3 },
+      "d-badminton": { real: 0, reconstructed: 1, synthetic: 0, total: 1 },
     });
   });
 
@@ -288,9 +291,11 @@ describe("validatePack — _tiny.json, the shared fixture", () => {
     pack.expected.specials = [];
     const result = validatePack(pack, TINY);
     // An absent key and a zero count are different facts: a report that cannot
-    // tell them apart hides a division nothing replayed.
+    // tell them apart hides a division nothing replayed. Both declared
+    // divisions appear, each zeroed.
     expect(result.provenance.byDivision).toEqual({
       "d-tiny": { real: 0, reconstructed: 0, synthetic: 0, total: 0 },
+      "d-badminton": { real: 0, reconstructed: 0, synthetic: 0, total: 0 },
     });
   });
 });
@@ -483,11 +488,14 @@ describe("validatePack — provenance", () => {
     (pack.streams[1] as TinyStream).provenance = "synthetic";
     const result = validatePack(pack, TINY);
     expectClean(result, TINY_NOT_DERIVED);
+    // d-tiny's two `real` streams, the mutated `synthetic` one, and
+    // d-badminton's own `reconstructed` stream (B03 T5) — untouched by this
+    // mutation, since it targets `pack.streams[1]`, d-tiny's own.
     expect(result.provenance.overall).toEqual({
       real: 2,
-      reconstructed: 0,
+      reconstructed: 1,
       synthetic: 1,
-      total: 3,
+      total: 4,
     });
   });
 

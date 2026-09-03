@@ -226,18 +226,20 @@ describe("fixtureCountIssue — addendum 1's comparison, on the testable side of
   const plan = (): SeedPlan => buildSeedPlan(tinyPack());
 
   it("is null when the generator minted exactly what the pack implies", () => {
-    // `_tiny` implies three; three is not a mismatch.
-    expect(fixtureCountIssue(3, plan())).toBeNull();
+    // `_tiny` implies three from d-tiny's league PLUS one from d-badminton's
+    // (B03 T5) — four, summed across BOTH league stages, since `actual` at
+    // the real call site is a pool-wide count spanning every division.
+    expect(fixtureCountIssue(4, plan())).toBeNull();
   });
 
-  it("names BOTH numbers and the legs when the count is short", () => {
+  it("names BOTH numbers and a per-division breakdown when the count is short", () => {
     const issue = fixtureCountIssue(1, plan());
-    expect(issue).toContain("expected 3 fixture(s)");
+    expect(issue).toContain("expected 4 fixture(s) total across 2 league stage(s)");
     expect(issue).toContain("got 1");
-    // The legs are in the message because "3" alone does not tell a reader
-    // WHERE the expectation came from — 2 entrants over 3 legs does.
-    expect(issue).toContain("2-entrant");
-    expect(issue).toContain("over 3 leg(s)");
+    // Each division's own arithmetic is named, not just the total — a reader
+    // has to be able to tell WHICH stage's count is off.
+    expect(issue).toContain('"d-tiny": 3 fixture(s) from the pack\'s 2-entrant league over 3 leg(s)');
+    expect(issue).toContain('"d-badminton": 1 fixture(s) from the pack\'s 2-entrant league over 1 leg(s)');
   });
 
   it("names both numbers when the count is LONG too — the inverted operator", () => {
@@ -245,8 +247,15 @@ describe("fixtureCountIssue — addendum 1's comparison, on the testable side of
     // match as a mismatch, so an arm that only ever sees `actual < expected`
     // cannot witness it.
     const issue = fixtureCountIssue(6, plan());
-    expect(issue).toContain("expected 3 fixture(s)");
+    expect(issue).toContain("expected 4 fixture(s) total across 2 league stage(s)");
     expect(issue).toContain("got 6");
+  });
+
+  it("degrades to the ORIGINAL single-entry sentence for a one-league-stage pack — no shape change for every pack before T5", () => {
+    const pack = tinyPack();
+    const singleDivision = { ...pack, divisions: [pack.divisions[0]] } as Pack;
+    const issue = fixtureCountIssue(1, buildSeedPlan(singleDivision));
+    expect(issue).toBe("expected 3 fixture(s) from the pack's 2-entrant league over 3 leg(s), got 1");
   });
 
   it("moves with the plan rather than with a constant", () => {
@@ -556,6 +565,18 @@ function makeFakeServer(opts: { sameOrgForAll?: boolean } = {}): {
         return rows.map((e) => ({ id: `entrant-${slug(e.display_name)}` })) as unknown as T;
       }
       if (method === "POST" && /^\/api\/v1\/stages\/[^/]+\/generate$/.test(routePath)) {
+        // STAGE-AWARE, because `_tiny.json` now declares TWO league stages
+        // (B03 T5 — the badminton division) and `seedSuite` calls `/generate`
+        // once per stage (lib/seed.ts): d-tiny's mints three round-robin
+        // fixtures (2 entrants, 3 legs), d-badminton's mints one (2 entrants,
+        // 1 leg). A single hardcoded response here would hand d-badminton
+        // three UNCLAIMED fixtures and leave its own stream unmatched —
+        // `bindStreamFixtures`'s two anti-vacuity checks (lib/seed.ts:184-185)
+        // exist precisely to catch that.
+        const stageId = routePath.split("/")[4];
+        if (stageId === "stage-badminton-league") {
+          return { fixtures: [{ id: "fx-bm-1", ext_key: "rr-r1-c1" }] } as unknown as T;
+        }
         return {
           fixtures: [
             { id: "fx-1", ext_key: "rr-r1-c1" },

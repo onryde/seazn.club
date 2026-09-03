@@ -36,9 +36,17 @@
 //
 // `fixtureCountIssue` and the pack stage (`tinyPackStage`) both had to be
 // adapted rather than deleted (T4 brief): `TinySeedPlan` is gone, so both now
-// speak `SeedPlan` — an N-division/N-stage shape — reading only the FIRST
-// `expectedFixtureCounts` entry, which for `_tiny.json` (exactly one league
-// stage) is the only one there is.
+// speak `SeedPlan` — an N-division/N-stage shape. At T4 this read only the
+// FIRST `expectedFixtureCounts` entry, which for the then-single-division
+// `_tiny.json` was the only one there was.
+//
+// B03 T5 (`_tiny.json` gains a second division, `d-badminton`) is what makes
+// that premise false: `actual` at the one call site below is always
+// `seeded.fixtureIdByKey.size`, a POOL-wide count spanning every division
+// `seedSuite` bound fixtures for — so `fixtureCountIssue` now SUMS every
+// `expectedFixtureCounts` entry rather than reading `[0]` alone. See its own
+// doc comment for the full reasoning; a single-league-stage pack (every pack
+// before T5) gets the identical message it always did.
 //
 // A `SeedTransport` is threaded through every HTTP call this file makes
 // (`TinySuiteInput.transport`, defaulted to `seed.ts`'s own
@@ -107,7 +115,7 @@ import { newSession, type Session } from "../http.ts";
 import { formatFinding, loadPackFile } from "../pack-io.ts";
 import { hashPack } from "../pack-hash.ts";
 import type { Pack } from "../pack-schema.ts";
-import { buildSeedPlan, type SeedPlan } from "../seed-plan.ts";
+import { buildSeedPlan, type SeedPlan, type SeedPlanExpectedFixtureCount } from "../seed-plan.ts";
 import { defaultTransport, seedSuite, type SeededSuite, type SeedTransport } from "../seed.ts";
 import type { SuiteReport } from "../report.ts";
 
@@ -195,6 +203,17 @@ export async function tinyPackStage(packPath: string): Promise<TinyPackStage> {
   }
 }
 
+/** One `expectedFixtureCounts` entry, rendered the way a reader can trace it
+ *  back to the pack: the count, the division's own entrant arithmetic, and
+ *  the legs that produced it — never a bare number. */
+function describeExpectedCount(entry: SeedPlanExpectedFixtureCount, plan: SeedPlan): string {
+  const division = plan.divisions.find((d) => d.ref === entry.divisionRef);
+  const stage = division?.stages.find((s) => s.ref === entry.stageRef);
+  const entrantCount = plan.entrants.filter((e) => e.divisionRef === entry.divisionRef).length;
+  const legs = stage?.config["legs"] ?? 1;
+  return `${entry.count} fixture(s) from the pack's ${entrantCount}-entrant league over ${legs} leg(s)`;
+}
+
 /**
  * ADDENDUM 1's comparison, as a pure function.
  *
@@ -203,10 +222,26 @@ export async function tinyPackStage(packPath: string): Promise<TinyPackStage> {
  *
  * Adapted for T4 to `SeedPlan`'s N-division/N-stage shape: `plan` now carries
  * one `expectedFixtureCounts` entry PER LEAGUE STAGE (seed-plan.ts:235-239).
- * This suite still only ever drives `_tiny.json`, which declares exactly one
- * league stage, so the first (only) entry is the one to check — an ABSENT
- * entry (a pack that stopped declaring a league stage) is itself surfaced
- * rather than silently skipped.
+ *
+ * B03 T5 (`_tiny.json` grows a second division, `d-badminton`) is what makes
+ * this SUM rather than "read the first entry": `actual` is always
+ * `seeded.fixtureIdByKey.size` at the one call site (`runTinySuite` below) —
+ * a POOL-wide count spanning every division `seedSuite` bound fixtures for,
+ * never scoped to one division — so comparing it against a single division's
+ * own expectation was already the wrong shape once a second league stage
+ * existed; it happened to read correct only because `_tiny.json` had
+ * exactly one. T4's own doc comment here recorded that as the reason it was
+ * safe to take `[0]` alone: "This suite still only ever drives `_tiny.json`,
+ * which declares exactly one league stage" — a premise this task's own pack
+ * change falsifies, so the comparison follows the pack rather than stay
+ * pinned to a division count `_tiny.json` no longer has.
+ *
+ * A single-league-stage pack (every pack before T5) gets the IDENTICAL
+ * message it always did — `plan.expectedFixtureCounts.length === 1` degrades
+ * to the old one-entry sentence exactly, so no existing single-division
+ * caller sees a shape change. An ABSENT expectation entirely (a pack that
+ * declares no league stage at all) is itself surfaced rather than silently
+ * skipped, as before.
  *
  * Extracted from the HTTP path because that is where it was unreachable: the
  * review inverted the operator in situ and the whole suite stayed green. The
@@ -217,19 +252,18 @@ export async function tinyPackStage(packPath: string): Promise<TinyPackStage> {
  * the one failure the addendum exists to prevent.
  */
 export function fixtureCountIssue(actual: number, plan: SeedPlan): string | null {
-  const expected = plan.expectedFixtureCounts[0];
-  if (expected === undefined) {
+  if (plan.expectedFixtureCounts.length === 0) {
     return `pack declares no league-stage fixture-count expectation to check the ${actual} generated fixture(s) against`;
   }
-  if (actual === expected.count) return null;
-  const division = plan.divisions.find((d) => d.ref === expected.divisionRef);
-  const stage = division?.stages.find((s) => s.ref === expected.stageRef);
-  const entrantCount = plan.entrants.filter((e) => e.divisionRef === expected.divisionRef).length;
-  const legs = stage?.config["legs"] ?? 1;
-  return (
-    `expected ${expected.count} fixture(s) from the pack's ${entrantCount}-entrant ` +
-    `league over ${legs} leg(s), got ${actual}`
-  );
+  const expectedTotal = plan.expectedFixtureCounts.reduce((sum, entry) => sum + entry.count, 0);
+  if (actual === expectedTotal) return null;
+  if (plan.expectedFixtureCounts.length === 1) {
+    return `expected ${describeExpectedCount(plan.expectedFixtureCounts[0]!, plan)}, got ${actual}`;
+  }
+  const perDivision = plan.expectedFixtureCounts
+    .map((entry) => `"${entry.divisionRef}": ${describeExpectedCount(entry, plan)}`)
+    .join("; ");
+  return `expected ${expectedTotal} fixture(s) total across ${plan.expectedFixtureCounts.length} league stage(s) (${perDivision}), got ${actual}`;
 }
 
 // ---------------------------------------------------------------------------
