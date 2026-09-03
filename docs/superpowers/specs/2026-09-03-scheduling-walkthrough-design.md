@@ -98,11 +98,24 @@ Worth stating because a fresh session will conflate them:
 
 ## Findings already established
 
-**F1 — clear-schedule ignores the freeze. Confirmed in code; to be confirmed
-live.** `divisionLockState` (`schedule.ts:531`) reads `schedule_locked`, and
-four write paths refuse a frozen division with a 422: single apply
-(`schedule.ts:2524`), fixture move (`:2901`), AI plan (`schedule-ai.ts:912`),
-joint apply (`competition-schedule-apply.ts:419`). `clearScheduleScoped`
+**F1 — clear-schedule ignores the freeze. CONFIRMED against a live database
+2026-09-03**: with the division frozen, the scoped clear returned
+`cleared: 12` — twelve fixtures wiped off a board the organiser had frozen.
+
+`divisionLockState` (`schedule.ts:531`) reads `schedule_locked`. Four write
+paths consult it, but NOT on identical terms — an earlier draft of this spec
+said they did, and a review disproved it:
+
+| path | refuses with |
+|---|---|
+| single apply `schedule.ts:2524` | 422, the bare literal |
+| fixture move `schedule.ts:2901` | 422, the same bare literal |
+| joint apply `competition-schedule-apply.ts:419` | 422, but interpolates the division name and sets code `SCHEDULE_LOCKED` |
+| AI plan `schedule-ai.ts:912` | NOT a frozen guard at all — a scope-lock read. The AI refusal is `schedule-ai.ts:3205`, and it is **409** with different copy. |
+
+So only two sites shared the literal before this wave; the clear guard makes
+three. **Consequence for any test:** this path's error envelope carries the
+generic 422 code, NOT `SCHEDULE_LOCKED`. Branch on status, never on `code`. `clearScheduleScoped`
 (`history.ts:659`) takes the advisory lock, checks the division exists, and
 never asks. Its route (`api/v1/schedule/clear/route.ts`) does RBAC only. The
 UI gates the Danger zone on `canEdit` alone (`history-panel.tsx:438`), so the
