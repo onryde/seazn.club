@@ -44,6 +44,23 @@ Copied verbatim from the spec and from `docs/superpowers/RULES.md`. Every task's
   counts pasted back. Rerun the gate yourself at the wave boundary." A
   delegated full-suite run costs a subagent's whole context and returns a
   number the controller must re-verify anyway.
+- **`PLAYWRIGHT_BASE` is NOT exported by `seazn-env env`, and `playwright.config.ts:28`
+  defaults it to `http://localhost:3000`.** Every Playwright command in this plan
+  MUST be preceded by `export PLAYWRIGHT_BASE="$SMOKE_BASE"` or it drives the wrong
+  server — the owner's dev server if one is up, nothing if not, and in neither case
+  the build under test. The full prefix for every Playwright run is:
+
+  ```bash
+  cd /Users/ashokhein/github/seazn.club/.claude/worktrees/dir-walkthrough/apps/web && \
+  eval "$(~/.claude/skills/seazn-local-env/scripts/seazn-env.sh env --label dirw)" && \
+  export PLAYWRIGHT_BASE="$SMOKE_BASE" && \
+  npx playwright test --project=walkthrough <spec>
+  ```
+- **A product-code mutation costs a full prod rebuild each way**, measured at 15-25
+  minutes under load. `seazn-env rebuild --label dirw` MUST be launched detached
+  (`nohup ... & disown`) — the 10-minute Bash cap SIGKILLs it mid-build and leaves
+  the server down with the mutant still on disk. Restore is then the next command,
+  not a later one.
 - Local env label: `dirw`. `eval "$(~/.claude/skills/seazn-local-env/scripts/seazn-env.sh env --label dirw)"` exports `DATABASE_URL` / `SMOKE_BASE` / `PLACEMENT_SERVICE_*`.
 
 ---
@@ -428,6 +445,7 @@ test("the duplicate queue proposes a real pair and suppresses a false one", asyn
 ```bash
 cd /Users/ashokhein/github/seazn.club/.claude/worktrees/dir-walkthrough/apps/web && \
 eval "$(~/.claude/skills/seazn-local-env/scripts/seazn-env.sh env --label dirw)" && \
+export PLAYWRIGHT_BASE="$SMOKE_BASE" && \
 npx playwright test --project=walkthrough directory-player-identity \
   --reporter=list > /tmp/t2a.log 2>&1; echo "EXIT=$?"; tail -20 /tmp/t2a.log
 ```
@@ -443,6 +461,7 @@ No product code changes should be needed. If the queue does not propose the pair
 ```bash
 cd /Users/ashokhein/github/seazn.club/.claude/worktrees/dir-walkthrough/apps/web && \
 eval "$(~/.claude/skills/seazn-local-env/scripts/seazn-env.sh env --label dirw)" && \
+export PLAYWRIGHT_BASE="$SMOKE_BASE" && \
 npx playwright test --project=walkthrough directory-player-identity \
   --reporter=list > /tmp/t2a.log 2>&1; echo "EXIT=$?"; grep -E "passed|failed|\([0-9]+m?s\)" /tmp/t2a.log | tail -5
 ```
@@ -457,6 +476,7 @@ Comment out the differing-dob suppressor in `apps/web/src/server/usecases/person
 cd /Users/ashokhein/github/seazn.club/.claude/worktrees/dir-walkthrough && \
 ~/.claude/skills/seazn-local-env/scripts/seazn-env.sh rebuild --label dirw && \
 cd apps/web && eval "$(~/.claude/skills/seazn-local-env/scripts/seazn-env.sh env --label dirw)" && \
+export PLAYWRIGHT_BASE="$SMOKE_BASE" && \
 npx playwright test --project=walkthrough directory-player-identity --reporter=list 2>&1 | tail -8
 ```
 
@@ -744,6 +764,7 @@ If the row's roles editor is not a `group` named `Roles` (i.e. the row uses a di
 ```bash
 cd /Users/ashokhein/github/seazn.club/.claude/worktrees/dir-walkthrough/apps/web && \
 eval "$(~/.claude/skills/seazn-local-env/scripts/seazn-env.sh env --label dirw)" && \
+export PLAYWRIGHT_BASE="$SMOKE_BASE" && \
 npx playwright test --project=walkthrough directory-officials-roles --reporter=list 2>&1 | tail -20
 ```
 
@@ -1218,6 +1239,7 @@ A `-g` filter is a filename sweep wearing a costume. Run the whole project:
 ```bash
 cd /Users/ashokhein/github/seazn.club/.claude/worktrees/dir-walkthrough/apps/web && \
 eval "$(~/.claude/skills/seazn-local-env/scripts/seazn-env.sh env --label dirw)" && \
+export PLAYWRIGHT_BASE="$SMOKE_BASE" && \
 npx playwright test --project=walkthrough --workers=2 --reporter=list \
   > /tmp/leg.log 2>&1; echo "EXIT=$?"; grep -E "passed|failed" /tmp/leg.log | tail -3
 ```
