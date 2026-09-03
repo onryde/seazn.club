@@ -4955,7 +4955,7 @@
   "history.danger.title": "Danger zone",
   "history.danger.body": "Clears timetable slots only — locked and decided fixtures always survive, and the action is undoable above.",
   "history.danger.clear": "Clear schedule…",
-  "history.danger.frozen": "The schedule is frozen. Unfreeze it on the board to clear slots.",
+  "history.danger.frozen": "The schedule is frozen. Unfreeze it above to clear slots.",
   "history.aria": "Schedule history",
   "history.undo": "Undo",
   "history.redo": "Redo",

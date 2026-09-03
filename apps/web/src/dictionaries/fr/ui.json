@@ -4955,7 +4955,7 @@
   "history.danger.title": "Zone sensible",
   "history.danger.body": "Efface uniquement les créneaux de l'horaire — les rencontres verrouillées et déjà décidées sont toujours conservées, et l'action est annulable ci-dessus.",
   "history.danger.clear": "Effacer le calendrier…",
-  "history.danger.frozen": "Le calendrier est verrouillé. Déverrouillez-le sur le tableau pour effacer les créneaux.",
+  "history.danger.frozen": "Le calendrier est verrouillé. Déverrouillez-le ci-dessus pour effacer les créneaux.",
   "history.aria": "Historique du calendrier",
   "history.undo": "Annuler",
   "history.redo": "Rétablir",

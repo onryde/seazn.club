@@ -43,6 +43,9 @@ import type { ReactElement } from "react";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 import enUi from "@/dictionaries/en/ui.json";
+import esUi from "@/dictionaries/es/ui.json";
+import frUi from "@/dictionaries/fr/ui.json";
+import nlUi from "@/dictionaries/nl/ui.json";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
@@ -60,6 +63,12 @@ vi.mock("@/lib/client-v1", () => ({
 const { HistoryPanel } = await import("../history-panel");
 
 const EN = enUi as unknown as Record<string, string>;
+const DICTS: Record<string, Record<string, string>> = {
+  en: EN,
+  es: esUi as unknown as Record<string, string>,
+  fr: frUi as unknown as Record<string, string>,
+  nl: nlUi as unknown as Record<string, string>,
+};
 
 /** Every key the panel renders with an EMPTY history list — the chrome, the
  *  save-point form, the Danger zone. */
@@ -214,6 +223,32 @@ describe("HistoryPanel — every string in the panel comes from the dictionary",
       expect(html, `${key}: the shipped English changed`).toContain(anchorFor(key, EN[key]!));
     }
   });
+});
+
+describe("HistoryPanel — the panel's copy points at the panel's own controls", () => {
+  // The frozen note's first draft read "Unfreeze it on the board to clear
+  // slots." True — schedule-board.tsx has a whole-division freeze toggle on the
+  // same `/locks` endpoint — but it sends the organiser to another tab when the
+  // checkbox that SET the freeze ("Freeze whole schedule") is a few hundred
+  // pixels up this very panel. Copy that points past the nearer control teaches
+  // the reader that the product is bigger and more confusing than it is.
+  //
+  // Written as a sweep over every key this panel owns, in every locale, rather
+  // than as one assertion on the one string that was wrong: the defect entered
+  // through a translated string, and a check that only reads English would not
+  // have seen three quarters of it.
+  const OFFSITE = /\b(board|tab)\b|tablero|tableau|\bbord\b|pesta[ñn]a|onglet|tabblad/i;
+  const OWNED = [...STATIC_KEYS, ...EVENT_KEYS.map(([, k]) => k), "history.notUndoable"];
+
+  for (const locale of Object.keys(DICTS)) {
+    it(`${locale}: no string sends the organiser to another surface`, () => {
+      for (const key of OWNED) {
+        const value = DICTS[locale]![key]!;
+        expect(value, `${locale}/${key} is missing`).toBeTypeOf("string");
+        expect(value, `${locale}/${key} points off this panel: "${value}"`).not.toMatch(OFFSITE);
+      }
+    });
+  }
 });
 
 describe("HistoryPanel — the Recent edits list names events in the reader's language", () => {
