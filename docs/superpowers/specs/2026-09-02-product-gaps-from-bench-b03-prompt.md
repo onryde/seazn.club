@@ -5,7 +5,7 @@ B03's own prompt forbids touching product code, so none of these were fixed
 there. Every one was found by trying to drive the product's real API from
 outside it, which is what the bench is for.
 
-> ## STATUS 2026-09-03 — seven of nine FIXED (PR #706, #709); G4 WITHDRAWN; **G7 is the only one still open**
+> ## STATUS 2026-09-03 — ALL NINE RESOLVED: eight FIXED (#706, #709, #710), G4 WITHDRAWN. Nothing open.
 >
 > | gap | state |
 > |---|---|
@@ -16,7 +16,7 @@ outside it, which is what the bench is for.
 > | G6 doc publishes a different object than the route enforces | **FIXED** — one schema object per route |
 > | G8 drift gate ignored the published spec | **FIXED** — `ci.yml` diffs `v1.public.json` too |
 > | G4 `import.events` granted by no plan | **NOT A GAP** — deliberate rollout kill-switch; withdrawn |
-> | G7 `business` seeded by a migration, absent live | **OPEN**, and NOT blocked on W2 |
+> | G7 `business` seeded by a migration, absent live | **FIXED** — #710 `496c2a576`, the query committed |
 > | G9 blackouts are write-only over the API | **FIXED** — PR #709 `eb3f1693d`, `GET .../availability` |
 >
 > Each fix was verified present in the tree, not taken from the PR
@@ -477,6 +477,14 @@ carries no `enterprise`, no `entitlements-v18-matrix.test.ts` and nothing past
 This exchange is the third time in two days the catalog moved under a written
 claim — v389, then V390, now W2. The recommendation below was already "commit
 the query, not the table"; treat that as confirmed rather than restated.
+
+> **FIXED 2026-09-03 — #710, `496c2a576`, verified in the tree.** The
+> entitlements index now carries the `select` itself, `search_path=seazn_club`
+> caveat included, rather than a table of its output. That is the
+> recommendation below, taken as written: commit the query, not its answer.
+> This document is the worked example of why — its own catalog table went stale
+> three times in two days (v389, then V390, then W2's `pro_plus`/`enterprise`
+> swap), which is exactly the failure a committed `select` cannot have.
 
 **Recommendation [sharpened 2026-09-03 by this document going stale on its own
 terms]:** do NOT write a note naming today's plans — that is what the original
