@@ -5,7 +5,7 @@ B03's own prompt forbids touching product code, so none of these were fixed
 there. Every one was found by trying to drive the product's real API from
 outside it, which is what the bench is for.
 
-> ## STATUS 2026-09-03 — six of nine FIXED (PR #706); G4 WITHDRAWN; G7 and G9 open
+> ## STATUS 2026-09-03 — seven of nine FIXED (PR #706, #709); G4 WITHDRAWN; **G7 is the only one still open**
 >
 > | gap | state |
 > |---|---|
@@ -17,7 +17,7 @@ outside it, which is what the bench is for.
 > | G8 drift gate ignored the published spec | **FIXED** — `ci.yml` diffs `v1.public.json` too |
 > | G4 `import.events` granted by no plan | **NOT A GAP** — deliberate rollout kill-switch; withdrawn |
 > | G7 `business` seeded by a migration, absent live | **OPEN**, and NOT blocked on W2 |
-> | G9 blackouts are write-only over the API | **IN FLIGHT** (`fix/g9-official-availability-get`) — do not double-take it |
+> | G9 blackouts are write-only over the API | **FIXED** — PR #709 `eb3f1693d`, `GET .../availability` |
 >
 > Each fix was verified present in the tree, not taken from the PR
 > description. **Read the six closed sections as history, not as work.** They
@@ -550,17 +550,32 @@ may be to stop committing it at all.
 
 ## G9 — G2's blackout route can be WRITTEN but not READ
 
-> **IN FLIGHT 2026-09-03, not merged** — another session is on
-> `fix/g9-official-availability-get`: a new scoped usecase
-> `listOfficialBlackout(auth, officialId)` (a real `where official_id = ...`,
-> NOT the org-wide `loadOfficialBlackouts`), route guarded by
-> `requireResourceAuth(req, "official", id, "read")` mirroring the writes, plus
-> `openapi.ts` and `key-scopes.ts` (GET, scope `read`, pin `official`) and a
-> regenerated spec. Their tests: scoped round-trip, a second official's blackout
-> does not leak, empty list is **200 not 404**, org B blocked.
+> **FIXED 2026-09-03 — PR #709, merge `eb3f1693d`, verified on `origin/main`
+> rather than taken from the report.** `GET` now sits at `:16` of that route
+> file alongside the `POST` (`:28`) and `DELETE` (`:38`) G2 shipped. The fix is
+> a new scoped usecase `listOfficialBlackout(auth, officialId)` carrying a real
+> `where official_id = ...` — NOT the org-wide `loadOfficialBlackouts`, which
+> has no such predicate and leans entirely on RLS. Route guarded by
+> `requireResourceAuth(req, "official", id, "read")`, mirroring the writes.
+> Tests: scoped round-trip, a second official's blackout does not leak, empty
+> list is **200 not 404**, org B blocked. That empty-list case is the one worth
+> keeping — a per-resource GET that 404s on empty is unusable for exactly the
+> reconciliation this gap existed to enable.
 >
-> Recorded so a third session does not take this twice. Re-check before
-> starting: this is another branch's state, not `main`'s.
+> **A correction to advice this file gave, worth keeping because the mistake is
+> reusable:** B03 suggested `key-scopes.ts` take `pin: "official"`. There is no
+> such pin. `PinKind` (`key-scopes.ts:33-40`) is a CLOSED union —
+> `competition | division | stage | fixture | entrant | registration | pool` —
+> and officials are not a pinnable resource kind here. The suggestion came from
+> reading `pin: "division"` at `:128-130` and `pin: "fixture"` at `:182` and
+> generalising: a grep showed the field existed and was then treated as showing
+> what values it admits. `tsc` caught it, and the merged entry is unpinned,
+> matching its sibling POST/DELETE rows.
+>
+> The bench's own read-back can now assert the stored value directly, instead
+> of inferring it from `schedule/validate`'s `warn.official_unavailable`. That
+> substitution is described below and should be revisited when the bench next
+> touches blackouts.
 
 **Found 2026-09-03 by B03 T6, while consuming G2's fix. Not a criticism of that
 fix — it is the gap its shape leaves behind, and it was only visible from a
