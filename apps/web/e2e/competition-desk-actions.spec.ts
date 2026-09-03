@@ -340,8 +340,18 @@ test.describe("competition desk: every action label lands on the control it name
       await action.click();
       await page.waitForURL(/\/o\//);
       if (rig.landText) {
-        await expect(page.getByText(rig.landText).first(),
-          `${row.kind}: the landing page does not show the thing the row is about`).toBeVisible();
+        // Same dual mobile/desktop DOM as the action above, one level deeper:
+        // the registrants row renders BOTH a `sm:hidden` phone card and a
+        // `hidden sm:grid` desktop block (registration-hub-registrant-table.tsx),
+        // so a bare `.first()` picks the phone copy and reads `hidden` at a
+        // desktop width — a TEST defect that reports as "the page does not show
+        // the registration". Separate the two diagnoses: absent from the DOM is
+        // a product defect, present-but-never-visible is a layout one.
+        const inDom = page.getByText(rig.landText);
+        await expect(inDom,
+          `${row.kind}: the landing page never rendered "${rig.landText}" at all`).not.toHaveCount(0);
+        await expect(inDom.filter({ visible: true }).first(),
+          `${row.kind}: "${rig.landText}" is in the DOM but no copy of it is visible`).toBeVisible();
       }
       await row.land(page);
     });
