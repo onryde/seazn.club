@@ -286,16 +286,41 @@ test("R8/#676 — MEASUREMENT: do M10/M11 (the min-w-0 mutants) have a visible c
       .forEach((el) => el.classList.add("whitespace-nowrap"));
   });
   const control = await measure("CONTROL nowrap");
-  // Asserted on HEIGHT, not width, and the reason is itself the finding: at 320
-  // the reserved cell is already capped by the space the band has to give
-  // (band 246 wide, cell 222), so NOTHING can widen it — the invisible sizers
-  // simply overflow their own cell unseen. Height is the metric that still
-  // responds, and it does (84 -> 68), which is what proves this harness can
-  // move pixels at all and that the M10/M11 result below is a real measurement
-  // rather than a mutation that quietly failed to apply.
+  // Band HEIGHT stopped being a usable witness once the phone composition
+  // wave gave the band a `max-md:min-h-11` floor (scorebug.tsx — the repo's
+  // 44px touch-target minimum, needed once the band became a keyboard-
+  // focusable scroll rail; see its own comment for why). That floor pins
+  // band.height at 44 in every one of these four states — confirmed by
+  // running this file against pre-fix `main` (job 100583961016, run
+  // 33735186301: `band.h 28->28` there too) — so `whitespace-nowrap` on the
+  // sizers was ALREADY not moving this metric before the floor was added;
+  // the floor just made the failure visible by removing the one state
+  // (mid-80s px) that used to clear 1px of tolerance.
+  //
+  // The real reason neither the sizers' `min-w-0`/`whitespace-nowrap` NOR
+  // the band's height can be moved: the reserving WRAPPER carries
+  // `max-md:shrink-0` (R3's own strip-item recipe), and a flex item with
+  // `flex-shrink: 0` renders at its hypothetical (content-driven) main size
+  // regardless of `min-width` — the CSS shrink algorithm, which is the only
+  // place `min-width: 0` vs `auto` matters, never runs. `min-w-0` on this
+  // wrapper is consequently a genuine no-op at this breakpoint, independent
+  // of anything this file's mutants (M10/M11) do — which is exactly why
+  // NEITHER of them, nor the sizer-nowrap control, can move a pixel here.
+  //
+  // POSITIVE CONTROL, corrected: prove the harness can still move a pixel by
+  // toggling the ONE class that genuinely gates this element's size —
+  // `max-md:shrink-0` itself — rather than a class whose effect is already
+  // structurally suppressed. Verified directly before writing this
+  // assertion: cell.width 353 -> 49 with `max-md:shrink-0` removed, band
+  // height still pinned at 44 by its own floor. Cell WIDTH is therefore the
+  // metric that responds now, not band height.
+  await page.evaluate(() => {
+    document.querySelectorAll('[data-strip-reserve="true"]').forEach((el) => el.classList.remove("max-md:shrink-0"));
+  });
+  const shrinkRemoved = await measure("CONTROL shrink-0 removed");
   expect(
-    Math.abs(control.band.height - base.band.height),
-    "positive control: forcing nowrap on the sizers MUST change the band geometry",
+    Math.abs(shrinkRemoved.cell.width - control.cell.width),
+    "positive control: removing max-md:shrink-0 MUST change the reserved cell's width",
   ).toBeGreaterThan(1);
 
   // The BASELINE is what this asserts; the mutant numbers are the deliverable
