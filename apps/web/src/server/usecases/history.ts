@@ -666,11 +666,21 @@ export async function clearScheduleScoped(
     await tx`select pg_advisory_xact_lock(hashtext(${"division:" + divisionId}))`;
     const [division] = await tx`select 1 from divisions where id = ${divisionId}`;
     if (!division) throw new HttpError(404, "division not found");
-    // The freeze applies to every division write path — apply
-    // (schedule.ts:2524), fixture move (:2901), AI plan (schedule-ai.ts:912)
-    // and joint apply (competition-schedule-apply.ts:419) all refuse on these
-    // exact terms. Clear was the one that did not, so a frozen board could be
-    // wiped by the one control whose whole point is that it is destructive.
+    // Clear was the one division write path a freeze did not stop, so a frozen
+    // board could be wiped by the one control whose whole point is that it is
+    // destructive. `applySchedule` and `patchFixture`'s timetable branch (both
+    // schedule.ts) refuse on exactly these terms — same 422, same sentence,
+    // and the sentence is duplicated by hand at all three sites, so a reword
+    // has to grep the literal rather than trust a shared constant.
+    //
+    // The other two freeze refusals are NOT the same contract, and were
+    // miscited here in the first draft of this comment: the joint apply
+    // (competition-schedule-apply.ts) is a 422 but interpolates the division
+    // name and carries code "SCHEDULE_LOCKED", and the AI-plan refusal
+    // (schedule-ai.ts, at the architect gate) is a 409 with its own copy and
+    // reads divisions.schedule_locked directly rather than through
+    // divisionLockState. schedule-ai.ts's divisionLockState call destructures
+    // `scopes` only and never consults `frozen` at all.
     const lockState = await divisionLockState(tx, divisionId);
     if (lockState.frozen) {
       throw new HttpError(422, "the division schedule is locked — unlock it to edit");

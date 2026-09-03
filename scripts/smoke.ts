@@ -10667,18 +10667,37 @@ async function autoScheduleSuite(): Promise<void> {
       ((clearOpen.json.data as { cleared?: number } | undefined)?.cleared ?? 0) > 0,
   );
 
-  // The whole-division freeze bites on the DESTRUCTIVE control too. Apply,
-  // fixture move, AI plan and joint apply all refuse a frozen division on
-  // these exact terms; clear was the one write path that did not, so a frozen
-  // board could be wiped by the one button whose entire point is that it
-  // wipes. Status AND message are a contract the board's own copy reads.
-  await v1(s, `/api/v1/divisions/${div.id}/locks`, "PATCH", { schedule_locked: true });
+  // The whole-division freeze bites on the DESTRUCTIVE control too. `applySchedule`
+  // and the single-fixture move both refuse a frozen division on exactly these
+  // terms (same 422, same sentence); clear was the one write path that did not,
+  // so a frozen board could be wiped by the one button whose entire point is
+  // that it wipes. Status AND message are a contract the board's own copy reads,
+  // so both are pinned here rather than the status alone.
+  const freeze = await v1(s, `/api/v1/divisions/${div.id}/locks`, "PATCH", {
+    schedule_locked: true,
+  });
   const clearFrozen = await v1(s, "/api/v1/schedule/clear", "POST", {
     division_id: div.id,
     scope: { excludeLocked: true },
     confirm: true,
   });
-  await v1(s, `/api/v1/divisions/${div.id}/locks`, "PATCH", { schedule_locked: false });
+  const thaw = await v1(s, `/api/v1/divisions/${div.id}/locks`, "PATCH", {
+    schedule_locked: false,
+  });
+  // BOTH sides of the freeze are asserted, and neither is inferable from the
+  // 422 below. `check` only counts — it never throws or returns — so putting
+  // the thaw before it proves the call was MADE, not that it SUCCEEDED. A
+  // thaw that answers non-200 leaves the division frozen, and the very next
+  // statement (`auto({ only_unlocked: true })`) then hits applySchedule's own
+  // frozen guard: a state leak from this block reported as a REFLOW defect,
+  // which sends the reader to the wrong subsystem. A silently-failed FREEZE is
+  // the mirror image — the clear would answer 200 and the 422 check below
+  // would indict the guard instead of the freeze that never happened.
+  check(
+    `clear: the freeze and the thaw around it both took ` +
+      `(freeze=${freeze.status}, thaw=${thaw.status})`,
+    freeze.status === 200 && thaw.status === 200,
+  );
   check(
     `clear: a FROZEN division refuses the scoped clear 422 with the unlock copy ` +
       `(status=${clearFrozen.status}, message=${clearFrozen.json.error?.message ?? "-"})`,
