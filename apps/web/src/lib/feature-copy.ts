@@ -65,14 +65,32 @@ export const FEATURE_REASONS: Record<string, string> = {
   // "Pro includes five, Pro Plus unlimited". Its KEY is live (§2 keeps it),
   // so only the sentence is stale — and every surviving "Pro Plus" string is
   // W3's copy pass, not this wave's. Recorded in the v18 _INDEX.md.
-  "cricket.dls": "DLS revised targets are a Pro feature — a manual umpire target still works.",
+  // ── SEVEN REASONS THAT NAMED PRO FOR A KEY COMMUNITY GRANTS ──────────────
+  //
+  // Found by `freeClaimFaults` (lib/copy-truth.ts) on its first run, which is
+  // the whole argument for judging each sentence against its OWN row. Four were
+  // freed by V392 in this wave (`cricket.dls`, `tiebreakers.custom`,
+  // `standings.custom_points`, `scheduling.multi_division`) and three had been
+  // free for waves (`exports` since V310, both officials keys since V319).
+  //
+  // None of these gates can fire from a PLAN any more — `orgPlanKey` coalesces
+  // a subscription-less org to 'community', which grants them — so the only
+  // refusal left is an explicit `org_entitlement_overrides` deny. That is what
+  // the copy now says. A sentence nobody can reach is exactly where a
+  // falsehood survives: no customer complains, no test renders it, and the
+  // next reader takes it as a statement of the paywall.
+  "cricket.dls": "DLS revised targets are switched off for this organisation — a manual umpire target still works.",
   "stats.player": "Player stats and scorecard entry are a Pro feature.",
   "scoring.audit_export": "The signed match audit trail download is a Pro feature.",
   "discipline.enforced": "Automatic suspension tracking is a Pro feature.",
-  "tiebreakers.custom": "Custom tiebreaker order is a Pro feature.",
-  "standings.custom_points": "Bonus-point rules and forfeit points are a Pro feature — plain win/draw/loss points work on every plan.",
+  "tiebreakers.custom": "Custom tiebreaker order is switched off for this organisation.",
+  "standings.custom_points": "Bonus-point rules and forfeit points are switched off for this organisation — plain win/draw/loss points work on every plan.",
   "standings.carry_over": "Carrying Phase-1 standings into Phase 2 is a Pro feature.",
-  "eligibility.enforced": "Enforced eligibility locks are a Pro feature.",
+  // `eligibility.enforced` has NO rows in plan_entitlements at all, so no
+  // plan grants or denies it and "a Pro feature" described a paywall that
+  // does not exist. Kept rather than deleted — the key is still passed to
+  // `featureReason` — and reworded to the refusal that is actually possible.
+  "eligibility.enforced": "Enforced eligibility locks are switched off for this organisation.",
   // Public & realtime
   // The number is NOT written here, for the same reason `import.bulk` stopped
   // writing its own: this sentence said "one public dashboard at a time"
@@ -103,7 +121,7 @@ export const FEATURE_REASONS: Record<string, string> = {
   // Platform
   "api.access": "API keys are a Pro feature.",
   "api.write": "Write access via the API is an Enterprise feature (Contact us) — read keys work on Pro.",
-  exports: "CSV/PDF exports are a Pro feature.",
+  exports: "CSV/PDF exports are switched off for this organisation.",
   "exports.branded": "Branded print templates (club colours, sponsor logos) are a Pro feature.",
   // Clubs & bulk import (Jul3/01 §7)
   // STATES NO NUMBER AND NO PLAN, deliberately, and both sides of a rebase
@@ -138,11 +156,14 @@ export const FEATURE_REASONS: Record<string, string> = {
   "scheduling.board": "Editing the schedule board is not available on this plan.",
   // Still a real paywall — and since V353 an Event Pass lifts it for one
   // competition, which is why the key is in `PASS_FEATURES`.
+  // V392 granted this to community: joint planning is free on every plan and
+  // there is no door. `ai-scheduling.md` carried the same false sentence and
+  // moved with this one.
   "scheduling.multi_division":
-    "The competition-wide schedule board is a Pro feature — or an Event Pass, for one competition.",
+    "The competition-wide schedule board is switched off for this organisation.",
   "officials.auto": "Auto-assigning officials (solver, phased sourcing) is a Pro feature — manual assignment still works.",
-  "officials.roles_multi": "Multiple official roles per fixture (judge + referee) are a Pro feature.",
-  "officials.marks": "Rating your match officials is a Pro feature.",
+  "officials.roles_multi": "Multiple official roles per fixture (judge + referee) are switched off for this organisation.",
+  "officials.marks": "Rating your match officials is switched off for this organisation.",
   "scheduling.ai": "AI Schedule (plan, refine and repair your schedule from plain-language instructions) is not available on this plan.",
   // scheduling.ai.runs_per_division.max retired (v17 Phase 2 Task 5, V322):
   // the graded per-division run cap below it is gone, replaced by the

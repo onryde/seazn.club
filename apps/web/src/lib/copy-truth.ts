@@ -819,9 +819,31 @@ export interface PaywallReason {
   text: string;
 }
 
-/** "…is a Pro feature", "needs a Pro plan", "upgrade to Pro". */
+/**
+ * "…is a Pro feature", "needs a Pro plan", "upgrade to Pro".
+ *
+ * DELIBERATELY NOT "needs a bigger plan". That is a QUOTA sentence — the
+ * allowance is used up — and every quota key legitimately has a community
+ * allowance, so treating it as a plan attribution reported
+ * `divisions.per_competition.max`, `stages.per_division.max` and `import.bulk`
+ * as falsehoods on this guard's first run. A cap sentence says "you have used
+ * yours", not "this belongs to Pro".
+ */
 export const PRO_ATTRIBUTION =
-  /\b(?:is|are)\s+(?:a|an)\s+(?:Pro|paid)\s+feature\b|\bneeds?\s+(?:a\s+)?(?:bigger\s+plan|Pro\s+plan)\b|\bupgrade\s+to\s+Pro\b/i;
+  /\b(?:is|are)\s+(?:a|an)\s+(?:Pro|paid)\s+feature\b|\bneeds?\s+(?:a\s+)?Pro\s+plan\b|\bupgrade\s+to\s+Pro\b/i;
+
+/**
+ * "…is an Enterprise feature", the Contact-us tier's own attribution.
+ *
+ * Its own pattern rather than a `(?:Pro|Enterprise)` alternation inside
+ * `PRO_ATTRIBUTION`, because the two make DIFFERENT claims about the same row:
+ * a Pro attribution says pro grants it, an Enterprise attribution says pro does
+ * NOT. Folding them together would have had this guard demand that
+ * `dashboard.branding` — badge removal, enterprise-only since V395 — be granted
+ * on Pro, which is the very thing the sentence says it is not.
+ */
+export const ENTERPRISE_ATTRIBUTION =
+  /\b(?:is|are)\s+(?:a|an)\s+Enterprise\s+feature\b|\bneeds?\s+(?:an\s+)?Enterprise\s+plan\b/i;
 
 /** "…works on every plan", "free on every plan", "included on every plan". */
 export const FREE_ATTRIBUTION =
@@ -846,19 +868,36 @@ export function freeClaimFaults(
     // describe something that is not a row (see `import.bulk`, which quotes a
     // cap and names no plan).
     const attributesPro = PRO_ATTRIBUTION.test(text);
-    const attributesFree = FREE_ATTRIBUTION.test(text);
-    if (!attributesPro && !attributesFree) continue;
+    const attributesEnterprise = ENTERPRISE_ATTRIBUTION.test(text);
+    // A free claim counts as a claim about THIS key only when the sentence
+    // makes no paid attribution at all. Several reasons pair the two on
+    // purpose — "Sponsor tiers … are a Pro feature — the flat partner strip is
+    // free on every plan", "Removing the seazn.club badge is an Enterprise
+    // feature — your own club logo works on every plan" — where the free half
+    // is a CONTRAST about a different capability. Reading it as a claim about
+    // the gated key reported five honest sentences as falsehoods on this
+    // guard's first two runs.
+    const attributesFree = !attributesPro && !attributesEnterprise && FREE_ATTRIBUTION.test(text);
+    if (!attributesPro && !attributesEnterprise && !attributesFree) continue;
     judged += 1;
     if (!rows[key]) {
       faults.push(`${key}: attributes a plan, but plan_entitlements has no such feature`);
       continue;
     }
-    // `bool_value === true` exactly, and for an int key a positive allowance —
-    // the same two shapes `hasFeature` and `getLimit` read.
-    const communityGrants =
-      row !== undefined && (row.bool === true || row.int === null || (row.int ?? 0) > 0);
-    if (attributesPro && communityGrants) {
-      faults.push(`${key}: calls it a Pro feature, but community already grants it`);
+    // The resolver's own two shapes, and they must not be merged. `hasFeature`
+    // reads `bool_value === true` EXACTLY; `getLimit` reads `int_value`, where
+    // NULL means unlimited and no row means 0.
+    //
+    // A bool row carries `int_value = NULL`, so "int is null therefore
+    // unlimited" reads every DENIED boolean as granted — measured on the first
+    // run of this guard, which reported `embeds.enabled` (community false,
+    // int null) as free. The discriminator is which COLUMN is populated.
+    const grants = (r: { bool: boolean | null; int: number | null } | undefined): boolean =>
+      r !== undefined && (r.bool !== null ? r.bool === true : r.int === null || r.int > 0);
+    const communityGrants = grants(row);
+    if ((attributesPro || attributesEnterprise) && communityGrants) {
+      const named = attributesPro ? "Pro" : "Enterprise";
+      faults.push(`${key}: calls it ${named === "Pro" ? "a Pro" : "an Enterprise"} feature, but community already grants it`);
     }
     if (attributesFree && !communityGrants) {
       faults.push(`${key}: says it works on every plan, but community does not grant it`);
@@ -866,10 +905,20 @@ export function freeClaimFaults(
     // …and the Pro half of a "Pro feature" claim has to be true as well. V395
     // took `dashboard.branding` off Pro, which is the shape that makes a
     // paywall point a Pro subscriber at an upgrade they already bought.
-    if (attributesPro && proRow !== undefined) {
-      const proGrants = proRow.bool === true || proRow.int === null || (proRow.int ?? 0) > 0;
-      if (!proGrants) {
-        faults.push(`${key}: calls it a Pro feature, but pro does not grant it either`);
+    if (attributesPro && proRow !== undefined && !grants(proRow)) {
+      faults.push(`${key}: calls it a Pro feature, but pro does not grant it either`);
+    }
+    // …and the ENTERPRISE claim, judged the other way round: naming the
+    // Contact-us tier asserts that PRO does not have it. A key Pro grants,
+    // sold as enterprise-only, sends a paying subscriber to a sales
+    // conversation for something already on their bill.
+    if (attributesEnterprise) {
+      if (proRow !== undefined && grants(proRow)) {
+        faults.push(`${key}: calls it an Enterprise feature, but pro grants it`);
+      }
+      const entRow = rows[key]?.enterprise;
+      if (entRow !== undefined && !grants(entRow)) {
+        faults.push(`${key}: calls it an Enterprise feature, but enterprise does not grant it`);
       }
     }
   }

@@ -1,10 +1,13 @@
 import { describe, it, expect } from "vitest";
 import {
+  FEATURE_REASONS,
   bulkImportRowsReason,
   doubleElimFormatReason,
   featurePlan,
   featureReason,
 } from "@/lib/feature-copy";
+import { freeClaimFaults, type PaywallReason } from "@/lib/copy-truth";
+import { sql } from "@/lib/db";
 
 /**
  * The vocabulary a price claim has to reach for. The ruling on the
@@ -202,7 +205,15 @@ describe("feature-copy V290", () => {
     expect(featureReason("discipline.enforced")).toBe(
       "Automatic suspension tracking is a Pro feature.",
     );
-    expect(featureReason("officials.marks")).toBe("Rating your match officials is a Pro feature.");
+    // `officials.marks` has been TRUE on community since V319 — the "Pro
+    // feature" sentence this pinned had been false for several waves, and
+    // `freeClaimFaults` found it by reading the row rather than the prose.
+    // Its two neighbours are still genuine Pro grants, which is why they are
+    // unchanged: the point of the trio is that they moved together in V293-295
+    // and only one of them has moved since.
+    expect(featureReason("officials.marks")).toBe(
+      "Rating your match officials is switched off for this organisation.",
+    );
     expect(featureReason("news.auto")).toBe("Auto-drafted result posts are a Pro feature.");
     expect(featurePlan("discipline.enforced")).toBe("pro");
     expect(featurePlan("officials.marks")).toBe("pro");
@@ -235,5 +246,141 @@ describe("doubleElimFormatReason — formats.double_elim names the ACTUAL gated 
 
   it("falls back to the double-elimination wording for any other kind (defensive default)", () => {
     expect(doubleElimFormatReason("knockout")).toBe(featureReason("formats.double_elim"));
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WHICH PLAN EACH PAYWALL SENTENCE ATTRIBUTES ITS FEATURE TO, against the row.
+//
+// `FEATURE_REASONS` is the one map every 402 and every <UpgradeGate> reads, and
+// it is keyed by `plan_entitlements.feature_key` — so each entry is a claim
+// about a SPECIFIC row and can be judged against that row alone. That is what
+// makes `freeClaimFaults` possible without a vocabulary: no guessing which
+// feature a sentence is about.
+//
+// W2 (entitlements v18) is the wave that made this necessary. It moved keys in
+// BOTH directions in one pass, and each direction lies differently:
+//
+//  - keys that became FREE (V390's three scoring-detail keys, `officials.auto`
+//    coming down to Pro in V392): a reason left saying "is a Pro feature" sells
+//    an upgrade for something the reader already has — and the gate it belongs
+//    to can no longer fire, so nobody ever sees it be wrong;
+//  - keys that became PAID (`dashboard.player_profiles`, `embeds.enabled`,
+//    `news.auto` in V395; the accent colour in V396): a reason left saying
+//    "works on every plan" promises a capability the resolver refuses, which is
+//    the more expensive direction — the reader is told they have it, tries, and
+//    is stopped.
+//
+// The second direction caught a live one the day this was written: V395's own
+// `dashboard.branding` reason ended "your own club logo and colours work on
+// every plan", and V396 priced the colour at Pro four hours later.
+//
+// Real Postgres required; skipped without DATABASE_URL.
+describe.skipIf(!process.env.DATABASE_URL)("every paywall reason names the plan its row does", () => {
+  const rows = async (): Promise<
+    Record<string, Record<string, { bool: boolean | null; int: number | null }>>
+  > => {
+    const all = await sql<
+      { feature_key: string; plan_key: string; bool_value: boolean | null; int_value: number | null }[]
+    >`select feature_key, plan_key, bool_value, int_value from plan_entitlements`;
+    expect(all.length, "plan_entitlements returned nothing").toBeGreaterThan(100);
+    const out: Record<string, Record<string, { bool: boolean | null; int: number | null }>> = {};
+    for (const r of all) {
+      (out[r.feature_key] ??= {})[r.plan_key] = { bool: r.bool_value, int: r.int_value };
+    }
+    return out;
+  };
+
+  const reasons = (): PaywallReason[] =>
+    Object.entries(FEATURE_REASONS).map(([key, text]) => ({ key, text }));
+
+  it("attributes no feature to a plan the matrix disagrees with", async () => {
+    expect(freeClaimFaults(reasons(), await rows())).toEqual([]);
+  });
+
+  it("reds in BOTH directions, and on an empty input", async () => {
+    const live = await rows();
+    // A key community GRANTS, sold as a Pro feature. `cricket.dls` is the case
+    // V392 created: free on every plan since that migration.
+    expect(
+      freeClaimFaults(
+        [{ key: "cricket.dls", text: "Rain-rule targets are a Pro feature." }],
+        live,
+      ).join(" | "),
+    ).toContain("cricket.dls: calls it a Pro feature, but community already grants it");
+
+    // …and the other direction: a key community does NOT grant, sold as free.
+    // `embeds.enabled` is the case V395 created.
+    expect(
+      freeClaimFaults(
+        [{ key: "embeds.enabled", text: "Embeds work on every plan." }],
+        live,
+      ).join(" | "),
+    ).toContain("embeds.enabled: says it works on every plan, but community does not grant it");
+
+    // A "Pro feature" claim for a key PRO does not grant either — the shape
+    // V395 made real by taking `dashboard.branding` off Pro, which is how a
+    // paywall comes to point a Pro subscriber at an upgrade they already own.
+    expect(
+      freeClaimFaults(
+        [{ key: "dashboard.branding", text: "Removing the badge is a Pro feature." }],
+        live,
+      ).join(" | "),
+    ).toContain("dashboard.branding: calls it a Pro feature, but pro does not grant it either");
+
+    // A reason for a key the matrix does not hold at all. `scorers.max` is the
+    // case V394 created by deleting the key: the resolver answers 0 for a
+    // missing row, so such a sentence describes a refusal nothing can lift.
+    expect(
+      freeClaimFaults(
+        [{ key: "scorers.max", text: "Extra scorer seats are a Pro feature." }],
+        live,
+      ).join(" | "),
+    ).toContain("scorers.max: attributes a plan, but plan_entitlements has no such feature");
+
+    // THE ENTERPRISE DIRECTION, which is the inverse claim and needs its own
+    // probes: naming the Contact-us tier asserts that PRO does NOT have it.
+    // `officials.auto` is the live case — V392 brought it down to Pro, so
+    // selling it as enterprise-only would send a paying subscriber to a sales
+    // conversation for something already on their bill.
+    expect(
+      freeClaimFaults(
+        [{ key: "officials.auto", text: "Auto officials assignment is an Enterprise feature." }],
+        live,
+      ).join(" | "),
+    ).toContain("officials.auto: calls it an Enterprise feature, but pro grants it");
+    // …and an enterprise claim for a key enterprise does not grant. Nothing in
+    // the shipped map does this, so the probe is written rather than reverted.
+    expect(
+      freeClaimFaults(
+        [{ key: "api.write", text: "Write access is an Enterprise feature." }],
+        { ...live, "api.write": { ...live["api.write"], enterprise: { bool: false, int: null } } },
+      ).join(" | "),
+    ).toContain("api.write: calls it an Enterprise feature, but enterprise does not grant it");
+    // …and the shipped enterprise sentences are CLEAN, or the two probes above
+    // would pass on a rule that always fires.
+    expect(
+      freeClaimFaults(
+        [
+          { key: "api.write", text: FEATURE_REASONS["api.write"]! },
+          { key: "dashboard.branding", text: FEATURE_REASONS["dashboard.branding"]! },
+        ],
+        live,
+      ),
+    ).toEqual([]);
+
+    // Anti-vacuity, both ends. A sentence that attributes no plan is not
+    // judged — but a whole map of them means the vocabulary has gone stale.
+    expect(
+      freeClaimFaults([{ key: "realtime", text: "You have reached a limit." }], live),
+    ).toEqual([
+      "no reason attributed a plan — the attribution vocabulary has gone stale and this rule examined nothing",
+    ]);
+    expect(freeClaimFaults([], live)).toEqual([
+      "no paywall reasons — this rule examines nothing",
+    ]);
+    expect(freeClaimFaults(reasons(), {})).toEqual([
+      "no plan_entitlements rows — the reasons were compared against nothing",
+    ]);
   });
 });
