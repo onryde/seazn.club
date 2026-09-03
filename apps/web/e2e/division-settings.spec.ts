@@ -3,8 +3,10 @@ import { TAG, apiJson, activeOrg } from "./helpers";
 
 // v8 acceptance (spec 2026-07-13): the division Settings tab collects
 // general/format/sharing/danger; the format locks once fixtures exist (UI
-// read-only + PATCH 409 FORMAT_LOCKED); cards wear their new identity —
-// sport banner on competitions, monogram tile on divisions.
+// read-only + PATCH 409 FORMAT_LOCKED); cards wear their identity — sport
+// banner on competitions. Divisions on the competition page moved off that
+// card grid onto DivisionLedger in W1 (competition-desk, 2026-09-02): logo
+// or the sport emoji, never a letter monogram — see the test below.
 
 async function seedRig(request: APIRequestContext) {
   const comp = await apiJson<{ id: string; slug: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31",
@@ -97,10 +99,15 @@ test("settings tab: sections render, rename works, format locks with fixtures", 
   expect(((await swap.json()) as { error?: { code?: string } }).error?.code).toBe("FORMAT_LOCKED");
 });
 
-test("cards wear their identity: sport banner on comps, monogram tile on divisions", async ({
+test("cards wear their identity: sport banner on comps, sport-emoji avatar on division ledger rows", async ({
   page,
   request,
 }) => {
+  // W1 (competition-desk design, 2026-09-02 §"Divisions ledger rows") retired
+  // the EntityCard tile grid for divisions on THIS page in favour of
+  // DivisionLedger: "logo, otherwise the sport emoji … never a letter
+  // monogram." The org page's own EntityCard grid (competitions, elsewhere)
+  // is unchanged and still asserted below.
   const org = await activeOrg(page);
   const rig = await seedRig(request);
 
@@ -108,7 +115,15 @@ test("cards wear their identity: sport banner on comps, monogram tile on divisio
   await expect(page.getByTestId("card-banner").first()).toBeVisible({ timeout: 20_000 });
 
   await page.goto(`/o/${org.slug}/c/${rig.compSlug}`);
-  const tile = page.getByTestId("card-tile").first();
-  await expect(tile).toBeVisible();
-  await expect(tile).toHaveText("T"); // "Tile Open" → monogram T
+  const row = page.getByTestId("desk-ledger-row").filter({ hasText: "Tile Open" }).first();
+  await expect(row).toBeVisible({ timeout: 20_000 });
+  // DivisionLedger renders BOTH responsive compositions into one row (mobile
+  // card, then the desktop grid, `md:hidden`/`hidden md:grid`) — this spec's
+  // "parallel" project runs at the default desktop viewport, so the mobile
+  // copy (DOM-first) is present but hidden; the desktop one (DOM-last) is
+  // the one actually on screen. `.last()`, not `.first()`.
+  const avatar = row.getByTestId("desk-ledger-avatar").last();
+  await expect(avatar).toBeVisible();
+  await expect(avatar).not.toHaveText("T"); // never a letter monogram
+  await expect(avatar.locator("img")).toHaveCount(0); // no logo uploaded — falls to the sport emoji, not a broken <img>
 });

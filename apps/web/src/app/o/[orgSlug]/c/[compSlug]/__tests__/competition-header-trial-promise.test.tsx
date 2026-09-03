@@ -51,7 +51,6 @@ vi.mock("@/server/usecases/divisions", () => ({ listDivisions: async () => [] })
 vi.mock("@/server/usecases/card-stats", () => ({
   listDivisionCardStats: async () => new Map(),
   nextLine: () => null,
-  formatLabel: () => null,
 }));
 vi.mock("@/server/public-site/data", () => ({ resolveLogoUrl: () => null }));
 vi.mock("@/lib/currency-server", () => ({ preferredCurrency: async () => "usd" }));

@@ -57,14 +57,20 @@ test("pick a template, land on the competition page with its structure, see entr
   await page.waitForURL((u) => !u.pathname.endsWith("/c/new"), { timeout: 20_000 });
 
   // Structure on the competition page: the created division renders as a
-  // card named after the template's division (localized "Main Draw"). Its
-  // meta line (format label "Knockout" from the REAL stage kind just
-  // written, and entrant guidance "0 entrants" — never a fake headcount) is
-  // page-level text next to, not inside, the card's accessible link name
-  // (EntityCard's stretched-link pattern: the `<a>` overlays the whole card
-  // but only names itself after the division), so these are checked as
-  // visible page content rather than folded into one locator's name.
+  // DivisionLedger row named after the template's division (localized "Main
+  // Draw"). Its format line (label "Knockout" from the REAL stage kind just
+  // written) and its status line ("0 entrants" — never a fake headcount) are
+  // page-level text next to, not inside, the row's accessible link name, so
+  // these are checked as visible page content rather than folded into one
+  // locator's name.
   await expect(page.getByRole("link", { name: "Main Draw" })).toBeVisible({ timeout: 20_000 });
-  await expect(page.getByText("Knockout")).toBeVisible();
-  await expect(page.getByText(/entrants?/i).first()).toBeVisible();
+  // DivisionLedger (W1) renders the format line into BOTH its responsive
+  // compositions (mobile card + desktop grid, one `md:hidden`); this spec
+  // runs at the default desktop viewport, so the desktop (DOM-last) copy is
+  // the one actually visible — `getByText` alone hits strict-mode's
+  // duplicate-match error since it doesn't discriminate on visibility.
+  await expect(page.getByTestId("desk-ledger-format").last()).toHaveText("Knockout");
+  // Same dual-DOM reason as above: the desktop (DOM-last) status-line copy
+  // is the one on screen at this spec's default desktop viewport.
+  await expect(page.getByText(/entrants?/i).last()).toBeVisible();
 });

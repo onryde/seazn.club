@@ -209,6 +209,24 @@ export async function listDivisionCardStats(
   return new Map(rows.map((r) => [r.division_id, r]));
 }
 
+// Restored after W1 (competition-desk) dropped it wiring the EntityCard
+// grid over to DivisionLedger — `stage_kinds` (below) stayed on
+// DivisionCardStats the whole time, but nothing read it any more, so a
+// division's format ("Knockout", "League + Groups"...) went from every card
+// to nowhere. See division-ledger.tsx's `formatLabel` field.
+export function formatLabel(kinds: string[]): string | null {
+  if (kinds.length === 0) return null;
+  const label: Record<string, string> = {
+    league: "League",
+    group: "Groups",
+    knockout: "Knockout",
+    swiss: "Swiss",
+    ladder: "Ladder",
+    americano: "Americano",
+  };
+  return kinds.map((k) => label[k] ?? k).join(" + ");
+}
+
 export interface NextLine {
   /** "Arun vs Dev · Court 2 · 14:30" — no "Next:"/"Now:" label baked in; the
    *  caller (EntityCard) renders that from the `ui` catalog so it localizes
@@ -242,18 +260,4 @@ export function nextLine(next: NextFixture | null, locale: string): NextLine | n
     );
   }
   return { text: parts.join(" · "), live: next.in_play };
-}
-
-/** "Knockout", "Group + Knockout", "League" — format from real structure. */
-export function formatLabel(kinds: string[]): string | null {
-  if (kinds.length === 0) return null;
-  const label: Record<string, string> = {
-    league: "League",
-    group: "Groups",
-    knockout: "Knockout",
-    swiss: "Swiss",
-    ladder: "Ladder",
-    americano: "Americano",
-  };
-  return kinds.map((k) => label[k] ?? k).join(" + ");
 }

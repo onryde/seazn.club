@@ -393,6 +393,51 @@ export async function eligibilityOverrideAuditRows(
  *    behaviour, not a limitation of the fixture — a spec that wants one org
  *    changed must put it in a group of its own first.
  */
+/** Put a division's venue in a different zone from its org, and date one of
+ *  its fixtures at an instant whose DAY differs between the two. The masthead
+ *  and the ledger row name the same fixture, so they must agree on the day —
+ *  a London org with a New York division at 23:00Z once printed
+ *  "Next Mon 7 Sep" above a row reading "Next Sun 6 Sep 19:00". No unit test
+ *  can see it: the page is a server component and apps/web vitest is node-env.
+ *
+ *  Minor fix (final review round 3): `division`/`schedule_settings`/
+ *  `fixtures` rows are scoped to the ONE division the caller just created —
+ *  fine to leave mutated. `organizations.timezone` is not: on the shared Pro
+ *  org every parallel spec runs against (auth.setup.ts:78-81) it is a
+ *  cross-spec contamination risk. Returns a restore function — call it in a
+ *  `finally` — that puts the org's timezone back to whatever it was before
+ *  this call, rather than assuming any particular default. */
+export async function setZoneSplitSql(opts: {
+  divisionId: string;
+  orgTz: string;
+  divisionTz: string;
+  fixtureNo: number;
+  at: string;
+}): Promise<() => Promise<void>> {
+  const orgId = await withDb(async (sql) => {
+    const [row] = await sql<{ org_id: string; timezone: string | null }[]>`
+      select c.org_id, o.timezone from competitions c
+        join divisions d on d.competition_id = c.id
+        join organizations o on o.id = c.org_id
+       where d.id = ${opts.divisionId}`;
+    if (!row) throw new Error(`setZoneSplitSql: no org for division ${opts.divisionId}`);
+    await sql`update organizations set timezone = ${opts.orgTz} where id = ${row.org_id}`;
+    await sql`insert into schedule_settings (division_id, tz, config)
+              values (${opts.divisionId}, ${opts.divisionTz}, '{}'::jsonb)
+              on conflict (division_id) do update set tz = ${opts.divisionTz}`;
+    await sql`update fixtures set scheduled_at = ${opts.at}::timestamptz
+               where division_id = ${opts.divisionId} and fixture_no = ${opts.fixtureNo}`;
+    await sql`update fixtures set scheduled_at = null
+               where division_id = ${opts.divisionId} and fixture_no <> ${opts.fixtureNo}`;
+    return { orgId: row.org_id, previousTimezone: row.timezone };
+  });
+  return async () => {
+    await withDb((sql) =>
+      sql`update organizations set timezone = ${orgId.previousTimezone} where id = ${orgId.orgId}`,
+    );
+  };
+}
+
 export async function setOrgPlanBySql(
   target: { orgId?: string; email?: string },
   plan: "pro" | "community" | "pro_plus",
@@ -486,6 +531,14 @@ export async function setOrgConnectSql(
  * the FK is satisfiable regardless of which org a test is looking at.
  */
 export async function claimProfileBySql(email: string): Promise<void> {
+  // Round J: the seven width projects share one database and one account, so
+  // the SECOND project to reach this helper collided on the
+  // `persons_org_user_lane_uq` partial index and aborted its whole serial
+  // file — 33 tests "did not run" behind one red. Solo runs never saw it.
+  // The precondition this helper exists to set up is "this user has a claimed
+  // player profile", which an existing row already satisfies, so a conflict
+  // is success rather than an idempotency guard swallowing a new arrival:
+  // the identity conflicted on is the same person, org and lane.
   await withDb(async (sql) => {
     const res = await sql`
       insert into persons (org_id, full_name, user_id, lane)
@@ -493,8 +546,26 @@ export async function claimProfileBySql(email: string): Promise<void> {
       from users u
       join org_members m on m.user_id = u.id
       where u.email = ${email}
-      limit 1`;
-    if (res.count === 0) throw new Error(`claimProfileBySql: no org membership for ${email}`);
+      limit 1
+      -- The predicate MUST match the partial index's own (V349:
+      -- user_id is not null and lane = 'player' and merged_into is null) --
+      -- Postgres only infers a partial index whose predicate the statement
+      -- implies, and a narrower guess raises "no unique or exclusion
+      -- constraint matching the ON CONFLICT spec".
+      on conflict (org_id, user_id, lane)
+        where user_id is not null and lane = 'player' and merged_into is null
+        do nothing`;
+    if (res.count === 0) {
+      // Distinguish the two zeros. A conflict means the profile is already
+      // claimed (fine); anything else means the SELECT matched nothing, which
+      // is the real failure this guard was written for.
+      const [existing] = await sql<{ id: string }[]>`
+        select p.id from persons p
+        join users u on u.id = p.user_id
+        where u.email = ${email} and p.lane = 'player' and p.merged_into is null
+        limit 1`;
+      if (!existing) throw new Error(`claimProfileBySql: no org membership for ${email}`);
+    }
   });
 }
 
@@ -620,6 +691,86 @@ export async function getFixtureScheduleSources(
 export async function setFixtureStatusSql(fixtureId: string, status: string): Promise<void> {
   await withDb(async (sql) => {
     await sql`update fixtures set status = ${status} where id = ${fixtureId}`;
+  });
+}
+
+/** Force a fixture's `scheduled_at` directly, bypassing the schedule engine
+ *  (H2 e2e, final review round 3): a division that has only been PUBLISHED
+ *  (`publishSchedule`, status 'scheduled') never got that far through the
+ *  normal write API in this file's other fixtures — `publish-schedule`
+ *  itself validates the timetable it is publishing, which is not what this
+ *  helper needs to prove. Same bypass-the-engine convention as
+ *  `setFixtureStatusSql` above. */
+export async function setFixtureScheduledAtSql(fixtureId: string, at: string | null): Promise<void> {
+  await withDb(async (sql) => {
+    await sql`update fixtures set scheduled_at = ${at} where id = ${fixtureId}`;
+  });
+}
+
+/** Assign a scorer to a fixture, by SQL (competition-desk e2e, round J).
+ *
+ *  `not_recording` is the one attention that needs an assignment to EXIST
+ *  while the fixture stays silent, and there is no write API that produces
+ *  that state without also inviting a person: the product's own path is an
+ *  org invite carrying a scope, which mints a user, sends mail and lands the
+ *  assignment as a side effect. The desk's read
+ *  (`competition-desk.ts`'s `scorerAssignments`) only asks whether a row
+ *  exists at fixture or division scope, so the org's own owner standing in as
+ *  the assignee is faithful to what the page reads — same bypass-the-engine
+ *  convention as `setFixtureStatusSql` above.
+ *
+ *  Derives org and assignee from the fixture itself so a caller needs no ids
+ *  beyond the one it already has. */
+export async function assignScorerSql(fixtureId: string): Promise<void> {
+  await withDb(async (sql) => {
+    const rows = await sql<{ ok: boolean }[]>`
+      insert into scorer_assignments (org_id, user_id, scope_type, scope_id)
+      select c.org_id, m.user_id, 'fixture', f.id
+      from fixtures f
+      join divisions d on d.id = f.division_id
+      join competitions c on c.id = d.competition_id
+      join org_members m on m.org_id = c.org_id and m.role = 'owner'
+      where f.id = ${fixtureId}
+      limit 1
+      on conflict do nothing
+      returning true as ok`;
+    if (rows.length === 0) {
+      throw new Error(`assignScorerSql: no scorer assignment written for fixture ${fixtureId} — the fixture, its org or its owner is missing`);
+    }
+  });
+}
+
+/** Move a fixture's KICK-OFF into the past, by SQL (competition-desk e2e,
+ *  review 7).
+ *
+ *  The desk's live-recording rows measure from `core.start`'s own
+ *  `recorded_at` — the real kick-off — not from `scheduled_at`, so a test that
+ *  needs a match to have been live for forty minutes cannot get there by
+ *  re-dating the fixture, and the only alternative is waiting forty minutes.
+ *  The fixture still reaches `in_play` through the real endpoint; this moves
+ *  the clock, nothing else.
+ *
+ *  Throws when no start event exists: silently updating zero rows would let a
+ *  test claim it had aged a match it had never started. */
+export async function backdateFixtureStartSql(fixtureId: string, minutesAgo: number): Promise<void> {
+  await withDb(async (sql) => {
+    const rows = await sql<{ id: string }[]>`
+      update score_events
+         set recorded_at = now() - make_interval(mins => ${minutesAgo})
+       where fixture_id = ${fixtureId} and type = 'core.start'
+      returning id`;
+    if (rows.length === 0) {
+      throw new Error(`backdateFixtureStartSql: fixture ${fixtureId} has no core.start event to move`);
+    }
+  });
+}
+
+/** Force a stage's status directly (competition-desk e2e: rule 1 — "finished"
+ *  requires every stage complete, or no open stage AND no live fixture — so
+ *  the "all decided" case needs the stage flipped as well as its fixtures). */
+export async function setStageStatusSql(stageId: string, status: string): Promise<void> {
+  await withDb(async (sql) => {
+    await sql`update stages set status = ${status} where id = ${stageId}`;
   });
 }
 
@@ -1510,17 +1661,27 @@ export async function createCompetitionViaUi(
 
 /**
  * Create a division through the tabbed builder UI (basics → scheduling →
- * Create). Uses the builder's defaults for sport/format; returns the division
- * id parsed from the post-create URL.
+ * Create). Uses the builder's defaults for sport/format unless `sportKey` is
+ * given; returns the division id parsed from the post-create URL.
+ *
+ * The builder has no separate entrant-kind picker (competition-desk e2e:
+ * confirmed by reading division-builder.tsx — no entrantKind/team/pairs
+ * control anywhere in it) — allowed entrant kinds are DERIVED from the
+ * sport+variant module, so a walkthrough that needs team entrants must pick
+ * a team sport here rather than pass a kind. Sports load `order by name`
+ * (d/new/page.tsx), so the unset default is alphabetically first
+ * ("badminton" — individual/pair only), not whatever the caller assumed.
  */
 export async function createDivisionViaUi(
   page: Page,
   competitionId: string,
   name: string,
+  sportKey?: string,
 ): Promise<string> {
   await page.goto(await competitionPath(page.request, competitionId, "/d/new"));
   // The name field is the first textbox on the Basics tab (see formats.spec.ts).
   await page.getByRole("textbox").first().fill(name);
+  if (sportKey) await page.getByRole("combobox", { name: "Sport", exact: true }).selectOption(sportKey);
   // Creation is guarded to the last tab.
   await page.getByRole("button", { name: "Scheduling", exact: true }).click();
   await page.getByRole("button", { name: /create division/i }).click();

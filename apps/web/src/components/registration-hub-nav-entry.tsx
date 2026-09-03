@@ -34,6 +34,7 @@ export function RegistrationHubNavEntry({
   count,
   details,
   awaiting = false,
+  className = "",
 }: {
   href: string;
   label: string;
@@ -52,18 +53,28 @@ export function RegistrationHubNavEntry({
    *  from `details` so the dot cannot drift out of step with the line that
    *  explains it. */
   awaiting?: boolean;
+  /** Layout hook for the caller's own row (the desk masthead orders its
+   *  phone stack with it). Never styling this component owns. */
+  className?: string;
 }) {
   return (
-    <span className="group relative inline-flex">
+    <span className={`group relative inline-flex max-sm:flex max-sm:w-full ${className}`}>
       <Link
         href={href}
         aria-label={ariaLabel}
-        className="btn btn-ghost gap-1.5"
+        className="btn btn-ghost gap-1.5 max-sm:min-h-11 max-sm:w-full max-sm:justify-start max-sm:px-4"
         data-registration-hub-entry
       >
         <UserPlus className="h-4 w-4" strokeWidth={1.75} aria-hidden />
-        <span className="hidden sm:inline">{label}</span>
-        <span className="hidden items-center gap-1.5 sm:inline-flex">
+        {/* F2 (round J): label and count were both `hidden sm:inline`, so at
+            phone widths this was an unlabelled icon tile carrying no number —
+            the one tool on this row that reports STATUS, with its status
+            hidden behind nothing at all. Visible at every width now. The
+            hover tooltip below stays desktop-only (`hidden sm:contents`):
+            there is no hover on a phone, and its lines are already in the
+            accessible name. */}
+        <span className="inline">{label}</span>
+        <span className="inline-flex items-center gap-1.5">
           <span className="inline-flex items-center rounded-full bg-purple-600 px-2 py-0.5 text-[11px] font-semibold whitespace-nowrap text-white">
             {count}
           </span>
