@@ -1,0 +1,527 @@
+// seed.ts — the HTTP driver. Takes a `SeedPlan` (lib/seed-plan.ts's PURE
+// pack -> request-body mapping) and drives it over the real REST API,
+// returning the real ids every later bench layer (scheduling, event-import,
+// oracles) needs to do its own job. `buildSeedPlan` decides WHAT to send;
+// this file decides WHEN and HOW, and turns pack refs into database uuids —
+// exactly the split `PackRef`'s own doc comment predicts: "the seeding layer
+// resolves it to a UUID and hands back a map" (pack-schema.ts:173-175).
+//
+// ---------------------------------------------------------------------------
+// Testability — an injected transport, never `global.fetch`
+// ---------------------------------------------------------------------------
+// `lib/env.ts`'s `runPreflight(base, probes)` is this directory's precedent
+// for DI over live I/O (its own header comment: "so `runPreflight` itself is
+// pure and unit-testable with fakes"; CI's own comment at
+// `.github/workflows/ci.yml:167-170` calls this out as the reason the bench
+// lib suite is DB-free). `SeedTransport` below is the same shape of split,
+// narrowed to exactly the two calls this file makes (`signIn`, `request`) —
+// `lib/__tests__/http.test.ts` mocks `global.fetch` to test `request()`
+// itself, which is right for THAT file and wrong here: this module never
+// needs to know fetch exists, only that something can sign in and make a
+// typed call.
+//
+// ---------------------------------------------------------------------------
+// Two things this file does NOT get from `SeedPlan`
+// ---------------------------------------------------------------------------
+// `SeedPlan` (seed-plan.ts:188-203) carries org/competition/divisions/
+// persons/entrants/officialPersonRefs/expectedFixtureCounts — no `venues`
+// field and no `streams` field, because `buildSeedPlan` resolves only the
+// six create-call bodies it owns; venues and streams are pack-level, not
+// plan-level. So `seedSuite` below takes them as separate inputs, straight
+// off the (already `PackSchema`-validated) pack: `venues` maps 1:1 onto
+// `CreateVenue`/`CreateCourtInput` with no computed fields (nothing to
+// "plan" — see `seedVenuesAndCourts`), and `streams` is what `bindStreamFixtures`
+// binds against the real `/generate` response. Keeping them as their own
+// parameters (rather than re-deriving a `Pack` inside this file, or adding
+// them to `seed-plan.ts`, which the brief forbids touching) means a unit
+// test builds a bare `SeedPlan` + a bare `PackStream[]` literal — plain
+// data, no `PackSchema.parse()` required — instead of a whole valid `Pack`.
+//
+// ---------------------------------------------------------------------------
+// The run tag is THIS layer's parameter, not `seed-plan.ts`'s
+// ---------------------------------------------------------------------------
+// `seed-plan.ts`'s own header comment (lines 15-21) says so directly:
+// `tinyPlan` (lib/suites/tiny.ts:100) resolves `pack.competition.name`
+// LITERALLY and `runTinySuite` appends its `runTag` at HTTP-call time
+// (lib/suites/tiny.ts:255) — "the existing precedent is that it is not this
+// layer's parameter at all, it is the HTTP driver's." `seedSuite` follows
+// that precedent for the competition name AND reuses `runTag` to build the
+// sign-in email, generalizing tiny.ts's hardcoded `bench-tiny-${runTag}`
+// (suites/tiny.ts:229) with `plan.org.slug` in place of the literal "tiny" —
+// which is also the ONE place `SeedPlanOrg.slug` gets used. There is no v1
+// REST route to set an org's name, slug or timezone at all: sign-in
+// auto-provisions a default org named literally "My organization"
+// (`apps/web/src/lib/auth.ts:377-391`, `ensureActiveOrg`/`createOrgForUser`),
+// there is no `apps/web/src/app/api/v1/orgs/route.ts` (only `orgs/[id]/...`
+// subresources — checked, `find apps/web/src/app/api/v1/orgs -maxdepth 1
+// -type f` returns nothing), and `schemas.ts` declares no `PatchOrg` /
+// `CreateOrg` symbol at all. So `plan.org.name` and `plan.org.timezone` have
+// NO reachable surface in this driver and are never sent anywhere — a brief/
+// API-shape finding recorded here rather than guessed around (an org PATCH
+// this file invented would be product code no route exists to receive).
+//
+// ---------------------------------------------------------------------------
+// Runtime constraints (unchanged from B01/B02/B03): `node
+// --experimental-strip-types` — no TS `enum`, no `namespace`, no parameter
+// properties. Every relative import carries `.ts`. Nothing here imports from
+// `apps/web` — every wire shape below is a hand mirror, cited against the
+// real schema/usecase it copies.
+import { newSession, request, signIn, type RequestOptions, type Session } from "./http.ts";
+import { fixtureKey, type PackStream, type PackVenue } from "./pack-schema.ts";
+import type {
+  SeedPlan,
+  SeedPlanEntrant,
+  SeedPlanPerson,
+  SeedPlanRosterMember,
+} from "./seed-plan.ts";
+
+// ---------------------------------------------------------------------------
+// Transport — narrow, injected, defaulted to the real thing
+// ---------------------------------------------------------------------------
+
+/** The subset of `./http.ts` this driver actually calls. A test hands in a
+ *  recording fake implementing this same shape; nothing in this file (or in
+ *  its tests) ever touches `global.fetch`. */
+export interface SeedTransport {
+  signIn(base: string, s: Session, email: string): Promise<{ has_org: boolean; org_id: string; redirect: string }>;
+  request<T>(base: string, s: Session, path: string, opts?: RequestOptions): Promise<T>;
+}
+
+export const defaultTransport: SeedTransport = { signIn, request };
+
+// ---------------------------------------------------------------------------
+// The result — pack ref -> real id, everywhere the plan declared a ref
+// ---------------------------------------------------------------------------
+
+export interface SeededSuite {
+  readonly orgId: string;
+  readonly competitionId: string;
+  /** Populated only for `venues`/their `courts` the caller actually passed
+   *  in — empty maps, never absent, when the pack (like `_tiny` today)
+   *  declares none. */
+  readonly venueIdByRef: ReadonlyMap<string, string>;
+  readonly courtIdByRef: ReadonlyMap<string, string>;
+  readonly divisionIdByRef: ReadonlyMap<string, string>;
+  readonly stageIdByRef: ReadonlyMap<string, string>;
+  readonly personIdByRef: ReadonlyMap<string, string>;
+  readonly entrantIdByRef: ReadonlyMap<string, string>;
+  /** Keyed by `fixtureKey(divisionRef, extKey)` (pack-schema.ts:1334-1336) —
+   *  the SAME composite key `PackStream`'s own cross-field rule uses
+   *  (pack-schema.ts:1623), never a hand-rolled second format. */
+  readonly fixtureIdByKey: ReadonlyMap<string, string>;
+}
+
+export interface SeedSuiteInput {
+  readonly base: string;
+  readonly plan: SeedPlan;
+  /** Off the pack directly — `SeedPlan` carries no `venues` field. Defaults
+   *  to `[]`, matching `_tiny`'s own "declares no venues" shape. */
+  readonly venues?: readonly PackVenue[];
+  /** Off the pack directly — `SeedPlan` carries no `streams` field either
+   *  (see this file's header comment). */
+  readonly streams: readonly PackStream[];
+  /** Same run tag `tinyPlan`'s caller mints (`randomUUID().slice(0, 8)` in
+   *  `suites/tiny.ts:199`) — this file does not mint its own, so two
+   *  concurrent runs against the same pack never collide on identity by
+   *  accident. */
+  readonly runTag: string;
+  readonly transport?: SeedTransport;
+}
+
+interface IdOut {
+  id: string;
+}
+
+interface GenerateOut {
+  // `created`/`existing` (stages.ts:1038-1039) are not surfaced here —
+  // nothing in this task's return shape needs the idempotency diff; a later
+  // task owns idempotent re-seeding (brief: "do NOT build idempotence").
+  fixtures: { id: string; ext_key?: string | null }[];
+}
+
+// ---------------------------------------------------------------------------
+// The ext_key binding — pure, and the load-bearing part of this file
+// ---------------------------------------------------------------------------
+
+/** One fixture out of a real `/generate` response, tagged with the ref of
+ *  the DIVISION whose stage produced it (never the LAST division processed —
+ *  `seedSuite` tags each fixture inside the per-division closure below, not
+ *  through a shared loop variable). */
+export interface GeneratedFixtureRef {
+  readonly divisionRef: string;
+  readonly extKey: string | null | undefined;
+  readonly id: string;
+}
+
+/**
+ * Matches every `PackStream` to the real fixture it names, by
+ * `fixtureKey(divisionRef, extKey)` — NEVER by array position (creation
+ * order is not guaranteed to match the pack's stream order, and even when it
+ * happens to, that agreement proves nothing — see this task's own required
+ * test). `ext_key` is unique per division, not globally
+ * (`PackStream.divisionRef`'s own doc, pack-schema.ts:621-624), which is
+ * exactly why the key is composite: two divisions sharing the same ext_key
+ * string must resolve to two different fixtures, not collide.
+ *
+ * Refuses two ways, each named explicitly rather than silently dropped or
+ * silently ignored (AGENTS.md recurring-failure class 6, "an absent symptom
+ * can mean suppressed, not safe"):
+ *   - a stream whose (divisionRef, ext_key) matched no generated fixture;
+ *   - a generated fixture that no stream claimed.
+ * A silent mismatch on either side would surface minutes into a live run as
+ * a wrong-fixture assertion instead of here, at seed time, with both sides
+ * named.
+ */
+export function bindStreamFixtures(
+  streams: readonly PackStream[],
+  fixtures: readonly GeneratedFixtureRef[],
+): ReadonlyMap<string, string> {
+  const byKey = new Map<string, string>();
+  for (const f of fixtures) {
+    // `FixtureRow.ext_key` is typed `string | null | undefined`
+    // (apps/web/src/server/usecases/stages.ts:205) ONLY because "dozens of
+    // pre-existing tests hand-build a FixtureRow-shaped literal that
+    // predates this field" (stages.ts:196-204's own doc comment) — a REAL
+    // `/generate` response always sets it (the generator's own stable id;
+    // FIXTURE_COLS always selects it). So an actual `null`/`undefined` here
+    // is a genuine anomaly, not "no stream could ever name this fixture" —
+    // folding it into a map key of the STRING "null" would let two such
+    // fixtures collide with each other, or with a pack that (legally, per
+    // `PackExtKey`) authored the ext_key text "null". Thrown immediately
+    // instead, naming the fixture that broke the contract.
+    if (f.extKey === null || f.extKey === undefined) {
+      throw new Error(
+        `seedSuite: generated fixture "${f.id}" in division "${f.divisionRef}" has no ext_key ` +
+          `(${JSON.stringify(f.extKey)}) — a real /generate response always sets one; cannot bind any stream to it`,
+      );
+    }
+    byKey.set(fixtureKey(f.divisionRef, f.extKey), f.id);
+  }
+
+  const result = new Map<string, string>();
+  const unmatched: string[] = [];
+  for (const stream of streams) {
+    const key = fixtureKey(stream.divisionRef, stream.fixtureExtKey);
+    const id = byKey.get(key);
+    if (id === undefined) {
+      unmatched.push(`division "${stream.divisionRef}" ext_key "${stream.fixtureExtKey}"`);
+      continue;
+    }
+    result.set(key, id);
+  }
+  if (unmatched.length > 0) {
+    throw new Error(
+      `seedSuite: ${unmatched.length} stream(s) matched no generated fixture: ${unmatched.join("; ")}`,
+    );
+  }
+
+  const unclaimed = [...byKey.entries()].filter(([key]) => !result.has(key));
+  if (unclaimed.length > 0) {
+    throw new Error(
+      `seedSuite: ${unclaimed.length} generated fixture(s) were claimed by no stream: ` +
+        unclaimed.map(([key, id]) => `${key} -> fixture ${id}`).join("; "),
+    );
+  }
+
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// The HTTP driver
+// ---------------------------------------------------------------------------
+
+/** Venues, then (per venue) their courts — independent of everything else in
+ *  `seedSuite` besides `orgId`/the session, and of each other across venues.
+ *  Field-for-field pass-through: `PackVenue`/`PackCourt` already carry
+ *  exactly `CreateVenue`'s (`name`, `address`, `sort`) and
+ *  `CreateCourtInput`'s (`name`, `sort`, `tags`) fields
+ *  (pack-schema.ts:701-732's own doc comment), so there is nothing to
+ *  compute here — optional fields are omitted rather than defaulted, since
+ *  the server already applies its own default (`CreateVenue.sort` /
+ *  `CreateCourtInput.sort` both `.default(0)`, apps/web/src/server/api-v1/
+ *  schemas.ts:4519-4522, apps/web/src/server/usecases/venues.ts:116-120) and
+ *  restating that default here would be a second copy that could drift. */
+async function seedVenuesAndCourts(
+  base: string,
+  s: Session,
+  t: SeedTransport,
+  orgId: string,
+  venues: readonly PackVenue[],
+): Promise<{ venueIdByRef: Map<string, string>; courtIdByRef: Map<string, string> }> {
+  const venueIdByRef = new Map<string, string>();
+  const courtIdByRef = new Map<string, string>();
+  await Promise.all(
+    venues.map(async (v) => {
+      const venue = await t.request<IdOut>(base, s, `/api/v1/orgs/${orgId}/venues`, {
+        method: "POST",
+        body: {
+          name: v.name,
+          ...(v.address === undefined ? {} : { address: v.address }),
+          ...(v.sort === undefined ? {} : { sort: v.sort }),
+        },
+      });
+      venueIdByRef.set(v.ref, venue.id);
+      await Promise.all(
+        v.courts.map(async (c) => {
+          const court = await t.request<IdOut>(base, s, `/api/v1/orgs/${orgId}/venues/${venue.id}/courts`, {
+            method: "POST",
+            body: {
+              name: c.name,
+              ...(c.sort === undefined ? {} : { sort: c.sort }),
+              tags: c.tags,
+            },
+          });
+          courtIdByRef.set(c.ref, court.id);
+        }),
+      );
+    }),
+  );
+  return { venueIdByRef, courtIdByRef };
+}
+
+/** Every player/coach/staff person the plan resolved — `SeedPlan.persons`
+ *  already excludes lane "official" (seed-plan.ts:288-300). Independent of
+ *  everything but the session, so every person is created concurrently. */
+async function seedPersons(
+  base: string,
+  s: Session,
+  t: SeedTransport,
+  persons: readonly SeedPlanPerson[],
+): Promise<Map<string, string>> {
+  const personIdByRef = new Map<string, string>();
+  await Promise.all(
+    persons.map(async (p) => {
+      const person = await t.request<IdOut>(base, s, "/api/v1/persons", {
+        method: "POST",
+        body: {
+          full_name: p.full_name,
+          ...(p.dob === undefined ? {} : { dob: p.dob }),
+          ...(p.gender === undefined ? {} : { gender: p.gender }),
+          consent: p.consent,
+        },
+      });
+      personIdByRef.set(p.ref, person.id);
+    }),
+  );
+  return personIdByRef;
+}
+
+/** One `EntrantMemberInput` (schemas.ts:365-370), `personRef` resolved to a
+ *  real `person_id`. */
+function buildMemberBody(
+  m: SeedPlanRosterMember,
+  personIdByRef: ReadonlyMap<string, string>,
+  entrantRef: string,
+): Record<string, unknown> {
+  const personId = personIdByRef.get(m.personRef);
+  if (personId === undefined) {
+    // Belt and suspenders, matching seed-plan.ts's `buildRosterMember`
+    // comment at the same kind of throw: `buildSeedPlan` already refuses an
+    // unknown or "official"-lane person ref at plan-build time
+    // (seed-plan.ts:219-247), so a `SeedPlan` built by `buildSeedPlan` can
+    // never reach this branch. Kept for a hand-built `SeedPlan` (a test, or
+    // a future caller) that bypasses that.
+    throw new Error(`entrant "${entrantRef}" rosters person ref "${m.personRef}", which has no resolved id`);
+  }
+  return {
+    person_id: personId,
+    ...(m.squad_number === undefined ? {} : { squad_number: m.squad_number }),
+    ...(m.default_position_key === undefined ? {} : { default_position_key: m.default_position_key }),
+    is_captain: m.is_captain,
+    roles: m.roles,
+  };
+}
+
+/** Entrants, grouped by division into ONE `POST .../entrants` call per
+ *  division (array body — same bulk-registration path `tinyPlan` uses,
+ *  generalized past its one-division limit). Needs every division AND every
+ *  person resolved first: a roster member's `person_id` is real, and
+ *  `EntrantMemberInput.person_id` is a mandatory `Uuid` (schemas.ts:365) —
+ *  there is no "create now, backfill the roster later" on this path. */
+async function seedEntrants(
+  base: string,
+  s: Session,
+  t: SeedTransport,
+  entrants: readonly SeedPlanEntrant[],
+  divisionIdByRef: ReadonlyMap<string, string>,
+  personIdByRef: ReadonlyMap<string, string>,
+): Promise<Map<string, string>> {
+  const entrantIdByRef = new Map<string, string>();
+  const byDivision = new Map<string, SeedPlanEntrant[]>();
+  for (const e of entrants) {
+    const list = byDivision.get(e.divisionRef) ?? [];
+    list.push(e);
+    byDivision.set(e.divisionRef, list);
+  }
+  await Promise.all(
+    [...byDivision.entries()].map(async ([divisionRef, list]) => {
+      const divisionId = divisionIdByRef.get(divisionRef);
+      if (divisionId === undefined) {
+        throw new Error(`entrant plan references unknown division ref "${divisionRef}"`);
+      }
+      const body = list.map((e) => ({
+        kind: e.kind,
+        display_name: e.display_name,
+        ...(e.seed === undefined ? {} : { seed: e.seed }),
+        members: e.members.map((m) => buildMemberBody(m, personIdByRef, e.ref)),
+      }));
+      // `createEntrants` (apps/web/src/server/usecases/entrants.ts:327-...)
+      // builds its `rows` result with a plain `for (const input of inputs)`
+      // loop, pushing in order — so the response array lines up
+      // POSITIONALLY with the request array. Confirmed by reading the
+      // usecase, never assumed (AGENTS.md failure class 5: "a grep is not a
+      // read"). Still checked for length agreement below rather than
+      // zipped blind, so a future change to that ordering fails loudly here
+      // instead of mis-binding an entrant to another entrant's id.
+      const rows = await t.request<IdOut[]>(base, s, `/api/v1/divisions/${divisionId}/entrants`, {
+        method: "POST",
+        body,
+      });
+      if (rows.length !== list.length) {
+        throw new Error(
+          `division "${divisionRef}": POST .../entrants returned ${rows.length} row(s) for ${list.length} requested entrant(s)`,
+        );
+      }
+      rows.forEach((row, i) => entrantIdByRef.set(list[i]!.ref, row.id));
+    }),
+  );
+  return entrantIdByRef;
+}
+
+/**
+ * Drives one `SeedPlan` over the real REST API and returns every real id it
+ * minted. Dependency order (see the header comment for what is NOT in
+ * `plan`):
+ *
+ *   1. sign in                                   -> orgId
+ *   2. venues+courts, persons, and the competition/division/stage tree —
+ *      three chains that share nothing but the session, run concurrently
+ *   3. entrants (needs every division AND every person resolved)
+ *   4. generate, per stage (needs that stage's division's entrants to
+ *      exist — same dependency `runTinySuite` encodes at
+ *      suites/tiny.ts:271-281, generalized past one stage), then bind by
+ *      ext_key
+ */
+export async function seedSuite(input: SeedSuiteInput): Promise<SeededSuite> {
+  const { base, plan, streams, runTag } = input;
+  const venues = input.venues ?? [];
+  const t = input.transport ?? defaultTransport;
+  const s = newSession();
+
+  const email = `bench-${plan.org.slug}-${runTag}@example.com`;
+  const { org_id: orgId } = await t.signIn(base, s, email);
+
+  const venuesWork = seedVenuesAndCourts(base, s, t, orgId, venues);
+  const personsWork = seedPersons(base, s, t, plan.persons);
+
+  const competition = await t.request<IdOut>(base, s, "/api/v1/competitions", {
+    method: "POST",
+    body: {
+      // Run tag on the NAME, pack date verbatim — mirrors
+      // suites/tiny.ts:251-256 exactly (see this file's header comment).
+      name: `${plan.competition.name} ${runTag}`,
+      ...(plan.competition.slug === undefined ? {} : { slug: plan.competition.slug }),
+      ...(plan.competition.startsOn === undefined ? {} : { starts_on: plan.competition.startsOn }),
+      ends_on: plan.competition.endsOn,
+      ...(plan.competition.description === undefined ? {} : { description: plan.competition.description }),
+    },
+  });
+
+  const divisionIdByRef = new Map<string, string>();
+  const stageIdByRef = new Map<string, string>();
+  // Which stage REFS belong to which division ref — needed below to know
+  // which stages to `/generate` together, and to tag each generated
+  // fixture with its OWNING division (never the last one processed: this
+  // map is built per-division, inside the same closure that creates that
+  // division, so there is no shared loop variable to capture wrong).
+  const stageRefsByDivisionRef = new Map<string, readonly string[]>();
+
+  await Promise.all(
+    plan.divisions.map(async (d) => {
+      const division = await t.request<IdOut>(base, s, `/api/v1/competitions/${competition.id}/divisions`, {
+        method: "POST",
+        // Spread rather than field-by-field: `tiebreakers` is optional on the
+        // plan and `CreateDivision` is NON-strict (`schemas.ts:225-250`), so a
+        // key sent as `undefined` is silently DROPPED rather than refused —
+        // the same way a division-creation wizard once lost its whole
+        // eligibility block (RS007/V380, the comment at `schemas.ts:233`).
+        // Omitting the key entirely is the only way to mean "not declared".
+        body: {
+          name: d.name,
+          sport_key: d.sport_key,
+          variant_key: d.variant_key,
+          config: d.config,
+          ...(d.tiebreakers === undefined ? {} : { tiebreakers: d.tiebreakers }),
+        },
+      });
+      divisionIdByRef.set(d.ref, division.id);
+
+      // Always an ARRAY body (even for one stage), so the response is
+      // always an array too (`CreateStages`'s union — schemas.ts:824 —
+      // otherwise returns a single object for a single-object body, per
+      // stages/route.ts:34's `Array.isArray(body) ? rows : rows[0]`).
+      const stages = await t.request<IdOut[]>(base, s, `/api/v1/divisions/${division.id}/stages`, {
+        method: "POST",
+        // `progression` is spread conditionally for the OPPOSITE reason to
+        // `tiebreakers` above: `CreateStage` is `.strict()`
+        // (`schemas.ts:821`), so an undeclared key is REJECTED outright rather
+        // than dropped. Sending `progression: undefined` on a stage that has
+        // none would fail the whole create call, not merely lose the field.
+        body: d.stages.map((st) => ({
+          seq: st.seq,
+          kind: st.kind,
+          name: st.name,
+          config: st.config,
+          ...(st.progression === undefined ? {} : { progression: st.progression }),
+        })),
+      });
+      if (stages.length !== d.stages.length) {
+        throw new Error(
+          `division "${d.ref}": POST .../stages returned ${stages.length} row(s) for ${d.stages.length} requested stage(s)`,
+        );
+      }
+      stages.forEach((row, i) => stageIdByRef.set(d.stages[i]!.ref, row.id));
+      stageRefsByDivisionRef.set(
+        d.ref,
+        d.stages.map((st) => st.ref),
+      );
+    }),
+  );
+
+  const [{ venueIdByRef, courtIdByRef }, personIdByRef] = await Promise.all([venuesWork, personsWork]);
+
+  const entrantIdByRef = await seedEntrants(base, s, t, plan.entrants, divisionIdByRef, personIdByRef);
+
+  const generated: GeneratedFixtureRef[] = [];
+  await Promise.all(
+    plan.divisions.map(async (d) => {
+      const stageRefs = stageRefsByDivisionRef.get(d.ref) ?? [];
+      await Promise.all(
+        stageRefs.map(async (stageRef) => {
+          const stageId = stageIdByRef.get(stageRef);
+          if (stageId === undefined) {
+            throw new Error(`stage "${stageRef}" has no resolved id — POST .../stages did not return one`);
+          }
+          const out = await t.request<GenerateOut>(base, s, `/api/v1/stages/${stageId}/generate`, {
+            method: "POST",
+          });
+          for (const f of out.fixtures) generated.push({ divisionRef: d.ref, extKey: f.ext_key, id: f.id });
+        }),
+      );
+    }),
+  );
+
+  const fixtureIdByKey = bindStreamFixtures(streams, generated);
+
+  return {
+    orgId,
+    competitionId: competition.id,
+    venueIdByRef,
+    courtIdByRef,
+    divisionIdByRef,
+    stageIdByRef,
+    personIdByRef,
+    entrantIdByRef,
+    fixtureIdByKey,
+  };
+}
