@@ -1,0 +1,312 @@
+// B03 T7 — proves `runTinySuite` actually DRIVES the DLS-gate probe and the
+// derived `autoAssign` flag, end to end, against the REAL committed
+// `_tiny.json` pack. Everything else (`--keep`/pack-refusal/fixture-count
+// coverage) already lives in `tiny-suite.test.ts`; this file exists so that
+// removing the wiring this task adds — the `if (input.sql !== undefined)`
+// block in `lib/suites/tiny.ts`, or the `autoAssign` passthrough it feeds
+// into `seedSuite` — reds a test, per the task's own acceptance criteria
+// ("the probe is driven by the suite, not merely defined").
+//
+// A fresh, self-contained fake server rather than extending
+// `tiny-suite.test.ts`'s own `makeFakeServer()`: that helper is shared by 22
+// existing tests and this task's brief is explicit about minimizing blast
+// radius outside what T7 actually owns. This fake is fully GENERIC (legs
+// tracked per stage at creation time, `ext_key`s derived as `rr-r{n}-c1` for
+// n=1..legs) rather than special-cased per division name — which happens to
+// match `_tiny.json`'s own two league stages' declared ext_keys exactly
+// (`legs: 3` → rr-r1-c1/rr-r2-c1/rr-r3-c1, `legs: 1` → rr-r1-c1) AND serves
+// the DLS-gate probe's own throwaway cricket divisions with no special
+// casing at all.
+import { describe, expect, it } from "vitest";
+import pino from "pino";
+import type { RawResult, Session } from "../http.ts";
+import type { ProbeTransport } from "../dls-gate.ts";
+import type { PlanEntitlementRow, PlanSql } from "../plan.ts";
+import { runTinySuite, TINY_PACK_PATH } from "../suites/tiny.ts";
+
+const silent = pino({ level: "silent" });
+
+interface RecordedCall {
+  readonly method: string;
+  readonly path: string;
+  readonly body: unknown;
+}
+
+function slug(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+}
+
+/** One combined fake implementing signIn/request/raw — a `ProbeTransport`
+ *  wherever the DLS-gate probe needs one, a `SeedTransport` (its own subset)
+ *  wherever `seedSuite`/`runTinySuite` need one. `officialsAutoGranted`
+ *  controls what the fake POST /entitlement-override "provisions" — the SQL
+ *  seam below reports back the SAME thing, so a caller can drive both
+ *  directions of the wiring from one factory. */
+function fakeServer(opts: { officialsAutoGranted: boolean }): {
+  transport: ProbeTransport;
+  sql: PlanSql;
+  calls: RecordedCall[];
+} {
+  const calls: RecordedCall[] = [];
+  const orgBySession = new WeakMap<Session, string>();
+  const dlsByDivisionId = new Map<string, boolean>();
+  const legsByStageId = new Map<string, number>();
+  const divisionIdByStageId = new Map<string, string>();
+  const fixtureDivisionId = new Map<string, string>();
+  const fixtureOfficials = new Map<string, unknown[]>();
+  const claimInvites = new Map<string, unknown>();
+  let divisionCounter = 0;
+  let stageCounter = 0;
+  let fixtureCounter = 0;
+  let entitled = false;
+  const sqlCalls: string[] = [];
+
+  const transport: ProbeTransport = {
+    async signIn(_base, s) {
+      calls.push({ method: "SIGNIN", path: "signIn", body: undefined });
+      const orgId = "org-fixed";
+      orgBySession.set(s, orgId);
+      return { has_org: true, org_id: orgId, redirect: "/dashboard" };
+    },
+    async request<T>(_base: string, _s: Session, rawPath: string, reqOpts?: { method?: string; body?: unknown }) {
+      const method = reqOpts?.method ?? "GET";
+      const body = reqOpts?.body;
+      const routePath = rawPath.split("?")[0]!;
+      calls.push({ method, path: rawPath, body });
+
+      if (method === "POST" && /^\/api\/v1\/orgs\/[^/]+\/venues$/.test(routePath)) {
+        return { id: `venue-${slug((body as { name: string }).name)}` } as T;
+      }
+      if (method === "POST" && /^\/api\/v1\/orgs\/[^/]+\/venues\/[^/]+\/courts$/.test(routePath)) {
+        return { id: `court-1` } as T;
+      }
+      if (method === "POST" && routePath === "/api/v1/persons") {
+        return { id: `person-${slug((body as { full_name: string }).full_name)}` } as T;
+      }
+      if (method === "POST" && routePath === "/api/v1/competitions") {
+        return { id: `comp-${slug((body as { name: string }).name)}` } as T;
+      }
+      if (method === "POST" && /^\/api\/v1\/competitions\/[^/]+\/divisions$/.test(routePath)) {
+        const b = body as { config?: { dls?: { enabled?: boolean } } };
+        const id = `div-${++divisionCounter}`;
+        dlsByDivisionId.set(id, b.config?.dls?.enabled === true);
+        return { id } as T;
+      }
+      if (method === "POST" && /^\/api\/v1\/divisions\/[^/]+\/entrants$/.test(routePath)) {
+        const rows = body as { display_name?: string }[];
+        return rows.map((e, i) => ({ id: `entrant-${slug(e.display_name ?? String(i))}-${Math.random()}` })) as unknown as T;
+      }
+      if (method === "POST" && /^\/api\/v1\/divisions\/([^/]+)\/stages$/.test(routePath)) {
+        const divisionId = routePath.split("/")[4]!;
+        const stagesBody = body as { config?: { legs?: number } }[];
+        return stagesBody.map((st) => {
+          const id = `stage-${++stageCounter}`;
+          legsByStageId.set(id, (st.config?.legs as number | undefined) ?? 1);
+          divisionIdByStageId.set(id, divisionId);
+          return { id };
+        }) as unknown as T;
+      }
+      if (method === "POST" && /^\/api\/v1\/stages\/[^/]+\/generate$/.test(routePath)) {
+        const stageId = routePath.split("/")[4]!;
+        const legs = legsByStageId.get(stageId) ?? 1;
+        const divisionId = divisionIdByStageId.get(stageId);
+        const fixtures = Array.from({ length: legs }, (_v, i) => {
+          const id = `fx-${++fixtureCounter}`;
+          if (divisionId !== undefined) fixtureDivisionId.set(id, divisionId);
+          return { id, ext_key: `rr-r${i + 1}-c1` };
+        });
+        return { fixtures } as unknown as T;
+      }
+      if (method === "PUT" && /^\/api\/v1\/divisions\/[^/]+\/schedule-settings$/.test(routePath)) {
+        return {} as T;
+      }
+      if (method === "POST" && /^\/api\/v1\/stages\/[^/]+\/schedule\/auto$/.test(routePath)) {
+        return { assignments: [], conflicts: [], solver: { engine: "greedy", status: "ok" } } as unknown as T;
+      }
+      if (method === "POST" && /^\/api\/v1\/stages\/[^/]+\/schedule\/apply$/.test(routePath)) {
+        return {} as T;
+      }
+      if (method === "POST" && /^\/api\/v1\/divisions\/[^/]+\/schedule\/validate$/.test(routePath)) {
+        return { conflicts: [] } as unknown as T;
+      }
+      if (method === "POST" && /^\/api\/v1\/divisions\/[^/]+\/officials\/auto$/.test(routePath)) {
+        return { assignments: [] } as unknown as T;
+      }
+      if (method === "POST" && routePath === "/api/v1/officials") {
+        return { id: `official-${slug((body as { display_name: string }).display_name)}` } as T;
+      }
+      if (method === "POST" && /^\/api\/v1\/officials\/[^/]+\/availability$/.test(routePath)) {
+        return { date: (body as { date: string }).date } as T;
+      }
+      if (method === "PATCH" && /^\/api\/v1\/fixtures\/[^/]+\/officials$/.test(routePath)) {
+        const fixtureId = routePath.split("/")[4]!;
+        fixtureOfficials.set(fixtureId, (body as { set: unknown[] }).set);
+        return { ok: true } as T;
+      }
+      if (method === "GET" && /^\/api\/v1\/fixtures\/[^/]+$/.test(routePath)) {
+        const fixtureId = routePath.split("/")[4]!;
+        return { id: fixtureId, officials: fixtureOfficials.get(fixtureId) ?? [] } as T;
+      }
+      if (method === "POST" && /^\/api\/v1\/persons\/[^/]+\/claim-invites$/.test(routePath)) {
+        const personId = routePath.split("/")[4]!;
+        const row = { person_id: personId, claimed_at: null, revoked_at: null };
+        claimInvites.set(personId, row);
+        return row as T;
+      }
+      if (method === "GET" && /^\/api\/v1\/persons\/[^/]+\/claim-invites$/.test(routePath)) {
+        const personId = routePath.split("/")[4]!;
+        return (claimInvites.get(personId) ?? null) as T;
+      }
+      if (method === "POST" && /^\/api\/admin\/orgs\/[^/]+\/entitlement-override$/.test(routePath)) {
+        entitled = true;
+        return { ok: true } as unknown as T;
+      }
+      if (method === "DELETE" && /^\/api\/admin\/orgs\/[^/]+\/entitlement-override$/.test(routePath)) {
+        return { ok: true } as unknown as T;
+      }
+      throw new Error(`fake server: unhandled ${method} ${routePath}`);
+    },
+    async raw(_base, _s, path, method = "GET", body): Promise<RawResult> {
+      calls.push({ method, path, body });
+      const m = /^\/api\/v1\/fixtures\/([^/]+)\/events$/.exec(path);
+      if (!m) throw new Error(`fake server: unhandled raw ${method} ${path}`);
+      const fixtureId = m[1]!;
+      const divisionId = fixtureDivisionId.get(fixtureId);
+      const dlsEnabled = divisionId !== undefined && dlsByDivisionId.get(divisionId) === true;
+      const { type, payload } = body as { type: string; payload: { target?: unknown } };
+      const manualTarget = payload?.target !== undefined;
+      const requiresDls = type === "cricket.revise" && dlsEnabled && !manualTarget;
+      if (requiresDls && !entitled) {
+        return {
+          status: 402,
+          json: { ok: false, error: { code: "PAYMENT_REQUIRED", message: "nope", feature_key: "cricket.dls" } } as never,
+        };
+      }
+      return { status: 201, json: { ok: true, data: { seq: 1 } } as never };
+    },
+  };
+
+  const sql: PlanSql = {
+    async entitlementRows(featureKey) {
+      sqlCalls.push(`entitlementRows(${featureKey})`);
+      if (featureKey === "cricket.dls") {
+        return [
+          { plan_key: "community", bool_value: false },
+          { plan_key: "pro", bool_value: true },
+        ] satisfies PlanEntitlementRow[];
+      }
+      if (featureKey === "officials.auto") {
+        return [
+          { plan_key: "community", bool_value: false },
+          { plan_key: "pro", bool_value: opts.officialsAutoGranted },
+        ] satisfies PlanEntitlementRow[];
+      }
+      return [];
+    },
+    async getOrgSubscriptionId() {
+      return null;
+    },
+    async updateSubscriptionPlan() {},
+    async createSubscriptionForOrg() {
+      return "sub-new";
+    },
+    async setOwnerStaff() {},
+    async setDivisionActive(divisionId) {
+      sqlCalls.push(`setDivisionActive(${divisionId})`);
+    },
+  };
+
+  return { transport, sql, calls };
+}
+
+describe("runTinySuite — B03 T7 plan/entitlement-gate wiring", () => {
+  it("drives the DLS-gate probe and reports its 5 cells as oracles, all passing", async () => {
+    const { transport, sql, calls } = fakeServer({ officialsAutoGranted: false });
+
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: silent,
+      packPath: TINY_PACK_PATH,
+      transport,
+      sql,
+      probeTransport: transport,
+    });
+
+    expect(report.gate).toBe("green");
+    expect(report.oracles).toBeDefined();
+    const names = (report.oracles ?? []).map((o) => o.name);
+    expect(names).toEqual([
+      "entitlement-gate: revise_no_target_unentitled",
+      "entitlement-gate: revise_with_target_unentitled",
+      "entitlement-gate: revise_dls_off_unentitled",
+      "entitlement-gate: other_event_unentitled",
+      "entitlement-gate: revise_no_target_entitled",
+    ]);
+    expect((report.oracles ?? []).every((o) => o.passed)).toBe(true);
+
+    // The probe's own throwaway competition really was created over HTTP —
+    // proof this is DRIVEN, not merely defined and never called.
+    expect(calls.some((c) => c.method === "POST" && c.path === "/api/v1/competitions" &&
+      (c.body as { name: string }).name.startsWith("Bench DLS Gate Probe"))).toBe(true);
+  });
+
+  it("autoAssign OFF: the provisioned plan does NOT grant officials.auto, so /officials/auto is never called", async () => {
+    const { transport, sql, calls } = fakeServer({ officialsAutoGranted: false });
+
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: silent,
+      packPath: TINY_PACK_PATH,
+      transport,
+      sql,
+      probeTransport: transport,
+    });
+
+    expect(report.gate).toBe("green");
+    expect(calls.some((c) => c.method === "POST" && /\/officials\/auto$/.test(c.path))).toBe(false);
+  });
+
+  it("autoAssign ON: the provisioned plan DOES grant officials.auto, so seedOfficialsAndClaims's auto pass is actually called", async () => {
+    const { transport, sql, calls } = fakeServer({ officialsAutoGranted: true });
+
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: silent,
+      packPath: TINY_PACK_PATH,
+      transport,
+      sql,
+      probeTransport: transport,
+    });
+
+    expect(report.gate).toBe("green");
+    // `_tiny.json`'s "off-eli" official declares empty `assignments` — the
+    // one auto-needing official this run's plan flip is supposed to unblock
+    // (seed.ts's own header comment on why this call was previously never
+    // wired at all).
+    expect(calls.some((c) => c.method === "POST" && /\/officials\/auto$/.test(c.path))).toBe(true);
+  });
+
+  it("without `sql`, the probe is SKIPPED entirely — today's behavior, unchanged", async () => {
+    const { transport, calls } = fakeServer({ officialsAutoGranted: true });
+
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: silent,
+      packPath: TINY_PACK_PATH,
+      transport,
+    });
+
+    expect(report.gate).toBe("green");
+    expect(report.oracles).toBeUndefined();
+    expect(calls.some((c) => c.path.includes("entitlement-override"))).toBe(false);
+    expect(calls.some((c) => c.method === "POST" && /\/officials\/auto$/.test(c.path))).toBe(false);
+  });
+});

@@ -198,6 +198,17 @@ export interface SeedSuiteInput {
    * is unaffected.
    */
   readonly competitionBranding?: Record<string, unknown>;
+  /**
+   * B03 T7: forwarded verbatim to `seedOfficialsAndClaims`'s own `autoAssign`
+   * — see that field's doc comment for what it gates and why it defaults to
+   * `false`. `seedSuite` itself derives nothing here; the CALLER (`lib/
+   * suites/tiny.ts`'s `runTinySuite`, once it has provisioned a plan and
+   * asked `lib/plan.ts#planGrants` whether that plan grants `officials.auto`)
+   * decides. Omitted (server default `false`) when absent — every existing
+   * caller of `seedSuite` is unaffected, matching `competitionBranding`'s own
+   * precedent just above.
+   */
+  readonly autoAssign?: boolean;
 }
 
 interface IdOut {
@@ -480,7 +491,7 @@ async function seedEntrants(
  *      ext_key
  */
 export async function seedSuite(input: SeedSuiteInput): Promise<SeededSuite> {
-  const { base, plan, streams, runTag, competitionBranding } = input;
+  const { base, plan, streams, runTag, competitionBranding, autoAssign } = input;
   const venues = input.venues ?? [];
   const t = input.transport ?? defaultTransport;
   const s = newSession();
@@ -594,7 +605,8 @@ export async function seedSuite(input: SeedSuiteInput): Promise<SeededSuite> {
   // ---- officials, their blackouts, their named assignments, and the pack's
   // claim invites. Driven HERE, by the real producer, rather than left for a
   // caller to remember: a seeding step nothing calls is not a seeding step.
-  // `autoAssign` stays off until B03 T7 provisions a plan (see its doc). ----
+  // `autoAssign` is B03 T7's own passthrough — see `SeedSuiteInput.
+  // autoAssign`'s doc comment for who decides it and why it defaults off. ----
   const officialsAndClaims =
     plan.officials.length > 0 || plan.claimInvites.length > 0
       ? await seedOfficialsAndClaims({
@@ -610,6 +622,7 @@ export async function seedSuite(input: SeedSuiteInput): Promise<SeededSuite> {
             ? {}
             : { primaryDivisionId: divisionIdByRef.get(plan.divisions[0].ref) }),
           email,
+          ...(autoAssign === undefined ? {} : { autoAssign }),
           ...(input.transport === undefined ? {} : { transport: input.transport }),
         })
       : undefined;

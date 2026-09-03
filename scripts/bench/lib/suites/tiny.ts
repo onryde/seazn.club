@@ -117,7 +117,9 @@ import { hashPack } from "../pack-hash.ts";
 import type { Pack } from "../pack-schema.ts";
 import { buildSeedPlan, type SeedPlan, type SeedPlanExpectedFixtureCount } from "../seed-plan.ts";
 import { defaultTransport, seedSuite, type SeededSuite, type SeedTransport } from "../seed.ts";
-import type { SuiteReport } from "../report.ts";
+import { runDlsGateProbe, type ProbeTransport } from "../dls-gate.ts";
+import type { PlanSql } from "../plan.ts";
+import type { OracleResult, SuiteReport } from "../report.ts";
 
 /** The committed micro-pack, resolved from THIS module rather than from the
  *  process cwd — the bench is run from the repo root by `npm run
@@ -158,6 +160,36 @@ export interface TinySuiteInput {
    *  Defaults to `seed.ts`'s own `defaultTransport`; a live run never passes
    *  it. */
   transport?: SeedTransport;
+  /**
+   * B03 T7: the plan/entitlement-provisioning SQL seam (`lib/plan.ts`).
+   * **Optional, and the absence is deliberate** — matching `seedOfficialsAndClaims`'s
+   * own `autoAssign` precedent ("default false, and the default is the
+   * point"): every EXISTING caller of `runTinySuite` (this file's own test
+   * suite included) that does not know about plan provisioning gets today's
+   * behavior unchanged — no DLS-gate probe, `autoAssign` stays off. `bench.ts`
+   * is the one caller that always supplies the real thing
+   * (`lib/plan.ts#createRealPlanSql`), so a real `_tiny` run always exercises
+   * the probe — see `lib/__tests__/bench-cli.test.ts` for the test proving
+   * THAT wiring specifically (removing it there reds a test at the bench.ts
+   * layer, independent of this file's own coverage of what happens once
+   * `sql` is supplied).
+   *
+   * When present, this run: (1) drives `runDlsGateProbe` — the cricket.dls
+   * entitlement-gate 2x2-plus-clear proof (see dls-gate.ts's header comment)
+   * — reporting every cell as an `oracle` and reddening the gate on any cell
+   * that fails its own expectation; (2) derives `autoAssign` from whether the
+   * plan the probe just provisioned ALSO grants `officials.auto`
+   * (`lib/plan.ts#planGrants` — "derived, not assumed", never assumed true
+   * merely because SOME plan got provisioned) and threads it into
+   * `seedSuite`, which is what finally drives `seedOfficialsAndClaims`'s
+   * auto-assign pass for real.
+   */
+  sql?: PlanSql;
+  /** Overridable so a test can drive the DLS-gate probe's OWN HTTP surface
+   *  through a fake, never `global.fetch` — same DI shape as `transport`
+   *  above. Defaults to `dls-gate.ts`'s own `defaultProbeTransport`; a live
+   *  run never passes it. Meaningless (never read) when `sql` is omitted. */
+  probeTransport?: ProbeTransport;
 }
 
 // ---------------------------------------------------------------------------
@@ -368,6 +400,7 @@ export async function runTinySuite(input: TinySuiteInput): Promise<SuiteReport> 
   const t = input.transport ?? defaultTransport;
   const errors: string[] = [];
   const warnings: string[] = [];
+  const oracles: OracleResult[] = [];
   const timings: { seedMs?: number; scheduleMs?: number } = {};
   let conflictCount: number | undefined;
   let solver: AutoScheduleOut["solver"];
@@ -466,6 +499,39 @@ export async function runTinySuite(input: TinySuiteInput): Promise<SuiteReport> 
       throw new Error("tiny: the pack's plan has no division/stage to seed and schedule");
     }
 
+    // B03 T7 — plan/entitlement provisioning + the cricket.dls entitlement-
+    // gate probe. Runs BEFORE `seedSuite` (never after): `autoAssign` below
+    // is a PARAMETER seedSuite forwards to `seedOfficialsAndClaims`, so
+    // whether officials.auto is granted has to be known before that call is
+    // built, not derived from anything seedSuite itself creates. The probe
+    // owns its OWN throwaway competition/divisions (dls-gate.ts's header
+    // comment) — it never touches `_tiny`'s own competition/division/stage,
+    // so this ordering costs nothing else in this function. Skipped
+    // entirely when `input.sql` is absent (see `TinySuiteInput.sql`'s own
+    // doc comment on why that is the deliberate default).
+    let autoAssign: boolean | undefined;
+    if (input.sql !== undefined) {
+      log.info({}, "tiny: running the cricket.dls entitlement-gate probe (B03 T7)");
+      const probe = await runDlsGateProbe({
+        base,
+        email,
+        runTag,
+        sql: input.sql,
+        ...(input.probeTransport === undefined ? {} : { transport: input.probeTransport }),
+      });
+      for (const cell of probe.cells) {
+        oracles.push({ name: `entitlement-gate: ${cell.cell}`, passed: cell.ok, detail: cell.detail });
+        if (!cell.ok) {
+          errors.push(`entitlement-gate probe cell "${cell.cell}" failed its own expectation: ${cell.detail}`);
+        }
+      }
+      autoAssign = probe.officialsAutoGranted;
+      log.info(
+        { provisionedPlan: probe.provisionedPlan, officialsAutoGranted: probe.officialsAutoGranted },
+        "tiny: entitlement-gate probe complete",
+      );
+    }
+
     // Two independent chains, run concurrently on separate sessions: this
     // suite's OWN venue/court (never part of `SeedPlan` — `_tiny.json`
     // declares no `venues[]`), and the entire org/competition/division/
@@ -482,6 +548,7 @@ export async function runTinySuite(input: TinySuiteInput): Promise<SuiteReport> 
       runTag,
       transport: t,
       competitionBranding: { [KEEP_BRANDING_KEY]: packHash },
+      ...(autoAssign === undefined ? {} : { autoAssign }),
     });
     const venuePromise = (async () => {
       const venue = await t.request<IdOut>(base, s, `/api/v1/orgs/${orgId}/venues`, {
@@ -592,5 +659,6 @@ export async function runTinySuite(input: TinySuiteInput): Promise<SuiteReport> 
     conflictCount,
     errors: errors.length > 0 ? errors : undefined,
     ...(warnings.length > 0 ? { warnings } : {}),
+    ...(oracles.length > 0 ? { oracles } : {}),
   };
 }
