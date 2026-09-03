@@ -168,6 +168,34 @@ describe("resolvePhase — rule order", () => {
     const fixtures = [fx({ id: "a", status: "decided" }), fx({ id: "b", status: "finalized" })];
     expect(resolvePhase(input({ stages, fixtures }))).toBe("setting_up");
   });
+  // K1 (fix round G, Critical — instance NINE). `openStageOwesWork` asked
+  // `lowestOpenStage`, ONE stage, a question about all of them: a LATER
+  // pending stage with zero fixtures was invisible and the `allPlayed` arm
+  // won. Driven live through the production API before this fix: masthead
+  // "Finished", row pill "Finished", "6 of 6 played · complete", and no
+  // Needs-you item, with an entire knockout never seeded.
+  //
+  // The lowest open stage here is DELIBERATELY fine (active, with fixtures,
+  // owing no proposal) — with a single-stage guard this case is
+  // indistinguishable from "2 finished: all fixtures played even though the
+  // stage is still active" three tests up, which is exactly why nothing
+  // caught it.
+  it("2 NOT finished: a LATER open stage with zero fixtures blocks it, even when the lowest open stage owes nothing", () => {
+    const stages = [
+      stage({ id: "lg", seq: 1, status: "active", hasFixtures: true }),
+      stage({ id: "fin", name: "Finals", seq: 2, status: "pending", hasFixtures: false, needsProposal: false }),
+    ];
+    const fixtures = [fx({ id: "a", status: "decided" }), fx({ id: "b", status: "finalized" })];
+    expect(resolvePhase(input({ stages, fixtures }))).toBe("scheduled");
+  });
+  it("2 NOT finished: the sibling shape — lowest stage COMPLETE, later stage pending with zero fixtures", () => {
+    const stages = [
+      stage({ id: "lg", seq: 1, status: "complete", hasFixtures: true }),
+      stage({ id: "fin", name: "Finals", seq: 2, status: "pending", hasFixtures: false, needsProposal: false }),
+    ];
+    const fixtures = [fx({ id: "a", status: "decided" }), fx({ id: "b", status: "finalized" })];
+    expect(resolvePhase(input({ stages, fixtures }))).toBe("setting_up");
+  });
   it("2 setting_up: division status setup wins over a fixture dated today", () => {
     expect(resolvePhase(input({ divisionStatus: "setup", fixtures: [fx({ scheduledAt: "2026-09-05T11:00:00Z" })] }))).toBe("setting_up");
   });
@@ -216,6 +244,22 @@ describe("resolvePhase — rule order", () => {
     // isolates needsProposal from hasFixtures: the other OR operand is false here
     const stages = [stage({ id: "fin", name: "Finals", seq: 1, status: "pending", hasFixtures: true, needsProposal: true })];
     expect(resolvePhase(input({ stages, fixtures: [fx({ scheduledAt: "2026-09-12T09:00:00Z" })] }))).toBe("setting_up");
+  });
+  // K1's fix must NOT over-apply to rule 4. Rule 2 asks "is there anything
+  // left at all?" of EVERY open stage; rule 4 asks "is the thing that is next
+  // up playable?" of the NEXT one only. Answering rule 4 with the same
+  // all-stages predicate would print "Setting up" beside "1 of 2 played" for
+  // the whole of a league season that has a knockout waiting behind it — the
+  // wave's own signature defect, introduced by its own fix. The expected
+  // value here differs between the two candidate predicates, which is the
+  // point of the case.
+  it("4 does NOT fire for a later empty stage while the current stage is still playable", () => {
+    const stages = [
+      stage({ id: "lg", seq: 1, status: "active", hasFixtures: true }),
+      stage({ id: "fin", name: "Finals", seq: 2, status: "pending", hasFixtures: false, needsProposal: false }),
+    ];
+    const fixtures = [fx({ id: "a", status: "decided" }), fx({ id: "b", status: "scheduled", scheduledAt: "2026-09-12T09:00:00Z" })];
+    expect(resolvePhase(input({ stages, fixtures }))).toBe("scheduled");
   });
   it("5 scheduled: fixtures exist, none today, none in play", () => {
     expect(resolvePhase(input())).toBe("scheduled");
@@ -274,6 +318,53 @@ describe("resolveAttention", () => {
     const stages = [stage({ id: "fin", name: "Finals", seq: 2, status: "pending", hasFixtures: false, needsProposal: true })];
     expect(resolveAttention(input({ stages }))).toContainEqual({ kind: "needs_draw", stageId: "fin", stageName: "Finals" });
   });
+  // K1 (fix round G, Critical — instance NINE), the attention half: the
+  // unseeded stage the finding names had NO row of any kind, so nothing on
+  // the page asked for the one action that unblocks it.
+  it("needs_fixtures names a LATER open stage with nothing to play, once nothing is live", () => {
+    const stages = [
+      stage({ id: "lg", seq: 1, status: "active", hasFixtures: true }),
+      stage({ id: "fin", name: "Finals", seq: 2, status: "pending", hasFixtures: false, needsProposal: false }),
+    ];
+    const fixtures = [fx({ id: "a", status: "decided" }), fx({ id: "b", status: "finalized" })];
+    expect(resolveAttention(input({ stages, fixtures }))).toContainEqual({
+      kind: "needs_fixtures", stageId: "fin", stageName: "Finals",
+    });
+  });
+  it("needs_fixtures, not needs_draw, for a stage that owes no proposal — the two rows point at different controls", () => {
+    const stages = [stage({ id: "fin", name: "Finals", seq: 1, status: "pending", hasFixtures: false, needsProposal: false })];
+    const out = resolveAttention(input({ stages, fixtures: [] }));
+    expect(out.map((a) => a.kind)).toEqual(["needs_fixtures"]);
+  });
+  // The other direction of the same rule: while earlier fixtures are still
+  // live, a later stage's emptiness is not yet the organiser's problem and
+  // neither of its doors is usable, so a red row there would prompt for an
+  // action that cannot be taken.
+  it("a later empty stage raises NOTHING while a fixture is still live", () => {
+    const stages = [
+      stage({ id: "lg", seq: 1, status: "active", hasFixtures: true }),
+      stage({ id: "fin", name: "Finals", seq: 2, status: "pending", hasFixtures: false, needsProposal: false }),
+    ];
+    const fixtures = [fx({ id: "a", status: "decided" }), fx({ id: "b", status: "scheduled", scheduledAt: "2026-09-12T09:00:00Z" })];
+    expect(resolveAttention(input({ stages, fixtures })).some((a) => a.kind === "needs_fixtures")).toBe(false);
+  });
+  it("needs_fixtures is gated on the division being real — silent while it is still 'setup'", () => {
+    // The wizard defines a division's stage graph at CREATE, before a single
+    // entrant exists, so an ungated row would put a red "Needs fixtures" on
+    // every division the moment it is made, pointing at a Generate button
+    // that cannot succeed yet. `needs_draw` stays ungated (H2's ruling, one
+    // test below) — the two are deliberately different.
+    const stages = [stage({ id: "lg", name: "League", seq: 1, status: "pending", hasFixtures: false, needsProposal: false })];
+    expect(resolveAttention(input({ divisionStatus: "setup", stages, fixtures: [] }))).toEqual([]);
+    // And the other direction, or the gate could be "never fires":
+    expect(resolveAttention(input({ divisionStatus: "scheduled", stages, fixtures: [] })).map((a) => a.kind)).toEqual(["needs_fixtures"]);
+  });
+  it("needs_fixtures is red, and sorts with needs_draw ahead of amber and slate", () => {
+    const stages = [stage({ id: "fin", name: "Finals", seq: 1, status: "pending", hasFixtures: false, needsProposal: false })];
+    const fixtures = [fx({ id: "u", status: "scheduled", scheduledAt: null })];
+    const kinds = resolveAttention(input({ stages, fixtures, awaitingRegistrations: 1 })).map((a) => a.kind);
+    expect(kinds).toEqual(["needs_fixtures", "unscheduled", "registrations_waiting"]);
+  });
   it("unscheduled counts only scheduled-status rows without a time", () => {
     const fixtures = [fx({ id: "a", scheduledAt: null }), fx({ id: "b", scheduledAt: null, status: "decided" }), fx({ id: "c" })];
     expect(resolveAttention(input({ fixtures }))).toContainEqual({ kind: "unscheduled", count: 1 });
@@ -327,6 +418,22 @@ describe("resolveAttention", () => {
     expect(resolveAttention(input({ fixtures }))).toContainEqual(
       expect.objectContaining({ kind: "no_scorer", minutesSinceKickoff: 42 }),
     );
+  });
+  // Minor 1 (fix round G): the `Math.max(0, …)` clamp printed "Kicked off 0
+  // min ago" for a kick-off in the FUTURE — the same misleading zero the
+  // null case was already fixed for. An elapsed time we cannot state is
+  // `null`, which renders the "unknown" sub-line instead of a number.
+  it("no_scorer: minutesSinceKickoff is null, not 0, for an in_play fixture dated in the FUTURE", () => {
+    const fixtures = [fx({ id: "p", status: "in_play", scheduledAt: "2026-09-05T10:42:00Z", eventCount: 0 })];
+    expect(resolveAttention(input({ fixtures }))).toContainEqual({
+      kind: "no_scorer", count: 1, fixtureIds: ["p"], minutesSinceKickoff: null,
+    });
+  });
+  it("no_scorer: a malformed scheduledAt gives null, never a NaN that renders as 'NaN min ago'", () => {
+    const fixtures = [fx({ id: "p", status: "in_play", scheduledAt: "not-a-date", eventCount: 0 })];
+    expect(resolveAttention(input({ fixtures }))).toContainEqual({
+      kind: "no_scorer", count: 1, fixtureIds: ["p"], minutesSinceKickoff: null,
+    });
   });
   it("result_missing: scheduled, kickoff + matchMinutes already passed", () => {
     const fixtures = [fx({ id: "r", scheduledAt: "2026-09-05T07:00:00Z", matchMinutes: 90 })];

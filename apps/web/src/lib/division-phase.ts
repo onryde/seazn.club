@@ -50,6 +50,17 @@ export interface PhaseInput {
 
 export type Attention =
   | { kind: "needs_draw"; stageId: string; stageName: string }
+  // K1 fix (fix round G, Critical — instance NINE). `needs_draw`'s sibling,
+  // for a stage that has nothing to play and no PROPOSAL to compute: an
+  // `on_complete` stage waiting to be seeded by the stage before it, or a
+  // stage whose fixtures were never generated at all. It is deliberately NOT
+  // `needs_draw`: the "Compute proposal" panel it points at
+  // (d/[divSlug]/page.tsx's `seedingStages`) is rendered only for a
+  // `timing: "setup"` stage, so re-using that row would send an organiser to
+  // a control that does not exist on their screen. Both of this row's real
+  // doors — "Complete stage" on the stage before it, and "Generate fixtures"
+  // — live on the division's fixtures tab, which is where its action goes.
+  | { kind: "needs_fixtures"; stageId: string; stageName: string }
   | { kind: "unscheduled"; count: number }
   // F3 fix (final review, Important): used to be one row PER FIXTURE — a
   // division with 6 overdue fixtures produced 6 identical "Needs you" rows.
@@ -68,6 +79,11 @@ export type Severity = "red" | "amber" | "slate";
 /** Severity is a property of the KIND, fixed here, never chosen at a call site. */
 export const ATTENTION_SEVERITY: Record<Attention["kind"], Severity> = {
   needs_draw: "red",
+  // Red for the same reason `needs_draw` is: an entire stage cannot be played
+  // until the organiser acts, and nothing else on the page says so. The
+  // finding that produced this row watched a whole knockout sit unseeded
+  // behind a "Finished" pill.
+  needs_fixtures: "red",
   no_scorer: "red",
   unscheduled: "amber",
   result_missing: "amber",
@@ -76,6 +92,7 @@ export const ATTENTION_SEVERITY: Record<Attention["kind"], Severity> = {
 
 const KIND_ORDER: Attention["kind"][] = [
   "needs_draw",
+  "needs_fixtures",
   "no_scorer",
   "unscheduled",
   "result_missing",
@@ -102,10 +119,46 @@ const LIVE = new Set(["scheduled", "in_play"]);
  *  not a played result. */
 const PLAYED_STATUSES = new Set(["decided", "finalized"]);
 
-function lowestOpenStage(stages: PhaseStage[]): PhaseStage | null {
-  return (
-    [...stages].filter((s) => s.status !== "complete").sort((a, b) => a.seq - b.seq)[0] ?? null
-  );
+/** Every stage that is not complete, in play order. K1 (fix round G,
+ *  Critical) replaced `lowestOpenStage`, which returned ONE stage: two of its
+ *  three callers were asking a question about ALL of them, and a helper whose
+ *  CARDINALITY is wrong is invisible to every test of the expression that
+ *  calls it. */
+function openStages(stages: PhaseStage[]): PhaseStage[] {
+  return [...stages].filter((s) => s.status !== "complete").sort((a, b) => a.seq - b.seq);
+}
+
+/** "This stage cannot be played yet": it has no fixtures, or it has them and
+ *  still owes its draw. */
+function stageOwesWork(s: PhaseStage): boolean {
+  return !s.hasFixtures || s.needsProposal;
+}
+
+/**
+ * K3 (fix round G): the ONE derivation of `PhaseStage.needsProposal` — "this
+ * stage owes a propose/confirm DRAW before anything can be generated for it".
+ *
+ * It used to be an expression written out TWICE — once in
+ * competition-desk.ts's stage mapper and once, hand-copied, in
+ * `o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx` — and it was untested at
+ * every layer: mutating either copy to a constant left the whole desk suite
+ * (137/137) green, even though `needs_draw`, the "Needs draw" pill, the
+ * "Compute proposal" action and resolvePhase's rule 4 ALL reach production
+ * only through it. A hand-copied predicate is a recorded drift class in this
+ * repo, so both call sites now share this function and it is pinned where it
+ * is DERIVED, against a real database: competition-desk.test.ts's
+ * "K3: needsProposal is derived from the stage's own progression timing".
+ *
+ * `timing` is `progression ->> 'timing'` — `null`/`undefined` for a stage
+ * carrying no progression at all, which is NOT a draw it owes (its fixtures
+ * are generated, not seeded).
+ */
+export function stageNeedsProposal(stage: {
+  status: string;
+  timing: string | null | undefined;
+  hasFixtures: boolean;
+}): boolean {
+  return stage.status === "pending" && stage.timing === "setup" && !stage.hasFixtures;
 }
 
 export function resolvePhase(input: PhaseInput): DivisionPhase {
@@ -143,8 +196,22 @@ export function resolvePhase(input: PhaseInput): DivisionPhase {
   // fully-played league with a later stage still awaiting its draw (the
   // U16 Cup shape) must stay NOT finished so it can fall through to rule 4
   // and read "setting_up" (with a needs_draw attention on top).
-  const open = lowestOpenStage(stages);
-  const openStageOwesWork = !!open && (!open.hasFixtures || open.needsProposal);
+  // K1 fix (fix round G, Critical — instance NINE). This asked
+  // `lowestOpenStage`, i.e. ONE stage, a question that is about all of them:
+  // "does anything still open owe work?" A LATER `pending` stage with zero
+  // fixtures was therefore invisible and `allPlayed && noLiveFixture` won
+  // rule 2 below. Driven end to end through the production API only (`POST
+  // /fixtures/{id}/events`, no SQL): a two-stage division whose stage 2 is
+  // `{timing: "on_complete"}`, with all six league fixtures scored, leaves
+  // stage 1 `active`, stage 2 `pending` with zero fixtures and the division
+  // `active` — and the desk read masthead "Finished", row pill "Finished",
+  // "6 of 6 played · complete" and NO Needs-you item at all, with an entire
+  // knockout never played and never seeded. (Sibling shape, same root: stage
+  // 1 `complete` instead of `active` read `setting_up`, equally silent.)
+  // Pressing "Complete stage" seeds the finals and the row corrects itself,
+  // so the product was fine — the desk simply never asked.
+  const open = openStages(stages);
+  const anyOpenStageOwesWork = open.some(stageOwesWork);
   const TERMINAL = new Set(["decided", "finalized", "abandoned", "forfeited", "cancelled"]);
   const allPlayed = fixtures.length > 0 && fixtures.every((f) => TERMINAL.has(f.status));
   // J2 fix (fix round F, Critical): `noLiveFixture` was factored out of only
@@ -169,7 +236,7 @@ export function resolvePhase(input: PhaseInput): DivisionPhase {
   // `in_play`. Terminal-but-unplayed fixtures (cancelled/abandoned/forfeited/
   // void) are NOT live and still read finished, which is the direction the
   // "remaining fixtures are terminal, not live" test pins.
-  if (!openStageOwesWork && noLiveFixture && (everyStageComplete || noOpenStage || allPlayed)) {
+  if (!anyOpenStageOwesWork && noLiveFixture && (everyStageComplete || noOpenStage || allPlayed)) {
     return "finished";
   }
   // 3. match_day
@@ -180,8 +247,20 @@ export function resolvePhase(input: PhaseInput): DivisionPhase {
       (f.status === "scheduled" && f.scheduledAt !== null && localDateKey(f.scheduledAt, input.tz) === today),
   );
   if (matchDay) return "match_day";
-  // 4. setting_up: the next stage has nothing to play yet
-  if (openStageOwesWork) return "setting_up";
+  // 4. setting_up: the next stage has nothing to play yet.
+  //
+  // This rung deliberately asks only the NEXT open stage, NOT every one of
+  // them the way rule 2 above now does — the two consumers of the old
+  // single-stage helper were asking different questions and only one of them
+  // was wrong. "Nothing has happened yet" is a claim about the division as a
+  // whole: a league three rounds into its season with a knockout that seeds
+  // on its completion has plenty to play, and answering `anyOpenStageOwesWork`
+  // here would print "Setting up" beside "3 of 6 played" for the entire
+  // season — the wave's own signature defect, introduced by over-applying its
+  // fix. Rule 2 asks "is there anything left at all?"; rule 4 asks "is the
+  // thing that is next up playable?".
+  const nextOpenStage = open[0];
+  if (nextOpenStage && stageOwesWork(nextOpenStage)) return "setting_up";
   // 5. scheduled — a live (non-terminal, i.e. status "scheduled"; "in_play"
   // always won rule 3 above) fixture actually carries a time.
   // F1 fix (final review, Critical): the old rule 5 was a bare "otherwise",
@@ -211,9 +290,43 @@ export function resolvePhase(input: PhaseInput): DivisionPhase {
 export function resolveAttention(input: PhaseInput): Attention[] {
   const out: Attention[] = [];
   const nowMs = Date.parse(input.now);
-  const open = lowestOpenStage(input.stages);
-  if (open && open.needsProposal) {
-    out.push({ kind: "needs_draw", stageId: open.id, stageName: open.name });
+  // K1 fix (fix round G, Critical — instance NINE), the other half. This read
+  // `lowestOpenStage` and raised ONLY `needs_draw`, so the unseeded stage the
+  // finding names had no row of any kind: nothing on the page asked the
+  // organiser for the one action that unblocks it.
+  //
+  // The lowest OPEN stage that owes work raises a row — `needs_draw` when it
+  // owes a propose/confirm proposal, `needs_fixtures` otherwise (see that
+  // kind's own note above for why re-using `needs_draw` would point at a
+  // control the organiser cannot see).
+  //
+  // A LATER open stage is reported only once there is nothing LIVE left to
+  // play — the same `noLiveFixture` predicate rule 2 uses. While earlier
+  // fixtures are still `scheduled` or `in_play`, a later stage's emptiness is
+  // not yet the organiser's problem and neither of its doors is usable
+  // (`seedingSourceReady`, lib/seeding-source-ready.ts, hides the proposal
+  // panel until every source stage has completed), so a red row there would
+  // be a prompt for an action that cannot be taken. For the lowest open stage
+  // the condition is unchanged from before this fix, deliberately: that arm
+  // never consulted the fixtures and must keep not consulting them.
+  const noLive = !input.fixtures.some((f) => LIVE.has(f.status));
+  const blocked = openStages(input.stages).find((s, i) => stageOwesWork(s) && (i === 0 || noLive));
+  if (blocked?.needsProposal) {
+    out.push({ kind: "needs_draw", stageId: blocked.id, stageName: blocked.name });
+  } else if (blocked && input.divisionStatus !== "setup") {
+    // `needs_fixtures` is gated on the division being REAL, and `needs_draw`
+    // deliberately is not (H2's ruling: a draw is owed the moment the stage
+    // exists). A `setup` division has no published timetable at all — every
+    // stage in it is legitimately empty while the organiser is still
+    // assembling entrants, and the wizard itself creates the stage graph
+    // before a single entrant exists, so an ungated row would put a red
+    // "Needs fixtures" on every division the moment it is created, pointing
+    // at a Generate button that cannot succeed yet. The row already states
+    // that case in words ("Setting up · 4 entrants"), and nothing is blocked.
+    // Every shape this fix exists for is `scheduled`/`active`/`completed` —
+    // fixtures cannot have been played otherwise — so the gate cannot hide
+    // one.
+    out.push({ kind: "needs_fixtures", stageId: blocked.id, stageName: blocked.name });
   }
   const unscheduled = input.fixtures.filter((f) => f.status === "scheduled" && f.scheduledAt === null).length;
   if (unscheduled > 0) out.push({ kind: "unscheduled", count: unscheduled });
@@ -260,8 +373,19 @@ export function resolveAttention(input: PhaseInput): Attention[] {
         // division-phase.ts:134 minor fix: a fixture with no `scheduledAt` at
         // all can never answer "minutes since kickoff" — `null`, not a
         // permanent, misleading "0 min ago".
-        const since = f.scheduledAt ? Math.max(0, Math.round((nowMs - Date.parse(f.scheduledAt)) / 60_000)) : null;
-        noScorer.push({ id: f.id, since });
+        //
+        // Minor 1 (fix round G): the clamp that used to sit here,
+        // `Math.max(0, …)`, reintroduced the very zero it was meant to
+        // prevent — an `in_play` fixture dated in the FUTURE (an organiser
+        // starts a match early, or re-dates one after kick-off) printed
+        // "Kicked off 0 min ago", and a malformed `scheduledAt` printed
+        // "Kicked off NaN min ago", since `Math.max(0, NaN)` is `NaN`. An
+        // elapsed time we cannot state is `null` — the same "unknown"
+        // sub-line the no-date case already renders — never a number that
+        // reads as a fact.
+        const kickoffMs = f.scheduledAt === null ? NaN : Date.parse(f.scheduledAt);
+        const elapsed = Number.isNaN(kickoffMs) ? null : Math.round((nowMs - kickoffMs) / 60_000);
+        noScorer.push({ id: f.id, since: elapsed !== null && elapsed >= 0 ? elapsed : null });
       } else if (
         f.status === "scheduled" &&
         f.scheduledAt !== null &&

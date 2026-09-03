@@ -1,6 +1,21 @@
 import { t } from "@/lib/i18n";
 import type { Dict } from "@/lib/i18n-constants";
+import type { DictionaryKey } from "@/lib/i18n-keys";
 import { ATTENTION_SEVERITY, type Attention, type DivisionPhase } from "@/lib/division-phase";
+
+/** The pill word for a RED attention, per kind. K1 (fix round G) replaced a
+ *  TERNARY here — `red.kind === "needs_draw" ? … : "desk.pill.no_scorer"` —
+ *  which silently labelled any red kind that was not `needs_draw` "No
+ *  scorer". A full `Record` over every kind (amber/slate ones map to `null`)
+ *  makes adding a kind a COMPILE error instead of a mislabelled pill. */
+const RED_PILL_KEY: Record<Attention["kind"], DictionaryKey | null> = {
+  needs_draw: "desk.pill.needs_draw",
+  needs_fixtures: "desk.pill.needs_fixtures",
+  no_scorer: "desk.pill.no_scorer",
+  unscheduled: null,
+  result_missing: null,
+  registrations_waiting: null,
+};
 
 const PHASE_CLASS: Record<DivisionPhase | "in_play" | "next", string> = {
   setting_up: "bg-purple-50 text-purple-700",
@@ -34,19 +49,20 @@ export function PhasePill({
 }) {
   // Spec: a RED attention outranks the phase on the pill; amber/slate do not.
   const red = attention.find((a) => ATTENTION_SEVERITY[a.kind] === "red");
-  const label = red
-    ? t(dict, red.kind === "needs_draw" ? "desk.pill.needs_draw" : "desk.pill.no_scorer")
+  const redKey = red ? RED_PILL_KEY[red.kind] : null;
+  const label = redKey
+    ? t(dict, redKey)
     : phase === "in_play"
       ? t(dict, "desk.phase.in_play", { n: inPlay })
       : phase === "next"
         ? t(dict, "desk.phase.next", { when: when ?? "" })
         : t(dict, `desk.phase.${phase}`);
-  const cls = red ? "bg-red-50 text-red-700" : PHASE_CLASS[phase];
+  const cls = redKey ? "bg-red-50 text-red-700" : PHASE_CLASS[phase];
   return (
     <span
       data-testid={testId}
       data-phase={phase}
-      data-pill={red ? red.kind : phase}
+      data-pill={redKey && red ? red.kind : phase}
       className={`badge inline-flex items-center gap-1.5 normal-case ${cls} ${className}`}
     >
       <i aria-hidden className="h-1.5 w-1.5 rounded-full bg-current" />

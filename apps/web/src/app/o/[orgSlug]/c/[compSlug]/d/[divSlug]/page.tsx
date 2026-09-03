@@ -28,7 +28,7 @@ import { getScheduleSettings } from "@/server/usecases/schedule";
 // picker excludes archived courts either way via `courtGroups`).
 import { listVenues } from "@/server/usecases/venues";
 import { resolveVenueTz } from "@/lib/tz";
-import { resolvePhase, type DivisionStatus } from "@/lib/division-phase";
+import { resolvePhase, stageNeedsProposal, type DivisionStatus } from "@/lib/division-phase";
 import { defaultMatchMinutes } from "@/server/usecases/competition-desk";
 import { hasFeature } from "@/lib/entitlements";
 import { listEntrantLogoUrls } from "@/server/usecases/teams";
@@ -144,17 +144,29 @@ export default async function DivisionPage({
   // at 0 rather than fetched here.
   const phase = resolvePhase({
     divisionStatus: division.status as DivisionStatus,
-    stages: stages.map((s) => ({
-      id: s.id,
-      name: s.name,
-      seq: s.seq,
-      status: s.status,
-      hasFixtures: fixtures.some((f) => f.stage_id === s.id),
-      needsProposal:
-        s.status === "pending" &&
-        (s.progression as { timing?: string } | null)?.timing === "setup" &&
-        !fixtures.some((f) => f.stage_id === s.id),
-    })),
+    // K3 (fix round G, coverage): `needsProposal` used to be a HAND-COPIED
+    // twin of competition-desk.ts's own expression — the same predicate
+    // written out in two files, drifting independently, and untested at
+    // every layer (mutating either copy to a constant left 137/137 green).
+    // The predicate now lives ONCE, in division-phase.ts's
+    // `stageNeedsProposal`, and is pinned against a real database in
+    // competition-desk.test.ts. `hasFixtures` is computed once here too — it
+    // was evaluated twice per stage, once for each field.
+    stages: stages.map((s) => {
+      const hasFixtures = fixtures.some((f) => f.stage_id === s.id);
+      return {
+        id: s.id,
+        name: s.name,
+        seq: s.seq,
+        status: s.status,
+        hasFixtures,
+        needsProposal: stageNeedsProposal({
+          status: s.status,
+          timing: (s.progression as { timing?: string } | null)?.timing ?? null,
+          hasFixtures,
+        }),
+      };
+    }),
     fixtures: fixtures.map((f) => ({
       id: f.id,
       status: f.status,

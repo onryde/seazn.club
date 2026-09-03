@@ -544,4 +544,99 @@ describe.skipIf(!HAS_DB)("getCompetitionDesk", () => {
     const d = desk.divisions.get(divisionId)!;
     expect(d.attention).toContainEqual({ kind: "result_missing", count: 1, fixtureIds: [f!.id] });
   });
+
+  // ---------------------------------------------------------------------
+  // Fix round G. K1 (Critical, instance NINE) and K3 (coverage).
+  //
+  // K3's finding: `needsProposal` — the predicate `needs_draw`, the "Needs
+  // draw" pill, the "Compute proposal" action and resolvePhase's rule 4 ALL
+  // reach production through — was untested at EVERY layer. Mutating it to
+  // `false` left 137/137 green, because every multi-stage unit test builds
+  // the same shape (stage 1 complete + `needsProposal: true`) by HAND, which
+  // is the one case the guard already handles: no test ever derived the
+  // field from a stage's own `progression`.
+  //
+  // These four seed a real two-stage division through the real usecases and
+  // let `getCompetitionDesk` derive it, so the mutants die BOTH ways: to
+  // `false` the setup-timing case loses its `needs_draw`, and to `true` the
+  // on_complete cases lose their `needs_fixtures` and gain a `needs_draw`
+  // pointing at a "Compute proposal" panel that is never rendered for them.
+  describe("K1/K3: a later stage that has nothing to play", () => {
+    /** League (seq 1, generated) + `Finals` (seq 2, no fixtures) carrying a
+     *  real progression at the given timing — the shape an organiser gets
+     *  from the wizard's "league then knockout" formats. */
+    async function twoStages(timing: "setup" | "on_complete") {
+      const { auth } = await seedOrg();
+      const { competitionId, divisionId } = await seedDivision(auth, 4);
+      const [league] = await createStages(auth, divisionId, {
+        seq: 1, kind: "league", name: "League", config: {}, progression: null,
+      });
+      await generateStageFixtures(auth, league!.id);
+      const [finals] = await createStages(auth, divisionId, {
+        seq: 2, kind: "knockout", name: "Finals", config: {},
+        progression: {
+          sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }],
+          placement: "rank_order",
+          timing,
+        },
+      });
+      await sql`update divisions set status = 'active' where id = ${divisionId}`;
+      // Every league fixture played, none live — the state the finding was
+      // driven in. Deliberately leaves stage 1 'active': the organiser never
+      // pressed "Complete stage", which is the whole point.
+      await sql`update fixtures set status = 'decided' where division_id = ${divisionId}`;
+      return { auth, competitionId, divisionId, leagueId: league!.id, finalsId: finals!.id };
+    }
+
+    it("K1: an unseeded on_complete stage blocks 'finished' and raises needs_fixtures naming it", async () => {
+      const { auth, competitionId, divisionId, finalsId } = await twoStages("on_complete");
+      const desk = await getCompetitionDesk(auth, competitionId);
+      const d = desk.divisions.get(divisionId)!;
+      // Print the asserted CONTENT beside the verdict: without these the row
+      // could be "not finished" for entirely the wrong reason.
+      expect(d.played).toBe(6);
+      expect(d.total).toBe(6);
+      expect(d.phase).not.toBe("finished");
+      expect(d.phase).toBe("scheduled");
+      expect(d.attention).toContainEqual({ kind: "needs_fixtures", stageId: finalsId, stageName: "Finals" });
+      // NOT needs_draw: an on_complete stage has no proposal to compute, and
+      // the panel that action points at is never rendered for one.
+      expect(d.attention.some((a) => a.kind === "needs_draw")).toBe(false);
+      expect(d.needs_draw_stage).toBeNull();
+      // K2: the masthead must not read "Setting up" over a row 6 of 6 played.
+      expect(competitionPhase(desk)).toEqual({ kind: "scheduled" });
+    });
+
+    it("K1 sibling: the same with stage 1 COMPLETE — setting_up, still with the needs_fixtures row", async () => {
+      const { auth, competitionId, divisionId, leagueId, finalsId } = await twoStages("on_complete");
+      await sql`update stages set status = 'complete' where id = ${leagueId}`;
+      const desk = await getCompetitionDesk(auth, competitionId);
+      const d = desk.divisions.get(divisionId)!;
+      expect(d.played).toBe(6);
+      expect(d.phase).toBe("setting_up");
+      expect(d.attention).toContainEqual({ kind: "needs_fixtures", stageId: finalsId, stageName: "Finals" });
+      // K2 again, on the shape whose row word IS "setting_up": the masthead
+      // still must not agree with it, because 6 fixtures have been played.
+      expect(competitionPhase(desk)).toEqual({ kind: "scheduled" });
+    });
+
+    it("K3: needsProposal is DERIVED from the stage's own progression timing — 'setup' owes a draw", async () => {
+      const { auth, competitionId, divisionId, leagueId, finalsId } = await twoStages("setup");
+      await sql`update stages set status = 'complete' where id = ${leagueId}`;
+      const desk = await getCompetitionDesk(auth, competitionId);
+      const d = desk.divisions.get(divisionId)!;
+      expect(d.attention).toContainEqual({ kind: "needs_draw", stageId: finalsId, stageName: "Finals" });
+      expect(d.needs_draw_stage).toEqual({ id: finalsId, name: "Finals" });
+      expect(d.attention.some((a) => a.kind === "needs_fixtures")).toBe(false);
+    });
+
+    it("K3 contrast: 'on_complete' at the same position owes NO draw — the two timings must not collapse", async () => {
+      const { auth, competitionId, divisionId, leagueId } = await twoStages("on_complete");
+      await sql`update stages set status = 'complete' where id = ${leagueId}`;
+      const desk = await getCompetitionDesk(auth, competitionId);
+      const d = desk.divisions.get(divisionId)!;
+      expect(d.attention.some((a) => a.kind === "needs_draw")).toBe(false);
+      expect(d.needs_draw_stage).toBeNull();
+    });
+  });
 });

@@ -41,6 +41,19 @@ export function needsYouItems(
             action: { label: t(dict, "desk.needsYou.needs_draw.action"), href: routes.division(org, comp, d.slug, "fixtures") },
           });
           break;
+        // K1 (fix round G, Critical — instance NINE): the row that did not
+        // exist. An open stage with nothing to play and no proposal to
+        // compute — a knockout waiting to be seeded when the league before
+        // it is completed, or a stage whose fixtures were never generated.
+        // Both of its doors are on the division's fixtures tab.
+        case "needs_fixtures":
+          items.push({
+            key: `${d.id}:needs_fixtures`, severity: sev, kind: a.kind,
+            title: t(dict, "desk.needsYou.needs_fixtures", { division: d.name, stage: a.stageName }),
+            sub: t(dict, "desk.needsYou.needs_fixtures.sub"),
+            action: { label: t(dict, "desk.needsYou.needs_fixtures.action"), href: routes.division(org, comp, d.slug, "fixtures") },
+          });
+          break;
         case "unscheduled":
           items.push({
             key: `${d.id}:unscheduled`, severity: sev, kind: a.kind,

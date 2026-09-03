@@ -87,7 +87,12 @@ test("an organiser watches the desk go Setting up → Scheduled → Match day �
   // legitimately puts a fixture in the future so the phase is genuinely
   // earned, keeping this test's own title ("Setting up → Scheduled → Match
   // day → …") true of the journey it drives.
-  const nextWeek = new Date(); nextWeek.setUTCDate(nextWeek.getUTCDate() + 7); nextWeek.setUTCHours(10, 0, 0, 0);
+  // Minor 2 (fix round G), same class as 3c below: derived from `now`, never
+  // from a pinned UTC hour. A week out is comfortably in the future and
+  // comfortably not today in every zone on earth, so this one was never
+  // actually broken — but a wall-clock hour in a fixture is the shape that
+  // has now cost this wave three defects, so it does not stay in the file.
+  const nextWeek = new Date(Date.now() + 7 * 24 * 3600_000);
   await apiJson(request, `/api/v1/fixtures/${ids[0]}`, "PATCH", { scheduled_at: nextWeek.toISOString() });
   await page.goto(compPath);
   await expect(row).toHaveAttribute("data-phase", "scheduled");
@@ -102,7 +107,14 @@ test("an organiser watches the desk go Setting up → Scheduled → Match day �
   // passed" for the SAME fixture, on the same screen. Confirmed to FAIL
   // against the pre-fix build (fix-round-d-report.md) before the source fix
   // landed.
-  const yesterday = new Date(); yesterday.setUTCDate(yesterday.getUTCDate() - 1); yesterday.setUTCHours(11, 0, 0, 0);
+  // Minor 2 (fix round G), the J1 class again: this used to build YESTERDAY's
+  // UTC calendar date at 11:00Z. `match_day` is bucketed in the division's own
+  // venue zone (H1), and at UTC+13/+14 "yesterday 11:00Z" is TODAY locally —
+  // so this step would have exercised the match_day rung rather than the
+  // past-kick-off one, silently, while every assertion below it still read
+  // plausibly. `now - 24h` is the same wall-clock time yesterday in EVERY
+  // zone, so it is yesterday-and-past by construction, with no window.
+  const yesterday = new Date(Date.now() - 24 * 3600_000);
   await apiJson(request, `/api/v1/fixtures/${ids[0]}`, "PATCH", { scheduled_at: yesterday.toISOString() });
   await page.goto(compPath);
   // The row must never claim this past kick-off as "Next" — division-

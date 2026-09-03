@@ -13,6 +13,7 @@ import { resolveVenueTz } from "@/lib/tz";
 import {
   resolveAttention,
   resolvePhase,
+  stageNeedsProposal,
   type Attention,
   type DivisionPhase,
   type DivisionStatus,
@@ -269,8 +270,16 @@ export async function getCompetitionDesk(
         seq: x.seq,
         status: x.status,
         hasFixtures: x.has_fixtures,
-        // A pending seeding stage with nothing generated is waiting on its draw.
-        needsProposal: x.status === "pending" && x.timing === "setup" && !x.has_fixtures,
+        // A pending seeding stage with nothing generated is waiting on its
+        // draw. K3 (fix round G): the predicate itself lives in
+        // division-phase.ts's `stageNeedsProposal` — it used to be written
+        // out here AND hand-copied into d/[divSlug]/page.tsx, and mutating
+        // either copy to a constant left 137/137 green.
+        needsProposal: stageNeedsProposal({
+          status: x.status,
+          timing: x.timing,
+          hasFixtures: x.has_fixtures,
+        }),
       }));
     const rows = fixtures.filter((x) => x.division_id === d.id);
     const phaseFixtures: PhaseFixture[] = rows.map((x) => ({
@@ -359,6 +368,17 @@ function nextFutureAt(next: DeskNextFixture | null, nowIso: string): string | nu
  *  existed with dates — confirmed live: a competition 43 matches deep read
  *  "Setting up" one row above a correctly-drawn "Needs draw" division.
  *
+ *  K2 (fix round G, Important — instance TEN) corrects what that paragraph
+ *  used to claim. Removing the phase-word RANKING did NOT remove the
+ *  masthead-contradicts-row defect, because the ladder's terminal FALLBACK
+ *  kept printing "Setting up" unconditionally and the guard above it rescued
+ *  only rows whose phase word was `scheduled` or `match_day`. Driven live at
+ *  three widths: a division with stage 1 complete and a `{timing: "setup"}`
+ *  finals stage reads `setting_up` (rule 4) with a red "Needs draw" pill and
+ *  a row saying "6 of 6 played · Finals not drawn" — and the masthead above
+ *  it said "Setting up". The fallback below no longer asks the phase WORD at
+ *  all; it asks whether anything has actually happened.
+ *
  *  Ladder step order matters: "any match_day" is checked BEFORE the dated
  *  fixture search (a live match day outranks a same-day dated fixture
  *  elsewhere), and "all finished" is checked AFTER it (a fully-finished
@@ -407,13 +427,27 @@ export function competitionPhase(desk: CompetitionDesk): CompetitionPillPhase {
     .sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
   if (dated.length > 0) return { kind: "next", at: dated[0]!.at, tz: dated[0]!.tz };
   if (divisions.every((d) => d.phase === "finished")) return { kind: "finished" };
-  // No usable date anywhere — the ladder's undefined case. It must still agree
-  // with the rows beneath it: a competition whose divisions are in progress is
-  // not "setting up". Reproduced live before this guard existed — the masthead
-  // read "Setting up" directly above a row reading "Scheduled", on a knockout
-  // whose only dated fixture was a TBD-entrant final (excluded from `next` by
-  // card-stats) and again on a mid-season league with one match played. Same
-  // masthead-contradicts-row shape the wave exists to remove.
-  if (divisions.some((d) => d.phase === "scheduled" || d.phase === "match_day")) return { kind: "scheduled" };
-  return { kind: "setting_up" };
+  // No usable date anywhere — the ladder's undefined case, and the only rung
+  // that can contradict the rows beneath it, because every rung above states
+  // a fact it has just read off them.
+  //
+  // K2 fix (fix round G, Important — instance TEN): the discriminator is
+  // PROGRESS, never the phase WORD. This used to be
+  // `some(d => d.phase === "scheduled" || d.phase === "match_day")` falling
+  // through to `setting_up`, which left every OTHER in-progress row —
+  // notably a rule-4 `setting_up` row whose finals are undrawn, and a
+  // `finished` row with no live fixture to date — printing "Setting up"
+  // above "6 of 6 played". (Its `|| d.phase === "match_day"` disjunct was
+  // also dead: line ~387 above has already returned for that case. Minor 3.)
+  //
+  // "Setting up" at competition level means what it means one level down:
+  // nothing informative has happened yet. So it is honest only when every row
+  // says the same thing AND none of them has played anything — a division
+  // that has played a single fixture is under way, whatever word its own pill
+  // has landed on. Everything else takes the same `scheduled` rescue round C
+  // already ruled for the mid-season-league shape ("the competition is under
+  // way but nothing is dated yet", which is exactly this state and is what
+  // the help page has always said this pill means).
+  const nothingHasHappened = divisions.every((d) => d.phase === "setting_up" && d.played === 0);
+  return nothingHasHappened ? { kind: "setting_up" } : { kind: "scheduled" };
 }

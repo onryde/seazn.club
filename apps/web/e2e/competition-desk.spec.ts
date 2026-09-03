@@ -292,6 +292,155 @@ test.describe("competition desk", () => {
     await expect(page.getByTestId("desk-needs-you")).toHaveCount(0);
   });
 
+  // K1 (fix round G, Critical — instance NINE). Both shapes below are built
+  // ENTIRELY through the production API — no SQL — because a state reached by
+  // SQL alone may not be one a user can reach, and these two certainly are.
+  //
+  // Driven live against the pre-fix build at 08:19Z on 2026-09-03, shape A
+  // read: masthead "Finished", row `data-phase=finished`, row text
+  // "Cup 6 of 6 played · complete Finished Open", and ZERO Needs-you
+  // sections — an entire knockout never played, never seeded, and nothing on
+  // the page asking for it. Shape B read masthead "Setting up", row
+  // `data-phase=setting_up`, "6 of 6 played", and again no Needs-you section.
+  const KNOCKOUT_FROM_LEAGUE = {
+    sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }],
+    placement: "rank_order",
+    timing: "on_complete",
+  };
+
+  async function leagueOfFour(request: APIRequestContext, label: string) {
+    const comp = await apiJson<{ id: string; slug: string }>(request, "/api/v1/competitions", "POST", {
+      name: `Desk ${label} ${TAG} ${Math.random().toString(36).slice(2, 6)}`, visibility: "public", ends_on: "2030-12-31",
+    });
+    const div = await apiJson<{ id: string; slug: string }>(
+      request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST",
+      { name: "Cup", sport_key: "generic", variant_key: "score", config: { points: { w: 3, d: 1, l: 0 }, progressScore: false } },
+    );
+    await addEntrantsViaApi(request, div.data!.id, ["Seed1", "Seed2", "Seed3", "Seed4"]);
+    const { stageId, fixtureIds } = await createStageAndGenerate(request, div.data!.id, { kind: "league", name: "League" });
+    // A 4-entrant round robin. If this is not 6 the whole state below is a
+    // different one and every assertion would be measuring something else.
+    expect(fixtureIds.length).toBe(6);
+    return { comp: comp.data!, div: div.data!, leagueId: stageId, fixtureIds };
+  }
+
+  async function addFinals(request: APIRequestContext, divisionId: string) {
+    const created = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divisionId}/stages`, "POST", {
+      seq: 2, kind: "knockout", name: "Finals", config: {}, progression: KNOCKOUT_FROM_LEAGUE,
+    });
+    expect(created.status).toBe(201);
+    return created.data!.id;
+  }
+
+  test("K1: a fully-played league with an unseeded finals stage is never Finished, and the desk names the stage", async ({
+    page,
+    request,
+  }) => {
+    const org = await activeOrg(page);
+    const rig = await leagueOfFour(request, "K1a");
+    await addFinals(request, rig.div.id);
+    await apiJson(request, `/api/v1/divisions/${rig.div.id}/start`, "POST");
+    for (const id of rig.fixtureIds) await scoreFixture(request, id, 2, 1);
+    // Print the asserted CONTENT beside the gate: stage 1 stays `active`
+    // (the organiser never pressed "Complete stage"), stage 2 `pending` with
+    // nothing generated. Without this the test could be measuring a division
+    // that auto-completed, where "not finished" would be true for the wrong
+    // reason.
+    const stages = await apiJson<{ id: string; seq: number; status: string }[]>(request, `/api/v1/divisions/${rig.div.id}/stages`);
+    expect(stages.data?.map((s) => [s.seq, s.status])).toEqual([[1, "active"], [2, "pending"]]);
+
+    await page.goto(`/o/${org.slug}/c/${rig.comp.slug}`);
+    const row = page.getByTestId("desk-ledger-row").filter({ hasText: "Cup" }).first();
+    await expect(row).not.toHaveAttribute("data-phase", "finished");
+    await expect(row).toHaveAttribute("data-phase", "scheduled");
+    await expect(row).toContainText("6 of 6 played");
+    // The row must ASK for something, and the masthead must not contradict it.
+    await expect(page.locator('[data-pill="needs_fixtures"]:visible').first()).toBeVisible();
+    await expect(page.getByTestId("desk-masthead-pill")).not.toHaveAttribute("data-phase", "finished");
+    const needs = page.getByTestId("desk-needs-you");
+    await expect(needs.locator('[data-attention="needs_fixtures"]')).toHaveCount(1);
+    await expect(needs).toContainText("Cup · no fixtures yet in Finals");
+    // And the action the row carries actually leads somewhere real.
+    await needs.getByRole("link", { name: "Open fixtures" }).click();
+    await expect(page).toHaveURL(new RegExp(`/d/${rig.div.slug}\\?tab=fixtures$`));
+
+    // The other direction: the product was never broken — completing the
+    // league seeds the finals and the row corrects itself. Without this the
+    // fix could have been "never finished while a later stage exists".
+    const completed = await apiJson(request, `/api/v1/stages/${rig.leagueId}/complete`, "POST", {});
+    expect(completed.status).toBe(200);
+    await page.goto(`/o/${org.slug}/c/${rig.comp.slug}`);
+    const seeded = page.getByTestId("desk-ledger-row").filter({ hasText: "Cup" }).first();
+    await expect(seeded).toContainText("6 of 9 played");
+    await expect(page.locator('[data-pill="needs_fixtures"]:visible')).toHaveCount(0);
+  });
+
+  test("K1 sibling: a finals stage added AFTER the league completed — setting_up, and still asked for", async ({
+    page,
+    request,
+  }) => {
+    const org = await activeOrg(page);
+    const rig = await leagueOfFour(request, "K1b");
+    await apiJson(request, `/api/v1/divisions/${rig.div.id}/start`, "POST");
+    for (const id of rig.fixtureIds) await scoreFixture(request, id, 2, 1);
+    // Complete the league FIRST, then add the cup — the ordinary "the league
+    // is done, now let's play a knockout" flow, and the only way this shape is
+    // reachable through the API at all (completing a stage that already has an
+    // `on_complete` successor seeds it immediately).
+    const completed = await apiJson(request, `/api/v1/stages/${rig.leagueId}/complete`, "POST", {});
+    expect(completed.status).toBe(200);
+    await addFinals(request, rig.div.id);
+    const stages = await apiJson<{ seq: number; status: string }[]>(request, `/api/v1/divisions/${rig.div.id}/stages`);
+    expect(stages.data?.map((s) => [s.seq, s.status])).toEqual([[1, "complete"], [2, "pending"]]);
+
+    await page.goto(`/o/${org.slug}/c/${rig.comp.slug}`);
+    const row = page.getByTestId("desk-ledger-row").filter({ hasText: "Cup" }).first();
+    await expect(row).toHaveAttribute("data-phase", "setting_up");
+    await expect(row).toContainText("6 of 6 played");
+    await expect(page.locator('[data-pill="needs_fixtures"]:visible').first()).toBeVisible();
+    await expect(page.getByTestId("desk-needs-you").locator('[data-attention="needs_fixtures"]')).toHaveCount(1);
+    // K2 (fix round G, Important — instance TEN): the masthead used to print
+    // "Setting up" above this row's "6 of 6 played". `setting_up` at
+    // competition level means nothing has happened yet, and six matches have.
+    await expect(page.getByTestId("desk-masthead-pill")).not.toHaveAttribute("data-phase", "setting_up");
+    await expect(page.getByTestId("desk-masthead-pill")).toHaveAttribute("data-phase", "scheduled");
+  });
+
+  // K2 (fix round G, Important — instance TEN), the shape the reviewer drove:
+  // a `{timing: "setup"}` finals stage after a completed league. The ROW is
+  // right ("6 of 6 played · Finals not drawn", red "Needs draw"); the masthead
+  // above it read "Setting up", because the ladder's terminal fallback rescued
+  // only rows whose phase word was `scheduled`/`match_day` and a rule-4
+  // `setting_up` row fell straight through. Observed live at 08:20Z on
+  // 2026-09-03 against the pre-fix build.
+  test("K2: the masthead never reads Setting up above a row that has played its whole league", async ({
+    page,
+    request,
+  }) => {
+    const org = await activeOrg(page);
+    const rig = await leagueOfFour(request, "K2");
+    await apiJson(request, `/api/v1/divisions/${rig.div.id}/start`, "POST");
+    for (const id of rig.fixtureIds) await scoreFixture(request, id, 2, 1);
+    const completed = await apiJson(request, `/api/v1/stages/${rig.leagueId}/complete`, "POST", {});
+    expect(completed.status).toBe(200);
+    const created = await apiJson<{ id: string }>(request, `/api/v1/divisions/${rig.div.id}/stages`, "POST", {
+      seq: 2, kind: "knockout", name: "Finals", config: {},
+      progression: { ...KNOCKOUT_FROM_LEAGUE, timing: "setup" },
+    });
+    expect(created.status).toBe(201);
+
+    await page.goto(`/o/${org.slug}/c/${rig.comp.slug}`);
+    const row = page.getByTestId("desk-ledger-row").filter({ hasText: "Cup" }).first();
+    // The row itself is unchanged by this fix — pinned so a future change to
+    // the masthead cannot "fix" the contradiction by breaking the row.
+    await expect(row).toContainText("6 of 6 played · Finals not drawn");
+    await expect(page.locator('[data-pill="needs_draw"]:visible').first()).toBeVisible();
+    const masthead = page.getByTestId("desk-masthead-pill");
+    await expect(masthead).not.toHaveAttribute("data-phase", "setting_up");
+    await expect(masthead).not.toContainText("Setting up");
+    await expect(masthead).toHaveAttribute("data-phase", "scheduled");
+  });
+
   // Deliberately OUTSIDE the serial block below: serial mode SKIPS the rest of
 // its describe after the first failure, so a sweep failure in there would
 // take the two tests it is guarding down with it and report them as "did not

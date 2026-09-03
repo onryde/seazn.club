@@ -65,16 +65,26 @@ function nextLine(dict: Dict, d: DeskDivision, locale: string, nowMs: number): s
 /** The mobile card's one action: a red attention's own label/href, or none.
  *  Owner ruling (review round 1, mobile-card redesign): the card itself is
  *  the tap target to the division — a button only earns its place when
- *  there's something that specifically needs doing (needs_draw / no_scorer),
- *  mirroring what NeedsYou would already surface for this division. */
+ *  there's something that specifically needs doing, mirroring what NeedsYou
+ *  would already surface for this division.
+ *
+ *  K1 (fix round G): `needs_fixtures` joins the list. It is the kind the
+ *  finding is about — an unseeded stage — so a row that raises it and
+ *  offers NO action would leave the mobile card in exactly the state the
+ *  ruling exists to remove ("the row carries an action the organiser can
+ *  take"). Its door is the fixtures tab, which holds both "Complete stage"
+ *  on the stage before it and "Generate fixtures". */
 function redAction(dict: Dict, d: DeskDivision, org: string, comp: string, slug: string): { label: string; href: string } | null {
   const a = d.attention.find(
-    (x): x is Extract<Attention, { kind: "needs_draw" | "no_scorer" }> =>
-      x.kind === "needs_draw" || x.kind === "no_scorer",
+    (x): x is Extract<Attention, { kind: "needs_draw" | "needs_fixtures" | "no_scorer" }> =>
+      x.kind === "needs_draw" || x.kind === "needs_fixtures" || x.kind === "no_scorer",
   );
   if (!a) return null;
   if (a.kind === "needs_draw") {
     return { label: t(dict, "desk.needsYou.needs_draw.action"), href: routes.division(org, comp, slug, "fixtures") };
+  }
+  if (a.kind === "needs_fixtures") {
+    return { label: t(dict, "desk.needsYou.needs_fixtures.action"), href: routes.division(org, comp, slug, "fixtures") };
   }
   // F3 fix (final review, Important): `no_scorer` is now aggregated per
   // division (`fixtureIds`, not a single `fixtureId`) — one fixture still

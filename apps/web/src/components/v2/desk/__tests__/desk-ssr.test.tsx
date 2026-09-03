@@ -48,6 +48,19 @@ describe("PhasePill", () => {
     expect(html).toContain("Needs draw");
     expect(html).not.toContain("Setting up");
   });
+  // K1 (fix round G): the label used to come from a TERNARY —
+  // `red.kind === "needs_draw" ? "desk.pill.needs_draw" : "desk.pill.no_scorer"`
+  // — so any red kind that was not `needs_draw` rendered "No scorer". This
+  // pins the third one against exactly that mutant.
+  it("K1: a needs_fixtures attention renders its OWN pill word, never 'No scorer'", () => {
+    const html = renderToStaticMarkup(
+      <PhasePill dict={en} phase="scheduled" attention={[{ kind: "needs_fixtures", stageId: "fin", stageName: "Finals" }]} />,
+    );
+    expect(html).toContain('data-pill="needs_fixtures"');
+    expect(html).toContain("Needs fixtures");
+    expect(html).not.toContain("No scorer");
+    expect(html).not.toContain("Scheduled");
+  });
   it("amber attention does not beat the phase", () => {
     const html = renderToStaticMarkup(<PhasePill dict={en} phase="scheduled" attention={[{ kind: "unscheduled", count: 3 }]} />);
     expect(html).toContain("Scheduled");
@@ -131,10 +144,32 @@ describe("competitionPhase", () => {
     const b = div({ division_id: "d2", phase: "finished", next: null });
     expect(competitionPhase(deskOf([a, b]))).toEqual({ kind: "finished" });
   });
-  it("ladder has no answer — nothing live, nothing dated, not all finished — falls to setting_up (chosen: same 'nothing informative yet' state as the empty-competition case)", () => {
+  // REVERSED by K2 (fix round G, Important — instance TEN). This test used to
+  // expect `setting_up` here and its title called that "chosen": a `finished`
+  // division and a `setting_up` one, nothing dated, was declared "nothing
+  // informative yet". It is the wave's signature defect frozen as an expected
+  // value — the masthead says the competition has not begun, directly above a
+  // row that says a division has finished. Driven live at three widths on the
+  // sibling shape (a `setting_up` row reading "6 of 6 played · Finals not
+  // drawn" under a "Setting up" masthead) before the fallback was fixed.
+  it("K2: a finished row beside a setting_up one is NOT 'setting up' — the masthead never contradicts the rows", () => {
     const settingUp = div({ division_id: "d1", phase: "setting_up", next: null });
     const finished = div({ division_id: "d2", phase: "finished", next: null });
-    expect(competitionPhase(deskOf([settingUp, finished]))).toEqual({ kind: "setting_up" });
+    expect(competitionPhase(deskOf([settingUp, finished]))).toEqual({ kind: "scheduled" });
+  });
+  it("K2: a setting_up row that has already PLAYED something is not 'setting up' either", () => {
+    // The exact live shape: one division, rule-4 `setting_up` (its finals are
+    // undrawn), 6 of 6 league fixtures played, nothing dated. The phase WORD
+    // agrees with the fallback; the row's own numbers do not.
+    const played = div({ division_id: "d1", phase: "setting_up", played: 6, total: 6, next: null });
+    expect(competitionPhase(deskOf([played]))).toEqual({ kind: "scheduled" });
+  });
+  it("K2: and 'setting up' is still reachable — every row setting_up with nothing played", () => {
+    // Without this the fix could have been "never setting_up", and the pill
+    // amendment 3 exists for (a fresh competition) would have been lost.
+    const a = div({ division_id: "d1", phase: "setting_up", played: 0, total: 0, next: null });
+    const b = div({ division_id: "d2", phase: "setting_up", played: 0, total: 6, next: null });
+    expect(competitionPhase(deskOf([a, b]))).toEqual({ kind: "setting_up" });
   });
 });
 
@@ -225,6 +260,16 @@ describe("desk.* copy (review round 3 — pluralization and subject-verb agreeme
     const items = needsYouItems(en, desk(d), names, "org", "comp", "en");
     const item = items.find((i) => i.kind === "registrations_waiting");
     expect(item?.title).toBe("1 registration waiting for approval");
+  });
+  it("K1: needs_fixtures builds a row naming the stage, with the fixtures-tab action", () => {
+    const d = div({ attention: [{ kind: "needs_fixtures", stageId: "fin", stageName: "Finals" }] });
+    const items = needsYouItems(en, desk(d), names, "org", "comp", "en");
+    const item = items.find((i) => i.kind === "needs_fixtures");
+    expect(item?.severity).toBe("red");
+    expect(item?.title).toBe("Premier Division · no fixtures yet in Finals");
+    // No verb agrees with the user-typed, usually-plural stage name.
+    expect(item?.title).not.toContain("Finals has");
+    expect(item?.action).toEqual({ label: "Open fixtures", href: "/o/org/c/comp/d/premier-division?tab=fixtures" });
   });
   it("C4: masthead division count reads singular at n=1, plural otherwise", () => {
     expect(plural(en, "desk.masthead.divisions", 1, "en")).toBe("1 division");
@@ -357,6 +402,16 @@ describe("DivisionLedger", () => {
     );
     expect(htmlAction).toContain("Compute proposal");
     expect(htmlAction).toContain('href="/o/org/c/comp/d/u16-cup?tab=fixtures"');
+  });
+  it("K1: mobile action button for needs_fixtures — the row carries the action, not just the pill", () => {
+    const d = div({ phase: "scheduled", played: 6, total: 6, attention: [{ kind: "needs_fixtures", stageId: "fin", stageName: "Finals" }] });
+    const html = renderToStaticMarkup(
+      <DivisionLedger dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z"
+        rows={[{ id: "d1", name: "U16 Cup", slug: "u16-cup", sportKey: "football", logoUrl: null, desk: d, statusLine: "6 of 6 played" }]} />,
+    );
+    expect(html).toContain("Open fixtures");
+    expect(html).toContain('href="/o/org/c/comp/d/u16-cup?tab=fixtures"');
+    expect(html).toContain('data-pill="needs_fixtures"');
   });
   // F3 fix (final review, Important): the mobile card's own red action
   // button reads `no_scorer.fixtureIds` now, not a single `fixtureId` —
