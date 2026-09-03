@@ -17,7 +17,7 @@ outside it, which is what the bench is for.
 > | G8 drift gate ignored the published spec | **FIXED** — `ci.yml` diffs `v1.public.json` too |
 > | G4 `import.events` granted by no plan | **NOT A GAP** — deliberate rollout kill-switch; withdrawn |
 > | G7 `business` seeded by a migration, absent live | **OPEN**, and NOT blocked on W2 |
-> | G9 blackouts are write-only over the API | **OPEN**, new — found while CONSUMING G2's own fix |
+> | G9 blackouts are write-only over the API | **IN FLIGHT** (`fix/g9-official-availability-get`) — do not double-take it |
 >
 > Each fix was verified present in the tree, not taken from the PR
 > description. **Read the six closed sections as history, not as work.** They
@@ -549,6 +549,18 @@ may be to stop committing it at all.
 ---
 
 ## G9 — G2's blackout route can be WRITTEN but not READ
+
+> **IN FLIGHT 2026-09-03, not merged** — another session is on
+> `fix/g9-official-availability-get`: a new scoped usecase
+> `listOfficialBlackout(auth, officialId)` (a real `where official_id = ...`,
+> NOT the org-wide `loadOfficialBlackouts`), route guarded by
+> `requireResourceAuth(req, "official", id, "read")` mirroring the writes, plus
+> `openapi.ts` and `key-scopes.ts` (GET, scope `read`, pin `official`) and a
+> regenerated spec. Their tests: scoped round-trip, a second official's blackout
+> does not leak, empty list is **200 not 404**, org B blocked.
+>
+> Recorded so a third session does not take this twice. Re-check before
+> starting: this is another branch's state, not `main`'s.
 
 **Found 2026-09-03 by B03 T6, while consuming G2's fix. Not a criticism of that
 fix — it is the gap its shape leaves behind, and it was only visible from a
