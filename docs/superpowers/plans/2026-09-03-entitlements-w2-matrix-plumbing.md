@@ -246,6 +246,72 @@ hardcoded money lines per locale — so the price half of this is small.
 the cards from the dictionaries, and every "Pro Plus" string, stay W3's. Regenerate
 `lib/i18n-keys.ts` rather than hand-merging it.
 
+### T10 — remove AUD entirely (owner ruling 2026-09-03)
+
+The owner chose full removal with the cost stated: **Australian clubs lose the
+ability to collect entry fees in AUD.** AUD does two jobs here and this takes both.
+
+- `SUPPORTED_CURRENCIES` in `lib/currency.ts` drops to four. `REGISTRATION_CURRENCIES`
+  is DERIVED from it (one authority, explicit exclusions) so it follows automatically —
+  do not add a second list.
+- **Migration `V392`**: `organizations.currency` carries
+  `CHECK (currency = ANY (ARRAY['usd','eur','gbp','inr','aud']))`. Alter it to drop
+  `aud`. `org-currency.test.ts` fails if code and constraint disagree, which is the
+  guard that makes this safe — do not weaken it. Greenfield, so no rows need
+  converting, but the migration should FAIL LOUDLY if any org row is still `aud`
+  rather than silently violating the new constraint.
+- Every `currency_options` block in `stripe-plans.json` loses its `aud` entry, and
+  copy-truth's `SEED_CURRENCIES` drops to four.
+- The two label maps that hand-write `aud: "A$ AUD"` (`currency-switcher.tsx`,
+  `org-registration-currency.tsx`) lose the row; both are `Record`s keyed on the
+  type, so a missed one is a compile error rather than a blank option.
+
+**The landmine that makes a PARTIAL removal worse than either end state:**
+`amountFor` is `spec.currency_options?.[currency] ?? spec.unit_amount`. Drop `aud`
+from the seed while leaving it in `SUPPORTED_CURRENCIES` and the pricing page renders
+the USD number under an A$ symbol — no error, a wrong price. Seed and supported-list
+must move in the SAME commit.
+
+## Stripe sandbox — owner ruling, and two findings that change the work
+
+**Ruling (2026-09-03): all billing testing runs against a real Stripe SANDBOX in
+e2e or a walkthrough, never the hand-written fixture.** The fixture server's own
+header agrees: "Only a real test-mode account settles whether Stripe bills a second
+seat at half rate." It is used by ZERO e2e specs today — only by vitest unit tests —
+so every `*.spec.ts` already resolves to real Stripe or to a dummy key.
+
+**Finding A — `stripe:sync` never prunes.** `scripts/stripe-sync.ts` iterates only the
+seed's own collections and exits. It archives a price ONLY when a still-named
+`lookup_key`'s amount has drifted. So removing `pro_plus` and `extra_org_pro_plus`
+from the seed leaves both LIVE AND PURCHASABLE in the account, and `planKeyForPrice`
+would resolve a real price id to a `plans` row this wave deleted. Design §5 already
+calls archival a manual ops step; that is now confirmed as necessary rather than
+tidy-up. W2 must at minimum prove the mapper FAILS SAFE for an orphaned price id.
+
+**Finding B — nothing checks the seed against live Stripe.** `stripe-plans.test.ts`
+is seed-internal (unique lookup keys, currencies present, M < L). The one live sync
+test uses a throwaway spec and says it "never touches the real seed's". No CI step
+runs the `.live.` tests. So this wave rewrites every amount in five currencies and two
+graduated tiers with no guard that Stripe accepted any of them. Add one: list live
+prices by `lookup_key` and assert `unit_amount` and every `currency_options` entry
+against the seed, gated on `BILLING_LIVE=1` and an `sk_test_` key like its neighbours.
+
+**Sandbox proofs owed by this wave**, each driven through the real producer and
+consumer, never a fixture:
+1. `stripe:sync` against test mode, then the read-back guard above — this is the only
+   thing that settles whether the new graduated tiers and four-currency options are
+   accepted.
+2. The per-rung pass grant, end to end: real hosted Checkout with `4242…`, real
+   `checkout.session.completed` returned by `stripe listen --forward-to`, wallet
+   asserted at +25 for M and +50 for L. The path is
+   `pass-checkout/route.ts` → `billing.ts` metadata → `billing-events.ts`
+   `handleCheckoutCompleted` → `passKeyForSession` → `recordPassPurchase`, with a
+   `passSessionRungMatchesPrice` guard in between that must be exercised, not assumed.
+3. A Pro checkout at the NEW price, proving price-id resolution after the reprice.
+
+There is no runbook for pointing a local run at the sandbox — `docs/runbooks/e2e-local.md`
+documents only the CI dummies. Write one as part of this work.
+
 ### T9 — sweep and gates
 Delete the two dead e2e specs. Rerun the 34 files that assert against
 `plan_entitlements` and the 8 copy-truth importers (4 need a live DB). Unit, e2e,
