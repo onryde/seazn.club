@@ -769,6 +769,45 @@ through `createOrgForUser` that group holds exactly one org, so it is safe; it i
 hazard where a spec has deliberately joined orgs. Check each of the eleven for which shape
 it is before repointing.
 
+### T19 — gate the officials import (owner ruling 2026-09-03: fix it in W2)
+
+**`POST /api/v1/officials/import` bypasses `import.bulk` entirely.** Found by the
+directory-walkthroughs session, confirmed independently here before acting.
+`app/api/v1/officials/import/route.ts` calls `importOfficials`
+(`server/usecases/officials.ts:278`), which has NO `requireFeature`, NO `withinLimit`, and
+never mentions `import.bulk` — while the sibling path gates at `imports.ts:132`. So the
+50-row Free cap is unenforceable through that route. API-only, no UI, which is why it went
+unnoticed.
+
+Ruled into W2: this wave exists to make the matrix true in code, and it is already fixing
+that key's stale paywall message. A cap with a bypass is not a cap.
+
+**The fix, mirroring the sibling exactly — do not invent a second shape:**
+`importOfficials` parses `const [header, ...data] = table` at :285, so `data.length` is the
+row count. Gate AFTER the header validation (:291) and BEFORE `return withTenant(...)`
+(:293) — `withinLimit` queries the POOLED sql proxy while `withTenant` pins a connection
+for its whole callback, and the sibling is pre-transaction for that reason.
+
+    const quota = await withinLimit(auth.orgId, "import.bulk", data.length);
+    if (!quota.ok) {
+      throw new PaymentRequiredError("import.bulk", {
+        limit: quota.limit,
+        reason: bulkImportRowsReason(quota.limit),
+      });
+    }
+
+Reuse `bulkImportRowsReason` — the sibling's comment explains that `extra` is spread AFTER
+`reason` in both envelopes, which is what lets the paywall quote the real number instead of
+a third hardcoded copy. Do not hardcode 50.
+
+**Tests owed:** a Free org importing 51 officials rows is refused 402 with `feature_key`
+`import.bulk` and the message quoting the LIVE cap; 50 succeeds; a Pro org's 51 succeeds.
+Mutation: delete the gate and the refusal test must red. This is a live API route that
+starts refusing, so it needs an e2e through the real HTTP door, not a usecase call.
+
+**Greenfield, so no caller is broken today** — but it IS a behaviour change to a shipped
+route, and the commit message should say so plainly.
+
 ### T9 — sweep and gates
 Delete the two dead e2e specs. Rerun the 34 files that assert against
 `plan_entitlements` and the 8 copy-truth importers (4 need a live DB). Unit, e2e,
