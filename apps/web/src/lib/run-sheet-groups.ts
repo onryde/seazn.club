@@ -107,11 +107,15 @@ const OPEN = new Set(["scheduled", "in_play"]);
 export function buildRunSheet(input: RunSheetInput): RunSheetBlock[] {
   const { fixtures, stages, tz, nowMs } = input;
 
-  // THE EMPTY CASE, FIRST. A sheet with no fixtures has no blocks — not an
-  // empty day, not a bare header. The page renders the rail alone (spec,
-  // "Error and empty states"). Every rule below is a "does the set contain X"
-  // test, and the empty set answers no to all of them, so without this line
-  // the answer is whatever the last branch happens to be (_RULES.md).
+  // THE EMPTY CASE, FIRST — but unlike a "does the set contain X" ladder
+  // (_RULES.md's vacuous-truth rule), this is NOT a correctness backstop.
+  // `buildRunSheet` is a PARTITION: the loop below buckets every row into a
+  // pile, and everything after it is a map/filter/sort over those piles —
+  // empty-safe by construction, so an empty `fixtures` array would already
+  // fall through to `blocks = []` with this line deleted. It stays as a fast
+  // exit that also skips building `seqOf`/`bracketStageIds` for zero rows,
+  // and keeps the page's own empty state simple (spec, "Error and empty
+  // states": the stage rail alone, no run sheet header at all).
   if (fixtures.length === 0) return [];
 
   const seqOf = new Map(stages.map((s) => [s.id, s.seq]));
