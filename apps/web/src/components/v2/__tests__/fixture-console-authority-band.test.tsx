@@ -293,7 +293,9 @@ describe("phone composition — the match strip (spec §3.1)", () => {
     // class attribute; assert the wrapper element itself: its opening tag
     // sits before the meta text, and its OWN closing tag sits after it (so
     // the text is still inside the wrapper, not past it).
-    const wrapperOpen = html.lastIndexOf('<div class="max-md:hidden">', metaIdx);
+    // Review fix (final wave, MINOR 7): the wrapper now also carries
+    // `id="match-details-body"`, matched by the toggle's own `aria-controls`.
+    const wrapperOpen = html.lastIndexOf('<div class="max-md:hidden" id="match-details-body">', metaIdx);
     expect(
       wrapperOpen,
       "closed by default, the meta line must sit inside its OWN max-md:hidden wrapper div",
@@ -303,6 +305,10 @@ describe("phone composition — the match strip (spec §3.1)", () => {
       wrapperClose,
       "the meta text must still be inside the wrapper when it closes, not after",
     ).toBeGreaterThan(metaIdx);
+    expect(
+      html,
+      "the toggle points aria-controls at the region it actually opens/closes",
+    ).toMatch(/data-role="match-details-toggle"[^>]*aria-controls="match-details-body"/);
   });
 
   it("hides the Scoring heading on phones — the strip is the heading there", () => {

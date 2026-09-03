@@ -651,8 +651,29 @@ export function FixtureConsole({
             data-role="match-details-toggle"
             aria-expanded={detailsOpen}
             aria-label={msg(detailsOpen ? "console.phone.hideDetails" : "console.phone.showDetails")}
+            // Review fix: same `aria-controls` the activity toggle already
+            // carries — points at the round/venue/time region below, which
+            // is the region this button actually opens/closes. `FixtureConsole`
+            // mounts once per fixture page (see `f/[no]/page.tsx`), so a
+            // static id is safe — unlike `PhoneDisclosure`, which is mounted
+            // several times on one page and needs `useId()`.
+            aria-controls="match-details-body"
             onClick={() => setDetailsOpen((v) => !v)}
-            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-slate-600 transition-colors hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400 md:hidden"
+            className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-slate-600 transition-colors hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400 md:hidden${
+              // Review fix: when the headline <p> above is suppressed
+              // (cricket/generic, pre-innings) this button is the row's only
+              // child, and `justify-between` on the parent leaves a lone
+              // flex child flush left instead of at the end. `ml-auto` pins
+              // it to the end of the row in that case; harmless when the
+              // headline is present too, since `justify-between` already
+              // pushes it there. No leading space before `${` above: the
+              // conditional string supplies its OWN leading space so the
+              // common case (`suppressHeadline` false) ends the class list
+              // in exactly `md:hidden` with no trailing space — a stray
+              // trailing space here broke the test's own anchored
+              // `\smd:hidden"` regex (fixture-console-authority-band.test.tsx).
+              suppressHeadline ? " ml-auto" : ""
+            }`}
           >
             <span aria-hidden="true">{detailsOpen ? "▴" : "▾"}</span>
           </button>
@@ -666,7 +687,7 @@ export function FixtureConsole({
             history-panel-contrast.test.tsx's source-scan regex for this
             exact line (`<p className="mt-1 text-xs text-slate-(\d+)">`)
             keeps matching untouched. */}
-        <div className={detailsOpen ? undefined : "max-md:hidden"}>
+        <div className={detailsOpen ? undefined : "max-md:hidden"} id="match-details-body">
           {/* R3.5/Task P — was text-slate-400 (2.63:1 on this .card's white,
               under the WCAG AA 4.5:1 floor); text-slate-600 clears 7.58:1,
               same fix as the "vs" separator above. */}
@@ -915,6 +936,15 @@ export function FixtureConsole({
         <div className="grid gap-4 lg:grid-cols-2">
           {(["home", "away"] as const).map((sideKey) => {
             const s = sides[sideKey]!;
+            // Review fix: `AvailabilityRoster` itself renders nothing for a
+            // side with no members (`lineup-editor.tsx`'s own
+            // `if (side.members.length === 0) return null`). Gate the
+            // wrapper on the SAME condition so a phone never shows a
+            // tappable "… availability" row that opens onto an empty body —
+            // matching the component's own rule rather than restating a
+            // separate one (`lineup-editor.tsx` is shared with the
+            // registration surfaces and is not touched here).
+            if (s.members.length === 0) return null;
             return (
               <PhoneDisclosure
                 key={s.id}

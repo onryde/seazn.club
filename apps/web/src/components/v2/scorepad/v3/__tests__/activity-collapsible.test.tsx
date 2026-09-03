@@ -49,7 +49,10 @@ describe("ActivityPanel collapsible (phone)", () => {
     const html = render({ collapsible: true });
     expect(html).toContain('data-role="v3-activity-toggle"');
     expect(html).toMatch(/data-role="v3-activity-toggle"[^>]*aria-expanded="false"/);
-    expect(html).toMatch(/data-role="v3-activity-toggle"[^>]*class="[^"]*\bmd:hidden\b/);
+    // `\bmd:hidden\b` also matches inside `max-md:hidden` — `-` to `m` is a
+    // word boundary in JS regex. Anchored on the trailing `\smd:hidden"` so a
+    // future `max-md:hidden` mutation reds instead of passing on inversion.
+    expect(html).toMatch(/data-role="v3-activity-toggle"[^>]*class="[^"]*\smd:hidden"/);
     expect(render({ collapsible: true, events: [THREE[0]] })).not.toContain('data-role="v3-activity-toggle"');
   });
   it("not collapsible (desktop console today, and every caller that omits it): no toggle, no hidden row", () => {

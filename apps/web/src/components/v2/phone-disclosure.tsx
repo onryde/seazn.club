@@ -1,5 +1,5 @@
 "use client";
-import { useState, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 
 export interface PhoneDisclosureProps {
   /** The card's own title, verbatim — what the row reads as on a phone. */
@@ -38,6 +38,13 @@ export interface PhoneDisclosureProps {
  *  assumptions. */
 export function PhoneDisclosure({ summary, aside, showLabel, hideLabel, children }: PhoneDisclosureProps) {
   const [open, setOpen] = useState(false);
+  // Review fix: the activity toggle already carries `aria-controls`; this
+  // one did not. `PhoneDisclosure` is mounted several times on one page
+  // (once per lineup/availability side in `fixture-console.tsx`), so the
+  // controlled region's id must be unique per instance — `useId()`, not a
+  // static string like `match-details-toggle`'s (that one mounts once per
+  // page).
+  const bodyId = useId();
   return (
     <div data-role="phone-disclosure" data-open={open} className="h-full min-w-0">
       <button
@@ -45,6 +52,7 @@ export function PhoneDisclosure({ summary, aside, showLabel, hideLabel, children
         data-role="phone-disclosure-toggle"
         aria-expanded={open}
         aria-label={open ? hideLabel : showLabel}
+        aria-controls={bodyId}
         onClick={() => setOpen((v) => !v)}
         className="flex min-h-11 w-full items-center justify-between gap-2 rounded-2xl border border-slate-200 bg-white px-4 text-left transition-colors hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400 md:hidden"
       >
@@ -54,7 +62,9 @@ export function PhoneDisclosure({ summary, aside, showLabel, hideLabel, children
           <span aria-hidden="true">{open ? "▴" : "▾"}</span>
         </span>
       </button>
-      <div className={open ? "grid h-full" : "grid h-full max-md:hidden"}>{children}</div>
+      <div className={open ? "grid h-full" : "grid h-full max-md:hidden"} id={bodyId}>
+        {children}
+      </div>
     </div>
   );
 }

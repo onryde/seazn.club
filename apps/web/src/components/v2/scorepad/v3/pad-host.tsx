@@ -2333,6 +2333,10 @@ export function PadHostV3(props: PadHostV3Props) {
         />
       )}
 
+      {/* Review fix: the phone order for these four (`max-md:order-N`) is now
+       *  explicit rather than an accident of source order — ribbon(1) →
+       *  context(2) → recording(3) → activity(4) — so reordering the JSX
+       *  below cannot silently change what a scorer sees on a phone. */}
       {ribbon && (
         <div
           data-role="v3-ribbon"
@@ -2358,7 +2362,7 @@ export function PadHostV3(props: PadHostV3Props) {
         </div>
       )}
 
-      <div data-role="v3-recording" className="max-md:order-2">
+      <div data-role="v3-recording" className="max-md:order-3">
         <RecordingChip
           activeBand={band}
           onBandChange={onBandChange}
@@ -2369,7 +2373,7 @@ export function PadHostV3(props: PadHostV3Props) {
       </div>
 
       {contextSpec && (
-        <div data-role="v3-context" className="max-md:order-1">
+        <div data-role="v3-context" className="max-md:order-2">
           <ContextStrip
             spec={contextSpec}
             view={combinedPool(squads)}
@@ -2495,13 +2499,19 @@ export function PadHostV3(props: PadHostV3Props) {
        *  scorer could not correct anything but the last ball once the hold
        *  window elapsed. Restored on the CHASSIS so R3-R6 inherit it. */}
       {(props.showActivity ?? true) && (
-      <div data-role="v3-activity-slot" className="max-md:order-3">
+      <div data-role="v3-activity-slot" className="max-md:order-4">
         <ActivityPanel
           events={activityEvents}
           ownEventIds={pipeline.ownEventIds}
           deviceLinkId={props.identity.deviceLinkId}
           personNames={personNames}
           t={t}
+          // Review fix: spec §3.9 — "the device-link page passes the same so
+          // the one component has one rule". `fixture-console.tsx`'s own
+          // `ActivityPanel` mount already gets this; this is the most
+          // phone-like surface in the whole change and was rendering a
+          // full-height ledger because the prop defaults to false.
+          collapsible
           onVoid={(eventId) => void handleUndo(eventId)}
           voidingId={voidingId}
           // Threads the skin's own per-event detail into the panel (D2). The

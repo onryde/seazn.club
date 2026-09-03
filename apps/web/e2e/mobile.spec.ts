@@ -148,7 +148,27 @@ async function expectPhoneComposition(page: Page, model: "S" | "T"): Promise<voi
     }
     // Lineup disclosures: rows visible, editors folded.
     const disclosures = page.locator('[data-role="phone-disclosure-toggle"]');
-    for (let i = 0; i < (await disclosures.count()); i++) await expect(disclosures.nth(i)).toBeVisible();
+    const disclosureCount = await disclosures.count();
+    for (let i = 0; i < disclosureCount; i++) await expect(disclosures.nth(i)).toBeVisible();
+    // Review fix (Important 3, final review) — nothing here ever OPENED a
+    // disclosure: every prior assertion ran with the body CLOSED, so
+    // `phone-disclosure.tsx`'s open branch (`aria-expanded="true"`,
+    // `hideLabel`, the body becoming visible) was unproven, and so was
+    // `expectNoHorizontalScroll` in the one state that actually shipped a
+    // 106px overflow at 320px. One disclosure is enough to witness it —
+    // opening every row on every route would be expensive for no more
+    // coverage, since they all share the same component.
+    if (disclosureCount > 0) {
+      const wrapper = page.locator('[data-role="phone-disclosure"]').first();
+      const first = wrapper.locator('[data-role="phone-disclosure-toggle"]');
+      const body = wrapper.locator("> div");
+      await first.click();
+      await expect(first).toHaveAttribute("aria-expanded", "true");
+      await expect(body).toBeVisible();
+      await expectNoHorizontalScroll(page);
+      await first.click();
+      await expect(first).toHaveAttribute("aria-expanded", "false");
+    }
   } else {
     if (handoverOffered) {
       await expect(deskHandover).toBeVisible();
