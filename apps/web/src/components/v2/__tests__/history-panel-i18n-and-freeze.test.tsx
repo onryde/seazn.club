@@ -1,10 +1,12 @@
 // Two defects in one panel, plus the testids two walkthrough specs select on.
 //
-// 1. NINE hardcoded English strings. The panel already reads `confirm.*`,
-//    `history.checkpoint.*` and `history.restore.*` from the dictionary, so a
-//    Spanish, French or Dutch organiser got a half-translated card — including
-//    the heading of a Pro-gated feature (`schedule.versioning`) and the label
-//    on the most destructive control on the page.
+// 1. The panel shipped its copy as hardcoded English while the confirm dialog
+//    beside it correctly read the dictionary, so a Spanish, French or Dutch
+//    organiser got a half-English card — including the heading of a Pro-gated
+//    feature and the label on the most destructive control on the page. Every
+//    user-facing string in the file now goes through `msg()`: the chrome, the
+//    twelve event names in the "Recent edits" list, the two aria-labels and the
+//    save-point placeholder.
 //
 // 2. The Danger zone's only render gate was `canEdit`. `HistoryPanel` already
 //    RECEIVES `scheduleLocked` (schedule/page.tsx passes
@@ -18,21 +20,29 @@
 //    freeze (over-quota ⇒ read-only) — a different thing with a confusingly
 //    similar name. Gating on anything derived from `canEdit` would make the
 //    guard silently unreachable while every test below still passed, so the
-//    frozen case here is driven with `canEdit` TRUE.
+//    frozen case here is driven with `canEdit` TRUE and only `scheduleLocked`
+//    varying.
 //
 // Why a sentinel dict rather than a text assertion: `useMsg` falls back to the
 // English catalog outside a DictProvider (dict-provider.tsx), and this change
-// keeps every English value byte-identical to the literal it replaces (e2e
-// specs select "Recent edits", "Save point" and "Clear schedule…" by name). So
-// a render under the English fallback CANNOT tell a dictionary read from a
-// hardcoded literal — both emit the same bytes. Providing a stub dict whose
-// values are sentinels is what makes the difference observable: a literal
-// survives the locale switch, a `msg()` call does not.
+// keeps every English value byte-identical to the literal it replaces (four are
+// selected by name from e2e — see ANCHORS below). So a render under the English
+// fallback CANNOT tell a dictionary read from a hardcoded literal; both emit
+// the same bytes. Providing a stub dict whose values are sentinels is what
+// makes the difference observable: a literal survives the locale switch, a
+// `msg()` call does not.
+//
+// Expected values are read from `en/ui.json` itself rather than typed in here,
+// so a reworded value moves the test with it instead of leaving it asserting
+// yesterday's copy.
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { ReactElement } from "react";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
+import enUi from "@/dictionaries/en/ui.json";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
@@ -49,37 +59,69 @@ vi.mock("@/lib/client-v1", () => ({
 
 const { HistoryPanel } = await import("../history-panel");
 
-/** Every string this task moves into the dictionary, keyed the way the panel
- *  now asks for it. Values are sentinels: none of them is English, so any of
- *  them appearing in the markup proves the panel went through `msg()`. */
-const XX: Record<string, string> = {
-  "history.title": "HISTORY-TITLE-XX",
-  "history.freezeAll": "FREEZE-ALL-XX",
-  "history.recent.title": "RECENT-TITLE-XX",
-  "history.recent.empty": "RECENT-EMPTY-XX",
-  "history.savePoints.title": "SAVEPOINTS-TITLE-XX",
-  "history.savePoints.create": "SAVEPOINT-CREATE-XX",
-  "history.danger.title": "DANGER-TITLE-XX",
-  "history.danger.body": "DANGER-BODY-XX",
-  "history.danger.clear": "DANGER-CLEAR-XX",
-  "history.danger.frozen": "DANGER-FROZEN-XX",
-};
+const EN = enUi as unknown as Record<string, string>;
 
-/** The literals as they appear in the SHIPPED markup, anchored on `>`…`<`
- *  wherever the string is short enough to collide with an attribute value —
- *  "Save point" is also the `aria-label` of the input beside the button, and
- *  that aria-label is deliberately NOT part of this change. */
-const ENGLISH_LITERALS = [
-  ">History<",
-  "Freeze whole schedule",
-  ">Recent edits<",
-  "Nothing yet.",
-  ">Save points<",
-  ">Save point<",
-  ">Danger zone<",
-  "Clears timetable slots only",
-  "Clear schedule",
+/** Every key the panel renders with an EMPTY history list — the chrome, the
+ *  save-point form, the Danger zone. */
+const STATIC_KEYS = [
+  "history.aria",
+  "history.title",
+  "history.undo",
+  "history.redo",
+  "history.freezeAll",
+  "history.recent.title",
+  "history.recent.empty",
+  "history.savePoints.title",
+  "history.savePoints.placeholder",
+  "history.savePoints.labelAria",
+  "history.savePoints.create",
+  "history.danger.title",
+  "history.danger.body",
+  "history.danger.clear",
+  "history.danger.frozen",
+] as const;
+
+/** event type -> the key that names it. Keyed by the EVENT TYPE rather than the
+ *  English label, so rewording a label never orphans its key. */
+const EVENT_KEYS: ReadonlyArray<readonly [string, string]> = [
+  ["schedule_applied", "history.event.scheduleApplied"],
+  ["schedule_edited", "history.event.scheduleEdited"],
+  ["schedule_cleared", "history.event.scheduleCleared"],
+  ["schedule_restored", "history.event.scheduleRestored"],
+  ["fixtures_generated", "history.event.fixturesGenerated"],
+  ["fixtures_cleared", "history.event.fixturesCleared"],
+  ["pool_entrants_cleared", "history.event.poolEntrantsCleared"],
+  ["pool_entrants_restored", "history.event.poolEntrantsRestored"],
+  ["officials_assigned", "history.event.officialsAssigned"],
+  ["participants_imported", "history.event.participantsImported"],
+  ["schedule_published", "history.event.schedulePublished"],
+  ["division_started", "history.event.divisionStarted"],
 ];
+
+/** Sentinels derived FROM the key list, so the two can never drift apart. */
+const XX: Record<string, string> = Object.fromEntries(
+  [...STATIC_KEYS, ...EVENT_KEYS.map(([, k]) => k), "history.notUndoable"].map((k) => [
+    k,
+    `XX-${k}-XX`,
+  ]),
+);
+
+/** Where each static key lands in the markup. A bare substring would match an
+ *  attribute as happily as a text node ("Save point" is also the input's
+ *  aria-label), so every expectation is anchored on what actually surrounds it.
+ *  The arrow glyphs are part of the BUTTON, not of the dictionary value — see
+ *  the component for why — so they belong in the anchor, not the expected copy. */
+const ATTRIBUTE_OF: Record<string, string> = {
+  "history.aria": "aria-label",
+  "history.savePoints.placeholder": "placeholder",
+  "history.savePoints.labelAria": "aria-label",
+};
+const GLYPH_OF: Record<string, string> = {
+  "history.undo": "↩ ",
+  "history.redo": "↪ ",
+};
+const anchorFor = (key: string, value: string): string =>
+  ATTRIBUTE_OF[key] ? `${ATTRIBUTE_OF[key]}="${value}"` : `>${GLYPH_OF[key] ?? ""}${value}<`;
 
 /** No provider ⇒ `useMsg` falls back to the English catalog, which IS the
  *  production path for an English organiser. */
@@ -103,12 +145,29 @@ const sentinelMarkup = (scheduleLocked: boolean): string =>
 const tagOf = (html: string, testid: string): string =>
   html.match(new RegExp(`<[a-z]+[^>]*\\bdata-testid="${testid}"[^>]*>`))?.[0] ?? "";
 
+describe("HistoryPanel — the keys this panel asks for actually exist", () => {
+  // Every expectation below is DERIVED from en/ui.json. A missing key makes the
+  // expected value `undefined`, and `not.toContain(undefined)` passes on any
+  // input — two of the assertions in this file would go vacuously green. This
+  // is the guard that stops that, so it must come first.
+  it("has every key the panel renders in the English catalog", () => {
+    for (const key of [
+      ...STATIC_KEYS,
+      ...EVENT_KEYS.map(([, k]) => k),
+      "history.notUndoable",
+    ]) {
+      expect(EN, `${key} is missing from en/ui.json`).toHaveProperty(key);
+      expect(typeof EN[key], `${key} must be a string`).toBe("string");
+    }
+  });
+});
+
 describe("HistoryPanel — the Danger zone respects the schedule freeze", () => {
   it("disables the clear button and says why when the division is frozen", () => {
     const html = englishMarkup(true);
     expect(tagOf(html, "schedule-clear")).toContain('disabled=""');
     expect(tagOf(html, "schedule-clear-reason")).not.toBe("");
-    expect(html).toContain("The schedule is frozen.");
+    expect(html).toContain(EN["history.danger.frozen"]);
   });
 
   it("leaves the clear button live, with no reason note, when it is not frozen", () => {
@@ -127,30 +186,82 @@ describe("HistoryPanel — the Danger zone respects the schedule freeze", () => 
 });
 
 describe("HistoryPanel — every string in the panel comes from the dictionary", () => {
-  it("renders the active locale's copy, not English, for all nine strings", () => {
+  it("renders the active locale's copy, not English, for every static string", () => {
     const html = sentinelMarkup(true);
-    for (const [key, sentinel] of Object.entries(XX)) {
-      expect(html, `${key} must be read through msg()`).toContain(sentinel);
+    for (const key of STATIC_KEYS) {
+      expect(html, `${key} must be read through msg()`).toContain(anchorFor(key, XX[key]!));
     }
   });
 
-  it("emits none of the nine English literals once another locale is active", () => {
+  it("emits none of the English values once another locale is active", () => {
     const html = sentinelMarkup(true);
-    for (const literal of ENGLISH_LITERALS) {
-      expect(html, `hardcoded literal still shipping: ${literal}`).not.toContain(literal);
+    for (const key of STATIC_KEYS) {
+      expect(html, `hardcoded literal still shipping for ${key}`).not.toContain(
+        anchorFor(key, EN[key]!),
+      );
     }
   });
 
   it("still renders the exact English copy the e2e specs select by name", () => {
-    // The dictionary values are byte-identical to the literals they replace;
-    // open-scheduling.spec.ts and schedule-panels.spec.ts select "Save point"
-    // and "Recent edits" by accessible name, so a reworded English value is a
-    // silent e2e break.
-    const html = englishMarkup(false);
-    expect(html).toContain(">Recent edits<");
-    expect(html).toContain(">Save point<");
-    expect(html).toContain(">Danger zone<");
-    expect(html).toContain("Clear schedule");
+    // The dictionary values are byte-identical to the literals they replace.
+    // Four are load-bearing: schedule-panels.spec.ts selects "Recent edits" and
+    // the buttons named "↩ Undo"/"↪ Redo", open-scheduling.spec.ts selects the
+    // "Save point" button and the "Save point label" input, and mobile.spec.ts
+    // selects the input by its placeholder. A reworded English value is a
+    // silent e2e break, so every one of them is pinned to en/ui.json here.
+    const html = englishMarkup(true);
+    for (const key of STATIC_KEYS) {
+      expect(html, `${key}: the shipped English changed`).toContain(anchorFor(key, EN[key]!));
+    }
+  });
+});
+
+describe("HistoryPanel — the Recent edits list names events in the reader's language", () => {
+  /** One event per known type, the first of them not undoable. The panel slices
+   *  to 12 and there are exactly 12 types, so all of them render. */
+  const EVENTS = EVENT_KEYS.map(([type], i) => ({
+    seq: EVENT_KEYS.length - i,
+    type,
+    undoable: i !== 0,
+    undone: false,
+    created_at: "2026-09-03T10:00:00.000Z",
+  }));
+
+  async function renderWithEvents() {
+    apiV1.mockReset();
+    apiV1.mockImplementation(async (path: string) =>
+      path.endsWith("/history") ? { watermark: 1, seq: 12, events: EVENTS } : [],
+    );
+    const island = renderIsland(
+      (props: { divisionId: string; scheduleLocked: boolean; canEdit: boolean }) =>
+        HistoryPanel(props),
+      { divisionId: "d1", scheduleLocked: false, canEdit: true },
+    );
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+    return island;
+  }
+
+  it("resolves all twelve event types through the dictionary, never the raw type", async () => {
+    const text = (await renderWithEvents()).text();
+    for (const [type, key] of EVENT_KEYS) {
+      expect(text, `${type} must render ${key}`).toContain(EN[key]!);
+      expect(text, `${type} fell through to the raw event type`).not.toContain(type);
+    }
+    expect(text).toContain(EN["history.notUndoable"]!);
+  });
+
+  it("keeps no English event label as a literal in the component source", () => {
+    // The list above renders under the English fallback, so it cannot tell a
+    // dictionary read from a literal any more than the chrome could. Reading
+    // the source is what makes a reintroduced TYPE_LABELS map fail.
+    const src = readFileSync(join(process.cwd(), "src/components/v2/history-panel.tsx"), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/.*$/gm, "");
+    for (const [, key] of EVENT_KEYS) {
+      expect(src, `${key}'s English is still hardcoded`).not.toContain(EN[key]!);
+    }
+    expect(src, "the not-undoable note is still hardcoded").not.toContain(EN["history.notUndoable"]!);
   });
 });
 

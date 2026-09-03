@@ -11,6 +11,7 @@ import { UpgradeGate } from "@/components/upgrade-gate";
 import { useConfirm } from "@/components/ui/confirm-provider";
 import { Tip } from "@/components/ui/tip";
 import { useMsg } from "@/components/i18n/dict-provider";
+import type { MessageKey } from "@/lib/messages";
 
 interface HistoryRow {
   seq: number;
@@ -46,19 +47,23 @@ const CHECKPOINT_GROUPS = [
   { kind: "ai", headingKey: "history.checkpoint.groupAi", noteKey: "history.checkpoint.notCounted" },
 ] as const;
 
-const TYPE_LABELS: Record<string, string> = {
-  schedule_applied: "Schedule applied",
-  schedule_edited: "Fixture moved",
-  schedule_cleared: "Schedule cleared",
-  schedule_restored: "Schedule restored",
-  fixtures_generated: "Fixtures generated",
-  fixtures_cleared: "Fixtures removed",
-  pool_entrants_cleared: "Pool emptied",
-  pool_entrants_restored: "Pool restored",
-  officials_assigned: "Officials assigned",
-  participants_imported: "Participants imported",
-  schedule_published: "Schedule published",
-  division_started: "Division started",
+/** Event type -> the dictionary key that names it. Keyed by the event TYPE, not
+ *  by the English label, so rewording a label never orphans its key. These
+ *  render INSIDE the "Recent edits" list: left as literals they made a
+ *  translated heading sit above a list of English event names. */
+const TYPE_LABEL_KEYS: Record<string, MessageKey> = {
+  schedule_applied: "history.event.scheduleApplied",
+  schedule_edited: "history.event.scheduleEdited",
+  schedule_cleared: "history.event.scheduleCleared",
+  schedule_restored: "history.event.scheduleRestored",
+  fixtures_generated: "history.event.fixturesGenerated",
+  fixtures_cleared: "history.event.fixturesCleared",
+  pool_entrants_cleared: "history.event.poolEntrantsCleared",
+  pool_entrants_restored: "history.event.poolEntrantsRestored",
+  officials_assigned: "history.event.officialsAssigned",
+  participants_imported: "history.event.participantsImported",
+  schedule_published: "history.event.schedulePublished",
+  division_started: "history.event.divisionStarted",
 };
 
 export function HistoryPanel({
@@ -142,6 +147,14 @@ export function HistoryPanel({
     }
   }
 
+  /** The event's name in the reader's language, falling through to the raw type
+   *  for an event this build has no key for — the same fall-through the old
+   *  label map had, so a new server-side event type still reads as something. */
+  const eventLabel = (type: string): string => {
+    const key = TYPE_LABEL_KEYS[type];
+    return key ? msg(key) : type;
+  };
+
   const step = (direction: "undo" | "redo") =>
     run(() =>
       apiV1(`/api/v1/divisions/${divisionId}/${direction}`, {
@@ -151,7 +164,7 @@ export function HistoryPanel({
     );
 
   return (
-    <section className="mt-8 space-y-4" aria-label="Schedule history">
+    <section className="mt-8 space-y-4" aria-label={msg("history.aria")}>
       <div className="flex flex-wrap items-center gap-2">
         {/* Tip sits OUTSIDE the h2 — inside it would pollute the heading's
             accessible name ("History About: …"). */}
@@ -163,11 +176,18 @@ export function HistoryPanel({
         </div>
         {canEdit && (
           <>
+            {/* The arrow stays in the JSX, OUTSIDE the dictionary value: it is
+                decorative, identical in all four (LTR) locales, and part of the
+                accessible name schedule-panels.spec.ts selects on ("↩ Undo") —
+                a translator who dropped or reordered it would break that spec
+                with no way to see why. Interpolated into ONE template literal
+                rather than sitting beside the expression so the button renders
+                a single text node, exactly as it did before. */}
             <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => void step("undo")}>
-              ↩ Undo
+              {`↩ ${msg("history.undo")}`}
             </button>
             <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => void step("redo")}>
-              ↪ Redo
+              {`↪ ${msg("history.redo")}`}
             </button>
             <label className="ml-auto flex items-center gap-2 text-sm text-slate-600">
               <input
@@ -205,8 +225,10 @@ export function HistoryPanel({
                   className={`flex items-center gap-2 ${e.undone ? "text-slate-400 line-through" : "text-slate-700"}`}
                 >
                   <span className="font-mono text-xs text-slate-400">#{e.seq}</span>
-                  {TYPE_LABELS[e.type] ?? e.type}
-                  {!e.undoable && <span className="text-xs text-slate-400">(not undoable)</span>}
+                  {eventLabel(e.type)}
+                  {!e.undoable && (
+                    <span className="text-xs text-slate-400">{msg("history.notUndoable")}</span>
+                  )}
                   <time className="ml-auto text-xs text-slate-400">
                     {new Date(e.created_at).toLocaleTimeString()}
                   </time>
@@ -254,10 +276,10 @@ export function HistoryPanel({
                 // still checks for.
                 className="input min-h-11 py-1.5 text-xs"
                 data-testid="savepoint-label"
-                placeholder="e.g. before rain reshuffle"
+                placeholder={msg("history.savePoints.placeholder")}
                 value={label}
                 onChange={(e) => setLabel(e.target.value)}
-                aria-label="Save point label"
+                aria-label={msg("history.savePoints.labelAria")}
               />
               <button
                 type="submit"
