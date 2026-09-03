@@ -389,9 +389,11 @@ Four changes in one migration plus their code and copy. All owner-ruled 2026-09-
 **(0) The AI credit re-cut.** `ai.credits.monthly` pro **35 → 25**; `ai.credits.trial`
 pro **20 → 15**; the pass grant becomes M **25** (unchanged) / L **50 → 35**. Free stays
 **5** — the owner settled that separately: "AI Credit is fine, that's the selling point."
-Enterprise `ai.credits.monthly` stays 500 and enterprise `ai.credits.trial` stays 20,
-neither being mentioned in the ruling; flag if that asymmetry (enterprise trial now above
-Pro's) is unintended.
+**The trial cut is PRO ONLY** — owner confirmed 2026-09-03 when the asymmetry was put to
+them. Enterprise keeps `ai.credits.trial` 20 and `ai.credits.monthly` 500, deliberately.
+So enterprise's trial is larger than Pro's, which is intended and not a drift to "fix":
+enterprise is a staff-granted contact-us plan whose numbers are set per deal, not a rung
+a customer self-serves onto. Touch `plan_key = 'pro'` only.
 
 **This is rework of T5, not a fresh change.** T5 shipped the per-rung grant at 25/50 with
 copy in four locales, and L's number is quoted in: the seed's `event_pass_l` product
