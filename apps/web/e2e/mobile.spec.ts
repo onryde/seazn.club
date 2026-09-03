@@ -847,10 +847,26 @@ test("competition desk: the tool row is a phone composition below sm, not the de
   // reads like a product defect. The fold's copy of the label is deliberately
   // included in the row's own set, which is why the set is captured BEFORE
   // the fold is opened.
-  const rowControlSet = async () =>
-    (await toolRow.locator("a:visible, button:visible").allInnerTexts())
-      .map((x) => x.replace(/\s+/g, " ").trim())
-      .filter(Boolean);
+  //
+  // Ordered by GEOMETRY, never by DOM order. The phone stack is composed with
+  // CSS `order`, which moves what the reader sees and leaves the DOM where it
+  // was — so `allInnerTexts()` answers a question nobody asked. The first
+  // version of the index assertion below read the DOM and reported the upsell
+  // as leading the row when it renders last on screen; sorting by `y` is what
+  // makes "leads with" mean what it says.
+  const rowControlSet = async (): Promise<string[]> => {
+    const items = await toolRow.locator("a:visible, button:visible").all();
+    const withPos = await Promise.all(
+      items.map(async (el) => ({
+        text: ((await el.innerText()) || "").replace(/\s+/g, " ").trim(),
+        box: await el.boundingBox(),
+      })),
+    );
+    return withPos
+      .filter((i) => i.text && i.box)
+      .sort((a, b) => a.box!.y - b.box!.y || a.box!.x - b.box!.x)
+      .map((i) => i.text);
+  };
 
   // F5: the Now line, at EVERY width. The phone card used to drop it — the
   // one width where "a match is on right now" matters most was the only one
