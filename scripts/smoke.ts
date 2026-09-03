@@ -2309,7 +2309,8 @@ async function passGrantsSuite(): Promise<void> {
 
   // Per competition: a board division carrying real fixtures (realtime, the
   // branded export and the player card all read it) plus the ceiling probes.
-  const board: Record<"pass" | "plain", { divId: string; fixtureId: string }> = {} as never;
+  const board: Record<"pass" | "plain", { divId: string; fixtureId: string; stageId: string }> =
+    {} as never;
   for (const [key, comp] of [["pass", passComp], ["plain", plainComp]] as const) {
     const div = await mkDiv(comp.id, "Board");
     await v1(s, `/api/v1/divisions/${div.id}/entrants`, "POST", [
@@ -2323,7 +2324,7 @@ async function passGrantsSuite(): Promise<void> {
       await v1(s, `/api/v1/stages/${stage.id}/generate`, "POST"),
     ).fixtures;
     await v1(s, `/api/v1/divisions/${div.id}/start`, "POST");
-    board[key] = { divId: div.id, fixtureId: fixtures[0]!.id };
+    board[key] = { divId: div.id, fixtureId: fixtures[0]!.id, stageId: stage.id };
   }
 
   // === entrants.per_division.max — community 64, pass 128 (V319) ==========
@@ -2493,6 +2494,55 @@ async function passGrantsSuite(): Promise<void> {
   check(
     "pass grants/sponsors: the sibling refuses the same package (402 sponsors.monetize)",
     plainPackage.status === 402 && featureKey(plainPackage) === "sponsors.monetize",
+  );
+
+  // === officials.auto — community false, pass true (V391) =================
+  // Auto-officials became a pass grant in v18. All THREE gates are probed,
+  // because they resolve the competition by different routes: the two division
+  // gates read `divisions.competition_id`, and `/stages/{id}/officials/source`
+  // has to hop stages -> divisions first. A gate that forgot the competition
+  // id would 402 on the passed side — the org paid for a feature it is then
+  // refused — and one that resolved org-wide would 200 on the sibling.
+  const officialsAuto = async (divisionId: string) =>
+    v1(s, `/api/v1/divisions/${divisionId}/officials/auto`, "POST", {
+      policy: { roles: ["referee"] },
+    });
+  const officialsApply = async (divisionId: string) =>
+    v1(s, `/api/v1/divisions/${divisionId}/officials/apply`, "POST", { assignments: [] });
+  const officialsSource = async (stageId: string) =>
+    v1(s, `/api/v1/stages/${stageId}/officials/source`, "POST", {
+      sources: [{ kind: "rank", fromStage: stageId, take: [{ rank: 1 }] }],
+    });
+  const passAuto = await officialsAuto(board.pass.divId);
+  const plainAuto = await officialsAuto(board.plain.divId);
+  const passApply = await officialsApply(board.pass.divId);
+  const plainApply = await officialsApply(board.plain.divId);
+  const passSource = await officialsSource(board.pass.stageId);
+  const plainSource = await officialsSource(board.plain.stageId);
+  check(
+    "pass grants/officials: auto-assign runs on the passed competition (200, proposal returned)",
+    passAuto.status === 200 &&
+      Array.isArray(v1data<{ assignments: unknown[] }>(passAuto).assignments),
+  );
+  check(
+    "pass grants/officials: the sibling is refused auto-assign (402 officials.auto) — no leak",
+    plainAuto.status === 402 && featureKey(plainAuto) === "officials.auto",
+  );
+  check(
+    "pass grants/officials: apply runs on the passed competition (200)",
+    passApply.status === 200,
+  );
+  check(
+    "pass grants/officials: the sibling is refused apply (402 officials.auto)",
+    plainApply.status === 402 && featureKey(plainApply) === "officials.auto",
+  );
+  check(
+    "pass grants/officials: rank sourcing runs on the passed competition (200) — stage -> division -> competition",
+    passSource.status === 200,
+  );
+  check(
+    "pass grants/officials: the sibling is refused rank sourcing (402 officials.auto)",
+    plainSource.status === 402 && featureKey(plainSource) === "officials.auto",
   );
 
   // === registration.fee_percent — community 8, pass 5 =====================
