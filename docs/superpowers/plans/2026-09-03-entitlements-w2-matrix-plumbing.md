@@ -671,6 +671,40 @@ design doc — the doc is now the older decision.
 - The Free card bullets in all four locale dictionaries.
 - Sweep B's planned `freeClaimFaults` must not treat these as free keys.
 
+### T16 — disclose the fee at the point of consent (owner question, 2026-09-03)
+
+**We already disclose, but not where it counts, and the disclosure describes a model the
+code does not implement.**
+
+`content/help/registration/card-payments.md:23` — "Each payment settles to your connected
+Stripe account, **minus Stripe's processing fee and the platform fee for your plan**" —
+and `:34` — "**Stripe's processing fee is separate, set by Stripe, and taken whichever plan
+you're on.**"
+
+That is the ADDITIVE model. The code is not additive: destination charges with no
+`on_behalf_of` make Seazn merchant of record, so WE absorb Stripe's fee. The published help
+is therefore wrong in the club's favour today. **Making the fee additive implements what we
+already told organisers** — it is not a new cost imposed on them, which is the strongest
+argument for the change and should be recorded as such.
+
+**The gap:** `app/o/[orgSlug]/settings/connect/page.tsx` mentions no fee, no percentage and
+no terms. An organiser completes KYC and hands over bank details having seen nothing about
+what we take. Help is a different surface, reached by a link.
+
+Owed:
+- A one-line fee summary on the Connect page ABOVE the onboarding button, with the
+  percentage READ FROM THE ENTITLEMENT (`registration.fee_percent`) rather than hardcoded —
+  that number has moved twice in one day, and there are already four stale hardcoded fee
+  literals in help. Four locales, then `i18n:gen-keys`.
+- Update the two help articles quoting "1% on Pro Plus" for a deleted plan:
+  `registration/open-registration.md:19` and `getting-started/create-your-organisation.md:21`.
+  Both also need the NEW rates once the fee change lands.
+
+Counter-argument recorded: a fee shown at the connect step will cost some connect
+conversion. Accepted — an organiser discovering it at first payout is a support ticket and
+a trust problem, and the additive change increases what they bear, so that is exactly when
+it belongs in front of them.
+
 ### T9 — sweep and gates
 Delete the two dead e2e specs. Rerun the 34 files that assert against
 `plan_entitlements` and the 8 copy-truth importers (4 need a live DB). Unit, e2e,
