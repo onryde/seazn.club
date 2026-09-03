@@ -573,6 +573,44 @@ is community / enterprise / event_pass / event_pass_l / pro, `business` is long 
 `pro_plus` is deleted and `enterprise` added, the plan-key mirrors are converged onto one
 union, and the live catalogue is now pinned against design §2 by a test.
 
+### T15 — V394 part B: the three share loops become paid (owner ruling 2026-09-03)
+
+**This REVERSES four cells V391 set eight hours ago**, and reverses design §2's growth
+thesis. Recorded in full because a reader finding V391 and V394 disagreeing will otherwise
+assume one is a mistake.
+
+| key | Free | Pro | Pass M/L | note |
+|---|---|---|---|---|
+| `branding` (org logo) | true → **false** | true | true | pass rows exist |
+| `dashboard.player_profiles` | true → **false** | true | true | pass rows exist |
+| `embeds.enabled` | true → **false** | true | **no row → INSERT true** | see trap below |
+| `news.auto` | true → **false** | true | true | pass rows exist |
+
+**The trap:** `embeds.enabled` has NO pass rows today. Flip Free to false without inserting
+them and the Event Pass falls through to the community row and silently LOSES embeds — the
+resolver only overlays what a pass row explicitly grants. Insert `event_pass` and
+`event_pass_l` true in the same statement.
+
+`dashboard.branding` is UNCHANGED — the owner was offered flipping it to false on Pro and
+did not take it. So the badge (shown when `dashboard.branding` is false) now appears on
+Event Pass competitions only: Free can no longer publish at all, and Pro publishes with the
+badge removed. That is a deliberate narrowing of the badge's reach to one plan, not an
+oversight.
+
+The counter-argument was put and overruled: design §2 made these three free as acquisition
+loops ("Three share loops go free… Each one puts the badge in front of people who are not
+yet customers"), and `news.auto` was itself an earlier "owner asked" free cell. The owner
+chose value capture over the loop. Do not "restore" these to Free on the strength of the
+design doc — the doc is now the older decision.
+
+**Copy that this falsifies and must move WITH the rows** (the wave's standing rule):
+- Design §2's four cells, or `entitlements-v18-matrix.test.ts` reds — it parses that table.
+- Design §3's Free card, which sells "player profiles, embeds and auto-drafted posts
+  (badge on)", and the "Why this attracts more customers" section built on the three loops.
+- `lib/pricing-cards.ts`'s `FREE_FEATURES` array.
+- The Free card bullets in all four locale dictionaries.
+- Sweep B's planned `freeClaimFaults` must not treat these as free keys.
+
 ### T9 — sweep and gates
 Delete the two dead e2e specs. Rerun the 34 files that assert against
 `plan_entitlements` and the 8 copy-truth importers (4 need a live DB). Unit, e2e,
