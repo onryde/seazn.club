@@ -739,6 +739,36 @@ then `ERROR: fetch failed` aborted at check 165, so that is a FLOOR, not a green
 - `smoke.ts:4797`/`:4801` assert the free `news.auto` toggle and a digest 402 — now true
   again; will pass, but re-read them rather than assuming.
 
+### T18 — C4's fixture writes, and a stale comment found beside them
+
+**C4 (reviewer pass 1, re-verified OUTSTANDING in pass 2): eleven raw-SQL writes of
+`plan_key='pro_plus'` into a column with a live FK.** `scripts/smoke.ts:1998, 3438, 3694,
+11467, 11972, 12136, 12464`; `e2e/ai-architect.spec.ts:82`;
+`e2e/payments-hardening.spec.ts:955`; `e2e/schedule-panels.spec.ts:82, 119`. Plus
+`e2e/helpers.ts:443`'s union still admitting the key.
+
+A previous sweep repointed ~90 cases across 53 files and truthfully reported that — and
+still missed every one of these, because `setPlan` takes a `string`, so no typecheck can
+see them. **They fail only AFTER merge**, since e2e runs on push-to-main and never on a PR.
+That is the whole reason this is high priority despite looking like test cleanup.
+
+**A stale comment found while verifying a peer session's warning about the same file.**
+`helpers.ts:1066-1073` documents `splitOrgIntoOwnGroupSql` with: "a new org joins its
+creator's EXISTING group (lib/auth.ts createOrgForUser), so three orgs minted by one e2e
+user are three orgs on ONE bill". **That contradicts the function it cites.**
+`createOrgForUser` (`lib/auth.ts:303`) inserts a FRESH subscription inside its transaction
+and attaches the new org to it — its own race comment says "each minted an org + a
+Community group". The only writers that attach an org to an existing group are the explicit
+usecases at `billing-groups.ts:975` and `:1260`. Fix the comment while narrowing the union
+in the same file.
+
+**What IS true and matters for this task:** `setOrgPlanBySql` (`helpers.ts:441-449`) is
+GROUP-scoped — it resolves `requireGroupId` and updates `subscriptions where id = groupId`.
+So repointing a fixture's plan moves every org sharing that group. For e2e orgs minted
+through `createOrgForUser` that group holds exactly one org, so it is safe; it is only a
+hazard where a spec has deliberately joined orgs. Check each of the eleven for which shape
+it is before repointing.
+
 ### T9 — sweep and gates
 Delete the two dead e2e specs. Rerun the 34 files that assert against
 `plan_entitlements` and the 8 copy-truth importers (4 need a live DB). Unit, e2e,
