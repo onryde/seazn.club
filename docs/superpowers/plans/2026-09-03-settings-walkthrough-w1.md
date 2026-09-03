@@ -4,7 +4,7 @@
 
 **Goal:** Drive every control on `/admin/settings` and every legacy `/settings/*` redirect by hand, pinning what each opens at and what each route actually answers — and fix the two defects that reading already found.
 
-**Architecture:** One Playwright spec in the `walkthrough` project, plus one new SQL helper in `e2e/helpers.ts` so a test can become staff *without* becoming superadmin. The spec runs **sequentially within its file** (Playwright's default) because the platform fee is a single global row with no org scoping — the programme's one-org-per-test parallelism rule does not apply to a global singleton. Two component fixes ship with the tests that fail without them.
+**Architecture:** One Playwright spec in the `walkthrough` project, plus one new SQL helper in `e2e/helpers.ts` so a test can become staff *without* becoming superadmin. The spec pins itself to `test.describe.configure({ mode: "default" })` at file top level, because the platform fee is a single global row with no org scoping — the programme's one-org-per-test parallelism rule does not apply to a global singleton. **This is NOT Playwright's default here:** `playwright.config.ts:126` sets `fullyParallel: true`, only the `serial` (:172) and `gallery` (:273) projects override it, and the `walkthrough` project does not — so its tests within a file DO race, and CI runs that leg at `--workers=3`. `default` rather than `serial`: each test restores in its own `finally`, and serial would abort the file on the first red, hiding every later failure behind it. Two component fixes ship with the tests that fail without them.
 
 **Tech Stack:** Playwright, Next.js App Router, postgres.js, zod, Vitest.
 
