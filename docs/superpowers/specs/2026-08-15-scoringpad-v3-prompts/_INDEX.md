@@ -7051,7 +7051,10 @@ the durable record. Rebased three times onto main; last base `11343aa3f` (#699).
 
 1. **Attribution marker = "disabled-until-complete"** — required rows get an asterisk + microcopy; Confirm greyed with a one-line reason until satisfied.
 2. **Swap badge leads with the SHIRT NUMBER**, falling back to position (`lead = squadNumber ?? positionKey`). Numbers are unique per side and are what a scorer reads off the jersey; position-led badges left three forwards identical.
-3. **Mode indicator = a read-only CONTEXT-STRIP SLOT**, chassis-wide — the pattern badminton/tabletennis/volleyball already ship. NOT the `RecordingChip`, which expresses the fidelity BAND (a plan/entitlement concept) and is fully occupied. Band and mode are different concepts wearing similar words.
+3. **Mode indicator = a read-only CONTEXT-STRIP SLOT**, chassis-wide — the pattern badminton/tabletennis/volleyball already ship. NOT the `RecordingChip`. Band and mode are different concepts wearing similar words.
+   - **RATIONALE CORRECTED by entitlements W1 (2026-09-03) — the RULING is unchanged and is now better founded.** As written at the time, the reason was "the `RecordingChip` expresses the fidelity BAND (a plan/entitlement concept) and is fully occupied". Both halves are false on `main` once W1 lands: the chip carries NO entitlement meaning (the paywall, `fidelityTiers`, `fidelityEntitlements`, the lock glyph and the upsell branch are all deleted — scoring detail is free on every plan), and it is not "occupied" by a display value at all. It is now the scorer's own **band picker**: a 44px labelled control that opens a four-row sheet and CHANGES what the pad offers.
+   - The wiring this ruling sets is therefore MORE right, not less: the chip is a control the scorer taps to choose, while the mode is a fold fact locked by the innings' first event and cannot be chosen at all. Pairing a locked value inside a picker would have told a scorer they could change something they cannot. Governance between the two is settled and documented — **mode governs absolutely, the band never overrides it** (`applyDelivery`'s `if (fine === null) invalid(...)` refusal in `cricket.ts`; grep the symbol, the line moves per branch).
+   - Full W1 record, including what the chip now means: `docs/superpowers/specs/2026-09-02-entitlements-v18-prompts/_INDEX.md`.
 4. **Cricket shot-type chip = DEFERRED with a named owner.** `CricketBall` is a `z.strictObject`, so the field is recorded surface (golden + conformance) — and **nothing reads shot type today**, so it would land as a seventh inert seam in the wave whose job is closing them. It ships with its consumer.
 5. **#675 = AMENDABLE** — tapping the existing "Partial" badge reopens that event's dock; the detail APPENDS as a follow-up event so the ledger stays append-only. Void-and-rescore was rejected: voiding a correct event to fix one missing name risks losing it under time pressure.
 6. **#676 = closed as mis-diagnosed** (see FP-R8-5), fixing only the re-flow by reserving the slot width.
@@ -7077,6 +7080,26 @@ the durable record. Rebased three times onto main; last base `11343aa3f` (#699).
 ### Register audit (`register-audit.md`, re-pinned at `4dde91fff`)
 
 19 rows: **17 verified CLOSED**, D-5 closed-with-residual, D-7 open under R9's name.
+
+**D-7 CLOSED 2026-09-03 by entitlements W1 (= R9, branch `feat/entitlements-w1-scoring-free`).**
+D-7 was "raw fidelity picker + unexplained 🔒". R1 closed the *explanation*
+half by wording the lock; W1 closes the row by removing the thing being
+explained. What actually shipped, so a later session can check rather than
+take this on trust:
+- The 🔒 is gone because the LOCK is gone. `SportModule.fidelityTiers`,
+  `FidelityTier` and `PadSpec.fidelityEntitlements` are deleted from the
+  engine; `scoreEvent` and the batch importer no longer refuse an event for
+  its band; migration `V390__scoring_free.sql` deletes the matching
+  `plan_entitlements` rows. Grep those symbols: every surviving hit is a
+  comment recording the deletion.
+- The picker is no longer "raw". It is Option B, owner-approved: a 44px
+  labelled pill (`recording-chip.tsx`) opening a four-row radiogroup sheet —
+  a BOTTOM sheet on a phone, a centred card from `sm` up — each row carrying
+  its band label and a DERIVED count of the controls that band puts on the
+  pad. No plan name, no `featurePlan`/`planLabel` import, and a test that
+  reds if that vocabulary returns.
+- The racquet skins' locked tile (the last surviving 🔒 on a converted sport)
+  is deleted rather than reworded, which is the defect's real end.
 Register acceptance MET. Two structural findings:
 - **The design-of-record §8 was never corrected** — untouched since R2 while this index accumulated corrections for D-2/3/8/9/11/13/16/17, so a session told to "argue from the design of record" gets **7 of 19 rows wrong**. Amend §8, or add an as-closed §8.2.
 - **D-5's event-copy gate is football-only by design** (`scoring-vocab.test.ts:397-412`), so R8's "verify it reds on a missing `pad.<sport>.ribbon` key" currently holds for 1 sport of 11.
