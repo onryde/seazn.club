@@ -206,7 +206,7 @@ Rationale is one line per changed row; unchanged rows say "keep".
 | key | Free | Pro | Pass M | Pass L | Ent | why |
 |---|---|---|---|---|---|---|
 | `branding` (org logo) | T | T | T | T | T | keep. An early W2 T15 draft flipped this to F on Free and the owner WITHDREW it: a free club uploads its own logo. What is sold is the removal of OUR badge — see `dashboard.branding` below |
-| `dashboard.branding` (badge off) | F | T | F | F | T | D7, never moves |
+| `dashboard.branding` (badge off) | F | **F** | F | F | T | W2 T15, owner ruling 2026-09-03: **the badge is SHOWN on every plan except enterprise.** This cell's old note read "D7, never moves" — it has now moved, deliberately, and that note is the older decision. Badge removal becomes an ENTERPRISE-only feature, which is where R3 already puts white label. Every self-serve plan carries our badge, Pro included: the acquisition loop the three share loops used to carry now runs through public dashboards instead |
 | `exports` | T | T | T | T | T | keep |
 | `exports.branded` | F | T | T | T | T | keep |
 | `logos.bulk` | F | T | – | – | T | keep (convenience) |

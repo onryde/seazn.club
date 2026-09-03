@@ -75,3 +75,29 @@ insert into plan_entitlements (plan_key, feature_key, bool_value)
 values ('event_pass',   'embeds.enabled', true),
        ('event_pass_l', 'embeds.enabled', true)
 on conflict (plan_key, feature_key) do update set bool_value = true;
+
+-- ---------------------------------------------------------------------------
+-- Step 3 (T15): the badge is SHOWN on every plan except enterprise.
+--
+-- `dashboard.branding` is INVERTED: true means the badge is REMOVED. So this
+-- one UPDATE takes badge removal off Pro and leaves it enterprise-only, which
+-- is where R3 already puts white label ("White label, custom domain, write
+-- API, priority support -> Contact Us"). Final cells: community false, pro
+-- false, event_pass false, event_pass_l false, enterprise true.
+--
+-- THIS OVERTURNS DESIGN §2's OWN NOTE ON THIS CELL, "D7, never moves".
+-- Recorded here rather than argued in a commit message, because a reader who
+-- finds that note is one edit away from reverting this: the note is the older
+-- decision, the owner moved the cell deliberately on 2026-09-03, and the
+-- design table has been amended in the same commit.
+--
+-- An intermediate ruling the same day set the two pass rungs TRUE. It was
+-- never built, so there is nothing to revert — but note that this statement
+-- also moves PRO, which no earlier draft did.
+--
+-- Net effect: every self-serve plan carries our badge, Pro included. The
+-- acquisition loop survives step 2's share-loop reversal after all; it just
+-- runs through public dashboards now instead of profiles, embeds and posts.
+update plan_entitlements
+   set bool_value = false
+ where plan_key = 'pro' and feature_key = 'dashboard.branding';
