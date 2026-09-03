@@ -740,7 +740,12 @@ test("competition desk: the division row is a CARD below md and a grid at md, no
   // meaningless if the red row is not actually red.
   await expect(redRow).toHaveAttribute("data-phase", "setting_up");
   await expect(cleanRow).toHaveAttribute("data-phase", "scheduled");
-  await expect(redRow.locator('[data-pill="needs_draw"]:visible').first()).toBeVisible();
+  // M1 (fix round I, instance TWELVE): this shape — a setup-timing Finals
+  // whose TBD bracket was never generated — used to read "Needs draw" and
+  // offer "Compute proposal", a button the landing page cannot operate until
+  // the bracket exists. It is `needs_fixtures` now; the ruling this test
+  // exists for (the CONTROL SET, not the words) is untouched.
+  await expect(redRow.locator('[data-pill="needs_fixtures"]:visible').first()).toBeVisible();
   await expect(page.getByTestId("desk-needs-you")).toBeVisible();
   await expect(page.getByTestId("desk-masthead-pill")).toBeVisible();
   await expectNoHorizontalScroll(page);
@@ -750,7 +755,7 @@ test("competition desk: the division row is a CARD below md and a grid at md, no
   // "⋯" menu — three, on EVERY row.
   const openLink = (row: typeof redRow) => row.getByRole("link", { name: "Open", exact: true });
   const menuButton = (row: typeof redRow) => row.getByRole("button", { name: /^Actions/ });
-  const action = redRow.getByRole("link", { name: "Compute proposal" });
+  const action = redRow.getByRole("link", { name: "Open fixtures" });
 
   if (isCardWidth) {
     await expect(redRow.locator("a:visible, button:visible")).toHaveCount(2);
@@ -786,7 +791,7 @@ test("competition desk: the division row is a CARD below md and a grid at md, no
       },
       [box!.x + box!.width / 2, box!.y + box!.height / 2],
     );
-    expect(hit, "the action's own centre must hit the action, not an overlay").toContain("Compute proposal");
+    expect(hit, "the action's own centre must hit the action, not an overlay").toContain("Open fixtures");
   } else {
     await expect(redRow.locator("a:visible, button:visible")).toHaveCount(3);
     await expect(cleanRow.locator("a:visible, button:visible")).toHaveCount(3);

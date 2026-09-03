@@ -301,6 +301,25 @@ export async function getCompetitionDesk(
         // stage with no progression at all names no sources, and
         // `[].every(...)` is vacuously true, so it is filtered out by
         // `timing` above rather than by a second reading of the JSON.
+        //
+        // KNOWN, UNDERSTOOD MUTATION SURVIVOR: replacing this whole
+        // expression with `true` leaves the desk suite green, and no
+        // reachable state distinguishes the two. `needs_draw` is only ever
+        // raised for `open[0]` (a LATER open stage additionally needs
+        // `noLive`, and its own generated TBD fixtures are `scheduled`, i.e.
+        // live, so that arm is unreachable) — and `open[0]` being the lowest
+        // OPEN stage means every lower-seq stage is already `complete`,
+        // which is exactly what `seedingSourceReady` asks, since a source
+        // must be an earlier stage of the same division
+        // (`resolveSeedingSourceStage`). So the gate is implied here by
+        // `openStages`. It is kept rather than deleted — unlike the two
+        // conjuncts `stageOwesDraw` shed for the same reason — because it is
+        // the sixth review's own ruling, because `stageOwesDraw` is reached
+        // by `d/[divSlug]/page.tsx` too, and because the implication rests
+        // on the ORDER of two other rules, which is precisely the kind of
+        // coupling this wave keeps breaking. It IS killable one layer down,
+        // where a caller can construct the combination directly:
+        // division-phase.test.ts's "a source stage is not complete" row.
         sourceReady:
           x.timing === "setup" && x.progression !== null
             ? seedingSourceReady(

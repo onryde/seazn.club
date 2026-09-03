@@ -164,8 +164,18 @@ test("an organiser watches the desk go Setting up → Scheduled → Match day �
   await expect(row.locator('[data-pill="no_scorer"]:visible')).toBeVisible();
   await expect(page.locator('[data-phase="in_play"]').first()).toContainText("1 in play");
   await shot("05-no-scorer");
-  await needs.getByRole("link", { name: "Assign scorer" }).click();
+  // M2 (fix round I): the action used to read "Assign scorer" — a control
+  // that exists nowhere in the product (`createAssignment` has no production
+  // caller; `scorer_assignments` is written only by accepting a scoped
+  // invite, which no UI creates). It now asks for the thing that IS on the
+  // console it lands on: the pad.
+  await needs.getByRole("link", { name: "Open scoring" }).click();
   await expect(page).toHaveURL(new RegExp(`/f/${fixtures[0]!.fixture_no}$`));
+  // `toHaveURL` alone is the shape that could not see instances 9 to 12 —
+  // it proves the address, never the screen. `competition-desk-actions.spec.ts`
+  // sweeps all six labels to their controls; this one line keeps the
+  // walkthrough honest about the step it just took.
+  await expect(page.locator('[data-role="console-scoring"]')).toBeVisible();
 
   // 6. Reach: every result in, stage complete (API + SQL). Read: Finished, nothing needs the organiser.
   await setFixtureStatusSql(ids[0]!, "scheduled");

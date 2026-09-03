@@ -279,26 +279,37 @@ function stageOwesWork(s: PhaseStage, fixtures: readonly PhaseFixture[]): boolea
  *
  * The four conjuncts are the union of the panel's own visibility gate and
  * the API's own preconditions, each one traceable to a line that refuses:
- *   - `status !== "complete"`     — a finished stage owes nothing. NOT
- *                                   `=== "pending"`, which K3 used and which
- *                                   is unreachable here: generating a
- *                                   stage's TBD bracket moves it to
- *                                   `active`, so the very act this row asks
- *                                   for takes the stage out of `pending`
- *                                   (read off a live division at 11:39Z:
- *                                   Finals seq 2, status `active`, timing
- *                                   `setup`, 3 fixtures, 0 filled);
- *   - `timing === "setup"`        — `on_complete` stages auto-seed and never
- *                                   go through propose/confirm (Decision 3);
- *   - `hasFixtures` + a `tbd` one — `computeSeedProposal`'s
- *                                   `destinationSlotsBySeed` 422 above, and
- *                                   the "already drawn" case: confirming
- *                                   FILLS every slot, so a drawn bracket has
- *                                   no `tbd` fixture left;
- *   - `sourceReady`               — `progression-panel.tsx:304`
- *                                   (`if (!sourceReady) return null`) and
- *                                   `sourcesToTables`' 409
- *                                   SEEDING_SOURCE_INCOMPLETE.
+ *   - `timing === "setup"`   — `on_complete` stages auto-seed and never go
+ *                              through propose/confirm (Decision 3);
+ *   - `sourceReady`          — `progression-panel.tsx:304`
+ *                              (`if (!sourceReady) return null`) and
+ *                              `sourcesToTables`' 409
+ *                              SEEDING_SOURCE_INCOMPLETE;
+ *   - a `tbd` fixture OF THIS STAGE — `computeSeedProposal`'s
+ *                              `destinationSlotsBySeed` 422 above (no
+ *                              generated bracket, nothing to resolve
+ *                              against), AND the "already drawn" case, since
+ *                              confirming FILLS every slot and a drawn
+ *                              bracket has no `tbd` fixture left.
+ *
+ * PRECONDITION: the stage is OPEN. Every caller reaches this through
+ * `openStages`, which is the ONE place "not complete" is decided, so the
+ * function is module-private and does not restate it. Two conjuncts that
+ * looked load-bearing were removed for the same reason after a mutation
+ * sweep proved neither could die on its own: `status !== "complete"` (the
+ * caller's filter already guarantees it) and `hasFixtures` (a stage with no
+ * fixtures has no `tbd` fixture either, so the last term subsumes it). A
+ * term the caller already guarantees is not a guard, it is a second
+ * authority — this wave's own recurring defect — and this file's own history
+ * carries the same shape: the predicate this one replaces made
+ * `stageOwesWork`'s `|| needsProposal` disjunct dead, because
+ * `needsProposal` implied `!hasFixtures`.
+ *
+ * NOT keyed on `status === "pending"`, which K3 used and which is
+ * unreachable here: generating a stage's TBD bracket moves it to `active`,
+ * so the very act this row asks for takes the stage out of `pending` (read
+ * off a live division at 11:39Z on 2026-09-03: Finals seq 2, status
+ * `active`, timing `setup`, 3 fixtures, 0 filled).
  *
  * Everything it excludes falls through to `needs_fixtures`, whose two doors
  * ("Complete stage", "Generate fixtures") are on that same screen — the
@@ -313,11 +324,9 @@ function stageOwesWork(s: PhaseStage, fixtures: readonly PhaseFixture[]): boolea
  * viewer-gated read. Two authorities disagreeing about one division is this
  * wave's other recurring defect.
  */
-export function stageOwesDraw(stage: PhaseStage, fixtures: readonly PhaseFixture[]): boolean {
+function stageOwesDraw(stage: PhaseStage, fixtures: readonly PhaseFixture[]): boolean {
   return (
-    stage.status !== "complete" &&
     stage.timing === "setup" &&
-    stage.hasFixtures &&
     stage.sourceReady &&
     fixtures.some((f) => f.stageId === stage.id && f.tbd)
   );
@@ -477,7 +486,7 @@ export function resolveAttention(input: PhaseInput): Attention[] {
   );
   // M1 (fix round I, Critical — instance TWELVE): `needs_draw` is raised
   // only when the panel's draw door is BOTH rendered and operable — see
-  // `stageOwesDraw` above for the four conjuncts and the live click that
+  // `stageOwesDraw` above for its three terms and the live click that
   // disproved the sixth review's control run. `door` names which of the
   // panel's three buttons is on screen, so the row can print that button's
   // own dictionary key rather than a hand-copied name.

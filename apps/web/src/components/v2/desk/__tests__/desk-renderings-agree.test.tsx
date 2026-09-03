@@ -3,11 +3,12 @@ import { renderToStaticMarkup } from "react-dom/server";
 import en from "@/dictionaries/en/ui.json";
 import { PhasePill } from "@/components/v2/desk/phase-pill";
 import { needsYouItems } from "@/components/v2/desk/needs-you";
+import { ProgressionPanel, type SeedProposal } from "@/components/v2/progression-panel";
 import { StagesPanel } from "@/components/v2/stages-panel";
 import { statusLine } from "@/lib/division-status-line";
 import {
-  ATTENTION_SEVERITY, DIVISION_PHASES, hasPlayedFixture, resolveAttention, resolvePhase,
-  type Attention, type DivisionPhase, type PhaseFixture, type PhaseInput, type PhaseStage,
+  ATTENTION_SEVERITY, DIVISION_PHASES, DRAW_DOORS, hasPlayedFixture, resolveAttention, resolvePhase,
+  type Attention, type DivisionPhase, type DrawDoor, type PhaseFixture, type PhaseInput, type PhaseStage,
 } from "@/lib/division-phase";
 import { competitionPhase, type CompetitionDesk, type DeskDivision } from "@/server/usecases/competition-desk";
 
@@ -343,5 +344,57 @@ describe("enumeration 2: the five renderings agree on every reachable phase/atte
       // own gate: it must never appear beside a played fixture.
       if (r.played > 0) expect(shown).toBe(false);
     });
+  });
+});
+
+/**
+ * M1 (fix round I): the `needs_draw` row's action must name a button the
+ * PANEL IS ACTUALLY SHOWING — the whole reason the label renders the panel's
+ * own dictionary key instead of a copy of its words.
+ *
+ * Not a tautology: the expected string is not read from `DRAW_DOOR_KEY` but
+ * extracted from a REAL `ProgressionPanel` rendered in the matching state, so
+ * it dies if either side moves — the map, the panel's copy, or the panel's
+ * branch structure. Mutating `DRAW_DOOR_KEY.confirm` to `computeCta` left the
+ * whole 256-test desk suite green before this existed.
+ */
+const PANEL_QUALIFIERS = {
+  qualifiers: [
+    { rank: 1, source: { stageId: "grp", group: "A", rank: 1 }, entrantId: "e1", destinationSlot: "f1:home" },
+    { rank: 2, source: { stageId: "grp", group: "B", rank: 1 }, entrantId: "e2", destinationSlot: "f1:away" },
+  ],
+  ties: [],
+  standingsHash: "h1",
+};
+const PANEL_PROPOSAL: Record<DrawDoor, SeedProposal | null> = {
+  compute: null,
+  confirm: { id: "p1", stageId: "ko1", status: "draft", computed: PANEL_QUALIFIERS },
+  recompute: { id: "p1", stageId: "ko1", status: "stale", computed: PANEL_QUALIFIERS },
+};
+
+describe("the needs_draw action names a button the seed-proposal panel is showing", () => {
+  it.each(DRAW_DOORS)("%s", (door) => {
+    const desk: DeskDivision = {
+      phase: "setting_up", attention: [{ kind: "needs_draw", stageName: "Finals", door }],
+      played: 6, total: 6, unscheduled: 0, in_play: 0, entrants: 4, next: null,
+      needs_draw_stage: { name: "Finals" }, fixture_names: {}, display_tz: TZ,
+    };
+    const items = needsYouItems(en, { in_play: 0, divisions: new Map([["d1", desk]]), now: NOW },
+      [{ id: "d1", name: "Premier", slug: "premier" }], "org", "comp", "en");
+    const label = items.find((i) => i.kind === "needs_draw")?.action.label;
+    expect(label, `no needs_draw row for the ${door} door`).toBeTruthy();
+
+    const html = renderToStaticMarkup(
+      <ProgressionPanel stageId="ko1" stageName="Finals" proposal={PANEL_PROPOSAL[door]} sourceReady
+        fixtures={[{ id: "f1", home_slot_label: { key: "slot.winner_group", params: { g: "A" } },
+                     away_slot_label: { key: "slot.winner_group", params: { g: "B" } } }]}
+        entrantNames={{ e1: "Alice", e2: "Bob" }} stageNames={{ grp: "Groups" }} locale="en" canEdit />,
+    );
+    const buttons = [...html.matchAll(/<button[^>]*>([\s\S]*?)<\/button>/g)]
+      .map((m) => m[1]!.replace(/<[^>]*>/g, "").trim())
+      .filter(Boolean);
+    expect(buttons.length, `the ${door} panel state renders no button at all`).toBeGreaterThan(0);
+    expect(buttons, `the desk offers "${label}" but the panel's ${door} state shows ${JSON.stringify(buttons)}`)
+      .toContain(label);
   });
 });

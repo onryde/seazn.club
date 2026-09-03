@@ -338,11 +338,15 @@ describe("resolvePhase — rule order", () => {
 });
 
 describe("resolveAttention", () => {
-  // M1 (fix round I, Critical — instance TWELVE). Each of the four conjuncts
-  // of `stageOwesDraw` is mutated on its own below: drop any one and the row
-  // must become `needs_fixtures` (or nothing), because in that state the
-  // panel's draw button is either absent or, as the live click at 11:39Z on
-  // 2026-09-03 showed, present and inoperable.
+  // M1 (fix round I, Critical — instance TWELVE). Each condition that decides
+  // whether the panel's draw door is BOTH rendered and operable is broken on
+  // its own below — the three terms of `stageOwesDraw`, plus the two the
+  // CALLER contributes (`openStages`' "not complete", and having any fixtures
+  // at all). Break any one and the row must become `needs_fixtures` or
+  // nothing, because in that state the draw button is either absent or, as
+  // the live click at 11:39Z on 2026-09-03 showed, present and inoperable.
+  // The last two are the caller's because a mutation sweep proved they could
+  // not die inside the predicate: see `stageOwesDraw`'s own note.
   it("needs_draw ONLY when the panel's draw door is both rendered and operable", () => {
     const stages = [drawable()];
     const fixtures = [tbdFx("fin")];
@@ -360,6 +364,8 @@ describe("resolveAttention", () => {
       { st: { sourceReady: false }, fx: [tbdFx("fin")] }, undefined],
     ["the stage auto-seeds instead (timing on_complete never goes through propose/confirm)",
       { st: { timing: "on_complete" }, fx: [tbdFx("fin")] }, undefined],
+    // `openStages` (the caller) owns this one — the predicate itself does not
+    // restate it, and this case is what proves the filter is doing the work.
     ["the stage is complete",
       { st: { status: "complete" }, fx: [tbdFx("fin")] }, undefined],
   ])("needs_draw is NOT raised when %s", (_why, shape, becomes) => {
