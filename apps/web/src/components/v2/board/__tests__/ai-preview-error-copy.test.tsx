@@ -182,7 +182,10 @@ describe("BriefStep — a failed compile is spoken, not swallowed", () => {
     // console, not a second one written for the preview.
     expect(html).toContain(t("board.ai.error.outOfCreditsTitle"));
     expect(html).toContain(t("board.ai.error.outOfCredits"));
-    expect(html).toContain('data-upgrade="pro_plus"');
+    // `pro`, not `pro_plus`: V392 deleted that plan from `plans`, so the CTA
+    // pointed at a tier nobody can buy. The credit-pack button beside it is
+    // the recovery a Pro org is offered — it is rendered first, for every org.
+    expect(html).toContain('data-upgrade="pro"');
     // The plain red line is the alternative branch, never both.
     expect(html).not.toContain(t("board.ai.preview.error.label"));
   });

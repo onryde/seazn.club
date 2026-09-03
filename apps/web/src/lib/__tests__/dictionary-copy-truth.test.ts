@@ -322,6 +322,25 @@ const HALF_CLAIM_VALUES: LocalisedValue[] = [
  * tarifa base", so the retired form has to carry enough context ("adicional a
  * mitad…") to tell the two apart.
  */
+// The three plan-ATTRIBUTION patterns `freeClaimFaults` reads (W2). They live
+// in copy-truth's exports, so `inertPatternFaults` demands a fixture for each
+// — and `ENTERPRISE_ATTRIBUTION` had none on the run it was added, which is
+// the corpus doing exactly its job: a pattern nobody exercises makes every
+// assertion resting on it report clean.
+const ATTRIBUTION_POSITIVES = [
+  // PRO_ATTRIBUTION
+  "Custom tiebreaker order is a Pro feature.",
+  "this needs a Pro plan",
+  "upgrade to Pro",
+  // ENTERPRISE_ATTRIBUTION — both arms, because the second ("needs an
+  // Enterprise plan") is the one no shipped sentence uses today.
+  "Write access via the API is an Enterprise feature",
+  "this needs an Enterprise plan",
+  // FREE_ATTRIBUTION
+  "your own club logo works on every plan",
+  "free for everyone",
+];
+
 const RETIRED_CLAIMS = [
   // en
   "for its lifetime",
@@ -588,6 +607,7 @@ const ADVERSARIAL: Record<DictionaryLocale, string[]> = {
  * directions: an unused fixture is a fault too.
  */
 const KNOWN_POSITIVES: string[] = [
+  ...ATTRIBUTION_POSITIVES,
   ...Object.values(REWORDINGS).flat(),
   ...Object.values(ADVERSARIAL).flat(),
   ...Object.values(BOUNDED),
