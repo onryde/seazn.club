@@ -21,7 +21,7 @@ const stage = (o: Partial<PhaseStage> = {}): PhaseStage => ({
   timing: null, sourceReady: false, proposal: "none", ...o,
 });
 const fx = (o: Partial<PhaseFixture> = {}): PhaseFixture => ({
-  id: "f1", status: "scheduled", scheduledAt: "2026-09-12T09:00:00Z", eventCount: 0, matchMinutes: 90,
+  id: "f1", status: "scheduled", scheduledAt: "2026-09-12T09:00:00Z", startedAt: null, eventCount: 0, matchMinutes: 90,
   hasScorer: false, stageId: "st1", tbd: false, ...o,
 });
 /**
@@ -513,6 +513,31 @@ describe("resolveAttention", () => {
       kind: "no_scorer", count: 1, fixtureIds: ["p"], minutesSinceKickoff: null,
     });
   });
+  // Review 7, Important 4: `stageOwesDraw`'s `f.stageId === stage.id` had no
+  // test at any layer — a mutant dropping it survived 246/246. It is
+  // load-bearing, not cosmetic: `tbd` is derived from a missing entrant, and a
+  // BYE in an earlier stage is exactly that. Without the scoping, any division
+  // whose league contains a bye would raise red "Needs draw · Compute
+  // proposal" for an ungenerated Finals — instance TWELVE, regenerated, and
+  // pointing at a panel button that cannot be operated.
+  it("needs_draw is scoped to its OWN stage: a bye in an earlier stage does not draw the finals", () => {
+    const stages = [
+      // Complete, and nothing of its own still live — otherwise a LATER stage
+      // is deliberately not reported at all and the case proves nothing.
+      stage({ id: "lg", name: "League", seq: 1, status: "complete", hasFixtures: true }),
+      // Its bracket was never generated, so this stage owes FIXTURES, not a
+      // draw — whatever tbd fixtures exist elsewhere in the division.
+      drawable({ id: "fin", name: "Finals", hasFixtures: false }),
+    ];
+    const fixtures = [
+      // The bye: a played league fixture that never had a second side.
+      fx({ id: "bye", stageId: "lg", status: "decided", tbd: true, scheduledAt: null }),
+    ];
+    const kinds = resolveAttention(input({ stages, fixtures })).map((a) => a.kind);
+    expect(kinds, "a bye in the league must not be read as the finals' bracket").toContain("needs_fixtures");
+    expect(kinds).not.toContain("needs_draw");
+  });
+
   // ── F3 (round J): `not_recording` — the assigned-but-silent scorer ──────
   //
   // Every boundary below is DERIVED from NOT_RECORDING_GRACE_MINUTES. A `15`
@@ -521,9 +546,13 @@ describe("resolveAttention", () => {
   // side of the boundary is what makes the constant itself load-bearing:
   // widening or narrowing the grace kills exactly one of them.
   const minutesAgo = (m: number) => new Date(Date.parse(NOW) - m * 60_000).toISOString();
+  // The clock is `startedAt` (core.start's own recorded_at), NOT `scheduledAt`
+  // — review 7, Minor 8b. `scheduledAt` is deliberately set to something quite
+  // different here so any case that silently falls back to it fails loudly
+  // rather than agreeing by coincidence.
   const silent = (o: Partial<PhaseFixture> = {}): PhaseFixture =>
     fx({ id: "s", status: "in_play", eventCount: 0, hasScorer: true,
-         scheduledAt: minutesAgo(NOT_RECORDING_GRACE_MINUTES), ...o });
+         scheduledAt: minutesAgo(600), startedAt: minutesAgo(NOT_RECORDING_GRACE_MINUTES), ...o });
 
   it("not_recording: the grace is fifteen minutes — the shipped value, not just whatever the constant says", () => {
     // Every other case here DERIVES its boundary from the constant, which is
@@ -538,7 +567,7 @@ describe("resolveAttention", () => {
     // Stated in absolute terms on purpose — the customer fact is "the desk
     // does not nag five minutes after kick-off", and it must stay true
     // however the constant is expressed.
-    const fixtures = [silent({ scheduledAt: minutesAgo(5) })];
+    const fixtures = [silent({ startedAt: minutesAgo(5) })];
     expect(resolveAttention(input({ fixtures })).map((a) => a.kind)).toEqual([]);
   });
   it("not_recording: raised at exactly the grace, with the elapsed minutes it claims", () => {
@@ -548,7 +577,7 @@ describe("resolveAttention", () => {
     });
   });
   it("not_recording: NOT raised one minute inside the grace — a slow start is not a defect", () => {
-    const fixtures = [silent({ scheduledAt: minutesAgo(NOT_RECORDING_GRACE_MINUTES - 1) })];
+    const fixtures = [silent({ startedAt: minutesAgo(NOT_RECORDING_GRACE_MINUTES - 1) })];
     // And nothing else takes its place: the fixture is silent but excused,
     // so the organiser sees no row at all rather than a differently-worded one.
     expect(resolveAttention(input({ fixtures })).map((a) => a.kind)).toEqual([]);
@@ -556,10 +585,27 @@ describe("resolveAttention", () => {
   it("not_recording: an unknown elapsed time raises NOTHING, never a synthesised zero", () => {
     // Three ways the clock can be unstatable. None of them may produce a row
     // claiming recording is late — the claim needs a number to stand on.
-    for (const scheduledAt of [null, "not-a-date", minutesAgo(-30)]) {
-      const kinds = resolveAttention(input({ fixtures: [silent({ scheduledAt })] })).map((a) => a.kind);
-      expect(kinds, `scheduledAt=${String(scheduledAt)}`).not.toContain("not_recording");
+    for (const startedAt of [null, "not-a-date", minutesAgo(-30)]) {
+      // `scheduledAt` is nulled too: with a fallback in the derivation, leaving
+      // a usable scheduled time here would let the row fire off the PLAN and
+      // this case would pass while proving nothing.
+      const fixtures = [silent({ startedAt, scheduledAt: null })];
+      const kinds = resolveAttention(input({ fixtures })).map((a) => a.kind);
+      expect(kinds, `startedAt=${String(startedAt)}`).not.toContain("not_recording");
     }
+  });
+  it("not_recording: a LATE-STARTING match gets its full grace from the kick-off, not from the plan", () => {
+    // Review 7, Minor 8b. `fixtures` has no kick-off column, so this used to
+    // measure from `scheduledAt` — and a match that starts 90 minutes late is
+    // an ordinary venue event. It would have raised the row the instant it
+    // went live, reading "Kicked off 90 min ago", making the grace worth
+    // nothing for exactly the matches most likely to be chaotic.
+    //
+    // The two times disagree on purpose, and the expected answer differs
+    // between them: measured from the plan this row fires, measured from the
+    // kick-off it does not.
+    const fixtures = [silent({ scheduledAt: minutesAgo(90), startedAt: minutesAgo(2) })];
+    expect(resolveAttention(input({ fixtures })).map((a) => a.kind)).toEqual([]);
   });
   it("not_recording: cleared by the first recorded event", () => {
     const fixtures = [silent({ eventCount: 1 })];
@@ -582,8 +628,8 @@ describe("resolveAttention", () => {
   });
   it("not_recording aggregates per division — one row, worst silence wins", () => {
     const fixtures = [
-      silent({ id: "s1", scheduledAt: minutesAgo(NOT_RECORDING_GRACE_MINUTES) }),
-      silent({ id: "s2", scheduledAt: minutesAgo(NOT_RECORDING_GRACE_MINUTES + 27) }),
+      silent({ id: "s1", startedAt: minutesAgo(NOT_RECORDING_GRACE_MINUTES) }),
+      silent({ id: "s2", startedAt: minutesAgo(NOT_RECORDING_GRACE_MINUTES + 27) }),
     ];
     const out = resolveAttention(input({ fixtures }));
     expect(out.filter((a) => a.kind === "not_recording")).toHaveLength(1);

@@ -103,9 +103,19 @@ function redAction(dict: Dict, d: DeskDivision, org: string, comp: string, slug:
 }
 
 export function DivisionLedger({
-  dict, rows, org, comp, locale, now,
+  dict, rows, org, comp, locale, now, canEdit,
 }: {
   dict: Dict; rows: LedgerRow[]; org: string; comp: string; locale: string; now: string;
+  /** IMPORTANT (review 7): the phone card's red action was NOT gated, while
+   *  `needsYouItems` on the page above it always has been. A viewer — an
+   *  ordinary org role that reaches this page, and one RS005 deliberately let
+   *  in — was offered a full-width primary "Compute proposal" landing on a
+   *  fixtures tab where `progression-panel.tsx` returns `null` for them.
+   *  That is instance twelve's exact shape, one audience over: a label naming
+   *  a control the landing page does not have. The pills and the status line
+   *  stay — a viewer may SEE that a division is blocked; they may not be
+   *  handed a button for work they cannot do. */
+  canEdit: boolean;
 }) {
   // Fix round 2: nextLine() computed ONCE per row here, reused below — never
   // re-derived, and never called twice for the same row. `hasNext` decides
@@ -138,7 +148,10 @@ export function DivisionLedger({
           const pct = d && d.total > 0 ? Math.round((d.played / d.total) * 100) : 0;
           const href = routes.division(org, comp, r.slug);
           const next = nextByRow[i];
-          const action = d ? redAction(dict, d, org, comp, r.slug) : null;
+          // Gated on `canEdit` for the reason the prop's own note gives: a
+          // viewer is shown the state, never a button for work the landing
+          // page will not let them do.
+          const action = canEdit && d ? redAction(dict, d, org, comp, r.slug) : null;
           const tile = (sizeClass: string) => (
             <span
               aria-hidden

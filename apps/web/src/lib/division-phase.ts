@@ -43,6 +43,18 @@ export interface PhaseFixture {
   id: string;
   status: string; // scheduled | in_play | decided | finalized | abandoned | forfeited | cancelled
   scheduledAt: string | null;
+  /** When the fixture was actually KICKED OFF — `core.start`'s own
+   *  `recorded_at` (competition-desk.ts). Review 7 (Minor 8b): `fixtures` has
+   *  no kick-off column at all, so "Kicked off N min ago" used to be measured
+   *  from `scheduledAt`, a PLAN. For a match starting 90 minutes late — an
+   *  ordinary venue event — that fired the row the instant it went live,
+   *  reading "Kicked off 90 min ago", with the grace period worth nothing.
+   *  `null` for anything not in play; a fixture cannot BE in play without a
+   *  `core.start`, so for the rows that read this it is always present. */
+  startedAt: string | null;
+  /** How many events have arrived SINCE the kick-off — `core.start` itself is
+   *  excluded (competition-desk.ts). Counting it made `eventCount === 0`
+   *  unreachable and both live-recording rows inert: review 7, Blocker 1. */
   eventCount: number;
   matchMinutes: number;
   /** F4 fix (final review, Important): does ANY scorer_assignment cover this
@@ -641,7 +653,13 @@ export function resolveAttention(input: PhaseInput): Attention[] {
       // elapsed time we cannot state is `null` — the same "unknown"
       // sub-line the no-date case already renders — never a number that
       // reads as a fact.
-      const kickoffMs = f.scheduledAt === null ? NaN : Date.parse(f.scheduledAt);
+      // Review 7 (Minor 8b): the clock is the KICK-OFF, not the plan.
+      // `startedAt` is `core.start`'s own `recorded_at`; `scheduledAt` remains
+      // the fallback only for a fixture that has no start event, which for the
+      // two rows below cannot happen (a fixture is not in play without one) —
+      // it is kept so the derivation stays total for every other caller.
+      const kickoff = f.startedAt ?? f.scheduledAt;
+      const kickoffMs = kickoff === null ? NaN : Date.parse(kickoff);
       const rawElapsed = Number.isNaN(kickoffMs) ? null : Math.round((nowMs - kickoffMs) / 60_000);
       const elapsed = rawElapsed !== null && rawElapsed >= 0 ? rawElapsed : null;
       if (f.status === "in_play" && f.eventCount === 0 && !f.hasScorer) {

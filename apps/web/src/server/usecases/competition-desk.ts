@@ -118,6 +118,9 @@ type FixtureRaw = {
   home: string | null;
   away: string | null;
   event_count: number;
+  /** When core.start was recorded — the fixture's REAL kick-off. `fixtures`
+   *  has no such column (V214), and `scheduled_at` is a plan, not an event. */
+  started_at: string | Date | null;
 };
 type SettingsRaw = { division_id: string; tz: string | null; match_minutes: number | null };
 /** F4 (final review, Important) — resolved once per competition, not N+1:
@@ -223,12 +226,41 @@ export async function getCompetitionDesk(
       ? await tx<FixtureRaw[]>`
           select f.id, f.division_id, f.status, f.scheduled_at, f.fixture_no, f.stage_id,
                  h.display_name as home, a.display_name as away,
-                 coalesce(e.n, 0)::int as event_count
+                 coalesce(e.n, 0)::int as event_count, e.started_at
             from fixtures f
             left join entrants h on h.id = f.home_entrant_id
             left join entrants a on a.id = f.away_entrant_id
             left join (
-              select fixture_id, count(*) as n
+              -- BLOCKER (review 7, round J). Two things were wrong here, and
+              -- together they made BOTH live-recording attentions unreachable
+              -- for a real organiser.
+              --
+              -- 1. This counted every score event, including core.start --
+              --    and core.start is the event that PUTS a fixture in play
+              --    (fixtureStatusFromFold, engine-db/append-event.ts). So a
+              --    fixture the product actually started always had at least
+              --    one event, eventCount === 0 was impossible, and no_scorer
+              --    (red, shipped earlier in this wave) and not_recording could
+              --    never fire. Proved on this database: all 551 in-play
+              --    fixtures carrying a real core.start have >= 1 event; the
+              --    1,189 with none were forced in play by raw SQL in tests,
+              --    which is exactly how every test for these rows reached the
+              --    state. Kicking off is not recording.
+              --
+              -- 2. There is no kick-off column on fixtures at all, so
+              --    "Kicked off N min ago" was measured from scheduled_at. A
+              --    match that starts 90 minutes late -- an ordinary venue
+              --    event -- would have raised the row the instant it went
+              --    live, reading "Kicked off 90 min ago", with the grace
+              --    period worth nothing. core.start IS the kick-off, and it
+              --    carries the time it happened.
+              --
+              -- started_at also removes the shape where an in-play fixture
+              -- with no scheduled_at could answer nothing about its own clock:
+              -- a fixture cannot be in play without a core.start.
+              select fixture_id,
+                     count(*) filter (where type <> 'core.start') as n,
+                     min(recorded_at) filter (where type = 'core.start') as started_at
                 from score_events
                where fixture_id = any(
                  select id from fixtures where division_id = any(${ids}) and status = 'in_play'
@@ -336,6 +368,7 @@ export async function getCompetitionDesk(
       status: x.status,
       scheduledAt: x.scheduled_at,
       eventCount: x.event_count,
+      startedAt: x.started_at === null ? null : new Date(x.started_at).toISOString(),
       matchMinutes,
       hasScorer: fixturesWithScorer.has(x.id) || divisionsWithScorer.has(d.id),
       stageId: x.stage_id,

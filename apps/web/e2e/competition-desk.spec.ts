@@ -8,8 +8,11 @@ import {
   setFixtureStatusSql,
   setFixtureScheduledAtSql,
   setStageStatusSql, setZoneSplitSql,
+  assignScorerSql,
+  backdateFixtureStartSql,
   scoreFixture } from "./helpers";
 import { findBucketSplit, findPrintSplit, sweepZoneSplitFinders } from "./zone-split";
+import { NOT_RECORDING_GRACE_MINUTES } from "../src/lib/division-phase";
 
 /** "Sun 6 Sep" — matches division-status-line.ts's `nextDateLabel`/`whenLabel`
  *  day portion, so an assertion never hardcodes a calendar date that ages. */
@@ -100,13 +103,17 @@ test.describe("competition desk", () => {
     // copy actually renders here, the same fix registration-hub.spec.ts's
     // `statusLocator` uses for the identical dual-DOM shape.
     await expect(page.locator('[data-pill="no_scorer"]:visible').first()).toBeVisible();
-    // The masthead's PHASE is still `in_play` — the underlying fact is
-    // unchanged and a later change to the phase ladder would still be caught
-    // here — but the WORDS it prints are the red row's, not the count.
+    // Review 7 REVERSED round J's first answer here, and the reviewer was
+    // right. The masthead briefly suppressed the count whenever any division
+    // was red, so "a future stage needs its draw" deleted "1 in play" — the
+    // only competition-level live count on the page. A row has to make that
+    // trade (one pill, and its alternative is a phase word); the masthead has
+    // a whole line. It keeps BOTH facts now, in two chips.
     const masthead = page.getByTestId("desk-masthead-pill");
     await expect(masthead).toHaveAttribute("data-phase", "in_play");
-    await expect(masthead).toHaveAttribute("data-pill", "no_scorer");
-    await expect(masthead).not.toContainText("in play");
+    await expect(masthead, "the live count must survive a red attention").toContainText("1 in play");
+    const chip = page.getByTestId("desk-masthead-attention");
+    await expect(chip, "and the red attention is named beside it").toHaveAttribute("data-attention-chip", "no_scorer");
   });
 
   // H2 fix (final review round 3, Important — corrected ruling): G3's gate
@@ -432,6 +439,64 @@ test.describe("competition desk", () => {
   // only rows whose phase word was `scheduled`/`match_day` and a rule-4
   // `setting_up` row fell straight through. Observed live at 08:20Z on
   // 2026-09-03 against the pre-fix build.
+  // BLOCKER (review 7): both live-recording attentions were INERT in
+  // production, and every test for them hid it. `no_scorer` and
+  // `not_recording` require `status === "in_play" && eventCount === 0`, but
+  // the only production writer of `in_play` is `fixtureStatusFromFold`, whose
+  // in-play branch is `has("core.start")` — and `core.start` is itself a
+  // `score_events` row that the count included. A fixture the product started
+  // therefore always had at least one event, and neither row could ever
+  // appear for a real organiser.
+  //
+  // Every existing test reached `in_play` through `setFixtureStatusSql`, i.e.
+  // through raw SQL that no user can perform, so all of them passed against a
+  // state the product cannot produce. THIS test reaches it the way a scorer
+  // does — by posting `core.start` to the real endpoint — which is the only
+  // arrangement that can witness the regression.
+  test("the live-recording rows fire for a fixture the PRODUCT started, not just one SQL forced in play", async ({
+    page,
+    request,
+  }) => {
+    const org = await activeOrg(page);
+    const rig = await leagueOfFour(request, "realstart");
+    expect((await apiJson(request, `/api/v1/divisions/${rig.div.id}/start`, "POST")).status).toBe(200);
+    const fixtureId = rig.fixtureIds[0]!;
+    // The real producer. Nothing else in this test touches `fixtures.status`.
+    const started = await apiJson(request, `/api/v1/fixtures/${fixtureId}/events`, "POST", {
+      expected_seq: 0, type: "core.start", payload: {},
+    });
+    expect(started.status, "core.start must be accepted — this test is meaningless otherwise").toBeLessThan(400);
+
+    await page.goto(`/o/${org.slug}/c/${rig.comp.slug}`);
+    const needs = page.getByTestId("desk-needs-you");
+    // Nobody assigned yet: the red row.
+    await expect(
+      needs.locator('[data-attention="no_scorer"]'),
+      "a match the product just started, with nothing recorded, must raise No scorer",
+    ).toHaveCount(1);
+
+    // Assign someone and backdate the kick-off past the grace: the row becomes
+    // its amber complement, and the two never appear together.
+    await assignScorerSql(fixtureId);
+    // The clock is the KICK-OFF (core.start's own recorded_at), so re-dating
+    // the fixture would do nothing — which is the whole point of review 7's
+    // Minor 8b, and is what this test caught on its first run. Age the start
+    // event instead; the fixture still got in play through the real endpoint.
+    await backdateFixtureStartSql(fixtureId, NOT_RECORDING_GRACE_MINUTES + 40);
+    await page.reload();
+    await expect(needs.locator('[data-attention="not_recording"]')).toHaveCount(1);
+    await expect(needs.locator('[data-attention="no_scorer"]')).toHaveCount(0);
+
+    // And the first REAL recorded event clears it — the other direction, so
+    // "always fires" cannot pass for "fires correctly".
+    const scored = await apiJson(request, `/api/v1/fixtures/${fixtureId}/events`, "POST", {
+      expected_seq: 1, type: "generic.result", payload: { p1Score: 1, p2Score: 0 },
+    });
+    expect(scored.status).toBeLessThan(400);
+    await page.reload();
+    await expect(needs.locator('[data-attention="not_recording"]')).toHaveCount(0);
+  });
+
   // F4 (round J): the rows put a red attention on their pill and the masthead
   // showed only the phase, so a competition whose divisions were collectively
   // blocked read calm at the top of its own page. This asserts the WORDS, not
@@ -462,15 +527,16 @@ test.describe("competition desk", () => {
     // three times in this wave. `:visible` picks the copy that renders here.
     const rowPill = row.locator('[data-pill="needs_fixtures"]:visible').first();
     await expect(rowPill).toBeVisible();
-    // ...and so does the masthead, with the same word, not a phase word.
-    await expect(masthead).toHaveAttribute("data-pill", "needs_fixtures");
-    await expect(masthead).toHaveText(/needs fixtures/i);
+    // ...and so does the masthead, in its own chip beside the phase.
+    const chip = page.getByTestId("desk-masthead-attention");
+    await expect(chip).toHaveAttribute("data-attention-chip", "needs_fixtures");
+    await expect(chip).toHaveText(/needs fixtures/i);
     // Print the asserted CONTENT beside the gate: the two must agree, and the
     // comparison is what this test exists for — a masthead that invented its
     // own competition-level copy would pass a bare presence check.
     expect(
-      (await masthead.textContent())?.trim().toLowerCase(),
-      "masthead and row must say the same thing",
+      (await chip.textContent())?.trim().toLowerCase(),
+      "masthead chip and row pill must say the same thing",
     ).toBe((await rowPill.textContent())?.trim().toLowerCase());
   });
 

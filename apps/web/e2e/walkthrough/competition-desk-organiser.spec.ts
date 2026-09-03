@@ -174,8 +174,10 @@ test("an organiser watches the desk go Setting up → Scheduled → Match day �
   // moved is only which of the two facts gets the words.
   const masthead = page.getByTestId("desk-masthead-pill");
   await expect(masthead).toHaveAttribute("data-phase", "in_play");
-  await expect(masthead).toHaveAttribute("data-pill", "no_scorer");
-  await expect(masthead).not.toContainText("in play");
+  // Review 7 corrected round J here: the masthead keeps the live COUNT and
+  // names the red attention beside it, rather than one deleting the other.
+  await expect(masthead).toContainText("1 in play");
+  await expect(page.getByTestId("desk-masthead-attention")).toHaveAttribute("data-attention-chip", "no_scorer");
   await shot("05-no-scorer");
   // M2 (fix round I): the action used to read "Assign scorer" — a control
   // that exists nowhere in the product (`createAssignment` has no production

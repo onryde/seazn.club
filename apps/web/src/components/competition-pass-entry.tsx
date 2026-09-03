@@ -233,7 +233,10 @@ export function CompetitionPassEntry({
     <Link
       href={href}
       data-pass-entry
-      className="mb-1 inline-flex items-center gap-1.5 rounded-full border border-lime-300 bg-lime-50 px-2.5 py-1 text-xs font-semibold text-lime-900 transition hover:border-lime-400 hover:bg-lime-100"
+      // `max-sm:min-h-11` (review 7): at 26px tall this was the shortest
+      // tappable thing on the phone competition page, 18px under the floor —
+      // and the closed branch above already earned that same fix.
+      className="mb-1 inline-flex items-center gap-1.5 rounded-full border border-lime-300 bg-lime-50 px-2.5 py-1 text-xs font-semibold text-lime-900 transition hover:border-lime-400 hover:bg-lime-100 max-sm:min-h-11"
     >
       <Ticket className="h-3.5 w-3.5 shrink-0" strokeWidth={2} aria-hidden />
       {buyLabel}

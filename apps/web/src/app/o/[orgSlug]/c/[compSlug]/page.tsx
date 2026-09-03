@@ -25,7 +25,7 @@ import { checkoutTrialDays } from "@/lib/billing";
 import { getCompetitionDesk, competitionPhase } from "@/server/usecases/competition-desk";
 import { statusLine, nextDateLabel } from "@/lib/division-status-line";
 import { ledgerRank, leadingAttention } from "@/lib/division-phase";
-import { PhasePill } from "@/components/v2/desk/phase-pill";
+import { PhasePill, AttentionChip } from "@/components/v2/desk/phase-pill";
 import { DeskToolsMore } from "@/components/v2/desk/desk-tools-more";
 import { NeedsYou, needsYouItems } from "@/components/v2/desk/needs-you";
 import { DivisionLedger, type LedgerRow } from "@/components/v2/desk/division-ledger";
@@ -194,16 +194,20 @@ export default async function CompetitionPage({
                   phase={compPhase.kind}
                   inPlay={compPhase.kind === "in_play" ? compPhase.n : 0}
                   when={compPhase.kind === "next" ? nextDateLabel(compPhase.at, locale, compPhase.tz) : undefined}
-                  // F4 (round J): the rows put a red attention on their pill
-                  // and this one showed only the phase, so a competition whose
-                  // divisions were collectively blocked read calm at the top
-                  // of its own page. One attention, picked by
-                  // `leadingAttention` and rendered by the same component the
-                  // rows use — no competition-level copy or count of its own.
-                  attention={mastheadAttention ? [mastheadAttention] : undefined}
                   testId="desk-masthead-pill"
                 />
               )}
+              {/* F4 (round J), corrected by review 7: the rows put a red
+                  attention on their pill and this masthead showed only the
+                  phase, so a competition whose divisions were collectively
+                  blocked read calm at the top of its own page.
+                  The first fix handed the attention to the pill itself, which
+                  SUPPRESSES the phase — and that made "a future stage needs
+                  its draw" delete "5 matches are live right now", the only
+                  competition-level live count on the page. A row has to make
+                  that trade (one pill, and its alternative is a phase word);
+                  the masthead does not. Both facts, side by side. */}
+              <AttentionChip dict={dict} attention={mastheadAttention} testId="desk-masthead-attention" />
               {/* Minor fix (review round 1): was the raw lowercase sport_key
                   ("football") — the `sport.<key>` dictionary already carries
                   a proper display name ("Ice hockey", "Table tennis") for
@@ -236,6 +240,16 @@ export default async function CompetitionPage({
                 the ENDED card instead of the offer once the pass has stopped
                 applying (v17 gap #301): the layout judges that, this page only
                 supplies every sentence it might need. */}
+            {/* IMPORTANT (review 7) — instance THIRTEEN. This carries no order
+                class, so on a phone it took CSS `order: 0` and led the stack:
+                a 26px full-width upsell sitting above the control this
+                redesign calls "THE action", 18px under the tap floor the
+                redesign exists to enforce. Invisible to the seven-width sweep
+                because every Playwright project runs as a Pro org, where this
+                renders nothing at all.
+                It is a discovery chip, not a tool: last on a phone, and never
+                between the organiser and their work. */}
+            <div className="max-sm:order-5">
             <CompetitionPassEntry
               href={routes.competitionUpgrade(orgSlug, compSlug)}
               buyLabel={t(dict, "pass.entry.buy", {
@@ -262,6 +276,7 @@ export default async function CompetitionPage({
               goProLabel={t(dict, trialAvailable ? "upgrade.proCard.cta" : "upgrade.proCard.ctaNoTrial")}
               canBuy={canEdit}
             />
+            </div>
             <Link
               href={routes.slideshowCompetition(competition.id)}
               target="_blank"
@@ -435,6 +450,7 @@ export default async function CompetitionPage({
             ) : (
               <DivisionLedger
                 dict={dict} rows={ledgerRows} org={orgSlug} comp={compSlug} locale={locale} now={now}
+                canEdit={canEdit}
               />
             )}
           </section>

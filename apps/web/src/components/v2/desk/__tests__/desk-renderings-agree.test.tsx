@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import en from "@/dictionaries/en/ui.json";
-import { PhasePill } from "@/components/v2/desk/phase-pill";
+import { PhasePill, AttentionChip } from "@/components/v2/desk/phase-pill";
 import { needsYouItems } from "@/components/v2/desk/needs-you";
 import { ProgressionPanel, type SeedProposal } from "@/components/v2/progression-panel";
 import { StagesPanel } from "@/components/v2/stages-panel";
 import { statusLine } from "@/lib/division-status-line";
-import {
+import { leadingAttention,
   ATTENTION_SEVERITY, DIVISION_PHASES, DRAW_DOORS, hasPlayedFixture, resolveAttention, resolvePhase,
   type Attention, type DivisionPhase, type DrawDoor, type PhaseFixture, type PhaseInput, type PhaseStage,
 } from "@/lib/division-phase";
@@ -111,7 +111,7 @@ const drawableStage = (o: Partial<PhaseStage> = {}) =>
   st({ id: "fin", name: "Finals", seq: 2, status: "active", hasFixtures: true,
        timing: "setup", sourceReady: true, ...o });
 const fxt = (o: Partial<PhaseFixture> = {}): PhaseFixture => ({
-  id: "f1", status: "decided", scheduledAt: FUTURE, eventCount: 0, matchMinutes: 90,
+  id: "f1", status: "decided", scheduledAt: FUTURE, startedAt: null, eventCount: 0, matchMinutes: 90,
   hasScorer: true, stageId: "s1", tbd: false, ...o,
 });
 const tbd = (o: Partial<PhaseFixture> = {}) =>
@@ -291,9 +291,18 @@ describe("enumeration 2: the five renderings agree on every reachable phase/atte
       );
       const desk: CompetitionDesk = { in_play: r.desk.in_play, divisions: new Map([["d1", r.desk]]), now: NOW };
       const cp = competitionPhase(desk);
+      // Review 7, Minor 9: this rendered the masthead with `attention={[]}`,
+      // so the file written to make five renderings AGREE did not exercise the
+      // masthead's own attention wiring at all and could not see a regression
+      // in it. It mirrors the page now — the phase pill, plus the separate
+      // attention chip beside it (page.tsx).
+      const leading = leadingAttention([r.desk]);
       const masthead = renderToStaticMarkup(
-        <PhasePill dict={en} phase={cp.kind === "in_play" ? "in_play" : cp.kind === "next" ? "next" : cp.kind}
-          inPlay={cp.kind === "in_play" ? cp.n : 0} when="Sat 12 Sep" attention={[]} />,
+        <>
+          <PhasePill dict={en} phase={cp.kind === "in_play" ? "in_play" : cp.kind === "next" ? "next" : cp.kind}
+            inPlay={cp.kind === "in_play" ? cp.n : 0} when="Sat 12 Sep" />
+          <AttentionChip dict={en} attention={leading} />
+        </>,
       );
       if (r.played > 0) {
         expect(rowPill).not.toContain(en["desk.phase.setting_up"]);
@@ -302,8 +311,18 @@ describe("enumeration 2: the five renderings agree on every reachable phase/atte
       // A red attention outranks the phase on the row pill — the model rule,
       // asserted here for EVERY pair rather than for the one kind a fix
       // happened to be about.
-      if (red) expect(rowPill).toContain(`data-pill="${red.kind}"`);
-      else expect(rowPill).toContain(`data-pill="${r.phase}"`);
+      // And the masthead names the SAME red kind — the F4 rule, swept over
+      // every reachable pair rather than proven on the one shape a test
+      // happened to build. It keeps the phase BESIDE it (review 7, Minor 7):
+      // a red attention must never delete the live count.
+      if (red) {
+        expect(rowPill).toContain(`data-pill="${red.kind}"`);
+        expect(masthead).toContain(`data-attention-chip="${red.kind}"`);
+        if (cp.kind === "in_play") expect(masthead).toContain(en["desk.phase.in_play"].replace("{n}", String(cp.n)));
+      } else {
+        expect(rowPill).toContain(`data-pill="${r.phase}"`);
+        expect(masthead).not.toContain("data-attention-chip");
+      }
     });
 
     it("3: the status line agrees with the pill — it never claims setting-up progress a played row contradicts", () => {

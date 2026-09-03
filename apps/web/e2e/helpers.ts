@@ -740,6 +740,31 @@ export async function assignScorerSql(fixtureId: string): Promise<void> {
   });
 }
 
+/** Move a fixture's KICK-OFF into the past, by SQL (competition-desk e2e,
+ *  review 7).
+ *
+ *  The desk's live-recording rows measure from `core.start`'s own
+ *  `recorded_at` — the real kick-off — not from `scheduled_at`, so a test that
+ *  needs a match to have been live for forty minutes cannot get there by
+ *  re-dating the fixture, and the only alternative is waiting forty minutes.
+ *  The fixture still reaches `in_play` through the real endpoint; this moves
+ *  the clock, nothing else.
+ *
+ *  Throws when no start event exists: silently updating zero rows would let a
+ *  test claim it had aged a match it had never started. */
+export async function backdateFixtureStartSql(fixtureId: string, minutesAgo: number): Promise<void> {
+  await withDb(async (sql) => {
+    const rows = await sql<{ id: string }[]>`
+      update score_events
+         set recorded_at = now() - make_interval(mins => ${minutesAgo})
+       where fixture_id = ${fixtureId} and type = 'core.start'
+      returning id`;
+    if (rows.length === 0) {
+      throw new Error(`backdateFixtureStartSql: fixture ${fixtureId} has no core.start event to move`);
+    }
+  });
+}
+
 /** Force a stage's status directly (competition-desk e2e: rule 1 — "finished"
  *  requires every stage complete, or no open stage AND no live fixture — so
  *  the "all decided" case needs the stage flipped as well as its fixtures). */

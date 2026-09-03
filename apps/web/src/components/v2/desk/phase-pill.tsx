@@ -50,6 +50,47 @@ const PHASE_CLASS: Record<DivisionPhase | "in_play" | "next", string> = {
   next: "bg-slate-100 text-slate-600",
 };
 
+/**
+ * The red word ALONE, as its own chip.
+ *
+ * Review 7, Minor 7, and the reviewer is right. The masthead used to hand its
+ * attention to `PhasePill`, which suppresses the phase whenever a red kind is
+ * present — so "a future stage needs its draw" silently deleted "5 matches are
+ * live right now", the only place a competition-level live count appears. A
+ * ROW has to make that trade because it has one pill's worth of space and its
+ * alternative is a phase WORD; the masthead has a whole line and its
+ * alternative is a NUMBER nothing else on the page carries.
+ *
+ * So the masthead keeps both facts, side by side, and the attribute/label
+ * disagreement goes with it (the pill used to carry `data-phase="in_play"`
+ * over the text "Needs draw").
+ *
+ * Returns null for a non-red attention, deliberately: amber and slate are
+ * already stated by the Needs-you rows underneath, and the masthead is not the
+ * place to restate them.
+ */
+export function AttentionChip({
+  dict, attention, className = "", testId,
+}: {
+  dict: Dict;
+  attention: Attention | null;
+  className?: string;
+  testId?: string;
+}) {
+  const key = attention ? RED_PILL_KEY[attention.kind] : null;
+  if (!attention || key === null) return null;
+  return (
+    <span
+      data-testid={testId}
+      data-attention-chip={attention.kind}
+      className={`badge inline-flex items-center gap-1.5 normal-case bg-red-50 text-red-700 ${className}`}
+    >
+      <i aria-hidden className="h-1.5 w-1.5 rounded-full bg-current" />
+      {t(dict, key)}
+    </span>
+  );
+}
+
 export function PhasePill({
   dict, phase, inPlay = 0, when, attention = [], className = "", testId,
 }: {

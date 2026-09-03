@@ -187,6 +187,11 @@ export default async function DivisionPage({
       id: f.id,
       status: f.status,
       scheduledAt: f.scheduled_at,
+      // Same stub reasoning as `eventCount`/`hasScorer` below: this page reads
+      // the PHASE, and the kick-off clock exists only for the competition
+      // page's live-recording attentions. A stub here cannot silently become
+      // load-bearing — `resolvePhase` never reads it.
+      startedAt: null,
       stageId: f.stage_id,
       // M1: the draw fact, read off the fixture's own entrants — the same
       // question the desk answers from its own `left join entrants`.

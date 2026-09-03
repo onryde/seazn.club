@@ -902,7 +902,13 @@ test("competition desk: the tool row is a phone composition below sm, not the de
     //    are not on this width at all. Membership, never box sizes — a phone
     //    view showing the same controls smaller is the defect, not the fix.
     const phoneSet = await rowControlSet();
-    expect(phoneSet.join(" | "), "the phone row leads with the schedule board").toMatch(/Schedule/);
+    // Review 7, Important 3: this used to be `phoneSet.join(" | ")` matched
+    // against /Schedule/, which passes for ANY position — and it was the one
+    // assertion that could have caught the upsell taking `order: 0` above the
+    // primary. The message claimed a positional property the assertion could
+    // not express (class 4, "tests lie in their names"). Index, not
+    // containment.
+    expect(phoneSet[0], `the phone row leads with the schedule board; got ${phoneSet.join(" | ")}`).toMatch(/Schedule/);
     expect(phoneSet.join(" | "), "registration keeps its label on a phone").toMatch(/Registration/);
     expect(phoneSet.join(" | "), "a phone needs a labelled More control").toMatch(/More/);
     expect(phoneSet.join(" | "), "the inline Settings tile must not survive into the phone row").not.toMatch(/Settings/);

@@ -57,7 +57,7 @@ describe("StagesPanel phase gating", () => {
       { id: "s2", name: "Finals", seq: 2, status: "pending", hasFixtures: false, timing: null, sourceReady: false, proposal: "none" as const },
     ],
     fixtures: [1, 2, 3, 4, 5, 6].map((n) => ({
-      id: `f${n}`, status: "decided", scheduledAt: null, eventCount: 0, matchMinutes: 30, hasScorer: true,
+      id: `f${n}`, status: "decided", scheduledAt: null, startedAt: null, eventCount: 0, matchMinutes: 30, hasScorer: true,
       stageId: "s1", tbd: false,
     })),
     now: "2026-03-01T12:00:00Z",
