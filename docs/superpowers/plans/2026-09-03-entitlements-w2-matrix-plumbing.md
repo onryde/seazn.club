@@ -615,7 +615,36 @@ than through profiles, embeds and posts.
 **`dashboard.public.max`: Free 3 → 2, Pro ∞ → 10.** Pro loses "unlimited public
 dashboards", so check `capClaimFaults` and any card copy claiming it.
 
-**"Event Pass always as a single comp" needs CODE, not a row.** `dashboard.public.max` is
+**`assertPublicQuota` is the real defect, and BOTH remaining rulings land on it.**
+Owner, 2026-09-03: the cap counts **ACTIVE public dashboards only**, and a passed
+competition does not count against it.
+
+`competitions.ts` `assertPublicQuota` today is a flat
+`select count(*) from competitions where visibility = 'public'` — **no status filter and
+no pass exclusion**. So a club that has run three seasons carries three public dashboards
+for ever and is refused a fourth while nothing is running. That is not a policy gap, it is
+a leak: the cap counts history rather than live surfaces, which is why 3 felt tight and 2
+would have felt broken.
+
+`assertActiveQuota` twenty lines above already solves both halves, and its own comment says
+why — *"competition past that boundary was keeping a free slot for ever"*:
+
+    where c.status in ${tx([...ACTIVE_COMPETITION_STATUSES])}
+      and not exists (
+        select 1 from competition_passes cp
+         where cp.competition_id = c.id
+           and pass_applies(c.status, c.ends_on, (now() at time zone 'utc')::date))
+
+Give `assertPublicQuota` the same two clauses. **Factor the shared predicate out rather
+than copying it** — that function's header already states the intent ("the same predicate
+the resolver uses, so the three sites cannot drift apart again"), and `assertPublicQuota`
+is conspicuously not one of those three sites. Copying would make it a fourth place to
+drift.
+
+Its comment is stale too: "Community holds 1 public competition at a time" against a cap
+of 2. Third stale hardcoded cap found in this area today.
+
+**Why a row cannot do this:** `dashboard.public.max` is
 an ORG-level integer and a pass can never lift one. Worse, the count has no pass exclusion:
 `competitions.ts:131-141` is `select count(*) from competitions where visibility='public'`
 then `withinLimit(orgId, "dashboard.public.max", count + 1)` — flat. `competitions.max_active`
