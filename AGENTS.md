@@ -306,7 +306,8 @@ or `fixture-console.tsx` at a phone width. Not derivable from the code:
   `RULES.md` and the `.claude/agents/*.md` frontmatter; never restate them
   here, and never override `model:` on a dispatch), all 4 required test types per task
   (unit/E2E/smoke/regression), greenfield schema stance, mobile+desktop
-  UI bar, pre-commit OpenAPI drift check, and the no-new-issues /
+  UI bar, CI OpenAPI drift check (a `ci.yml` step, not a pre-commit hook —
+  this repo has no `.husky/`), and the no-new-issues /
   fix-inline-unless-blast-radius rule. Every dispatch brief should
   restate the relevant parts inline or point here explicitly.
 - **`.github/workflows/e2e.yml` is LIVE, and it triggers on `push` to `main`

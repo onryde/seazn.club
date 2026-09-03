@@ -72,6 +72,7 @@ export const ROUTES: RouteSpec[] = [
   { path: "/divisions/{id}/archive", method: "post", summary: "Archive: hidden from console/public/quota, restorable", tag: "divisions", response: S.Division, errors: [409] },
   { path: "/divisions/{id}/archive", method: "delete", summary: "Restore an archived division (quota re-checked)", tag: "divisions", response: S.Division, errors: [402] },
   // Entrants
+  { path: "/divisions/{id}/fixtures", method: "get", summary: "List a division's fixtures in play order (G3 — before this the only way to obtain fixtures over HTTP was the idempotent POST /stages/{id}/generate)", tag: "fixtures", response: z.array(S.Fixture) },
   { path: "/divisions/{id}/entrants", method: "get", summary: "List entrants", tag: "entrants", response: z.array(S.Entrant) },
   { path: "/divisions/{id}/entrants", method: "post", summary: "Register entrant(s) — object or bulk array", tag: "entrants", request: S.CreateEntrants, response: z.union([S.Entrant, z.array(S.Entrant)]), status: 201, errors: [422] },
   { path: "/entrants/{id}", method: "get", summary: "Get an entrant with members", tag: "entrants", response: S.Entrant },
@@ -296,6 +297,8 @@ export const ROUTES: RouteSpec[] = [
   { path: "/officials/{id}", method: "get", summary: "Get an official", tag: "officials", response: S.Official },
   { path: "/officials/{id}", method: "patch", summary: "Update an official", tag: "officials", request: S.PatchOfficial, response: S.Official, errors: [402] },
   { path: "/officials/{id}", method: "delete", summary: "Delete an official", tag: "officials" },
+  { path: "/officials/{id}/availability", method: "post", summary: "Record a blackout date for this org's officials row (G2 — organiser-side counterpart to POST /me/availability/officiating, which is self-service only and fans out across every org linked to the official)", tag: "officials", request: S.OfficiatingBlackoutInput, response: S.OfficiatingBlackout, status: 201 },
+  { path: "/officials/{id}/availability", method: "delete", summary: "Clear a blackout date (idempotent)", tag: "officials", query: { date: { schema: { type: "string", format: "date" }, description: "The date to clear (YYYY-MM-DD)" } } },
   { path: "/officials/import", method: "post", summary: "Bulk CSV/XLSX import (multipart `file`: Name, Roles, MaxPerDay)", tag: "officials", status: 201, errors: [422] },
   { path: "/officials/{id}/invite", method: "post", summary: "Invite the official to claim their profile through the shared person-claim rail (session editors only; claim_url embeds the one-time secret)", tag: "officials", request: S.CreateClaimInvite, response: S.CreatedPersonClaim, status: 201, errors: [409] },
   { path: "/divisions/{id}/officials/auto", method: "post", summary: "Propose assignments — pure engine pass with locked rows as obstacles; writes nothing (Pro `officials.auto`)", tag: "officials", request: S.AutoAssignOfficials, response: S.OfficialsProposal, errors: [402] },

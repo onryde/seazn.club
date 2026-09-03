@@ -19,7 +19,7 @@ import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { requireFeature } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import { AiApplyMeta } from "@/server/api-v1/schemas";
+import { AiApplyMeta, CreateOfficial, PatchOfficial } from "@/server/api-v1/schemas";
 import { sendOfficialAssignedEmail } from "@/lib/email";
 import { toLocale } from "@/lib/i18n-constants";
 import { msgFor } from "@/lib/messages-i18n";
@@ -48,18 +48,17 @@ const COLS = [
   "home_pool_id", "max_per_day", "created_at",
 ] as const;
 
-export const CreateOfficialInput = z.object({
-  display_name: z.string().min(1).max(200),
-  person_id: z.string().uuid().optional(),
-  entrant_id: z.string().uuid().optional(),
-  email: z.email().max(200).nullable().optional(),
-  role_keys: z.array(z.string().min(1)).min(1).default(["referee"]),
-  home_pool_id: z.string().uuid().nullable().optional(),
-  max_per_day: z.number().int().positive().nullable().optional(),
-});
+// G6 (bench B03 product-gaps, 2026-09-02): this used to be its own z.object,
+// field-for-field identical to schemas.ts's CreateOfficial/PatchOfficial but
+// maintained separately — openapi.ts published one, this route validated
+// with the other, so they could silently drift. Import the same object
+// instead of a second copy. (The reverse direction — openapi.ts importing
+// this file — doesn't work: usecases/*.ts import "server-only", which
+// scripts/openapi-gen.ts can't resolve outside Next's bundler.)
+export const CreateOfficialInput = CreateOfficial;
 export type CreateOfficialInput = z.infer<typeof CreateOfficialInput>;
 
-export const PatchOfficialInput = CreateOfficialInput.partial();
+export const PatchOfficialInput = PatchOfficial;
 export type PatchOfficialInput = z.infer<typeof PatchOfficialInput>;
 
 export async function listOfficials(auth: AuthCtx): Promise<OfficialRow[]> {
@@ -106,6 +105,40 @@ export async function loadOfficialBlackouts(tx: Tx): Promise<OfficialBlackoutRow
  *  warns before assigning someone onto a date they marked unavailable). */
 export async function listOfficialBlackouts(auth: AuthCtx): Promise<OfficialBlackoutRow[]> {
   return withTenant(auth.orgId, (tx) => loadOfficialBlackouts(tx));
+}
+
+/** Org-side counterpart to me-officiating.ts's setMyBlackout/deleteMyBlackout
+ *  (G2, bench B03 product-gaps 2026-09-02): before this, an organiser told
+ *  "I can't do the 14th" by an official had no way to record it — every
+ *  write to official_availability required the official's own /me session
+ *  (superuser connection, fans the date out to every org linked to that
+ *  person). This writes ONLY this org's officials row: `withTenant`'s RLS
+ *  scoping (V391 grants app_user the write here) is what keeps it that way,
+ *  not an application check. `requireResourceAuth("official", ...)` at the
+ *  route already confirmed `officialId` belongs to `auth.orgId` before this
+ *  runs. */
+export async function setOfficialBlackout(
+  auth: AuthCtx,
+  officialId: string,
+  date: string,
+  note?: string | null,
+): Promise<Pick<OfficialBlackoutRow, "date" | "note">> {
+  const trimmed = note?.trim() || null;
+  await withTenant(auth.orgId, (tx) => tx`
+    insert into official_availability (org_id, official_id, date, note)
+    values (${auth.orgId}, ${officialId}, ${date}, ${trimmed})
+    on conflict (official_id, date) do update set note = excluded.note`);
+  return { date, note: trimmed };
+}
+
+/** Clear a blackout date for this org's officials row (idempotent). */
+export async function deleteOfficialBlackout(
+  auth: AuthCtx,
+  officialId: string,
+  date: string,
+): Promise<void> {
+  await withTenant(auth.orgId, (tx) => tx`
+    delete from official_availability where official_id = ${officialId} and date = ${date}`);
 }
 
 export interface OfficialBusyRow {
