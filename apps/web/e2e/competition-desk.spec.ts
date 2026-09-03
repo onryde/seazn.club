@@ -431,10 +431,18 @@ test.describe("competition desk", () => {
 
     await page.goto(`/o/${org.slug}/c/${rig.comp.slug}`);
     const row = page.getByTestId("desk-ledger-row").filter({ hasText: "Cup" }).first();
-    // The row itself is unchanged by this fix — pinned so a future change to
+    // The row itself is unchanged by THIS fix — pinned so a future change to
     // the masthead cannot "fix" the contradiction by breaking the row.
-    await expect(row).toContainText("6 of 6 played · Finals not drawn");
-    await expect(page.locator('[data-pill="needs_draw"]:visible').first()).toBeVisible();
+    //
+    // M1 (fix round I, instance TWELVE) did change which red row this shape
+    // raises: with the Finals bracket never generated, its draw is not
+    // computable (`computeSeedProposal` 422s SEEDING_RULES_MISSING), so the
+    // row is `needs_fixtures` and its action opens the fixtures tab, where
+    // "Generate fixtures" and "Complete stage" both live. It is still RED and
+    // it still names the stage, which is all K2's own assertion needs.
+    await expect(row).toContainText("6 of 6 played");
+    await expect(page.getByTestId("desk-needs-you")).toContainText("Finals");
+    await expect(page.locator('[data-pill="needs_fixtures"]:visible').first()).toBeVisible();
     const masthead = page.getByTestId("desk-masthead-pill");
     await expect(masthead).not.toHaveAttribute("data-phase", "setting_up");
     await expect(masthead).not.toContainText("Setting up");
@@ -506,8 +514,10 @@ test.describe("competition desk", () => {
     for (const id of alpha.fixtureIds) await setFixtureScheduledAtSql(id, tomorrow);
 
     // Zulu: its league is played out and complete, and a `setup`-timing
-    // Finals stage still owes its draw — red `needs_draw`, phase
-    // `setting_up`.
+    // Finals stage still owes its FIXTURES — red `needs_fixtures`, phase
+    // `setting_up`. (It read `needs_draw` until M1, fix round I: with no
+    // generated bracket the draw is not computable, so the row asks for the
+    // step that is. Either way it is RED, which is what this test is about.)
     const zulu = await makeDivision("Zulu Cup");
     for (const id of zulu.fixtureIds) await setFixtureStatusSql(id, "decided");
     await setStageStatusSql(zulu.stageId, "complete");
@@ -531,8 +541,8 @@ test.describe("competition desk", () => {
     const zuluRow = rows.filter({ hasText: "Zulu Cup" });
     await expect(alphaRow).toHaveAttribute("data-phase", "scheduled");
     await expect(zuluRow).toHaveAttribute("data-phase", "setting_up");
-    await expect(page.locator('[data-pill="needs_draw"]:visible').first()).toBeVisible();
-    await expect(zuluRow.locator('[data-pill="needs_draw"]').first()).toHaveCount(1);
+    await expect(page.locator('[data-pill="needs_fixtures"]:visible').first()).toBeVisible();
+    await expect(zuluRow.locator('[data-pill="needs_fixtures"]').first()).toHaveCount(1);
     await expect(alphaRow.locator("[data-pill]").first()).toHaveAttribute("data-pill", "scheduled");
 
     // THE ASSERTION: the red row is FIRST, against both its name and its
