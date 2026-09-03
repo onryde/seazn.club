@@ -591,28 +591,37 @@ them and the Event Pass falls through to the community row and silently LOSES em
 resolver only overlays what a pass row explicitly grants. Insert `event_pass` and
 `event_pass_l` true in the same statement.
 
-**`dashboard.branding` goes TRUE on both pass rungs** (owner, 2026-09-03) — true means the
-badge is REMOVED, so every paying plan now publishes unbranded.
+**`dashboard.branding`: SUPERSEDED, twice, within the hour — read only this version.**
+Owner, final: **the badge is SHOWN on every plan except enterprise.** `dashboard.branding`
+true means the badge is REMOVED, so the cells are community false, pro **true → false**,
+event_pass false, event_pass_l false, enterprise true. Badge removal becomes an
+ENTERPRISE-ONLY feature, which is exactly where R3 puts white label ("White label, custom
+domain, write API, priority support → Contact Us").
 
-**This overturns design §2's one explicitly frozen cell**, marked "D7, never moves". The
-override is deliberate and must not be reverted on the strength of that note; the note is
-now the older decision.
+An intermediate ruling set the pass rungs true. It was never built, so there is nothing to
+revert — but note that this also moves **Pro**, which no earlier draft did. Design §2 marks
+this cell "D7, never moves"; it has now moved, deliberately, and that note is the older
+decision.
 
-An earlier draft of this entry said the badge would then appear nowhere. That was WRONG,
-and the correction matters: `dashboard.public.max` is still **3 on Free**, so free public
-dashboards survive and carry the badge. The resulting rule is clean enough to sell:
-**free means we brand it and you don't; paying means you brand it and we don't.**
+Net effect: every self-serve plan carries our badge, including Pro. The acquisition loop
+survives the share-loop reversal after all — it just runs through public dashboards rather
+than through profiles, embeds and posts.
 
-| | Free | Pro | Event Pass |
-|---|---|---|---|
-| public dashboards | 3 | ∞ | ∞ |
-| our badge | SHOWN | removed | removed |
-| own logo (`branding`) | no | yes | yes |
-| profiles / embeds / auto posts | no | yes | yes |
+**`dashboard.public.max`: Free 3 → 2, Pro ∞ → 10.** Pro loses "unlimited public
+dashboards", so check `capClaimFaults` and any card copy claiming it.
 
-Noted for a later wave, not this one: with every publishing plan having the badge off,
-`dashboard.branding` and `branding` now gate the SAME boundary (Free vs everyone else) with
-two keys. Worth collapsing into one, but not while this wave is mid-flight.
+**"Event Pass always as a single comp" needs CODE, not a row.** `dashboard.public.max` is
+an ORG-level integer and a pass can never lift one. Worse, the count has no pass exclusion:
+`competitions.ts:131-141` is `select count(*) from competitions where visibility='public'`
+then `withinLimit(orgId, "dashboard.public.max", count + 1)` — flat. `competitions.max_active`
+solves the identical problem at `:113-120` by subtracting passed competitions out of the
+count via a `not exists (… pass_applies …)` clause. Mirror that here: a passed competition's
+public dashboard must not count against the org's cap. Same shape as this wave's "+1"
+finding; do not try to express it as a matrix row.
+
+Also stale and now more wrong: `feature-copy.ts` says "Your plan hosts one public dashboard
+at a time" — the cap is 2 on Free and 10 on Pro. Quote the entitlement, do not hardcode a
+fourth literal.
 
 The counter-argument was put and overruled: design §2 made these three free as acquisition
 loops ("Three share loops go free… Each one puts the badge in front of people who are not
