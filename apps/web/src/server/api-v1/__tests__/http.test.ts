@@ -185,13 +185,24 @@ describe("v1 envelope", () => {
     expect(err.stranded).toBe(2);
   });
 
-  it("maps PaymentRequiredError → 402 with the feature key", async () => {
+  it("maps PaymentRequiredError → 402 with code PAYMENT_REQUIRED and feature_key", async () => {
+    // G5 (bench B03 product-gaps, 2026-09-02): PaymentRequiredError extends
+    // HttpError, and its dedicated branch in http.ts sits ABOVE the generic
+    // `instanceof HttpError` branch (subclass check must come first). Reorder
+    // them and every contextual paywall degrades to a generic HttpError
+    // response — same 402 status, but `code` reverts to undefined and
+    // `feature_key` disappears, so <UpgradeGate> silently stops rendering.
+    // This asserts the fields ONLY the specific branch produces, not just the
+    // status the generic branch would also produce.
     const res = await v1(async () => {
       throw new PaymentRequiredError("api.access");
     });
     expect(res.status).toBe(402);
     const json = await body(res);
-    expect((json.error as { feature: string }).feature).toBe("api.access");
+    const error = json.error as { code: string; feature: string; feature_key: string };
+    expect(error.code).toBe("PAYMENT_REQUIRED");
+    expect(error.feature).toBe("api.access");
+    expect(error.feature_key).toBe("api.access");
   });
 
   it("maps AuthError → 401 and HttpError → its status", async () => {
