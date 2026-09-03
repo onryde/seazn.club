@@ -14432,6 +14432,26 @@ async function v1Suite(admin: Session, orgId: string, orgSlug: string): Promise<
   const fixturePage = await html(admin, `/o/${orgSlug}/c/${compSlug}/d/${divSlug}/f/1`);
   check("fixture ordinal page serves (/f/1)", fixturePage.status === 200);
 
+  // Phone composition (spec 2026-09-02-scorepad-v3-phone-composition §6.3):
+  // anchored on `="` — React serialises an omitted prop as "$undefined", so a
+  // bare data-role probe would pass in both states.
+  check(
+    "fixture console: phone match-details toggle is in the markup",
+    fixturePage.status === 200 && fixturePage.body.includes('data-role="match-details-toggle"'),
+  );
+  // Review fix (final wave, MINOR 6): `!desktop || phone` is an implication,
+  // not the real invariant — it passes vacuously on any page where hand-over
+  // is not offered at all (desktop absent makes it true regardless of
+  // phone), and it never catches "phone present, desktop absent" either.
+  // One `canHandOver` predicate now drives both copies, so the real
+  // invariant is that their presence is EQUAL — both rendered, or neither.
+  const deviceHandoverDesktop = fixturePage.body.includes('data-role="device-handover"');
+  const deviceHandoverPhone = fixturePage.body.includes('data-role="device-handover-phone"');
+  check(
+    "fixture console: phone hand-over icon ships beside the desktop button (both present, or both absent)",
+    deviceHandoverDesktop === deviceHandoverPhone,
+  );
+
   // Scheduling console (doc 12, PROMPT-17): scoring is closed until the
   // explicit start; auto pass proposes without persisting; start opens scoring.
   const fx = fixtures[0].id;

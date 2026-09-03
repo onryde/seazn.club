@@ -211,4 +211,50 @@ describe("a fixture with no lineup to pick still shows the roster's availability
     const html = consoleHtml("football");
     expect(html).not.toContain('data-testid="availability-roster"');
   });
+
+  // Review fix (final wave, MINOR 5) — `AvailabilityRoster` itself returns
+  // null for a side with no members (`lineup-editor.tsx`'s own
+  // `if (side.members.length === 0) return null`), but the console used to
+  // wrap it in a `PhoneDisclosure` unconditionally: a phone would show a
+  // tappable "… availability" row that opened onto nothing. The wrapper is
+  // now gated on the same `members.length > 0` condition.
+  it("renders no phone disclosure row at all when a side has no members to show availability for", () => {
+    const mod = builtinModules.find((m) => m.key === "generic")!;
+    const catalog = lineupCatalogFor(mod, {});
+    const emptySide = (id: string, name: string): SideInfo => ({
+      id,
+      name,
+      kind: "team",
+      members: [],
+      lineup: [],
+    });
+    const html = renderToStaticMarkup(
+      <FixtureConsole
+        fixture={{
+          id: "f1",
+          status: "scheduled",
+          scheduled_at: null,
+          venue_name: null,
+          court_name: null,
+          round_no: 1,
+        }}
+        sport={{
+          key: mod.key,
+          config: {},
+          scorerLabel: mod.officialLabel.scorer,
+          positionGroups: catalog.groups,
+          roles: catalog.roles ?? [],
+          lineupSize: catalog.lineup.size,
+          benchMax: catalog.lineup.benchMax ?? 0,
+        }}
+        home={emptySide("e1", "Home")}
+        away={emptySide("e2", "Away")}
+        initialState={{ status: "scheduled", last_seq: 0, summary: null, state: {}, outcome: null }}
+        initialEvents={[]}
+        canEdit={true}
+      />,
+    );
+    expect(html).not.toContain('data-testid="availability-roster"');
+    expect(html, "no toggle with nothing behind it either").not.toContain('data-role="phone-disclosure-toggle"');
+  });
 });

@@ -17,7 +17,8 @@ import {
   ActivityPanel,
   type ActivityEvent,
 } from "../activity";
-import { propsOf, textOf, walk } from "@/components/__tests__/_hook-harness";
+import type { ReactElement } from "react";
+import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
 import type { MsgFn } from "../ribbon";
 
 function ev(over: Partial<ActivityEvent> & { id: string }): ActivityEvent {
@@ -266,7 +267,7 @@ describe("ActivityPanel — history wiring (R2b)", () => {
       calls.push({ payload, history });
       return undefined;
     };
-    ActivityPanel({
+    renderIsland(ActivityPanel, {
       events: [oldest, middle, newest],
       ownEventIds: NO_IDS,
       deviceLinkId: null,
@@ -297,7 +298,7 @@ describe("ActivityPanel — history wiring (R2b)", () => {
       calls.push({ payload, history });
       return undefined;
     };
-    ActivityPanel({
+    renderIsland(ActivityPanel, {
       events: [real, voided, current, voidEvt],
       ownEventIds: NO_IDS,
       deviceLinkId: null,
@@ -321,7 +322,7 @@ describe("ActivityPanel — history wiring (R2b)", () => {
       calls.push({ history });
       return undefined;
     };
-    ActivityPanel({
+    renderIsland(ActivityPanel, {
       events: [only],
       ownEventIds: NO_IDS,
       deviceLinkId: null,
@@ -341,9 +342,11 @@ describe("scroll threshold", () => {
 
 // D1 + D2, at the RENDERED level: `activityRowState`/`buildRibbon` being
 // correct in isolation (ribbon.test.ts) does not prove `ActivityPanel`
-// actually wires them up. `ActivityPanel` has no hooks, so it can be called
-// directly as a plain function — same shape React itself would call it —
-// and its output walked with the shared node-env harness utilities.
+// actually wires them up. `ActivityPanel` gained a `useState` (phone
+// composition, spec §3.9), so it can no longer be called directly as a plain
+// function — `renderIsland` (`_hook-harness.tsx`) supplies the hook
+// dispatcher a bare call has none of, and its output is walked with the
+// shared node-env harness utilities exactly as before.
 const T: MsgFn = ((key: string, vars?: Record<string, string | number>) => {
   if (key === "pad.ribbon.core.start") return "Match started";
   if (key === "pad.ribbon.fallback") return `${vars!.event} recorded`;
@@ -353,8 +356,13 @@ const T: MsgFn = ((key: string, vars?: Record<string, string | number>) => {
   return String(key);
 }) as MsgFn;
 
-function rowTexts(tree: ReturnType<typeof ActivityPanel>): string[] {
-  return walk(tree)
+// `.tree()`'s default `expand` is `walk` — already a fully flattened list of
+// EVERY element under the root, each still carrying its own untouched
+// `.props.children`. So this filters that flat list directly rather than
+// re-`walk`ing it (re-walking a pre-flattened list would revisit every
+// descendant's children a second time and double-count nested text).
+function rowTexts(elements: readonly ReactElement[]): string[] {
+  return elements
     .filter((el) => propsOf(el)["data-role"] === "v3-activity-row")
     .map((el) => textOf(el));
 }
@@ -362,14 +370,17 @@ function rowTexts(tree: ReturnType<typeof ActivityPanel>): string[] {
 describe("ActivityPanel — rendered captions (D1)", () => {
   it("core.start never renders its raw event type — a real screenshot caught 'core.start recorded'", () => {
     const events: ActivityEvent[] = [ev({ id: "s", type: "core.start" })];
-    const tree = ActivityPanel({
+    // `.text()` runs `textOf` on the RAW (unwalked) output — the right choice
+    // here since this test wants the panel's whole rendered text, not a
+    // per-row slice; see `rowTexts`'s own comment for why `.tree()` cannot be
+    // fed straight into `textOf` without double-counting.
+    const text = renderIsland(ActivityPanel, {
       events,
       ownEventIds: NO_IDS,
       deviceLinkId: null,
       personNames: {},
       t: T,
-    });
-    const text = textOf(tree);
+    }).text();
     expect(text).not.toContain("core.start");
     expect(text).toContain("Match started");
   });
@@ -383,14 +394,14 @@ describe("ActivityPanel — rendered captions (D2)", () => {
       const bat = (payload.runs as { bat?: number } | undefined)?.bat ?? 0;
       return bat === 0 ? "Dot ball" : `${bat} runs`;
     };
-    const tree = ActivityPanel({
+    const tree = renderIsland(ActivityPanel, {
       events: [dot, four],
       ownEventIds: NO_IDS,
       deviceLinkId: null,
       personNames: {},
       t: T,
       resolveDetail,
-    });
+    }).tree();
     const [texts0, texts1] = rowTexts(tree);
     expect(texts0).not.toBe(texts1);
     expect(rowTexts(tree).some((r) => r.includes("Dot ball"))).toBe(true);
@@ -400,13 +411,13 @@ describe("ActivityPanel — rendered captions (D2)", () => {
   it("WITHOUT resolveDetail, two different balls collapse to the SAME text — documents that pad-host.tsx must still wire resolveDetail for this to differentiate in production", () => {
     const dot = ev({ id: "b1", type: "cricket.ball", payload: { runs: { bat: 0 } } });
     const four = ev({ id: "b2", type: "cricket.ball", payload: { runs: { bat: 4 } } });
-    const tree = ActivityPanel({
+    const tree = renderIsland(ActivityPanel, {
       events: [dot, four],
       ownEventIds: NO_IDS,
       deviceLinkId: null,
       personNames: {},
       t: T,
-    });
+    }).tree();
     const texts = rowTexts(tree);
     expect(texts).toHaveLength(2);
     expect(texts[0]).toBe(texts[1]);
@@ -432,14 +443,14 @@ describe("ActivityPanel — partial rows (R7-42/F)", () => {
   it("renders the partial badge only for a row isPartial flags true", () => {
     const answered = ev({ id: "r1", type: "badminton.rally", payload: { wonBy: "home", scorer: "a" } });
     const unanswered = ev({ id: "r2", type: "badminton.rally", payload: { wonBy: "away" } });
-    const tree = ActivityPanel({
+    const tree = renderIsland(ActivityPanel, {
       events: [answered, unanswered],
       ownEventIds: NO_IDS,
       deviceLinkId: null,
       personNames: {},
       t: T_PARTIAL,
       isPartial: (_type, payload) => payload.scorer === undefined,
-    });
+    }).tree();
     const rows = rowTexts(tree);
     // orderedActivity reverses (newest first) — row 0 is r2, the UNANSWERED
     // rally submitted last; row 1 is r1, the answered one.
@@ -449,13 +460,13 @@ describe("ActivityPanel — partial rows (R7-42/F)", () => {
 
   it("WITHOUT isPartial, no row ever carries the badge — additive, zero change for every existing caller", () => {
     const events = [ev({ id: "r1", type: "badminton.rally", payload: { wonBy: "home" } })];
-    const tree = ActivityPanel({
+    const tree = renderIsland(ActivityPanel, {
       events,
       ownEventIds: NO_IDS,
       deviceLinkId: null,
       personNames: {},
       t: T_PARTIAL,
-    });
+    }).tree();
     expect(rowTexts(tree)[0]).not.toContain("Partial");
   });
 });

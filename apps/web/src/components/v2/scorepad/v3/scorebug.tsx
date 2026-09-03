@@ -29,10 +29,52 @@
 // Token pairs + the WCAG contrast math backing this file's color choices
 // live in ./tokens.ts / __tests__/contrast.test.ts — read that file's
 // header before changing any color class here.
+import { useSyncExternalStore } from "react";
 import type { ScorebugHalf, ScorebugSpec, TapEvent, WhoLine } from "./types";
 import { padLabel } from "@/lib/scoring-vocab";
 import type { MsgFn } from "./ribbon";
 import { NIGHT_TILE_CLASSES, SCORE_TEXT_SIZE_CLASS } from "./tokens";
+
+/** The SAME condition Tailwind's `max-md:` variant compiles to (`@media not
+ *  all and (min-width: 48rem)` — verified against this repo's own build
+ *  output, `.next/static/chunks/*.css`), so this stays in sync with the class
+ *  the meta strip's `overflow-x` itself is gated on below. */
+const PHONE_QUERY = "not all and (min-width: 48rem)";
+
+/** Why this exists at all: `useIsPhone` below decides whether the strip
+ *  should be `tabIndex`-focusable, and `tabIndex` is an HTML ATTRIBUTE — it
+ *  cannot be conditioned by a CSS media query the way a class can. Making it
+ *  a plain `true` at every width (this file's first attempt) satisfied axe's
+ *  `scrollable-region-focusable` but then failed the repo's OWN 44px
+ *  hit-target floor at DESKTOP too — `scorepad-a11y-kit.ts`'s
+ *  `INTERACTIVE_SELECTOR` counts any `[tabindex]:not([tabindex="-1"])` as an
+ *  "operable" target, and this row is not 44px tall at 1280 either. A strip
+ *  that only SCROLLS below `md` should only need a keyboard tab stop below
+ *  `md`; at `md` and up `flex-wrap` shows every item with nothing to scroll,
+ *  so there is nothing there to make reachable.
+ *
+ *  `useSyncExternalStore`, not `useState`+`useEffect` — this file's first cut
+ *  called `setIsPhone` from inside the effect body to pick up the current
+ *  match on mount, which is exactly the "cascading render" shape
+ *  `react-hooks/set-state-in-effect` warns against. `matchMedia` IS an
+ *  external store in React's own sense of the term (the browser owns the
+ *  value, components only read it), which is what this hook is for: no
+ *  extra render, and the tearing-safe read. `getServerSnapshot` returns
+ *  `false` — matches the server render, so hydration never mismatches. */
+function subscribeToPhoneQuery(onChange: () => void): () => void {
+  const mql = window.matchMedia(PHONE_QUERY);
+  mql.addEventListener("change", onChange);
+  return () => mql.removeEventListener("change", onChange);
+}
+function readPhoneQuery(): boolean {
+  return window.matchMedia(PHONE_QUERY).matches;
+}
+function readPhoneQueryOnServer(): boolean {
+  return false;
+}
+function useIsPhone(): boolean {
+  return useSyncExternalStore(subscribeToPhoneQuery, readPhoneQuery, readPhoneQueryOnServer);
+}
 
 export interface ScorebugProps {
   spec: ScorebugSpec;
@@ -147,7 +189,7 @@ function HalfContent({ half, hintText }: { half: ScorebugHalf; hintText: string 
        *  Chassis-wide: every skin's ScorebugSpec renders through here, so
        *  this was verified against the other skins' captures too. */}
       <div
-        className={`line-clamp-6 min-w-0 text-center app-display text-[12px] font-semibold tracking-wide ${NIGHT_TILE_CLASSES.creamText} sm:text-sm`}
+        className={`line-clamp-6 min-w-0 text-center app-display text-[12px] font-semibold tracking-wide ${NIGHT_TILE_CLASSES.creamText} sm:text-sm max-md:line-clamp-2`}
       >
         {half.who.map((w, i) => (
           // NOT `inline-flex`: an inline-flex box is ATOMIC to the
@@ -210,7 +252,7 @@ function HalfContent({ half, hintText }: { half: ScorebugHalf; hintText: string 
         </div>
       )}
       {half.tappable && hintText && (
-        <span className={`text-[11px] font-medium ${NIGHT_TILE_CLASSES.creamTextMuted}`}>{hintText}</span>
+        <span className={`text-[11px] font-medium ${NIGHT_TILE_CLASSES.creamTextMuted} max-md:block max-md:max-w-full max-md:truncate`}>{hintText}</span>
       )}
     </>
   );
@@ -254,6 +296,7 @@ const STRIP_SIZER_CLASS =
  * unfocusable <div>), the context line, and the stat strip.
  */
 export function Scorebug({ spec, t, onTap, onOpenSheet }: ScorebugProps) {
+  const isPhone = useIsPhone();
   return (
     <div
       className={`overflow-hidden rounded-2xl border-t-2 ${NIGHT_TILE_CLASSES.ledEdge} ${NIGHT_TILE_CLASSES.tileBg} shadow-lg`}
@@ -306,7 +349,7 @@ export function Scorebug({ spec, t, onTap, onOpenSheet }: ScorebugProps) {
                 }}
                 aria-label={[whoNames(half.who), hintText].filter(Boolean).join(" ")}
                 style={{ minHeight: 44 }}
-                className={`${NIGHT_TILE_CLASSES.half} flex min-w-0 flex-col items-center justify-center gap-1 px-3 py-3 text-center outline-offset-[-3px] transition-colors focus-visible:outline focus-visible:outline-2`}
+                className={`${NIGHT_TILE_CLASSES.half} flex min-w-0 flex-col items-center justify-center gap-1 px-3 py-3 text-center outline-offset-[-3px] transition-colors focus-visible:outline focus-visible:outline-2 max-md:px-2 max-md:py-2`}
               >
                 {content}
               </button>
@@ -316,7 +359,7 @@ export function Scorebug({ spec, t, onTap, onOpenSheet }: ScorebugProps) {
             <div
               key={i}
               data-role="v3-scorebug-half"
-              className="flex min-w-0 flex-col items-center justify-center gap-1 px-3 py-3 text-center"
+              className="flex min-w-0 flex-col items-center justify-center gap-1 px-3 py-3 text-center max-md:px-2 max-md:py-2"
             >
               {content}
             </div>
@@ -325,7 +368,60 @@ export function Scorebug({ spec, t, onTap, onOpenSheet }: ScorebugProps) {
       </div>
 
       {spec.strip.length > 0 && (
-        <div className={`flex flex-wrap items-center justify-center gap-x-4 gap-y-1 ${NIGHT_TILE_CLASSES.bandBg} px-3 py-1.5`}>
+        // Task 13 finding C — the strip is a swipeable rail on phones
+        // (`max-md:overflow-x-auto` above), and a still screenshot of it
+        // reads as clipped text, not "there is more, scroll for it" (this
+        // is an APPROVED affordance the design review flagged as needing a
+        // visual cue, not a defect in the scroll behaviour itself — see the
+        // dispatch's own already-triaged note on the strip). `relative`
+        // here (never on the scrolling div itself) is what lets the fade
+        // below stay pinned to the outer box's visible right edge — an
+        // `absolute` child of the SCROLLING div would instead be positioned
+        // against that div's full scrollable width and sit off-screen past
+        // whatever is currently scrolled out of view.
+        <div className="relative">
+          {/* CI e2e finding (run 33735186301, `parallel 2/2`): making this band
+              a scrolling rail on phones tripped axe's `scrollable-region-
+              focusable` at SERIOUS impact — `scorepad-skins.spec.ts`'s
+              `expectPadA11yClean`. A region that scrolls must be reachable by
+              keyboard, and every child here is static text, so the rule's
+              "focusable content" escape does not apply either. `tabIndex={0}`
+              alone silences axe; `role="group"` + a name is what makes the
+              resulting tab stop mean something instead of announcing as a bare
+              empty group.
+
+              GATED ON `useIsPhone()`, not unconditional — a first attempt made
+              it unconditional (reasoning "tabindex can't vary by media query")
+              and that broke the repo's OWN 44px hit-target floor at DESKTOP
+              too: `scorepad-a11y-kit.ts`'s `INTERACTIVE_SELECTOR` counts any
+              `[tabindex]:not([tabindex="-1"])` as an operable target needing
+              44px. `useIsPhone()` is JS state (mirrors `max-md:`'s own media
+              query exactly, verified against the compiled CSS), not a class,
+              so it CAN gate an attribute a stylesheet cannot reach. At `md`
+              and up `flex-wrap` shows every item with nothing to scroll, so
+              there is nothing there to make keyboard-reachable in the first
+              place.
+
+              `max-md:min-h-11` (round 2): gating alone was not enough —
+              `scorepad-skins.spec.ts` forces `test.use({ viewport: { width:
+              375 } })` for EVERY test in the file regardless of Playwright
+              project (S11/#420's own header), so its floor scan runs at the
+              SAME width the rail is scrollable at. The two requirements
+              (axe: reachable; this repo: ≥44px) apply simultaneously there,
+              not at two different widths — `useIsPhone()` narrows WHERE the
+              conflict can occur, it cannot remove a conflict that occurs
+              inside its own true branch. `min-h-11` is the same recipe the
+              rest of this chassis already uses for a phone touch target
+              (`phone-disclosure.tsx`'s toggle, the ribbon's Take-back
+              button) — genuinely grow the row on phones, not just excuse it.
+
+              `className` stays the FIRST prop: `phone-classes.test.tsx` anchors
+              on `<div class="…` immediately after `<div class="relative">`, and
+              React emits attributes in JSX order. */}
+          <div
+            className={`flex flex-wrap items-center justify-center gap-x-4 gap-y-1 ${NIGHT_TILE_CLASSES.bandBg} px-3 py-1.5 max-md:min-h-11 max-md:flex-nowrap max-md:justify-start max-md:gap-x-3 max-md:overflow-x-auto max-md:[scrollbar-width:none]`}
+            {...(isPhone ? { role: "group", tabIndex: 0, "aria-label": t("pad.scorebug.strip.label") } : {})}
+          >
           {spec.strip.map((item, i) => {
             // R3/B4 (owner ruling R3-6, the per-sport signature): a strip item
             // may ask for the LED-panel treatment — the fourth official's
@@ -346,7 +442,7 @@ export function Scorebug({ spec, t, onTap, onOpenSheet }: ScorebugProps) {
                   key={i}
                   {...(item.id ? { "data-strip-item-id": item.id } : {})}
                   data-strip-tone="led"
-                  className={`${NIGHT_TILE_CLASSES.ledPanel} text-xs font-semibold`}
+                  className={`${NIGHT_TILE_CLASSES.ledPanel} text-xs font-semibold max-md:shrink-0 max-md:whitespace-nowrap`}
                 >
                   {item.label && (
                     <span className={NIGHT_TILE_CLASSES.ledPanelLabel}>{item.label}</span>
@@ -421,7 +517,7 @@ export function Scorebug({ spec, t, onTap, onOpenSheet }: ScorebugProps) {
                   // and top-aligned the visible value inside it, while every
                   // sibling strip item sits on the band's own `items-center`.
                   // The reservation is a WIDTH; it must not buy height.
-                  className="grid min-w-0 place-items-center"
+                  className="grid min-w-0 place-items-center max-md:shrink-0"
                   style={{ fontVariantNumeric: "tabular-nums" }}
                 >
                   {/* THE SIZERS ARE SIBLINGS OF THE VISIBLE LAYER, NEVER ITS
@@ -474,13 +570,31 @@ export function Scorebug({ spec, t, onTap, onOpenSheet }: ScorebugProps) {
                 // rendered when a skin actually sets it, so every other strip
                 // item (over dots, names, target) is unchanged.
                 {...(item.id ? { "data-strip-item-id": item.id } : {})}
-                className={weight}
+                className={`${weight} max-md:shrink-0 max-md:whitespace-nowrap`}
                 style={{ fontVariantNumeric: "tabular-nums" }}
               >
                 {text}
               </span>
             );
           })}
+          </div>
+          {/* The fade itself: `pointer-events-none` so it never intercepts a
+              swipe or a tap on the last visible strip item, `aria-hidden`
+              since it is purely decorative (the scrollable region's own
+              content is what a screen reader needs), and `md:hidden` so it
+              is zero-cost/zero-DOM-effect at the width this rail wraps
+              instead of scrolls. `pad-strip-fade` (globals.css) is the
+              SAME custom property `NIGHT_TILE_CLASSES.bandBg` (`pad-board-2`,
+              just above) paints the rail's own background from — a class,
+              not an inline `var(--sport-...)` here, so the fade blends into
+              whichever sport's band colour is live without this file's own
+              source tripping sport-theme.test.ts's ban on any v3 component
+              writing a literal `--sport-` of its own (see that class's own
+              comment in globals.css). */}
+          <div
+            aria-hidden="true"
+            className="pad-strip-fade pointer-events-none absolute inset-y-0 right-0 w-8 md:hidden"
+          />
         </div>
       )}
     </div>

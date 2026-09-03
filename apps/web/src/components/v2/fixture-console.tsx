@@ -19,6 +19,7 @@ import {
 } from "@/components/v2/lineup-editor";
 import { ScoringErrorBoundary } from "@/components/v2/scoring-error-boundary";
 import { DeviceLinkPanel } from "@/components/v2/device-link-panel";
+import { PhoneDisclosure } from "@/components/v2/phone-disclosure";
 import { PadSuspensionBanner } from "@/components/discipline/pad-suspension-banner";
 import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { scoringErrorText, decidedOutcomeText, shootoutScoreFromDetail } from "@/lib/scoring-vocab";
@@ -348,6 +349,7 @@ export function FixtureConsole({
   /** The row whose Void is in flight — the panel dims exactly that button. */
   const [voidingId, setVoidingId] = useState<string | null>(null);
   const [handoverOpen, setHandoverOpen] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
 
   const resync = useCallback(async () => {
     const [state, all] = await Promise.all([
@@ -451,6 +453,17 @@ export function FixtureConsole({
   // as loose JSON off the wire, not an engine import.
   const outcome = live.outcome as { kind?: string; winner?: string; method?: string } | null;
   const scoring = canEdit && live.status !== "finalized" && live.status !== "cancelled";
+  // Fix round 1 (Task 4) — CRITICAL: the phone hand-over icon used to be
+  // gated on `deviceHandover` alone while the `DeviceLinkPanel` it opens
+  // sits behind `scoring && home && away` (the Scoring section's own gate,
+  // below). On a TBD fixture (home/away null, header falls back to
+  // schedule.tbd) with `canEdit`, the icon rendered and opened nothing —
+  // pre-match, exactly when a handover happens. `deviceHandover` also reads
+  // the SERVER's `fixture.status` while `scoring` reads the CLIENT's
+  // `live.status`, so the two disagreed after an in-session finalize too.
+  // One predicate now drives both the phone icon, the desktop button, and
+  // the panel — they cannot diverge again.
+  const canHandOver = deviceHandover && scoring && !!home && !!away;
   // An ABANDONED fixture is over, and the server records that in `status` while
   // leaving `outcome` NULL — the engine's own outcome for it is
   // `{kind:"no_result"}` (core/events.test.ts), which has no winner to persist
@@ -470,6 +483,22 @@ export function FixtureConsole({
   // Over, but reversible.
   const decided = live.outcome !== null || live.status === "abandoned";
   const started = live.status !== "scheduled";
+  // Task 13 finding B — the SCORING section's header row hides itself on
+  // phones once `started` (below, "Owner review ... hand-over as an icon"),
+  // and its ScorePad mount is gated on `scorePadV2 && !decided` (below) —
+  // so a fixture that is BOTH started and decided has nothing left to show
+  // inside `<section data-role="console-scoring">` on a phone, yet the
+  // section's own `card p-5 max-md:p-3` wrapper (padding, border, bg-white)
+  // still rendered, an empty white box between the header's "won on ..."
+  // line and the Activity card (found on cricket/football/ice-hockey
+  // decided-screen captures at 320, absent from the pre-branch baseline —
+  // the baseline's header row had no `started`-gated max-md:hidden at all).
+  // `canHandOver && handoverOpen` is the one thing that CAN still put real
+  // content in the section on a phone regardless of `started`/`decided`
+  // (the phone-only header icon, line ~629, opens `DeviceLinkPanel` inside
+  // this section with no `max-md:hidden` of its own) — excluded here so
+  // hiding the section can never hide content a scorer just asked to see.
+  const consoleScoringEmptyOnPhone = started && !(scorePadV2 && !decided) && !(canHandOver && handoverOpen);
 
   const sides = { home, away };
   // R7/C5 (D-6) — what to CALL each side, resolved ONCE here and read by the
@@ -578,11 +607,17 @@ export function FixtureConsole({
   const flaggedSuspensions = activeSuspensions.filter((s) => referencedPersons.has(s.personId));
 
   return (
-    <div className="space-y-6">
-      {/* Scoreline header */}
-      <header className="card p-5">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <h1 className="text-lg font-semibold tracking-tight text-slate-900">
+    <div className="space-y-6 max-md:space-y-3">
+      {/* Scoreline header — on phones this IS the match strip (spec §3.1):
+          names on one truncated line, status, a compact score, hand-over as
+          an icon, and the round/venue/time line behind a details toggle. */}
+      <header className="card p-5 max-md:p-3">
+        <div className="flex flex-wrap items-center justify-between gap-3 max-md:flex-nowrap max-md:gap-2">
+          <h1
+            className={`text-lg font-semibold tracking-tight text-slate-900 max-md:min-w-0 max-md:flex-1 max-md:text-[13px] ${
+              detailsOpen ? "" : "max-md:truncate"
+            }`}
+          >
             {homeName ?? resolveSlotLabel(fixture.home_slot_label ?? null, msg, "schedule.tbd")}{" "}
             {/* R3.5 accessibility fix — was text-slate-400 (~2.6:1 on white,
                 under the WCAG AA 4.5:1 floor for normal text); text-slate-600
@@ -597,32 +632,96 @@ export function FixtureConsole({
           <span className={`badge ${STATUS_STYLE[live.status] ?? ""}`}>
             {scoreStatusLabel(msg, live.status)}
           </span>
+          {canHandOver && (
+            <button
+              type="button"
+              data-role="device-handover-phone"
+              aria-label={msg("score.handOverDevice")}
+              aria-expanded={handoverOpen}
+              onClick={() => setHandoverOpen((v) => !v)}
+              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-slate-200 text-slate-700 transition-colors hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400 md:hidden"
+            >
+              <svg
+                aria-hidden="true"
+                viewBox="0 0 20 20"
+                className="h-5 w-5"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={1.75}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M3 7h11M11 4l3 3-3 3M17 13H6M9 10l-3 3 3 3" />
+              </svg>
+            </button>
+          )}
         </div>
-        {!suppressHeadline && (
-          <p className="mt-2 font-mono text-2xl text-slate-800">
-            {summary?.headline ?? "—"}
-          </p>
-        )}
+        <div className="max-md:mt-1 max-md:flex max-md:items-center max-md:justify-between max-md:gap-2">
+          {!suppressHeadline && (
+            <p className="mt-2 font-mono text-2xl text-slate-800 max-md:mt-0 max-md:min-w-0 max-md:text-lg">
+              {summary?.headline ?? "—"}
+            </p>
+          )}
+          <button
+            type="button"
+            data-role="match-details-toggle"
+            aria-expanded={detailsOpen}
+            aria-label={msg(detailsOpen ? "console.phone.hideDetails" : "console.phone.showDetails")}
+            // Review fix: same `aria-controls` the activity toggle already
+            // carries — points at the round/venue/time region below, which
+            // is the region this button actually opens/closes. `FixtureConsole`
+            // mounts once per fixture page (see `f/[no]/page.tsx`), so a
+            // static id is safe — unlike `PhoneDisclosure`, which is mounted
+            // several times on one page and needs `useId()`.
+            aria-controls="match-details-body"
+            onClick={() => setDetailsOpen((v) => !v)}
+            className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-slate-600 transition-colors hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400 md:hidden${
+              // Review fix: when the headline <p> above is suppressed
+              // (cricket/generic, pre-innings) this button is the row's only
+              // child, and `justify-between` on the parent leaves a lone
+              // flex child flush left instead of at the end. `ml-auto` pins
+              // it to the end of the row in that case; harmless when the
+              // headline is present too, since `justify-between` already
+              // pushes it there. No leading space before `${` above: the
+              // conditional string supplies its OWN leading space so the
+              // common case (`suppressHeadline` false) ends the class list
+              // in exactly `md:hidden` with no trailing space — a stray
+              // trailing space here broke the test's own anchored
+              // `\smd:hidden"` regex (fixture-console-authority-band.test.tsx).
+              suppressHeadline ? " ml-auto" : ""
+            }`}
+          >
+            <span aria-hidden="true">{detailsOpen ? "▴" : "▾"}</span>
+          </button>
+        </div>
         {/* R3.5/Task G — the v3 pad unmounts once decided; this is the
             organiser console's surviving surface for "who won, and how". */}
         {decidedLine && <p className="mt-1 text-sm font-medium text-slate-700">{decidedLine}</p>}
-        {/* R3.5/Task P — was text-slate-400 (2.63:1 on this .card's white,
-            under the WCAG AA 4.5:1 floor); text-slate-600 clears 7.58:1,
-            same fix as the "vs" separator above. */}
-        <p className="mt-1 text-xs text-slate-600">
-          {msg("schedule.round", { n: fixture.round_no })}
-          {fixture.scheduled_at ? (
-            <>
-              {" · "}
-              <ClientTime value={fixture.scheduled_at} mode="datetime" tz={fixture.scheduled_tz} showZone />
-            </>
-          ) : (
-            ""
-          )}
-          {fixture.venue_name ? ` · ${fixture.venue_name}` : ""}
-          {fixture.court_name ? ` · ${fixture.court_name}` : ""}
-          {` · ${msg("score.recordedBy", { scorer: sport.scorerLabel.toLowerCase() })}`}
-        </p>
+        {/* Phone-only: the round/venue/time line sits behind
+            `match-details-toggle` below md (spec §3.1) — wrapped in this div
+            rather than folded into the <p>'s own className so
+            history-panel-contrast.test.tsx's source-scan regex for this
+            exact line (`<p className="mt-1 text-xs text-slate-(\d+)">`)
+            keeps matching untouched. */}
+        <div className={detailsOpen ? undefined : "max-md:hidden"} id="match-details-body">
+          {/* R3.5/Task P — was text-slate-400 (2.63:1 on this .card's white,
+              under the WCAG AA 4.5:1 floor); text-slate-600 clears 7.58:1,
+              same fix as the "vs" separator above. */}
+          <p className="mt-1 text-xs text-slate-600">
+            {msg("schedule.round", { n: fixture.round_no })}
+            {fixture.scheduled_at ? (
+              <>
+                {" · "}
+                <ClientTime value={fixture.scheduled_at} mode="datetime" tz={fixture.scheduled_tz} showZone />
+              </>
+            ) : (
+              ""
+            )}
+            {fixture.venue_name ? ` · ${fixture.venue_name}` : ""}
+            {fixture.court_name ? ` · ${fixture.court_name}` : ""}
+            {` · ${msg("score.recordedBy", { scorer: sport.scorerLabel.toLowerCase() })}`}
+          </p>
+        </div>
       </header>
 
       {paywallFeature && <UpgradeGate feature={paywallFeature} />}
@@ -657,17 +756,20 @@ export function FixtureConsole({
           record more", and a section that outlived the pad would answer
           that question wrong. */}
       {scoring && home && away && (
-        <section className="card p-5" data-role="console-scoring">
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-            <h2 className="text-sm font-semibold text-slate-700">{msg("score.scoring")}</h2>
+        <section
+          className={`card p-5 max-md:p-3${consoleScoringEmptyOnPhone ? " max-md:hidden" : ""}`}
+          data-role="console-scoring"
+        >
+          <div className={`mb-3 flex flex-wrap items-center justify-between gap-2${started ? " max-md:hidden" : ""}`}>
+            <h2 className="text-sm font-semibold text-slate-700 max-md:hidden">{msg("score.scoring")}</h2>
             <div className="flex flex-wrap items-center gap-2">
-              {deviceHandover && (
+              {canHandOver && (
                 <button
                   type="button"
                   data-role="device-handover"
                   aria-expanded={handoverOpen}
                   onClick={() => setHandoverOpen((v) => !v)}
-                  className="btn btn-ghost min-h-11"
+                  className="btn btn-ghost min-h-11 max-md:hidden"
                 >
                   {msg("score.handOverDevice")}
                 </button>
@@ -685,7 +787,7 @@ export function FixtureConsole({
             </div>
           </div>
 
-          {deviceHandover && handoverOpen && (
+          {canHandOver && handoverOpen && (
             <div className="mb-4">
               <DeviceLinkPanel fixtureId={fixture.id} scorerLabel={sport.scorerLabel} embedded />
             </div>
@@ -742,6 +844,7 @@ export function FixtureConsole({
         personNames={entrantNames}
         t={msg}
         authority
+        collapsible
         resolveDetail={activityDetail}
         // R7-46. Reads through the ref at call time rather than closing over a
         // value, so the panel does not need to re-render when the pad's view
@@ -814,22 +917,29 @@ export function FixtureConsole({
           {(["home", "away"] as const).map((sideKey) => {
             const s = sides[sideKey]!;
             return (
-              <LineupEditor
+              <PhoneDisclosure
                 key={s.id}
-                fixtureId={fixture.id}
-                // R7/C5 — the editor titles itself with `side.name`; hand it
-                // the RESOLVED one rather than the entry label. Resolved at
-                // the call site because `lineup-editor.tsx` is another wave's
-                // file this week, and because one resolution serving every
-                // reader is the point of `entrantDisplayName`.
-                side={{ ...s, name: entrantDisplayName(s) }}
-                positionGroups={sport.positionGroups}
-                roles={sport.roles}
-                lineupSize={sport.lineupSize}
-                canEdit={canEdit && live.status === "scheduled"}
-                onSaved={() => router.refresh()}
-                availability={availability}
-              />
+                summary={entrantDisplayName(s)}
+                aside={msg("console.phone.lineup")}
+                showLabel={msg("lineup.phone.show")}
+                hideLabel={msg("lineup.phone.hide")}
+              >
+                <LineupEditor
+                  fixtureId={fixture.id}
+                  // R7/C5 — the editor titles itself with `side.name`; hand it
+                  // the RESOLVED one rather than the entry label. Resolved at
+                  // the call site because `lineup-editor.tsx` is another wave's
+                  // file this week, and because one resolution serving every
+                  // reader is the point of `entrantDisplayName`.
+                  side={{ ...s, name: entrantDisplayName(s) }}
+                  positionGroups={sport.positionGroups}
+                  roles={sport.roles}
+                  lineupSize={sport.lineupSize}
+                  canEdit={canEdit && live.status === "scheduled"}
+                  onSaved={() => router.refresh()}
+                  availability={availability}
+                />
+              </PhoneDisclosure>
             );
           })}
         </div>
@@ -845,12 +955,27 @@ export function FixtureConsole({
         <div className="grid gap-4 lg:grid-cols-2">
           {(["home", "away"] as const).map((sideKey) => {
             const s = sides[sideKey]!;
+            // Review fix: `AvailabilityRoster` itself renders nothing for a
+            // side with no members (`lineup-editor.tsx`'s own
+            // `if (side.members.length === 0) return null`). Gate the
+            // wrapper on the SAME condition so a phone never shows a
+            // tappable "… availability" row that opens onto an empty body —
+            // matching the component's own rule rather than restating a
+            // separate one (`lineup-editor.tsx` is shared with the
+            // registration surfaces and is not touched here).
+            if (s.members.length === 0) return null;
             return (
-              <AvailabilityRoster
+              <PhoneDisclosure
                 key={s.id}
-                side={{ ...s, name: entrantDisplayName(s) }}
-                availability={availability}
-              />
+                summary={entrantDisplayName(s)}
+                showLabel={msg("lineup.availabilityTitle", { name: entrantDisplayName(s) })}
+                hideLabel={msg("lineup.availabilityTitle", { name: entrantDisplayName(s) })}
+              >
+                <AvailabilityRoster
+                  side={{ ...s, name: entrantDisplayName(s) }}
+                  availability={availability}
+                />
+              </PhoneDisclosure>
             );
           })}
         </div>

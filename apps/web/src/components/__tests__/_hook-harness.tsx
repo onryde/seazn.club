@@ -73,6 +73,21 @@ interface HookDispatcher {
    *  catalog outside a `DictProvider`), so the sentences a test reads are the
    *  shipped English ones. */
   useContext: (context: { _currentValue: Cell }) => Cell;
+  /** Always the SERVER snapshot, never `subscribe`/`getSnapshot` — this
+   *  environment has no `window` (`environment: "node"`, no jsdom), and a
+   *  browser-backed store (`v3/scorebug.tsx`'s `useIsPhone`, a `matchMedia`
+   *  subscription) would throw reading it. Real React does the same thing
+   *  during SSR — `getServerSnapshot` exists precisely so a store can be read
+   *  with no live browser underneath — so this mirrors production's own
+   *  pre-hydration behaviour rather than inventing a harness-only rule. A
+   *  component whose CLICK WIRING this harness exists to test never depends
+   *  on which snapshot a browser-only store returns; one that started to
+   *  would need a real renderer, not this one. */
+  useSyncExternalStore: (
+    subscribe: (onChange: () => void) => () => void,
+    getSnapshot: () => Cell,
+    getServerSnapshot?: () => Cell,
+  ) => Cell;
 }
 
 export type Props = Record<string, unknown>;
@@ -297,6 +312,9 @@ export function renderIsland<P>(
     },
     useContext(context) {
       return context._currentValue;
+    },
+    useSyncExternalStore(_subscribe, getSnapshot, getServerSnapshot) {
+      return getServerSnapshot ? getServerSnapshot() : getSnapshot();
     },
   };
 

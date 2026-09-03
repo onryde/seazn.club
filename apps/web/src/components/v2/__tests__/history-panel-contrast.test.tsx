@@ -282,7 +282,11 @@ describe("FixtureConsole & MatchRuleFields — contrast sweep completion (R3.5/T
     {
       label: "activity row — provenance line (time + recorded by)",
       src: activityPanelCode,
-      regex: /className="mt-0\.5 block text-xs font-normal text-slate-(\d+) no-underline"/,
+      // Tail left open (`[^"]*"` rather than a bare closing `"`) on purpose:
+      // this guard's job is the slate TIER, not the full class string, and a
+      // legitimate phone-composition class (`max-md:truncate`) now sits after
+      // `no-underline` in production markup.
+      regex: /className="mt-0\.5 block text-xs font-normal text-slate-(\d+) no-underline[^"]*"/,
     },
     {
       label: "activity row — #seq column",

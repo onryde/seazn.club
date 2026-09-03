@@ -58,6 +58,7 @@ function skinFiles(): string[] {
 function v3SourceFiles(): string[] {
   return [...sourcesIn(V3_DIR), ...skinFiles().map((name) => `skins/${name}`)];
 }
+import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
   DEFAULT_SPORT_PALETTE,
@@ -316,7 +317,12 @@ const FULL_BRANCH_SPEC: ScorebugSpec = {
 };
 
 describe("CRICKET IS UNCHANGED — lock 3: render", () => {
-  const html = renderToStaticMarkup(Scorebug({ spec: FULL_BRANCH_SPEC, t }) as never);
+  // `createElement`, not a bare `Scorebug({...})` call — see scorebug.test.ts's
+  // own comment on its first call site (CI run 33747095481): `Scorebug` now
+  // carries a hook (`useIsPhone`), and a hook needs `renderToStaticMarkup`
+  // itself to be the one rendering, not a bare function invocation with no
+  // dispatcher underneath.
+  const html = renderToStaticMarkup(createElement(Scorebug, { spec: FULL_BRANCH_SPEC, t }));
 
   it("emits no --sport-* property of its own — the board reads them off :root, so cricket inherits", () => {
     expect(html).not.toContain("--sport-");

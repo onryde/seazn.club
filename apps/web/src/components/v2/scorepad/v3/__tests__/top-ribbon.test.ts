@@ -19,6 +19,7 @@
 //     two numbers the same way twice; the panel is the independent path, and
 //     the two disagreeing IS the defect.
 import { describe, expect, it } from "vitest";
+import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ActivityPanel, latestRowDetail, type ActivityDetailResolver, type ActivityEvent } from "../activity";
 import { buildTopRibbon } from "../pad-host";
@@ -64,15 +65,21 @@ function ev(seq: number, type: string, payload: Record<string, unknown>, voids: 
 /** The caption text the real panel renders on its newest row. Parsed out of
  *  the markup rather than recomputed — see this file's header. */
 function newestRowCaption(events: readonly ActivityEvent[], resolveDetail: Parameters<typeof ActivityPanel>[0]["resolveDetail"]): string {
+  // `createElement`, not a bare `ActivityPanel({...})` call: the panel now
+  // has a `useState` (phone composition, spec §3.9), and calling a function
+  // component directly executes its body immediately, outside any React
+  // render pass — there is no hook dispatcher at that point. `createElement`
+  // only DESCRIBES the call; `renderToStaticMarkup` is what actually invokes
+  // it, inside a real render.
   const html = renderToStaticMarkup(
-    ActivityPanel({
+    createElement(ActivityPanel, {
       events,
       ownEventIds: new Set<string>(),
       deviceLinkId: null,
       personNames: NAMES,
       t,
       resolveDetail,
-    }) as never,
+    }),
   );
   // Rows render newest-first (`orderedActivity`). Targeted by the caption's
   // OWN marker rather than "the first <span> in the <li>", which is what this

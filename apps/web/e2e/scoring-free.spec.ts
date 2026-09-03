@@ -140,6 +140,16 @@ for (const width of [320, 768, 1280]) {
     ).toHaveCount(0);
 
     // --- the tap actually lands on the chip, at this width ------------------
+    // The scorepad-v3-mobile-composition wave reorders the recording chip
+    // BELOW the ribbon and tiles on phones (`max-md:order-3`, pad-host.tsx) —
+    // by design, so the board is what a scorer reaches first. Football's live
+    // tile grid is tall enough that the chip sits past this test's own fixed
+    // `height: 900` at 320px (measured: chip.y ≈ 889, viewport 900 — off the
+    // fold by less than the chip's own height). This test predates that
+    // reorder (W1) and never scrolled to reach the chip; a real scorer would.
+    // Found while chasing CI e2e run 33747095481, `parallel 2/2` — reproduced
+    // locally, not environmental.
+    await chip(page).scrollIntoViewIfNeeded();
     const chipBox = (await chip(page).boundingBox())!;
     expect(chipBox.height, `the chip must be a 44px target at ${width}`).toBeGreaterThanOrEqual(44);
     expect(await hitAt(page, chipBox)).toBe("v3-recording-chip");

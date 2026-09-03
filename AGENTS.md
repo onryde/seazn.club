@@ -221,6 +221,83 @@ shipped at least twice, and the first four shipped **past a green suite**.
     live value — otherwise it fails in exactly the process where the short
     value is correct, and the obvious repair is to delete the guard.
 
+21. **`-g` on a Playwright sweep is a filename sweep wearing a costume, and
+    serial mode hides everything after the first red.** The phone-composition
+    wave ran ~six green local gates, every one of them
+    `-g "badminton v3 pad|cricket v3 pad|setup:"` — a filter that selected
+    neither of the two tests the change actually broke. CI found both. Then
+    `mobile.spec.ts` runs `describe.configure({ mode: "serial" })`, so the
+    first red aborts the remaining ~110 tests in that project: CI's own
+    "2 failed / 29 passed" was concealing a THIRD failure that only appeared
+    once the first was fixed. Two rules follow. Run the whole spec file, never
+    a `-g` slice, before believing a UI change is clean. And when a serial file
+    goes red, treat the count as a floor, not a total — re-run after each fix
+    until a full pass completes.
+
+22. **Folding a control behind a phone disclosure breaks every test that
+    asserts it VISIBLE, and no unit test can see it.** `apps/web` vitest is
+    `environment: "node"` — a `max-md:hidden` body renders into the markup, so
+    a class-scan test stays green while five width projects go red on
+    `toBeVisible()`. When you fold something, grep the e2e suite for its
+    testid and make those tests OPEN the fold; do not weaken their assertions
+    to match the new markup. Wait on `toBeAttached`, not `toBeVisible` —
+    visibility is exactly what the fold denies — and open EVERY instance
+    (`fixture-console.tsx` mounts one disclosure per side; opening the first
+    leaves the second's controls boxless and `boundingBox()` returns null).
+    Gate the open on the toggle being visible rather than on a width literal:
+    at 768/834 the toggle is `md:hidden` and clicking a hidden control throws.
+
+23. **A scrolling rail is not clipped content, and a `scrollWidth >
+    clientWidth` scan cannot tell them apart.** Making the scorebug meta strip
+    a swipeable rail on phones (`max-md:overflow-x-auto`) reddened
+    `mobile.spec.ts`'s clipping scan at all five phone widths
+    (`div 394px content in 317px`) and tripped axe's
+    `scrollable-region-focusable` at SERIOUS impact in
+    `scorepad-skins.spec.ts`. Both are real, and both have one cause: an
+    overflow whose extra content is REACHABLE is a feature; one inside an
+    `overflow-hidden` box is a defect. Split on computed `overflow-x`
+    (`auto`/`scroll` vs `hidden`/`visible`) — `overflowingIn` /
+    `expectScorebugNotClipped` in `mobile.spec.ts` do this. And any new
+    scrolling region owes a `tabindex="0"` plus a role and an accessible name,
+    or axe reds; `tabindex` cannot be varied by media query, so it is
+    unconditional. Never let the exemption go unchecked: assert that every box
+    you excused is the reachable kind, or the next overflow hides behind it.
+
+## The phone composition (ScoringPad v3 and the fixture console)
+
+Design of record:
+`docs/superpowers/specs/2026-09-02-scorepad-v3-phone-composition-design.md`
+(owner-approved 2026-09-02, "Option 2 — score strip up, chrome down"). Read
+it before changing anything under `apps/web/src/components/v2/scorepad/v3/`
+or `fixture-console.tsx` at a phone width. Not derivable from the code:
+
+- **One DOM, branched — never a second phone tree.** Everything below
+  Tailwind `md` (768) is `max-md:*`; everything phone-only is `md:hidden`.
+  Exactly ONE control is duplicated (the device hand-over), and its desktop
+  twin carries `max-md:hidden`. ≥768 is unchanged and must stay that way.
+- **`/\bmd:hidden\b/` also matches inside `max-md:hidden`**, so an assertion
+  written that way passes on its own inversion. Anchor on `\s...hidden"`.
+- **A wrapper between a grid and its card kills equal-height stretch**, and
+  `h-full` on a plain block does NOT cascade into a content-sized child — use
+  `grid h-full` on both wrapper and body (`phone-disclosure.tsx`).
+- **`truncate` needs `min-w-0` on the whole ancestor chain**, not just the
+  span. A missing one on the disclosure wrapper put 106px of horizontal
+  overflow on the page at 320–390 — visible only with a realistic 43-character
+  entrant name, and only in a browser.
+- **Order is explicit, not source order.** `pad-host.tsx`'s root is
+  `flex flex-col gap-3` with `order-1..4` on its children; the ribbon moving
+  above the board is what buys the headroom that puts cricket's first tile at
+  503px on a 568px screen. *Take back* consequently sits BELOW the board on
+  phones — an owner-accepted trade, not a bug to "fix".
+- **Person/entrant chips get their own row.** In `detail-dock.tsx` the phone
+  grid is two columns, but any non-`flag` chip is `max-md:col-span-2` — a name
+  in a one-column cell inflates into a circular blob, which is exactly the
+  defect the owner rejected the first build for.
+- **Verify with a control-set diff from the live DOM**, membership and order
+  and repeats, at 320 against 1280 — not by comparing box sizes. A phone view
+  that shows the same control set at smaller sizes is a groomed shrink, which
+  is the thing this programme exists to undo.
+
 ## Standing project rules
 
 - **Read `docs/superpowers/RULES.md` first.** Owner's full standing
