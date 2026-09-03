@@ -668,10 +668,15 @@ export async function clearScheduleScoped(
     if (!division) throw new HttpError(404, "division not found");
     // Clear was the one division write path a freeze did not stop, so a frozen
     // board could be wiped by the one control whose whole point is that it is
-    // destructive. `applySchedule` and `patchFixture`'s timetable branch (both
-    // schedule.ts) refuse on exactly these terms — same 422, same sentence,
-    // and the sentence is duplicated by hand at all three sites, so a reword
-    // has to grep the literal rather than trust a shared constant.
+    // destructive. `applySchedule` and the single-fixture move (`moveFixture`)
+    // — both schedule.ts — refuse on exactly these terms: same 422, same
+    // sentence, and in `moveFixture` unconditionally, ahead of its own
+    // `movesTimetable` test, so a freeze refuses every patch and not just a
+    // reslot. (`patchFixture` is a different function in fixtures.ts and
+    // carries no freeze guard at all; naming it here was the third miss on
+    // this one enumeration.) The sentence is duplicated by hand at all three
+    // sites, so a reword has to grep the literal rather than trust a shared
+    // constant.
     //
     // The other two freeze refusals are NOT the same contract, and were
     // miscited here in the first draft of this comment: the joint apply
