@@ -16,6 +16,12 @@ export interface LedgerRow {
   slug: string;
   sportKey: string;
   logoUrl: string | null;
+  /** "Knockout", "League + Groups"... — null/absent once every stage was
+   *  deleted. Distinct from `statusLine` (progress/next), restored from
+   *  `card-stats`' `formatLabel(stage_kinds)` after W1 dropped it wiring off
+   *  the EntityCard grid. Optional (not just nullable) so existing test
+   *  fixtures that predate this field don't all need updating. */
+  formatLabel?: string | null;
   /** null when getCompetitionDesk failed: the row still renders from card stats. */
   desk: DeskDivision | null;
   statusLine: string;
@@ -155,6 +161,7 @@ export function DivisionLedger({
           const tile = (sizeClass: string) => (
             <span
               aria-hidden
+              data-testid="desk-ledger-avatar"
               className={`grid h-9 w-9 shrink-0 place-items-center overflow-hidden rounded-lg bg-purple-50 leading-none ${sizeClass}`}
             >
               {r.logoUrl ? (
@@ -189,6 +196,11 @@ export function DivisionLedger({
                         indistinguishable. Two lines below `md`, unchanged
                         single-line truncation above it. */}
                     <span className="line-clamp-2 min-w-0 flex-1 text-sm font-semibold text-slate-900 md:truncate">{r.name}</span>
+                    {r.formatLabel && (
+                      <span className="w-full text-xs text-slate-500" data-testid="desk-ledger-format">
+                        {r.formatLabel}
+                      </span>
+                    )}
                     {/* The pill gets its OWN LINE on a phone. Sharing one with
                         the name left about 110px for the name at 320, which
                         wrapped "Championship Cup" mid-word to "Championshi /
@@ -249,6 +261,11 @@ export function DivisionLedger({
                 {tile("text-xl")}
                 <div className="min-w-0">
                   <Link href={href} className="block truncate text-sm font-semibold text-slate-900">{r.name}</Link>
+                  {r.formatLabel && (
+                    <p className="truncate text-xs text-slate-500" data-testid="desk-ledger-format">
+                      {r.formatLabel}
+                    </p>
+                  )}
                   {/* V3 fix (review round 1): was `truncate` (single line,
                       cut off exactly where the meaning is — "28 of 28
                       played · Final…"). Wraps up to two lines instead. */}

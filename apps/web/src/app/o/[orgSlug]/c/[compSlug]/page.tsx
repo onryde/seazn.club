@@ -6,7 +6,7 @@ import { CalendarRange, Globe, MonitorPlay, Printer, Settings } from "lucide-rea
 import { requireCompetitionPage } from "@/server/page-auth";
 import { getCompetition } from "@/server/usecases/competitions";
 import { listDivisions } from "@/server/usecases/divisions";
-import { listDivisionCardStats } from "@/server/usecases/card-stats";
+import { listDivisionCardStats, formatLabel } from "@/server/usecases/card-stats";
 import { CardMenu } from "@/components/ui/card-menu";
 import { resolveLogoUrl } from "@/server/public-site/data";
 import { RegistrationHubNavEntry } from "@/components/registration-hub-nav-entry";
@@ -81,6 +81,7 @@ export default async function CompetitionPage({
       return {
         id: d.id, name: d.name, slug: d.slug, sportKey: d.sport_key,
         logoUrl: resolveLogoUrl(d.logo_storage_path, d.logo_url), desk: null,
+        formatLabel: formatLabel(s?.stage_kinds ?? []),
         statusLine: t(dict, "card.progress.played", { played: s?.played ?? 0, total: s?.total ?? 0 }),
       };
     }
@@ -90,6 +91,7 @@ export default async function CompetitionPage({
       slug: d.slug,
       sportKey: d.sport_key,
       logoUrl: resolveLogoUrl(d.logo_storage_path, d.logo_url),
+      formatLabel: formatLabel(s?.stage_kinds ?? []),
       desk: dd,
       statusLine: statusLine(dict, {
         phase: dd.phase, played: dd.played, total: dd.total, unscheduled: dd.unscheduled, inPlay: dd.in_play,
