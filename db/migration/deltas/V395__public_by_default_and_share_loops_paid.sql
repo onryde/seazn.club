@@ -101,3 +101,26 @@ on conflict (plan_key, feature_key) do update set bool_value = true;
 update plan_entitlements
    set bool_value = false
  where plan_key = 'pro' and feature_key = 'dashboard.branding';
+
+-- ---------------------------------------------------------------------------
+-- Step 4 (T15): public dashboards — Free 3 -> 2, Pro unlimited -> 10.
+--
+-- Pro loses the "unlimited public dashboards" claim; §3's Pro card and
+-- `capClaimFaults` move with it (copy sweep).
+--
+-- The tightening is only safe BECAUSE the same wave fixed what the cap counts.
+-- `assertPublicQuota` was a flat `select count(*) from competitions where
+-- visibility = 'public'` — no status filter, no pass exclusion — so it counted
+-- HISTORY: a club three seasons in carried three public dashboards for ever
+-- and was refused a fourth while nothing was running. That is why 3 felt tight
+-- and why 2 would have felt broken. Free's third active competition is also
+-- why the create path now DEGRADES to private instead of refusing (step 5):
+-- Free is 3 active competitions but 2 public dashboards, and a plan whose
+-- one-line sell is "run a club night" must never fail a create by default.
+update plan_entitlements
+   set int_value = 2
+ where plan_key = 'community' and feature_key = 'dashboard.public.max';
+
+update plan_entitlements
+   set int_value = 10
+ where plan_key = 'pro' and feature_key = 'dashboard.public.max';

@@ -6,6 +6,7 @@ import { z } from "zod";
 import { sql, withTenant } from "@/lib/db";
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
 import { invalidateOrgEntitlements, requireFeature, withinLimit } from "@/lib/entitlements";
+import { publicDashboardsReason } from "@/lib/feature-copy";
 import { captureServer } from "@/lib/posthog-server";
 import { EVENTS, type AnalyticsEvent } from "@/lib/analytics-events";
 import { log } from "@/server/logger";
@@ -16,9 +17,9 @@ import { fireDiscoveryRevalidate, invalidateDiscoveryCache } from "@/server/publ
 import { ONBOARDING_EARN, REFERRAL_WELCOME_EARN, tryEarnGrant } from "@/lib/credits";
 import { invalidateSlugCache } from "@/server/slug-resolve";
 import {
-  ACTIVE_COMPETITION_STATUSES,
   assertCompetitionNotFrozen,
   frozenCompetitionIds,
+  liveUnpassedCompetition,
 } from "./entitlement-freeze";
 
 export interface CompetitionRow {
@@ -113,32 +114,61 @@ export async function assertActiveQuota(auth: AuthCtx): Promise<void> {
   const count = await withTenant(auth.orgId, async (tx) => {
     const [{ n }] = await tx<{ n: number }[]>`
       select count(*)::int as n from competitions c
-      where c.status in ${tx([...ACTIVE_COMPETITION_STATUSES])}
-        and not exists (
-          select 1 from competition_passes cp
-           where cp.competition_id = c.id
-             and pass_applies(c.status, c.ends_on, (now() at time zone 'utc')::date))`;
+      where ${liveUnpassedCompetition(tx)}`;
     return n;
   });
   const { ok } = await withinLimit(auth.orgId, "competitions.max_active", count + 1);
   if (!ok) throw new PaymentRequiredError("competitions.max_active");
 }
 
-// Doc 10 §1: `dashboard.public.max` — Community holds 1 public competition at
-// a time. Enforced here, at the write (doc 10 §2 rule 1), not in the UI.
+/**
+ * Doc 10 §1: `dashboard.public.max` — how many public dashboards the org may
+ * have LIVE at once. Enforced at the write (doc 10 §2 rule 1), not in the UI.
+ *
+ * The count is the same `liveUnpassedCompetition` predicate `assertActiveQuota`
+ * uses, and until V395 it was neither half of it: a flat
+ * `count(*) where visibility = 'public'` with no status filter and no pass
+ * exclusion. So it metered HISTORY — a club three seasons in carried three
+ * public dashboards for ever and was refused a fourth while nothing at all was
+ * running — and a competition an Event Pass had bought out of the active quota
+ * still occupied a public slot. That mattered more once T15 cut Free's cap to
+ * 2. The old header here also claimed "Community holds 1 public competition at
+ * a time", which had been wrong through two cap changes; the number is not
+ * restated in prose any more, it travels with the refusal (see below).
+ *
+ * `excludeId` is the PATCH path's "don't count the row being changed".
+ *
+ * Split into a boolean form and an asserting form because the create path must
+ * DEGRADE rather than refuse (T15/F, owner ruling 2026-09-03) while the patch
+ * path still 402s.
+ */
+export async function withinPublicQuota(
+  auth: AuthCtx,
+  excludeId?: string,
+): Promise<{ ok: boolean; limit: number | null }> {
+  const count = await withTenant(auth.orgId, async (tx) => {
+    const [{ n }] = await tx<{ n: number }[]>`
+      select count(*)::int as n from competitions c
+      where c.visibility = 'public'
+        ${excludeId ? tx`and c.id <> ${excludeId}` : tx``}
+        and ${liveUnpassedCompetition(tx)}`;
+    return n;
+  });
+  return withinLimit(auth.orgId, "dashboard.public.max", count + 1);
+}
+
 /** Exported (only) for createFromTemplate — see assertActiveQuota above. */
 export async function assertPublicQuota(auth: AuthCtx, excludeId?: string): Promise<void> {
-  const count = await withTenant(auth.orgId, async (tx) => {
-    const rows = excludeId
-      ? await tx<{ n: string }[]>`
-          select count(*) as n from competitions
-          where visibility = 'public' and id <> ${excludeId}`
-      : await tx<{ n: string }[]>`
-          select count(*) as n from competitions where visibility = 'public'`;
-    return Number(rows[0]?.n ?? 0);
-  });
-  const { ok } = await withinLimit(auth.orgId, "dashboard.public.max", count + 1);
-  if (!ok) throw new PaymentRequiredError("dashboard.public.max");
+  const { ok, limit } = await withinPublicQuota(auth, excludeId);
+  // The cap travels WITH the refusal rather than being restated in copy: the
+  // flat sentence in `feature-copy.ts` said "one public dashboard at a time"
+  // through caps of 1, 3 and 2. Same mechanism `import.bulk` uses.
+  if (!ok) {
+    throw new PaymentRequiredError("dashboard.public.max", {
+      limit,
+      reason: publicDashboardsReason(limit),
+    });
+  }
 }
 
 /** Activation event (feature 1) — first competition is the "aha" moment.

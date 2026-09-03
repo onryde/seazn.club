@@ -74,7 +74,14 @@ export const FEATURE_REASONS: Record<string, string> = {
   "standings.carry_over": "Carrying Phase-1 standings into Phase 2 is a Pro feature.",
   "eligibility.enforced": "Enforced eligibility locks are a Pro feature.",
   // Public & realtime
-  "dashboard.public.max": "Your plan hosts one public dashboard at a time.",
+  // The number is NOT written here, for the same reason `import.bulk` stopped
+  // writing its own: this sentence said "one public dashboard at a time"
+  // through caps of 1 (V112), 3 (V392) and 2 (V395) — a false customer-facing
+  // claim on every plan but the first. `publicDashboardsReason` below builds
+  // it from the limit `withinPublicQuota` actually resolved. This flat form is
+  // the fallback for a caller with no limit to hand (the /admin reason column,
+  // <UpgradeGate>'s key-only lookup).
+  "dashboard.public.max": "Your plan's public dashboards are all in use — archive a finished one, or upgrade.",
   "dashboard.branding": "Custom dashboard branding is a Pro feature.",
   "dashboard.player_profiles": "Public player profiles are a Pro feature.",
   realtime: "Live push updates are a Pro feature.",
@@ -203,6 +210,21 @@ export function doubleElimFormatReason(stageKind: string): string {
 export function bulkImportRowsReason(limit: number | null): string {
   if (limit === null) return featureReason("import.bulk");
   return `Files over ${limit} rows need a bigger plan — split the file or upgrade.`;
+}
+
+/**
+ * The public-dashboard refusal, quoting the cap it was refused BY.
+ *
+ * Says ARCHIVE, not delete, and it is now true: since V395 the quota counts
+ * only LIVE public dashboards (`liveUnpassedCompetition`), so archiving a
+ * finished season really does free a slot. Before that it did not, and telling
+ * a customer to archive would have been advice that changed nothing.
+ */
+export function publicDashboardsReason(limit: number | null): string {
+  if (limit === null) return featureReason("dashboard.public.max");
+  return limit === 1
+    ? "Your plan hosts 1 public dashboard at a time — archive the finished one, or upgrade."
+    : `Your plan hosts ${limit} public dashboards at a time — archive a finished one, or upgrade.`;
 }
 
 // Cheapest plan that unlocks each feature (mirrors plan_entitlements,

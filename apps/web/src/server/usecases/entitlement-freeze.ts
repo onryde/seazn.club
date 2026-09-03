@@ -13,6 +13,37 @@ type Tx = postgres.TransactionSql;
 // Competition statuses that count against `competitions.max_active`.
 export const ACTIVE_COMPETITION_STATUSES = ["draft", "published", "live"] as const;
 
+/**
+ * THE predicate: "this competition is live AND is not bought out by an Event
+ * Pass". A SQL fragment rather than four hand-written copies, because it has
+ * two halves that are each easy to omit and each fail silently.
+ *
+ * The status half stops a quota metering HISTORY — completed and archived
+ * competitions are not live surfaces and must not hold a slot. The pass half
+ * is v3/07 §3: a pass buys its competition out of the quota, for as long as
+ * the pass APPLIES. "A pass row exists" is NOT the rule and getting that wrong
+ * cost a release (#347): SPEC-4 §7 ends a pass at the grace boundary, and a
+ * live competition past that boundary was keeping a free slot for ever.
+ * V343's `pass_applies` is the same predicate the entitlement resolver uses.
+ *
+ * Callers must alias the competitions table as `c` — the fragment names
+ * `c.id`, `c.status` and `c.ends_on`.
+ *
+ * Four call sites share it, and the fourth is why it was extracted:
+ * `assertActiveQuota` already claimed in its own header that this was "the
+ * same predicate the resolver uses, so the three sites cannot drift apart
+ * again", and `assertPublicQuota` was conspicuously not one of those three —
+ * it had NEITHER half. Copying the clauses into it would have made a fourth
+ * place to drift; this makes it impossible.
+ */
+export function liveUnpassedCompetition(t: Tx) {
+  return t`c.status in ${t([...ACTIVE_COMPETITION_STATUSES])}
+      and not exists (
+        select 1 from competition_passes cp
+         where cp.competition_id = c.id
+           and pass_applies(c.status, c.ends_on, (now() at time zone 'utc')::date))`;
+}
+
 export interface FreezeCandidate {
   id: string;
   lastActiveAt: string | Date;
@@ -52,11 +83,7 @@ async function loadCandidates(tx: Tx): Promise<FreezeCandidate[]> {
     left join divisions d on d.competition_id = c.id
     left join fixtures f on f.division_id = d.id
     left join score_events e on e.fixture_id = f.id
-    where c.status in ${tx([...ACTIVE_COMPETITION_STATUSES])}
-      and not exists (
-        select 1 from competition_passes cp
-         where cp.competition_id = c.id
-           and pass_applies(c.status, c.ends_on, (now() at time zone 'utc')::date))
+    where ${liveUnpassedCompetition(tx)}
     group by c.id, c.created_at`;
   return rows.map((r) => ({ id: r.id, lastActiveAt: r.last_active }));
 }
@@ -82,11 +109,7 @@ export async function frozenCompetitionIds(orgId: string): Promise<Set<string>> 
   const run = async (t: Tx): Promise<Set<string>> => {
     const [{ n }] = await t<{ n: number }[]>`
       select count(*)::int as n from competitions c
-      where c.status in ${t([...ACTIVE_COMPETITION_STATUSES])}
-        and not exists (
-          select 1 from competition_passes cp
-           where cp.competition_id = c.id
-             and pass_applies(c.status, c.ends_on, (now() at time zone 'utc')::date))`;
+      where ${liveUnpassedCompetition(t)}`;
     if (n <= limit) return new Set();
     return selectFrozen(await loadCandidates(t), limit);
   };
