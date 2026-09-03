@@ -1777,12 +1777,13 @@ export function multiDivisionBoardPlanGateFaults(label: string, markdown: string
     new RegExp(String.raw`\b${subject}\b[^.;]{0,60}\b(?:${gate})`, "i"),
     new RegExp(String.raw`\b(?:${gate})[^.;]{0,60}\b${subject}\b`, "i"),
   ];
-  // …unless the sentence also names the other door. Deliberately requires
-  // "Event Pass" in full: this article calls each AI phase a "pass" ("the
-  // schedule pass", "the officials pass", "a single pass"), so a bare \bpass\b
-  // would exempt almost every sentence in it — the guard would read clean
-  // because it was looking at the wrong noun.
-  const namesThePass = /\bevent\s+pass(es)?\b/i;
+  // THE EXEMPTION IS GONE (W2, entitlements v18). This used to clear the fault
+  // when a sentence also named the Event Pass, on the premise that Pro and the
+  // pass were the two doors to planning several divisions together. V392 made
+  // `scheduling.multi_division` TRUE on community, so there is no door at all —
+  // it is free on every plan key, and "needs Pro, or this competition's Event
+  // Pass" became just as false as "needs Pro" alone. An exemption whose premise
+  // has moved is a hiding place, so the rule now fires on any plan gate.
   // The board ITSELF sold as a paid feature — false on its own, no exemption.
   const boardIsPaid = [
     /\b(?:schedule|scheduling|drag[-\s]and[-\s]drop)\s+board\b[^.;]{0,40}\b(?:is|are)\s+a\s+(?:\w+\s+){0,2}?(?:pro|paid|premium)\b/i,
@@ -1800,11 +1801,10 @@ export function multiDivisionBoardPlanGateFaults(label: string, markdown: string
           );
         }
       }
-      if (namesThePass.test(sentence)) continue;
       for (const pattern of proOnlyDoor) {
         if (pattern.test(sentence)) {
           faults.push(
-            `${label}: "${sentence.slice(0, 72)}…" names Pro as the only way to plan several divisions together, without the Event Pass — V353 grants scheduling.multi_division to event_pass and event_pass_l, which lifts it for one competition`,
+            `${label}: "${sentence.slice(0, 72)}…" names Pro as a way to plan several divisions together — V392 grants scheduling.multi_division on EVERY plan key, community included, so any plan gate on it is false`,
           );
         }
       }
@@ -3096,7 +3096,12 @@ export const FEE_LADDER_PLAN_KEYS: Record<string, string[]> = {
   Community: ["community"],
   "Event Pass": ["event_pass", "event_pass_l"],
   Pro: ["pro"],
-  "Pro Plus": ["pro_plus"],
+  // W2 (entitlements v18): "Pro Plus" -> "Enterprise". V392 deleted `pro_plus`
+  // from `plans`, and the 1% floor moved onto `enterprise` — so the ladder's
+  // bottom rung kept its rate and changed its name. The LABEL is what a reader
+  // sees in the table, which is why this map is keyed on it rather than on the
+  // plan key: a row nobody can buy any more is still a row that lies.
+  Enterprise: ["enterprise"],
 };
 
 /** `| Community | 8% |` rows, from a markdown fee table. */

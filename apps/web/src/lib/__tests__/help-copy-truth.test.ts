@@ -587,10 +587,10 @@ Unlike schedule generations, **officials AI runs are not metered** — restaff a
 // The same lost-sale shape as the upgrade card in `dictionary-copy-truth`: the
 // reader of this paragraph is an organiser who has just been stopped.
 // ─────────────────────────────────────────────────────────────────────────────
-describe("scheduling/ai-scheduling.md states both doors to the joint board (#382)", () => {
+describe("scheduling/ai-scheduling.md gates the joint board on no plan at all", () => {
   const aiScheduling = helpArticleBySlug("scheduling/ai-scheduling");
 
-  it("never names Pro as the only way to plan several divisions together", () => {
+  it("never names a plan as a way to plan several divisions together", () => {
     expect(multiDivisionBoardPlanGateFaults("ai-scheduling.md", aiScheduling)).toEqual([]);
   });
 
@@ -598,12 +598,16 @@ describe("scheduling/ai-scheduling.md states both doors to the joint board (#382
   // this the guard above could be inert and read as clean.
   it("reds on the exact Pro-only sentence #382 found", () => {
     const reverted = aiScheduling.replace(
-      /Planning several divisions together needs[^\n]*/,
+      // The anchor moved in W2: the sentence used to begin "Planning several
+      // divisions together needs **Pro**, or this competition's **Event
+      // Pass**". V392 made the key free on every plan, so the article gates
+      // nothing and the anchor is the sentence that replaced it.
+      /Planning several divisions together is[^\n]*/,
       "The multi-division board is a **Pro** feature.",
     );
     expect(reverted, "the replacement never matched — the article moved").not.toBe(aiScheduling);
     expect(multiDivisionBoardPlanGateFaults("x", reverted).join(" | ")).toContain(
-      "names Pro as the only way to plan several divisions together",
+      "names Pro as a way to plan several divisions together",
     );
   });
 
@@ -624,16 +628,21 @@ describe("scheduling/ai-scheduling.md states both doors to the joint board (#382
     }
   });
 
-  // ANTI-VACUITY, the other direction: naming the pass is what clears the
-  // multi-division rule, so a sentence that gates on Pro ALONE must still red
-  // while the same sentence with the pass must not. A guard that never fires,
-  // and a guard that always fires, both read as green somewhere.
-  it("the pass clause is what clears the guard, not the phrasing", () => {
+  // INVERTED in W2 (entitlements v18). Naming the Event Pass used to CLEAR
+  // this rule, because Pro and the pass were the two doors. V392 granted
+  // `scheduling.multi_division` to community, so there is no door: both
+  // sentences below are false now and both must red. The exemption is deleted
+  // rather than left unexercised — an exemption whose premise has moved is a
+  // hiding place, and this is the sentence someone would write to use it.
+  it("no plan gate clears the guard — naming the Event Pass does not either", () => {
     const withoutPass = "# T\n\nPlanning several divisions together needs **Pro**.\n";
     const withPass =
       "# T\n\nPlanning several divisions together needs **Pro**, or this competition's **Event Pass**.\n";
     expect(multiDivisionBoardPlanGateFaults("x", withoutPass)).not.toEqual([]);
-    expect(multiDivisionBoardPlanGateFaults("x", withPass)).toEqual([]);
+    expect(multiDivisionBoardPlanGateFaults("x", withPass)).not.toEqual([]);
+    // …and the guard still has an OFF state, or "everything reds" would pass
+    // this test just as well: the shipped article, which gates nothing.
+    expect(multiDivisionBoardPlanGateFaults("ai-scheduling.md", aiScheduling)).toEqual([]);
   });
 });
 
@@ -655,14 +664,16 @@ describe.skipIf(!HAS_DB)("ai-scheduling.md's joint-board claim is the matrix's (
     const grant = (feature: string, plan: string) =>
       rows.find((r) => r.feature_key === feature && r.plan_key === plan)?.bool_value === true;
 
-    // Why the article must name the pass at all.
-    expect(grant("scheduling.multi_division", "event_pass")).toBe(true);
-    expect(grant("scheduling.multi_division", "event_pass_l")).toBe(true);
-    expect(grant("scheduling.multi_division", "pro")).toBe(true);
-    // …and why "needs Pro" is still worth saying: community does NOT have it.
-    expect(grant("scheduling.multi_division", "community")).toBe(false);
+    // WHY THE ARTICLE MAY GATE NOTHING. This assertion is inverted from what it
+    // was: community used to be false, which is what made "needs Pro, or this
+    // competition's Event Pass" true and the guard's pass-exemption sensible.
+    // V392 (entitlements v18 W2 T1) granted the key to community, so joint
+    // planning is free on every plan and every plan gate on it is now false.
+    for (const plan of ["community", "event_pass", "event_pass_l", "pro", "enterprise"]) {
+      expect(grant("scheduling.multi_division", plan), `multi_division on ${plan}`).toBe(true);
+    }
     // Why the board itself may not be described as paid.
-    for (const plan of ["community", "event_pass", "event_pass_l", "pro", "pro_plus"]) {
+    for (const plan of ["community", "event_pass", "event_pass_l", "pro", "enterprise"]) {
       expect(grant("scheduling.board", plan), `scheduling.board on ${plan}`).toBe(true);
     }
   });
@@ -780,7 +791,11 @@ describe.skipIf(!HAS_DB)("billing help articles quote the numbers the matrix enf
       entrants: await capFor("entrants.per_division.max", "event_pass_l"),
       divisions: await capFor("divisions.per_competition.max", "event_pass_l"),
     };
-    expect(l.entrants, "L's entrant cap is unlimited — the copy says so in words").toBeNull();
+    // INVERTED by V392, which gave L a real 512-entrant cap where it had been
+    // null. The word was the claim for as long as the row was null; now the
+    // NUMBER is, and the word is the defect — asserted in both directions so a
+    // page cannot carry "512 entrants" and "unlimited entrants" together.
+    expect(l.entrants, "L's entrant cap is a number since V392").not.toBeNull();
 
     for (const [label, text] of [
       ["event-pass.md", eventPass],
@@ -789,7 +804,8 @@ describe.skipIf(!HAS_DB)("billing help articles quote the numbers the matrix enf
       expect(text, `${label}: M's entrant cap`).toContain(`${m.entrants} entrants`);
       expect(text, `${label}: M's division cap`).toContain(`${m.divisions} divisions`);
       expect(text, `${label}: L's division cap`).toContain(`${l.divisions} divisions`);
-      expect(text, `${label}: L is unlimited`).toMatch(/\bunlimited\s+entrants\b/i);
+      expect(text, `${label}: L's entrant cap`).toContain(`${l.entrants} entrants`);
+      expect(text, `${label}: L is capped, not unlimited`).not.toMatch(/\bunlimited\s+entrants\b/i);
     }
   });
 
@@ -806,7 +822,9 @@ describe.skipIf(!HAS_DB)("billing help articles quote the numbers the matrix enf
   });
 
   it("every monthly AI credit figure in plans.md is that plan's live grant", async () => {
-    for (const key of ["community", "pro", "pro_plus"]) {
+    // `enterprise`, not `pro_plus`: V392 deleted that plan and moved the top
+    // grant onto enterprise (500, re-cut from 200 in the same wave).
+    for (const key of ["community", "pro", "enterprise"]) {
       const live = await capFor("ai.credits.monthly", key);
       expect(plans, `${key}'s monthly grant`).toContain(`${live} AI credits a month`);
     }
@@ -1174,14 +1192,17 @@ describe("the help-prose guards survive a rewording, not just a revert", () => {
   });
 
   it("catches a fee-ladder row that drifts from the matrix, and one that vanishes", () => {
-    const live = { community: 8, event_pass: 5, event_pass_l: 5, pro: 2, pro_plus: 1 };
+    // `enterprise`, not `pro_plus` — V392 deleted that plan and the 1% floor
+    // moved onto enterprise, so the ladder's bottom rung kept its rate and
+    // changed its name (see FEE_LADDER_PLAN_KEYS).
+    const live = { community: 8, event_pass: 5, event_pass_l: 5, pro: 2, enterprise: 1 };
     const table = [
       "| Plan | Platform fee |",
       "| --- | --- |",
       "| Community | 8% |",
       "| Event Pass | 5% |",
       "| Pro | 2% |",
-      "| Pro Plus | 1% |",
+      "| Enterprise | 1% |",
     ].join("\n");
     expect(feeLadderFaults(feeLadderRows(table), live)).toEqual([]);
 
@@ -2585,18 +2606,30 @@ describe("the add-ons article's behaviour claims are pinned to the code", () => 
 });
 
 describe.skipIf(!HAS_DB)("the add-ons article quotes the caps the matrix enforces", () => {
+  // W2 (entitlements v18): the second plan was `pro_plus`, whose row V392
+  // deleted. Enterprise took its place at the top of the ladder — and its cap
+  // is NULL, so the two halves of this test are no longer symmetrical. Pro has
+  // a number and the article must quote it; enterprise has none and the article
+  // must say so in WORDS, because a null cap printed as a number is exactly the
+  // failure the L rung taught this suite.
   it("names each plan's own organisation limit", async () => {
-    for (const [plan, label] of [
-      ["pro", "Pro"],
-      ["pro_plus", "Pro Plus"],
-    ] as const) {
+    const capFor = async (plan: string): Promise<number | null> => {
       const [row] = await sql<{ int_value: number | null }[]>`
         select int_value from plan_entitlements
         where plan_key = ${plan} and feature_key = 'orgs.max_owned'`;
       expect(row, `plan_entitlements has no ${plan}/orgs.max_owned row`).toBeDefined();
-      expect(row!.int_value, `${plan} must have a finite org cap for this sentence`).not.toBeNull();
-      expect(addOns, `${label}'s live organisation cap`).toContain(`${label} covers ${row!.int_value}`);
-    }
+      return row!.int_value;
+    };
+    const pro = await capFor("pro");
+    expect(pro, "pro must have a finite org cap for this sentence").not.toBeNull();
+    expect(addOns, "Pro's live organisation cap").toContain(`Pro covers ${pro}`);
+
+    const enterprise = await capFor("enterprise");
+    expect(enterprise, "enterprise's org cap is unlimited").toBeNull();
+    expect(addOns, "enterprise's null cap, in words").toMatch(/Enterprise\s+is\s+unlimited/i);
+    // …and no number may be attached to it, which is how a null cap comes to be
+    // sold as a ceiling.
+    expect(addOns, "a figure quoted for an unlimited cap").not.toMatch(/Enterprise\s+covers\s+\d/i);
   });
 });
 

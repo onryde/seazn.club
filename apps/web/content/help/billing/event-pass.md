@@ -26,7 +26,7 @@ Prices are shown in your billing currency, so the figures above are the US ones;
 
 For the competition it covers, and every division inside it — at **either** size:
 
-- **128 entrants** per division on M, or **unlimited entrants** on L (Community allows 64) — and up to **10 divisions** in the competition on M, or up to **20 divisions** on L (Community allows 4).
+- **128 entrants** per division on M, or **512 entrants** on L (Community allows 64) — and up to **10 divisions** in the competition on M, or up to **20 divisions** on L (Community allows 4).
 - **A 5% platform fee** on card entry fees, instead of Community's 8% — on a $2,000 event that's $60 back in your pocket.
 - **Branded exports** — order of play, match sheets, rotas and posters carry your masthead, logo and sponsor line instead of exporting as plain tables.
 - **Public player cards** — entrants get their public profile pages.
@@ -70,7 +70,7 @@ Neither reason is stamped on anything. The status and the date are read from the
 
 **A pass already bought is a separate question.** Closing a competition stops one being sold; it does not undo one that was sold. A competition that holds a pass keeps its **Event Pass M active** marker, and once that competition is **completed or archived** the pass stops applying exactly as described above — nothing is deleted, and the purchase and its receipt stay on your billing page either way.
 
-On **Pro or Pro Plus** you never meet this at all. The one size a paid plan is still shown — **L**, whose uncapped entrants per division beat the 256 Pro allows — is withdrawn past the line like every other offer, and the upgrade page shows your plan on its own.
+On **Pro** you never meet this at all. The one size a paid plan is still shown — **L**, whose 512 entrants per division beat the 256 Pro allows — is withdrawn past the line like every other offer, and the upgrade page shows your plan on its own.
 
 ## When it fits
 
@@ -109,7 +109,7 @@ When that happens the event stays fully **readable** — nothing you built is de
 
 **I own the pass and I've hit a limit again — will it offer me another one?** No. Once a competition holds a pass, every upgrade prompt inside it drops the pass button and shows Pro on its own: either you've used everything the pass includes, or the feature was never on the pass. You can't buy the same competition a second pass — and that includes buying L for a competition that already holds M. If you have outgrown an M pass, Pro is the step, not a second purchase.
 
-**Does the pass count toward Pro if I upgrade later?** Yes, once — and only for the organisation that runs the upgrade. A pass **bought** in the last 30 days comes off your first Pro (or Pro Plus) invoice in full, as an account credit, if it's this same organisation's checkout that starts your **billing group**'s subscription — you'll see it applied on the invoice, not as a discount at checkout. It's not a shared pool: a pass held by a different organisation in the group earns nothing, even if that org's is the one you'd expect to count. And once a group's one credit is used, a second pass anywhere in the group, even for a different competition, earns nothing further. Passes we granted you carry no credit, because nothing was charged. [More on how billing groups share one credit](/help/billing/groups#common-questions).
+**Does the pass count toward Pro if I upgrade later?** Yes, once — and only for the organisation that runs the upgrade. A pass **bought** in the last 30 days comes off your first Pro invoice in full, as an account credit, if it's this same organisation's checkout that starts your **billing group**'s subscription — you'll see it applied on the invoice, not as a discount at checkout. It's not a shared pool: a pass held by a different organisation in the group earns nothing, even if that org's is the one you'd expect to count. And once a group's one credit is used, a second pass anywhere in the group, even for a different competition, earns nothing further. Passes we granted you carry no credit, because nothing was charged. [More on how billing groups share one credit](/help/billing/groups#common-questions).
 
 **What happens to the passed competition if my Pro subscription lapses?** It keeps everything the pass grants — the pass is bought outright for that event and survives a downgrade. Only the rest of your org falls back to Community limits ([what downgrading freezes](/help/billing/downgrade)).
 

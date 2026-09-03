@@ -252,7 +252,8 @@ re-derived from the matrix and guarded by `lib/copy-truth.ts`. Target copy
   on, and now stays on for Pro too.
 - **Event Pass — "One tournament, fully powered."** Per competition, no
   subscription. M: 10 divisions × 128 entrants, +25 credits. L: 20 × 512,
-  +50 credits. Live scoreboard · hand-over scoring devices · auto officials ·
+  +35 credits (re-cut from 50 by T12, owner ruling 2026-09-03 — the rungs
+  still differ, but L is no longer double M). Live scoreboard · hand-over scoring devices · auto officials ·
   suspension tracking · advanced formats · top-scorer stats · branded exports
   · sponsors · 5 restore points · 5% fee · counts toward Pro if you subscribe
   within 30 days. Nudge: three L passes ($87) cost more than Pro annual
@@ -267,6 +268,12 @@ re-derived from the matrix and guarded by `lib/copy-truth.ts`. Target copy
   the credit grant was re-cut 35 → 25 (T12), and **"badge removed" is gone
   from this card**: badge removal is enterprise-only now (T15). What Pro gains
   in exchange is the three share loops.
+  Amended again W2 T17 (owner ruling 2026-09-03): **the public accent colour
+  is back on this card, on its own key.** `dashboard.branding` gated the badge
+  AND the colour, so T15 took a paying Pro customer's palette off their public
+  pages along with the perk they never bought. `dashboard.theme` is Pro and
+  above, no pass rows, and the Pro card's visual claim is the colour — "your
+  club colours on public pages & slideshow" — where it used to be the badge.
 
 ### 3a. Prices (R12) — every amount is a SET point per currency
 

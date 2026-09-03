@@ -28,7 +28,7 @@ Size packs have **no control in Settings yet** either. [Talk to us](mailto:hello
 
 ## Extra organisations — the whole bill, every month
 
-One subscription already covers several organisations: Pro covers 5 and Pro Plus covers 10. Once every slot is full, an extra organisation buys **one more slot** rather than forcing you up a plan. Each organisation after the first costs no more than half the base rate.
+One subscription already covers several organisations: Pro covers 5, and Enterprise is unlimited. Once every slot is full, an extra organisation buys **one more slot** rather than forcing you up a plan. Each organisation after the first costs no more than half the base rate.
 
 The add-on is charged **every month, whatever your plan's own billing period** — so on a monthly bill it matches that half rate exactly, and on an annual bill it does not. An annual group pays for its extra organisations monthly, which comes to **at least a sixth more over a year** than a slot inside the plan's own limit costs, and rather more than that in some currencies. If you are annual and expect to stay over the limit, compare the add-on against moving up a plan before you buy.
 

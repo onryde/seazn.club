@@ -30,7 +30,6 @@ import {
   orgAddonRiderFaults,
   passCreditGrantFaults,
   passDurationFaults,
-  plusDifferentiatorFaults,
   productNameQuantityFaults,
   retiredRunCapFaults,
   riderRateFaults,
@@ -280,9 +279,11 @@ describe.skipIf(!HAS_DB)("stripe-plans.json quotes the numbers the matrix enforc
   // vacuously, which is worse than its absence.
   //
   // The mechanism each one proved is NOT lost:
-  //   • the differentiator-frame logic keeps its own pure rewording proof
-  //     further down this file (it drives `plusDifferentiatorFaults` on
-  //     fixture strings, no seed involved);
+  //   • the differentiator-frame logic kept its own pure rewording proof
+  //     further down this file until W2, when `plusDifferentiatorFaults` was
+  //     deleted with the plan — the identical question survives as
+  //     `crossCardExclusivityFaults` over `EXCLUSIVE_CLAIM_VOCAB` in
+  //     pricing-cards.test.ts, asked of every card rather than one tier;
   //   • "quotes its own live organisation allowance" below still walks every
   //     plan the seed DOES carry;
   //   • the credit-superlative check has nothing left to guard: no surviving
@@ -614,61 +615,18 @@ describe("the guards survive a rewording, not just a revert", () => {
     ).toContain("does not quote its live entrant cap (128)");
   });
 
-  it("catches a Pro Plus differentiator Pro already has, however it is phrased", () => {
-    // The live matrix, as this file's DB tests read it: scheduling.ai is true
-    // on EVERY plan, so it can never be a Pro Plus differentiator.
-    const proGrants = {
-      "scheduling.ai": true,
-      "officials.auto": false,
-      "api.write": false,
-      "support.priority": false,
-    };
-    const plusGrants = {
-      "scheduling.ai": true,
-      "officials.auto": true,
-      "api.write": true,
-      "support.priority": true,
-    };
-    const honest =
-      "Everything in Pro, plus automatic officials assignment, write API access and priority support. Covers up to 10 organisations.";
-    expect(plusDifferentiatorFaults(honest, proGrants, plusGrants)).toEqual([]);
-
-    for (const reworded of [
-      "Everything in Pro, plus AI-assisted scheduling and priority support.",
-      "Everything in Pro, plus AI-powered scheduling.",
-      "Everything in Pro, plus AI schedule building.",
-    ]) {
-      expect(plusDifferentiatorFaults(reworded, proGrants, plusGrants), reworded).toContain(
-        "pro_plus: sells scheduling.ai as a differentiator, but Pro already grants it",
-      );
-    }
-
-    // A claim Pro Plus does not actually grant, caught from the other side.
-    expect(
-      plusDifferentiatorFaults("Everything in Pro, plus write API access.", proGrants, {
-        ...plusGrants,
-        "api.write": false,
-      }),
-    ).toEqual(["pro_plus: claims api.write, but Pro Plus does not grant it"]);
-
-    // Dropping the frame disables the scope — a fault in itself.
-    expect(
-      plusDifferentiatorFaults("Now with AI-assisted scheduling.", proGrants, plusGrants),
-    ).toEqual(['pro_plus: no "Everything in Pro, plus" frame — nothing to scope the claims to']);
-
-    // fix round 1 — the positive backstop for an all-negative list: a reword
-    // that keeps the frame but phrases every claim outside the vocabulary
-    // would have the guard examine NOTHING and report clean.
-    expect(
-      plusDifferentiatorFaults(
-        "Everything in Pro, plus a bigger allowance and nicer colours.",
-        proGrants,
-        plusGrants,
-      ),
-    ).toEqual([
-      "pro_plus: names no recognised differentiator — the vocabulary has gone stale and this guard examined nothing",
-    ]);
-  });
+  // The "Everything in Pro, plus …" rewording proof lived here and was DELETED
+  // in W2 (entitlements v18) with `plusDifferentiatorFaults`. It ran on fixture
+  // strings rather than the seed, so nothing about it was vacuous — but the
+  // frame it scoped to belongs to a plan V392 removed from `plans`, from
+  // `stripe-plans.json` and from `/pricing`, and a guard kept alive on fixtures
+  // alone guards a sentence nobody can write any more.
+  //
+  // The question it asked — does this copy sell as exclusive something a
+  // cheaper plan already grants? — survives as `crossCardExclusivityFaults`
+  // over `EXCLUSIVE_CLAIM_VOCAB` (the same four-entry list, renamed) in
+  // pricing-cards.test.ts, where it is asked of every card that still exists
+  // and kept non-vacuous by the Pro card's `officials.auto` bullet.
 
   // N1. The claim and the arithmetic are checked against each other, so the
   // guard reds whichever of the two moves.
