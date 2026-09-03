@@ -375,16 +375,22 @@ export const RECURRING_GRANT_PATTERNS = [
 ];
 
 /**
- * Pro Plus's description is framed "Everything in Pro, plus …", which makes
- * every item after the frame an assertion of EXCLUSIVITY. Each entry maps a
- * feature_key to the vocabulary a description would use to claim it — broad
- * enough that "AI-powered scheduling" and "AI-assisted scheduling" are the same
- * claim, because they are.
+ * Each entry maps a feature_key to the vocabulary a card or description would
+ * use to CLAIM it — broad enough that "AI-powered scheduling" and "AI-assisted
+ * scheduling" are the same claim, because they are.
  *
  * Boolean features only: the unlimited-scale claims (members/teams/clubs) are
  * int-shaped and are checked separately against their caps.
+ *
+ * RENAMED in W2 (entitlements v18). It was `PLUS_DIFFERENTIATOR_VOCAB`, framed
+ * by Pro Plus's "Everything in Pro, plus …" — and that plan is gone: V392
+ * deleted `pro_plus` from `plans` outright. The LIST is unchanged and still
+ * earns its keep, because `crossCardExclusivityFaults` asks it a question about
+ * EVERY card rather than one tier: does any card claim a feature its own plan
+ * does not grant? `officials.auto` is what keeps it non-vacuous today — V392
+ * moved that key down to Pro when Pro Plus went, and the Pro card now says so.
  */
-export const PLUS_DIFFERENTIATOR_VOCAB: Array<[feature: string, claim: RegExp]> = [
+export const EXCLUSIVE_CLAIM_VOCAB: Array<[feature: string, claim: RegExp]> = [
   // Task 4 widened this to BOTH WORD ORDERS. It required "AI" before
   // "schedul…", so "scheduling with AI built in" — an ordinary way to write the
   // same claim, and the order every other language uses — returned no fault
@@ -727,16 +733,36 @@ export function capClaimFaults(rungs: Rung[], caps: RungCaps[]): string[] {
       for (const match of text.matchAll(/(\d[\d,]*)\s+entrants\b/gi)) {
         faults.push(`${key}: quotes "${match[1]} entrants" for an unlimited cap`);
       }
-    } else if (!description.includes(`${own.entrants} entrants`)) {
-      faults.push(`${key}: does not quote its live entrant cap (${own.entrants})`);
+    } else {
+      if (!description.includes(`${own.entrants} entrants`)) {
+        faults.push(`${key}: does not quote its live entrant cap (${own.entrants})`);
+      }
+      // …and it may not ALSO say "unlimited". W2 (entitlements v18, V392) gave
+      // the L rung a real 512-entrant cap where it had been null, and every
+      // surface describing it said "unlimited entrants". Quoting the number
+      // BESIDE the word would have satisfied the branch above while the
+      // sentence a buyer reads still promised no ceiling — the one direction a
+      // presence-only rule cannot see, because the word stays readable as true.
+      if (/\bunlimited\s+entrants\b/i.test(text)) {
+        faults.push(
+          `${key}: calls its entrant cap unlimited, but the matrix caps it at ${own.entrants}`,
+        );
+      }
     }
 
     if (own.divisions === null) {
       if (!/\bunlimited\s+divisions\b/i.test(description)) {
         faults.push(`${key}: division cap is unlimited but the copy never says so`);
       }
-    } else if (!description.includes(`${own.divisions} divisions`)) {
-      faults.push(`${key}: does not quote its live division cap (${own.divisions})`);
+    } else {
+      if (!description.includes(`${own.divisions} divisions`)) {
+        faults.push(`${key}: does not quote its live division cap (${own.divisions})`);
+      }
+      if (/\bunlimited\s+divisions\b/i.test(text)) {
+        faults.push(
+          `${key}: calls its division cap unlimited, but the matrix caps it at ${own.divisions}`,
+        );
+      }
     }
 
     // Cross-rung contamination. Skipped where two rungs genuinely share a
@@ -759,52 +785,117 @@ export function capClaimFaults(rungs: Rung[], caps: RungCaps[]): string[] {
 }
 
 /**
- * "Everything in Pro, plus X" asserts that X is something Pro does NOT have.
- * Every claim the description actually makes is judged twice: Pro must not
- * already grant it, and Pro Plus must actually grant it.
+ * WHICH PLAN a paywall sentence attributes a feature to, against the row.
  *
- * Two ways the guard could be silently switched off, both faults:
- *  - a reword that DROPS THE FRAME would leave nothing to scope to;
- *  - a reword that leaves the frame but phrases every claim outside the
- *    vocabulary would have the guard examine NOTHING and report clean. The
- *    anti-vacuity check is the positive backstop for a list that is otherwise
- *    all negatives.
+ * `lib/feature-copy.ts`'s `FEATURE_REASONS` is the one map every 402 and every
+ * `<UpgradeGate>` reads, keyed by `plan_entitlements.feature_key`, so each entry
+ * is a claim about a SPECIFIC row and can be judged against that row alone — no
+ * vocabulary, no guessing which feature a sentence is about.
+ *
+ * Two directions, because W2 moved keys BOTH ways in one wave and each
+ * direction lies differently:
+ *
+ *  - a key community GRANTS, described as "a Pro feature". V390 freed the three
+ *    scoring-detail keys and V392 brought `officials.auto` down to Pro; a reason
+ *    left behind sells an upgrade for something the reader already has, and the
+ *    gate it belongs to can no longer fire, so nobody ever sees it be wrong.
+ *  - a key community does NOT grant, described as free / on every plan. V395
+ *    made `dashboard.player_profiles`, `embeds.enabled` and `news.auto` paid on
+ *    Free and V396 took the accent colour off it; a reason left behind promises
+ *    a capability the resolver refuses, which is the more expensive direction —
+ *    the reader is told they have it, tries, and is stopped.
+ *
+ * The second direction caught a live one the day it was written: V395's own
+ * `dashboard.branding` reason still ended "your own club logo and colours work
+ * on every plan" after V396 priced the colour at Pro.
+ *
+ * A reason for a key with NO ROW is a fault too, not a skip: the resolver
+ * answers 0/false for a missing row, so such a sentence describes a refusal
+ * nothing can lift, and `?? true` would have read a deleted key as free.
  */
-export function plusDifferentiatorFaults(
-  description: string,
-  proGrants: Record<string, boolean>,
-  plusGrants: Record<string, boolean>,
-): string[] {
-  const frame = /Everything\s+in\s+Pro,\s*plus\b/i;
-  const at = description.search(frame);
-  if (at === -1) {
-    return ['pro_plus: no "Everything in Pro, plus" frame — nothing to scope the claims to'];
-  }
-  // The differentiator list runs to the end of that sentence; what follows is
-  // the organisation-count sentence, a scale claim rather than a feature one.
-  const rest = description.slice(at);
-  const end = rest.search(/\.\s/);
-  const clause = end === -1 ? rest : rest.slice(0, end);
+export interface PaywallReason {
+  /** `plan_entitlements.feature_key`. */
+  key: string;
+  text: string;
+}
 
+/** "…is a Pro feature", "needs a Pro plan", "upgrade to Pro". */
+export const PRO_ATTRIBUTION =
+  /\b(?:is|are)\s+(?:a|an)\s+(?:Pro|paid)\s+feature\b|\bneeds?\s+(?:a\s+)?(?:bigger\s+plan|Pro\s+plan)\b|\bupgrade\s+to\s+Pro\b/i;
+
+/** "…works on every plan", "free on every plan", "included on every plan". */
+export const FREE_ATTRIBUTION =
+  /\b(?:work|works|available|included|free)\b[^.;]{0,24}\bon\s+every\s+plan\b|\bon\s+every\s+plan\b[^.;]{0,24}\b(?:free|included)\b|\bfree\s+for\s+everyone\b/i;
+
+export function freeClaimFaults(
+  reasons: PaywallReason[],
+  rows: Record<string, Record<string, { bool: boolean | null; int: number | null }>>,
+): string[] {
+  if (reasons.length === 0) return ["no paywall reasons — this rule examines nothing"];
+  if (Object.keys(rows).length === 0) {
+    return ["no plan_entitlements rows — the reasons were compared against nothing"];
+  }
   const faults: string[] = [];
-  let recognised = 0;
-  for (const [feature, claim] of PLUS_DIFFERENTIATOR_VOCAB) {
-    if (!claim.test(clause)) continue;
-    recognised += 1;
-    if (proGrants[feature]) {
-      faults.push(`pro_plus: sells ${feature} as a differentiator, but Pro already grants it`);
+  let judged = 0;
+
+  for (const { key, text } of reasons) {
+    const row = rows[key]?.community;
+    const proRow = rows[key]?.pro;
+    // A reason for a key the matrix does not hold at all. Only reported for a
+    // sentence that actually attributes a plan — a reason may legitimately
+    // describe something that is not a row (see `import.bulk`, which quotes a
+    // cap and names no plan).
+    const attributesPro = PRO_ATTRIBUTION.test(text);
+    const attributesFree = FREE_ATTRIBUTION.test(text);
+    if (!attributesPro && !attributesFree) continue;
+    judged += 1;
+    if (!rows[key]) {
+      faults.push(`${key}: attributes a plan, but plan_entitlements has no such feature`);
+      continue;
     }
-    if (!plusGrants[feature]) {
-      faults.push(`pro_plus: claims ${feature}, but Pro Plus does not grant it`);
+    // `bool_value === true` exactly, and for an int key a positive allowance —
+    // the same two shapes `hasFeature` and `getLimit` read.
+    const communityGrants =
+      row !== undefined && (row.bool === true || row.int === null || (row.int ?? 0) > 0);
+    if (attributesPro && communityGrants) {
+      faults.push(`${key}: calls it a Pro feature, but community already grants it`);
+    }
+    if (attributesFree && !communityGrants) {
+      faults.push(`${key}: says it works on every plan, but community does not grant it`);
+    }
+    // …and the Pro half of a "Pro feature" claim has to be true as well. V395
+    // took `dashboard.branding` off Pro, which is the shape that makes a
+    // paywall point a Pro subscriber at an upgrade they already bought.
+    if (attributesPro && proRow !== undefined) {
+      const proGrants = proRow.bool === true || proRow.int === null || (proRow.int ?? 0) > 0;
+      if (!proGrants) {
+        faults.push(`${key}: calls it a Pro feature, but pro does not grant it either`);
+      }
     }
   }
-  if (recognised === 0) {
+
+  if (judged === 0) {
     faults.push(
-      "pro_plus: names no recognised differentiator — the vocabulary has gone stale and this guard examined nothing",
+      "no reason attributed a plan — the attribution vocabulary has gone stale and this rule examined nothing",
     );
   }
   return faults;
 }
+
+// `plusDifferentiatorFaults` and `localePlusDifferentiatorFaults` were DELETED
+// here in W2 (entitlements v18). Both judged the "Everything in Pro, plus …"
+// frame against `pro_plus` grants, and V392 deleted that plan from `plans` and
+// `plan_entitlements` outright — so every call reported the same four faults
+// ("claims officials.auto, which has no rows in plan_entitlements", and so on)
+// about a card `/pricing` no longer renders. A guard whose subject is gone does
+// not fail safe; it fails LOUD, about nothing, and hides the guards that are
+// still telling the truth.
+//
+// What survives, because the QUESTION survives: `EXCLUSIVE_CLAIM_VOCAB` above,
+// read by `crossCardExclusivityFaults` in pricing-cards.test.ts — does any card
+// claim a feature its own plan does not grant? That is asked of every card and
+// needs no tier above Pro. The four LOCALE vocabularies that fed the deleted
+// locale guard went with it (`LocaleClaims.plusClaims`).
 
 // ── The extra-organisation rider rate ────────────────────────────────────────
 
@@ -2034,11 +2125,6 @@ export interface LocaleClaims {
   bounded: RegExp;
   /** Recurring cadence — the inverse of the pass's one-time credit grant. */
   recurring: RegExp[];
-  /** A claim that the plan grants X, keyed by `plan_entitlements.feature_key`.
-   *  Both word orders, because Romance languages put the noun first
-   *  ("programación asistida por IA") and Germanic ones the modifier
-   *  ("AI-ondersteunde planning"). */
-  plusClaims: Array<[feature: string, claim: RegExp]>;
   /** "the largest monthly AI credit grant" — the TRUE differentiator that
    *  replaced the false AI-scheduling one. Its own regex because it is a
    *  COMPARATIVE, not a boolean grant. */
@@ -2063,7 +2149,6 @@ export const LOCALE_CLAIMS: Record<DictionaryLocale, LocaleClaims> = {
     permanence: FALSE_PASS_PERMANENCE_PATTERNS,
     bounded: BOUNDED_SCOPE_GRAMMAR,
     recurring: RECURRING_GRANT_PATTERNS,
-    plusClaims: PLUS_DIFFERENTIATOR_VOCAB,
     creditLeadership: /\b(largest|biggest|highest)\b[^,.;]{0,30}\bcredit/i,
     // WIDENED, fix round 4. The first three alternatives are the phrases the
     // corrected copy uses; the last two are the ones the SHIPPED copy used and
@@ -2148,22 +2233,6 @@ export const LOCALE_CLAIMS: Record<DictionaryLocale, LocaleClaims> = {
       String.raw`\brenovaci\w*\b`,
       String.raw`\ben\s+cada\s+renovaci\w*\b`,
     ].map(claim),
-    plusClaims: [
-      [
-        "scheduling.ai",
-        claim(
-          String.raw`\b(programaci|planificaci)\w*[^,.;]{0,30}\b(IA|AI)\b|\b(IA|AI)\b[^,.;]{0,30}\b(programaci|planificaci)`,
-        ),
-      ],
-      [
-        "officials.auto",
-        claim(
-          String.raw`\basignaci\w*\s+autom\w*[^,.;]{0,25}\b(árbitros?|oficiales?)\b|\b(árbitros?|oficiales?)\b[^,.;]{0,25}\bautom`,
-        ),
-      ],
-      ["api.write", claim(String.raw`\bescritura\b[^,.;]{0,25}\bAPI\b|\bAPI\b[^,.;]{0,25}\bescritura\b`)],
-      ["support.priority", claim(String.raw`\bsoporte\s+priorit\w+\b`)],
-    ],
     creditLeadership: claim(String.raw`\b(mayor|más\s+grande)\b[^,.;]{0,30}\bcréditos?\b`),
     halfClaim: claim(String.raw`\bmitad\s+de\s+(la\s+tarifa\s+base|la\s+tarifa\s+de\s+tu\s+plan|precio|tarifa)\b`),
     atMostHalf: claim(String.raw`\b(no\s+más\s+de|como\s+máximo|a\s+lo\s+sumo|máximo)\s+(la\s+)?mitad\b`),
@@ -2237,22 +2306,6 @@ export const LOCALE_CLAIMS: Record<DictionaryLocale, LocaleClaims> = {
       String.raw`\brenouvellement(s)?\b`,
       String.raw`\bà\s+chaque\s+renouvellement\b`,
     ].map(claim),
-    plusClaims: [
-      [
-        "scheduling.ai",
-        claim(
-          String.raw`\b(planification|ordonnancement)\b[^,.;]{0,30}\b(IA|AI)\b|\b(IA|AI)\b[^,.;]{0,30}\b(planification|ordonnancement)\b`,
-        ),
-      ],
-      [
-        "officials.auto",
-        claim(
-          String.raw`\battribution\s+automatique\b[^,.;]{0,30}\bofficiels?\b|\bofficiels?\b[^,.;]{0,30}\bautomatique\b`,
-        ),
-      ],
-      ["api.write", claim(String.raw`\bAPI\b[^,.;]{0,25}\bécriture\b|\bécriture\b[^,.;]{0,25}\bAPI\b`)],
-      ["support.priority", claim(String.raw`\b(assistance|support)\s+prioritaire\b`)],
-    ],
     creditLeadership: claim(String.raw`\bplus\s+(grosse|grande|élevée|important\w*)\b[^,.;]{0,30}\bcrédits?\b|\bcrédits?\b[^,.;]{0,30}\bla\s+plus\s+(élevée|grande|grosse|important\w*)\b`),
     halfClaim: claim(String.raw`\bmoitié\s+du\s+(tarif\s+de\s+base|tarif\s+de\s+votre\s+forfait|prix)\b|\bmoitié\s+prix\b`),
     atMostHalf: claim(String.raw`\b(au\s+plus|pas\s+plus\s+de|au\s+maximum|maximum)\s+(la\s+)?moitié\b`),
@@ -2323,22 +2376,6 @@ export const LOCALE_CLAIMS: Record<DictionaryLocale, LocaleClaims> = {
       String.raw`\bverlenging(en)?\b`,
       String.raw`\bbij\s+elke\s+verlenging\b`,
     ].map(claim),
-    plusClaims: [
-      [
-        "scheduling.ai",
-        claim(
-          String.raw`\bAI\b[^,.;]{0,30}\b(planning|inplannen|plannen|scheduling)\b|\b(planning|inplannen|plannen)\b[^,.;]{0,30}\bAI\b`,
-        ),
-      ],
-      [
-        "officials.auto",
-        claim(
-          String.raw`\bautomatische\s+toewijzing\b[^,.;]{0,30}\bofficials?\b|\bofficials?\b[^,.;]{0,30}\bautomatische\b`,
-        ),
-      ],
-      ["api.write", claim(String.raw`\bschrijftoegang\b[^,.;]{0,25}\bAPI\b|\bAPI\b[^,.;]{0,25}\bschrijftoegang\b`)],
-      ["support.priority", claim(String.raw`\bprioritaire\s+onderst\w+\b`)],
-    ],
     creditLeadership: claim(String.raw`\b(grootste|hoogste)\b[^,.;]{0,30}\bcredit`),
     // `\bhelft\s+van\s+het\s+…` required "het", so the shipped
     // `orgNew.bill.addToExistingHint` — "voor de helft van DE prijs" — was
@@ -2611,57 +2648,6 @@ export function localeCreditGrantFaults(
 export type FeatureGrants = Record<string, Record<string, boolean>>;
 
 /**
- * A Pro Plus differentiator claim is judged against the MATRIX, per locale.
- *
- * NOTE THE NEGATIVE CASE, which is the whole reason this reads the grants
- * instead of banning a phrase: "AI-assisted scheduling" is false TODAY because
- * `scheduling.ai` is `true` on all five plan keys (community, event_pass,
- * event_pass_l, pro, pro_plus — measured). If a future migration made it
- * pro_plus-only, the claim would become TRUE and this guard must fall silent.
- * A rule that fired unconditionally would satisfy every stated requirement of
- * this task and be wrong the moment the matrix moved.
- *
- * `lowerPlans` are the plans the "Everything in Pro, plus …" frame asserts do
- * NOT have the feature. Anti-vacuity closes the other side: an answer that
- * names no recognised differentiator has had this guard examine nothing.
- */
-export function localePlusDifferentiatorFaults(
-  values: LocalisedValue[],
-  grants: FeatureGrants,
-  lowerPlans: string[],
-): string[] {
-  const faults: string[] = [];
-  for (const { locale, key, value } of values) {
-    let recognised = 0;
-    for (const [feature, claim] of LOCALE_CLAIMS[locale].plusClaims) {
-      if (!claim.test(value)) continue;
-      recognised += 1;
-      const row = grants[feature];
-      if (!row) {
-        faults.push(`${locale} ${key}: claims ${feature}, which has no rows in plan_entitlements`);
-        continue;
-      }
-      for (const plan of lowerPlans) {
-        if (row[plan]) {
-          faults.push(
-            `${locale} ${key}: sells ${feature} as a Pro Plus differentiator, but ${plan} already grants it`,
-          );
-        }
-      }
-      if (!row.pro_plus) {
-        faults.push(`${locale} ${key}: claims ${feature}, but pro_plus does not grant it`);
-      }
-    }
-    if (recognised === 0) {
-      faults.push(
-        `${locale} ${key}: names no recognised differentiator — the ${locale} vocabulary has gone stale and this guard examined nothing`,
-      );
-    }
-  }
-  return faults;
-}
-
-/**
  * #382 review, finding 1 — the sibling claim, pointed the other way.
  *
  * `localePlusDifferentiatorFaults` judges "Pro Plus adds X over the PLANS
@@ -2770,26 +2756,35 @@ export function localePassUncoveredFaults(
 }
 
 /**
- * The comparative that REPLACED the false AI-scheduling claim. A boolean-grant
- * guard cannot judge it: "the largest monthly AI credit grant" is true only
- * while `ai.credits.monthly` for pro_plus is strictly greater than every other
- * plan's, so it is checked against the numbers, in every locale.
+ * The comparative "the largest monthly AI credit grant". A boolean-grant guard
+ * cannot judge it: it is true only while ONE plan's `ai.credits.monthly` is
+ * strictly greater than every other plan's, so it is checked against the
+ * numbers, in every locale.
  *
  * Paired both ways, like every presence rule here: the claim must be STATED (an
- * answer that just deletes it tells a buyer nothing about what they get instead
- * of the scheduling they were wrongly promised), and it must be TRUE.
+ * answer that just deletes it tells a buyer nothing about what they get) and it
+ * must be TRUE.
+ *
+ * W2 (entitlements v18): the leading plan is now an ARGUMENT. It was hardcoded
+ * `pro_plus`, and V392 deleted that plan — so the guard compared `undefined`
+ * against everything, reported the claim false in four locales, and named a
+ * plan that no longer exists in its own failure message. The live ordering is
+ * enterprise 500 > pro 25 > community 5 (V392 + V394), and enterprise is a
+ * Contact-us strip rather than a priced card, so a caller has to say which plan
+ * its copy is claiming leadership FOR rather than inherit yesterday's answer.
  */
 export function localeCreditLeadershipFaults(
   values: LocalisedValue[],
   monthlyGrants: Record<string, number | null>,
+  leader: string,
 ): string[] {
   const faults: string[] = [];
-  const plus = monthlyGrants.pro_plus;
-  const others = Object.entries(monthlyGrants).filter(([plan]) => plan !== "pro_plus");
+  const lead = monthlyGrants[leader];
+  const others = Object.entries(monthlyGrants).filter(([plan]) => plan !== leader);
   const leads =
-    typeof plus === "number" &&
+    typeof lead === "number" &&
     others.length > 0 &&
-    others.every(([, value]) => typeof value === "number" && value < plus);
+    others.every(([, value]) => typeof value === "number" && value < lead);
 
   for (const { locale, key, value } of values) {
     const stated = LOCALE_CLAIMS[locale].creditLeadership.test(value);
@@ -2797,7 +2792,7 @@ export function localeCreditLeadershipFaults(
       faults.push(`${locale} ${key}: never claims the largest monthly AI credit grant`);
     } else if (!leads) {
       faults.push(
-        `${locale} ${key}: claims the largest monthly AI credit grant, but pro_plus grants ${plus} against ${others
+        `${locale} ${key}: claims the largest monthly AI credit grant, but ${leader} grants ${lead} against ${others
           .map(([plan, v]) => `${plan}=${v}`)
           .join(", ")}`,
       );

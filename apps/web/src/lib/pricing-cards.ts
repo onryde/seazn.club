@@ -12,7 +12,11 @@ import { lowestPassRung } from "@/lib/pass-ladder";
 // lib/__tests__/pricing-cards.test.ts. Moving a cap means moving the copy here
 // AND in billing.community.* / billing.pro.* across all four dictionaries.
 export const FREE_FEATURES = [
-  "10 active competitions, 4 divisions",
+  // 3, not 10: V392 (entitlements v18 W2 T1) re-cut community's active
+  // competition cap. The number is quoted here and in billing.community.f1
+  // across four dictionaries; `cardMatrixFaults` pins this one and
+  // pricing-cards.test.ts pins those.
+  "3 active competitions, 4 divisions",
   "64 entrants per division",
   "League, groups + knockout & swiss formats",
   // V310: charging entry fees is free on every plan — only the platform cut
@@ -40,7 +44,13 @@ export const PASS_FEATURES = [
   // v17 #294: two rungs, so this line names both ceilings. It led with M's
   // alone while L existed, which reads as "an Event Pass caps at 128" — the
   // exact limit an L buyer is paying to remove.
-  "10 divisions, 128 entrants each — 20 & unlimited on L",
+  //
+  // W2 (entitlements v18, V392): L's entrant cap is 512, NOT unlimited. It was
+  // null, and this line said so in words; a null cap that becomes a number is
+  // the one direction "unlimited" copy cannot survive, because the word is
+  // still readable as true. `capClaimFaults` now faults a numeric cap that is
+  // also called unlimited, so the two cannot both be said.
+  "10 divisions, 128 entrants each — 20 divisions & 512 entrants on L",
   "Advanced formats — double elim, ladders",
   "5% platform fee on entry fees, not 8%",
   "Branded exports & public player cards",
@@ -88,7 +98,11 @@ export const PASS_CREDIT_GRANT: Record<PassKey, number> = {
 };
 
 export const PRO_FEATURES = [
-  "Unlimited competitions & divisions",
+  // HALF of this was true and half was not. `competitions.max_active` is still
+  // null on pro; `divisions.per_competition.max` is 20 since V392. One bullet
+  // covering two rows outlives a change to either, which is exactly how it
+  // came to promise a cap the resolver enforces at 20.
+  "Unlimited competitions, 20 divisions each",
   "256 entrants per division",
   "Entry fees at a 2% platform fee",
   // W1 (entitlements v18, owner ruling 2026-08-30): was "Ball-by-ball & rally
@@ -99,54 +113,44 @@ export const PRO_FEATURES = [
   // still Pro-only, so the bullet keeps its row and loses its falsehood.
   "Player stats & scorecards",
   "Officials, exports, API keys, device links",
-  "Remove the “Powered by Seazn” badge",
+  // WAS "Remove the “Powered by Seazn” badge". V395 (W2 T15, owner ruling
+  // 2026-09-03) made badge removal ENTERPRISE-only — every self-serve plan
+  // carries the badge now, Pro included — so this bullet promised a row Pro no
+  // longer holds. V396 then split the accent colour onto `dashboard.theme`,
+  // which IS a Pro grant and is the visual differentiator the badge line used
+  // to stand in for. Replaced rather than dropped: the card keeps a claim about
+  // how a Pro org's public pages look, and it is one the matrix backs.
+  "Your club colours on public pages & slideshow",
   // v16 league-ops (T84): suspensions/discipline, official ratings and
   // auto-drafted news posts all seed true on Pro (V293/V294/V295).
   "Suspensions & discipline tracking",
-  "Rate your match officials",
+  // V392 brought `officials.auto` down from the deleted Pro Plus to Pro, so the
+  // Pro card can make this claim for the first time. Folded into the ratings
+  // bullet rather than added as a tenth: one bullet, two rows
+  // (`officials.auto` + `officials.marks`), both pinned in CARD_SURFACES.
+  "Auto officials assignment & ratings",
   "Auto-drafted result posts",
 ];
 
-// Pro Plus is progressively disclosed on /pricing (spec §4) — same five
-// selling points as billing.plus.f1-f5 (Task 8's in-app upgrade prompt), kept
-// in marketing tone. Mirrored as dict keys pricing.plus.f1-f5 for i18n.
-// #244: "scorers" retired from marketing — the seat is dormant legacy; the card
-// leads with members/teams/clubs instead.
+// The Pro Plus CARD ARRAYS were deleted here in W2 (entitlements v18, V392 +
+// T2): `PLUS_CARD_FEATURES`, `PLUS_COMING_SOON` and the whole "Everything in
+// Pro, plus…" surface. The plan does not exist — V392 deleted `pro_plus` from
+// `plans` and `plan_entitlements` outright — and `/pricing` had already stopped
+// rendering them: the page reads `pricing.plus.cta` as the PRO card's CTA label
+// and nothing else from that family, and `components/marketing/plus-reveal.tsx`
+// is imported by no page at all.
 //
-// THIS ARRAY IS THE ENGLISH MIRROR, NOT THE RENDERED TEXT. `/pricing` reads
-// `pricing.plus.f{1..5}` out of the dictionaries and uses this array only for
-// the count and the order (page.tsx:402), so every edit here is an edit in FOUR
-// files. `pricing-cards.test.ts` pins the two together.
+// Leaving them was not neutral. Every bullet was read under an EXCLUSIVITY
+// frame, and four of the five named rows that no longer exist on any plan
+// (`officials.auto` came back to Pro, `api.write` is enterprise-only,
+// `support.priority` was deleted by V392, `clubs.hierarchy` is free) — so the
+// guards that judged them reported five live falsehoods against a card nobody
+// can see, which is noise that hides the real ones.
 //
-// v17 gap wave 7 (#299): f3 was "AI-assisted scheduling", sold under the
-// "Everything in Pro, plus…" frame — i.e. as something the lower plans lack.
-// `scheduling.ai` is `true` on ALL FIVE plan keys (community, event_pass,
-// event_pass_l, pro, pro_plus), so it differentiated nothing. Its replacement
-// is the one AI claim the matrix does back: `ai.credits.monthly` is 10 on
-// community, 60 on pro and 200 on pro_plus, so Pro Plus really does carry the
-// largest monthly grant. Pinned against those rows by pricing-cards.test.ts and
-// by dictionary-copy-truth.test.ts (all four locales).
-export const PLUS_CARD_FEATURES = [
-  "Unlimited members, teams & clubs",
-  "1% platform fee on entry fees",
-  "Largest monthly AI credit grant",
-  "Auto officials assignment",
-  "Write API access & priority support",
-];
-
-// Pro Plus roadmap (SPEC-1 §6): badged "coming soon", NOT purchasable. Rendered
-// as a muted list under the Plus card so the tier's ceiling reads as ambition,
-// not a paywall. Mirrored as dict keys pricing.plus.soon1-soon8 for i18n.
-export const PLUS_COMING_SOON: string[] = [
-  "Multi-org command centre",
-  "Shared templates & branding across orgs",
-  "Cross-competition analytics",
-  "Custom domain & white-label",
-  "SSO / SAML",
-  "SLA & dedicated support",
-  "Data export & warehouse",
-  "Bulk & scheduled automation",
-];
+// The `pricing.plus.f1-5` / `soon1-8` DICTIONARY keys stay for now: pruning the
+// four locale trees is W3's, and an unrendered key costs nothing while an
+// unrendered ARRAY costs a guard's attention. Enterprise is a Contact-us strip
+// (design §4), not a priced column, so nothing replaces this here.
 
 export interface TicketTier {
   tier: string;

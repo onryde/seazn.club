@@ -1457,14 +1457,21 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
   }> = [
     { key: "billing.community.f4", plan: "community", polarity: "granted", features: ["registration.enabled", "registration.paid"] },
     { key: "billing.community.f5", plan: "community", polarity: "denied", features: ["exports.branded", "dashboard.player_profiles"] },
-    { key: "billing.community.f6", plan: "community", polarity: "denied", features: ["dashboard.branding"] },
+    // TWO rows since V396 split the accent colour off badge removal, and this
+    // sentence names both things ("Theme colour & badge removal"). Pinning only
+    // one of them would let the other move under the ✗ unnoticed.
+    { key: "billing.community.f6", plan: "community", polarity: "denied", features: ["dashboard.branding", "dashboard.theme"] },
     { key: "billing.community.f7", plan: "community", polarity: "denied", features: ["realtime"] },
     // W1 (entitlements v18): was `["scoring.ball_by_ball", "scoring.rally_by_rally"]`
     // until V390 deleted both rows. The bullet is now the third capability that
     // sentence used to name — `stats.player` — which is the one of the three
     // that is still Pro-only.
     { key: "billing.pro.f4", plan: "pro", polarity: "granted", features: ["stats.player"] },
-    { key: "billing.pro.f5", plan: "pro", polarity: "granted", features: ["dashboard.branding"] },
+    // WAS `dashboard.branding`. V395 (W2 T15) made badge removal
+    // enterprise-only, so that row went FALSE on pro and this ✓ would have been
+    // a live falsehood; V396 split the accent colour — which is what "Custom
+    // branding" means here — onto `dashboard.theme`, which pro does grant.
+    { key: "billing.pro.f5", plan: "pro", polarity: "granted", features: ["dashboard.theme"] },
     { key: "billing.pro.f6", plan: "pro", polarity: "granted", features: ["exports"] },
     { key: "billing.pro.f7", plan: "pro", polarity: "granted", features: ["realtime"] },
   ];
@@ -1767,7 +1774,7 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
     // The rule fires: the three rows this round corrected, as they shipped.
     const flipped: Record<string, Record<string, boolean | null>> = {
       ...grants,
-      "dashboard.branding": { ...grants["dashboard.branding"], community: true },
+      "dashboard.theme": { ...grants["dashboard.theme"], community: true },
     };
     const refaults: string[] = [];
     for (const claim of PANEL_CLAIMS.filter((c) => c.key === "billing.community.f6")) {
