@@ -3,7 +3,8 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { Scorebug } from "../scorebug";
-import type { ScorebugSpec } from "../types";
+import { DetailDock, type DockStore } from "../detail-dock";
+import type { DockSpec, ScorebugSpec } from "../types";
 
 const t = ((key: string) => key) as unknown as Parameters<typeof Scorebug>[0]["t"];
 const spec: ScorebugSpec = {
@@ -77,5 +78,73 @@ describe("scorebug phone classes", () => {
     expect(item).not.toBeNull();
     expect(item![0]).toMatch(/class="[^"]*\bmax-md:shrink-0\b/);
     expect(item![0]).not.toMatch(/max-md:whitespace-nowrap/);
+  });
+});
+
+// Owner review (2026-09-02), NEEDS WORK for football/hockey/ice hockey:
+// "just names are coming out of circle" — a person chip (kind !== "flag")
+// was forced into the same max-md:grid-cols-2 half-width cell as a short
+// flag chip, then given rounded-full, so a long display name wrapped to
+// four lines inside a pill that inflated into a circular blob. Spec
+// (docs/superpowers/specs/2026-09-02-scorepad-v3-phone-composition-design.md:73):
+// "Person pickers ... render one per row (max-md:grid-cols-1)".
+describe("detail dock phone classes — person chip gets its own row, not a pill it overflows", () => {
+  const noopStore: DockStore = {
+    mutateHeld: async () => true,
+    releaseHeld: async () => {},
+  };
+  const dockSpec: DockSpec = {
+    title: "Goal detail",
+    chips: [
+      { id: "ownGoal", label: "pad.football.dock.ownGoal", kind: "flag", mutate: (p) => p },
+      { id: "penalty", label: "pad.football.dock.penalty", kind: "flag", mutate: (p) => p },
+      {
+        id: "scorer:mtl53fg9ctu7",
+        label: "pad.football.dock.person",
+        labelText: "Gallery Football Away Keeper mtl53fg9ctu7",
+        mutate: (p) => p,
+      },
+    ],
+  };
+  const html = renderToStaticMarkup(
+    <DetailDock
+      spec={dockSpec}
+      heldId="h1"
+      store={noopStore}
+      heldUntil={Date.now() + 6000}
+      t={t as unknown as Parameters<typeof DetailDock>[0]["t"]}
+      now={() => Date.now()}
+    />,
+  );
+  const buttons = [...html.matchAll(/<button[^>]*>[\s\S]*?<\/button>/g)].map((m) => m[0]);
+  const personButton = buttons.find((b) => b.includes("Gallery Football Away Keeper mtl53fg9ctu7"));
+  const flagButton = buttons.find((b) => b.includes("pad.football.dock.ownGoal"));
+
+  it("renders both a flag chip and a person chip", () => {
+    expect(flagButton).not.toBeUndefined();
+    expect(personButton).not.toBeUndefined();
+  });
+
+  it("the person chip spans the full row and drops the pill radius on phones", () => {
+    expect(personButton).toMatch(/class="[^"]*\bmax-md:col-span-2\b/);
+    expect(personButton).toMatch(/class="[^"]*\bmax-md:rounded-xl\b/);
+    expect(personButton).toMatch(/class="[^"]*\bmax-md:justify-start\b/);
+    expect(personButton).toMatch(/class="[^"]*\bmax-md:text-left\b/);
+    // never clamped/truncated — a scorer must be able to read the full name
+    expect(personButton).not.toMatch(/\btruncate\b/);
+    expect(personButton).not.toMatch(/\bline-clamp/);
+  });
+
+  it("the flag chip stays a two-up rectangle, untouched by the person-chip fix", () => {
+    expect(flagButton).not.toMatch(/max-md:col-span-2/);
+    expect(flagButton).not.toMatch(/max-md:rounded-xl/);
+    expect(flagButton).toMatch(/class="[^"]*\bmax-md:justify-center\b/);
+    expect(flagButton).toMatch(/class="[^"]*\brounded-lg\b/);
+  });
+
+  it("desktop stays flex-wrap pills — no md: (non-max) grid/col-span leak", () => {
+    // the container itself must still be flex flex-wrap at desktop widths,
+    // and the phone-only overrides must all be `max-md:`-scoped
+    expect(html).toMatch(/class="[^"]*\bflex\b[^"]*\bflex-wrap\b[^"]*\bmax-md:grid\b/);
   });
 });

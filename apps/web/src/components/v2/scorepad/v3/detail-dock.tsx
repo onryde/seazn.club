@@ -458,8 +458,30 @@ export function DetailDock({ spec, heldId, store, heldUntil, t, now = Date.now }
             // as the pill they already were. The radius is the only thing that
             // differs — same size, same border, same fill, so nothing about
             // this changes a dock whose chips set no `kind` (cricket's).
+            //
+            // Owner review (2026-09-02), NEEDS WORK — "just names are coming
+            // out of circle": every chip, person or flag, shared the same
+            // max-md:grid-cols-2 half-width cell and the same rounded-full
+            // pill. A short flag label ("Own goal") fits that fine; a
+            // person's display name does not — forced into half of a 320px
+            // dock, it wrapped to four lines inside a pill whose radius then
+            // inflated the whole thing into a circular blob (spec
+            // 2026-09-02-scorepad-v3-phone-composition-design.md:73, "Person
+            // pickers ... render one per row"). A non-flag chip now spans
+            // the full grid row on phones (max-md:col-span-2), swaps the
+            // pill radius for a rectangle (max-md:rounded-xl) and
+            // left-aligns its text (max-md:justify-start max-md:text-left)
+            // so a wrapped name reads as a label, not a centred blob. Never
+            // truncated/clamped: the scorer must be able to read WHICH
+            // player this is, and min-w-0 + break-words (below) already let
+            // a long unbroken token wrap instead of overflowing. Desktop is
+            // untouched — every one of these is a max-md:* variant, so the
+            // unprefixed `rounded-full`/flex-wrap pill stays exactly as
+            // before at ≥768.
             className={`inline-flex min-w-0 max-w-full items-center gap-1.5 border px-4 text-sm font-medium transition-colors max-md:justify-center max-md:px-3 ${
-              chip.kind === "flag" ? "rounded-lg" : "rounded-full"
+              chip.kind === "flag"
+                ? "rounded-lg"
+                : "rounded-full max-md:col-span-2 max-md:rounded-xl max-md:justify-start max-md:text-left"
             } ${
               selected
                 ? "cursor-default border-transparent bg-violet-600 text-white"
