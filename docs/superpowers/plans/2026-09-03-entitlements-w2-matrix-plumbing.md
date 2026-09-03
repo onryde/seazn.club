@@ -532,6 +532,47 @@ and `:15421,15430` ("scorers.max (Pro = 1): a second scorer can't take a seat",
 asserting 402). The second's NAME states the old rule, which is the shape this repo has
 been bitten by before — read what it asserts, then move it to Free 2 / Pro 10.
 
+### T14 — V394: grant `import.events` on every plan (owner ruling 2026-09-03)
+
+Raised by the scheduler-bench session as "G4, blocked on W2". Verified before acting, and
+it was NOT what the report said: `import.events` has zero rows AND exactly one reader —
+
+    app/api/v1/divisions/[id]/events/import/route.ts:28
+      await requireFeature(auth.orgId, "import.events"); // 402 during rollout
+
+The 402 was a deliberate rollout kill-switch, not a forgotten matrix row, and the key
+appears nowhere in design §2. So this is a FEATURE LAUNCH decision, not plumbing. It was
+put to the owner as such, twice: ship or hold, then which plans.
+
+**Ruling: ship it, TRUE on every plan — community, pro, enterprise, event_pass,
+event_pass_l.** Rationale accepted: R9 says scoring detail is never a price boundary and
+W1 already stripped the fidelity-band gate off this very importer, so gating the same
+importer by plan would re-introduce the boundary R9 removed. The house pattern for imports
+is a volume cap rather than a gate (`import.bulk` is 50 Free / 500 Pro); if event-import
+volume needs bounding later, add a CAP key, do not convert this into a gate.
+
+Scope:
+- Migration **V394** inserting `import.events` bool true for all five plans.
+- **Add the key to design §2** — `entitlements-v18-matrix.test.ts` parses that table, so a
+  row in the database that §2 does not name is drift by construction.
+- Update the `// 402 during rollout` comment at the call site; it is no longer true, and a
+  stale comment saying a live feature is gated is how the next reader re-disables it.
+- Check whether the key belongs in `ENTITLEMENT_DOMAINS` / the pricing comparison. It is
+  true everywhere, so it differentiates nothing and probably should NOT be a pricing row —
+  but say which, rather than leaving it to chance.
+- `feature-copy.ts` reason string: with every plan granting it the 402 becomes unreachable
+  for any org on a plan. Decide whether the reason stays for the no-plan case or goes.
+
+Sequenced AFTER T12 (V393) because that task is in flight; do not send a mid-task
+correction — this repo has had a subagent reject one as prompt injection.
+
+**For the bench session:** this unblocks their G4 once W2 merges. Their G7 (`business`
+seeded by V112, absent live) is CORRECT and was never blocked on W2 — the live catalogue
+is community / enterprise / event_pass / event_pass_l / pro, `business` is long gone, and
+"query the catalogue, never read it off migrations" remains the rule. W2 improves it:
+`pro_plus` is deleted and `enterprise` added, the plan-key mirrors are converged onto one
+union, and the live catalogue is now pinned against design §2 by a test.
+
 ### T9 — sweep and gates
 Delete the two dead e2e specs. Rerun the 34 files that assert against
 `plan_entitlements` and the 8 copy-truth importers (4 need a live DB). Unit, e2e,

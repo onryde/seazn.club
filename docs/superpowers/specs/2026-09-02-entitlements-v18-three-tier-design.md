@@ -58,7 +58,7 @@ self-serve.
   so a pass row would be invisible until the call passes the division's
   competition id. The route is `POST /divisions/{id}/officials/auto`, so the
   id is one join away.
-- `scorers.max` is real: `org_members.role = 'scorer'` is its own pool
+- `scorers.max` was real (W2 T12 deleted the key; the pool below is history): `org_members.role = 'scorer'` is its own pool
   (`lib/invites.ts:67`), offered in `components/org-team.tsx`, excluded from
   the billing usage count (`billing.usage.scorerNote`). Free 1, Pro 1 today.
 - `news.auto` gates both auto-drafted result posts and the weekly digest
@@ -139,14 +139,14 @@ Rationale is one line per changed row; unchanged rows say "keep".
 |---|---|---|---|---|---|---|
 | `orgs.max_owned` | 1 | 5 | – | – | ∞ | keep; extra org $9/mo add-on stays |
 | `members.max` (staff) | **3** | **10** | – | – | ∞ | R10; the extra-seat add-on is **hidden** (R13): backend and Stripe price stay dormant, nothing advertises it |
-| `scorers.max` | **2** | **10** | – | – | ∞ | pool exists (Background); 1/1 was indistinguishable from Free. Volunteer scorer logins are cheap seats; a club with ten is normal. Alternative rejected: merging into staff seats would let scorers eat the 10 staff |
+| `scorers.max` | — | — | — | — | — | **delete key** (W2 T12, owner ruling 2026-09-03): the cap meters a capability the product gives away. W1 made scoring free on every plan, and an ACCEPTED fixture official already reads AND scores with no org role at all (`requireFixtureActor`), so the seat is not separately sold. The scorer ROLE stays — deprecating it is its own wave (#707) |
 | `competitions.max_active` | **3** | ∞ | +1 | +1 | ∞ | R6; Pro headline stays "unlimited competitions" |
 | `dashboard.public.max` | **3** | ∞ | – | – | ∞ | growth: equals Free's 3 competitions so every free competition can be public and carry the badge. Org-level, a pass cannot lift it, which is why it must equal the comp cap |
 | `divisions.per_competition.max` | 4 | **20** | 10 | 20 | ∞ | R2: bounded; 20 is a federation |
 | `stages.per_division.max` | 2 | **6** | **4** | **4** | ∞ | pass today falls to Free's 2, which blocks a plate/bowl |
 | `entrants.per_division.max` | 64 | 256 | 128 | **512** | ∞ | R2; size pack +32 stays |
 | `teams.max` | 8 | **100** | – | – | ∞ | R4 |
-| `teams.squad_max` | 20 | **40** | – | – | ∞ | cricket 15, football 23, rugby 23: Free = one matchday squad, Pro = season roster. Pass rows (20 = Free) were no-ops and are dropped |
+| `teams.squad_max` | **23** | **40** | – | – | ∞ | Free = one matchday squad, Pro = season roster. 23 is the engine's own largest matchday squad, not a guess: `football.ts` declares `lineup: { size: 11, benchMax: 12 }` and `icehockey.ts` `{ size: 6, benchMax: 17 }`, both 23; cricket is 15 and volleyball 14, so they already fit. At 20 a football or ice-hockey club could not register its first full squad on Free at all (W2 T12; the earlier "rugby 23" rationale cited a sport the engine catalogue does not carry). Pass rows (20 = Free) were no-ops and are dropped |
 | `clubs.max` | 5 | **25** | – | – | ∞ | bounded |
 | `import.bulk` (rows) | 50 | **500** | – | – | ∞ | bounded |
 
@@ -225,9 +225,9 @@ Rationale is one line per changed row; unchanged rows say "keep".
 | `domains.custom` | — | — | — | — | — | **delete key**: no code behind it. Sold in the Contact-Us conversation, built later |
 | `support.priority` | — | — | — | — | — | **delete key**: a label, not a gate. Lives in Contact-Us copy |
 | `stats.club_championship` | — | — | — | — | — | **delete key**: inert |
-| `ai.credits.monthly` | **5** | **35** | – | – | **500** (staff override per deal) | R9 |
-| `ai.credits.trial` | – | 20 | – | – | 20 | keep |
-| pass credit grant (constant, not a key) | | | **+25** | **+50** | | R9; per-rung map replaces `PASS_CREDIT_GRANT` |
+| `ai.credits.monthly` | **5** | **25** | – | – | **500** (staff override per deal) | R9; Pro re-cut 35 → 25 (W2 T12, owner ruling 2026-09-03) |
+| `ai.credits.trial` | – | **15** | – | – | 20 | Pro re-cut 20 → 15 (W2 T12). Enterprise deliberately KEEPS 20 — its numbers are set per deal, so the asymmetry is intended and is not a drift to "fix" |
+| pass credit grant (constant, not a key) | | | **+25** | **+35** | | R9; per-rung map replaces `PASS_CREDIT_GRANT`. L re-cut 50 → 35 with the monthly grants (W2 T12) |
 
 Rule going forward: **the matrix carries only enforced keys.** Anything that
 is copy-only lives in dictionaries, never in `plan_entitlements`.
