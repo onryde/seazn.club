@@ -60,27 +60,34 @@ The scorebug carries the same score. Desktop unchanged.
 - Tap model unchanged: the halves remain the rally buttons (MODEL-S) or plain readouts (MODEL-T).
 
 ### 3.4 Ribbon (`v3-ribbon`) — label `max-md:line-clamp-2` instead of a single truncated line. *Take back* unchanged.
+**Correction (Task 8):** the ribbon also carries `max-md:order-1`, so on phone it (and *Take back* with it) sits **below the board** — after tiles and dock, not in its original top-of-pad position — sharing the same order value as the context strip (§3.5), which lands directly after it in source order.
 
 ### 3.5 Context strip (cricket and any skin that declares one) — three one-line rows
 `Striker | <name, truncates>` / `Non-striker | …` / `Bowler | …` as a two-column table at phone; the innings-fidelity lock line drops to one muted line. Desktop pills unchanged.
+**Correction (Task 8):** two premises here were wrong, both found by reading `context-strip.tsx`. First, the strip is **not** a two-column table on phone — each chip stacks full-width in a single column (`max-md:flex-col` on the row, `max-md:w-full` per chip, label `max-md:truncate`). Second, the strip carries `max-md:order-1` (deviation found while planning) and moves **below the dock** on phone, because keeping it in its original position pushed the keypad's first tile past the 568px first screen. The striker/bowler facts stay visible above the fold too: they are already on the scorebug rail, so nothing is lost by moving the strip itself down.
 
 ### 3.6 Tiles (`tile-grid.tsx`) — `max-md:min-h-[54px]`, label `max-md:text-[15px]`
 Column count and spans stay skin-decided (`TileSpec.span`); cricket's keypad keeps four columns.
 
 ### 3.7 Dock (`detail-dock.tsx`) — inline, 44px floor
-Chips container `max-md:grid max-md:grid-cols-2 max-md:gap-2`; chips `max-md:min-h-11 max-md:justify-center max-md:min-w-0` with a truncating label; *Cancel* `max-md:w-full`. Person pickers (chips whose label is a person's name, e.g. cricket "Who's out?") render one per row (`max-md:grid-cols-1`). `revealDock` (scroll-into-view on open) is unchanged and is what keeps the dock reachable.
+Chips container `max-md:grid max-md:grid-cols-2 max-md:gap-2`; chips `max-md:justify-center max-md:px-3` with a truncating label. Person pickers (chips whose label is a person's name, e.g. cricket "Who's out?") render one per row (`max-md:grid-cols-1`). `revealDock` (scroll-into-view on open) is unchanged and is what keeps the dock reachable.
+**Correction (Task 8):** the dock has **no Cancel or Back control at any width** — the premise was wrong. Its only dismiss is the pre-existing 44×44 X icon button (`aria-label={t("pad.dock.dismiss")}`, `detail-dock.tsx`), untouched by this plan. Chips becoming a 2-column grid is the only phone change here.
 
 ### 3.8 Recording-level chip (`v3-recording`, "Every detail") — moved **below** the dock on phone
-`max-md:order-*` so it follows tiles + dock; `max-md:min-h-9 max-md:text-xs`. It is a status toggle, not a scoring action; on a phone it yields its slot to the board.
+`max-md:order-2` so it follows tiles + dock (and the ribbon/context strip, §3.4/§3.5, which share `max-md:order-1`). It is a status toggle, not a scoring action; on a phone it yields its slot to the board.
+**Correction (Task 8):** the chip is **not resized**. Its own component, `RecordingChip` (`recording-chip.tsx:197`), already carries `style={{ minHeight: 44 }}` inline; shrinking it to `max-md:min-h-9 max-md:text-xs` as originally written here would break the 44px tap floor. It only moves.
 
 ### 3.9 Activity ledger (`ActivityPanel`, console instance) — collapsed on phone
 - New prop `collapsible` (console passes `true`; the device-link page passes the same so the one component has one rule).
-- Collapsed: header row becomes the toggle ("Activity · N", chevron; accessible name "Show all activity" / "Show latest only"), the **latest row only**, and *Void last entry* always visible. *Ledger verified* + *Download audit* and rows 2..N are `max-md:hidden` until expanded.
+- Collapsed: header row becomes the toggle ("Activity · N", chevron; accessible name "Show all activity" / "Show latest only") and only the **latest row** stays visible; rows 2..N are `max-md:hidden` until expanded.
 - Rows: title and the "time · recorded by …" line are `max-md:truncate` one line each.
 - ≥ 768: no toggle rendered (`md:hidden`), no row hidden — identical to today.
 
+**Correction (Task 8):** the footer is an opaque `ReactNode` the console supplies (`fixture-console.tsx`'s `footer` prop — *Void last entry*, *Ledger verified*, *Download audit*), rendered unconditionally in `activity.tsx` (`{footer && <div className="border-t ...">{footer}</div>}`, no `max-md:hidden` on it or its wrapper). It **stays fully visible on phones at every collapsed state**; the toggle only folds rows 2..N of the `<ul>`, never the footer.
+
 ### 3.10 Lineups — one disclosure row each on phone
 A small `PhoneDisclosure` wrapper in `fixture-console.tsx` around each `LineupEditor` / roster card: summary row = the card's existing title + the "N/M starting" count + chevron (button, `md:hidden`, accessible name "Show lineup" / "Hide lineup"); body `max-md:hidden` while closed. `LineupEditor` itself is not touched. ≥ 768 identical to today.
+**Note (Task 8):** the wrapper (`phone-disclosure.tsx`) carries *unconditional* `h-full min-w-0` and its body `grid h-full` — not `max-md:`-scoped, because they exist to preserve the pre-existing equal-height two-card grid (`grid gap-4 lg:grid-cols-2`) at ≥ 768, which a plain wrapper would otherwise break (a grid item's `h-full` does not cascade into a content-sized child without this). Verified live: a DOM-structure diff and matched 1280 screenshots against the pre-change baseline server show the two lineup cards rendering identically (task-8-report.md).
 
 ### 3.11 Match actions (`data-role="match-actions"`) — unchanged.
 
@@ -91,15 +98,17 @@ A small `PhoneDisclosure` wrapper in `fixture-console.tsx` around each `LineupEd
 | Hand over device | Show match details *(new)* |
 | Scorebug home half · away half | **Hand over device** *(moved into strip, icon)* |
 | Take back | Scorebug home half · away half |
-| Every detail | Take back |
-| Sanction Home · Sanction Away · More | Sanction Home · Sanction Away · More |
-| Void × N | **Every detail** *(moved below board)* |
+| Every detail | Sanction Home · Sanction Away · More |
+| Sanction Home · Sanction Away · More | **Take back** *(moved below board — order-1)* |
+| Void × N | **Every detail** *(moved below board — order-2)* |
 | Void last entry · Download audit | Show all activity *(new)* |
-| Lineup selects (home) · (away) | Void × 1 · **Void last entry** |
+| Lineup selects (home) · (away) | Void × 1 · Void last entry · Ledger verified · Download audit *(footer stays fully visible, §3.9)* |
 | Forfeit · Abandon | Show lineup × 2 *(new)* |
 | | Forfeit · Abandon |
 
-Membership differs (three disclosures added, N−1 Void and Download audit folded), order differs (two moves). Not a shrink by ruling 0.1.
+Membership differs (three disclosures added, N−1 Void folded — the footer is never folded, §3.9), order differs (Take back and Every detail both move below the board via `max-md:order-1`/`order-2`, §3.4/§3.8). Not a shrink by ruling 0.1.
+
+**Correction (Task 8):** the original table above put *Take back* ahead of the tiles/dock row and paired only *Every detail* with "moved below board" — reading the shipped `pad-host.tsx` order classes (`max-md:order-1` ribbon and context strip, `max-md:order-2` recording, tiles/dock left at the default `order-0`) shows tiles and dock are hoisted ahead of BOTH the ribbon and the recording chip on phone, not just the chip. Table corrected above; class values in `pad-host.tsx` are the source of truth if they change again.
 
 ## 4. Copy and i18n
 New strings, all four dictionaries (`apps/web/src/dictionaries/{en,es,fr,nl}/ui.json`), then `gen-keys` regen of `i18n-keys.ts`:
@@ -119,7 +128,11 @@ New strings, all four dictionaries (`apps/web/src/dictionaries/{en,es,fr,nl}/ui.
    - existing no-horizontal-scroll gate stays.
    Budget any per-tap wait as `Math.max(FLOOR, base + taps * (HOLD_MS + slack))`, never a flat number.
 3. **Smoke** (`scripts/smoke.ts` pattern, PR CI): fetch the fixture page and assert the phone strip control is in the HTML, anchored `data-testid="device-handover-phone"` (with `="`, not a bare probe).
-4. **Regression — "≥ 768 unchanged" as pixels**: run `gallery.capture.ts` for all 12 sports on `main` and on the branch (`docs/runbooks/pad-gallery.md`; `GALLERY_WIDTHS=768,1280` for the diff run, full three widths for sign-off). 768 and 1280 PNGs must be **byte-identical** (`cmp`) sport for sport; 320 PNGs must **differ** for every sport (proves the change is live, not suppressed). Any 768/1280 diff is a defect in this spec's mechanism, not tolerance to widen.
+4. **Regression — "≥ 768 unchanged", proven three ways (Task 8 correction)**: byte-identical 768/1280 PNGs across two gallery runs is impossible — the harness seeds random-tagged fixtures per run (different names, ids, timestamps), so base and after screenshots of "the same screen" are never byte-comparable even with zero code change; `cmp` was never a viable gate here. Replaced by:
+   - **The class audit** — `git diff main -- apps/web/src | grep '^\+' | grep -oE '(className|class)=...'` over every added line; every surviving token (stripped of `max-md:`/`md:` variants) must be on a NEW element or the one whitelisted root change (`pad-host.tsx`'s `space-y-3` → `flex flex-col gap-3`, §2).
+   - **A live DOM-structure diff at 1280** between the current build and the pre-change baseline, on the same seeded fixture (same DB) — tag, `data-role`/`data-testid`, class, depth-first. Catches what the class audit cannot: a new wrapper element changing an EXISTING element's parent/box (this plan's own `PhoneDisclosure` risk, §3.10).
+   - **Eyes-on**: 320/768/1280 screenshots for every sport, with 320 confirmed to *differ* from baseline (`cmp`, proving the change is live, not suppressed) and 768/1280 judged by layout, not pixels (names/seeds differ between runs).
+   320 PNGs must differ for every sport; any 768/1280 LAYOUT difference (not pixel difference) is a defect in this spec's mechanism, not tolerance to widen.
 5. **Existing suites** re-run: `scorepad-v3-*.spec.ts`, `walkthrough/scorepad-v3-r7-console-chrome.spec.ts` (drives hand-over), the 15 specs that click *Void* — at their own projects. Those that run at phone widths and click a now-folded control are updated to open the disclosure first; list them in the PR.
 6. **Gallery sign-off** at 320/768/1280, all 12 sports, per-screen verdicts by the owner, per ruling 0.5. Plus a hand-driven walkthrough on a real phone width: score a rally, open a dock, void an entry, hand the device over — and write down what was seen.
 7. Lint via `rtk proxy npm run lint` (read `✖ N problems`); tsc via a direct `npx tsc --noEmit -p apps/web` exit code, not the wrapper's summary; `npm run openapi:gen && git status --porcelain` empty before every commit.
