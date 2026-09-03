@@ -191,6 +191,43 @@ const LEDGER_PHASE_RANK: Record<DivisionPhase, number> = {
   finished: 3,
 };
 
+/**
+ * F4 (round J): the ONE attention a competition-level pill should show, or
+ * `null`.
+ *
+ * The division rows put a red attention on their pill and the masthead showed
+ * only the phase, so a competition whose divisions were collectively blocked
+ * read calm at the top of its own page — the same "two screens, each correct,
+ * contradicting each other" shape this wave keeps producing.
+ *
+ * It picks, never summarises: the highest severity wins, ties inside a band
+ * broken by `KIND_ORDER`, and the winner is handed to the SAME `PhasePill`
+ * the rows use so it prints the same words. Deliberately no invented
+ * "several things need you" copy and no count — a second authority for one
+ * displayed fact is exactly what produced this wave's worst defects, and a
+ * competition-level number would be one.
+ *
+ * Lives here rather than inline in the page for the reason `ledgerRank`
+ * does: the page is an async server component that node-env vitest cannot
+ * reach, so a rule written there has no unit test at any layer.
+ */
+export function leadingAttention(
+  desks: Iterable<{ attention: readonly Attention[] } | null>,
+): Attention | null {
+  let best: Attention | null = null;
+  for (const d of desks) {
+    if (!d) continue;
+    for (const a of d.attention) {
+      if (best === null || attentionRank(a) < attentionRank(best)) best = a;
+    }
+  }
+  return best;
+}
+
+function attentionRank(a: Attention): number {
+  return SEVERITY_ORDER.indexOf(ATTENTION_SEVERITY[a.kind]) * 100 + KIND_ORDER.indexOf(a.kind);
+}
+
 export function ledgerRank(desk: { phase: DivisionPhase; attention: readonly Attention[] } | null): number {
   if (!desk) return 9;
   if (desk.attention.some((a) => ATTENTION_SEVERITY[a.kind] === "red")) return -1;

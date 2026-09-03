@@ -24,8 +24,9 @@ import { sql } from "@/lib/db";
 import { checkoutTrialDays } from "@/lib/billing";
 import { getCompetitionDesk, competitionPhase } from "@/server/usecases/competition-desk";
 import { statusLine, nextDateLabel } from "@/lib/division-status-line";
-import { ledgerRank } from "@/lib/division-phase";
+import { ledgerRank, leadingAttention } from "@/lib/division-phase";
 import { PhasePill } from "@/components/v2/desk/phase-pill";
+import { DeskToolsMore } from "@/components/v2/desk/desk-tools-more";
 import { NeedsYou, needsYouItems } from "@/components/v2/desk/needs-you";
 import { DivisionLedger, type LedgerRow } from "@/components/v2/desk/division-ledger";
 import { log } from "@/server/logger";
@@ -123,6 +124,11 @@ export default async function CompetitionPage({
   // sort is still this page's own (rank, then name), and is pinned by
   // competition-desk.spec.ts's row-order test.
   ledgerRows.sort((a, b) => ledgerRank(a.desk) - ledgerRank(b.desk) || a.name.localeCompare(b.name));
+  // Read off the ledger rows rather than `desk.divisions` so the masthead can
+  // never disagree with what is actually on the page: a division the ledger
+  // renders from card stats alone (its desk entry missing) contributes no
+  // attention here either.
+  const mastheadAttention = leadingAttention(ledgerRows.map((r) => r.desk));
   const publicPath =
     competition.visibility !== "private" ? routes.shared(orgSlug, competition.slug) : null;
   // RS004 W2 scope item 2: the Registration hub's nav entry carries live
@@ -188,6 +194,13 @@ export default async function CompetitionPage({
                   phase={compPhase.kind}
                   inPlay={compPhase.kind === "in_play" ? compPhase.n : 0}
                   when={compPhase.kind === "next" ? nextDateLabel(compPhase.at, locale, compPhase.tz) : undefined}
+                  // F4 (round J): the rows put a red attention on their pill
+                  // and this one showed only the phase, so a competition whose
+                  // divisions were collectively blocked read calm at the top
+                  // of its own page. One attention, picked by
+                  // `leadingAttention` and rendered by the same component the
+                  // rows use — no competition-level copy or count of its own.
+                  attention={mastheadAttention ? [mastheadAttention] : undefined}
                   testId="desk-masthead-pill"
                 />
               )}
@@ -204,9 +217,19 @@ export default async function CompetitionPage({
               <span>{plural(dict, "desk.masthead.divisions", divisions.length, locale)}</span>
             </div>
           </div>
-          {/* Header actions: icon + label on desktop, icon-only under `sm`
-              (v3/02 pattern 5 — labels move into aria-label, 44px targets). */}
-          <div className="flex flex-wrap items-center gap-2">
+          {/* Header actions.
+              `sm` and up: unchanged — icon + label, wrapped in a row.
+              Below `sm` (F2, round J): NOT the same row shrunk. It stacks,
+              full width, and the set itself changes — one primary action
+              (Schedule board), the one tool that carries status
+              (Registration, with its count), and everything else folded into
+              a labelled "More" disclosure. Before this, all five tools
+              collapsed to unlabelled 46x34 icon tiles under the 44px tap
+              floor, which is a groomed shrink of the desktop row. */}
+          <div
+            data-testid="desk-tool-row"
+            className="flex flex-wrap items-center gap-2 max-sm:w-full max-sm:flex-col max-sm:items-stretch"
+          >
             {/* Entry point 1 of 4 (task 19): the pass, offered in the
                 competition's own header instead of only at a paywall. Renders
                 itself away for a paid org — Pro already exceeds it, and shows
@@ -243,25 +266,28 @@ export default async function CompetitionPage({
               href={routes.slideshowCompetition(competition.id)}
               target="_blank"
               aria-label={t(dict, "aria.slideshowNewTab")}
-              className="btn btn-ghost gap-1.5"
+              className="btn btn-ghost gap-1.5 max-sm:hidden"
             >
               <MonitorPlay className="h-4 w-4" strokeWidth={1.75} />
               <span className="hidden sm:inline">{t(dict, "action.slideshow")} ↗</span>
             </Link>
+            {/* The organiser's most likely action at a venue, so on a phone it
+                is THE action: first, full width, filled, and labelled. */}
             <Link
               href={routes.competitionSchedule(orgSlug, compSlug)}
               aria-label={t(dict, "aria.scheduleBoard")}
-              className="btn btn-ghost gap-1.5"
+              data-testid="desk-tool-schedule"
+              className="btn btn-ghost gap-1.5 max-sm:order-1 max-sm:min-h-11 max-sm:w-full max-sm:justify-center max-sm:border-purple-600 max-sm:bg-purple-600 max-sm:text-white"
             >
               <CalendarRange className="h-4 w-4" strokeWidth={1.75} />
-              <span className="hidden sm:inline">{t(dict, "action.scheduleBoard")}</span>
+              <span className="sm:inline">{t(dict, "action.scheduleBoard")}</span>
             </Link>
             {publicPath && (
               <Link
                 href={publicPath}
                 target="_blank"
                 aria-label={t(dict, "aria.viewPublicNewTab")}
-                className="btn btn-ghost gap-1.5"
+                className="btn btn-ghost gap-1.5 max-sm:hidden"
               >
                 <Globe className="h-4 w-4" strokeWidth={1.75} />
                 <span className="hidden sm:inline">{t(dict, "action.viewPublic")} ↗</span>
@@ -274,7 +300,7 @@ export default async function CompetitionPage({
                 href={`${publicPath}/poster.pdf`}
                 target="_blank"
                 aria-label={t(dict, "aria.qrPoster")}
-                className="btn btn-ghost gap-1.5"
+                className="btn btn-ghost gap-1.5 max-sm:hidden"
               >
                 <Printer className="h-4 w-4" strokeWidth={1.75} />
                 <span className="hidden sm:inline">{t(dict, "action.qr")}</span>
@@ -292,6 +318,7 @@ export default async function CompetitionPage({
               // this page does not render for one at all, so no gate is owed
               // here: whoever sees this overview may see the hub.
               <RegistrationHubNavEntry
+                className="max-sm:order-2"
                 href={routes.competitionRegistration(orgSlug, compSlug)}
                 label={t(dict, "action.registration")}
                 // The breakdown, not just "Registration": the tooltip that
@@ -315,11 +342,29 @@ export default async function CompetitionPage({
             <Link
               href={routes.competitionSettings(orgSlug, compSlug)}
               aria-label={t(dict, "aria.settings")}
-              className="btn btn-ghost gap-1.5"
+              className="btn btn-ghost gap-1.5 max-sm:hidden"
             >
               <Settings className="h-4 w-4" strokeWidth={1.75} />
               <span className="hidden sm:inline">{t(dict, "action.settings")}</span>
             </Link>
+            {/* Phone only, and the counterpart of the four `max-sm:hidden`
+                tools above: the same destinations, as labelled full-width
+                rows at the tap floor instead of unreadable glyphs. Its own
+                `sm:hidden` is what keeps 640-and-up literally unchanged. */}
+            <DeskToolsMore
+              className="max-sm:order-3 sm:hidden"
+              label={t(dict, "desk.tools.more")}
+              items={[
+                { label: t(dict, "action.slideshow"), href: routes.slideshowCompetition(competition.id), external: true },
+                ...(publicPath
+                  ? [
+                      { label: t(dict, "action.viewPublic"), href: publicPath, external: true },
+                      { label: t(dict, "action.qr"), href: `${publicPath}/poster.pdf`, external: true },
+                    ]
+                  : []),
+                { label: t(dict, "action.settings"), href: routes.competitionSettings(orgSlug, compSlug) },
+              ]}
+            />
           </div>
         </div>
 

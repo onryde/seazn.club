@@ -805,6 +805,138 @@ test("competition desk: the division row is a CARD below md and a grid at md, no
   }
 });
 
+// F2 + F5 (round J). The desk's TOOL ROW below `sm`, and the Now line on the
+// phone card.
+//
+// Before this the five tools were `hidden sm:inline` labels over 46x34 icon
+// tiles: unlabelled, under the 44px floor, on the width most likely to be in
+// a hand at a venue — a groomed shrink of the desktop row rather than a phone
+// composition. The gate is a CONTROL-SET diff (membership and reachability),
+// never a comparison of box sizes: a phone view showing the same controls
+// smaller is exactly the defect this asserts against.
+test("competition desk: the tool row is a phone composition below sm, not the desktop row shrunk", async ({
+  page,
+  request,
+}) => {
+  const width = projectViewport()?.width ?? 0;
+  const isPhone = width < 640;
+
+  const comp = await apiJson<{ id: string; slug: string }>(request, "/api/v1/competitions", "POST", {
+    name: `Desk Tools ${TAG}`, visibility: "public", ends_on: "2030-12-31",
+  });
+  expect(comp.status).toBe(201);
+  const div = await apiJson<{ id: string; slug: string }>(
+    request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST",
+    { name: "Tools Cup", sport_key: "generic", variant_key: "score", config: { points: { w: 3, d: 1, l: 0 }, progressScore: false } },
+  );
+  expect(div.status).toBe(201);
+  await addEntrantsViaApi(request, div.data!.id, ["Alpha", "Bravo", "Charlie", "Delta"]);
+  const { fixtureIds } = await createStageAndGenerate(request, div.data!.id, { kind: "league", name: "League" });
+  expect((await apiJson(request, `/api/v1/divisions/${div.data!.id}/start`, "POST")).status).toBeLessThan(400);
+  // One fixture LIVE, so the ledger row has a "Now: …" line to carry (F5).
+  await setFixtureStatusSql(fixtureIds[0]!, "in_play");
+
+  await page.goto(await competitionPath(request, comp.data!.id), { waitUntil: "load" });
+  await dismissCookieBanner(page);
+
+  const toolRow = page.getByTestId("desk-tool-row");
+  const schedule = page.getByTestId("desk-tool-schedule");
+  const more = page.getByTestId("desk-tools-more-toggle");
+  // Scoped to the tool row: the org nav carries its own "Settings" link, and
+  // an unscoped role query matches that too — a strict-mode violation that
+  // reads like a product defect. The fold's copy of the label is deliberately
+  // included in the row's own set, which is why the set is captured BEFORE
+  // the fold is opened.
+  const rowControlSet = async () =>
+    (await toolRow.locator("a:visible, button:visible").allInnerTexts())
+      .map((x) => x.replace(/\s+/g, " ").trim())
+      .filter(Boolean);
+
+  // F5: the Now line, at EVERY width. The phone card used to drop it — the
+  // one width where "a match is on right now" matters most was the only one
+  // that never said so.
+  const row = page.getByTestId("desk-ledger-row").filter({ hasText: "Tools Cup" }).first();
+  const nowLine = row.locator("p:visible", { hasText: /^Now:/ });
+  await expect(nowLine, "the ledger row must name the live fixture at this width").toHaveCount(1);
+  await expect(nowLine).toContainText(/Alpha|Bravo|Charlie|Delta/);
+
+  if (isPhone) {
+    // 1. The primary action is labelled, full width, and clears the floor.
+    await expect(schedule).toBeVisible();
+    await expect(schedule, "the phone primary must carry its WORD, not just a glyph").toContainText("Schedule");
+    const box = await schedule.boundingBox();
+    expect(box, "the phone primary must have a measurable box").not.toBeNull();
+    expect(box!.height, "a phone action must clear the 44px touch floor").toBeGreaterThanOrEqual(HIT_TARGET_FLOOR_PX);
+    expect(box!.width, "the phone primary is full-width, not an inline tile").toBeGreaterThan(width * 0.7);
+
+    // 2. Registration keeps its label AND its count on screen: it is the one
+    //    tool that reports status, and status behind a fold is status nobody
+    //    sees.
+    const registration = page.getByRole("link", { name: /Registration/ });
+    await expect(registration).toBeVisible();
+    await expect(registration).toContainText("Registration");
+
+    // 3. The CONTROL-SET diff, captured before anything is opened: the
+    //    desktop row's inline Settings, Slideshow, Public page and QR tiles
+    //    are not on this width at all. Membership, never box sizes — a phone
+    //    view showing the same controls smaller is the defect, not the fix.
+    const phoneSet = await rowControlSet();
+    expect(phoneSet.join(" | "), "the phone row leads with the schedule board").toMatch(/Schedule/);
+    expect(phoneSet.join(" | "), "registration keeps its label on a phone").toMatch(/Registration/);
+    expect(phoneSet.join(" | "), "a phone needs a labelled More control").toMatch(/More/);
+    expect(phoneSet.join(" | "), "the inline Settings tile must not survive into the phone row").not.toMatch(/Settings/);
+    expect(phoneSet.join(" | "), "the inline Slideshow tile must not survive into the phone row").not.toMatch(/Slideshow/);
+
+    // 4. The rest are FOLDED — attached, so a test can tell "behind the fold"
+    //    from "never rendered", but not visible until the disclosure opens.
+    await expect(more, "a phone needs a labelled More control, not a bare glyph").toBeVisible();
+    await expect(more).toContainText("More");
+    await expect(more).toHaveAttribute("aria-expanded", "false");
+    // `.locator("a")`, not `getByRole("link")`: the closed panel carries the
+    // `hidden` ATTRIBUTE, which correctly removes its links from the
+    // accessibility tree — so a role query finds nothing and cannot tell
+    // "folded away" from "never rendered", the exact pair this assertion
+    // exists to separate. (It reported `element(s) not found` on the first
+    // run, which is also the proof the distinction is real.)
+    const folded = page.getByTestId("desk-tools-more").locator("a");
+    await expect(folded.first(), "the folded tools must be in the DOM, just not on screen").toBeAttached();
+    await expect(folded.first()).not.toBeVisible();
+    await expect(
+      page.getByTestId("desk-tools-more").getByRole("link"),
+      "a closed fold must be out of the accessibility tree too, not merely invisible",
+    ).toHaveCount(0);
+
+    await more.click();
+    await expect(more).toHaveAttribute("aria-expanded", "true");
+    const count = await folded.count();
+    expect(count, "the fold must carry the tools the row no longer shows inline").toBeGreaterThanOrEqual(2);
+    for (let i = 0; i < count; i++) {
+      const item = folded.nth(i);
+      await expect(item).toBeVisible();
+      const itemBox = await item.boundingBox();
+      expect(itemBox, `folded tool ${i} must have a box once open`).not.toBeNull();
+      expect(itemBox!.height, `folded tool ${i} must clear the 44px floor`).toBeGreaterThanOrEqual(HIT_TARGET_FLOOR_PX);
+      expect((await item.textContent())?.trim(), `folded tool ${i} must be labelled`).toBeTruthy();
+    }
+
+    // 5. And once open, the labels are BACK — in a different control, in a
+    //    different place. That is what makes this a composition rather than a
+    //    deletion: nothing was taken away from the organiser, it moved.
+    const openedSet = await rowControlSet();
+    expect(openedSet.join(" | "), "the fold restores the tools the row dropped").toMatch(/Settings/);
+    expect(openedSet.join(" | ")).toMatch(/Slideshow/);
+  } else {
+    // 640 and up is UNCHANGED: the labelled row, and no disclosure at all.
+    await expect(more, "the phone disclosure must not appear at tablet width").toBeHidden();
+    await expect(schedule).toBeVisible();
+    const tabletSet = (await rowControlSet()).join(" | ");
+    expect(tabletSet, "the labelled row is unchanged at 640 and up").toMatch(/Settings/);
+    expect(tabletSet).toMatch(/Slideshow/);
+    expect(tabletSet, "no disclosure at this width").not.toMatch(/More/);
+  }
+  await expectNoHorizontalScroll(page);
+});
+
 // R3.5 review round 1 (2026-08-26, finding 4) — split out of "console
 // routes: no horizontal scroll" above. Two fixture seeds plus ~18
 // postEvents (~36 round trips) used to run at the HEAD of that test's own

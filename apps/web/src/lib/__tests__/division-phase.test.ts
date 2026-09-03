@@ -4,8 +4,10 @@ import {
   resolveAttention,
   localDateKey,
   ledgerRank,
+  leadingAttention,
   hasPlayedFixture,
   NOT_RECORDING_GRACE_MINUTES,
+  type Attention,
   type PhaseInput,
   type PhaseFixture,
   type PhaseStage,
@@ -767,6 +769,48 @@ describe("hasPlayedFixture", () => {
  * without a rebuild; `competition-desk.spec.ts` asserts the rendered ROW
  * ORDER on top of it.
  */
+describe("leadingAttention — the one thing the masthead says", () => {
+  const RED_DRAW = { kind: "needs_draw", stageName: "Finals", door: "compute" } as const;
+  const RED_SCORER: Attention = { kind: "no_scorer", count: 1, fixtureIds: ["f"], minutesSinceKickoff: 9 };
+  const AMBER_QUIET: Attention = { kind: "not_recording", count: 1, fixtureIds: ["q"], minutesSinceKickoff: 30 };
+  const AMBER_UNSCHED = { kind: "unscheduled", count: 2 } as const;
+  const SLATE = { kind: "registrations_waiting", count: 4 } as const;
+  const div = (...attention: Attention[]) => ({ attention });
+
+  it("nothing to say when no division has an attention", () => {
+    expect(leadingAttention([])).toBeNull();
+    expect(leadingAttention([div(), div()])).toBeNull();
+  });
+  it("a division the ledger renders without desk data contributes nothing", () => {
+    // The `null` row is real: `getCompetitionDesk` can fail for one division
+    // and the ledger still renders it from card stats. The masthead must not
+    // claim to know something about a row it knows nothing about.
+    expect(leadingAttention([null, null])).toBeNull();
+    expect(leadingAttention([null, div(SLATE)])).toEqual(SLATE);
+  });
+  it("severity wins across divisions, whatever order they arrive in", () => {
+    expect(leadingAttention([div(SLATE), div(AMBER_UNSCHED), div(RED_DRAW)])).toEqual(RED_DRAW);
+    expect(leadingAttention([div(RED_DRAW), div(AMBER_UNSCHED), div(SLATE)])).toEqual(RED_DRAW);
+  });
+  it("KIND_ORDER breaks a tie inside one severity band — the case a reorder kills", () => {
+    // Both amber, so severity cannot separate them: only the kind order can,
+    // and it puts `not_recording` ahead of `unscheduled`. Swap those two in
+    // KIND_ORDER and this is the assertion that dies — without it the
+    // tie-break has no test at any layer.
+    expect(leadingAttention([div(AMBER_UNSCHED), div(AMBER_QUIET)])).toEqual(AMBER_QUIET);
+    expect(leadingAttention([div(AMBER_QUIET), div(AMBER_UNSCHED)])).toEqual(AMBER_QUIET);
+    // Same again one band up, so the rule is not an accident of the amber row.
+    expect(leadingAttention([div(RED_SCORER), div(RED_DRAW)])).toEqual(RED_DRAW);
+  });
+  it("picks one, never summarises: the winner is a row the pill can already print", () => {
+    // The masthead renders through the same PhasePill the rows use, so
+    // whatever comes back must be an Attention exactly as a row carries it —
+    // not a synthesised count, not a new kind.
+    const out = leadingAttention([div(AMBER_UNSCHED, RED_DRAW), div(SLATE)]);
+    expect(out).toBe(RED_DRAW);
+  });
+});
+
 describe("ledgerRank — red outranks the phase", () => {
   const red = { kind: "needs_draw", stageName: "Finals", door: "compute" } as const;
   const amber = { kind: "unscheduled", count: 2 } as const;

@@ -1456,6 +1456,7 @@ export type DictionaryKey =
   | "desk.status.settingUp.other"
   | "desk.status.unscheduledSuffix.one"
   | "desk.status.unscheduledSuffix.other"
+  | "desk.tools.more"
   | "device.askFreshLink"
   | "device.courtsideFooter"
   | "device.failed"

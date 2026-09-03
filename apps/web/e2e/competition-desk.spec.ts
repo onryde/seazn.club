@@ -413,6 +413,44 @@ test.describe("competition desk", () => {
   // only rows whose phase word was `scheduled`/`match_day` and a rule-4
   // `setting_up` row fell straight through. Observed live at 08:20Z on
   // 2026-09-03 against the pre-fix build.
+  // F4 (round J): the rows put a red attention on their pill and the masthead
+  // showed only the phase, so a competition whose divisions were collectively
+  // blocked read calm at the top of its own page. This asserts the WORDS, not
+  // just that a pill exists — a `data-pill` attribute with the phase's own
+  // copy under it would satisfy a weaker check and still say the wrong thing.
+  test("F4: the masthead names the red attention its rows are raising, in the same words", async ({
+    page,
+    request,
+  }) => {
+    const org = await activeOrg(page);
+    const rig = await leagueOfFour(request, "F4");
+    await apiJson(request, `/api/v1/divisions/${rig.div.id}/start`, "POST");
+    for (const id of rig.fixtureIds) await scoreFixture(request, id, 2, 1);
+    const completed = await apiJson(request, `/api/v1/stages/${rig.leagueId}/complete`, "POST", {});
+    expect(completed.status).toBe(200);
+    const created = await apiJson<{ id: string }>(request, `/api/v1/divisions/${rig.div.id}/stages`, "POST", {
+      seq: 2, kind: "knockout", name: "Finals", config: {},
+      progression: { ...KNOCKOUT_FROM_LEAGUE, timing: "setup" },
+    });
+    expect(created.status).toBe(201);
+
+    await page.goto(`/o/${org.slug}/c/${rig.comp.slug}`);
+    const masthead = page.getByTestId("desk-masthead-pill");
+    const row = page.getByTestId("desk-ledger-row").filter({ hasText: "Cup" }).first();
+    // The row raises it...
+    await expect(row.locator('[data-pill="needs_fixtures"]')).toHaveCount(1);
+    // ...and so does the masthead, with the same word, not a phase word.
+    await expect(masthead).toHaveAttribute("data-pill", "needs_fixtures");
+    await expect(masthead).toHaveText(/needs fixtures/i);
+    // Print the asserted CONTENT beside the gate: the two must agree, and the
+    // comparison is what this test exists for — a masthead that invented its
+    // own competition-level copy would pass a bare presence check.
+    expect(
+      (await masthead.textContent())?.trim().toLowerCase(),
+      "masthead and row must say the same thing",
+    ).toBe((await row.locator('[data-pill="needs_fixtures"]').first().textContent())?.trim().toLowerCase());
+  });
+
   test("K2: the masthead never reads Setting up above a row that has played its whole league", async ({
     page,
     request,
