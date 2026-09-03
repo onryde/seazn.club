@@ -2739,3 +2739,129 @@ describe("registration funnel — the green fixture: all five rules satisfied at
     expect(errors(validatePack(pack, UNIT).findings)).toEqual([]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Rule 6 — `joins[].consent` must agree with whether the joining PERSON is
+// actually a minor, in BOTH directions (found by opening `StepConsent`'s
+// `showGuardian` condition rather than trusting the `reg-consent-grant`
+// testid it is attached to — B03r-repins-2026-09-03.md "A sixth stage-0
+// rule").
+//
+// Derived from `isMinor`/`ageAt` (apps/web/src/lib/registration-rules.ts:
+// 56-68), NOT from `guardianRequired` (components/public-site/register/
+// validation.ts) directly: that function takes a `CartState`/`ContactState`
+// pair a pack join has neither shape of, but it is a thin wrapper —
+// `guardianRequired` -> `effectiveSelfDob` -> `isMinor(dob, now)` — so
+// mirroring `isMinor` itself reaches the exact verdict a pack CAN supply the
+// inputs for.
+//
+// Uses WALL-CLOCK "now" (computed once per `validatePack` call), NOT the
+// `seasonStartYear`/2024-01-01 cutoff rule 1/5's age-band checks use above —
+// a deliberately DIFFERENT date basis, because the product's own
+// `showGuardian = guardianRequired(cart, contact, new Date())`
+// (step-consent.tsx:54) evaluates minority at the moment someone actually
+// registers, not against a season-start cutoff. So every dob below is
+// computed RELATIVE TO TODAY (`isoDateYearsAgo`), never a fixed literal —
+// a fixed "over 18" dob would silently go stale and eventually assert the
+// wrong thing as wall-clock time passes.
+// ---------------------------------------------------------------------------
+
+/** Today minus `years` years, plus `dayOffset` days — e.g. `isoDateYearsAgo(18, -1)`
+ *  is a birthday that fell YESTERDAY (18 today, adult); `isoDateYearsAgo(18, 1)`
+ *  is a birthday that falls TOMORROW (still 17, minor). Relative to the real
+ *  clock on purpose (see block comment above). */
+function isoDateYearsAgo(years: number, dayOffset = 0): string {
+  const d = new Date();
+  d.setUTCFullYear(d.getUTCFullYear() - years);
+  d.setUTCDate(d.getUTCDate() + dayOffset);
+  return d.toISOString().slice(0, 10);
+}
+
+const ADULT_DOB = isoDateYearsAgo(30);
+const MINOR_DOB = isoDateYearsAgo(10);
+// Boundary pair: a right-answer-differs-from-the-wrong-answer's-constant
+// case (AGENTS.md #19) — a flipped `<`/`<=` or a dropped `beforeBirthday`
+// adjustment swaps these two relative to each other, where two ordinary
+// "clearly adult"/"clearly minor" dobs would not catch it.
+const JUST_TURNED_18_DOB = isoDateYearsAgo(18, -1); // birthday was yesterday -> 18, adult
+const TURNS_18_TOMORROW_DOB = isoDateYearsAgo(18, 1); // birthday is tomorrow -> still 17, minor
+
+function joinBlock(overrides: {
+  readonly consent: "granted" | "guardian";
+  readonly personRef: string;
+}): Record<string, unknown> {
+  return {
+    ...OPEN_RESTRICTION,
+    entrantKind: "team",
+    feeCents: 0,
+    approval: "auto",
+    entries: [{ extKey: "e-team", captain: "p1", roster: [], pay: false, expect: "entrant" }],
+    joins: [{ entry: "e-team", person: overrides.personRef, consent: overrides.consent }],
+    expect: baseExpect({ entrants: 1 }),
+  };
+}
+
+describe("registration funnel — rule 6: join consent must match minority", () => {
+  it('consent:"guardian" declared for an ADULT reds, naming the person and the entry', () => {
+    const pack = registrationPack({
+      persons: [{ ref: "p-adult", fullName: "Adult Joiner", lane: "player", dob: ADULT_DOB }],
+      block: joinBlock({ consent: "guardian", personRef: "p-adult" }),
+    });
+    const finding = onlyError(validatePack(pack, UNIT).findings);
+    expect(finding.code).toBe("registration.join_consent_mismatch");
+    expect(finding.message).toContain("p-adult");
+    expect(finding.message).toContain("e-team");
+  });
+
+  it('consent:"guardian" declared for a MINOR does not red', () => {
+    const pack = registrationPack({
+      persons: [{ ref: "p-minor", fullName: "Minor Joiner", lane: "player", dob: MINOR_DOB }],
+      block: joinBlock({ consent: "guardian", personRef: "p-minor" }),
+    });
+    expect(errors(validatePack(pack, UNIT).findings)).toEqual([]);
+  });
+
+  it('CONVERSE: consent:"granted" declared for a MINOR reds — the server unconditionally requires a guardian', () => {
+    const pack = registrationPack({
+      persons: [{ ref: "p-minor2", fullName: "Minor Joiner 2", lane: "player", dob: MINOR_DOB }],
+      block: joinBlock({ consent: "granted", personRef: "p-minor2" }),
+    });
+    const finding = onlyError(validatePack(pack, UNIT).findings);
+    expect(finding.code).toBe("registration.join_consent_mismatch");
+    expect(finding.message).toContain("p-minor2");
+    expect(finding.message).toContain("e-team");
+  });
+
+  it('consent:"granted" declared for an ADULT does not red', () => {
+    const pack = registrationPack({
+      persons: [{ ref: "p-adult2", fullName: "Adult Joiner 2", lane: "player", dob: ADULT_DOB }],
+      block: joinBlock({ consent: "granted", personRef: "p-adult2" }),
+    });
+    expect(errors(validatePack(pack, UNIT).findings)).toEqual([]);
+  });
+
+  it("BOUNDARY: a birthday yesterday (18, adult) declaring guardian reds", () => {
+    const pack = registrationPack({
+      persons: [{ ref: "p-just18", fullName: "Just Turned 18", lane: "player", dob: JUST_TURNED_18_DOB }],
+      block: joinBlock({ consent: "guardian", personRef: "p-just18" }),
+    });
+    const finding = onlyError(validatePack(pack, UNIT).findings);
+    expect(finding.code).toBe("registration.join_consent_mismatch");
+  });
+
+  it("BOUNDARY: a birthday tomorrow (still 17, minor) declaring guardian does not red", () => {
+    const pack = registrationPack({
+      persons: [{ ref: "p-almost18", fullName: "Turns 18 Tomorrow", lane: "player", dob: TURNS_18_TOMORROW_DOB }],
+      block: joinBlock({ consent: "guardian", personRef: "p-almost18" }),
+    });
+    expect(errors(validatePack(pack, UNIT).findings)).toEqual([]);
+  });
+
+  it("a join for a person with NO dob on record is treated as adult (mirrors the server's !!dob short-circuit)", () => {
+    const pack = registrationPack({
+      persons: [{ ref: "p-nodob", fullName: "No Dob", lane: "player" }],
+      block: joinBlock({ consent: "granted", personRef: "p-nodob" }),
+    });
+    expect(errors(validatePack(pack, UNIT).findings)).toEqual([]);
+  });
+});

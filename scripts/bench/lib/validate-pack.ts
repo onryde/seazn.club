@@ -552,12 +552,19 @@ export function resolveStatePath(root: unknown, path: string): { found: boolean;
 // Stage 1.5 — the registration funnel (B03r, design §4)
 // ---------------------------------------------------------------------------
 //
-// Five offline checks over `pack.registration` alone — no engine, no
+// Six offline checks over `pack.registration` alone — no engine, no
 // streams, so they run even for a division with no fixtures at all. Each is
 // its OWN function (same discipline as pack-schema.ts's cross-field rules:
 // "a reviewer can read one rule at a time, and a mutation sweep can delete
 // exactly one and watch exactly one test red"), and every finding names the
 // offending entry's `extKey` in its message.
+//
+// Rule 6 was found AFTER the first five landed, by opening the control a
+// testid had been attached to rather than trusting the testid
+// (B03r-repins-2026-09-03.md "A sixth stage-0 rule"): `joins[].consent`
+// claims a consent flow ("granted" or "guardian") that only exists when the
+// joining person's age agrees with it — see that rule's own doc comment
+// below for the full derivation.
 //
 // Two of the five (rule 1's per-person checks) are hand mirrors of
 // `apps/web/src/lib/registration-rules.ts`'s pure predicates
@@ -846,6 +853,106 @@ function checkCurrencyRequiredForFee(
   ];
 }
 
+/** `PackRegistrationBlock` infers `joins` inline (`pack-schema.ts` exports
+ *  no separate `PackRegistrationJoin` TYPE, only the zod schema it is built
+ *  from) — indexed off the block type here rather than editing
+ *  pack-schema.ts for a type alias this file is the only consumer of. */
+type PackRegistrationJoin = PackRegistrationBlock["joins"][number];
+
+function registrationJoinLabel(divisionRef: string, join: PackRegistrationJoin, i: number): string {
+  return `registration.byDivision[${divisionRef}].joins[${i}] (person:${join.person} -> entry:${join.entry})`;
+}
+
+/** Mirrors `isMinor`/`ageAt` (apps/web/src/lib/registration-rules.ts:56-68):
+ *  whole years between `dob` and `now`, decremented if `now` falls before
+ *  the birthday. A MISSING dob is treated as adult, not as its own
+ *  violation (unlike `categoryViolation`/`ageBandViolation` above) — that is
+ *  what the product itself does: `joinTeamEntry`'s guardian gate
+ *  (registration-submit.ts:1214) computes
+ *  `minor = !!input.player.dob && isMinor(input.player.dob, now)`, so an
+ *  absent dob can never trip the server's guardian requirement either. */
+function isMinorAt(dob: string | undefined, now: Date): boolean {
+  if (!dob) return false;
+  const born = new Date(`${dob}T00:00:00Z`);
+  let age = now.getUTCFullYear() - born.getUTCFullYear();
+  const beforeBirthday =
+    now.getUTCMonth() < born.getUTCMonth() ||
+    (now.getUTCMonth() === born.getUTCMonth() && now.getUTCDate() < born.getUTCDate());
+  if (beforeBirthday) age -= 1;
+  return age < 18;
+}
+
+/**
+ * Design §4 check 6 (B03r-repins-2026-09-03.md "A sixth stage-0 rule"):
+ * `joins[].consent` must agree with whether the joining PERSON is actually a
+ * minor, in BOTH directions.
+ *
+ * Derived from `isMinor`/`ageAt` (registration-rules.ts:56-68) rather than
+ * from `guardianRequired` (components/public-site/register/validation.ts)
+ * directly, because `guardianRequired` takes a `CartState`/`ContactState`
+ * pair a pack join has neither shape of — but it is a thin wrapper over
+ * exactly this predicate: `guardianRequired` -> `effectiveSelfDob` ->
+ * `isMinor(dob, now)`. Mirroring `isMinor` itself reaches the identical
+ * verdict with inputs a pack CAN supply (a person ref's `dob`).
+ *
+ * Uses WALL-CLOCK `now` (computed once in `validatePack` below), NOT the
+ * `seasonStartYear` cutoff `ageBandViolation` above uses for eligibility —
+ * a deliberately DIFFERENT date basis. The product's own
+ * `showGuardian = guardianRequired(cart, contact, new Date())`
+ * (step-consent.tsx:54) evaluates minority at the moment someone actually
+ * registers, not against a season-start cutoff; reusing the eligibility
+ * cutoff here would silently answer a different question than the one the
+ * product asks.
+ *
+ * BOTH directions are the SAME defect mirrored, so both are checked as one
+ * equivalence (`consent === "guardian"` iff minor):
+ *  - "guardian" declared for an ADULT: `showGuardian` is false, so the
+ *    product renders NO guardian control at all for them — the browser
+ *    driver hangs on a selector that never appears, and the join usecase
+ *    derives `consent_status` from `minor` regardless of what a pack
+ *    declares (registration-submit.ts:1231), so the "guardian" flow the
+ *    pack promised can never happen.
+ *  - "granted" declared for a MINOR: `joinTeamEntry`'s own guardian gate
+ *    (registration-submit.ts:1215) unconditionally throws 422 ("A
+ *    guardian's name and consent are required for players under 18") once
+ *    `minor` is true and no `guardian_consent`/`guardian_name` was
+ *    supplied — a pack telling a driver "granted" is fine for a minor is
+ *    certain to fail live, the same "pack lies" class rule 1 exists for.
+ */
+function checkJoinConsentMatchesMinority(
+  divisionRef: string,
+  block: PackRegistrationBlock,
+  personsByRef: ReadonlyMap<string, PackPerson>,
+  now: Date,
+): PackFinding[] {
+  const findings: PackFinding[] = [];
+  block.joins.forEach((join, i) => {
+    const person = personsByRef.get(join.person);
+    // Dangling ref: PackSchema's own checkRegistration already refuses a
+    // pack whose join.person does not resolve, so nothing useful to say here.
+    if (person === undefined) return;
+    const minor = isMinorAt(person.dob, now);
+    const expected: "granted" | "guardian" = minor ? "guardian" : "granted";
+    if (join.consent === expected) return;
+    const dobNote = person.dob ? `dob ${person.dob}` : "no dob on record";
+    findings.push({
+      code: "registration.join_consent_mismatch",
+      severity: "error",
+      where: registrationJoinLabel(divisionRef, join, i),
+      message: minor
+        ? `join for person "${join.person}" (${dobNote}) into entry "${join.entry}" in division ` +
+          `"${divisionRef}" declares consent:"granted", but that person is a MINOR as of ` +
+          `${now.toISOString().slice(0, 10)} — the server's guardian gate (registration-submit.ts) ` +
+          `unconditionally rejects a minor join with no guardian_consent/guardian_name`
+        : `join for person "${join.person}" (${dobNote}) into entry "${join.entry}" in division ` +
+          `"${divisionRef}" declares consent:"guardian", but that person is an ADULT — the product's ` +
+          `guardian control (step-consent.tsx's showGuardian) never renders for them, so the pack is ` +
+          `claiming a flow the product will never show`,
+    });
+  });
+  return findings;
+}
+
 // ---------------------------------------------------------------------------
 // Stage 2 — the per-stream fold
 // ---------------------------------------------------------------------------
@@ -991,6 +1098,12 @@ export function validatePack(raw: unknown, opts: ValidatePackOptions): PackValid
   if (pack.registration !== undefined) {
     const personsByRef = new Map(pack.persons.map((p) => [p.ref, p]));
     const seasonStartYear = seasonStartYearOf(pack);
+    // Computed ONCE so every join in this validatePack call is judged
+    // against the same instant, same reasoning as `seasonStartYear` above —
+    // see checkJoinConsentMatchesMinority's own doc comment for why this is
+    // wall-clock `now` rather than the season-start cutoff `seasonStartYear`
+    // itself is.
+    const now = new Date();
     for (const division of pack.divisions) {
       const block = pack.registration.byDivision[division.ref];
       if (block === undefined) continue;
@@ -1001,6 +1114,7 @@ export function validatePack(raw: unknown, opts: ValidatePackOptions): PackValid
         ...checkPayRequiresFee(division.ref, block),
         ...checkRegistrationRequiresDobGender(division, block, personsByRef),
         ...checkCurrencyRequiredForFee(division.ref, block, pack.org.currency),
+        ...checkJoinConsentMatchesMinority(division.ref, block, personsByRef, now),
       );
     }
   }
