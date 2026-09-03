@@ -19,7 +19,7 @@ import {
   type LedgerEvent,
 } from "@seazn/engine/history";
 import { EngineError } from "@seazn/engine/core";
-import { withTenant } from "@/lib/db";
+import { sql, withTenant } from "@/lib/db";
 // Since #382 a manual save AT THE CAP rolls the window instead of refusing, so
 // PaymentRequiredError survives here for one case only: a quota that resolves
 // below 1, where there is no window to roll (see `createCheckpoint`).
@@ -446,6 +446,26 @@ export async function listCheckpoints(auth: AuthCtx, divisionId: string): Promis
   });
 }
 
+/** The competition an Event-Pass-lifted gate must be resolved against.
+ *
+ *  lib/entitlements.ts only consults `competition_passes` when a competition is
+ *  in scope, so a gate on a key V391 lifts (`schedule.checkpoints.max`) that omits it makes the
+ *  pass INVISIBLE — the org pays $29 and is refused on the competition it
+ *  bought. Same shape as usecases/officials.ts's `competitionForDivision` (T6).
+ *
+ *  Pooled `sql`, and deliberately OUTSIDE the `withTenant` callback below:
+ *  `resolve` queries the pooled proxy, and issuing that from inside a pinned
+ *  tenant transaction asks the pool for a second connection while the first is
+ *  still held — the self-deadlock lib/db.ts guards against.
+ *
+ *  A missing row yields `undefined`, which resolves the gate org-wide (the
+ *  pre-V391 behaviour) and the 404 is raised inside the transaction as before. */
+async function competitionForDivision(divisionId: string): Promise<string | undefined> {
+  const [row] = await sql<{ competition_id: string }[]>`
+    select competition_id from divisions where id = ${divisionId}`;
+  return row?.competition_id;
+}
+
 export async function createCheckpoint(
   auth: AuthCtx,
   divisionId: string,
@@ -456,7 +476,13 @@ export async function createCheckpoint(
   // transaction with the insert (doc 10 §2 rule 1). `getLimit` queries the
   // pooled `sql` proxy, and `withTenant` pins a pooled connection for its whole
   // callback — see `assertWithinLimit` in lib/entitlements.ts.
-  const checkpointLimit = await getLimit(auth.orgId, "schedule.checkpoints.max");
+  // V391 lifts this cap on an Event Pass (community 2 -> event_pass 5), so the
+  // read is scoped to this division's competition.
+  const checkpointLimit = await getLimit(
+    auth.orgId,
+    "schedule.checkpoints.max",
+    await competitionForDivision(divisionId),
+  );
   return withTenant(auth.orgId, async (tx) => {
     // #382 review, finding 3: the roll below is count → delete → insert, and
     // without this lock those three steps are not serialised. Two saves landing

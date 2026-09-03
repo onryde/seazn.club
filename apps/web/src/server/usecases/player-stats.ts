@@ -9,9 +9,9 @@ import {
   type PlayerStatRow,
 } from "@seazn/engine/stats";
 import type { EventEnvelope } from "@seazn/engine/core";
-import { withTenant } from "@/lib/db";
+import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
-import { requireFeature } from "@/lib/entitlements";
+import { hasFeature, requireFeature } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { resolveFixtureCfg, resolveModule } from "@/server/engine-db";
 import { loadLineupPairsForDivision } from "@/server/engine-db/lineups";
@@ -271,6 +271,101 @@ export async function recomputePlayerStats(
   return { rows, throughSeq, hasModel: true };
 }
 
+
+/** The competition a `stats.player` gate must be resolved against.
+ *
+ *  lib/entitlements.ts only consults `competition_passes` when a competition is
+ *  in scope, and V391 turns `stats.player` TRUE on `event_pass`/`event_pass_l`
+ *  and FALSE on `community` — so gating org-wide sold a Free org player stats
+ *  with the pass and then refused them on the competition it paid for.
+ *
+ *  Pooled `sql`, and deliberately OUTSIDE the `withTenant` callbacks below:
+ *  `resolve` queries the pooled proxy, and issuing that from inside a pinned
+ *  tenant transaction asks the pool for a second connection while the first is
+ *  still held — the self-deadlock lib/db.ts guards against. Same shape as
+ *  usecases/officials.ts's `competitionForDivision` (T6). */
+async function competitionForDivision(divisionId: string): Promise<string | undefined> {
+  const [row] = await sql<{ competition_id: string }[]>`
+    select competition_id from divisions where id = ${divisionId}`;
+  return row?.competition_id;
+}
+
+/**
+ * Every (division, competition) pair a PERSON reader could draw on, within one
+ * org.
+ *
+ * The union of the divisions the person is rostered into and the divisions they
+ * already hold a snapshot row for, because the two readers below select from
+ * both: `personStats` recomputes from `entrant_members` and then reads
+ * `player_stat_snapshots`, and a snapshot can outlive the roster row that
+ * produced it. Taking only one side would silently drop rows an entitled org
+ * can see today.
+ *
+ * Pooled `sql` with an EXPLICIT `org_id` filter — this runs outside `withTenant`
+ * (see `competitionForDivision`), so there is no tenant rail to scope it.
+ */
+async function personDivisionScope(
+  orgId: string,
+  personId: string,
+  divisionId?: string,
+): Promise<{ division_id: string; competition_id: string }[]> {
+  if (divisionId) {
+    return sql<{ division_id: string; competition_id: string }[]>`
+      select id as division_id, competition_id from divisions
+      where id = ${divisionId} and org_id = ${orgId}`;
+  }
+  return sql<{ division_id: string; competition_id: string }[]>`
+    select d.id as division_id, d.competition_id
+    from divisions d
+    where d.org_id = ${orgId}
+      and (exists (
+            select 1 from entrant_members em
+            join entrants e on e.id = em.entrant_id
+            where em.person_id = ${personId} and e.division_id = d.id)
+        or exists (
+            select 1 from player_stat_snapshots ps
+            where ps.person_id = ${personId} and ps.division_id = d.id))`;
+}
+
+/**
+ * Which of those divisions this org may actually read player stats for.
+ *
+ * An Event Pass lifts ONE competition, and both person readers span
+ * competitions — so neither a single org-wide answer nor `hasFeatureOnAnyPass`
+ * is honest here. Org-wide refuses a pass holder on the competition they paid
+ * for; an any-pass yes hands them every OTHER competition's stats for free,
+ * which is the same $29 hole in the other direction (and is exactly what
+ * lib/__tests__/pass-scoping-guard.test.ts's counter-rule flags in an
+ * enforcement layer). So the gate is resolved PER COMPETITION and the reader is
+ * restricted to the ones that pass.
+ *
+ * Refusal, when nothing in scope is covered, is the ordinary
+ * `PaymentRequiredError` naming `stats.player`, so every existing 402 caller and
+ * paywall is unchanged. `scope[0]` is the competition the answer is about; when
+ * the person plays nowhere at all the scope is empty and the resolve falls back
+ * to the org-wide answer, which is byte-for-byte the pre-fix behaviour for that
+ * case (an entitled org gets an empty card, an unentitled one gets 402).
+ *
+ * A per-competition answer is never WORSE than the org-wide one — the pass
+ * overlay coalesces into the plan row rather than replacing it — so an org that
+ * holds `stats.player` on its plan reaches every division here, exactly as
+ * before.
+ */
+async function statsReadableDivisions(
+  orgId: string,
+  scope: { division_id: string; competition_id: string }[],
+): Promise<string[]> {
+  const allowed = new Set<string>();
+  for (const competitionId of new Set(scope.map((s) => s.competition_id))) {
+    if (await hasFeature(orgId, "stats.player", competitionId)) allowed.add(competitionId);
+  }
+  if (allowed.size === 0) {
+    await requireFeature(orgId, "stats.player", scope[0]?.competition_id);
+    return [];
+  }
+  return scope.filter((s) => allowed.has(s.competition_id)).map((s) => s.division_id);
+}
+
 export interface LeaderboardRow {
   person_id: string;
   full_name: string;
@@ -293,7 +388,7 @@ export async function divisionPlayerStats(
   rows: LeaderboardRow[];
   requires_detailed_scoring: boolean;
 }> {
-  await requireFeature(auth.orgId, "stats.player");
+  await requireFeature(auth.orgId, "stats.player", await competitionForDivision(divisionId));
   return withTenant(auth.orgId, async (tx) => {
     const { rows, hasModel } = await recomputePlayerStats(tx, divisionId);
     const [division] = await tx<{ sport_key: string; module_version: string }[]>`
@@ -356,26 +451,37 @@ export async function personStats(
   personId: string,
   divisionId?: string,
 ): Promise<{ divisions: { division_id: string; division_name: string; stats: Record<string, number> }[] }> {
-  await requireFeature(auth.orgId, "stats.player");
+  // Resolved before the transaction (pooled proxy, see `competitionForDivision`).
+  // `readable` already IS `[divisionId]` when one was named and the org may read
+  // it, so it replaces the old `and ps.division_id = ...` conditional outright.
+  const readable = await statsReadableDivisions(
+    auth.orgId,
+    await personDivisionScope(auth.orgId, personId, divisionId),
+  );
+  const readableSet = new Set(readable);
   return withTenant(auth.orgId, async (tx) => {
     const [person] = await tx`
       select 1 from persons where id = ${personId} and merged_into is null`;
     if (!person) throw new HttpError(404, "person not found");
-    // refresh the divisions this person appears in (or the requested one)
-    const divisionIds = divisionId
-      ? [divisionId]
-      : (
-          await tx<{ division_id: string }[]>`
-            select distinct e.division_id
-            from entrant_members em join entrants e on e.id = em.entrant_id
-            where em.person_id = ${personId}`
-        ).map((r) => r.division_id);
+    // refresh the divisions this person appears in (or the requested one) —
+    // minus any whose competition this org may not read, which would be paying
+    // for a fold whose output is then filtered away.
+    const divisionIds = (
+      divisionId
+        ? [divisionId]
+        : (
+            await tx<{ division_id: string }[]>`
+              select distinct e.division_id
+              from entrant_members em join entrants e on e.id = em.entrant_id
+              where em.person_id = ${personId}`
+          ).map((r) => r.division_id)
+    ).filter((d) => readableSet.has(d));
     for (const d of divisionIds) await recomputePlayerStats(tx, d);
     const rows = await tx<{ division_id: string; division_name: string; stats: Record<string, number> }[]>`
       select ps.division_id, d.name as division_name, ps.stats
       from player_stat_snapshots ps join divisions d on d.id = ps.division_id
       where ps.person_id = ${personId}
-      ${divisionId ? tx`and ps.division_id = ${divisionId}` : tx``}
+        and ps.division_id = any(${readable})
       order by d.name`;
     return { divisions: rows };
   });
@@ -478,7 +584,13 @@ export async function personCareerStats(
   auth: AuthCtx,
   personId: string,
 ): Promise<{ sports: CareerSportStats[] }> {
-  await requireFeature(auth.orgId, "stats.player");
+  // Per competition, not org-wide — see `statsReadableDivisions`. A career
+  // rollup spans competitions, so an Event Pass covers the part of the career
+  // played inside the competition it was bought for, and no more.
+  const readable = await statsReadableDivisions(
+    auth.orgId,
+    await personDivisionScope(auth.orgId, personId),
+  );
   return withTenant(auth.orgId, async (tx) => {
     const [person] = await tx`
       select 1 from persons where id = ${personId} and merged_into is null`;
@@ -501,6 +613,7 @@ export async function personCareerStats(
       from player_stat_snapshots ps
       join divisions d on d.id = ps.division_id and d.archived_at is null
       where ps.person_id = ${personId}
+        and ps.division_id = any(${readable})
       order by d.slug`;
     if (rows.length === 0) return { sports: [] };
 

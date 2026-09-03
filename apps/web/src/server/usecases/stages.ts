@@ -297,7 +297,10 @@ export async function createStages(
   // transaction with the insert (doc 10 §2 rule 1). `getLimit` queries the
   // pooled `sql` proxy, and `withTenant` pins a pooled connection for its whole
   // callback — see `assertWithinLimit` in lib/entitlements.ts.
-  const stageCap = await getLimit(auth.orgId, "stages.per_division.max");
+  // V391 lifts this cap on an Event Pass (community 2 -> event_pass 4), and the
+  // pass overlay only applies when a competition is in scope — `divComp` is
+  // already resolved above for the format gates, so the same id gates the cap.
+  const stageCap = await getLimit(auth.orgId, "stages.per_division.max", divComp?.competition_id);
   return withTenant(auth.orgId, async (tx) => {
     const [division] = await tx<{ competition_id: string; sport_key: string; module_version: string }[]>`
       select competition_id, sport_key, module_version from divisions where id = ${divisionId}`;
