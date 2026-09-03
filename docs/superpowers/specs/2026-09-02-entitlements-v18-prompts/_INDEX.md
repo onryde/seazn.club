@@ -461,6 +461,40 @@ Each needs a task and an owner. Nothing here is fixed by W1.
     the lifted set too and are NOT offenders: those call sites already scope to
     a competition. So the guard is discriminating, not blanket.
 
+    **A SECOND guard is red on the other half of the same defect, and the two
+    must be fixed IN THIS ORDER.** `components/__tests__/upgrade-gate-pass-features.test.ts`
+    derives the lifted set the same way and compares it against
+    `lib/pass-features.ts`'s hand-written `PASS_FEATURES` — the set that decides
+    whether a paywall offers the Event Pass or only the Pro card. It disagrees
+    with the live matrix in both directions:
+
+    - **Seven keys are missing** (the pass lifts them, the paywall does not
+      offer it): `discipline.enforced`, `officials.auto`,
+      `schedule.checkpoints.max`, `scoring.audit_export`,
+      `scoring.device_links`, `stats.player`, `stages.per_division.max`.
+    - **Three are stale** (in the set, no longer lifted):
+      `dashboard.player_profiles` (V391 made it free on Community),
+      `scheduling.multi_division` and `formats.double_elim` (granted on every
+      plan, so the pass lifts nothing).
+
+    **Do not "fix" `PASS_FEATURES` first.** Six of those seven additions are
+    exactly the unscoped enforcement sites listed above. Adding them while the
+    gates still resolve org-wide makes the product OFFER a pass for features it
+    then refuses to deliver — the user pays and stays blocked, which is the
+    precise harm that test's own header names as its right-hand-side failure,
+    and it is strictly worse than today's "never offered". Thread the
+    competition ids first, then widen `PASS_FEATURES`, then both guards go
+    green together. The three stale removals are safe in either order but do
+    not make the test green on their own (it asserts set EQUALITY).
+
+    Both of these are the same failure shape and worth naming as a class: a
+    guard whose target set is DERIVED FROM THE DATABASE goes red when a
+    migration lands, with no application diff to point at. Nothing in V391's
+    own diff mentions `player-stats.ts` or `pass-features.ts`. Run the
+    source-scanning and matrix-derived guards explicitly after any
+    `plan_entitlements` change — file-based test selection will never reach
+    them.
+
 ### Closed by W1, recorded so nobody re-opens them
 
 - **The device-link 403's zero automated coverage.** Task 6 gave it a shared
