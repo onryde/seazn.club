@@ -382,7 +382,27 @@ locale is denominated in USD.
 
 Queued behind T5, which is editing `billing.ts` right now.
 
-### T12 — DELETE the `scorers.max` cap; keep the scorer role (owner ruling 2026-09-03)
+### T12 — V393: delete `scorers.max`, and raise Free's squad cap to 23
+
+Two cells in one migration. Both owner-ruled 2026-09-03.
+
+**(a) Free `teams.squad_max` 20 → 23.** Design §2 justifies Free's squad cap as "Free =
+one matchday squad". Measured against the engine's own declarations, it is not:
+`football.ts` is `lineup: { size: 11, benchMax: 12 }` = **23**, and `icehockey.ts` is
+`{ size: 6, benchMax: 17 }` = **23**. Cricket is 15 and volleyball 14, so those fit — but
+a football or ice-hockey club cannot register its first full squad on Free at all. That is
+the same "broken on night one" failure the design cites when it freed double-elimination.
+
+Pro stays 40, which keeps the real distinction (matchday squad vs season roster). Do NOT
+change the copy: "squads of 40" is a Pro claim and is unaffected.
+
+Derive nothing here from the design doc — it says "cricket 15, football 23, rugby 23",
+and RUGBY IS NOT IN THE ENGINE CATALOGUE. The sports that exist are football, cricket,
+volleyball, badminton, tabletennis, icehockey and carrom. Use the engine's numbers.
+
+**(b) DELETE the `scorers.max` cap; keep the scorer role.**
+
+#### Why the cap goes (owner ruling 2026-09-03)
 
 **Ruling: delete the cap, do not deprecate the role in this wave.**
 
