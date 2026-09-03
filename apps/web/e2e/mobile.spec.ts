@@ -18,6 +18,9 @@ import {
   seedVenueWithCourts,
   setBoolEntitlementOverrideSql,
   setDivisionConfigSql,
+  setFixtureScheduledAtSql,
+  setFixtureStatusSql,
+  setStageStatusSql,
 } from "./helpers";
 import {
   HIT_TARGET_FLOOR_PX,
@@ -650,6 +653,150 @@ test("console routes: no horizontal scroll", async ({ page, request }) => {
   ];
   for (const { path, allowancePx } of routes) {
     await auditRoute(page, path, { allowancePx });
+  }
+});
+
+/**
+ * Minor 2 (fix round H): the COMPETITION DESK had zero automated width
+ * coverage. This file carried no `desk-ledger-row` / `desk-needs-you` /
+ * `desk-masthead` selector at all, and the desk branch never touched it —
+ * while all seven width projects (320/360/375/390/430/768/834) run
+ * `testMatch: /mobile\.spec\.ts/`. In this repo a UI surface is unprotected
+ * until it appears in this file BY NAME, so the owner-ruled mobile CARD
+ * composition — the one the owner rejected a shrunken desktop table for —
+ * had none.
+ *
+ * The ruling it enforces (_RULES.md, "Mobile is designed, not shrunk"):
+ * below `md` the row is its OWN composition — the whole card body is one
+ * link, the pill sits beside the name, the status line wraps, there is NO
+ * "Open" button and NO "⋯" menu, and a red attention gets one full-width
+ * >=44px action. At `md` and up it is the desktop grid instead.
+ *
+ * This asserts the ruling the only way a capture cannot: by comparing the
+ * visible CONTROL SET on either side of the `md` boundary (768px), which
+ * these seven projects straddle — 320/360/375/390/430 are below it,
+ * tablet-768/834 at or above. Same set with smaller boxes would be a shrink;
+ * different sets is a composition.
+ */
+test("competition desk: the division row is a CARD below md and a grid at md, not the same controls resized", async ({
+  page,
+  request,
+}) => {
+  const width = projectViewport()?.width ?? 0;
+  const isCardWidth = width < 768;
+
+  const comp = await apiJson<{ id: string; slug: string }>(request, "/api/v1/competitions", "POST", {
+    name: `Desk Width ${TAG}`, visibility: "public", ends_on: "2030-12-31",
+  });
+  expect(comp.status).toBe(201);
+  const makeDivision = async (name: string) => {
+    const div = await apiJson<{ id: string; slug: string }>(
+      request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST",
+      { name, sport_key: "generic", variant_key: "score", config: { points: { w: 3, d: 1, l: 0 }, progressScore: false } },
+    );
+    expect(div.status).toBe(201);
+    await addEntrantsViaApi(request, div.data!.id, ["Seed1", "Seed2", "Seed3", "Seed4"]);
+    const { stageId, fixtureIds } = await createStageAndGenerate(request, div.data!.id, { kind: "league", name: "League" });
+    expect(fixtureIds.length).toBe(6);
+    const started = await apiJson(request, `/api/v1/divisions/${div.data!.id}/start`, "POST");
+    expect(started.status).toBeLessThan(400);
+    return { div: div.data!, stageId, fixtureIds };
+  };
+
+  // One CLEAN row (no attention: every fixture dated in the future) and one
+  // RED row (its league played out and complete, a `setup`-timing Finals
+  // stage still owing its draw). The action only exists on the red one, so a
+  // fixture with a single clean row would leave the action untested and one
+  // with a single red row could not tell "no action here" from "no action
+  // ever".
+  const clean = await makeDivision("Clean Cup");
+  const tomorrow = new Date(Date.now() + 24 * 3600_000).toISOString();
+  for (const id of clean.fixtureIds) await setFixtureScheduledAtSql(id, tomorrow);
+  const red = await makeDivision("Red Cup");
+  for (const id of red.fixtureIds) await setFixtureStatusSql(id, "decided");
+  await setStageStatusSql(red.stageId, "complete");
+  const finals = await apiJson(request, `/api/v1/divisions/${red.div.id}/stages`, "POST", {
+    seq: 2, kind: "knockout", name: "Finals", config: {},
+    progression: {
+      sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }],
+      placement: "rank_order",
+      timing: "setup",
+    },
+  });
+  expect(finals.status).toBe(201);
+
+  // Self-contained: the org path comes from the competition's own org_id
+  // (competitionPath), never this file's shared `orgSlug` — which is filled
+  // by the setup test and is EMPTY under a `-g` filtered run, silently
+  // navigating to `/o//c/...` and finding zero rows.
+  await page.goto(await competitionPath(request, comp.data!.id), { waitUntil: "load" });
+  await dismissCookieBanner(page);
+  const rows = page.getByTestId("desk-ledger-row");
+  await expect(rows).toHaveCount(2);
+  const redRow = rows.filter({ hasText: "Red Cup" });
+  const cleanRow = rows.filter({ hasText: "Clean Cup" });
+  // Print the asserted CONTENT beside every gate below: a width gate cannot
+  // tell you it measured the wrong page STATE, and this whole test is
+  // meaningless if the red row is not actually red.
+  await expect(redRow).toHaveAttribute("data-phase", "setting_up");
+  await expect(cleanRow).toHaveAttribute("data-phase", "scheduled");
+  await expect(redRow.locator('[data-pill="needs_draw"]:visible').first()).toBeVisible();
+  await expect(page.getByTestId("desk-needs-you")).toBeVisible();
+  await expect(page.getByTestId("desk-masthead-pill")).toBeVisible();
+  await expectNoHorizontalScroll(page);
+
+  // The CONTROL SET, per row. Below md: the card body (one link) plus, on a
+  // red row only, one action. At md and up: the name link, "Open", and the
+  // "⋯" menu — three, on EVERY row.
+  const openLink = (row: typeof redRow) => row.getByRole("link", { name: "Open", exact: true });
+  const menuButton = (row: typeof redRow) => row.getByRole("button", { name: /^Actions/ });
+  const action = redRow.getByRole("link", { name: "Compute proposal" });
+
+  if (isCardWidth) {
+    await expect(redRow.locator("a:visible, button:visible")).toHaveCount(2);
+    await expect(cleanRow.locator("a:visible, button:visible")).toHaveCount(1);
+    await expect(openLink(redRow)).toBeHidden();
+    await expect(menuButton(redRow)).toBeHidden();
+
+    // "The whole card is one link": the name, the pill, the progress bar and
+    // the status line are all INSIDE the single visible body link, not
+    // siblings of it. A screenshot cannot tell these apart.
+    const body = cleanRow.locator("a:visible").first();
+    await expect(body).toContainText("Clean Cup");
+    await expect(body).toContainText("of 6");
+    await expect(body.locator("[data-pill]")).toHaveCount(1);
+
+    // The one action: full width and >=44px, and actually TAPPABLE there
+    // (boundingBox reports paint, not hit area).
+    await expect(action).toBeVisible();
+    // Scroll it in FIRST: `boundingBox()` is viewport-relative, and at 320
+    // this row sits below the fold, so `elementFromPoint` on the unscrolled
+    // coordinates returns null and the hit-test would report a false defect.
+    // (It did, on the first run of this test — which is also the proof the
+    // hit-test is not vacuous.)
+    await action.scrollIntoViewIfNeeded();
+    const box = await action.boundingBox();
+    expect(box, "the red row's action must have a measurable box").not.toBeNull();
+    expect(box!.height, "a mobile action must clear the 44px touch floor").toBeGreaterThanOrEqual(HIT_TARGET_FLOOR_PX);
+    expect(box!.width, "the mobile action is full-width, not an inline button").toBeGreaterThan(width * 0.7);
+    const hit = await page.evaluate(
+      ([x, y]) => {
+        const el = document.elementFromPoint(x!, y!);
+        return el ? `${el.tagName}:${(el.textContent ?? "").trim().slice(0, 40)}` : "none";
+      },
+      [box!.x + box!.width / 2, box!.y + box!.height / 2],
+    );
+    expect(hit, "the action's own centre must hit the action, not an overlay").toContain("Compute proposal");
+  } else {
+    await expect(redRow.locator("a:visible, button:visible")).toHaveCount(3);
+    await expect(cleanRow.locator("a:visible, button:visible")).toHaveCount(3);
+    await expect(openLink(redRow)).toBeVisible();
+    await expect(menuButton(redRow)).toBeVisible();
+    await expect(openLink(cleanRow)).toBeVisible();
+    await expect(menuButton(cleanRow)).toBeVisible();
+    // The card-only action does not survive into the desktop composition —
+    // if it did, "different sets" would be a lie and this would be a reflow.
+    await expect(action).toBeHidden();
   }
 });
 

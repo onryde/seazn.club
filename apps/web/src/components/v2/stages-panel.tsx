@@ -18,7 +18,7 @@ import { useLocaleOrDefault, useMsg } from "@/components/i18n/dict-provider";
 import { seedingErrorMessage } from "@/lib/seeding-error";
 import type { Locale } from "@/lib/i18n-constants";
 import type { MessageKey } from "@/lib/messages";
-import type { DivisionPhase } from "@/lib/division-phase";
+import { hasPlayedFixture, type DivisionPhase } from "@/lib/division-phase";
 import { resolveSlotLabel } from "@/lib/slot-label";
 import { roundRoleFor, roundRoleLabel } from "@/lib/round-role-label";
 import { parseRoundRoleKey } from "@seazn/engine/competition";
@@ -721,7 +721,20 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
 
   return (
     <div className="space-y-6">
-      {canEdit && phase === "setting_up" && <TipCallout id="division.start-locks" />}
+      {/* L1 (fix round H, Critical — instance ELEVEN): gated on PROGRESS, not
+          on the phase WORD, exactly as the pill (phase-pill.tsx: a red
+          attention outranks the phase) and the masthead (competition-desk.ts's
+          `nothingHasHappened`) already are. `setting_up` does not mean
+          "nothing has happened yet" — resolvePhase's RULE 4 returns it for a
+          division whose whole league is played and COMPLETE while a later
+          stage still owes its fixtures — so this told an organiser looking at
+          "1. League · Complete" and six Decided results to "Finish seeding and
+          structure first". `hasPlayedFixture` is division-phase.ts's own
+          predicate over the same PLAYED set the desk counts with, not a
+          fourth hand-copy of it. */}
+      {canEdit && phase === "setting_up" && !hasPlayedFixture(fixtures) && (
+        <TipCallout id="division.start-locks" />
+      )}
       {notice && (
         <p className="flex items-center gap-2 rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
           {notice}

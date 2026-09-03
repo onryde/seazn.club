@@ -146,6 +146,48 @@ describe.skipIf(!HAS_DB)("getCompetitionDesk", () => {
     expect(competitionPhase(desk)).toEqual({ kind: "scheduled" });
   });
 
+  // L2 (fix round H, Important): `nothingHasHappened` is a CONJUNCTION —
+  // `d.phase === "setting_up" && d.played === 0` — and its two halves had
+  // never been mutated separately. The `played === 0` half is killed by the
+  // "K1 sibling" case further down (phase `setting_up`, 6 played, masthead
+  // must be `scheduled`). The `phase === "setting_up"` half was killed by
+  // NOTHING: replacing the whole guard with `divisions.every(d => d.played
+  // === 0)` left 147/147 green while re-creating instance TEN, driven at
+  // 09:13Z on 2026-09-03 — a timetable published yesterday, 0 of 6 played,
+  // masthead correctly "Scheduled" today and "Setting up" under the mutant.
+  //
+  // This is that case: nothing played at all, and a phase that is NOT
+  // `setting_up`. Its expected value differs under each candidate predicate,
+  // which is the only shape that can pin one half of a conjunction.
+  //
+  // Deliberately DATED IN THE PAST: a future date would be rescued by the
+  // ladder's `next` rung two steps above and never reach this guard at all,
+  // so the test would pass under both the guard and its mutant.
+  it("L2: a published timetable with nothing played yet is 'scheduled' — the phase half of nothingHasHappened", async () => {
+    const { auth } = await seedOrg();
+    const { competitionId, divisionId } = await seedDivision(auth, 4);
+    const [stage] = await createStages(auth, divisionId, {
+      seq: 1, kind: "league", name: "League", config: {}, progression: null,
+    });
+    await generateStageFixtures(auth, stage!.id);
+    // `scheduled` is exactly what the ordinary Publish action sets
+    // (schedule.ts's publishSchedule) — an organiser who published a
+    // timetable and never pressed Start.
+    await sql`update divisions set status = 'scheduled' where id = ${divisionId}`;
+    await sql`update fixtures set scheduled_at = now() - interval '1 day'
+              where division_id = ${divisionId}`;
+    const desk = await getCompetitionDesk(auth, competitionId);
+    const d = desk.divisions.get(divisionId)!;
+    // Print the asserted CONTENT beside the verdict: this is the state the
+    // guard's two halves disagree about, and nothing else.
+    expect(d.played).toBe(0);
+    expect(d.total).toBe(6);
+    expect(d.phase).toBe("scheduled");
+    // The masthead says what the rows say. Under `every(d => d.played === 0)`
+    // this reads "Setting up" above six dated, overdue fixtures.
+    expect(competitionPhase(desk)).toEqual({ kind: "scheduled" });
+  });
+
   it("F1 fix: unscheduled fixtures on an active division are 'setting_up', never 'scheduled', with an unscheduled attention", async () => {
     // Final review, Critical: the OLD rule 5 was a bare "otherwise", so this
     // exact shape — a started division, fixtures generated, none carrying a

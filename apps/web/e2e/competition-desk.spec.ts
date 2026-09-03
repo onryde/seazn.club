@@ -459,6 +459,88 @@ test.describe("competition desk", () => {
   // An hour apart across a full year covers every hour of the clock and
   // every calendar date, DST transitions included — the two axes a
   // wall-clock-dependent fixture can hide behind. ~8s of pure CPU locally.
+  /**
+   * L3 (fix round H, Important): the ledger's RED-FIRST order had no test at
+   * ANY layer. It lives in `o/[orgSlug]/c/[compSlug]/page.tsx`, an async
+   * server component vitest cannot reach, and deleting the red clause left
+   * 147/147 green because nothing asserted ROW ORDER. Load-bearing: driven at
+   * 09:14Z on 2026-09-03, a red `setting_up` "Zulu" correctly sorted above a
+   * `match_day` "Alpha".
+   *
+   * The two rows are built so that BOTH fallbacks point the other way:
+   *   - alphabetically, "Alpha Cup" precedes "Zulu Cup";
+   *   - by phase rank, Alpha's `scheduled` (1) precedes Zulu's `setting_up`
+   *     (2).
+   * Only the red clause can put Zulu first, so this is the one shape whose
+   * expected value differs with and without it. (A `match_day` Alpha would
+   * contrast even harder, but "is this fixture today?" is answered in the
+   * VENUE zone — a dependency this assertion does not need.)
+   */
+  test("L3: a red row sorts above a clean one whose name AND phase both rank ahead of it", async ({
+    page,
+    request,
+  }) => {
+    const org = await activeOrg(page);
+    const comp = await apiJson<{ id: string; slug: string }>(request, "/api/v1/competitions", "POST", {
+      name: `Desk Order ${TAG} ${Math.random().toString(36).slice(2, 6)}`, visibility: "public", ends_on: "2030-12-31",
+    });
+    expect(comp.status).toBe(201);
+    const makeDivision = async (name: string) => {
+      const div = await apiJson<{ id: string; slug: string }>(
+        request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST",
+        { name, sport_key: "generic", variant_key: "score", config: { points: { w: 3, d: 1, l: 0 }, progressScore: false } },
+      );
+      expect(div.status).toBe(201);
+      await addEntrantsViaApi(request, div.data!.id, ["Seed1", "Seed2", "Seed3", "Seed4"]);
+      const { stageId, fixtureIds } = await createStageAndGenerate(request, div.data!.id, { kind: "league", name: "League" });
+      expect(fixtureIds.length).toBe(6);
+      const started = await apiJson(request, `/api/v1/divisions/${div.data!.id}/start`, "POST");
+      expect(started.status).toBeLessThan(400);
+      return { div: div.data!, stageId, fixtureIds };
+    };
+
+    // Alpha: a perfectly ordinary league, every fixture dated in the future.
+    // Nothing red, nothing overdue, nothing unscheduled — phase `scheduled`.
+    const alpha = await makeDivision("Alpha Cup");
+    const tomorrow = new Date(Date.now() + 24 * 3600_000).toISOString();
+    for (const id of alpha.fixtureIds) await setFixtureScheduledAtSql(id, tomorrow);
+
+    // Zulu: its league is played out and complete, and a `setup`-timing
+    // Finals stage still owes its draw — red `needs_draw`, phase
+    // `setting_up`.
+    const zulu = await makeDivision("Zulu Cup");
+    for (const id of zulu.fixtureIds) await setFixtureStatusSql(id, "decided");
+    await setStageStatusSql(zulu.stageId, "complete");
+    const finals = await apiJson<{ id: string }>(request, `/api/v1/divisions/${zulu.div.id}/stages`, "POST", {
+      seq: 2, kind: "knockout", name: "Finals", config: {},
+      progression: {
+        sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }],
+        placement: "rank_order",
+        timing: "setup",
+      },
+    });
+    expect(finals.status).toBe(201);
+
+    await page.goto(`/o/${org.slug}/c/${comp.data!.slug}`);
+    const rows = page.getByTestId("desk-ledger-row");
+    await expect(rows).toHaveCount(2);
+    // Print the asserted CONTENT beside the gate: without these the order
+    // could be right for entirely the wrong reason (both rows red, both the
+    // same phase, one row missing altogether).
+    const alphaRow = rows.filter({ hasText: "Alpha Cup" });
+    const zuluRow = rows.filter({ hasText: "Zulu Cup" });
+    await expect(alphaRow).toHaveAttribute("data-phase", "scheduled");
+    await expect(zuluRow).toHaveAttribute("data-phase", "setting_up");
+    await expect(page.locator('[data-pill="needs_draw"]:visible').first()).toBeVisible();
+    await expect(zuluRow.locator('[data-pill="needs_draw"]').first()).toHaveCount(1);
+    await expect(alphaRow.locator("[data-pill]").first()).toHaveAttribute("data-pill", "scheduled");
+
+    // THE ASSERTION: the red row is FIRST, against both its name and its
+    // phase rank.
+    await expect(rows.nth(0)).toContainText("Zulu Cup");
+    await expect(rows.nth(1)).toContainText("Alpha Cup");
+  });
+
   test("both zone-split finders work at every hour of the year, not just some", () => {
     test.setTimeout(180_000);
     const from = new Date();

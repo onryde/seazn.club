@@ -90,6 +90,36 @@ export const ATTENTION_SEVERITY: Record<Attention["kind"], Severity> = {
   registrations_waiting: "slate",
 };
 
+/**
+ * Ledger order: RED FIRST, then phase. L3 (fix round H, Important).
+ *
+ * "A red attention OUTRANKS the phase" is a MODEL rule (design of record,
+ * §"The shared model"), not a page detail — the pill already obeys it
+ * (phase-pill.tsx) — so the ledger's expression of it lives here, beside
+ * `ATTENTION_SEVERITY`, the single authority for which kinds are red. It used
+ * to sit inline in `o/[orgSlug]/c/[compSlug]/page.tsx`, an async server
+ * component vitest cannot reach: deleting the red clause left 147/147 green
+ * and no e2e asserted row order either, so the ordering had no test at ANY
+ * layer. `competition-desk.spec.ts` now asserts the rendered ROW ORDER on top
+ * of this, and `division-phase.test.ts` mutates the rule itself.
+ *
+ * `null` (getCompetitionDesk failed for this row — the row still renders from
+ * card stats alone) sorts LAST: a row we know nothing about must never be
+ * ranked above one we do.
+ */
+const LEDGER_PHASE_RANK: Record<DivisionPhase, number> = {
+  match_day: 0,
+  scheduled: 1,
+  setting_up: 2,
+  finished: 3,
+};
+
+export function ledgerRank(desk: { phase: DivisionPhase; attention: readonly Attention[] } | null): number {
+  if (!desk) return 9;
+  if (desk.attention.some((a) => ATTENTION_SEVERITY[a.kind] === "red")) return -1;
+  return LEDGER_PHASE_RANK[desk.phase];
+}
+
 const KIND_ORDER: Attention["kind"][] = [
   "needs_draw",
   "needs_fixtures",
@@ -118,6 +148,31 @@ const LIVE = new Set(["scheduled", "in_play"]);
  *  count shows — never abandoned/forfeited/cancelled, which are terminal but
  *  not a played result. */
 const PLAYED_STATUSES = new Set(["decided", "finalized"]);
+
+/**
+ * "Has anything actually been played?" — the PROGRESS question, which is the
+ * one to ask wherever a consumer would otherwise read the WORD `setting_up`
+ * as "nothing has happened yet".
+ *
+ * L1 (fix round H, Critical — instance ELEVEN): `setting_up` does NOT mean
+ * that. `resolvePhase`'s rule 4 returns it for a division whose whole league
+ * is played and complete while a LATER stage still owes its fixtures, so the
+ * word survives an entire season. Three consumers have now had to learn this
+ * separately — the pill (a red attention outranks the phase,
+ * phase-pill.tsx), the masthead (`competitionPhase`'s `nothingHasHappened`,
+ * competition-desk.ts) and the fixtures tab's start-locks tip
+ * (stages-panel.tsx) — and the third was still asking the phase word alone
+ * after the first two were fixed. The predicate lives here, once, rather than
+ * being written out a fourth time: a hand-copied predicate is a recorded
+ * drift class in this wave (see `stageNeedsProposal`, K3).
+ *
+ * Derived from the SAME `PLAYED_STATUSES` set the desk's own played/total
+ * count comes from, so an answer here can never disagree with the number the
+ * row beside it already shows.
+ */
+export function hasPlayedFixture(fixtures: readonly { status: string }[]): boolean {
+  return fixtures.some((f) => PLAYED_STATUSES.has(f.status));
+}
 
 /** Every stage that is not complete, in play order. K1 (fix round G,
  *  Critical) replaced `lowestOpenStage`, which returned ONE stage: two of its
@@ -283,7 +338,7 @@ export function resolvePhase(input: PhaseInput): DivisionPhase {
   // F1's own original case is unaffected: 0 played AND nothing dated still
   // has `anyPlayed` false, so it falls through to `setting_up` exactly as
   // before — the `unscheduled` attention already says so in words.
-  const anyPlayed = fixtures.some((f) => PLAYED_STATUSES.has(f.status));
+  const anyPlayed = hasPlayedFixture(fixtures);
   return anyPlayed ? "scheduled" : "setting_up";
 }
 

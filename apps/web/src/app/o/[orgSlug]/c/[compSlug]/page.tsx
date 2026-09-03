@@ -24,7 +24,7 @@ import { sql } from "@/lib/db";
 import { checkoutTrialDays } from "@/lib/billing";
 import { getCompetitionDesk, competitionPhase } from "@/server/usecases/competition-desk";
 import { statusLine, nextDateLabel } from "@/lib/division-status-line";
-import { ATTENTION_SEVERITY } from "@/lib/division-phase";
+import { ledgerRank } from "@/lib/division-phase";
 import { PhasePill } from "@/components/v2/desk/phase-pill";
 import { NeedsYou, needsYouItems } from "@/components/v2/desk/needs-you";
 import { DivisionLedger, type LedgerRow } from "@/components/v2/desk/division-ledger";
@@ -112,16 +112,17 @@ export default async function CompetitionPage({
       ),
     };
   });
-  const PHASE_RANK = { match_day: 0, scheduled: 1, setting_up: 2, finished: 3 } as const;
-  // K1 (fix round G): this used to name the two red kinds by hand — a THIRD
-  // hand-copy of "which kinds are red", after phase-pill.tsx's ternary and
-  // division-ledger.tsx's filter, and one a new red kind would silently drop
-  // to the bottom of the ledger. `ATTENTION_SEVERITY` is the single
-  // authority for severity (division-phase.ts, "never chosen at a call
-  // site"), so ask it.
-  const rank = (r: LedgerRow) =>
-    !r.desk ? 9 : r.desk.attention.some((x) => ATTENTION_SEVERITY[x.kind] === "red") ? -1 : PHASE_RANK[r.desk.phase];
-  ledgerRows.sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
+  // K1 (fix round G): the rank used to name the two red kinds by hand — a
+  // THIRD hand-copy of "which kinds are red", after phase-pill.tsx's ternary
+  // and division-ledger.tsx's filter, and one a new red kind would silently
+  // drop to the bottom of the ledger. L3 (fix round H): it now lives in
+  // `ledgerRank` (division-phase.ts) rather than inline here, because "a red
+  // attention outranks the phase" is a MODEL rule and this file is an async
+  // server component no unit test can reach — deleting the red clause left
+  // 147/147 green and no e2e asserted row order either. The ORDER of the
+  // sort is still this page's own (rank, then name), and is pinned by
+  // competition-desk.spec.ts's row-order test.
+  ledgerRows.sort((a, b) => ledgerRank(a.desk) - ledgerRank(b.desk) || a.name.localeCompare(b.name));
   const publicPath =
     competition.visibility !== "private" ? routes.shared(orgSlug, competition.slug) : null;
   // RS004 W2 scope item 2: the Registration hub's nav entry carries live

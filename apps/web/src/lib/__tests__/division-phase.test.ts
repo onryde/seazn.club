@@ -3,6 +3,8 @@ import {
   resolvePhase,
   resolveAttention,
   localDateKey,
+  ledgerRank,
+  hasPlayedFixture,
   type PhaseInput,
   type PhaseFixture,
   type PhaseStage,
@@ -516,5 +518,107 @@ describe("resolveAttention", () => {
       const out = resolveAttention(input({ divisionStatus: "setup", stages, fixtures, awaitingRegistrations: 2 }));
       expect(out.map((a) => a.kind).sort()).toEqual(["needs_draw", "registrations_waiting", "unscheduled"]);
     });
+  });
+});
+
+/**
+ * Minor 1 (fix round H): `openStages` sorts by `seq`, and that sort is the
+ * ONLY ordering authority for two order-dependent readers — rule 4's
+ * `open[0]` and `resolveAttention`'s `blocked` (`i === 0`).
+ * `competition-desk.ts`'s stage query is `from stages s where s.division_id =
+ * any(...)` with no `order by`, and the division page feeds `resolvePhase`
+ * from a DIFFERENT query (`listStages`) again, so Postgres may hand either
+ * caller its rows in any order. Deleting the sort left 147/147 green.
+ *
+ * Pinned HERE rather than by adding `order by s.seq` to that one query, on
+ * purpose: the sort is the authority, and it has to hold for every caller.
+ * Pinning the order in one SQL statement would guard one of the two callers
+ * and create a SECOND authority for the same fact — the exact drift class
+ * this wave has already paid for three times (two zones, two `needsProposal`
+ * expressions, three hand-copies of "which kinds are red").
+ *
+ * The input is deliberately handed to the module in REVERSE seq order, which
+ * is the only shape whose expected value differs with and without the sort.
+ */
+describe("openStages is the ordering authority — Minor 1 (fix round H)", () => {
+  // Stage 1 is playable (fixtures generated, no draw owed); stage 2 owes its
+  // fixtures. One LIVE fixture, so `blocked`'s `i === 0 || noLive` cannot
+  // rescue the later stage — only the sort decides which stage is index 0.
+  const reversed = () =>
+    input({
+      divisionStatus: "active",
+      stages: [
+        stage({ id: "s2", name: "Finals", seq: 2, status: "pending", hasFixtures: false, needsProposal: false }),
+        stage({ id: "s1", name: "League", seq: 1, status: "active", hasFixtures: true, needsProposal: false }),
+      ],
+      fixtures: [fx({ id: "f1", status: "scheduled", scheduledAt: "2026-09-12T09:00:00Z" })],
+    });
+
+  it("rule 4 asks the LOWEST-seq open stage, whatever order the rows arrive in", () => {
+    // Without the sort, `open[0]` is Finals — which owes its fixtures — and a
+    // mid-season league reads "Setting up".
+    expect(resolvePhase(reversed())).toBe("scheduled");
+  });
+
+  it("resolveAttention's blocked stage is the LOWEST-seq one, whatever order the rows arrive in", () => {
+    // Without the sort, Finals sits at index 0 and raises a red
+    // `needs_fixtures` for a stage nobody can act on yet (its own doors stay
+    // shut until the league completes).
+    expect(resolveAttention(reversed()).some((a) => a.kind === "needs_fixtures")).toBe(false);
+  });
+});
+
+/**
+ * L1 (fix round H, Critical). The progress predicate the fixtures tab's
+ * start-locks tip, and rule 6, both ask instead of reading the phase WORD.
+ */
+describe("hasPlayedFixture", () => {
+  it("counts only a recorded RESULT — never a terminal-but-unplayed fixture", () => {
+    expect(hasPlayedFixture([])).toBe(false);
+    expect(hasPlayedFixture([{ status: "scheduled" }, { status: "in_play" }])).toBe(false);
+    // The three terminal statuses that are NOT a played result — the same
+    // distinction card-stats.ts's PLAYED set draws.
+    expect(hasPlayedFixture([{ status: "abandoned" }, { status: "forfeited" }, { status: "cancelled" }])).toBe(false);
+    expect(hasPlayedFixture([{ status: "scheduled" }, { status: "decided" }])).toBe(true);
+    expect(hasPlayedFixture([{ status: "finalized" }])).toBe(true);
+  });
+});
+
+/**
+ * L3 (fix round H, Important): the competition page's ledger sorts RED FIRST
+ * — a red attention outranks the phase, the same model rule the pill already
+ * obeys. It lived inline in an async server component that vitest cannot
+ * reach, so deleting the red clause left 147/147 green and no e2e asserted
+ * row order. The rank now lives here, beside `ATTENTION_SEVERITY` (its only
+ * authority for "which kinds are red"), where it can be mutated and killed
+ * without a rebuild; `competition-desk.spec.ts` asserts the rendered ROW
+ * ORDER on top of it.
+ */
+describe("ledgerRank — red outranks the phase", () => {
+  const red = { kind: "needs_draw", stageId: "s", stageName: "Finals" } as const;
+  const amber = { kind: "unscheduled", count: 2 } as const;
+
+  it("ranks the four phases in ledger order", () => {
+    expect(ledgerRank({ phase: "match_day", attention: [] })).toBeLessThan(ledgerRank({ phase: "scheduled", attention: [] }));
+    expect(ledgerRank({ phase: "scheduled", attention: [] })).toBeLessThan(ledgerRank({ phase: "setting_up", attention: [] }));
+    expect(ledgerRank({ phase: "setting_up", attention: [] })).toBeLessThan(ledgerRank({ phase: "finished", attention: [] }));
+  });
+
+  it("a red attention lifts a row above EVERY phase, including match_day", () => {
+    // The load-bearing case, and the one that dies without the red clause: a
+    // `setting_up` row is the LOWEST-ranked live phase, so if red did not
+    // outrank the phase it would sort below a `match_day` row with nothing
+    // wrong with it.
+    expect(ledgerRank({ phase: "setting_up", attention: [red] }))
+      .toBeLessThan(ledgerRank({ phase: "match_day", attention: [] }));
+  });
+
+  it("an AMBER attention does not lift a row — only red outranks the phase", () => {
+    expect(ledgerRank({ phase: "setting_up", attention: [amber] }))
+      .toBe(ledgerRank({ phase: "setting_up", attention: [] }));
+  });
+
+  it("a row with no desk data sorts last, below finished", () => {
+    expect(ledgerRank(null)).toBeGreaterThan(ledgerRank({ phase: "finished", attention: [] }));
   });
 });
