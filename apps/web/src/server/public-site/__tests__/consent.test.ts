@@ -190,6 +190,14 @@ describe.skipIf(!HAS_DB)("public read model — visibility (doc 09 §1)", () => 
 });
 
 describe.skipIf(!HAS_DB)("entitlement split (doc 09 §4, doc 10)", () => {
+  // The view's key CHANGED in W2 (entitlements v18 T17, V396):
+  // `dashboard.branding` -> `dashboard.theme`. The colour and the "Powered by
+  // seazn.club" badge shared one key until then, so V395 making badge removal
+  // enterprise-only silently emptied this blob for Pro. The assertion is
+  // unchanged and still has its teeth — override the key the view reads and
+  // the colour comes back, override anything else and it does not — but it now
+  // names the key that actually gates a colour. Overriding `dashboard.branding`
+  // here would (correctly) restore nothing.
   it("nulls branding in the view for non-entitled (community) orgs, restores on override", async () => {
     const scene = await seedPublicScene();
     const [before] = await sql<{ branding: Record<string, unknown> }[]>`
@@ -198,7 +206,7 @@ describe.skipIf(!HAS_DB)("entitlement split (doc 09 §4, doc 10)", () => {
 
     await sql`
       insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason)
-      values (${scene.orgId}, 'dashboard.branding', true, 'test')`;
+      values (${scene.orgId}, 'dashboard.theme', true, 'test')`;
     const [after] = await sql<{ branding: Record<string, unknown> }[]>`
       select branding from public_competitions_v where id = ${scene.competitionId}`;
     expect(after.branding).toEqual({ logo: "logos/x.png", banner: "banners/x.png" });

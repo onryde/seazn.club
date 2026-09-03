@@ -123,20 +123,27 @@ export default async function SettingsPage({
   // TWO KEYS, NOT ONE (D23). They are different products and the resolver has
   // always treated them that way:
   //
-  //   branding            org LOGO upload + display  → free on every plan (V310)
-  //   dashboard.branding  org THEME COLOUR           → Pro / Pro Plus only
+  //   branding         org LOGO upload + display  → free on every plan (V310)
+  //   dashboard.theme  org THEME COLOUR           → Pro and above (V396)
   //
   // One `canBrand` flag drove both gates. That was harmless while `branding`
   // was Pro-only, and became a real bug the moment V310 made it free: a
   // Community org was handed a working colour picker whose value is stripped on
   // the way out — server/public-site/data.ts wraps o.branding in
-  // `case when org_has_feature(o.id, 'dashboard.branding') then … else '{}' end`.
+  // `case when org_has_feature(o.id, 'dashboard.theme') then … else '{}' end`.
   // Save a colour, see nothing change, anywhere, ever.
+  //
+  // The colour key is `dashboard.theme`, NOT `dashboard.branding`. It was
+  // `dashboard.branding` until V396 (entitlements v18 W2 T17) — the same key
+  // that removes the seazn badge, which V395 had just made enterprise-only. A
+  // Pro org therefore lost this picker and the colour it renders in one step.
+  // Reading the badge key here again would deny every Pro subscriber; the
+  // matching assertion lives in brand-gate-split.test.ts.
   const [canBrandLogo, canBrandColor] =
     tab === "organization"
       ? await Promise.all([
           hasFeature(active.id, "branding"),
-          hasFeature(active.id, "dashboard.branding"),
+          hasFeature(active.id, "dashboard.theme"),
         ])
       : [false, false];
   let orgAbout: string | null = null;
@@ -367,7 +374,10 @@ export default async function SettingsPage({
                   <div className="mt-5 border-t border-slate-100 pt-5">
                     {/* D23: the logo above is free, this control is Pro. The
                         chip explains the split so the neighbouring upsell
-                        doesn't read as arbitrary. */}
+                        doesn't read as arbitrary. It names `dashboard.theme`
+                        (V396) — badging it `dashboard.branding` would print
+                        "Contact us" for a self-serve Pro upgrade, because
+                        featurePlan() routes that key to enterprise. */}
                     <SubSection
                       icon={Palette}
                       label={t(dict, "settings.org.brandColor")}
@@ -377,7 +387,7 @@ export default async function SettingsPage({
                       <OrgBrandColor orgId={active.id} initialBranding={active.branding} />
                     ) : (
                       <p className="flex items-center gap-2 text-sm text-slate-500">
-                        <PlanBadge feature="dashboard.branding" />
+                        <PlanBadge feature="dashboard.theme" />
                         {t(dict, "settings.upgrade.brandColor")}{" "}
                         <Link href={routes.billing(orgSlug)} className="text-purple-600 underline">
                           {t(dict, "settings.upgrade.link")}

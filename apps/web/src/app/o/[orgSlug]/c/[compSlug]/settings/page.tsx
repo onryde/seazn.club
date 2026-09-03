@@ -44,7 +44,13 @@ export default async function CompetitionSettingsPage({
   ] = await Promise.all([
       getCompetition(auth, id),
       hasFeature(auth.orgId, "discovery.branding"),
-      hasFeature(auth.orgId, "dashboard.branding"),
+      // The competition BRANDING tab (accent colour) — `dashboard.theme` since
+      // V396 (entitlements v18 W2 T17), not `dashboard.branding`. That key is
+      // badge removal alone and has been enterprise-only since V395, so reading
+      // it here would have hidden this tab from every Pro subscriber while
+      // `public_competitions_v` went on emptying the colour they had already
+      // saved. Both ends of that chain move together, by design.
+      hasFeature(auth.orgId, "dashboard.theme"),
       listDivisions(auth, id, { includeArchived: true }),
       preferredCurrency(org.id),
       // v17 gap #354 — the "ended" pass card below offers a Go Pro link whose

@@ -85,7 +85,19 @@ export const FEATURE_REASONS: Record<string, string> = {
   // V395 made badge removal enterprise-only, so this must not say "Pro" — a
   // Pro subscriber reading it would be told to buy what they already have.
   // `featurePlan` sends the gate to Contact-us via ENTERPRISE_FEATURES below.
-  "dashboard.branding": "Removing the seazn.club badge is an Enterprise feature (Contact us) — your own club logo and colours work on every plan.",
+  //
+  // It also must not still say "colours work on every plan": V396 split the
+  // accent colour onto its own key and priced it at Pro, so that half of the
+  // sentence stopped being true the moment this key stopped gating it. The
+  // logo half is still true — `branding` is free on every plan (V310).
+  "dashboard.branding": "Removing the seazn.club badge is an Enterprise feature (Contact us) — your own club logo works on every plan.",
+  // V396 (entitlements v18 W2 T17): the accent colour used to ride
+  // `dashboard.branding` above, which is why it went dark for Pro when badge
+  // removal became enterprise-only. It is a plain Pro feature and `featurePlan`
+  // answers "pro" for it by default — it is deliberately NOT in
+  // ENTERPRISE_FEATURES, or this gate would quote Contact-us for something a
+  // self-serve upgrade already covers.
+  "dashboard.theme": "Your own colours on public pages, the slideshow and shared cards are a Pro feature — your club logo works on every plan.",
   "dashboard.player_profiles": "Public player profiles are a Pro feature.",
   realtime: "Live push updates are a Pro feature.",
   // Platform

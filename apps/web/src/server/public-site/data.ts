@@ -148,8 +148,9 @@ export interface PublicOrg {
   id: string;
   name: string;
   slug: string;
-  branded: boolean; // dashboard.branding (paid) — removable seazn footer + OG badge
-  /** Org brand color blob — emptied in-query without dashboard.branding. */
+  branded: boolean; // dashboard.branding (enterprise) — removable seazn footer + OG badge
+  /** Org brand color blob — emptied in-query without dashboard.theme (V396).
+   *  A DIFFERENT key from `branded` above; see loadOrg's note. */
   branding: unknown;
   /** Resolved logo URL — null without the branding entitlement or a logo. */
   logo: string | null;
@@ -344,22 +345,33 @@ export interface PublicPlayer {
 
 async function loadOrg(orgSlug: string): Promise<PublicOrg | null> {
   // Branding reads are entitlement-gated in the query, same rule as the
-  // public_*_v views: theme color needs dashboard.branding, logo needs
-  // branding (the key that also unlocks the upload).
+  // public_*_v views. THREE keys, three different things — they were two until
+  // V396 (entitlements v18 W2 T17, owner ruling 2026-09-03) split the third
+  // out, and the welding was invisible until it cost a customer something:
+  //
+  //   branding           org LOGO (upload + display)  free on every plan (V310)
+  //   dashboard.theme    org ACCENT COLOUR            Pro and above (V396)
+  //   dashboard.branding badge removal, ALONE         enterprise only (V395)
   //
   // `branded` is NOT the logo/name gate — it is the "may remove the seazn
   // attribution" perk (the Powered-by footer and the OG-card badge; see
-  // PublicOrg.branded and og/post-card.tsx). That is a PAID differentiator, so
-  // it keys off dashboard.branding, NOT `branding`. V310 freed `branding` to
+  // PublicOrg.branded and og/post-card.tsx). V310 freed `branding` to
   // every plan, which silently switched the footer off for community orgs and
   // killed the free-tier growth lever until this was re-gated.
+  //
+  // The colour rode `dashboard.branding` too, until V395 made badge removal
+  // enterprise-only — and took Pro's brand colour off its public pages with
+  // it, a visible downgrade nobody bought. Four smoke checks caught that and
+  // were left RED rather than edited to match the defect. Do not re-weld these:
+  // `entitlements-v18-theme.test.ts` asserts the colour and the badge TOGETHER
+  // for a Pro org, because either half alone still passes with one key.
   const [row] = await sql<
     (Omit<PublicOrg, "logo"> & { logo_url: string | null; logo_storage_path: string | null })[]
   >`
     select o.id, o.name, o.slug, o.about, o.default_locale,
            o.stripe_charges_enabled as card_payments,
            org_has_feature(o.id, 'dashboard.branding') as branded,
-           case when org_has_feature(o.id, 'dashboard.branding')
+           case when org_has_feature(o.id, 'dashboard.theme')
                 then o.branding else '{}'::jsonb end as branding,
            case when org_has_feature(o.id, 'branding') then o.logo_url end as logo_url,
            case when org_has_feature(o.id, 'branding') then o.logo_storage_path end as logo_storage_path

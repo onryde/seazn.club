@@ -53,8 +53,25 @@ export const ENTITLEMENT_DOMAINS: { slug: string; features: string[] }[] = [
   { slug: "officials", features: [
     "officials.roles_multi", "officials.auto", "officials.marks",
   ]},
+  // `dashboard.branding` left this list in W2 (entitlements v18 T17) and
+  // `dashboard.theme` took its place. Not a rename — a correction of which key
+  // the row was ever describing. The label has always read "Your colours on
+  // public pages" — and the colour is exactly what V396 split out, while
+  // `dashboard.branding` is badge removal alone. The four locale strings are
+  // re-pointed rather than duplicated: nothing else read the old key.
+  //
+  // The badge row does not simply move across, for the same reason
+  // `support.priority` left below: V395 made badge removal ENTERPRISE-only,
+  // enterprise is not a `/pricing` column (design §4 — it is the Contact-us
+  // strip under the table), so the row would render a tick-free line in all
+  // four columns. Worse than telling no story: it would have told a Pro
+  // subscriber their colours are not included, which is what it did between
+  // V395 and V396. Badge removal is a Contact-us conversation now.
+  //
+  // /admin keeps showing `dashboard.branding` — `entitlement-admin.ts` files
+  // every key this list omits under its trailing "other" section.
   { slug: "brand", features: [
-    "branding", "dashboard.branding", "realtime", "embeds.enabled",
+    "branding", "dashboard.theme", "realtime", "embeds.enabled",
     "discovery.listed", "discovery.featured", "discovery.branding",
     "exports", "exports.branded", "news.auto",
   ]},
