@@ -591,11 +591,28 @@ them and the Event Pass falls through to the community row and silently LOSES em
 resolver only overlays what a pass row explicitly grants. Insert `event_pass` and
 `event_pass_l` true in the same statement.
 
-`dashboard.branding` is UNCHANGED — the owner was offered flipping it to false on Pro and
-did not take it. So the badge (shown when `dashboard.branding` is false) now appears on
-Event Pass competitions only: Free can no longer publish at all, and Pro publishes with the
-badge removed. That is a deliberate narrowing of the badge's reach to one plan, not an
-oversight.
+**`dashboard.branding` goes TRUE on both pass rungs** (owner, 2026-09-03) — true means the
+badge is REMOVED, so every paying plan now publishes unbranded.
+
+**This overturns design §2's one explicitly frozen cell**, marked "D7, never moves". The
+override is deliberate and must not be reverted on the strength of that note; the note is
+now the older decision.
+
+An earlier draft of this entry said the badge would then appear nowhere. That was WRONG,
+and the correction matters: `dashboard.public.max` is still **3 on Free**, so free public
+dashboards survive and carry the badge. The resulting rule is clean enough to sell:
+**free means we brand it and you don't; paying means you brand it and we don't.**
+
+| | Free | Pro | Event Pass |
+|---|---|---|---|
+| public dashboards | 3 | ∞ | ∞ |
+| our badge | SHOWN | removed | removed |
+| own logo (`branding`) | no | yes | yes |
+| profiles / embeds / auto posts | no | yes | yes |
+
+Noted for a later wave, not this one: with every publishing plan having the badge off,
+`dashboard.branding` and `branding` now gate the SAME boundary (Free vs everyone else) with
+two keys. Worth collapsing into one, but not while this wave is mid-flight.
 
 The counter-argument was put and overruled: design §2 made these three free as acquisition
 loops ("Three share loops go free… Each one puts the badge in front of people who are not
