@@ -173,7 +173,6 @@ const FAQ_EXEMPT: Record<string, string> = {
   "pricing.faq.currencies.a": "about currency pinning",
   "pricing.faq.annual.a": "about annual billing",
   "pricing.faq.cancel.a": "about cancelling Pro; no pass claim",
-  "pricing.faq.proPlus.a": "scanned, but for differentiators and the rider rate — not pass permanence",
 };
 
 /** The one pass string that quantifies the credit grant. */
@@ -184,12 +183,12 @@ const M_GRANT = PASS_CREDIT_GRANT.event_pass;
 const L_GRANT = PASS_CREDIT_GRANT.event_pass_l;
 const GRANTS: readonly number[] = Object.values(PASS_CREDIT_GRANT);
 
-/** The Pro Plus FAQ answer — a different claim family, deliberately NOT scanned
- *  for pass permanence. Pro Plus is a subscription: "for as long as you pay" is
- *  a true thing to say about it, and reusing the pass's vocabulary here would
- *  red on honest copy. (Measured: it carries no permanence hit in any locale
- *  today, in any of the four vocabularies.) */
-const PLUS_VALUES = across("marketing", "pricing.faq.proPlus.a");
+// `PLUS_VALUES` — `pricing.faq.proPlus.a`, the /pricing FAQ answer to "What's
+// in Pro Plus?" — is DELETED here with the key itself (retired-plan copy sweep).
+// V392 removed `pro_plus` from `plans`, and a question ABOUT a plan that does
+// not exist has no true rewording: the answer went, not its wording. Its three
+// scans (the anti-vacuity floor, the retired-claim registry, the half-rate
+// axis) lose one input each; every one of them still has others.
 
 /** #382 review, finding 1 — the Pro card on the per-competition upgrade page
  *  (`app/o/[orgSlug]/c/[compSlug]/upgrade/page.tsx`). A FOURTH key axis, and
@@ -202,7 +201,8 @@ const PRO_CARD_BODY = across("ui", "upgrade.proCard.body");
 /**
  * THE PRO PLUS CARD — a THIRD key axis, and the reason it now exists.
  *
- * `PLUS_VALUES` above is the FAQ answer, three cards down the /pricing page.
+ * `pricing.faq.proPlus.a` was the FAQ answer, three cards down the /pricing
+ * page; it is deleted with the plan.
  * The card itself is six other keys, and nothing scanned them: task 4 removed
  * "AI-assisted scheduling" from the answer while the card two screens above
  * went on selling it, in all four locales. A page disagreeing with itself is
@@ -271,7 +271,7 @@ const PLUS_CARD_VALUES: LocalisedValue[] = DICTIONARY_LOCALES.map((locale) => ({
 /**
  * THE HALF-RATE CLAIM HAS ITS OWN KEY AXIS, and this is why.
  *
- * `localeHalfClaimFaults` was only ever called with `PLUS_VALUES`, so
+ * `localeHalfClaimFaults` was only ever called with the Pro Plus FAQ answer, so
  * `pricing.faq.groups.a` — which says "half your plan's rate", bare, in all four
  * locales, three FAQ cards away — was never scanned. `en.halfClaim` literally
  * spells that phrase out; the pattern existed and nothing pointed it at the key.
@@ -287,7 +287,9 @@ const PLUS_CARD_VALUES: LocalisedValue[] = DICTIONARY_LOCALES.map((locale) => ({
  * is only a decision once every key that makes the claim is on it.
  */
 const HALF_CLAIM_KEYS = [
-  "pricing.faq.proPlus.a",
+  // `pricing.faq.proPlus.a` left this axis with the key (retired-plan copy
+  // sweep). `pricing.faq.groups.a` — the falsehood that started the axis — is
+  // still on it, so the family keeps a marketing-side member.
   "pricing.faq.groups.a",
   "pricing.matrix.orgs.max_owned.note",
 ];
@@ -916,7 +918,7 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
   it("actually has copy to scan, in every locale", () => {
     // A deleted card key must reach this list rather than be normalised to "".
     expect(missingCardKeys).toEqual([]);
-    for (const { locale, key, value } of [...PASS_BOUND_VALUES, ...PLUS_VALUES, ...PLUS_CARD_VALUES]) {
+    for (const { locale, key, value } of [...PASS_BOUND_VALUES, ...PLUS_CARD_VALUES]) {
       expect(value, `${locale} ${key} is missing or empty`).toBeTruthy();
       expect(value.length, `${locale} ${key}`).toBeGreaterThan(20);
     }
@@ -976,8 +978,10 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
     // 236 -> 256: the five `pass.entry.ended.*` keys x four locales, pinned by
     // the W8 review round. 256 -> 252: entitlements v18 R13 hid the extra-seat
     // add-on, so `pricing.addons.seat` no longer exists to pin in any locale.
+    // 252 -> 248: the retired-plan copy sweep deleted `pricing.faq.proPlus.a`,
+    // the answer to a question about a plan V392 removed from `plans`.
     // A count, not a floor, so a DELETED pin reds too.
-    expect(APPROVED_DICTIONARY_COPY.length * DICTIONARY_LOCALES.length).toBe(252);
+    expect(APPROVED_DICTIONARY_COPY.length * DICTIONARY_LOCALES.length).toBe(248);
     // Every entry must say what it claims and what decides it — a pin with no
     // `why` is a snapshot, and a snapshot teaches the next editor to re-record
     // rather than to re-check.
@@ -2018,7 +2022,6 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
 
   it("carries none of the retired prose, in any locale", () => {
     expect(retiredClaimFaults(PASS_BOUND_VALUES, RETIRED_CLAIMS)).toEqual([]);
-    expect(retiredClaimFaults(PLUS_VALUES, RETIRED_CLAIMS)).toEqual([]);
     // The Pro Plus CARD, which carried the four AI-scheduling literals in
     // RETIRED_CLAIMS for a whole round after the FAQ answer had dropped them.
     expect(retiredClaimFaults(PLUS_CARD_VALUES, RETIRED_CLAIMS)).toEqual([]);
@@ -2099,7 +2102,13 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
   it("declares every key that actually makes the half-rate claim, and cannot shrink", () => {
     // FLOORS. Not derived from the lists — restated deliberately, because a
     // floor computed from the thing it bounds is not a floor.
-    expect(HALF_CLAIM_KEYS.length, "the marketing half of the axis has been emptied").toBeGreaterThanOrEqual(3);
+    // 3 -> 2 in the retired-plan copy sweep, and ONLY because the third key was
+    // DELETED WITH ITS SUBJECT: `pricing.faq.proPlus.a` answered "What's in Pro
+    // Plus?" about a plan V392 removed from `plans`. A floor is lowered for a
+    // deleted subject, never for a reword — a value that stops matching
+    // `halfClaim` while its key survives reds the derivation below instead, and
+    // that is the direction this floor cannot see.
+    expect(HALF_CLAIM_KEYS.length, "the marketing half of the axis has been emptied").toBeGreaterThanOrEqual(2);
     expect(HALF_CLAIM_UI_KEYS.length, "the ui half of the axis has been emptied").toBeGreaterThanOrEqual(3);
 
     // DERIVATION, per file, over every locale's own vocabulary.

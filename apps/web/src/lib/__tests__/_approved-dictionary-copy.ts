@@ -88,26 +88,16 @@ export const APPROVED_DICTIONARY_COPY: ApprovedValue[] = [
     key: "pricing.faq.groups.a",
     why: "the extra-organisation rate. 'half your plan's rate' unqualified is false — the seed rounds the rider DOWN (usd pro monthly 1900 -> 900 = 47.4%) while eur/aud land on exact halves, so only 'no more than half' is true in all twenty plan x interval x currency combinations. Source of truth: config/stripe-plans.json graduated tiers, via riderClaimShape.",
     text: {
-      en: "Yes. A subscription is a billing group: it can hold several organisations under one card and one invoice, and each organisation after the first costs no more than half your plan’s rate. Every organisation in the group runs on the group’s plan, so joining a Pro Plus group takes an organisation’s entry-fee rate from 8% to 1%. Payouts are untouched — each organisation keeps its own Stripe account and its own bank details.",
-      es: "Sí. Una suscripción es un grupo de facturación: puede incluir varias organizaciones con una sola tarjeta y una sola factura, y cada organización a partir de la primera cuesta no más de la mitad de la tarifa de tu plan. Todas las organizaciones del grupo funcionan con el plan del grupo, así que unirse a un grupo Pro Plus baja la comisión de inscripción de una organización del 8% al 1%. Los pagos no cambian: cada organización conserva su propia cuenta de Stripe y sus propios datos bancarios.",
-      fr: "Oui. Un abonnement est un groupe de facturation : il peut réunir plusieurs organisations sous une seule carte et une seule facture, et chaque organisation après la première coûte au plus la moitié du tarif de votre forfait. Toutes les organisations du groupe fonctionnent avec le forfait du groupe : rejoindre un groupe Pro Plus fait passer les frais d’inscription d’une organisation de 8 % à 1 %. Les reversements ne changent pas : chaque organisation conserve son propre compte Stripe et ses propres coordonnées bancaires.",
-      nl: "Ja. Een abonnement is een facturatiegroep: het kan meerdere organisaties omvatten met één kaart en één factuur, en elke organisatie na de eerste kost hoogstens de helft van het tarief van je abonnement. Elke organisatie in de groep draait op het abonnement van de groep, dus toetreden tot een Pro Plus-groep brengt het inschrijfkostenpercentage van een organisatie van 8% naar 1%. Uitbetalingen veranderen niet: elke organisatie houdt haar eigen Stripe-account en haar eigen bankgegevens.",
-    },
-  },
-  {
-    file: "marketing",
-    key: "pricing.faq.proPlus.a",
-    why: "Pro Plus's differentiators and the extra-organisation rate. Every claim after 'Everything in Pro, plus' asserts EXCLUSIVITY, so each must be a feature lower plans lack: scheduling.ai is granted on all five plan keys and must NOT appear here. Source of truth: plan_entitlements (officials.auto, api.write, support.priority are pro_plus-only; ai.credits.monthly is 10/60/200).",
-    text: {
-      en: "Everything in Pro, plus unlimited members, teams and clubs inside every organisation, a 1% platform fee, the largest monthly AI credit grant, auto officials assignment, write API access and priority support. Pro is {pro}/month; Pro Plus is {plus}/month or {plusAnnual}/year. Pro covers up to 5 organisations on one bill and Pro Plus up to 10, each extra one at no more than half the base rate.",
-      es: "Todo lo de Pro, más miembros, equipos y clubes ilimitados dentro de cada organización, comisión de plataforma del 1 %, la mayor dotación mensual de créditos de IA, asignación automática de árbitros, acceso de escritura a la API y soporte prioritario. Pro cuesta {pro}/mes; Pro Plus cuesta {plus}/mes o {plusAnnual}/año. Pro cubre hasta 5 organizaciones en una sola factura y Pro Plus hasta 10, cada una adicional por no más de la mitad de la tarifa base.",
-      fr: "Tout ce qu’offre Pro, plus des membres, équipes et clubs illimités au sein de chaque organisation, 1 % de frais de plateforme, la dotation mensuelle de crédits IA la plus élevée, l’attribution automatique des officiels, l’accès API en écriture et une assistance prioritaire. Pro est à {pro}/mois ; Pro Plus est à {plus}/mois ou {plusAnnual}/an. Pro couvre jusqu’à 5 organisations sur une seule facture et Pro Plus jusqu’à 10, chaque organisation supplémentaire pour au plus la moitié du tarif de base.",
-      nl: "Alles van Pro, plus onbeperkt leden, teams en clubs binnen elke organisatie, 1% platformkosten, het grootste maandelijkse AI-credittegoed, automatische toewijzing van officials, schrijftoegang tot de API en prioritaire ondersteuning. Pro is {pro}/maand; Pro Plus is {plus}/maand of {plusAnnual}/jaar. Pro dekt tot 5 organisaties op één factuur en Pro Plus tot 10, elke extra organisatie voor hoogstens de helft van het basistarief.",
+      en: "Yes. A subscription is a billing group: it can hold several organisations under one card and one invoice, and each organisation after the first costs no more than half your plan’s rate. Every organisation in the group runs on the group’s plan, so joining a Pro group takes an organisation’s entry-fee rate from 8% to 2%. Payouts are untouched — each organisation keeps its own Stripe account and its own bank details.",
+      es: "Sí. Una suscripción es un grupo de facturación: puede incluir varias organizaciones con una sola tarjeta y una sola factura, y cada organización a partir de la primera cuesta no más de la mitad de la tarifa de tu plan. Todas las organizaciones del grupo funcionan con el plan del grupo, así que unirse a un grupo Pro baja la comisión de inscripción de una organización del 8% al 2%. Los pagos no cambian: cada organización conserva su propia cuenta de Stripe y sus propios datos bancarios.",
+      fr: "Oui. Un abonnement est un groupe de facturation : il peut réunir plusieurs organisations sous une seule carte et une seule facture, et chaque organisation après la première coûte au plus la moitié du tarif de votre forfait. Toutes les organisations du groupe fonctionnent avec le forfait du groupe : rejoindre un groupe Pro fait passer les frais d’inscription d’une organisation de 8 % à 2 %. Les reversements ne changent pas : chaque organisation conserve son propre compte Stripe et ses propres coordonnées bancaires.",
+      nl: "Ja. Een abonnement is een facturatiegroep: het kan meerdere organisaties omvatten met één kaart en één factuur, en elke organisatie na de eerste kost hoogstens de helft van het tarief van je abonnement. Elke organisatie in de groep draait op het abonnement van de groep, dus toetreden tot een Pro-groep brengt het inschrijfkostenpercentage van een organisatie van 8% naar 2%. Uitbetalingen veranderen niet: elke organisatie houdt haar eigen Stripe-account en haar eigen bankgegevens.",
     },
   },
   // ── The Pro Plus CARD (v17 gap wave 7, #299) ───────────────────────────────
   //
-  // `pricing.faq.proPlus.a` above is the ANSWER three cards down the page. These
+  // `pricing.faq.proPlus.a` was the ANSWER three cards down the page; it is
+  // deleted with the plan (retired-plan copy sweep, V392). These
   // six keys are the CARD itself — the frame plus its five bullets — and until
   // this task they were the only Pro Plus surface nothing pinned. The result was
   // a page that disagreed with itself: the FAQ had dropped "AI-assisted
@@ -343,7 +333,7 @@ export const APPROVED_DICTIONARY_COPY: ApprovedValue[] = [
   {
     file: "marketing",
     key: "pricing.addons.org",
-    why: "the extra-organisation add-on label. Its RATE is the “no more than half the base rate” claim pinned on pricing.faq.groups.a and pricing.faq.proPlus.a and verified against the seed’s graduated tiers by riderClaimShape.",
+    why: "the extra-organisation add-on label. Its RATE is the “no more than half the base rate” claim pinned on pricing.faq.groups.a and verified against the seed’s graduated tiers by riderClaimShape.",
     text: {
       en: "Extra org",
       es: "Organización adicional",
@@ -669,7 +659,7 @@ export const APPROVED_DICTIONARY_COPY: ApprovedValue[] = [
   // ── The extra-organisation TIP (v17 gap wave 7, task 7, #299) ──────────────
   //
   // A FOURTH surface of the half-rate claim, and the one that showed the axis
-  // was still not closed. `pricing.faq.groups.a` and `pricing.faq.proPlus.a`
+  // was still not closed. `pricing.faq.groups.a` and the Pro Plus FAQ answer
   // were corrected earlier in this wave; this key said "half your plan's rate",
   // bare, in all four locales the whole time — the same phrase, the same
   // pattern (`en.halfClaim` spells it out), and again nothing pointed the rule
@@ -685,10 +675,10 @@ export const APPROVED_DICTIONARY_COPY: ApprovedValue[] = [
     key: "tips.billing.extra-org.body",
     why: "the extra-organisation rate, in the ⓘ tip beside the billing-group controls. 'half your plan's rate' unqualified is false — the seed rounds the rider DOWN (usd pro monthly 1900 -> 900 = 47.4%, pro_plus 3900 -> 1900 = 48.7%) while eur and aud land on exact halves, so only 'no more than half' is true in all twenty plan x interval x currency combinations. Source of truth: config/stripe-plans.json graduated tiers, via riderClaimShape. The 2%/1%/8% clause is registration.fee_percent in plan_entitlements and is unchanged.",
     text: {
-      en: "Each organisation after the first costs no more than half the base rate. It also moves to your plan's entry-fee cut — 2% on Pro or 1% on Pro Plus, instead of the 8% a free organisation pays.",
-      es: "Cada organización después de la primera cuesta no más de la mitad de la tarifa base. También pasa a la comisión de inscripción de tu plan: 2 % en Pro o 1 % en Pro Plus, en lugar del 8 % que paga una organización gratuita.",
-      fr: "Chaque organisation après la première coûte au plus la moitié du tarif de base. Elle passe aussi à la commission d'inscription de votre formule — 2 % sur Pro ou 1 % sur Pro Plus, au lieu des 8 % que paie une organisation gratuite.",
-      nl: "Elke organisatie na de eerste kost hoogstens de helft van het basistarief. Ze gaat ook over op het inschrijfgeldpercentage van je abonnement — 2% op Pro of 1% op Pro Plus, in plaats van de 8% die een gratis organisatie betaalt.",
+      en: "Each organisation after the first costs no more than half the base rate. It also moves to your plan's entry-fee cut — 2% on Pro, instead of the 8% a free organisation pays.",
+      es: "Cada organización después de la primera cuesta no más de la mitad de la tarifa base. También pasa a la comisión de inscripción de tu plan: 2 % en Pro, en lugar del 8 % que paga una organización gratuita.",
+      fr: "Chaque organisation après la première coûte au plus la moitié du tarif de base. Elle passe aussi à la commission d'inscription de votre formule — 2 % sur Pro, au lieu des 8 % que paie une organisation gratuite.",
+      nl: "Elke organisatie na de eerste kost hoogstens de helft van het basistarief. Ze gaat ook over op het inschrijfgeldpercentage van je abonnement — 2% op Pro, in plaats van de 8% die een gratis organisatie betaalt.",
     },
   },
   // ── The remaining three half-rate surfaces (v17 gap wave 7, task 7 round 2) ──

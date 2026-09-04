@@ -434,18 +434,11 @@ export const APPROVED_GROUPS_INVENTORY: string[] = [
   "d2190ce79f9684a3",
   "87261be9da787175",
   "beaab221487f9585",
-  "edd2b6da9a126c56",
+  "5be7274033911d5c",
   "9faecfa06325046c",
-  "a09dc0137f8e8527",
+  "c9b02fd532228c71",
   "e12f4df63f6cc9ea",
   "03db06a1af2d3405",
-  // v17 gap #333, position 17. Read against `server/page-auth.ts`
-  // requireBillingPage: the payer branch is entered only on
-  // `subscriptions.owner_user_id` of the org's OWN group ("any organisation on
-  // it"), and hands back role null / canEdit false while every other page in
-  // the /o tree stays on requireOrgPage — which is what makes "the bill and
-  // nothing else" true. The three tabs named are exactly the three that call
-  // it: settings/{billing,credits,add-ons}/page.tsx.
   "8cca87480a6deb54",
   "696c2fcc2ecfec40",
   "a052c3f07ce2508c",
@@ -500,7 +493,7 @@ export const APPROVED_GROUPS_INVENTORY: string[] = [
   "19438b187f04e834",
   "84701e090fcbf515",
   "ddc8366bdf93737f",
-  "bb92ff4f463ccd7b",
+  "44a3cac6b1327242",
   "29c9a5af721c8abb",
   "a04e4219f607e695",
   "2b57b36732a3e9fb",
@@ -508,7 +501,7 @@ export const APPROVED_GROUPS_INVENTORY: string[] = [
   "c5c32d350da1d6b1",
   "09c784bdca897d29",
   "3d324adb3ee0b927",
-  "e2fe25cfb8981353",
+  "636714ad25e8f991",
   "1415f62ed176347a",
   "a83851ffc59ddfeb",
   "290e525981e1463d",

@@ -43,7 +43,7 @@ Your plan sets how many clubs and teams you can create, and how large a single s
 | Community | 2 | 2 | 20 |
 | Event Pass | 2 | 2 | 20 |
 | Pro | 20 | 40 | Unlimited |
-| Pro Plus | Unlimited | Unlimited | Unlimited |
+| Enterprise | Unlimited | Unlimited | Unlimited |
 
 Grouping teams under a club (the club hierarchy) works on every plan — the caps above are what a bigger plan lifts. When you hit a limit, the page tells you which one and links to upgrade. Upgrade any time to raise the ceilings.
 
