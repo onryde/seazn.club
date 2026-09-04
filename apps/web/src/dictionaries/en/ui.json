@@ -4959,5 +4959,5 @@
   "runsheet.sub.awaitingDraw": "Awaiting draw",
   "runsheet.emptyFilter.message": "No fixtures match “{filter}” right now.",
   "runsheet.settled.title": "Played, not scheduled",
-  "runsheet.setTime.zoneNote": "Times entered here are in {tz}."
+  "runsheet.setTime.zoneNote": "Enter the time in {orgTz} — this row shows it in {tz}."
 }

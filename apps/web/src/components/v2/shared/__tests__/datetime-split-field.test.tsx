@@ -155,6 +155,30 @@ describe("DateTimeSplitField", () => {
     // A viewport media query here is the bug, not an alternative spelling.
     expect(html).not.toContain("@media(min-width:");
   });
+
+  // THE SECOND HALF OF THAT SAME REGRESSION, paid for on 2026-09-04.
+  //
+  // `@container` compiles to `container-type: inline-size`, which applies
+  // inline-size CONTAINMENT — the box's own contents stop contributing to its
+  // inline size. So anywhere this element is sized FROM its content (a flex
+  // item, whose flex-basis `auto` resolves to max-content; a grid item that is
+  // not stretched) its width resolves to ZERO and both halves collapse to the
+  // browser's ~26px minimum. Measured live at 320/390/768/1280 on the run
+  // sheet's inline "Set time" editor and on `stages-panel.tsx`'s "Add match"
+  // form: container 0px, date 26px, select 26px, and the select's own centre
+  // hit-testing to the Save BUTTON beside it. Two of the six call sites were
+  // broken; a third (`move-panel.tsx`) had been carrying a `w-80 max-w-full`
+  // wrapper for exactly this reason without ever naming it.
+  //
+  // This is a class-scan, and a class-scan cannot see a cascade — the real
+  // proof is the measured box in `e2e/run-sheet.spec.ts` ("the inline
+  // Set-time field is a usable, tappable control at 320 and at 1280"). It is
+  // here so the one-token deletion that reintroduces a zero-width date field
+  // fails in the fast suite too, next to the reason.
+  it("gives the container-query box an EXTRINSIC width — it cannot size itself from content", () => {
+    const html = renderToStaticMarkup(<DateTimeSplitField {...baseProps} />);
+    expect(html).toMatch(/class="[^"]*@container[^"]*w-full/);
+  });
   // A form that routes save errors and e2e locators by field name loses its
   // handle the moment a raw <input> becomes this pair — RS004's registration
   // hub was addressing `[data-field="opens_at"]` before the time-step sweep

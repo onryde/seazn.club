@@ -4959,5 +4959,5 @@
   "runsheet.sub.awaitingDraw": "Wacht op loting",
   "runsheet.emptyFilter.message": "Geen wedstrijden voor “{filter}” op dit moment.",
   "runsheet.settled.title": "Gespeeld, niet ingepland",
-  "runsheet.setTime.zoneNote": "Hier ingevoerde tijden zijn in {tz}."
+  "runsheet.setTime.zoneNote": "Voer de tijd in {orgTz} in — deze regel toont hem in {tz}."
 }

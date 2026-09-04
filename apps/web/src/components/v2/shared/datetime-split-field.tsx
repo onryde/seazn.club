@@ -154,7 +154,26 @@ export function DateTimeSplitField({
     // side. That covers 320px phones (the low end of the mobile.spec.ts
     // matrix) and every narrow column, present and future, without the call
     // site having to know it is narrow.
-    <div className="@container">
+    //
+    // `w-full` IS LOAD-BEARING, not decoration. `@container` compiles to
+    // `container-type: inline-size`, which applies INLINE-SIZE CONTAINMENT:
+    // the element's own contents no longer contribute to its inline size. So
+    // wherever this box is sized from its content — a flex item (flex-basis
+    // `auto` resolves to max-content), or a grid item that is not stretched —
+    // its width resolves to ZERO and both halves collapse to the browser's
+    // ~26px minimum, leaving an empty box and a chevron floating over
+    // whatever sits beside it. Measured 2026-09-04 at 320/390/768/1280 on the
+    // run sheet's inline "Set time" editor and on `stages-panel.tsx`'s "Add
+    // match" form: container 0px, date input 26px, time select 26px, and the
+    // select's own centre hit-testing to the Save BUTTON. An explicit
+    // extrinsic width is the fix, and it belongs here rather than at each
+    // call site — `move-panel.tsx` already carried a `w-80 max-w-full`
+    // wrapper for exactly this reason without naming it, and two of the six
+    // call sites had no wrapper and were broken. A call site that wants the
+    // field narrower caps it from OUTSIDE (a `max-w-*` on its own container),
+    // which composes with this; nothing can rely on the old shrink-to-fit,
+    // because shrink-to-fit here has only ever produced zero.
+    <div className="@container w-full">
       <div className="flex flex-col gap-2 @[18rem]:flex-row @[18rem]:items-end">
         <div className="min-w-0 flex-[3]">
           <DateTimeField {...dateProps} />

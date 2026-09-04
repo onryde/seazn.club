@@ -4959,5 +4959,5 @@
   "runsheet.sub.awaitingDraw": "Pendiente del sorteo",
   "runsheet.emptyFilter.message": "Ningún partido coincide con «{filter}» ahora mismo.",
   "runsheet.settled.title": "Jugado, sin programar",
-  "runsheet.setTime.zoneNote": "Las horas introducidas aquí están en {tz}."
+  "runsheet.setTime.zoneNote": "Introduce la hora en {orgTz}: esta fila la muestra en {tz}."
 }

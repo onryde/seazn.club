@@ -14,6 +14,20 @@ import {
 // constant, so the case still witnesses the regression if either zone
 // changes (fix round 3).
 import { isoFromZonedDateTime } from "../src/lib/zoned-datetime";
+// The SAME day-bucketing authority `buildRunSheet` and `fixtureRowAction`
+// both call — the expected day key below is derived from it rather than
+// re-implemented with `toISOString().slice(0, 10)`, which is only the right
+// answer while the venue zone happens to be UTC (fix round 4).
+import { dayKeyInTz } from "@seazn/engine/scheduling/tz";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
+/** The SHIPPED English copy, so a copy assertion has one authority and moves
+ *  with the dictionary instead of freezing yesterday's sentence into a test
+ *  (same idiom as `competition-desk-actions.spec.ts` and four others). */
+const UI_EN = JSON.parse(
+  readFileSync(fileURLToPath(new URL("../src/dictionaries/en/ui.json", import.meta.url)), "utf8"),
+) as Record<string, string>;
 
 // Competition Desk W2, Task 4 — the fixtures tab as a run sheet. This is the
 // seam obligation for Tasks 2 and 3: `fixtureRowAction` and `buildRunSheet`
@@ -27,7 +41,46 @@ import { isoFromZonedDateTime } from "../src/lib/zoned-datetime";
 // invented request body (a probe in W1 passed at every width once because its
 // setup calls had silently failed — stages 400, generate 404, start 422 —
 // while the page was never in the state under test).
-async function seedRunSheetDivision(request: import("@playwright/test").APIRequestContext) {
+/**
+ * A fixed-offset IANA zone in which `nowMs` reads as local **midday**.
+ *
+ * Fix round 4 (controller finding). Rounds 1-3 fought the UTC day boundary
+ * with a clamp on how far the seeded fixtures could sit from real "now":
+ * first `Math.max(3, room - 2)` (which DEMANDED 3 minutes of room it did not
+ * have and overshot into tomorrow, a live 23:58 red), then half the room
+ * actually available. The halving is arithmetically sound — half a positive
+ * is strictly less than it, so every seeded instant stays inside today — but
+ * it bought that by SHRINKING THE OFFSETS, and the "future" row has a second
+ * job the clamp cannot do: it must still be in the future when the PAGE
+ * RENDERS, which is three SQL writes, four API reads and a page load later.
+ * At 23:59:50 UTC the future offset became 5 seconds, the row was already
+ * past by render, `filteredNowIndex` moved, and the NOW-rule position
+ * assertion went red with no day-group message to explain it. The window
+ * went from ~3 minutes a day to tens of seconds; it never closed.
+ *
+ * A floor cannot both stay inside today and outlast render latency — that is
+ * the real tension, and neither clamp resolves it. The offsets are not the
+ * free variable here; THE VENUE ZONE IS. The sheet buckets and prints in
+ * `scheduleSettings.tz` (amendment 4) and this seed chooses that value, so
+ * choosing one where "now" is local midday puts ~12 hours of room on each
+ * side of the day boundary at every hour of the real clock. The offsets then
+ * go back to a flat ±90/-30 minutes: far enough that render latency is
+ * irrelevant, and provably inside one local day whenever the run starts.
+ *
+ * `Etc/GMT±N` is POSIX-style and INVERTS THE SIGN — `Etc/GMT-5` is UTC+5.
+ * These zones are deliberate: fixed-offset and DST-free, so a real zone's
+ * seasonal shift cannot move the midday anchor out from under the seed.
+ */
+function middayZoneFor(nowMs: number): string {
+  const offsetHours = 12 - new Date(nowMs).getUTCHours();
+  if (offsetHours === 0) return "UTC";
+  return `Etc/GMT${offsetHours > 0 ? "-" : "+"}${Math.abs(offsetHours)}`;
+}
+
+async function seedRunSheetDivision(
+  request: import("@playwright/test").APIRequestContext,
+  opts: { tz?: string } = {},
+) {
   const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
     ends_on: "2030-12-31",
     name: `RunSheet E2E ${TAG}`,
@@ -47,12 +100,12 @@ async function seedRunSheetDivision(request: import("@playwright/test").APIReque
     "POST",
     ["A", "B", "C", "D"].map((n, i) => ({ kind: "individual", display_name: n, seed: i + 1 })),
   );
-  // The venue zone this whole sheet buckets and prints in (amendment 4) —
-  // pinned to UTC, same convention `division-schedule.spec.ts` already uses,
-  // so a day boundary near real "now" in some other zone can never flake this.
+  // The venue zone this whole sheet buckets and prints in (amendment 4).
+  // Defaults to UTC (the convention `division-schedule.spec.ts` uses); the
+  // day-grouping case passes a midday zone instead — see `middayZoneFor`.
   const settings = await apiJson(request, `/api/v1/divisions/${divisionId}/schedule-settings`, "PUT", {
     config: {},
-    tz: "UTC",
+    tz: opts.tz ?? "UTC",
   });
   expect(settings.status, `schedule-settings PUT failed: ${JSON.stringify(settings.error)}`).toBeLessThan(300);
   const { fixtureIds } = await createStageAndGenerate(request, divisionId);
@@ -60,45 +113,48 @@ async function seedRunSheetDivision(request: import("@playwright/test").APIReque
 }
 
 test("the run sheet groups by venue day and prints the day, the time and the pitch", async ({ page, request }) => {
-  const { divisionId, fixtureIds } = await seedRunSheetDivision(request);
+  // Fix round 4: the venue zone is CHOSEN so that real "now" is local midday
+  // in it — see `middayZoneFor` for the whole argument. Everything below is
+  // then flat and deterministic; there is no clamp, no floor, and no hour of
+  // the real clock at which this case behaves differently.
+  const now = Date.now();
+  const tz = middayZoneFor(now);
+  const { divisionId, fixtureIds } = await seedRunSheetDivision(request, { tz });
   expect(fixtureIds.length, "seed produced no fixtures — setup failed, not the sheet").toBeGreaterThanOrEqual(3);
+  // The seed's whole safety argument in one assertion, printed: "now" must
+  // really be near the middle of the venue-zone day, or the flat ±90-minute
+  // offsets below are not safe and the reader should be told so HERE rather
+  // than discovering it as a mystery day-group failure 40 lines later.
+  const hourInTz = Number(
+    new Intl.DateTimeFormat("en-GB", { hour: "2-digit", hour12: false, timeZone: tz }).format(new Date(now)),
+  );
+  console.log("run sheet seed zone:", tz, "| local hour there:", hourInTz);
+  expect(hourInTz, `middayZoneFor(${tz}) did not land near midday`).toBeGreaterThanOrEqual(11);
+  expect(hourInTz, `middayZoneFor(${tz}) did not land near midday`).toBeLessThanOrEqual(13);
 
   // Times relative to REAL now — NOT `page.clock`, which has zero uses in
   // this repo (`grep -a -rn "page.clock" apps/web/e2e` returns nothing), so
   // the NOW rule's actual position can never be pinned to a fixed clock; it
   // has to be derived from whatever "now" the SUT itself reads at render.
-  // Two rows before now, one after, all on the SAME UTC calendar day.
+  // Two rows before now, one after, all on the same venue-zone day.
   //
-  // Fix round 2 (controller finding A): the PREVIOUS version clamped each
-  // offset to the room available before/after midnight, but floored that
-  // clamp at a flat 3 minutes — `Math.max(3, room - 2)` — which DEMANDS 3
-  // minutes of room even when less than 3 exist, and overshoots into the
-  // adjacent calendar day. A live run at 23:58 UTC hit exactly this
-  // (`afterMin` forced to 3 when only ~2 remained) and read two day groups
-  // instead of one; "ran twice, green both times" was clock luck, not
-  // coverage. Fixed by taking HALF the room actually available on each
-  // side instead of a fixed floor — halving a positive quantity can never
-  // exceed it, so `now ± offset` is PROVABLY inside the same UTC day at any
-  // hour, not just probably. (`minutesSinceMidnightUtc`/`Until` are real
-  // numbers derived from `Date.now()`'s millisecond precision, so landing on
-  // the literal zero that would degenerate this to a zero gap is ~1-in-86.4M
-  // — the same order of residual risk `page.clock`'s absence already leaves
-  // for the render round-trip itself, not a new one this test introduces.)
-  const now = Date.now();
-  const minutesSinceMidnightUtc = (now - Math.floor(now / 86_400_000) * 86_400_000) / 60_000;
-  const minutesUntilMidnightUtc = 1440 - minutesSinceMidnightUtc;
-  const beforeFarMin = Math.min(90, minutesSinceMidnightUtc / 2);
-  const beforeNearMin = Math.min(30, beforeFarMin / 2);
-  const afterMin = Math.min(90, minutesUntilMidnightUtc / 2);
+  // FLAT offsets, no clamp: the midday zone above guarantees ~12 hours of
+  // room on both sides of the local day boundary, so 90 minutes can never
+  // reach it. And 90 minutes of headroom is what makes the FUTURE row still
+  // future when the page finally renders — the property the round-2 halving
+  // clamp silently gave up (at 23:59:50 it left a 5-second future offset,
+  // which three SQL writes and a page load outlive).
+  const beforeFarMin = 90;
+  const beforeNearMin = 30;
+  const afterMin = 90;
   await setFixtureScheduledAtSql(fixtureIds[0]!, new Date(now - beforeFarMin * 60_000).toISOString());
   await setFixtureScheduledAtSql(fixtureIds[1]!, new Date(now - beforeNearMin * 60_000).toISOString());
   await setFixtureScheduledAtSql(fixtureIds[2]!, new Date(now + afterMin * 60_000).toISOString());
 
-  // Derived from the seed, never typed — the exact expected day key (fix
-  // round 1, IMPORTANT 5a): the division's venue zone is pinned to UTC
-  // (`seedRunSheetDivision`), so the day all three seeded instants land on is
-  // simply the UTC calendar date of "now".
-  const expectedDayKey = new Date(now).toISOString().slice(0, 10);
+  // Derived from the seed through the SUT's OWN bucketing authority (fix
+  // round 1, IMPORTANT 5a; fix round 4 re-derives it via `dayKeyInTz` rather
+  // than a UTC-only string slice, since the venue zone is no longer UTC).
+  const expectedDayKey = dayKeyInTz(now, tz);
   // The exact fixture_no values the day block must show, IN CHRONOLOGICAL
   // ORDER (fix round 1, IMPORTANT 5b) — a sheet that merely contains "at
   // least 3 rows somewhere" passes even when it bucketed into the WRONG day
@@ -344,4 +400,222 @@ test("fix round 3 (owner ruling): the inline Set-time editor writes the ORG zone
     // failure.
     await restoreOrgTz();
   }
+});
+
+// Fix round 4, CRITICAL — the "When" field in this editor was ZERO PIXELS
+// WIDE at every width, and every gate in the suite passed over it.
+//
+// `DateTimeSplitField`'s outer box is `@container` (`container-type:
+// inline-size`), which applies inline-size CONTAINMENT: its own contents stop
+// contributing to its inline size. As a flex item of this editor's row its
+// flex-basis is `auto` → max-content → contained → 0, and both halves
+// collapsed to the browser's ~26px minimum: on screen, an empty box under
+// "When" with the time select's chevron floating over the Save button.
+// Measured before the fix at 320/390/768/1280: container 0px, date input
+// 26px, time select 26px, and the select's own centre hit-testing to a
+// BUTTON. An organiser could not set a fixture time from this tab on any
+// device — and with `FixtureLine` retired this is the only inline set-time
+// path in the product.
+//
+// WHY NOTHING CAUGHT IT: `setDateTime` (helpers.ts) drives the halves with
+// `.fill()` and `.selectOption()`, and `schedule-datetime-ux.spec.ts` reads
+// `<option>` values straight out of the DOM. All of that works perfectly on a
+// zero-width control — the element exists, is "visible" to Playwright, and
+// accepts programmatic input. Only a BOX MEASUREMENT plus a real hit test can
+// see it, which is what this case is.
+test("fix round 4: the inline Set-time field is a usable, tappable control at 320 and at 1280", async ({
+  page,
+  request,
+}) => {
+  const { divisionId, fixtureIds } = await seedRunSheetDivision(request);
+  expect(fixtureIds.length, "seed produced no fixtures — setup failed, not the sheet").toBeGreaterThanOrEqual(1);
+
+  for (const width of [320, 1280]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+    const sheet = page.getByTestId("run-sheet");
+    await expect(sheet).toBeVisible();
+
+    const setTime = sheet.locator('[data-row-action="set_time"]').first();
+    await setTime.scrollIntoViewIfNeeded();
+    await setTime.click();
+    // Deliberately located by the CONTROL it contains, not by the
+    // `run-sheet-set-time-editor` testid that shipped alongside this fix: an
+    // assertion introduced in the same commit as its own hook can only be run
+    // against the fixed build, and this case had to produce a true red
+    // against the BROKEN one first. It did — 26px halves, container 0px.
+    const editor = sheet.locator("li", { has: page.locator('input[type="date"]') }).first();
+    await expect(editor.locator('input[type="date"]')).toBeVisible();
+
+    // Measured from the LIVE box, and hit-tested at the tap point with
+    // `document.elementFromPoint` — never `boundingBox()` alone, which
+    // reports paint and not hit area (a control can measure 44px and still
+    // be untappable under an overlay). `scrollIntoView` first: elementFromPoint
+    // is VIEWPORT-relative and returns null for anything below the fold,
+    // which reads as "untappable" when it only means "off-screen".
+    const seen = await editor.evaluate((el) => {
+      const container = el.querySelector('[class*="@container"]') as HTMLElement | null;
+      const dateInput = el.querySelector('input[type="date"]') as HTMLElement | null;
+      const timeSelect = el.querySelector("select") as HTMLElement | null;
+      const w = (node: HTMLElement | null) => (node === null ? -1 : Math.round(node.getBoundingClientRect().width));
+      const hit = (node: HTMLElement | null) => {
+        if (node === null) return "(absent)";
+        node.scrollIntoView({ block: "center" });
+        const r = node.getBoundingClientRect();
+        if (r.width === 0 || r.height === 0) return "(zero box)";
+        const target = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        return target === node ? "self" : `${target?.tagName.toLowerCase() ?? "(nothing)"}`;
+      };
+      return {
+        containerW: w(container),
+        dateW: w(dateInput),
+        timeW: w(timeSelect),
+        dateHit: hit(dateInput),
+        timeHit: hit(timeSelect),
+        scrollW: document.documentElement.scrollWidth,
+        clientW: document.documentElement.clientWidth,
+      };
+    });
+    console.log(`set-time field at ${width}px:`, JSON.stringify(seen));
+
+    // 120px is not a style preference: below it a `dd/mm/yyyy` date input
+    // clips its own placeholder and the time select shows a bare chevron —
+    // the state this test exists to prevent measured 26px. The defect it
+    // witnesses is an order of magnitude away from the threshold, so the
+    // number is a floor, not a pixel-perfect snapshot that will churn.
+    expect(seen.containerW, `the @container box collapsed at ${width}px`).toBeGreaterThanOrEqual(200);
+    expect(seen.dateW, `the date input is unusably narrow at ${width}px`).toBeGreaterThanOrEqual(120);
+    expect(seen.timeW, `the time select is unusably narrow at ${width}px`).toBeGreaterThanOrEqual(120);
+    expect(seen.dateHit, `the date input is not what a tap at its centre hits at ${width}px`).toBe("self");
+    expect(seen.timeHit, `the time select is not what a tap at its centre hits at ${width}px`).toBe("self");
+    expect(seen.scrollW, `the open editor put the page into horizontal scroll at ${width}px`).toBeLessThanOrEqual(
+      seen.clientW,
+    );
+
+    // And it still WORKS as a control, not just as a box: type a time
+    // through the same helper every other spec uses and read it back.
+    await setDateTime(editor, "2030-06-15T14:30");
+    const roundTrip = await editor.evaluate((el) => ({
+      date: (el.querySelector('input[type="date"]') as HTMLInputElement | null)?.value ?? null,
+      time: (el.querySelector("select") as HTMLSelectElement | null)?.value ?? null,
+    }));
+    console.log(`set-time field round trip at ${width}px:`, JSON.stringify(roundTrip));
+    expect(roundTrip).toEqual({ date: "2030-06-15", time: "14:30" });
+  }
+});
+
+// Fix round 4 — the zone note, both directions.
+//
+// Round 3 added it unconditionally, saying only which zone the input accepts.
+// Two problems, both about whether an organiser keeps reading it: it fired on
+// every division, including the majority where `orgTz === tz` and there is
+// nothing to disambiguate (a note that speaks when it has nothing to say
+// trains people to stop reading it), and it never said that the ROW
+// redisplays in a different zone, which is the actual confusion — a typed
+// 15:00 reappearing as 04:00 with no visible cause reads as data loss.
+//
+// This is also where `orgTz` gets its teeth. The editor's initial VALUE is
+// no longer read from the fixture (see run-sheet-row.tsx: the ladder only
+// opens this editor for a fixture with no time at all, so that read was dead
+// code), so the note is the one place `orgTz` is observable in the DOM.
+// Pinned as an exact sentence built from the dictionary's own string, not a
+// substring check — a containment assertion cannot tell "enter in NY, shown
+// in Tokyo" from the swapped, exactly-wrong "enter in Tokyo, shown in NY".
+test("fix round 4: the set-time zone note names both clocks, and only appears when they differ", async ({
+  page,
+  request,
+}) => {
+  const { divisionId, fixtureIds } = await seedRunSheetDivision(request);
+  expect(fixtureIds.length, "seed produced no fixtures — setup failed, not the sheet").toBeGreaterThanOrEqual(1);
+  const target = fixtureIds[0]!;
+  const fixtureNo = (await apiJson<{ fixture_no: number }>(request, `/api/v1/fixtures/${target}`)).data!.fixture_no;
+
+  const openEditor = async () => {
+    await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+    const row = page.locator(`[data-fixture-no="${fixtureNo}"]`);
+    await row.locator('[data-row-action="set_time"]').click();
+    await expect(row.getByTestId("run-sheet-set-time-editor")).toBeVisible();
+    return row;
+  };
+
+  // Phase 1 — the two zones DISAGREE. `fixtureNo: -1` matches no real row,
+  // so the helper's "null every OTHER fixture" clause leaves every fixture
+  // unscheduled, which is what makes "Set time" reachable at all.
+  const restoreOrgTz = await setZoneSplitSql({
+    divisionId,
+    orgTz: "America/New_York",
+    divisionTz: "Asia/Tokyo",
+    fixtureNo: -1,
+    at: "2030-01-01T00:00:00.000Z",
+  });
+  try {
+    let row = await openEditor();
+    const note = row.getByTestId("run-sheet-set-time-zone-note");
+    await expect(note).toBeVisible();
+    const seen = (await note.textContent())?.trim() ?? "";
+    // Built from the SHIPPED English string, so the copy has exactly one
+    // authority and a reworded note moves this expectation with it.
+    const expected = UI_EN["runsheet.setTime.zoneNote"]!
+      .replace("{orgTz}", "America/New_York")
+      .replace("{tz}", "Asia/Tokyo");
+    console.log("zone note (orgTz=America/New_York, tz=Asia/Tokyo):", JSON.stringify(seen));
+    expect(seen).toBe(expected);
+    // The two zones must really disagree, or phase 1 proves nothing.
+    expect(expected).not.toBe(
+      UI_EN["runsheet.setTime.zoneNote"]!.replace("{orgTz}", "Asia/Tokyo").replace("{tz}", "America/New_York"),
+    );
+
+    // Phase 2 — the two zones AGREE. The editor is still there; the note is
+    // not. Asserted with a POSITIVE twin (the editor is visible) beside the
+    // absence, because `toHaveCount(0)` is satisfied by a page that failed
+    // to render the editor at all.
+    await setZoneSplitSql({
+      divisionId,
+      orgTz: "Asia/Tokyo",
+      divisionTz: "Asia/Tokyo",
+      fixtureNo: -1,
+      at: "2030-01-01T00:00:00.000Z",
+    });
+    row = await openEditor();
+    const editorText = (await row.getByTestId("run-sheet-set-time-editor").textContent())?.trim() ?? "";
+    console.log("editor text when orgTz === tz === Asia/Tokyo:", JSON.stringify(editorText));
+    await expect(row.getByTestId("run-sheet-set-time-editor")).toBeVisible();
+    await expect(row.locator('input[type="date"]')).toBeVisible();
+    await expect(row.getByTestId("run-sheet-set-time-zone-note")).toHaveCount(0);
+  } finally {
+    // Restores the ORIGINAL org timezone captured by the FIRST call —
+    // `organizations.timezone` is shared with every parallel spec on this
+    // org (setZoneSplitSql's own doc comment).
+    await restoreOrgTz();
+  }
+});
+
+// Fix round 4, the premise behind the deleted read: this editor is
+// unreachable on a fixture that already has a time, so there is no existing
+// instant for it to display and no zone for that display to get wrong.
+// `fixtureRowAction`'s branch 4 returns `set_time` only for
+// `scheduledAt === null`; a timed fixture gets `score` / `assign_scorer` /
+// `result`, all of which render a plain `<Link>` that never opens an editor.
+// Pinned here so a later wave that re-adds an "edit a time already set"
+// affordance has to come through this test — and, per the note in
+// run-sheet-row.tsx, ship a value pin for the zone it seeds from.
+test("fix round 4: a fixture that already has a time offers no inline editor at all", async ({ page, request }) => {
+  const { divisionId, fixtureIds } = await seedRunSheetDivision(request);
+  expect(fixtureIds.length, "seed produced no fixtures — setup failed, not the sheet").toBeGreaterThanOrEqual(1);
+  const target = fixtureIds[0]!;
+  const fixtureNo = (await apiJson<{ fixture_no: number }>(request, `/api/v1/fixtures/${target}`)).data!.fixture_no;
+  await setFixtureScheduledAtSql(target, "2030-06-15T09:00:00.000Z");
+
+  await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+  await expect(page.getByTestId("run-sheet")).toBeVisible();
+  const row = page.locator(`[data-fixture-no="${fixtureNo}"]`);
+  // POSITIVE twin first: the row is really on the page and really carries an
+  // action, so the absences below are absences and not a blank page.
+  await expect(row).toHaveCount(1);
+  const action = await row.locator("[data-row-action]").getAttribute("data-row-action");
+  console.log(`scheduled fixture_no=${fixtureNo} action:`, action);
+  expect(["score", "assign_scorer"], "a timed, unsettled fixture is scoring work").toContain(action);
+  await expect(row.locator('[data-row-action="set_time"]')).toHaveCount(0);
+  await expect(row.getByTestId("run-sheet-set-time-editor")).toHaveCount(0);
+  await expect(row.locator('input[type="date"]')).toHaveCount(0);
 });

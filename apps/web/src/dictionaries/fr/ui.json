@@ -4959,5 +4959,5 @@
   "runsheet.sub.awaitingDraw": "En attente du tirage",
   "runsheet.emptyFilter.message": "Aucun match ne correspond à « {filter} » pour le moment.",
   "runsheet.settled.title": "Joué, non programmé",
-  "runsheet.setTime.zoneNote": "Les heures saisies ici sont en {tz}."
+  "runsheet.setTime.zoneNote": "Saisissez l’heure en {orgTz} — cette ligne l’affiche en {tz}."
 }

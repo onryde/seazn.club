@@ -22,7 +22,10 @@ import { fixtureRowAction, type RowAction } from "@/lib/fixture-row-action";
 import { isBye, type RunSheetFixture } from "@/lib/run-sheet-groups";
 import { outcomeText, VOID_STATUSES } from "@/components/v2/stages-panel";
 import type { PatchFixture } from "@/server/api-v1/schemas";
-import { zonedDateTimeInput, isoFromZonedDateTime } from "@/lib/zoned-datetime";
+// Write-only: the editor never READS an existing instant (see the `when`
+// state below — the ladder only opens it for a fixture with no time at all),
+// so `zonedDateTimeInput` is deliberately not imported here.
+import { isoFromZonedDateTime } from "@/lib/zoned-datetime";
 
 export function RunSheetRow({
   fixture,
@@ -64,17 +67,29 @@ export function RunSheetRow({
   const msg = useMsg();
   const router = useRouter();
   const [editing, setEditing] = useState(false);
-  // Fix round 3 (owner ruling): the ORG zone (`orgTz`, #448), never the
-  // VENUE zone (`tz`) and never the browser's implicit zone —
-  // `zoned-datetime.ts`'s own header already rules that a TYPED time is
-  // governed by `orgTz`, matching every other write site in the repo. This
-  // is a deliberate mismatch with the row's DISPLAY (`tz`, amendment 4): on
-  // a division whose venue zone overrides the org's, an organiser typing
-  // 15:00 sees the row redisplay a different wall-clock time after save —
-  // accepted explicitly by the owner, made legible via the zone note next
-  // to the field rather than "fixed" by changing the display (that trade
-  // was ruled on, not left open).
-  const [when, setWhen] = useState(fixture.scheduled_at ? zonedDateTimeInput(fixture.scheduled_at, orgTz) : "");
+  // ALWAYS EMPTY, and that is a fact about the ladder, not a shortcut.
+  //
+  // This editor is reachable through exactly one door: the `set_time` action
+  // control below. `fixtureRowAction`'s branch 4 returns `set_time` ONLY for
+  // `scheduledAt === null` (fixture-row-action.ts) — a fixture that already
+  // carries a time gets `score` / `assign_scorer` / `result`, whose control
+  // is a plain `<Link>` that never sets `editing`. So `fixture.scheduled_at`
+  // is null on every render that can reach the field, and the round-3
+  // initializer `fixture.scheduled_at ? zonedDateTimeInput(…, orgTz) : ""`
+  // could only ever take its empty branch.
+  //
+  // Fix round 4: that dead truthy branch is REMOVED rather than left as a
+  // "harmless" fallback. It was a zone conversion nothing could observe, in
+  // the one file where a wrong zone is not self-cancelling — it read as a
+  // live, tested authority and no mutation of it could go red. `orgTz` is
+  // still this component's write zone (see the Save handler) and still names
+  // itself in the zone note; it simply has no read to do.
+  //
+  // If a later wave re-adds an "edit a time already set" affordance on this
+  // sheet, it must seed this state THEN, in `orgTz`, and ship a value-pin
+  // test on a division where `tz !== orgTz` — a read in `tz` would look
+  // right on screen (the row displays `tz`) while writing an hour that moved.
+  const [when, setWhen] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -228,15 +243,31 @@ export function RunSheetRow({
         </div>
       </div>
       {editing && (
-        <div className="mt-2 flex flex-col gap-1.5">
+        // `max-w-sm` caps the EDITOR, not the field. `DateTimeSplitField` is
+        // `w-full` (its own file says why: a container-query box cannot size
+        // itself from content), so without a cap the date/time pair would
+        // stretch the whole card width on a desktop row — ~1050px of date
+        // input for a value that needs ~230. Capping from outside composes
+        // with that width instead of competing with it, and it is the ONLY
+        // thing here that touches the field's size: delete the `w-full` and
+        // this editor goes back to a 0px box whatever this class says.
+        <div data-testid="run-sheet-set-time-editor" className="mt-2 flex max-w-sm flex-col gap-1.5">
           {/* Fix round 3 (owner ruling, "make the mismatch legible"): the
-              typed value is read/written in `orgTz`, not the `tz` the row
+              typed value is written in `orgTz`, not the `tz` the row
               displays in — on a division whose venue zone differs, the
-              saved time redisplays differently. Named here so that reads
-              as "this field uses a different clock", not as data loss. */}
-          <p className="text-xs text-slate-500" data-testid="run-sheet-set-time-zone-note">
-            {msg("runsheet.setTime.zoneNote", { tz: orgTz })}
-          </p>
+              saved time redisplays at a different wall-clock hour.
+              Fix round 4: rendered ONLY when the two zones actually
+              disagree, and it now names BOTH — round 3's version said which
+              zone the input accepts but never that the row redisplays in a
+              different one, which is the whole confusion, and it printed on
+              every division including the majority where there is nothing to
+              disambiguate. A note that fires when it has nothing to say
+              trains organisers to stop reading it. */}
+          {orgTz !== tz && (
+            <p className="text-xs text-slate-500" data-testid="run-sheet-set-time-zone-note">
+              {msg("runsheet.setTime.zoneNote", { orgTz, tz })}
+            </p>
+          )}
           <div className="flex flex-wrap items-end gap-2">
             <DateTimeField
               kind="datetime-local"
