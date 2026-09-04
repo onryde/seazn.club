@@ -10667,6 +10667,34 @@ async function autoScheduleSuite(): Promise<void> {
       ((clearOpen.json.data as { cleared?: number } | undefined)?.cleared ?? 0) > 0,
   );
 
+  // Restore is the OTHER destructive control in this console, and the wider of
+  // the two: clear empties unlocked slots, a restore rewrites every fixture's
+  // time and court back to the save point. It sits a few hundred pixels above
+  // the clear, so a freeze that bound only one of them refused the smaller edit
+  // and allowed the larger.
+  //
+  // The control half is a save point taken at the CURRENT watermark, which
+  // makes restoring it a legitimate no-op (`steps: 0`): it writes nothing and
+  // leaves the board REFLOW is about to measure exactly as it stands. That is
+  // all this half has to do — hold "the endpoint accepts this division" fixed,
+  // so the 422 below can only be the freeze.
+  const savePoint = await v1(s, `/api/v1/divisions/${div.id}/checkpoints`, "POST", {
+    label: `freeze control ${tag}`,
+  });
+  const savePointId = (savePoint.json.data as { id?: string } | undefined)?.id;
+  const restoreOpen = await v1(s, `/api/v1/divisions/${div.id}/restore`, "POST", {
+    checkpoint_id: savePointId,
+    confirm: true,
+  });
+  check(
+    `restore: an UNFROZEN division accepts the rewind ` +
+      `(save point=${savePoint.status}, restore=${restoreOpen.status})`,
+    savePoint.status === 201 &&
+      !!savePointId &&
+      restoreOpen.status === 200 &&
+      (restoreOpen.json.data as { steps?: number } | undefined)?.steps === 0,
+  );
+
   // The whole-division freeze bites on the DESTRUCTIVE control too. `applySchedule`
   // and the single-fixture move both refuse a frozen division on exactly these
   // terms (same 422, same sentence); clear was the one write path that did not,
@@ -10681,6 +10709,10 @@ async function autoScheduleSuite(): Promise<void> {
     scope: { excludeLocked: true },
     confirm: true,
   });
+  const restoreFrozen = await v1(s, `/api/v1/divisions/${div.id}/restore`, "POST", {
+    checkpoint_id: savePointId,
+    confirm: true,
+  });
   const thaw = await v1(s, `/api/v1/divisions/${div.id}/locks`, "PATCH", {
     schedule_locked: false,
   });
@@ -10691,10 +10723,12 @@ async function autoScheduleSuite(): Promise<void> {
   // statement (`auto({ only_unlocked: true })`) then hits applySchedule's own
   // frozen guard: a state leak from this block reported as a REFLOW defect,
   // which sends the reader to the wrong subsystem. A silently-failed FREEZE is
-  // the mirror image — the clear would answer 200 and the 422 check below
-  // would indict the guard instead of the freeze that never happened.
+  // the mirror image — the clear and the restore would both answer 200 and the
+  // two 422 checks below would indict the guards instead of the freeze that
+  // never happened. Both refusals sit inside this one freeze/thaw window, so
+  // this assertion covers both.
   check(
-    `clear: the freeze and the thaw around it both took ` +
+    `locks: the freeze and the thaw around both refusals took ` +
       `(freeze=${freeze.status}, thaw=${thaw.status})`,
     freeze.status === 200 && thaw.status === 200,
   );
@@ -10703,6 +10737,15 @@ async function autoScheduleSuite(): Promise<void> {
       `(status=${clearFrozen.status}, message=${clearFrozen.json.error?.message ?? "-"})`,
     clearFrozen.status === 422 &&
       clearFrozen.json.error?.message === "the division schedule is locked — unlock it to edit",
+  );
+  check(
+    // Same status and same sentence as the clear above, deliberately: four
+    // write paths now share this one hand-duplicated refusal, and the panel's
+    // own frozen note is written against it.
+    `restore: a FROZEN division refuses the save-point rewind 422 with the unlock copy ` +
+      `(status=${restoreFrozen.status}, message=${restoreFrozen.json.error?.message ?? "-"})`,
+    restoreFrozen.status === 422 &&
+      restoreFrozen.json.error?.message === "the division schedule is locked — unlock it to edit",
   );
 
   const reflow = await auto({ only_unlocked: true });
