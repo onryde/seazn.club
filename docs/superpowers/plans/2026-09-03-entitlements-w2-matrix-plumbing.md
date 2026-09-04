@@ -1002,6 +1002,121 @@ Delete the two dead e2e specs. Rerun the 34 files that assert against
 smoke and regression per RULES.md. Judge vitest only from `--reporter=json
 --outputFile`, confirming `.testResults[].name` resolves inside this worktree.
 
+## Product-owner gaps found at the W2 boundary (2026-09-04)
+
+Five, ranked by money at stake. Each was verified against the tree or the `entw2`
+database, not inferred from a brief. Numbers below use Stripe's standard
+2.9% + $0.30 on a $1,000 competition, and the live matrix: community 5%, pass 4%,
+pro 2%, enterprise 1%.
+
+### 1. The rate cut shipped; the thing that pays for it did not. BLOCKS MERGE.
+
+`on_behalf_of` appears **nowhere in the tree** — grep of `apps/web/src` and
+`packages` returns nothing — while V397's cut is already applied in the database.
+Today, on this branch, the platform charges less AND still absorbs Stripe's fee.
+
+| $1,000 competition | platform gross | Stripe | platform net |
+|---|---|---|---|
+| Before V397 (community 8%, no rail) | $80.00 | −$29.30 | **$50.70** |
+| **Today** (community 5%, no rail) | $50.00 | −$29.30 | **$20.70** |
+| Intended (community 5% + rail) | $50.00 | club pays | **$50.00** |
+
+A 37.5% headline cut is a **59% cut in contribution** without the rail, and roughly
+**neutral** with it — which is the proof the cut was SIZED for the rail rather than
+taken on its own. The pass rungs move the same way (5%→4% is −48% net without the
+rail, +93% with it, because the rail is worth more than the point given away).
+
+**Recommendation: V397 and `on_behalf_of` are one unit of work and must land in one
+commit, or the migration reverts with it.** Merging W2 as it stands ships a priced
+promise to clubs ("we absorb the card fee") that the code does not keep, and takes
+the revenue cut anyway. This is the same shape as W1's merge gate — a row-deleting
+migration that outran the surface that pays for it.
+
+### 2. INR credit packs are a dominated SKU — the smallest pack costs more than Pro.
+
+Verified from `stripe-plans.json` and `plan_entitlements`: Pro monthly INR **59900**
+(₹599) includes **25** credits = ₹23.96/credit. `seazn_credits_10` is INR **79900**
+(₹799) = ₹79.90/credit.
+
+| | per-credit in plan | per-credit in pack | premium |
+|---|---|---|---|
+| USD | $0.60 | $1.00 | 1.67× |
+| EUR | €0.52 | €0.92 | 1.77× |
+| GBP | £0.44 | £0.80 | 1.82× |
+| **INR** | **₹23.96** | **₹79.90** | **3.34×** |
+
+Cause is recorded in this plan's own history: the plans were re-anchored to PPP set
+points and the credit packs were carried as "unchanged", so the packs are a
+dollar-priced SKU sitting in a rupee-priced catalogue.
+
+**Recommendation: shift every INR pack down one rung** — 10 → ₹399, 25 → ₹999,
+50 → ₹1,999, 100 → ₹3,999 (minor: 39900 / 99900 / 199900 / 399900). That is
+₹39.9/credit, i.e. **1.67× the included rate — exactly USD's ratio**, so the ladder
+becomes one rule in four currencies instead of three plus an outlier.
+
+**Owner value:** today an Indian Free org that runs out of credits has no rational
+top-up at all (the pack costs more than the better product), so it converts nobody;
+and an Indian Pro org that exhausts 25 credits cannot buy more at a defensible
+price, which caps ARPU on precisely the heaviest users. Both are silent — a
+dominated SKU produces no error, just no sales.
+
+**And add the guard:** the six ladder rules compare plans to passes only. Nothing
+compares a CONSUMABLE to the plan that includes the same thing. One rule —
+"pack per-credit ≥ plan per-credit, and within 2× of it, in every currency" — would
+have caught this and will catch the next PPP re-anchoring that forgets a SKU.
+
+### 3. An empty platform-fee field saves 0%, on both layers.
+
+`admin-platform-settings.tsx:12` — `Number("")` is `0`, and `Number.isFinite(0) &&
+0 >= 0` is `true`, so the client calls an empty box valid. The server agrees:
+`api/admin/settings/route.ts:15` is `z.number().min(0).max(100)`. A staff member who
+clears the field to retype it and hits save sets the platform default to zero, with
+a success toast and an audit row that looks deliberate.
+
+`feePercentFor` (`registrations.ts:78`) falls through to `platformFeeDefault()`
+whenever the entitlement is null **or ≤ 0**, so the blast radius is every charge on
+the fallback path.
+
+**Recommendation:** keep `min(0)` — a deliberate 0% promo is legitimate — but stop
+translating *empty* into zero: require a non-blank field client-side. **Ship it with
+the paired positive assertion** (empty rejected AND `0` still accepted from a
+deliberate entry), or the test passes by refusing everything, which is the failure
+class this repo has shipped twice.
+
+### 4. The pass/Pro crossover is a good ladder that nothing explains.
+
+Pass M $11.99 at 4% versus Pro $14.99/mo at 2%: the extra 2 points cost $3.00 at
+$150 of entry fees, which is where Pro overtakes the pass for a one-month
+competition. Below it the pass wins; above it Pro does. That is a defensible ladder
+and it is stated **nowhere a customer can see** — so the page reads simply "the pass
+is cheaper", which pushes volume at the one-time SKU.
+
+**Recommendation (W3, with the pricing page):** one comparator line — "Running a
+single competition? The pass is cheaper until about $150 in entry fees." **Owner
+value:** the recurring SKU is the retention SKU; naming the crossover routes
+high-GMV organisers to it without discounting anything.
+
+### 5. The degrade screen withholds the number that sizes the upgrade.
+
+The path is built and good — the create is not refused, `public_quota_degraded`
+comes back on the 201, and `competition-wizard.tsx:103` renders a card with an
+`UpgradeGate`. But the client destructures only `{ name, slug }` and **drops
+`limit`**, and the copy is "Your plan's public dashboards are all in use". The
+organiser never learns they are at **2** and that Pro is **10**.
+
+**Recommendation:** thread `limit` through and name both numbers. **Owner value:**
+this is the single best-timed upgrade moment in the product — the customer wanted
+public and did not get it — and it is the one place currently refusing to quantify
+what upgrading buys.
+
+### Not a gap, but an obligation: the growth reversal needs a measurement
+
+Player profiles, embeds and auto posts went back behind the paywall this wave, which
+also removes the badge from the surfaces that carried it off-platform. That was an
+explicit owner ruling and is not re-litigated here — but it trades distribution for
+revenue, and nothing in the tree measures the distribution side. Worth a baseline
+before W3 ships the surfaces, so the trade can be read later instead of argued.
+
 ## Constraints
 
 - Four locale dictionaries for any changed user-facing string; `lib/i18n-keys.ts` is
