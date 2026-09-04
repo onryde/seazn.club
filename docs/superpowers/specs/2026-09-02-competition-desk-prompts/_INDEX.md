@@ -214,3 +214,26 @@ point that branch at · the dictionary merge with that wave is a CERTAIN four-hu
 conflict, one per locale, all the same trailing-comma shape — anything beyond
 those four is a real conflict and must be read. `i18n-keys.ts` is
 regenerate-do-not-merge.
+
+### Correction to the handoff above (2026-09-04, measured)
+
+The paragraph above calls the dictionary collision with
+`feat/scheduling-walkthrough` "a CERTAIN four-hunk conflict, one per locale". That
+was a PREDICTION stated as a measurement, and it is wrong. Corrected in place
+rather than deleted, per this programme's convention, because the wrong version is
+what a later session would otherwise re-derive.
+
+Measured: **three** hunks per locale, twelve total — a 1-line hunk near `:96`, a
+2-line hunk near `:3333` (`board.ai.joint.undoneWhy` / `.undoneReason`), and a
+tail hunk near `:4940` (+33/-1). Only the TAIL hunk is certain to collide; the
+other two collide only if both waves' inserts land near the same anchors, which
+cannot be known until W2 is pushed. The `-1` is still not a deleted key —
+`reg.hub.registrants.table.soloAssigned` gains a trailing comma, and both waves
+produce that churn independently, so it reads as delete-and-re-add on both sides
+when nothing was deleted.
+
+**W2 merges clean against `origin/main`**: `git merge-tree --write-tree
+origin/main HEAD` after an explicit fetch reports zero conflicts, with
+`origin/main` 84 commits ahead of this branch's point. That command checks
+mergeability without touching the working tree or index, so it is safe to run
+mid-wave with agents live — worth knowing generally.
