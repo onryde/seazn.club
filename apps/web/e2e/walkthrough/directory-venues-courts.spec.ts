@@ -73,6 +73,17 @@ const WEEKDAY = FIXTURE_AT.getUTCDay();
 const OPEN_AT = "18:00";
 const CLOSE_AT = "20:00";
 
+/** The wire carries minutes-past-midnight; the panel speaks "HH:MM". Derived
+ *  from the constants above rather than typed twice, so moving OPEN_AT/CLOSE_AT
+ *  moves the expectation with them instead of leaving it asserting yesterday. */
+const minutesOf = (hhmm: string): number => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5));
+
+/** A week after the fixture, deliberately NOT the day it sits on: the exception
+ *  is additive, so every stranded count below stays a statement about the
+ *  weekday narrowing alone. Design 4.3 asks for hours, a closed day AND a
+ *  dated exception; this is the third. */
+const EXCEPTION_DATE = "2026-11-11";
+
 test("three courts, restricted hours on the middle one, and the count the scheduler sends back", async ({
   page,
 }) => {
@@ -87,8 +98,16 @@ test("three courts, restricted hours on the middle one, and the count the schedu
 
   // Setup, deliberately through the API: see the docblock. This is the one
   // premise of the arithmetic below that a default could move underneath us.
-  const tz = await apiJson(page.request, `/api/orgs/${orgId}`, "PATCH", { timezone: "UTC" });
+  const tz = await apiJson<{ timezone: string | null }>(page.request, `/api/orgs/${orgId}`, "PATCH", {
+    timezone: "UTC",
+  });
   expect(tz.status, "could not pin the org's scheduling timezone").toBe(200);
+  // Read the column back, do not merely ask. A fresh org's `timezone` is NULL
+  // (`lib/auth.ts`'s createOrgForUser names no zone) and `resolveVenueTz(null,
+  // null)` already answers UTC — so deleting the PATCH above stays green TODAY
+  // and inverts silently the day that default moves. `expect(status).toBe(200)`
+  // guards the call succeeding, never its presence; this guards the state.
+  expect(tz.data?.timezone, "the org's scheduling timezone did not take").toBe("UTC");
 
   const venueName = uniqueName("Riverside Sports Centre");
   const courtNames = [uniqueName("Court A"), uniqueName("Court B"), uniqueName("Court C")];
@@ -142,6 +161,10 @@ test("three courts, restricted hours on the middle one, and the count the schedu
   );
   const venue = (venues.data ?? []).find((v) => v.name === venueName);
   expect(venue, `the venue the panel just created is missing from GET /orgs/${orgId}/venues`).toBeDefined();
+  // Membership and count, in the order the panel created them. NOT a proof of
+  // ordering policy: "Court A/B/C" plus a shared suffix sort the same way
+  // creation order runs, so this line cannot separate the two. It is here for
+  // "three courts exist and are named what was typed".
   expect(venue!.courts.map((c) => c.name)).toEqual(courtNames);
   const restrictedCourtId = venue!.courts.find((c) => c.name === restricted)!.id;
 
@@ -178,16 +201,59 @@ test("three courts, restricted hours on the middle one, and the count the schedu
   await openField.selectOption(OPEN_AT);
   await closeField.selectOption(CLOSE_AT);
 
+  // --- C2. a dated exception, and the guard that refuses a blank one -------
+  const saveButton = courtRow.getByRole("button", { name: "Save calendar", exact: true });
+  await expect(saveButton, "the save is already refusing before an exception exists").toBeEnabled();
+
+  await courtRow.getByRole("button", { name: "Add an exception date", exact: true }).click();
+
+  // A fresh row seeds `{ date: "", closed: true, open_min: null, close_min: null }`
+  // (venues-panel.tsx's `onAdd`), so "Closed all day" is ALREADY ticked and the
+  // date is the only blank. That blank is a real guard —
+  // `hasEmptyExceptionDate` feeds the Save button's `disabled` alongside
+  // `overlap`/`invalidRange` — and a spec that filled the date in the same
+  // breath as adding the row would never witness it. Asserted in BOTH
+  // directions: two guards covering for each other are each untested.
+  await expect(
+    saveButton,
+    "a blank exception date must refuse the save (hasEmptyExceptionDate)",
+  ).toBeDisabled();
+
+  await courtRow.getByRole("textbox", { name: "Exception date", exact: true }).fill(EXCEPTION_DATE);
+  await expect(saveButton, "filling the exception date must release the save").toBeEnabled();
+
   // Registered BEFORE the click that fires it.
   const savePromise = page.waitForResponse(
     (r) => /\/courts\/[^/]+\/calendar$/.test(r.url()) && r.request().method() === "PUT",
   );
-  await courtRow.getByRole("button", { name: "Save calendar", exact: true }).click();
+  await saveButton.click();
   const saved = await savePromise;
   expect(saved.status()).toBe(200);
   const body = (await saved.json()) as {
-    data?: { newlyStrandedFixtureCount: number; strandedFixtureCount: number };
+    data?: {
+      hours: { weekday: number; open_min: number; close_min: number }[];
+      exceptions: { date: string; closed: boolean; open_min: number | null; close_min: number | null }[];
+      newlyStrandedFixtureCount: number;
+      strandedFixtureCount: number;
+    };
   };
+
+  // THE teeth behind `.nth(WEEKDAY)`. Every other assertion in this test
+  // survives the range landing on the WRONG weekday: once any row exists,
+  // `baseFor` reads every rowless weekday as closed, so a Monday range strands
+  // the Wednesday fixture just as well — same stranded count, same six
+  // "Closed all day.", same outside_court_hours conflict. `.nth(0)` passes the
+  // whole spec. This line is the only one that does not.
+  expect(
+    body.data?.hours,
+    "the saved calendar is not the single Wednesday range this test typed in — check the `.nth(WEEKDAY)` above",
+  ).toEqual([{ weekday: WEEKDAY, open_min: minutesOf(OPEN_AT), close_min: minutesOf(CLOSE_AT) }]);
+
+  // And the exception reached the server as a CLOSED day, not merely as a row.
+  expect(
+    body.data?.exceptions,
+    "the dated exception did not survive the write",
+  ).toEqual([{ date: EXCEPTION_DATE, closed: true, open_min: null, close_min: null }]);
 
   // THE assertion. Pinned to 1, not `> 0`: this org owns exactly one fixture,
   // so 1 is the only right answer, and a reachability test satisfied by any
@@ -227,6 +293,14 @@ test("three courts, restricted hours on the middle one, and the count the schedu
   // substring match cross-hits between two unrelated controls.
   await expect(reopened.getByText("Closed all day.", { exact: true })).toHaveCount(6);
 
+  // Design 4.3 step 5: the exception survived the round trip as well. Read off
+  // the reopened editor, which is populated from the GET, not from the form
+  // state this test filled in before the reload.
+  await expect(
+    reopened.getByRole("textbox", { name: "Exception date", exact: true }),
+    "the dated exception did not come back from the server",
+  ).toHaveValue(EXCEPTION_DATE);
+
   // --- E. the conflict is raised, and it is ADVISORY -----------------------
   const validated = await apiJson<{
     conflicts: { fixture_id: string; code: string; blocking: boolean; details?: { kind: string } }[];
@@ -242,6 +316,10 @@ test("three courts, restricted hours on the middle one, and the count the schedu
     outsideHours[0]!.blocking,
     "outside_court_hours is advisory by design (isBlockingConflict carves it out) — a blocking one is a behaviour change, not a stricter test",
   ).toBe(false);
+  // Non-vacuous ONLY because the length assertion above pinned `outsideHours`
+  // to 1 first: `[].every(...)` is true, so on an empty `forFixture` this line
+  // would pass while reporting nothing at all. That ordering is load-bearing —
+  // do not reorder these two, and do not delete the one above as redundant.
   expect(
     forFixture.every((c) => c.blocking === false),
     "narrowing a court's hours under an already-placed fixture must never produce a BLOCKING conflict — that is the publish deadlock the carve-out exists to prevent",
