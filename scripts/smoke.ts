@@ -10695,6 +10695,31 @@ async function autoScheduleSuite(): Promise<void> {
       (restoreOpen.json.data as { steps?: number } | undefined)?.steps === 0,
   );
 
+  // Undo and Redo are the primitives the restore above is BUILT OUT OF —
+  // `restoreCheckpoint` is a loop of `undoDivision` — and they sit on two
+  // buttons a few hundred pixels above the Restore the freeze disables. The
+  // control half is an undo immediately followed by its redo, which leaves the
+  // board exactly where REFLOW below expects it (the five cleared cards stay
+  // cleared) while proving the endpoints accept this division. It also leaves a
+  // redo PENDING for nothing: the frozen redo below is refused on a division
+  // whose redo stack the control just re-spent, so a second undo is taken first.
+  const undoOpen = await v1(s, `/api/v1/divisions/${div.id}/undo`, "POST", {});
+  const redoOpen = await v1(s, `/api/v1/divisions/${div.id}/redo`, "POST", {});
+  check(
+    `undo/redo: an UNFROZEN division steps back and forward ` +
+      `(undo=${undoOpen.status}, redo=${redoOpen.status})`,
+    undoOpen.status === 200 && redoOpen.status === 200,
+  );
+  // One more undo, so the frozen REDO below has something real to refuse. On an
+  // empty redo stack the engine refuses it whatever the freeze does, and the
+  // check would witness nothing.
+  const undoAgain = await v1(s, `/api/v1/divisions/${div.id}/undo`, "POST", {});
+  check(
+    `undo: the second step back landed, so the frozen redo below has a redo to refuse ` +
+      `(status=${undoAgain.status})`,
+    undoAgain.status === 200,
+  );
+
   // The whole-division freeze bites on the DESTRUCTIVE control too. `applySchedule`
   // and the single-fixture move both refuse a frozen division on exactly these
   // terms (same 422, same sentence); clear was the one write path that did not,
@@ -10713,20 +10738,22 @@ async function autoScheduleSuite(): Promise<void> {
     checkpoint_id: savePointId,
     confirm: true,
   });
+  const undoFrozen = await v1(s, `/api/v1/divisions/${div.id}/undo`, "POST", {});
+  const redoFrozen = await v1(s, `/api/v1/divisions/${div.id}/redo`, "POST", {});
   const thaw = await v1(s, `/api/v1/divisions/${div.id}/locks`, "PATCH", {
     schedule_locked: false,
   });
   // BOTH sides of the freeze are asserted, and neither is inferable from the
   // 422 below. `check` only counts — it never throws or returns — so putting
   // the thaw before it proves the call was MADE, not that it SUCCEEDED. A
-  // thaw that answers non-200 leaves the division frozen, and the very next
-  // statement (`auto({ only_unlocked: true })`) then hits applySchedule's own
-  // frozen guard: a state leak from this block reported as a REFLOW defect,
-  // which sends the reader to the wrong subsystem. A silently-failed FREEZE is
-  // the mirror image — the clear and the restore would both answer 200 and the
-  // two 422 checks below would indict the guards instead of the freeze that
-  // never happened. Both refusals sit inside this one freeze/thaw window, so
-  // this assertion covers both.
+  // thaw that answers non-200 leaves the division frozen, and the redo and the
+  // `auto({ only_unlocked: true })` after it then hit their own frozen guards:
+  // a state leak from this block reported as a REFLOW defect, which sends the
+  // reader to the wrong subsystem. A silently-failed FREEZE is the mirror image
+  // — the clear, the restore, the undo and the redo would all answer 200 and
+  // the four 422 checks below would indict the guards instead of the freeze
+  // that never happened. All four refusals sit inside this one freeze/thaw
+  // window, so this assertion covers every one of them.
   check(
     `locks: the freeze and the thaw around both refusals took ` +
       `(freeze=${freeze.status}, thaw=${thaw.status})`,
@@ -10746,6 +10773,36 @@ async function autoScheduleSuite(): Promise<void> {
       `(status=${restoreFrozen.status}, message=${restoreFrozen.json.error?.message ?? "-"})`,
     restoreFrozen.status === 422 &&
       restoreFrozen.json.error?.message === "the division schedule is locked — unlock it to edit",
+  );
+  check(
+    // The restore above is a LOOP of this undo, so a freeze that stopped the
+    // composite and left the primitive live refused the wider edit and allowed
+    // the narrower one — from a button on the same panel. Same status, same
+    // hand-duplicated sentence: six write paths share it now.
+    `undo: a FROZEN division refuses the step back 422 with the unlock copy ` +
+      `(status=${undoFrozen.status}, message=${undoFrozen.json.error?.message ?? "-"})`,
+    undoFrozen.status === 422 &&
+      undoFrozen.json.error?.message === "the division schedule is locked — unlock it to edit",
+  );
+  check(
+    // Redo is the same guard reached from the other direction — one predicate
+    // in `step`, but a mutation that reached only one of the two callers would
+    // pass with the undo check alone.
+    `redo: a FROZEN division refuses the step forward 422 with the unlock copy ` +
+      `(status=${redoFrozen.status}, message=${redoFrozen.json.error?.message ?? "-"})`,
+    redoFrozen.status === 422 &&
+      redoFrozen.json.error?.message === "the division schedule is locked — unlock it to edit",
+  );
+
+  // Spend the redo the freeze refused, now that the division is thawed: it is
+  // the non-vacuity half of the two checks above (a redo the engine had nothing
+  // to do would 4xx frozen or not), and it puts the board back on the cleared
+  // state REFLOW measures next.
+  const redoThawed = await v1(s, `/api/v1/divisions/${div.id}/redo`, "POST", {});
+  check(
+    `redo: the same step the freeze refused succeeds once thawed — it was the FREEZE, ` +
+      `not an empty redo stack (status=${redoThawed.status})`,
+    redoThawed.status === 200,
   );
 
   const reflow = await auto({ only_unlocked: true });
