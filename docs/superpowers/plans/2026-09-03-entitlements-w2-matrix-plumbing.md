@@ -163,10 +163,10 @@ reinstate it from an earlier draft.
 | `seazn_extra_org_pro_monthly` | 699 | 599 | 499 | 29900 |
 | `seazn_seat_monthly` (hidden, R13) | 199 | 199 | 199 | 9900 |
 | `seazn_size_pack_32` | 499 | 499 | 399 | 19900 |
-| `seazn_credits_10` | 1000 | 900 | 800 | 79900 |
-| `seazn_credits_25` | 2500 | 2300 | 2000 | 199900 |
-| `seazn_credits_50` | 5000 | 4600 | 4000 | 399900 |
-| `seazn_credits_100` | 10000 | 9200 | 7900 | 799900 |
+| `seazn_credits_10` (40 credits) | 1000 | 900 | 800 | 39900 |
+| `seazn_credits_25` (105 credits) | 2500 | 2300 | 2000 | 99900 |
+| `seazn_credits_50` (220 credits) | 5000 | 4600 | 4000 | 199900 |
+| `seazn_credits_100` (460 credits) | 10000 | 9200 | 7900 | 399900 |
 
 The extra-org rate is not a separate SKU on annual — it is the `up_to: inf` rung of each
 plan's graduated ladder, which is why tier 2+ and `extra_org_pro_monthly` are the same
@@ -1032,38 +1032,92 @@ promise to clubs ("we absorb the card fee") that the code does not keep, and tak
 the revenue cut anyway. This is the same shape as W1's merge gate — a row-deleting
 migration that outran the surface that pays for it.
 
-### 2. INR credit packs are a dominated SKU — the smallest pack costs more than Pro.
 
-Verified from `stripe-plans.json` and `plan_entitlements`: Pro monthly INR **59900**
-(₹599) includes **25** credits = ₹23.96/credit. `seazn_credits_10` is INR **79900**
-(₹799) = ₹79.90/credit.
+### CORRECTION 2026-09-04 — `on_behalf_of` does not move Stripe's fee. The rail as costed cannot be built.
 
-| | per-credit in plan | per-credit in pack | premium |
+Raised by the implementer, which refused to write the change rather than ship something
+that looks like the fix, and verified independently against
+`https://docs.stripe.com/connect/charges` before acting on it.
+
+**Destination charges — what we run today:** "Stripe debits fees from your platform's
+balance." `on_behalf_of` makes the connected account the *business of record*: it settles
+in that account's country, uses that country's fee **structure**, its statement
+descriptor, address and payout timing. On the question of who pays, the same page is
+explicit that with `on_behalf_of` set, "the country of the connected account is used to
+determine the country specific fees **charged to your platform account**."
+
+**Only direct charges have the lever:** "You can choose whether to have Stripe debit fees
+directly from connected accounts or from your platform account." That is a charge-TYPE
+migration, and it carries two more consequences: refunds and chargebacks move to the
+connected account's balance (today "your platform balance is automatically debited for
+the disputed amount and fee", and on legacy Express "your platform is responsible for
+disputes and fraud"), and "direct charges aren't recommended for legacy v1 Express and
+Custom accounts" — `stripe-connect.ts:133` creates exactly those, so it is a Connect
+onboarding migration to v2 accounts as well.
+
+**Three places in the tree asserted the false premise**, so this was the wave's belief and
+not one agent's misreading: this plan, the W3 spec, and `V397`'s own header.
+
+**What the arithmetic really says**, per $1,000 of entry fees, Stripe at 2.9% + $0.30:
+
+| | platform gross | Stripe | platform net |
 |---|---|---|---|
-| USD | $0.60 | $1.00 | 1.67× |
-| EUR | €0.52 | €0.92 | 1.77× |
-| GBP | £0.44 | £0.80 | 1.82× |
-| **INR** | **₹23.96** | **₹79.90** | **3.34×** |
+| Community 8% (before V397) | $80 | −$29.30 | **$50.70** |
+| Community 5% (today) | $50 | −$29.30 | **$20.70** |
+| Pass 4% (today) | $40 | −$29.30 | **$10.70** |
+| Pro 2% (unchanged by V397) | $20 | −$29.30 | **−$9.30** |
+| Enterprise 1% (unchanged) | $10 | −$29.30 | **−$19.30** |
+| Direct charges, any rate | rate | club pays | **the full rate** |
 
-Cause is recorded in this plan's own history: the plans were re-anchored to PPP set
-points and the credit packs were carried as "unchanged", so the packs are a
-dollar-priced SKU sitting in a rupee-priced catalogue.
+**V397 diagnosed this correctly and prescribed a mechanism that does not exist.** Its
+header's claim — "Pro and Enterprise LOSE MONEY on every registration… because the loss
+is a rate, not a fixed overhead a big entry fee eventually absorbs" — is exactly right,
+and was already true BEFORE V397: any rate under Stripe's own 2.9% is negative and gets
+more negative as the club grows. V397 did not create the hole; it deepened it for
+community and the passes while leaving the two negative rungs untouched.
 
-**Recommendation: shift every INR pack down one rung** — 10 → ₹399, 25 → ₹999,
-50 → ₹1,999, 100 → ₹3,999 (minor: 39900 / 99900 / 199900 / 399900). That is
-₹39.9/credit, i.e. **1.67× the included rate — exactly USD's ratio**, so the ladder
-becomes one rule in four currencies instead of three plus an outlier.
+**Nothing is lost today** — greenfield, no live registrations — so this is a decision
+about what we launch with, not a leak to staunch. The decision is the owner's and is
+recorded above this line once taken.
 
-**Owner value:** today an Indian Free org that runs out of credits has no rational
-top-up at all (the pack costs more than the better product), so it converts nobody;
-and an Indian Pro org that exhausts 25 credits cannot buy more at a defensible
-price, which caps ARPU on precisely the heaviest users. Both are silent — a
-dominated SKU produces no error, just no sales.
+### 2. INR credit packs were half as generous as every other market — CORRECTED
 
-**And add the guard:** the six ladder rules compare plans to passes only. Nothing
-compares a CONSUMABLE to the plan that includes the same thing. One rule —
-"pack per-credit ≥ plan per-credit, and within 2× of it, in every currency" — would
-have caught this and will catch the next PPP re-anchoring that forgets a SKU.
+**My original write-up of this finding was wrong in its arithmetic and its customer
+story, and is replaced here rather than left standing.** I read the `10` in
+`seazn_credits_10` as the credit count. It is the pack's USD dollar price; the grant is
+the sibling `credits` field — **40 / 105 / 220 / 460**. Caught by the implementer, and
+verified against the seed before accepting it. So packs were never "dominated": at
+₹799 for 40 credits they were already cheaper per credit than Pro's included rate. Every
+sentence I wrote about an Indian customer facing a top-up that costs more than the
+better product was false.
+
+**What is true, and was worth fixing.** A pack's per-credit price as a multiple of the
+plan's included rate (Pro is ₹599 / $14.99 for **25** credits a month), across the four
+rungs:
+
+| | usd | eur | gbp | **inr, before** | **inr, after** |
+|---|---|---|---|---|---|
+| pack ÷ included | 0.363–0.417 | 0.385–0.433 | 0.391–0.455 | **0.726–0.834** | **0.363–0.416** |
+
+INR sat at **exactly 2.00× USD's multiple in all four rungs** — the packs were half as
+generous in India as everywhere else, because the plans were re-anchored to PPP set
+points this wave and the packs were carried as "unchanged". The prescription was right
+even though the reasoning behind it was not: shifting each INR rung down one lands
+within 0.15% of USD's ratio.
+
+**The guard that shipped is not the one I briefed.** I asked for "pack per-credit ≥ the
+included rate, ≤ 2× it", which is red on the tree in every currency both before and
+after the fix — it encodes my inverted arithmetic. Replaced with two rules that are
+derived rather than asserted: **parity** (each market's pack-to-plan multiple within 25%
+of the anchor currency's, a ratio because set price points make absolute amounts
+incomparable across markets) and **dominance** (the multiple stays under 1, so a top-up
+never becomes cheaper than subscribing). Both read the included count live from
+`plan_entitlements`. Each was mutation-proved to fail alone: restoring inr 79900 reds
+parity only; tripling `credits_10` in all four markets reds dominance only.
+
+**The lesson, since it is the third of its kind in this wave:** I asserted a per-unit
+economics claim from a key NAME without opening the record it names. A grep is not a
+read — and a key called `credits_10` is a hypothesis about what it grants.
 
 ### 3. An empty platform-fee field saves 0%, on both layers.
 
