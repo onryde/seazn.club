@@ -80,7 +80,7 @@
       }
     }
   ],
-  "$comment_packs": "AI credit packs (v17 SPEC-2 §5/§6): one-time top-ups into the org/group's ai_credit_ledger wallet (bucket='pack', never-expire — D2). Not tied to a `plans` row, so the checkout route resolves the live price by `lookup_key` at request time (stripe.prices.list) instead of a stored id — stripe-sync.ts only needs to ensure the price exists, never write it back to a table. `credits` is our own field (never sent to Stripe) — the webhook grants the `credits` snapshot stamped into the session metadata at checkout creation (server-set, so it cannot be tampered with client-side); this catalog is only the logged fallback when the snapshot is absent (a drift the webhook staff-alerts, never a silent wrong/zero grant). The v18 reprice left every pack amount alone; they only lost their AUD point. W3 (2026-09-04) moved every OTHER SKU onto charm points and deliberately left these ROUND — $10, $25, $50, $100 — which design/v3/07 §3a marks as intentional in the same words: credits are compute, not packaging. A pack is bought as a quantity of a metered resource ($10 buys 40 credits), so $9.99 reads as a discount on a thing whose price is arithmetic, not as a keen price; the round number is what makes the per-credit rate legible. Recorded here because otherwise it reads as a section somebody forgot — `stripe-plans-ladder.test.ts` names `packs` as the one charm-grid exemption and asserts that the exempt set is exactly this one, so the exception cannot silently grow.",
+  "$comment_packs": "AI credit packs (v17 SPEC-2 §5/§6): one-time top-ups into the org/group's ai_credit_ledger wallet (bucket='pack', never-expire — D2). Not tied to a `plans` row, so the checkout route resolves the live price by `lookup_key` at request time (stripe.prices.list) instead of a stored id — stripe-sync.ts only needs to ensure the price exists, never write it back to a table. `credits` is our own field (never sent to Stripe) — the webhook grants the `credits` snapshot stamped into the session metadata at checkout creation (server-set, so it cannot be tampered with client-side); this catalog is only the logged fallback when the snapshot is absent (a drift the webhook staff-alerts, never a silent wrong/zero grant). The v18 reprice left every pack amount alone; they only lost their AUD point. W3 (2026-09-04) moved every OTHER SKU onto charm points and deliberately left these ROUND — $10, $25, $50, $100 — which design/v3/07 §3a marks as intentional in the same words: credits are compute, not packaging. A pack is bought as a quantity of a metered resource ($10 buys 40 credits), so $9.99 reads as a discount on a thing whose price is arithmetic, not as a keen price; the round number is what makes the per-credit rate legible. Recorded here because otherwise it reads as a section somebody forgot — `stripe-plans-ladder.test.ts` names `packs` as the one charm-grid exemption and asserts that the exempt set is exactly this one, so the exception cannot silently grow. The INR points were then RE-ANCHORED later in the same wave (2026-09-04) and are the only pack amounts that have ever moved: ₹799 / ₹1,999 / ₹3,999 / ₹7,999 became ₹399 / ₹999 / ₹1,999 / ₹3,999. The plans had been re-anchored to per-market set points while these were carried forward as 'unchanged', which left a dollar-priced SKU sitting in a rupee-priced catalogue. Measured against the per-credit rate Pro's own monthly price implies (that price divided by its `ai.credits.monthly` allowance), usd/eur/gbp bought pack credits at ~0.36-0.46x while India paid ~0.73-0.83x — twice the multiple, in every rung. Halving puts INR back on usd's multiple to within 0.15%. What is held equal across markets is the RATIO to the plan, never the amount: nothing here is an FX conversion of anything else. `stripe-plans-ladder.test.ts` now asserts that ratio in every currency, and that a pack never costs more per credit than the plan that includes credits — the comparison whose absence let the drift sit unseen, because every other rule in that file compares packaging to packaging.",
   "packs": [
     {
       "key": "credits_10",
@@ -92,7 +92,7 @@
       "price": {
         "lookup_key": "seazn_credits_10",
         "unit_amount": 1000,
-        "currency_options": { "eur": 900, "gbp": 800, "inr": 79900 }
+        "currency_options": { "eur": 900, "gbp": 800, "inr": 39900 }
       }
     },
     {
@@ -105,7 +105,7 @@
       "price": {
         "lookup_key": "seazn_credits_25",
         "unit_amount": 2500,
-        "currency_options": { "eur": 2300, "gbp": 2000, "inr": 199900 }
+        "currency_options": { "eur": 2300, "gbp": 2000, "inr": 99900 }
       }
     },
     {
@@ -118,7 +118,7 @@
       "price": {
         "lookup_key": "seazn_credits_50",
         "unit_amount": 5000,
-        "currency_options": { "eur": 4600, "gbp": 4000, "inr": 399900 }
+        "currency_options": { "eur": 4600, "gbp": 4000, "inr": 199900 }
       }
     },
     {
@@ -131,7 +131,7 @@
       "price": {
         "lookup_key": "seazn_credits_100",
         "unit_amount": 10000,
-        "currency_options": { "eur": 9200, "gbp": 7900, "inr": 799900 }
+        "currency_options": { "eur": 9200, "gbp": 7900, "inr": 399900 }
       }
     }
   ],
