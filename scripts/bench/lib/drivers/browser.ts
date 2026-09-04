@@ -335,24 +335,31 @@ export function browserOrganiser(session: RegistrationBrowserSession, base: stri
 // Captain — drives the public register stepper for `enter()`, hosted Stripe
 // Checkout for `pay()`.
 //
-// KNOWN GAP, disclosed rather than papered over: `register-stepper.tsx`'s
-// "Next" button (the one bound to `goNext`, immediately above `reg-submit`
-// in the same file) carries NO `data-testid` or stable id at all — only the
-// review step's final action does. This driver locates it STRUCTURALLY (the
-// second `<button>` in the Back/Next row, `stepperNextButton` below) rather
-// than by its translated label text (`AGENTS.md`'s own
-// "UI-text-breaks-e2e" rule) — a real selector, but not a `data-testid`,
-// and exactly the class of control `B03r-repins-2026-09-03.md`'s brief says
-// to report rather than silently invent a fix for. `apps/web/**` is out of
-// this task's file set, so no testid was added there.
+// The stepper's Back/Next row and step-who's "I'm playing" checkbox carried no
+// stable selector when this driver was first written, so it located them
+// structurally — `div.relative.z-50.flex button` nth(1), and "the first
+// checkbox on the page". Both were disclosed as a KNOWN GAP rather than
+// papered over, which was right, and the first live run then failed on exactly
+// them: `locator.check: Timeout waiting for '[data-testid="reg-consent-grant"]'`,
+// because the wizard had never advanced off the "who" step.
+//
+// They are real hooks now (`reg-next`, `reg-back`, `reg-who-playing`). The
+// owner's rule is to add a testid only where NO stable selector exists, which
+// is exactly this case — as against the registration hub, where `data-field` /
+// `data-action` already existed and adding testids was ruled against.
+//
+// The structural locators were not merely ugly, they were wrong in a way no
+// unit test could see: `step-who.tsx:108` renders that checkbox only when
+// `showSelfToggle` is true, so "the first checkbox on the page" silently
+// resolved to a DIFFERENT control whenever the toggle was absent — checking
+// someone else's box and reporting success.
 // ---------------------------------------------------------------------------
 
-/** The stepper's Back/Next row has exactly two `<button>`s
- *  (`register-stepper.tsx`'s own `<div className="relative z-50 flex ...">`
- *  — Back is always first, Next/Submit always second) — see this section's
- *  header comment for why this is structural, not text-based. */
+/** The stepper's "Next" action. `reg-submit` REPLACES it on the review step
+ *  (`register-stepper.tsx`'s own ternary), so a driver that has reached review
+ *  must click that instead — this locator resolves to nothing there. */
 function stepperNextButton(page: Page) {
-  return page.locator("div.relative.z-50.flex button").nth(1);
+  return page.locator('[data-testid="reg-next"]');
 }
 
 async function clickStepperNext(page: Page): Promise<void> {
@@ -401,10 +408,10 @@ async function enterViaStepper(
   await page.locator("#reg-who-name").fill(entry.contact.name);
   await page.locator("#reg-who-email").fill(entry.contact.email);
   if (entry.registeringSelf) {
-    // "I'm playing" — the ONLY checkbox on this step (step-who.tsx); no
-    // id/testid exists on it either (same class of gap as the Next button
-    // above), so this is likewise a structural, never text-based, locator.
-    await page.locator('input[type="checkbox"]').first().check();
+    // "I'm playing" (step-who.tsx). Rendered only when `showSelfToggle` is
+    // true, which is why the old "first checkbox on the page" locator was
+    // unsafe: with the toggle absent it resolved to an unrelated control.
+    await page.locator('[data-testid="reg-who-playing"]').check();
   }
   if (entry.contact.dob) {
     const dob = page.locator("#reg-who-dob");

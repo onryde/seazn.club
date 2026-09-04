@@ -1888,4 +1888,54 @@ describe("step 5 — submit", () => {
     expect(btn, "submit button not found").toBeTruthy();
     expect(propsOf(btn!)["data-testid"]).toBe("reg-submit");
   });
+
+  // `reg-next` and `reg-back` exist because the bench's browser driver used to
+  // locate this row STRUCTURALLY — `div.relative.z-50.flex button` nth(1) —
+  // and the first live run stalled 30s on the consent step because the wizard
+  // had never advanced off "who". A CSS-class chain is a real selector right
+  // up until someone restyles the row, and nothing here could have told us.
+  //
+  // The assertions pin WHICH button carries WHICH hook. Asserting only that
+  // both testids appear somewhere would pass with the two swapped, and a
+  // driver clicking Back to go forward looks exactly like a wizard that will
+  // not advance.
+  it('carries data-testid="reg-next" on Next and "reg-back" on Back, on the right buttons', async () => {
+    const m = mount([DIV_OPEN]);
+    const row = m.island.tree().filter((e) => e.type === "button");
+    const back = row.find((e) => propsOf(e)["data-testid"] === "reg-back");
+    const next = row.find((e) => propsOf(e)["data-testid"] === "reg-next");
+
+    expect(back, "no reg-back button").toBeTruthy();
+    expect(next, "no reg-next button").toBeTruthy();
+
+    // Back is the disabled-on-first-step one; Next is not. This is what
+    // distinguishes them beyond the label, which is a translated string.
+    expect(propsOf(back!).disabled, "reg-back should be disabled on the first step").toBe(true);
+    expect(propsOf(next!).disabled).not.toBe(true);
+    expect(propsOf(back!).onClick).not.toBe(propsOf(next!).onClick);
+  });
+
+  // `reg-who-playing` replaces the bench driver's old
+  // `input[type="checkbox"].first()` locator. That locator was not merely
+  // fragile — `step-who.tsx:108` renders this control only when
+  // `showSelfToggle` is true, so with the toggle absent "the first checkbox on
+  // the page" resolves to a DIFFERENT control and checks someone else's box
+  // while reporting success.
+  //
+  // So this pins IDENTITY, not presence: exactly one element carries the hook,
+  // it is a checkbox, and toggling it actually drives `imPlaying`. Presence
+  // alone would be satisfied by the hook landing on any checkbox in the tree.
+  it('carries data-testid="reg-who-playing" on the "I am playing" checkbox, and on nothing else', async () => {
+    const m = mount([DIV_OPEN]);
+    const hooked = m.island.tree().filter((e) => propsOf(e)["data-testid"] === "reg-who-playing");
+    expect(hooked, "expected exactly one reg-who-playing element").toHaveLength(1);
+    expect(propsOf(hooked[0]!).type).toBe("checkbox");
+
+    const before = propsOf(hooked[0]!).checked;
+    (propsOf(hooked[0]!).onChange as (e: { target: { checked: boolean } }) => void)({
+      target: { checked: !before },
+    });
+    const after = m.island.tree().filter((e) => propsOf(e)["data-testid"] === "reg-who-playing");
+    expect(propsOf(after[0]!).checked, "the hooked checkbox does not drive imPlaying").toBe(!before);
+  });
 });
