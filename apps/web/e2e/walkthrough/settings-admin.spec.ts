@@ -446,3 +446,69 @@ test.describe("admin platform settings", () => {
     expect(restored?.value, "the fee must be back where this test found it").toBe(original);
   });
 });
+
+/**
+ * The four legacy `/settings/*` routes, register case 24. Every one is a
+ * `redirect()` shim into the org-scoped tree, and three of them carry a query
+ * string a payment round-trip depends on: `?checkout=success&session_id=…` is
+ * what `/o/[orgSlug]/settings/billing` calls `reconcileCheckout` from (page.tsx
+ * :91), and `?connect=return|refresh` is where Stripe drops an organiser coming
+ * back out of Connect onboarding. A shim that forwards the path and eats the
+ * query answers HTTP 200 on a page that has silently lost the thing it was
+ * opened for — which is why the pathname alone is not the assertion.
+ *
+ * A SIBLING describe, and it therefore inherits NO cleanup hook: the
+ * `beforeEach`/`afterEach` above are scoped to `admin platform settings`. That
+ * is safe here only because these tests borrow no privilege and write no global
+ * row — they navigate as the ordinary shared Pro user and nothing else.
+ * Anything added to this block that grants a `staff_role` or writes
+ * `platform_settings` must carry its own `afterEach`; the neighbour's will not
+ * run for it.
+ */
+test.describe("legacy settings redirects", () => {
+  /**
+   * PATHNAME AND SEARCH, per hop, compared as one string.
+   *
+   * Each half covers the other's blind spot. The pathname alone is satisfied by
+   * a shim that forwarded and dropped the query — the regression this test
+   * exists for. The search alone is satisfied by a redirect that never happened,
+   * since `/settings?tab=preferences` carries the same `?tab=preferences` it was
+   * asked for. Only the pair pins "it moved, and it took the query with it".
+   *
+   * The no-query hop is not filler. `routes.orgSettings` omits the query
+   * ENTIRELY when `tab` is undefined (`tab ? "?tab=" + tab : no query`,
+   * lib/routes.ts:12-13); the mutant is a builder that always appends, landing a
+   * bare `/settings` on `?tab=undefined` — the literal string "undefined",
+   * which `SETTINGS_TABS.includes()` then silently falls back off.
+   *
+   * `session_id=cs_test_x` is a session Stripe has never heard of, on purpose:
+   * `reconcileCheckout` is one big try/catch that logs and returns false
+   * (billing.ts:1506), so the hop proves the params ARRIVE without depending on
+   * a live Stripe session existing.
+   */
+  test("each legacy route lands org-scoped with its query intact", async ({ page }) => {
+    const org = await activeOrg(page);
+
+    const hops: { from: string; to: string; why: string }[] = [
+      { from: "/settings?tab=preferences", to: `/o/${org.slug}/settings?tab=preferences`,
+        why: "?tab= survives" },
+      { from: "/settings", to: `/o/${org.slug}/settings`,
+        why: "no query, no dangling ?" },
+      { from: "/settings/billing?checkout=success&session_id=cs_test_x",
+        to: `/o/${org.slug}/settings/billing?checkout=success&session_id=cs_test_x`,
+        why: "an in-flight Stripe session reconciles on the new URL" },
+      { from: "/settings/connect?connect=return",
+        to: `/o/${org.slug}/settings/connect?connect=return`,
+        why: "the Connect onboarding round-trip survives" },
+      { from: "/settings/payments?connect=refresh",
+        to: `/o/${org.slug}/settings/connect?connect=refresh`,
+        why: "two hops: /payments → /connect → org-scoped" },
+    ];
+
+    for (const hop of hops) {
+      await page.goto(hop.from);
+      const landed = new URL(page.url());
+      expect(`${landed.pathname}${landed.search}`, `${hop.from} — ${hop.why}`).toBe(hop.to);
+    }
+  });
+});
