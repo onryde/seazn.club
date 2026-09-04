@@ -20,9 +20,9 @@ export const FREE_FEATURES = [
   "64 entrants per division",
   "League, groups + knockout & swiss formats",
   // V310: charging entry fees is free on every plan — only the platform cut
-  // differs (8 / 5 / 2 / 1%). "Free-event" undersold Community and made the
+  // differs (5 / 4 / 2 / 1% since V397). "Free-event" undersold Community and made the
   // pass look like it unlocked payment rather than a cheaper rate.
-  "Online registration & entry fees (8% fee)",
+  "Online registration & entry fees (5% fee)",
   "Live standings & public dashboard",
   "Listed on the seazn.club showcase",
 ];
@@ -52,7 +52,7 @@ export const PASS_FEATURES = [
   // also called unlimited, so the two cannot both be said.
   "10 divisions, 128 entrants each — 20 divisions & 512 entrants on L",
   "Advanced formats — double elim, ladders",
-  "5% platform fee on entry fees, not 8%",
+  "4% platform fee on entry fees, not 5%",
   "Branded exports & public player cards",
   "Sponsor tiers & paid sponsorship packages",
   "Realtime scoreboard & slideshow",

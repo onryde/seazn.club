@@ -1486,9 +1486,14 @@ describe("every surface a reader sees is covered, not just the paragraphs", () =
   // plans.md is pinned WHOLE, not by section: the same falsehood pasted into a
   // sibling section used to raise zero faults.
   it("covers plans.md outside the Event Pass section", () => {
+    // The anchor is the heading WITHOUT its price. It carried "$12/month" and
+    // broke the day W3 repriced Pro to $14.99 — correctly, because the
+    // `not.toBe` below is what a mutation anchor is for, but a probe that reds
+    // on every legitimate reprice teaches its next reader to retype the price
+    // rather than to check the mutation still lands.
     const mutated = plans.replace(
-      "## Pro — $12/month",
-      "The pass has no end date and applies for the life of the event.\n\n## Pro — $12/month",
+      "## Pro — ",
+      "The pass has no end date and applies for the life of the event.\n\n## Pro — ",
     );
     expect(mutated, "the section anchor moved").not.toBe(plans);
     expect(inventoryFaults("x", mutated, APPROVED_PLANS_INVENTORY)).not.toEqual([]);

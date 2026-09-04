@@ -100,57 +100,30 @@ const helpValues = (): LocalisedValue[] =>
 
 const CORPUS = [...dictionaryValues(), ...tipValues(), ...helpValues()];
 
-// ── THE EXEMPTIONS ───────────────────────────────────────────────────────────
+// ── THE EXEMPTIONS: NONE, AS OF W3 ──────────────────────────────────────────
 //
-// Every one of these still says "Pro Plus", and every one of them QUOTES MONEY.
-// The ruling on the sweep that added this guard is that priced copy belongs to
-// the repricing that follows it — platform fees move to an additive ladder and
-// subscription prices to charm endings, so a rename now is a rewrite twice. A
-// plan RENAME was available for the fee-ladder rows and was taken everywhere it
-// left the number alone; it is not available here, because these sentences
-// quote prices that belonged to the retired plan ALONE ($39/mo, $19/mo,
-// $163/yr, and a worked example built on them). There is no true rename of
-// "Pro Plus is $39/month".
+// This list held five entries and is now EMPTY, which is the point of it.
 //
-// `hits` is a COUNT, and `staleRetiredPlanExemptions` asserts it exactly: fix
-// one of the four in groups.md and this list reds until someone re-counts it.
-const EXEMPT: readonly RetiredPlanExemption[] = [
-  {
-    where: "tips.registration.platform-fee.body",
-    name: "Pro Plus",
-    hits: 4,
-    why: "the platform-fee ladder in the registration tip, one hit per locale. Owner ruling on the retired-plan sweep: leave the fee percentages for the repricing task",
-  },
-  {
-    where: "config/tips.ts tips.registration.platform-fee.body",
-    name: "Pro Plus",
-    hits: 1,
-    why: "the en source the tip above mirrors. It has to move in the same change as the four dictionary values, so it carries the same exemption",
-  },
-  {
-    where: "content/help/registration/open-registration.md",
-    name: "Pro Plus",
-    hits: 1,
-    why: "the fee ladder inline in the payment-method list. Owner ruling: leave the fee percentages for the repricing task",
-  },
-  {
-    where: "content/help/getting-started/create-your-organisation.md",
-    name: "Pro Plus",
-    hits: 2,
-    why: "the fee ladder in step 2, and the organisation allowance in the FAQ below it — which states the half-rate rider and is inventory-gated (APPROVED_CREATE_ORG_INVENTORY). Owner ruling: leave this article to the repricing task",
-  },
-  {
-    where: "content/help/billing/groups.md",
-    name: "Pro Plus",
-    // FIVE, not four. The first bullet says it TWICE — "Pro Plus is $39/month
-    // plus $19/month each" and "Eight clubs on Pro Plus annually" — and a
-    // line-counting sweep of this article read it as four. The count is the
-    // guard's, derived from the scan, and it caught that miscount on its first
-    // run; that is the argument for counting occurrences rather than surfaces.
-    hits: 5,
-    why: "the $39/$19 monthly and $327/$163 annual rider prices, the eight-club break-even worked example built on them, and the two add-an-organisation bullets. Every one quotes a price the retired plan alone had; rebuilding the arithmetic on Pro is the repricing task's, not a rename",
-  },
-];
+// The sweep that added this guard found five surfaces that still said "Pro
+// Plus" and could not be renamed, because every one of them QUOTED MONEY that
+// belonged to the retired plan alone — $39/mo, $19/mo, $163/yr, a fee ladder
+// ending "1% on Pro Plus", and an eight-club worked example built on those
+// numbers. There is no true rename of "Pro Plus is $39/month". The owner's
+// ruling was that priced copy belongs to the repricing that follows, so the
+// five were exempted WITH A COUNT rather than half-fixed.
+//
+// W3 (2026-09-04) is that repricing: V397 re-cut the fee ladder for the
+// additive model and every SKU moved onto charm points, so all five sentences
+// were rewritten against final numbers in one change — the fee ladders now end
+// "1% on Enterprise" (the row V392 moved, at the rate it kept), and groups.md's
+// worked example is rebuilt on Pro's own five-organisation cap at the new
+// prices. Nothing is left to permit.
+//
+// The list stays here, empty, rather than being deleted along with its type:
+// the machinery it feeds is still the thing that keeps the NEXT deferral
+// honest, and the cases below prove that machinery on synthetic surfaces
+// precisely so it cannot rot while nothing live exercises it.
+const EXEMPT: readonly RetiredPlanExemption[] = [];
 
 describe("no shipped string names a plan nobody can buy", () => {
   // ANTI-VACUITY, and the reason this block is first. Every assertion below is
@@ -258,32 +231,67 @@ describe("no shipped string names a plan nobody can buy", () => {
     expect(retiredPlanNameFaults(truthful, LIVE_PLAN_NAMES, RETIRED_PLAN_NAMES, EXEMPT)).toEqual([]);
   });
 
-  // The exemption is a licence for the occurrences that EXIST. One more reds.
-  it("reds on a new occurrence added to an exempted surface", () => {
-    const groups = CORPUS.find((v) => v.key === "content/help/billing/groups.md")!;
+  // ── THE EXEMPTION MACHINERY, PROVEN ON SYNTHETIC SURFACES ─────────────────
+  //
+  // These three cases used to run against the live exempted surfaces. W3
+  // repriced every one of them, so `EXEMPT` is empty and there is nothing live
+  // left to point at. That is a better world and a worse test: with no
+  // exemption in the tree, the counting rule — the part that stops a deferral
+  // becoming a permanent licence — would be dead code nobody exercises until
+  // the next wave defers something and finds it broken.
+  //
+  // So the fixture below is a stand-in for a deferral: one surface, named three
+  // times, exempted for three. It is deliberately NOT wired into the live scan.
+  const DEFERRED = {
+    locale: "en" as const,
+    key: "content/help/billing/some-deferred-article.md",
+    value: [
+      "Pro Plus is $39/month.",
+      "A second organisation on Pro Plus is $19/month.",
+      "Eight clubs on Pro Plus annually come to $1,468.",
+    ].join("\n"),
+  };
+  const DEFERRED_EXEMPT: readonly RetiredPlanExemption[] = [
+    {
+      where: DEFERRED.key,
+      name: "Pro Plus",
+      hits: 3,
+      why: "a stand-in for a priced sentence a wave has deliberately deferred — the shape the five real ones had before W3 rewrote them",
+    },
+  ];
+
+  it("permits exactly the occurrences an exemption counts, and no more", () => {
+    // The licence itself: three named, three exempted, nothing reported.
+    expect(
+      retiredPlanNameFaults([DEFERRED], LIVE_PLAN_NAMES, RETIRED_PLAN_NAMES, DEFERRED_EXEMPT),
+    ).toEqual([]);
+    // …and it is a licence for the occurrences that EXIST. One more reds.
     const withOneMore: LocalisedValue[] = [
-      { ...groups, value: `${groups.value}\n\nPro Plus is back, apparently.\n` },
+      { ...DEFERRED, value: `${DEFERRED.value}\n\nPro Plus is back, apparently.\n` },
     ];
-    const faults = retiredPlanNameFaults(withOneMore, LIVE_PLAN_NAMES, RETIRED_PLAN_NAMES, EXEMPT);
+    const faults = retiredPlanNameFaults(
+      withOneMore,
+      LIVE_PLAN_NAMES,
+      RETIRED_PLAN_NAMES,
+      DEFERRED_EXEMPT,
+    );
     expect(faults).toHaveLength(1);
-    expect(faults[0]).toContain("6 time(s), 5 exempted");
+    expect(faults[0]).toContain("4 time(s), 3 exempted");
   });
 
-  // …and one fewer reds too, which is what stops the list rotting.
+  // …and one fewer reds too, which is what stops the list rotting — and is
+  // precisely what W3 had to answer for when it repaired all five real ones.
   it("reds on an exemption whose string has been repaired", () => {
-    const groups = CORPUS.find((v) => v.key === "content/help/billing/groups.md")!;
-    const repaired = CORPUS.map((v) =>
-      v.key === groups.key ? { ...v, value: v.value.replace(/Pro Plus/g, "Enterprise") } : v,
-    );
+    const repaired = [{ ...DEFERRED, value: DEFERRED.value.replace(/Pro Plus/g, "Enterprise") }];
     const stale = staleRetiredPlanExemptions(
       repaired,
       LIVE_PLAN_NAMES,
       RETIRED_PLAN_NAMES,
-      EXEMPT,
+      DEFERRED_EXEMPT,
     );
     expect(stale).toHaveLength(1);
-    expect(stale[0]).toContain("content/help/billing/groups.md");
-    expect(stale[0]).toContain("5 time(s), but that surface names it 0 time(s)");
+    expect(stale[0]).toContain(DEFERRED.key);
+    expect(stale[0]).toContain("3 time(s), but that surface names it 0 time(s)");
   });
 
   // THE VACUITY MODES, each demonstrated rather than asserted. All three inputs
@@ -304,15 +312,30 @@ describe("no shipped string names a plan nobody can buy", () => {
 
   // A FLOOR ON WHAT THE SCAN SEES. The two rules above are negative — they
   // report what is wrong — so a corpus the regex silently stopped matching
-  // reads identically to a clean one. The exempted surfaces are the known
-  // positives, and their count is asserted from the corpus rather than from
-  // the list that exempts them.
-  it("still finds the offences it knowingly permits", () => {
-    const hits = retiredPlanNameHits(CORPUS, LIVE_PLAN_NAMES, RETIRED_PLAN_NAMES);
-    expect(hits.length, "the scan found nothing at all — it is inert").toBe(
-      EXEMPT.reduce((sum, e) => sum + e.hits, 0),
+  // reads identically to a clean one.
+  //
+  // Until W3 the known positives WERE the live exempted surfaces, and their
+  // count was asserted from the corpus rather than from the list that exempted
+  // them. The repricing removed the last of them, so the live corpus now scans
+  // to zero — and "zero" is exactly what a scan that has gone inert also
+  // reports. The floor therefore moves onto a synthetic positive, and the live
+  // corpus is asserted CLEAN rather than merely quiet.
+  it("still finds an offence when one is put in front of it, and finds none live", () => {
+    const planted = retiredPlanNameHits(
+      [DEFERRED, ...CORPUS],
+      LIVE_PLAN_NAMES,
+      RETIRED_PLAN_NAMES,
     );
-    expect(new Set(hits.map((h) => h.name))).toEqual(new Set(["Pro Plus"]));
+    expect(
+      planted.filter((h) => h.key === DEFERRED.key).length,
+      "the scan did not see three plain 'Pro Plus' occurrences — it is inert",
+    ).toBe(3);
+    expect(new Set(planted.map((h) => h.name))).toEqual(new Set(["Pro Plus"]));
+
+    // The live half. Zero offences and zero exemptions is the CLEAN state, and
+    // the assertion above is what tells it apart from a broken scan.
+    expect(retiredPlanNameHits(CORPUS, LIVE_PLAN_NAMES, RETIRED_PLAN_NAMES)).toEqual([]);
+    expect(EXEMPT).toEqual([]);
   });
 });
 

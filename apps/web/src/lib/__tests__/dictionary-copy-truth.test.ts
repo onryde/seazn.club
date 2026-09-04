@@ -1364,8 +1364,17 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
   it("pins the metadata's hardcoded amounts to the seed that sets them", () => {
     const pass = passPrice("usd", "event_pass") / 100;
     const pro = proPrice("monthly", "usd") / 100;
-    expect(pass, "the seed's M-rung list price").toBe(15);
-    expect(pro, "the seed's Pro monthly list price").toBe(12);
+    // Both figures are the SEED's, never typed here — W3 repriced them onto
+    // charm points ($15 -> $11.99, $12 -> $14.99) and a typed pair would have
+    // reported a legitimate reprice as a copy regression. What IS asserted is
+    // that they are usable as a pin: two finite, positive and DISTINCT amounts,
+    // so a description that quoted one number twice cannot satisfy both regexes
+    // below, and a reader that returned NaN cannot make them vacuous.
+    for (const [label, amount] of [["the M rung", pass], ["Pro monthly", pro]] as const) {
+      expect(Number.isFinite(amount), `${label}: the seed price is not a number`).toBe(true);
+      expect(amount, `${label}: the seed price is not positive`).toBeGreaterThan(0);
+    }
+    expect(pass, "the pass and the plan must be priced apart for this pin to bite").not.toBe(pro);
     for (const locale of DICTIONARY_LOCALES) {
       const description = load(locale, "marketing")["pricing.meta.description"]!;
       expect(description, `${locale}: the pass price`).toMatch(

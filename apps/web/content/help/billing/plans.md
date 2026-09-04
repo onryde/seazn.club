@@ -6,20 +6,20 @@ order: 1
 
 ## Community — free forever
 
-Run real competitions, free: 3 active competitions, 4 divisions in each, 3 team members, 64 entrants per division, 2 public dashboards, full scoring and scheduling, and unlimited match officials per fixture. Your **organisation logo** sits on your public pages, you can **charge entry fees** (by card or offline) at an 8% platform fee, exports come out as plain PDF/XLSX, and your organisation gets **5 AI credits a month** to spend on AI scheduling and officials. When a competition is finished, complete or archive it to free its slot. Divisions work differently: archiving one gives its slot back only if it never recorded a result ([archive and delete](/help/divisions/archive)).
+Run real competitions, free: 3 active competitions, 4 divisions in each, 3 team members, 64 entrants per division, 2 public dashboards, full scoring and scheduling, and unlimited match officials per fixture. Your **organisation logo** sits on your public pages, you can **charge entry fees** (by card or offline) at a 5% platform fee, exports come out as plain PDF/XLSX, and your organisation gets **5 AI credits a month** to spend on AI scheduling and officials. When a competition is finished, complete or archive it to free its slot. Divisions work differently: archiving one gives its slot back only if it never recorded a result ([archive and delete](/help/divisions/archive)).
 
-## Event Pass — from $15 one-time
+## Event Pass — from $11.99 one-time
 
 One-time upgrade for a single competition, while that competition is still running, without a subscription. It comes in **two sizes**, and the only difference between them is how big that one event may get:
 
-- **M — $15**: **128 entrants** per division, up to **10 divisions**.
-- **L — $39**: **512 entrants** per division, up to **20 divisions**.
+- **M — $11.99**: **128 entrants** per division, up to **10 divisions**.
+- **L — $44.99**: **512 entrants** per division, up to **20 divisions**.
 
-Both sizes carry the same features: branded exports, public player cards, sponsor tiers and paid packages, the realtime scoreboard and slideshow, advanced formats including double elimination, and a **5% platform fee** on entry fees instead of 8%. The one-time AI credit top-up is sized with the pass — a one-time **+25 AI credits** on M, **+35 AI credits** on L. Pick the size at checkout — a competition holds one pass and keeps it.
+Both sizes carry the same features: branded exports, public player cards, sponsor tiers and paid packages, the realtime scoreboard and slideshow, advanced formats including double elimination, and a **4% platform fee** on entry fees instead of 5%. The one-time AI credit top-up is sized with the pass — a one-time **+25 AI credits** on M, **+35 AI credits** on L. Pick the size at checkout — a competition holds one pass and keeps it.
 
 Your brand **colour** is not part of either size — that stays Pro. A passed competition doesn't count against your active-competition limit. Right for the tournament that comes round rarely enough that a running subscription doesn't pay for itself. It doesn't carry to the next edition. [What the pass buys, in full](/help/billing/event-pass).
 
-## Pro — $12/month, up to 5 organisations
+## Pro — $14.99/month, up to 5 organisations
 
 Unlimited active competitions, 20 divisions in each, 256 entrants per division, 10 team members — plus the organiser toolkit: your **brand colour** on public pages and share images (the logo is free everywhere), a **2% platform fee** on entry fees, spreadsheet imports and branded exports, clubs, player stats, advanced formats, read-only API keys and embeds (score & manage keys need Enterprise), and **25 AI credits a month**. Also unlocks automatic suspension tracking, automatic officials assignment and rating your match officials, auto-drafted result posts, public player profiles, and up to 10 public dashboards. Starts with a 14-day trial, no card required — one trial per organisation, whether you start it yourself or our team sets one up for you; if you come back to Pro later, billing starts from day one.
 
@@ -37,8 +37,8 @@ Charging entry fees is free on every plan — Community included. What the plan 
 
 | Plan | Platform fee |
 | --- | --- |
-| Community | 8% |
-| Event Pass | 5% |
+| Community | 5% |
+| Event Pass | 4% |
 | Pro | 2% |
 | Enterprise | 1% |
 
@@ -46,7 +46,7 @@ Stripe's own processing fee is separate and set by Stripe. The whole money journ
 
 ## One subscription can cover several organisations
 
-A subscription is a **billing group**: one card and one invoice for up to 5 organisations on Pro. The first is the plan's normal price and each one after that is **no more than half** — $6/month on Pro. Every organisation in the group runs on the group's plan, so its entry-fee rate follows too. Community holds one organisation, and Enterprise is unlimited. See [one subscription, several organisations](/help/billing/groups).
+A subscription is a **billing group**: one card and one invoice for up to 5 organisations on Pro. The first is the plan's normal price and each one after that is **no more than half** — $6.99/month on Pro. Every organisation in the group runs on the group's plan, so its entry-fee rate follows too. Community holds one organisation, and Enterprise is unlimited. See [one subscription, several organisations](/help/billing/groups).
 
 ## Changing plan or billing period mid-cycle
 

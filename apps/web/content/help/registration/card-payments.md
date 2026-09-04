@@ -26,12 +26,12 @@ Each payment settles to your connected Stripe account, minus Stripe's processing
 
 | Plan | Platform fee |
 | --- | --- |
-| Community | 8% |
-| Event Pass | 5% |
+| Community | 5% |
+| Event Pass | 4% |
 | Pro | 2% |
 | Enterprise | 1% |
 
-The rate that applies is the best one the competition can claim, so a Community org can put its big annual event on an [Event Pass](/help/billing/event-pass) and pay 5% on that event while the rest of the org stays at 8%. Stripe's processing fee is separate, set by Stripe, and taken whichever plan you're on.
+The rate that applies is the best one the competition can claim, so a Community org can put its big annual event on an [Event Pass](/help/billing/event-pass) and pay 4% on that event while the rest of the org stays at 5%. Stripe's processing fee is separate, set by Stripe, and taken whichever plan you're on.
 
 ## 4. Refunds
 

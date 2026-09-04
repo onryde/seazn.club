@@ -10,12 +10,12 @@ It comes in two sizes, **M** and **L**. They differ in exactly one respect — h
 
 ## Two sizes: M and L
 
-| | M — $15 | L — $39 |
+| | M — $11.99 | L — $44.99 |
 |---|---|---|
 | Entrants per division | 128 | Unlimited |
 | Divisions in the competition | Up to 10 | Up to 20 |
 | AI credits | +25, one-time | +35, one-time |
-| Platform fee on entry fees | 5% | 5% |
+| Platform fee on entry fees | 4% | 4% |
 | Everything else below | Same | Same |
 
 Pick the size **before you buy**: a competition holds exactly one pass, chosen once at checkout, and there is no moving it from M to L (or L to M) afterwards. If you are unsure, the numbers to look at are your biggest division's entry list and how many divisions the event will end up with.
@@ -27,7 +27,7 @@ Prices are shown in your billing currency, so the figures above are the US ones;
 For the competition it covers, and every division inside it — at **either** size:
 
 - **128 entrants** per division on M, or **512 entrants** on L (Community allows 64) — and up to **10 divisions** in the competition on M, or up to **20 divisions** on L (Community allows 4).
-- **A 5% platform fee** on card entry fees, instead of Community's 8% — on a $2,000 event that's $60 back in your pocket.
+- **A 4% platform fee** on card entry fees, instead of Community's 5% — on a $2,000 event that's $20 back in your pocket.
 - **Branded exports** — order of play, match sheets, rotas and posters carry your masthead, logo and sponsor line instead of exporting as plain tables.
 - **Public player cards** — entrants get their public profile pages.
 - **Sponsor tiers and paid packages** — Title / Gold / Silver / Partner grouping, per-competition placement, and selling priced sponsorship by card ([sponsors](/help/sharing/sponsors)).
@@ -105,7 +105,7 @@ When that happens the event stays fully **readable** — nothing you built is de
 
 **Can I buy a pass on top of Pro?** No — and you wouldn't want to. Pro allows **256 entrants** per division against an M pass's 128, with no cap on divisions or on how many competitions it covers. So while you're on a paid plan, upgrade prompts inside your competitions don't offer the pass at all — they show your plan's next step on its own — and the purchase itself is blocked with a note.
 
-**Do I need a pass to take card entry fees?** No — every plan can charge entry fees, Community included. The pass makes them **cheaper**: 5% instead of 8%. [The fee ladder](/help/billing/plans#the-platform-fee-on-entry-fees).
+**Do I need a pass to take card entry fees?** No — every plan can charge entry fees, Community included. The pass makes them **cheaper**: 4% instead of 5%. [The fee ladder](/help/billing/plans#the-platform-fee-on-entry-fees).
 
 **I own the pass and I've hit a limit again — will it offer me another one?** No. Once a competition holds a pass, every upgrade prompt inside it drops the pass button and shows Pro on its own: either you've used everything the pass includes, or the feature was never on the pass. You can't buy the same competition a second pass — and that includes buying L for a competition that already holds M. If you have outgrown an M pass, Pro is the step, not a second purchase.
 
@@ -113,7 +113,7 @@ When that happens the event stays fully **readable** — nothing you built is de
 
 **What happens to the passed competition if my Pro subscription lapses?** It keeps everything the pass grants — the pass is bought outright for that event and survives a downgrade. Only the rest of your org falls back to Community limits ([what downgrading freezes](/help/billing/downgrade)).
 
-**Where do I buy one?** Wherever the competition is: open it and the **Event Pass — from $15 one-time** link sits above its name, on the overview and on its settings page. From the competition list, it's in the **⋯** menu on the card. Your [billing page](/o/settings/billing) lists the same link for each competition you could still pass, under **Event Pass** below the usage meter. All four go to the same one-page checkout, where you choose M or L before paying. All four also disappear together once that competition is [closed to new passes](#when-a-competition-closes-to-new-passes) — we stop offering what the checkout would refuse.
+**Where do I buy one?** Wherever the competition is: open it and the **Event Pass — from $11.99 one-time** link sits above its name, on the overview and on its settings page. From the competition list, it's in the **⋯** menu on the card. Your [billing page](/o/settings/billing) lists the same link for each competition you could still pass, under **Event Pass** below the usage meter. All four go to the same one-page checkout, where you choose M or L before paying. All four also disappear together once that competition is [closed to new passes](#when-a-competition-closes-to-new-passes) — we stop offering what the checkout would refuse.
 
 Once a competition holds a pass, those links are replaced by an **Event Pass M active** or **Event Pass L active** marker, naming the size you bought — there's nothing left to buy for that event. On a paid plan they appear only where a size still raises a limit your plan caps: with Pro that is **L**, which lifts the 256-entrant ceiling on a division. Where your plan already covers the size, no link appears and the checkout refuses that sale. Once that competition is over the marker becomes **Event Pass ended** and points you at the next edition instead — see [when a pass stops applying](#when-a-pass-stops-applying).
 

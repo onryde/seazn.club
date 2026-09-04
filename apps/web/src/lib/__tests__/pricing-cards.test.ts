@@ -228,19 +228,19 @@ const APPROVED_CARD_BULLETS: ApprovedBullets[] = [
       "3 active competitions, 4 divisions",
       "64 entrants per division",
       "League, groups + knockout & swiss formats",
-      "Online registration & entry fees (8% fee)",
+      "Online registration & entry fees (5% fee)",
       "Live standings & public dashboard",
       "Listed on the seazn.club showcase",
     ],
   },
   {
     array: "PASS_FEATURES",
-    why: "the Event Pass card on /pricing (and, sliced, the home ticket stub). Bullet 1 is the pass's DURATION — V328/V334 `org_has_feature` drop the pass arm once the competition is archived/completed or 7 days past ends_on, so it is bounded, not permanent; that is asserted by passBulletDurationFaults. Bullet 2 carries BOTH rungs' caps and bullet 4 the fee, all pinned to the live matrix by CARD_SURFACES below: divisions.per_competition.max and entrants.per_division.max on event_pass AND event_pass_l (L's entrant cap became 512 in V392, where it had been null — so the copy quotes the number, and capClaimFaults now faults any surface that still calls it unlimited), registration.fee_percent on event_pass, and community's registration.fee_percent for the 'not 8%' comparison. Bullets 3 and 5-7 name boolean grants (formats.advanced, exports.branded, dashboard.player_profiles, sponsors.*, realtime) that the pass lifts off community.",
+    why: "the Event Pass card on /pricing (and, sliced, the home ticket stub). Bullet 1 is the pass's DURATION — V328/V334 `org_has_feature` drop the pass arm once the competition is archived/completed or 7 days past ends_on, so it is bounded, not permanent; that is asserted by passBulletDurationFaults. Bullet 2 carries BOTH rungs' caps and bullet 4 the fee, all pinned to the live matrix by CARD_SURFACES below: divisions.per_competition.max and entrants.per_division.max on event_pass AND event_pass_l (L's entrant cap became 512 in V392, where it had been null — so the copy quotes the number, and capClaimFaults now faults any surface that still calls it unlimited), registration.fee_percent on event_pass, and community's registration.fee_percent for the 'not 5%' comparison (both re-approved for W3/V397, which cut the ladder to 5/4/2/1 for the additive fee model — read against `plan_entitlements` and the §2 table, not from memory). Bullets 3 and 5-7 name boolean grants (formats.advanced, exports.branded, dashboard.player_profiles, sponsors.*, realtime) that the pass lifts off community.",
     bullets: [
       "Upgrades ONE competition while it runs",
       "10 divisions, 128 entrants each — 20 divisions & 512 entrants on L",
       "Advanced formats — double elim, ladders",
-      "5% platform fee on entry fees, not 8%",
+      "4% platform fee on entry fees, not 5%",
       "Branded exports & public player cards",
       "Sponsor tiers & paid sponsorship packages",
       "Realtime scoreboard & slideshow",
@@ -520,7 +520,7 @@ const CARD_SURFACES: CardSurface[] = [
       // Fix round 2: L's fee was card-guarded by nothing — moving it 5 -> 8 red
       // only the help article, never the card selling it.
       { feature: "registration.fee_percent", plan: "event_pass_l", betterWhen: "lower", says: (n) => new RegExp(`\\b${n}%\\s+platform\\s+fee\\b`, "i") },
-      // The comparator the same bullet makes: "…not 8%". It is a claim about
+      // The comparator the same bullet makes: "…not 5%". It is a claim about
       // COMMUNITY's rate sitting on the pass card, and it goes stale the moment
       // community's fee moves — which is exactly what F5 of the battery did.
       { feature: "registration.fee_percent", plan: "community", says: (n) => new RegExp(`\\bnot\\s+${n}%`, "i") },
