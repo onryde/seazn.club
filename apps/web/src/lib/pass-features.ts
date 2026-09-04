@@ -3,7 +3,8 @@
  * `plan_entitlements` beats the `community` row.
  *
  * ONE key the pass lifts is deliberately absent: `registration.fee_percent`
- * (8% → 5%). It is a deduction RATE read through `getLimit`
+ * (Free's rate → the pass's, 5% → 4% since V397). It is a deduction RATE read
+ * through `getLimit`
  * (server/usecases/registrations.ts) and never throws PaymentRequiredError, so
  * no paywall can ever render for it — listing it would be dead weight, not a
  * lost sale.

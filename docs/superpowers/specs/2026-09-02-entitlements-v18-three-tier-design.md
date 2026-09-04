@@ -157,7 +157,7 @@ Rationale is one line per changed row; unchanged rows say "keep".
 |---|---|---|---|---|---|---|
 | `registration.enabled` | T | T | T | T | T | keep |
 | `registration.paid` | T | T | T | T | T | keep |
-| `registration.fee_percent` | 8 | 2 | 5 | 5 | 1 | keep; 8% is how Free pays for itself, 5% is a pass reason, 2% a Pro reason |
+| `registration.fee_percent` | **5** | 2 | **4** | **4** | 1 | **W3, V397 (owner ruling 2026-09-04): the fee becomes ADDITIVE.** The connected account bears Stripe's own cost, so our percentage is pure margin and every rate comes down. At destination-charge rates today (2.9% + $0.30 US) our 2% on Pro never covers Stripe's cut, so Pro *and* Enterprise lose money on every registration regardless of its size — the loss is a rate, not an overhead a bigger entry fee absorbs. Additive also matches how the market quotes: LeagueApps "2.5% on top of Stripe", Regystra "1% plus standard Stripe processing". Pro stays 2 and Enterprise stays 1 (already pure margin); Free 8 → 5 is still how Free pays for itself, and the pass keeps a full point of daylight under it. The charge-path change (`on_behalf_of`) is a SEPARATE task — these rates are lower rates on the existing charge shape until it lands, so nobody is worse off at any point in the sequence |
 | `sponsors.tiers` | F | T | T | T | T | keep (organiser monetisation = leverage) |
 | `sponsors.monetize` | F | T | T | T | T | keep |
 
