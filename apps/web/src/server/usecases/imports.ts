@@ -118,7 +118,11 @@ export async function createImport(
   const rows = input.pinDivision
     ? parsed.map((r) => ({ ...r, divisionSlug: input.pinDivision!.slug }))
     : parsed;
-  // Jul3/01 §7: Community capped at 20 rows/file (int limit on import.bulk).
+  // The per-file row cap is `import.bulk`, an int limit resolved from the LIVE
+  // plan catalog — do not restate its value here. This comment used to say
+  // "Community capped at 20 rows/file"; the catalog has since moved to 50, and
+  // the stale number outlived the fact by long enough to be quoted back as
+  // truth. One authority per fact: `plan_entitlements` is it.
   const quota = await withinLimit(auth.orgId, "import.bulk", rows.length);
   if (!quota.ok) throw new PaymentRequiredError("import.bulk");
   const config = ImportConfig.parse(input.config ?? {});
@@ -414,7 +418,10 @@ export async function commitImport(
       }
     }
 
-    // Jul3/01 §7: the Club hierarchy itself is Pro.
+    // Gated on `clubs.hierarchy`, resolved from the live plan catalog. NOT a
+    // Pro-only feature — this comment used to say so and the catalog now grants
+    // it on all five plans, community included. Read the entitlement, not this
+    // line, before reasoning about who can import a club tree.
     if (plan.ops.some((op) => op.kind.startsWith("club."))) {
       if (!clubsHierarchy) throw new PaymentRequiredError("clubs.hierarchy");
     }
