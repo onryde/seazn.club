@@ -2646,7 +2646,7 @@ test("P7/D1b: the t20-super8 template creates 3 stages, and Super 8 fixtures res
 
   const superGen = await apiJson<{
     created: number;
-    fixtures: { home_entrant_id: string | null; away_entrant_id: string | null }[];
+    fixtures: { fixture_no: number; home_entrant_id: string | null; away_entrant_id: string | null }[];
   }>(request, `/api/v1/stages/${super8StageId}/generate`, "POST");
   expect(superGen.status, "Super 8 generate").toBeLessThan(300);
   expect(superGen.data!.created, "Super 8 must generate real fixture rows").toBeGreaterThan(0);
@@ -2659,14 +2659,23 @@ test("P7/D1b: the t20-super8 template creates 3 stages, and Super 8 fixtures res
   }
 
   await page.reload({ waitUntil: "load" });
-  const super8Section = page.locator("section.card").filter({
-    has: page.getByRole("heading", { name: /^\d+\.\s*Super 8$/ }),
-  });
-  await expect(super8Section).toBeVisible();
-  const fixtureRows = super8Section.locator("ul li");
+  // Competition Desk W2 (Task 4): fixture rows no longer render inside the
+  // stage's own card — every fixture now renders ONCE, division-wide, in
+  // the run sheet (`<RunSheet>`, mounted once in `stages-panel.tsx`,
+  // outside the per-stage card loop). These Super 8 fixtures are all TBD on
+  // both sides (never explicitly scheduled), so they land wherever the
+  // sheet's grouping puts an untimed OPEN fixture — never assumed here,
+  // located instead by `data-fixture-no`, the one stable per-fixture hook
+  // the sheet carries, fetched from the generate response rather than
+  // guessed at a block or a stage heading's proximity.
+  const fixtureRows = page.locator(
+    superGen.data!.fixtures.map((f) => `[data-fixture-no="${f.fixture_no}"]`).join(", "),
+  );
   await expect(fixtureRows.first()).toBeVisible({ timeout: 15_000 });
   const rowCount = await fixtureRows.count();
-  expect(rowCount, "Super 8 must render its generated fixtures").toBeGreaterThan(0);
+  expect(rowCount, "Super 8 must render every one of its generated fixtures").toBe(
+    superGen.data!.fixtures.length,
+  );
   const rowTexts = await fixtureRows.allTextContents();
   for (const text of rowTexts) {
     // Resolved seed-descriptor text (P6/D4b's slot-label resolver), never a

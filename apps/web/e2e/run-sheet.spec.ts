@@ -57,19 +57,32 @@ test("the run sheet groups by venue day and prints the day, the time and the pit
   expect(fixtureIds.length, "seed produced no fixtures — setup failed, not the sheet").toBeGreaterThanOrEqual(3);
 
   // Times relative to REAL now — NOT `page.clock`, which has zero uses in
-  // this repo (`grep -a -rn "page.clock" apps/web/e2e` returns nothing).
-  // Two rows before now, one after, all on the SAME UTC calendar day. A flat
-  // ±90-minute spread crossed midnight UTC in a real run of this suite
-  // (2026-09-03, ~22:48 UTC put the "future" row after midnight and this
-  // test read two day groups instead of one) — clamped here to the room
-  // actually available before/after midnight, with a small floor so the
-  // three rows still sort into a distinct before/before/after order.
+  // this repo (`grep -a -rn "page.clock" apps/web/e2e` returns nothing), so
+  // the NOW rule's actual position can never be pinned to a fixed clock; it
+  // has to be derived from whatever "now" the SUT itself reads at render.
+  // Two rows before now, one after, all on the SAME UTC calendar day.
+  //
+  // Fix round 2 (controller finding A): the PREVIOUS version clamped each
+  // offset to the room available before/after midnight, but floored that
+  // clamp at a flat 3 minutes — `Math.max(3, room - 2)` — which DEMANDS 3
+  // minutes of room even when less than 3 exist, and overshoots into the
+  // adjacent calendar day. A live run at 23:58 UTC hit exactly this
+  // (`afterMin` forced to 3 when only ~2 remained) and read two day groups
+  // instead of one; "ran twice, green both times" was clock luck, not
+  // coverage. Fixed by taking HALF the room actually available on each
+  // side instead of a fixed floor — halving a positive quantity can never
+  // exceed it, so `now ± offset` is PROVABLY inside the same UTC day at any
+  // hour, not just probably. (`minutesSinceMidnightUtc`/`Until` are real
+  // numbers derived from `Date.now()`'s millisecond precision, so landing on
+  // the literal zero that would degenerate this to a zero gap is ~1-in-86.4M
+  // — the same order of residual risk `page.clock`'s absence already leaves
+  // for the render round-trip itself, not a new one this test introduces.)
   const now = Date.now();
   const minutesSinceMidnightUtc = (now - Math.floor(now / 86_400_000) * 86_400_000) / 60_000;
   const minutesUntilMidnightUtc = 1440 - minutesSinceMidnightUtc;
-  const beforeFarMin = Math.min(90, Math.max(3, minutesSinceMidnightUtc - 2));
+  const beforeFarMin = Math.min(90, minutesSinceMidnightUtc / 2);
   const beforeNearMin = Math.min(30, beforeFarMin / 2);
-  const afterMin = Math.min(90, Math.max(3, minutesUntilMidnightUtc - 2));
+  const afterMin = Math.min(90, minutesUntilMidnightUtc / 2);
   await setFixtureScheduledAtSql(fixtureIds[0]!, new Date(now - beforeFarMin * 60_000).toISOString());
   await setFixtureScheduledAtSql(fixtureIds[1]!, new Date(now - beforeNearMin * 60_000).toISOString());
   await setFixtureScheduledAtSql(fixtureIds[2]!, new Date(now + afterMin * 60_000).toISOString());

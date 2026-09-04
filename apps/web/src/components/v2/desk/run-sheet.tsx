@@ -216,39 +216,51 @@ export function RunSheet({
       );
     }
 
-    // block.kind === "settled" — a decided/finalized/voided NON-bracket
-    // fixture with no recorded time (fix round 1, controller ruling): kept
-    // visible, terminal, ordered after "unscheduled" so a played match never
-    // reads as work still to do. Each row's own action is already "Result"
-    // (`fixtureRowAction`'s SETTLED branch fires regardless of
-    // `scheduled_at`) and its sub-line already carries the score
-    // (`outcomeText`) — `RunSheetRow` needs no change to render this
-    // correctly, only a home to render it IN.
-    const rows = block.fixtures.filter(keep);
-    if (rows.length === 0) return null;
-    return (
-      <section key="settled" data-run-sheet-block="settled">
-        <h3 className="border-y border-slate-300 bg-slate-200 px-4 py-1.5 text-xs font-semibold uppercase tracking-wide text-slate-600">
-          {msg("runsheet.settled.title")}
-        </h3>
-        <ul className="divide-y divide-slate-100">
-          {rows.map((f) => (
-            <RunSheetRow
-              key={f.id}
-              fixture={f}
-              href={hrefFor(f)}
-              tz={tz}
-              nowMs={nowMs}
-              canEdit={canEdit}
-              entrantNames={entrantNames}
-              courtNames={courtNames}
-              boardSlotOptions={boardSlotOptions}
-              onRescheduled={onRescheduled}
-            />
-          ))}
-        </ul>
-      </section>
-    );
+    if (block.kind === "settled") {
+      // A decided/finalized/voided NON-bracket fixture with no recorded time
+      // (fix round 1, controller ruling): kept visible, terminal, ordered
+      // after "unscheduled" so a played match never reads as work still to
+      // do. Each row's own action is already "Result" (`fixtureRowAction`'s
+      // SETTLED branch fires regardless of `scheduled_at`) and its sub-line
+      // already carries the score (`outcomeText`) — `RunSheetRow` needs no
+      // change to render this correctly, only a home to render it IN.
+      const rows = block.fixtures.filter(keep);
+      if (rows.length === 0) return null;
+      return (
+        <section key="settled" data-run-sheet-block="settled">
+          <h3 className="border-y border-slate-300 bg-slate-200 px-4 py-1.5 text-xs font-semibold uppercase tracking-wide text-slate-600">
+            {msg("runsheet.settled.title")}
+          </h3>
+          <ul className="divide-y divide-slate-100">
+            {rows.map((f) => (
+              <RunSheetRow
+                key={f.id}
+                fixture={f}
+                href={hrefFor(f)}
+                tz={tz}
+                nowMs={nowMs}
+                canEdit={canEdit}
+                entrantNames={entrantNames}
+                courtNames={courtNames}
+                boardSlotOptions={boardSlotOptions}
+                onRescheduled={onRescheduled}
+              />
+            ))}
+          </ul>
+        </section>
+      );
+    }
+
+    // Fix round 2 ("also, cheap"): the fall-through used to be unguarded —
+    // "settled" fell out of an `if`/`if`/`if`/else chain, so a FIFTH block
+    // kind added later would have silently rendered under the "Played, not
+    // scheduled" heading instead of failing loudly. `block` is `never` here
+    // if every kind above is handled; the assignment is a compile-time
+    // exhaustiveness check, and the runtime branch fails loudly rather than
+    // rendering the wrong thing for a kind nothing above recognises.
+    const exhaustive: never = block;
+    console.error("RunSheet: unrecognised block kind", exhaustive);
+    return null;
   }
 
   const renderedBlocks = blocks.map(renderBlock).filter((node): node is React.ReactElement => node !== null);
