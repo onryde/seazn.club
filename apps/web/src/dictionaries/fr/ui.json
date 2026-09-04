@@ -96,6 +96,7 @@
   "confirm.deleteCheckpoint.title": "Supprimer ce point de sauvegarde ?",
   "history.checkpoint.delete": "Supprimer le point de sauvegarde",
   "history.checkpoint.restore": "Restaurer",
+  "history.checkpoint.frozen": "Le calendrier est verrouillé. Déverrouillez-le ci-dessus pour restaurer un point de sauvegarde.",
   "history.restore.noop": "Rien à annuler — le calendrier est déjà à ce point de sauvegarde.",
   "history.restore.done.one": "Restauré — 1 modification annulée.",
   "history.restore.done.other": "Restauré — {count} modifications annulées.",

@@ -96,6 +96,7 @@
   "confirm.deleteCheckpoint.title": "Delete this save point?",
   "history.checkpoint.delete": "Delete save point",
   "history.checkpoint.restore": "Restore",
+  "history.checkpoint.frozen": "The schedule is frozen. Unfreeze it above to restore a save point.",
   "history.restore.noop": "Nothing to undo — the board is already at this save point.",
   "history.restore.done.one": "Restored — undid 1 change.",
   "history.restore.done.other": "Restored — undid {count} changes.",

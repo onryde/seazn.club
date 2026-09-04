@@ -336,6 +336,30 @@ export function HistoryPanel({
               Each group is a rewind rail — the node is the save point, the line
               is the history between them. A filled node is the live AI anchor
               (what Undo targets); hollow nodes are still restorable. */}
+          {/* The freeze binds the rewind as well as the clear, and says so the
+              same way the Danger zone does: the control stays on the page,
+              disabled, with a reason beside it — a vanished button reads as a
+              missing feature, a disabled one teaches that unfreezing is the way
+              back. Restore is the WIDER of the two edits (clear empties
+              unlocked slots; this rewrites every fixture's time and court back
+              to the save point), so the freeze that stopped the smaller one a
+              few hundred pixels below had to stop this.
+
+              One note for the whole list rather than one per row: every Restore
+              on it is disabled for the same single reason, and repeating the
+              sentence down the rail would be noise. It is suppressed when there
+              are no save points — a paragraph explaining a button that is not
+              rendered.
+
+              `scheduleLocked` is the prop, NOT anything derived from `canEdit`:
+              the mount site passes `canEdit && !billingFrozen`, and
+              `billingFrozen` is the ORG's billing freeze, a different thing
+              with a confusingly similar name. */}
+          {canEdit && scheduleLocked && checkpoints.length > 0 && (
+            <p className="text-xs text-slate-500" data-testid="checkpoint-restore-reason">
+              {msg("history.checkpoint.frozen")}
+            </p>
+          )}
           {checkpoints.length === 0 ? (
             <p className="text-sm text-slate-600">{msg("history.checkpoint.empty")}</p>
           ) : (
@@ -396,7 +420,7 @@ export function HistoryPanel({
                                   type="button"
                                   data-testid="checkpoint-restore"
                                   className={`text-[10.5px] hover:underline ${cp.superseded ? "text-slate-600" : "text-purple-600"}`}
-                                  disabled={busy}
+                                  disabled={busy || scheduleLocked}
                                   onClick={async () => {
                                     const ok = await confirmDialog({
                                       title: msg("confirm.restoreCheckpoint.title"),

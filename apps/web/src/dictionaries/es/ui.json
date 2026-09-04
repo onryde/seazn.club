@@ -96,6 +96,7 @@
   "confirm.deleteCheckpoint.title": "¿Eliminar este punto de guardado?",
   "history.checkpoint.delete": "Eliminar punto de guardado",
   "history.checkpoint.restore": "Restaurar",
+  "history.checkpoint.frozen": "El calendario está congelado. Descongélalo arriba para restaurar un punto de guardado.",
   "history.restore.noop": "No hay nada que deshacer: el calendario ya está en este punto de guardado.",
   "history.restore.done.one": "Restaurado: se deshizo 1 cambio.",
   "history.restore.done.other": "Restaurado: se deshicieron {count} cambios.",

@@ -96,6 +96,7 @@
   "confirm.deleteCheckpoint.title": "Dit opslagpunt verwijderen?",
   "history.checkpoint.delete": "Opslagpunt verwijderen",
   "history.checkpoint.restore": "Herstellen",
+  "history.checkpoint.frozen": "Het schema is vergrendeld. Ontgrendel het hierboven om een opslagpunt te herstellen.",
   "history.restore.noop": "Niets om ongedaan te maken — het schema staat al op dit opslagpunt.",
   "history.restore.done.one": "Hersteld — 1 wijziging ongedaan gemaakt.",
   "history.restore.done.other": "Hersteld — {count} wijzigingen ongedaan gemaakt.",

@@ -2186,6 +2186,7 @@ export type DictionaryKey =
   | "history.checkpoint.empty"
   | "history.checkpoint.evicted"
   | "history.checkpoint.evictedHint"
+  | "history.checkpoint.frozen"
   | "history.checkpoint.groupAi"
   | "history.checkpoint.groupYours"
   | "history.checkpoint.latestAi"
