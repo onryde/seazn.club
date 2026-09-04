@@ -749,14 +749,14 @@ async function main() {
   await v4AiSuite(admin, org2.id, renamed.slug);
 
   // --- C1 gap B: the AI planning path's round-order blind spot, over real
-  // HTTP (own fresh Pro Plus session — not an entitlement gate). Needs the
+  // HTTP (own fresh paid session — not an entitlement gate). Needs the
   // same T17 fixture server as v4AiSuite; skips the same way when
   // SCHEDULING_AI_BASE_URL is unset.
   await scheduleAiRoundOrderSuite();
 
   // --- #350 multi-division JOINT AI scheduling: the batch-discount price
   // (rungs 2+3 → 4 credits, budget sized from the undiscounted 5) and the
-  // atomic apply on a fresh Pro Plus org, plus the two refusals that must
+  // atomic apply on a fresh Pro org, plus the two refusals that must
   // happen before any model call — a one-division request (400) and a wallet
   // that cannot cover the quote (402). The refusals are keyless-safe; the
   // priced run needs the T17 fixture server.
@@ -815,9 +815,10 @@ async function main() {
   // /help + /developers, scoped keys, OG/poster/embed/sponsors — pro + free.
   await v3ContentApiSuite(admin, org2.id, renamed.slug);
 
-  // --- pro-plus-tier (Task 11): community per-fixture-official + save-point
-  // caps, api.write re-armed above Pro, Pro Plus lifting both — own fresh
-  // org, restores its own plan before returning (shared-DB poison trap).
+  // --- the above-Pro rung (Task 11): community's save-point window and its
+  // ungated officials, api.write re-armed above Pro, and the rung above Pro
+  // lifting the window and minting the key — own fresh org, restores its own
+  // plan before returning (shared-DB poison trap).
   await aboveProRungSuite();
 
   // --- PROMPT-36 pricing v3: free caps, Event Pass lift + scope isolation,
@@ -998,8 +999,8 @@ async function main() {
   // grant, over the real `ref`-cookie flow. Own fresh orgs; keyless-safe.
   await referralSuite();
 
-  // --- v17 gap #293: the extra-organisation recurring add-on. A Pro Plus
-  // payer at the 10-org cap gets a 402 CARRYING a purchase offer, buying the
+  // --- v17 gap #293: the extra-organisation recurring add-on. A Pro
+  // payer at the 5-org cap gets a 402 CARRYING a purchase offer, buying the
   // rider lifts the cap by one and the same create then succeeds; a community
   // owner and a NON-PAYER inside that same group are refused the same way and
   // offered nothing. Own fresh group; keyless-safe.
@@ -1478,7 +1479,8 @@ async function p72Suite(): Promise<void> {
   // === KEY AUTH: DELETE /competitions/:id is never key-accessible → 403 for
   // ANY scope (the route is absent from the allowlist, so it default-denies).
   // A read key is enough to prove the door, and — unlike a write-capable key,
-  // which V290 made Pro Plus only — it mints on a plain Pro org. ===
+  // which V290 put above Pro and v18 kept there — it mints on a plain Pro
+  // org. ===
   const mkKey = await v1(owner, `/api/v1/orgs/${orgId}/api-keys`, "POST", {
     name: "p72 probe",
     scopes: ["read"],
@@ -1631,7 +1633,7 @@ async function p72Suite(): Promise<void> {
  *  any Stripe/LLM call, and each check runs AFTER its data is seeded. Own fresh
  *  orgs (never touches org/org2 from main()); the pass persona stays community.
  *
- *  V291 truths this pins: Pro AI cap 5/division, Pro Plus unlimited (null); a
+ *  V291 truths this pins: the AI cap rises with the tier; a
  *  pass overlays comp-scoped Pro features INSIDE the passed comp only; the dead
  *  Event-Pass members.max row is gone → org-wide keys resolve community for a
  *  passed org. */
@@ -1673,7 +1675,7 @@ async function smokePlanMatrix(): Promise<void> {
     owner: Session,
     orgId: string,
     hostCompId: string,
-    key: string, // email suffix + label: community | pro | proplus | pass
+    key: string, // email suffix + label: community | pro | enterprise | pass
     expectBranded: boolean,
   ): Promise<void> => {
     // --- Full data feed: one division, all three entrant shapes. Entrant #1
@@ -3399,8 +3401,8 @@ async function referralSuite(): Promise<void> {
  * v17 gap #293 — the extra-organisation recurring add-on, end to end at the
  * wire, on BOTH paths.
  *
- * PRO path (the payer): a Pro Plus payer standing on their plan's 10-org cap is
- * refused a plain "create org #11" with a 402 that CARRIES a purchase offer;
+ * PRO path (the payer): a Pro payer standing on their plan's 5-org cap is
+ * refused a plain "create org #6" with a 402 that CARRIES a purchase offer;
  * buying the rider lifts the cap by exactly one and the SAME create then
  * succeeds. The refusal is asserted BEFORE the purchase deliberately — "the
  * create succeeded" is evidence of a lift only if it was first proven refused.
@@ -3410,7 +3412,7 @@ async function referralSuite(): Promise<void> {
  * is an upgrade; offering a purchase there would only relocate the dead end to
  * the purchase route's 400 one screen later.
  *
- * NON-PAYER: an owner of organisations INSIDE the Pro Plus group above, at the
+ * NON-PAYER: an owner of organisations INSIDE the Pro group above, at the
  * very same cap, who is not that group's `subscriptions.owner_user_id`. Also
  * refused, also with no offer — the purchase route (setExtraOrgs →
  * requireBillingOwner) 403s anyone but the payer. Reachable in production:
@@ -6503,8 +6505,8 @@ async function oneTrialSuite(): Promise<void> {
   // so both trial copies — and `upgrade.proCard.cta` = "Go Pro — 14-day free
   // trial" — sit in the body whatever the org's state. Inside that JSON the
   // label is preceded by an escaped quote, so only the rendered <button> text
-  // matches here. ("Go Pro Plus — …" never collides: '>Go Pro —' needs the
-  // dash next.)
+  // matches here. (The retired "Go Pro Plus — …" could not collide either:
+  // '>Go Pro —' needs the dash next.)
   const OFFERS_TRIAL = ">Start free trial —";
   const OFFERS_NO_TRIAL = ">Go Pro —";
 
@@ -11567,7 +11569,7 @@ async function placementPerCourtBlackoutSuite(): Promise<void> {
 
 /** design/v4 (Task 18): the AI Schedule Architect end-to-end over HTTP.
  *
- *  A fresh Pro Plus org walks the two-phase happy path — schedule ai-plan
+ *  A fresh Pro org walks the two-phase happy path — schedule ai-plan
  *  (proposal shape + a schedule.ai_generated ledger row stamping model/usage/
  *  cost_usd) → apply with the `ai` provenance block → ai-last recall → officials
  *  ai-plan with an EMPTY instruction (zero-token solver draft →
@@ -12559,7 +12561,7 @@ async function scheduledCountsByDivision(divisionIds: string[]): Promise<Record<
  *  leave a flipped org as found in case a later suite lands above this one). */
 async function aboveProRungSuite(): Promise<void> {
   const owner = newSession();
-  const who = await signIn(owner, `proplus_${tag}@example.com`);
+  const who = await signIn(owner, `aboveprorung_${tag}@example.com`);
   const orgId = who.org_id;
 
   const comp = v1data<{ id: string; slug: string }>(
@@ -17583,7 +17585,7 @@ async function cleanup(tag: string): Promise<void> {
     `ui_free_${tag}@example.com`,
     `disc_free_${tag}@example.com`,
     `pass_${tag}@example.com`,
-    `proplus_${tag}@example.com`,
+    `aboveprorung_${tag}@example.com`,
     `funnel_${tag}@example.com`,
     `tos_${tag}@example.com`,
     `player_${tag}@example.com`,
@@ -17612,7 +17614,7 @@ async function cleanup(tag: string): Promise<void> {
     `p72comm_${tag}@example.com`,
     `smoke-community-${tag}@example.com`,
     `smoke-pro-${tag}@example.com`,
-    `smoke-proplus-${tag}@example.com`,
+    `smoke-enterprise-${tag}@example.com`,
     `smoke-pass-${tag}@example.com`,
     // Task 23 — passGrantsSuite's own org (its two competitions, pass row,
     // sponsors, packages, person and AI ledger rows all cascade with it).
@@ -17622,7 +17624,7 @@ async function cleanup(tag: string): Promise<void> {
     `passl_${tag}@example.com`,
     `passlpro_${tag}@example.com`,
     // Task 20 — the three extra users seeded per plan org (owner is above).
-    ...["community", "pro", "proplus", "pass"].flatMap((k) => [
+    ...["community", "pro", "enterprise", "pass"].flatMap((k) => [
       `scorer_${k}_${tag}@example.com`,
       `official_${k}_${tag}@example.com`,
       `player_${k}_${tag}@example.com`,
@@ -17645,7 +17647,7 @@ async function cleanup(tag: string): Promise<void> {
     // trips: by the time it's checked, both rows are already gone together.
     `referrer_${tag}@example.com`,
     `referred_${tag}@example.com`,
-    // #293 extraOrgAddonSuite — the Pro Plus payer (whose nine seeded fill
+    // #293 extraOrgAddonSuite — the Pro payer (whose four seeded fill
     // organisations carry created_by = this user and so go with the purge
     // below), the non-payer co-owner, and the community owner.
     `orgaddon_${tag}@example.com`,
