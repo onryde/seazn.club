@@ -608,7 +608,19 @@ test.describe("zone-split cases — they share organizations.timezone", () => {
       date: (el.querySelector('input[type="date"]') as HTMLInputElement | null)?.value ?? null,
       time: (el.querySelector("select") as HTMLSelectElement | null)?.value ?? null,
     }));
-    const rowTime = (await row.getByTestId("run-sheet-edit-time").textContent())?.trim() ?? "";
+    // The DISPLAY string, formatted in the page with the same call
+    // `ClientTime` makes — never rebuilt from the ISO string by hand. Two
+    // reasons: the browser locale here is en-US, so 04:00 renders "4:00 AM"
+    // and a `wrongZoneInput.slice(11)` comparison would simply be wrong; and
+    // deriving it any other way re-implements the component under test.
+    const display = await page.evaluate(
+      ([iso, venueTz, orgZone]) => {
+        const d = new Date(iso);
+        const f = (z: string) => d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: z });
+        return { inTz: f(venueTz), inOrgTz: f(orgZone) };
+      },
+      [at, "Asia/Tokyo", ORG_TZ] as const,
+    );
     console.log(
       "editor seed: instant",
       at,
@@ -618,13 +630,18 @@ test.describe("zone-split cases — they share organizations.timezone", () => {
       expectedInput,
       "| would-be-wrong (tz)",
       wrongZoneInput,
-      "| row displays (tz)",
-      JSON.stringify(rowTime),
+      "| row displays",
+      JSON.stringify(display),
     );
+    // THE PIN: the field is seeded in `orgTz`.
     expect(`${shown.date}T${shown.time}`).toBe(expectedInput);
-    // And the row really is displaying the OTHER zone, so this case is
-    // witnessing the asymmetry rather than a division where it cannot arise.
-    expect(rowTime).toBe(wrongZoneInput.slice(11));
+    // And the ROW is displaying the other zone, so this case witnesses the
+    // asymmetry rather than a division where it cannot arise. `toHaveText`
+    // rather than a `textContent()` read: `ClientTime` starts as an empty
+    // string and fills in on mount, so a single read can catch it pre-
+    // hydration and pass or fail on timing rather than on the zone.
+    expect(display.inTz, "the two zones must render differently, or this proves nothing").not.toBe(display.inOrgTz);
+    await expect(row.getByTestId("run-sheet-edit-time")).toHaveText(display.inTz);
   });
 });
 
@@ -730,16 +747,24 @@ test("fix round 4: the inline Set-time field is a usable, tappable control at 32
   }
 });
 
-// Fix round 4, the premise behind the deleted read: this editor is
-// unreachable on a fixture that already has a time, so there is no existing
-// instant for it to display and no zone for that display to get wrong.
+// Written in round 4 as the premise behind the (then) deleted `orgTz` read:
 // `fixtureRowAction`'s branch 4 returns `set_time` only for
-// `scheduledAt === null`; a timed fixture gets `score` / `assign_scorer` /
-// `result`, all of which render a plain `<Link>` that never opens an editor.
-// Pinned here so a later wave that re-adds an "edit a time already set"
-// affordance has to come through this test — and, per the note in
-// run-sheet-row.tsx, ship a value pin for the zone it seeds from.
-test("fix round 4: a fixture that already has a time offers no inline editor at all", async ({ page, request }) => {
+// `scheduledAt === null`, so a timed fixture's ACTION is `score` /
+// `assign_scorer` / `result`, each a plain `<Link>` that never opens an
+// editor. That half is unchanged and still asserted. What round 5 changed is
+// the conclusion drawn from it: the editor being unreachable was a
+// REGRESSION, not a design, and the time cell is now its door.
+//
+// RENAMED IN ROUND 5, because round 5 made the old name a lie. It used to
+// read "…offers no inline editor at all", which was true when the only door
+// was the `set_time` action; the owner has since ruled that gap a regression
+// and the time cell is now a door. What this case still asserts — and what
+// it is now named for — is that the ACTION COLUMN stays at one control and
+// that control is scoring, with the editor reachable somewhere else. A test
+// whose title outlives what it asserts is a defect in its own right
+// (_RULES.md: "Read what a test ASSERTS, never what it is called" — this
+// repo has shipped one asserting the opposite of its title).
+test("a timed fixture's ACTION is scoring — the editor is not in the action column", async ({ page, request }) => {
   const { divisionId, fixtureIds } = await seedRunSheetDivision(request);
   expect(fixtureIds.length, "seed produced no fixtures — setup failed, not the sheet").toBeGreaterThanOrEqual(1);
   const target = fixtureIds[0]!;
@@ -853,20 +878,20 @@ test("fix round 5: the time cell opens the editor, corrects the time, and can cl
   console.log("corrected time: typed", corrected, "| stored", afterSave);
   expect(afterSave, "the correction did not store an instant at all").toBeTruthy();
 
-  // Reopen and read it back — the ROUND TRIP, which is what an organiser
-  // actually experiences and what a wrong-zone read would break.
+  // NOT asserted here: what the field shows when reopened. That is a
+  // ZONE-DEPENDENT reading (`orgTz`), and `organizations.timezone` is shared
+  // and written by three other spec files as well as this one's serial
+  // block, so a value seeded before a reload and read after it can straddle
+  // a concurrent flip. It is pinned instead in the zone-split block, where
+  // the zone is controlled and the assertion is strictly stronger — the
+  // exact instant, against `zonedDateTimeInput(at, orgTz)`.
+
+  // CLEAR IT — the retired `schedule.unschedule` capability, recovered
+  // inside the editor rather than as a second row-level control. Reopened
+  // through the same time cell, which is the point of the affordance.
   await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
   await row.getByTestId("run-sheet-edit-time").click();
   await expect(editor).toBeVisible();
-  const reread = await editor.evaluate((el) => ({
-    date: (el.querySelector('input[type="date"]') as HTMLInputElement | null)?.value ?? null,
-    time: (el.querySelector("select") as HTMLSelectElement | null)?.value ?? null,
-  }));
-  console.log("reopened editor shows:", JSON.stringify(reread), "expected:", corrected);
-  expect(`${reread.date}T${reread.time}`).toBe(corrected);
-
-  // CLEAR IT — the retired `schedule.unschedule` capability, recovered
-  // inside the editor rather than as a second row-level control.
   await editor.getByTestId("run-sheet-clear-time").click();
   await expect
     .poll(
@@ -879,8 +904,7 @@ test("fix round 5: the time cell opens the editor, corrects the time, and can cl
   // the absence below, so "the time cell is gone" cannot pass on a blank page.
   await expect(row.locator('[data-row-action="set_time"]')).toHaveCount(1);
   await expect(row.getByTestId("run-sheet-edit-time")).toHaveCount(0);
-  const dash = (await row.locator("span").first().textContent())?.trim() ?? "";
-  console.log("row after clearing the time — action:", "set_time", "| time cell:", JSON.stringify(dash));
+  console.log("after clearing: the row is open scheduling work again (set_time), and the time cell is inert");
 });
 
 // FIX ROUND 5, the dead-end guard. `moveFixture` refuses a timetable change
