@@ -827,6 +827,9 @@ it.
   // 9 — clear, and 10 — restore to exactly what step 7 produced
   await page.getByTestId("schedule-clear").click();
   await page.getByRole("button", { name: /clear slots/i }).click();
+  // §S22: clear reports NO counts in the UI — no "N cleared, M skipped". So
+  // assert the board's emptiness from the system's own record, not from a
+  // number on screen that does not exist.
   await expect.poll(async () => (await scheduledSlots(request, divisionId)).length).toBe(0);
 
   await page.getByTestId("checkpoint-restore").first().click();
@@ -861,6 +864,21 @@ board.
   });
   expect(refused.status, `clear on a frozen division returned ${refused.status}`).toBe(422);
   expect(await scheduledSlots(request, divisionId)).toEqual(placed);
+
+  // 12c — RESTORE is the same hole (§S3), found by driving and not named in
+  // the original brief. It rewrites the WHOLE board, so its blast radius is
+  // larger than clear's, and a fix scoped to clearScheduleScoped alone leaves
+  // the organiser equally exposed via the button beside it.
+  const refusedRestore = await apiJson(request, `/api/v1/divisions/${divisionId}/restore`, "POST", {
+    checkpoint_id: checkpointId, confirm: true,
+  });
+  expect(
+    refusedRestore.status,
+    `restore on a frozen division returned ${refusedRestore.status}`,
+  ).toBe(422);
+  expect(await scheduledSlots(request, divisionId)).toEqual(placed);
+  // And the UI half: the restore control must say why, not 422 at the organiser.
+  await expect(page.getByTestId("checkpoint-restore").first()).toBeDisabled();
 
   // 13 — publish, then start. Run to the terminal state.
   await goTab(page, base, "board");
@@ -950,12 +968,17 @@ Close both in `afterAll`.
   await page.getByLabel(/email/i).fill(officialEmail);
   await page.getByRole("button", { name: /save|invite/i }).click();
 
-  // Read the claim link OFF THE PAGE. Constructing it is how a dead link stays
-  // green — the whole point of this step is that the link resolves.
-  const claimUrl = await page.getByRole("link", { name: /claim|invite/i })
-    .first().getAttribute("href");
-  expect(claimUrl, "the directory emitted no claim link").toBeTruthy();
-  await officialPage.goto(claimUrl!);
+  // The claim link is NOT an anchor — §S16 of the findings: it renders as a
+  // <code> element, is visually truncated, and is shown once. So `getByRole
+  // ("link")` finds nothing and clicking is not implementable. Read the TEXT
+  // off the page and navigate to it: still "from the page that emits it",
+  // which is the property that matters, and never a URL this test built.
+  const claimUrl = (await page.getByTestId("official-claim-link").innerText()).trim();
+  expect(claimUrl, "the directory emitted no claim link").toMatch(/^https?:\/\//);
+  await officialPage.goto(claimUrl);
+  // Assert it RESOLVED. A truncated <code> can hold an unusable string and
+  // still look right; only the destination proves it.
+  await expect(officialPage).not.toHaveURL(/\/404|error/);
 ```
 
 - [ ] **Step 3: The official blacks out a day, from their own screen**
@@ -978,6 +1001,13 @@ This is the first assertion anywhere on the G9 read-back route from a browser.
 ```ts
   await goTab(page, base, "officials");
   await page.getByTestId("officials-propose").click();
+  // §S4: today the auto-draft produces a proposal whose "Apply N assignments"
+  // button is DISABLED with no explanation, on an unfrozen division where
+  // manual assign works — i.e. the whole auto-assign feature is unreachable.
+  // This assertion FAILS on the current product ON PURPOSE. It is the failing
+  // test the fix makes green; do not weaken it to match today's behaviour, and
+  // do not delete it. If the fix is not in this wave, mark it `test.fail()`
+  // with a comment naming §S4 — never `skip`, which reports nothing.
   await expect(page.getByTestId("officials-apply")).toBeEnabled();
   await page.getByTestId("officials-apply").click();
 
