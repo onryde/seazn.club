@@ -264,6 +264,11 @@ export function TemplateDetailSheet({
   const [endsOn, setEndsOn] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [paywall, setPaywall] = useState<{ feature: string; reason?: string } | null>(null);
+  // Set when the public-dashboard cap turned this create private (T20). NOT an
+  // error — the competition exists — so it replaces the form with a note and a
+  // way onward, exactly as the blank wizard does, instead of redirecting into a
+  // competition whose public link 404s.
+  const [degraded, setDegraded] = useState<{ name: string; slug: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const progressionLines = templateProgressionLines(msg, template);
 
@@ -284,7 +289,16 @@ export function TemplateDetailSheet({
     }
     setBusy(true);
     try {
-      const created = await apiV1<{ slug: string }>("/api/v1/competitions/from-template", {
+      // The response shape is spelled out inline rather than imported from
+      // `@/server/api-v1/schemas`: this is a "use client" file, and a VALUE
+      // import of that module drags the gRPC placement client into the browser
+      // bundle (see the module header). Only the two fields this component
+      // acts on are named.
+      const created = await apiV1<{
+        slug: string;
+        visibility: string;
+        public_quota_degraded?: { feature_key: string; limit: number | null };
+      }>("/api/v1/competitions/from-template", {
         method: "POST",
         json: {
           template_key: template.key,
@@ -294,6 +308,13 @@ export function TemplateDetailSheet({
           ends_on: endsOn,
         },
       });
+      // ONE signal, the explicit one. Diffing `visibility` against the request
+      // would be a second guard covering for the first, and two guards covering
+      // for each other are each untested.
+      if (created.public_quota_degraded) {
+        setDegraded({ name: name.trim(), slug: created.slug });
+        return;
+      }
       router.push(routes.competition(orgSlug, created.slug));
     } catch (err) {
       const nextPaywall = paywallFromError(err, template);
@@ -305,6 +326,40 @@ export function TemplateDetailSheet({
     } finally {
       setBusy(false);
     }
+  }
+
+  // The create SUCCEEDED — so the "Use this template" button goes with the
+  // form, for the same reason the blank wizard drops its own: leaving an armed
+  // create button under a competition that already exists is how the same event
+  // gets created twice.
+  if (degraded) {
+    return (
+      <Modal
+        title={msg("comp.wizard.publicDegraded.title")}
+        onClose={onClose}
+        size="lg"
+        footer={
+          <button
+            type="button"
+            data-testid="template-degraded-continue"
+            onClick={() => router.push(routes.competition(orgSlug, degraded.slug))}
+            className="btn btn-primary min-h-11"
+          >
+            {msg("comp.wizard.publicDegraded.continue")}
+          </button>
+        }
+      >
+        {/* Same testid and the same four `comp.wizard.publicDegraded.*` keys
+            the blank wizard renders — one message, already translated into all
+            four locales, not a second copy of it for the majority path. */}
+        <div className="space-y-4" data-testid="public-quota-degraded">
+          <p className="text-sm leading-relaxed text-slate-600">
+            {msg("comp.wizard.publicDegraded.body", { name: degraded.name })}
+          </p>
+          <UpgradeGate feature="dashboard.public.max" />
+        </div>
+      </Modal>
+    );
   }
 
   return (

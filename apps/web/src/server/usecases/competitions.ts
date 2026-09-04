@@ -167,7 +167,12 @@ export async function withinPublicQuota(
   return withinLimit(auth.orgId, "dashboard.public.max", count + 1);
 }
 
-/** Exported (only) for createFromTemplate — see assertActiveQuota above. */
+/** The REFUSING form, and the only caller left is `patchCompetition` below:
+ *  since T15/F both create paths degrade instead (`resolveCreateVisibility`),
+ *  so createFromTemplate — which this comment used to name as the reason for
+ *  the export — no longer calls it. Kept exported alongside
+ *  `withinPublicQuota` so the boolean and asserting forms stay one pair with
+ *  one visibility. */
 export async function assertPublicQuota(auth: AuthCtx, excludeId?: string): Promise<void> {
   const { ok, limit } = await withinPublicQuota(auth, excludeId);
   // The cap travels WITH the refusal rather than being restated in copy: the

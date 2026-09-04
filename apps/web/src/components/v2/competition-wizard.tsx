@@ -53,7 +53,12 @@ export function CompetitionWizard({ orgSlug }: { orgSlug: string }) {
     }
     setBusy(true);
     try {
-      const created = await apiV1<{ id: string; slug: string; visibility: string }>("/api/v1/competitions", {
+      const created = await apiV1<{
+        id: string;
+        slug: string;
+        visibility: string;
+        public_quota_degraded?: { feature_key: string; limit: number | null };
+      }>("/api/v1/competitions", {
         method: "POST",
         json: {
           name,
@@ -67,10 +72,13 @@ export function CompetitionWizard({ orgSlug }: { orgSlug: string }) {
           branding: {},
         },
       });
-      // The server is the authority on what was actually created. Asking for
-      // public and getting private back is the degrade, and it is the ONLY
-      // signal — there is no extra response field to drift from the row.
-      if (visibility === "public" && created.visibility !== "public") {
+      // The server is the authority on what was actually created, and since T20
+      // it SAYS so rather than leaving every consumer to diff the row against
+      // its own request. Read off the explicit note, not a re-derivation of it:
+      // `created.visibility` is still the truthful value on the resource (and
+      // is what a caller ignoring the note reads), but making this component
+      // check both would be two guards covering for each other, each untested.
+      if (created.public_quota_degraded) {
         setDegraded({ name: name.trim(), slug: created.slug });
         return;
       }

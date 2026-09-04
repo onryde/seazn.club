@@ -105,3 +105,64 @@ test("the wizard opens on Public, and at the cap it creates a PRIVATE competitio
     await invalidateOrgEntitlements(page.request, org.id);
   }
 });
+
+test("the TEMPLATE GALLERY at the cap shows the same note — it does not redirect into a silently private competition", async ({
+  page,
+}) => {
+  // T20 CRITICAL (reviewer pass 3, 2026-09-03). The wizard above proved the
+  // MINORITY path: `/competitions/new` opens on the template gallery and
+  // "start blank" is a button inside it, so the gallery is what most
+  // organisers actually use. It POSTed /competitions/from-template and
+  // redirected UNCONDITIONALLY, because `FromTemplateResult` carried no
+  // visibility for it to diff — so a Free org at its cap created from a
+  // template, landed on the competition page as if nothing had happened, and
+  // shared a link that 404s for every fan (`public_fixtures_v` filters
+  // `visibility = any('{public,unlisted}')`).
+  //
+  // Only a browser can answer this: the server-side degrade is unit-pinned in
+  // `src/server/usecases/__tests__/templates.test.ts`, and no `environment:
+  // "node"` test can see a redirect that should not have happened.
+  //
+  // slam128 for the same reason format-templates.spec.ts picks it: it sits
+  // behind neither formats.double_elim nor formats.advanced, so the flow is
+  // proven on the same tier whichever auth project runs it.
+  const org = await activeOrg(page);
+  const cappedName = `Capped Template ${TAG}`;
+
+  await setEntitlementOverrideSql(org.id, "dashboard.public.max", 0);
+  await invalidateOrgEntitlements(page.request, org.id);
+
+  try {
+    await page.goto(`/o/${org.slug}/c/new`);
+    await expect(page.getByTestId("template-gallery")).toBeVisible({ timeout: 20_000 });
+    await page.getByTestId("template-card-slam128").click();
+    const sheet = page.getByRole("dialog");
+    await expect(sheet).toBeVisible();
+    await sheet.getByLabel("Name", { exact: false }).fill(cappedName);
+    await sheet.getByLabel("Ends on", { exact: false }).fill("2030-12-31");
+    await page.getByTestId("template-detail-submit").click();
+
+    const note = page.getByTestId("public-quota-degraded");
+    await expect(note).toBeVisible({ timeout: 20_000 });
+    await expect(note).toContainText(cappedName);
+    await expect(note.getByRole("link", { name: /upgrade|plan|billing/i }).first()).toBeVisible();
+    // THE REGRESSION: the redirect must NOT have fired. Asserted on the URL
+    // rather than on the note alone — a note that renders for a beat while the
+    // router navigates past it would satisfy the visibility check and still
+    // ship the bug.
+    expect(new URL(page.url()).pathname.endsWith("/c/new")).toBe(true);
+    // And the "Use this template" button is gone with the form, so the same
+    // event cannot be created twice by a second press.
+    await expect(page.getByTestId("template-detail-submit")).toHaveCount(0);
+
+    const created = await fetchByName(page.request, cappedName);
+    expect(created.visibility).toBe("private");
+
+    // The way onward still works — the competition exists, this is not an error.
+    await page.getByTestId("template-degraded-continue").click();
+    await page.waitForURL(new RegExp(`/c/${created.slug}$`), { timeout: 20_000 });
+  } finally {
+    await setEntitlementOverrideSql(org.id, "dashboard.public.max", 50);
+    await invalidateOrgEntitlements(page.request, org.id);
+  }
+});
