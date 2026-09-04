@@ -481,12 +481,36 @@ test.describe("legacy settings redirects", () => {
    * bare `/settings` on `?tab=undefined` — the literal string "undefined",
    * which `SETTINGS_TABS.includes()` then silently falls back off.
    *
+   * AND THE STATUS, because the address bar is not the page. `page.goto`
+   * follows the redirect chain and returns the FINAL response, and a landing
+   * that 500s or renders an error boundary keeps exactly the URL asserted
+   * above — so the URL pair alone stays green on the precise case hop 3 exists
+   * for, "the Stripe params arrive and the page reconciles them". The blast
+   * radius is nil today only because `reconcileCheckout` never throws; this
+   * holds the contract rather than today's implementation of it.
+   *
+   * `toBeLessThan(400)` on a captured response is this folder's existing idiom
+   * (`rs007-registration-journey.spec.ts`:169, `rs010-registration-cross-flow`
+   * :287) — a branded 404 still 404s, so assert the status, never the prose.
+   * The `?.` cannot make it vacuous: `page.goto` returns null only for a
+   * same-document navigation, none of these are, and `expect(undefined)
+   * .toBeLessThan(400)` THROWS rather than passing — verified directly against
+   * @playwright/test rather than assumed.
+   *
    * `session_id=cs_test_x` is a session Stripe has never heard of, on purpose:
    * `reconcileCheckout` is one big try/catch that logs and returns false
    * (billing.ts:1506), so the hop proves the params ARRIVE without depending on
    * a live Stripe session existing.
    */
   test("each legacy route lands org-scoped with its query intact", async ({ page }) => {
+    // LIMIT, stated rather than engineered around. `activeOrg` resolves
+    // `find(seazn_org) ?? orgs[0]` (helpers.ts), which is the SAME rule
+    // `requirePageAuth` uses to pick the org every one of these shims redirects
+    // INTO (page-auth.ts:40-41). So the expected slug below mirrors the
+    // product's own selector: a shim that hardcoded some other org's slug is
+    // caught, a wrong org produced by that shared rule is not. Re-implementing
+    // the rule here would only assert the test's copy of it against the
+    // product's, which is a mirror, not a check.
     const org = await activeOrg(page);
 
     const hops: { from: string; to: string; why: string }[] = [
@@ -506,9 +530,13 @@ test.describe("legacy settings redirects", () => {
     ];
 
     for (const hop of hops) {
-      await page.goto(hop.from);
+      const landing = await page.goto(hop.from, { waitUntil: "load" });
       const landed = new URL(page.url());
       expect(`${landed.pathname}${landed.search}`, `${hop.from} — ${hop.why}`).toBe(hop.to);
+      expect(
+        landing?.status(),
+        `${hop.from} landed on ${landed.pathname} with HTTP ${landing?.status()} — the query arrived at an error page, not at ${hop.to}`,
+      ).toBeLessThan(400);
     }
   });
 });
