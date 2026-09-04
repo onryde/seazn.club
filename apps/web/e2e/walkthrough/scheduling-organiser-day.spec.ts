@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import {
   TAG,
@@ -16,13 +18,62 @@ import {
 // typed or submitted, and the system's own record is read back after it.
 test.describe.configure({ mode: "serial" });
 
-// Budget: fourteen tapped steps, no deliberate waits, a six-fixture solve.
-// DERIVED, so that adding a step moves the budget with it rather than leaving a
-// flat constant to red under it (AGENTS.md §20).
+/** Every label and door name below comes from the dictionary, never from an
+ *  English literal typed into this file: a test that retypes the copy cannot
+ *  notice the copy changing under it. `readFileSync` rather than a JSON
+ *  `import`, which needs an import attribute Playwright's loader does not
+ *  supply — the same shape `competition-desk-actions.spec.ts` uses. */
+const en: Record<string, string> = JSON.parse(
+  readFileSync(fileURLToPath(new URL("../../src/dictionaries/en/ui.json", import.meta.url)), "utf8"),
+);
+
+/**
+ * THE SOLVE BUDGET, derived from the solver's own declared wall.
+ *
+ * `autoSolverWallMs()` (server/usecases/schedule.ts:1992) resolves the ask as
+ * `PLACEMENT_WALL_SECONDS`, or a documented default of 10 seconds; the service
+ * then applies its own independent `min()` ceiling, so the caller's ask is
+ * always an UPPER bound on what a board is actually granted. Measured against
+ * the live service, a six-fixture board spends that whole wall
+ * (`granted_wall_seconds: 10.0`, `solver_elapsed_ms: 10030`), so this is a real
+ * cost and not a safety margin — and a flat literal beside it would be a latent
+ * red the moment the wall moves (AGENTS.md §20).
+ *
+ * MIRRORED, not imported: `autoSolverWallMs` lives in a server module that
+ * cannot be pulled into a Playwright spec. Exporting the constant from a leaf
+ * the way `HOLD_MS` and `NOT_RECORDING_GRACE_MINUTES` already are is the
+ * product change this wants — recorded in task-4-fix-1.md rather than made here.
+ */
+const SOLVER_WALL_SECONDS_DEFAULT = 10;
+function solverWallMs(): number {
+  const raw = process.env.PLACEMENT_WALL_SECONDS;
+  if (raw === undefined || raw.trim() === "") return SOLVER_WALL_SECONDS_DEFAULT * 1_000;
+  const seconds = Number(raw);
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    throw new Error(`PLACEMENT_WALL_SECONDS must be a finite number > 0, got ${JSON.stringify(raw)}`);
+  }
+  return Math.round(seconds * 1_000);
+}
+
+// Budget: fourteen tapped steps, no deliberate waits, one solve. DERIVED, so
+// that adding a step or moving the solver's wall moves the budget with it
+// rather than leaving a flat constant to red under it.
 const STEPS = 14;
-const PER_STEP_MS = 6_000;
-const SOLVE_MS = 30_000;
-test.setTimeout(STEPS * PER_STEP_MS + SOLVE_MS);
+const PER_STEP_MS = 4_000;
+/** Two solver walls plus slack: one for the solve itself, one because the strip
+ *  only paints after the round trip has been persisted and re-rendered. */
+const SOLVE_MS = 2 * solverWallMs() + 5_000;
+const TEST_BUDGET_MS = STEPS * PER_STEP_MS + SOLVE_MS;
+/** The OWNER'S constraint on this leg, and the reason the journey is four
+ *  entrants and one solve. Asserted as the test's first act (not thrown at
+ *  module scope, where a load-time failure reports as ZERO collected tests
+ *  rather than as a red one), so the next person to add a step or raise the
+ *  solver's wall gets a legible failure instead of silent drift. */
+const HARD_BUDGET_MS = 90_000;
+test.setTimeout(TEST_BUDGET_MS);
+
+/** The standing UI bar: desktop, tablet and the narrowest phone. */
+const FINAL_WIDTHS = [1280, 768, 320];
 
 // ---------------------------------------------------------------- the clock
 //
@@ -41,6 +92,9 @@ const REST_MIN = 60;
 const MAX_PER_DAY = 2;
 // Lower-cased at the door (`normalizeTags`), so this is what comes back.
 const COURT_TAG = `swt-${TAG}`;
+/** The roster, and therefore the fixture count: one league fixture per
+ *  unordered pair. Every count below is derived from this array's length. */
+const ENTRANT_NAMES = [`Ada ${TAG}`, `Bo ${TAG}`, `Cleo ${TAG}`, `Dev ${TAG}`];
 
 // ------------------------------------------------------------ the record
 interface HardRule {
@@ -81,11 +135,38 @@ let fixtureIds: string[] = [];
 // failure most likely to happen, and every later spec touching that division
 // then reds with a 422 that has nothing to do with its own change.
 // Put the thaw in afterAll, never in finally, and make it idempotent.
+//
+// And the thaw must VERIFY itself. `apiJson` (helpers.ts:122-139) resolves on
+// any status — it never throws on a non-2xx — so a bare `.catch(() => {})`
+// around it makes a 403, a 422 and a 500 indistinguishable from success, and
+// the leak this hook exists to prevent happens silently. Check the status,
+// then re-READ the lock state, and say so loudly in the log if it is still
+// locked. Never throw from here: an afterAll that throws masks the test's own
+// failure, which is the thing the next person actually needs to read.
 test.afterAll(async ({ request }) => {
   if (!divisionId) return;
-  await apiJson(request, `/api/v1/divisions/${divisionId}/locks`, "PATCH", {
-    schedule_locked: false,
-  }).catch(() => {});
+  try {
+    const patch = await apiJson(request, `/api/v1/divisions/${divisionId}/locks`, "PATCH", {
+      schedule_locked: false,
+    });
+    const after = await apiJson<{ schedule_locked: boolean }>(
+      request,
+      `/api/v1/divisions/${divisionId}`,
+    );
+    const stillLocked = after.data?.schedule_locked !== false;
+    if (patch.status >= 300 || stillLocked) {
+      console.error(
+        `[scheduling-organiser-day] THAW FAILED for division ${divisionId} — ` +
+          `PATCH /locks → ${patch.status} ${JSON.stringify(patch.error ?? {})}, ` +
+          `read-back schedule_locked=${JSON.stringify(after.data?.schedule_locked)} ` +
+          `(GET → ${after.status}). A division left frozen on this shared server will ` +
+          `red later specs with a 422 that has nothing to do with their own change; ` +
+          `unfreeze it by hand.`,
+      );
+    }
+  } catch (err) {
+    console.error(`[scheduling-organiser-day] THAW THREW for division ${divisionId}: ${String(err)}`);
+  }
 });
 
 async function goTab(page: Page, path: string, tab: string): Promise<void> {
@@ -187,15 +268,13 @@ test.beforeAll(async ({ request }) => {
   // Four entrants in a league is six fixtures — enough to exercise rest and the
   // per-day cap, small enough to solve fast. The budget is the design
   // constraint here, not an afterthought.
-  const entrants = await addEntrantsViaApi(request, divisionId, [
-    `Ada ${TAG}`,
-    `Bo ${TAG}`,
-    `Cleo ${TAG}`,
-    `Dev ${TAG}`,
-  ]);
+  const entrants = await addEntrantsViaApi(request, divisionId, ENTRANT_NAMES);
   if (entrants.status >= 300) throw new Error(`entrants → ${entrants.status}`);
   ({ fixtureIds } = await createStageAndGenerate(request, divisionId));
-  expect(fixtureIds).toHaveLength(6);
+  // Derived from the entrants THIS setup created — a single round robin is one
+  // fixture per unordered pair. A literal here would have to be re-typed the
+  // moment the roster changes, and would then be asserting yesterday's number.
+  expect(fixtureIds).toHaveLength((ENTRANT_NAMES.length * (ENTRANT_NAMES.length - 1)) / 2);
 
   // `divisionPath` is two localhost GETs and is deliberately not cached, so it
   // is resolved once here and reused rather than called per step.
@@ -207,6 +286,18 @@ test("the organiser sets up, schedules, saves, clears, restores, freezes and pub
   page,
   request,
 }, testInfo) => {
+  // ---------------------------------------------------------------- 0
+  // The budget, before anything spends it. This leg is the e2e workflow's
+  // wall-clock floor and 90s is the owner's constraint on it, so the derived
+  // allowance is asserted against that ceiling rather than merely being
+  // written down beside it: add a step, or raise PLACEMENT_WALL_SECONDS, and
+  // this reds with the arithmetic instead of drifting quietly over.
+  expect(
+    TEST_BUDGET_MS,
+    `derived budget ${TEST_BUDGET_MS}ms = ${STEPS} steps x ${PER_STEP_MS}ms + ${SOLVE_MS}ms solve, ` +
+      `over the ${HARD_BUDGET_MS}ms this leg is allowed. Cut steps or entrants, not assertions.`,
+  ).toBeLessThanOrEqual(HARD_BUDGET_MS);
+
   // ---------------------------------------------------------------- 1
   // Required courts and the clock, typed into the Settings tab.
   await goTab(page, base, "settings");
@@ -218,9 +309,9 @@ test("the organiser sets up, schedules, saves, clears, restores, freezes and pub
   // input plus a quarter-hour `<select>` — and deliberately exposes no bare
   // handle on either half. The date input carries the field's visible label;
   // the select is renamed "Time" so it does not read as a second copy of it.
-  await page.getByLabel("Start date & time").fill(DAY0);
-  await page.getByRole("combobox", { name: "Time" }).selectOption(PLAY_FROM);
-  await page.getByLabel("End date").fill(LAST_DAY);
+  await page.getByLabel(en["boardset.startAt"]!).fill(DAY0);
+  await page.getByRole("combobox", { name: en["datetime.timeLabel"]! }).selectOption(PLAY_FROM);
+  await page.getByLabel(en["boardset.endAt"]!).fill(LAST_DAY);
 
   // TRAP (Task 3 review): `settings-day-start` / `settings-day-end` live in the
   // ELSE branch of `customWindows ? <p> : …` (board/settings-panel.tsx:539). A
@@ -237,9 +328,10 @@ test("the organiser sets up, schedules, saves, clears, restores, freezes and pub
 
   await page.getByTestId("settings-match-minutes").fill(String(MATCH_MINUTES));
   await page.getByTestId("settings-gap-minutes").fill(String(GAP_MINUTES));
-  // "Save settings", not /save/i: the blackout editor's own button is
-  // "Save blackout windows" and a loose name matcher stops meaning one control.
-  await page.getByRole("button", { name: "Save settings" }).click();
+  // `boardset.save`, not /save/i: the blackout editor's own button is
+  // `constraints.blackout.save` and a loose name matcher stops meaning one
+  // control the moment a second Save appears on the panel.
+  await page.getByRole("button", { name: en["boardset.save"]! }).click();
 
   // The whole panel commits behind that ONE Save, so the record is read once
   // for everything it wrote.
@@ -274,11 +366,28 @@ test("the organiser sets up, schedules, saves, clears, restores, freezes and pub
   // Required court tags. Not on /schedule at all — this is the division's own
   // Settings tab (division-settings.tsx), PATCH /divisions/{id}. The run
   // sheet's `stage-court-tags` is a different surface and a different wave's.
+  //
+  // SCOPED to `division-settings`, deliberately. `divset.requiredTags.title`
+  // and `stagetags.title` are the SAME STRING in the dictionary
+  // ("Required court tags", ui.json:2276 and :2261) — a page-wide name lookup
+  // is a strict-mode red waiting for the day the stage editor shares a screen
+  // with this one.
   await goTab(page, divisionBase, "settings");
-  await page.getByRole("button", { name: "Required court tags" }).click();
-  await page.getByLabel("Type a tag and press Enter").fill(COURT_TAG);
-  await page.getByLabel("Type a tag and press Enter").press("Enter");
-  await page.getByRole("button", { name: "Save requirement" }).click();
+  const divSettings = page.getByTestId("division-settings");
+  await divSettings.getByRole("button", { name: en["divset.requiredTags.title"]! }).click();
+  const tagInput = divSettings.getByLabel(en["tags.placeholder"]!);
+  await tagInput.fill(COURT_TAG);
+  await tagInput.press("Enter");
+  // The chip is the panel's own statement that the tag was taken, before any
+  // Save — without it a refused entry saves an empty list and still reads green
+  // against a division that had no tags to begin with. Addressed by the chip's
+  // own remove control, whose accessible name interpolates the tag
+  // (`tags.remove`): the chip `<li>` itself also contains the button's "×", so
+  // an exact text match on the tag never resolves.
+  await expect(
+    divSettings.getByRole("button", { name: en["tags.remove"]!.replace("{tag}", COURT_TAG) }),
+  ).toBeVisible();
+  await divSettings.getByRole("button", { name: en["divset.requiredTags.save"]! }).click();
   await expect
     .poll(async () => (await divisionRow(request, divisionId)).required_court_tags)
     .toEqual([COURT_TAG]);
@@ -331,14 +440,49 @@ test("the organiser sets up, schedules, saves, clears, restores, freezes and pub
   // the queue in constraints-panel.tsx exists to prevent. The save-pulse is
   // read too: it is the panel's own client-side statement that it saved, so the
   // negative does not rest on a race with one HTTP round trip.
-  const beforeTyping = await readConfig(request, divisionId);
-  await page.getByTestId("constraint-min-rest").fill(String(REST_MIN));
-  await expect(page.locator("#rest-min-saved")).toHaveText("");
-  expect(await readConfig(request, divisionId)).toEqual(beforeTyping);
-  await page.getByTestId("constraint-min-rest").blur();
+  const restField = page.getByTestId("constraint-min-rest");
+  const restSaved = page.locator("#rest-min-saved");
+
+  // 5a — THE POSITIVE PAIR FIRST. A probe that has only ever been asserted
+  // EMPTY has never been shown to work: it would read green against a marker
+  // that is broken, renamed, or permanently blank, and the negative below
+  // would then prove nothing at all. So commit for real, watch the marker
+  // appear, and only then trust its silence.
+  await restField.fill(String(REST_MIN));
+  await restField.blur();
+  await expect(restSaved).toHaveText(en["constraints.field.saved"]!);
   await expect
     .poll(async () => (await readConfig(request, divisionId)).constraints?.restMin)
     .toBe(REST_MIN);
+
+  // 5b — then WAIT ON THE TRANSITION back to empty, not on a bare timeout.
+  // `useSavedPulse` clears itself after its own interval, so this assertion
+  // spends exactly that long and lands on a panel that is provably idle — the
+  // settled baseline the negative below needs, and the reason it is not racing
+  // an in-flight save left over from 5a.
+  await expect(restSaved).toHaveText("");
+
+  // 5c — THE NEGATIVE, from that baseline: typing alone must issue ZERO
+  // writes. A test that filled and immediately polled would pass on a panel
+  // that committed on every keystroke, which is the regression the save queue
+  // in constraints-panel.tsx exists to prevent. Bounded by two real round
+  // trips rather than a sleep: an immediate per-keystroke commit (the shape
+  // this panel actually used to have) lands inside the first one.
+  const typed = String(REST_MIN + 15);
+  const beforeTyping = await readConfig(request, divisionId);
+  await restField.fill(typed);
+  await expect(restField).toHaveValue(typed);
+  expect(await readConfig(request, divisionId)).toEqual(beforeTyping);
+  await expect(restSaved).toHaveText("");
+  expect(await readConfig(request, divisionId)).toEqual(beforeTyping);
+  await expect(restSaved).toHaveText("");
+
+  // 5d — and the commit still works from there, marker and record together.
+  await restField.blur();
+  await expect(restSaved).toHaveText(en["constraints.field.saved"]!);
+  await expect
+    .poll(async () => (await readConfig(request, divisionId)).constraints?.restMin)
+    .toBe(REST_MIN + 15);
 
   // `Number("") === 0` in JS, so an EMPTY numeric input reads as a valid zero
   // rather than as missing. `restMin` is coerced with `Math.max(0, Number(v))`,
@@ -424,9 +568,28 @@ test("the organiser sets up, schedules, saves, clears, restores, freezes and pub
   // assertion below reads these, never a constant re-derived here — so the test
   // cannot disagree with the panel about which hour "09:00" was.
   const stored = (await readConfig(request, divisionId)).blackouts![0]!;
-  expect(stored.court).toBeUndefined(); // "" is stored as ABSENT, not as ""
   expect(Date.parse(stored.from)).toBe(Date.parse(day0Window.from));
   expect(Date.parse(stored.to)).toBe(Date.parse(day0Window.to));
+  // "" is stored as an ABSENT key, not as an empty string — and that claim
+  // needs its POSITIVE pair, or it is equally satisfied by a panel that never
+  // writes `court` at all and silently drops every court-scoped window. So
+  // scope the row to a real court, read the key back, and only then put it
+  // back to everywhere. The last of the three is the state step 8 solves
+  // against, so the round trip also leaves the board where it was.
+  expect(Object.keys(stored).sort()).toEqual(["from", "to"]);
+  await row.getByTestId("blackout-court").selectOption(taggedCourtId);
+  await page.getByTestId("blackout-save").click();
+  await expect
+    .poll(async () => (await readConfig(request, divisionId)).blackouts?.[0]?.court)
+    .toBe(taggedCourtId);
+  await row.getByTestId("blackout-court").selectOption("");
+  await page.getByTestId("blackout-save").click();
+  await expect
+    .poll(async () =>
+      Object.keys((await readConfig(request, divisionId)).blackouts?.[0] ?? {}).sort(),
+    )
+    .toEqual(["from", "to"]);
+
   const blackoutFrom = Date.parse(stored.from);
   const blackoutTo = Date.parse(stored.to);
 
@@ -441,15 +604,34 @@ test("the organiser sets up, schedules, saves, clears, restores, freezes and pub
   await page.getByTestId("schedule-auto").click();
   const strip = page.getByTestId("schedule-result-strip");
   await expect(strip).toBeVisible({ timeout: SOLVE_MS });
-  await expect(page.getByTestId("schedule-result-provenance")).not.toBeEmpty();
-  // Reported, not asserted: which engine produced the board is environmental
-  // (CP-SAT when the placement service is up, greedy when it is not), and every
-  // claim below has to hold either way.
+
+  // Which engine produced the board is ENVIRONMENTAL and is reported, never
+  // asserted: `data-engine` names where the BOARD came from, not which solver
+  // ran, so "greedy" is the ordinary answer on a small board even with CP-SAT
+  // live (build.ts:2330-2392 ships the greedy seed whenever the service's reply
+  // does not strictly beat it). Every claim below holds for both producers.
   const engine = await strip.getAttribute("data-engine");
+  expect(engine === "greedy" || engine === "optimized", `unknown engine ${engine}`).toBe(true);
   testInfo.annotations.push({ type: "solver-engine", description: String(engine) });
 
+  // The provenance line is `<engine> · <elapsed> · <churn>`. `not.toBeEmpty()`
+  // pinned nothing — a single stray character satisfied it — so pin the SHAPE
+  // and the engine label the strip chose, read out of the dictionary rather
+  // than retyped, so a reworded label moves this with it.
+  const provenance = page.getByTestId("schedule-result-provenance");
+  await expect(provenance).toContainText(en[`board.result.engine.${engine}`]!);
+  expect((await provenance.textContent())?.split(" · ")).toHaveLength(3);
+
   const placed = await scheduledSlots(request, divisionId);
-  expect(placed).toHaveLength(fixtureIds.length);
+  // Every generated fixture placed. Derived from the setup's own fixture list,
+  // and carrying its own diagnosis: a partial board is a real defect, but it
+  // reads as a bare count mismatch unless the strip's status is quoted beside
+  // it (AGENTS.md §20 — the misleading line comes first).
+  expect(
+    placed.length,
+    `${placed.length} of ${fixtureIds.length} fixtures placed; ` +
+      `strip reports status=${await strip.getAttribute("data-status")} engine=${engine}`,
+  ).toBe(fixtureIds.length);
   const matchMs = MATCH_MINUTES * 60_000;
   for (const slot of placed) {
     const startsAt = Date.parse(slot.at);
@@ -473,13 +655,30 @@ test("the organiser sets up, schedules, saves, clears, restores, freezes and pub
   await goTab(page, base, "constraints");
   await page.getByTestId("wait-report-check").click();
   const result = page.getByTestId("wait-report-result");
-  await expect(result).toBeVisible();
-  const { data: report } = await apiJson<{ worst: { display_name: string }[] }>(
-    request,
-    `/api/v1/divisions/${divisionId}/schedule/report`,
-  );
-  expect(report!.worst.length).toBeGreaterThan(0);
-  await expect(result).toContainText(report!.worst[0]!.display_name);
+  // `toBeVisible()` alone is VACUOUS here: `wait-report-result` sits on BOTH
+  // branches (constraints-panel.tsx:1037 the "no waits yet" <p>, :1039 the
+  // results table), so it means only "a report came back, in either shape".
+  // Assert what separates them — the table, by its own aria-label — and that
+  // the empty-state sentence is not the thing on screen.
+  await expect(result.getByRole("table", { name: en["constraints.waitReport.tableAriaLabel"]! }))
+    .toBeVisible();
+  await expect(result).not.toHaveText(en["constraints.waitReport.empty"]!);
+
+  const { status: reportStatus, data: report } = await apiJson<{
+    worst: { display_name?: string; fixtures?: number }[];
+  }>(request, `/api/v1/divisions/${divisionId}/schedule/report`);
+  expect(reportStatus).toBe(200);
+  const worst = report?.worst ?? [];
+  expect(worst.length).toBeGreaterThan(0);
+  // The key has to EXIST before its value is asserted: `toContainText(undefined)`
+  // and its relatives pass against a payload that simply stopped carrying the
+  // field, which is the shape a rename ships.
+  const worstRow = worst[0]!;
+  expect(Object.keys(worstRow)).toContain("display_name");
+  const worstName = worstRow.display_name!;
+  expect(typeof worstName).toBe("string");
+  expect(worstName.length).toBeGreaterThan(0);
+  await expect(result).toContainText(worstName);
 
   // ---------------------------------------------------------------- 10
   // A save point, made by hand.
@@ -496,8 +695,8 @@ test("the organiser sets up, schedules, saves, clears, restores, freezes and pub
   // a number on screen that does not exist.
   await page.getByTestId("schedule-clear").click();
   await page
-    .getByRole("alertdialog", { name: "Clear unlocked slots?" })
-    .getByRole("button", { name: "Clear slots" })
+    .getByRole("alertdialog", { name: en["confirm.clearSlots.title"]! })
+    .getByRole("button", { name: en["confirm.clearSlots.label"]! })
     .click();
   await expect.poll(async () => (await scheduledSlots(request, divisionId)).length).toBe(0);
 
@@ -507,8 +706,8 @@ test("the organiser sets up, schedules, saves, clears, restores, freezes and pub
   // court, not merely the same count.
   await page.getByTestId("checkpoint-restore").first().click();
   await page
-    .getByRole("alertdialog", { name: "Restore this save point?" })
-    .getByRole("button", { name: "Restore", exact: true })
+    .getByRole("alertdialog", { name: en["confirm.restoreCheckpoint.title"]! })
+    .getByRole("button", { name: en["confirm.restoreCheckpoint.label"]!, exact: true })
     .click();
   await expect
     .poll(async () => (await scheduledSlots(request, divisionId)).length)
@@ -572,7 +771,15 @@ test("the organiser sets up, schedules, saves, clears, restores, freezes and pub
   await expect.poll(async () => (await divisionRow(request, divisionId)).status).toBe("active");
   await expect(page.getByTestId("board-start-division")).toHaveCount(0);
 
-  await screenshotAtWidths(page, testInfo, "organiser-day-final", [1280, 768, 320]);
+  // The standing bar is 1280, 768 and 320 with no horizontal page scroll at
+  // ANY of them. `screenshotAtWidths` (helpers.ts:240-252) only captures — it
+  // asserts nothing at all — so the gate is run per width here rather than
+  // once, at whatever viewport the capture happened to leave behind.
+  for (const width of FINAL_WIDTHS) {
+    await page.setViewportSize({ width, height: 900 });
+    await expectNoHorizontalScroll(page);
+  }
+  await screenshotAtWidths(page, testInfo, "organiser-day-final", FINAL_WIDTHS);
 
   // A FIRST phone visit to the board. `schedule-board.tsx` reads a SAVED
   // density out of localStorage BEFORE applying its `max-width: 640px` default,
@@ -583,13 +790,13 @@ test("the organiser sets up, schedules, saves, clears, restores, freezes and pub
   await page.evaluate(() => window.localStorage.removeItem("seazn:board:density"));
   await page.setViewportSize({ width: 320, height: 568 });
   await goTab(page, base, "board");
-  const densityGroup = page.getByRole("group", { name: "Board density" });
+  const densityGroup = page.getByRole("group", { name: en["board.densityAria"]! });
   await expect(densityGroup).toBeVisible();
   // MEASURED on 2026-09-04 against this build, not reasoned from the source:
   // with no stored preference at 320 the board opens on Agenda. Pinning the
   // value, not just "one of them is pressed", is what makes a regression in the
   // phone default visible here at all.
-  await expect(densityGroup.locator('button[aria-pressed="true"]')).toHaveText("Agenda");
+  await expect(densityGroup.locator('button[aria-pressed="true"]')).toHaveText(en["board.density.agenda"]!);
   await expectNoHorizontalScroll(page);
   await page.screenshot({
     path: `${testInfo.outputPath()}/organiser-day-board-320-first-visit.png`,
