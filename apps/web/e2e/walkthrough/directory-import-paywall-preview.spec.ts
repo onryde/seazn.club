@@ -66,6 +66,20 @@ test("a refused upload clears the previous file's committable plan", async ({ pa
   ).toBeVisible();
   await expect(commit, "the first file did not produce a committable plan").toBeVisible();
 
+  // --- 1b. a SUCCESSFUL remap must not tear the plan down -------------------
+  //
+  // `remap()` re-enters the same `upload()` this test's fix touches, so a fix
+  // written as "clear the preview whenever an upload starts" would unmount the
+  // mapping+preview card on every mapping change — a flash on the happy path,
+  // to cure a bug that only exists on the failing one. That regression shipped
+  // once and no spec could see it, because nothing here exercised remap.
+  await page.getByRole("button", { name: "Re-map & re-preview" }).click();
+  await expect(
+    page.getByRole("heading", { name: `Preview — first.csv (${GOOD_ROWS} rows)` }),
+    "a successful re-map tore down the plan it was supposed to refresh",
+  ).toBeVisible();
+  await expect(commit, "a successful re-map left no committable plan").toBeVisible();
+
   // --- 2. drop the row cap UNDER the next file, without leaving the page ----
   //
   // The override alone is not enough: `liveLimit` warms a 300s entitlement

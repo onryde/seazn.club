@@ -133,15 +133,6 @@ export function ImportWizard() {
     setError(null);
     setPaywallFeature(null);
     setResult(null);
-    // The PREVIOUS file's plan, too. Without this a refused upload — a row cap
-    // hit, a parse failure — leaves the last good preview mounted underneath
-    // the paywall or the error, with its "Commit import" button still enabled,
-    // and pressing it imports a file the organiser was just told was rejected.
-    //
-    // Deliberately here and NOT in `fail()`: `fail()` also serves the COMMIT
-    // path, where a 402 should leave the plan on screen for the organiser to
-    // trim. Only the upload path must clear it.
-    setPreview(null);
     setBusy(true);
     try {
       const form = new FormData();
@@ -158,6 +149,23 @@ export function ImportWizard() {
       setMapping(data.mapping ?? {});
       setWarnsAcknowledged(false);
     } catch (err) {
+      // Drop the PREVIOUS file's plan. Without this a refused upload — a row
+      // cap hit, a parse failure — leaves the last good preview mounted under
+      // the paywall or the error with its "Commit import" button still
+      // enabled, and pressing it imports a file the organiser was just told
+      // was rejected.
+      //
+      // In the CATCH, not at the top of `upload()`: `remap()` re-enters this
+      // same function on every mapping change, so clearing up front unmounted
+      // the mapping+preview card mid-flight on successful remaps too — a flash
+      // on the happy path, to fix a bug that only exists on the failing one.
+      //
+      // And not in `fail()` either, which the COMMIT path shares: a commit 402
+      // must leave the plan on screen for the organiser to trim. (It does so
+      // by never clearing `preview` at all — `commit()` handles 402 inline and
+      // returns before `fail()` is reached, so this is about keeping the two
+      // paths independent, not about `fail()`'s own behaviour.)
+      setPreview(null);
       fail(err);
     } finally {
       setBusy(false);
