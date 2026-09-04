@@ -275,6 +275,17 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
           <span
             data-testid="reg-status-outcome"
             data-status={entry.status}
+            /* The entry's own id, alongside its status. The bench reads both
+             * off this badge because the submit RESPONSE is unreadable by then:
+             * the stepper navigates here on success, and Playwright's
+             * `response.json()` then fails with "No resource with given
+             * identifier found" — the browser has discarded the body. The
+             * landing URL carries only the GROUP's rid/token, and the public
+             * status API is entry-keyed (`publicRegistrationStatus` ->
+             * `regByToken`), so without this the entry ids are unreachable from
+             * the page the registrant is actually looking at. Mirrors the
+             * hub's own `data-registration-id` convention. */
+            data-registration-id={entry.id}
             className={`shrink-0 rounded-full border px-2.5 py-1 text-xs font-semibold tracking-wide uppercase ${tone.badge}`}
           >
             {t(ui, STATUS_KEY[entry.status])}

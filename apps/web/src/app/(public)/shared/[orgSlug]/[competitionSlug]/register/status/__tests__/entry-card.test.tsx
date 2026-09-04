@@ -200,4 +200,33 @@ describe("EntryCard — reg-status-outcome bench hook", () => {
     expect(html).toContain('data-status="rejected"');
     expect(html).not.toContain('data-status="waitlisted"');
   });
+
+  // `data-registration-id` sits beside `data-status` because the bench cannot
+  // read the submit RESPONSE: the stepper navigates here on success, and
+  // Playwright's `response.json()` then fails with "No resource with given
+  // identifier found" — the browser has discarded the body of a request whose
+  // page is gone. The landing URL carries only the GROUP's rid/token, and the
+  // public status API is entry-keyed, so this badge is the only place an
+  // entry's own id is observable from the page a registrant actually sees.
+  it('carries data-registration-id on the same badge, matching the entry it renders', () => {
+    const props = baseProps();
+    const html = renderToStaticMarkup(
+      <EntryCard {...props} entry={{ ...props.entry, id: "reg-abc-123", status: "confirmed" }} />,
+    );
+    // Anchored on `="` — React serialises an omitted prop as "$undefined", so
+    // a bare attribute-name probe passes in both the present and absent states.
+    expect(html).toContain('data-registration-id="reg-abc-123"');
+  });
+
+  it("data-registration-id tracks the entry rather than being a constant", () => {
+    const props = baseProps();
+    const other = renderToStaticMarkup(
+      <EntryCard {...props} entry={{ ...props.entry, id: "reg-zzz-999", status: "confirmed" }} />,
+    );
+    // The differential half. A hardcoded id would satisfy the test above
+    // forever, and a driver would then address the wrong entry — or the same
+    // one twice — with nothing failing.
+    expect(other).toContain('data-registration-id="reg-zzz-999"');
+    expect(other).not.toContain('data-registration-id="reg-abc-123"');
+  });
 });

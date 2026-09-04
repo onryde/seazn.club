@@ -474,32 +474,51 @@ async function enterViaStepper(
     throw new Error(`browserCaptain.enter(): unexpected HTTP ${response.status()} from public submit`);
   }
 
-  const body = (await response.json()) as SubmitResponseBody;
-  const result = body.entries[0];
-  if (result === undefined) throw new Error("browserCaptain.enter(): submit response carried no entries[0]");
-  if (body.access_token !== undefined) onAccessToken(body.access_token);
+  // The success body is NOT read here, deliberately. On success the stepper
+  // immediately navigates to the status page, and Playwright's
+  // `response.json()` then fails with
+  //   Protocol error (Network.getResponseBody): No resource with given
+  //   identifier found
+  // because the browser has already discarded the body of a request whose page
+  // is gone. That is a race, not a flake: widening a timeout cannot fix it, and
+  // it only appears in a real browser, which is why three green unit suites and
+  // the http driver never saw it.
+  //
+  // Everything needed is on the page the registrant actually lands on. The URL
+  // carries the GROUP's rid + token (`submit.ts`'s `resolvePostSubmitNavigation`),
+  // and each entry's own id and status are on its status badge. Reading them
+  // there is also the stronger assertion: it proves the UI agrees, rather than
+  // trusting a payload the customer never sees.
+  //
+  // A paid-up-front entry redirects to Stripe instead and never lands here;
+  // `pay()` mints its own checkout session rather than trusting whichever page
+  // this navigation happened to reach.
+  await page.waitForURL(
+    (url) => url.pathname.includes("/register/status") || url.hostname.includes("checkout.stripe.com"),
+  );
 
-  // The app's OWN post-submit redirect (`submit.ts`'s
-  // `resolvePostSubmitNavigation`) — proves the UI, not just the API,
-  // agrees with what was just parsed. A free/no-immediate-charge entry
-  // (`_tiny`'s own division) always lands on the status page; a
-  // paid-up-front one would redirect straight to Stripe instead — `pay()`
-  // below still mints its OWN checkout session rather than trusting
-  // whatever page this navigation happens to land on.
-  await page.waitForURL((url) => url.pathname.includes("/register/status") || url.hostname.includes("checkout.stripe.com"));
-  if (page.url().includes("/register/status")) {
-    const outcome = page.locator('[data-testid="reg-status-outcome"]').first();
-    await outcome.waitFor({ state: "visible" });
-    const domStatus = await outcome.getAttribute("data-status");
-    if (domStatus !== null && domStatus !== result.status) {
-      throw new Error(
-        `browserCaptain.enter(): submit response said status "${result.status}" but the status page's own ` +
-          `reg-status-outcome shows "${domStatus}" — read data-status, never the visible label`,
-      );
-    }
+  if (page.url().includes("checkout.stripe.com")) {
+    // Paid-up-front: no status page to read. The entry exists, but its id is
+    // only observable once `pay()` completes and the status page renders.
+    return { status: "pending", ref: "" };
   }
 
-  return { status: mapSubmitStatus(result.status), ref: result.registration_id };
+  const landed = new URL(page.url());
+  const token = landed.searchParams.get("token");
+  if (token !== null && token !== "") onAccessToken(token);
+
+  const outcome = page.locator('[data-testid="reg-status-outcome"]').first();
+  await outcome.waitFor({ state: "visible" });
+  const domStatus = await outcome.getAttribute("data-status");
+  const registrationId = await outcome.getAttribute("data-registration-id");
+  if (domStatus === null || registrationId === null) {
+    throw new Error(
+      "browserCaptain.enter(): the status badge carried no data-status/data-registration-id — " +
+        "read those attributes, never the visible label (it is an i18n string in four locales)",
+    );
+  }
+
+  return { status: mapSubmitStatus(domStatus), ref: registrationId };
 }
 
 async function payViaCheckout(session: RegistrationBrowserSession, base: string, entryId: string, token: string): Promise<void> {
