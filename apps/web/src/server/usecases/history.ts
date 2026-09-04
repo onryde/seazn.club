@@ -252,6 +252,38 @@ async function step(
         actualSeq: meta.seq,
       });
     }
+    // A freeze binds the REWIND as well as every forward edit. Undo and redo
+    // were the last two division write paths that ignored it: `applySchedule`
+    // and the single-fixture move (both schedule.ts), `clearScheduleScoped` and
+    // `restoreCheckpoint` (below) all refuse on exactly these terms, and
+    // `restoreCheckpoint` is a LOOP OF THIS FUNCTION — so a freeze that stopped
+    // the restore left the primitive it is built out of live, on two buttons a
+    // few hundred pixels above the Restore it had just disabled. Same blast
+    // radius, one layer down.
+    //
+    // Guarding it strands nobody, which is the objection this was exempted for.
+    // `divisions.schedule_locked` has exactly ONE writer — `setDivisionLocks`,
+    // which appends no ledger event — so there is no replay of the division
+    // freeze and no rewind could ever have handed it back. The `schedule_locked`
+    // undo DOES replay is `fixtures.schedule_locked`, the per-fixture pin: a
+    // different column on a different table with the same name, and the whole
+    // of the original exemption's reasoning.
+    //
+    // Same 422 and the same hand-duplicated sentence as the four sites above —
+    // six now, still no shared constant, so a reword must grep the literal.
+    // (The joint apply's 422 interpolates a division name and carries code
+    // "SCHEDULE_LOCKED", and the AI-plan refusal is a 409 with its own copy:
+    // neither is this contract.)
+    //
+    // AFTER the existence check in `divisionMeta` (a missing division still
+    // 404s) and after the optimistic token, matching `applySchedule`, which
+    // runs `assertFreshSeq` ahead of its own freeze check. BEFORE the ledger
+    // read, so a frozen division refuses without engine work and without a
+    // chance of appending.
+    const lockState = await divisionLockState(tx, divisionId);
+    if (lockState.frozen) {
+      throw new HttpError(422, "the division schedule is locked — unlock it to edit");
+    }
     const ledger = await loadLedger(tx, divisionId);
     const decided = await decidedFixtureIds(tx, divisionId);
     let result;
@@ -610,20 +642,18 @@ export async function restoreCheckpoint(
     //
     // Same 422 and the same hand-duplicated sentence as `applySchedule` and
     // the single-fixture move (both schedule.ts) and as `clearScheduleScoped`
-    // below — four sites now, no shared constant, so a reword must grep the
-    // literal. (The joint apply's 422 interpolates a division name and carries
-    // code "SCHEDULE_LOCKED", and the AI-plan refusal is a 409 with its own
-    // copy: neither is this contract.)
+    // below — no shared constant, so a reword must grep the literal. (The
+    // joint apply's 422 interpolates a division name and carries code
+    // "SCHEDULE_LOCKED", and the AI-plan refusal is a 409 with its own copy:
+    // neither is this contract.)
     //
-    // It goes HERE and not in `undoDivision`, which this function calls in a
-    // loop and which is deliberately left unguarded: undo/redo replay
-    // `schedule_edited`, whose executor restores `fixtures.schedule_locked`
-    // from the ledger, so undo is a legitimate way to put a PIN back. It never
-    // writes `divisions.schedule_locked` — that column moves only through
-    // `setDivisionLocks`, which appends no ledger event — so neither undo nor
-    // this restore can hand back the division freeze, and refusing here
-    // strands nothing. The guard must be ahead of the loop regardless: inside
-    // it, the first undo would already have landed.
+    // `step` (undo/redo) now carries the same guard, and this one is still
+    // load-bearing rather than redundant: a restore whose watermark has already
+    // reached the checkpoint short-circuits to `{ steps: 0 }` in the loop below
+    // WITHOUT ever calling undo, so only this guard can refuse that call. The
+    // two are pinned by separate cases in history.test.ts for exactly that
+    // reason. It also has to be ahead of the loop regardless: inside it, the
+    // first undo would already have landed.
     //
     // After the checkpoint lookup, so a checkpoint that does not exist (or
     // belongs to another division) still answers 404 rather than 422 — the
