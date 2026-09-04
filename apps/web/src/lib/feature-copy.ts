@@ -61,10 +61,12 @@ export const FEATURE_REASONS: Record<string, string> = {
   // and a reason here would be an upsell nothing can reach. The last two
   // additionally named "Pro Plus", a plan that no longer exists.
   //
-  // NOT removed, and deliberately: `schedule.checkpoints.max` still says
-  // "Pro includes five, Pro Plus unlimited". Its KEY is live (§2 keeps it),
-  // so only the sentence is stale — and every surviving "Pro Plus" string is
-  // W3's copy pass, not this wave's. Recorded in the v18 _INDEX.md.
+  // NOT removed, and deliberately: `schedule.checkpoints.max`. Its KEY is live
+  // (§2 keeps it), so only the SENTENCE was stale — it said "Pro includes five,
+  // Pro Plus unlimited" against a plan V392 deleted and a Pro cap V319 moved to
+  // 10. Rewritten here, in the retired-plan copy sweep, to the two rungs a
+  // reader of this 402 can actually be on: community 2, pro 10. Above Pro is
+  // unlimited and is the Contact-us conversation, which no 402 upsell reaches.
   // ── SEVEN REASONS THAT NAMED PRO FOR A KEY COMMUNITY GRANTS ──────────────
   //
   // Found by `freeClaimFaults` (lib/copy-truth.ts) on its first run, which is
@@ -175,7 +177,8 @@ export const FEATURE_REASONS: Record<string, string> = {
   "ai.credits":
     "You're out of AI credits for this billing period. Top up a credit pack or upgrade your plan to keep using AI Schedule and AI Officials.",
   "schedule.versioning": "Multi-site scope locks are a Pro feature — undo/redo always works.",
-  "schedule.checkpoints.max": "You've reached your plan's save points — Pro includes five, Pro Plus unlimited. Undo/redo always works.",
+  "schedule.checkpoints.max":
+    "You've reached your plan's save points — Community keeps 2 per division and Pro keeps 10. Undo/redo always works.",
   "scoring.device_links":
     "Hand-this-device-over scoring links are a Pro feature — your scorer seat still works.",
   // Registration & entry fees (doc 16 §1.1)

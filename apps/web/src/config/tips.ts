@@ -38,7 +38,7 @@ export const TIPS = {
   },
   "persons.public-cards": {
     title: "What makes a profile public",
-    body: "Two separate locks, and a public player card needs both. The player's own consent — no plan overrides it, and switching it off takes the card down again — and your plan: public cards need Pro, Pro Plus, or an Event Pass on that competition. Name and photo are consented separately.",
+    body: "Two separate locks, and a public player card needs both. The player's own consent — no plan overrides it, and switching it off takes the card down again — and your plan: public cards need Pro or an Event Pass on that competition. Name and photo are consented separately.",
     helpSlug: "players/player-stats-and-photo",
   },
   "persons.actions": {
@@ -94,7 +94,7 @@ export const TIPS = {
     // msg(`tips.${id}.body`) from the four dictionaries; this is the source of
     // truth the en dictionary mirrors, and lib/__tests__/dictionary-copy-truth
     // asserts the two are identical so a fix here can never be cosmetic.
-    body: "Each organisation after the first costs no more than half the base rate. It also moves to your plan's entry-fee cut — 2% on Pro or 1% on Pro Plus, instead of the 8% a free organisation pays.",
+    body: "Each organisation after the first costs no more than half the base rate. It also moves to your plan's entry-fee cut — 2% on Pro, instead of the 8% a free organisation pays.",
     helpSlug: "billing/groups",
   },
   // Held back when the tips landed, because quantity_paid was written by
@@ -166,7 +166,7 @@ export const TIPS = {
   },
   "schedule.save-points": {
     title: "Save points",
-    body: "A save point bookmarks the timetable exactly as it is now — every kick-off time and court. Restore rewinds the schedule to that bookmark by undoing each change since, one by one. Match results are never touched: if rewinding would erase a played result, the restore stops there. One save point is free, Pro includes five, Pro Plus is unlimited.",
+    body: "A save point bookmarks the timetable exactly as it is now — every kick-off time and court. Restore rewinds the schedule to that bookmark by undoing each change since, one by one. Match results are never touched: if rewinding would erase a played result, the restore stops there. Community keeps 2 save points per division and Pro keeps 10.",
     helpSlug: "scheduling/undo",
   },
   "schedule.field-fairness": {
