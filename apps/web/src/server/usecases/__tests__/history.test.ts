@@ -428,6 +428,77 @@ describe.skipIf(!HAS_DB)("schedule undo & versioning (Jul3/03)", () => {
     expect(after!.scheduled).toBeGreaterThan(0);
   });
 
+
+  // Restore is the SECOND destructive control the Danger zone's neighbour
+  // offers, and it has the larger blast radius of the two: clear empties
+  // unlocked slots, a restore rewrites every fixture's time and court back to
+  // the save point. The freeze stopped clear (above) and did not stop this, so
+  // an organiser who froze a board could still have the whole timetable
+  // rewritten from a control sitting a few hundred pixels up the same panel.
+  //
+  // `restoreCheckpoint` rewinds by calling `undoDivision` in a loop, and undo
+  // itself is deliberately NOT guarded — see the guard's own comment for why.
+  // The refusal therefore has to live in `restoreCheckpoint`, ahead of the
+  // loop, or the first undo lands before anything says no.
+  it("restoring a save point refuses a frozen division, and still restores an unfrozen one", async () => {
+    const { auth } = await seedOrg();
+    const { courtA, courtB } = await seedCourts(auth);
+
+    /** Schedule one fixture, bookmark it, then move it away. Restoring the
+     *  returned checkpoint rewinds that single move — one step, one visible
+     *  column. */
+    async function divisionWithARewindWaiting() {
+      const { division, fixtures } = await seedDivision(auth);
+      const f = fixtures[0]!.id;
+      await patchFixture(auth, f, { scheduled_at: at(9), court_id: courtA });
+      const cp = await createCheckpoint(auth, division.id, "before reshuffle");
+      await patchFixture(auth, f, { scheduled_at: at(15), court_id: courtB });
+      return { divisionId: division.id, fixtureId: f, checkpointId: cp.id };
+    }
+
+    // Two divisions rather than one, because a restore does not re-arm itself:
+    // `patchFixture` appends its event without clearing `edit_watermark`, so a
+    // second restore of the same checkpoint on the same division short-circuits
+    // to `steps: 0` and would witness nothing whether the guard fired or not.
+    //
+    // The unfrozen control runs FIRST, so a guard that refused every restore —
+    // or one placed so early it never reaches the rewind — cannot pass this
+    // test by refusing both halves.
+    const open = await divisionWithARewindWaiting();
+    const control = await restoreCheckpoint(auth, open.divisionId, open.checkpointId, true);
+    expect(control.steps).toBe(1);
+    const [rewound] = await sql<{ court_id: string | null }[]>`
+      select court_id from fixtures where id = ${open.fixtureId}`;
+    expect(rewound!.court_id).toBe(courtA);
+
+    const frozen = await divisionWithARewindWaiting();
+    const [before] = await sql<{ at: string | null; court_id: string | null }[]>`
+      select scheduled_at::text as at, court_id from fixtures where id = ${frozen.fixtureId}`;
+    expect(before!.court_id).toBe(courtB); // the rewind really is available
+
+    await setDivisionLocks(auth, frozen.divisionId, { schedule_locked: true });
+
+    await expect(
+      restoreCheckpoint(auth, frozen.divisionId, frozen.checkpointId, true),
+    ).rejects.toMatchObject({ status: 422 });
+    // The sentence is a contract three sibling write paths already share and
+    // the panel's own copy echoes, so it is pinned as well as the status.
+    // `message` is not an own enumerable property, so the `toMatchObject`
+    // above cannot see it — it needs its own matcher.
+    await expect(
+      restoreCheckpoint(auth, frozen.divisionId, frozen.checkpointId, true),
+    ).rejects.toThrow("the division schedule is locked — unlock it to edit");
+
+    // The refusal must not have rewritten the board on its way out: the guard
+    // sits ahead of the rewind loop, not inside it.
+    const [after] = await sql<{ at: string | null; court_id: string | null }[]>`
+      select scheduled_at::text as at, court_id from fixtures where id = ${frozen.fixtureId}`;
+    expect(after).toEqual(before);
+    // ...and the division it did not name is untouched by the freeze.
+    const openStill = await restoreCheckpoint(auth, open.divisionId, open.checkpointId, true);
+    expect(openStill.steps).toBe(0);
+  });
+
   it("clear-entrants keeps the pool, blocks after a result; two-site scope lock blocks edits", async () => {
     const { auth } = await seedOrg();
     const { division, fixtures } = await seedDivision(auth, {

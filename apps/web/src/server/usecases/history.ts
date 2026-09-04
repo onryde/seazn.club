@@ -601,6 +601,37 @@ export async function restoreCheckpoint(
       select seq from division_checkpoints
       where id = ${checkpointId} and division_id = ${divisionId}`;
     if (!cp) throw new HttpError(404, "checkpoint not found");
+    // A freeze has to stop the REWIND as well as the clear. Restore is the
+    // wider of the two: `clearScheduleScoped` empties unlocked slots, this
+    // rewrites every fixture's time and court back to the save point — and the
+    // two controls sit in the same console a few hundred pixels apart, so a
+    // freeze that only bound one of them refused the smaller edit and allowed
+    // the larger.
+    //
+    // Same 422 and the same hand-duplicated sentence as `applySchedule` and
+    // the single-fixture move (both schedule.ts) and as `clearScheduleScoped`
+    // below — four sites now, no shared constant, so a reword must grep the
+    // literal. (The joint apply's 422 interpolates a division name and carries
+    // code "SCHEDULE_LOCKED", and the AI-plan refusal is a 409 with its own
+    // copy: neither is this contract.)
+    //
+    // It goes HERE and not in `undoDivision`, which this function calls in a
+    // loop and which is deliberately left unguarded: undo/redo replay
+    // `schedule_edited`, whose executor restores `fixtures.schedule_locked`
+    // from the ledger, so undo is a legitimate way to put a PIN back. It never
+    // writes `divisions.schedule_locked` — that column moves only through
+    // `setDivisionLocks`, which appends no ledger event — so neither undo nor
+    // this restore can hand back the division freeze, and refusing here
+    // strands nothing. The guard must be ahead of the loop regardless: inside
+    // it, the first undo would already have landed.
+    //
+    // After the checkpoint lookup, so a checkpoint that does not exist (or
+    // belongs to another division) still answers 404 rather than 422 — the
+    // ordering `clearScheduleScoped` uses for its own existence check.
+    const lockState = await divisionLockState(tx, divisionId);
+    if (lockState.frozen) {
+      throw new HttpError(422, "the division schedule is locked — unlock it to edit");
+    }
     return Number(cp.seq);
   });
   let steps = 0;
