@@ -464,7 +464,7 @@ export async function setZoneSplitSql(opts: {
 
 export async function setOrgPlanBySql(
   target: { orgId?: string; email?: string },
-  plan: "pro" | "community" | "pro_plus",
+  plan: "pro" | "community",
 ): Promise<void> {
   await withDb(async (sql) => {
     if (target.orgId) {
@@ -1089,12 +1089,20 @@ export async function joinOrgToGroupSql(orgId: string, groupId: string): Promise
 /**
  * Give `orgId` a billing group of ITS OWN, and return the new group's id.
  *
- * The inverse of joinOrgToGroupSql, and the fixture V309 made necessary: a new
- * org joins its creator's EXISTING group (lib/auth.ts createOrgForUser), so
- * three orgs minted by one e2e user are three orgs on ONE bill, not three
- * groups. A spec that wants to watch orgs move between groups has to break them
- * apart first, or every "join" it performs is a no-op against a group that
- * already holds everything.
+ * The inverse of joinOrgToGroupSql. This comment used to say a new org joins
+ * its creator's EXISTING group (citing lib/auth.ts createOrgForUser), so three
+ * orgs minted by one e2e user shared ONE bill. That was FALSE, and a peer
+ * session acted on it before withdrawing the conclusion: `createOrgForUser`
+ * inserts a FRESH `subscriptions` row inside its own transaction and stamps it
+ * onto the new org ("Individual by default (#212): every new org mints its OWN
+ * community group", and its race comment says "each minted an org + a Community
+ * group"). V309's auto-join is opt-in now. The only writers that attach an org
+ * to an EXISTING group are the explicit usecases in billing-groups.ts.
+ *
+ * So a spec that wants to watch orgs move between groups starts from orgs that
+ * are already apart, and this helper is what a spec uses when it has
+ * deliberately JOINED them (joinOrgToGroupSql, or the attach route) and now
+ * needs one back on a bill of its own.
  *
  * Mirrors what a detach leaves behind — a fresh community group owned by the
  * org's owner — and drops the old group if this emptied it, like dropEmptyGroup.

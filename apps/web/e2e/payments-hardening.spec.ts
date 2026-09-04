@@ -134,7 +134,7 @@ interface SeededOrg {
 /** Org with its own fresh owner (never the shared Pro user → no budget impact).
  *  plan/connect columns set per opts. Returns ids + the owner email to log in. */
 async function seedOrg(opts: {
-  plan?: "community" | "pro" | "pro_plus";
+  plan?: "community" | "pro" | "enterprise";
   subStatus?: string;
   chargesEnabled?: boolean;
   connected?: boolean;
@@ -948,11 +948,14 @@ test.describe("T9 · past-due grace degrades to community after 14 days", () => 
     expect(keyAttempt.status).toBe(402);
   });
 
-  // Plan-generic (reviewer ITEM-3): the grace degrade applies to pro_plus too,
+  // Plan-generic (reviewer ITEM-3): the grace degrade applies above Pro too,
   // exercised end-to-end so the constraint is proven on the top paid tier.
-  test("banner shows and gated writes 402 for a >14d past_due PRO PLUS org", async ({ page }) => {
+  // That tier is `enterprise` since V392 (entitlements v18) deleted `pro_plus`
+  // from `plans` — the point of the test is that the degrade is not keyed to
+  // one plan, so it follows the top tier rather than dying with the old one.
+  test("banner shows and gated writes 402 for a >14d past_due ENTERPRISE org", async ({ page }) => {
     const stale = new Date(Date.now() - 15 * 24 * 60 * 60_000).toISOString();
-    const org = await seedOrg({ plan: "pro_plus", subStatus: "past_due", subUpdatedAt: stale });
+    const org = await seedOrg({ plan: "enterprise", subStatus: "past_due", subUpdatedAt: stale });
 
     await loginAsOwner(page, org.ownerEmail);
 
@@ -961,9 +964,10 @@ test.describe("T9 · past-due grace degrades to community after 14 days", () => 
       page.getByText(/payment failed — your subscription is past due/i),
     ).toBeVisible({ timeout: 20_000 });
 
-    // pro_plus degrades to community at read time → the api.access-gated write 402s.
+    // enterprise degrades to community at read time → the api.access-gated write
+    // 402s (api.access is true on enterprise, false on community).
     const keyAttempt = await apiJson(page.request, `/api/v1/orgs/${org.orgId}/api-keys`, "POST", {
-      name: `t9plus ${TAG}`,
+      name: `t9ent ${TAG}`,
       scopes: ["read"],
     });
     expect(keyAttempt.status).toBe(402);

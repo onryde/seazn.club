@@ -59,11 +59,13 @@ async function shot(page: Page, name: string): Promise<void> {
   await page.screenshot({ path: resolve(SHOTS, `${name}.png`), fullPage: true }).catch(() => undefined);
 }
 
-/** Create + activate a fresh Pro Plus org (officials.auto is a Pro Plus feature —
- *  V290 — so the officials auto-draft only runs there). Same fresh-org-by-id flip
+/** Create + activate a fresh PRO org. `officials.auto` is what the officials
+ *  auto-draft step needs; V290 put it above Pro, and V392 (entitlements v18)
+ *  brought it back DOWN to Pro when it deleted the `pro_plus` plan outright, so
+ *  Pro is the tier that grants it now. Same fresh-org-by-id flip
  *  schedule-panels.spec uses to dodge the shared org's primed entitlement cache. */
-async function activateFreshProPlusOrg(page: Page, request: APIRequestContext): Promise<string> {
-  return (await activateFreshProPlusOrgWithSlug(page, request)).id;
+async function activateFreshProOrg(page: Page, request: APIRequestContext): Promise<string> {
+  return (await activateFreshProOrgWithSlug(page, request)).id;
 }
 
 /** The same thing, plus the org's SLUG. The `/o/[orgSlug]/…` competition board
@@ -72,14 +74,14 @@ async function activateFreshProPlusOrg(page: Page, request: APIRequestContext): 
  *  activation above happens on the separate `request` context. Taking the slug
  *  from the create response is the only reading that names the org this test
  *  actually owns. */
-async function activateFreshProPlusOrgWithSlug(
+async function activateFreshProOrgWithSlug(
   page: Page,
   request: APIRequestContext,
 ): Promise<{ id: string; slug: string }> {
   const org = await apiJson<{ id: string; slug: string }>(request, "/api/orgs", "POST", {
-    name: `AI Architect PP ${TAG}-${Math.random().toString(36).slice(2, 6)}`,
+    name: `AI Architect Pro ${TAG}-${Math.random().toString(36).slice(2, 6)}`,
   });
-  await setOrgPlanBySql({ orgId: org.data!.id }, "pro_plus");
+  await setOrgPlanBySql({ orgId: org.data!.id }, "pro");
   const activated = await apiJson(request, "/api/orgs/active", "POST", { org_id: org.data!.id });
   expect(activated.status).toBeLessThan(300);
   return { id: org.data!.id, slug: org.data!.slug };
@@ -222,7 +224,7 @@ async function addFinishByWish(page: Page): Promise<void> {
 
 test("pro: brief → run → CLEAN → officials → apply → undo", async ({ page, request }) => {
   fixture.reset();
-  await activateFreshProPlusOrg(page, request); // officials.auto step needs Pro Plus
+  await activateFreshProOrg(page, request); // the officials.auto step needs a paid plan
   const { divisionId } = await seedAiDivision(request, { officials: true });
 
   await page.goto(await divisionPath(page.request, divisionId, "/schedule?tab=board"));
@@ -313,7 +315,7 @@ test("pro: brief → run → CLEAN → officials → apply → undo", async ({ p
  */
 test("pro: declining the compiled instruction spends no credit", async ({ page, request }) => {
   fixture.reset();
-  const orgId = await activateFreshProPlusOrg(page, request);
+  const orgId = await activateFreshProOrg(page, request);
   const { divisionId } = await seedAiDivision(request);
 
   await page.goto(await divisionPath(page.request, divisionId, "/schedule?tab=board"));
@@ -446,7 +448,7 @@ test("the credits picker is a real radio group — arrows move the selection AND
   page,
   request,
 }) => {
-  await activateFreshProPlusOrg(page, request);
+  await activateFreshProOrg(page, request);
   const { divisionId } = await seedRungTwoDivision(request);
 
   await page.goto(await divisionPath(page.request, divisionId, "/schedule?tab=board"));
@@ -541,7 +543,7 @@ test("the officials step prices itself: free draft with no picker, priced once a
   request,
 }) => {
   fixture.reset();
-  await activateFreshProPlusOrg(page, request);
+  await activateFreshProOrg(page, request);
   const { divisionId } = await seedAiDivision(request, { officials: true });
 
   await page.goto(await divisionPath(page.request, divisionId, "/schedule?tab=board"));
@@ -597,7 +599,7 @@ test("pro: the officials draft spends nothing until the organiser presses", asyn
   request,
 }) => {
   fixture.reset();
-  const orgId = await activateFreshProPlusOrg(page, request);
+  const orgId = await activateFreshProOrg(page, request);
   const { divisionId } = await seedAiDivision(request, { officials: true });
 
   await page.goto(await divisionPath(page.request, divisionId, "/schedule?tab=board"));
@@ -650,7 +652,7 @@ test("a move re-prices the open console before the server has even answered", as
   page,
   request,
 }) => {
-  await activateFreshProPlusOrg(page, request);
+  await activateFreshProOrg(page, request);
   const { divisionId, stageId, courts } = await seedAiDivision(request);
 
   // Give every fixture a slot, then black out a MID-DAY window. The repair
@@ -853,7 +855,7 @@ test("competition board: pick divisions → price the batch → run → review �
   request,
 }) => {
   fixture.reset();
-  const org = await activateFreshProPlusOrgWithSlug(page, request);
+  const org = await activateFreshProOrgWithSlug(page, request);
   const { competitionId, compSlug, divisionIds } = await seedJointCompetition(request);
   const [bigDivision, smallDivision] = divisionIds as [string, string];
 
@@ -1038,7 +1040,7 @@ test("a model refusal surfaces the AI_PLAN_FAILED copy (and proves the model was
   request,
 }) => {
   fixture.reset();
-  await activateFreshProPlusOrg(page, request);
+  await activateFreshProOrg(page, request);
   const { divisionId } = await seedAiDivision(request);
 
   await page.goto(await divisionPath(page.request, divisionId, "/schedule?tab=board"));
@@ -1083,7 +1085,7 @@ test("a double-booked plan is repaired by the solver before the organiser sees i
   request,
 }) => {
   fixture.reset();
-  await activateFreshProPlusOrg(page, request);
+  await activateFreshProOrg(page, request);
   const { divisionId } = await seedAiDivision(request);
 
   await page.goto(await divisionPath(page.request, divisionId, "/schedule?tab=board"));
@@ -1187,7 +1189,7 @@ test("a clash off the minute boundary is repaired without losing its seconds (#4
   request,
 }) => {
   fixture.reset();
-  await activateFreshProPlusOrg(page, request);
+  await activateFreshProOrg(page, request);
   const { divisionId } = await seedAiDivision(request);
 
   await page.goto(await divisionPath(page.request, divisionId, "/schedule?tab=board"));
@@ -1279,7 +1281,7 @@ test("a round-order violation in the canned plan is detected, not silently accep
   request,
 }) => {
   fixture.reset();
-  await activateFreshProPlusOrg(page, request);
+  await activateFreshProOrg(page, request);
   const { divisionId } = await seedAiDivision(request);
 
   await page.goto(await divisionPath(page.request, divisionId, "/schedule?tab=board"));
@@ -1422,7 +1424,10 @@ test.describe("community credit gate", () => {
       // Not a dead end: the recovery block's own CTAs, and the check still on
       // offer underneath once the wallet is topped up.
       await expect(outOfCredits.getByRole("button", { name: "Buy credits" })).toBeVisible();
-      await expect(outOfCredits.locator('[data-upgrade="pro_plus"]')).toBeVisible();
+      // `pro`, not `pro_plus`: V392 deleted that plan from `plans`, so the CTA
+      // pointed at a tier nobody can buy. The recovery block still offers an
+      // upgrade — it now names the top self-serve plan (ai-out-of-credits.tsx).
+      await expect(outOfCredits.locator('[data-upgrade="pro"]')).toBeVisible();
       await shot(page, "07-community-out-of-credits");
 
       // The same block at the reference phone. Its three recovery CTAs stack
@@ -1449,7 +1454,7 @@ test.describe("mobile viewport", () => {
 
   test("the happy flow runs at 390px with no horizontal scroll", async ({ page, request }) => {
     fixture.reset();
-    await activateFreshProPlusOrg(page, request); // officials.auto step needs Pro Plus
+    await activateFreshProOrg(page, request); // the officials.auto step needs a paid plan
     const { divisionId } = await seedAiDivision(request, { officials: true });
 
     await page.goto(await divisionPath(page.request, divisionId, "/schedule?tab=board"));

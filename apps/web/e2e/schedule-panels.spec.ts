@@ -73,13 +73,15 @@ test("documents: Admit tickets on a competition with no confirmed registrations 
 });
 
 test("officials (PROMPT-22): propose → apply an auto-assignment", async ({ page, request }) => {
-  // V290: officials.auto is Pro Plus. Run this flow in a FRESH org flipped to
-  // pro_plus by id — a fresh org has no cached entitlements, and flipping the
-  // shared setup org would race the 5-min ent cache primed by sibling tests.
+  // officials.auto is a PAID grant: V290 put it above Pro, V392 (entitlements
+  // v18) brought it back down to Pro when it deleted the `pro_plus` plan. Run
+  // this flow in a FRESH org flipped to pro by id — a fresh org has no cached
+  // entitlements, and flipping the shared setup org would race the 5-min ent
+  // cache primed by sibling tests.
   const org = await apiJson<{ id: string }>(request, "/api/orgs", "POST", {
     name: `Panels ${TAG}-${Math.random().toString(36).slice(2, 6)}`,
   });
-  await setOrgPlanBySql({ orgId: org.data!.id }, "pro_plus");
+  await setOrgPlanBySql({ orgId: org.data!.id }, "pro");
   const activated = await apiJson(request, "/api/orgs/active", "POST", { org_id: org.data!.id });
   expect(activated.status).toBeLessThan(300);
 
@@ -116,7 +118,7 @@ test("officials (#448): maxPerDay caps on the org day across a UTC midnight", as
   const org = await apiJson<{ id: string }>(request, "/api/orgs", "POST", {
     name: `TZ448 ${TAG}-${Math.random().toString(36).slice(2, 6)}`,
   });
-  await setOrgPlanBySql({ orgId: org.data!.id }, "pro_plus");
+  await setOrgPlanBySql({ orgId: org.data!.id }, "pro");
   const activated = await apiJson(request, "/api/orgs/active", "POST", { org_id: org.data!.id });
   expect(activated.status).toBeLessThan(300);
 
