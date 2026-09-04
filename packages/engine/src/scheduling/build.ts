@@ -1821,16 +1821,28 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
    *
    * PER-DIVISION IS THE FINEST GRAIN THIS MAP HAS, and `restFloor` is asked
    * with `{ divisionId }` alone for that reason — never with the fixture's
-   * `poolId`. A pool-keyed `restByGroup` entry has nowhere to land here: the
-   * key space is division ids, so folding a pool's stricter floor in would
-   * raise it for every SIBLING POOL of the same division too, which
-   * over-constrains cards that owe nothing and can turn a feasible board
-   * infeasible. Under-stating it is the lesser harm — `rest` is warn-only at
-   * the verifier gate — and collapsing a per-group floor into a number the
-   * organiser never set is the shape of defect this whole block exists to
-   * undo. (`RuleGroup` is a set of FIXTURE IDS and could carry a pool-scoped
-   * group; it is `restByDivision`'s division-keyed record, the parameter
-   * `buildRuleGroups` takes, that cannot express one.)
+   * `poolId`. A pool-keyed `restByGroup` entry has nowhere to land: the key
+   * space is division ids.
+   *
+   * IT IS NOT MAX-COLLAPSED INTO THE DIVISION, and the reason is that doing so
+   * would be WRONG, not merely expensive. Folding one pool's stricter floor up
+   * raises it for every SIBLING POOL of the same division — inventing a rest
+   * rule for cards whose organiser never set one, which is the same
+   * "constraint nobody configured" defect as the bug above, pointed the other
+   * way. It also converts a warning into a hard stop: an over-constrained
+   * board comes back `infeasible` and the organiser is blocked outright, with
+   * no conflict list to reason about.
+   *
+   * Note this is NOT an argument that under-stating is cheap because `rest` is
+   * warn-only. It is warn-only, and that is exactly how the 32-conflict board
+   * above shipped — so "only a warning" excuses nothing. The asymmetry that
+   * decides it is that expressing the division floor is TRUE and expressing a
+   * collapsed one is FALSE.
+   *
+   * (`RuleGroup` is a set of FIXTURE IDS and could carry a pool-scoped group;
+   * it is `restByDivision`'s division-keyed record, the parameter
+   * `buildRuleGroups` takes, that cannot express one. Widening that parameter
+   * is how the pool dimension gets closed honestly.)
    *
    * Every division ON THIS BOARD gets an entry, including `""` — the id used for
    * a fixture with no division (see `divisionId: f.divisionId ?? ""` below).
@@ -1854,7 +1866,17 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
       // because that is exactly what `slotFixtures` (`restForMs`) and
       // `validateAssignments` (`pairRestMinutesWith`) ask for the same card.
       const minutes = restFloor(verifyConfig, { divisionId: f.divisionId }).minutes;
-      if (minutes <= 0) continue;
+      // `!(minutes > 0)`, NOT `minutes <= 0` — the two differ on exactly the
+      // values worth guarding. `undefined <= 0` and `NaN <= 0` are both FALSE,
+      // so the natural spelling falls through and puts a NaN on the solver's
+      // wire; the negated form rejects them along with the non-positives. The
+      // read this replaced was `config.perEntrantMinRest ?? 0`, which could not
+      // produce one — `restFloor` seeds its running max from that field
+      // directly, so an absent value propagates. Unreachable while
+      // `calendar.ts` types `perEntrantMinRest` as a required `number`; kept
+      // because "unreachable" is one type change away and a NaN reaching a
+      // solver payload fails far from here.
+      if (!(minutes > 0)) continue;
       anyFloor = true;
       merged[f.divisionId ?? ""] = Math.max(merged[f.divisionId ?? ""] ?? 0, minutes);
     }
