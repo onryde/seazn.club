@@ -100,6 +100,7 @@ That blindness is the whole reason the defects survived.
 | `scorepad-v3-volleyball-match` | volleyball, a set opened by answering the pad's own serve question, a set that inherits its opener by alternation, then the deciding set's own fresh toss, to a decided result, then undone |
 | `registration-connect` | the money path: organiser settings → public team entry on a paid division → card on `checkout.stripe.com` → webhook → confirmed |
 | `rs007-invite-pay-cancel` | invite + pay + cancel: two team entries in one cart (capacity ONE waitlists the second), one Stripe checkout for the cart's real subtotal, a claim link followed, the waitlisted sibling promoted but never paid, then cancelled through the status page — witnesses two confirmed defects (the subtotal keeping a withdrawn entry's fee; the cancel dialog promising a refund sourced from a sibling's charge). Meant to FAIL. |
+| `settings-admin` | the platform fee — the one global number every entry fee is cut by: a support-role staff member offered a dead Save the route also refuses, a cleared field that must not save a silent 0%, the fee changed through the form and read back from the store, and both bounds driven on the form AND on the route. Then the four legacy `/settings/*` shims, landing org-scoped with the `?tab=` and Stripe return params they carry — `/settings/payments` via two hops |
 
 `registration-connect` and `rs007-invite-pay-cancel` are both **opt-in** and
 skip loudly without `CONNECT_WALKTHROUGH=1` and `STRIPE_CONNECT_TEST_ACCOUNT`

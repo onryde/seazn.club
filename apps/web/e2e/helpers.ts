@@ -1152,6 +1152,64 @@ export async function setOwnerStaffSql(orgId: string, on: boolean): Promise<void
   );
 }
 
+/** Set the org owner's staff role precisely — `setOwnerStaffSql` can only
+ *  express superadmin, so it cannot reach the staff-but-not-superadmin case
+ *  that separates requireStaff() from requireSuperadmin(). Pass null to clear.
+ *  ALWAYS restore in a finally: the shared Pro user outlives the borrower. */
+export async function setOwnerStaffRoleSql(
+  orgId: string,
+  role: "support" | "superadmin" | null,
+): Promise<void> {
+  await withDb((sql) =>
+    role
+      ? sql`update users set is_staff = true, staff_role = ${role}
+              where id in (select user_id from org_members
+                            where org_id = ${orgId} and role = 'owner')`
+      : sql`update users set is_staff = false, staff_role = null
+              where id in (select user_id from org_members
+                            where org_id = ${orgId} and role = 'owner')`,
+  );
+}
+
+/**
+ * The global platform fee default, read straight off `platform_settings`.
+ *
+ * SQL rather than `GET /api/admin/settings` on purpose: the route is
+ * superadmin-only, and the one caller that needs this value needs it BEFORE any
+ * privilege has been borrowed — a `beforeEach` capturing the row so a hook can
+ * put it back after a test that timed out mid-write. Returns `null` when the
+ * row is absent or its `value` is not a jsonb NUMBER (a jsonb `null`, string or
+ * boolean all decode to something `Number()` reads as a finite 0 — see below),
+ * so a caller can decline to "restore" a value
+ * that never existed (with no row, `platformFeeDefault()` falls through to the
+ * PLATFORM_FEE_PERCENT env and then to 5 — writing one would not be a restore,
+ * it would be a new setting).
+ *
+ * READS ONLY. There is deliberately no SQL writer beside it: `value` is cached
+ * in Redis for 300s (`lib/platform-settings.ts`, cache-aside), and
+ * `setPlatformFeeDefault` is the ONLY writer that invalidates that cache. A raw
+ * UPDATE would fix the row and leave every later reader — the settings page,
+ * and every checkout resolving a fee — served the stale value for five minutes.
+ * Restore through `PUT /api/admin/settings`.
+ */
+export async function platformFeePercentSql(): Promise<number | null> {
+  return withDb(async (sql) => {
+    const [row] = await sql<{ value: unknown }[]>`
+      select value from platform_settings where key = 'platform_fee_percent'`;
+    const value = row?.value;
+    // Narrowed to a real number BEFORE it is measured, and that is the whole
+    // point. `value` is jsonb, so postgres.js decodes it to whatever JSON says
+    // — `null` for a jsonb `null` row, a string or boolean for a hand-written
+    // one — and `Number(null)`, `Number("")` and `Number(false)` are each a
+    // FINITE `0`. A bare `Number(value)` therefore reads a valueless row as a
+    // perfectly good 0%, the afterEach hook PUTs that 0 back as a "restore",
+    // and the platform's entire cut on entry fees is zeroed through the route
+    // with the cache invalidated: this wave's own headline defect, reproduced
+    // inside the fixture built to prevent it.
+    return typeof value === "number" && Number.isFinite(value) ? value : null;
+  });
+}
+
 export interface OrgInfo {
   id: string;
   slug: string;
