@@ -18,8 +18,16 @@ export function AdminPlatformSettings({
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const parsed = Number(fee);
-  const valid = Number.isFinite(parsed) && parsed >= 0 && parsed <= 100;
+  const trimmed = fee.trim();
+  const parsed = Number(trimmed);
+  // `Number("")` is 0 — and so is `Number("   ")`. Without the emptiness clause
+  // an empty box reads as a perfectly valid 0%: the button stays live, and one
+  // click zeroes the platform's entire cut on entry fees. The route cannot
+  // catch it (0 IS a legal fee, `z.number().min(0)`), so the form is the only
+  // place that can tell "the admin meant zero" from "the admin cleared the box".
+  // A `type="number"` input also reports "" for unparseable input, so this same
+  // clause is what stops a typo'd "abc" from being saved as 0.
+  const valid = trimmed !== "" && Number.isFinite(parsed) && parsed >= 0 && parsed <= 100;
 
   async function save() {
     setBusy(true);

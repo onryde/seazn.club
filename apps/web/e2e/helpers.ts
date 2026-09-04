@@ -1171,6 +1171,34 @@ export async function setOwnerStaffRoleSql(
   );
 }
 
+/**
+ * The global platform fee default, read straight off `platform_settings`.
+ *
+ * SQL rather than `GET /api/admin/settings` on purpose: the route is
+ * superadmin-only, and the one caller that needs this value needs it BEFORE any
+ * privilege has been borrowed — a `beforeEach` capturing the row so a hook can
+ * put it back after a test that timed out mid-write. Returns `null` when the
+ * row is absent or unparseable, so a caller can decline to "restore" a value
+ * that never existed (with no row, `platformFeeDefault()` falls through to the
+ * PLATFORM_FEE_PERCENT env and then to 5 — writing one would not be a restore,
+ * it would be a new setting).
+ *
+ * READS ONLY. There is deliberately no SQL writer beside it: `value` is cached
+ * in Redis for 300s (`lib/platform-settings.ts`, cache-aside), and
+ * `setPlatformFeeDefault` is the ONLY writer that invalidates that cache. A raw
+ * UPDATE would fix the row and leave every later reader — the settings page,
+ * and every checkout resolving a fee — served the stale value for five minutes.
+ * Restore through `PUT /api/admin/settings`.
+ */
+export async function platformFeePercentSql(): Promise<number | null> {
+  return withDb(async (sql) => {
+    const [row] = await sql<{ value: unknown }[]>`
+      select value from platform_settings where key = 'platform_fee_percent'`;
+    const parsed = Number(row?.value);
+    return Number.isFinite(parsed) ? parsed : null;
+  });
+}
+
 export interface OrgInfo {
   id: string;
   slug: string;
