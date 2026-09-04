@@ -881,6 +881,45 @@ three headers become true instead of aspirational.
 
 **Nobody has a green smoke on this branch** — the last run aborted at check 165.
 
+### Owed to W4 — the Stripe sandbox sync, and what can actually be removed
+
+**Owner ruling 2026-09-04: the sync runs in W4, but as its FIRST task, not its last.**
+
+W2 is too early — prices are not final until the additive-fee change lands, and syncing
+twice mints two generations of archived prices for nothing. W4's end is too late, because
+**nothing has ever validated this seed's shape against real Stripe**: the per-currency
+`currency_options`, the graduated tier ladders, and whether Stripe honours REMOVING `aud`
+from an existing price's currency options are all unverified. A malformed seed should
+surface before the wave that depends on it is finished.
+
+**What can be deleted, verified against the installed SDK (stripe@22.3.0), not assumed:**
+- **Prices CANNOT be deleted.** `Prices` exposes `create`, `list`, `retrieve`, `search`,
+  `update` — there is **no `del`**. Archiving (`active: false`) is the only removal.
+- **Products expose `del`**, but Stripe refuses while any price references the product, and
+  every product here has prices. In practice: archive.
+
+**Most of it self-heals.** `scripts/stripe-sync.ts:411-417` already archives on drift — for
+a still-named `lookup_key` whose amount changed it mints a replacement and sets the old
+price `active: false`. So running sync after V397 archives every superseded amount by
+itself.
+
+**The true orphans are only the entries whose seed rows this wave DELETED** — `pro_plus`
+monthly and annual (both graduated tiers) and `extra_org_pro_plus`. Sync never visits a
+collection member that no longer exists, so they stay active and purchasable in the
+sandbox. About six objects, archived by hand in the Dashboard as a recorded ops step.
+
+**Do NOT wipe the sandbox's test data**, tempting though greenfield makes it. It is
+ACCOUNT-WIDE: peer sessions are live and at least one drives real test-mode hosted Checkout
+(`rs007` types `4242…`), and it would invalidate `plans.stripe_price_id_*` in every local
+label's database, each of which would then need its own re-sync. If a clean slate is ever
+wanted it is a coordinated action, not a side effect of a wave.
+
+**Also owed in the same task:** the seed-versus-live read-back guard. Nothing today lists
+live prices by `lookup_key` and asserts `unit_amount` plus every `currency_options` entry
+against the seed — `stripe-plans.test.ts` only checks the seed against itself, and no CI
+step runs the `.live.` tests. Gate it on `BILLING_LIVE=1` and an `sk_test_` key like its
+neighbours.
+
 ### T9 — sweep and gates
 Delete the two dead e2e specs. Rerun the 34 files that assert against
 `plan_entitlements` and the 8 copy-truth importers (4 need a live DB). Unit, e2e,
