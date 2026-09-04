@@ -241,14 +241,37 @@ describe("undoJointApply", () => {
     });
   });
 
-  it("surfaces the server's per-division failures", async () => {
+  it("surfaces the server's per-division failures, REASON included", async () => {
     // The ids are the point. Collapsed into a boolean, the console can only say
     // "some divisions", which sends the organiser to open every division page
     // to find out which.
+    //
+    // And the REASON is half of it: this mapping used to be
+    // `out.failed.map(f => f.division_id)`, which dropped the one sentence the
+    // organiser can act on — a frozen division answers "unlock it to edit" and
+    // the console never said so.
     const { api } = recorder({
       [RESTORE_URL]: restored(["d1"], [{ division_id: "d2", reason: "checkpoint not found" }]),
     });
-    expect(await undoJointApply("c1", anchors, api)).toEqual({ ok: false, failed: ["d2"] });
+    expect(await undoJointApply("c1", anchors, api)).toEqual({
+      ok: false,
+      failed: [{ divisionId: "d2", reason: "checkpoint not found" }],
+    });
+  });
+
+  it("carries the frozen-division refusal through verbatim", async () => {
+    // The joint restore inherits `restoreCheckpoint`'s 422 as a `failed[]` entry
+    // at HTTP 200 — a real partial outcome, since each division rewinds in its
+    // own transaction. The sentence is the contract five sibling write paths
+    // share, so it must arrive unaltered rather than re-worded here.
+    const LOCKED = "the division schedule is locked — unlock it to edit";
+    const { api } = recorder({
+      [RESTORE_URL]: restored([], [{ division_id: "d1", reason: LOCKED }]),
+    });
+    expect(await undoJointApply("c1", anchors, api)).toEqual({
+      ok: false,
+      failed: [{ divisionId: "d1", reason: LOCKED }],
+    });
   });
 
   it("reports every division as unrestored when the call itself fails", async () => {
@@ -260,7 +283,15 @@ describe("undoJointApply", () => {
         throw new ApiV1Error("boom", 500, "SERVER_ERROR");
       },
     });
-    expect(await undoJointApply("c1", anchors, api)).toEqual({ ok: false, failed: ["d1", "d2"] });
+    // No reason per division: the call failed as a whole, and repeating its
+    // message against every division would read as N separate findings.
+    expect(await undoJointApply("c1", anchors, api)).toEqual({
+      ok: false,
+      failed: [
+        { divisionId: "d1", reason: "" },
+        { divisionId: "d2", reason: "" },
+      ],
+    });
   });
 
   it("tells a REFUSED restore apart from a failed one, and claims no failures", async () => {

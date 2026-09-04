@@ -3339,6 +3339,8 @@
   "board.ai.joint.conflictAside": "Los partidos que apartaste mantienen su hora actual, así que siguen ocupando esas pistas. Vuelve a incluirlos o muévelos a mano primero.",
   "board.ai.joint.undoRetry": "Reintentar esas",
   "board.ai.joint.undonePartialTitle": "Solo se han revertido algunas divisiones",
+  "board.ai.joint.undoneWhy": "Por qué no se han revertido:",
+  "board.ai.joint.undoneReason": "{divisions}: {reason}",
   "comp.wrapUp.title": "La fecha de finalización de esta competición ya pasó",
   "comp.wrapUp.body": "Debía terminar el {date}. Márcala como completada o establece una nueva fecha de finalización si sigue en curso.",
   "comp.wrapUp.complete": "Marcar como completada",

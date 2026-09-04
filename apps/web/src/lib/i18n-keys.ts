@@ -500,6 +500,8 @@ export type DictionaryKey =
   | "board.ai.joint.undoRetry"
   | "board.ai.joint.undonePartial"
   | "board.ai.joint.undonePartialTitle"
+  | "board.ai.joint.undoneReason"
+  | "board.ai.joint.undoneWhy"
   | "board.ai.lastRun.action"
   | "board.ai.lastRun.aria"
   | "board.ai.lastRun.label"

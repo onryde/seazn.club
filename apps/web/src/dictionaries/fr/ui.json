@@ -3339,6 +3339,8 @@
   "board.ai.joint.conflictAside": "Les matchs que vous avez mis de côté ont gardé leur horaire actuel : ils occupent donc toujours ces terrains. Réintégrez-les ou déplacez-les à la main d’abord.",
   "board.ai.joint.undoRetry": "Réessayer celles-ci",
   "board.ai.joint.undonePartialTitle": "Seules certaines divisions ont été rétablies",
+  "board.ai.joint.undoneWhy": "Pourquoi elles n’ont pas été rétablies :",
+  "board.ai.joint.undoneReason": "{divisions} : {reason}",
   "comp.wrapUp.title": "La date de fin de cette compétition est passée",
   "comp.wrapUp.body": "Elle devait se terminer le {date}. Marquez-la comme terminée, ou définissez une nouvelle date de fin si elle est toujours en cours.",
   "comp.wrapUp.complete": "Marquer comme terminée",

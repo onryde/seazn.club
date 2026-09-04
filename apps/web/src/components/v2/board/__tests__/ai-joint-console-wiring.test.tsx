@@ -83,6 +83,7 @@ vi.mock("@/components/i18n/dict-provider", async (importOriginal) => {
 
 // Static, not dynamic: vitest hoists the `vi.mock` calls above every import in
 // the file, so these already see the mocked modules.
+import { renderToStaticMarkup } from "react-dom/server";
 import { ApiV1Error } from "@/lib/client-v1";
 import type { AiParsePreviewResponse } from "@/server/api-v1/schemas";
 import { AiCompetitionConsole, JointReviewStep, type JointDivision } from "../ai-competition-console";
@@ -603,7 +604,87 @@ describe("the review step is wired to the console's own state", () => {
     undo();
     await flush();
     expect(step().undone).toBe("partial");
-    expect(step().undoFailed).toEqual(["d2"]);
+    expect(step().undoFailed).toEqual([{ divisionId: "d2", reason: "no such checkpoint" }]);
+  });
+
+  // The 422 the server sends for a frozen division carries the ONE sentence an
+  // organiser can act on ("unlock it to edit"), and the joint path threw it
+  // away: `out.failed.map(f => f.division_id)` kept the ids and dropped
+  // `reason`, so the console named which divisions failed and never said why.
+  // Copy that exists and that nothing renders is an inert seam, so this drives
+  // the REAL producer (the console's own `undoJointApply`, over the envelope
+  // the usecase actually returns) into the REAL consumer (`JointReviewStep`
+  // rendered with the props the console handed it) rather than asserting on a
+  // fixture at both ends.
+  it("carries each division's own reason from the server envelope into the rendered copy", async () => {
+    const LOCKED = "the division schedule is locked — unlock it to edit";
+    const ctx = await applied(() => ({
+      restored: [{ division_id: "d1", watermark: 3, steps: 1 }],
+      failed: [{ division_id: "d2", reason: LOCKED }],
+      ok: false,
+    }));
+
+    ctx.undo();
+    await flush();
+    const html = renderToStaticMarkup(typed(ctx.island.tree(), JointReviewStep));
+    expect(html, "the division is still named").toContain("Under 14s");
+    expect(html, "the server's reason never reaches the organiser").toContain(LOCKED);
+  });
+
+  // Two divisions refused for DIFFERENT reasons must read as two reasons. One
+  // banner carrying the first would tell the organiser to unfreeze a division
+  // that is not frozen, and hide the one that is.
+  it("keeps distinct reasons distinct, and collapses identical ones", async () => {
+    const LOCKED = "the division schedule is locked — unlock it to edit";
+    const GONE = "checkpoint not found";
+    const distinct = await applied(() => ({
+      restored: [],
+      failed: [
+        { division_id: "d1", reason: LOCKED },
+        { division_id: "d2", reason: GONE },
+      ],
+      ok: false,
+    }));
+    distinct.undo();
+    await flush();
+    const two = renderToStaticMarkup(typed(distinct.island.tree(), JointReviewStep));
+    expect(two).toContain(LOCKED);
+    expect(two).toContain(GONE);
+
+    const shared = await applied(() => ({
+      restored: [],
+      failed: [
+        { division_id: "d1", reason: LOCKED },
+        { division_id: "d2", reason: LOCKED },
+      ],
+      ok: false,
+    }));
+    shared.undo();
+    await flush();
+    const one = renderToStaticMarkup(typed(shared.island.tree(), JointReviewStep));
+    expect(one.split(LOCKED).length - 1, "one shared reason, said twice").toBe(1);
+    // ...and both divisions are named on the line that carries it.
+    expect(one).toContain("Under 12s");
+    expect(one).toContain("Under 14s");
+  });
+
+  // The catch branch reports every division as unrestored with NO reason,
+  // because the call itself failed and a per-division reason would be a guess.
+  // A blank "why" line beside a name is worse than none.
+  it("says nothing about why when the call failed and there is no per-division reason", async () => {
+    const ctx = await applied(() => {
+      throw new Error("network down");
+    });
+    ctx.undo();
+    await flush();
+    expect(ctx.step().undoFailed).toEqual([
+      { divisionId: "d1", reason: "" },
+      { divisionId: "d2", reason: "" },
+    ]);
+    const html = renderToStaticMarkup(typed(ctx.island.tree(), JointReviewStep));
+    expect(html, "an empty reason still printed its heading").not.toContain(
+      "Why they were not reverted",
+    );
   });
 
   it("undoes through ONE competition-scoped call, whatever the organiser clicks", async () => {
@@ -661,7 +742,7 @@ describe("the review step is wired to the console's own state", () => {
 
     undo();
     await flush();
-    expect(step().undoFailed).toEqual(["d2"]);
+    expect(step().undoFailed).toEqual([{ divisionId: "d2", reason: "boom" }]);
 
     undo();
     await flush();

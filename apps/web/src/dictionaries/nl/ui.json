@@ -3339,6 +3339,8 @@
   "board.ai.joint.conflictAside": "De wedstrijden die je opzij zette, behielden hun huidige tijd en bezetten die banen dus nog. Neem ze weer mee of verplaats ze eerst handmatig.",
   "board.ai.joint.undoRetry": "Die opnieuw proberen",
   "board.ai.joint.undonePartialTitle": "Slechts een deel van de divisies is teruggezet",
+  "board.ai.joint.undoneWhy": "Waarom ze niet zijn teruggezet:",
+  "board.ai.joint.undoneReason": "{divisions}: {reason}",
   "comp.wrapUp.title": "De einddatum van deze competitie is verstreken",
   "comp.wrapUp.body": "Ze zou eindigen op {date}. Markeer ze als voltooid, of stel een nieuwe einddatum in als ze nog loopt.",
   "comp.wrapUp.complete": "Als voltooid markeren",

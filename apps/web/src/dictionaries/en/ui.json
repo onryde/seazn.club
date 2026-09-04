@@ -3339,6 +3339,8 @@
   "board.ai.joint.conflictAside": "The fixtures you set aside kept their current times, so they are still holding those courts. Put them back in, or move them by hand first.",
   "board.ai.joint.undoRetry": "Try those again",
   "board.ai.joint.undonePartialTitle": "Only some divisions were reverted",
+  "board.ai.joint.undoneWhy": "Why they were not reverted:",
+  "board.ai.joint.undoneReason": "{divisions}: {reason}",
   "comp.wrapUp.title": "This competition's end date has passed",
   "comp.wrapUp.body": "It was due to end on {date}. Mark it completed, or set a new end date if it's still running.",
   "comp.wrapUp.complete": "Mark it completed",
