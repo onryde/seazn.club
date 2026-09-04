@@ -482,12 +482,20 @@ test.describe("legacy settings redirects", () => {
    * which `SETTINGS_TABS.includes()` then silently falls back off.
    *
    * AND THE STATUS, because the address bar is not the page. `page.goto`
-   * follows the redirect chain and returns the FINAL response, and a landing
-   * that 500s or renders an error boundary keeps exactly the URL asserted
-   * above — so the URL pair alone stays green on the precise case hop 3 exists
-   * for, "the Stripe params arrive and the page reconciles them". The blast
-   * radius is nil today only because `reconcileCheckout` never throws; this
-   * holds the contract rather than today's implementation of it.
+   * follows the redirect chain and returns the FINAL landing's response — not
+   * the opening 307, which is a distinction this test's own probe row had to
+   * demonstrate rather than assume, since a 307 is also `< 400` and would make
+   * the whole assertion decorative. A landing that 500s keeps exactly the URL
+   * asserted above, so the URL pair alone stays green on the precise case hop 3
+   * exists for, "the Stripe params arrive and the page reconciles them". The
+   * blast radius is nil today only because `reconcileCheckout` never throws;
+   * this holds the contract rather than today's implementation of it.
+   *
+   * RESIDUE, stated rather than glossed: a status covers the SERVER-error half
+   * only. An `error.tsx` boundary that trips after hydration still returns 200,
+   * so a landed page that dies in the client would pass this check. Closing
+   * that needs a landmark assertion per hop — three different pages, three more
+   * selectors to keep true — and it is deliberately not claimed here.
    *
    * `toBeLessThan(400)` on a captured response is this folder's existing idiom
    * (`rs007-registration-journey.spec.ts`:169, `rs010-registration-cross-flow`
@@ -535,7 +543,7 @@ test.describe("legacy settings redirects", () => {
       expect(`${landed.pathname}${landed.search}`, `${hop.from} — ${hop.why}`).toBe(hop.to);
       expect(
         landing?.status(),
-        `${hop.from} landed on ${landed.pathname} with HTTP ${landing?.status()} — the query arrived at an error page, not at ${hop.to}`,
+        `${hop.from} reached ${hop.to} but the page returned HTTP ${landing?.status()} — the query arrived at a dead page`,
       ).toBeLessThan(400);
     }
   });
