@@ -553,6 +553,31 @@ describe.skipIf(!HAS_DB)("schedule undo & versioning (Jul3/03)", () => {
     await setDivisionLocks(auth, division.id, { schedule_locked: true });
     const [before] = await sql<{ at: string | null; court_id: string | null }[]>`
       select scheduled_at::text as at, court_id from fixtures where id = ${f}`;
+    /** The LEDGER's own state, not the board's — and read honestly about what it
+     *  can and cannot catch.
+     *
+     *  It does NOT pin the guard's PLACEMENT inside `step`. The whole body runs
+     *  in one `withTenant` transaction, so a throw anywhere in it rolls the
+     *  append, the `seq` bump and the watermark back together: moving the guard
+     *  to after `appendEvent` leaves this assertion green (verified by
+     *  mutation, 2026-09-04 — that mutant SURVIVES). Placement is protected by
+     *  the transaction, not by this test.
+     *
+     *  What it does pin is that the rewind stays ONE transaction. That is a
+     *  live regression class here rather than a hypothetical:
+     *  `restoreCheckpoint` right beside it is N separate transactions, and a
+     *  refusal partway through leaves earlier events committed. If `step` ever
+     *  splits the same way, this goes red where the board snapshot alone would
+     *  not. */
+    const ledgerState = async (): Promise<{ events: number; seq: number; watermark: number | null }> => {
+      const [row] = await sql<{ events: number; seq: number; watermark: number | null }[]>`
+        select (select count(*)::int from division_events where division_id = ${division.id}) as events,
+               seq::int as seq,
+               edit_watermark::int as watermark
+        from divisions where id = ${division.id}`;
+      return row!;
+    };
+    const ledgerBefore = await ledgerState();
 
     await expect(undoDivision(auth, division.id)).rejects.toMatchObject({ status: 422 });
     // `message` is not an own enumerable property, so `toMatchObject` above
@@ -566,10 +591,14 @@ describe.skipIf(!HAS_DB)("schedule undo & versioning (Jul3/03)", () => {
       "the division schedule is locked — unlock it to edit",
     );
 
-    // Neither refusal appended an event or moved a fixture on its way out.
+    // Neither refusal moved a fixture on its way out...
     const [after] = await sql<{ at: string | null; court_id: string | null }[]>`
       select scheduled_at::text as at, court_id from fixtures where id = ${f}`;
     expect(after).toEqual(before);
+    // ...nor left an event, a seq bump or a watermark move behind it. Asserted
+    // rather than inferred from the unchanged board — with the caveat in the
+    // helper's own comment about exactly which failure this can witness.
+    expect(await ledgerState()).toEqual(ledgerBefore);
 
     // ...and the redo really was still there: it is the FREEZE that refused it,
     // not an empty redo stack.

@@ -90,6 +90,14 @@ import { AiCompetitionConsole, JointReviewStep, type JointDivision } from "../ai
 import { AiInstructionPreview } from "../ai-instruction-preview";
 import { jointPreviewBody, jointRunBody } from "../ai-joint-run";
 import { AiQuoteCard } from "../ai-quote-card";
+import en from "@/dictionaries/en/ui.json";
+
+/** Derived, never typed in: a negative assertion pinned to a hardcoded English
+ *  literal passes for two indistinguishable reasons — the thing is correctly
+ *  absent, or the copy was reworded and the literal went stale. Only one of
+ *  those is the property the test exists for. Same shape
+ *  `ai-competition-console.test.tsx` uses. */
+const enText = en as unknown as Record<string, string>;
 
 /**
  * Four divisions, of which exactly TWO can join a run. The gap is the point:
@@ -682,9 +690,11 @@ describe("the review step is wired to the console's own state", () => {
       { divisionId: "d2", reason: "" },
     ]);
     const html = renderToStaticMarkup(typed(ctx.island.tree(), JointReviewStep));
-    expect(html, "an empty reason still printed its heading").not.toContain(
-      "Why they were not reverted",
-    );
+    const WHY = enText["board.ai.joint.undoneWhy"]!;
+    // The heading must EXIST before its absence means anything — a missing key
+    // yields `undefined`, and `not.toContain(undefined)` passes on any input.
+    expect(typeof WHY, "board.ai.joint.undoneWhy is missing from en/ui.json").toBe("string");
+    expect(html, "an empty reason still printed its heading").not.toContain(WHY);
   });
 
   it("undoes through ONE competition-scoped call, whatever the organiser clicks", async () => {
