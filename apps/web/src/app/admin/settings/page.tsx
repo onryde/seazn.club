@@ -9,7 +9,14 @@ export const dynamic = "force-dynamic";
  *  superadmin on write, so the form must express that same split or a support
  *  user is handed a Save that can only 401. */
 export default async function AdminSettingsPage() {
-  const [fee, staff] = await Promise.all([platformFeeDefault(), requireStaff()]);
+  // Check THEN fetch, in that order and not concurrently. `Promise.all` starts
+  // the fee read before the authz check has resolved; nothing escapes today
+  // (`requireStaff()` redirects, and the value is discarded on the way out),
+  // but it inverts check-then-fetch for no gain — the fee read is a single
+  // cached row, not the slow path — and every one of the six sibling admin
+  // pages awaits `requireStaff()` first.
+  const staff = await requireStaff();
+  const fee = await platformFeeDefault();
   return (
     <div className="space-y-6">
       <div>
