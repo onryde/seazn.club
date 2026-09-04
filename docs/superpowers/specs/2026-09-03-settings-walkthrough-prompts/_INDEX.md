@@ -279,9 +279,27 @@ reusable lesson:**
 **Not verifiable on this machine, and not defects:** `STRIPE_SECRET_KEY` /
 `STRIPE_WEBHOOK_SECRET` (17 tests between Stripe and the webhook signature),
 `CRON_SECRET` (1), `SCHEDULING_AI_BASE_URL` + `ANTHROPIC_API_KEY` (ai-architect).
-`tennis-mtb` and `partial-amend` are wall-clock budgets derived from `HOLD_MS`
-(AGENTS.md failure class 20); `tennis-mtb` was measured at 306.9s against a
-300s budget in W1 and passed in CI.
+`partial-amend` is load, settled: all four of its tests pass at `--workers=1`
+in **16-29s each** against a 180s budget.
+
+**`tennis-mtb` is NOT load, and this is a real finding — F6, owed to whichever
+wave owns that file (R4/MTB, #670), not to this programme.** Run alone, at
+`--workers=1`, on an idle machine, it took **307.4s** against
+`test.setTimeout(300_000)` (`scorepad-v3-tennis-mtb.spec.ts:142`). W1 measured
+306.9s. Two measurements, two sessions, both over the line by ~2.5%: it is
+reproducible, not flaky, and "it passed in CI" only means CI's runner is
+fractionally faster than this one.
+
+The budget is a FLAT LITERAL beside a cost derived from `HOLD_MS` and the tap
+count — exactly AGENTS.md failure class 20 ("a flat timeout beside a derived
+cost is a latent red"). Its own sibling `scorepad-v3-partial-amend.spec.ts:50`
+already derives its budget from the hold and says so in a comment. The fix is
+to adopt that pattern here, so moving `HOLD_MS` moves this budget with it.
+
+**Deliberately NOT fixed by this session:** the file belongs to another
+programme, the owner scoped this session to W1.5, and a one-line edit to a
+stranger's spec budget is exactly the kind of unasked change that gets
+attributed to the wrong wave later.
 
 **A method note worth keeping:** `ps eww -p <pid>` returns NOTHING on this
 machine — zero env vars, for any process. An empty result there is not evidence
