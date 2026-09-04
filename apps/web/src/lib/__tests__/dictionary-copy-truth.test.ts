@@ -980,8 +980,11 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
     // add-on, so `pricing.addons.seat` no longer exists to pin in any locale.
     // 252 -> 248: the retired-plan copy sweep deleted `pricing.faq.proPlus.a`,
     // the answer to a question about a plan V392 removed from `plans`.
+    // 248 -> 252: `pricing.pass.crossover`, the pass-vs-Pro comparator W2 added
+    // to the Event Pass card — the page priced both offers and never said which
+    // one was cheaper, or from what volume of entry fees that changes.
     // A count, not a floor, so a DELETED pin reds too.
-    expect(APPROVED_DICTIONARY_COPY.length * DICTIONARY_LOCALES.length).toBe(248);
+    expect(APPROVED_DICTIONARY_COPY.length * DICTIONARY_LOCALES.length).toBe(252);
     // Every entry must say what it claims and what decides it — a pin with no
     // `why` is a snapshot, and a snapshot teaches the next editor to re-record
     // rather than to re-check.
@@ -1018,6 +1021,14 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
       match: /^pricing\.(credits\.\w+|addons\.(credits|seat|org|sizePack)|plus\.per|pass\.(per|from|ladder\.caps\w*)|community\.price)$/,
       pinned: true,
       why: "quotes money or an allowance — the number is interpolated live, so the words around it are the claim",
+    },
+    {
+      // W2: the pass-vs-Pro comparator. It states WHICH offer is cheaper and up
+      // to what volume of entry fees — a claim no `plan_entitlements` row makes
+      // on its own, because it is derived from two prices and two rates at once.
+      match: /^pricing\.pass\.crossover$/,
+      pinned: true,
+      why: "names the point where a month of Pro overtakes the Event Pass, and the two platform-fee rates that put it there. Every figure is live (lib/pricing-crossover.ts over stripe-plans.json + registration.fee_percent); the words are what say which side is which, and swapping them mis-sells the one-time sku",
     },
     {
       match: /^pricing\.faq\./,

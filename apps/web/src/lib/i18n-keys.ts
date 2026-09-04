@@ -3697,6 +3697,7 @@ export type DictionaryKey =
   | "pricing.matrix.tiebreakers.custom"
   | "pricing.meta.description"
   | "pricing.meta.title"
+  | "pricing.pass.crossover"
   | "pricing.pass.cta"
   | "pricing.pass.ctaSignedIn"
   | "pricing.pass.from"

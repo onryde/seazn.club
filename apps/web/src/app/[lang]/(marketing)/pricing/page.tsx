@@ -27,6 +27,7 @@ import {
   proPrice,
   type Currency,
 } from "@/lib/currency";
+import { feeCrossoverMinor, readableMinor } from "@/lib/pricing-crossover";
 import { preferredCurrency } from "@/lib/currency-server";
 import { getActiveOrgId, getCurrentUser, getUserOrgs } from "@/lib/auth";
 import { pickActiveOrg } from "@/lib/active-org";
@@ -207,6 +208,42 @@ export default async function PricingPage({
   const passCta = await passColumnCta().catch(() => "signup" as const);
   const proMonthly = formatMinor(proPrice("monthly", currency), currency);
 
+  // WHERE THE TWO OFFERS CROSS (lib/pricing-crossover.ts). The pass is cheaper
+  // up front and dearer per pound of entry fees, so for a competition that runs
+  // a month the two cost the same at exactly one volume — and the page never
+  // said so. Read plainly it said "the pass is cheaper", which is true only
+  // below that point and pushes volume at the ONE-TIME sku when the recurring
+  // one is what retains.
+  //
+  // Every input is live: the two prices from the same `stripe-plans.json` the
+  // cards above quote, both fee rates from the `matrix` the comparison table
+  // below renders from. The line disappears rather than misleads when a rate is
+  // unreadable or the ladder stops having a crossing at all — the same rule the
+  // M/L ladder above follows for a cap it does not have.
+  const feePercent = (plan: string): number | null | undefined =>
+    matrix["registration.fee_percent"]?.[plan]?.int_value;
+  const passFeePercent = feePercent("event_pass");
+  const proFeePercent = feePercent("pro");
+  const crossoverMinor = feeCrossoverMinor({
+    passMinor: passPrice(currency, "event_pass"),
+    proMonthlyMinor: proPrice("monthly", currency),
+    passFeePercent,
+    proFeePercent,
+  });
+  const crossoverReadable = crossoverMinor === null ? 0 : readableMinor(crossoverMinor);
+  const crossoverLine =
+    crossoverReadable > 0
+      ? t(d, "pricing.pass.crossover", {
+          amount: formatMinor(crossoverReadable, currency),
+          pro: proMonthly,
+          // Non-null wherever `crossoverMinor` is: `feeCrossoverMinor` returns
+          // null unless both rates are numbers. Narrowed rather than defaulted,
+          // so a rate that went missing can never render as a rate of 0.
+          proFee: proFeePercent as number,
+          passFee: passFeePercent as number,
+        })
+      : null;
+
   // The FAQ used to hardcode "$19/mo" while the cards above it honoured the
   // currency switcher — a GBP visitor saw £ and $ on one page. Every answer is
   // interpolated with the same switched amounts instead; `t()` leaves an answer
@@ -340,6 +377,15 @@ export default async function PricingPage({
                 </p>
                 {passLadder && (
                   <p className="mb-4 text-xs text-slate-500">{t(d, "pricing.pass.ladderNote")}</p>
+                )}
+                {/* The comparator, on the pass card rather than beside Pro:
+                    this is where the buyer is choosing, and the mis-sale this
+                    prevents is choosing the pass for a competition big enough
+                    that Pro is cheaper. */}
+                {crossoverLine && (
+                  <p className="mb-4 text-xs text-slate-500" data-pass-crossover>
+                    {crossoverLine}
+                  </p>
                 )}
                 <ul className="mb-8 flex-1 space-y-2.5 text-sm text-slate-600">
                   {PASS_FEATURES.map((f) => (

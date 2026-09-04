@@ -47,7 +47,8 @@ vi.mock("next/navigation", () => ({
 }));
 
 import PricingPage from "../page";
-import { formatMinor, passPrice } from "@/lib/currency";
+import { formatMinor, passPrice, proPrice } from "@/lib/currency";
+import { feeCrossoverMinor, readableMinor } from "@/lib/pricing-crossover";
 
 /** Each rung's usd price AS THE PAGE RENDERS IT — derived, never typed. W3
  *  repriced both rungs onto charm points ("$15" became "$11.99"), and a typed
@@ -55,8 +56,18 @@ import { formatMinor, passPrice } from "@/lib/currency";
 const M_PRICE = formatMinor(passPrice("usd", "event_pass"), "usd");
 const L_PRICE = formatMinor(passPrice("usd", "event_pass_l"), "usd");
 
-/** The two keys V341 makes the rungs differ on, plus a fee row so the card's
- *  surroundings render. Mirrors the live matrix. */
+/**
+ * The keys this page's Event Pass card renders from: the two V341 makes the
+ * rungs differ on, plus `registration.fee_percent` for the pass/Pro comparator.
+ *
+ * NOT a mirror of the live matrix, and it never was — the header comment that
+ * said so was wrong twice over. `event_pass_l`'s entrant cap is deliberately
+ * NULL here because the unlimited branch is what two of the tests below exist
+ * to pin, while V392 gave the live rung a real 512; and there was no fee row at
+ * all despite the comment promising one. The live figures are pinned against
+ * `plan_entitlements` by lib/__tests__/pricing-cards.test.ts and
+ * lib/__tests__/pricing-crossover.test.ts, which is where that job belongs.
+ */
 const LIVE = [
   { plan_key: "community", feature_key: "divisions.per_competition.max", bool_value: null, int_value: 4 },
   { plan_key: "event_pass", feature_key: "divisions.per_competition.max", bool_value: null, int_value: 10 },
@@ -66,6 +77,13 @@ const LIVE = [
   // null int_value on a PRESENT row = unlimited. This is the figure the L rung
   // is sold on.
   { plan_key: "event_pass_l", feature_key: "entrants.per_division.max", bool_value: null, int_value: null },
+  // The fee ladder the comparator is derived from (V397: community 5, pass 4,
+  // pro 2). The pass costs MORE per pound of entry fees and less up front,
+  // which is the whole shape of the crossing.
+  { plan_key: "community", feature_key: "registration.fee_percent", bool_value: null, int_value: 5 },
+  { plan_key: "event_pass", feature_key: "registration.fee_percent", bool_value: null, int_value: 4 },
+  { plan_key: "event_pass_l", feature_key: "registration.fee_percent", bool_value: null, int_value: 4 },
+  { plan_key: "pro", feature_key: "registration.fee_percent", bool_value: null, int_value: 2 },
 ];
 
 const render = async (rows = LIVE) => {
@@ -149,4 +167,63 @@ describe("/pricing renders the Event Pass M/L ladder", () => {
     // not have, not against quoting a price we always do.
     expect(text).toContain(L_PRICE);
   });
+});
+
+// ── The pass/Pro comparator ─────────────────────────────────────────────────
+//
+// The page priced both offers and left the buyer to work out which one costs
+// them less, which reads as "the pass is cheaper" — true only below one
+// threshold, and the threshold was stated nowhere. Naming it is the whole
+// point, so the assertions below are about the FIGURE, not about the element
+// being present.
+describe("/pricing names where Pro overtakes the Event Pass", () => {
+  /** The crossing as the page derives it: catalogue prices, matrix fee rates. */
+  const CROSSING = formatMinor(
+    readableMinor(
+      feeCrossoverMinor({
+        passMinor: passPrice("usd", "event_pass"),
+        proMonthlyMinor: proPrice("monthly", "usd"),
+        passFeePercent: 4,
+        proFeePercent: 2,
+      })!,
+    ),
+    "usd",
+  );
+
+  it("quotes the crossing and both fee rates, none of them typed", async () => {
+    const { markup, text } = await render();
+    expect(markup, "the comparator itself").toContain("data-pass-crossover");
+    expect(CROSSING).toBe("$150");
+    expect(text).toContain(CROSSING);
+    // Both sides of the fee ladder, so the reader can check the arithmetic.
+    expect(text).toContain("2% platform fee against 4%");
+    // …and Pro's own price, since that is the other half of what they would pay.
+    expect(text).toContain(`${formatMinor(proPrice("monthly", "usd"), "usd")}/mo`);
+    // The crossing is a THIRD number, not either sticker price echoed back —
+    // a comparator that printed one of those would satisfy a bare
+    // "contains a currency amount" assertion.
+    expect(CROSSING).not.toBe(M_PRICE);
+    expect(CROSSING).not.toBe(formatMinor(proPrice("monthly", "usd"), "usd"));
+  });
+
+  it("says nothing at all when a fee rate could not be read", async () => {
+    // `loadMatrix` fails soft to `{}` when the DB is unreachable at build. A
+    // missing rate must take the sentence with it: a threshold computed from a
+    // rate we do not have is a number invented at the point of sale.
+    const { markup, text } = await render(
+      LIVE.filter((r) => !(r.feature_key === "registration.fee_percent" && r.plan_key === "pro")),
+    );
+    expect(markup).not.toContain("data-pass-crossover");
+    expect(text).not.toContain(CROSSING);
+    // …and the card still sells. Suppressing the comparator must not take the
+    // Event Pass offer down with it.
+    expect(text).toContain(M_PRICE);
+  });
+
+  // The ladder shapes that have NO crossing at all — equal fees, a pass that is
+  // cheaper per pound, a pass that costs more up front — are pinned in
+  // lib/__tests__/pricing-crossover.test.ts rather than here. Measured: at this
+  // level they are unkillable. `readableMinor`'s own "nothing to render" floor
+  // catches the ±Infinity and NaN those shapes produce, so a page test for them
+  // stays green with the helper's guard deleted, and would be decoration.
 });

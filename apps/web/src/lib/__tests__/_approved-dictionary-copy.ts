@@ -63,6 +63,17 @@ export const APPROVED_DICTIONARY_COPY: ApprovedValue[] = [
   },
   {
     file: "marketing",
+    key: "pricing.pass.crossover",
+    why: "which of the two offers is cheaper, and the volume of entry fees at which that flips. Every figure is interpolated live — the two prices from config/stripe-plans.json via lib/currency's passPrice/proPrice, both rates from registration.fee_percent in plan_entitlements (V397: pass 4, pro 2), and the crossing itself from lib/pricing-crossover.ts's feeCrossoverMinor. So the NUMBERS cannot rot; the WORDS decide which side of the threshold each offer is on, and a reword that swaps them sells the one-time sku to the organisers the recurring one is cheaper for. Suppressed entirely when a rate is unreadable or the ladder stops crossing, so this sentence never appears without both rates behind it.",
+    text: {
+      en: "Up to about {amount} of entry fees a month, this is the cheaper option; above that it is Pro at {pro}/mo — a {proFee}% platform fee against {passFee}%.",
+      es: "Hasta unos {amount} de cuotas de inscripción al mes, esta es la opción más barata; por encima de eso lo es Pro a {pro}/mes: una comisión de plataforma del {proFee}% frente al {passFee}%.",
+      fr: "Jusqu’à environ {amount} de frais d’inscription par mois, c’est l’option la moins chère ; au-delà, c’est Pro à {pro}/mois — {proFee} % de frais de plateforme contre {passFee} %.",
+      nl: "Tot ongeveer {amount} aan inschrijfgelden per maand is dit de goedkoopste keuze; daarboven is dat Pro voor {pro}/mnd — {proFee}% platformkosten tegen {passFee}%.",
+    },
+  },
+  {
+    file: "marketing",
     key: "pricing.faq.eventPass.a",
     why: "what the pass buys, for how long, and the size of the one-time credit grant. Caps come from plan_entitlements (event_pass / event_pass_l); the grant is PASS_CREDIT_GRANT in lib/pricing-cards.ts and is PER RUNG since entitlements v18 W2 T5 — 25 on M and, since W2 T12 re-cut L from 50, 35 on L, which is why this answer must quote BOTH figures (localeCreditGrantFaults reads the declared set); the duration is V328/V334. The 4% / 5% fee pair is registration.fee_percent on event_pass and on community, re-cut by V397 (it read 5% / 8%).",
     text: {

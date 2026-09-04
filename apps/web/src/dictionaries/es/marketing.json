@@ -83,6 +83,7 @@
   "pricing.pass.rung.l": "L",
   "pricing.pass.ladder.caps": "Hasta {divisions} divisiones, {entrants} participantes cada una",
   "pricing.pass.ladder.capsUnlimited": "Hasta {divisions} divisiones, participantes ilimitados",
+  "pricing.pass.crossover": "Hasta unos {amount} de cuotas de inscripción al mes, esta es la opción más barata; por encima de eso lo es Pro a {pro}/mes: una comisión de plataforma del {proFee}% frente al {passFee}%.",
   "pricing.pass.ladderNote": "La misma comisión de plataforma en ambos casos; el saldo de créditos va con el tamaño del pase. Elige tu tamaño al pagar.",
   "pricing.pass.cta": "Empieza gratis, mejora en la app",
   "pricing.pass.ctaSignedIn": "Elige una competición",
