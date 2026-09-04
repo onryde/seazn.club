@@ -27,6 +27,7 @@ import {
   type RosteredFixture,
 } from "../helpers";
 import { HUMAN_FASTEST_REPEAT_MS } from "../../src/components/v2/scorepad/use-pad-pipeline";
+import { HOLD_MS } from "../../src/components/v2/scorepad/queue";
 
 test.describe.configure({ mode: "parallel" });
 
@@ -131,6 +132,34 @@ async function tapPoint(page: Page, fx: RosteredFixture, side: "home" | "away"):
     .toBe(before + 1);
 }
 
+/**
+ * THE BUDGET IS DERIVED, NOT TYPED — and the flat `300_000` it replaces was a
+ * latent red, not a safety margin.
+ *
+ * The v3 pad soft-commits: every tap waits out a full `HOLD_MS` before the
+ * ledger can be polled, so this file's cost is dominated by taps x HOLD_MS.
+ * At the default 12s hold the ~24 taps below come to ~288s on their own —
+ * which left the old 300s ceiling roughly twelve seconds of headroom for
+ * seeding, the page load, the config write and every `expect.poll` in between.
+ * It did not fit: measured 306.9s in one session and 307.4s in another, alone,
+ * at `--workers=1`, on an idle machine. Two measurements over the line is a
+ * budget that was always too small, not flake, and not load.
+ *
+ * It also fails DISHONESTLY. On a `test.setTimeout` overrun Playwright prints
+ * whichever `expect.poll` was in flight, so this file reported
+ * "Expected: 24 / Received: 23" — a missing rally — above the timeout line
+ * (AGENTS.md failure class 20). The data defect is the decoy; the wall clock
+ * is the event.
+ *
+ * Expressed against the constant so that doubling `HOLD_MS` — it is
+ * env-tunable via `NEXT_PUBLIC_SCOREPAD_HOLD_MS`, and CI may run it short —
+ * moves this budget with it instead of silently re-creating the same overrun.
+ * Same shape as `scorepad-v3-partial-amend.spec.ts`, which already does this.
+ */
+const TAPS = 24; // 4 + 4 to level the sets, 10 through five-all, up to 5 to
+                 // decide, plus Start match and the closing Void last entry.
+const BUDGET_MS = Math.max(300_000, 120_000 + TAPS * (HOLD_MS + 1_500));
+
 /** A no-ad game is four points; with `gamesTo: 1` that is also a whole set. */
 async function winGame(page: Page, fx: RosteredFixture, side: "home" | "away"): Promise<void> {
   for (let i = 0; i < 4; i += 1) await tapPoint(page, fx, side);
@@ -139,7 +168,7 @@ async function winGame(page: Page, fx: RosteredFixture, side: "home" | "away"): 
 test("R4 — tennis: tap a match through the deciding-set MATCH TIE-BREAK to a decided result, then undo the match point", async ({
   page,
 }) => {
-  test.setTimeout(300_000);
+  test.setTimeout(BUDGET_MS);
   shotNo = 0;
 
   // `doubles-noad-mtb10` is a SHIPPED variant, not a config invented for this
